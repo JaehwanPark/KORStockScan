@@ -14,51 +14,85 @@ _SESSION_ROUTE_REQUIRED = KiwoomWSManager._integrated_aftermarket_route_required
 
 
 def test_delay_depth_reader_copies_only_existing_0d_and_current_transport():
-    manager = KiwoomWSManager('test-token')
+    manager = KiwoomWSManager("test-token")
     manager._market_data_transport_epoch = 7
+
     class History:
         def __deepcopy__(self, memo):
-            pytest.fail('delay sampler traversed accumulated history')
-    book = {'asks':[{'price':100,'volume':2}], 'bids':[{'price':99,'volume':2}]}
-    manager.realtime_data['005930'] = dict(price_history=History(),
-        realtime_type_snapshots_by_route={'integrated': {'0D': dict(orderbook=book,
-            item='005930_AL', market_route='KRX_NXT_INTEGRATED', transport_epoch=7,
-            observed_epoch=10.), '0B': {'history': History()}}})
-    value = manager.get_pre_submit_delay_depth('005930')
-    assert value['market_data_transport_epoch'] == 7
-    assert set(value) == {'market_data_transport_epoch','realtime_type_snapshots_by_route'}
-    value['realtime_type_snapshots_by_route']['integrated']['0D']['orderbook']['asks'][0]['price'] = 999
-    assert book['asks'][0]['price'] == 100
+            pytest.fail("delay sampler traversed accumulated history")
+
+    book = {"asks": [{"price": 100, "volume": 2}], "bids": [{"price": 99, "volume": 2}]}
+    manager.realtime_data["005930"] = dict(
+        price_history=History(),
+        realtime_type_snapshots_by_route={
+            "integrated": {
+                "0D": dict(
+                    orderbook=book,
+                    item="005930_AL",
+                    market_route="KRX_NXT_INTEGRATED",
+                    transport_epoch=7,
+                    observed_epoch=10.0,
+                ),
+                "0B": {"history": History()},
+            }
+        },
+    )
+    value = manager.get_pre_submit_delay_depth("005930")
+    assert value["market_data_transport_epoch"] == 7
+    assert set(value) == {
+        "market_data_transport_epoch",
+        "realtime_type_snapshots_by_route",
+    }
+    value["realtime_type_snapshots_by_route"]["integrated"]["0D"]["orderbook"]["asks"][
+        0
+    ]["price"] = 999
+    assert book["asks"][0]["price"] == 100
 
 
 def test_retired_vcp_and_s15_conditions_are_absent_from_ws_bootstrap():
     keywords = set(kiwoom_websocket.SCALP_CONDITION_KEYWORDS)
-    assert not keywords.intersection({
-        "vcp_candid_01", "vcp_shooting_01", "vcp_shooting_next_01",
-        "s15_scan_base_01", "s15_trigger_break_01",
-    })
+    assert not keywords.intersection(
+        {
+            "vcp_candid_01",
+            "vcp_shooting_01",
+            "vcp_shooting_next_01",
+            "s15_scan_base_01",
+            "s15_trigger_break_01",
+        }
+    )
 
 
 def test_exact_item_reader_uses_observation_store_and_current_registration():
     manager = KiwoomWSManager("test-token")
     manager._market_data_transport_epoch = 3
     manager._registered_items_by_code["005930"] = (
-        "005930", "005930_NX", "005930_AL",
+        "005930",
+        "005930_NX",
+        "005930_AL",
     )
-    manager._registered_item_epochs.update({
-        "005930": 3, "005930_NX": 3, "005930_AL": 3,
-    })
-    manager._micro_reversion_observation_only_items.update({
-        "005930_NX", "005930_AL",
-    })
+    manager._registered_item_epochs.update(
+        {
+            "005930": 3,
+            "005930_NX": 3,
+            "005930_AL": 3,
+        }
+    )
+    manager._micro_reversion_observation_only_items.update(
+        {
+            "005930_NX",
+            "005930_AL",
+        }
+    )
     regular = manager._ensure_target_defaults("005930")
     regular["curr"] = 70000
     nxt = manager._ensure_target_defaults(
-        "005930_NX", store=manager._micro_reversion_observation_route_data,
+        "005930_NX",
+        store=manager._micro_reversion_observation_route_data,
     )
     nxt["curr"] = 70050
     integrated = manager._ensure_target_defaults(
-        "005930_AL", store=manager._micro_reversion_observation_route_data,
+        "005930_AL",
+        store=manager._micro_reversion_observation_route_data,
     )
     integrated["curr"] = 70100
 
@@ -585,24 +619,32 @@ def test_micro_observer_preserves_trusted_trade_ingress_clock(
         int((now - 2) * 1000) if trusted else None
     )
     tick = snapshot["last_trade_tick" if realtime_type == "0B" else "last_depth_tick"]
-    assert tick["received_at_ms"] == int((now - 2 if trusted and realtime_type == "0B" else now) * 1000)
+    assert tick["received_at_ms"] == int(
+        (now - 2 if trusted and realtime_type == "0B" else now) * 1000
+    )
     if realtime_type == "0B":
         assert tick["provider_trade_epoch"] == now
         assert tick["provider_trade_time_precision_ms"] == 1000
-        assert tick["provider_trade_date_basis"] == "local_receive_calendar_date_not_provider_date"
-        route = snapshot['realtime_type_snapshots_by_route']['KRX|krx_only']['0B']
-        latency = route['market_source_latency']
-        assert latency['packet_to_normalization_ms'] == (2000 if trusted else None)
-        assert latency['provider_to_packet_ms'] == (-2000 if trusted else None)
-        assert route['observed_epoch'] == (now - 2 if trusted else now)
+        assert (
+            tick["provider_trade_date_basis"]
+            == "local_receive_calendar_date_not_provider_date"
+        )
+        route = snapshot["realtime_type_snapshots_by_route"]["KRX|krx_only"]["0B"]
+        latency = route["market_source_latency"]
+        assert latency["packet_to_normalization_ms"] == (2000 if trusted else None)
+        assert latency["provider_to_packet_ms"] == (-2000 if trusted else None)
+        assert route["observed_epoch"] == (now - 2 if trusted else now)
     assert "micro_observer_packet_received_at_ms" not in manager.realtime_data["005930"]
-    route = snapshot['realtime_type_snapshots_by_route']['KRX|krx_only'][realtime_type]
-    latency = route['market_source_latency']
-    assert latency['item'] == '005930' and latency['route_sequence'] == route['route_sequence']
-    assert latency['packet_to_normalization_ms'] == (2000 if trusted else None)
-    if realtime_type == '0D':
-        assert latency['provider_to_packet_ms'] is None
-        assert 'native_ingest_returned_epoch' not in latency
+    route = snapshot["realtime_type_snapshots_by_route"]["KRX|krx_only"][realtime_type]
+    latency = route["market_source_latency"]
+    assert (
+        latency["item"] == "005930"
+        and latency["route_sequence"] == route["route_sequence"]
+    )
+    assert latency["packet_to_normalization_ms"] == (2000 if trusted else None)
+    if realtime_type == "0D":
+        assert latency["provider_to_packet_ms"] is None
+        assert "native_ingest_returned_epoch" not in latency
 
 
 def test_raw_observation_is_lossless_while_dispatch_keeps_full_latest_history(
@@ -716,7 +758,10 @@ def test_dashboard_snapshot_freezes_main_and_exact_route_views(monkeypatch):
     route_target["recent_trade_ticks"].append({"price": 2, "volume": 1})
 
     assert captured["main"]["005930"]["curr"] == 70000
-    assert captured["producer"]["registration_basis"] == "local_sent_registry_not_broker_ack"
+    assert (
+        captured["producer"]["registration_basis"]
+        == "local_sent_registry_not_broker_ack"
+    )
     assert captured["routes"]["005930_NX"]["curr"] == 70010
     assert captured["routes"]["005930_NX"]["recent_trade_ticks"] == [
         {"price": 70010, "volume": 2}
@@ -1789,12 +1834,19 @@ def test_zero_base_mode_subscribes_only_independent_swing_condition(monkeypatch)
     manager = KiwoomWSManager("test-token")
     fake_ws = _FakeWS([])
     manager.websocket = fake_ws
-    asyncio.run(manager._handle_message(json.dumps({
-        "trnm": "CNSRLST", "data": [
-            {"seq": "1", "name": "scalp_candid_normal_01"},
-            {"seq": "2", "name": "kospi_short_swing_01"},
-        ],
-    })))
+    asyncio.run(
+        manager._handle_message(
+            json.dumps(
+                {
+                    "trnm": "CNSRLST",
+                    "data": [
+                        {"seq": "1", "name": "scalp_candid_normal_01"},
+                        {"seq": "2", "name": "kospi_short_swing_01"},
+                    ],
+                }
+            )
+        )
+    )
     assert [json.loads(payload)["seq"] for payload in fake_ws.sent] == ["2"]
     assert manager.condition_dict == {"2": "kospi_short_swing_01"}
 
@@ -1811,22 +1863,37 @@ def test_retired_vcp_s15_conditions_are_not_subscribed(monkeypatch):
     fake_ws = _FakeWS([])
     manager.websocket = fake_ws
     names = (
-        "vcp_candid_01", "vcp_shooting_01", "vcp_shooting_next_01",
-        "s15_scan_base", "s15_trigger_break",
-        "s15_scan_base_01", "s15_trigger_break_01",
-        "scalp_candid_normal_01", "kospi_short_swing_01",
+        "vcp_candid_01",
+        "vcp_shooting_01",
+        "vcp_shooting_next_01",
+        "s15_scan_base",
+        "s15_trigger_break",
+        "s15_scan_base_01",
+        "s15_trigger_break_01",
+        "scalp_candid_normal_01",
+        "kospi_short_swing_01",
     )
-    asyncio.run(manager._handle_message(json.dumps({
-        "trnm": "CNSRLST",
-        "data": [{"seq": str(i), "name": name} for i, name in enumerate(names)],
-    })))
+    asyncio.run(
+        manager._handle_message(
+            json.dumps(
+                {
+                    "trnm": "CNSRLST",
+                    "data": [
+                        {"seq": str(i), "name": name} for i, name in enumerate(names)
+                    ],
+                }
+            )
+        )
+    )
 
     sent = [json.loads(payload) for payload in fake_ws.sent]
     assert [names[int(payload["seq"])] for payload in sent] == [
-        "scalp_candid_normal_01", "kospi_short_swing_01",
+        "scalp_candid_normal_01",
+        "kospi_short_swing_01",
     ]
     assert set(manager.condition_dict.values()) == {
-        "scalp_candid_normal_01", "kospi_short_swing_01",
+        "scalp_candid_normal_01",
+        "kospi_short_swing_01",
     }
 
 
@@ -2467,27 +2534,17 @@ def test_execute_unsubscribe_returns_remove_send_completion(monkeypatch):
         return completion
 
     monkeypatch.setattr(
-        kiwoom_websocket.asyncio, "run_coroutine_threadsafe", schedule,
+        kiwoom_websocket.asyncio,
+        "run_coroutine_threadsafe",
+        schedule,
     )
     assert manager.execute_unsubscribe(["000001"]) is completion
     completion.set_result(True)
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-def test_main_fixed_watch_registers_missing_exact_route_beside_existing_integrated_route(monkeypatch):
+def test_main_fixed_watch_registers_missing_exact_route_beside_existing_integrated_route(
+    monkeypatch,
+):
     manager = KiwoomWSManager("test-token")
     manager._started = True
     manager.loop = SimpleNamespace(is_running=lambda: True)
@@ -2507,20 +2564,26 @@ def test_main_fixed_watch_registers_missing_exact_route_beside_existing_integrat
 
     def fake_schedule(coro, loop):
         coro.close()
-        return type("FakeFuture", (), {"add_done_callback": lambda self, callback: None})()
+        return type(
+            "FakeFuture", (), {"add_done_callback": lambda self, callback: None}
+        )()
 
     monkeypatch.setattr(manager, "_send_reg", fake_send_reg)
-    monkeypatch.setattr(kiwoom_websocket.asyncio, "run_coroutine_threadsafe", fake_schedule)
+    monkeypatch.setattr(
+        kiwoom_websocket.asyncio, "run_coroutine_threadsafe", fake_schedule
+    )
 
     manager.execute_subscribe(
-        ["005930_NX"], source="main_fixed_watch_admission",
+        ["005930_NX"],
+        source="main_fixed_watch_admission",
         required_realtime_types=("0B", "0D"),
     )
     assert captured[0][0] == ["005930_NX"]
     assert captured[0][1]["replace_existing"] is False
 
     manager.execute_subscribe(
-        ["005930_AL"], source="main_fixed_watch_admission",
+        ["005930_AL"],
+        source="main_fixed_watch_admission",
         required_realtime_types=("0B", "0D"),
     )
     assert len(captured) == 1
@@ -3524,7 +3587,9 @@ def test_real_payload_with_exchange_suffix_updates_canonical_snapshot():
     assert route_snapshot["actual_execution_venue"] == "UNKNOWN"
 
 
-def test_realtime_snapshots_preserve_plain_and_integrated_routes_independently(monkeypatch):
+def test_realtime_snapshots_preserve_plain_and_integrated_routes_independently(
+    monkeypatch,
+):
     clock = [kiwoom_websocket.time.time()]
     monkeypatch.setattr(kiwoom_websocket.time, "time", lambda: clock[0])
     manager = KiwoomWSManager("test-token")
@@ -3536,7 +3601,8 @@ def test_realtime_snapshots_preserve_plain_and_integrated_routes_independently(m
     manager.subscribed_codes.add("039490")
     # Parsing/observer latency must not make the same depth receipt younger.
     monkeypatch.setattr(
-        manager, "_update_micro_estimator_from_orderbook",
+        manager,
+        "_update_micro_estimator_from_orderbook",
         lambda *_args, **_kwargs: clock.__setitem__(0, clock[0] + 0.1),
     )
 
@@ -3615,15 +3681,18 @@ def test_realtime_snapshots_preserve_plain_and_integrated_routes_independently(m
         "KRX": {"ask": 0, "bid": 0},
         "NXT": {"ask": 100, "bid": 200},
     }
-    assert manager.realtime_data["039490"]["recent_depth_ticks_by_route"][
-        "_AL|krx_nxt_integrated"
-    ][0]["ask_levels"][0]["price"] == 10010
+    assert (
+        manager.realtime_data["039490"]["recent_depth_ticks_by_route"][
+            "_AL|krx_nxt_integrated"
+        ][0]["ask_levels"][0]["price"]
+        == 10010
+    )
     integrated_depth = manager.realtime_data["039490"]["recent_depth_ticks_by_route"][
         "_AL|krx_nxt_integrated"
     ][0]
-    assert integrated_depth['market_route']=='krx_nxt_integrated'
-    assert integrated_depth['market_suffix']=='_AL'
-    assert integrated_depth['route_sequence']>0
+    assert integrated_depth["market_route"] == "krx_nxt_integrated"
+    assert integrated_depth["market_suffix"] == "_AL"
+    assert integrated_depth["route_sequence"] > 0
     assert snapshots["_AL|krx_nxt_integrated"]["0D"]["observed_epoch"] == (
         integrated_depth["received_at_ms"] / 1000
     )
@@ -3856,55 +3925,68 @@ def test_remove_before_reg_string_false_does_not_send_remove(monkeypatch):
     assert [payload["trnm"] for payload in payloads] == ["REG"]
 
 
-
-
 def test_retired_feedback_has_no_deferred_scheduler():
     manager = KiwoomWSManager("test-token")
-    assert not hasattr(manager, '_micro_reversion_deferred_reg_codes')
-    assert manager._defer_missing_micro_registration(['005930'],source='retired') is None
-
-
-
-
-
-
-
-
+    assert not hasattr(manager, "_micro_reversion_deferred_reg_codes")
+    assert (
+        manager._defer_missing_micro_registration(["005930"], source="retired") is None
+    )
 
 
 def test_premarket_quiet_persistent_repair_keeps_current_registration(monkeypatch):
     class Clock(datetime):
         @classmethod
         def now(cls, tz=None):
-            return datetime(2026,9,21,8,20,tzinfo=tz)
-    monkeypatch.setattr(kiwoom_websocket,"datetime",Clock)
-    manager=KiwoomWSManager("test-token")
-    manager._started=True
-    manager.websocket=_FakeWS([])
+            return datetime(2026, 9, 21, 8, 20, tzinfo=tz)
+
+    monkeypatch.setattr(kiwoom_websocket, "datetime", Clock)
+    manager = KiwoomWSManager("test-token")
+    manager._started = True
+    manager.websocket = _FakeWS([])
     manager._session_ready.set()
     manager.subscribed_codes.add("005930")
-    manager._registered_items_by_code["005930"]=("005930_AL",)
-    manager._registered_item_epochs["005930_AL"]=manager._market_data_transport_epoch
-    manager._registered_item_types["005930_AL"]=("0B","0D","0w","0F")
-    manager.loop=SimpleNamespace(is_running=lambda: (_ for _ in ()).throw(AssertionError("must not dispatch quiet repair")))
-    manager.execute_subscribe(["005930"],force=True,repair_cycle="persistent_ws_gap",required_realtime_types=["0B","0D"])
-    assert manager.websocket.sent==[]
+    manager._registered_items_by_code["005930"] = ("005930_AL",)
+    manager._registered_item_epochs["005930_AL"] = manager._market_data_transport_epoch
+    manager._registered_item_types["005930_AL"] = ("0B", "0D", "0w", "0F")
+    manager.loop = SimpleNamespace(
+        is_running=lambda: (_ for _ in ()).throw(
+            AssertionError("must not dispatch quiet repair")
+        )
+    )
+    manager.execute_subscribe(
+        ["005930"],
+        force=True,
+        repair_cycle="persistent_ws_gap",
+        required_realtime_types=["0B", "0D"],
+    )
+    assert manager.websocket.sent == []
     # A missing type is a real registration change, and must reach dispatch.
-    with pytest.raises(AssertionError,match="dispatch"):
-        manager.execute_subscribe(["005930"],force=True,repair_cycle="persistent_ws_gap",required_realtime_types=["0H"])
-    manager._market_data_transport_epoch+=1
-    with pytest.raises(AssertionError,match="dispatch"):
-        manager.execute_subscribe(["005930"],force=True,repair_cycle="persistent_ws_gap")
+    with pytest.raises(AssertionError, match="dispatch"):
+        manager.execute_subscribe(
+            ["005930"],
+            force=True,
+            repair_cycle="persistent_ws_gap",
+            required_realtime_types=["0H"],
+        )
+    manager._market_data_transport_epoch += 1
+    with pytest.raises(AssertionError, match="dispatch"):
+        manager.execute_subscribe(
+            ["005930"], force=True, repair_cycle="persistent_ws_gap"
+        )
 
 
 def test_observation_only_al_demotion_does_not_repromote_runtime_item(monkeypatch):
-    manager=KiwoomWSManager("test-token")
-    manager.websocket=_FakeWS([])
+    manager = KiwoomWSManager("test-token")
+    manager.websocket = _FakeWS([])
     manager._session_ready.set()
     manager._implicit_runtime_route_codes.add("005930")
     manager._micro_reversion_observation_only_items.add("005930_AL")
-    monkeypatch.setattr(manager,"_integrated_aftermarket_route_required",lambda:True)
-    asyncio.run(manager._send_reg(["005930_AL"],observation_only=True,realtime_types=["0B","0D"]))
+    monkeypatch.setattr(manager, "_integrated_aftermarket_route_required", lambda: True)
+    asyncio.run(
+        manager._send_reg(
+            ["005930_AL"], observation_only=True, realtime_types=["0B", "0D"]
+        )
+    )
     assert "005930_AL" in manager._micro_reversion_observation_only_items
     assert manager._runtime_primary_items_by_code.get("005930") != "005930_AL"
 
@@ -3925,6 +4007,7 @@ def _exact_probe_manager():
 def _zero_base_native_transfer(route="nxt_only"):
     import time
     from src.engine.scalping import reversal_source_diagnostics as D
+
     manager = KiwoomWSManager("test-token")
     manager.websocket = _FakeWS([])
     manager._session_ready.set()
@@ -3939,21 +4022,42 @@ def _zero_base_native_transfer(route="nxt_only"):
     manager._exact_probe_item_leases[item] = {"lease_id": "lease-1", "epoch": 8}
     manager._micro_reversion_observation_only_items.add(item)
     manager._micro_reversion_observation_only_codes.add(code)
-    manager._ensure_target_defaults(item, store=manager._micro_reversion_observation_route_data)["curr"] = 99999
+    manager._ensure_target_defaults(
+        item, store=manager._micro_reversion_observation_route_data
+    )["curr"] = 99999
     now = time.time()
-    expected = dict(snapshot=({"symbol": code, "venue": venue, "source_item": item,
-                              "native_epoch": 8, "epoch": now}, {}),
-                    deadline_epoch=now + 5, deadline_perf=time.perf_counter() + 5,
-                    observer_pid=os.getpid(), observer_start_ticks=D._PROCESS_START_TICKS)
-    payload = dict(code=code, market_data_route=route, ws_handoff_id="lease-1",
-                   physical_probe_lease_id="lease-1", native_observation=expected,
-                   zero_base_pending_db=True)
+    expected = dict(
+        snapshot=(
+            {
+                "symbol": code,
+                "venue": venue,
+                "source_item": item,
+                "native_epoch": 8,
+                "epoch": now,
+            },
+            {},
+        ),
+        deadline_epoch=now + 5,
+        deadline_perf=time.perf_counter() + 5,
+        observer_pid=os.getpid(),
+        observer_start_ticks=D._PROCESS_START_TICKS,
+    )
+    payload = dict(
+        code=code,
+        market_data_route=route,
+        ws_handoff_id="lease-1",
+        physical_probe_lease_id="lease-1",
+        native_observation=expected,
+        zero_base_pending_db=True,
+    )
     return manager, payload, item
 
 
 @pytest.mark.parametrize("route", ["nxt_only", "krx_nxt_integrated"])
 @pytest.mark.parametrize("borrowed", [False, True])
-def test_zero_base_native_transfer_keeps_exact_registration_and_cleanup(route, borrowed):
+def test_zero_base_native_transfer_keeps_exact_registration_and_cleanup(
+    route, borrowed
+):
     manager, payload, item = _zero_base_native_transfer(route)
     if borrowed:
         manager._exact_probe_item_leases.clear()
@@ -3975,13 +4079,30 @@ def test_zero_base_native_transfer_keeps_exact_registration_and_cleanup(route, b
     assert manager.websocket.sent == []
 
 
-@pytest.mark.parametrize("gap", [
-    "expired", "wrong_pid", "route", "symbol", "epoch", "registered_epoch", "missing_0d",
-    "lease", "lease_epoch", "physical_lease", "removing", "not_ready", "stopped", "primary_conflict",
-    "other_runtime_item", "unregistered",
-])
+@pytest.mark.parametrize(
+    "gap",
+    [
+        "expired",
+        "wrong_pid",
+        "route",
+        "symbol",
+        "epoch",
+        "registered_epoch",
+        "missing_0d",
+        "lease",
+        "lease_epoch",
+        "physical_lease",
+        "removing",
+        "not_ready",
+        "stopped",
+        "primary_conflict",
+        "other_runtime_item",
+        "unregistered",
+    ],
+)
 def test_zero_base_native_transfer_rejects_invalid_original_binding(gap):
     import time
+
     manager, payload, item = _zero_base_native_transfer()
     expected = payload["native_observation"]
     if gap == "expired":
@@ -4027,12 +4148,33 @@ def test_zero_base_native_transfer_uses_only_later_real_packets(route):
     manager, payload, item = _zero_base_native_transfer(route)
     assert manager.adopt_zero_base_probe_target(payload)
     before_epoch = manager._market_data_transport_epoch
-    asyncio.run(manager._handle_message(json.dumps({
-        "trnm": "REAL", "data": [
-            {"type": "0B", "item": item, "values": {"10": "10000", "15": "+1", "228": "101.5"}},
-            {"type": "0D", "item": item, "values": {"21": "133500", "41": "10010", "51": "9990", "61": "10", "71": "10"}},
-        ],
-    })))
+    asyncio.run(
+        manager._handle_message(
+            json.dumps(
+                {
+                    "trnm": "REAL",
+                    "data": [
+                        {
+                            "type": "0B",
+                            "item": item,
+                            "values": {"10": "10000", "15": "+1", "228": "101.5"},
+                        },
+                        {
+                            "type": "0D",
+                            "item": item,
+                            "values": {
+                                "21": "133500",
+                                "41": "10010",
+                                "51": "9990",
+                                "61": "10",
+                                "71": "10",
+                            },
+                        },
+                    ],
+                }
+            )
+        )
+    )
     snapshot = manager.get_exact_item_data("010140", item)
     assert snapshot["curr"] == 10000  # Observation-only price was 99999.
     assert snapshot["received_types"] == {"0B", "0D"}
@@ -4042,6 +4184,7 @@ def test_zero_base_native_transfer_uses_only_later_real_packets(route):
 
 def test_exact_probe_adds_nx_preserves_al_and_removes_only_owned_item():
     manager = _exact_probe_manager()
+
     async def scenario():
         receipt = await manager._acquire_exact_probe_item("010140_NX", "lease-1")
         assert receipt["registered"] is True
@@ -4053,24 +4196,36 @@ def test_exact_probe_adds_nx_preserves_al_and_removes_only_owned_item():
         repeated = await manager._acquire_exact_probe_item("010140_NX", "lease-1")
         assert repeated["created"] is True
         assert len(manager.websocket.sent) == 1
-        assert (await manager._acquire_exact_probe_item("010140_NX", "other"))["registered"] is False
+        assert (await manager._acquire_exact_probe_item("010140_NX", "other"))[
+            "registered"
+        ] is False
         assert await manager._release_exact_probe_item("010140_NX", "other") is True
         assert len(manager.websocket.sent) == 1
         assert await manager._release_exact_probe_item("010140_NX", "lease-1") is True
         assert manager._registered_items_by_code["010140"] == ("010140_AL",)
         assert manager._registered_item_types["010140_AL"] == ("0B", "0D", "0w", "0F")
         assert "010140_NX" not in manager._micro_reversion_observation_only_items
+
     asyncio.run(scenario())
     packets = [json.loads(raw) for raw in manager.websocket.sent]
     assert packets[0]["trnm"] == "REG" and packets[0]["refresh"] == "1"
     assert all(row["item"] == ["010140_NX"] for row in packets[0]["data"])
-    assert packets[1] == {"trnm": "REMOVE", "grp_no": "1",
-                         "data": [{"item": ["010140_NX"], "type": ["0B", "0D"]}]}
+    assert packets[1] == {
+        "trnm": "REMOVE",
+        "grp_no": "1",
+        "data": [{"item": ["010140_NX"], "type": ["0B", "0D"]}],
+    }
 
 
-@pytest.mark.parametrize("condition", ["budget", "not_ready", "invalid_existing", "borrowed", "adopted", "reconnect"])
-def test_exact_probe_budget_borrowing_adoption_and_epoch_boundaries(monkeypatch, condition):
+@pytest.mark.parametrize(
+    "condition",
+    ["budget", "not_ready", "invalid_existing", "borrowed", "adopted", "reconnect"],
+)
+def test_exact_probe_budget_borrowing_adoption_and_epoch_boundaries(
+    monkeypatch, condition
+):
     manager = _exact_probe_manager()
+
     async def scenario():
         if condition == "budget":
             monkeypatch.setattr(manager, "_max_registered_item_count", lambda: 1)
@@ -4078,7 +4233,9 @@ def test_exact_probe_budget_borrowing_adoption_and_epoch_boundaries(monkeypatch,
             manager._session_ready.clear()
         elif condition in {"invalid_existing", "borrowed"}:
             manager._registered_items_by_code["010140"] += ("010140_NX",)
-            manager._registered_item_epochs["010140_NX"] = 7 if condition == "invalid_existing" else 8
+            manager._registered_item_epochs["010140_NX"] = (
+                7 if condition == "invalid_existing" else 8
+            )
             manager._registered_item_types["010140_NX"] = ("0B", "0D")
         receipt = await manager._acquire_exact_probe_item("010140_NX", "lease-1")
         if condition in {"budget", "not_ready", "invalid_existing"}:
@@ -4097,14 +4254,18 @@ def test_exact_probe_budget_borrowing_adoption_and_epoch_boundaries(monkeypatch,
             assert "010140_NX" in manager._registered_items_by_code["010140"]
         if condition == "reconnect":
             assert manager._registered_items_by_code["010140"] == ("010140_AL",)
+
     asyncio.run(scenario())
 
 
 def test_exact_probe_send_failure_retains_custody_for_item_cleanup(monkeypatch):
     manager = _exact_probe_manager()
+
     async def uncertain_send(*args, **kwargs):
         return None  # Native transport reports no confirmed registration.
+
     monkeypatch.setattr(manager, "_send_reg_impl", uncertain_send)
+
     async def scenario():
         receipt = await manager._acquire_exact_probe_item("010140_NX", "lease-1")
         assert receipt["registered"] is False and receipt["created"] is True
@@ -4112,23 +4273,33 @@ def test_exact_probe_send_failure_retains_custody_for_item_cleanup(monkeypatch):
         await manager._release_exact_probe_item("010140_NX", "lease-1")
         assert manager._registered_items_by_code["010140"] == ("010140_AL",)
         assert "010140_NX" not in manager._exact_probe_item_leases
+
     asyncio.run(scenario())
     assert json.loads(manager.websocket.sent[0])["trnm"] == "REMOVE"
 
 
-def test_exact_probe_adoption_during_remove_serializes_restore_without_touching_al(monkeypatch):
+def test_exact_probe_adoption_during_remove_serializes_restore_without_touching_al(
+    monkeypatch,
+):
     manager = _exact_probe_manager()
     manager._started = True
     packets = []
+
     async def scenario():
         manager.loop = asyncio.get_running_loop()
         await manager._acquire_exact_probe_item("010140_NX", "lease-1")
+
         async def send(raw):
             packet = json.loads(raw)
             packets.append(packet)
             if packet["trnm"] == "REMOVE":
-                manager.execute_subscribe(["010140_NX"], source="other_observation_owner",
-                                          observation_only=True, realtime_types=("0B", "0D"))
+                manager.execute_subscribe(
+                    ["010140_NX"],
+                    source="other_observation_owner",
+                    observation_only=True,
+                    realtime_types=("0B", "0D"),
+                )
+
         manager.websocket.send = send
         assert await manager._release_exact_probe_item("010140_NX", "lease-1") is True
         assert "010140_NX" not in manager._registered_item_epochs
@@ -4137,287 +4308,540 @@ def test_exact_probe_adoption_during_remove_serializes_restore_without_touching_
         assert manager._registered_item_epochs["010140_NX"] == 8
         assert manager._registered_items_by_code["010140"] == ("010140_AL", "010140_NX")
         assert "010140_NX" not in manager._exact_probe_item_leases
+
     asyncio.run(scenario())
     assert [packet["trnm"] for packet in packets] == ["REMOVE", "REG"]
-    assert all(row["item"] == ["010140_NX"] for packet in packets for row in packet["data"])
+    assert all(
+        row["item"] == ["010140_NX"] for packet in packets for row in packet["data"]
+    )
 
 
 @pytest.mark.parametrize("symbol", ["005930", "034020", "403870", "196170", "036930"])
 def test_dashboard_omits_unused_histories_preserving_exported_route_window(symbol):
     from src.engine.bd_fbuy_accum_pre_scanner import _ws_machine_route_payload
-    manager = KiwoomWSManager('test-token')
+
+    manager = KiwoomWSManager("test-token")
     target = manager._ensure_target_defaults(symbol)
+
     class UnusedHistory:
         def __deepcopy__(self, memo):
-            pytest.fail('dashboard must not copy unused live history')
-    target['price_history'] = UnusedHistory()
-    target['recent_trade_ticks_by_route'] = {'krx_nxt_integrated': deque([
-        {'received_at_ms': 1000000-i, 'transport_epoch': 1, 'item': symbol + "_AL",
-         'price': 10000+i, 'volume': 1, 'route_sequence': 500-i}
-        for i in range(500)])}
-    target['recent_depth_ticks_by_route'] = {'krx_nxt_integrated': deque([
-        {'received_at_ms': 1000000-i, 'transport_epoch': 1, 'item': symbol + "_AL",
-         'ask_levels': [{'price': 10001+i, 'quantity': 10}],
-         'bid_levels': [{'price': 10000+i, 'quantity': 10}], 'route_sequence': 500-i}
-        for i in range(500)])}
+            pytest.fail("dashboard must not copy unused live history")
+
+    target["price_history"] = UnusedHistory()
+    target["recent_trade_ticks_by_route"] = {
+        "krx_nxt_integrated": deque(
+            [
+                {
+                    "received_at_ms": 1000000 - i,
+                    "transport_epoch": 1,
+                    "item": symbol + "_AL",
+                    "price": 10000 + i,
+                    "volume": 1,
+                    "route_sequence": 500 - i,
+                }
+                for i in range(500)
+            ]
+        )
+    }
+    target["recent_depth_ticks_by_route"] = {
+        "krx_nxt_integrated": deque(
+            [
+                {
+                    "received_at_ms": 1000000 - i,
+                    "transport_epoch": 1,
+                    "item": symbol + "_AL",
+                    "ask_levels": [{"price": 10001 + i, "quantity": 10}],
+                    "bid_levels": [{"price": 10000 + i, "quantity": 10}],
+                    "route_sequence": 500 - i,
+                }
+                for i in range(500)
+            ]
+        )
+    }
     frozen = manager._snapshot_target(target, dashboard_only=True)
-    assert 'market_data_health' not in frozen  # writer computes health outside WS lock
-    assert len(frozen['recent_trade_ticks_by_route']['krx_nxt_integrated']) == 120
-    assert _ws_machine_route_payload(frozen, now_ts=1000) == _ws_machine_route_payload(target, now_ts=1000)
-    target['recent_trade_ticks_by_route']['krx_nxt_integrated'][0]['price'] = 1
-    assert frozen['recent_trade_ticks_by_route']['krx_nxt_integrated'][0]['price'] == 10000
+    assert "market_data_health" not in frozen  # writer computes health outside WS lock
+    assert len(frozen["recent_trade_ticks_by_route"]["krx_nxt_integrated"]) == 120
+    assert _ws_machine_route_payload(frozen, now_ts=1000) == _ws_machine_route_payload(
+        target, now_ts=1000
+    )
+    target["recent_trade_ticks_by_route"]["krx_nxt_integrated"][0]["price"] = 1
+    assert (
+        frozen["recent_trade_ticks_by_route"]["krx_nxt_integrated"][0]["price"] == 10000
+    )
 
 
 def test_dashboard_finishes_projection_outside_ingress_lock(monkeypatch):
-    manager = KiwoomWSManager('test-token')
-    manager._ensure_target_defaults('005930')
+    manager = KiwoomWSManager("test-token")
+    manager._ensure_target_defaults("005930")
     original = manager._finish_snapshot
     seen = []
+
     class ImmediateThread:
-        def __init__(self, *, target, **kwargs): self.target = target
-        def start(self): self.target()
+        def __init__(self, *, target, **kwargs):
+            self.target = target
+
+        def start(self):
+            self.target()
+
     # Patch the publisher thread only, keeping an actual probe thread above.
     from threading import Thread
+
     def finish_without_patched_thread(snapshot, **kwargs):
         acquired = []
+
         def probe():
-            ok = manager.lock.acquire(timeout=.2)
+            ok = manager.lock.acquire(timeout=0.2)
             acquired.append(ok)
-            if ok: manager.lock.release()
+            if ok:
+                manager.lock.release()
+
         thread = Thread(target=probe)
-        thread.start(); thread.join(.5)
+        thread.start()
+        thread.join(0.5)
         assert acquired == [True]
         seen.append(True)
         return original(snapshot, **kwargs)
-    monkeypatch.setattr(manager, '_finish_snapshot', finish_without_patched_thread)
-    monkeypatch.setattr(kiwoom_websocket.threading, 'Thread', ImmediateThread)
-    monkeypatch.setattr(kiwoom_websocket, 'write_ws_snapshot', lambda *a, **kw: 'fixture')
+
+    monkeypatch.setattr(manager, "_finish_snapshot", finish_without_patched_thread)
+    monkeypatch.setattr(kiwoom_websocket.threading, "Thread", ImmediateThread)
+    monkeypatch.setattr(
+        kiwoom_websocket, "write_ws_snapshot", lambda *a, **kw: "fixture"
+    )
     manager._maybe_write_dashboard_snapshot()
     assert seen and not manager._dashboard_snapshot_write_inflight
 
 
 def test_failed_worker_start_resets_publication_guard(monkeypatch):
-    manager = KiwoomWSManager('test-token')
+    manager = KiwoomWSManager("test-token")
+
     class BrokenThread:
-        def __init__(self, **kwargs): pass
-        def start(self): raise RuntimeError('thread unavailable')
-    monkeypatch.setattr(kiwoom_websocket.threading, 'Thread', BrokenThread)
-    with pytest.raises(RuntimeError): manager._maybe_write_dashboard_snapshot()
+        def __init__(self, **kwargs):
+            pass
+
+        def start(self):
+            raise RuntimeError("thread unavailable")
+
+    monkeypatch.setattr(kiwoom_websocket.threading, "Thread", BrokenThread)
+    with pytest.raises(RuntimeError):
+        manager._maybe_write_dashboard_snapshot()
     assert manager._dashboard_snapshot_write_inflight is False
 
 
 def test_dashboard_uses_capture_clock_when_projection_is_delayed(monkeypatch):
-    manager = KiwoomWSManager('test-token')
+    manager = KiwoomWSManager("test-token")
     clock = [1000.0]
-    monkeypatch.setattr(kiwoom_websocket.time, 'time', lambda: clock[0])
-    row = manager._ensure_target_defaults('034020')
-    row['last_realtime_type_ts'] = {'0B': 999.0}
+    monkeypatch.setattr(kiwoom_websocket.time, "time", lambda: clock[0])
+    row = manager._ensure_target_defaults("034020")
+    row["last_realtime_type_ts"] = {"0B": 999.0}
     captured = {}
+
     class Collector:
         def completed_bar_integrity(self):
             clock[0] = 1003.0
             return {}
+
     class ImmediateThread:
-        def __init__(self, *, target, **kwargs): self.target = target
-        def start(self): self.target()
+        def __init__(self, *, target, **kwargs):
+            self.target = target
+
+        def start(self):
+            self.target()
+
     def write(frame, **kwargs):
-        captured.update(now=kwargs['now_ts'], event=frame['034020']['last_realtime_type_ts']['0B'])
+        captured.update(
+            now=kwargs["now_ts"], event=frame["034020"]["last_realtime_type_ts"]["0B"]
+        )
+
     manager._micro_reversion_forward_collector = Collector()
-    monkeypatch.setattr(kiwoom_websocket.threading, 'Thread', ImmediateThread)
-    monkeypatch.setattr(kiwoom_websocket, 'write_ws_snapshot', write)
+    monkeypatch.setattr(kiwoom_websocket.threading, "Thread", ImmediateThread)
+    monkeypatch.setattr(kiwoom_websocket, "write_ws_snapshot", write)
     manager._maybe_write_dashboard_snapshot()
-    assert captured == {'now': 1000.0, 'event': 999.0}
+    assert captured == {"now": 1000.0, "event": 999.0}
     assert clock[0] == 1003.0
 
+
 def test_dashboard_preserves_main_projection_without_retired_research(monkeypatch):
-    manager = KiwoomWSManager('test-token')
-    assert not hasattr(manager, '_capture_episode_research_facts')
-    assert not hasattr(manager, '_schedule_episode_research_capture')
+    manager = KiwoomWSManager("test-token")
+    assert not hasattr(manager, "_capture_episode_research_facts")
+    assert not hasattr(manager, "_schedule_episode_research_capture")
     frames = []
+
     class ImmediateThread:
-        def __init__(self, *, target, **kwargs): self.target = target
-        def start(self): self.target()
-    monkeypatch.setattr(kiwoom_websocket.threading, 'Thread', ImmediateThread)
-    monkeypatch.setattr(kiwoom_websocket, 'write_ws_snapshot', lambda frame, **kw: frames.append(kw) or 'fixture')
+        def __init__(self, *, target, **kwargs):
+            self.target = target
+
+        def start(self):
+            self.target()
+
+    monkeypatch.setattr(kiwoom_websocket.threading, "Thread", ImmediateThread)
+    monkeypatch.setattr(
+        kiwoom_websocket,
+        "write_ws_snapshot",
+        lambda frame, **kw: frames.append(kw) or "fixture",
+    )
     manager._maybe_write_dashboard_snapshot()
     assert not manager._dashboard_snapshot_write_inflight
-    assert 'episode_research_capture' not in frames[0]['shared_transport_producer']
+    assert "episode_research_capture" not in frames[0]["shared_transport_producer"]
 
 
 def test_frozen_history_keeps_full_tape_and_copies_mutable_children():
-    from src.engine.infrastructure.snapshot_copy import freeze_history,materialize_history
+    from src.engine.infrastructure.snapshot_copy import (
+        freeze_history,
+        materialize_history,
+    )
     from collections import deque
     from types import SimpleNamespace
-    manager=KiwoomWSManager('offline-token')
-    target=manager._ensure_target_defaults('005930')
-    target['recent_trade_ticks']=deque((freeze_history(dict(price=i,volume=1,
-        nested=[{'value':i}],extra=SimpleNamespace(value=i))) for i in range(500)),maxlen=500)
-    frozen=manager._snapshot_target(target,_defer_finish=True)
-    raw=materialize_history(frozen['recent_trade_ticks'])
-    assert isinstance(raw,deque) and raw.maxlen==500
-    target['recent_trade_ticks'].appendleft(freeze_history({'price':999}))
-    first=manager._finish_snapshot(frozen)
-    second=manager._finish_snapshot(dict(frozen))
-    assert isinstance(first['recent_trade_ticks'],list) # Existing final consumer normalization.
-    assert len(first['recent_trade_ticks'])==500 and first['recent_trade_ticks'][0]['price']==0
-    first['recent_trade_ticks'][0]['nested'][0]['value']=999
-    first['recent_trade_ticks'][0]['extra'].value=999
-    assert second['recent_trade_ticks'][0]['nested'][0]['value']==0
-    assert second['recent_trade_ticks'][0]['extra'].value==0
+
+    manager = KiwoomWSManager("offline-token")
+    target = manager._ensure_target_defaults("005930")
+    target["recent_trade_ticks"] = deque(
+        (
+            freeze_history(
+                dict(
+                    price=i,
+                    volume=1,
+                    nested=[{"value": i}],
+                    extra=SimpleNamespace(value=i),
+                )
+            )
+            for i in range(500)
+        ),
+        maxlen=500,
+    )
+    frozen = manager._snapshot_target(target, _defer_finish=True)
+    raw = materialize_history(frozen["recent_trade_ticks"])
+    assert isinstance(raw, deque) and raw.maxlen == 500
+    target["recent_trade_ticks"].appendleft(freeze_history({"price": 999}))
+    first = manager._finish_snapshot(frozen)
+    second = manager._finish_snapshot(dict(frozen))
+    assert isinstance(
+        first["recent_trade_ticks"], list
+    )  # Existing final consumer normalization.
+    assert (
+        len(first["recent_trade_ticks"]) == 500
+        and first["recent_trade_ticks"][0]["price"] == 0
+    )
+    first["recent_trade_ticks"][0]["nested"][0]["value"] = 999
+    first["recent_trade_ticks"][0]["extra"].value = 999
+    assert second["recent_trade_ticks"][0]["nested"][0]["value"] == 0
+    assert second["recent_trade_ticks"][0]["extra"].value == 0
 
 
 def test_exact_probe_trace_distinguishes_wire_from_normalization_and_freezes_before_release():
     import threading
     from src.engine.kiwoom_websocket import KiwoomWSManager
+
     manager = KiwoomWSManager.__new__(KiwoomWSManager)
-    manager.lock = threading.RLock(); manager._market_data_transport_epoch = 7
+    manager.lock = threading.RLock()
+    manager._market_data_transport_epoch = 7
     from src.engine.infrastructure.ws_control_receipts import ControlReceipts
+
     manager._control_receipts = ControlReceipts()
-    manager._exact_probe_item_leases = {'123456_AL':dict(lease_id='lease',epoch=7)}
-    manager._micro_reversion_registration_receipt = {'items':{'123456_AL':dict(
-        registration_transport_epoch=7, receipt_count_by_type={})}}
-    trace = manager.exact_probe_source_trace('123456_AL','lease')
-    assert trace['first_unobserved_boundary_by_type']['0B'] == 'wire_receive'
-    manager._record_exact_probe_wire_receipt({'item':'123456_AL','type':'0B','values':{}},100)
-    trace = manager.exact_probe_source_trace('123456_AL','lease')
-    assert trace['first_unobserved_boundary_by_type']['0B'] == 'normalized_receive'
-    assert trace['broker_ack_observed'] is None and trace['order_authority'] is False
-    manager._record_exact_probe_wire_receipt({'item':'123456_NX','type':'0D'},101)
-    manager._micro_reversion_registration_receipt['items']['123456_AL']['receipt_count_by_type']['0B'] = 1
-    complete = manager.exact_probe_source_trace('123456_AL','lease')
-    assert complete['first_unobserved_boundary_by_type']['0B'] == 'native_consumer_not_proven_here'
-    manager._exact_probe_item_leases.clear(); manager._micro_reversion_registration_receipt['items'].clear()
-    assert complete['lease']['wire_receipt_count_by_type'] == {'0B':1}
-    assert trace['registration']['receipt_count_by_type'] == {}
-    assert manager.exact_probe_source_trace('123456_AL','lease')['lease_bound'] is False
+    manager._exact_probe_item_leases = {"123456_AL": dict(lease_id="lease", epoch=7)}
+    manager._micro_reversion_registration_receipt = {
+        "items": {
+            "123456_AL": dict(registration_transport_epoch=7, receipt_count_by_type={})
+        }
+    }
+    trace = manager.exact_probe_source_trace("123456_AL", "lease")
+    assert trace["first_unobserved_boundary_by_type"]["0B"] == "wire_receive"
+    manager._record_exact_probe_wire_receipt(
+        {"item": "123456_AL", "type": "0B", "values": {}}, 100
+    )
+    trace = manager.exact_probe_source_trace("123456_AL", "lease")
+    assert trace["first_unobserved_boundary_by_type"]["0B"] == "normalized_receive"
+    assert trace["broker_ack_observed"] is None and trace["order_authority"] is False
+    manager._record_exact_probe_wire_receipt({"item": "123456_NX", "type": "0D"}, 101)
+    manager._micro_reversion_registration_receipt["items"]["123456_AL"][
+        "receipt_count_by_type"
+    ]["0B"] = 1
+    complete = manager.exact_probe_source_trace("123456_AL", "lease")
+    assert (
+        complete["first_unobserved_boundary_by_type"]["0B"]
+        == "native_consumer_not_proven_here"
+    )
+    manager._exact_probe_item_leases.clear()
+    manager._micro_reversion_registration_receipt["items"].clear()
+    assert complete["lease"]["wire_receipt_count_by_type"] == {"0B": 1}
+    assert trace["registration"]["receipt_count_by_type"] == {}
+    assert (
+        manager.exact_probe_source_trace("123456_AL", "lease")["lease_bound"] is False
+    )
 
 
-@pytest.mark.parametrize('kind', ['0B', '0D'])
-@pytest.mark.parametrize('outcome', ['enqueued', 'invalid_depth_snapshot', 'queue_full',
-                                    'disabled', 'exception', 'unavailable', 'unknown'])
+@pytest.mark.parametrize("kind", ["0B", "0D"])
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        "enqueued",
+        "invalid_depth_snapshot",
+        "queue_full",
+        "disabled",
+        "exception",
+        "unavailable",
+        "unknown",
+    ],
+)
 def test_exact_probe_trace_accounts_for_collector_outcomes(kind, outcome):
     from types import SimpleNamespace
-    from src.engine.scalping.micro_reversion.forward_collector import ProducerCanaryResult
+    from src.engine.scalping.micro_reversion.forward_collector import (
+        ProducerCanaryResult,
+    )
+
     manager = _exact_probe_manager()
-    lease = dict(lease_id='lease', epoch=7, interval_started_epoch=99.)
-    manager._exact_probe_item_leases['123456_AL'] = lease
+    lease = dict(lease_id="lease", epoch=7, interval_started_epoch=99.0)
+    manager._exact_probe_item_leases["123456_AL"] = lease
     manager._market_data_transport_epoch = 7
-    source = dict(item='123456_AL', transport_epoch=7, route_sequence=1,
-                  received_at_ms=100000, market_route='krx_nxt_integrated')
-    data = {'last_realtime_type_item': {kind: '123456_AL'},
-            'last_trade_tick' if kind == '0B' else 'last_depth_tick': source}
+    source = dict(
+        item="123456_AL",
+        transport_epoch=7,
+        route_sequence=1,
+        received_at_ms=100000,
+        market_route="krx_nxt_integrated",
+    )
+    data = {
+        "last_realtime_type_item": {kind: "123456_AL"},
+        "last_trade_tick" if kind == "0B" else "last_depth_tick": source,
+    }
+
     def observe(*args, **kwargs):
-        if outcome == 'exception':
-            raise RuntimeError('collector failure')
-        return None if outcome == 'unknown' else ProducerCanaryResult(outcome)
-    manager._micro_reversion_forward_collector = (None if outcome == 'unavailable' else
-        SimpleNamespace(observe_kiwoom_0b=observe, observe_kiwoom_0d=observe))
-    manager._observe_micro_reversion_forward('123456', data, realtime_type=kind)
-    result = {'exception': 'callback_error', 'unavailable': 'collector_unavailable',
-              'unknown': 'unobservable_result'}.get(outcome, outcome)
-    trace = manager.exact_probe_source_trace('123456_AL', 'lease')
-    assert trace['lease']['collector_result_counts_by_type'] == {kind: {result: 1}}
-    assert trace['lease']['collector_last_result_by_type'][kind] == dict(
-        result=result, route_sequence=1, received_at_ms=100000)
+        if outcome == "exception":
+            raise RuntimeError("collector failure")
+        return None if outcome == "unknown" else ProducerCanaryResult(outcome)
+
+    manager._micro_reversion_forward_collector = (
+        None
+        if outcome == "unavailable"
+        else SimpleNamespace(observe_kiwoom_0b=observe, observe_kiwoom_0d=observe)
+    )
+    manager._observe_micro_reversion_forward("123456", data, realtime_type=kind)
+    result = {
+        "exception": "callback_error",
+        "unavailable": "collector_unavailable",
+        "unknown": "unobservable_result",
+    }.get(outcome, outcome)
+    trace = manager.exact_probe_source_trace("123456_AL", "lease")
+    assert trace["lease"]["collector_result_counts_by_type"] == {kind: {result: 1}}
+    assert trace["lease"]["collector_last_result_by_type"][kind] == dict(
+        result=result, route_sequence=1, received_at_ms=100000
+    )
     # A detached terminal trace survives native lease cleanup.
     lease.clear()
-    assert trace['lease']['collector_result_counts_by_type'][kind][result] == 1
-    assert trace['order_authority'] is False
+    assert trace["lease"]["collector_result_counts_by_type"][kind][result] == 1
+    assert trace["order_authority"] is False
 
 
-@pytest.mark.parametrize('damage', ['epoch', 'item', 'route', 'replacement', 'reconnect',
-                                   'before_registration', 'missing_interval', 'bad_clock', 'lease_id'])
+@pytest.mark.parametrize(
+    "damage",
+    [
+        "epoch",
+        "item",
+        "route",
+        "replacement",
+        "reconnect",
+        "before_registration",
+        "missing_interval",
+        "bad_clock",
+        "lease_id",
+    ],
+)
 def test_collector_outcome_never_credits_another_probe_lease(damage):
     from types import SimpleNamespace
-    from src.engine.scalping.micro_reversion.forward_collector import ProducerCanaryResult
+    from src.engine.scalping.micro_reversion.forward_collector import (
+        ProducerCanaryResult,
+    )
+
     manager = _exact_probe_manager()
     manager._market_data_transport_epoch = 7
-    lease = dict(lease_id='lease', epoch=7, interval_started_epoch=99.)
-    manager._exact_probe_item_leases['123456_AL'] = lease
-    source = dict(item='123456_AL', transport_epoch=7, route_sequence=1,
-                  received_at_ms=100000, market_route='krx_nxt_integrated')
-    if damage == 'epoch': source['transport_epoch'] = 6
-    if damage == 'item': source['item'] = '123456_NX'
-    if damage == 'route': source['market_route'] = 'nxt_only'
-    if damage == 'before_registration': source['received_at_ms'] = 98000
-    if damage == 'missing_interval': lease.pop('interval_started_epoch')
-    if damage == 'bad_clock': source['received_at_ms'] = float('nan')
+    lease = dict(lease_id="lease", epoch=7, interval_started_epoch=99.0)
+    manager._exact_probe_item_leases["123456_AL"] = lease
+    source = dict(
+        item="123456_AL",
+        transport_epoch=7,
+        route_sequence=1,
+        received_at_ms=100000,
+        market_route="krx_nxt_integrated",
+    )
+    if damage == "epoch":
+        source["transport_epoch"] = 6
+    if damage == "item":
+        source["item"] = "123456_NX"
+    if damage == "route":
+        source["market_route"] = "nxt_only"
+    if damage == "before_registration":
+        source["received_at_ms"] = 98000
+    if damage == "missing_interval":
+        lease.pop("interval_started_epoch")
+    if damage == "bad_clock":
+        source["received_at_ms"] = float("nan")
+
     def observe(*args, **kwargs):
-        if damage == 'replacement':
-            manager._exact_probe_item_leases['123456_AL'] = dict(lease_id='new', epoch=7)
-        if damage == 'reconnect': manager._market_data_transport_epoch = 8
-        if damage == 'lease_id': lease['lease_id'] = 'new'
+        if damage == "replacement":
+            manager._exact_probe_item_leases["123456_AL"] = dict(
+                lease_id="new", epoch=7
+            )
+        if damage == "reconnect":
+            manager._market_data_transport_epoch = 8
+        if damage == "lease_id":
+            lease["lease_id"] = "new"
         return ProducerCanaryResult.ENQUEUED
-    manager._micro_reversion_forward_collector = SimpleNamespace(observe_kiwoom_0d=observe)
-    manager._observe_micro_reversion_forward('123456', {
-        'last_realtime_type_item': {'0D': '123456_AL'}, 'last_depth_tick': source}, realtime_type='0D')
-    assert 'collector_result_counts_by_type' not in lease
-    assert 'collector_result_counts_by_type' not in manager._exact_probe_item_leases['123456_AL']
+
+    manager._micro_reversion_forward_collector = SimpleNamespace(
+        observe_kiwoom_0d=observe
+    )
+    manager._observe_micro_reversion_forward(
+        "123456",
+        {"last_realtime_type_item": {"0D": "123456_AL"}, "last_depth_tick": source},
+        realtime_type="0D",
+    )
+    assert "collector_result_counts_by_type" not in lease
+    assert (
+        "collector_result_counts_by_type"
+        not in manager._exact_probe_item_leases["123456_AL"]
+    )
 
 
 def test_probe_collector_accounting_exceeds_diagnostic_tail_without_growing_keys():
     from types import SimpleNamespace
-    from src.engine.scalping.micro_reversion.forward_collector import ProducerCanaryResult
+    from src.engine.scalping.micro_reversion.forward_collector import (
+        ProducerCanaryResult,
+    )
+
     manager = _exact_probe_manager()
     manager._market_data_transport_epoch = 7
-    lease = dict(lease_id='lease', epoch=7, interval_started_epoch=99.)
-    manager._exact_probe_item_leases['123456_AL'] = lease
+    lease = dict(lease_id="lease", epoch=7, interval_started_epoch=99.0)
+    manager._exact_probe_item_leases["123456_AL"] = lease
     manager._micro_reversion_forward_collector = SimpleNamespace(
-        observe_kiwoom_0d=lambda *a, **kw: ProducerCanaryResult.INVALID_DEPTH_SNAPSHOT)
-    source = dict(item='123456_AL', transport_epoch=7, route_sequence=1,
-                  received_at_ms=100000, market_route='krx_nxt_integrated')
+        observe_kiwoom_0d=lambda *a, **kw: ProducerCanaryResult.INVALID_DEPTH_SNAPSHOT
+    )
+    source = dict(
+        item="123456_AL",
+        transport_epoch=7,
+        route_sequence=1,
+        received_at_ms=100000,
+        market_route="krx_nxt_integrated",
+    )
     for sequence in range(1, 201):
-        source['route_sequence'] = sequence
-        manager._observe_micro_reversion_forward('123456', {
-            'last_realtime_type_item': {'0D': '123456_AL'}, 'last_depth_tick': source}, realtime_type='0D')
-    assert lease['collector_result_counts_by_type'] == {'0D': {'invalid_depth_snapshot': 200}}
-    assert lease['collector_first_non_enqueued_by_type']['0D']['route_sequence'] == 1
-    assert lease['collector_last_result_by_type']['0D']['route_sequence'] == 200
+        source["route_sequence"] = sequence
+        manager._observe_micro_reversion_forward(
+            "123456",
+            {"last_realtime_type_item": {"0D": "123456_AL"}, "last_depth_tick": source},
+            realtime_type="0D",
+        )
+    assert lease["collector_result_counts_by_type"] == {
+        "0D": {"invalid_depth_snapshot": 200}
+    }
+    assert lease["collector_first_non_enqueued_by_type"]["0D"]["route_sequence"] == 1
+    assert lease["collector_last_result_by_type"]["0D"]["route_sequence"] == 200
 
 
-def test_native_depth_ingress_records_probe_rejection_without_reentering_snapshot_lock(monkeypatch):
+def test_native_depth_ingress_records_probe_rejection_without_reentering_snapshot_lock(
+    monkeypatch,
+):
     import threading
     from types import SimpleNamespace
-    from src.engine.scalping.micro_reversion.forward_collector import ProducerCanaryResult
+    from src.engine.scalping.micro_reversion.forward_collector import (
+        ProducerCanaryResult,
+    )
+
     class NoReentry:
-        def __init__(self): self.lock = threading.Lock()
+        def __init__(self):
+            self.lock = threading.Lock()
+
         def __enter__(self):
-            assert self.lock.acquire(blocking=False), 'snapshot lock reentry'
-        def __exit__(self, *args): self.lock.release()
+            assert self.lock.acquire(blocking=False), "snapshot lock reentry"
+
+        def __exit__(self, *args):
+            self.lock.release()
+
     manager = _exact_probe_manager()
-    monkeypatch.setattr(manager, '_maybe_write_dashboard_snapshot', lambda: None)
+    monkeypatch.setattr(manager, "_maybe_write_dashboard_snapshot", lambda: None)
     manager.lock = NoReentry()
-    manager.subscribed_codes.add('123456')
+    manager.subscribed_codes.add("123456")
     now = _epoch_at_090010()
-    monkeypatch.setattr(kiwoom_websocket.time, 'time', lambda: now)
-    manager._exact_probe_item_leases['123456_AL'] = dict(
-        lease_id='lease', epoch=8, interval_started_epoch=now-1)
-    manager._micro_reversion_observation_only_items.add('123456_AL')
+    monkeypatch.setattr(kiwoom_websocket.time, "time", lambda: now)
+    manager._exact_probe_item_leases["123456_AL"] = dict(
+        lease_id="lease", epoch=8, interval_started_epoch=now - 1
+    )
+    manager._micro_reversion_observation_only_items.add("123456_AL")
     manager._micro_reversion_forward_collector = SimpleNamespace(
         flags=SimpleNamespace(depth_capture_active=True),
-        observe_kiwoom_0d=lambda *a, **kw: ProducerCanaryResult.INVALID_DEPTH_SNAPSHOT)
-    asyncio.run(manager._handle_message(json.dumps({'trnm': 'REAL', 'data': [{
-        'type': '0D', 'item': '123456_AL', 'values': {
-            '21': '090010', '41': '10110', '61': '100', '51': '10100', '71': '100'}}]})))
-    trace = manager.exact_probe_source_trace('123456_AL', 'lease')
-    assert trace['lease']['collector_result_counts_by_type'] == {'0D': {'invalid_depth_snapshot': 1}}
+        observe_kiwoom_0d=lambda *a, **kw: ProducerCanaryResult.INVALID_DEPTH_SNAPSHOT,
+    )
+    asyncio.run(
+        manager._handle_message(
+            json.dumps(
+                {
+                    "trnm": "REAL",
+                    "data": [
+                        {
+                            "type": "0D",
+                            "item": "123456_AL",
+                            "values": {
+                                "21": "090010",
+                                "41": "10110",
+                                "61": "100",
+                                "51": "10100",
+                                "71": "100",
+                            },
+                        }
+                    ],
+                }
+            )
+        )
+    )
+    trace = manager.exact_probe_source_trace("123456_AL", "lease")
+    assert trace["lease"]["collector_result_counts_by_type"] == {
+        "0D": {"invalid_depth_snapshot": 1}
+    }
 
 
 def _fresh_continuity_transfer():
     import time
     from src.engine.scalping.continuous_reversal_postclose import digest
+
     manager, payload, item = _zero_base_native_transfer("krx_nxt_integrated")
-    manager._exact_probe_item_leases[item]["interval_started_epoch"] = time.time() - 0.01
+    manager._exact_probe_item_leases[item]["interval_started_epoch"] = (
+        time.time() - 0.01
+    )
+
     async def feed():
         for _ in range(4):
-            await manager._handle_message(json.dumps({"trnm": "REAL", "data": [
-                {"type": "0D", "item": item, "values": {"21": "133500", "41": "10010", "51": "9990", "61": "10", "71": "10"}},
-                {"type": "0B", "item": item, "values": {"10": "10000", "15": "+1", "228": "101.5"}},
-            ]}))
+            await manager._handle_message(
+                json.dumps(
+                    {
+                        "trnm": "REAL",
+                        "data": [
+                            {
+                                "type": "0D",
+                                "item": item,
+                                "values": {
+                                    "21": "133500",
+                                    "41": "10010",
+                                    "51": "9990",
+                                    "61": "10",
+                                    "71": "10",
+                                },
+                            },
+                            {
+                                "type": "0B",
+                                "item": item,
+                                "values": {"10": "10000", "15": "+1", "228": "101.5"},
+                            },
+                        ],
+                    }
+                )
+            )
+
     asyncio.run(feed())
     expected = payload["native_observation"]
     event = expected["snapshot"][0]
-    event.update(epoch=time.time(), signal_id="original-signal", event_id="original-event", native_sequence=4)
+    event.update(
+        epoch=time.time(),
+        signal_id="original-signal",
+        event_id="original-event",
+        native_sequence=4,
+    )
     expected["snapshot_sha256"] = digest(expected["snapshot"])
     return manager, payload, item
 
@@ -4426,22 +4850,35 @@ def test_native_source_continuity_keeps_original_buffer_precheck_and_receive_clo
     import time
     from src.engine.scalping.native_source_continuity import source_ready
     from src.engine import sniper_state_handlers as handlers
+
     manager, payload, item = _fresh_continuity_transfer()
     original = manager.get_exact_item_data(payload["code"], item)
     stored = manager._micro_reversion_observation_route_data[item]
     assert manager.adopt_zero_base_probe_target(payload)
-    assert manager.realtime_data[payload["code"]] is stored  # One live writer, no copy/replay.
+    assert (
+        manager.realtime_data[payload["code"]] is stored
+    )  # One live writer, no copy/replay.
     assert item not in manager._micro_reversion_observation_route_data
     now = time.time()
-    target = {**payload, "id": 92, "strategy": "SCALPING", "status": "WATCHING", "position_tag": "SCANNER",
-              "added_time": now, "entry_armed_at_epoch": now, "scanner_attach_epoch": now,
-              "source_signature": "PRICE_JUMP_START"}
+    target = {
+        **payload,
+        "id": 92,
+        "strategy": "SCALPING",
+        "status": "WATCHING",
+        "position_tag": "SCANNER",
+        "added_time": now,
+        "entry_armed_at_epoch": now,
+        "scanner_attach_epoch": now,
+        "source_signature": "PRICE_JUMP_START",
+    }
     current = manager.get_latest_data(payload["code"])
     assert current["strength_momentum_history"] == original["strength_momentum_history"]
     assert current["last_realtime_type_ts"] == original["last_realtime_type_ts"]
     assert len(current["strength_momentum_history"]) == 4
     assert source_ready(target, current, now=time.time())
-    fields = handlers._scanner_fast_precheck_fields(target, now_ts=time.time(), code=payload["code"], ws_data=current)
+    fields = handlers._scanner_fast_precheck_fields(
+        target, now_ts=time.time(), code=payload["code"], ws_data=current
+    )
     assert fields["scanner_native_source_continuity_ready"] is True
     assert fields["fast_precheck_post_attach_entry_realtime"] is False
     assert fields["fast_precheck_reason"] != "awaiting_first_post_attach_trade_input"
@@ -4450,21 +4887,45 @@ def test_native_source_continuity_keeps_original_buffer_precheck_and_receive_clo
     assert manager.websocket.sent == []
 
 
-@pytest.mark.parametrize("damage", ["stale", "missing_depth", "history_epoch", "history_route", "history_sequence", "future", "missing_signal", "missing_digest"])
+@pytest.mark.parametrize(
+    "damage",
+    [
+        "stale",
+        "missing_depth",
+        "history_epoch",
+        "history_route",
+        "history_sequence",
+        "future",
+        "missing_signal",
+        "missing_digest",
+    ],
+)
 def test_native_source_continuity_never_promotes_unverified_observation(damage):
-    from src.engine.infrastructure.snapshot_copy import freeze_history, materialize_history
+    from src.engine.infrastructure.snapshot_copy import (
+        freeze_history,
+        materialize_history,
+    )
+
     manager, payload, item = _fresh_continuity_transfer()
     source = manager._micro_reversion_observation_route_data[item]
     typed = source["realtime_type_snapshots_by_route"]["_AL|krx_nxt_integrated"]
-    if damage == "stale": typed["0B"]["observed_epoch"] -= 4
-    elif damage == "missing_depth": typed.pop("0D")
-    elif damage == "future": typed["0B"]["observed_epoch"] += 5
-    elif damage == "missing_signal": payload["native_observation"]["snapshot"][0].pop("signal_id")
-    elif damage == "missing_digest": payload["native_observation"].pop("snapshot_sha256")
+    if damage == "stale":
+        typed["0B"]["observed_epoch"] -= 4
+    elif damage == "missing_depth":
+        typed.pop("0D")
+    elif damage == "future":
+        typed["0B"]["observed_epoch"] += 5
+    elif damage == "missing_signal":
+        payload["native_observation"]["snapshot"][0].pop("signal_id")
+    elif damage == "missing_digest":
+        payload["native_observation"].pop("snapshot_sha256")
     else:
         rows = materialize_history(freeze_history(source["strength_momentum_history"]))
-        key, value = {"history_epoch": ("transport_epoch", 7), "history_route": ("market_route", "krx_only"),
-                      "history_sequence": ("route_sequence", 1)}[damage]
+        key, value = {
+            "history_epoch": ("transport_epoch", 7),
+            "history_route": ("market_route", "krx_only"),
+            "history_sequence": ("route_sequence", 1),
+        }[damage]
         rows[-1][key] = value
         source["strength_momentum_history"] = rows
     assert manager.adopt_zero_base_probe_target(payload)  # Local custody only.
@@ -4472,24 +4933,36 @@ def test_native_source_continuity_never_promotes_unverified_observation(damage):
     assert manager.get_latest_data(payload["code"]) == {}
 
 
-@pytest.mark.parametrize("damage", ["pid", "epoch", "lease", "route", "signal", "deadline", "stale", "source_receipt"])
+@pytest.mark.parametrize(
+    "damage",
+    ["pid", "epoch", "lease", "route", "signal", "deadline", "stale", "source_receipt"],
+)
 def test_native_source_continuity_current_readiness_cannot_reuse_old_authority(damage):
     import time
     from copy import deepcopy
     from src.engine.scalping.native_source_continuity import source_ready
+
     manager, payload, item = _fresh_continuity_transfer()
     assert manager.adopt_zero_base_probe_target(payload)
     data = manager.get_latest_data(payload["code"])
     target = deepcopy(payload)
     now = time.time()
-    if damage == "pid": target["native_observation"]["observer_pid"] += 1
-    elif damage == "epoch": data["market_data_transport_epoch"] += 1
-    elif damage == "lease": target["physical_probe_lease_id"] = "new"
-    elif damage == "route": target["market_data_route"] = "nxt_only"
-    elif damage == "signal": target["native_observation"]["snapshot"][0]["signal_id"] = "new"
-    elif damage == "deadline": target["native_observation"]["deadline_perf"] = time.perf_counter() - 1
-    elif damage == "stale": now += 3.5
-    elif damage == "source_receipt": data["_zero_base_source_continuity"]["history_count"] += 1
+    if damage == "pid":
+        target["native_observation"]["observer_pid"] += 1
+    elif damage == "epoch":
+        data["market_data_transport_epoch"] += 1
+    elif damage == "lease":
+        target["physical_probe_lease_id"] = "new"
+    elif damage == "route":
+        target["market_data_route"] = "nxt_only"
+    elif damage == "signal":
+        target["native_observation"]["snapshot"][0]["signal_id"] = "new"
+    elif damage == "deadline":
+        target["native_observation"]["deadline_perf"] = time.perf_counter() - 1
+    elif damage == "stale":
+        now += 3.5
+    elif damage == "source_receipt":
+        data["_zero_base_source_continuity"]["history_count"] += 1
     assert not source_ready(target, data, now=now)
     assert data["strength_momentum_history"]  # Observed history is not erased.
 
@@ -4498,40 +4971,95 @@ def test_native_source_continuity_current_readiness_cannot_reuse_old_authority(d
 @pytest.mark.parametrize("code", [0, 1])
 def test_control_response_retained_before_send_returns(kind, code):
     manager = _exact_probe_manager()
+
     async def send(_packet):
-        await manager._handle_message(json.dumps({"trnm": kind, "return_code": code, "return_msg": "fixture"}))
+        await manager._handle_message(
+            json.dumps({"trnm": kind, "return_code": code, "return_msg": "fixture"})
+        )
+
     manager.websocket.send = send
-    asyncio.run(manager._send_control_packet({"trnm": kind, "grp_no": "1", "data": [{"item": ["010140_AL"], "type": ["0B"]}]}))
+    asyncio.run(
+        manager._send_control_packet(
+            {
+                "trnm": kind,
+                "grp_no": "1",
+                "data": [{"item": ["010140_AL"], "type": ["0B"]}],
+            }
+        )
+    )
     row = manager._control_receipts.projection(item="010140_AL", epoch=8, kind=kind)
     assert row["broker_ack_observed"] is True
     assert row["broker_result"] == ("success" if code == 0 else "rejected")
     assert row["request"]["send_state"] == "sent"
-    assert manager._registered_item_epochs["010140_AL"] == 8  # No unsolicited unsubscribe.
+    assert (
+        manager._registered_item_epochs["010140_AL"] == 8
+    )  # No unsolicited unsubscribe.
 
 
 def test_control_ambiguous_bootstrap_duplicate_late_and_old_epoch_are_not_item_ack():
     manager = _exact_probe_manager()
+
     async def scenario():
         for item, group in (("", "2"), ("", "3"), ("010140_AL", "1")):
-            await manager._send_control_packet({"trnm": "REG", "grp_no": group, "data": [{"item": [item], "type": ["0B"]}]})
+            await manager._send_control_packet(
+                {
+                    "trnm": "REG",
+                    "grp_no": group,
+                    "data": [{"item": [item], "type": ["0B"]}],
+                }
+            )
         for _ in range(4):
             await manager._handle_message(json.dumps({"trnm": "REG", "return_code": 0}))
-        assert manager._control_receipts.projection(item="010140_AL", epoch=8)["broker_ack_observed"] is None
+        assert (
+            manager._control_receipts.projection(item="010140_AL", epoch=8)[
+                "broker_ack_observed"
+            ]
+            is None
+        )
         manager._market_data_transport_epoch = 9
-        await manager._send_control_packet({"trnm": "REG", "grp_no": "1", "data": [{"item": ["010140_AL"], "type": ["0B"]}]})
-        await manager._handle_message(json.dumps({"trnm": "REG", "return_code": 1}), transport_epoch=8)
-        assert manager._control_receipts.projection(item="010140_AL", epoch=9)["broker_ack_observed"] is None
-        await manager._handle_message(json.dumps({"trnm": "REG", "return_code": 0}), transport_epoch=9)
-        assert manager._control_receipts.projection(item="010140_AL", epoch=9)["broker_result"] == "success"
+        await manager._send_control_packet(
+            {
+                "trnm": "REG",
+                "grp_no": "1",
+                "data": [{"item": ["010140_AL"], "type": ["0B"]}],
+            }
+        )
+        await manager._handle_message(
+            json.dumps({"trnm": "REG", "return_code": 1}), transport_epoch=8
+        )
+        assert (
+            manager._control_receipts.projection(item="010140_AL", epoch=9)[
+                "broker_ack_observed"
+            ]
+            is None
+        )
+        await manager._handle_message(
+            json.dumps({"trnm": "REG", "return_code": 0}), transport_epoch=9
+        )
+        assert (
+            manager._control_receipts.projection(item="010140_AL", epoch=9)[
+                "broker_result"
+            ]
+            == "success"
+        )
+
     asyncio.run(scenario())
 
 
 def test_control_bounded_history_never_makes_evicted_requests_unique():
     manager = _exact_probe_manager()
+
     async def scenario():
         for _ in range(140):
-            await manager._send_control_packet({"trnm": "REG", "grp_no": "1", "data": [{"item": ["010140_AL"], "type": ["0B"]}]})
+            await manager._send_control_packet(
+                {
+                    "trnm": "REG",
+                    "grp_no": "1",
+                    "data": [{"item": ["010140_AL"], "type": ["0B"]}],
+                }
+            )
         await manager._handle_message(json.dumps({"trnm": "REG", "return_code": 1}))
+
     asyncio.run(scenario())
     assert len(manager._control_receipts.requests) == 128
     assert manager._control_receipts.responses[-1]["attribution"] == "unknown"
@@ -4539,65 +5067,103 @@ def test_control_bounded_history_never_makes_evicted_requests_unique():
 
 def test_control_uncertain_send_and_unsolicited_response_cannot_claim_later_success():
     manager = _exact_probe_manager()
+
     async def fail(_packet):
-        raise RuntimeError('fixture uncertain send')
+        raise RuntimeError("fixture uncertain send")
+
     async def scenario():
-        await manager._handle_message(json.dumps({'trnm':'REG','return_code':0}))
+        await manager._handle_message(json.dumps({"trnm": "REG", "return_code": 0}))
         manager.websocket.send = fail
         with pytest.raises(RuntimeError):
-            await manager._send_control_packet({'trnm':'REG','grp_no':'1','data':[{'item':['010140_AL'],'type':['0B']}]})
-        await manager._handle_message(json.dumps({'trnm':'REG','return_code':0}))
+            await manager._send_control_packet(
+                {
+                    "trnm": "REG",
+                    "grp_no": "1",
+                    "data": [{"item": ["010140_AL"], "type": ["0B"]}],
+                }
+            )
+        await manager._handle_message(json.dumps({"trnm": "REG", "return_code": 0}))
+
     asyncio.run(scenario())
-    trace = manager._control_receipts.projection(item='010140_AL',epoch=8)
-    assert trace['request']['send_state'] == 'uncertain'
-    assert trace['broker_ack_observed'] is None
-    assert trace['connection_responses'][-1]['attribution'] == 'unknown'
+    trace = manager._control_receipts.projection(item="010140_AL", epoch=8)
+    assert trace["request"]["send_state"] == "uncertain"
+    assert trace["broker_ack_observed"] is None
+    assert trace["connection_responses"][-1]["attribution"] == "unknown"
 
 
 def test_native_continuity_real_after_adoption_appends_once_and_keeps_history():
     manager, payload, item = _fresh_continuity_transfer()
     assert manager.adopt_zero_base_probe_target(payload)
-    original = manager.get_latest_data(payload['code'])
-    asyncio.run(manager._handle_message(json.dumps({'trnm':'REAL','data':[
-        {'type':'0B','item':item,'values':{'10':'10001','15':'+2','228':'102'}}]})))
-    after = manager.get_latest_data(payload['code'])
-    assert after['strength_momentum_history'][:-1] == original['strength_momentum_history']
-    assert len(after['strength_momentum_history']) == 5
-    assert after['strength_momentum_history'][-1]['route_sequence'] == 5
-    assert after['curr'] == 10001
+    original = manager.get_latest_data(payload["code"])
+    asyncio.run(
+        manager._handle_message(
+            json.dumps(
+                {
+                    "trnm": "REAL",
+                    "data": [
+                        {
+                            "type": "0B",
+                            "item": item,
+                            "values": {"10": "10001", "15": "+2", "228": "102"},
+                        }
+                    ],
+                }
+            )
+        )
+    )
+    after = manager.get_latest_data(payload["code"])
+    assert (
+        after["strength_momentum_history"][:-1] == original["strength_momentum_history"]
+    )
+    assert len(after["strength_momentum_history"]) == 5
+    assert after["strength_momentum_history"][-1]["route_sequence"] == 5
+    assert after["curr"] == 10001
     assert item not in manager._micro_reversion_observation_route_data
     assert manager.websocket.sent == []
 
 
 def test_bound_rejection_preserves_local_registration_and_targets_only_original_lease():
-    manager = KiwoomWSManager('test-token')
+    manager = KiwoomWSManager("test-token")
     manager.websocket = _FakeWS([])
     manager._session_ready.set()
     manager._market_data_transport_epoch = 8
+
     async def send(_packet):
-        await manager._handle_message(json.dumps({'trnm':'REG','return_code':1,'return_msg':'fixture refusal'}))
+        await manager._handle_message(
+            json.dumps(
+                {"trnm": "REG", "return_code": 1, "return_msg": "fixture refusal"}
+            )
+        )
+
     manager.websocket.send = send
-    result = asyncio.run(manager._acquire_exact_probe_item('010140_AL','original-lease'))
-    assert result['registered'] is True  # This is still the local-send registry.
-    assert result['server_registration_rejected'] is True
-    assert manager.exact_probe_control_failure('010140_AL','original-lease') == 'exact_probe_registration_rejected'
-    assert manager.exact_probe_control_failure('010140_AL','replacement-lease') == ''
-    assert manager._registered_item_epochs['010140_AL'] == 8
+    result = asyncio.run(
+        manager._acquire_exact_probe_item("010140_AL", "original-lease")
+    )
+    assert result["registered"] is True  # This is still the local-send registry.
+    assert result["server_registration_rejected"] is True
+    assert (
+        manager.exact_probe_control_failure("010140_AL", "original-lease")
+        == "exact_probe_registration_rejected"
+    )
+    assert manager.exact_probe_control_failure("010140_AL", "replacement-lease") == ""
+    assert manager._registered_item_epochs["010140_AL"] == 8
 
 
 def test_connection_projection_preserves_remove_response_after_registry_cleanup():
     manager = _exact_probe_manager()
-    manager._exact_probe_item_leases['010140_AL'] = {'lease_id':'lease-1','epoch':8}
+    manager._exact_probe_item_leases["010140_AL"] = {"lease_id": "lease-1", "epoch": 8}
+
     async def scenario():
-        assert await manager._release_exact_probe_item('010140_AL','lease-1')
-        await manager._handle_message(json.dumps({'trnm':'REMOVE','return_code':0}))
+        assert await manager._release_exact_probe_item("010140_AL", "lease-1")
+        await manager._handle_message(json.dumps({"trnm": "REMOVE", "return_code": 0}))
+
     asyncio.run(scenario())
-    assert '010140_AL' not in manager._registered_item_epochs
+    assert "010140_AL" not in manager._registered_item_epochs
     with manager.lock:
         snapshot = manager._control_receipts.snapshot()
-    assert snapshot['requests'][-1]['lease_ids']['010140_AL'] == 'lease-1'
-    assert snapshot['responses'][-1]['trnm'] == 'REMOVE'
-    assert snapshot['responses'][-1]['broker_result'] == 'success'
-    assert snapshot['order_authority'] is False
-    snapshot['responses'][-1]['broker_result'] = 'changed-copy'
-    assert manager._control_receipts.responses[-1]['broker_result'] == 'success'
+    assert snapshot["requests"][-1]["lease_ids"]["010140_AL"] == "lease-1"
+    assert snapshot["responses"][-1]["trnm"] == "REMOVE"
+    assert snapshot["responses"][-1]["broker_result"] == "success"
+    assert snapshot["order_authority"] is False
+    snapshot["responses"][-1]["broker_result"] = "changed-copy"
+    assert manager._control_receipts.responses[-1]["broker_result"] == "success"

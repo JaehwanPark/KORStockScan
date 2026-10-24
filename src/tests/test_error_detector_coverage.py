@@ -26,7 +26,11 @@ def test_required_detector_coverage_registry_is_complete():
 
 def test_heartbeat_coverage_requires_only_surviving_runtime_workers():
     components = {
-        "main_loop", "telegram", "error_detection", "sniper_engine", "scalping_scanner"
+        "main_loop",
+        "telegram",
+        "error_detection",
+        "sniper_engine",
+        "scalping_scanner",
     }
     assert REQUIRED_HEARTBEAT_COMPONENTS == components
     gaps = validate_detector_coverage(
@@ -44,18 +48,30 @@ def test_heartbeat_coverage_requires_only_surviving_runtime_workers():
 def test_native_stage_and_notifier_functional_coverage():
     from src.engine.automation.postclose_summary_handoff import STAGE_REGISTRY
     from src.engine.notify_error_detection_admin import SEMANTIC_ALERT_STAGES
-    result = validate_semantic_coverage('2026-10-07')
-    assert result['status'] == 'pass' and result['native_stage_count'] == len(STAGE_REGISTRY)
-    assert result['stages']['main_auxiliary_policy']['prerequisites'] == ['main_machine_policy']
+
+    result = validate_semantic_coverage("2026-10-07")
+    assert result["status"] == "pass" and result["native_stage_count"] == len(
+        STAGE_REGISTRY
+    )
+    assert result["stages"]["main_auxiliary_policy"]["prerequisites"] == [
+        "main_machine_policy"
+    ]
     assert len(REQUIRED_ARTIFACT_IDS) == 39
-    assert 'code_improvement_workorder' not in REQUIRED_ARTIFACT_IDS
-    assert 'codex_workorder_runner_report' in REQUIRED_ARTIFACT_IDS
-    assert 'codebase_performance_workorder_report' in REQUIRED_ARTIFACT_IDS
-    bad = validate_semantic_coverage('2026-10-07', alert_stages=SEMANTIC_ALERT_STAGES-{'main_machine_policy'})
-    assert bad['findings'] == ['main_machine_policy:notifier_unbound']
-    bad = validate_semantic_coverage('2026-10-07', stages={k:v for k,v in STAGE_REGISTRY.items() if k!='main_machine_policy'})
-    assert 'main_machine_policy:stage_unregistered' in bad['findings']
-    assert validate_semantic_coverage('2026-10-07', hooks={})['status'] == 'source_invalid'
+    assert "code_improvement_workorder" not in REQUIRED_ARTIFACT_IDS
+    assert "codex_workorder_runner_report" in REQUIRED_ARTIFACT_IDS
+    assert "codebase_performance_workorder_report" in REQUIRED_ARTIFACT_IDS
+    bad = validate_semantic_coverage(
+        "2026-10-07", alert_stages=SEMANTIC_ALERT_STAGES - {"main_machine_policy"}
+    )
+    assert bad["findings"] == ["main_machine_policy:notifier_unbound"]
+    bad = validate_semantic_coverage(
+        "2026-10-07",
+        stages={k: v for k, v in STAGE_REGISTRY.items() if k != "main_machine_policy"},
+    )
+    assert "main_machine_policy:stage_unregistered" in bad["findings"]
+    assert (
+        validate_semantic_coverage("2026-10-07", hooks={})["status"] == "source_invalid"
+    )
 
 
 def test_new_operational_feature_must_declare_detector_coverage():
@@ -154,7 +170,12 @@ def test_pattern_lab_propagation_freshness_follows_postclose_wrapper_window():
 
 
 def test_all_25_feature_bindings_preserve_optional_and_natural_authority():
-    result=validate_semantic_coverage('2026-10-16')
-    assert set(result['feature_contracts'])=={f'C{i:02}' for i in range(1,26)}
-    assert result['feature_contracts']['C18']['expectedness']=='installed_optional_only'
-    assert all(v['natural_acceptance']=='not_proven_by_static_coverage' for v in result['feature_contracts'].values())
+    result = validate_semantic_coverage("2026-10-16")
+    assert set(result["feature_contracts"]) == {f"C{i:02}" for i in range(1, 26)}
+    assert (
+        result["feature_contracts"]["C18"]["expectedness"] == "installed_optional_only"
+    )
+    assert all(
+        v["natural_acceptance"] == "not_proven_by_static_coverage"
+        for v in result["feature_contracts"].values()
+    )

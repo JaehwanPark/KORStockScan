@@ -4,121 +4,287 @@ Each input is an already source-bound minimal replay result. Every candidate
 shares one transitive common cohort and one chronological purged split.
 Partition-local means/winners have no selection authority.
 """
+
 from datetime import datetime
 import json
 import math
 from zoneinfo import ZoneInfo
 
 from src.engine.lifecycle import research_storage as storage
-from src.engine.scalping.universal_trailing_replay import _cohort_day, SLIPPAGE_BPS, training_cost_available
+from src.engine.scalping.universal_trailing_replay import (
+    _cohort_day,
+    SLIPPAGE_BPS,
+    training_cost_available,
+)
 from src.engine.scalping.pre_submit_delay_initial_policy import number, digest
 
-EVIDENCE = ('actual_completed','actual_entry_alternative_exit','enter_pass_opportunity_cf')
+EVIDENCE = (
+    "actual_completed",
+    "actual_entry_alternative_exit",
+    "enter_pass_opportunity_cf",
+)
 
 
 def aggregate(partitions, *, output_root):
     with storage.index(output_root) as db:
-        aliases=None
+        aliases = None
         for part in partitions():
-            if aliases is None: aliases=part['candidate_aliases']
-            if aliases!=part['candidate_aliases']: raise ValueError('universal_candidate_generation_changed_between_partitions')
-            for identity,context in part['population_context'].items():
-                value={'context':context,'outcomes':part['minimal_results'][identity],
-                       'common':identity in part.get('eligible_ids',part['common_ids'])}
-                value=storage.compact_outcomes(output_root,value)
-                storage.put(db,identity,value,content_sha=digest(storage.logical_value(value)))
-        if aliases is None: return {'status':'valid_empty','strata':{},'allowed_runtime_apply':False}
-        db.execute('CREATE TABLE outcomes(id TEXT,candidate TEXT,body TEXT,PRIMARY KEY(id,candidate)) WITHOUT ROWID')
+            if aliases is None:
+                aliases = part["candidate_aliases"]
+            if aliases != part["candidate_aliases"]:
+                raise ValueError(
+                    "universal_candidate_generation_changed_between_partitions"
+                )
+            for identity, context in part["population_context"].items():
+                value = {
+                    "context": context,
+                    "outcomes": part["minimal_results"][identity],
+                    "common": identity in part.get("eligible_ids", part["common_ids"]),
+                }
+                value = storage.compact_outcomes(output_root, value)
+                storage.put(
+                    db,
+                    identity,
+                    value,
+                    content_sha=digest(storage.logical_value(value)),
+                )
+        if aliases is None:
+            return {
+                "status": "valid_empty",
+                "strata": {},
+                "allowed_runtime_apply": False,
+            }
+        db.execute(
+            "CREATE TABLE outcomes(id TEXT,candidate TEXT,body TEXT,PRIMARY KEY(id,candidate)) WITHOUT ROWID"
+        )
         from src.engine.lifecycle.research_input_budget import Claim
-        for identity,value,_ in storage.records(db):
-            with Claim(4096*len(aliases)):
-                value=storage.expand_outcomes(output_root,value)
-                if set(value['outcomes'])!=set(aliases.values()):
-                    raise ValueError('universal_candidate_population_incomplete')
-                for candidate,body in value['outcomes'].items():
-                    db.execute('INSERT INTO outcomes VALUES (?,?,?)',(identity,candidate,storage.encoded(body).decode()))
-        db.execute('CREATE TABLE cohort (id TEXT PRIMARY KEY,evidence TEXT,entry REAL,end REAL,day TEXT,'
-                   'verified INTEGER,split TEXT,cost_unavailable INTEGER) WITHOUT ROWID')
-        for identity,row,_ in storage.records(db):
-            if not row['common']: continue
-            context=row['context']; evidence=context['evidence_kind']
-            if evidence not in EVIDENCE: raise ValueError('universal_population_evidence_invalid')
-            day,verified=_cohort_day(context,evidence)
-            db.execute('INSERT INTO cohort VALUES (?,?,?,?,?,?,?,?)',(identity,evidence,context['entry_at'],
-                context['observation_end_at'],day,int(verified),'train',0))
-        db.execute('CREATE INDEX cohort_membership ON cohort(evidence,split,entry,id)')
-        strata={}
+
+        for identity, value, _ in storage.records(db):
+            with Claim(4096 * len(aliases)):
+                value = storage.expand_outcomes(output_root, value)
+                if set(value["outcomes"]) != set(aliases.values()):
+                    raise ValueError("universal_candidate_population_incomplete")
+                for candidate, body in value["outcomes"].items():
+                    db.execute(
+                        "INSERT INTO outcomes VALUES (?,?,?)",
+                        (identity, candidate, storage.encoded(body).decode()),
+                    )
+        db.execute(
+            "CREATE TABLE cohort (id TEXT PRIMARY KEY,evidence TEXT,entry REAL,end REAL,day TEXT,"
+            "verified INTEGER,split TEXT,cost_unavailable INTEGER) WITHOUT ROWID"
+        )
+        for identity, row, _ in storage.records(db):
+            if not row["common"]:
+                continue
+            context = row["context"]
+            evidence = context["evidence_kind"]
+            if evidence not in EVIDENCE:
+                raise ValueError("universal_population_evidence_invalid")
+            day, verified = _cohort_day(context, evidence)
+            db.execute(
+                "INSERT INTO cohort VALUES (?,?,?,?,?,?,?,?)",
+                (
+                    identity,
+                    evidence,
+                    context["entry_at"],
+                    context["observation_end_at"],
+                    day,
+                    int(verified),
+                    "train",
+                    0,
+                ),
+            )
+        db.execute("CREATE INDEX cohort_membership ON cohort(evidence,split,entry,id)")
+        strata = {}
         for evidence in EVIDENCE:
-            days=[d for d, in db.execute('SELECT DISTINCT day FROM cohort WHERE evidence=? ORDER BY day',(evidence,))]
-            split=max(1,min(len(days)-1,int(len(days)*.7))) if len(days)>1 else len(days)
-            train_days,holdout_days=days[:split],days[split:]
-            cutoff=None
+            days = [
+                d
+                for d, in db.execute(
+                    "SELECT DISTINCT day FROM cohort WHERE evidence=? ORDER BY day",
+                    (evidence,),
+                )
+            ]
+            split = (
+                max(1, min(len(days) - 1, int(len(days) * 0.7)))
+                if len(days) > 1
+                else len(days)
+            )
+            train_days, holdout_days = days[:split], days[split:]
+            cutoff = None
             if holdout_days:
-                db.execute("UPDATE cohort SET split='holdout' WHERE evidence=? AND day>=?",(evidence,holdout_days[0]))
-                cutoff=db.execute("SELECT min(entry) FROM cohort WHERE evidence=? AND split='holdout'",(evidence,)).fetchone()[0]
-            if evidence=='actual_completed':
+                db.execute(
+                    "UPDATE cohort SET split='holdout' WHERE evidence=? AND day>=?",
+                    (evidence, holdout_days[0]),
+                )
+                cutoff = db.execute(
+                    "SELECT min(entry) FROM cohort WHERE evidence=? AND split='holdout'",
+                    (evidence,),
+                ).fetchone()[0]
+            if evidence == "actual_completed":
                 # Check the original train membership before either purge so
                 # overlapping path/cost gaps retain both audit explanations.
                 # Update only a non-indexed flag while streaming the cursor.
-                for identity,body in db.execute(
-                    'SELECT c.id,r.body FROM cohort c JOIN records r ON r.id=c.id '
-                    "WHERE c.evidence=? AND c.split='train' ORDER BY c.entry,c.id",(evidence,)):
-                    if not training_cost_available(json.loads(body)['context'],cutoff):
-                        db.execute('UPDATE cohort SET cost_unavailable=1 WHERE id=?',(identity,))
+                for identity, body in db.execute(
+                    "SELECT c.id,r.body FROM cohort c JOIN records r ON r.id=c.id "
+                    "WHERE c.evidence=? AND c.split='train' ORDER BY c.entry,c.id",
+                    (evidence,),
+                ):
+                    if not training_cost_available(json.loads(body)["context"], cutoff):
+                        db.execute(
+                            "UPDATE cohort SET cost_unavailable=1 WHERE id=?",
+                            (identity,),
+                        )
             if cutoff is not None:
-                db.execute("UPDATE cohort SET split='purged' WHERE evidence=? AND split='train' AND end>=?",(evidence,cutoff))
-            db.execute("UPDATE cohort SET split='purged' WHERE evidence=? AND split='train' AND cost_unavailable=1",(evidence,))
+                db.execute(
+                    "UPDATE cohort SET split='purged' WHERE evidence=? AND split='train' AND end>=?",
+                    (evidence, cutoff),
+                )
+            db.execute(
+                "UPDATE cohort SET split='purged' WHERE evidence=? AND split='train' AND cost_unavailable=1",
+                (evidence,),
+            )
+
             def ids(cohort=None, *, cost_unavailable=False):
-                condition='evidence=?'+(' AND split=?' if cohort else '')
-                if cost_unavailable: condition+=' AND cost_unavailable=1'
-                args=(evidence,cohort) if cohort else (evidence,)
-                return storage.write_tree(output_root,(i for i, in db.execute(
-                    'SELECT id FROM cohort WHERE '+condition+' ORDER BY entry,id',args)))
-            qualified=ids();train,held,purged=ids('train'),ids('holdout'),ids('purged')
-            cost_unavailable=ids(cost_unavailable=True)
-            verified=not bool(db.execute('SELECT 1 FROM cohort WHERE evidence=? AND verified=0 LIMIT 1',(evidence,)).fetchone())
-            metrics={}
-            for name,candidate in aliases.items():
-                metrics[name]={}
-                for cohort,cohort_ref in (('train',train),('holdout',held)):
+                condition = "evidence=?" + (" AND split=?" if cohort else "")
+                if cost_unavailable:
+                    condition += " AND cost_unavailable=1"
+                args = (evidence, cohort) if cohort else (evidence,)
+                return storage.write_tree(
+                    output_root,
+                    (
+                        i
+                        for i, in db.execute(
+                            "SELECT id FROM cohort WHERE "
+                            + condition
+                            + " ORDER BY entry,id",
+                            args,
+                        )
+                    ),
+                )
+
+            qualified = ids()
+            train, held, purged = ids("train"), ids("holdout"), ids("purged")
+            cost_unavailable = ids(cost_unavailable=True)
+            verified = not bool(
+                db.execute(
+                    "SELECT 1 FROM cohort WHERE evidence=? AND verified=0 LIMIT 1",
+                    (evidence,),
+                ).fetchone()
+            )
+            metrics = {}
+            for name, candidate in aliases.items():
+                metrics[name] = {}
+                for cohort, cohort_ref in (("train", train), ("holdout", held)):
+
                     def deltas():
-                        for identity,body,candidate_body,parent_body in db.execute(
-                            'SELECT c.id,r.body,o.body,p.body FROM cohort c JOIN records r ON r.id=c.id '
-                            'JOIN outcomes o ON o.id=c.id AND o.candidate=? '
-                            'JOIN outcomes p ON p.id=c.id AND p.candidate=? '
-                            'WHERE c.evidence=? AND c.split=? ORDER BY c.entry,c.id',
-                            (candidate,aliases['incumbent'],evidence,cohort)):
-                            context=json.loads(body)['context']
-                            amount=number(context['buy_basis_krw'])
-                            if amount is None or amount<=0:
-                                raise ValueError('universal_notional_unverified')
-                            row,base=json.loads(candidate_body),json.loads(parent_body)
-                            if row['modeled_net_pnl_krw'] is None or base['modeled_net_pnl_krw'] is None: continue
-                            reference=max(base['modeled_net_pnl_krw'],row['actual_pnl_krw']) if evidence=='actual_completed' else base['modeled_net_pnl_krw']
-                            yield (identity,(row['modeled_net_pnl_krw']-reference)/amount*100,
-                                   [(v-reference)/amount*100 for v in row['slippage_net_pnl_krw']],row['modeled_net_pnl_krw'])
-                    paired=storage.write_tree(output_root,(i for i,_,_,_ in deltas()))
-                    count=paired['count']
-                    mean=math.fsum(v for _,v,_,_ in deltas())/count if count else None
-                    worst=min((v for _,v,_,_ in deltas()),default=None)
-                    adverse=storage.write_tree(output_root,(i for i,v,_,_ in deltas() if v<0))
-                    stress={str(bps):math.fsum(v[n] for _,_,v,_ in deltas())/count if count else None
-                            for n,bps in enumerate(SLIPPAGE_BPS)}
-                    metrics[name][cohort]={'n':count,'paired_ev_pct':mean,'worst_paired_delta_pct':worst,
-                                           'worsened_ids_ref':adverse,'paired_ids_ref':paired,
-                                           'large_loss_worsened_ids_ref':storage.write_tree(output_root,(i for i,d,_,p in deltas() if d<0 and p<0)),
-                                           'slippage_ev_pct':stress}
-            strata[evidence]={'common_ids_ref':qualified,'train_ids_ref':train,'holdout_ids_ref':held,'purged_ids_ref':purged,
-                'cost_unavailable_train_ids_ref':cost_unavailable,
-                'train_days':train_days,'holdout_days':holdout_days,'metrics':metrics,'completion_date_verified':verified,
-                'existing_selector_sample_floor_met':evidence=='actual_completed' and verified and len(days)>=7
-                    and train['count']>=30 and held['count']>=10 and len(holdout_days)>=2,
-                'candidate_review_required':True,'allowed_runtime_apply':False}
-        common=storage.write_tree(output_root,(i for i, in db.execute('SELECT id FROM cohort ORDER BY id')))
-        population=storage.write_tree(output_root,(i for i,_,_ in storage.records(db)))
-        conflicts=storage.write_tree(output_root,({'identity':i,'reason':'global_population_conflict'}
-                                                  for i,_,_ in storage.records(db,conflicts=True)))
-        return {'status':'evaluated' if common['count'] else 'source_gap','common_ids_ref':common,'eligible_ids_ref':common,
-            'population_algorithm':'candidate_parent_pairs_v2','population_ids_ref':population,
-            'conflicts_ref':conflicts,'strata':strata,'storage_schema':'main_trailing_sharded_evaluation_v2',
-            'decision_authority':'research_only_existing_selector_review_required','allowed_runtime_apply':False}
+                        for identity, body, candidate_body, parent_body in db.execute(
+                            "SELECT c.id,r.body,o.body,p.body FROM cohort c JOIN records r ON r.id=c.id "
+                            "JOIN outcomes o ON o.id=c.id AND o.candidate=? "
+                            "JOIN outcomes p ON p.id=c.id AND p.candidate=? "
+                            "WHERE c.evidence=? AND c.split=? ORDER BY c.entry,c.id",
+                            (candidate, aliases["incumbent"], evidence, cohort),
+                        ):
+                            context = json.loads(body)["context"]
+                            amount = number(context["buy_basis_krw"])
+                            if amount is None or amount <= 0:
+                                raise ValueError("universal_notional_unverified")
+                            row, base = json.loads(candidate_body), json.loads(
+                                parent_body
+                            )
+                            if (
+                                row["modeled_net_pnl_krw"] is None
+                                or base["modeled_net_pnl_krw"] is None
+                            ):
+                                continue
+                            reference = (
+                                max(base["modeled_net_pnl_krw"], row["actual_pnl_krw"])
+                                if evidence == "actual_completed"
+                                else base["modeled_net_pnl_krw"]
+                            )
+                            yield (
+                                identity,
+                                (row["modeled_net_pnl_krw"] - reference) / amount * 100,
+                                [
+                                    (v - reference) / amount * 100
+                                    for v in row["slippage_net_pnl_krw"]
+                                ],
+                                row["modeled_net_pnl_krw"],
+                            )
+
+                    paired = storage.write_tree(
+                        output_root, (i for i, _, _, _ in deltas())
+                    )
+                    count = paired["count"]
+                    mean = (
+                        math.fsum(v for _, v, _, _ in deltas()) / count
+                        if count
+                        else None
+                    )
+                    worst = min((v for _, v, _, _ in deltas()), default=None)
+                    adverse = storage.write_tree(
+                        output_root, (i for i, v, _, _ in deltas() if v < 0)
+                    )
+                    stress = {
+                        str(bps): (
+                            math.fsum(v[n] for _, _, v, _ in deltas()) / count
+                            if count
+                            else None
+                        )
+                        for n, bps in enumerate(SLIPPAGE_BPS)
+                    }
+                    metrics[name][cohort] = {
+                        "n": count,
+                        "paired_ev_pct": mean,
+                        "worst_paired_delta_pct": worst,
+                        "worsened_ids_ref": adverse,
+                        "paired_ids_ref": paired,
+                        "large_loss_worsened_ids_ref": storage.write_tree(
+                            output_root,
+                            (i for i, d, _, p in deltas() if d < 0 and p < 0),
+                        ),
+                        "slippage_ev_pct": stress,
+                    }
+            strata[evidence] = {
+                "common_ids_ref": qualified,
+                "train_ids_ref": train,
+                "holdout_ids_ref": held,
+                "purged_ids_ref": purged,
+                "cost_unavailable_train_ids_ref": cost_unavailable,
+                "train_days": train_days,
+                "holdout_days": holdout_days,
+                "metrics": metrics,
+                "completion_date_verified": verified,
+                "existing_selector_sample_floor_met": evidence == "actual_completed"
+                and verified
+                and len(days) >= 7
+                and train["count"] >= 30
+                and held["count"] >= 10
+                and len(holdout_days) >= 2,
+                "candidate_review_required": True,
+                "allowed_runtime_apply": False,
+            }
+        common = storage.write_tree(
+            output_root, (i for i, in db.execute("SELECT id FROM cohort ORDER BY id"))
+        )
+        population = storage.write_tree(
+            output_root, (i for i, _, _ in storage.records(db))
+        )
+        conflicts = storage.write_tree(
+            output_root,
+            (
+                {"identity": i, "reason": "global_population_conflict"}
+                for i, _, _ in storage.records(db, conflicts=True)
+            ),
+        )
+        return {
+            "status": "evaluated" if common["count"] else "source_gap",
+            "common_ids_ref": common,
+            "eligible_ids_ref": common,
+            "population_algorithm": "candidate_parent_pairs_v2",
+            "population_ids_ref": population,
+            "conflicts_ref": conflicts,
+            "strata": strata,
+            "storage_schema": "main_trailing_sharded_evaluation_v2",
+            "decision_authority": "research_only_existing_selector_review_required",
+            "allowed_runtime_apply": False,
+        }

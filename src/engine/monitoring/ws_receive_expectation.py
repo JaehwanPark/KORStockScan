@@ -54,7 +54,9 @@ def _remaining_seconds(value: Any) -> int | None:
     return total if total > 0 else None
 
 
-def _exchange_time(receipt: Mapping[str, Any], received_at: datetime) -> datetime | None:
+def _exchange_time(
+    receipt: Mapping[str, Any], received_at: datetime
+) -> datetime | None:
     token = str(receipt.get("exchange_time_raw") or "").strip()
     if len(token) != 6 or not token.isdigit():
         return None
@@ -162,11 +164,9 @@ def classify_receive_gap(row: Mapping[str, Any], at: datetime | None) -> dict[st
     result = dict(row)
     # A persisted diagnostic is not a waiver after the opening boundary.
     prior_expectation = row.get("receive_expectation")
-    if (
-        isinstance(prior_expectation, dict)
-        and prior_expectation.get("contract_version")
-        in {CONTRACT_VERSION, "ws_opening_receive_expectation_v1"}
-    ):
+    if isinstance(prior_expectation, dict) and prior_expectation.get(
+        "contract_version"
+    ) in {CONTRACT_VERSION, "ws_opening_receive_expectation_v1"}:
         prior_reason = str(row.get("repair_reason") or "")
         if (
             "observed_repair_reason" in row

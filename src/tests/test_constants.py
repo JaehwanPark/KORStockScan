@@ -225,10 +225,18 @@ def test_avg_down_market_on_stop_touch_runtime_env_override(monkeypatch):
     reloaded = importlib.reload(constants)
 
     assert reloaded.TRADING_RULES.SCALPING_AVG_DOWN_MARKET_ON_STOP_TOUCH_ENABLED is True
-    assert not hasattr(reloaded.TRADING_RULES, 'SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_ENABLED')
-    assert not hasattr(reloaded.TRADING_RULES, 'SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_MAX_SEC')
-    assert not hasattr(reloaded.TRADING_RULES, 'SCALP_STOP_LINE_TOUCH_AVG_DOWN_EXTRA_DIP_PCT')
-    assert not hasattr(reloaded.TRADING_RULES, 'SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_EMERGENCY_PCT')
+    assert not hasattr(
+        reloaded.TRADING_RULES, "SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_ENABLED"
+    )
+    assert not hasattr(
+        reloaded.TRADING_RULES, "SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_MAX_SEC"
+    )
+    assert not hasattr(
+        reloaded.TRADING_RULES, "SCALP_STOP_LINE_TOUCH_AVG_DOWN_EXTRA_DIP_PCT"
+    )
+    assert not hasattr(
+        reloaded.TRADING_RULES, "SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_EMERGENCY_PCT"
+    )
 
 
 def test_stop_loss_runtime_env_overrides(monkeypatch):
@@ -251,7 +259,9 @@ def test_stop_loss_runtime_env_overrides(monkeypatch):
     assert reloaded.TRADING_RULES.SCALP_STOP == -3.0
     assert reloaded.TRADING_RULES.SCALP_HARD_STOP == -5.0
     assert reloaded.TRADING_RULES.SCALP_SOFT_STOP_MICRO_GRACE_EMERGENCY_PCT == -4.0
-    assert not hasattr(reloaded.TRADING_RULES, 'SCALP_SOFT_STOP_DYNAMIC_GRACE_EMERGENCY_PCT')
+    assert not hasattr(
+        reloaded.TRADING_RULES, "SCALP_SOFT_STOP_DYNAMIC_GRACE_EMERGENCY_PCT"
+    )
     assert reloaded.TRADING_RULES.SCALP_PRESET_HARD_STOP_PCT == -1.4
     assert reloaded.TRADING_RULES.SCALP_PRESET_HARD_STOP_EMERGENCY_PCT == -2.4
     assert reloaded.TRADING_RULES.KOSDAQ_STOP == -5.0
@@ -982,13 +992,23 @@ def test_trading_rules_scalping_entry_price_percent_bps_env_override(monkeypatch
     assert reloaded.TRADING_RULES.DYNAMIC_ENTRY_PRICE_RESOLVER_LIVE_SELECTED is True
     assert reloaded.TRADING_RULES.ENTRY_PRICE_LIVE_TUNING_SELECTED is True
     assert reloaded.TRADING_RULES.ENTRY_STAGE_LIVE_TUNING_SELECTED is True
-    assert not hasattr(reloaded.TRADING_RULES, 'SCALP_SOFT_STOP_DYNAMIC_GRACE_OVERRIDE_ENABLED')
-    assert not hasattr(reloaded.TRADING_RULES, 'SCALP_SOFT_STOP_DYNAMIC_GRACE_WEAK_SEC')
-    assert not hasattr(reloaded.TRADING_RULES, 'SCALP_SOFT_STOP_DYNAMIC_GRACE_BASE_SEC')
-    assert not hasattr(reloaded.TRADING_RULES, 'SCALP_SOFT_STOP_DYNAMIC_GRACE_STRONG_SEC')
-    assert not hasattr(reloaded.TRADING_RULES, 'SCALP_SOFT_STOP_DYNAMIC_GRACE_MIN_AI_SCORE')
-    assert not hasattr(reloaded.TRADING_RULES, 'SCALP_SOFT_STOP_DYNAMIC_GRACE_EMERGENCY_PCT')
-    assert not hasattr(reloaded.TRADING_RULES, 'SCALP_SOFT_STOP_DYNAMIC_GRACE_MAX_WORSEN_PCT')
+    assert not hasattr(
+        reloaded.TRADING_RULES, "SCALP_SOFT_STOP_DYNAMIC_GRACE_OVERRIDE_ENABLED"
+    )
+    assert not hasattr(reloaded.TRADING_RULES, "SCALP_SOFT_STOP_DYNAMIC_GRACE_WEAK_SEC")
+    assert not hasattr(reloaded.TRADING_RULES, "SCALP_SOFT_STOP_DYNAMIC_GRACE_BASE_SEC")
+    assert not hasattr(
+        reloaded.TRADING_RULES, "SCALP_SOFT_STOP_DYNAMIC_GRACE_STRONG_SEC"
+    )
+    assert not hasattr(
+        reloaded.TRADING_RULES, "SCALP_SOFT_STOP_DYNAMIC_GRACE_MIN_AI_SCORE"
+    )
+    assert not hasattr(
+        reloaded.TRADING_RULES, "SCALP_SOFT_STOP_DYNAMIC_GRACE_EMERGENCY_PCT"
+    )
+    assert not hasattr(
+        reloaded.TRADING_RULES, "SCALP_SOFT_STOP_DYNAMIC_GRACE_MAX_WORSEN_PCT"
+    )
     assert reloaded.TRADING_RULES.HOLDING_EXIT_LIVE_TUNING_SELECTED is True
 
 
@@ -1248,7 +1268,7 @@ def test_trading_rules_profit_stagnation_exit_env_override(monkeypatch):
     assert reloaded.TRADING_RULES.SCALP_PROFIT_STAGNATION_MIN_SEC == 180
     assert reloaded.TRADING_RULES.SCALP_PROFIT_STAGNATION_MAX_PROFIT_MOVE_PCT == 0.15
     assert reloaded.TRADING_RULES.SCALP_PROFIT_STAGNATION_MAX_PEAK_IMPROVE_PCT == 0.10
-    assert not hasattr(reloaded.TRADING_RULES, 'SCALP_PROFIT_STAGNATION_MIN_AI_SCORE')
+    assert not hasattr(reloaded.TRADING_RULES, "SCALP_PROFIT_STAGNATION_MIN_AI_SCORE")
     assert reloaded.TRADING_RULES.SCALP_LOW_PROFIT_STAGNATION_HARD_EXIT_ENABLED is True
     assert (
         reloaded.TRADING_RULES.SCALP_LOW_PROFIT_STAGNATION_MIN_ADJUSTED_PROFIT_PCT
@@ -1389,12 +1409,18 @@ def test_pre_submit_quote_refresh_env_override(monkeypatch):
 def test_trading_rules_runtime_shadow_defaults_are_off(monkeypatch):
     reloaded = importlib.reload(constants)
 
-    for key in ('SCALP_COMMON_HARD_TIME_STOP_SHADOW_ONLY',
-                'SCALP_SOFT_STOP_SAME_SYMBOL_COOLDOWN_SHADOW_ENABLED',
-                'SCALP_PARTIAL_ONLY_TIMEOUT_SHADOW_ENABLED', 'SCALP_TIME_LIMIT_MIN', 'MIN_PROFIT_PRESERVE'):
-        assert not hasattr(reloaded.TRADING_RULES,key)
-    assert not hasattr(reloaded.TRADING_RULES, 'SCALP_BAD_ENTRY_REFINED_CANARY_ENABLED')
-    assert not hasattr(reloaded.TRADING_RULES, 'SCALP_BAD_ENTRY_REFINED_OBSERVE_ENABLED')
+    for key in (
+        "SCALP_COMMON_HARD_TIME_STOP_SHADOW_ONLY",
+        "SCALP_SOFT_STOP_SAME_SYMBOL_COOLDOWN_SHADOW_ENABLED",
+        "SCALP_PARTIAL_ONLY_TIMEOUT_SHADOW_ENABLED",
+        "SCALP_TIME_LIMIT_MIN",
+        "MIN_PROFIT_PRESERVE",
+    ):
+        assert not hasattr(reloaded.TRADING_RULES, key)
+    assert not hasattr(reloaded.TRADING_RULES, "SCALP_BAD_ENTRY_REFINED_CANARY_ENABLED")
+    assert not hasattr(
+        reloaded.TRADING_RULES, "SCALP_BAD_ENTRY_REFINED_OBSERVE_ENABLED"
+    )
     assert reloaded.TRADING_RULES.OPENAI_DUAL_PERSONA_SHADOW_MODE is False
 
 
@@ -1662,21 +1688,40 @@ def test_scalping_session_venue_provenance_blocks_post_effective_transition():
     assert fields["market_data_route"] == "unknown"
 
 
-@pytest.mark.parametrize("setting", [
-    "OPENAI_SCALPING_ENTRY_MODEL", "OPENAI_HOLDING_SCORE_MODEL", "OPENAI_HOLDING_EXIT_VOTE_MODEL",
-    "OPENAI_HOLDING_FLOW_MODEL", "OPENAI_REALTIME_REPORT_MODEL", "OPENAI_SWING_ANALYSIS_MODEL",
-    "OPENAI_SCALPING_SHARED_MODEL", "OPENAI_WATCHING_SHADOW_MODEL", "OPENAI_GATEKEEPER_SHADOW_MODEL",
-])
+@pytest.mark.parametrize(
+    "setting",
+    [
+        "OPENAI_SCALPING_ENTRY_MODEL",
+        "OPENAI_HOLDING_SCORE_MODEL",
+        "OPENAI_HOLDING_EXIT_VOTE_MODEL",
+        "OPENAI_HOLDING_FLOW_MODEL",
+        "OPENAI_REALTIME_REPORT_MODEL",
+        "OPENAI_SWING_ANALYSIS_MODEL",
+        "OPENAI_SCALPING_SHARED_MODEL",
+        "OPENAI_WATCHING_SHADOW_MODEL",
+        "OPENAI_GATEKEEPER_SHADOW_MODEL",
+    ],
+)
 def test_role_model_environment_override_is_single_setting(monkeypatch, setting):
-    roles = ("OPENAI_SCALPING_ENTRY_MODEL", "OPENAI_HOLDING_SCORE_MODEL", "OPENAI_HOLDING_EXIT_VOTE_MODEL",
-             "OPENAI_HOLDING_FLOW_MODEL", "OPENAI_REALTIME_REPORT_MODEL", "OPENAI_SWING_ANALYSIS_MODEL",
-             "OPENAI_SCALPING_SHARED_MODEL", "OPENAI_WATCHING_SHADOW_MODEL", "OPENAI_GATEKEEPER_SHADOW_MODEL")
+    roles = (
+        "OPENAI_SCALPING_ENTRY_MODEL",
+        "OPENAI_HOLDING_SCORE_MODEL",
+        "OPENAI_HOLDING_EXIT_VOTE_MODEL",
+        "OPENAI_HOLDING_FLOW_MODEL",
+        "OPENAI_REALTIME_REPORT_MODEL",
+        "OPENAI_SWING_ANALYSIS_MODEL",
+        "OPENAI_SCALPING_SHARED_MODEL",
+        "OPENAI_WATCHING_SHADOW_MODEL",
+        "OPENAI_GATEKEEPER_SHADOW_MODEL",
+    )
     for name in roles:
         monkeypatch.delenv("KORSTOCKSCAN_" + name, raising=False)
     before = constants._build_trading_rules()
     monkeypatch.setenv("KORSTOCKSCAN_" + setting, "only-this-role")
     after = constants._build_trading_rules()
-    assert {name for name in roles if getattr(before, name) != getattr(after, name)} == {setting}
+    assert {
+        name for name in roles if getattr(before, name) != getattr(after, name)
+    } == {setting}
     assert getattr(after, setting) == "only-this-role"
     for removed in ("GPT_FAST_MODEL", "GPT_REPORT_MODEL", "GPT_DEEP_MODEL"):
         assert not hasattr(after, removed)

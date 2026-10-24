@@ -7,7 +7,6 @@ from src.database.db_manager import DBManager
 from src.database.models import Base
 from src.utils import kiwoom_utils, update_kospi
 
-
 KST = ZoneInfo("Asia/Seoul")
 
 
@@ -211,9 +210,7 @@ def test_eod_collection_stores_nullable_aftermarket_and_uses_legacy_nxt_fallback
             },
         }, {"api_id": "ka10099", "status": "partial", "complete": False}
 
-    monkeypatch.setattr(
-        kiwoom_utils, "get_stock_eligibility_map_ka10099", fake_source
-    )
+    monkeypatch.setattr(kiwoom_utils, "get_stock_eligibility_map_ka10099", fake_source)
     monkeypatch.setattr(
         db,
         "get_latest_is_nxt_map",
@@ -237,9 +234,7 @@ def test_eod_collection_stores_nullable_aftermarket_and_uses_legacy_nxt_fallback
     assert stored["nxt_eligible"] is True
     assert stored["krx_aftermarket_eligible"] is None
     assert stored["quality_state"] == "UNKNOWN"
-    assert "aftermarket_eligibility_source_incomplete" in stored[
-        "blocked_reasons_json"
-    ]
+    assert "aftermarket_eligibility_source_incomplete" in stored["blocked_reasons_json"]
 
 
 def test_daily_quote_upsert_preserves_unreceived_history_and_refreshes_received():
@@ -247,27 +242,54 @@ def test_daily_quote_upsert_preserves_unreceived_history_and_refreshes_received(
     from sqlalchemy import create_engine, select
     from src.database.models import DailyStockQuote
 
-    engine = create_engine('sqlite://')
+    engine = create_engine("sqlite://")
     Base.metadata.create_all(engine)
     table = DailyStockQuote.__table__
     with engine.begin() as conn:
-        conn.execute(table.insert(), [
-            {'quote_date': date(2026, 10, 1), 'stock_code': '005930', 'close_price': 10.0},
-            {'quote_date': date(2026, 9, 30), 'stock_code': '005930', 'close_price': 9.0},
-            {'quote_date': date(2026, 10, 1), 'stock_code': '000660', 'close_price': 20.0},
-        ])
-        frame = pd.DataFrame([
-            {'quote_date': date(2026, 10, 1), 'stock_code': '005930', 'close_price': 11.0},
-            {'quote_date': date(2026, 10, 2), 'stock_code': '005930', 'close_price': 12.0},
-        ])
+        conn.execute(
+            table.insert(),
+            [
+                {
+                    "quote_date": date(2026, 10, 1),
+                    "stock_code": "005930",
+                    "close_price": 10.0,
+                },
+                {
+                    "quote_date": date(2026, 9, 30),
+                    "stock_code": "005930",
+                    "close_price": 9.0,
+                },
+                {
+                    "quote_date": date(2026, 10, 1),
+                    "stock_code": "000660",
+                    "close_price": 20.0,
+                },
+            ],
+        )
+        frame = pd.DataFrame(
+            [
+                {
+                    "quote_date": date(2026, 10, 1),
+                    "stock_code": "005930",
+                    "close_price": 11.0,
+                },
+                {
+                    "quote_date": date(2026, 10, 2),
+                    "stock_code": "005930",
+                    "close_price": 12.0,
+                },
+            ]
+        )
         assert update_kospi._upsert_daily_quote_batch(conn, frame) == 2
         assert update_kospi._upsert_daily_quote_batch(conn, frame) == 2
-        rows = conn.execute(select(table.c.quote_date, table.c.stock_code, table.c.close_price)).all()
+        rows = conn.execute(
+            select(table.c.quote_date, table.c.stock_code, table.c.close_price)
+        ).all()
     assert set(rows) == {
-        (date(2026, 9, 30), '005930', 9.0),
-        (date(2026, 10, 1), '005930', 11.0),
-        (date(2026, 10, 2), '005930', 12.0),
-        (date(2026, 10, 1), '000660', 20.0),
+        (date(2026, 9, 30), "005930", 9.0),
+        (date(2026, 10, 1), "005930", 11.0),
+        (date(2026, 10, 2), "005930", 12.0),
+        (date(2026, 10, 1), "000660", 20.0),
     }
 
 
@@ -277,11 +299,13 @@ def test_daily_quote_batch_rejects_duplicate_identity_before_writes():
     from sqlalchemy import create_engine, select
     from src.database.models import DailyStockQuote
 
-    engine = create_engine('sqlite://')
+    engine = create_engine("sqlite://")
     Base.metadata.create_all(engine)
-    frame = pd.DataFrame([{'quote_date': date(2026, 10, 2), 'stock_code': '005930'}] * 2)
+    frame = pd.DataFrame(
+        [{"quote_date": date(2026, 10, 2), "stock_code": "005930"}] * 2
+    )
     with engine.begin() as conn:
-        with pytest.raises(ValueError, match='duplicate_identity'):
+        with pytest.raises(ValueError, match="duplicate_identity"):
             update_kospi._upsert_daily_quote_batch(conn, frame)
         assert conn.execute(select(DailyStockQuote.__table__)).all() == []
 
@@ -292,23 +316,25 @@ def test_daily_quote_batch_rolls_back_earlier_chunks_on_late_failure(monkeypatch
     from sqlalchemy import create_engine, select, event
     from src.database.models import DailyStockQuote
 
-    engine = create_engine('sqlite://')
+    engine = create_engine("sqlite://")
     Base.metadata.create_all(engine)
-    monkeypatch.setattr(update_kospi, 'BULK_CHUNKSIZE', 1)
+    monkeypatch.setattr(update_kospi, "BULK_CHUNKSIZE", 1)
     calls = []
 
-    @event.listens_for(engine, 'before_cursor_execute')
+    @event.listens_for(engine, "before_cursor_execute")
     def fail_second_insert(conn, cursor, statement, parameters, context, executemany):
-        if statement.startswith('INSERT INTO daily_stock_quotes'):
+        if statement.startswith("INSERT INTO daily_stock_quotes"):
             calls.append(statement)
             if len(calls) == 2:
-                raise RuntimeError('synthetic_write_failure')
+                raise RuntimeError("synthetic_write_failure")
 
-    frame = pd.DataFrame([
-        {'quote_date': date(2026, 10, 1), 'stock_code': '005930'},
-        {'quote_date': date(2026, 10, 2), 'stock_code': '005930'},
-    ])
-    with pytest.raises(RuntimeError, match='synthetic_write_failure'):
+    frame = pd.DataFrame(
+        [
+            {"quote_date": date(2026, 10, 1), "stock_code": "005930"},
+            {"quote_date": date(2026, 10, 2), "stock_code": "005930"},
+        ]
+    )
+    with pytest.raises(RuntimeError, match="synthetic_write_failure"):
         with engine.begin() as conn:
             update_kospi._upsert_daily_quote_batch(conn, frame)
     with engine.connect() as conn:
@@ -316,26 +342,38 @@ def test_daily_quote_batch_rolls_back_earlier_chunks_on_late_failure(monkeypatch
 
 
 def test_failed_eod_source_does_not_run_recommendation(monkeypatch, tmp_path):
-    monkeypatch.setattr(update_kospi, 'update_kospi_data', lambda: {
-        'status': 'failed', 'reason': 'target_date_rows_missing'})
-    monkeypatch.setattr(update_kospi, 'STATUS_DIR', tmp_path)
-    monkeypatch.setattr(update_kospi, '_load_latest_quote_state', lambda: {})
-    monkeypatch.setattr(update_kospi.subprocess, 'run', lambda *a, **k: (_ for _ in ()).throw(
-        AssertionError('downstream must not run')))
+    monkeypatch.setattr(
+        update_kospi,
+        "update_kospi_data",
+        lambda: {"status": "failed", "reason": "target_date_rows_missing"},
+    )
+    monkeypatch.setattr(update_kospi, "STATUS_DIR", tmp_path)
+    monkeypatch.setattr(update_kospi, "_load_latest_quote_state", lambda: {})
+    monkeypatch.setattr(
+        update_kospi.subprocess,
+        "run",
+        lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError("downstream must not run")
+        ),
+    )
     result = update_kospi.run_update_kospi_chain()
-    assert result['status'] == 'failed'
-    assert result['failed_steps'] == ['update_kospi_data']
-    assert len(result['steps']) == 1
+    assert result["status"] == "failed"
+    assert result["failed_steps"] == ["update_kospi_data"]
+    assert len(result["steps"]) == 1
 
 
 def test_eod_downstream_failure_is_not_a_success_with_warning(monkeypatch):
-    monkeypatch.setattr(update_kospi, '_load_latest_quote_state', lambda: {})
-    result = update_kospi._build_update_kospi_status('2026-10-02', 'start', [
-        {'name': 'update_kospi_data', 'status': 'completed'},
-        {'name': 'recommend_daily_v2', 'status': 'failed'},
-    ])
-    assert result['status'] == 'failed'
-    assert result['failed_steps'] == ['recommend_daily_v2']
+    monkeypatch.setattr(update_kospi, "_load_latest_quote_state", lambda: {})
+    result = update_kospi._build_update_kospi_status(
+        "2026-10-02",
+        "start",
+        [
+            {"name": "update_kospi_data", "status": "completed"},
+            {"name": "recommend_daily_v2", "status": "failed"},
+        ],
+    )
+    assert result["status"] == "failed"
+    assert result["failed_steps"] == ["recommend_daily_v2"]
 
 
 def test_daily_quote_postgresql_statement_preserves_keys_and_nulls():
@@ -345,14 +383,22 @@ def test_daily_quote_postgresql_statement_preserves_keys_and_nulls():
 
     statements = []
     conn = SimpleNamespace(dialect=postgresql.dialect(), execute=statements.append)
-    frame = pd.DataFrame([{'quote_date': date(2026, 10, 2), 'stock_code': '005930',
-                          'close_price': 10.0, 'foreign_net': float('nan')}])
+    frame = pd.DataFrame(
+        [
+            {
+                "quote_date": date(2026, 10, 2),
+                "stock_code": "005930",
+                "close_price": 10.0,
+                "foreign_net": float("nan"),
+            }
+        ]
+    )
     assert update_kospi._upsert_daily_quote_batch(conn, frame) == 1
     compiled = statements[0].compile(dialect=conn.dialect)
-    assert 'ON CONFLICT (quote_date, stock_code) DO UPDATE SET' in str(compiled)
-    assert 'DELETE' not in str(compiled)
-    assert compiled.params['foreign_net_m0'] is None
-    assert compiled.params['quote_date_m0'] == date(2026, 10, 2)
+    assert "ON CONFLICT (quote_date, stock_code) DO UPDATE SET" in str(compiled)
+    assert "DELETE" not in str(compiled)
+    assert compiled.params["foreign_net_m0"] is None
+    assert compiled.params["quote_date_m0"] == date(2026, 10, 2)
 
 
 def test_eod_source_census_distinguishes_empty_stale_and_partial(monkeypatch):
@@ -361,103 +407,174 @@ def test_eod_source_census_distinguishes_empty_stale_and_partial(monkeypatch):
     from types import SimpleNamespace
     from contextlib import nullcontext
 
-    engine = create_engine('sqlite://')
+    engine = create_engine("sqlite://")
     Base.metadata.create_all(engine)
-    monkeypatch.setattr(update_kospi, 'DBManager', lambda: SimpleNamespace(
-        engine=engine, init_db=lambda: None, get_session=lambda: nullcontext()))
-    monkeypatch.setattr(update_kospi, 'EventBus', lambda: SimpleNamespace(publish=lambda *a: None))
-    monkeypatch.setattr(update_kospi.kiwoom_utils, 'is_trading_day', lambda: (True, 'fixture'))
-    monkeypatch.setattr(update_kospi.kiwoom_utils, 'get_kiwoom_token', lambda: 'fixture-token')
-    monkeypatch.setattr(update_kospi.fdr, 'StockListing', lambda *a: pd.DataFrame(
-        [{'Market': 'KOSPI', 'Code': '005930'}, {'Market': 'KOSPI', 'Code': '000660'},
-         {'Market': 'KOSPI', 'Code': '00088K'}]))
-    monkeypatch.setattr(update_kospi, '_collect_and_store_market_eligibility',
-                        lambda *a, **k: ({}, {'status': 'pass', 'stored_count': 2}))
-    monkeypatch.setattr(update_kospi, '_today_str', lambda: '2026-10-02')
-    monkeypatch.setattr(update_kospi.time, 'sleep', lambda *a: None)
-    monkeypatch.setattr(update_kospi, 'process_and_save_stock', lambda *a, **k: pd.DataFrame())
+    monkeypatch.setattr(
+        update_kospi,
+        "DBManager",
+        lambda: SimpleNamespace(
+            engine=engine, init_db=lambda: None, get_session=lambda: nullcontext()
+        ),
+    )
+    monkeypatch.setattr(
+        update_kospi, "EventBus", lambda: SimpleNamespace(publish=lambda *a: None)
+    )
+    monkeypatch.setattr(
+        update_kospi.kiwoom_utils, "is_trading_day", lambda: (True, "fixture")
+    )
+    monkeypatch.setattr(
+        update_kospi.kiwoom_utils, "get_kiwoom_token", lambda: "fixture-token"
+    )
+    monkeypatch.setattr(
+        update_kospi.fdr,
+        "StockListing",
+        lambda *a: pd.DataFrame(
+            [
+                {"Market": "KOSPI", "Code": "005930"},
+                {"Market": "KOSPI", "Code": "000660"},
+                {"Market": "KOSPI", "Code": "00088K"},
+            ]
+        ),
+    )
+    monkeypatch.setattr(
+        update_kospi,
+        "_collect_and_store_market_eligibility",
+        lambda *a, **k: ({}, {"status": "pass", "stored_count": 2}),
+    )
+    monkeypatch.setattr(update_kospi, "_today_str", lambda: "2026-10-02")
+    monkeypatch.setattr(update_kospi.time, "sleep", lambda *a: None)
+    monkeypatch.setattr(
+        update_kospi, "process_and_save_stock", lambda *a, **k: pd.DataFrame()
+    )
     empty = update_kospi.update_kospi_data()
-    assert empty['status'] == 'failed'
-    assert empty['reason'] == 'no_collected_rows'
-    assert empty['unreceived_codes'] == ['000660', '005930']
-    assert empty['total_count'] == 2
-    assert empty['excluded_symbol_identities'] == [{
-        'raw_code': '00088K', 'canonical_code': '00088K',
-        'reason': 'unsupported_equity_namespace'}]
+    assert empty["status"] == "failed"
+    assert empty["reason"] == "no_collected_rows"
+    assert empty["unreceived_codes"] == ["000660", "005930"]
+    assert empty["total_count"] == 2
+    assert empty["excluded_symbol_identities"] == [
+        {
+            "raw_code": "00088K",
+            "canonical_code": "00088K",
+            "reason": "unsupported_equity_namespace",
+        }
+    ]
 
     observed_date = date(2026, 10, 1)
 
     def received(code, *args, **kwargs):
-        if code == '000660':
+        if code == "000660":
             return pd.DataFrame()
-        return pd.DataFrame([{'quote_date': observed_date, 'stock_code': code, 'close_price': 10.0}])
+        return pd.DataFrame(
+            [{"quote_date": observed_date, "stock_code": code, "close_price": 10.0}]
+        )
 
-    monkeypatch.setattr(update_kospi, 'process_and_save_stock', received)
+    monkeypatch.setattr(update_kospi, "process_and_save_stock", received)
     stale = update_kospi.update_kospi_data()
-    assert stale['status'] == 'failed'
-    assert stale['reason'] == 'target_date_rows_missing'
-    assert stale['target_date_symbol_count'] == 0
+    assert stale["status"] == "failed"
+    assert stale["reason"] == "target_date_rows_missing"
+    assert stale["target_date_symbol_count"] == 0
     observed_date = date(2026, 10, 2)
     partial = update_kospi.update_kospi_data()
-    assert partial['status'] == 'completed_with_warnings'
-    assert partial['target_date_symbol_count'] == 1
-    assert partial['missing_target_date_codes'] == ['000660']
-    assert partial['inserted_rows'] == 1
+    assert partial["status"] == "completed_with_warnings"
+    assert partial["target_date_symbol_count"] == 1
+    assert partial["missing_target_date_codes"] == ["000660"]
+    assert partial["inserted_rows"] == 1
 
 
 def test_eod_normalization_never_collapses_instrument_namespaces():
-    assert update_kospi._normalize_stock_code('00088K') == '00088K'
-    assert update_kospi._normalize_stock_code('A005930_AL') == '005930'
-    assert update_kospi._normalize_stock_code('005930_NX') == '005930'
-    assert update_kospi._normalize_stock_code('1234567') == '1234567'
+    assert update_kospi._normalize_stock_code("00088K") == "00088K"
+    assert update_kospi._normalize_stock_code("A005930_AL") == "005930"
+    assert update_kospi._normalize_stock_code("005930_NX") == "005930"
+    assert update_kospi._normalize_stock_code("1234567") == "1234567"
 
 
-@pytest.mark.parametrize('feed', ['fdr', 'db'])
-@pytest.mark.parametrize('new_gap', [False, True])
-def test_operator_removed_master_symbols_never_reenter_eod_collection(monkeypatch, feed, new_gap):
+@pytest.mark.parametrize("feed", ["fdr", "db"])
+@pytest.mark.parametrize("new_gap", [False, True])
+def test_operator_removed_master_symbols_never_reenter_eod_collection(
+    monkeypatch, feed, new_gap
+):
     import pandas as pd
     from sqlalchemy import create_engine, text
     from types import SimpleNamespace
     from contextlib import nullcontext
-    from src.engine.infrastructure.market_eligibility_source import REMOVED_MASTER_SYMBOLS
+    from src.engine.infrastructure.market_eligibility_source import (
+        REMOVED_MASTER_SYMBOLS,
+    )
 
-    codes = sorted(REMOVED_MASTER_SYMBOLS) + ['005930'] + (['000660'] if new_gap else [])
-    engine = create_engine('sqlite://')
+    codes = (
+        sorted(REMOVED_MASTER_SYMBOLS) + ["005930"] + (["000660"] if new_gap else [])
+    )
+    engine = create_engine("sqlite://")
     Base.metadata.create_all(engine)
     with engine.begin() as conn:
-        conn.execute(text('INSERT INTO daily_stock_quotes (quote_date,stock_code,close_price) '
-                          'VALUES (:day,:code,1)'), [dict(day='2026-10-22',code=c) for c in codes])
-    monkeypatch.setattr(update_kospi, 'DBManager', lambda: SimpleNamespace(
-        engine=engine, init_db=lambda: None, get_session=lambda: nullcontext()))
-    monkeypatch.setattr(update_kospi, 'EventBus', lambda: SimpleNamespace(publish=lambda *a: None))
-    monkeypatch.setattr(update_kospi.kiwoom_utils, 'is_trading_day', lambda: (True, 'fixture'))
-    monkeypatch.setattr(update_kospi.kiwoom_utils, 'get_kiwoom_token', lambda: 'fixture-token')
+        conn.execute(
+            text(
+                "INSERT INTO daily_stock_quotes (quote_date,stock_code,close_price) "
+                "VALUES (:day,:code,1)"
+            ),
+            [dict(day="2026-10-22", code=c) for c in codes],
+        )
+    monkeypatch.setattr(
+        update_kospi,
+        "DBManager",
+        lambda: SimpleNamespace(
+            engine=engine, init_db=lambda: None, get_session=lambda: nullcontext()
+        ),
+    )
+    monkeypatch.setattr(
+        update_kospi, "EventBus", lambda: SimpleNamespace(publish=lambda *a: None)
+    )
+    monkeypatch.setattr(
+        update_kospi.kiwoom_utils, "is_trading_day", lambda: (True, "fixture")
+    )
+    monkeypatch.setattr(
+        update_kospi.kiwoom_utils, "get_kiwoom_token", lambda: "fixture-token"
+    )
+
     def listings(*args):
-        if feed == 'db': raise ValueError('offline listing failure')
-        return pd.DataFrame([dict(Market='KOSDAQ',Code=c) for c in codes])
-    monkeypatch.setattr(update_kospi.fdr, 'StockListing', listings)
-    expected = sorted(set(codes)-REMOVED_MASTER_SYMBOLS)
+        if feed == "db":
+            raise ValueError("offline listing failure")
+        return pd.DataFrame([dict(Market="KOSDAQ", Code=c) for c in codes])
+
+    monkeypatch.setattr(update_kospi.fdr, "StockListing", listings)
+    expected = sorted(set(codes) - REMOVED_MASTER_SYMBOLS)
+
     def eligibility(db, session, *, token, stock_codes, **kwargs):
         assert stock_codes == expected
-        return {}, dict(status='pass',stored_count=len(stock_codes))
-    monkeypatch.setattr(update_kospi, '_collect_and_store_market_eligibility', eligibility)
-    monkeypatch.setattr(update_kospi, '_today_str', lambda: '2026-10-23')
-    monkeypatch.setattr(update_kospi.time, 'sleep', lambda *a: None)
+        return {}, dict(status="pass", stored_count=len(stock_codes))
+
+    monkeypatch.setattr(
+        update_kospi, "_collect_and_store_market_eligibility", eligibility
+    )
+    monkeypatch.setattr(update_kospi, "_today_str", lambda: "2026-10-23")
+    monkeypatch.setattr(update_kospi.time, "sleep", lambda *a: None)
     calls = []
+
     def received(code, *args, **kwargs):
         calls.append(code)
-        if code == '000660': return pd.DataFrame()
-        return pd.DataFrame([dict(quote_date=date(2026,10,23),stock_code=code,close_price=2)])
-    monkeypatch.setattr(update_kospi, 'process_and_save_stock', received)
+        if code == "000660":
+            return pd.DataFrame()
+        return pd.DataFrame(
+            [dict(quote_date=date(2026, 10, 23), stock_code=code, close_price=2)]
+        )
+
+    monkeypatch.setattr(update_kospi, "process_and_save_stock", received)
     result = update_kospi.update_kospi_data()
     assert calls == expected
-    assert result['total_count'] == len(expected)
-    assert result['status'] == ('completed_with_warnings' if new_gap else 'completed')
-    assert result['missing_target_date_codes'] == (['000660'] if new_gap else [])
-    assert {r['canonical_code'] for r in result['excluded_symbol_identities']
-            if r['reason'] == 'operator_removed_from_master'} == REMOVED_MASTER_SYMBOLS
+    assert result["total_count"] == len(expected)
+    assert result["status"] == ("completed_with_warnings" if new_gap else "completed")
+    assert result["missing_target_date_codes"] == (["000660"] if new_gap else [])
+    assert {
+        r["canonical_code"]
+        for r in result["excluded_symbol_identities"]
+        if r["reason"] == "operator_removed_from_master"
+    } == REMOVED_MASTER_SYMBOLS
     with engine.connect() as conn:
-        rows = conn.execute(text('SELECT stock_code,close_price FROM daily_stock_quotes '
-                                 "WHERE quote_date='2026-10-22' ORDER BY stock_code")).all()
-        assert rows == [(c,1.0) for c in sorted(codes)]
+        rows = conn.execute(
+            text(
+                "SELECT stock_code,close_price FROM daily_stock_quotes "
+                "WHERE quote_date='2026-10-22' ORDER BY stock_code"
+            )
+        ).all()
+        assert rows == [(c, 1.0) for c in sorted(codes)]
     engine.dispose()

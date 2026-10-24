@@ -25,7 +25,9 @@ from src.engine.ai.hot_path_ai_dispatcher import (
     HotPathAIRequest,
 )
 from src.engine.scalping.scanner_runtime_scheduler import ScannerGeneration
-from src.engine.infrastructure.snapshot_copy import immutable_mapping as _immutable_mapping
+from src.engine.infrastructure.snapshot_copy import (
+    immutable_mapping as _immutable_mapping,
+)
 
 SCANNER_ASYNC_EVAL_VERSION = "scanner_async_eval_commit_v1"
 _MAX_READY_RESULTS = 128
@@ -33,90 +35,147 @@ _MAX_CANCELLED_GENERATIONS = 256
 
 # Main's invocation owns a result from the instant take removes it, including
 # exceptions before the resolver has constructed its return dictionary.
-ASYNC_CONSUMPTION = ContextVar('main_async_consumption', default=None)
+ASYNC_CONSUMPTION = ContextVar("main_async_consumption", default=None)
 
 
 def async_request_binding(context):
-    return dict(async_request_id=context.request_id, async_producer_pid=os.getpid(),
+    return dict(
+        async_request_id=context.request_id,
+        async_producer_pid=os.getpid(),
         async_producer_start_ticks=_PROCESS_START,
         async_origin_deadline_epoch=context.deadline_epoch,
         async_order_venue=context.generation.venue,
-        scanner_generation_id=context.generation.generation_id)
+        scanner_generation_id=context.generation.generation_id,
+    )
+
+
 try:
-    _PROCESS_START = Path('/proc/self/stat').read_text().rsplit(')', 1)[1].split()[19]
+    _PROCESS_START = Path("/proc/self/stat").read_text().rsplit(")", 1)[1].split()[19]
 except (OSError, IndexError):
     _PROCESS_START = None
 
 
 def _append_async_disposition(code, fields):
     from src.utils.pipeline_event_logger import emit_pipeline_event
-    return emit_pipeline_event('ENTRY_PIPELINE', code, code,
-                               'entry_async_disposition', fields=fields)
+
+    return emit_pipeline_event(
+        "ENTRY_PIPELINE", code, code, "entry_async_disposition", fields=fields
+    )
 
 
 def record_async_disposition(result, disposition, reason, **facts):
     """Use the existing compact pipeline; never alter provider outbox state."""
     try:
-        event = (result.native_claim.get('snapshot') or [{}])[0]
+        event = (result.native_claim.get("snapshot") or [{}])[0]
         payload = result.ai_payload
-        identity = f'{os.getpid()}|{_PROCESS_START}|{result.request_id}|{disposition}'
+        identity = f"{os.getpid()}|{_PROCESS_START}|{result.request_id}|{disposition}"
         fields = dict(
-                async_disposition_event_id=hashlib.sha256(identity.encode()).hexdigest(),
-                async_disposition=disposition, async_disposition_reason=str(reason),
-                async_request_id=result.request_id, scanner_generation_id=result.generation_id,
-                evaluation_attempt_id=payload.get('evaluation_attempt_id'),
-                ai_decision_trace_id=payload.get('ai_decision_trace_id'),
-                async_origin_snapshot_id=payload.get('ai_decision_snapshot_id') or payload.get('ai_market_snapshot_id'),
-                async_machine_action=payload.get('entry_mechanistic_action'),
-                async_auxiliary_status=payload.get('entry_ai_screen_status'),
-                async_auxiliary_verdict=payload.get('entry_ai_risk_verdict'),
-                async_provider_called=payload.get('provider_called'),
-                async_producer_start_ticks=_PROCESS_START,
-                async_release=os.getenv('KORSTOCKSCAN_RUNTIME_GIT_COMMIT'),
-                **{k:v for k,v in result.origin_fields.items() if k not in (
-                    'effective_venue','entry_machine_bundle_sha256','entry_auxiliary_policy_sha256')},
-                native_event_id=event.get('event_id'), native_signal_id=event.get('signal_id'),
-                effective_venue=payload.get('effective_venue') or result.origin_fields.get('effective_venue') or result.venue,
-                async_order_venue=result.venue,
-                entry_machine_bundle_sha256=payload.get('machine_bundle_sha256') or result.origin_fields.get('entry_machine_bundle_sha256'),
-                entry_auxiliary_policy_sha256=payload.get('entry_ai_component_sha256') or result.origin_fields.get('entry_auxiliary_policy_sha256'),
-                async_origin_deadline_epoch=result.deadline_epoch,
-                async_worker_completed_epoch=result.completed_epoch,
-                async_coordinator_ready_perf=getattr(result, 'coordinator_ready_perf', 0.0) or None,
-                async_evaluation_completed_perf=(payload.get('entry_local_stage_clocks') or {}).get(
-                    'async_evaluation_completed_perf'),
-                entry_local_stage_clocks=json.dumps(thaw_scanner_async_value(payload.get('entry_local_stage_clocks') or {}),
-                    sort_keys=True, separators=(',', ':')),
-                async_disposition_epoch=time.time(), async_producer_pid=os.getpid(),
-                async_request_source_date=datetime.fromtimestamp(
-                    getattr(result, 'submitted_epoch', result.completed_epoch),
-                    ZoneInfo('Asia/Seoul')).date().isoformat(),
-                metric_role='source_quality_gate', decision_authority='report_only',
-                window_policy='current_pid_exact_attempt_with_carry_in_out', sample_floor='none',
-                primary_decision_metric='pass_to_main_disposition_coverage',
-                forbidden_uses='policy_promotion,broker_order,economics',
-                actual_order_submitted=False, broker_order_forbidden=True, runtime_effect=False)
+            async_disposition_event_id=hashlib.sha256(identity.encode()).hexdigest(),
+            async_disposition=disposition,
+            async_disposition_reason=str(reason),
+            async_request_id=result.request_id,
+            scanner_generation_id=result.generation_id,
+            evaluation_attempt_id=payload.get("evaluation_attempt_id"),
+            ai_decision_trace_id=payload.get("ai_decision_trace_id"),
+            async_origin_snapshot_id=payload.get("ai_decision_snapshot_id")
+            or payload.get("ai_market_snapshot_id"),
+            async_machine_action=payload.get("entry_mechanistic_action"),
+            async_auxiliary_status=payload.get("entry_ai_screen_status"),
+            async_auxiliary_verdict=payload.get("entry_ai_risk_verdict"),
+            async_provider_called=payload.get("provider_called"),
+            async_producer_start_ticks=_PROCESS_START,
+            async_release=os.getenv("KORSTOCKSCAN_RUNTIME_GIT_COMMIT"),
+            **{
+                k: v
+                for k, v in result.origin_fields.items()
+                if k
+                not in (
+                    "effective_venue",
+                    "entry_machine_bundle_sha256",
+                    "entry_auxiliary_policy_sha256",
+                )
+            },
+            native_event_id=event.get("event_id"),
+            native_signal_id=event.get("signal_id"),
+            effective_venue=payload.get("effective_venue")
+            or result.origin_fields.get("effective_venue")
+            or result.venue,
+            async_order_venue=result.venue,
+            entry_machine_bundle_sha256=payload.get("machine_bundle_sha256")
+            or result.origin_fields.get("entry_machine_bundle_sha256"),
+            entry_auxiliary_policy_sha256=payload.get("entry_ai_component_sha256")
+            or result.origin_fields.get("entry_auxiliary_policy_sha256"),
+            async_origin_deadline_epoch=result.deadline_epoch,
+            async_worker_completed_epoch=result.completed_epoch,
+            async_coordinator_ready_perf=getattr(result, "coordinator_ready_perf", 0.0)
+            or None,
+            async_evaluation_completed_perf=(
+                payload.get("entry_local_stage_clocks") or {}
+            ).get("async_evaluation_completed_perf"),
+            entry_local_stage_clocks=json.dumps(
+                thaw_scanner_async_value(payload.get("entry_local_stage_clocks") or {}),
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+            async_disposition_epoch=time.time(),
+            async_producer_pid=os.getpid(),
+            async_request_source_date=datetime.fromtimestamp(
+                getattr(result, "submitted_epoch", result.completed_epoch),
+                ZoneInfo("Asia/Seoul"),
+            )
+            .date()
+            .isoformat(),
+            metric_role="source_quality_gate",
+            decision_authority="report_only",
+            window_policy="current_pid_exact_attempt_with_carry_in_out",
+            sample_floor="none",
+            primary_decision_metric="pass_to_main_disposition_coverage",
+            forbidden_uses="policy_promotion,broker_order,economics",
+            actual_order_submitted=False,
+            broker_order_forbidden=True,
+            runtime_effect=False,
+        )
         for key, value in facts.items():
             # Main's timing projection repeats the worker completion clock.
             # Accept its identical value, while preserving original request
             # identity and execution facts against a conflicting override.
-            if key in fields and (type(fields[key]) is not type(value) or fields[key] != value):
-                raise ValueError('async_disposition_original_fact_conflict:' + key)
+            if key in fields and (
+                type(fields[key]) is not type(value) or fields[key] != value
+            ):
+                raise ValueError("async_disposition_original_fact_conflict:" + key)
             fields[key] = value
-        if getattr(result, 'observation_sink', None) is not None:
-            return result.observation_sink(_append_async_disposition, result.code, fields)
+        if getattr(result, "observation_sink", None) is not None:
+            return result.observation_sink(
+                _append_async_disposition, result.code, fields
+            )
         receipt = _append_async_disposition(result.code, fields)
-        success = isinstance(receipt, dict) and receipt.get('structured_append_succeeded') is True
-        if (not success or receipt.get('structured_append_status') != 'raw_appended'
-                or receipt.get('structured_compact_append_succeeded') is False):
+        success = (
+            isinstance(receipt, dict)
+            and receipt.get("structured_append_succeeded") is True
+        )
+        if (
+            not success
+            or receipt.get("structured_append_status") != "raw_appended"
+            or receipt.get("structured_compact_append_succeeded") is False
+        ):
             from src.engine.monitoring.runtime_performance import failure
-            failure('async_disposition', (receipt or {}).get('structured_append_status', 'writer_unobservable')
-                    if isinstance(receipt, dict) else 'writer_unobservable')
+
+            failure(
+                "async_disposition",
+                (
+                    (receipt or {}).get(
+                        "structured_append_status", "writer_unobservable"
+                    )
+                    if isinstance(receipt, dict)
+                    else "writer_unobservable"
+                ),
+            )
         return success
     except Exception as exc:
         try:
             from src.engine.monitoring.runtime_performance import failure
-            failure('async_disposition', type(exc).__name__, emit_log=False)
+
+            failure("async_disposition", type(exc).__name__, emit_log=False)
         except Exception:
             pass
         return False
@@ -125,6 +184,7 @@ def record_async_disposition(result, disposition, reason, **facts):
 @dataclass(frozen=True, slots=True)
 class FixedWatchGeneration:
     """Native fixed-watch identity, never a scanner promotion."""
+
     code: str
     venue: str
     generation_id: str
@@ -135,19 +195,30 @@ class FixedWatchGeneration:
     @classmethod
     def from_claim(cls, code, claim):
         from src.engine.scalping.entry_deadline import claim_deadline_epoch
-        proof = claim.get('source_registration_receipt') or {}
-        event = claim['snapshot'][0]
-        if (not proof.get('sha256') or event['symbol'] != code
-                or claim_deadline_epoch(claim) <= time.time()):
-            raise ValueError('fixed_watch_native_identity_missing_or_expired')
-        return cls(code, event['venue'], 'fixed-watch:' + claim['token'],
-                   proof['sha256'], float(event['epoch']))
+
+        proof = claim.get("source_registration_receipt") or {}
+        event = claim["snapshot"][0]
+        if (
+            not proof.get("sha256")
+            or event["symbol"] != code
+            or claim_deadline_epoch(claim) <= time.time()
+        ):
+            raise ValueError("fixed_watch_native_identity_missing_or_expired")
+        return cls(
+            code,
+            event["venue"],
+            "fixed-watch:" + claim["token"],
+            proof["sha256"],
+            float(event["epoch"]),
+        )
 
     def timing_fields(self, *, now_epoch):
-        return dict(entry_async_identity_kind='fixed_watch_native_claim',
-                    fixed_watch_request_identity=self.generation_id,
-                    source_registration_sha256=self.source_signature,
-                    signal_age_seconds=max(0.,now_epoch-self.claim_epoch))
+        return dict(
+            entry_async_identity_kind="fixed_watch_native_claim",
+            fixed_watch_request_identity=self.generation_id,
+            source_registration_sha256=self.source_signature,
+            signal_age_seconds=max(0.0, now_epoch - self.claim_epoch),
+        )
 
 
 def thaw_scanner_async_value(value: Any) -> Any:
@@ -188,7 +259,9 @@ class ScannerAsyncEvalContext:
         caller_deadline_perf: float | None = None,
     ) -> "ScannerAsyncEvalContext":
         if not isinstance(generation, (ScannerGeneration, FixedWatchGeneration)):
-            raise TypeError("async context requires scanner or native fixed-watch identity")
+            raise TypeError(
+                "async context requires scanner or native fixed-watch identity"
+            )
         submitted = float(submitted_epoch)
         deadline = float(deadline_epoch)
         if (
@@ -205,23 +278,36 @@ class ScannerAsyncEvalContext:
             or not math.isfinite(float(caller_deadline_perf))
             or float(caller_deadline_perf) <= 0
         ):
-            raise ValueError('invalid original monotonic deadline')
+            raise ValueError("invalid original monotonic deadline")
         return cls(
             generation=generation,
             cache_key=str(cache_key or "").strip() or generation.generation_id,
             submitted_epoch=submitted,
             deadline_epoch=deadline,
-            stock_snapshot=_immutable_mapping({k:v for k,v in stock_snapshot.items()
-                if k != '_async_consumption_guard'}),
+            stock_snapshot=_immutable_mapping(
+                {
+                    k: v
+                    for k, v in stock_snapshot.items()
+                    if k != "_async_consumption_guard"
+                }
+            ),
             ws_snapshot=_immutable_mapping(ws_snapshot),
             state_version=str(state_version or "-"),
             submitted_perf=perf,
-            deadline_perf=min(perf+max(0.0, deadline-time.time()),
-                              float(caller_deadline_perf) if caller_deadline_perf is not None else float('inf')),
+            deadline_perf=min(
+                perf + max(0.0, deadline - time.time()),
+                (
+                    float(caller_deadline_perf)
+                    if caller_deadline_perf is not None
+                    else float("inf")
+                ),
+            ),
         )
 
     def expired(self):
-        return time.time() >= self.deadline_epoch or (self.deadline_perf > 0 and time.perf_counter() >= self.deadline_perf)
+        return time.time() >= self.deadline_epoch or (
+            self.deadline_perf > 0 and time.perf_counter() >= self.deadline_perf
+        )
 
     @property
     def request_id(self) -> str:
@@ -347,7 +433,9 @@ class ScannerAsyncEvalCoordinator:
                     pending_count=len(self._requests),
                 )
             if request_id in self._consumed:
-                return ScannerAsyncSubmitDecision(False, 'result_already_consumed', request_id, len(self._requests))
+                return ScannerAsyncSubmitDecision(
+                    False, "result_already_consumed", request_id, len(self._requests)
+                )
             if request_id in self._requests:
                 return ScannerAsyncSubmitDecision(
                     accepted=False,
@@ -369,7 +457,9 @@ class ScannerAsyncEvalCoordinator:
                     request_id=request_id,
                     pending_count=len(self._requests),
                 )
-            retained = set(self._requests) | set(self._ready) | self._undrained_request_ids
+            retained = (
+                set(self._requests) | set(self._ready) | self._undrained_request_ids
+            )
             if len(retained) >= _MAX_READY_RESULTS:
                 return ScannerAsyncSubmitDecision(
                     accepted=False,
@@ -386,7 +476,9 @@ class ScannerAsyncEvalCoordinator:
                     lambda completed, rid=request_id: self._on_prepared(rid, completed)
                 )
                 if self._preparation_pump is None:
-                    self._preparation_pump = self._preparation_executor.submit(self._drain_preparations)
+                    self._preparation_pump = self._preparation_executor.submit(
+                        self._drain_preparations
+                    )
             except Exception:
                 self._requests.pop(request_id, None)
                 self._preparation_queue.pop(request_id, None)
@@ -412,14 +504,27 @@ class ScannerAsyncEvalCoordinator:
                     self._preparation_pump = None
                     return
                 now = time.perf_counter()
+
                 def priority(pair):
                     request = pair[1]
-                    claim = request.context.stock_snapshot.get('_continuous_reversal_pending_claim') or {}
-                    snapshot = claim.get('snapshot') or ()
-                    confirmed = bool(snapshot and snapshot[0].get('decision_phase') == 'CONFIRMED_UPTICK')
-                    aged = now-request.context.submitted_perf >= 1.0
-                    return (0 if aged else 1 if confirmed else 2, request.context.submitted_perf)
-                rid,request = min(self._preparation_queue.items(), key=priority)
+                    claim = (
+                        request.context.stock_snapshot.get(
+                            "_continuous_reversal_pending_claim"
+                        )
+                        or {}
+                    )
+                    snapshot = claim.get("snapshot") or ()
+                    confirmed = bool(
+                        snapshot
+                        and snapshot[0].get("decision_phase") == "CONFIRMED_UPTICK"
+                    )
+                    aged = now - request.context.submitted_perf >= 1.0
+                    return (
+                        0 if aged else 1 if confirmed else 2,
+                        request.context.submitted_perf,
+                    )
+
+                rid, request = min(self._preparation_queue.items(), key=priority)
                 self._preparation_queue.pop(rid)
                 future = self._preparation_futures.get(rid)
             if future is None or not future.set_running_or_notify_cancel():
@@ -430,19 +535,27 @@ class ScannerAsyncEvalCoordinator:
                 future.set_exception(exc)
 
     def _prepare(
-        self, request: ScannerAsyncEvalRequest,
+        self,
+        request: ScannerAsyncEvalRequest,
     ) -> tuple[float, float, Mapping[str, Any]]:
         started = time.time()
         started_perf = time.perf_counter()
         with self._lock:
-            cancelled = self._closed or request.context.generation.generation_id in self._cancelled_generations
+            cancelled = (
+                self._closed
+                or request.context.generation.generation_id
+                in self._cancelled_generations
+            )
         if cancelled or request.context.expired():
             return started, started, MappingProxyType({})
         prepared = request.prepare(request.context)
         completed = time.time()
         from src.engine.monitoring.runtime_performance import observe
-        observe('preparation_queue', max(0.,started_perf-request.context.submitted_perf))
-        observe('preparation_service', max(0.,time.perf_counter()-started_perf))
+
+        observe(
+            "preparation_queue", max(0.0, started_perf - request.context.submitted_perf)
+        )
+        observe("preparation_service", max(0.0, time.perf_counter() - started_perf))
         return started, completed, _immutable_mapping(prepared)
 
     def _on_prepared(self, request_id: str, future: Future) -> None:
@@ -457,7 +570,11 @@ class ScannerAsyncEvalCoordinator:
             now = time.time()
             self._finish(
                 request,
-                status="superseded_before_preparation" if isinstance(exc, CancelledError) else "preparation_error",
+                status=(
+                    "superseded_before_preparation"
+                    if isinstance(exc, CancelledError)
+                    else "preparation_error"
+                ),
                 preparation_started_epoch=now,
                 preparation_completed_epoch=now,
                 completed_epoch=now,
@@ -468,8 +585,9 @@ class ScannerAsyncEvalCoordinator:
             return
         with self._lock:
             generation_cancelled = (
-                self._closed or
-                request.context.generation.generation_id in self._cancelled_generations
+                self._closed
+                or request.context.generation.generation_id
+                in self._cancelled_generations
             )
         if generation_cancelled:
             self._finish(
@@ -555,16 +673,20 @@ class ScannerAsyncEvalCoordinator:
     def _evaluate_prepared(
         self, request: ScannerAsyncEvalRequest, prepared: Mapping[str, Any]
     ) -> Mapping[str, Any]:
-        from src.engine.monitoring.runtime_performance import entry_timing_frame, entry_stage
+        from src.engine.monitoring.runtime_performance import (
+            entry_timing_frame,
+            entry_stage,
+        )
+
         with entry_timing_frame() as timings:
-            with entry_stage('entry_evaluation'):
+            with entry_stage("entry_evaluation"):
                 result = self._evaluate_prepared_frame(request, prepared)
             result = dict(result)
-            clocks = dict(result.get('entry_local_stage_clocks') or {})
-            clocks['stage_durations_ms'] = dict(timings)
-            clocks['stage_duration_basis'] = 'nested_same_pid_monotonic_not_additive'
-            clocks['async_evaluation_completed_perf'] = time.perf_counter()
-            result['entry_local_stage_clocks'] = clocks
+            clocks = dict(result.get("entry_local_stage_clocks") or {})
+            clocks["stage_durations_ms"] = dict(timings)
+            clocks["stage_duration_basis"] = "nested_same_pid_monotonic_not_additive"
+            clocks["async_evaluation_completed_perf"] = time.perf_counter()
+            result["entry_local_stage_clocks"] = clocks
             return result
 
     def _evaluate_prepared_frame(
@@ -584,7 +706,8 @@ class ScannerAsyncEvalCoordinator:
                 raise RuntimeError("scanner_async_superseded_before_evaluation")
         if request.refresh_before_evaluate is not None:
             from src.engine.monitoring.runtime_performance import entry_stage
-            with entry_stage('entry_refresh'):
+
+            with entry_stage("entry_refresh"):
                 refreshed = request.refresh_before_evaluate(request.context, prepared)
             if not isinstance(refreshed, Mapping):
                 raise TypeError("scanner_async_refreshed_frame_must_be_mapping")
@@ -610,21 +733,39 @@ class ScannerAsyncEvalCoordinator:
             request = self._requests.get(request_id)
             prepared = self._prepared.get(request_id, MappingProxyType({}))
             timings = self._preparation_timings.get(
-                request_id, (ai_result.submitted_epoch, ai_result.submitted_epoch))
-            superseded = self._closed or (request is not None and
-                request.context.generation.generation_id in self._cancelled_generations)
+                request_id, (ai_result.submitted_epoch, ai_result.submitted_epoch)
+            )
+            superseded = self._closed or (
+                request is not None
+                and request.context.generation.generation_id
+                in self._cancelled_generations
+            )
         if request is None:
             return False
         expired = request.context.expired()
-        self._finish(request,
-            status='superseded_result' if superseded else 'evaluation_deadline_expired'
-                if expired and ai_result.status == 'completed' else ai_result.status,
-            preparation_started_epoch=timings[0], preparation_completed_epoch=timings[1],
-            ai_started_epoch=ai_result.started_epoch, completed_epoch=ai_result.completed_epoch,
+        self._finish(
+            request,
+            status=(
+                "superseded_result"
+                if superseded
+                else (
+                    "evaluation_deadline_expired"
+                    if expired and ai_result.status == "completed"
+                    else ai_result.status
+                )
+            ),
+            preparation_started_epoch=timings[0],
+            preparation_completed_epoch=timings[1],
+            ai_started_epoch=ai_result.started_epoch,
+            completed_epoch=ai_result.completed_epoch,
             observation_only=bool(ai_result.observation_only or superseded or expired),
-            prepared_context=prepared, ai_payload=ai_result.payload,
-            ai_dispatch_wait_sec=ai_result.ai_dispatch_wait_sec, ai_response_sec=ai_result.ai_response_sec,
-            error_type=ai_result.error_type, error_message=ai_result.error_message)
+            prepared_context=prepared,
+            ai_payload=ai_result.payload,
+            ai_dispatch_wait_sec=ai_result.ai_dispatch_wait_sec,
+            ai_response_sec=ai_result.ai_response_sec,
+            error_type=ai_result.error_type,
+            error_message=ai_result.error_message,
+        )
         return True
 
     def _on_ai_completed(self, result):
@@ -701,14 +842,32 @@ class ScannerAsyncEvalCoordinator:
             error_type=error_type,
             error_message=error_message,
             deadline_perf=context.deadline_perf,
-            generation_kind="fixed_watch" if isinstance(context.generation, FixedWatchGeneration) else "scanner",
-            native_claim=_immutable_mapping(context.stock_snapshot.get('_continuous_reversal_pending_claim')),
+            generation_kind=(
+                "fixed_watch"
+                if isinstance(context.generation, FixedWatchGeneration)
+                else "scanner"
+            ),
+            native_claim=_immutable_mapping(
+                context.stock_snapshot.get("_continuous_reversal_pending_claim")
+            ),
             deadline_epoch=context.deadline_epoch,
             original_generation=context.generation,
-            origin_fields=_immutable_mapping({key: context.stock_snapshot.get(key) for key in
-                ('id', 'watch_origin', 'watch_admission_id', 'watch_generation_id', 'scanner_promotion_id',
-                 'effective_venue', 'market_session_bucket',
-                 'entry_machine_bundle_sha256', 'entry_auxiliary_policy_sha256')}),
+            origin_fields=_immutable_mapping(
+                {
+                    key: context.stock_snapshot.get(key)
+                    for key in (
+                        "id",
+                        "watch_origin",
+                        "watch_admission_id",
+                        "watch_generation_id",
+                        "scanner_promotion_id",
+                        "effective_venue",
+                        "market_session_bucket",
+                        "entry_machine_bundle_sha256",
+                        "entry_auxiliary_policy_sha256",
+                    )
+                }
+            ),
             observation_sink=self.observation_sink,
         )
         terminal_reason = None
@@ -721,10 +880,10 @@ class ScannerAsyncEvalCoordinator:
             self._prepared.pop(context.request_id, None)
             self._preparation_timings.pop(context.request_id, None)
             if self._closed:
-                terminal_reason = 'coordinator_shutdown'
+                terminal_reason = "coordinator_shutdown"
             else:
                 if context.generation.generation_id in self._cancelled_generations:
-                    terminal_reason = 'generation_invalidated'
+                    terminal_reason = "generation_invalidated"
                 else:
                     result = replace(result, coordinator_ready_perf=time.perf_counter())
                     self._ready[context.request_id] = result
@@ -738,17 +897,23 @@ class ScannerAsyncEvalCoordinator:
                     evicted.append(self._ready.pop(oldest_request_id))
                     self._completed.pop(oldest_request_id, None)
                     self._undrained_request_ids.discard(oldest_request_id)
-        record_async_disposition(result, 'worker_completed', status)
+        record_async_disposition(result, "worker_completed", status)
         try:
             from .pre_submit_delay_observation import register_pass_result
+
             register_pass_result(result)
         except (ValueError, TypeError, KeyError, AttributeError):
             from src.engine.monitoring.runtime_performance import failure
-            failure('pre_submit_delay_pass_capture', 'source_unobservable', emit_log=False)
+
+            failure(
+                "pre_submit_delay_pass_capture", "source_unobservable", emit_log=False
+            )
         if terminal_reason:
-            record_async_disposition(result, 'terminal_nonexecution', terminal_reason)
+            record_async_disposition(result, "terminal_nonexecution", terminal_reason)
         for old in evicted:
-            record_async_disposition(old, 'terminal_nonexecution', 'result_retention_overflow')
+            record_async_disposition(
+                old, "terminal_nonexecution", "result_retention_overflow"
+            )
 
     def drain_completed(
         self, *, limit: int | None = None
@@ -777,7 +942,7 @@ class ScannerAsyncEvalCoordinator:
             if result is not None:
                 owner = ASYNC_CONSUMPTION.get()
                 if owner is not None:
-                    owner['original_result'] = result
+                    owner["original_result"] = result
                 self._consumed[request_id] = None
                 while len(self._consumed) > 256:
                     self._consumed.popitem(last=False)
@@ -789,7 +954,7 @@ class ScannerAsyncEvalCoordinator:
             return self._ready.get(f"{generation_id}:{cache_key}")
 
     def discard_completed(
-        self, *, generation_id: str, cache_key: str, reason='unused_result'
+        self, *, generation_id: str, cache_key: str, reason="unused_result"
     ) -> ScannerAsyncEvalResult | None:
         request_id = (
             f"{str(generation_id or '').strip()}:{str(cache_key or '').strip()}"
@@ -803,7 +968,7 @@ class ScannerAsyncEvalCoordinator:
                 while len(self._consumed) > 256:
                     self._consumed.popitem(last=False)
         if result is not None:
-            record_async_disposition(result, 'terminal_nonexecution', reason)
+            record_async_disposition(result, "terminal_nonexecution", reason)
         return result
 
     def wait_for_completion(self, timeout: float) -> bool:
@@ -853,9 +1018,11 @@ class ScannerAsyncEvalCoordinator:
         the original result and checks its original deadline and guards.
         """
         with self._lock:
-            return {(result.generation_id, result.cache_key): result.coordinator_ready_perf
-                    for result in self._ready.values()
-                    if result.generation_kind == 'fixed_watch'}
+            return {
+                (result.generation_id, result.cache_key): result.coordinator_ready_perf
+                for result in self._ready.values()
+                if result.generation_kind == "fixed_watch"
+            }
 
     def has_completed_result(self) -> bool:
         """Report a result retained for main-thread COMMIT consumption.
@@ -886,8 +1053,11 @@ class ScannerAsyncEvalCoordinator:
         with self._lock:
             for request_id in self._undrained_request_ids:
                 result = self._ready.get(request_id)
-                if (result is not None and result.generation_kind == 'fixed_watch'
-                        and (result.generation_id, result.cache_key) in direct):
+                if (
+                    result is not None
+                    and result.generation_kind == "fixed_watch"
+                    and (result.generation_id, result.cache_key) in direct
+                ):
                     continue
                 return True
             return False
@@ -900,14 +1070,22 @@ class ScannerAsyncEvalCoordinator:
             with self._lock:
                 self._cancelled_generations.add(normalized)
                 while len(self._cancelled_generations) > _MAX_CANCELLED_GENERATIONS:
-                    live = {r.context.generation.generation_id for r in self._requests.values()}
-                    removable = next((g for g in self._cancelled_generations if g not in live), None)
+                    live = {
+                        r.context.generation.generation_id
+                        for r in self._requests.values()
+                    }
+                    removable = next(
+                        (g for g in self._cancelled_generations if g not in live), None
+                    )
                     if removable is None:
                         break
                     self._cancelled_generations.discard(removable)
                 for request_id, future in list(self._preparation_futures.items()):
                     request = self._requests.get(request_id)
-                    if request and request.context.generation.generation_id == normalized:
+                    if (
+                        request
+                        and request.context.generation.generation_id == normalized
+                    ):
                         futures.append(future)
                 stale_ready_ids = [
                     request_id
@@ -923,7 +1101,9 @@ class ScannerAsyncEvalCoordinator:
             for future in futures:
                 future.cancel()
             for result in discarded:
-                record_async_disposition(result, 'terminal_nonexecution', 'generation_invalidated')
+                record_async_disposition(
+                    result, "terminal_nonexecution", "generation_invalidated"
+                )
 
     def reactivate_generation(self, generation_id: str) -> bool:
         """Release a fully quiesced generation for one scheduler-owned retry.
@@ -973,7 +1153,9 @@ class ScannerAsyncEvalCoordinator:
             self._completed.clear()
             self._undrained_request_ids.clear()
         for result in retained:
-            record_async_disposition(result, 'terminal_nonexecution', 'coordinator_shutdown')
+            record_async_disposition(
+                result, "terminal_nonexecution", "coordinator_shutdown"
+            )
 
 
 def validate_scanner_async_commit(
@@ -1017,8 +1199,9 @@ def validate_scanner_async_commit(
     reason = "commit_allowed"
     if result.status != "completed" or result.observation_only:
         reason = "result_not_commit_eligible"
-    elif ((result.deadline_epoch > 0 and float(now_epoch) >= result.deadline_epoch)
-          or (result.deadline_perf > 0 and time.perf_counter() >= result.deadline_perf)):
+    elif (result.deadline_epoch > 0 and float(now_epoch) >= result.deadline_epoch) or (
+        result.deadline_perf > 0 and time.perf_counter() >= result.deadline_perf
+    ):
         reason = "result_deadline_expired"
     elif current_generation is None:
         reason = "current_generation_missing"
@@ -1053,7 +1236,7 @@ def validate_scanner_async_commit(
     fields["scanner_async_commit_allowed"] = allowed
     fields["scanner_async_commit_reason"] = reason
     if native_validation_error:
-        fields['scanner_async_native_validation_error'] = str(native_validation_error)
+        fields["scanner_async_native_validation_error"] = str(native_validation_error)
     return ScannerAsyncCommitDecision(
         allowed=allowed,
         reason=reason,

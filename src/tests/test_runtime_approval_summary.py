@@ -8,82 +8,153 @@ import pytest
 from src.engine import runtime_approval_summary as mod
 
 
-@pytest.mark.parametrize('comparison', ['incomplete','completed_unresolved','valid_empty'])
+@pytest.mark.parametrize(
+    "comparison", ["incomplete", "completed_unresolved", "valid_empty"]
+)
 def test_registered_readiness_does_not_claim_completed_comparison(comparison):
-    result=mod._reversal_comparison_disposition(dict(comparison_complete=False,
-        policy_states=dict(adoption_basis='carried',comparison_state=comparison)))
-    assert result['comparison_status']=='insufficient_sample'
-    assert result['candidate_count']==0
-    assert result['comparison_complete'] is False
+    result = mod._reversal_comparison_disposition(
+        dict(
+            comparison_complete=False,
+            policy_states=dict(adoption_basis="carried", comparison_state=comparison),
+        )
+    )
+    assert result["comparison_status"] == "insufficient_sample"
+    assert result["candidate_count"] == 0
+    assert result["comparison_complete"] is False
 
 
 def test_registered_carry_keeps_comparison_source_gap_visible():
-    result=mod._reversal_comparison_disposition(dict(comparison_complete=False,
-        policy_states=dict(adoption_basis='carried',comparison_state='source_gap')))
-    assert result['comparison_status']=='source_gap'
-    assert result['candidate_count']==0
+    result = mod._reversal_comparison_disposition(
+        dict(
+            comparison_complete=False,
+            policy_states=dict(adoption_basis="carried", comparison_state="source_gap"),
+        )
+    )
+    assert result["comparison_status"] == "source_gap"
+    assert result["candidate_count"] == 0
 
 
 def test_completed_registered_carry_does_not_claim_new_selection():
-    assert mod._reversal_comparison_disposition(dict(comparison_complete=True,
-        policy_states=dict(adoption_basis='carried',comparison_state='complete')))['comparison_status']=='identical_policy'
-    assert mod._reversal_comparison_disposition(dict(comparison_complete=True,
-        policy_states=dict(adoption_basis='comparison_selected',comparison_state='complete')))=={}
+    assert (
+        mod._reversal_comparison_disposition(
+            dict(
+                comparison_complete=True,
+                policy_states=dict(
+                    adoption_basis="carried", comparison_state="complete"
+                ),
+            )
+        )["comparison_status"]
+        == "identical_policy"
+    )
+    assert (
+        mod._reversal_comparison_disposition(
+            dict(
+                comparison_complete=True,
+                policy_states=dict(
+                    adoption_basis="comparison_selected", comparison_state="complete"
+                ),
+            )
+        )
+        == {}
+    )
 
 
 def test_machine_component_is_not_labeled_as_auxiliary_selection():
-    handoff=dict(comparison_complete=True,policy_states=dict(adoption_basis='comparison_selected',comparison_state='complete'))
-    machine=dict(status='completed',adoption_basis='carried',comparison_state='complete')
-    result=mod._reversal_comparison_disposition(handoff,component=machine)
-    assert result['comparison_status']=='identical_policy'
-    assert result['candidate_count']==0
+    handoff = dict(
+        comparison_complete=True,
+        policy_states=dict(
+            adoption_basis="comparison_selected", comparison_state="complete"
+        ),
+    )
+    machine = dict(
+        status="completed", adoption_basis="carried", comparison_state="complete"
+    )
+    result = mod._reversal_comparison_disposition(handoff, component=machine)
+    assert result["comparison_status"] == "identical_policy"
+    assert result["candidate_count"] == 0
 
 
-def test_native_family_does_not_require_legacy_strategy_activation(tmp_path, monkeypatch):
+def test_native_family_does_not_require_legacy_strategy_activation(
+    tmp_path, monkeypatch
+):
     from src.engine.scalping import mechanistic_entry_runtime_policy as native
-    monkeypatch.setattr(native,'current_strategy_receipt',lambda **kw: (_ for _ in ()).throw(
-        KeyError('strategy_activation')))
-    result=mod._current_strategy_receipt(tmp_path,dict(continuous_reversal=dict(schema='continuous_reversal_policy_v6')))
-    assert result['status']=='legacy_strategy_receipt_not_applicable'
-    assert result['actual_pid_consumed'] is False
-    with pytest.raises(KeyError,match='strategy_activation'):
-        mod._current_strategy_receipt(tmp_path,{})
+
+    monkeypatch.setattr(
+        native,
+        "current_strategy_receipt",
+        lambda **kw: (_ for _ in ()).throw(KeyError("strategy_activation")),
+    )
+    result = mod._current_strategy_receipt(
+        tmp_path, dict(continuous_reversal=dict(schema="continuous_reversal_policy_v6"))
+    )
+    assert result["status"] == "legacy_strategy_receipt_not_applicable"
+    assert result["actual_pid_consumed"] is False
+    with pytest.raises(KeyError, match="strategy_activation"):
+        mod._current_strategy_receipt(tmp_path, {})
 
 
 def test_partial_auxiliary_selection_retains_selected_scope_and_pending_population():
-    sid='samsung|REGULAR|ALL|SOR'
-    component=dict(status='completed',adoption_basis='comparison_selected',comparison_complete=False,
-                   comparison_promoted_scopes=[sid],comparison_metrics={sid:dict(improved=True,paired_points=3)})
-    result=mod._reversal_comparison_disposition(dict(comparison_complete=False),component=component)
-    assert result['comparison_status']=='cumulative_winrate_selected'
-    assert result['candidate_count']==1
-    assert result['comparison_selected_scopes']==[sid]
-    assert result['comparison_complete'] is False
-    assert result['resolution_mode']=='scoped_comparison_selected_remaining_incomplete'
-    component['comparison_metrics'][sid]['paired_points']=0
-    with pytest.raises(ValueError,match='promoted_scope_evidence_invalid'):
-        mod._reversal_comparison_disposition({},component=component)
-    component['comparison_metrics'][sid]=[]
-    with pytest.raises(ValueError,match='promoted_scope_evidence_invalid'):
-        mod._reversal_comparison_disposition({},component=component)
+    sid = "samsung|REGULAR|ALL|SOR"
+    component = dict(
+        status="completed",
+        adoption_basis="comparison_selected",
+        comparison_complete=False,
+        comparison_promoted_scopes=[sid],
+        comparison_metrics={sid: dict(improved=True, paired_points=3)},
+    )
+    result = mod._reversal_comparison_disposition(
+        dict(comparison_complete=False), component=component
+    )
+    assert result["comparison_status"] == "cumulative_winrate_selected"
+    assert result["candidate_count"] == 1
+    assert result["comparison_selected_scopes"] == [sid]
+    assert result["comparison_complete"] is False
+    assert (
+        result["resolution_mode"] == "scoped_comparison_selected_remaining_incomplete"
+    )
+    component["comparison_metrics"][sid]["paired_points"] = 0
+    with pytest.raises(ValueError, match="promoted_scope_evidence_invalid"):
+        mod._reversal_comparison_disposition({}, component=component)
+    component["comparison_metrics"][sid] = []
+    with pytest.raises(ValueError, match="promoted_scope_evidence_invalid"):
+        mod._reversal_comparison_disposition({}, component=component)
 
 
 def test_exact_component_reader_rejects_rewritten_policy_source(tmp_path):
     from src.engine.scalping import continuous_reversal_postclose as producer
     from src.engine.scalping import mechanistic_entry_runtime_policy as native
-    machine=producer.seal(dict(status='completed',adoption_basis='carried'))
-    auxiliary=producer.seal(dict(status='completed',adoption_basis='comparison_selected'))
-    family=dict(schema='continuous_reversal_policy_v6',source_date='2026-10-08',
-                machine_report_sha256=machine['artifact_content_sha256'],auxiliary_report_sha256=auxiliary['artifact_content_sha256'])
-    for report in (machine,auxiliary):
-        path=native.root(tmp_path)/'sources'/('reversal-'+report['artifact_content_sha256']+'.json')
-        _write(path,report)
-    policy=dict(continuous_reversal=family)
-    assert mod._reversal_component(tmp_path,policy,'main_mechanistic_entry')==machine
-    assert mod._reversal_component(tmp_path,policy,'compact_auxiliary')==auxiliary
-    _write(native.root(tmp_path)/'sources'/('reversal-'+machine['artifact_content_sha256']+'.json'),dict(machine,adoption_basis='comparison_selected'))
-    with pytest.raises(ValueError,match='component_changed'):
-        mod._reversal_component(tmp_path,policy,'main_mechanistic_entry')
+
+    machine = producer.seal(dict(status="completed", adoption_basis="carried"))
+    auxiliary = producer.seal(
+        dict(status="completed", adoption_basis="comparison_selected")
+    )
+    family = dict(
+        schema="continuous_reversal_policy_v6",
+        source_date="2026-10-08",
+        machine_report_sha256=machine["artifact_content_sha256"],
+        auxiliary_report_sha256=auxiliary["artifact_content_sha256"],
+    )
+    for report in (machine, auxiliary):
+        path = (
+            native.root(tmp_path)
+            / "sources"
+            / ("reversal-" + report["artifact_content_sha256"] + ".json")
+        )
+        _write(path, report)
+    policy = dict(continuous_reversal=family)
+    assert (
+        mod._reversal_component(tmp_path, policy, "main_mechanistic_entry") == machine
+    )
+    assert mod._reversal_component(tmp_path, policy, "compact_auxiliary") == auxiliary
+    _write(
+        native.root(tmp_path)
+        / "sources"
+        / ("reversal-" + machine["artifact_content_sha256"] + ".json"),
+        dict(machine, adoption_basis="comparison_selected"),
+    )
+    with pytest.raises(ValueError, match="component_changed"):
+        mod._reversal_component(tmp_path, policy, "main_mechanistic_entry")
+
 
 def _write(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -125,18 +196,28 @@ def _seed_required(target_date: str) -> None:
         )
 
 
-def test_late_publication_selects_new_policy_without_relabeling_preopen(monkeypatch, tmp_path):
+def test_late_publication_selects_new_policy_without_relabeling_preopen(
+    monkeypatch, tmp_path
+):
     data = _patch(monkeypatch, tmp_path)
     root = data / "runtime" / "mechanistic_entry_policy"
     source = "2026-09-30"
-    _write(root / "policy_2026-10-01.json", {
-        "target_date": "2026-10-01", "compact_evaluation_source_date": source,
-        "machine_evaluation_source": {"source_date": source},
-    })
-    _write(root / "policy_2026-10-02.json", {
-        "target_date": "2026-10-02", "compact_evaluation_source_date": source,
-        "machine_evaluation_source": {"source_date": source},
-    })
+    _write(
+        root / "policy_2026-10-01.json",
+        {
+            "target_date": "2026-10-01",
+            "compact_evaluation_source_date": source,
+            "machine_evaluation_source": {"source_date": source},
+        },
+    )
+    _write(
+        root / "policy_2026-10-02.json",
+        {
+            "target_date": "2026-10-02",
+            "compact_evaluation_source_date": source,
+            "machine_evaluation_source": {"source_date": source},
+        },
+    )
     monkeypatch.setenv("POSTCLOSE_PREPARED_EFFECTIVE_DATE", "2026-10-01")
     monkeypatch.setenv("POSTCLOSE_POLICY_PUBLICATION_DATE", "2026-10-01")
     paths = mod._paths(source)
@@ -148,7 +229,9 @@ def test_late_publication_selects_new_policy_without_relabeling_preopen(monkeypa
         mod._paths(source)
 
 
-def test_summary_completes_direct_evidence_without_fabricating_economics(monkeypatch, tmp_path):
+def test_summary_completes_direct_evidence_without_fabricating_economics(
+    monkeypatch, tmp_path
+):
     _patch(monkeypatch, tmp_path)
     target = "2026-09-19"
     _seed_required(target)
@@ -167,7 +250,8 @@ def test_summary_completes_direct_evidence_without_fabricating_economics(monkeyp
 
 
 def test_mechanical_carried_selection_keeps_lineage_without_claiming_natural_lift(
-    monkeypatch, tmp_path,
+    monkeypatch,
+    tmp_path,
 ):
     data = _patch(monkeypatch, tmp_path)
     target = "2026-09-26"
@@ -188,11 +272,17 @@ def test_mechanical_carried_selection_keeps_lineage_without_claiming_natural_lif
     }
     manifest["manifest_sha256"] = mod._bootstrap_digest_json(manifest)
     _write(bootstrap_dir / f"runtime_policy_bootstrap_{target}.json", manifest)
-    _write(bootstrap_dir / f"runtime_policy_bootstrap_verify_{target}.json", {
-        "target_date": target, "passed": True, "pid_passed": True,
-        "pid_env_available": True, "pid": 123,
-        "manifest_sha256": manifest["manifest_sha256"],
-    })
+    _write(
+        bootstrap_dir / f"runtime_policy_bootstrap_verify_{target}.json",
+        {
+            "target_date": target,
+            "passed": True,
+            "pid_passed": True,
+            "pid_env_available": True,
+            "pid": 123,
+            "manifest_sha256": manifest["manifest_sha256"],
+        },
+    )
     report = mod.build_runtime_approval_summary(target)
     lineage = report["holding_exit_threshold_lineage"]
     assert lineage["mechanical_runtime_selected"] is True
@@ -205,100 +295,195 @@ def test_mechanical_carried_selection_keeps_lineage_without_claiming_natural_lif
     assert observed["paired_policy_lift_established"] is False
     manifest["scalp_trailing_selection_lineage"]["origin_target_date"] = "2026-09-24"
     _write(bootstrap_dir / f"runtime_policy_bootstrap_{target}.json", manifest)
-    tampered = mod.build_runtime_approval_summary(target)["holding_exit_threshold_lineage"]
+    tampered = mod.build_runtime_approval_summary(target)[
+        "holding_exit_threshold_lineage"
+    ]
     assert tampered["mechanical_runtime_selected"] is False
-    assert tampered["mechanical_closed_loop_attribution"]["actual_pid_consumed"] is False
+    assert (
+        tampered["mechanical_closed_loop_attribution"]["actual_pid_consumed"] is False
+    )
 
 
-@pytest.mark.parametrize('fault', [None, 'source', 'receipt'])
-def test_summary_preserves_only_verified_prepared_incumbent(monkeypatch, tmp_path, fault):
-    from src.engine.scalping import holding_path_vote_policy as V, holding_vote_experiment as E
-    data=_patch(monkeypatch,tmp_path)
-    path=V.policy_path(data,'2026-10-19');path.parent.mkdir(parents=True,exist_ok=True);path.write_text('frozen')
-    prior=dict(schema=V.SUCCESSOR_SCHEMA,selection_mode='incumbent_carry',code_sha256='old',source_date='2026-10-16',source_report_sha256='source')
-    calls=[]
-    def load(*args,**kw):
+@pytest.mark.parametrize("fault", [None, "source", "receipt"])
+def test_summary_preserves_only_verified_prepared_incumbent(
+    monkeypatch, tmp_path, fault
+):
+    from src.engine.scalping import (
+        holding_path_vote_policy as V,
+        holding_vote_experiment as E,
+    )
+
+    data = _patch(monkeypatch, tmp_path)
+    path = V.policy_path(data, "2026-10-19")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("frozen")
+    prior = dict(
+        schema=V.SUCCESSOR_SCHEMA,
+        selection_mode="incumbent_carry",
+        code_sha256="old",
+        source_date="2026-10-16",
+        source_report_sha256="source",
+    )
+    calls = []
+
+    def load(*args, **kw):
         calls.append(kw)
-        if kw.get('require_current_code') is not False and fault:
-            raise ValueError('original_source_changed' if fault=='source' else 'code_handoff_missing')
+        if kw.get("require_current_code") is not False and fault:
+            raise ValueError(
+                "original_source_changed"
+                if fault == "source"
+                else "code_handoff_missing"
+            )
         return prior
-    monkeypatch.setattr(V,'load_bundle',load)
-    monkeypatch.setattr(E,'code_sha',lambda:'new')
-    monkeypatch.setattr(mod,'create_holding_vote_policy',lambda **kw: pytest.fail('frozen policy rebuilt'))
-    args=dict(source_date='2026-10-16',target_date='2026-10-19',source_report_sha256='source',replay={},source_quality={})
+
+    monkeypatch.setattr(V, "load_bundle", load)
+    monkeypatch.setattr(E, "code_sha", lambda: "new")
+    monkeypatch.setattr(
+        mod,
+        "create_holding_vote_policy",
+        lambda **kw: pytest.fail("frozen policy rebuilt"),
+    )
+    args = dict(
+        source_date="2026-10-16",
+        target_date="2026-10-19",
+        source_report_sha256="source",
+        replay={},
+        source_quality={},
+    )
     if fault:
-        with pytest.raises(ValueError):mod._holding_vote_publication_bundle(**args)
+        with pytest.raises(ValueError):
+            mod._holding_vote_publication_bundle(**args)
     else:
-        bundle,preserved=mod._holding_vote_publication_bundle(**args)
+        bundle, preserved = mod._holding_vote_publication_bundle(**args)
         assert bundle is prior and preserved is True
-        assert calls[-1]['source_report_sha256']=='source'
-    assert path.read_text()=='frozen'
+        assert calls[-1]["source_report_sha256"] == "source"
+    assert path.read_text() == "frozen"
 
 
-@pytest.mark.parametrize('prior_code', ['old', 'current'])
-def test_summary_current_native_replay_can_publish_updated_source(monkeypatch,tmp_path,prior_code):
-    from src.engine.scalping import holding_path_vote_policy as V,holding_vote_experiment as E
-    data=_patch(monkeypatch,tmp_path);path=V.policy_path(data,'2026-10-19');path.parent.mkdir(parents=True,exist_ok=True);path.write_text('old source')
-    monkeypatch.setattr(V,'load_bundle',lambda *a,**kw: dict(schema=V.SUCCESSOR_SCHEMA,selection_mode='incumbent_carry',code_sha256=prior_code,source_report_sha256='old'))
-    monkeypatch.setattr(E,'code_sha',lambda:'current')
-    monkeypatch.setattr(mod,'create_holding_vote_policy',lambda **kw: {'new_source':kw['source_report_sha256']})
-    assert mod._holding_vote_publication_bundle(source_date='2026-10-16',target_date='2026-10-19',
-        source_report_sha256='new',replay={},source_quality={})==({'new_source':'new'},False)
+@pytest.mark.parametrize("prior_code", ["old", "current"])
+def test_summary_current_native_replay_can_publish_updated_source(
+    monkeypatch, tmp_path, prior_code
+):
+    from src.engine.scalping import (
+        holding_path_vote_policy as V,
+        holding_vote_experiment as E,
+    )
+
+    data = _patch(monkeypatch, tmp_path)
+    path = V.policy_path(data, "2026-10-19")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("old source")
+    monkeypatch.setattr(
+        V,
+        "load_bundle",
+        lambda *a, **kw: dict(
+            schema=V.SUCCESSOR_SCHEMA,
+            selection_mode="incumbent_carry",
+            code_sha256=prior_code,
+            source_report_sha256="old",
+        ),
+    )
+    monkeypatch.setattr(E, "code_sha", lambda: "current")
+    monkeypatch.setattr(
+        mod,
+        "create_holding_vote_policy",
+        lambda **kw: {"new_source": kw["source_report_sha256"]},
+    )
+    assert mod._holding_vote_publication_bundle(
+        source_date="2026-10-16",
+        target_date="2026-10-19",
+        source_report_sha256="new",
+        replay={},
+        source_quality={},
+    ) == ({"new_source": "new"}, False)
 
 
-@pytest.mark.parametrize('stale_replay', [False, True])
-def test_summary_changed_source_uses_native_numeric_validation(monkeypatch,tmp_path,stale_replay):
+@pytest.mark.parametrize("stale_replay", [False, True])
+def test_summary_changed_source_uses_native_numeric_validation(
+    monkeypatch, tmp_path, stale_replay
+):
     from src.engine.scalping import holding_path_vote_policy as V
     from src.tests.test_holding_vote_numeric_successor import fixture
     from src.tests.test_holding_path_vote_replay import EMPTY_SOURCE_QUALITY
-    *_,numeric=fixture(tmp_path)
-    numeric['selected_cells']={}
-    replay=dict(schema='holding_path_vote_postclose_replay_v1',vote_numeric_research=numeric)
-    prior=V.create_successor(source_date='2026-10-08',target_date='2026-10-12',
-        source_report_sha256='a'*64,replay=replay,source_quality=EMPTY_SOURCE_QUALITY)
-    prior['code_sha256']='0'*64
-    prior['bundle_sha256']=V.digest({k:v for k,v in prior.items() if k!='bundle_sha256'})
-    path=V.policy_path(tmp_path,'2026-10-12');_write(path,prior);original=path.read_bytes()
-    monkeypatch.setattr(mod,'DATA_DIR',tmp_path)
-    if stale_replay:numeric['code_sha256']='0'*64
-    args=dict(source_date='2026-10-08',target_date='2026-10-12',source_report_sha256='b'*64,
-              replay=replay,source_quality=EMPTY_SOURCE_QUALITY)
+
+    *_, numeric = fixture(tmp_path)
+    numeric["selected_cells"] = {}
+    replay = dict(
+        schema="holding_path_vote_postclose_replay_v1", vote_numeric_research=numeric
+    )
+    prior = V.create_successor(
+        source_date="2026-10-08",
+        target_date="2026-10-12",
+        source_report_sha256="a" * 64,
+        replay=replay,
+        source_quality=EMPTY_SOURCE_QUALITY,
+    )
+    prior["code_sha256"] = "0" * 64
+    prior["bundle_sha256"] = V.digest(
+        {k: v for k, v in prior.items() if k != "bundle_sha256"}
+    )
+    path = V.policy_path(tmp_path, "2026-10-12")
+    _write(path, prior)
+    original = path.read_bytes()
+    monkeypatch.setattr(mod, "DATA_DIR", tmp_path)
     if stale_replay:
-        with pytest.raises(ValueError,match='holding_vote_successor_parent_invalid'):
+        numeric["code_sha256"] = "0" * 64
+    args = dict(
+        source_date="2026-10-08",
+        target_date="2026-10-12",
+        source_report_sha256="b" * 64,
+        replay=replay,
+        source_quality=EMPTY_SOURCE_QUALITY,
+    )
+    if stale_replay:
+        with pytest.raises(ValueError, match="holding_vote_successor_parent_invalid"):
             mod._holding_vote_publication_bundle(**args)
     else:
-        bundle,preserved=mod._holding_vote_publication_bundle(**args)
-        assert not preserved and bundle['source_report_sha256']=='b'*64
-        assert bundle['policy_set_sha256']==prior['policy_set_sha256']
-        assert bundle['selection_mode']=='incumbent_carry'
-    assert path.read_bytes()==original
+        bundle, preserved = mod._holding_vote_publication_bundle(**args)
+        assert not preserved and bundle["source_report_sha256"] == "b" * 64
+        assert bundle["policy_set_sha256"] == prior["policy_set_sha256"]
+        assert bundle["selection_mode"] == "incumbent_carry"
+    assert path.read_bytes() == original
 
 
 def test_summary_publishes_estimated_holding_vote_policy_without_realized_ev(
-    monkeypatch, tmp_path,
+    monkeypatch,
+    tmp_path,
 ):
     from src.engine import build_next_stage2_checklist
-    from src.engine.scalping.holding_path_vote_replay import summarize_holding_path_votes
+    from src.engine.scalping.holding_path_vote_replay import (
+        summarize_holding_path_votes,
+    )
     from src.engine.scalping.holding_path_vote_policy import load_bundle
 
     data = _patch(monkeypatch, tmp_path)
     source_date, target_date = "2026-09-26", "2026-09-28"
-    monkeypatch.setattr(build_next_stage2_checklist, "_next_krx_trading_day",
-                        lambda _: target_date)
+    monkeypatch.setattr(
+        build_next_stage2_checklist, "_next_krx_trading_day", lambda _: target_date
+    )
     _seed_required(source_date)
     replay = summarize_holding_path_votes(
-        [], load_events=lambda _: [], model="gpt-5.4-nano",
+        [],
+        load_events=lambda _: [],
+        model="gpt-5.4-nano",
     )
-    _write(data / "report" / "monitor_snapshots" /
-           f"holding_exit_observation_{source_date}.json", {
-               "date": source_date,
-               "holding_path_vote_replay": replay,
-               "completed_population_quality": {
-                   "complete": False, "strict_completed_position_ids": [],
-                   "db_completed_main_ids": [], "source_gap_ids": [],
-                   "source_gap_dates": [],
-               },
-           })
+    _write(
+        data
+        / "report"
+        / "monitor_snapshots"
+        / f"holding_exit_observation_{source_date}.json",
+        {
+            "date": source_date,
+            "holding_path_vote_replay": replay,
+            "completed_population_quality": {
+                "complete": False,
+                "strict_completed_position_ids": [],
+                "db_completed_main_ids": [],
+                "source_gap_ids": [],
+                "source_gap_dates": [],
+            },
+        },
+    )
     report = mod.build_runtime_approval_summary(source_date)
     receipt = report["holding_path_vote_policy"]
     assert receipt["status"] == "estimated_provisional_published"
@@ -345,18 +530,14 @@ def test_compact_historical_gap_keeps_verified_future_natural_owner():
         "candidate_selection": {"status": "insufficient_sample"},
         "candidate_zero_disposition": {
             "status": "source_gap",
-            "blockers": [
-                {"blocker": "exact_stop_distance_missing_or_invalid"}
-            ],
+            "blockers": [{"blocker": "exact_stop_distance_missing_or_invalid"}],
         },
         "metrics": {
             "paired_comparable_count": 0,
             "operating_economic_comparison": {"status": "source_gap"},
         },
         "prospective_source_contract": {"implementation_verified": True},
-        "historical_evidence_state": (
-            "exact_source_unrecoverable_preserved_excluded"
-        ),
+        "historical_evidence_state": ("exact_source_unrecoverable_preserved_excluded"),
     }
 
     evidence = mod._economic_projection("compact_auxiliary", payload)
@@ -387,18 +568,14 @@ def test_summary_distinguishes_missing_required_from_optional(monkeypatch, tmp_p
 
     assert report["status"] == mod.DIRECT_EVIDENCE_INCOMPLETE
     assert "entry_split:missing" in report["blocking_reasons"]
-    assert all("entry_split_policy:missing" != item for item in report["blocking_reasons"])
+    assert all(
+        "entry_split_policy:missing" != item for item in report["blocking_reasons"]
+    )
 
 
-
-
-
-
-
-
-
-
-def test_economic_states_keep_source_gap_no_edge_and_validated_edge_distinct(monkeypatch, tmp_path):
+def test_economic_states_keep_source_gap_no_edge_and_validated_edge_distinct(
+    monkeypatch, tmp_path
+):
     _patch(monkeypatch, tmp_path)
     target = "2026-09-19"
     _seed_required(target)
@@ -407,12 +584,22 @@ def test_economic_states_keep_source_gap_no_edge_and_validated_edge_distinct(mon
         {
             "target_date": target,
             "allowed_runtime_apply": True,
-            "economic_evaluation": {"status": "source_gap", "blocker": "missing_fill_lineage"},
+            "economic_evaluation": {
+                "status": "source_gap",
+                "blocker": "missing_fill_lineage",
+            },
         },
     )
     _write(
         mod._paths(target)["entry_split"],
-        {"target_date": target, "economic_acceptance": {"status": "no_edge", "paired_sample_count": 12, "delta_ev_pct": -0.03}},
+        {
+            "target_date": target,
+            "economic_acceptance": {
+                "status": "no_edge",
+                "paired_sample_count": 12,
+                "delta_ev_pct": -0.03,
+            },
+        },
     )
     _write(
         mod._paths(target)["scale_in_split"],
@@ -427,13 +614,27 @@ def test_economic_states_keep_source_gap_no_edge_and_validated_edge_distinct(mon
             },
         },
     )
-    _write(mod._paths(target)["scale_in_split_policy"], {"target_date": target, "allowed_runtime_apply": True})
+    _write(
+        mod._paths(target)["scale_in_split_policy"],
+        {"target_date": target, "allowed_runtime_apply": True},
+    )
 
     report = mod.build_runtime_approval_summary(target)
 
-    assert report["sources"]["entry_cancel_wait"]["economic_evidence"]["comparison_status"] == "source_gap"
-    assert report["sources"]["entry_cancel_wait"]["economic_evidence"]["policy_apply_allowed"] is False
-    assert report["sources"]["entry_split"]["economic_evidence"]["comparison_status"] == "measured_no_edge"
+    assert (
+        report["sources"]["entry_cancel_wait"]["economic_evidence"]["comparison_status"]
+        == "source_gap"
+    )
+    assert (
+        report["sources"]["entry_cancel_wait"]["economic_evidence"][
+            "policy_apply_allowed"
+        ]
+        is False
+    )
+    assert (
+        report["sources"]["entry_split"]["economic_evidence"]["comparison_status"]
+        == "measured_no_edge"
+    )
     scale = report["sources"]["scale_in_split"]["economic_evidence"]
     assert scale["comparison_status"] == "validated_edge"
     assert scale["actual_net_profit_improvement"] is None
@@ -442,7 +643,9 @@ def test_economic_states_keep_source_gap_no_edge_and_validated_edge_distinct(mon
     assert report["policy_handoff_state"] == "candidate_published"
 
 
-def test_validated_edge_without_dated_policy_receipt_is_source_gap(monkeypatch, tmp_path):
+def test_validated_edge_without_dated_policy_receipt_is_source_gap(
+    monkeypatch, tmp_path
+):
     _patch(monkeypatch, tmp_path)
     target = "2026-09-19"
     _seed_required(target)
@@ -466,7 +669,9 @@ def test_validated_edge_without_dated_policy_receipt_is_source_gap(monkeypatch, 
     assert report["validated_edge_count"] == 0
 
 
-def test_compact_direct_policy_receipt_is_bound_to_paired_evaluation(monkeypatch, tmp_path):
+def test_compact_direct_policy_receipt_is_bound_to_paired_evaluation(
+    monkeypatch, tmp_path
+):
     from src.engine.scalping import compact_auxiliary_paired_replay as compact
     from src.engine.scalping import mechanistic_entry_runtime_policy as policy
 
@@ -490,14 +695,25 @@ def test_compact_direct_policy_receipt_is_bound_to_paired_evaluation(monkeypatch
                 "paired_comparable_count": 12,
                 "delta_net_ev_pct": -0.03,
                 "operating_economic_comparison": {
-                    "incumbent": {"ev_pct": 0.11, "es10": -0.4, "fill_participation": 0.5},
-                    "candidate": {"ev_pct": 0.08, "es10": -0.42, "fill_participation": 0.5},
+                    "incumbent": {
+                        "ev_pct": 0.11,
+                        "es10": -0.4,
+                        "fill_participation": 0.5,
+                    },
+                    "candidate": {
+                        "ev_pct": 0.08,
+                        "es10": -0.42,
+                        "fill_participation": 0.5,
+                    },
                     "robust_paired_delta_ev_lower_bound_pct": -0.08,
                     "portfolio_daily_net_delta_krw": -1200,
                     "portfolio_capital_delta_krw_minutes": 0,
                 },
             },
-            "chronological_validation": {"learning_pairs": [], "holdout_consumed": True},
+            "chronological_validation": {
+                "learning_pairs": [],
+                "holdout_consumed": True,
+            },
             "owner_execution_model_status": "validated",
             "closure_test": "forward_holdout_receipt",
             **compact.AUTHORITY,
@@ -529,67 +745,121 @@ def test_compact_direct_policy_receipt_is_bound_to_paired_evaluation(monkeypatch
     assert source["economic_evidence"]["policy_handoff_state"] == "incumbent_preserved"
 
 
-@pytest.mark.parametrize('stage_issues,staged_status,candidate,staged_day,expected', [
-    ([], 'existing_incumbent_preserved', None, '2026-10-06', True),
-    (['main_machine_policy:output_generation_changed'], 'existing_incumbent_preserved', None, '2026-10-06', False),
-    ([], 'staged', None, '2026-10-06', False),
-    ([], 'existing_incumbent_preserved', {'changed': True}, '2026-10-06', False),
-    ([], 'existing_incumbent_preserved', None, '2026-10-07', False),
-])
+@pytest.mark.parametrize(
+    "stage_issues,staged_status,candidate,staged_day,expected",
+    [
+        ([], "existing_incumbent_preserved", None, "2026-10-06", True),
+        (
+            ["main_machine_policy:output_generation_changed"],
+            "existing_incumbent_preserved",
+            None,
+            "2026-10-06",
+            False,
+        ),
+        ([], "staged", None, "2026-10-06", False),
+        ([], "existing_incumbent_preserved", {"changed": True}, "2026-10-06", False),
+        ([], "existing_incumbent_preserved", None, "2026-10-07", False),
+    ],
+)
 def test_main_current_carry_keeps_original_publication_and_requires_native_stage(
-    monkeypatch, tmp_path, stage_issues, staged_status, candidate, staged_day, expected,
+    monkeypatch,
+    tmp_path,
+    stage_issues,
+    staged_status,
+    candidate,
+    staged_day,
+    expected,
 ):
     from src.engine.scalping import mechanistic_entry_runtime_policy as policy
     from src.engine.automation import postclose_summary_handoff as handoff
 
     data = _patch(monkeypatch, tmp_path)
-    day = '2026-10-02'
+    day = "2026-10-02"
     _seed_required(day)
-    machine = {'version': 'incumbent'}
-    bundle = {'target_date': '2026-10-06', 'machine_policy': machine,
-              'machine_disposition': 'incumbent_carried',
-              'machine_evaluation_source': {'source_date': day, 'artifact_content_sha256': 'a' * 64},
-              'winrate_selection': {'report_sha256': 'a' * 64,
-                                   'machine_policy_sha256': policy.digest(machine),
-                                   'disposition': 'incumbent_carried'},
-              'bundle_sha256': 'b' * 64}
-    _write(data / 'runtime/mechanistic_entry_policy/policy_2026-10-06.json', bundle)
-    _write(data / f'report/ai_decision_action_outcome_calibration/winrate_policy_{day}.json', {
-        'schema': 'main_entry_winrate_policy_report_v1', 'selection_basis': 'win_rate_only',
-        'target_date': day, 'artifact_content_sha256': 'c' * 64,
-        'disposition': 'incumbent_carried', 'candidate_policy': candidate,
-        'acceptance_contract': 'main_machine_observation_admission_acceptance_v1',
-        'candidate_computed': True, 'candidate_train_qualified': True,
-        'candidate_validation_evaluated': False, 'candidate_selected': False,
-        'fresh_validation': 'not_observed',
-        'hurdle_errors': ['admission_recipe_forward_date_after_2026_10_02_required'],
-    })
-    _write(handoff.stage_artifacts(data / 'report', day, 'main_machine_policy')[
-        'machine_policy_terminal'], {'staged': {'status': staged_status, 'target_date': staged_day}})
-    monkeypatch.setattr(policy, 'current_strategy_receipt', lambda **kwargs: {'status': 'valid'})
-    monkeypatch.setattr(policy, 'load', lambda **kwargs: bundle)
-    monkeypatch.setattr(handoff, 'stage_receipt_issues', lambda *args, **kwargs: stage_issues)
+    machine = {"version": "incumbent"}
+    bundle = {
+        "target_date": "2026-10-06",
+        "machine_policy": machine,
+        "machine_disposition": "incumbent_carried",
+        "machine_evaluation_source": {
+            "source_date": day,
+            "artifact_content_sha256": "a" * 64,
+        },
+        "winrate_selection": {
+            "report_sha256": "a" * 64,
+            "machine_policy_sha256": policy.digest(machine),
+            "disposition": "incumbent_carried",
+        },
+        "bundle_sha256": "b" * 64,
+    }
+    _write(data / "runtime/mechanistic_entry_policy/policy_2026-10-06.json", bundle)
+    _write(
+        data
+        / f"report/ai_decision_action_outcome_calibration/winrate_policy_{day}.json",
+        {
+            "schema": "main_entry_winrate_policy_report_v1",
+            "selection_basis": "win_rate_only",
+            "target_date": day,
+            "artifact_content_sha256": "c" * 64,
+            "disposition": "incumbent_carried",
+            "candidate_policy": candidate,
+            "acceptance_contract": "main_machine_observation_admission_acceptance_v1",
+            "candidate_computed": True,
+            "candidate_train_qualified": True,
+            "candidate_validation_evaluated": False,
+            "candidate_selected": False,
+            "fresh_validation": "not_observed",
+            "hurdle_errors": [
+                "admission_recipe_forward_date_after_2026_10_02_required"
+            ],
+        },
+    )
+    _write(
+        handoff.stage_artifacts(data / "report", day, "main_machine_policy")[
+            "machine_policy_terminal"
+        ],
+        {"staged": {"status": staged_status, "target_date": staged_day}},
+    )
+    monkeypatch.setattr(
+        policy, "current_strategy_receipt", lambda **kwargs: {"status": "valid"}
+    )
+    monkeypatch.setattr(policy, "load", lambda **kwargs: bundle)
+    monkeypatch.setattr(
+        handoff, "stage_receipt_issues", lambda *args, **kwargs: stage_issues
+    )
 
-    result = mod.build_runtime_approval_summary(day)['sources']['main_mechanistic_entry']
-    assert result['policy_receipt']['valid'] is expected
-    assert result['winrate_policy']['report_sha256'] == 'a' * 64
-    assert result['winrate_policy']['latest_evaluation_report_sha256'] == 'c' * 64
-    assert result['winrate_policy']['evaluation_binding'] == (
-        'sealed_current_incumbent_carry' if expected else 'unverified')
-    assert result['economic_evidence']['comparison_status'] != 'validated_edge'
-    status = result['winrate_policy']['admission_acceptance']
-    assert status['candidate_train_qualified'] and status['fresh_validation'] == 'not_observed'
-    assert not status['candidate_selected']
+    result = mod.build_runtime_approval_summary(day)["sources"][
+        "main_mechanistic_entry"
+    ]
+    assert result["policy_receipt"]["valid"] is expected
+    assert result["winrate_policy"]["report_sha256"] == "a" * 64
+    assert result["winrate_policy"]["latest_evaluation_report_sha256"] == "c" * 64
+    assert result["winrate_policy"]["evaluation_binding"] == (
+        "sealed_current_incumbent_carry" if expected else "unverified"
+    )
+    assert result["economic_evidence"]["comparison_status"] != "validated_edge"
+    status = result["winrate_policy"]["admission_acceptance"]
+    assert (
+        status["candidate_train_qualified"]
+        and status["fresh_validation"] == "not_observed"
+    )
+    assert not status["candidate_selected"]
 
 
-def test_next_effective_date_is_pending_until_preopen_verification(monkeypatch, tmp_path):
+def test_next_effective_date_is_pending_until_preopen_verification(
+    monkeypatch, tmp_path
+):
     data = _patch(monkeypatch, tmp_path)
     target = "2026-09-19"
     _seed_required(target)
     policy = mod._paths(target)["entry_cancel_wait_policy"]
     _write(
         policy,
-        {"source_date": target, "effective_date": "2026-09-21", "status": "incumbent_preserved"},
+        {
+            "source_date": target,
+            "effective_date": "2026-09-21",
+            "status": "incumbent_preserved",
+        },
     )
 
     pending = mod.build_runtime_approval_summary(target)
@@ -599,11 +869,17 @@ def test_next_effective_date_is_pending_until_preopen_verification(monkeypatch, 
     assert pending["preopen_consumption_receipt"]["apply_date"] == "2026-09-21"
 
     _write(
-        data / "runtime" / "policy_bootstrap" / "runtime_policy_bootstrap_2026-09-21.json",
+        data
+        / "runtime"
+        / "policy_bootstrap"
+        / "runtime_policy_bootstrap_2026-09-21.json",
         {"target_date": "2026-09-21", "selected_families": []},
     )
     _write(
-        data / "runtime" / "policy_bootstrap" / "runtime_policy_bootstrap_verify_2026-09-21.json",
+        data
+        / "runtime"
+        / "policy_bootstrap"
+        / "runtime_policy_bootstrap_verify_2026-09-21.json",
         {
             "target_date": "2026-09-21",
             "status": "pass",
@@ -620,7 +896,10 @@ def test_next_effective_date_is_pending_until_preopen_verification(monkeypatch, 
     assert verified["preopen_consumption_receipt"]["actual_pid_consumed"] is False
 
     _write(
-        data / "runtime" / "policy_bootstrap" / "runtime_policy_bootstrap_verify_2026-09-21.json",
+        data
+        / "runtime"
+        / "policy_bootstrap"
+        / "runtime_policy_bootstrap_verify_2026-09-21.json",
         {
             "target_date": "2026-09-21",
             "status": "pass",
@@ -638,49 +917,89 @@ def test_next_effective_date_is_pending_until_preopen_verification(monkeypatch, 
     assert consumed["preopen_consumption_receipt"]["runtime_pid"] == 4321
 
 
-def test_current_future_summary_rejects_release_and_manifest_generation_mismatch(monkeypatch, tmp_path):
+def test_current_future_summary_rejects_release_and_manifest_generation_mismatch(
+    monkeypatch, tmp_path
+):
     from src.engine.automation import runtime_policy_bootstrap as bootstrap
 
     data = _patch(monkeypatch, tmp_path)
     source, apply = "2026-09-23", "2026-09-28"
-    sources = {"policy": {"exists": True, "target_date_matches": True,
-                          "error": None, "effective_date": apply}}
+    sources = {
+        "policy": {
+            "exists": True,
+            "target_date_matches": True,
+            "error": None,
+            "effective_date": apply,
+        }
+    }
     state, _, receipt = mod._runtime_consumption_state(source, sources)
     assert state == "pending" and receipt["manifest_sha256"] is None
     root = data / "runtime" / "policy_bootstrap"
     root.mkdir(parents=True)
     env_file = root / f"runtime_policy_bootstrap_{apply}.env"
     env_file.write_text("export TEST=true\n")
-    manifest = {"target_date": apply, "source_incumbent_target_date": "2026-09-19",
-        "selected_release_sha": "a" * 40, "env_file": str(env_file),
+    manifest = {
+        "target_date": apply,
+        "source_incumbent_target_date": "2026-09-19",
+        "selected_release_sha": "a" * 40,
+        "env_file": str(env_file),
         "env_sha256": hashlib.sha256(env_file.read_bytes()).hexdigest(),
-        "selected_families": []}
+        "selected_families": [],
+    }
     manifest["manifest_sha256"] = bootstrap._digest_json(manifest)
     _write(root / f"runtime_policy_bootstrap_{apply}.json", manifest)
-    _write(root / f"runtime_policy_bootstrap_verify_{apply}.json", {
-        "target_date": apply, "status": "pass", "passed": True,
-        "manifest_sha256": manifest["manifest_sha256"], "pid": None,
-        "pid_passed": None, "pid_env_available": True})
+    _write(
+        root / f"runtime_policy_bootstrap_verify_{apply}.json",
+        {
+            "target_date": apply,
+            "status": "pass",
+            "passed": True,
+            "manifest_sha256": manifest["manifest_sha256"],
+            "pid": None,
+            "pid_passed": None,
+            "pid_env_available": True,
+        },
+    )
     selection = data / "runtime" / "runtime_release_selection.json"
-    _write(selection, {"schema": "runtime_release_selection_v1",
-                       "git_commit": "b" * 40, "release_root": "/releases/selected"})
+    _write(
+        selection,
+        {
+            "schema": "runtime_release_selection_v1",
+            "git_commit": "b" * 40,
+            "release_root": "/releases/selected",
+        },
+    )
     state, _, receipt = mod._runtime_consumption_state(source, sources)
     assert state == "rejected"
     assert "selected_release_mismatch" in receipt["future_generation_issues"]
-    _write(selection, {"schema": "runtime_release_selection_v1",
-                       "git_commit": "a" * 40, "release_root": "/releases/selected"})
+    _write(
+        selection,
+        {
+            "schema": "runtime_release_selection_v1",
+            "git_commit": "a" * 40,
+            "release_root": "/releases/selected",
+        },
+    )
     state, natural, receipt = mod._runtime_consumption_state(source, sources)
     assert (state, natural) == ("verified", "not_due")
     assert receipt["actual_pid_consumed"] is False
     assert receipt["valid_empty"] is True
-    _write(selection, {"schema": "runtime_release_selection_v1",
-                       "git_commit": "a" * 40, "release_root": "relative/selected"})
+    _write(
+        selection,
+        {
+            "schema": "runtime_release_selection_v1",
+            "git_commit": "a" * 40,
+            "release_root": "relative/selected",
+        },
+    )
     state, _, receipt = mod._runtime_consumption_state(source, sources)
     assert state == "rejected"
     assert "selected_release_mismatch" in receipt["future_generation_issues"]
 
 
-def test_late_summary_binds_historical_preopen_selection_without_pid(monkeypatch, tmp_path):
+def test_late_summary_binds_historical_preopen_selection_without_pid(
+    monkeypatch, tmp_path
+):
     from src.engine.automation import runtime_policy_bootstrap as bootstrap
 
     workspace = tmp_path / "KORStockScan"
@@ -693,18 +1012,41 @@ def test_late_summary_binds_historical_preopen_selection_without_pid(monkeypatch
     (release / "src").mkdir()
     (release / "src" / "marker.txt").write_text("reviewed\n")
     subprocess.run(["git", "-C", str(release), "add", "src/marker.txt"], check=True)
-    subprocess.run(["git", "-C", str(release), "-c", "user.name=Test",
-                    "-c", "user.email=test@example.invalid", "commit", "-qm", "source"], check=True)
-    commit = subprocess.check_output(["git", "-C", str(release), "rev-parse", "HEAD"], text=True).strip()
-    old = {"schema": "runtime_release_selection_v1", "git_commit": commit,
-           "release_root": str(release), "selected_at_kst": "2026-10-01T07:00:00+09:00"}
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(release),
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "-qm",
+            "source",
+        ],
+        check=True,
+    )
+    commit = subprocess.check_output(
+        ["git", "-C", str(release), "rev-parse", "HEAD"], text=True
+    ).strip()
+    old = {
+        "schema": "runtime_release_selection_v1",
+        "git_commit": commit,
+        "release_root": str(release),
+        "selected_at_kst": "2026-10-01T07:00:00+09:00",
+    }
     backup = workspace / "tmp" / "runtime-selection-before-next.json"
     _write(backup, old)
-    current = {"schema": "runtime_release_selection_v1", "git_commit": "b" * 40,
-               "release_root": str(release.parent / "next"),
-               "selected_at_kst": "2026-10-01T08:00:00+09:00",
-               "previous_git_commit": commit, "previous_release_root": str(release),
-               "previous_selection_backup": str(backup)}
+    current = {
+        "schema": "runtime_release_selection_v1",
+        "git_commit": "b" * 40,
+        "release_root": str(release.parent / "next"),
+        "selected_at_kst": "2026-10-01T08:00:00+09:00",
+        "previous_git_commit": commit,
+        "previous_release_root": str(release),
+        "previous_selection_backup": str(backup),
+    }
     selection = data / "runtime" / "runtime_release_selection.json"
     _write(selection, current)
     source, apply = "2026-09-30", "2026-10-01"
@@ -712,19 +1054,36 @@ def test_late_summary_binds_historical_preopen_selection_without_pid(monkeypatch
     env = root / f"runtime_policy_bootstrap_{apply}.env"
     env.parent.mkdir(parents=True)
     env.write_text("export TEST=true\n")
-    manifest = {"target_date": apply, "source_incumbent_target_date": source,
-                "selected_release_sha": commit, "selected_families": [],
-                "env_file": str(env), "env_sha256": hashlib.sha256(env.read_bytes()).hexdigest(),
-                "generated_at": "2026-10-01T07:35:00+09:00"}
+    manifest = {
+        "target_date": apply,
+        "source_incumbent_target_date": source,
+        "selected_release_sha": commit,
+        "selected_families": [],
+        "env_file": str(env),
+        "env_sha256": hashlib.sha256(env.read_bytes()).hexdigest(),
+        "generated_at": "2026-10-01T07:35:00+09:00",
+    }
     manifest["manifest_sha256"] = bootstrap._digest_json(manifest)
     _write(root / f"runtime_policy_bootstrap_{apply}.json", manifest)
-    verification = {"target_date": apply, "status": "pass", "passed": True,
-                    "manifest_sha256": manifest["manifest_sha256"], "pid": None,
-                    "pid_passed": None, "pid_env_available": True,
-                    "verified_at": "2026-10-01T07:36:00+09:00"}
+    verification = {
+        "target_date": apply,
+        "status": "pass",
+        "passed": True,
+        "manifest_sha256": manifest["manifest_sha256"],
+        "pid": None,
+        "pid_passed": None,
+        "pid_env_available": True,
+        "verified_at": "2026-10-01T07:36:00+09:00",
+    }
     _write(root / f"runtime_policy_bootstrap_verify_{apply}.json", verification)
-    sources = {"policy": {"exists": True, "target_date_matches": True,
-                          "error": None, "effective_date": apply}}
+    sources = {
+        "policy": {
+            "exists": True,
+            "target_date_matches": True,
+            "error": None,
+            "effective_date": apply,
+        }
+    }
     state, natural, receipt = mod._runtime_consumption_state(source, sources)
     assert (state, natural) == ("verified", "not_due")
     assert receipt["release_selection_status"] == "historical"
@@ -732,11 +1091,19 @@ def test_late_summary_binds_historical_preopen_selection_without_pid(monkeypatch
     assert receipt["selected_release_commit"] == commit
     assert receipt["actual_pid_consumed"] is False
     from src.engine.automation.postclose_summary_handoff import inspect_future_handoff
+
     report_dir = data / "report"
-    summary = {"date": source, "preopen_consumption_state": state,
-               "preopen_consumption_receipt": receipt}
-    _write(report_dir / "runtime_approval_summary" /
-           f"runtime_approval_summary_{source}.json", summary)
+    summary = {
+        "date": source,
+        "preopen_consumption_state": state,
+        "preopen_consumption_receipt": receipt,
+    }
+    _write(
+        report_dir
+        / "runtime_approval_summary"
+        / f"runtime_approval_summary_{source}.json",
+        summary,
+    )
     handoff = inspect_future_handoff(summary, source, report_dir=report_dir)
     assert handoff["status"] == "historical_generation_no_pid"
     assert handoff["actual_pid_consumed"] is False
@@ -744,10 +1111,15 @@ def test_late_summary_binds_historical_preopen_selection_without_pid(monkeypatch
     state, _, receipt = mod._runtime_consumption_state(source, sources)
     assert state == "rejected"
     assert "selected_release_mismatch" in receipt["future_generation_issues"]
-    assert inspect_future_handoff(summary, source, report_dir=report_dir)["status"] == "stale"
+    assert (
+        inspect_future_handoff(summary, source, report_dir=report_dir)["status"]
+        == "stale"
+    )
 
 
-def test_pending_maturity_requires_verified_future_generation_contract(monkeypatch, tmp_path):
+def test_pending_maturity_requires_verified_future_generation_contract(
+    monkeypatch, tmp_path
+):
     _patch(monkeypatch, tmp_path)
     target = "2026-09-19"
     _seed_required(target)
@@ -773,7 +1145,12 @@ def test_pending_maturity_requires_verified_future_generation_contract(monkeypat
         },
     )
     pending = mod.build_runtime_approval_summary(target)
-    assert pending["sources"]["entry_cancel_wait"]["economic_evidence"]["comparison_status"] == "pending_maturity"
+    assert (
+        pending["sources"]["entry_cancel_wait"]["economic_evidence"][
+            "comparison_status"
+        ]
+        == "pending_maturity"
+    )
 
 
 def test_rising_missed_policy_receipt_is_semantically_bound(monkeypatch, tmp_path):
@@ -863,9 +1240,9 @@ def test_rising_validated_edge_uses_economic_authority_and_bound_policy(
         },
     }
     policy["policy_sha256"] = mod.direct_policy_digest(policy)
-    policy["runtime_env_overrides"][
-        "KORSTOCKSCAN_RISING_MISSED_TP1_POLICY_SHA256"
-    ] = policy["policy_sha256"]
+    policy["runtime_env_overrides"]["KORSTOCKSCAN_RISING_MISSED_TP1_POLICY_SHA256"] = (
+        policy["policy_sha256"]
+    )
     _write(mod._paths(target)["rising_missed_policy"], policy)
 
     report = mod.build_runtime_approval_summary(target)
@@ -916,9 +1293,9 @@ def test_rising_policy_receipt_rejects_multiple_runtime_axes(monkeypatch, tmp_pa
         },
     }
     policy["policy_sha256"] = mod.direct_policy_digest(policy)
-    policy["runtime_env_overrides"][
-        "KORSTOCKSCAN_RISING_MISSED_TP1_POLICY_SHA256"
-    ] = policy["policy_sha256"]
+    policy["runtime_env_overrides"]["KORSTOCKSCAN_RISING_MISSED_TP1_POLICY_SHA256"] = (
+        policy["policy_sha256"]
+    )
     _write(mod._paths(target)["rising_missed_policy"], policy)
 
     report = mod.build_runtime_approval_summary(target)
@@ -928,11 +1305,13 @@ def test_rising_policy_receipt_rejects_multiple_runtime_axes(monkeypatch, tmp_pa
     assert source["economic_evidence"]["comparison_status"] == "source_gap"
 
 
-
-
 def test_ws_freshness_reuse_contract_verifies_final_source_only_report(tmp_path):
     day = "2026-09-22"
-    path = tmp_path / "intraday_ws_freshness_monitor" / f"intraday_ws_freshness_monitor_{day}.json"
+    path = (
+        tmp_path
+        / "intraday_ws_freshness_monitor"
+        / f"intraday_ws_freshness_monitor_{day}.json"
+    )
     report = {
         "report_type": "intraday_ws_freshness_monitor",
         "target_date": day,
@@ -956,18 +1335,31 @@ def test_ws_freshness_reuse_contract_verifies_final_source_only_report(tmp_path)
         "artifact_sha256": mod._sha(path),
     }
     _write(Path(str(path) + ".reuse-contract.json"), contract)
-    _, proof, error = mod._large_companion("ws_freshness", path, day, mod._sha(path), {})
+    _, proof, error = mod._large_companion(
+        "ws_freshness", path, day, mod._sha(path), {}
+    )
     assert error is None and proof["verified"] is True
     report["evaluation_phase"] = "intraday"
     path.write_text(json.dumps(report, indent=2), encoding="utf-8")
-    assert mod._large_companion("ws_freshness", path, day, mod._sha(path), {})[2] == "semantic_unverified_large_source"
+    assert (
+        mod._large_companion("ws_freshness", path, day, mod._sha(path), {})[2]
+        == "semantic_unverified_large_source"
+    )
 
 
 def test_main_proxy_population_and_ev_are_not_operating_economics():
-    payload = {"machine_full_evaluation": dict(state="source_gap", full_population_count=1715,
-        paired_comparable_count=1710, holdout_incumbent_ev_pct=-0.005,
-        holdout_cost_adjusted_ev_pct=-0.005, holdout_paired_delta_ev_pct=0.0,
-        downstream_operating_evidence_complete=False, structural_blocker="machine_operating_population_unbound")}
+    payload = {
+        "machine_full_evaluation": dict(
+            state="source_gap",
+            full_population_count=1715,
+            paired_comparable_count=1710,
+            holdout_incumbent_ev_pct=-0.005,
+            holdout_cost_adjusted_ev_pct=-0.005,
+            holdout_paired_delta_ev_pct=0.0,
+            downstream_operating_evidence_complete=False,
+            structural_blocker="machine_operating_population_unbound",
+        )
+    }
     row = mod._economic_projection("main_mechanistic_entry", payload)
     assert row["paired_sample_count"] is None
     assert row["incumbent_cost_adjusted_ev_pct"] is None
@@ -978,11 +1370,14 @@ def test_main_proxy_population_and_ev_are_not_operating_economics():
 
 
 def test_pre_submit_delay_source_gap_has_owned_closure_test():
-    row = mod._economic_projection("pre_submit_delay", {
-        "source_date": "2026-09-23",
-        "status": "source_gap",
-        "first_blocker": "invalid_submit_clock",
-    })
+    row = mod._economic_projection(
+        "pre_submit_delay",
+        {
+            "source_date": "2026-09-23",
+            "status": "source_gap",
+            "first_blocker": "invalid_submit_clock",
+        },
+    )
     assert row["closure_owner"] == "pre_submit_delay_tuning"
     assert row["closure_test"] == (
         "exact_attempt_submit_clock_quote_cost_terminal_and_independent_holdout"
@@ -990,62 +1385,98 @@ def test_pre_submit_delay_source_gap_has_owned_closure_test():
     assert row["policy_handoff_state"] == "blocked"
 
 
-def test_pre_submit_price_analysis_is_consumed_without_economic_promotion(tmp_path, monkeypatch):
+def test_pre_submit_price_analysis_is_consumed_without_economic_promotion(
+    tmp_path, monkeypatch
+):
     from src.tests.test_pre_submit_delay_tuning import _price_pattern_fixture
+
     data = _patch(monkeypatch, tmp_path)
-    _price_pattern_fixture(data, monkeypatch, [{"prices": {0: 10000, 30: 9900}}], write=True)
-    result = mod.build_runtime_approval_summary("2026-10-02", include_swing=False, include_producer_gap=False)
+    _price_pattern_fixture(
+        data, monkeypatch, [{"prices": {0: 10000, 30: 9900}}], write=True
+    )
+    result = mod.build_runtime_approval_summary(
+        "2026-10-02", include_swing=False, include_producer_gap=False
+    )
     source = result["sources"]["pre_submit_delay"]
     assert source["price_pattern_analysis"]["analysis_complete"] is True
     assert source["price_pattern_analysis"]["paired_comparison_count"] == 1
     assert source["economic_evidence"]["comparison_status"] == "source_gap"
     assert source["economic_evidence"]["policy_apply_allowed"] is False
     assert source["policy_receipt"]["valid"] is True
-    assert "First-submit price pattern" in mod.summary_paths("2026-10-02")[1].read_text()
+    assert (
+        "First-submit price pattern" in mod.summary_paths("2026-10-02")[1].read_text()
+    )
 
 
-def test_pre_submit_price_analysis_invalid_diagnostic_does_not_claim_completion(tmp_path, monkeypatch):
+def test_pre_submit_price_analysis_invalid_diagnostic_does_not_claim_completion(
+    tmp_path, monkeypatch
+):
     from src.tests.test_pre_submit_delay_tuning import _price_pattern_fixture
     from src.engine.scalping import pre_submit_delay_tuning as delay
+
     data = _patch(monkeypatch, tmp_path)
-    report = _price_pattern_fixture(data, monkeypatch, [{"prices": {0: 10000, 30: 9900}}], write=True)
+    report = _price_pattern_fixture(
+        data, monkeypatch, [{"prices": {0: 10000, 30: 9900}}], write=True
+    )
     report["price_pattern_analysis"]["runtime_apply_allowed"] = True
     _write(delay.report_path("2026-10-02"), report)
-    result = mod.build_runtime_approval_summary("2026-10-02", include_swing=False, include_producer_gap=False)
+    result = mod.build_runtime_approval_summary(
+        "2026-10-02", include_swing=False, include_producer_gap=False
+    )
     source = result["sources"]["pre_submit_delay"]
     assert source["price_pattern_analysis"]["status"] == "source_invalid"
     assert source["price_pattern_analysis"]["analysis_complete"] is False
     assert source["error"] == "price_pattern_contract_invalid"
 
 
-
-
 def test_main_supported_economics_never_uses_terminal_proxy_as_currency_ev():
-    payload = {'machine_full_evaluation': dict(state='evaluated_no_edge',
-        downstream_operating_evidence_complete=True, holdout_incumbent_ev_pct=99.,
-        holdout_cost_adjusted_ev_pct=999., holdout_paired_delta_ev_pct=900.,
-        operating_economics={'incumbent':{'ev_pct':.2},'candidate':{'ev_pct':.3},
-            'robust_paired_delta_ev_lower_bound_pct':.05})}
-    row = mod._economic_section('main_mechanistic_entry', payload)
-    assert row['incumbent_ev_pct'] == .2
-    assert row['candidate_ev_pct'] == .3
-    assert abs(row['delta_ev_pct'] - .1) < 1e-10
-    assert row['diagnostic_terminal_proxy']['delta_ev_pct'] == 900.
+    payload = {
+        "machine_full_evaluation": dict(
+            state="evaluated_no_edge",
+            downstream_operating_evidence_complete=True,
+            holdout_incumbent_ev_pct=99.0,
+            holdout_cost_adjusted_ev_pct=999.0,
+            holdout_paired_delta_ev_pct=900.0,
+            operating_economics={
+                "incumbent": {"ev_pct": 0.2},
+                "candidate": {"ev_pct": 0.3},
+                "robust_paired_delta_ev_lower_bound_pct": 0.05,
+            },
+        )
+    }
+    row = mod._economic_section("main_mechanistic_entry", payload)
+    assert row["incumbent_ev_pct"] == 0.2
+    assert row["candidate_ev_pct"] == 0.3
+    assert abs(row["delta_ev_pct"] - 0.1) < 1e-10
+    assert row["diagnostic_terminal_proxy"]["delta_ev_pct"] == 900.0
 
 
-def test_pid_consumption_requires_matching_effective_date_bootstrap(monkeypatch, tmp_path):
+def test_pid_consumption_requires_matching_effective_date_bootstrap(
+    monkeypatch, tmp_path
+):
     data = _patch(monkeypatch, tmp_path)
     day = "2026-09-21"
     directory = data / "runtime/policy_bootstrap"
     manifest = directory / f"runtime_policy_bootstrap_{day}.json"
     verification = directory / f"runtime_policy_bootstrap_verify_{day}.json"
     _write(manifest, {"target_date": day})
-    _write(verification, {"target_date": day, "status": "pass", "passed": True,
-                          "pid": 4321, "pid_passed": True, "pid_env_available": True})
+    _write(
+        verification,
+        {
+            "target_date": day,
+            "status": "pass",
+            "passed": True,
+            "pid": 4321,
+            "pid_passed": True,
+            "pid_env_available": True,
+        },
+    )
     state, natural, receipt = mod._runtime_consumption_state(day, {})
     assert (state, natural) == ("not_due", "not_applicable")
     assert receipt["actual_pid_consumed"] is False
-    sources = {"policy": {"exists": True, "target_date_matches": True, "effective_date": day}}
+    sources = {
+        "policy": {"exists": True, "target_date_matches": True, "effective_date": day}
+    }
     _write(manifest, {"target_date": "2026-09-20"})
     state, natural, receipt = mod._runtime_consumption_state(day, sources)
     assert state == "rejected" and natural == "not_due"
@@ -1054,13 +1485,34 @@ def test_pid_consumption_requires_matching_effective_date_bootstrap(monkeypatch,
 
 def test_machine_admission_selection_is_not_portfolio_edge(monkeypatch):
     from src.engine.scalping import entry_strategy_policy as strategy
-    measured = dict(status="supported_machine_admission", win_rate_pct=None,
-                    selected_path_ev_pct=None, selected_opportunity_count=0)
-    train = dict(status="supported_machine_admission", win_rate_pct=60., selected_path_ev_pct=-.40886)
-    result = dict(status="selected_machine_policy", promotion_pass=True,
-        selection_basis="win_rate_then_net_ev_without_profit_floor", evaluated_candidate_count=94,
-        candidate={"parent_policy": {}, "evidence": {"train": {"economics": train}, "holdout": {"economics": measured}}})
-    monkeypatch.setattr(strategy, "select_report_candidate", lambda _: ("KRX|KRX_REGULAR", result))
+
+    measured = dict(
+        status="supported_machine_admission",
+        win_rate_pct=None,
+        selected_path_ev_pct=None,
+        selected_opportunity_count=0,
+    )
+    train = dict(
+        status="supported_machine_admission",
+        win_rate_pct=60.0,
+        selected_path_ev_pct=-0.40886,
+    )
+    result = dict(
+        status="selected_machine_policy",
+        promotion_pass=True,
+        selection_basis="win_rate_then_net_ev_without_profit_floor",
+        evaluated_candidate_count=94,
+        candidate={
+            "parent_policy": {},
+            "evidence": {
+                "train": {"economics": train},
+                "holdout": {"economics": measured},
+            },
+        },
+    )
+    monkeypatch.setattr(
+        strategy, "select_report_candidate", lambda _: ("KRX|KRX_REGULAR", result)
+    )
     monkeypatch.setattr(strategy, "promotion_errors", lambda *args: [])
     row = mod._economic_projection("main_mechanistic_entry", {})
     assert row["comparison_status"] == "unsupported_scope"
@@ -1068,15 +1520,20 @@ def test_machine_admission_selection_is_not_portfolio_edge(monkeypatch):
     assert row["policy_apply_allowed"] is False
     assert row["candidate_cost_adjusted_ev_pct"] is None
     assert row["actual_net_profit_improvement"] is None
-    assert row["diagnostic_machine_selection"]["train"]["win_rate_pct"] == 60.
-    assert row["diagnostic_machine_selection"]["holdout"]["selected_opportunity_count"] == 0
+    assert row["diagnostic_machine_selection"]["train"]["win_rate_pct"] == 60.0
+    assert (
+        row["diagnostic_machine_selection"]["holdout"]["selected_opportunity_count"]
+        == 0
+    )
 
 
 def test_explicit_prepared_date_does_not_slide_to_later_sibling(monkeypatch, tmp_path):
     _patch(monkeypatch, tmp_path)
     monkeypatch.setenv("POSTCLOSE_PREPARED_EFFECTIVE_DATE", "2026-09-22")
-    sources = {str(i): dict(exists=True, target_date_matches=True, effective_date=day)
-               for i,day in enumerate(("2026-09-22", "2026-09-23"))}
+    sources = {
+        str(i): dict(exists=True, target_date_matches=True, effective_date=day)
+        for i, day in enumerate(("2026-09-22", "2026-09-23"))
+    }
     _, _, receipt = mod._runtime_consumption_state("2026-09-21", sources)
     assert receipt["apply_date"] == "2026-09-22"
     assert receipt["effective_dates"] == ["2026-09-22", "2026-09-23"]
@@ -1085,114 +1542,179 @@ def test_explicit_prepared_date_does_not_slide_to_later_sibling(monkeypatch, tmp
         mod._runtime_consumption_state("2026-09-21", sources)
 
 
-def test_cancel_wait_summary_preserves_history_gap_and_daily_empty(monkeypatch, tmp_path):
+def test_cancel_wait_summary_preserves_history_gap_and_daily_empty(
+    monkeypatch, tmp_path
+):
     from src.tests.test_entry_cancel_wait_tuning import _reconciliation_fixture
-    report, _, _, _ = _reconciliation_fixture(tmp_path, monkeypatch, unknown_history=True)
-    evidence = mod._economic_projection('entry_cancel_wait', report)
-    assert evidence['comparison_status'] == 'insufficient_sample'
-    assert evidence['cancel_wait_reconciliation']['historical_state'] == 'source_gap'
-    assert evidence['policy_apply_allowed'] is False
-    assert evidence['cancel_wait_reconciliation']['daily_zero_is_verified'] is True
-    assert evidence['cancel_wait_reconciliation']['unresolved_prior_custody_count'] is None
-    assert evidence['paired_delta_ev_pct'] is None
+
+    report, _, _, _ = _reconciliation_fixture(
+        tmp_path, monkeypatch, unknown_history=True
+    )
+    evidence = mod._economic_projection("entry_cancel_wait", report)
+    assert evidence["comparison_status"] == "insufficient_sample"
+    assert evidence["cancel_wait_reconciliation"]["historical_state"] == "source_gap"
+    assert evidence["policy_apply_allowed"] is False
+    assert evidence["cancel_wait_reconciliation"]["daily_zero_is_verified"] is True
+    assert (
+        evidence["cancel_wait_reconciliation"]["unresolved_prior_custody_count"] is None
+    )
+    assert evidence["paired_delta_ev_pct"] is None
 
 
 def test_cancel_wait_summary_valid_empty_is_insufficient_sample(monkeypatch, tmp_path):
     from src.tests.test_entry_cancel_wait_tuning import _reconciliation_fixture
+
     report, _, _, _ = _reconciliation_fixture(tmp_path, monkeypatch)
-    evidence = mod._economic_projection('entry_cancel_wait', report)
-    assert evidence['comparison_status'] == 'insufficient_sample'
-    assert evidence['cancel_wait_reconciliation']['historical_state'] == 'verified_empty'
-    assert evidence['candidate_cost_adjusted_ev_pct'] is None
+    evidence = mod._economic_projection("entry_cancel_wait", report)
+    assert evidence["comparison_status"] == "insufficient_sample"
+    assert (
+        evidence["cancel_wait_reconciliation"]["historical_state"] == "verified_empty"
+    )
+    assert evidence["candidate_cost_adjusted_ev_pct"] is None
 
 
-def test_large_entry_split_uses_native_pair_and_rejects_tampering(tmp_path,monkeypatch):
+def test_large_entry_split_uses_native_pair_and_rejects_tampering(
+    tmp_path, monkeypatch
+):
     from src.engine.scalping import entry_split_order_plan as native
-    day='2026-09-04'; path=tmp_path/'entry.json'; policy_path=tmp_path/'policy.json'
-    policy=dict(schema_version=native.POLICY_SCHEMA_VERSION,source_date=day,source_report=str(path),policy_version='test',buckets={})
-    report=dict(schema_version=native.SCHEMA_VERSION,date=day,recommended_policy=dict(policy_version='test'),economic_acceptance=dict(status='insufficient_sample'))
-    report,policy=native.bind_report_policy_generation(report,policy)
-    path.write_text(json.dumps(report));policy_path.write_text(json.dumps(policy))
-    paths={'entry_split_policy':policy_path}
-    actual,proof,error=mod._large_companion('entry_split',path,day,mod._sha(path),paths)
-    assert error is None and proof['verified'] and actual==report
-    assert mod._economic_projection('entry_split',actual)==mod._economic_projection('entry_split',report)
-    assert mod._large_companion('entry_split',path,'2026-09-07',mod._sha(path),paths)[2]
-    assert mod._large_companion('entry_split',path,day,'0'*64,paths)[2]
-    report['economic_acceptance']['status']='validated_edge';path.write_text(json.dumps(report))
-    assert mod._large_companion('entry_split',path,day,mod._sha(path),paths)[2]
-    monkeypatch.setattr(native,'ENTRY_REPORT_MAX_BYTES',1)
-    assert mod._large_companion('entry_split',path,day,mod._sha(path),paths)[2]
+
+    day = "2026-09-04"
+    path = tmp_path / "entry.json"
+    policy_path = tmp_path / "policy.json"
+    policy = dict(
+        schema_version=native.POLICY_SCHEMA_VERSION,
+        source_date=day,
+        source_report=str(path),
+        policy_version="test",
+        buckets={},
+    )
+    report = dict(
+        schema_version=native.SCHEMA_VERSION,
+        date=day,
+        recommended_policy=dict(policy_version="test"),
+        economic_acceptance=dict(status="insufficient_sample"),
+    )
+    report, policy = native.bind_report_policy_generation(report, policy)
+    path.write_text(json.dumps(report))
+    policy_path.write_text(json.dumps(policy))
+    paths = {"entry_split_policy": policy_path}
+    actual, proof, error = mod._large_companion(
+        "entry_split", path, day, mod._sha(path), paths
+    )
+    assert error is None and proof["verified"] and actual == report
+    assert mod._economic_projection("entry_split", actual) == mod._economic_projection(
+        "entry_split", report
+    )
+    assert mod._large_companion(
+        "entry_split", path, "2026-09-07", mod._sha(path), paths
+    )[2]
+    assert mod._large_companion("entry_split", path, day, "0" * 64, paths)[2]
+    report["economic_acceptance"]["status"] = "validated_edge"
+    path.write_text(json.dumps(report))
+    assert mod._large_companion("entry_split", path, day, mod._sha(path), paths)[2]
+    monkeypatch.setattr(native, "ENTRY_REPORT_MAX_BYTES", 1)
+    assert mod._large_companion("entry_split", path, day, mod._sha(path), paths)[2]
 
 
-def test_summary_rejects_partial_root_patch_before_producer_or_write(tmp_path, monkeypatch):
-    production = tmp_path / 'production/report/runtime_approval_summary'
+def test_summary_rejects_partial_root_patch_before_producer_or_write(
+    tmp_path, monkeypatch
+):
+    production = tmp_path / "production/report/runtime_approval_summary"
     production.mkdir(parents=True)
-    original = production / 'runtime_approval_summary_2026-10-12.json'
+    original = production / "runtime_approval_summary_2026-10-12.json"
     original.write_bytes(b'{"sealed":true}\n')
-    monkeypatch.setattr(mod, 'DATA_DIR', tmp_path / 'test-data')
-    monkeypatch.setattr(mod, 'REPORT_DIR', production)
-    monkeypatch.setattr(mod, '_paths', lambda _: pytest.fail('producer ran before output custody validation'))
-    with pytest.raises(ValueError, match='summary_output_data_root_mismatch'):
-        mod.build_runtime_approval_summary('2026-10-12')
+    monkeypatch.setattr(mod, "DATA_DIR", tmp_path / "test-data")
+    monkeypatch.setattr(mod, "REPORT_DIR", production)
+    monkeypatch.setattr(
+        mod,
+        "_paths",
+        lambda _: pytest.fail("producer ran before output custody validation"),
+    )
+    with pytest.raises(ValueError, match="summary_output_data_root_mismatch"):
+        mod.build_runtime_approval_summary("2026-10-12")
     assert original.read_bytes() == b'{"sealed":true}\n'
 
 
-def test_summary_publication_keeps_both_generations_and_rejects_archive_damage(tmp_path, monkeypatch):
+def test_summary_publication_keeps_both_generations_and_rejects_archive_damage(
+    tmp_path, monkeypatch
+):
     _patch(monkeypatch, tmp_path)
-    path, _ = mod.summary_paths('2026-10-12')
+    path, _ = mod.summary_paths("2026-10-12")
     before, after = '{"version":1}\n', '{"version":2}\n'
     mod._atomic_write(path, before)
     mod._atomic_write(path, after)
-    directory = path.parent / 'generations' / path.stem
-    saved = directory / (hashlib.sha256(before.encode()).hexdigest()+'.json')
+    directory = path.parent / "generations" / path.stem
+    saved = directory / (hashlib.sha256(before.encode()).hexdigest() + ".json")
     assert saved.read_text() == before and saved.stat().st_mode & 0o222 == 0
-    assert (directory / (hashlib.sha256(after.encode()).hexdigest()+'.json')).read_text() == after
+    assert (
+        directory / (hashlib.sha256(after.encode()).hexdigest() + ".json")
+    ).read_text() == after
     assert path.read_text() == after
     # A conflicting preserved generation must stop publication, not be resealed.
-    saved.chmod(0o600); saved.write_text('{}')
-    with pytest.raises(ValueError, match='summary_preserved_generation_changed'):
+    saved.chmod(0o600)
+    saved.write_text("{}")
+    with pytest.raises(ValueError, match="summary_preserved_generation_changed"):
         mod._atomic_write(path, before)
     assert path.read_text() == after
 
 
 def test_summary_publication_rejects_symlink_destination(tmp_path, monkeypatch):
     _patch(monkeypatch, tmp_path)
-    path, _ = mod.summary_paths('2026-10-12')
+    path, _ = mod.summary_paths("2026-10-12")
     path.parent.mkdir(parents=True)
-    protected=tmp_path/'protected'; protected.write_text('original')
+    protected = tmp_path / "protected"
+    protected.write_text("original")
     path.symlink_to(protected)
-    with pytest.raises(ValueError, match='regular_file'):
-        mod._atomic_write(path, '{}')
-    assert protected.read_text() == 'original'
+    with pytest.raises(ValueError, match="regular_file"):
+        mod._atomic_write(path, "{}")
+    assert protected.read_text() == "original"
 
 
-@pytest.mark.parametrize('operation', ['open', 'replace', 'unlink', 'symlink', 'dir_fd'])
+@pytest.mark.parametrize(
+    "operation", ["open", "replace", "unlink", "symlink", "dir_fd"]
+)
 def test_test_guard_blocks_production_mutation_before_it_happens(tmp_path, operation):
     import os
     import sys
     from src.tests.conftest import _reject_production_mutation
-    protected = tmp_path / 'protected'
-    protected.mkdir(); target=protected/'summary.json'; target.write_text('original')
-    temporary=tmp_path/'new.json'; temporary.write_text('replacement')
-    alias=tmp_path/'alias'; alias.symlink_to(protected, target_is_directory=True)
+
+    protected = tmp_path / "protected"
+    protected.mkdir()
+    target = protected / "summary.json"
+    target.write_text("original")
+    temporary = tmp_path / "new.json"
+    temporary.write_text("replacement")
+    alias = tmp_path / "alias"
+    alias.symlink_to(protected, target_is_directory=True)
     # Scope this hook to a temporary root; do not touch real production files.
-    active=[True]
-    def guard(event,args):
-        if active[0]:_reject_production_mutation(event,args,(protected,))
+    active = [True]
+
+    def guard(event, args):
+        if active[0]:
+            _reject_production_mutation(event, args, (protected,))
+
     sys.addaudithook(guard)
     try:
-        with pytest.raises(PermissionError,match='unit_test_production_write_forbidden'):
-            if operation=='open': (alias/'summary.json').write_text('changed')
-            elif operation=='replace':os.replace(temporary,target)
-            elif operation=='unlink':target.unlink()
-            elif operation=='symlink':os.symlink(temporary,protected/'new')
+        with pytest.raises(
+            PermissionError, match="unit_test_production_write_forbidden"
+        ):
+            if operation == "open":
+                (alias / "summary.json").write_text("changed")
+            elif operation == "replace":
+                os.replace(temporary, target)
+            elif operation == "unlink":
+                target.unlink()
+            elif operation == "symlink":
+                os.symlink(temporary, protected / "new")
             else:
-                fd=os.open(protected,os.O_RDONLY|os.O_DIRECTORY)
-                try:os.rename(temporary,'summary.json',dst_dir_fd=fd)
-                finally:os.close(fd)
-        assert target.read_text()=='original'
-    finally:active[0]=False
+                fd = os.open(protected, os.O_RDONLY | os.O_DIRECTORY)
+                try:
+                    os.rename(temporary, "summary.json", dst_dir_fd=fd)
+                finally:
+                    os.close(fd)
+        assert target.read_text() == "original"
+    finally:
+        active[0] = False
 
 
 def test_session_defaults_are_private_before_writer_imports():

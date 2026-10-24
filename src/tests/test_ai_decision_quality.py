@@ -548,14 +548,19 @@ def _pending(action="DROP"):
 
 def test_captured_control_preserves_original_health_without_legacy_imputation():
     health = {"schema": "kiwoom_market_data_health_v1", "decision_authority": False}
-    source = {**_trace(), "market_data_health": health,
-              "input_feature_allowed": False,
-              "input_feature_blockers": ["required_feature_tape_stale"]}
+    source = {
+        **_trace(),
+        "market_data_health": health,
+        "input_feature_allowed": False,
+        "input_feature_blockers": ["required_feature_tape_stale"],
+    }
     fields = quality._captured_control_fields(source)
     assert fields["captured_market_data_health"] == health
     assert fields["captured_input_feature_allowed"] is False
     assert fields["captured_input_feature_blockers"] == source["input_feature_blockers"]
-    assert "captured_market_data_health" not in quality._captured_control_fields(_trace())
+    assert "captured_market_data_health" not in quality._captured_control_fields(
+        _trace()
+    )
 
 
 def test_historical_repaired_control_requires_final_response_not_raw_evidence():
@@ -765,14 +770,28 @@ def test_daily_materialization_builds_ordered_chain_without_candidate_execution(
     assert materialization["reports"]["control"]["controls"]
     diagnostic = materialization["reports"]["mature"]["diagnostic_price_path_summary"]
     assert diagnostic["eligible_sample_count"] == 1
-    assert diagnostic["source_quality_adjusted_ev_pct"] == 0.0  # original WAIT diagnostic proxy
+    assert (
+        diagnostic["source_quality_adjusted_ev_pct"] == 0.0
+    )  # original WAIT diagnostic proxy
     assert diagnostic["economic_acceptance_eligible"] is False
-    assert materialization["reports"]["mature"]["label_contract_status_counts"] == {"available": 1}
+    assert materialization["reports"]["mature"]["label_contract_status_counts"] == {
+        "available": 1
+    }
     invalid = deepcopy(materialization["reports"])
     invalid["mature"]["labels"][0]["horizon_metrics"]["10m"]["end_return_pct"] = 2.0
-    assert "label_report_hash_mismatch" in quality.validate_daily_materialization_reports(target_date="2026-07-27", reports=invalid)
+    assert (
+        "label_report_hash_mismatch"
+        in quality.validate_daily_materialization_reports(
+            target_date="2026-07-27", reports=invalid
+        )
+    )
     invalid["paired"] = {}
-    assert "legacy_artifacts_in_current_materialization" in quality.validate_daily_materialization_reports(target_date="2026-07-27", reports=invalid)
+    assert (
+        "legacy_artifacts_in_current_materialization"
+        in quality.validate_daily_materialization_reports(
+            target_date="2026-07-27", reports=invalid
+        )
+    )
 
 
 def _paired_outcome_recovery_report(*, outcome_return_pct=1.0):
@@ -1190,13 +1209,19 @@ def test_postclose_cli_writes_and_revalidates_all_daily_artifacts(
     )
 
     assert paths["control"].exists() and paths["mature"].exists()
-    assert not any(paths[x].exists() for x in ("baseline", "paired", "candidate_lifecycle_state"))
+    assert not any(
+        paths[x].exists() for x in ("baseline", "paired", "candidate_lifecycle_state")
+    )
     assert "source_labels_materialized" in capsys.readouterr().out
     from src.engine.scalping import ai_action_outcome_calibration as calibration
+
     # Public producer outputs are consumed with exact hashes by the case table.
     target = tmp_path / "data"
     cpath = target / "runtime/ai_decision_quality_control_2026-07-27.json"
-    lpath = target / "report/ai_decision_outcome_labels/ai_decision_outcome_labels_2026-07-27.json"
+    lpath = (
+        target
+        / "report/ai_decision_outcome_labels/ai_decision_outcome_labels_2026-07-27.json"
+    )
     for source, dest in ((paths["control"], cpath), (paths["mature"], lpath)):
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(source.read_bytes())
@@ -1785,14 +1810,24 @@ def test_machine_auxiliary_missing_live_stop_uses_explicit_counterfactual_only()
         "machine_observation_sha256": "a" * 64,
         "entry_conservative_execution_cost_pct": 0.2,
     }
-    rows = [{
-        "timestamp": f"2026-07-27T09:0{minute}:00+09:00",
-        "stock_code": "005930", "price": 100.5, "high": 100.5,
-        "low": 99.9, "close": 100.5, "effective_venue": "KRX",
-        "session_bucket": "KRX_REGULAR", "source_quality": "pass",
-    } for minute in range(1, 6)]
+    rows = [
+        {
+            "timestamp": f"2026-07-27T09:0{minute}:00+09:00",
+            "stock_code": "005930",
+            "price": 100.5,
+            "high": 100.5,
+            "low": 99.9,
+            "close": 100.5,
+            "effective_venue": "KRX",
+            "session_bucket": "KRX_REGULAR",
+            "source_quality": "pass",
+        }
+        for minute in range(1, 6)
+    ]
     label = quality.mature_outcome_labels(
-        pending_labels=[pending], price_rows=rows, lifecycle_rows=[],
+        pending_labels=[pending],
+        price_rows=rows,
+        lifecycle_rows=[],
         as_of=datetime(2026, 7, 27, 9, 11, tzinfo=KST),
     )[0]
     assert label["outcome_stop_owner"] == "fixed_counterfactual_entry_boundary"
@@ -1805,7 +1840,8 @@ def test_machine_auxiliary_missing_live_stop_uses_explicit_counterfactual_only()
     )
     legacy = quality.mature_outcome_labels(
         pending_labels=[{**pending, "machine_observation_sha256": None}],
-        price_rows=rows, lifecycle_rows=[],
+        price_rows=rows,
+        lifecycle_rows=[],
         as_of=datetime(2026, 7, 27, 9, 11, tzinfo=KST),
     )[0]
     assert legacy.get("outcome_stop_owner") is None
@@ -1814,13 +1850,15 @@ def test_machine_auxiliary_missing_live_stop_uses_explicit_counterfactual_only()
     )
     explicit = quality.mature_outcome_labels(
         pending_labels=[{**pending, "adverse_price": 99.4}],
-        price_rows=rows, lifecycle_rows=[],
+        price_rows=rows,
+        lifecycle_rows=[],
         as_of=datetime(2026, 7, 27, 9, 11, tzinfo=KST),
     )[0]
     assert explicit.get("outcome_stop_owner") != "fixed_counterfactual_entry_boundary"
     malformed = quality.mature_outcome_labels(
         pending_labels=[{**pending, "adverse_pct": "invalid"}],
-        price_rows=rows, lifecycle_rows=[],
+        price_rows=rows,
+        lifecycle_rows=[],
         as_of=datetime(2026, 7, 27, 9, 11, tzinfo=KST),
     )[0]
     assert malformed.get("outcome_stop_owner") != "fixed_counterfactual_entry_boundary"
@@ -1828,26 +1866,39 @@ def test_machine_auxiliary_missing_live_stop_uses_explicit_counterfactual_only()
         "exact_stop_distance_missing_or_invalid"
     )
     mismatched = quality.mature_outcome_labels(
-        pending_labels=[{**pending, "evaluation_attempt_id": "attempt-a",
-                         "entry_cost_evaluation_attempt_id": "attempt-b"}],
-        price_rows=rows, lifecycle_rows=[],
+        pending_labels=[
+            {
+                **pending,
+                "evaluation_attempt_id": "attempt-a",
+                "entry_cost_evaluation_attempt_id": "attempt-b",
+            }
+        ],
+        price_rows=rows,
+        lifecycle_rows=[],
         as_of=datetime(2026, 7, 27, 9, 11, tzinfo=KST),
     )[0]
     assert mismatched.get("outcome_stop_owner") != "fixed_counterfactual_entry_boundary"
-    assert mismatched["horizon_metrics"]["3m"]["entry_quality_path"]["label_reason"] == (
-        "conservative_execution_cost_missing_or_invalid"
-    )
+    assert mismatched["horizon_metrics"]["3m"]["entry_quality_path"][
+        "label_reason"
+    ] == ("conservative_execution_cost_missing_or_invalid")
     wrong_basis = quality.mature_outcome_labels(
-        pending_labels=[{**pending, "entry_cost_source_status": "source_gap",
-                         "entry_cost_basis": "unknown_contract"}],
-        price_rows=rows, lifecycle_rows=[],
+        pending_labels=[
+            {
+                **pending,
+                "entry_cost_source_status": "source_gap",
+                "entry_cost_basis": "unknown_contract",
+            }
+        ],
+        price_rows=rows,
+        lifecycle_rows=[],
         as_of=datetime(2026, 7, 27, 9, 11, tzinfo=KST),
     )[0]
-    assert wrong_basis["horizon_metrics"]["3m"]["entry_quality_path"]["label_reason"] == (
-        "conservative_execution_cost_missing_or_invalid"
-    )
+    assert wrong_basis["horizon_metrics"]["3m"]["entry_quality_path"][
+        "label_reason"
+    ] == ("conservative_execution_cost_missing_or_invalid")
     bound_cost = {
-        **pending, "evaluation_attempt_id": "attempt-a",
+        **pending,
+        "evaluation_attempt_id": "attempt-a",
         "entry_cost_evaluation_attempt_id": "attempt-a",
         "entry_cost_source_status": "exact_pre_provider_replay",
         "entry_cost_scope": "counterfactual_friction_no_broker_fees",
@@ -1856,7 +1907,9 @@ def test_machine_auxiliary_missing_live_stop_uses_explicit_counterfactual_only()
         "entry_cost_replay_context_sha256": "c" * 64,
     }
     bound = quality.mature_outcome_labels(
-        pending_labels=[bound_cost], price_rows=rows, lifecycle_rows=[],
+        pending_labels=[bound_cost],
+        price_rows=rows,
+        lifecycle_rows=[],
         as_of=datetime(2026, 7, 27, 9, 11, tzinfo=KST),
     )[0]
     assert bound["horizon_metrics"]["3m"]["entry_quality_path"]["label_reason"] != (
@@ -1864,7 +1917,8 @@ def test_machine_auxiliary_missing_live_stop_uses_explicit_counterfactual_only()
     )
     unbound = quality.mature_outcome_labels(
         pending_labels=[{**bound_cost, "entry_cost_contract_sha256": None}],
-        price_rows=rows, lifecycle_rows=[],
+        price_rows=rows,
+        lifecycle_rows=[],
         as_of=datetime(2026, 7, 27, 9, 11, tzinfo=KST),
     )[0]
     assert unbound["horizon_metrics"]["3m"]["entry_quality_path"]["label_reason"] == (
@@ -1872,118 +1926,224 @@ def test_machine_auxiliary_missing_live_stop_uses_explicit_counterfactual_only()
     )
 
 
-def test_auxiliary_reuses_only_verified_machine_cache_for_requested_exact_route(monkeypatch):
+def test_auxiliary_reuses_only_verified_machine_cache_for_requested_exact_route(
+    monkeypatch,
+):
     from src.engine.scalping import ai_action_outcome_calibration as machine
     from src.engine.scalping import entry_setup_evidence
     from src.engine.scalping.ai_decision_trace import _json_bytes
 
-    monkeypatch.setattr(entry_setup_evidence, 'validate_entry_setup_evidence', lambda _value: [])
+    monkeypatch.setattr(
+        entry_setup_evidence, "validate_entry_setup_evidence", lambda _value: []
+    )
     capture = {
-        'schema':'mechanistic_entry_observation_v1',
-        'captured_at':'2026-09-29T10:00:00+09:00',
-        'source':{'setup_evidence':{}}, 'redacted':False,
-        'provider_called':False, 'runtime_effect':False,
-        'allowed_runtime_apply':False, 'actual_order_submitted':False,
-        'broker_order_forbidden':True,
+        "schema": "mechanistic_entry_observation_v1",
+        "captured_at": "2026-09-29T10:00:00+09:00",
+        "source": {"setup_evidence": {}},
+        "redacted": False,
+        "provider_called": False,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
     }
-    capture['machine_observation_sha256'] = hashlib.sha256(_json_bytes(capture)).hexdigest()
+    capture["machine_observation_sha256"] = hashlib.sha256(
+        _json_bytes(capture)
+    ).hexdigest()
     prices = [
-        {'stock_code':'005930', 'effective_venue':'KRX',
-         'session_bucket':'KRX_REGULAR', 'source_request_code':'005930_AL'},
-        {'stock_code':'000660', 'effective_venue':'KRX',
-         'session_bucket':'KRX_REGULAR', 'source_request_code':'000660_AL'},
+        {
+            "stock_code": "005930",
+            "effective_venue": "KRX",
+            "session_bucket": "KRX_REGULAR",
+            "source_request_code": "005930_AL",
+        },
+        {
+            "stock_code": "000660",
+            "effective_venue": "KRX",
+            "session_bucket": "KRX_REGULAR",
+            "source_request_code": "000660_AL",
+        },
     ]
     seen = []
+
     def cached_rows(**kwargs):
-        seen.extend(kwargs['observations'])
-        return prices, {'status':'verified_cache_reused'}, {'005930_AL', '000660_AL'}
-    monkeypatch.setattr(machine, '_machine_completed_price_rows', cached_rows)
-    required = {('005930', 'KRX', 'KRX_REGULAR', '005930_AL')}
+        seen.extend(kwargs["observations"])
+        return prices, {"status": "verified_cache_reused"}, {"005930_AL", "000660_AL"}
+
+    monkeypatch.setattr(machine, "_machine_completed_price_rows", cached_rows)
+    required = {("005930", "KRX", "KRX_REGULAR", "005930_AL")}
     selected, receipt = quality._verified_machine_completed_prices_for_ai(
-        target_date='2026-09-29', payloads=[capture], required_routes=required,
+        target_date="2026-09-29",
+        payloads=[capture],
+        required_routes=required,
     )
     assert selected == prices[:1]
-    assert receipt['status'] == 'verified_cache_reused'
+    assert receipt["status"] == "verified_cache_reused"
     assert seen == [capture]
     seen.clear()
     selected, receipt = quality._verified_machine_completed_prices_for_ai(
-        target_date='2026-09-29', payloads=[capture, capture],
+        target_date="2026-09-29",
+        payloads=[capture, capture],
         required_routes=required,
     )
     assert selected == prices[:1]
     assert seen == [capture]
-    invalid = {**capture, 'source':{'setup_evidence':{'tampered':True}}}
+    invalid = {**capture, "source": {"setup_evidence": {"tampered": True}}}
     selected, receipt = quality._verified_machine_completed_prices_for_ai(
-        target_date='2026-09-29', payloads=[invalid], required_routes=required,
+        target_date="2026-09-29",
+        payloads=[invalid],
+        required_routes=required,
     )
     assert selected == []
-    assert receipt['status'] == 'verified_machine_capture_missing'
+    assert receipt["status"] == "verified_machine_capture_missing"
 
 
-@pytest.mark.parametrize("stage,matching,expected", [
-    ("entry_screen", True, {("005930", "KRX", "KRX_REGULAR", "005930_AL")}),
-    ("entry_screen", False, set()),
-    ("holding", True, set()),
-])
+@pytest.mark.parametrize(
+    "stage,matching,expected",
+    [
+        ("entry_screen", True, {("005930", "KRX", "KRX_REGULAR", "005930_AL")}),
+        ("entry_screen", False, set()),
+        ("holding", True, set()),
+    ],
+)
 def test_outcome_materialization_requests_only_exact_auxiliary_entry_route(
     monkeypatch, stage, matching, expected
 ):
-    pending = {**_pending(), "decision_stage": stage,
-               "snapshot_id": "snapshot-1", "market_data_route": "krx_nxt_integrated",
-               "broker_route": "SOR", "machine_observation_sha256": "a" * 64,
-               "entry_mechanistic_action": "ENTER_NOW"}
-    trace = {**pending, "provider_called": True,
-             "snapshot_id": "snapshot-1" if matching else "other-snapshot"}
-    monkeypatch.setattr(quality, "_default_sources", lambda *_a, **_k: {
-        "pending": [pending], "traces": [trace], "payloads": [], "pipeline_paths": []})
-    monkeypatch.setattr(quality, "load_promotion_for_target_date",
-                        lambda *_a: ({}, None, None))
-    monkeypatch.setattr(quality, "load_pipeline_price_and_lifecycle_rows",
-                        lambda *_a, **_k: ([], []))
-    monkeypatch.setattr(quality, "annotate_primary_cohort_eligibility",
-                        lambda **kwargs: kwargs["labels"])
+    pending = {
+        **_pending(),
+        "decision_stage": stage,
+        "snapshot_id": "snapshot-1",
+        "market_data_route": "krx_nxt_integrated",
+        "broker_route": "SOR",
+        "machine_observation_sha256": "a" * 64,
+        "entry_mechanistic_action": "ENTER_NOW",
+    }
+    trace = {
+        **pending,
+        "provider_called": True,
+        "snapshot_id": "snapshot-1" if matching else "other-snapshot",
+    }
+    monkeypatch.setattr(
+        quality,
+        "_default_sources",
+        lambda *_a, **_k: {
+            "pending": [pending],
+            "traces": [trace],
+            "payloads": [],
+            "pipeline_paths": [],
+        },
+    )
+    monkeypatch.setattr(
+        quality, "load_promotion_for_target_date", lambda *_a: ({}, None, None)
+    )
+    monkeypatch.setattr(
+        quality, "load_pipeline_price_and_lifecycle_rows", lambda *_a, **_k: ([], [])
+    )
+    monkeypatch.setattr(
+        quality,
+        "annotate_primary_cohort_eligibility",
+        lambda **kwargs: kwargs["labels"],
+    )
     seen = []
+
     class RouteCaptured(Exception):
         pass
+
     def capture_routes(**kwargs):
         seen.append(kwargs["required_routes"])
         raise RouteCaptured
-    monkeypatch.setattr(quality, "_verified_machine_completed_prices_for_ai", capture_routes)
+
+    monkeypatch.setattr(
+        quality, "_verified_machine_completed_prices_for_ai", capture_routes
+    )
     with pytest.raises(RouteCaptured):
-        quality.main(["--date", "2026-07-27", "--mode", "mature",
-                      "--as-of", "2026-07-27T16:30:00+09:00"])
+        quality.main(
+            [
+                "--date",
+                "2026-07-27",
+                "--mode",
+                "mature",
+                "--as-of",
+                "2026-07-27T16:30:00+09:00",
+            ]
+        )
     assert seen == [expected]
 
 
-def test_auxiliary_exact_route_uses_verified_partial_machine_cache_without_rest(monkeypatch):
+def test_auxiliary_exact_route_uses_verified_partial_machine_cache_without_rest(
+    monkeypatch,
+):
     from src.utils import kiwoom_utils
-    pending = {**_pending(), "decision_stage": "entry_screen",
-               "snapshot_id": "snapshot-1", "market_data_route": "krx_nxt_integrated",
-               "broker_route": "SOR", "machine_observation_sha256": "a" * 64,
-               "entry_mechanistic_action": "ENTER_NOW"}
+
+    pending = {
+        **_pending(),
+        "decision_stage": "entry_screen",
+        "snapshot_id": "snapshot-1",
+        "market_data_route": "krx_nxt_integrated",
+        "broker_route": "SOR",
+        "machine_observation_sha256": "a" * 64,
+        "entry_mechanistic_action": "ENTER_NOW",
+    }
     trace = {**pending, "provider_called": True}
-    price = {"stock_code": "005930", "effective_venue": "KRX",
-             "session_bucket": "KRX_REGULAR", "source_request_code": "005930_AL",
-             "timestamp": "2026-07-27T09:01:00+09:00", "price": 100}
-    monkeypatch.setattr(quality, "_default_sources", lambda *_a, **_k: {
-        "pending": [pending], "traces": [trace], "payloads": [], "pipeline_paths": []})
-    monkeypatch.setattr(quality, "load_promotion_for_target_date",
-                        lambda *_a: ({}, None, None))
-    monkeypatch.setattr(quality, "load_pipeline_price_and_lifecycle_rows",
-                        lambda *_a, **_k: ([], []))
-    monkeypatch.setattr(quality, "annotate_primary_cohort_eligibility",
-                        lambda **kwargs: kwargs["labels"])
-    monkeypatch.setattr(quality, "_verified_machine_completed_prices_for_ai",
-                        lambda **_k: ([price], {"status": "verified_cache_reused_partial_source_gap"}))
-    monkeypatch.setattr(kiwoom_utils, "get_cached_kiwoom_token",
-                        lambda: pytest.fail("verified exact route must not request REST"))
+    price = {
+        "stock_code": "005930",
+        "effective_venue": "KRX",
+        "session_bucket": "KRX_REGULAR",
+        "source_request_code": "005930_AL",
+        "timestamp": "2026-07-27T09:01:00+09:00",
+        "price": 100,
+    }
+    monkeypatch.setattr(
+        quality,
+        "_default_sources",
+        lambda *_a, **_k: {
+            "pending": [pending],
+            "traces": [trace],
+            "payloads": [],
+            "pipeline_paths": [],
+        },
+    )
+    monkeypatch.setattr(
+        quality, "load_promotion_for_target_date", lambda *_a: ({}, None, None)
+    )
+    monkeypatch.setattr(
+        quality, "load_pipeline_price_and_lifecycle_rows", lambda *_a, **_k: ([], [])
+    )
+    monkeypatch.setattr(
+        quality,
+        "annotate_primary_cohort_eligibility",
+        lambda **kwargs: kwargs["labels"],
+    )
+    monkeypatch.setattr(
+        quality,
+        "_verified_machine_completed_prices_for_ai",
+        lambda **_k: ([price], {"status": "verified_cache_reused_partial_source_gap"}),
+    )
+    monkeypatch.setattr(
+        kiwoom_utils,
+        "get_cached_kiwoom_token",
+        lambda: pytest.fail("verified exact route must not request REST"),
+    )
     seen = {}
+
     def mature(**kwargs):
         seen.update(kwargs)
         return [{**pending, "label_status": "pending", "horizon_metrics": {}}]
+
     monkeypatch.setattr(quality, "mature_outcome_labels", mature)
-    assert quality.main(["--date", "2026-07-27", "--mode", "mature",
-                         "--as-of", "2026-07-27T16:30:00+09:00"]) == 0
+    assert (
+        quality.main(
+            [
+                "--date",
+                "2026-07-27",
+                "--mode",
+                "mature",
+                "--as-of",
+                "2026-07-27T16:30:00+09:00",
+            ]
+        )
+        == 0
+    )
     assert seen["price_rows"] == [price]
     assert seen["pending_labels"][0]["outcome_request_code"] == "005930_AL"
 
@@ -2209,15 +2369,31 @@ def test_completed_bar_loader_preserves_exact_machine_request_route():
     from src.engine.scalping import ai_decision_quality as quality
 
     calls = []
+
     def fetcher(code, request_code):
         calls.append((code, request_code))
-        return ([{"source_timestamp": "20260727100100", "현재가": 101,
-                  "고가": 102, "저가": 100}], {"api_id": "ka10080"})
+        return (
+            [
+                {
+                    "source_timestamp": "20260727100100",
+                    "현재가": 101,
+                    "고가": 102,
+                    "저가": 100,
+                }
+            ],
+            {"api_id": "ka10080"},
+        )
 
     prices, provenance = quality.load_kiwoom_completed_minute_price_rows(
         target_date="2026-07-27",
-        labels=[{"stock_code": "005930", "effective_venue": "KRX",
-                 "session_bucket": "KRX_REGULAR", "market_data_route": "krx_nxt_integrated"}],
+        labels=[
+            {
+                "stock_code": "005930",
+                "effective_venue": "KRX",
+                "session_bucket": "KRX_REGULAR",
+                "market_data_route": "krx_nxt_integrated",
+            }
+        ],
         as_of=datetime(2026, 7, 27, 10, 3, tzinfo=ZoneInfo("Asia/Seoul")),
         fetcher=fetcher,
         request_code_resolver=lambda row: row["stock_code"] + "_AL",
@@ -2226,40 +2402,78 @@ def test_completed_bar_loader_preserves_exact_machine_request_route():
     assert prices[0]["effective_venue"] == "KRX"
     assert prices[0]["source_request_code"] == "005930_AL"
     assert provenance[0]["request_code"] == "005930_AL"
-    label = {"effective_venue": "KRX", "session_bucket": "KRX_REGULAR",
-             "outcome_request_code": "005930_AL"}
+    label = {
+        "effective_venue": "KRX",
+        "session_bucket": "KRX_REGULAR",
+        "outcome_request_code": "005930_AL",
+    }
     assert quality._same_route(label, prices[0])
-    assert not quality._same_route(label, {**prices[0], "source_request_code": "005930"})
-    assert not quality._same_route(label, {k: v for k, v in prices[0].items()
-                                           if k != "source_request_code"})
+    assert not quality._same_route(
+        label, {**prices[0], "source_request_code": "005930"}
+    )
+    assert not quality._same_route(
+        label, {k: v for k, v in prices[0].items() if k != "source_request_code"}
+    )
 
 
-@pytest.mark.parametrize("venue,session,market_route,broker,expected", [
-    ("KRX", "KRX_REGULAR", "krx_nxt_integrated", "SOR", "005930_AL"),
-    ("PREMARKET_KRX_LIKE", "PREMARKET_KRX_LIKE", "nxt_only", "NXT", "005930_NX"),
-    ("KRX_NXT_INTEGRATED", "KRX_NXT_AFTERMARKET", "krx_nxt_integrated", "SOR", "005930_AL"),
-    ("KRX", "KRX_REGULAR", "krx_only", "KRX", "005930"),
-    ("KRX", "KRX_REGULAR", "krx_only", "SOR", "005930"),
-    ("KRX_NXT_INTEGRATED", "KRX_NXT_AFTERMARKET", "krx_nxt_integrated", "NXT", "005930_AL"),
-])
+@pytest.mark.parametrize(
+    "venue,session,market_route,broker,expected",
+    [
+        ("KRX", "KRX_REGULAR", "krx_nxt_integrated", "SOR", "005930_AL"),
+        ("PREMARKET_KRX_LIKE", "PREMARKET_KRX_LIKE", "nxt_only", "NXT", "005930_NX"),
+        (
+            "KRX_NXT_INTEGRATED",
+            "KRX_NXT_AFTERMARKET",
+            "krx_nxt_integrated",
+            "SOR",
+            "005930_AL",
+        ),
+        ("KRX", "KRX_REGULAR", "krx_only", "KRX", "005930"),
+        ("KRX", "KRX_REGULAR", "krx_only", "SOR", "005930"),
+        (
+            "KRX_NXT_INTEGRATED",
+            "KRX_NXT_AFTERMARKET",
+            "krx_nxt_integrated",
+            "NXT",
+            "005930_AL",
+        ),
+    ],
+)
 def test_ai_outcome_chart_route_requires_exact_decision_trace(
     venue, session, market_route, broker, expected
 ):
-    label = {"stock_code": "005930", "snapshot_id": "exact-1",
-             "decision_ts": "2026-09-29T09:10:00+09:00",
-             "effective_venue": venue, "session_bucket": session,
-             "market_data_route": market_route, "broker_route": broker}
+    label = {
+        "stock_code": "005930",
+        "snapshot_id": "exact-1",
+        "decision_ts": "2026-09-29T09:10:00+09:00",
+        "effective_venue": venue,
+        "session_bucket": session,
+        "market_data_route": market_route,
+        "broker_route": broker,
+    }
     assert quality._exact_outcome_request_code(label, dict(label)) == expected
-    assert quality._exact_outcome_request_code(
-        label, {**label, "snapshot_id": "other"}
-    ) is None
-    assert quality._exact_outcome_request_code(
-        label, {**label, "decision_ts": "2026-09-29T09:11:00+09:00"}
-    ) is None
-    assert quality._exact_outcome_request_code(
-        label, {**label, "market_data_route": (
-            "krx_only" if market_route != "krx_only" else "nxt_only")}
-    ) is None
+    assert (
+        quality._exact_outcome_request_code(label, {**label, "snapshot_id": "other"})
+        is None
+    )
+    assert (
+        quality._exact_outcome_request_code(
+            label, {**label, "decision_ts": "2026-09-29T09:11:00+09:00"}
+        )
+        is None
+    )
+    assert (
+        quality._exact_outcome_request_code(
+            label,
+            {
+                **label,
+                "market_data_route": (
+                    "krx_only" if market_route != "krx_only" else "nxt_only"
+                ),
+            },
+        )
+        is None
+    )
 
 
 def test_ai_postclose_completed_fetch_retains_early_integrated_market_bars(monkeypatch):
@@ -2267,15 +2481,22 @@ def test_ai_postclose_completed_fetch_retains_early_integrated_market_bars(monke
     from src.utils.kiwoom_read_request_control import REQUEST_CLASS_SOURCE_ONLY
 
     calls = []
-    today = [{"source_timestamp": f"20260929{minute // 60 + 9:02d}{minute % 60:02d}00",
-              "현재가": 10000} for minute in range(600)]
+    today = [
+        {
+            "source_timestamp": f"20260929{minute // 60 + 9:02d}{minute % 60:02d}00",
+            "현재가": 10000,
+        }
+        for minute in range(600)
+    ]
     previous = {"source_timestamp": "20260928150000", "현재가": 10000}
 
     def chart(token, code, **kwargs):
         calls.append((token, code, kwargs))
-        return [previous, *today][-kwargs["limit"]:], {
-            "api_id": "ka10080", "request_code": code,
-            "request_base_dt": "20260929", "last_http_status_code": 200,
+        return [previous, *today][-kwargs["limit"] :], {
+            "api_id": "ka10080",
+            "request_code": code,
+            "request_base_dt": "20260929",
+            "last_http_status_code": 200,
             "continuous_page_limit_reached": True,
             "sort_direction_detected": "descending",
         }
@@ -2302,12 +2523,20 @@ def test_ai_postclose_completed_fetch_retains_early_integrated_market_bars(monke
 
 def test_unproven_ai_outcome_route_cannot_mature_from_pipeline_price():
     pending = {**_pending(), "invalid_reasons": ["outcome_route_unproven"]}
-    prices = [{"timestamp": "2026-07-27T09:01:00+09:00",
-               "stock_code": "005930", "price": 102,
-               "effective_venue": "KRX", "session_bucket": "KRX_REGULAR",
-               "source_quality": "pass"}]
+    prices = [
+        {
+            "timestamp": "2026-07-27T09:01:00+09:00",
+            "stock_code": "005930",
+            "price": 102,
+            "effective_venue": "KRX",
+            "session_bucket": "KRX_REGULAR",
+            "source_quality": "pass",
+        }
+    ]
     row = quality.mature_outcome_labels(
-        pending_labels=[pending], price_rows=prices, lifecycle_rows=[],
+        pending_labels=[pending],
+        price_rows=prices,
+        lifecycle_rows=[],
         as_of=datetime(2026, 7, 27, 9, 2, tzinfo=KST),
     )[0]
     assert row["label_status"] == "pending"
@@ -2781,11 +3010,19 @@ def test_kiwoom_completed_minute_loader_accepts_nxt_overlap_session():
 def test_pipeline_probe_receipts_collected_in_existing_price_scan():
     receipts = []
     prices, lifecycle = quality.load_pipeline_price_and_lifecycle_rows(
-        [{"emitted_at": "2026-09-29T10:00:00+09:00",
-          "stock_code": "005930", "stage": "zero_base_probe_result",
-          "fields": {"zero_base_probe_result": "assessed",
-                     "machine_observation_sha256": "a" * 64}}],
-        stock_codes={"000001"}, probe_receipts=receipts,
+        [
+            {
+                "emitted_at": "2026-09-29T10:00:00+09:00",
+                "stock_code": "005930",
+                "stage": "zero_base_probe_result",
+                "fields": {
+                    "zero_base_probe_result": "assessed",
+                    "machine_observation_sha256": "a" * 64,
+                },
+            }
+        ],
+        stock_codes={"000001"},
+        probe_receipts=receipts,
     )
     assert prices == [] and lifecycle == []
     assert receipts[0]["fields"]["machine_observation_sha256"] == "a" * 64
@@ -7208,8 +7445,6 @@ def test_micro_reversion_materialization_fails_closed_without_full_control_promp
         )
 
 
-
-
 def test_micro_reversion_json_loader_resolves_archived_gzip(tmp_path):
     logical_path = tmp_path / "ai_micro_reversion_replay_source_bundle_2026-08-24.json"
     expected = {"schema": "test", "target_date": "2026-08-24"}
@@ -7219,8 +7454,6 @@ def test_micro_reversion_json_loader_resolves_archived_gzip(tmp_path):
         json.dump(expected, handle)
 
     assert quality._load_json(logical_path) == expected
-
-
 
 
 def _micro_reversion_execution_label(prepared):
@@ -7999,12 +8232,6 @@ def test_micro_reversion_action_neutral_label_flows_into_three_arm_evaluator():
     ] == [("entry", "KRX", "KRX_REGULAR")]
     assert evaluation["cross_stage_venue_aggregate_promotion_forbidden"] is False
     assert report["outcomes_embedded_in_provider_input"] is False
-
-
-
-
-
-
 
 
 def test_micro_reversion_execute_cli_rejects_explicit_parallel_workers(
@@ -9535,8 +9762,6 @@ def test_micro_reversion_execution_isolates_failed_parent_from_clean_batch():
     assert {
         result["outcome_label_rebound_from_sha256"] for result in resumed["results"]
     } == prior_label_hashes
-
-
 
 
 def test_micro_reversion_execution_does_not_infer_provider_success_from_hash():
@@ -13926,15 +14151,32 @@ def test_pipeline_lifecycle_keeps_promotion_on_trace_without_promotion_only_bloa
     assert correlation["scanner_promotion_ids"] == ["SCANPROM-005930-1"]
 
 
-@pytest.mark.parametrize("due,have,eligible,expected", [
-    (False, False, True, "pending"), (True, False, True, "source_gap"),
-    (True, True, True, "available"), (True, True, False, "source_gap")])
-def test_materialized_label_role_distinguishes_fixed_gap_from_maturity(due, have, eligible, expected):
-    label = {**_pending(), "decision_ts": "2026-09-17T10:00:00+09:00",
-             "source_quality_status": "pass", "primary_cohort_eligible": eligible,
-             "horizon_metrics": {"10m": {"end_return_pct": 0.5}} if have else {}}
-    report = {"target_date": "2026-09-17", "labels": [label],
-              "outcome_as_of": "2026-09-17T10:30:00+09:00" if due else "2026-09-17T10:05:00+09:00"}
+@pytest.mark.parametrize(
+    "due,have,eligible,expected",
+    [
+        (False, False, True, "pending"),
+        (True, False, True, "source_gap"),
+        (True, True, True, "available"),
+        (True, True, False, "source_gap"),
+    ],
+)
+def test_materialized_label_role_distinguishes_fixed_gap_from_maturity(
+    due, have, eligible, expected
+):
+    label = {
+        **_pending(),
+        "decision_ts": "2026-09-17T10:00:00+09:00",
+        "source_quality_status": "pass",
+        "primary_cohort_eligible": eligible,
+        "horizon_metrics": {"10m": {"end_return_pct": 0.5}} if have else {},
+    }
+    report = {
+        "target_date": "2026-09-17",
+        "labels": [label],
+        "outcome_as_of": (
+            "2026-09-17T10:30:00+09:00" if due else "2026-09-17T10:05:00+09:00"
+        ),
+    }
     result = quality.annotate_materialized_label_contract(report)
     contract = result["labels"][0]["evaluation_label_contract"]
     assert contract["diagnostic_price_path"]["status"] == expected
@@ -13944,35 +14186,85 @@ def test_materialized_label_role_distinguishes_fixed_gap_from_maturity(due, have
 
 
 def _compact_price_diagnostic_fixture():
-    binding = dict(schema="compact_request_binding_supplement_v1", status="exact_request_bound",
-                   decision_trace_id="compact-original", original_trace_payload_sha256="a"*64,
-                   archived_payload_sha256="a"*64, request_envelope_sha256="b"*64, findings=[],
-                   compact_source_scope=dict(symbol="005930", market="REGULAR", venue="SOR", source_item="005930_AL"),
-                   runtime_effect=False, allowed_runtime_apply=False, canonical_primary_eligibility_changed=False)
+    binding = dict(
+        schema="compact_request_binding_supplement_v1",
+        status="exact_request_bound",
+        decision_trace_id="compact-original",
+        original_trace_payload_sha256="a" * 64,
+        archived_payload_sha256="a" * 64,
+        request_envelope_sha256="b" * 64,
+        findings=[],
+        compact_source_scope=dict(
+            symbol="005930", market="REGULAR", venue="SOR", source_item="005930_AL"
+        ),
+        runtime_effect=False,
+        allowed_runtime_apply=False,
+        canonical_primary_eligibility_changed=False,
+    )
     binding["sha256"] = quality._sha256(binding)
-    label = dict(decision_trace_id="compact-original", decision_stage="entry_screen", stock_code="005930",
-                 decision_ts="2026-09-17T10:00:00+09:00", effective_venue="KRX", session_bucket="KRX_REGULAR",
-                 outcome_request_code="005930_AL", source_quality_status="pass", primary_payload_sha256="a"*64,
-                 snapshot_id="original-snapshot", market_data_route="krx_nxt_integrated", broker_route="SOR",
-                 primary_cohort_eligible=False, primary_cohort_exclusion_reasons=["canonical_context_missing"],
-                 entry_primary_decision_owner="mechanistic_entry_adjudicator",
-                 entry_ai_role="auxiliary_risk_screen_pass_veto_no_promotion",
-                 entry_auxiliary_response_contract_valid=None, entry_ai_screen_status="not_evaluated_transport",
-                 compact_request_binding=binding, horizon_metrics={"10m": dict(end_return_pct=0.5, sample_count=10,
-                    counterfactual_only=True, window_basis="post_decision_same_route",
-                    window_start="2026-09-17T10:00:00+09:00", observed_venue="KRX", observed_session_bucket="KRX_REGULAR")})
-    return quality.annotate_materialized_label_contract(dict(schema=quality.LABEL_REPORT_SCHEMA,
-        target_date="2026-09-17", labels=[label], outcome_as_of="2026-09-17T11:00:00+09:00",
-        price_source_provenance=[dict(stock_code="005930", effective_venue="KRX", session_bucket="KRX_REGULAR",
-            request_code="005930_AL", response_request_code="005930_AL", request_base_dt="20260917",
-            coverage_start="2026-09-17T09:00:00+09:00", coverage_end="2026-09-17T10:09:00+09:00",
-            source_quality_status="pass_target_window_available", fetch_error=None)], **quality.OFFLINE_CONTRACT))
+    label = dict(
+        decision_trace_id="compact-original",
+        decision_stage="entry_screen",
+        stock_code="005930",
+        decision_ts="2026-09-17T10:00:00+09:00",
+        effective_venue="KRX",
+        session_bucket="KRX_REGULAR",
+        outcome_request_code="005930_AL",
+        source_quality_status="pass",
+        primary_payload_sha256="a" * 64,
+        snapshot_id="original-snapshot",
+        market_data_route="krx_nxt_integrated",
+        broker_route="SOR",
+        primary_cohort_eligible=False,
+        primary_cohort_exclusion_reasons=["canonical_context_missing"],
+        entry_primary_decision_owner="mechanistic_entry_adjudicator",
+        entry_ai_role="auxiliary_risk_screen_pass_veto_no_promotion",
+        entry_auxiliary_response_contract_valid=None,
+        entry_ai_screen_status="not_evaluated_transport",
+        compact_request_binding=binding,
+        horizon_metrics={
+            "10m": dict(
+                end_return_pct=0.5,
+                sample_count=10,
+                counterfactual_only=True,
+                window_basis="post_decision_same_route",
+                window_start="2026-09-17T10:00:00+09:00",
+                observed_venue="KRX",
+                observed_session_bucket="KRX_REGULAR",
+            )
+        },
+    )
+    return quality.annotate_materialized_label_contract(
+        dict(
+            schema=quality.LABEL_REPORT_SCHEMA,
+            target_date="2026-09-17",
+            labels=[label],
+            outcome_as_of="2026-09-17T11:00:00+09:00",
+            price_source_provenance=[
+                dict(
+                    stock_code="005930",
+                    effective_venue="KRX",
+                    session_bucket="KRX_REGULAR",
+                    request_code="005930_AL",
+                    response_request_code="005930_AL",
+                    request_base_dt="20260917",
+                    coverage_start="2026-09-17T09:00:00+09:00",
+                    coverage_end="2026-09-17T10:09:00+09:00",
+                    source_quality_status="pass_target_window_available",
+                    fetch_error=None,
+                )
+            ],
+            **quality.OFFLINE_CONTRACT,
+        )
+    )
 
 
 def test_compact_diagnostic_available_is_separate_from_primary_economics_and_response():
     report = _compact_price_diagnostic_fixture()
     before = deepcopy(report)
-    projection = quality.build_compact_diagnostic_price_path(report, source_file_sha256="f"*64)
+    projection = quality.build_compact_diagnostic_price_path(
+        report, source_file_sha256="f" * 64
+    )
     assert projection["status_counts"] == {"available": 1}
     assert projection["rows"][0]["auxiliary_response_contract_valid"] is None
     assert report == before
@@ -13981,54 +14273,109 @@ def test_compact_diagnostic_available_is_separate_from_primary_economics_and_res
     assert projection["economic_acceptance_eligible"] is False
     assert projection["net_ev_pct"] is None
     assert projection["actual_completed_profit"] is False
-    assert quality.validate_compact_diagnostic_price_path(projection, report, source_file_sha256="f"*64)
+    assert quality.validate_compact_diagnostic_price_path(
+        projection, report, source_file_sha256="f" * 64
+    )
     projection["status_counts"] = {"source_gap": 1}
-    assert not quality.validate_compact_diagnostic_price_path(projection, report, source_file_sha256="f"*64)
+    assert not quality.validate_compact_diagnostic_price_path(
+        projection, report, source_file_sha256="f" * 64
+    )
 
 
-@pytest.mark.parametrize("mutation", ["historical_hash", "bad_binding_seal", "other_trace", "other_symbol",
-    "other_item", "other_venue", "other_market", "other_owner", "other_role", "other_date", "other_route", "missing_price",
-    "short_price_window", "missing_metric", "wrong_metric_route", "nan_metric", "future_asof", "duplicate_trace",
-    "session_clock_conflict", "coverage_session_clock_conflict", "naive_clock"])
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "historical_hash",
+        "bad_binding_seal",
+        "other_trace",
+        "other_symbol",
+        "other_item",
+        "other_venue",
+        "other_market",
+        "other_owner",
+        "other_role",
+        "other_date",
+        "other_route",
+        "missing_price",
+        "short_price_window",
+        "missing_metric",
+        "wrong_metric_route",
+        "nan_metric",
+        "future_asof",
+        "duplicate_trace",
+        "session_clock_conflict",
+        "coverage_session_clock_conflict",
+        "naive_clock",
+    ],
+)
 def test_compact_diagnostic_preserves_original_source_gaps(mutation):
     report = _compact_price_diagnostic_fixture()
     row = report["labels"][0]
     binding = row["compact_request_binding"]
     if mutation == "historical_hash":
         binding["status"] = "archive_identity_verified_trace_hash_mismatch"
-        binding["original_trace_payload_sha256"] = "c"*64
-    elif mutation == "bad_binding_seal": binding["sha256"] = "c"*64
-    elif mutation == "other_trace": binding["decision_trace_id"] = "other"
-    elif mutation == "other_symbol": binding["compact_source_scope"]["symbol"] = "000660"
-    elif mutation == "other_item": binding["compact_source_scope"]["source_item"] = "005930_NX"
-    elif mutation == "other_venue": binding["compact_source_scope"]["venue"] = "KRX"
-    elif mutation == "other_market": binding["compact_source_scope"]["market"] = "AFTER"
-    elif mutation == "other_owner": row["entry_primary_decision_owner"] = "retired_owner"
-    elif mutation == "other_role": row["entry_ai_role"] = "primary_decider"
-    elif mutation == "other_date": row["decision_ts"] = "2026-09-18T10:00:00+09:00"
-    elif mutation == "other_route": report["price_source_provenance"][0]["response_request_code"] = "005930_NX"
-    elif mutation == "missing_price": report["price_source_provenance"] = []
-    elif mutation == "short_price_window": report["price_source_provenance"][0]["coverage_end"] = "2026-09-17T10:08:00+09:00"
-    elif mutation == "missing_metric": row["horizon_metrics"] = {}
-    elif mutation == "wrong_metric_route": row["horizon_metrics"]["10m"]["observed_venue"] = "NXT"
-    elif mutation == "nan_metric": row["horizon_metrics"]["10m"]["end_return_pct"] = "nan"
-    elif mutation == "future_asof": report["outcome_as_of"] = "2026-09-16T10:00:00+09:00"
-    elif mutation == "duplicate_trace": report["labels"].append(deepcopy(row))
-    elif mutation == "naive_clock": row["decision_ts"] = "2026-09-17T10:00:00"
+        binding["original_trace_payload_sha256"] = "c" * 64
+    elif mutation == "bad_binding_seal":
+        binding["sha256"] = "c" * 64
+    elif mutation == "other_trace":
+        binding["decision_trace_id"] = "other"
+    elif mutation == "other_symbol":
+        binding["compact_source_scope"]["symbol"] = "000660"
+    elif mutation == "other_item":
+        binding["compact_source_scope"]["source_item"] = "005930_NX"
+    elif mutation == "other_venue":
+        binding["compact_source_scope"]["venue"] = "KRX"
+    elif mutation == "other_market":
+        binding["compact_source_scope"]["market"] = "AFTER"
+    elif mutation == "other_owner":
+        row["entry_primary_decision_owner"] = "retired_owner"
+    elif mutation == "other_role":
+        row["entry_ai_role"] = "primary_decider"
+    elif mutation == "other_date":
+        row["decision_ts"] = "2026-09-18T10:00:00+09:00"
+    elif mutation == "other_route":
+        report["price_source_provenance"][0]["response_request_code"] = "005930_NX"
+    elif mutation == "missing_price":
+        report["price_source_provenance"] = []
+    elif mutation == "short_price_window":
+        report["price_source_provenance"][0][
+            "coverage_end"
+        ] = "2026-09-17T10:08:00+09:00"
+    elif mutation == "missing_metric":
+        row["horizon_metrics"] = {}
+    elif mutation == "wrong_metric_route":
+        row["horizon_metrics"]["10m"]["observed_venue"] = "NXT"
+    elif mutation == "nan_metric":
+        row["horizon_metrics"]["10m"]["end_return_pct"] = "nan"
+    elif mutation == "future_asof":
+        report["outcome_as_of"] = "2026-09-16T10:00:00+09:00"
+    elif mutation == "duplicate_trace":
+        report["labels"].append(deepcopy(row))
+    elif mutation == "naive_clock":
+        row["decision_ts"] = "2026-09-17T10:00:00"
     elif mutation == "session_clock_conflict":
         row["decision_ts"] = "2026-09-17T19:00:00+09:00"
         row["horizon_metrics"]["10m"]["window_start"] = row["decision_ts"]
         report["outcome_as_of"] = "2026-09-17T20:00:00+09:00"
-        report["price_source_provenance"][0]["coverage_end"] = "2026-09-17T19:09:00+09:00"
+        report["price_source_provenance"][0][
+            "coverage_end"
+        ] = "2026-09-17T19:09:00+09:00"
     elif mutation == "coverage_session_clock_conflict":
         row["decision_ts"] = "2026-09-17T15:29:00+09:00"
         row["horizon_metrics"]["10m"]["window_start"] = row["decision_ts"]
         report["outcome_as_of"] = "2026-09-17T16:00:00+09:00"
-        report["price_source_provenance"][0]["coverage_end"] = "2026-09-17T15:38:00+09:00"
+        report["price_source_provenance"][0][
+            "coverage_end"
+        ] = "2026-09-17T15:38:00+09:00"
     if mutation != "bad_binding_seal":
-        binding["sha256"] = quality._sha256({k:v for k,v in binding.items() if k != "sha256"})
-        if mutation == "duplicate_trace": report["labels"][1] = deepcopy(row)
-    projection = quality.build_compact_diagnostic_price_path(report, source_file_sha256="f"*64)
+        binding["sha256"] = quality._sha256(
+            {k: v for k, v in binding.items() if k != "sha256"}
+        )
+        if mutation == "duplicate_trace":
+            report["labels"][1] = deepcopy(row)
+    projection = quality.build_compact_diagnostic_price_path(
+        report, source_file_sha256="f" * 64
+    )
     assert projection["status_counts"] == {"source_gap": len(report["labels"])}
 
 
@@ -14036,21 +14383,38 @@ def test_compact_diagnostic_pending_is_a_fixed_original_horizon():
     report = _compact_price_diagnostic_fixture()
     report["outcome_as_of"] = "2026-09-17T10:05:00+09:00"
     report["labels"][0]["horizon_metrics"] = {}
-    assert quality.build_compact_diagnostic_price_path(report, source_file_sha256="f"*64)["status_counts"] == {"pending": 1}
+    assert quality.build_compact_diagnostic_price_path(
+        report, source_file_sha256="f" * 64
+    )["status_counts"] == {"pending": 1}
     report["outcome_as_of"] = "2026-09-17T10:10:00+09:00"
-    assert quality.build_compact_diagnostic_price_path(report, source_file_sha256="f"*64)["status_counts"] == {"source_gap": 1}
+    assert quality.build_compact_diagnostic_price_path(
+        report, source_file_sha256="f" * 64
+    )["status_counts"] == {"source_gap": 1}
 
 
 @pytest.mark.parametrize("compressed", [False, True])
-def test_compact_diagnostic_reuse_preserves_native_bytes_and_current_consumer(monkeypatch, tmp_path, compressed):
+def test_compact_diagnostic_reuse_preserves_native_bytes_and_current_consumer(
+    monkeypatch, tmp_path, compressed
+):
     from src.engine.error_detectors import artifact_freshness as consumer
+
     target = "2026-09-17"
-    lpath = tmp_path/"data/report/ai_decision_outcome_labels"/f"ai_decision_outcome_labels_{target}.json"
-    cpath = tmp_path/"control.json"
+    lpath = (
+        tmp_path
+        / "data/report/ai_decision_outcome_labels"
+        / f"ai_decision_outcome_labels_{target}.json"
+    )
+    cpath = tmp_path / "control.json"
     lpath.parent.mkdir(parents=True)
     labels = _compact_price_diagnostic_fixture()
-    control = dict(schema=quality.CONTROL_SCHEMA, target_date=target, materialization_schema=quality.DAILY_MATERIALIZATION_SCHEMA,
-                   label_report_sha256=quality._sha256(labels), input_trace_count=1, **quality.OFFLINE_CONTRACT)
+    control = dict(
+        schema=quality.CONTROL_SCHEMA,
+        target_date=target,
+        materialization_schema=quality.DAILY_MATERIALIZATION_SCHEMA,
+        label_report_sha256=quality._sha256(labels),
+        input_trace_count=1,
+        **quality.OFFLINE_CONTRACT,
+    )
     control["control_manifest_sha256"] = quality._sha256(control)
     raw = json.dumps(labels, indent=2).encode()
     physical = lpath.with_suffix(".json.gz") if compressed else lpath
@@ -14059,18 +14423,41 @@ def test_compact_diagnostic_reuse_preserves_native_bytes_and_current_consumer(mo
     originals = physical.read_bytes(), cpath.read_bytes()
     monkeypatch.setattr(quality, "control_path", lambda _: cpath)
     monkeypatch.setattr(quality, "label_report_path", lambda _: lpath)
-    monkeypatch.setattr(quality, "source_label_input_receipt", lambda *_a, **_k: dict(generation_stable=True,
-        source_manifest_sha256="a"*64, source_trace_count=1, source_outcome_count=1, implementation_sha256="new"))
-    monkeypatch.setattr(quality, "_default_sources", lambda *_a, **_k: pytest.fail("no original source/provider replay"))
-    monkeypatch.setattr(consumer, "_continuous_reversal_result_semantics", lambda *_a: {"status":"candidate_selected", "findings":[]})
+    monkeypatch.setattr(
+        quality,
+        "source_label_input_receipt",
+        lambda *_a, **_k: dict(
+            generation_stable=True,
+            source_manifest_sha256="a" * 64,
+            source_trace_count=1,
+            source_outcome_count=1,
+            implementation_sha256="new",
+        ),
+    )
+    monkeypatch.setattr(
+        quality,
+        "_default_sources",
+        lambda *_a, **_k: pytest.fail("no original source/provider replay"),
+    )
+    monkeypatch.setattr(
+        consumer,
+        "_continuous_reversal_result_semantics",
+        lambda *_a: {"status": "candidate_selected", "findings": []},
+    )
     for _ in range(2):
-        result = quality.reuse_source_label_materialization(target, write=True, migrate=True)
+        result = quality.reuse_source_label_materialization(
+            target, write=True, migrate=True
+        )
         assert result["compact_diagnostic_status_counts"] == {"available": 1}
         assert (physical.read_bytes(), cpath.read_bytes()) == originals
         observed = consumer._auxiliary_result_semantics(tmp_path, target)
-        assert observed["status"] == "candidate_selected"  # primary selection remains independent
-        assert observed["compact_diagnostic_price_path"]["status_counts"] == {"available": 1}
-    assert not (lpath.parent/"revisions").exists()
+        assert (
+            observed["status"] == "candidate_selected"
+        )  # primary selection remains independent
+        assert observed["compact_diagnostic_price_path"]["status_counts"] == {
+            "available": 1
+        }
+    assert not (lpath.parent / "revisions").exists()
     projection = json.loads(quality.compact_diagnostic_path(target).read_bytes())
     projection["status_counts"] = {"available": 9}
     quality.compact_diagnostic_path(target).write_text(json.dumps(projection))
@@ -14087,43 +14474,64 @@ def test_compact_diagnostic_reuse_preserves_native_bytes_and_current_consumer(mo
     assert observed["compact_diagnostic_price_path"]["status"] == "source_invalid"
 
 
-def test_compact_diagnostic_publisher_and_consumer_reject_special_sources(monkeypatch, tmp_path):
+def test_compact_diagnostic_publisher_and_consumer_reject_special_sources(
+    monkeypatch, tmp_path
+):
     import os
     from src.engine.error_detectors import artifact_freshness as consumer
+
     target = "2026-09-17"
-    logical = tmp_path/"data/report/ai_decision_outcome_labels"/f"ai_decision_outcome_labels_{target}.json"
+    logical = (
+        tmp_path
+        / "data/report/ai_decision_outcome_labels"
+        / f"ai_decision_outcome_labels_{target}.json"
+    )
     logical.parent.mkdir(parents=True)
     os.mkfifo(logical)
     monkeypatch.setattr(quality, "label_report_path", lambda _: logical)
     with pytest.raises(ValueError, match="source_path_invalid"):
-        quality._publish_compact_diagnostic_price_path(target, _compact_price_diagnostic_fixture())
+        quality._publish_compact_diagnostic_price_path(
+            target, _compact_price_diagnostic_fixture()
+        )
     logical.with_suffix(".compact_diagnostic.json").write_text("{}")
-    assert consumer._compact_diagnostic_price_path_semantics(tmp_path, target)["status"] == "source_invalid"
+    assert (
+        consumer._compact_diagnostic_price_path_semantics(tmp_path, target)["status"]
+        == "source_invalid"
+    )
 
 
 def test_compact_diagnostic_late_gzip_alias_switch_fails_closed(monkeypatch, tmp_path):
     from src.engine.error_detectors import artifact_freshness as consumer
+
     target = "2026-09-17"
-    logical = tmp_path/"data/report/ai_decision_outcome_labels"/f"ai_decision_outcome_labels_{target}.json"
+    logical = (
+        tmp_path
+        / "data/report/ai_decision_outcome_labels"
+        / f"ai_decision_outcome_labels_{target}.json"
+    )
     logical.parent.mkdir(parents=True)
     labels = _compact_price_diagnostic_fixture()
     raw = json.dumps(labels).encode()
     logical.with_suffix(".json.gz").write_bytes(gzip.compress(raw, mtime=0))
     monkeypatch.setattr(quality, "label_report_path", lambda _: logical)
     original_write = quality._atomic_write_json
+
     def switch_after_publish(path, value):
         original_write(path, value)
         logical.write_bytes(raw)  # Same content, a different logical selection.
+
     monkeypatch.setattr(quality, "_atomic_write_json", switch_after_publish)
     with pytest.raises(ValueError, match="source_generation_changed"):
         quality._publish_compact_diagnostic_price_path(target, labels)
     logical.unlink()
     original_read = consumer._semantic_object
+
     def switch_after_projection(path, **kwargs):
         value = original_read(path, **kwargs)
         if path.name.endswith(".compact_diagnostic.json"):
             logical.write_bytes(raw)
         return value
+
     monkeypatch.setattr(consumer, "_semantic_object", switch_after_projection)
     observed = consumer._compact_diagnostic_price_path_semantics(tmp_path, target)
     assert observed["status"] == "source_invalid"
@@ -14131,26 +14539,63 @@ def test_compact_diagnostic_late_gzip_alias_switch_fails_closed(monkeypatch, tmp
 
 
 @pytest.mark.parametrize("compressed", [False, True])
-def test_source_label_revision_reuse_cas_and_original_bytes(monkeypatch, tmp_path, capsys, compressed):
+def test_source_label_revision_reuse_cas_and_original_bytes(
+    monkeypatch, tmp_path, capsys, compressed
+):
     target = "2026-09-17"
     cpath, lpath = tmp_path / "control.json", tmp_path / "labels.json"
     monkeypatch.setattr(quality, "control_path", lambda _: cpath)
     monkeypatch.setattr(quality, "label_report_path", lambda _: lpath)
-    inputs = {"generation_stable": True, "source_manifest_sha256": "a" * 64, "source_trace_count": 0, "source_outcome_count": 0}
-    monkeypatch.setattr(quality, "source_label_input_receipt", lambda _, **_kwargs: deepcopy(inputs))
-    control = {"schema": quality.CONTROL_SCHEMA, "target_date": target, "input_trace_count": 0, **quality.OFFLINE_CONTRACT}
+    inputs = {
+        "generation_stable": True,
+        "source_manifest_sha256": "a" * 64,
+        "source_trace_count": 0,
+        "source_outcome_count": 0,
+    }
+    monkeypatch.setattr(
+        quality, "source_label_input_receipt", lambda _, **_kwargs: deepcopy(inputs)
+    )
+    control = {
+        "schema": quality.CONTROL_SCHEMA,
+        "target_date": target,
+        "input_trace_count": 0,
+        **quality.OFFLINE_CONTRACT,
+    }
     control["control_manifest_sha256"] = quality._sha256(control)
-    labels = {"schema": quality.LABEL_REPORT_SCHEMA, "target_date": target, "labels": [], **quality.OFFLINE_CONTRACT}
-    cpath.write_text(json.dumps(control)); lpath.write_text(json.dumps(labels, indent=2))
+    labels = {
+        "schema": quality.LABEL_REPORT_SCHEMA,
+        "target_date": target,
+        "labels": [],
+        **quality.OFFLINE_CONTRACT,
+    }
+    cpath.write_text(json.dumps(control))
+    lpath.write_text(json.dumps(labels, indent=2))
     if compressed:
         import gzip
+
         compressed_path = lpath.with_suffix(".json.gz")
         compressed_path.write_bytes(gzip.compress(lpath.read_bytes(), mtime=0))
         lpath.unlink()
     raw = quality.existing_or_gzip_path(lpath).read_bytes()
     control_raw = cpath.read_bytes()
-    monkeypatch.setattr(quality, "_default_sources", lambda *_a, **_k: pytest.fail("unchanged frozen inputs cannot rescan"))
-    assert quality.main(["--date", target, "--mode", "postclose", "--reuse-materialized-labels", "--write"]) == 0
+    monkeypatch.setattr(
+        quality,
+        "_default_sources",
+        lambda *_a, **_k: pytest.fail("unchanged frozen inputs cannot rescan"),
+    )
+    assert (
+        quality.main(
+            [
+                "--date",
+                target,
+                "--mode",
+                "postclose",
+                "--reuse-materialized-labels",
+                "--write",
+            ]
+        )
+        == 0
+    )
     revisions = list((tmp_path / "revisions").glob("*.json*"))
     assert len(revisions) == 2
     assert {p.read_bytes() for p in revisions} == {raw, control_raw}
@@ -14158,43 +14603,92 @@ def test_source_label_revision_reuse_cas_and_original_bytes(monkeypatch, tmp_pat
     assert "unchanged_source_labels_reused" in capsys.readouterr().out
     before_rebind = lpath.read_bytes()
     inputs["implementation_sha256"] = "new_reviewed_custody_code"
-    assert quality.main(["--date", target, "--mode", "postclose", "--reuse-materialized-labels", "--write"]) == 0
+    assert (
+        quality.main(
+            [
+                "--date",
+                target,
+                "--mode",
+                "postclose",
+                "--reuse-materialized-labels",
+                "--write",
+            ]
+        )
+        == 0
+    )
     assert lpath.read_bytes() == before_rebind  # no diagnostic/label recalculation
-    reports = {"control": quality._load_json(cpath), "mature": quality._load_json(lpath)}
+    reports = {
+        "control": quality._load_json(cpath),
+        "mature": quality._load_json(lpath),
+    }
     with pytest.raises(ValueError, match="predecessor_changed"):
-        quality.write_source_label_materialization(target, reports, inputs=inputs, previous_label_sha256="b"*64)
-    changed = deepcopy(inputs); changed["source_manifest_sha256"] = "c"*64
+        quality.write_source_label_materialization(
+            target, reports, inputs=inputs, previous_label_sha256="b" * 64
+        )
+    changed = deepcopy(inputs)
+    changed["source_manifest_sha256"] = "c" * 64
     with pytest.raises(ValueError, match="generation_changed"):
         quality.write_source_label_materialization(target, reports, inputs=changed)
     reports["mature"]["labels"].append({"bad": True})
-    assert "label_report_hash_mismatch" in quality.validate_daily_materialization_reports(target_date=target, reports=reports)
+    assert (
+        "label_report_hash_mismatch"
+        in quality.validate_daily_materialization_reports(
+            target_date=target, reports=reports
+        )
+    )
 
 
-@pytest.mark.parametrize("mode", ["micro_reversion_source_bundle", "micro_reversion_materialize", "micro_reversion_execute"])
+@pytest.mark.parametrize(
+    "mode",
+    [
+        "micro_reversion_source_bundle",
+        "micro_reversion_materialize",
+        "micro_reversion_execute",
+    ],
+)
 def test_retired_r0_r3_modes_are_rejected_before_io(mode, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     with pytest.raises(SystemExit) as exc:
-        quality.main(["--date", "2026-09-17", "--mode", mode, "--write", "--execute-candidate"])
+        quality.main(
+            ["--date", "2026-09-17", "--mode", mode, "--write", "--execute-candidate"]
+        )
     assert exc.value.code == 2
     assert not list(tmp_path.iterdir())
 
 
-@pytest.mark.parametrize('promotion', [None, 'None', ' null ', [], [None], 123])
+@pytest.mark.parametrize("promotion", [None, "None", " null ", [], [None], 123])
 def test_correlation_cannot_join_placeholder_scanner_provenance(promotion):
-    label = {'stock_code': '005930', 'decision_stage': 'entry',
-             'decision_ts': '2026-10-02T10:00:00+09:00', 'scanner_promotion_id': promotion}
-    row = {'stock_code': '005930', 'timestamp': '2026-10-02T10:00:01+09:00',
-           'scanner_promotion_id': promotion, 'stage': 'ai_confirmed'}
+    label = {
+        "stock_code": "005930",
+        "decision_stage": "entry",
+        "decision_ts": "2026-10-02T10:00:00+09:00",
+        "scanner_promotion_id": promotion,
+    }
+    row = {
+        "stock_code": "005930",
+        "timestamp": "2026-10-02T10:00:01+09:00",
+        "scanner_promotion_id": promotion,
+        "stage": "ai_confirmed",
+    }
     result = quality._correlation(label, [row])
-    assert result['scanner_promotion_ids'] == []
-    assert result['status'] != 'exact_matched'
+    assert result["scanner_promotion_ids"] == []
+    assert result["status"] != "exact_matched"
 
 
 def test_correlation_native_trace_does_not_export_placeholder_scanner():
-    label = {'stock_code': '005930', 'decision_stage': 'entry',
-             'decision_ts': '2026-10-02T10:00:00+09:00', 'decision_trace_id': 'trace-native'}
-    row = {'stock_code': '005930', 'timestamp': '2026-10-02T10:00:01+09:00',
-           'decision_trace_id': 'trace-native', 'scanner_promotion_id': 'None', 'stage': 'ai_confirmed'}
+    label = {
+        "stock_code": "005930",
+        "decision_stage": "entry",
+        "decision_ts": "2026-10-02T10:00:00+09:00",
+        "decision_trace_id": "trace-native",
+    }
+    row = {
+        "stock_code": "005930",
+        "timestamp": "2026-10-02T10:00:01+09:00",
+        "decision_trace_id": "trace-native",
+        "scanner_promotion_id": "None",
+        "stage": "ai_confirmed",
+    }
     result = quality._correlation(label, [row])
-    assert result['status'] == 'exact_matched'
-    assert result['scanner_promotion_ids'] == []
+    assert result["status"] == "exact_matched"
+    assert result["scanner_promotion_ids"] == []

@@ -89,7 +89,9 @@ def _ticks():
         ("2026-09-21T16:04:44+09:00", "160438", "20260921160400", 6000),
     ],
 )
-def test_market_clock_tick_and_bar_ages_agree(clock, local_now, tick_time, bar_time, age_ms):
+def test_market_clock_tick_and_bar_ages_agree(
+    clock, local_now, tick_time, bar_time, age_ms
+):
     from src.engine.scalping_feature_packet import extract_scalping_feature_packet
 
     local = datetime.fromisoformat(local_now)
@@ -101,16 +103,22 @@ def test_market_clock_tick_and_bar_ages_agree(clock, local_now, tick_time, bar_t
     }[clock]
     ticks = [{**tick, "time": tick_time} for tick in _ticks()]
     packet = extract_scalping_feature_packet(
-        _ws_data(), ticks,
-        [{"source_timestamp": bar_time, "현재가": 10120}], now=now,
+        _ws_data(),
+        ticks,
+        [{"source_timestamp": bar_time, "현재가": 10120}],
+        now=now,
     )
     assert packet["tick_latest_age_ms"] == age_ms
     assert packet["tick_context_stale"] is (not 0 <= age_ms <= 5000)
     assert packet["minute_candle_window_fresh"] is True
-    assert packet["minute_candle_latest_age_ms"] == (61000 if tick_time == "235959" else 44000)
+    assert packet["minute_candle_latest_age_ms"] == (
+        61000 if tick_time == "235959" else 44000
+    )
     assert packet["quote_age_ms"] == 200
     assert packet["quote_stale"] is False
-    assert (packet["microstructure_reaction_context_status"] == "ok") is (0 <= age_ms <= 5000)
+    assert (packet["microstructure_reaction_context_status"] == "ok") is (
+        0 <= age_ms <= 5000
+    )
 
 
 def test_epoch_market_clock_does_not_depend_on_host_timezone(monkeypatch):
@@ -127,7 +135,8 @@ def test_epoch_market_clock_does_not_depend_on_host_timezone(monkeypatch):
             time.tzset()
             packet = extract_scalping_feature_packet(
                 _ws_data(last_realtime_type_ts={"0D": now.timestamp() - 0.2}),
-                _ticks(), [{"source_timestamp": "20260921090000", "현재가": 10120}],
+                _ticks(),
+                [{"source_timestamp": "20260921090000", "현재가": 10120}],
                 now=now.timestamp(),
             )
             assert packet["tick_latest_age_ms"] == 2000
@@ -465,20 +474,33 @@ def test_kiwoom_0b_signed_trade_volume_source_is_trusted_before_touch_fallback()
 
 
 def test_one_explicit_untrusted_volume_keeps_mixed_window_pressure_closed():
-    trusted = [{
-        "time": f"09:00:0{second}", "price": 10100,
-        "volume": 100, "volume_source": "15_abs",
-        "aggressor_side": "BUY",
-        "aggressor_source": "kiwoom_0b_signed_trade_volume",
-        "aggressor_quality": "signed_trade_volume_positive",
-    } for second in range(5, 0, -1)]
-    mixed = trusted + [{
-        **trusted[-1], "time": "09:00:00", "volume_source": "1030_1031_cumulative",
-    }]
+    trusted = [
+        {
+            "time": f"09:00:0{second}",
+            "price": 10100,
+            "volume": 100,
+            "volume_source": "15_abs",
+            "aggressor_side": "BUY",
+            "aggressor_source": "kiwoom_0b_signed_trade_volume",
+            "aggressor_quality": "signed_trade_volume_positive",
+        }
+        for second in range(5, 0, -1)
+    ]
+    mixed = trusted + [
+        {
+            **trusted[-1],
+            "time": "09:00:00",
+            "volume_source": "1030_1031_cumulative",
+        }
+    ]
     snapshot = precompute_microstructure_reaction_inputs(
-        _ws_data(), mixed, now=datetime.strptime("09:00:06", "%H:%M:%S"),
+        _ws_data(),
+        mixed,
+        now=datetime.strptime("09:00:06", "%H:%M:%S"),
     )
-    assert snapshot["tick_aggressor_source_counts"]["kiwoom_0b_signed_trade_volume"] == 6
+    assert (
+        snapshot["tick_aggressor_source_counts"]["kiwoom_0b_signed_trade_volume"] == 6
+    )
     assert snapshot["tick_aggressor_trusted_count"] == 0
     assert snapshot["tick_aggressor_pressure_usable"] is False
 
@@ -580,14 +602,22 @@ def test_reaction_quote_uses_0d_clock_over_carried_age_and_capture_clock():
     from src.engine.scalping.microstructure_reaction_context import _quote_age_ms
 
     now = datetime(2026, 9, 17, 14, 0)
-    age, _ = _quote_age_ms({
-        "last_realtime_type_ts": {"0D": now.timestamp() - 6},
-        "last_ws_update_ts": now.timestamp(), "quote_age_ms": 0,
-        "captured_at_ms": int(now.timestamp() * 1000),
-    }, now=now)
+    age, _ = _quote_age_ms(
+        {
+            "last_realtime_type_ts": {"0D": now.timestamp() - 6},
+            "last_ws_update_ts": now.timestamp(),
+            "quote_age_ms": 0,
+            "captured_at_ms": int(now.timestamp() * 1000),
+        },
+        now=now,
+    )
     assert age == 6000
-    age, _ = _quote_age_ms({
-        "last_realtime_type_ts": None, "quote_age_ms": 0,
-        "last_ws_update_ts": now.timestamp(),
-    }, now=now)
+    age, _ = _quote_age_ms(
+        {
+            "last_realtime_type_ts": None,
+            "quote_age_ms": 0,
+            "last_ws_update_ts": now.timestamp(),
+        },
+        now=now,
+    )
     assert age is None

@@ -301,7 +301,6 @@ def _normalize_stock_code(code) -> str:
     return kiwoom_utils.normalize_stock_code(code)
 
 
-
 def _collect_and_store_market_eligibility(
     db: DBManager,
     session,
@@ -402,11 +401,21 @@ def process_and_save_stock(code, token, session, is_nxt=False) -> pd.DataFrame:
         df["Code"] = code_str
         df["Name"] = basic_info.get("Name") or "이름없음"
         df["Marcap"] = basic_info.get("Marcap") or 0
-        metadata = basic_info.get('StrategyMetadata')
-        if isinstance(metadata, dict) and metadata.get('stock_code') == code_str:
+        metadata = basic_info.get("StrategyMetadata")
+        if isinstance(metadata, dict) and metadata.get("stock_code") == code_str:
             # Separate current snapshot, never backfill into historical rows.
-            from src.engine.scalping.mechanistic_entry_runtime_policy import _atomic_write_json
-            _atomic_write_json(PROJECT_ROOT / 'data' / 'runtime' / 'entry_strategy_metadata' / f'{code_str}.json', metadata)
+            from src.engine.scalping.mechanistic_entry_runtime_policy import (
+                _atomic_write_json,
+            )
+
+            _atomic_write_json(
+                PROJECT_ROOT
+                / "data"
+                / "runtime"
+                / "entry_strategy_metadata"
+                / f"{code_str}.json",
+                metadata,
+            )
 
         df["Is_NXT"] = bool(is_nxt)
 
@@ -547,13 +556,15 @@ def _upsert_daily_quote_batch(conn, frame: pd.DataFrame) -> int:
         raise ValueError("daily_quote_batch_unknown_columns")
     columns = [column for column in frame.columns if column not in keys]
     for start in range(0, len(frame), BULK_CHUNKSIZE):
-        chunk = frame.iloc[start:start + BULK_CHUNKSIZE].astype(object)
+        chunk = frame.iloc[start : start + BULK_CHUNKSIZE].astype(object)
         records = chunk.where(pd.notna(chunk), None).to_dict("records")
         statement = insert(table).values(records)
         if columns:
             statement = statement.on_conflict_do_update(
                 index_elements=keys,
-                set_={column: getattr(statement.excluded, column) for column in columns},
+                set_={
+                    column: getattr(statement.excluded, column) for column in columns
+                },
             )
         else:
             statement = statement.on_conflict_do_nothing(index_elements=keys)
@@ -655,19 +666,30 @@ def update_kospi_data():
     kospi_codes = []
     for raw_code in source_codes:
         identity = kiwoom_utils.kiwoom_stock_code_identity(raw_code)
-        removed = identity['is_equity_code'] and master_symbol_removed(identity['canonical_code'])
+        removed = identity["is_equity_code"] and master_symbol_removed(
+            identity["canonical_code"]
+        )
         if identity["is_equity_code"] and not removed:
             kospi_codes.append(identity["canonical_code"])
         else:
-            excluded_symbol_identities.append({
-                "raw_code": str(raw_code),
-                "canonical_code": identity["canonical_code"],
-                "reason": "operator_removed_from_master" if removed else "unsupported_equity_namespace",
-            })
+            excluded_symbol_identities.append(
+                {
+                    "raw_code": str(raw_code),
+                    "canonical_code": identity["canonical_code"],
+                    "reason": (
+                        "operator_removed_from_master"
+                        if removed
+                        else "unsupported_equity_namespace"
+                    ),
+                }
+            )
     kospi_codes = sorted(set(kospi_codes))
     if not kospi_codes:
-        return {"status": "failed", "reason": "supported_symbol_source_empty",
-                "excluded_symbol_identities": excluded_symbol_identities}
+        return {
+            "status": "failed",
+            "reason": "supported_symbol_source_empty",
+            "excluded_symbol_identities": excluded_symbol_identities,
+        }
     total_count = len(kospi_codes)
     successful_codes = []
     target_date = date.fromisoformat(_today_str())

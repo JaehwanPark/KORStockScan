@@ -1,4 +1,8 @@
-from src.utils.kiwoom_transport_telemetry import measured_http_call, record_decoded_response, demand as transport_demand
+from src.utils.kiwoom_transport_telemetry import (
+    measured_http_call,
+    record_decoded_response,
+    demand as transport_demand,
+)
 import os
 import sys
 import json
@@ -19,16 +23,16 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-_ENTRY_SOURCE_BUDGET = ContextVar('kiwoom_entry_source_budget', default=None)
+_ENTRY_SOURCE_BUDGET = ContextVar("kiwoom_entry_source_budget", default=None)
 
 
 def _entry_read_budget(api_id, request_class, request_owner):
     # Capacity preparation is the only account read owned by the entry worker.
     # Mandatory sizing, protection and order reads retain their own budgets.
-    if api_id.startswith('ka') or (
-        api_id == 'kt00011'
+    if api_id.startswith("ka") or (
+        api_id == "kt00011"
         and request_class == REQUEST_CLASS_SOURCE_ONLY
-        and request_owner == 'entry_capacity_prefetch'
+        and request_owner == "entry_capacity_prefetch"
     ):
         return _ENTRY_SOURCE_BUDGET.get()
     return None
@@ -49,8 +53,9 @@ def _source_budget_wait(seconds, budget):
     if budget is not None:
         budget.require()
         if budget.remaining() <= seconds:
-            raise ValueError('entry_machine_input_deadline_expired')
+            raise ValueError("entry_machine_input_deadline_expired")
     time.sleep(seconds)
+
 
 try:
     import fcntl
@@ -195,9 +200,13 @@ def _cache_get(namespace, key):
         entry = _MARKET_DATA_CACHE.get(cache_key)
         if not entry:
             return None
-        if (float(entry.get("expires_at", 0.0) or 0.0) <= now
-                or (namespace.startswith("ka10080") and
-                    (now < entry.get("created_at", now) or int(entry.get("created_at", now) // 60) != int(now // 60)))):
+        if float(entry.get("expires_at", 0.0) or 0.0) <= now or (
+            namespace.startswith("ka10080")
+            and (
+                now < entry.get("created_at", now)
+                or int(entry.get("created_at", now) // 60) != int(now // 60)
+            )
+        ):
             _MARKET_DATA_CACHE.pop(cache_key, None)
             return None
         return _cache_clone(entry.get("value"))
@@ -219,8 +228,8 @@ def _cache_set(namespace, key, value, ttl_sec):
     cache_key = (namespace, key)
     now = time.time()
     expires_at = now + float(ttl_sec)
-    if namespace == 'ka10080_minutes_with_meta' and meta.get('rest_received_ts_ms'):
-        expires_at = min(expires_at, float(meta['rest_received_ts_ms'])/1000 + 3.0)
+    if namespace == "ka10080_minutes_with_meta" and meta.get("rest_received_ts_ms"):
+        expires_at = min(expires_at, float(meta["rest_received_ts_ms"]) / 1000 + 3.0)
     if meta.get("read_response_cache_expires_at") is not None:
         expires_at = min(expires_at, float(meta["read_response_cache_expires_at"]))
     with _MARKET_DATA_CACHE_LOCK:
@@ -641,7 +650,7 @@ def _kiwoom_token_file_lock():
 # ==========================================
 # 1. API 설정 및 공통 유틸리티
 # ==========================================
-KIWOOM_BASE_URL_PROVENANCE = {'status':'unobserved'}
+KIWOOM_BASE_URL_PROVENANCE = {"status": "unobserved"}
 
 
 def get_kiwoom_base_url():
@@ -654,7 +663,7 @@ def get_kiwoom_base_url():
     global KIWOOM_BASE_URL_PROVENANCE
     # Clear the previous successful read before resolving a new generation.
     # This observer never changes the existing URL/fallback or token behavior.
-    KIWOOM_BASE_URL_PROVENANCE = {'status':'unobserved'}
+    KIWOOM_BASE_URL_PROVENANCE = {"status": "unobserved"}
     # GCP에는 dev_path가 있고, AWS에는 없으므로 알아서 분기됩니다!
     target_path = CONFIG_PATH if os.path.exists(CONFIG_PATH) else DEV_PATH
 
@@ -663,18 +672,26 @@ def get_kiwoom_base_url():
             conf = json.load(f)
             # config에 명시된 URL이 있으면 가져오고, 없으면 실투자 URL을 기본값으로 씁니다.
             base_url = conf.get("KIWOOM_BASE_URL", "https://api.kiwoom.com")
-            KIWOOM_BASE_URL_PROVENANCE = dict(status='observed',
-                origin=base_url if isinstance(base_url,str) and base_url in ('https://api.kiwoom.com','https://mockapi.kiwoom.com') else None,
-                explicit_origin=isinstance(conf.get('KIWOOM_BASE_URL'),str)
-                    and bool(conf['KIWOOM_BASE_URL'].strip()),
-                credential_present=isinstance(conf.get('KIWOOM_APPKEY'),str)
-                    and bool(conf['KIWOOM_APPKEY'].strip()))
+            KIWOOM_BASE_URL_PROVENANCE = dict(
+                status="observed",
+                origin=(
+                    base_url
+                    if isinstance(base_url, str)
+                    and base_url
+                    in ("https://api.kiwoom.com", "https://mockapi.kiwoom.com")
+                    else None
+                ),
+                explicit_origin=isinstance(conf.get("KIWOOM_BASE_URL"), str)
+                and bool(conf["KIWOOM_BASE_URL"].strip()),
+                credential_present=isinstance(conf.get("KIWOOM_APPKEY"), str)
+                and bool(conf["KIWOOM_APPKEY"].strip()),
+            )
             # Also called for each market-cache scope, not only at startup.
             # Successful resolution must be silent on both stdout and stderr;
             # keep reading the origin so cache isolation stays unchanged.
             return base_url
     except Exception as e:
-        KIWOOM_BASE_URL_PROVENANCE = {'status':'source_gap'}
+        KIWOOM_BASE_URL_PROVENANCE = {"status": "source_gap"}
         # Startup diagnostics must stay on stderr even if file logging fails.
         print(f"⚠️ 설정 로드 실패. 실투자 기본 URL로 폴백합니다: {e}", file=sys.stderr)
         return "https://api.kiwoom.com"
@@ -809,7 +826,15 @@ def _request_new_kiwoom_token(config: dict) -> tuple[str | None, dict]:
     headers = {"Content-Type": "application/json;charset=UTF-8"}
 
     try:
-        res = measured_http_call(requests.post, url, telemetry_owner='kiwoom_utils.oauth', telemetry_class='auth', headers=headers, json=params, timeout=5)
+        res = measured_http_call(
+            requests.post,
+            url,
+            telemetry_owner="kiwoom_utils.oauth",
+            telemetry_class="auth",
+            headers=headers,
+            json=params,
+            timeout=5,
+        )
 
         log_info(f"🔐 [TOKEN] 응답 코드: {res.status_code}")
         if res.status_code == 200:
@@ -1128,8 +1153,17 @@ def get_account_execution_snapshot_kt00008(token):
     return snapshot
 
 
-def get_orderable_by_margin_kt00011(token, code, unit_price=None, is_nxt=None, *, source_only=False,
-                                  source_read_rate_max_wait_sec=0.0, request_purpose=None, read_meta=None):
+def get_orderable_by_margin_kt00011(
+    token,
+    code,
+    unit_price=None,
+    is_nxt=None,
+    *,
+    source_only=False,
+    source_read_rate_max_wait_sec=0.0,
+    request_purpose=None,
+    read_meta=None,
+):
     """
     [kt00011] 증거금율별주문가능수량조회요청
     - 종목별 증거금율(stk_profa_rt), 계좌증거금율(profa_rt), 적용증거금율(aplc_rt)
@@ -1144,11 +1178,22 @@ def get_orderable_by_margin_kt00011(token, code, unit_price=None, is_nxt=None, *
         payload["uv"] = str(int(float(unit_price)))
 
     source_bounds = (
-        dict(max_retries=1, request_owner=request_purpose or "scale_in_budget_source",
-             request_class=REQUEST_CLASS_SOURCE_ONLY, request_code=req_code,
-             read_rate_max_wait_sec=max(0.0, min(DEFAULT_SOURCE_ONLY_MAX_WAIT_SEC,
-                 float(source_read_rate_max_wait_sec))), request_timeout=(0.15, 0.15))
-        if source_only else {}
+        dict(
+            max_retries=1,
+            request_owner=request_purpose or "scale_in_budget_source",
+            request_class=REQUEST_CLASS_SOURCE_ONLY,
+            request_code=req_code,
+            read_rate_max_wait_sec=max(
+                0.0,
+                min(
+                    DEFAULT_SOURCE_ONLY_MAX_WAIT_SEC,
+                    float(source_read_rate_max_wait_sec),
+                ),
+            ),
+            request_timeout=(0.15, 0.15),
+        )
+        if source_only
+        else {}
     )
     response = fetch_kiwoom_api_continuous(
         url=url,
@@ -1157,7 +1202,11 @@ def get_orderable_by_margin_kt00011(token, code, unit_price=None, is_nxt=None, *
         payload=payload,
         use_continuous=False,
         **({"return_meta": True} if source_only or isinstance(read_meta, dict) else {}),
-        **({"request_owner": request_purpose} if request_purpose and not source_only else {}),
+        **(
+            {"request_owner": request_purpose}
+            if request_purpose and not source_only
+            else {}
+        ),
         **source_bounds,
     )
     # A source-only admission deferral has no broker response. Keep it distinct
@@ -1168,15 +1217,31 @@ def get_orderable_by_margin_kt00011(token, code, unit_price=None, is_nxt=None, *
         results, source_meta = response, {}
     source_meta = source_meta if isinstance(source_meta, dict) else {}
     if isinstance(read_meta, dict):
-        read_meta.update({key: source_meta.get(key) for key in (
-            "request_attempt_count", "read_rate_control_status", "read_rate_control_reason",
-            "read_rate_control_waited_sec", "last_http_status_code",
-            "first_http_started_epoch", "last_http_started_epoch", "last_http_received_epoch",
-            "admission_attempt_count")})
+        read_meta.update(
+            {
+                key: source_meta.get(key)
+                for key in (
+                    "request_attempt_count",
+                    "read_rate_control_status",
+                    "read_rate_control_reason",
+                    "read_rate_control_waited_sec",
+                    "last_http_status_code",
+                    "first_http_started_epoch",
+                    "last_http_started_epoch",
+                    "last_http_received_epoch",
+                    "admission_attempt_count",
+                )
+            }
+        )
     if not results:
-        if (source_only and source_meta.get("read_rate_control_status") == "deferred"
-                and int(source_meta.get("request_attempt_count") or 0) == 0):
-            reason = str(source_meta.get("read_rate_control_reason") or "deferred").strip()
+        if (
+            source_only
+            and source_meta.get("read_rate_control_status") == "deferred"
+            and int(source_meta.get("request_attempt_count") or 0) == 0
+        ):
+            reason = str(
+                source_meta.get("read_rate_control_reason") or "deferred"
+            ).strip()
             return {"error": "kt00011_source_read_deferred:" + reason}
         return {}
 
@@ -2183,11 +2248,18 @@ def get_stock_eligibility_map_ka10099(
     page_count = 0
     market_source_meta: list[dict] = []
     snapshot_complete = True
-    bounds = (dict(max_retries=1, max_pages=8,
-                   request_owner="runtime_market_eligibility",
-                   request_class=REQUEST_CLASS_SOURCE_ONLY,
-                   read_rate_max_wait_sec=1.0, request_timeout=(1.0, 2.0))
-              if runtime_prepare else {})
+    bounds = (
+        dict(
+            max_retries=1,
+            max_pages=8,
+            request_owner="runtime_market_eligibility",
+            request_class=REQUEST_CLASS_SOURCE_ONLY,
+            read_rate_max_wait_sec=1.0,
+            request_timeout=(1.0, 2.0),
+        )
+        if runtime_prepare
+        else {}
+    )
     for mrkt_tp in requested_markets:
         fetched = fetch_kiwoom_api_continuous(
             url=url,
@@ -2219,14 +2291,20 @@ def get_stock_eligibility_map_ka10099(
         if runtime_prepare:
             # Runtime preparation cannot treat a missing code/list/meta envelope
             # or an empty whole-market result as a complete listing snapshot.
-            market_complete = market_complete and bool(source_meta) and all(
-                isinstance(response, dict)
-                and ("return_code" in response or "rt_cd" in response)
-                and isinstance(response.get("list"), list)
-                for response in responses)
+            market_complete = (
+                market_complete
+                and bool(source_meta)
+                and all(
+                    isinstance(response, dict)
+                    and ("return_code" in response or "rt_cd" in response)
+                    and isinstance(response.get("list"), list)
+                    for response in responses
+                )
+            )
             market_complete = market_complete and any(
                 isinstance(response, dict) and bool(response.get("list"))
-                for response in responses)
+                for response in responses
+            )
         if source_meta and source_meta.get("last_http_status_code") != 200:
             market_complete = False
         snapshot_complete = snapshot_complete and market_complete
@@ -2253,8 +2331,12 @@ def get_stock_eligibility_map_ka10099(
                 if not isinstance(item, dict):
                     continue
                 code = normalize_stock_code(item.get("code"))
-                if (not code or not code.isdigit() or len(code) != 6
-                        or (not all_listings and code not in requested_codes)):
+                if (
+                    not code
+                    or not code.isdigit()
+                    or len(code) != 6
+                    or (not all_listings and code not in requested_codes)
+                ):
                     continue
                 audit_info = str(item.get("auditInfo") or "").strip()
                 stock_state = str(item.get("state") or "").strip()
@@ -2267,7 +2349,8 @@ def get_stock_eligibility_map_ka10099(
                     True if nxt_enable == "Y" else False if nxt_enable == "N" else None
                 )
                 venue_fields = official_listing_venue_fields(
-                    item, trade_date=source_trade_date, nxt_eligible=nxt_eligible)
+                    item, trade_date=source_trade_date, nxt_eligible=nxt_eligible
+                )
                 raw_payload_sha256 = hashlib.sha256(
                     json.dumps(
                         item,
@@ -2293,16 +2376,19 @@ def get_stock_eligibility_map_ka10099(
                     "payload_sha256": raw_payload_sha256,
                 }
                 previous = result.get(code)
-                if previous is not None and ((runtime_prepare and previous.get("quality_state") == "CONFLICT") or any(
-                    previous.get(field) != snapshot.get(field)
-                    for field in (
-                        "nxt_eligible",
-                        "audit_info",
-                        "stock_state",
-                        "order_warning",
-                        "market_code",
+                if previous is not None and (
+                    (runtime_prepare and previous.get("quality_state") == "CONFLICT")
+                    or any(
+                        previous.get(field) != snapshot.get(field)
+                        for field in (
+                            "nxt_eligible",
+                            "audit_info",
+                            "stock_state",
+                            "order_warning",
+                            "market_code",
+                        )
                     )
-                )):
+                ):
                     snapshot["quality_state"] = "CONFLICT"
                     snapshot["eligible_venues_json"] = []
                     snapshot["blocked_reasons"] = list(
@@ -2375,8 +2461,11 @@ def get_stock_eligibility_map_ka10099(
         "official_upstream_commit": source_revision,
         "eligibility_source_revision": source_revision,
         "official_upstream_paths": [
-            ("kiwoom/_data/kiwoom_api_spec.json#종목정보-리스트-ka10099" if runtime_prepare
-             else "kiwoom_docs/종목정보.md#종목정보-리스트-ka10099"),
+            (
+                "kiwoom/_data/kiwoom_api_spec.json#종목정보-리스트-ka10099"
+                if runtime_prepare
+                else "kiwoom_docs/종목정보.md#종목정보-리스트-ka10099"
+            ),
             "kiwoom/specs.py",
         ],
     }
@@ -2405,16 +2494,33 @@ def get_basic_info_ka10001(token, code):
     # official ka10001.mac unit (100 million KRW), captured at retrieval time.
     # It must never be projected into earlier daily rows as an as-of fact.
     market_cap_snapshot = None
-    if marcap > 0 and str(data.get('return_code', '0')) == '0':
-        observed = datetime.now(ZoneInfo('Asia/Seoul')).isoformat()
-        source = {'api_id': 'ka10001', 'stock_code': str(code).split('_')[0],
-                  'mac': str(raw_mac), 'unit': '100000000_KRW', 'observed_at': observed}
-        market_cap_snapshot = dict(observed_at=observed, stock_code=source['stock_code'],
-            market_cap=dict(value=marcap * 100_000_000, unit='KRW', known_at=observed,
-                effective_at=observed, source_sha256=hashlib.sha256(json.dumps(source,
-                    sort_keys=True, separators=(',', ':'), ensure_ascii=True).encode()).hexdigest(),
-                corporate_action_consistent=True, adjustment_basis='reported_market_cap_no_price_or_share_splice'),
-            source=source)
+    if marcap > 0 and str(data.get("return_code", "0")) == "0":
+        observed = datetime.now(ZoneInfo("Asia/Seoul")).isoformat()
+        source = {
+            "api_id": "ka10001",
+            "stock_code": str(code).split("_")[0],
+            "mac": str(raw_mac),
+            "unit": "100000000_KRW",
+            "observed_at": observed,
+        }
+        market_cap_snapshot = dict(
+            observed_at=observed,
+            stock_code=source["stock_code"],
+            market_cap=dict(
+                value=marcap * 100_000_000,
+                unit="KRW",
+                known_at=observed,
+                effective_at=observed,
+                source_sha256=hashlib.sha256(
+                    json.dumps(
+                        source, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+                    ).encode()
+                ).hexdigest(),
+                corporate_action_consistent=True,
+                adjustment_basis="reported_market_cap_no_price_or_share_splice",
+            ),
+            source=source,
+        )
     return {
         "Name": name,
         "Marcap": marcap,
@@ -2675,16 +2781,24 @@ def get_item_info_ka10100(token, code):
 def get_index_twenty_day_regime_ka20006(token, *, base_date=None):
     """Official chart contract, distinct from the existing two-value helper."""
     from src.trading.market.index_regime import index_regime
-    base_date = base_date or datetime.now().strftime('%Y%m%d')
+
+    base_date = base_date or datetime.now().strftime("%Y%m%d")
     responses = fetch_kiwoom_api_continuous(
-        url=get_api_url('/api/dostk/chart'), token=token, api_id='ka20006',
-        payload={'inds_cd':'001','base_dt':base_date}, use_continuous=False,
-        request_owner='signal_radar_market_regime_fallback',
-        request_class=REQUEST_CLASS_RUNTIME_REQUIRED, request_code='001')
-    if not responses or str(responses[0].get('return_code')) != '0':
-        raise ValueError('index_source_missing_or_failed')
-    result=index_regime(responses[0].get('inds_dt_pole_qry'),base_date=base_date,scale=100.)
-    return dict(result, source='kiwoom_ka20006', fetched_epoch=time.time())
+        url=get_api_url("/api/dostk/chart"),
+        token=token,
+        api_id="ka20006",
+        payload={"inds_cd": "001", "base_dt": base_date},
+        use_continuous=False,
+        request_owner="signal_radar_market_regime_fallback",
+        request_class=REQUEST_CLASS_RUNTIME_REQUIRED,
+        request_code="001",
+    )
+    if not responses or str(responses[0].get("return_code")) != "0":
+        raise ValueError("index_source_missing_or_failed")
+    result = index_regime(
+        responses[0].get("inds_dt_pole_qry"), base_date=base_date, scale=100.0
+    )
+    return dict(result, source="kiwoom_ka20006", fetched_epoch=time.time())
 
 
 def get_index_daily_ka20006(token, inds_cd="001"):
@@ -3394,8 +3508,6 @@ def _pred_pre_signal_direction(value):
     return "unknown"
 
 
-
-
 def rank_change_sign_diagnostics(rank_change_sign, rank_change):
     sign = str(rank_change_sign or "").strip()
     try:
@@ -3986,7 +4098,9 @@ def get_stock_orderbook_ka10004(
     snapshot["rest_age_ms"] = math.ceil(age) if age is not None else None
     snapshot["age_ms"] = snapshot["rest_age_ms"]
     stamp = source_meta.get("rest_received_ts_ms")
-    snapshot["rest_received_ts"] = stamp / 1000.0 if type(stamp) is int and stamp > 0 else None
+    snapshot["rest_received_ts"] = (
+        stamp / 1000.0 if type(stamp) is int and stamp > 0 else None
+    )
     return (snapshot, source_meta) if return_meta else snapshot
 
 
@@ -4144,20 +4258,36 @@ def get_vi_triggered_ka10054(token, mrkt_tp="000", limit=60):
 
 
 def get_zero_base_volume_surge_ka10023(
-    token, *, mrkt_tp, stex_tp, request_owner="zero_base_activity_panel",
-    request_class=REQUEST_CLASS_SOURCE_ONLY, read_rate_max_wait_sec=3.0,
+    token,
+    *,
+    mrkt_tp,
+    stex_tp,
+    request_owner="zero_base_activity_panel",
+    request_class=REQUEST_CLASS_SOURCE_ONLY,
+    read_rate_max_wait_sec=3.0,
 ):
     """Bounded, source-only volume-surge discovery; never a live trade receipt."""
     payload = {
-        "mrkt_tp": str(mrkt_tp), "sort_tp": "1", "tm_tp": "1",
-        "tm": "1", "trde_qty_tp": "5", "stk_cnd": "4",
-        "pric_tp": "0", "stex_tp": str(stex_tp),
+        "mrkt_tp": str(mrkt_tp),
+        "sort_tp": "1",
+        "tm_tp": "1",
+        "tm": "1",
+        "trde_qty_tp": "5",
+        "stk_cnd": "4",
+        "pric_tp": "0",
+        "stex_tp": str(stex_tp),
     }
     results, meta = fetch_kiwoom_api_continuous(
-        url=get_api_url("/api/dostk/rkinfo"), token=token, api_id="ka10023",
-        payload=payload, use_continuous=False, return_meta=True,
-        request_owner=request_owner, request_class=request_class,
-        request_code="not_applicable", read_rate_max_wait_sec=read_rate_max_wait_sec,
+        url=get_api_url("/api/dostk/rkinfo"),
+        token=token,
+        api_id="ka10023",
+        payload=payload,
+        use_continuous=False,
+        return_meta=True,
+        request_owner=request_owner,
+        request_class=request_class,
+        request_code="not_applicable",
+        read_rate_max_wait_sec=read_rate_max_wait_sec,
     )
     meta = dict(meta) if isinstance(meta, dict) else {}
     response_codes = []
@@ -4172,15 +4302,22 @@ def get_zero_base_volume_surge_ka10023(
     meta["response_return_codes"] = response_codes
     meta["response_contract_status"] = (
         "verified_success"
-        if isinstance(results, list) and len(results) == len(response_codes)
-        and bool(response_codes) and all(code == "0" for code in response_codes)
-        else "verified_rejected" if response_codes and any(code != "0" for code in response_codes)
-        else "unverified"
+        if isinstance(results, list)
+        and len(results) == len(response_codes)
+        and bool(response_codes)
+        and all(code == "0" for code in response_codes)
+        else (
+            "verified_rejected"
+            if response_codes and any(code != "0" for code in response_codes)
+            else "unverified"
+        )
     )
     rows = []
     if meta["response_contract_status"] == "verified_success":
         for response in results:
-            for source_rank, item in enumerate(response.get("trde_qty_sdnin", []) or [], 1):
+            for source_rank, item in enumerate(
+                response.get("trde_qty_sdnin", []) or [], 1
+            ):
                 if not isinstance(item, dict):
                     continue
                 code_fields = _scanner_equity_code_fields(item.get("stk_cd"), "ka10023")
@@ -4191,14 +4328,18 @@ def get_zero_base_volume_surge_ka10023(
                 price = _scanner_to_int(item.get("cur_prc"))
                 if not name or not is_valid_stock(code, name, current_price=price):
                     continue
-                rows.append({
-                    **code_fields, "Name": name, "Price": price,
-                    "ChangeRate": _scanner_to_signed_float(item.get("flu_rt")),
-                    "Volume": _scanner_to_int(item.get("now_trde_qty")),
-                    "SurgeQty": _scanner_to_signed_int(item.get("sdnin_qty")),
-                    "PreSig": item.get("pred_pre_sig"),
-                    "SourceRank": source_rank,
-                })
+                rows.append(
+                    {
+                        **code_fields,
+                        "Name": name,
+                        "Price": price,
+                        "ChangeRate": _scanner_to_signed_float(item.get("flu_rt")),
+                        "Volume": _scanner_to_int(item.get("now_trde_qty")),
+                        "SurgeQty": _scanner_to_signed_int(item.get("sdnin_qty")),
+                        "PreSig": item.get("pred_pre_sig"),
+                        "SourceRank": source_rank,
+                    }
+                )
                 if len(rows) >= 200:
                     return rows, meta
     return rows, meta
@@ -4428,15 +4569,21 @@ def get_program_flow_realtime(token, code, ws_data=None):
     """실시간 프로그램 수급은 WS '0w'를 우선, 없으면 ka90008 전일 스냅샷으로 fallback."""
     ws_data = ws_data or {}
     request_code = get_effective_kiwoom_code(code)
-    stamp = (ws_data.get('last_realtime_type_ts') or {}).get('0w')
-    item = (ws_data.get('last_realtime_type_item') or {}).get('0w')
-    age = (time.time()-stamp)*1000 if type(stamp) in (int,float) else None
+    stamp = (ws_data.get("last_realtime_type_ts") or {}).get("0w")
+    item = (ws_data.get("last_realtime_type_item") or {}).get("0w")
+    age = (time.time() - stamp) * 1000 if type(stamp) in (int, float) else None
     # Missing provenance is unavailable, never refreshed by a current 0B tick.
-    has_ws_program = (item == request_code and age is not None and 0 <= age <= 60000
-        and type(ws_data.get('market_data_transport_epoch')) is int
-        and ws_data['market_data_transport_epoch'] > 0
-        and (ws_data.get('last_realtime_type_transport_epoch') or {}).get('0w') == ws_data['market_data_transport_epoch']
-        and not ws_data.get('source_conflict') and not ws_data.get('price_conflict'))
+    has_ws_program = (
+        item == request_code
+        and age is not None
+        and 0 <= age <= 60000
+        and type(ws_data.get("market_data_transport_epoch")) is int
+        and ws_data["market_data_transport_epoch"] > 0
+        and (ws_data.get("last_realtime_type_transport_epoch") or {}).get("0w")
+        == ws_data["market_data_transport_epoch"]
+        and not ws_data.get("source_conflict")
+        and not ws_data.get("price_conflict")
+    )
     if has_ws_program:
         net_qty = int(ws_data.get("prog_net_qty", 0) or 0)
         delta_qty = int(ws_data.get("prog_delta_qty", 0) or 0)
@@ -4572,8 +4719,9 @@ def check_execution_strength_ka10046(token, code):
     )
 
 
-def _rest_trade_rows_at_consume(rows, *, api_id, request_code, request_owner,
-                                request_class, reuse=False):
+def _rest_trade_rows_at_consume(
+    rows, *, api_id, request_code, request_owner, request_class, reuse=False
+):
     """Keep original receive clocks and separate consumer purpose from fetch."""
     from src.trading.market.quote_consistency import build_rest_market_data_health
 
@@ -4582,8 +4730,11 @@ def _rest_trade_rows_at_consume(rows, *, api_id, request_code, request_owner,
     for row in consumed:
         meta = row.get("_kiwoom_source_meta", {})
         row["market_data_health"] = build_rest_market_data_health(
-            {"stk_cd": row.get("response_item_raw")}, api_id=api_id,
-            request_code=request_code, source_meta=meta, now_ts=now_ts,
+            {"stk_cd": row.get("response_item_raw")},
+            api_id=api_id,
+            request_code=request_code,
+            source_meta=meta,
+            now_ts=now_ts,
         )
         row["market_data_consumer_receipt"] = {
             "request_owner": request_owner,
@@ -4600,18 +4751,29 @@ def _rest_trade_rows_cacheable(rows, source_meta, data):
         return False
     if str(data.get("return_code", data.get("rt_cd", ""))) != "0":
         return False
-    if (source_meta.get("read_rate_control_status") == "deferred"
-            or source_meta.get("read_singleflight_status") == "deferred"
-            or source_meta.get("rate_limit_retry_exhausted") is True):
+    if (
+        source_meta.get("read_rate_control_status") == "deferred"
+        or source_meta.get("read_singleflight_status") == "deferred"
+        or source_meta.get("rate_limit_retry_exhausted") is True
+    ):
         return False
     receipt = rows[0]["market_data_health"]["rest_input"]
     age = receipt["response_receive_age_ms"]
-    return (age is not None and math.isfinite(age) and age >= 0
-            and receipt["receipt_binding_proven"])
+    return (
+        age is not None
+        and math.isfinite(age)
+        and age >= 0
+        and receipt["receipt_binding_proven"]
+    )
 
 
 def get_tick_history_ka10003(
-    token, code, limit=10, *, request_owner=None, request_class=None,
+    token,
+    code,
+    limit=10,
+    *,
+    request_owner=None,
+    request_class=None,
     explicit_request_code=False,
 ):
     """
@@ -4634,8 +4796,12 @@ def get_tick_history_ka10003(
     if cached is not None:
         transport_demand("ka10003", "cache_http0")
         return _rest_trade_rows_at_consume(
-            cached, api_id="ka10003", request_code=str(req_code),
-            request_owner=request_owner, request_class=request_class, reuse=True,
+            cached,
+            api_id="ka10003",
+            request_code=str(req_code),
+            request_owner=request_owner,
+            request_class=request_class,
+            reuse=True,
         )
 
     url = get_api_url("/api/dostk/stkinfo")
@@ -4648,10 +4814,19 @@ def get_tick_history_ka10003(
     if request_class is not None:
         purpose["request_class"] = request_class
     fetched = fetch_kiwoom_api_continuous(
-        url=url, token=token, api_id="ka10003", payload=payload, use_continuous=False,
-        return_meta=True, **purpose,
+        url=url,
+        token=token,
+        api_id="ka10003",
+        payload=payload,
+        use_continuous=False,
+        return_meta=True,
+        **purpose,
     )
-    if isinstance(fetched, tuple) and len(fetched) == 2 and isinstance(fetched[1], dict):
+    if (
+        isinstance(fetched, tuple)
+        and len(fetched) == 2
+        and isinstance(fetched[1], dict)
+    ):
         results, source_meta = fetched
     else:
         results, source_meta = fetched, _empty_kiwoom_source_meta("ka10003")
@@ -4723,15 +4898,21 @@ def get_tick_history_ka10003(
                     "provider_trade_time_raw": item.get("tm"),
                     "provider_trade_epoch": None,
                     "market_data_health": build_rest_market_data_health(
-                        data, api_id="ka10003", request_code=str(req_code),
-                        source_meta=source_meta, now_ts=time.time(),
+                        data,
+                        api_id="ka10003",
+                        request_code=str(req_code),
+                        source_meta=source_meta,
+                        now_ts=time.time(),
                     ),
                 }
             )
 
     ticks = _rest_trade_rows_at_consume(
-        ticks, api_id="ka10003", request_code=str(req_code),
-        request_owner=request_owner, request_class=request_class,
+        ticks,
+        api_id="ka10003",
+        request_code=str(req_code),
+        request_owner=request_owner,
+        request_class=request_class,
     )
     if not ticks or not _rest_trade_rows_cacheable(ticks, source_meta, data):
         return ticks
@@ -4950,7 +5131,9 @@ def compute_buy_dominance_from_ka10003_entries(
     }
 
 
-def get_recent_signed_trades_ka10084(token, code, limit=10, tm="", *, request_owner=None, request_class=None):
+def get_recent_signed_trades_ka10084(
+    token, code, limit=10, tm="", *, request_owner=None, request_class=None
+):
     """
     [ka10084] 당일전일체결요청.
 
@@ -4971,8 +5154,12 @@ def get_recent_signed_trades_ka10084(token, code, limit=10, tm="", *, request_ow
     cached = _cache_get("ka10084_signed_trades", cache_key)
     if cached is not None:
         return _rest_trade_rows_at_consume(
-            cached, api_id="ka10084", request_code=str(req_code),
-            request_owner=request_owner, request_class=request_class, reuse=True,
+            cached,
+            api_id="ka10084",
+            request_code=str(req_code),
+            request_owner=request_owner,
+            request_class=request_class,
+            reuse=True,
         )
 
     url = get_api_url("/api/dostk/stkinfo")
@@ -4993,9 +5180,14 @@ def get_recent_signed_trades_ka10084(token, code, limit=10, tm="", *, request_ow
         api_id="ka10084",
         payload=payload,
         use_continuous=False,
-        return_meta=True, **purpose,
+        return_meta=True,
+        **purpose,
     )
-    if isinstance(fetched, tuple) and len(fetched) == 2 and isinstance(fetched[1], dict):
+    if (
+        isinstance(fetched, tuple)
+        and len(fetched) == 2
+        and isinstance(fetched[1], dict)
+    ):
         results, meta = fetched
     else:
         results, meta = fetched, _empty_kiwoom_source_meta("ka10084")
@@ -5038,8 +5230,11 @@ def get_recent_signed_trades_ka10084(token, code, limit=10, tm="", *, request_ow
                         "provider_trade_time_raw": item.get("tm"),
                         "provider_trade_epoch": None,
                         "market_data_health": build_rest_market_data_health(
-                            results[0], api_id="ka10084", request_code=str(req_code),
-                            source_meta=meta, now_ts=time.time(),
+                            results[0],
+                            api_id="ka10084",
+                            request_code=str(req_code),
+                            source_meta=meta,
+                            now_ts=time.time(),
                         ),
                         "strength": item.get("cntr_str"),
                         "acc_vol": abs(_parse_signed_int(item.get("acc_trde_qty"), 0)),
@@ -5048,8 +5243,11 @@ def get_recent_signed_trades_ka10084(token, code, limit=10, tm="", *, request_ow
                 )
 
     rows = _rest_trade_rows_at_consume(
-        rows, api_id="ka10084", request_code=str(req_code),
-        request_owner=request_owner, request_class=request_class,
+        rows,
+        api_id="ka10084",
+        request_code=str(req_code),
+        request_owner=request_owner,
+        request_class=request_class,
     )
     if not rows or not _rest_trade_rows_cacheable(rows, meta, results[0]):
         return rows
@@ -5099,24 +5297,44 @@ def get_minute_candles_ka10080_with_meta(
         raise ValueError("base_dt must use YYYYMMDD")
     # The latest completed-minute cutoff is part of the source contract. A
     # five-second cache must not cross a new completed bar or a clock rollback.
-    cache_key = (str(req_code), int(limit), request_base_dt, int(time.time() // 60), bool(include_forming))
+    cache_key = (
+        str(req_code),
+        int(limit),
+        request_base_dt,
+        int(time.time() // 60),
+        bool(include_forming),
+    )
     cache_key = (_market_data_cache_scope(token), cache_key)
     cached = _cache_get("ka10080_minutes_with_meta", cache_key)
     if cached is not None:
         rows, meta = cached
-        meta.update(read_response_cache_status='hit',
-                    read_response_cache_caller_http_attempt_count=0,
-                    read_singleflight_caller_http_attempt_count=0)
-        if meta.get('shared_history_revision_sha256'):
-            meta['shared_history_reused'] = True
+        meta.update(
+            read_response_cache_status="hit",
+            read_response_cache_caller_http_attempt_count=0,
+            read_singleflight_caller_http_attempt_count=0,
+        )
+        if meta.get("shared_history_revision_sha256"):
+            meta["shared_history_reused"] = True
         return rows, meta
 
     from src.trading.market import completed_history
     from src.trading.market.session_contract import resolve_market_session
-    history_key = completed_history.key(_market_data_cache_scope(token), str(req_code), request_base_dt,
-        resolve_market_session(datetime.fromtimestamp(time.time(), _KST)).session_regime)
-    shared = completed_history.read(DATA_DIR, history_key, now=time.time(),
-                                    limit=int(limit), include_forming=include_forming)
+
+    history_key = completed_history.key(
+        _market_data_cache_scope(token),
+        str(req_code),
+        request_base_dt,
+        resolve_market_session(
+            datetime.fromtimestamp(time.time(), _KST)
+        ).session_regime,
+    )
+    shared = completed_history.read(
+        DATA_DIR,
+        history_key,
+        now=time.time(),
+        limit=int(limit),
+        include_forming=include_forming,
+    )
     if shared is not None:
         return shared
 
@@ -5197,23 +5415,38 @@ def get_minute_candles_ka10080_with_meta(
                 }
             )
 
-    if refined_candles and not (source_meta.get('continuous_next_key_missing')
-            or source_meta.get('rate_limit_detected')
-            or source_meta.get('read_rate_control_status') == 'deferred'):
+    if refined_candles and not (
+        source_meta.get("continuous_next_key_missing")
+        or source_meta.get("rate_limit_detected")
+        or source_meta.get("read_rate_control_status") == "deferred"
+    ):
         try:
-            published = completed_history.publish(DATA_DIR, history_key,
-                refined_candles[-completed_history.MAX_ROWS:], source_meta, now=time.time(),
-                consumption_receipt=source_meta)
-            source_meta['shared_history_publication'] = 'published' if published else 'not_eligible'
+            published = completed_history.publish(
+                DATA_DIR,
+                history_key,
+                refined_candles[-completed_history.MAX_ROWS :],
+                source_meta,
+                now=time.time(),
+                consumption_receipt=source_meta,
+            )
+            source_meta["shared_history_publication"] = (
+                "published" if published else "not_eligible"
+            )
         except (OSError, ValueError, TypeError, sqlite3.Error) as exc:
-            source_meta['shared_history_publication'] = 'unavailable:' + type(exc).__name__
+            source_meta["shared_history_publication"] = (
+                "unavailable:" + type(exc).__name__
+            )
     if not include_forming:
-        cutoff = datetime.fromtimestamp(time.time(), _KST).strftime('%Y%m%d%H%M00')
-        refined_candles = [r for r in refined_candles if r['source_timestamp'] < cutoff]
-    refined_candles = refined_candles[-int(limit or len(refined_candles) or 1):]
-    if (not refined_candles or source_meta.get('truncated_window')
-            or source_meta.get('continuous_next_key_missing') or source_meta.get('rate_limit_detected')
-            or source_meta.get('read_rate_control_status') == 'deferred'):
+        cutoff = datetime.fromtimestamp(time.time(), _KST).strftime("%Y%m%d%H%M00")
+        refined_candles = [r for r in refined_candles if r["source_timestamp"] < cutoff]
+    refined_candles = refined_candles[-int(limit or len(refined_candles) or 1) :]
+    if (
+        not refined_candles
+        or source_meta.get("truncated_window")
+        or source_meta.get("continuous_next_key_missing")
+        or source_meta.get("rate_limit_detected")
+        or source_meta.get("read_rate_control_status") == "deferred"
+    ):
         return refined_candles, source_meta
     return _cache_set(
         "ka10080_minutes_with_meta",
@@ -5332,7 +5565,11 @@ def fetch_kiwoom_api_continuous(
         "api_id": api_id,
         "payload": frozen_payload,
         "date": datetime.now(_KST).date().isoformat(),
-        **({"completed_minute_cutoff": int(time.time() // 60)} if api_id == 'ka10080' else {}),
+        **(
+            {"completed_minute_cutoff": int(time.time() // 60)}
+            if api_id == "ka10080"
+            else {}
+        ),
         "request_class": request_class,
         "request_code": request_code,
         "max_retries": max_retries,
@@ -5359,6 +5596,7 @@ def fetch_kiwoom_api_continuous(
     if budget is not None:
         wait_sec = min(wait_sec, budget.remaining())
     try:
+
         def fetch_market_read():
             # The wire key excludes caller-side slicing (10 vs 120 bars) but
             # retains route, date, priority, continuation and request bounds.
@@ -5371,16 +5609,25 @@ def fetch_kiwoom_api_continuous(
             started = time.time()
             result = _fetch_kiwoom_api_continuous_transport(**kwargs)
             results, meta = result
-            if (api_id == "ka10080" and results
-                    and all(isinstance(row, dict) and str(row.get("return_code")) == "0" for row in results)
-                    and type(meta.get("rest_received_ts_ms")) is int
-                    and 0 < meta["rest_received_ts_ms"] <= int(time.time() * 1000)
-                    and meta.get("read_rate_control_status") == "admitted"
-                    and not meta.get("continuous_next_key_missing")
-                    and not meta.get("continuous_page_limit_reached")
-                    and not meta.get("rate_limit_detected")
-                    and int(started // 60) == int(time.time() // 60)):
-                ttl = min(3.0, float(getattr(TRADING_RULES, "KIWOOM_MINUTE_CACHE_TTL_SEC", 3.0)))
+            if (
+                api_id == "ka10080"
+                and results
+                and all(
+                    isinstance(row, dict) and str(row.get("return_code")) == "0"
+                    for row in results
+                )
+                and type(meta.get("rest_received_ts_ms")) is int
+                and 0 < meta["rest_received_ts_ms"] <= int(time.time() * 1000)
+                and meta.get("read_rate_control_status") == "admitted"
+                and not meta.get("continuous_next_key_missing")
+                and not meta.get("continuous_page_limit_reached")
+                and not meta.get("rate_limit_detected")
+                and int(started // 60) == int(time.time() // 60)
+            ):
+                ttl = min(
+                    3.0,
+                    float(getattr(TRADING_RULES, "KIWOOM_MINUTE_CACHE_TTL_SEC", 3.0)),
+                )
                 # Preserve the existing post-fetch normalized-cache window;
                 # a later raw-cache consumer may not start another TTL.
                 meta["read_response_cache_expires_at"] = time.time() + ttl
@@ -5388,19 +5635,34 @@ def fetch_kiwoom_api_continuous(
                 _cache_set("ka10080_transport", key, result, ttl)
             return result
 
-        shared_scope = {name: value for name, value in scope.items() if name != "coordinator"}
-        shared_key = hashlib.sha256(json.dumps(shared_scope, sort_keys=True,
-                                               allow_nan=False).encode()).hexdigest()
+        shared_scope = {
+            name: value for name, value in scope.items() if name != "coordinator"
+        }
+        shared_key = hashlib.sha256(
+            json.dumps(shared_scope, sort_keys=True, allow_nan=False).encode()
+        ).hexdigest()
 
         def scoped_market_read():
-            if (api_id == "ka10080" and request_class == REQUEST_CLASS_SOURCE_ONLY
-                    and read_rate_coordinator is None):
+            if (
+                api_id == "ka10080"
+                and request_class == REQUEST_CLASS_SOURCE_ONLY
+                and read_rate_coordinator is None
+            ):
+
                 def stable_scope_fetch():
                     value = fetch_market_read()
-                    if hashlib.sha256(str(resolve_kiwoom_request_token(token)).encode()).hexdigest() != scope["token_digest"]:
+                    if (
+                        hashlib.sha256(
+                            str(resolve_kiwoom_request_token(token)).encode()
+                        ).hexdigest()
+                        != scope["token_digest"]
+                    ):
                         value[1]["read_shared_cache_scope_changed"] = True
                     return value
-                return _SHARED_CANDLE_READ.run(shared_key, stable_scope_fetch, wait_sec=wait_sec)
+
+                return _SHARED_CANDLE_READ.run(
+                    shared_key, stable_scope_fetch, wait_sec=wait_sec
+                )
             return fetch_market_read()
 
         (results, meta), joined, elapsed = _MARKET_READ_SINGLE_FLIGHT.run(
@@ -5433,7 +5695,9 @@ def fetch_kiwoom_api_continuous(
             "read_singleflight_status": "joined" if joined else "owner",
             "read_singleflight_waited_sec": round(elapsed, 6) if joined else 0.0,
             "read_singleflight_caller_http_attempt_count": (
-                0 if joined or meta.get("read_response_cache_status") == "hit" else meta.get("request_attempt_count", 0)
+                0
+                if joined or meta.get("read_response_cache_status") == "hit"
+                else meta.get("request_attempt_count", 0)
             ),
             "transport_request_owner": meta.get("request_owner"),
             "request_owner": str(request_owner or f"kiwoom_utils.{api_id}"),
@@ -5470,6 +5734,7 @@ def _fetch_kiwoom_api_continuous_transport(
     """
     all_results = []
     import uuid
+
     max_attempts = max(1, int(max_retries))
     meta = _empty_kiwoom_source_meta(api_id)
     meta["logical_request_id"] = uuid.uuid4().hex
@@ -5514,7 +5779,9 @@ def _fetch_kiwoom_api_continuous_transport(
             current_failure_kind = ""
             current_failure_detail = ""
             if api_id == "kt00011":
-                meta["admission_attempt_count"] = int(meta.get("admission_attempt_count") or 0) + 1
+                meta["admission_attempt_count"] = (
+                    int(meta.get("admission_attempt_count") or 0) + 1
+                )
             admission = coordinator.acquire(
                 token=active_token,
                 endpoint=url,
@@ -5522,10 +5789,22 @@ def _fetch_kiwoom_api_continuous_transport(
                 request_class=request_class,
                 api_id=api_id,
                 request_code=normalized_request_code,
-                max_wait_sec=(min(float(read_rate_max_wait_sec) if read_rate_max_wait_sec is not None
-                                  else DEFAULT_SOURCE_ONLY_MAX_WAIT_SEC if request_class == REQUEST_CLASS_SOURCE_ONLY
-                                  else DEFAULT_REQUIRED_MAX_WAIT_SEC, budget.remaining())
-                              if budget is not None else read_rate_max_wait_sec),
+                max_wait_sec=(
+                    min(
+                        (
+                            float(read_rate_max_wait_sec)
+                            if read_rate_max_wait_sec is not None
+                            else (
+                                DEFAULT_SOURCE_ONLY_MAX_WAIT_SEC
+                                if request_class == REQUEST_CLASS_SOURCE_ONLY
+                                else DEFAULT_REQUIRED_MAX_WAIT_SEC
+                            )
+                        ),
+                        budget.remaining(),
+                    )
+                    if budget is not None
+                    else read_rate_max_wait_sec
+                ),
             )
             admission_meta = admission.as_dict()
             meta.update(
@@ -5577,23 +5856,37 @@ def _fetch_kiwoom_api_continuous_transport(
                 "next-key": next_key,
                 "api-id": api_id,
             }
-            effective_timeout = (KIWOOM_CONNECT_TIMEOUT_SEC, KIWOOM_READ_TIMEOUT_SEC) if request_timeout is None else request_timeout
+            effective_timeout = (
+                (KIWOOM_CONNECT_TIMEOUT_SEC, KIWOOM_READ_TIMEOUT_SEC)
+                if request_timeout is None
+                else request_timeout
+            )
             if budget is not None:
                 budget.require()
                 remaining = budget.remaining()
-                effective_timeout = (tuple(min(float(v), remaining/2) for v in effective_timeout)
-                                     if isinstance(effective_timeout, tuple) else min(float(effective_timeout), remaining))
+                effective_timeout = (
+                    tuple(min(float(v), remaining / 2) for v in effective_timeout)
+                    if isinstance(effective_timeout, tuple)
+                    else min(float(effective_timeout), remaining)
+                )
             try:
                 if api_id == "kt00011":
                     started_epoch = time.time()
                     meta.setdefault("first_http_started_epoch", started_epoch)
                     meta["last_http_started_epoch"] = started_epoch
-                    meta["request_attempt_count"] += 1  # Count a timeout as a sent attempt.
+                    meta[
+                        "request_attempt_count"
+                    ] += 1  # Count a timeout as a sent attempt.
                 if api_id != "kt00011":
-                    meta["request_attempt_count"] = int(meta.get("request_attempt_count") or 0) + 1
+                    meta["request_attempt_count"] = (
+                        int(meta.get("request_attempt_count") or 0) + 1
+                    )
                 response = measured_http_call(
-                    requests.post, url, telemetry_owner=normalized_owner,
-                    telemetry_class=request_class, telemetry_code=normalized_request_code,
+                    requests.post,
+                    url,
+                    telemetry_owner=normalized_owner,
+                    telemetry_class=request_class,
+                    telemetry_code=normalized_request_code,
                     telemetry_logical_id=meta["logical_request_id"],
                     headers=headers,
                     json=payload,
@@ -5804,7 +6097,12 @@ def _fetch_kiwoom_api_continuous_transport(
             )
             pending_failed_token = ""
 
-        if response_code == "0" and api_id in {"ka10001", "ka10003", "ka10004", "ka10084"}:
+        if response_code == "0" and api_id in {
+            "ka10001",
+            "ka10003",
+            "ka10004",
+            "ka10084",
+        }:
             res_json = dict(res_json)
             res_json["_kiwoom_source_meta"] = {
                 "api_id": api_id,
@@ -5827,12 +6125,15 @@ def _fetch_kiwoom_api_continuous_transport(
         if next_key:
             meta["next_key_seen"] = True
 
-        if api_id == 'ka10080' and minimum_rows is not None:
-            observed = {str(row.get('cntr_tm')) for page in all_results
-                        for row in page.get('stk_min_pole_chart_qry', [])
-                        if isinstance(row, dict) and row.get('cntr_tm')}
+        if api_id == "ka10080" and minimum_rows is not None:
+            observed = {
+                str(row.get("cntr_tm"))
+                for page in all_results
+                for row in page.get("stk_min_pole_chart_qry", [])
+                if isinstance(row, dict) and row.get("cntr_tm")
+            }
             if len(observed) >= max(1, int(minimum_rows)):
-                meta['continuous_requested_window_satisfied'] = True
+                meta["continuous_requested_window_satisfied"] = True
                 break
 
         if cont_yn != "Y":
@@ -5845,7 +6146,9 @@ def _fetch_kiwoom_api_continuous_transport(
             meta["continuous_page_limit_reached"] = True
             break
 
-        _source_budget_wait(0.5, budget)  # 연속조회 시 서버 배려를 위한 딜레이(실전서버)
+        _source_budget_wait(
+            0.5, budget
+        )  # 연속조회 시 서버 배려를 위한 딜레이(실전서버)
         # time.sleep(1.2)  # 연속조회 시 서버 배려를 위한 딜레이(모의투자서버)
 
     return (all_results, meta) if return_meta else all_results

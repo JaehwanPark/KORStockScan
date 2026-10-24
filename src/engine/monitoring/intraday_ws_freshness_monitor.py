@@ -222,7 +222,13 @@ WS_AGE_FIELDS_MS = (
 )
 
 PROVIDER_IDENTITY_FIELDS = frozenset(
-    {"provider", "ai_provider", "model_provider", "provider_actual", "ai_provider_actual"}
+    {
+        "provider",
+        "ai_provider",
+        "model_provider",
+        "provider_actual",
+        "ai_provider_actual",
+    }
 )
 
 
@@ -886,7 +892,9 @@ def _scanner_executable_bbo_observation(
             "market_data_route": market_data_route,
             "market_data_route_origin": route_origin,
             "declared_market_data_route": (
-                None if explicit_route == "__INVALID_EXPLICIT_ROUTE__" else explicit_route
+                None
+                if explicit_route == "__INVALID_EXPLICIT_ROUTE__"
+                else explicit_route
             ),
             "declared_market_data_route_raw": _valid_lineage_token(
                 row.get("market_data_route")
@@ -1063,7 +1071,9 @@ def _scanner_funnel_state_from_mapping(value: Any) -> dict[str, Any]:
     )
     fingerprints = value.get("event_fingerprints")
     return {
-        "lookup_attention_native_events": dict(value.get("lookup_attention_native_events") or {}),
+        "lookup_attention_native_events": dict(
+            value.get("lookup_attention_native_events") or {}
+        ),
         "lineages": {
             str(key): dict(item)
             for key, item in lineages.items()
@@ -1107,7 +1117,9 @@ def _scanner_funnel_state_from_mapping(value: Any) -> dict[str, Any]:
     }
 
 
-def _reconcile_zero_base_attach_metadata(state: dict[str, Any], target_date: str) -> dict[str, Any]:
+def _reconcile_zero_base_attach_metadata(
+    state: dict[str, Any], target_date: str
+) -> dict[str, Any]:
     """Bind original attach context without borrowing a later quote/session.
 
     Legacy compact events omit source_signature and the promotion clock. Their
@@ -1115,94 +1127,220 @@ def _reconcile_zero_base_attach_metadata(state: dict[str, Any], target_date: str
     native attach, rather than a claim that those fields exist in that event.
     """
     from src.engine.scalping.scanner_lookup_attention_resource import canonical_sha256
-    lineages=state.get('lineages') or {}
-    day_start=datetime.fromisoformat(target_date).replace(tzinfo=KST).timestamp()
-    candidates=defaultdict(list);blocked=defaultdict(list);reasons=Counter()
-    allowed={
-        'KRX':{'KRX_REGULAR'},'PREMARKET_KRX_LIKE':{'KRX_LIKE_PREMARKET'},'NXT':{'NXT'},
-        'KRX_NXT_INTEGRATED':{'KRX_NXT_AFTERMARKET','KRX_NXT_AFTERMARKET_CLOSE_ONLY','KRX_NXT_AFTERMARKET_TERMINAL_EXIT'},
+
+    lineages = state.get("lineages") or {}
+    day_start = datetime.fromisoformat(target_date).replace(tzinfo=KST).timestamp()
+    candidates = defaultdict(list)
+    blocked = defaultdict(list)
+    reasons = Counter()
+    allowed = {
+        "KRX": {"KRX_REGULAR"},
+        "PREMARKET_KRX_LIKE": {"KRX_LIKE_PREMARKET"},
+        "NXT": {"NXT"},
+        "KRX_NXT_INTEGRATED": {
+            "KRX_NXT_AFTERMARKET",
+            "KRX_NXT_AFTERMARKET_CLOSE_ONLY",
+            "KRX_NXT_AFTERMARKET_TERMINAL_EXIT",
+        },
     }
-    for promotion,lineage in lineages.items():
-        binding=lineage.pop('zero_base_attach_metadata_binding',None)
-        if isinstance(binding,dict) and binding.get('schema')=='zero_base_attach_metadata_binding_v1':
-            if (lineage.get('scan_generation_id') or lineage.get('scan_rank') is not None
-                    or lineage.get('ranked_candidate_count') is not None
-                    or (lineage.get('stages') or {}).get('scalping_scanner_candidate_promoted')):
+    for promotion, lineage in lineages.items():
+        binding = lineage.pop("zero_base_attach_metadata_binding", None)
+        if (
+            isinstance(binding, dict)
+            and binding.get("schema") == "zero_base_attach_metadata_binding_v1"
+        ):
+            if (
+                lineage.get("scan_generation_id")
+                or lineage.get("scan_rank") is not None
+                or lineage.get("ranked_candidate_count") is not None
+                or (lineage.get("stages") or {}).get(
+                    "scalping_scanner_candidate_promoted"
+                )
+            ):
                 continue
-            for field in ('venue','market_session_bucket'):
-                if lineage.get(field)==binding.get(field):
-                    lineage[field]=(binding.get('original_metadata') or {}).get(field,'UNKNOWN')
-    for event_sha,event in (state.get('lookup_attention_native_events') or {}).items():
-        if not isinstance(event,dict) or event.get('stage')!='scalping_scanner_runtime_target_attach':continue
-        row=_flatten_event(event);promotion=_valid_lineage_token(row.get('scanner_promotion_id'))
-        if not promotion.startswith('ZBPROM-') or promotion not in lineages:continue
-        lineage=lineages[promotion]
-        # Ranked promotions keep their existing immutable metadata owner.
-        if (lineage.get('scan_generation_id') or lineage.get('scan_rank') is not None
-                or lineage.get('ranked_candidate_count') is not None
-                or (lineage.get('stages') or {}).get('scalping_scanner_candidate_promoted')):continue
-        issue=None;parts=promotion.split('-');signature=str(lineage.get('source_signature') or '')
-        code=str(row.get('stock_code') or row.get('code') or '').strip()
-        record=_valid_lineage_token(row.get('runtime_record_id'))
-        anchor=_to_float(lineage.get('promotion_emitted_epoch'));event_at=_event_time(row)
-        source_hash=signature.removeprefix('ZERO_BASE_DISCOVERY:')
-        records=lineage.get('record_ids') if isinstance(lineage.get('record_ids'),list) else []
-        outcomes=lineage.get('attach_outcomes') if isinstance(lineage.get('attach_outcomes'),list) else []
-        venue=str(row.get('effective_venue') or row.get('venue') or '').upper()
-        session=_scanner_session_metadata(row)
-        try:hash_valid=event_sha==canonical_sha256(event)
-        except (ValueError,TypeError):hash_valid=False
-        if not hash_valid:issue='cached_native_hash_conflict'
-        elif (len(parts)!=4 or len(parts[1])!=6 or not parts[1].isdigit()
-              or len(parts[2])!=13 or not parts[2].isdigit() or not parts[3].isdigit()
-              or not 1<=len(parts[3])<=6 or int(parts[3])<=0 or parts[1]!=code or lineage.get('code')!=code):issue='promotion_code_identity_invalid'
-        elif (not signature.startswith('ZERO_BASE_DISCOVERY:') or len(source_hash)!=64
-              or any(c not in '0123456789abcdef' for c in source_hash)
-              or (row.get('source_signature') is not None and row['source_signature']!=signature)):issue='source_signature_conflict'
-        elif (not record or set(map(str,records))!={record}
-              or (row.get('record_id') is not None and str(row['record_id'])!=record)):issue='record_identity_conflict'
-        elif (event_at is None or event_at.date().isoformat()!=target_date
-              or row.get('emitted_date') not in (None,target_date) or anchor is None
-              or not math.isfinite(anchor)
-              or not day_start<=anchor<day_start+86400):issue='source_date_or_clock_invalid'
-        elif (not 0<=anchor-int(parts[2])/1000<=ZERO_BASE_ATTACH_METADATA_MAX_LAG_SEC
-              or not 0<=event_at.timestamp()-anchor<=ZERO_BASE_ATTACH_METADATA_MAX_LAG_SEC
-              or (row.get('scanner_promotion_emitted_epoch') is not None
-                  and _to_float(row['scanner_promotion_emitted_epoch'])!=anchor)):issue='attach_clock_stale_or_conflicting'
-        elif (set(map(_valid_lineage_token,outcomes))!={'attached'}
-              or row.get('runtime_target_attach_outcome') not in (None,'attached')):issue='attach_outcome_unverified'
-        elif (venue not in allowed or session not in allowed[venue]
-              or (row.get('venue') and str(row['venue']).upper()!=venue)
-              or _scanner_market_data_route({'market_session_bucket':session}) is None):issue='attach_session_or_context_conflict'
-        elif any(resolve_market_session(clock).session_regime.upper()!=session for clock in (
-                event_at,datetime.fromtimestamp(anchor,tz=KST))):issue='attach_session_clock_conflict'
-        if issue:
-            reasons[issue]+=1;blocked[promotion].append(issue);continue
-        candidates[promotion].append(dict(
-            schema='zero_base_attach_metadata_binding_v1',promotion_id=promotion,record_id=record,
-            source_signature=signature,promotion_emitted_epoch=anchor,target_date=target_date,
-            venue=venue,market_session_bucket=session,cached_native_event_sha256=event_sha,
-            attach_emitted_at=event['emitted_at'],
-            signature_clock_basis='existing_lineage_signature_and_clock',
-            signature_present_in_cached_event=row.get('source_signature') is not None,
-            session_clock_basis='declared_bucket_matches_original_promotion_and_attach_clock',
-            physical_execution_venue_attested=False,runtime_effect=False,allowed_runtime_apply=False))
-    bindings=[]
-    for promotion,proofs in candidates.items():
-        lineage=lineages[promotion]
-        semantic={(p['record_id'],p['source_signature'],p['promotion_emitted_epoch'],p['venue'],p['market_session_bucket']) for p in proofs}
-        if blocked.get(promotion) or len(semantic)!=1:
-            if len(semantic)!=1:reasons['conflicting_native_reattach']+=1
+            for field in ("venue", "market_session_bucket"):
+                if lineage.get(field) == binding.get(field):
+                    lineage[field] = (binding.get("original_metadata") or {}).get(
+                        field, "UNKNOWN"
+                    )
+    for event_sha, event in (state.get("lookup_attention_native_events") or {}).items():
+        if (
+            not isinstance(event, dict)
+            or event.get("stage") != "scalping_scanner_runtime_target_attach"
+        ):
             continue
-        proof=sorted(proofs,key=lambda p:p['attach_emitted_at'])[0]
-        if any(lineage.get(k) not in (None,'','UNKNOWN',proof[k]) for k in ('venue','market_session_bucket')):
-            reasons['existing_lineage_context_conflict']+=1;continue
-        proof['original_metadata']={k:lineage.get(k,'UNKNOWN') for k in ('venue','market_session_bucket')}
-        for field in ('venue','market_session_bucket'):lineage[field]=proof[field]
-        lineage['zero_base_attach_metadata_binding']=proof;bindings.append(proof)
-    return dict(schema='zero_base_attach_metadata_reconciliation_v1',target_date=target_date,
-                bound_lineage_count=len(bindings),rejected_reason_counts=dict(reasons),bindings=bindings,
-                physical_execution_venue_attested=False,runtime_effect=False,allowed_runtime_apply=False)
+        row = _flatten_event(event)
+        promotion = _valid_lineage_token(row.get("scanner_promotion_id"))
+        if not promotion.startswith("ZBPROM-") or promotion not in lineages:
+            continue
+        lineage = lineages[promotion]
+        # Ranked promotions keep their existing immutable metadata owner.
+        if (
+            lineage.get("scan_generation_id")
+            or lineage.get("scan_rank") is not None
+            or lineage.get("ranked_candidate_count") is not None
+            or (lineage.get("stages") or {}).get("scalping_scanner_candidate_promoted")
+        ):
+            continue
+        issue = None
+        parts = promotion.split("-")
+        signature = str(lineage.get("source_signature") or "")
+        code = str(row.get("stock_code") or row.get("code") or "").strip()
+        record = _valid_lineage_token(row.get("runtime_record_id"))
+        anchor = _to_float(lineage.get("promotion_emitted_epoch"))
+        event_at = _event_time(row)
+        source_hash = signature.removeprefix("ZERO_BASE_DISCOVERY:")
+        records = (
+            lineage.get("record_ids")
+            if isinstance(lineage.get("record_ids"), list)
+            else []
+        )
+        outcomes = (
+            lineage.get("attach_outcomes")
+            if isinstance(lineage.get("attach_outcomes"), list)
+            else []
+        )
+        venue = str(row.get("effective_venue") or row.get("venue") or "").upper()
+        session = _scanner_session_metadata(row)
+        try:
+            hash_valid = event_sha == canonical_sha256(event)
+        except (ValueError, TypeError):
+            hash_valid = False
+        if not hash_valid:
+            issue = "cached_native_hash_conflict"
+        elif (
+            len(parts) != 4
+            or len(parts[1]) != 6
+            or not parts[1].isdigit()
+            or len(parts[2]) != 13
+            or not parts[2].isdigit()
+            or not parts[3].isdigit()
+            or not 1 <= len(parts[3]) <= 6
+            or int(parts[3]) <= 0
+            or parts[1] != code
+            or lineage.get("code") != code
+        ):
+            issue = "promotion_code_identity_invalid"
+        elif (
+            not signature.startswith("ZERO_BASE_DISCOVERY:")
+            or len(source_hash) != 64
+            or any(c not in "0123456789abcdef" for c in source_hash)
+            or (
+                row.get("source_signature") is not None
+                and row["source_signature"] != signature
+            )
+        ):
+            issue = "source_signature_conflict"
+        elif (
+            not record
+            or set(map(str, records)) != {record}
+            or (row.get("record_id") is not None and str(row["record_id"]) != record)
+        ):
+            issue = "record_identity_conflict"
+        elif (
+            event_at is None
+            or event_at.date().isoformat() != target_date
+            or row.get("emitted_date") not in (None, target_date)
+            or anchor is None
+            or not math.isfinite(anchor)
+            or not day_start <= anchor < day_start + 86400
+        ):
+            issue = "source_date_or_clock_invalid"
+        elif (
+            not 0
+            <= anchor - int(parts[2]) / 1000
+            <= ZERO_BASE_ATTACH_METADATA_MAX_LAG_SEC
+            or not 0
+            <= event_at.timestamp() - anchor
+            <= ZERO_BASE_ATTACH_METADATA_MAX_LAG_SEC
+            or (
+                row.get("scanner_promotion_emitted_epoch") is not None
+                and _to_float(row["scanner_promotion_emitted_epoch"]) != anchor
+            )
+        ):
+            issue = "attach_clock_stale_or_conflicting"
+        elif set(map(_valid_lineage_token, outcomes)) != {"attached"} or row.get(
+            "runtime_target_attach_outcome"
+        ) not in (None, "attached"):
+            issue = "attach_outcome_unverified"
+        elif (
+            venue not in allowed
+            or session not in allowed[venue]
+            or (row.get("venue") and str(row["venue"]).upper() != venue)
+            or _scanner_market_data_route({"market_session_bucket": session}) is None
+        ):
+            issue = "attach_session_or_context_conflict"
+        elif any(
+            resolve_market_session(clock).session_regime.upper() != session
+            for clock in (event_at, datetime.fromtimestamp(anchor, tz=KST))
+        ):
+            issue = "attach_session_clock_conflict"
+        if issue:
+            reasons[issue] += 1
+            blocked[promotion].append(issue)
+            continue
+        candidates[promotion].append(
+            dict(
+                schema="zero_base_attach_metadata_binding_v1",
+                promotion_id=promotion,
+                record_id=record,
+                source_signature=signature,
+                promotion_emitted_epoch=anchor,
+                target_date=target_date,
+                venue=venue,
+                market_session_bucket=session,
+                cached_native_event_sha256=event_sha,
+                attach_emitted_at=event["emitted_at"],
+                signature_clock_basis="existing_lineage_signature_and_clock",
+                signature_present_in_cached_event=row.get("source_signature")
+                is not None,
+                session_clock_basis="declared_bucket_matches_original_promotion_and_attach_clock",
+                physical_execution_venue_attested=False,
+                runtime_effect=False,
+                allowed_runtime_apply=False,
+            )
+        )
+    bindings = []
+    for promotion, proofs in candidates.items():
+        lineage = lineages[promotion]
+        semantic = {
+            (
+                p["record_id"],
+                p["source_signature"],
+                p["promotion_emitted_epoch"],
+                p["venue"],
+                p["market_session_bucket"],
+            )
+            for p in proofs
+        }
+        if blocked.get(promotion) or len(semantic) != 1:
+            if len(semantic) != 1:
+                reasons["conflicting_native_reattach"] += 1
+            continue
+        proof = sorted(proofs, key=lambda p: p["attach_emitted_at"])[0]
+        if any(
+            lineage.get(k) not in (None, "", "UNKNOWN", proof[k])
+            for k in ("venue", "market_session_bucket")
+        ):
+            reasons["existing_lineage_context_conflict"] += 1
+            continue
+        proof["original_metadata"] = {
+            k: lineage.get(k, "UNKNOWN") for k in ("venue", "market_session_bucket")
+        }
+        for field in ("venue", "market_session_bucket"):
+            lineage[field] = proof[field]
+        lineage["zero_base_attach_metadata_binding"] = proof
+        bindings.append(proof)
+    return dict(
+        schema="zero_base_attach_metadata_reconciliation_v1",
+        target_date=target_date,
+        bound_lineage_count=len(bindings),
+        rejected_reason_counts=dict(reasons),
+        bindings=bindings,
+        physical_execution_venue_attested=False,
+        runtime_effect=False,
+        allowed_runtime_apply=False,
+    )
 
 
 def _append_unique(values: Any, value: Any) -> list[str]:
@@ -2119,9 +2257,14 @@ def _scanner_hotset_bbo_observations(
         if not isinstance(raw_observation, dict):
             filter_reasons["bbo_observation_invalid_type"] += 1
             continue
-        observation_session = str(raw_observation.get("market_session_bucket") or "").upper()
-        if (session not in {"", "UNKNOWN"}
-                and observation_session not in {"", "UNKNOWN", session}):
+        observation_session = str(
+            raw_observation.get("market_session_bucket") or ""
+        ).upper()
+        if session not in {"", "UNKNOWN"} and observation_session not in {
+            "",
+            "UNKNOWN",
+            session,
+        }:
             filter_reasons["bbo_observation_session_mismatch_or_missing"] += 1
             continue
         observation_route = _scanner_explicit_market_data_route(raw_observation)
@@ -2153,12 +2296,15 @@ def _scanner_hotset_bbo_observations(
                 "observed_epoch": observed_at.timestamp(),
                 "market_data_route": (
                     expected_route
-                    or _scanner_market_data_route({
-                        "market_session_bucket": observation_session or session,
-                    })
+                    or _scanner_market_data_route(
+                        {
+                            "market_session_bucket": observation_session or session,
+                        }
+                    )
                 ),
                 "declared_market_data_route": (
-                    None if observation_route == "__INVALID_EXPLICIT_ROUTE__"
+                    None
+                    if observation_route == "__INVALID_EXPLICIT_ROUTE__"
                     else observation_route
                 ),
                 "market_data_route_consistency": _scanner_route_consistency(
@@ -2833,8 +2979,11 @@ def _scanner_bbo_economic_attribution(
             observation_session = str(
                 raw_observation.get("market_session_bucket") or ""
             ).upper()
-            if (session not in {"", "UNKNOWN"}
-                    and observation_session not in {"", "UNKNOWN", session}):
+            if session not in {"", "UNKNOWN"} and observation_session not in {
+                "",
+                "UNKNOWN",
+                session,
+            }:
                 observation_filter_reasons[
                     "bbo_observation_session_mismatch_or_missing"
                 ] += 1
@@ -2865,12 +3014,15 @@ def _scanner_bbo_economic_attribution(
                     "observed_epoch": observation_at.timestamp(),
                     "market_data_route": (
                         expected_route
-                        or _scanner_market_data_route({
-                            "market_session_bucket": observation_session or session,
-                        })
+                        or _scanner_market_data_route(
+                            {
+                                "market_session_bucket": observation_session or session,
+                            }
+                        )
                     ),
                     "declared_market_data_route": (
-                        None if observation_route == "__INVALID_EXPLICIT_ROUTE__"
+                        None
+                        if observation_route == "__INVALID_EXPLICIT_ROUTE__"
                         else observation_route
                     ),
                     "market_data_route_consistency": _scanner_route_consistency(
@@ -2919,15 +3071,15 @@ def _scanner_bbo_economic_attribution(
             symbol_master_block_reason = (
                 f"official_symbol_master_{symbol_master_status}"
             )
-        session_route = _scanner_market_data_route(
-            {"market_session_bucket": session}
-        )
+        session_route = _scanner_market_data_route({"market_session_bucket": session})
         economic_eligibility_status = (
             "instrument_classification_unverified"
             if symbol_master_block_reason is not None
-            else "session_route_unresolved"
-            if session_route is None
-            else "eligible_verified_common_stock"
+            else (
+                "session_route_unresolved"
+                if session_route is None
+                else "eligible_verified_common_stock"
+            )
         )
         economic_eligible = (
             economic_eligibility_status == "eligible_verified_common_stock"
@@ -2974,9 +3126,7 @@ def _scanner_bbo_economic_attribution(
             bbo_join_block_reason = "prune_offset_zero_executable_bbo_missing"
         if bbo_join_block_reason:
             missing_reason_counts[bbo_join_block_reason] += 1
-            for reason, count in (
-                container.get("bbo_gap_reason_counts") or {}
-            ).items():
+            for reason, count in (container.get("bbo_gap_reason_counts") or {}).items():
                 missing_reason_counts[str(reason)] += int(count or 0)
             rows.append(
                 {
@@ -3006,11 +3156,13 @@ def _scanner_bbo_economic_attribution(
                     "economic_eligibility_status": economic_eligibility_status,
                     "economic_exclusion_reason": (
                         symbol_master_block_reason
-                        or ("session_route_unresolved" if session_route is None else None)
+                        or (
+                            "session_route_unresolved"
+                            if session_route is None
+                            else None
+                        )
                     ),
-                    "primary_exclusion_reason": (
-                        bbo_join_block_reason
-                    ),
+                    "primary_exclusion_reason": (bbo_join_block_reason),
                     "first_hit_label": "unresolved_source_quality_blocked",
                     "gross_return_pct": None,
                     "cost_adjusted_return_pct": None,
@@ -3139,9 +3291,7 @@ def _scanner_bbo_economic_attribution(
         )
 
     candidate_count = len(rows)
-    eligible_rows = [
-        row for row in rows if _scanner_row_economically_eligible(row)
-    ]
+    eligible_rows = [row for row in rows if _scanner_row_economically_eligible(row)]
     symbol_master_excluded_rows = [
         row for row in rows if row.get("symbol_master_block_reason") is not None
     ]
@@ -3214,15 +3364,13 @@ def _scanner_bbo_economic_attribution(
             "source_census_count": len(group_rows),
             "eligible_verified_common_stock_candidate_count": len(group_eligible_rows),
             "instrument_classification_unverified_count": sum(
-                row.get("symbol_master_block_reason") is not None
-                for row in group_rows
+                row.get("symbol_master_block_reason") is not None for row in group_rows
             ),
             "session_route_unresolved_count": sum(
                 _scanner_market_data_route(row) is None for row in group_rows
             ),
             "official_symbol_master_excluded_count": sum(
-                row.get("symbol_master_block_reason") is not None
-                for row in group_rows
+                row.get("symbol_master_block_reason") is not None for row in group_rows
             ),
             "exact_bbo_joined_count": len(group_joined_rows),
             "observed_exact_bbo_joined_count": sum(
@@ -4716,8 +4864,11 @@ def _row_provider_none(row: dict[str, Any]) -> bool:
     unknown, even though str(None) happens to spell the explicit route 'none'.
     """
     for key, value in row.items():
-        if (str(key).lower() in PROVIDER_IDENTITY_FIELDS
-                and isinstance(value, str) and value.strip().lower() == "none"):
+        if (
+            str(key).lower() in PROVIDER_IDENTITY_FIELDS
+            and isinstance(value, str)
+            and value.strip().lower() == "none"
+        ):
             return True
     return False
 
@@ -5601,11 +5752,16 @@ def _build_workorders(
 
 def _lookup_native_inputs(target_date, current_events=None):
     """Read bounded canonical report sections, never historical giant states."""
-    from src.engine.automation.source_quality_clean_baseline import policy_refresh_start_date
+    from src.engine.automation.source_quality_clean_baseline import (
+        policy_refresh_start_date,
+    )
+
     native = {}
     migration = None
-    lower = max(policy_refresh_start_date(target_date),
-                (date.fromisoformat(target_date) - timedelta(days=89)).isoformat())
+    lower = max(
+        policy_refresh_start_date(target_date),
+        (date.fromisoformat(target_date) - timedelta(days=89)).isoformat(),
+    )
     for path in sorted(REPORT_DIR.glob(f"{REPORT_TYPE}_*.json")):
         day = path.stem.removeprefix(f"{REPORT_TYPE}_")
         try:
@@ -5615,7 +5771,12 @@ def _lookup_native_inputs(target_date, current_events=None):
             continue
         if not lower <= day <= target_date or path.stat().st_size > 64 * 1024 * 1024:
             continue
-        section = _read_json(path).get("scanner_unique_funnel", {}).get("economic_cohorts", {}).get("lookup_attention_selection", {})
+        section = (
+            _read_json(path)
+            .get("scanner_unique_funnel", {})
+            .get("economic_cohorts", {})
+            .get("lookup_attention_selection", {})
+        )
         if isinstance(section.get("native_events"), list):
             native[day] = section["native_events"]
         if isinstance(section.get("historical_migration_diagnostics"), dict):
@@ -5645,9 +5806,7 @@ def build_report(
     (
         market_session_receipts,
         market_session_state_provenance,
-    ) = _load_market_session_state_receipts(
-        target_date, market_session_events_path
-    )
+    ) = _load_market_session_state_receipts(target_date, market_session_events_path)
     # Freeze the live dashboard against the report's as-of time before a slow
     # event scan. Reading it afterwards can reject a legitimate newer snapshot
     # as future-dated and silently erase the entire current diagnostic cohort.
@@ -5724,7 +5883,10 @@ def build_report(
     scanner_funnel_state["_fingerprint_set"] = set(
         scanner_funnel_state.get("event_fingerprints") or []
     )
-    from src.engine.scalping.scanner_lookup_attention_resource import capture_native_event
+    from src.engine.scalping.scanner_lookup_attention_resource import (
+        capture_native_event,
+    )
+
     appended_event_count = 0
     invalid_json_line_count = 0
     source_offsets: dict[str, dict[str, Any]] = {}
@@ -5825,7 +5987,9 @@ def build_report(
             "source_identity_stable_during_scan": source_identity_stable,
         }
 
-    zero_base_attach_metadata=_reconcile_zero_base_attach_metadata(scanner_funnel_state,target_date)
+    zero_base_attach_metadata = _reconcile_zero_base_attach_metadata(
+        scanner_funnel_state, target_date
+    )
     incremental_state_persisted = bool(
         incremental_state_path is not None
         and all(
@@ -5900,9 +6064,7 @@ def build_report(
         if finalize
         else _snapshot_generated_at({"generated_at": generated_at})
     )
-    snapshot_states = _market_session_states_at(
-        market_session_receipts, snapshot_as_of
-    )
+    snapshot_states = _market_session_states_at(market_session_receipts, snapshot_as_of)
     snapshot_rows = [
         classify_receive_gap(
             {**row, "market_session_states_by_scope": snapshot_states},
@@ -5933,21 +6095,50 @@ def build_report(
     )
 
     if finalize:
-        from src.engine.scalping.scanner_lookup_attention_resource import integrated_selection_evaluation
-        native_by_date, migration = _lookup_native_inputs(target_date,
-            list(scanner_funnel_state.get("lookup_attention_native_events", {}).values()))
-        predecessor_report = _read_json(REPORT_DIR / f"{REPORT_TYPE}_{target_date}.json")
-        predecessor = (predecessor_report.get("scanner_unique_funnel", {}).get("economic_cohorts", {}).get("lookup_attention_selection"))
-        scanner_unique_funnel.setdefault("economic_cohorts", {})["lookup_attention_selection"] = integrated_selection_evaluation(
-            date.fromisoformat(target_date), native_by_date, predecessor=predecessor, migration=migration)
+        from src.engine.scalping.scanner_lookup_attention_resource import (
+            integrated_selection_evaluation,
+        )
+
+        native_by_date, migration = _lookup_native_inputs(
+            target_date,
+            list(
+                scanner_funnel_state.get("lookup_attention_native_events", {}).values()
+            ),
+        )
+        predecessor_report = _read_json(
+            REPORT_DIR / f"{REPORT_TYPE}_{target_date}.json"
+        )
+        predecessor = (
+            predecessor_report.get("scanner_unique_funnel", {})
+            .get("economic_cohorts", {})
+            .get("lookup_attention_selection")
+        )
+        scanner_unique_funnel.setdefault("economic_cohorts", {})[
+            "lookup_attention_selection"
+        ] = integrated_selection_evaluation(
+            date.fromisoformat(target_date),
+            native_by_date,
+            predecessor=predecessor,
+            migration=migration,
+        )
     else:
-        scanner_unique_funnel.setdefault("economic_cohorts", {})["lookup_attention_selection"] = {
-            "status": "intraday_capture_only", "allowed_runtime_apply": False,
-            "native_event_count": len(scanner_funnel_state.get("lookup_attention_native_events") or {}),
+        scanner_unique_funnel.setdefault("economic_cohorts", {})[
+            "lookup_attention_selection"
+        ] = {
+            "status": "intraday_capture_only",
+            "allowed_runtime_apply": False,
+            "native_event_count": len(
+                scanner_funnel_state.get("lookup_attention_native_events") or {}
+            ),
         }
 
     from src.engine.scalping.scanner_lookup_attention_resource import summary_projection
-    lookup_summary = summary_projection(scanner_unique_funnel.get('economic_cohorts', {}).get('lookup_attention_selection'))
+
+    lookup_summary = summary_projection(
+        scanner_unique_funnel.get("economic_cohorts", {}).get(
+            "lookup_attention_selection"
+        )
+    )
     summary = {
         "lookup_attention_generation": lookup_summary,
         "target_date": target_date,
@@ -6250,42 +6441,77 @@ def write_report(
     monitor_md = REPORT_DIR / f"{REPORT_TYPE}_{target_date}.md"
 
     from src.utils.jsonl_io import json_artifact_generation_lock
+
     with json_artifact_generation_lock(monitor_json) as generation:
         previous = _read_json(monitor_json)
-        old = previous.get("scanner_unique_funnel", {}).get("economic_cohorts", {}).get("lookup_attention_selection", {})
-        cohorts = report.setdefault("scanner_unique_funnel", {}).setdefault("economic_cohorts", {})
+        old = (
+            previous.get("scanner_unique_funnel", {})
+            .get("economic_cohorts", {})
+            .get("lookup_attention_selection", {})
+        )
+        cohorts = report.setdefault("scanner_unique_funnel", {}).setdefault(
+            "economic_cohorts", {}
+        )
         current = cohorts.get("lookup_attention_selection") or {}
-        if old.get("evaluation_phase") == "postclose_final" and current.get("evaluation_phase") != "postclose_final":
+        if (
+            old.get("evaluation_phase") == "postclose_final"
+            and current.get("evaluation_phase") != "postclose_final"
+        ):
             # Late intraday capture may update quality, but cannot erase a final
             # economic proof. New capture waits for the next final evaluation.
             cohorts["lookup_attention_selection"] = old
             current = old
-        binding = publication or previous.get("scanner_lookup_attention_publication") or {}
+        binding = (
+            publication or previous.get("scanner_lookup_attention_publication") or {}
+        )
         if current.get("evaluation_phase") == "postclose_final":
-            from src.engine.scalping.scanner_lookup_attention_policy import publish_integrated_policy
-            payload = publish_integrated_policy(report,
-                publication_date=binding.get("publication_date"), policy_date=binding.get("policy_date"),
-                effective_date=binding.get("effective_date"))
+            from src.engine.scalping.scanner_lookup_attention_policy import (
+                publish_integrated_policy,
+            )
+
+            payload = publish_integrated_policy(
+                report,
+                publication_date=binding.get("publication_date"),
+                policy_date=binding.get("policy_date"),
+                effective_date=binding.get("effective_date"),
+            )
             report["postclose_quality_handoff"] = {
                 "source_evaluation_date": target_date,
-                "source_only": True, "allowed_runtime_apply": False,
+                "source_only": True,
+                "allowed_runtime_apply": False,
                 "parent_quality_phase": report.get("evaluation_phase"),
                 "parent_generated_at": report.get("generated_at"),
-                "parent_quality_final_claimed": report.get("evaluation_phase") == "postclose_final",
-                "quality_audit_receipts": current.get("source_quality", {}).get("audits", []),
+                "parent_quality_final_claimed": report.get("evaluation_phase")
+                == "postclose_final",
+                "quality_audit_receipts": current.get("source_quality", {}).get(
+                    "audits", []
+                ),
                 "economic_section_sha256": current.get("artifact_sha256"),
                 "analysis_mode": current.get("analysis_mode"),
             }
             report["scanner_lookup_attention_publication"] = {
-                "publication_date": payload["publication_date"], "policy_date": payload["target_date"],
+                "publication_date": payload["publication_date"],
+                "policy_date": payload["target_date"],
                 "effective_date": payload["prepared_effective_date"],
                 "source_evaluation_date": payload["source_evaluation_date"],
-                "policy_artifact_sha256": payload["artifact_sha256"]}
-        from src.engine.scalping.scanner_lookup_attention_resource import summary_projection
-        report['lookup_attention_generation'] = summary_projection(
-            report.get('scanner_unique_funnel', {}).get('economic_cohorts', {}).get('lookup_attention_selection'))
-        write_json_object_generation_safe(monitor_json, report, sort_keys=True,
-            trailing_newline=True, generation=generation)
+                "policy_artifact_sha256": payload["artifact_sha256"],
+            }
+        from src.engine.scalping.scanner_lookup_attention_resource import (
+            summary_projection,
+        )
+
+        report["lookup_attention_generation"] = summary_projection(
+            report.get("scanner_unique_funnel", {})
+            .get("economic_cohorts", {})
+            .get("lookup_attention_selection")
+        )
+        write_json_object_generation_safe(
+            monitor_json,
+            report,
+            sort_keys=True,
+            trailing_newline=True,
+            generation=generation,
+        )
         monitor_md.write_text(_render_monitor_markdown(report), encoding="utf-8")
     if monitor_only:
         return monitor_json, monitor_md, None, None
@@ -6317,24 +6543,54 @@ def write_report(
 
 def _run_once(args: argparse.Namespace) -> dict[str, Any]:
     if args.refresh_lookup_selection_only:
-        from src.engine.scalping.scanner_lookup_attention_resource import integrated_selection_evaluation
+        from src.engine.scalping.scanner_lookup_attention_resource import (
+            integrated_selection_evaluation,
+        )
+
         path = REPORT_DIR / f"{REPORT_TYPE}_{args.target_date}.json"
         report = _read_json(path)
         if report.get("target_date") != args.target_date:
             raise ValueError("lookup_refresh_requires_existing_exact_date_report")
         cohorts = report["scanner_unique_funnel"].setdefault("economic_cohorts", {})
         native_by_date, migration = _lookup_native_inputs(args.target_date)
-        section = integrated_selection_evaluation(date.fromisoformat(args.target_date), native_by_date,
+        section = integrated_selection_evaluation(
+            date.fromisoformat(args.target_date),
+            native_by_date,
             predecessor=cohorts.get("lookup_attention_selection"),
-            migration=_read_json(Path(args.lookup_migration_receipt)) if args.lookup_migration_receipt else migration)
+            migration=(
+                _read_json(Path(args.lookup_migration_receipt))
+                if args.lookup_migration_receipt
+                else migration
+            ),
+        )
         cohorts["lookup_attention_selection"] = section
-        from src.engine.scalping.scanner_lookup_attention_resource import summary_projection
-        report['lookup_attention_generation'] = summary_projection(section)
+        from src.engine.scalping.scanner_lookup_attention_resource import (
+            summary_projection,
+        )
+
+        report["lookup_attention_generation"] = summary_projection(section)
         if args.write:
-            write_report(report, monitor_only=True, publication={
-                "publication_date": args.lookup_publication_date, "policy_date": args.lookup_policy_date,
-                "effective_date": args.lookup_effective_date} if args.lookup_publication_date else None)
-        print(json.dumps({"status": section["status"], "artifact_sha256": section["artifact_sha256"]}))
+            write_report(
+                report,
+                monitor_only=True,
+                publication=(
+                    {
+                        "publication_date": args.lookup_publication_date,
+                        "policy_date": args.lookup_policy_date,
+                        "effective_date": args.lookup_effective_date,
+                    }
+                    if args.lookup_publication_date
+                    else None
+                ),
+            )
+        print(
+            json.dumps(
+                {
+                    "status": section["status"],
+                    "artifact_sha256": section["artifact_sha256"],
+                }
+            )
+        )
         return report
     snapshot_path = (
         Path(args.subscription_snapshot) if args.subscription_snapshot else None
@@ -6399,8 +6655,22 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--interval-sec", type=float, default=60.0)
     args = parser.parse_args(argv)
 
-    if any((args.lookup_publication_date, args.lookup_policy_date, args.lookup_effective_date)) and (
-            not args.refresh_lookup_selection_only or not all((args.lookup_publication_date, args.lookup_policy_date, args.lookup_effective_date))):
+    if any(
+        (
+            args.lookup_publication_date,
+            args.lookup_policy_date,
+            args.lookup_effective_date,
+        )
+    ) and (
+        not args.refresh_lookup_selection_only
+        or not all(
+            (
+                args.lookup_publication_date,
+                args.lookup_policy_date,
+                args.lookup_effective_date,
+            )
+        )
+    ):
         parser.error("lookup publication requires scoped refresh and all three dates")
     iterations = max(1, int(args.watch_iterations or 1))
     for idx in range(iterations):

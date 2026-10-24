@@ -37,9 +37,7 @@ SUPPORTED_LISTING_MARKETS = frozenset({"KOSPI", "KOSDAQ"})
 SUPPORTED_OWNERS = frozenset({"episode"})
 
 DEFAULT_STATE_PATH = TMP_DIR / "market_weakness_observer_state.json"
-DEFAULT_SYMBOL_MASTER_DIR = (
-    DATA_DIR / "report/micro_reversion_economic_reference"
-)
+DEFAULT_SYMBOL_MASTER_DIR = DATA_DIR / "report/micro_reversion_economic_reference"
 DEFAULT_BLOCKED_ENTRY_OBSERVATION_DIR = (
     DATA_DIR / "report/machine_market_weakness_blocked_entries"
 )

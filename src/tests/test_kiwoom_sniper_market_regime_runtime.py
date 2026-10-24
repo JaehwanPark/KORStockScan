@@ -257,18 +257,39 @@ def test_expired_scanner_ai_result_arms_recheck_before_scheduler_discard():
     assert (
         fields["scanner_async_expired_response_recheck_actual_order_submitted"] is False
     )
-    assert fields["scanner_async_expired_response_recheck_broker_order_forbidden"] is True
+    assert (
+        fields["scanner_async_expired_response_recheck_broker_order_forbidden"] is True
+    )
 
 
-@pytest.mark.parametrize('changed', [dict(scanner_generation_id='successor'),
-    dict(_scanner_async_generation_id='successor'), dict(_scanner_async_cache_key='successor')])
+@pytest.mark.parametrize(
+    "changed",
+    [
+        dict(scanner_generation_id="successor"),
+        dict(_scanner_async_generation_id="successor"),
+        dict(_scanner_async_cache_key="successor"),
+    ],
+)
 def test_expired_scanner_result_never_arms_successor_recheck(changed):
-    target = dict(scanner_generation_id='original', **changed) if 'scanner_generation_id' not in changed else changed.copy()
+    target = (
+        dict(scanner_generation_id="original", **changed)
+        if "scanner_generation_id" not in changed
+        else changed.copy()
+    )
     original = target.copy()
-    result = SimpleNamespace(status='expired_after_response', generation_id='original',
-                             cache_key='watching:original', ai_payload={})
+    result = SimpleNamespace(
+        status="expired_after_response",
+        generation_id="original",
+        cache_key="watching:original",
+        ai_payload={},
+    )
     assert not kiwoom_sniper_v2._scanner_async_result_owns_target_slot(target, result)
-    assert kiwoom_sniper_v2._arm_scanner_async_rejected_result_recheck(target, result, now_epoch=1000) == {}
+    assert (
+        kiwoom_sniper_v2._arm_scanner_async_rejected_result_recheck(
+            target, result, now_epoch=1000
+        )
+        == {}
+    )
     assert target == original
 
 
@@ -442,8 +463,13 @@ def _isolate_manual_control_exclusion(monkeypatch, tmp_path):
     # Registered Main symbols now resolve custody from the verified common
     # journal. Isolate that current contract as well as manual exclusions.
     from src.trading.order import owner_custody_registry as owner
-    monkeypatch.setenv("KORSTOCKSCAN_ORDER_OWNER_REGISTRY_PATH", str(tmp_path / "owner.jsonl"))
-    monkeypatch.setenv("KORSTOCKSCAN_BROKER_ACCOUNT_KEY", "scanner-runtime-test-account")
+
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_ORDER_OWNER_REGISTRY_PATH", str(tmp_path / "owner.jsonl")
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_BROKER_ACCOUNT_KEY", "scanner-runtime-test-account"
+    )
     registry = owner.OrderOwnerRegistry()
     registry.retire_automatic_owners_to_manual()
     monkeypatch.setattr(owner, "default_order_owner_registry", lambda: registry)
@@ -700,37 +726,64 @@ def test_restore_holding_runtime_state_restores_durable_scalping_peak(monkeypatc
     assert targets[0]["position_peak_runtime_price"] == 1140
 
 
-def test_restore_holding_runtime_state_rehydrates_exact_buy_identity(monkeypatch, tmp_path):
+def test_restore_holding_runtime_state_rehydrates_exact_buy_identity(
+    monkeypatch, tmp_path
+):
     from src.engine.ai.holding_exit_vote import (
-        buy_fill_identity_from_runtime, persist_buy_fill_receipt,
+        buy_fill_identity_from_runtime,
+        persist_buy_fill_receipt,
     )
+
     monkeypatch.setattr(kiwoom_sniper_v2, "DATA_DIR", tmp_path)
     monkeypatch.setattr(kiwoom_sniper_v2, "highest_prices", {})
-    monkeypatch.setattr(kiwoom_sniper_v2.POSITION_PEAK_LEDGER,
-                        "restore_peak", lambda stock: (0, "missing"))
+    monkeypatch.setattr(
+        kiwoom_sniper_v2.POSITION_PEAK_LEDGER,
+        "restore_peak",
+        lambda stock: (0, "missing"),
+    )
     stock = {
-        "id": 48376, "code": "047040", "name": "TEST", "status": "HOLDING",
-        "strategy": "SCALPING", "position_tag": "SCALP_BASE",
-        "buy_price": 19010.0, "buy_qty": 1,
-        "buy_time": "2026-09-28 10:40:55", "entry_filled_qty": 1,
+        "id": 48376,
+        "code": "047040",
+        "name": "TEST",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "position_tag": "SCALP_BASE",
+        "buy_price": 19010.0,
+        "buy_qty": 1,
+        "buy_time": "2026-09-28 10:40:55",
+        "entry_filled_qty": 1,
         "_entry_receipt_filled_by_order_no": {"0029186": 1},
         "_entry_receipt_executions_by_order_no": {
             "0029186": {"131176": {"cumulative_qty": 1}}
         },
     }
     expected = persist_buy_fill_receipt(stock, tmp_path)
-    loaded = {key: stock[key] for key in (
-        "id", "code", "name", "status", "strategy", "position_tag",
-        "buy_price", "buy_qty", "buy_time",
-    )}
+    loaded = {
+        key: stock[key]
+        for key in (
+            "id",
+            "code",
+            "name",
+            "status",
+            "strategy",
+            "position_tag",
+            "buy_price",
+            "buy_qty",
+            "buy_time",
+        )
+    }
     kiwoom_sniper_v2._restore_holding_runtime_state([loaded])
     assert loaded["buy_fill_identity_restore_status"] == "restored"
     assert buy_fill_identity_from_runtime(loaded) == expected
     assert "buy_fill_identity_store_gap" not in loaded
 
     stale = {**loaded, "buy_qty": 2}
-    for key in ("_entry_receipt_filled_by_order_no", "_entry_receipt_executions_by_order_no",
-                "entry_filled_qty", "buy_fill_identity_restore_status"):
+    for key in (
+        "_entry_receipt_filled_by_order_no",
+        "_entry_receipt_executions_by_order_no",
+        "entry_filled_qty",
+        "buy_fill_identity_restore_status",
+    ):
         stale.pop(key, None)
     kiwoom_sniper_v2._restore_holding_runtime_state([stale])
     assert stale["buy_fill_identity_store_gap"] == "position_generation_mismatch"
@@ -1110,9 +1163,7 @@ def test_zero_base_exact_data_route_does_not_override_explicit_session_venue():
         "market_data_route": "nxt_only",
         "broker_route": "NXT",
     }
-    premarket_fields = kiwoom_sniper_v2._scanner_runtime_target_venue_fields(
-        premarket
-    )
+    premarket_fields = kiwoom_sniper_v2._scanner_runtime_target_venue_fields(premarket)
     assert premarket_fields["effective_venue"] == "PREMARKET_KRX_LIKE"
     assert premarket_fields["venue_source_quality_status"] == "pass"
 
@@ -1493,9 +1544,7 @@ def test_scheduler_boot_restore_consumes_injected_central_session_context(
         lambda _epoch: pytest.fail("legacy clock resolver must not be called"),
     )
     boot_epoch = observed_at.timestamp()
-    context = kiwoom_sniper_v2._scanner_scheduler_session_context_at_epoch(
-        boot_epoch
-    )
+    context = kiwoom_sniper_v2._scanner_scheduler_session_context_at_epoch(boot_epoch)
     payload = kiwoom_sniper_v2._scanner_scheduler_boot_restore_payload(
         {
             "code": "005930",
@@ -1723,8 +1772,12 @@ def test_scheduler_event_sink_snapshots_action_for_observation_executor(monkeypa
         _InlineExecutor(),
     )
     from src.utils.pipeline_event_logger import BoundedObservationQueue
-    monkeypatch.setattr(kiwoom_sniper_v2, '_SCANNER_OBSERVATION_QUEUE',
-        BoundedObservationQueue(kiwoom_sniper_v2._SCANNER_OBSERVATION_EXECUTOR))
+
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "_SCANNER_OBSERVATION_QUEUE",
+        BoundedObservationQueue(kiwoom_sniper_v2._SCANNER_OBSERVATION_EXECUTOR),
+    )
     monkeypatch.setattr(
         kiwoom_sniper_v2,
         "emit_pipeline_event",
@@ -1772,8 +1825,9 @@ def test_scheduler_event_sink_shutdown_cannot_abort_runtime(monkeypatch):
         _ClosedExecutor(),
     )
     from src.utils.pipeline_event_logger import BoundedObservationQueue
+
     queue = BoundedObservationQueue(kiwoom_sniper_v2._SCANNER_OBSERVATION_EXECUTOR)
-    monkeypatch.setattr(kiwoom_sniper_v2, '_SCANNER_OBSERVATION_QUEUE', queue)
+    monkeypatch.setattr(kiwoom_sniper_v2, "_SCANNER_OBSERVATION_QUEUE", queue)
     monkeypatch.setattr(kiwoom_sniper_v2, "log_error", errors.append)
 
     kiwoom_sniper_v2._emit_scanner_scheduler_event(
@@ -1783,7 +1837,7 @@ def test_scheduler_event_sink_shutdown_cannot_abort_runtime(monkeypatch):
     )
 
     assert errors == []
-    assert queue.snapshot()['unavailable'] == 1
+    assert queue.snapshot()["unavailable"] == 1
 
 
 def test_fresh_canonical_generation_releases_boot_restore_isolation(
@@ -5752,6 +5806,7 @@ def test_initial_ws_registration_groups_caps_scanner_hot_tier(monkeypatch, tmp_p
 
 def test_main_boot_no_longer_imports_or_publishes_retired_collection_targets():
     import inspect
+
     source = inspect.getsource(kiwoom_sniper_v2)
     assert "load_exact_date_collection_targets" not in source
     assert "_publish_micro_reversion_collection_target_set" not in source
@@ -9209,9 +9264,13 @@ def test_scanner_ws_subscription_recheck_selects_manager_snapshot_by_normalized_
     )
 
 
-@pytest.mark.parametrize("suffix,route,venue", [
-    ("", "krx_only", "KRX"), ("_AL", "krx_nxt_integrated", "UNKNOWN"),
-])
+@pytest.mark.parametrize(
+    "suffix,route,venue",
+    [
+        ("", "krx_only", "KRX"),
+        ("_AL", "krx_nxt_integrated", "UNKNOWN"),
+    ],
+)
 @pytest.mark.parametrize("gap", [5.0, 35.0])
 def test_scanner_trade_feature_wait_does_not_repair_proven_live_source(
     monkeypatch, suffix, route, venue, gap
@@ -11406,15 +11465,20 @@ def test_scanner_promotion_pending_attach_prevents_prune_until_attach_resolution
 def test_zero_base_probe_lease_survives_main_ws_prune(monkeypatch):
     published = []
     monkeypatch.setattr(
-        kiwoom_sniper_v2, "WS_MANAGER",
+        kiwoom_sniper_v2,
+        "WS_MANAGER",
         SimpleNamespace(subscribed_codes={"123450", "123460"}),
     )
     monkeypatch.setattr(
-        kiwoom_sniper_v2, "event_bus",
-        SimpleNamespace(publish=lambda name, payload: published.append((name, payload))),
+        kiwoom_sniper_v2,
+        "event_bus",
+        SimpleNamespace(
+            publish=lambda name, payload: published.append((name, payload))
+        ),
     )
     monkeypatch.setattr(
-        kiwoom_sniper_v2, "should_retain_ws_subscription",
+        kiwoom_sniper_v2,
+        "should_retain_ws_subscription",
         lambda *_args, **_kwargs: False,
     )
     monkeypatch.setattr(

@@ -155,7 +155,11 @@ def _step_specs(target_date: str) -> list[StepSpec]:
                     "pattern_lab_currentness_audit",
                     target_date,
                 ),
-                *_pair("swing_pattern_lab_automation", "swing_pattern_lab_automation", target_date),
+                *_pair(
+                    "swing_pattern_lab_automation",
+                    "swing_pattern_lab_automation",
+                    target_date,
+                ),
                 "src/engine/pattern_lab_ai_review.py",
             ),
         ),
@@ -566,9 +570,12 @@ def evaluate_step(spec: StepSpec, env: dict[str, str] | None = None) -> dict[str
     reasons: list[str] = []
     if spec.step_id == "observation_source_quality_audit":
         from src.engine.observation_source_quality_audit import check_audit_reusable
+
         audit_path = PROJECT_ROOT / spec.output_paths[0]
         target_date = audit_path.stem.removeprefix("observation_source_quality_audit_")
-        reusable = check_audit_reusable(target_date, audit_phase="final", artifact_path=audit_path)
+        reusable = check_audit_reusable(
+            target_date, audit_phase="final", artifact_path=audit_path
+        )
         if not reusable["reusable"]:
             reasons.append(reusable["reason"])
     if force:
@@ -615,12 +622,22 @@ def build_report(
     if scope not in SCOPES:
         raise ValueError(f"unsupported scope: {scope}")
     effective_env = dict(os.environ if env is None else env)
-    swing_enabled = str(effective_env.get("THRESHOLD_CYCLE_RUN_SWING_POSTCLOSE", "false")).lower() in {"1", "true", "yes", "on"}
+    swing_enabled = str(
+        effective_env.get("THRESHOLD_CYCLE_RUN_SWING_POSTCLOSE", "false")
+    ).lower() in {"1", "true", "yes", "on"}
     decisions = [
         evaluate_step(spec, env=env)
         for spec in _step_specs(target_date)
         if (scope == "all" or spec.scope == scope)
-        and (swing_enabled or spec.step_id not in {"pattern_lab_currentness_audit", "pattern_lab_ai_review", "pattern_lab_propagation_audit"})
+        and (
+            swing_enabled
+            or spec.step_id
+            not in {
+                "pattern_lab_currentness_audit",
+                "pattern_lab_ai_review",
+                "pattern_lab_propagation_audit",
+            }
+        )
     ]
     return {
         "report_type": REPORT_TYPE,

@@ -408,8 +408,9 @@ def _build_high_ai_hard_stop_conflict_fields(
     resolved_exit_rule = str(exit_rule or "-")
     score = None if current_ai_score is None else _safe_float(current_ai_score, 0.0)
     is_hard_stop = resolved_exit_rule in HIGH_AI_HARD_STOP_EXIT_RULES
-    is_conflict = bool(is_hard_stop and score is not None
-                       and score >= HIGH_AI_HARD_STOP_SCORE_FLOOR)
+    is_conflict = bool(
+        is_hard_stop and score is not None and score >= HIGH_AI_HARD_STOP_SCORE_FLOOR
+    )
     if is_conflict:
         dimension_value = "high_ai_hard_stop_conflict"
     elif is_hard_stop and (score is None or score <= 0.0):
@@ -423,7 +424,8 @@ def _build_high_ai_hard_stop_conflict_fields(
         "hard_stop_conflict_dimension": dimension_value,
         "hard_stop_conflict_score_floor": HIGH_AI_HARD_STOP_SCORE_FLOOR,
         "hard_stop_conflict_ai_score_band": (
-            _ai_score_band(score) if score is not None else "missing"),
+            _ai_score_band(score) if score is not None else "missing"
+        ),
         "hard_stop_conflict_runtime_effect": False,
         "hard_stop_conflict_allowed_runtime_apply": False,
         "hard_stop_conflict_hard_gate": False,
@@ -431,7 +433,9 @@ def _build_high_ai_hard_stop_conflict_fields(
         "ai_score_at_exit": round(score, 1) if score is not None else None,
         "ai_score_raw_at_exit": (
             round(_safe_float(ai_score_raw, 0.0), 1)
-            if ai_score_raw is not None else None),
+            if ai_score_raw is not None
+            else None
+        ),
         "ai_action_at_exit": str(ai_action or "-"),
         "ai_result_source_at_exit": str(ai_result_source or "-"),
         "ai_model_at_exit": str(ai_model or "-"),
@@ -485,39 +489,61 @@ def _post_sell_execution_route_contract(
         else sell_dt
     )
     from src.trading.market.execution_venue import (
-        execution_venue_fields, broker_route_fields, market_defaults_active,
+        execution_venue_fields,
+        broker_route_fields,
+        market_defaults_active,
         MARKET_DEFAULT_AUTHORITY,
     )
+
     assignment = execution_venue_fields(source, observed_at=resolved_sell_dt)
     context = resolve_market_session(resolved_sell_dt)
     from src.trading.market.execution_venue import UNRESOLVED_MARKET_VALUES
+
     broker_route = ""
-    for key in ("last_sell_execution_broker_route_requested", "broker_route_requested",
-                "last_sell_execution_broker_route", "last_exit_broker_route", "fast_exit_broker_route",
-                "entry_execution_broker_route", "broker_route", "dmst_stex_tp"):
+    for key in (
+        "last_sell_execution_broker_route_requested",
+        "broker_route_requested",
+        "last_sell_execution_broker_route",
+        "last_exit_broker_route",
+        "fast_exit_broker_route",
+        "entry_execution_broker_route",
+        "broker_route",
+        "dmst_stex_tp",
+    ):
         value = str(source.get(key) or "").strip().upper()
         if not broker_route:
             broker_route = value
         if value not in UNRESOLVED_MARKET_VALUES:
             broker_route = value
             break
-    route_fields = broker_route_fields(broker_route, observed_at=resolved_sell_dt, recorded=source)
+    route_fields = broker_route_fields(
+        broker_route, observed_at=resolved_sell_dt, recorded=source
+    )
     broker_route = route_fields["broker_route_requested"]
-    market_data_route = str(
-        source.get("last_sell_execution_market_data_route")
-        or source.get("market_data_route")
-        or source.get("post_sell_expected_market_route")
-        or source.get("rising_missed_ws_0d_route")
-        or ""
-    ).strip().lower()
+    market_data_route = (
+        str(
+            source.get("last_sell_execution_market_data_route")
+            or source.get("market_data_route")
+            or source.get("post_sell_expected_market_route")
+            or source.get("rising_missed_ws_0d_route")
+            or ""
+        )
+        .strip()
+        .lower()
+    )
     route_resolution = "explicit_market_data_route"
     if market_data_route in {"", "unknown", "-"}:
         if market_defaults_active(resolved_sell_dt):
-            market_data_route = {"SOR": "krx_nxt_integrated", "KRX": "krx_only",
-                                 "NXT": "nxt_only"}.get(broker_route, "unknown")
+            market_data_route = {
+                "SOR": "krx_nxt_integrated",
+                "KRX": "krx_only",
+                "NXT": "nxt_only",
+            }.get(broker_route, "unknown")
             route_resolution = MARKET_DEFAULT_AUTHORITY
         else:
-            market_data_route = str(context.preferred_market_data_route or "").strip().lower()
+            market_data_route = (
+                str(context.preferred_market_data_route or "").strip().lower()
+            )
             route_resolution = "market_session_contract_preferred_data_route"
     if broker_route not in {"KRX", "NXT", "SOR"} or market_data_route not in {
         "krx_only",
@@ -543,16 +569,22 @@ def _post_sell_execution_route_contract(
         or source.get("market_session_bucket")
         or context.session_regime
     ).strip()
-    venue = str(
-        source.get("last_sell_execution_actual_venue")
-        or source.get("actual_execution_venue")
-        or source.get("broker_actual_execution_venue")
-        or "UNKNOWN"
-    ).strip().upper()
+    venue = (
+        str(
+            source.get("last_sell_execution_actual_venue")
+            or source.get("actual_execution_venue")
+            or source.get("broker_actual_execution_venue")
+            or "UNKNOWN"
+        )
+        .strip()
+        .upper()
+    )
     if venue not in {"KRX", "NXT"}:
         venue = "UNKNOWN"
     if context.contract_version == "market_session_contract_v1" and venue == "UNKNOWN":
-        legacy_venue = str(source.get("last_sell_execution_cohort") or "").strip().upper()
+        legacy_venue = (
+            str(source.get("last_sell_execution_cohort") or "").strip().upper()
+        )
         if legacy_venue in {"KRX", "NXT"}:
             venue = legacy_venue
     venue_source = str(
@@ -597,10 +629,14 @@ def _post_sell_execution_route_contract(
             "venue": venue,
             "session": session,
             "actual_execution_venue_source": venue_source,
-            "actual_execution_venue_verified": assignment["actual_execution_venue_verified"],
+            "actual_execution_venue_verified": assignment[
+                "actual_execution_venue_verified"
+            ],
             "execution_venue_override": assignment["execution_venue_override"],
         }
-    quote_scope = {"nxt_only": "NXT", "krx_nxt_integrated": "SOR", "krx_only": "KRX"}[market_data_route]
+    quote_scope = {"nxt_only": "NXT", "krx_nxt_integrated": "SOR", "krx_only": "KRX"}[
+        market_data_route
+    ]
     return {
         "status": "route_contract_ready",
         "quote_observer_scope": quote_scope,
@@ -616,7 +652,9 @@ def _post_sell_execution_route_contract(
         **route_fields,
         "actual_execution_venue": venue,
         "actual_execution_venue_source": venue_source,
-        "actual_execution_venue_verified": assignment["actual_execution_venue_verified"],
+        "actual_execution_venue_verified": assignment[
+            "actual_execution_venue_verified"
+        ],
         "execution_venue_override": assignment["execution_venue_override"],
     }
 
@@ -717,11 +755,11 @@ def _register_post_sell_executable_bbo_observer(
             "market_data_route": route["market_data_route"],
             "broker_route_requested": route["broker_route_requested"],
             "actual_execution_venue": route["actual_execution_venue"],
-            "actual_execution_venue_source": route[
-                "actual_execution_venue_source"
-            ],
+            "actual_execution_venue_source": route["actual_execution_venue_source"],
             "actual_execution_venue_verified": route["actual_execution_venue_verified"],
-            "broker_actual_execution_venue": stock.get("broker_actual_execution_venue", "UNKNOWN"),
+            "broker_actual_execution_venue": stock.get(
+                "broker_actual_execution_venue", "UNKNOWN"
+            ),
             "pending_horizons_sec": list(POST_SELL_EXECUTABLE_BBO_HORIZONS_SEC),
             "fresh_sample_count": 0,
             "first_fresh_quote_epoch": 0.0,
@@ -874,12 +912,21 @@ def record_post_sell_candidate(
         if retired_holding_score:
             resolved_ai_score = resolved_ai_raw = resolved_ai_effective = None
         else:
-            resolved_ai_score = round(_safe_float(
-                current_ai_score, stock.get("last_exit_current_ai_score", 0.0)), 1)
-            resolved_ai_raw = round(_safe_float(
-                stock.get("last_exit_ai_score_raw"), resolved_ai_score), 1)
-            resolved_ai_effective = round(_safe_float(
-                stock.get("last_exit_ai_score_effective"), resolved_ai_score), 1)
+            resolved_ai_score = round(
+                _safe_float(
+                    current_ai_score, stock.get("last_exit_current_ai_score", 0.0)
+                ),
+                1,
+            )
+            resolved_ai_raw = round(
+                _safe_float(stock.get("last_exit_ai_score_raw"), resolved_ai_score), 1
+            )
+            resolved_ai_effective = round(
+                _safe_float(
+                    stock.get("last_exit_ai_score_effective"), resolved_ai_score
+                ),
+                1,
+            )
         has_standard_exit_decision = any(
             key in stock
             for key in (
@@ -898,7 +945,9 @@ def record_post_sell_candidate(
             "signal_date": target_date,
             "recommendation_id": _safe_int(recommendation_id, 0),
             "sell_time": sell_dt.strftime("%H:%M:%S"),
-            "exact_sell_fill_time": exact_fill_at.isoformat() if exact_fill_at else None,
+            "exact_sell_fill_time": (
+                exact_fill_at.isoformat() if exact_fill_at else None
+            ),
             "sell_order_no": str(stock.get("sell_execution_order_no") or ""),
             "sell_execution_no": str(stock.get("sell_execution_execution_no") or ""),
             "sell_bucket": sell_bucket,
@@ -1020,40 +1069,71 @@ def record_post_sell_candidate(
             "market_session_regime": receipt_route.get("session", "unknown"),
             "market_data_route": receipt_route.get("expected_market_route", "-"),
             "broker_route_requested": receipt_route.get("broker_route", "-"),
-            "broker_route_requested_raw": receipt_route.get("broker_route_requested_raw"),
+            "broker_route_requested_raw": receipt_route.get(
+                "broker_route_requested_raw"
+            ),
             "broker_route_override": receipt_route.get("broker_route_override"),
             "actual_execution_venue": receipt_route.get("venue", "UNKNOWN"),
             "actual_execution_venue_source": receipt_route.get(
                 "actual_execution_venue_source",
                 "official_exchange_fields_ambiguous_or_missing",
             ),
-            "actual_execution_venue_verified": receipt_route.get("actual_execution_venue_verified", False),
+            "actual_execution_venue_verified": receipt_route.get(
+                "actual_execution_venue_verified", False
+            ),
             "execution_venue_override": receipt_route.get("execution_venue_override"),
-            **{key: stock.get(key) for key in (
-                "broker_actual_execution_venue", "broker_actual_execution_venue_source",
-                "broker_actual_exchange_code", "broker_actual_exchange_name", "broker_sor_flag")},
+            **{
+                key: stock.get(key)
+                for key in (
+                    "broker_actual_execution_venue",
+                    "broker_actual_execution_venue_source",
+                    "broker_actual_exchange_code",
+                    "broker_actual_exchange_name",
+                    "broker_sor_flag",
+                )
+            },
             "market_axes_source_quality_status": receipt_route.get(
                 "status", "route_source_quality_blocked"
             ),
             **_entry_split_post_sell_fields(stock),
         }
-        from src.engine.scalping.strategy_owner_replay import entry_split_actual_economic_receipt
-        entry_split_receipt = entry_split_actual_economic_receipt(stock,
-            buy_price=buy_price, buy_qty=buy_qty, profit_rate=profit_rate, completion_at=sell_dt)
+        from src.engine.scalping.strategy_owner_replay import (
+            entry_split_actual_economic_receipt,
+        )
+
+        entry_split_receipt = entry_split_actual_economic_receipt(
+            stock,
+            buy_price=buy_price,
+            buy_qty=buy_qty,
+            profit_rate=profit_rate,
+            completion_at=sell_dt,
+        )
         payload["entry_split_actual_economics"] = entry_split_receipt
-        split_attributed = bool(stock.get("entry_split_initial_entry_seed")
+        split_attributed = bool(
+            stock.get("entry_split_initial_entry_seed")
             or stock.get("entry_split_order_policy_applied")
             or stock.get("entry_split_order_policy_variant_id")
             or stock.get("entry_split_order_variant_id")
-            or stock.get("entry_split_order_policy_mode"))
+            or stock.get("entry_split_order_policy_mode")
+        )
         payload["entry_split_actual_economic_receipt_status"] = (
-            "ready" if entry_split_receipt else
-            "source_gap" if split_attributed or stock.get("entry_split_replay_seed_status") == "source_gap"
-            else "not_attributed")
-        if not entry_split_receipt and payload["entry_split_actual_economic_receipt_status"] == "source_gap":
+            "ready"
+            if entry_split_receipt
+            else (
+                "source_gap"
+                if split_attributed
+                or stock.get("entry_split_replay_seed_status") == "source_gap"
+                else "not_attributed"
+            )
+        )
+        if (
+            not entry_split_receipt
+            and payload["entry_split_actual_economic_receipt_status"] == "source_gap"
+        ):
             payload["entry_split_actual_economic_receipt_blocker"] = (
-                stock.get("entry_split_replay_seed_blocker") or
-                "completed_cost_or_exact_frozen_seed_contract_missing")
+                stock.get("entry_split_replay_seed_blocker")
+                or "completed_cost_or_exact_frozen_seed_contract_missing"
+            )
         for optional_key in (
             "no_scale_in_counterfactual_profit_pct",
             "scale_in_incremental_realized_delta_pct",

@@ -138,11 +138,15 @@ def evaluate_entry_score_role_gate(
     parse_ok_value = result.get("ai_parse_ok")
     parse_ok = True if parse_ok_value in (None, "") else _truthy(parse_ok_value)
     fallback_50 = _truthy(result.get("ai_fallback_score_50"))
-    evaluation_status = str(
-        result.get("ai_decision_evaluation_status")
-        or result.get("decision_evaluation_status")
-        or ""
-    ).strip().lower()
+    evaluation_status = (
+        str(
+            result.get("ai_decision_evaluation_status")
+            or result.get("decision_evaluation_status")
+            or ""
+        )
+        .strip()
+        .lower()
+    )
     stale = any(
         _stale_flag(value)
         for value in (

@@ -65,8 +65,7 @@ def _grid_state(row: dict) -> dict[str, tuple[bool, bool]] | None:
     try:
         values = json.loads(raw) if isinstance(raw, str) else raw
         state = {
-            str(key): (bool(armed), bool(triggered))
-            for key, armed, triggered in values
+            str(key): (bool(armed), bool(triggered)) for key, armed, triggered in values
         }
     except (TypeError, ValueError):
         return None
@@ -83,7 +82,10 @@ def _validated_events(rows: list[dict]) -> tuple[list[dict], str | None]:
     policy_shas = set()
     last_at = float("-inf")
     for index, row in enumerate(rows, 1):
-        if not isinstance(row, dict) or row.get("observation_grid_version") != GRID_VERSION:
+        if (
+            not isinstance(row, dict)
+            or row.get("observation_grid_version") != GRID_VERSION
+        ):
             return [], "source_gap_grid_version"
         if row.get("tuning_start_grid_version") != "start_0p3_to_1p2_step_0p1_v1":
             return [], "source_gap_start_grid_version"
@@ -98,8 +100,14 @@ def _validated_events(rows: list[dict]) -> tuple[list[dict], str | None]:
             return [], "source_gap_tuning_input_quality"
         evaluations = _number(row.get("tuning_grid_evaluations_since_event"))
         max_gap = _number(row.get("tuning_grid_max_evaluation_gap_sec"))
-        if (evaluations is None or evaluations < 1 or not evaluations.is_integer()
-                or max_gap is None or max_gap < 0 or max_gap > 2.0):
+        if (
+            evaluations is None
+            or evaluations < 1
+            or not evaluations.is_integer()
+            or max_gap is None
+            or max_gap < 0
+            or max_gap > 2.0
+        ):
             return [], "source_gap_evaluation_coverage"
         at = _number(row.get("evaluation_at_epoch"))
         bid_at = _number(row.get("bid_source_received_at_epoch"))
@@ -111,10 +119,11 @@ def _validated_events(rows: list[dict]) -> tuple[list[dict], str | None]:
         session = session_contract.resolve_market_session(
             datetime.fromtimestamp(at, KST)
         )
-        if (not session.exit_allowed_by_clock
-                or _flag(row.get("tuning_exit_allowed_by_clock")) is not True
-                or row.get("tuning_session_contract_version")
-                    != session.contract_version):
+        if (
+            not session.exit_allowed_by_clock
+            or _flag(row.get("tuning_exit_allowed_by_clock")) is not True
+            or row.get("tuning_session_contract_version") != session.contract_version
+        ):
             return [], "source_gap_market_exit_clock_blocked"
         peak = _number(row.get("peak_price"))
         peak_profit = _number(row.get("peak_profit_pct"))
@@ -122,8 +131,16 @@ def _validated_events(rows: list[dict]) -> tuple[list[dict], str | None]:
         bid_qty = _number(row.get("executable_bid_qty"))
         strong = _flag(row.get("strong"))
         limit = _number(row.get("trailing_limit_pct"))
-        if (peak is None or peak <= 0 or peak_profit is None or bid is None
-                or bid <= 0 or strong is None or limit is None or limit <= 0):
+        if (
+            peak is None
+            or peak <= 0
+            or peak_profit is None
+            or bid is None
+            or bid <= 0
+            or strong is None
+            or limit is None
+            or limit <= 0
+        ):
             return [], "source_gap_replay_decision_input"
         if bid_qty is None or bid_qty <= 0 or not bid_qty.is_integer():
             return [], "source_gap_executable_bid_depth"
@@ -132,17 +149,30 @@ def _validated_events(rows: list[dict]) -> tuple[list[dict], str | None]:
             return [], "source_gap_grid_state_missing"
         for start in START_GRID_PCT:
             decision = evaluate_trailing_take_profit(
-                peak_price=peak, executable_bid=bid,
-                peak_profit_pct=peak_profit, start_pct=start,
-                strong=strong, weak_limit_pct=limit, strong_limit_pct=limit,
+                peak_price=peak,
+                executable_bid=bid,
+                peak_profit_pct=peak_profit,
+                start_pct=start,
+                strong=strong,
+                weak_limit_pct=limit,
+                strong_limit_pct=limit,
             )
             if logged[str(start)] != (decision.armed, decision.triggered):
                 return [], "source_gap_grid_state_mismatch"
         position_keys.add(str(row.get("position_key") or ""))
         policy_shas.add(str(row.get("scalp_trailing_policy_value_sha256") or ""))
-        result.append({**row, "_at": at, "_market": market,
-                       "_peak": peak, "_peak_profit": peak_profit,
-                       "_bid": bid, "_strong": strong, "_limit": limit})
+        result.append(
+            {
+                **row,
+                "_at": at,
+                "_market": market,
+                "_peak": peak,
+                "_peak_profit": peak_profit,
+                "_bid": bid,
+                "_strong": strong,
+                "_limit": limit,
+            }
+        )
         last_at = at
     if len(position_keys) != 1 or "" in position_keys:
         return [], "source_gap_position_identity"
@@ -152,24 +182,37 @@ def _validated_events(rows: list[dict]) -> tuple[list[dict], str | None]:
 
 
 def _first_signal(
-    rows: list[dict], *, target_market: str, start_pct: float,
+    rows: list[dict],
+    *,
+    target_market: str,
+    start_pct: float,
     incumbent_by_market: dict[str, float],
 ) -> tuple[dict | None, float | None]:
     armed = False
     first_arm_at: float | None = None
     for row in rows:
-        start = (start_pct if row["_market"] == target_market
-                 else incumbent_by_market[row["_market"]])
+        start = (
+            start_pct
+            if row["_market"] == target_market
+            else incumbent_by_market[row["_market"]]
+        )
         decision = evaluate_trailing_take_profit(
-            peak_price=row["_peak"], executable_bid=row["_bid"],
-            peak_profit_pct=row["_peak_profit"], start_pct=start,
-            strong=row["_strong"], weak_limit_pct=row["_limit"],
+            peak_price=row["_peak"],
+            executable_bid=row["_bid"],
+            peak_profit_pct=row["_peak_profit"],
+            start_pct=start,
+            strong=row["_strong"],
+            weak_limit_pct=row["_limit"],
             strong_limit_pct=row["_limit"],
         )
         if decision.armed and not armed:
             armed = True
             first_arm_at = row["_at"]
-        if armed and decision.price_usable and decision.drawdown_pct + 1e-9 >= row["_limit"]:
+        if (
+            armed
+            and decision.price_usable
+            and decision.drawdown_pct + 1e-9 >= row["_limit"]
+        ):
             return row, first_arm_at
     return None, first_arm_at
 
@@ -212,8 +255,11 @@ def _candidate_pnl(trade: dict, row: dict) -> tuple[float | None, str | None]:
 
 
 def replay_start_grid(
-    trade: dict, transitions: list[dict], *,
-    actual_exit_rule: str, actual_exit_signal: dict,
+    trade: dict,
+    transitions: list[dict],
+    *,
+    actual_exit_rule: str,
+    actual_exit_signal: dict,
     incumbent_start_pct: float = 0.4,
     incumbent_by_market: dict[str, float] | None = None,
 ) -> dict:
@@ -232,10 +278,10 @@ def replay_start_grid(
     incumbents = incumbent_by_market or {
         market: incumbent_start_pct for market in START_MARKETS
     }
-    if (set(incumbents) != set(START_MARKETS)
-            or any(_number(incumbents[market]) is None
-                   or not 0 < float(incumbents[market]) <= 100
-                   for market in START_MARKETS)):
+    if set(incumbents) != set(START_MARKETS) or any(
+        _number(incumbents[market]) is None or not 0 < float(incumbents[market]) <= 100
+        for market in START_MARKETS
+    ):
         return {**base, "source_gap": "source_gap_incumbent_market_values"}
     base["incumbent_by_market"] = {
         market: float(incumbents[market]) for market in START_MARKETS
@@ -247,16 +293,24 @@ def replay_start_grid(
     if not rows or signal_at - rows[-1]["_at"] > 15.0:
         return {**base, "source_gap": "source_gap_exit_signal_coverage"}
     buys = trade.get("buy_fill_legs")
-    if (not isinstance(buys, list) or not buys
-            or any(not isinstance(leg, dict) or _epoch(leg.get("at")) is None
-                   for leg in buys)):
+    if (
+        not isinstance(buys, list)
+        or not buys
+        or any(
+            not isinstance(leg, dict) or _epoch(leg.get("at")) is None for leg in buys
+        )
+    ):
         return {**base, "source_gap": "source_gap_buy_fill_clock"}
     if rows[0]["_at"] < max(_epoch(leg["at"]) for leg in buys) - 1.0:
         return {**base, "source_gap": "source_gap_pre_full_buy_observation"}
     sells = trade.get("sell_fill_legs")
-    if (not isinstance(sells, list) or not sells
-            or any(not isinstance(leg, dict) or _epoch(leg.get("at")) is None
-                   for leg in sells)):
+    if (
+        not isinstance(sells, list)
+        or not sells
+        or any(
+            not isinstance(leg, dict) or _epoch(leg.get("at")) is None for leg in sells
+        )
+    ):
         return {**base, "source_gap": "source_gap_sell_fill_clock"}
     if min(_epoch(leg["at"]) for leg in sells) < signal_at - 1.0:
         return {**base, "source_gap": "source_gap_sell_before_exit_signal"}
@@ -266,41 +320,46 @@ def replay_start_grid(
         return {**base, "source_gap": "source_gap_exact_completed_economics"}
     actual_tp = actual_exit_rule == "scalp_trailing_take_profit"
     incumbent, _ = _first_signal(
-        rows, target_market="REGULAR", start_pct=incumbents["REGULAR"],
+        rows,
+        target_market="REGULAR",
+        start_pct=incumbents["REGULAR"],
         incumbent_by_market=incumbents,
     )
-    if actual_tp and (incumbent is None
-                      or abs(incumbent["_at"] - signal_at) > 1.0):
+    if actual_tp and (incumbent is None or abs(incumbent["_at"] - signal_at) > 1.0):
         return {**base, "source_gap": "source_gap_incumbent_trigger_not_reproduced"}
     if not actual_tp and incumbent is not None and incumbent["_at"] < signal_at - 1.0:
         return {**base, "source_gap": "source_gap_incumbent_competing_exit_order"}
     base["incumbent_actual_pnl_krw"] = actual_pnl
-    base["incumbent_first_trigger_at_epoch"] = (
-        incumbent["_at"] if incumbent else None
-    )
+    base["incumbent_first_trigger_at_epoch"] = incumbent["_at"] if incumbent else None
     base["exposure_markets"] = sorted({row["_market"] for row in rows})
+
     def predecision_context(row: dict) -> dict:
         ai_usable = _flag(row.get("ai_score_usable"))
         return {
             "ai_class": (
-                "strong" if ai_usable and row["_strong"] else
-                "weak" if ai_usable else "unusable"
+                "strong"
+                if ai_usable and row["_strong"]
+                else "weak" if ai_usable else "unusable"
             ),
             "quote_state": str(row.get("quote_consistency_state") or "missing"),
             "spread_bps": _number(row.get("executable_spread_bps")),
             "bid_source": str(row.get("bid_source") or "missing"),
         }
+
     base["predecision_context"] = predecision_context(rows[0])
     base["predecision_context_by_market"] = {
-        market: predecision_context(next(row for row in rows
-                                         if row["_market"] == market))
+        market: predecision_context(
+            next(row for row in rows if row["_market"] == market)
+        )
         for market in base["exposure_markets"]
     }
     for market in START_MARKETS:
         results = {}
         for start in START_GRID_PCT:
             first, arm_at = _first_signal(
-                rows, target_market=market, start_pct=start,
+                rows,
+                target_market=market,
+                start_pct=start,
                 incumbent_by_market=incumbents,
             )
             status = "same_observed_exit"
@@ -308,7 +367,9 @@ def replay_start_grid(
             gap_reason = None
             if first is not None and first["_at"] < signal_at - 1.0:
                 modeled_pnl, gap_reason = _candidate_pnl(trade, first)
-                status = "modeled_earlier_full_sell" if gap_reason is None else "source_gap"
+                status = (
+                    "modeled_earlier_full_sell" if gap_reason is None else "source_gap"
+                )
             elif first is not None and abs(first["_at"] - signal_at) <= 1.0:
                 if not actual_tp:
                     status = "same_time_competing_exit_priority"
@@ -316,7 +377,8 @@ def replay_start_grid(
                 status = "censored_after_actual_take_profit"
                 modeled_pnl = None
             first_signal_pnl = (
-                modeled_pnl if status == "modeled_earlier_full_sell"
+                modeled_pnl
+                if status == "modeled_earlier_full_sell"
                 else _candidate_pnl(trade, first)[0] if first else None
             )
             results[str(start)] = {
@@ -331,16 +393,19 @@ def replay_start_grid(
                 "first_trigger_market": first["_market"] if first else None,
                 "first_trigger_modeled_net_pct": (
                     round(100.0 * first_signal_pnl / buy_amount, 6)
-                    if first_signal_pnl is not None else None
+                    if first_signal_pnl is not None
+                    else None
                 ),
                 "modeled_or_observed_pnl_krw": modeled_pnl,
                 "paired_delta_pnl_krw": (
                     round(modeled_pnl - actual_pnl, 2)
-                    if modeled_pnl is not None else None
+                    if modeled_pnl is not None
+                    else None
                 ),
                 "fill_model": (
                     "best_bid_full_qty_configured_cost"
-                    if status == "modeled_earlier_full_sell" else None
+                    if status == "modeled_earlier_full_sell"
+                    else None
                 ),
             }
         base["markets"][market] = results
@@ -358,7 +423,9 @@ def _weighted_ev(rows: list[tuple[dict, dict]]) -> float | None:
 def _outcome_available_day(outcome: dict) -> str:
     """Split by the date a completed outcome became available, when known."""
 
-    return str(outcome.get("completion_observed_date") or outcome.get("rec_date") or "")[:10]
+    return str(
+        outcome.get("completion_observed_date") or outcome.get("rec_date") or ""
+    )[:10]
 
 
 def _day_bootstrap_interval(rows: list[tuple[dict, dict]]) -> list[float] | None:
@@ -406,19 +473,24 @@ def summarize_start_grid(
         "population_complete": bool(population_complete),
         "holdout_date_basis": "completion_observed_date_with_entry_date_fallback",
         "entry_date_fallback_ids": sorted(
-            trade_id for trade_id, row in by_id.items()
+            trade_id
+            for trade_id, row in by_id.items()
             if not row.get("completion_observed_date")
         ),
         "markets": {},
     }
     for market in START_MARKETS:
         exposed = {
-            trade_id for trade_id, outcome in by_id.items()
-            if market in (outcome.get("trailing_start_market_replay") or {})
-                .get("exposure_markets", [])
+            trade_id
+            for trade_id, outcome in by_id.items()
+            if market
+            in (outcome.get("trailing_start_market_replay") or {}).get(
+                "exposure_markets", []
+            )
         }
         source_gaps = sorted(
-            trade_id for trade_id, outcome in by_id.items()
+            trade_id
+            for trade_id, outcome in by_id.items()
             if (outcome.get("trailing_start_market_replay") or {}).get("source_gap")
         )
         eligible: dict[str, set[str]] = {}
@@ -428,12 +500,18 @@ def summarize_start_grid(
             candidate_rows = {}
             for trade_id in exposed:
                 outcome = by_id[trade_id]
-                candidate = (outcome.get("trailing_start_market_replay") or {}) \
-                    .get("markets", {}).get(market, {}).get(key)
-                if (isinstance(candidate, dict)
-                        and candidate.get("paired_delta_pnl_krw") is not None
-                        and _number(outcome.get("buy_fill_amount")) is not None
-                        and float(outcome["buy_fill_amount"]) > 0):
+                candidate = (
+                    (outcome.get("trailing_start_market_replay") or {})
+                    .get("markets", {})
+                    .get(market, {})
+                    .get(key)
+                )
+                if (
+                    isinstance(candidate, dict)
+                    and candidate.get("paired_delta_pnl_krw") is not None
+                    and _number(outcome.get("buy_fill_amount")) is not None
+                    and float(outcome["buy_fill_amount"]) > 0
+                ):
                     candidate_rows[trade_id] = (outcome, candidate)
             for trade_id in set(by_id) - exposed - set(source_gaps):
                 outcome = by_id[trade_id]
@@ -441,37 +519,46 @@ def summarize_start_grid(
                 if amount is not None and amount > 0:
                     candidate_rows[trade_id] = (
                         outcome,
-                        {"status": "not_exposed_zero_effect",
-                         "paired_delta_pnl_krw": 0.0},
+                        {
+                            "status": "not_exposed_zero_effect",
+                            "paired_delta_pnl_krw": 0.0,
+                        },
                     )
             rows_by_start[key] = candidate_rows
             eligible[key] = set(candidate_rows)
         common = set.intersection(*eligible.values()) if eligible else set()
-        dates = sorted({_outcome_available_day(by_id[trade_id])
-                        for trade_id in common})
+        dates = sorted({_outcome_available_day(by_id[trade_id]) for trade_id in common})
         holdout_days = max(MIN_HOLDOUT_DAYS, math.ceil(len(dates) * 0.2))
         holdout = set(dates[-holdout_days:]) if len(dates) > holdout_days else set()
         candidate_metrics = {}
         for start in START_GRID_PCT:
             key = str(start)
             selected = [rows_by_start[key][trade_id] for trade_id in sorted(common)]
-            train_rows = [pair for pair in selected
-                          if _outcome_available_day(pair[0]) not in holdout]
-            holdout_rows = [pair for pair in selected
-                            if _outcome_available_day(pair[0]) in holdout]
+            train_rows = [
+                pair
+                for pair in selected
+                if _outcome_available_day(pair[0]) not in holdout
+            ]
+            holdout_rows = [
+                pair for pair in selected if _outcome_available_day(pair[0]) in holdout
+            ]
             context = {}
             for field in ("ai_class", "quote_state"):
                 buckets: dict[str, list[tuple[dict, dict]]] = {}
                 for pair in selected:
                     replay = pair[0].get("trailing_start_market_replay") or {}
-                    market_context = (replay.get("predecision_context_by_market")
-                                      or {}).get(market) or {}
+                    market_context = (
+                        replay.get("predecision_context_by_market") or {}
+                    ).get(market) or {}
                     label = str(market_context.get(field) or "not_exposed")
                     buckets.setdefault(label, []).append(pair)
                 context[field] = {
-                    label: {"n": len(group),
-                            "modeled_paired_notional_weighted_delta_ev_pct":
-                                _weighted_ev(group)}
+                    label: {
+                        "n": len(group),
+                        "modeled_paired_notional_weighted_delta_ev_pct": _weighted_ev(
+                            group
+                        ),
+                    }
                     for label, group in sorted(buckets.items())
                 }
             candidate_metrics[key] = {
@@ -481,11 +568,13 @@ def summarize_start_grid(
                 "holdout_n": len(holdout_rows),
                 "train_ev_pct": _weighted_ev(train_rows),
                 "holdout_ev_pct": _weighted_ev(holdout_rows),
-                "holdout_day_bootstrap_95pct_interval":
-                    _day_bootstrap_interval(holdout_rows),
+                "holdout_day_bootstrap_95pct_interval": _day_bootstrap_interval(
+                    holdout_rows
+                ),
                 "worst_paired_delta_ev_pct": min(
                     (
-                        100.0 * float(pair[1]["paired_delta_pnl_krw"])
+                        100.0
+                        * float(pair[1]["paired_delta_pnl_krw"])
                         / float(pair[0]["buy_fill_amount"])
                         for pair in selected
                     ),
@@ -494,14 +583,17 @@ def summarize_start_grid(
                 "incremental_loss_worsened_ids": sorted(
                     str(pair[0]["record_id"])
                     for pair in selected
-                    if (pair[1].get("status") == "modeled_earlier_full_sell"
+                    if (
+                        pair[1].get("status") == "modeled_earlier_full_sell"
                         and float(pair[1]["modeled_or_observed_pnl_krw"]) < 0
-                        and float(pair[1]["paired_delta_pnl_krw"]) < 0)
+                        and float(pair[1]["paired_delta_pnl_krw"]) < 0
+                    )
                 ),
                 "predecision_interactions": context,
             }
         enough = bool(
-            population_complete and common
+            population_complete
+            and common
             and len(dates) - len(holdout) >= MIN_TRAIN_DAYS
             and len(holdout) >= MIN_HOLDOUT_DAYS
             and all(
@@ -512,7 +604,8 @@ def summarize_start_grid(
         )
         incumbent_values = {
             (by_id[trade_id].get("trailing_start_market_replay") or {})
-                .get("incumbent_by_market", {}).get(market)
+            .get("incumbent_by_market", {})
+            .get(market)
             for trade_id in common
         }
         incumbent_value = (
@@ -522,20 +615,31 @@ def summarize_start_grid(
         )
         if incumbent_value is None or incumbent_value not in START_GRID_PCT:
             enough = False
-        ranked = sorted(
-            START_GRID_PCT,
-            key=lambda start: (
-                -float(candidate_metrics[str(start)]["train_ev_pct"]),
-                abs(start - incumbent_value), start,
-            ),
-        ) if enough else []
+        ranked = (
+            sorted(
+                START_GRID_PCT,
+                key=lambda start: (
+                    -float(candidate_metrics[str(start)]["train_ev_pct"]),
+                    abs(start - incumbent_value),
+                    start,
+                ),
+            )
+            if enough
+            else []
+        )
         winner = ranked[0] if ranked else None
-        winner_metric = candidate_metrics.get(str(winner)) if winner is not None else None
+        winner_metric = (
+            candidate_metrics.get(str(winner)) if winner is not None else None
+        )
         interval = (winner_metric or {}).get("holdout_day_bootstrap_95pct_interval")
         research_value = (
-            winner if winner != incumbent_value and interval and interval[0] > 0
+            winner
+            if winner != incumbent_value
+            and interval
+            and interval[0] > 0
             and winner_metric["holdout_ev_pct"] is not None
-            and winner_metric["holdout_ev_pct"] > 0 else None
+            and winner_metric["holdout_ev_pct"] > 0
+            else None
         )
         tail_review_required = bool(
             research_value is not None
@@ -555,10 +659,17 @@ def summarize_start_grid(
             "runtime_candidate_value_pct": None,
             "eligible_for_live_review": False,
             "status": (
-                "hold_tail_safety_review" if tail_review_required
-                else "research_candidate_holdout_positive" if research_value is not None
-                else "hold_source_or_sample" if not enough
-                else "hold_no_independent_edge"
+                "hold_tail_safety_review"
+                if tail_review_required
+                else (
+                    "research_candidate_holdout_positive"
+                    if research_value is not None
+                    else (
+                        "hold_source_or_sample"
+                        if not enough
+                        else "hold_no_independent_edge"
+                    )
+                )
             ),
         }
     return result

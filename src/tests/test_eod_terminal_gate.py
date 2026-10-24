@@ -12,11 +12,11 @@ ROOT = Path(__file__).resolve().parents[2]
 GATE = ROOT / "deploy/eod_terminal_gate.sh"
 
 
-
-
 def _run_gate(tmp_path: Path, payload: dict) -> subprocess.CompletedProcess[str]:
     target = "2026-09-28"
-    status = tmp_path / "data/runtime/update_kospi_status" / f"update_kospi_{target}.json"
+    status = (
+        tmp_path / "data/runtime/update_kospi_status" / f"update_kospi_{target}.json"
+    )
     status.parent.mkdir(parents=True)
     status.write_text(json.dumps(payload), encoding="utf-8")
     return subprocess.run(
@@ -82,42 +82,58 @@ def test_eod_gates_precede_surviving_machine_dispatch():
     assert not (ROOT / "deploy/run_widget_evaluation.sh").exists()
     assert not (ROOT / "deploy/run_machine_microstructure_final_refresh.sh").exists()
     assert not (ROOT / "deploy/install_postclose_eod_gate_systemd.sh").exists()
-    threshold = (ROOT / "deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
+    threshold = (ROOT / "deploy/run_threshold_cycle_postclose.sh").read_text(
+        encoding="utf-8"
+    )
 
     start_marker = threshold.index('emit_postclose_marker "[START] threshold-cycle')
     gate = threshold.index('wait_for_eod_terminal "$PROJECT_DIR"', start_marker)
     assert gate < threshold.index("stop_postclose_bot_if_requested", start_marker)
-    assert gate < threshold.index('--stage main_machine_policy --date "$TARGET_DATE"', start_marker)
+    assert gate < threshold.index(
+        '--stage main_machine_policy --date "$TARGET_DATE"', start_marker
+    )
 
 
-@pytest.mark.parametrize('day', ['2026-10-09', '2026-10-10'])
+@pytest.mark.parametrize("day", ["2026-10-09", "2026-10-10"])
 def test_dashboard_archive_holiday_skips_before_eod_or_compression(tmp_path, day):
-    (tmp_path / '.venv').symlink_to(ROOT / '.venv', target_is_directory=True)
-    (tmp_path / 'src').symlink_to(ROOT / 'src', target_is_directory=True)
+    (tmp_path / ".venv").symlink_to(ROOT / ".venv", target_is_directory=True)
+    (tmp_path / "src").symlink_to(ROOT / "src", target_is_directory=True)
     result = subprocess.run(
-        ['bash', str(ROOT / 'deploy/run_dashboard_db_archive_cron.sh'), '0'],
-        env={**os.environ, 'PROJECT_DIR': str(tmp_path), 'TARGET_DATE': day,
-             'DASHBOARD_ARCHIVE_EOD_WAIT_SEC': '0'},
-        capture_output=True, text=True, timeout=15,
+        ["bash", str(ROOT / "deploy/run_dashboard_db_archive_cron.sh"), "0"],
+        env={
+            **os.environ,
+            "PROJECT_DIR": str(tmp_path),
+            "TARGET_DATE": day,
+            "DASHBOARD_ARCHIVE_EOD_WAIT_SEC": "0",
+        },
+        capture_output=True,
+        text=True,
+        timeout=15,
     )
     assert result.returncode == 0, result.stderr
-    assert f'[SKIP] dashboard_db_archive target_date={day}' in result.stdout
-    assert 'no_archive_mutation=true' in result.stdout
-    assert '[DONE]' not in result.stdout and 'EOD' not in result.stdout
-    assert not (tmp_path / 'logs/dashboard_db_archive.log').exists()
+    assert f"[SKIP] dashboard_db_archive target_date={day}" in result.stdout
+    assert "no_archive_mutation=true" in result.stdout
+    assert "[DONE]" not in result.stdout and "EOD" not in result.stdout
+    assert not (tmp_path / "logs/dashboard_db_archive.log").exists()
 
 
 def test_dashboard_archive_trading_day_missing_eod_still_fails(tmp_path):
-    (tmp_path / '.venv').symlink_to(ROOT / '.venv', target_is_directory=True)
-    (tmp_path / 'src').symlink_to(ROOT / 'src', target_is_directory=True)
+    (tmp_path / ".venv").symlink_to(ROOT / ".venv", target_is_directory=True)
+    (tmp_path / "src").symlink_to(ROOT / "src", target_is_directory=True)
     result = subprocess.run(
-        ['bash', str(ROOT / 'deploy/run_dashboard_db_archive_cron.sh'), '0'],
-        env={**os.environ, 'PROJECT_DIR': str(tmp_path), 'TARGET_DATE': '2026-10-08',
-             'DASHBOARD_ARCHIVE_EOD_WAIT_SEC': '0'},
-        capture_output=True, text=True, timeout=15,
+        ["bash", str(ROOT / "deploy/run_dashboard_db_archive_cron.sh"), "0"],
+        env={
+            **os.environ,
+            "PROJECT_DIR": str(tmp_path),
+            "TARGET_DATE": "2026-10-08",
+            "DASHBOARD_ARCHIVE_EOD_WAIT_SEC": "0",
+        },
+        capture_output=True,
+        text=True,
+        timeout=15,
     )
     assert result.returncode != 0
-    assert '[FAIL] dashboard_db_archive target_date=2026-10-08' in result.stdout
-    assert 'EOD wait timeout' in result.stderr
-    assert '[DONE]' not in result.stdout
-    assert not (tmp_path / 'logs/dashboard_db_archive.log').exists()
+    assert "[FAIL] dashboard_db_archive target_date=2026-10-08" in result.stdout
+    assert "EOD wait timeout" in result.stderr
+    assert "[DONE]" not in result.stdout
+    assert not (tmp_path / "logs/dashboard_db_archive.log").exists()

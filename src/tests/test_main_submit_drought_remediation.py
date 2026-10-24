@@ -395,8 +395,11 @@ def test_watching_evaluates_above_smart_target_with_existing_cooldown(
     monkeypatch.setattr(H, "_log_entry_pipeline", lambda *a, **k: None)
     monkeypatch.setattr(H, "log_error", lambda message, *a, **k: errors.append(message))
     monkeypatch.setattr(H, "_extract_ai_overlap_snapshot", lambda **k: {})
-    monkeypatch.setattr(H, "_commit_watching_entry_evaluation",
-                        lambda stock, code, decision, **k: commits.append(decision))
+    monkeypatch.setattr(
+        H,
+        "_commit_watching_entry_evaluation",
+        lambda stock, code, decision, **k: commits.append(decision),
+    )
     monkeypatch.setattr(H, "arm_big_bite_if_triggered", lambda **k: (False, {}))
     monkeypatch.setattr(H, "confirm_big_bite_follow_through", lambda **k: (True, {}))
     monkeypatch.setattr(
@@ -418,11 +421,21 @@ def test_watching_evaluates_above_smart_target_with_existing_cooldown(
     monkeypatch.setattr(
         H,
         "_resolve_scanner_async_entry_ai",
-        lambda *a, **k: calls.append(k) or (
-            dict(status="completed", prepared_context={"recent_ticks":[{"price":273000}]},
-                 ai_decision={"action":"WAIT", "score":0, "reason":"source invalid",
-                              "entry_mechanistic_policy_decision":"source_invalid"})
-            if completed_source_invalid else dict(status="pending")),
+        lambda *a, **k: calls.append(k)
+        or (
+            dict(
+                status="completed",
+                prepared_context={"recent_ticks": [{"price": 273000}]},
+                ai_decision={
+                    "action": "WAIT",
+                    "score": 0,
+                    "reason": "source invalid",
+                    "entry_mechanistic_policy_decision": "source_invalid",
+                },
+            )
+            if completed_source_invalid
+            else dict(status="pending")
+        ),
     )
     runtime = dict(
         strategy="SCALPING",
@@ -460,7 +473,7 @@ def test_watching_evaluates_above_smart_target_with_existing_cooldown(
             ask_tot=100000,
             bid_tot=100000,
             open=270000,
-            orderbook={"ask_tot":100000,"bid_tot":100000},
+            orderbook={"ask_tot": 100000, "bid_tot": 100000},
         ),
         radar,
         object(),
@@ -474,8 +487,8 @@ def test_watching_evaluates_above_smart_target_with_existing_cooldown(
     )
     assert len(calls) == expected
     if completed_source_invalid and expected:
-        assert len(commits)==1
-        assert commits[0]["entry_mechanistic_policy_decision"]=="source_invalid"
+        assert len(commits) == 1
+        assert commits[0]["entry_mechanistic_policy_decision"] == "source_invalid"
         assert not errors
 
 

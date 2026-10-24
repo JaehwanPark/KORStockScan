@@ -45,20 +45,33 @@ def _read_diskstats() -> dict:
         if len(parts) < 14:
             continue
         name = parts[2]
-        block = Path('/sys/class/block') / name
-        if (name.startswith(("loop", "ram", "zram", "dm-", "md"))
-                or (block / 'partition').exists()):
+        block = Path("/sys/class/block") / name
+        if (
+            name.startswith(("loop", "ram", "zram", "dm-", "md"))
+            or (block / "partition").exists()
+        ):
             continue
         if not block.exists():
             continue
         read_sectors += int(parts[5])
         write_sectors += int(parts[9])
-        devices[name] = dict(read_sectors=int(parts[5]), write_sectors=int(parts[9]),
-            read_ios=int(parts[3]), write_ios=int(parts[7]),
-            read_ms=int(parts[6]), write_ms=int(parts[10]),
-            inflight=int(parts[11]), io_ms=int(parts[12]), weighted_ms=int(parts[13]))
-    return {"schema": "physical_block_v2", "read_sectors": read_sectors,
-            "write_sectors": write_sectors, "devices": devices}
+        devices[name] = dict(
+            read_sectors=int(parts[5]),
+            write_sectors=int(parts[9]),
+            read_ios=int(parts[3]),
+            write_ios=int(parts[7]),
+            read_ms=int(parts[6]),
+            write_ms=int(parts[10]),
+            inflight=int(parts[11]),
+            io_ms=int(parts[12]),
+            weighted_ms=int(parts[13]),
+        )
+    return {
+        "schema": "physical_block_v2",
+        "read_sectors": read_sectors,
+        "write_sectors": write_sectors,
+        "devices": devices,
+    }
 
 
 def _top_processes() -> list[dict[str, str]]:
@@ -168,16 +181,22 @@ def _cpu_pct(curr: dict[str, int], prev: dict[str, int]) -> dict[str, float]:
 
 
 def _disk_delta(curr: dict[str, int], prev: dict[str, int]) -> dict[str, float]:
-    if (not prev or curr.get('schema') != prev.get('schema')
-            or curr.get('devices', {}).keys() != prev.get('devices', {}).keys()
-            or curr['read_sectors'] < prev.get('read_sectors', 0)
-            or curr['write_sectors'] < prev.get('write_sectors', 0)):
-        return {'disk_read_mb_delta': None, 'disk_write_mb_delta': None,
-                'measurement_status': 'baseline_or_device_generation_changed'}
+    if (
+        not prev
+        or curr.get("schema") != prev.get("schema")
+        or curr.get("devices", {}).keys() != prev.get("devices", {}).keys()
+        or curr["read_sectors"] < prev.get("read_sectors", 0)
+        or curr["write_sectors"] < prev.get("write_sectors", 0)
+    ):
+        return {
+            "disk_read_mb_delta": None,
+            "disk_write_mb_delta": None,
+            "measurement_status": "baseline_or_device_generation_changed",
+        }
     read_delta = max(0, curr["read_sectors"] - int(prev.get("read_sectors", 0)))
     write_delta = max(0, curr["write_sectors"] - int(prev.get("write_sectors", 0)))
     return {
-        'measurement_status': 'observed',
+        "measurement_status": "observed",
         "disk_read_mb_delta": round((read_delta * 512) / (1024 * 1024), 3),
         "disk_write_mb_delta": round((write_delta * 512) / (1024 * 1024), 3),
     }
@@ -186,36 +205,46 @@ def _disk_delta(curr: dict[str, int], prev: dict[str, int]) -> dict[str, float]:
 def _io_pressure():
     result = {}
     try:
-        for line in Path('/proc/pressure/io').read_text().splitlines():
+        for line in Path("/proc/pressure/io").read_text().splitlines():
             name, *pairs = line.split()
-            result[name] = {k: float(v) for k, v in (pair.split('=') for pair in pairs)}
+            result[name] = {k: float(v) for k, v in (pair.split("=") for pair in pairs)}
     except (OSError, ValueError):
-        return {'status': 'unobserved'}
-    return {'status': 'observed', **result}
+        return {"status": "unobserved"}
+    return {"status": "observed", **result}
 
 
 def _device_intervals(current, previous, seconds):
     result = {}
-    counters = ('read_ios', 'write_ios', 'read_ms', 'write_ms', 'io_ms', 'weighted_ms')
-    for name, row in current.get('devices', {}).items():
-        old = previous.get('devices', {}).get(name)
-        if (not old or seconds <= 0 or current.get('schema') != previous.get('schema')
-                or any(row[k] < old.get(k, row[k] + 1) for k in counters)):
-            result[name] = {'status': 'baseline_or_counter_reset'}
+    counters = ("read_ios", "write_ios", "read_ms", "write_ms", "io_ms", "weighted_ms")
+    for name, row in current.get("devices", {}).items():
+        old = previous.get("devices", {}).get(name)
+        if (
+            not old
+            or seconds <= 0
+            or current.get("schema") != previous.get("schema")
+            or any(row[k] < old.get(k, row[k] + 1) for k in counters)
+        ):
+            result[name] = {"status": "baseline_or_counter_reset"}
             continue
         d = {k: row[k] - old[k] for k in counters}
-        ios = d['read_ios'] + d['write_ios']
-        result[name] = dict(status='observed', interval_sec=seconds, inflight=row['inflight'],
-            await_ms=round((d['read_ms'] + d['write_ms']) / ios, 3) if ios else None,
-            average_queue_depth=round(d['weighted_ms'] / (seconds * 1000), 4),
-            busy_pct=round(d['io_ms'] / (seconds * 10), 3))
+        ios = d["read_ios"] + d["write_ios"]
+        result[name] = dict(
+            status="observed",
+            interval_sec=seconds,
+            inflight=row["inflight"],
+            await_ms=round((d["read_ms"] + d["write_ms"]) / ios, 3) if ios else None,
+            average_queue_depth=round(d["weighted_ms"] / (seconds * 1000), 4),
+            busy_pct=round(d["io_ms"] / (seconds * 10), 3),
+        )
     return result
 
 
 def _swap_counters():
     try:
-        fields = dict(line.split() for line in Path('/proc/vmstat').read_text().splitlines())
-        return {name: int(fields[name]) for name in ('pswpin', 'pswpout')}
+        fields = dict(
+            line.split() for line in Path("/proc/vmstat").read_text().splitlines()
+        )
+        return {name: int(fields[name]) for name in ("pswpin", "pswpout")}
     except (OSError, ValueError, KeyError):
         return {}
 
@@ -225,58 +254,106 @@ def _process_io_snapshot(top):
     candidates = {}
     main_identity = None
     try:
-        selection = json.loads((PROJECT_ROOT / 'data/runtime/runtime_release_selection.json').read_text())
-        if selection.get('actual_pid_consumed') is True:
-            candidates[int(selection['actual_pid_receipt']['pid'])] = 'main'
-            main_identity = selection['actual_pid_receipt']
+        selection = json.loads(
+            (PROJECT_ROOT / "data/runtime/runtime_release_selection.json").read_text()
+        )
+        if selection.get("actual_pid_consumed") is True:
+            candidates[int(selection["actual_pid_receipt"]["pid"])] = "main"
+            main_identity = selection["actual_pid_receipt"]
     except (OSError, ValueError, KeyError, TypeError):
         pass
     # Enumerate names/parents once, then read counters only for known jobs.
     # The CPU top-five cannot identify an I/O-blocked reporter or developer job.
     inventory = []
     try:
-        output = subprocess.run(['ps', '-eo', 'pid,ppid,comm,args'],
-            capture_output=True, text=True, check=True, timeout=2).stdout
+        output = subprocess.run(
+            ["ps", "-eo", "pid,ppid,comm,args"],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=2,
+        ).stdout
         for line in output.splitlines()[1:1025]:
             parts = line.split(None, 3)
             if len(parts) == 4:
-                inventory.append(dict(pid=parts[0], ppid=parts[1], comm=parts[2], args=parts[3]))
+                inventory.append(
+                    dict(pid=parts[0], ppid=parts[1], comm=parts[2], args=parts[3])
+                )
     except (OSError, subprocess.SubprocessError):
         inventory = top
     for item in inventory:
-        args = item.get('args', '')
-        owner = ('sentinel' if 'src.engine.buy_funnel_sentinel' in args else
-                 'pytest' if 'pytest' in args else
-                 'codex' if 'codex' in item.get('comm', '').lower() else
-                 'research' if any(name in args for name in
-                    ('-m src.engine.paired', '-m src.engine.automation.pre_submit_delay_partitioned_research')) else None)
+        args = item.get("args", "")
+        owner = (
+            "sentinel"
+            if "src.engine.buy_funnel_sentinel" in args
+            else (
+                "pytest"
+                if "pytest" in args
+                else (
+                    "codex"
+                    if "codex" in item.get("comm", "").lower()
+                    else (
+                        "research"
+                        if any(
+                            name in args
+                            for name in (
+                                "-m src.engine.paired",
+                                "-m src.engine.automation.pre_submit_delay_partitioned_research",
+                            )
+                        )
+                        else None
+                    )
+                )
+            )
+        )
         if owner and len(candidates) < 64:
-            candidates[int(item['pid'])] = owner
+            candidates[int(item["pid"])] = owner
     # Preserve the actual parent chain, without claiming all writers were seen.
     for _ in range(4):
         for item in inventory:
-            if (int(item.get('ppid', 0)) in candidates and int(item['pid']) not in candidates
-                    and len(candidates) < 64):
-                candidates[int(item['pid'])] = candidates[int(item['ppid'])] + '_child'
+            if (
+                int(item.get("ppid", 0)) in candidates
+                and int(item["pid"]) not in candidates
+                and len(candidates) < 64
+            ):
+                candidates[int(item["pid"])] = candidates[int(item["ppid"])] + "_child"
     rows = []
     for pid, owner in candidates.items():
-        proc = Path('/proc') / str(pid)
-        row = {'pid': pid, 'owner': owner, 'status': 'unobserved'}
+        proc = Path("/proc") / str(pid)
+        row = {"pid": pid, "owner": owner, "status": "unobserved"}
         try:
-            fields = (proc / 'stat').read_text().rsplit(')', 1)[1].split()
-            if (owner == 'main' and main_identity is not None
-                    and (str((proc / 'cwd').resolve()) != main_identity.get('process_cwd')
-                         or (main_identity.get('start_ticks') is not None
-                             and str(main_identity['start_ticks']) != fields[19]))):
-                raise ValueError('selected_main_identity_changed')
-            row.update(ppid=int(fields[1]), start_ticks=int(fields[19]),
-                       major_faults=int(fields[9]), rss_pages=int(fields[21]))
-            io = dict(line.split(':', 1) for line in (proc / 'io').read_text().splitlines())
-            end = (proc / 'stat').read_text().rsplit(')', 1)[1].split()
+            fields = (proc / "stat").read_text().rsplit(")", 1)[1].split()
+            if (
+                owner == "main"
+                and main_identity is not None
+                and (
+                    str((proc / "cwd").resolve()) != main_identity.get("process_cwd")
+                    or (
+                        main_identity.get("start_ticks") is not None
+                        and str(main_identity["start_ticks"]) != fields[19]
+                    )
+                )
+            ):
+                raise ValueError("selected_main_identity_changed")
+            row.update(
+                ppid=int(fields[1]),
+                start_ticks=int(fields[19]),
+                major_faults=int(fields[9]),
+                rss_pages=int(fields[21]),
+            )
+            io = dict(
+                line.split(":", 1) for line in (proc / "io").read_text().splitlines()
+            )
+            end = (proc / "stat").read_text().rsplit(")", 1)[1].split()
             if end[19] != fields[19]:
-                raise ValueError('process_replaced')
-            row.update(status='observed', io={k: int(io[k]) for k in
-                       ('rchar', 'wchar', 'read_bytes', 'write_bytes')})
+                raise ValueError("process_replaced")
+            row.update(
+                status="observed",
+                io={
+                    k: int(io[k])
+                    for k in ("rchar", "wchar", "read_bytes", "write_bytes")
+                },
+            )
         except (OSError, ValueError, KeyError, IndexError):
             pass
         rows.append(row)
@@ -284,14 +361,18 @@ def _process_io_snapshot(top):
 
 
 def _process_io_deltas(current, previous):
-    old = {(x['pid'], x.get('start_ticks')): x for x in previous}
+    old = {(x["pid"], x.get("start_ticks")): x for x in previous}
     for row in current:
-        before = old.get((row['pid'], row.get('start_ticks')))
-        if (row['status'] == 'observed' and before and before.get('status') == 'observed'
-                and all(row['io'][k] >= before['io'][k] for k in row['io'])):
-            row['io_delta'] = {k: row['io'][k] - before['io'][k] for k in row['io']}
+        before = old.get((row["pid"], row.get("start_ticks")))
+        if (
+            row["status"] == "observed"
+            and before
+            and before.get("status") == "observed"
+            and all(row["io"][k] >= before["io"][k] for k in row["io"])
+        ):
+            row["io_delta"] = {k: row["io"][k] - before["io"][k] for k in row["io"]}
         else:
-            row['io_delta'] = None
+            row["io_delta"] = None
     return current
 
 
@@ -303,7 +384,9 @@ def _sample_locked() -> dict:
     disk = _read_diskstats()
     mem = _read_meminfo()
     top = _top_processes()
-    process_io = _process_io_deltas(_process_io_snapshot(top), prev_state.get('process_io', []))
+    process_io = _process_io_deltas(
+        _process_io_snapshot(top), prev_state.get("process_io", [])
+    )
     swap = _swap_counters()
     load1, load5, load15 = os.getloadavg()
     sample = {
@@ -323,21 +406,35 @@ def _sample_locked() -> dict:
             "swap_free_mb": round(mem.get("SwapFree", 0) / 1024, 1),
         },
         "io": _disk_delta(disk, prev_state.get("disk", {})),
-        'io_pressure': _io_pressure(),
-        'swap_pages_delta': {k: swap[k] - prev_state['swap'][k] for k in swap}
-            if (swap and set(swap) <= prev_state.get('swap', {}).keys()
-                and all(swap[k] >= prev_state['swap'][k] for k in swap)) else None,
-        'process_io': process_io,
-        'process_io_scope': 'selected_main_named_jobs_and_bounded_descendants_no_group_sum',
-        'disk_devices': disk.get('devices', {}),
-        'disk_intervals': _device_intervals(disk, prev_state.get('disk', {}),
-                                           now_ts - prev_state.get('epoch', now_ts)),
+        "io_pressure": _io_pressure(),
+        "swap_pages_delta": (
+            {k: swap[k] - prev_state["swap"][k] for k in swap}
+            if (
+                swap
+                and set(swap) <= prev_state.get("swap", {}).keys()
+                and all(swap[k] >= prev_state["swap"][k] for k in swap)
+            )
+            else None
+        ),
+        "process_io": process_io,
+        "process_io_scope": "selected_main_named_jobs_and_bounded_descendants_no_group_sum",
+        "disk_devices": disk.get("devices", {}),
+        "disk_intervals": _device_intervals(
+            disk, prev_state.get("disk", {}), now_ts - prev_state.get("epoch", now_ts)
+        ),
         "top": top,
     }
     LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
     _append_json_line_durable(LOG_PATH, sample)
-    _save_state({"cpu": cpu, "disk": disk, "epoch": int(now_ts),
-                 'process_io': process_io, 'swap': swap})
+    _save_state(
+        {
+            "cpu": cpu,
+            "disk": disk,
+            "epoch": int(now_ts),
+            "process_io": process_io,
+            "swap": swap,
+        }
+    )
     return sample
 
 

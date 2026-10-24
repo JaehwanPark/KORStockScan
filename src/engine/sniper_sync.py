@@ -96,7 +96,10 @@ def _inventory_read_receipt_fields(
     successful_exchanges, *, started_at: datetime, completed_at: datetime
 ) -> str:
     successful = sorted(
-        {str(exchange or "").strip().upper() for exchange in (successful_exchanges or set())}
+        {
+            str(exchange or "").strip().upper()
+            for exchange in (successful_exchanges or set())
+        }
         - {""}
     )
     return (
@@ -610,7 +613,9 @@ def _ensure_runtime_target(record, *, buy_qty=None, buy_price=None):
         if strategy == "SCALPING" and position_tag != OPENING_ROTATION_POSITION_TAG:
             target.setdefault("exit_mode", "SCALP_PRESET_TP")
         probe_recovery = recover_probe_runtime_bundle_for_stock(target)
-        if probe_recovery.get("recovered") or probe_recovery.get("probe_bundle_blocked"):
+        if probe_recovery.get("recovered") or probe_recovery.get(
+            "probe_bundle_blocked"
+        ):
             log_info(
                 f"[ENTRY_SPLIT_PROBE_RECOVERY] {code} "
                 f"result={probe_recovery.get('reason')} "
@@ -777,27 +782,50 @@ def _recover_missing_broker_holdings(session, real_codes):
                 # aggregate inventory must never create a new Main position.
                 try:
                     census = owner_registry.reconcile_symbol_quantity(
-                        symbol=code, broker_quantity=_to_int(real_data.get("qty", 0)))
+                        symbol=code, broker_quantity=_to_int(real_data.get("qty", 0))
+                    )
                     for position, quantity in census["position_quantities"].items():
-                        if (not str(position).startswith("main_scalping:")
-                                or type(quantity) is not int or quantity <= 0):
+                        if (
+                            not str(position).startswith("main_scalping:")
+                            or type(quantity) is not int
+                            or quantity <= 0
+                        ):
                             continue
                         record_id = str(position).removeprefix("main_scalping:")
                         if not record_id.isdecimal():
                             continue
-                        record = session.query(RecommendationHistory).filter_by(
-                            id=int(record_id)).first()
-                        if (record is None or record.stock_code != code
-                                or record.rec_date != today or record.status != "WATCHING"
-                                or record.buy_time is not None or _to_int(record.buy_qty) != 0):
+                        record = (
+                            session.query(RecommendationHistory)
+                            .filter_by(id=int(record_id))
+                            .first()
+                        )
+                        if (
+                            record is None
+                            or record.stock_code != code
+                            or record.rec_date != today
+                            or record.status != "WATCHING"
+                            or record.buy_time is not None
+                            or _to_int(record.buy_qty) != 0
+                        ):
                             continue
-                        _preserve_coexistence_owner_inventory(record=record, code=code,
-                            real_codes=real_codes, source="registered_entry_restart_recovery")
+                        _preserve_coexistence_owner_inventory(
+                            record=record,
+                            code=code,
+                            real_codes=real_codes,
+                            source="registered_entry_restart_recovery",
+                        )
                         if record.status == "HOLDING":
                             recovered += 1
                             tracked_codes.add(code)
-                except (OwnerRegistryError, SymbolOwnerPolicyError, OSError, ValueError) as exc:
-                    log_error(f"[REGISTERED_ENTRY_RESTART_BLOCKED] code={code} reason={exc}")
+                except (
+                    OwnerRegistryError,
+                    SymbolOwnerPolicyError,
+                    OSError,
+                    ValueError,
+                ) as exc:
+                    log_error(
+                        f"[REGISTERED_ENTRY_RESTART_BLOCKED] code={code} reason={exc}"
+                    )
                 if code in tracked_codes:
                     continue
             # Operator-owned inventory (including widget auto-trade fills) must
@@ -819,7 +847,9 @@ def _recover_missing_broker_holdings(session, real_codes):
             if KIWOOM_TOKEN:
                 try:
                     settlement_context_snapshot = (
-                        kiwoom_utils.get_account_execution_snapshot_kt00008(KIWOOM_TOKEN)
+                        kiwoom_utils.get_account_execution_snapshot_kt00008(
+                            KIWOOM_TOKEN
+                        )
                     )
                 except Exception:
                     settlement_context_snapshot = []
@@ -841,10 +871,12 @@ def _recover_missing_broker_holdings(session, real_codes):
                             if isinstance(CONF, dict)
                             else "0"
                         )
-                        order_ref_snapshot = kiwoom_utils.get_order_reference_snapshot_2nd_pass(
-                            KIWOOM_TOKEN,
-                            qry_tp=qry_tp,
-                            stk_bond_tp=stk_bond_tp,
+                        order_ref_snapshot = (
+                            kiwoom_utils.get_order_reference_snapshot_2nd_pass(
+                                KIWOOM_TOKEN,
+                                qry_tp=qry_tp,
+                                stk_bond_tp=stk_bond_tp,
+                            )
                         )
                     except Exception:
                         order_ref_snapshot = []
@@ -1006,50 +1038,76 @@ def _restore_registered_partial_sell(record, target, code, remaining_qty, mismat
     import copy
     from src.engine import sniper_execution_receipts as receipts
 
-    if (not isinstance(target, dict)
-            or str(getattr(record, "status", "")).upper() != "SELL_ORDERED"
-            or str(target.get("status", "")).upper() != "SELL_ORDERED"
-            or evaluate_main_bot_control_exclusion(code).excluded
-            or target.get("id") != getattr(record, "id", None)
-            or str(target.get("code") or "").strip()[:6] != code
-            or not 0 < remaining_qty < _to_int(getattr(record, "buy_qty", 0))):
+    if (
+        not isinstance(target, dict)
+        or str(getattr(record, "status", "")).upper() != "SELL_ORDERED"
+        or str(target.get("status", "")).upper() != "SELL_ORDERED"
+        or evaluate_main_bot_control_exclusion(code).excluded
+        or target.get("id") != getattr(record, "id", None)
+        or str(target.get("code") or "").strip()[:6] != code
+        or not 0 < remaining_qty < _to_int(getattr(record, "buy_qty", 0))
+    ):
         return None
     with _with_state_lock():
         prior_conflict = target.get("sell_cancel_reconciliation_source")
-        if target.get("broker_symbol_allocation_conflict") and prior_conflict != mismatch:
+        if (
+            target.get("broker_symbol_allocation_conflict")
+            and prior_conflict != mismatch
+        ):
             return None
         if target.get("sell_cancel_reconciliation_required") and prior_conflict not in {
-                mismatch, "durable_pending_sell_submit_exact_rehydration",
-                "durable_sell_receipt_journal_exact_match"}:
+            mismatch,
+            "durable_pending_sell_submit_exact_rehydration",
+            "durable_sell_receipt_journal_exact_match",
+        }:
             return None
         state, reason = receipts.load_sell_receipt_recovery(
-            target_id=record.id, code=code, position_qty=_to_int(record.buy_qty),
-            broker_remaining_qty=remaining_qty)
-        if (not isinstance(state, dict) or reason != "journal_exact_match"
-                or state.get("final") is not False
-                or state.get("quantity_contract_complete") is not True):
+            target_id=record.id,
+            code=code,
+            position_qty=_to_int(record.buy_qty),
+            broker_remaining_qty=remaining_qty,
+        )
+        if (
+            not isinstance(state, dict)
+            or reason != "journal_exact_match"
+            or state.get("final") is not False
+            or state.get("quantity_contract_complete") is not True
+        ):
             return None
         probe = copy.deepcopy(target)
-        probe.update(_sell_execution_receipt_state=state, status="SELL_ORDERED",
-                     sell_odno=state.get("order_no"))
-        if (not receipts._restore_pending_sell_submit_custody_retry_snapshot(probe)
-                or probe.get("sell_submit_pending") is not False
-                or not receipts._active_partial_sell_receipt(probe, str(state.get("order_no") or ""))
-                or receipts._validated_sell_order_context(probe)[0] is None):
+        probe.update(
+            _sell_execution_receipt_state=state,
+            status="SELL_ORDERED",
+            sell_odno=state.get("order_no"),
+        )
+        if (
+            not receipts._restore_pending_sell_submit_custody_retry_snapshot(probe)
+            or probe.get("sell_submit_pending") is not False
+            or not receipts._active_partial_sell_receipt(
+                probe, str(state.get("order_no") or "")
+            )
+            or receipts._validated_sell_order_context(probe)[0] is None
+        ):
             return None
         restored, reason = _restore_sell_receipt_recovery(
-            target_stock=target, record=record, code=code,
-            broker_remaining_qty=remaining_qty)
+            target_stock=target,
+            record=record,
+            code=code,
+            broker_remaining_qty=remaining_qty,
+        )
         if restored is None:
             return None
         # Only this exact mismatch belongs to this recovery. Other allocation,
         # cancel, manual and pending-order interlocks retain their own owners.
         if prior_conflict == mismatch:
             target.pop("broker_symbol_allocation_conflict", None)
-        return dict(order_no=restored.get("order_no"),
-                    position_qty=_to_int(record.buy_qty), remaining_qty=remaining_qty,
-                    filled_qty=_to_int(record.buy_qty)-remaining_qty,
-                    source=reason)
+        return dict(
+            order_no=restored.get("order_no"),
+            position_qty=_to_int(record.buy_qty),
+            remaining_qty=remaining_qty,
+            filled_qty=_to_int(record.buy_qty) - remaining_qty,
+            source=reason,
+        )
 
 
 def _restore_registered_entry_buy(record, target, code, quantity, registry):
@@ -1070,177 +1128,372 @@ def _restore_registered_entry_buy(record, target, code, quantity, registry):
     owner = f"main_scalping:{target_id}"
     today = datetime.now(receipts._KST).date()
     buy_time = getattr(record, "buy_time", None)
-    cleared_initial = (quantity == 1 and old_qty == 0 and buy_time is None
+    cleared_initial = (
+        quantity == 1
+        and old_qty == 0
+        and buy_time is None
         and str(getattr(record, "status", "")).upper() == "WATCHING"
         and getattr(record, "rec_date", None) == today
-        and _to_float(getattr(record, "buy_price", 0)) == 0)
-    unconsumed_initial = cleared_initial or (quantity == 1 and old_qty > 1 and buy_time is None
-        and str(getattr(record, "status", "")).upper() == "BUY_ORDERED")
-    if (type(quantity) is not int or quantity < 1 or old_qty < 1 and not cleared_initial
-            or quantity > 1 and old_qty not in {1, quantity}
-            or type(target_id) is not int or target_id <= 0
-            or str(getattr(record, "strategy", "")).upper() != "SCALPING"
-            or (str(getattr(record, "status", "")).upper() not in {"HOLDING", "BUY_ORDERED", "SELL_ORDERED"}
-                and not cleared_initial)
-            or (buy_time is None and not unconsumed_initial)
-            or (buy_time is not None and buy_time.date() != today)
-            or getattr(record, "sell_time", None) or _to_float(getattr(record, "sell_price", 0)) != 0
-            or evaluate_main_bot_control_exclusion(code).excluded
-            or receipts._sell_pending_submit_path(target_id).exists()
-            or receipts._sell_receipt_recovery_path(target_id).exists()):
+        and _to_float(getattr(record, "buy_price", 0)) == 0
+    )
+    unconsumed_initial = cleared_initial or (
+        quantity == 1
+        and old_qty > 1
+        and buy_time is None
+        and str(getattr(record, "status", "")).upper() == "BUY_ORDERED"
+    )
+    if (
+        type(quantity) is not int
+        or quantity < 1
+        or old_qty < 1
+        and not cleared_initial
+        or quantity > 1
+        and old_qty not in {1, quantity}
+        or type(target_id) is not int
+        or target_id <= 0
+        or str(getattr(record, "strategy", "")).upper() != "SCALPING"
+        or (
+            str(getattr(record, "status", "")).upper()
+            not in {"HOLDING", "BUY_ORDERED", "SELL_ORDERED"}
+            and not cleared_initial
+        )
+        or (buy_time is None and not unconsumed_initial)
+        or (buy_time is not None and buy_time.date() != today)
+        or getattr(record, "sell_time", None)
+        or _to_float(getattr(record, "sell_price", 0)) != 0
+        or evaluate_main_bot_control_exclusion(code).excluded
+        or receipts._sell_pending_submit_path(target_id).exists()
+        or receipts._sell_receipt_recovery_path(target_id).exists()
+    ):
         return None
     with _with_state_lock(), probe._PROBE_RUNTIME_STATE_LOCK:
         if target is not None:
             reason = str(target.get("sell_cancel_reconciliation_source") or "")
-            if (target.get("id") != target_id or target.get("code") != code
-                    or any(target.get(k) for k in ("sell_odno", "sell_ord_no", "sell_submit_pending",
-                        "sell_submit_generation", "_sell_execution_receipt_state", "pending_add_order", "exit_requested"))
-                    or (reason and not (reason.startswith("main_owner_registry_quantity_mismatch:")
+            if (
+                target.get("id") != target_id
+                or target.get("code") != code
+                or any(
+                    target.get(k)
+                    for k in (
+                        "sell_odno",
+                        "sell_ord_no",
+                        "sell_submit_pending",
+                        "sell_submit_generation",
+                        "_sell_execution_receipt_state",
+                        "pending_add_order",
+                        "exit_requested",
+                    )
+                )
+                or (
+                    reason
+                    and not (
+                        reason.startswith("main_owner_registry_quantity_mismatch:")
                         or reason.startswith("missing_original_order_no:")
-                        or reason == "cancel_intent_or_ack_exact_generation_required"))):
+                        or reason == "cancel_intent_or_ack_exact_generation_required"
+                    )
+                )
+            ):
                 return None
-        rows = registry.position_intents(context=OwnerOrderContext(
-            "main_scalping", owner, owner, "entry_receipt_recovery"), symbol=code)
-        if not rows or any(row.get("owner_type") != "main_scalping"
-                or row.get("owner_id") != owner or row.get("position_id") != owner
-                or row.get("symbol") != code or row.get("order_date") != today.isoformat()
-                or row.get("side") != "BUY" or row.get("action") != "NEW" for row in rows):
+        rows = registry.position_intents(
+            context=OwnerOrderContext(
+                "main_scalping", owner, owner, "entry_receipt_recovery"
+            ),
+            symbol=code,
+        )
+        if not rows or any(
+            row.get("owner_type") != "main_scalping"
+            or row.get("owner_id") != owner
+            or row.get("position_id") != owner
+            or row.get("symbol") != code
+            or row.get("order_date") != today.isoformat()
+            or row.get("side") != "BUY"
+            or row.get("action") != "NEW"
+            for row in rows
+        ):
             return None
         # A definitive local rejection is retained in the census, never a fill.
-        filled = [r for r in rows if not (r.get("state") == "INTENT_REJECTED"
-            and not r.get("broker_order_no") and r.get("filled_qty", 0) == 0 and r.get("fill_amount", 0) == 0)]
-        if (len(filled) != quantity or any(r.get("state") != "ORDER_TERMINAL"
-                or type(r.get("quantity")) is not int or r["quantity"] != 1
-                or type(r.get("filled_qty")) is not int or r["filled_qty"] != 1
-                or type(r.get("fill_amount")) is not int or r["fill_amount"] <= 0
-                or r.get("canceled_qty", 0) != 0 or not r.get("execution_no")
-                or not re.fullmatch(r"[0-9]{7}", str(r.get("broker_order_no") or ""))
-                or not re.fullmatch(r"[0-9a-f]{64}", str(r.get("event_hash") or "")) for r in filled)):
+        filled = [
+            r
+            for r in rows
+            if not (
+                r.get("state") == "INTENT_REJECTED"
+                and not r.get("broker_order_no")
+                and r.get("filled_qty", 0) == 0
+                and r.get("fill_amount", 0) == 0
+            )
+        ]
+        if len(filled) != quantity or any(
+            r.get("state") != "ORDER_TERMINAL"
+            or type(r.get("quantity")) is not int
+            or r["quantity"] != 1
+            or type(r.get("filled_qty")) is not int
+            or r["filled_qty"] != 1
+            or type(r.get("fill_amount")) is not int
+            or r["fill_amount"] <= 0
+            or r.get("canceled_qty", 0) != 0
+            or not r.get("execution_no")
+            or not re.fullmatch(r"[0-9]{7}", str(r.get("broker_order_no") or ""))
+            or not re.fullmatch(r"[0-9a-f]{64}", str(r.get("event_hash") or ""))
+            for r in filled
+        ):
             return None
         by_order = {r["broker_order_no"]: r for r in filled}
         payload = probe._load_probe_runtime_state(today.isoformat())
-        bundles = [b for b in (payload.get("bundles") or {}).values() if isinstance(b, dict)
-            and b.get("target_id") == target_id and b.get("code") == code
-            and b.get("phase") in {"probe_submitted", "residual_submitting", "residual_submitted", "complete", "aborted"}]
+        bundles = [
+            b
+            for b in (payload.get("bundles") or {}).values()
+            if isinstance(b, dict)
+            and b.get("target_id") == target_id
+            and b.get("code") == code
+            and b.get("phase")
+            in {
+                "probe_submitted",
+                "residual_submitting",
+                "residual_submitted",
+                "complete",
+                "aborted",
+            }
+        ]
         if len(bundles) != 1:
             return None
         bundle = bundles[0]
         probe_only = quantity == 1
         expected = [bundle.get("order_no"), *(bundle.get("residual_order_nos") or [])]
         first = by_order.get(bundle.get("order_no"))
-        if (len(by_order) != quantity or len(expected) != quantity or set(expected) != set(by_order)
-                or not first
-                or any(not str(r.get("client_intent_id") or "").startswith(
-                    owner+":"+str(target_id)+":"+(
-                        "ENTRY_BUY:" if r is first else "ENTRY_RESIDUAL_BUY:")) for r in filled)
-                or (target is not None and any(str(r.get("ord_no") or "") not in by_order
-                    for r in (target.get("pending_entry_orders") or [])))):
+        if (
+            len(by_order) != quantity
+            or len(expected) != quantity
+            or set(expected) != set(by_order)
+            or not first
+            or any(
+                not str(r.get("client_intent_id") or "").startswith(
+                    owner
+                    + ":"
+                    + str(target_id)
+                    + ":"
+                    + ("ENTRY_BUY:" if r is first else "ENTRY_RESIDUAL_BUY:")
+                )
+                for r in filled
+            )
+            or (
+                target is not None
+                and any(
+                    str(r.get("ord_no") or "") not in by_order
+                    for r in (target.get("pending_entry_orders") or [])
+                )
+            )
+        ):
             return None
         amount = sum(r["fill_amount"] for r in filled)
-        evidence = dict(bundle_id=bundle["bundle_id"], quantity=quantity, fill_amount=amount,
-            registry_event_hashes={n:r["event_hash"] for n,r in by_order.items()})
+        evidence = dict(
+            bundle_id=bundle["bundle_id"],
+            quantity=quantity,
+            fill_amount=amount,
+            registry_event_hashes={n: r["event_hash"] for n, r in by_order.items()},
+        )
         if probe_only:
             from src.engine.scalping.strategy_owner_components import digest
+
             source = bundle.get("entry_split_probe_submit_source") or {}
             requested = bundle.get("requested_qty")
             continuation = bundle.get("continuation") or {}
             # Only the exact terminal initial probe can close an unsent remainder.
             # A partial/open broker order, an unbound plan or another intent is
             # never inferred from account aggregate quantity.
-            if (type(requested) is not int or requested <= 1
-                    or old_qty not in {1, requested} and not cleared_initial
-                    or str(record.status).upper() not in {"BUY_ORDERED", "HOLDING"} and not cleared_initial
-                    or bundle.get("phase") not in {"probe_submitted", "aborted"}
-                    or bundle.get("actual_submitted_qty") != 1
-                    or bundle.get("residual_submitted_qty", 0) != 0
-                    or continuation.get("requested_qty") != requested
-                    or continuation.get("residual_qty") != requested-1
-                    or source.get("schema") != "entry_probe_submit_source_v1"
-                    or source.get("sha256") != digest({k:v for k,v in source.items() if k != "sha256"})
-                    or any(source.get(k) != v for k,v in dict(source_date=today.isoformat(),
-                        owner_id=owner, record_id=str(target_id), position_cycle_id=str(target_id),
-                        stock_code=code, bundle_id=bundle["bundle_id"], planned_qty=requested).items())
-                    or not source.get("initial_parent_id")
-                    or not source.get("account_key") or source["account_key"] != first.get("account_key")
-                    or bundle.get("broker_route") != first.get("route")
-                    or not str(first.get("client_intent_id") or "").startswith(
-                        f"{owner}:{target_id}:ENTRY_BUY:entry_split_probe_0:1:")
-                    or bundle.get("phase") == "aborted" and bundle.get("registered_entry_recovery") != evidence):
+            if (
+                type(requested) is not int
+                or requested <= 1
+                or old_qty not in {1, requested}
+                and not cleared_initial
+                or str(record.status).upper() not in {"BUY_ORDERED", "HOLDING"}
+                and not cleared_initial
+                or bundle.get("phase") not in {"probe_submitted", "aborted"}
+                or bundle.get("actual_submitted_qty") != 1
+                or bundle.get("residual_submitted_qty", 0) != 0
+                or continuation.get("requested_qty") != requested
+                or continuation.get("residual_qty") != requested - 1
+                or source.get("schema") != "entry_probe_submit_source_v1"
+                or source.get("sha256")
+                != digest({k: v for k, v in source.items() if k != "sha256"})
+                or any(
+                    source.get(k) != v
+                    for k, v in dict(
+                        source_date=today.isoformat(),
+                        owner_id=owner,
+                        record_id=str(target_id),
+                        position_cycle_id=str(target_id),
+                        stock_code=code,
+                        bundle_id=bundle["bundle_id"],
+                        planned_qty=requested,
+                    ).items()
+                )
+                or not source.get("initial_parent_id")
+                or not source.get("account_key")
+                or source["account_key"] != first.get("account_key")
+                or bundle.get("broker_route") != first.get("route")
+                or not str(first.get("client_intent_id") or "").startswith(
+                    f"{owner}:{target_id}:ENTRY_BUY:entry_split_probe_0:1:"
+                )
+                or bundle.get("phase") == "aborted"
+                and bundle.get("registered_entry_recovery") != evidence
+            ):
                 return None
         elif bundle.get("requested_qty") != quantity or bundle.get("phase") not in {
-                "residual_submitting", "residual_submitted", "complete"}:
+            "residual_submitting",
+            "residual_submitted",
+            "complete",
+        }:
             return None
         if unconsumed_initial:
             try:
                 observed = datetime.fromisoformat(first["fill_observed_at_kst"])
-                if observed.tzinfo is None or observed.astimezone(receipts._KST).date() != today:
+                if (
+                    observed.tzinfo is None
+                    or observed.astimezone(receipts._KST).date() != today
+                ):
                     return None
                 buy_time = observed.astimezone(receipts._KST).replace(tzinfo=None)
             except (KeyError, ValueError, TypeError):
                 return None
-        expected_price = first["fill_amount"] if old_qty == 1 else amount/quantity
-        if ((not unconsumed_initial and not isclose(_to_float(record.buy_price), expected_price, abs_tol=0.0001))
-                or unconsumed_initial and not cleared_initial and not 0 < _to_float(record.buy_price) < float("inf")
-                or old_qty == quantity and not probe_only and (bundle.get("phase") != "complete"
-                    or bundle.get("registered_entry_recovery") != evidence)):
+        expected_price = first["fill_amount"] if old_qty == 1 else amount / quantity
+        if (
+            (
+                not unconsumed_initial
+                and not isclose(
+                    _to_float(record.buy_price), expected_price, abs_tol=0.0001
+                )
+            )
+            or unconsumed_initial
+            and not cleared_initial
+            and not 0 < _to_float(record.buy_price) < float("inf")
+            or old_qty == quantity
+            and not probe_only
+            and (
+                bundle.get("phase") != "complete"
+                or bundle.get("registered_entry_recovery") != evidence
+            )
+        ):
             return None
-        recovered = dict(id=target_id, code=code, buy_time=buy_time,
-            buy_qty=quantity, buy_price=amount/quantity, entry_filled_qty=quantity,
-            _entry_receipt_filled_by_order_no={n:1 for n in by_order},
-            _entry_receipt_executions_by_order_no={n:{r["execution_no"]:dict(
-                cumulative_qty=1, cumulative_exec_amount=r["fill_amount"], order_qty=1,
-                remaining_qty=0, unit_exec_qty=1, unit_exec_price=r["fill_amount"])}
-                for n,r in by_order.items()},
-            _add_receipt_filled_by_order_no={}, _add_receipt_executions_by_order_no={})
+        recovered = dict(
+            id=target_id,
+            code=code,
+            buy_time=buy_time,
+            buy_qty=quantity,
+            buy_price=amount / quantity,
+            entry_filled_qty=quantity,
+            _entry_receipt_filled_by_order_no={n: 1 for n in by_order},
+            _entry_receipt_executions_by_order_no={
+                n: {
+                    r["execution_no"]: dict(
+                        cumulative_qty=1,
+                        cumulative_exec_amount=r["fill_amount"],
+                        order_qty=1,
+                        remaining_qty=0,
+                        unit_exec_qty=1,
+                        unit_exec_price=r["fill_amount"],
+                    )
+                }
+                for n, r in by_order.items()
+            },
+            _add_receipt_filled_by_order_no={},
+            _add_receipt_executions_by_order_no={},
+        )
         identity = vote.buy_fill_identity_from_runtime(recovered)
         try:
             path = vote._buy_fill_receipt_path(receipts.DATA_DIR, recovered)
             previous_sha = None
             if path.exists() or path.is_symlink():
-                previous, previous_sha = bounded_object(path, vote._BUY_FILL_RECEIPT_MAX_BYTES)
-                prior = dict(id=target_id, code=code, buy_time=previous.get("buy_time"),
-                    buy_qty=previous.get("buy_qty"), buy_price=previous.get("buy_price"))
+                previous, previous_sha = bounded_object(
+                    path, vote._BUY_FILL_RECEIPT_MAX_BYTES
+                )
+                prior = dict(
+                    id=target_id,
+                    code=code,
+                    buy_time=previous.get("buy_time"),
+                    buy_qty=previous.get("buy_qty"),
+                    buy_price=previous.get("buy_price"),
+                )
                 valid_times = {vote._buy_fill_receipt_time(buy_time)}
                 for row in filled:
                     if row.get("fill_observed_at_kst"):
                         at = datetime.fromisoformat(row["fill_observed_at_kst"])
-                        valid_times.add(vote._buy_fill_receipt_time(at.replace(microsecond=0)))
+                        valid_times.add(
+                            vote._buy_fill_receipt_time(at.replace(microsecond=0))
+                        )
                         valid_times.add(vote._buy_fill_receipt_time(at))
-                if (vote._buy_fill_receipt_time(prior["buy_time"]) not in valid_times
-                        or vote.restore_buy_fill_receipt(prior, receipts.DATA_DIR) != "restored"):
+                if (
+                    vote._buy_fill_receipt_time(prior["buy_time"]) not in valid_times
+                    or vote.restore_buy_fill_receipt(prior, receipts.DATA_DIR)
+                    != "restored"
+                ):
                     return None
                 legs = vote.buy_fill_legs_from_runtime(prior)
-                if (not legs or first["broker_order_no"] not in {leg["order_no"] for leg in legs}
-                        or any(leg not in vote.buy_fill_legs_from_runtime(recovered) for leg in legs)
-                        or not isclose(float(prior["buy_price"]),
-                            sum(by_order[leg["order_no"]]["fill_amount"] for leg in legs)/len(legs),
-                            abs_tol=0.0001)):
+                if (
+                    not legs
+                    or first["broker_order_no"] not in {leg["order_no"] for leg in legs}
+                    or any(
+                        leg not in vote.buy_fill_legs_from_runtime(recovered)
+                        for leg in legs
+                    )
+                    or not isclose(
+                        float(prior["buy_price"]),
+                        sum(by_order[leg["order_no"]]["fill_amount"] for leg in legs)
+                        / len(legs),
+                        abs_tol=0.0001,
+                    )
+                ):
                     return None
             # Persist the same exact native legs before committing DB quantity.
-            restored = dict(id=target_id, code=code, buy_time=buy_time,
-                buy_qty=quantity, buy_price=amount/quantity)
-            if (previous_sha is None or vote.restore_buy_fill_receipt(restored, receipts.DATA_DIR) != "restored"
-                    or vote.buy_fill_identity_from_runtime(restored) != identity):
+            restored = dict(
+                id=target_id,
+                code=code,
+                buy_time=buy_time,
+                buy_qty=quantity,
+                buy_price=amount / quantity,
+            )
+            if (
+                previous_sha is None
+                or vote.restore_buy_fill_receipt(restored, receipts.DATA_DIR)
+                != "restored"
+                or vote.buy_fill_identity_from_runtime(restored) != identity
+            ):
                 vote.persist_buy_fill_receipt(recovered, receipts.DATA_DIR)
-            if (vote.restore_buy_fill_receipt(restored, receipts.DATA_DIR) != "restored"
-                    or vote.buy_fill_identity_from_runtime(restored) != identity):
+            if (
+                vote.restore_buy_fill_receipt(restored, receipts.DATA_DIR) != "restored"
+                or vote.buy_fill_identity_from_runtime(restored) != identity
+            ):
                 raise ValueError("registered_entry_buy_identity_not_consumed")
         except (OSError, ValueError, TypeError, KeyError) as exc:
-            log_error(f"[REGISTERED_ENTRY_BUY_IDENTITY_RECOVERY_BLOCKED] record_id={target_id} "
-                      f"code={code} reason={type(exc).__name__}:{exc}")
+            log_error(
+                f"[REGISTERED_ENTRY_BUY_IDENTITY_RECOVERY_BLOCKED] record_id={target_id} "
+                f"code={code} reason={type(exc).__name__}:{exc}"
+            )
             return None
         # This is native receipt completion, not a synthesized broker terminal.
-        probe.update_probe_runtime_bundle(bundle["bundle_id"], phase="aborted" if probe_only else "complete",
-            now=datetime.now(receipts._KST), filled_qty=quantity, actual_submitted_qty=quantity,
-            avg_buy_price=amount/quantity, registered_entry_recovery=evidence,
-            buy_fill_identity_recovery=bundle.get("buy_fill_identity_recovery") or dict(
-                identity=identity, previous_receipt_sha256=previous_sha),
-            **(dict(reason="registered_initial_probe_receipt_recovery",
-                terminal_abort_reason="registered_initial_probe_receipt_recovery",
-                terminal_outcome="residual_not_submitted", residual_terminal_qty=requested-1,
-                entry_split_probe_scale_in_forbidden=True,
-                entry_split_probe_residual_expand_forbidden=True, probe_expand_forbidden=True)
-                if probe_only else {}))
+        probe.update_probe_runtime_bundle(
+            bundle["bundle_id"],
+            phase="aborted" if probe_only else "complete",
+            now=datetime.now(receipts._KST),
+            filled_qty=quantity,
+            actual_submitted_qty=quantity,
+            avg_buy_price=amount / quantity,
+            registered_entry_recovery=evidence,
+            buy_fill_identity_recovery=bundle.get("buy_fill_identity_recovery")
+            or dict(identity=identity, previous_receipt_sha256=previous_sha),
+            **(
+                dict(
+                    reason="registered_initial_probe_receipt_recovery",
+                    terminal_abort_reason="registered_initial_probe_receipt_recovery",
+                    terminal_outcome="residual_not_submitted",
+                    residual_terminal_qty=requested - 1,
+                    entry_split_probe_scale_in_forbidden=True,
+                    entry_split_probe_residual_expand_forbidden=True,
+                    probe_expand_forbidden=True,
+                )
+                if probe_only
+                else {}
+            ),
+        )
         record.buy_time = buy_time
         record.buy_qty = quantity
         record.buy_price = amount / quantity
@@ -1250,19 +1503,36 @@ def _restore_registered_entry_buy(record, target, code, quantity, registry):
             target.update(restored)
             target["buy_fill_identity_store_sha256"] = identity
             target.pop("buy_fill_identity_store_gap", None)
-            target.update(status="HOLDING", buy_qty=quantity, buy_price=amount/quantity, scale_in_locked=True,
-                initial_buy_qty=quantity, entry_split_probe_phase="aborted" if probe_only else "complete",
-                entry_filled_qty=quantity, entry_fill_amount=amount)
+            target.update(
+                status="HOLDING",
+                buy_qty=quantity,
+                buy_price=amount / quantity,
+                scale_in_locked=True,
+                initial_buy_qty=quantity,
+                entry_split_probe_phase="aborted" if probe_only else "complete",
+                entry_filled_qty=quantity,
+                entry_fill_amount=amount,
+            )
             if probe_only:
-                target.update(entry_split_probe_scale_in_forbidden=True,
-                    entry_split_probe_residual_expand_forbidden=True, probe_expand_forbidden=True,
-                    entry_split_probe_bundle_id=bundle["bundle_id"])
-            target["_entry_receipt_requested_by_order_no"] = {n:1 for n in by_order}
-            target["_entry_receipt_filled_by_order_no"] = {n:1 for n in by_order}
-            target["_entry_receipt_filled_amount_by_order_no"] = {n:r["fill_amount"] for n,r in by_order.items()}
-            for key in ("broker_symbol_allocation_conflict", "sell_cancel_reconciliation_required",
-                        "sell_cancel_reconciliation_source", "sell_cancel_reconciliation_retry_at",
-                        "sell_order_time", "pending_entry_orders"):
+                target.update(
+                    entry_split_probe_scale_in_forbidden=True,
+                    entry_split_probe_residual_expand_forbidden=True,
+                    probe_expand_forbidden=True,
+                    entry_split_probe_bundle_id=bundle["bundle_id"],
+                )
+            target["_entry_receipt_requested_by_order_no"] = {n: 1 for n in by_order}
+            target["_entry_receipt_filled_by_order_no"] = {n: 1 for n in by_order}
+            target["_entry_receipt_filled_amount_by_order_no"] = {
+                n: r["fill_amount"] for n, r in by_order.items()
+            }
+            for key in (
+                "broker_symbol_allocation_conflict",
+                "sell_cancel_reconciliation_required",
+                "sell_cancel_reconciliation_source",
+                "sell_cancel_reconciliation_retry_at",
+                "sell_order_time",
+                "pending_entry_orders",
+            ):
                 target.pop(key, None)
         return evidence
 
@@ -1311,9 +1581,15 @@ def _preserve_coexistence_owner_inventory(
     real_qty = _to_int((real_codes.get(code) or {}).get("qty", 0))
     reconciliation = None
     main_qty = None
-    target = next((item for item in (ACTIVE_TARGETS or [])
-        if str(item.get("code", "")).strip()[:6] == code
-        and item.get("id") == getattr(record, "id", None)), None)
+    target = next(
+        (
+            item
+            for item in (ACTIVE_TARGETS or [])
+            if str(item.get("code", "")).strip()[:6] == code
+            and item.get("id") == getattr(record, "id", None)
+        ),
+        None,
+    )
     try:
         if decision is not None and decision.coexistence_enabled:
             if not registry.decision_activation_matches(decision):
@@ -1334,19 +1610,33 @@ def _preserve_coexistence_owner_inventory(
                 "main_owner_registry_quantity_mismatch:"
                 f"registry={main_qty}:db={_to_int(getattr(record, 'buy_qty', 0))}"
             )
-            partial = (_restore_registered_partial_sell(record, target, code, main_qty, mismatch)
-                       if not reconciliation_errors else None)
+            partial = (
+                _restore_registered_partial_sell(
+                    record, target, code, main_qty, mismatch
+                )
+                if not reconciliation_errors
+                else None
+            )
             if partial is not None:
                 reconciliation["main_partial_sell_receipt"] = partial
             else:
-                entry = (_restore_registered_entry_buy(record, target, code, main_qty, registry)
-                         if not reconciliation_errors else None)
+                entry = (
+                    _restore_registered_entry_buy(
+                        record, target, code, main_qty, registry
+                    )
+                    if not reconciliation_errors
+                    else None
+                )
                 if entry is None:
                     reconciliation_errors.append(mismatch)
                 else:
                     reconciliation["main_entry_buy_receipt"] = entry
-        elif not reconciliation_errors and (target is None or target.get("buy_fill_identity_store_gap")):
-            entry = _restore_registered_entry_buy(record, target, code, main_qty, registry)
+        elif not reconciliation_errors and (
+            target is None or target.get("buy_fill_identity_store_gap")
+        ):
+            entry = _restore_registered_entry_buy(
+                record, target, code, main_qty, registry
+            )
             if entry is not None:
                 reconciliation["main_entry_buy_receipt"] = entry
     except OwnerRegistryError as exc:
@@ -1741,6 +2031,7 @@ def sync_balance_with_db():
     global KIWOOM_TOKEN, DB, ACTIVE_TARGETS
 
     from src.engine.scalping.main_custody_checkpoint import journal_generation
+
     try:
         custody_query_generation = journal_generation()
     except (OSError, ValueError):
@@ -1863,9 +2154,12 @@ def sync_balance_with_db():
             )
             for record in custody_owner_records:
                 if str(getattr(record, "status", "")).upper() == "BUY_ORDERED":
-                    _preserve_coexistence_owner_inventory(record=record,
-                        code=str(record.stock_code).strip()[:6], real_codes=real_codes,
-                        source="startup_pending_buy_balance_sync")
+                    _preserve_coexistence_owner_inventory(
+                        record=record,
+                        code=str(record.stock_code).strip()[:6],
+                        real_codes=real_codes,
+                        source="startup_pending_buy_balance_sync",
+                    )
             archive_active_records = [
                 record
                 for record in custody_owner_records
@@ -2661,6 +2955,7 @@ def refresh_broker_account_snapshot_read_only() -> bool:
 
     global KIWOOM_TOKEN
     from src.engine.scalping.main_custody_checkpoint import journal_generation
+
     try:
         custody_query_generation = journal_generation()
     except (OSError, ValueError):
@@ -2732,8 +3027,7 @@ def refresh_broker_account_snapshot_read_only() -> bool:
         "[BROKER_SNAPSHOT_REFRESHED] "
         f"inventory={len(inventory or [])} "
         f"open_orders={len(open_orders or [])} "
-        f"open_orders_verified={open_orders_request_succeeded} "
-        + inventory_receipt
+        f"open_orders_verified={open_orders_request_succeeded} " + inventory_receipt
     )
     return open_orders_request_succeeded
 
@@ -2820,6 +3114,7 @@ def periodic_account_sync():
     # durable journal before any account snapshot can remove or reinterpret the
     # runtime target.
     from src.engine.scalping.main_custody_checkpoint import journal_generation
+
     try:
         custody_query_generation = journal_generation()
     except (OSError, ValueError):
@@ -3286,15 +3581,18 @@ def periodic_account_sync():
                                 "broker_sor_flag": exact_execution.get("sor_yn"),
                                 "owner_buy_time": (
                                     record.buy_time.isoformat()
-                                    if isinstance(record.buy_time, datetime) else None
+                                    if isinstance(record.buy_time, datetime)
+                                    else None
                                 ),
                                 "broker_snapshot_at": datetime.fromtimestamp(
                                     broker_snapshot_at, _KST
                                 ).isoformat(),
                             }
                             reconciliation_contract_text = json.dumps(
-                                reconciliation_contract, sort_keys=True,
-                                separators=(",", ":"), default=str,
+                                reconciliation_contract,
+                                sort_keys=True,
+                                separators=(",", ":"),
+                                default=str,
                             )
                             reconciliation_contract_sha256 = hashlib.sha256(
                                 reconciliation_contract_text.encode("utf-8")
@@ -3379,15 +3677,16 @@ def periodic_account_sync():
                                     "pipeline_lifecycle_population_scope": (
                                         "real_record_bound"
                                         if exact_execution
-                                        and str(target_snapshot.get("strategy")
-                                                or getattr(record, "strategy", ""))
-                                        .upper() == "SCALPING"
+                                        and str(
+                                            target_snapshot.get("strategy")
+                                            or getattr(record, "strategy", "")
+                                        ).upper()
+                                        == "SCALPING"
                                         and getattr(record, "id", None) is not None
                                         else "source_quality_gap"
                                     ),
                                     "exit_rule": (
-                                        target_snapshot.get("last_exit_rule")
-                                        or "-"
+                                        target_snapshot.get("last_exit_rule") or "-"
                                     ),
                                     "metric_role": (
                                         "execution_quality_real_only"
@@ -3439,8 +3738,8 @@ def periodic_account_sync():
                                     ),
                                     "sell_terminal_source_status": (
                                         "balance_reconciled_price_only"
-                                        if exact_execution else
-                                        "balance_absent_receipt_missing"
+                                        if exact_execution
+                                        else "balance_absent_receipt_missing"
                                     ),
                                     "sell_reconciliation_source_date": (
                                         f"{receipt_trade_date[:4]}-"
@@ -3456,10 +3755,14 @@ def periodic_account_sync():
                                     "sell_reconciliation_execution_no": None,
                                     "broker_actual_fees_taxes_krw": None,
                                     "configured_fee_estimate_krw": (
-                                        round((reconciled_sell_price - record.buy_price)
-                                              * getattr(record, "buy_qty", 0)
-                                              - realized_pnl_krw, 4)
-                                        if exact_execution else None
+                                        round(
+                                            (reconciled_sell_price - record.buy_price)
+                                            * getattr(record, "buy_qty", 0)
+                                            - realized_pnl_krw,
+                                            4,
+                                        )
+                                        if exact_execution
+                                        else None
                                     ),
                                     "sell_price": (
                                         reconciled_sell_price

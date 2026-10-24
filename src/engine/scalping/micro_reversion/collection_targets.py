@@ -58,7 +58,9 @@ MAX_ZERO_BASE_GAP_EVENTS = 256
 
 
 def load_zero_base_route_gap_scopes(
-    source_date: str, *, root: Path = DATA_DIR / "pipeline_events",
+    source_date: str,
+    *,
+    root: Path = DATA_DIR / "pipeline_events",
     collection_target_root: Path = COLLECTION_TARGET_ROOT,
 ) -> dict[str, Any]:
     """Bind current-date premarket probe conflicts to their discovery claims.
@@ -70,20 +72,28 @@ def load_zero_base_route_gap_scopes(
     if date.fromisoformat(source_date) < date(2026, 9, 29):
         return {"status": "not_applicable", "path": str(path), "scopes": []}
     current_targets = load_exact_date_collection_targets(
-        source_date, root=collection_target_root,
+        source_date,
+        root=collection_target_root,
     )
     if current_targets.get("status") != "loaded":
-        return {"status": "unobservable",
-                "reason": "current_source_only_target_"
-                + str(current_targets.get("status") or "missing"),
-                "path": str(path), "scopes": []}
+        return {
+            "status": "unobservable",
+            "reason": "current_source_only_target_"
+            + str(current_targets.get("status") or "missing"),
+            "path": str(path),
+            "scopes": [],
+        }
     target_payload = current_targets.get("payload") or {}
     current_target = {
         "path": current_targets["path"],
-        "semantic_sha256": hashlib.sha256(json.dumps(
-            target_payload, sort_keys=True, ensure_ascii=True,
-            separators=(",", ":"),
-        ).encode()).hexdigest(),
+        "semantic_sha256": hashlib.sha256(
+            json.dumps(
+                target_payload,
+                sort_keys=True,
+                ensure_ascii=True,
+                separators=(",", ":"),
+            ).encode()
+        ).hexdigest(),
     }
     owned_items = {
         row.get("symbol"): set(row.get("registration_items") or ())
@@ -93,11 +103,19 @@ def load_zero_base_route_gap_scopes(
     try:
         size = path.stat().st_size
     except OSError as exc:
-        return {"status": "unobservable", "reason": type(exc).__name__,
-                "path": str(path), "scopes": []}
+        return {
+            "status": "unobservable",
+            "reason": type(exc).__name__,
+            "path": str(path),
+            "scopes": [],
+        }
     if size > MAX_ZERO_BASE_GAP_SOURCE_BYTES:
-        return {"status": "unobservable", "reason": "source_size_limit",
-                "path": str(path), "scopes": []}
+        return {
+            "status": "unobservable",
+            "reason": "source_size_limit",
+            "path": str(path),
+            "scopes": [],
+        }
     claims: dict[str, tuple[str, str, datetime]] = {}
     conflicts: list[tuple[str, str, datetime, str]] = []
     digest = hashlib.sha256()
@@ -108,19 +126,24 @@ def load_zero_base_route_gap_scopes(
             for raw in source:
                 read_bytes += len(raw)
                 if read_bytes > MAX_ZERO_BASE_GAP_SOURCE_BYTES:
-                    return {"status": "unobservable", "reason": "source_size_limit",
-                            "path": str(path), "scopes": []}
+                    return {
+                        "status": "unobservable",
+                        "reason": "source_size_limit",
+                        "path": str(path),
+                        "scopes": [],
+                    }
                 digest.update(raw)
                 try:
                     row = json.loads(raw)
                 except (ValueError, UnicodeDecodeError):
                     malformed += 1
                     continue
-                if (not isinstance(row, dict)
-                        or row.get("emitted_date") != source_date
-                        or row.get("stage") not in {
-                            "zero_base_probe_claim", "zero_base_probe_result"
-                        }):
+                if (
+                    not isinstance(row, dict)
+                    or row.get("emitted_date") != source_date
+                    or row.get("stage")
+                    not in {"zero_base_probe_claim", "zero_base_probe_result"}
+                ):
                     continue
                 fields = row.get("fields")
                 if not isinstance(fields, dict):
@@ -128,10 +151,13 @@ def load_zero_base_route_gap_scopes(
                 code = _normalize_symbol(row.get("stock_code"))
                 route = fields.get("zero_base_route")
                 source_sha = fields.get("zero_base_source_sha256")
-                if (not code or route != "nxt_only"
-                        or not isinstance(source_sha, str)
-                        or len(source_sha) != 64
-                        or any(char not in "0123456789abcdef" for char in source_sha)):
+                if (
+                    not code
+                    or route != "nxt_only"
+                    or not isinstance(source_sha, str)
+                    or len(source_sha) != 64
+                    or any(char not in "0123456789abcdef" for char in source_sha)
+                ):
                     continue
                 try:
                     emitted = datetime.fromisoformat(row["emitted_at"])
@@ -143,36 +169,62 @@ def load_zero_base_route_gap_scopes(
                     continue
                 if row["stage"] == "zero_base_probe_claim":
                     claims[source_sha] = (code, route, emitted)
-                elif (fields.get("zero_base_probe_result") == "source_unavailable"
-                      and fields.get("zero_base_probe_reason")
-                      == "exact_route_subscription_conflict"
-                      and fields.get("entry_mechanistic_action") in (None, "", "-")
-                      and fields.get("actual_order_submitted") in (False, "False")):
+                elif (
+                    fields.get("zero_base_probe_result") == "source_unavailable"
+                    and fields.get("zero_base_probe_reason")
+                    == "exact_route_subscription_conflict"
+                    and fields.get("entry_mechanistic_action") in (None, "", "-")
+                    and fields.get("actual_order_submitted") in (False, "False")
+                ):
                     conflicts.append((code, route, emitted, source_sha))
                     if len(conflicts) > MAX_ZERO_BASE_GAP_EVENTS:
-                        return {"status": "unobservable", "reason": "event_limit",
-                                "path": str(path), "scopes": []}
+                        return {
+                            "status": "unobservable",
+                            "reason": "event_limit",
+                            "path": str(path),
+                            "scopes": [],
+                        }
     except OSError as exc:
-        return {"status": "unobservable", "reason": type(exc).__name__,
-                "path": str(path), "scopes": []}
+        return {
+            "status": "unobservable",
+            "reason": type(exc).__name__,
+            "path": str(path),
+            "scopes": [],
+        }
     scopes = []
     seen = set()
     for code, route, result_at, source_sha in conflicts:
         claim = claims.get(source_sha)
-        if (claim is None or claim[:2] != (code, route)
-                or not 0 <= (result_at - claim[2]).total_seconds() <= 120
-                or (code, source_sha) in seen
-                or not owned_items.get(code)
-                or f"{code}_NX" in owned_items[code]):
+        if (
+            claim is None
+            or claim[:2] != (code, route)
+            or not 0 <= (result_at - claim[2]).total_seconds() <= 120
+            or (code, source_sha) in seen
+            or not owned_items.get(code)
+            or f"{code}_NX" in owned_items[code]
+        ):
             continue
         seen.add((code, source_sha))
-        scopes.append({"symbol": code, "route": route,
-                       "source_sha256": source_sha,
-                       "result_at": result_at.isoformat()})
-    return {"status": "partial" if malformed else "complete", "path": str(path),
-            "source_sha256": digest.hexdigest(), "malformed_rows": malformed,
-            "conflict_event_count": len(conflicts), "matched_event_count": len(scopes),
-            "current_target": current_target, "scopes": scopes}
+        scopes.append(
+            {
+                "symbol": code,
+                "route": route,
+                "source_sha256": source_sha,
+                "result_at": result_at.isoformat(),
+            }
+        )
+    return {
+        "status": "partial" if malformed else "complete",
+        "path": str(path),
+        "source_sha256": digest.hexdigest(),
+        "malformed_rows": malformed,
+        "conflict_event_count": len(conflicts),
+        "matched_event_count": len(scopes),
+        "current_target": current_target,
+        "scopes": scopes,
+    }
+
+
 COLLECTION_TARGET_METRIC_CONTRACT = {
     "metric_role": (
         "full_active_owner_exact_route_collection_coverage_and_bounded_"
@@ -300,6 +352,7 @@ def build_collection_targets(
         if not symbol:
             return
         from src.trading.config.owner_retirement import new_entry_retired
+
         if new_entry_retired(symbol, scope.get("owner")):
             return
         row = merged.setdefault(
@@ -330,17 +383,22 @@ def build_collection_targets(
         row["expected_venues"].update(value for value in venues if value)
         row["active_owner"] = row["active_owner"] or _is_active_gap(scope)
         row["actual_execution_observed"] = bool(
-            row["actual_execution_observed"]
-            or False
+            row["actual_execution_observed"] or False
         )
 
     from src.engine.scalping.main_fixed_watch import SPECS
+
     for spec in SPECS if effective_date >= date(2026, 10, 7) else ():
-        merge_scope({
-            "symbol": spec.symbol, "owner": "main_scalping",
-            "scope_id": f"main_fixed_watch_{spec.symbol}",
-            "scope_kind": "active_main_fixed_watch", "expected_venues": ["SOR", "NXT"],
-        }, collection_reason="MAIN_FIXED_WATCH_SOURCE")
+        merge_scope(
+            {
+                "symbol": spec.symbol,
+                "owner": "main_scalping",
+                "scope_id": f"main_fixed_watch_{spec.symbol}",
+                "scope_kind": "active_main_fixed_watch",
+                "expected_venues": ["SOR", "NXT"],
+            },
+            collection_reason="MAIN_FIXED_WATCH_SOURCE",
+        )
 
     for gap in attribution_report.get("producer_consumer_gaps") or ():
         if not isinstance(gap, dict) or gap.get("gap_class") not in REPAIRABLE_GAPS:
@@ -374,14 +432,21 @@ def build_collection_targets(
         if not isinstance(gap, dict) or gap.get("route") != "nxt_only":
             continue
         source_sha = gap.get("source_sha256")
-        if (not isinstance(source_sha, str) or len(source_sha) != 64
-                or any(char not in "0123456789abcdef" for char in source_sha)
-                or str(gap.get("result_at") or "")[:10] != source_date.isoformat()):
+        if (
+            not isinstance(source_sha, str)
+            or len(source_sha) != 64
+            or any(char not in "0123456789abcdef" for char in source_sha)
+            or str(gap.get("result_at") or "")[:10] != source_date.isoformat()
+        ):
             continue
         merge_scope(
-            {"owner": "zero_base_probe_source_only", "scope_id": source_sha,
-             "scope_kind": "prospective_zero_base_exact_route_gap",
-             "symbol": gap.get("symbol"), "expected_venues": ("NXT",)},
+            {
+                "owner": "zero_base_probe_source_only",
+                "scope_id": source_sha,
+                "scope_kind": "prospective_zero_base_exact_route_gap",
+                "symbol": gap.get("symbol"),
+                "expected_venues": ("NXT",),
+            },
             collection_reason="zero_base_exact_route_subscription_conflict",
         )
 
@@ -443,11 +508,14 @@ def build_collection_targets(
     # permanently remove its entry/stop/target microstructure evidence. The
     # bounded daily budget now applies only to prospective research symbols.
     prospective_budget = min(
-        len(prospective_rows), research_budget,
+        len(prospective_rows),
+        research_budget,
         max(0, MAX_COLLECTION_TARGET_ACTIVE_SYMBOLS - len(active_rows)),
-        max(0, MAX_COLLECTION_TARGET_ACTIVE_ITEMS - sum(
-            len(row["_expected_venues"]) for row in active_rows
-        )),
+        max(
+            0,
+            MAX_COLLECTION_TARGET_ACTIVE_ITEMS
+            - sum(len(row["_expected_venues"]) for row in active_rows),
+        ),
     )
     active_candidates = _priority_round_robin(
         active_rows,
@@ -478,10 +546,14 @@ def build_collection_targets(
             # owner.  Prospective research remains bounded to one rotated
             # route because it has no active execution lineage to repair.
             selected_venues = (
-                venues if row["active_owner"] else
-                ["NXT"] if "zero_base_exact_route_subscription_conflict"
-                in row["gap_classes"] else
-                [venues[venue_phase % len(venues)]]
+                venues
+                if row["active_owner"]
+                else (
+                    ["NXT"]
+                    if "zero_base_exact_route_subscription_conflict"
+                    in row["gap_classes"]
+                    else [venues[venue_phase % len(venues)]]
+                )
             )
             row["expected_venues"] = selected_venues
             row["registration_items"] = [
@@ -533,7 +605,9 @@ def build_collection_targets(
         "budget": {
             # Compatibility field: this is the effective selected-universe
             # ceiling, not the prospective research budget in schemas v2/v3.
-            "max_symbols": min(MAX_COLLECTION_TARGET_ACTIVE_SYMBOLS, len(active_rows) + research_budget),
+            "max_symbols": min(
+                MAX_COLLECTION_TARGET_ACTIVE_SYMBOLS, len(active_rows) + research_budget
+            ),
             "prospective_budget_policy": "independent_of_active_owner_coverage",
             "research_symbol_budget": research_budget,
             "selected_symbol_count": len(selected),
@@ -653,7 +727,11 @@ def load_exact_date_collection_targets(
         }
     budget = payload.get("budget")
     if not isinstance(budget, dict):
-        return {"status": "invalid_budget_contract", "path": str(path), "registration_items": []}
+        return {
+            "status": "invalid_budget_contract",
+            "path": str(path),
+            "registration_items": [],
+        }
     selected_targets = payload.get("selected_targets")
     overflow_targets = payload.get("overflow_targets")
     schema = payload.get("schema")
@@ -725,14 +803,21 @@ def load_exact_date_collection_targets(
         active_candidate_items = -1
         selected_active_items = -1
     # Existing v3 manifests retain their original shared-budget contract.
-    independent_budget = (budget or {}).get("prospective_budget_policy") == "independent_of_active_owner_coverage"
+    independent_budget = (budget or {}).get(
+        "prospective_budget_policy"
+    ) == "independent_of_active_owner_coverage"
     prospective_limit = (
-        min(research_budget, max(0, MAX_COLLECTION_TARGET_ACTIVE_SYMBOLS - selected_active))
-        if independent_budget else max(0, research_budget - selected_active)
+        min(
+            research_budget,
+            max(0, MAX_COLLECTION_TARGET_ACTIVE_SYMBOLS - selected_active),
+        )
+        if independent_budget
+        else max(0, research_budget - selected_active)
     )
     expected_max = (
         min(MAX_COLLECTION_TARGET_ACTIVE_SYMBOLS, active_candidates + research_budget)
-        if independent_budget else max(active_candidates, research_budget)
+        if independent_budget
+        else max(active_candidates, research_budget)
     )
     v3_budget_valid = bool(
         schema == COLLECTION_TARGET_SCHEMA
@@ -758,7 +843,8 @@ def load_exact_date_collection_targets(
         and 0 <= selected_prospective <= prospective_limit
         and prospective_overflow == len(overflow_targets)
         and declared_max == expected_max
-        and budget.get("prospective_budget_policy") in (None, "independent_of_active_owner_coverage")
+        and budget.get("prospective_budget_policy")
+        in (None, "independent_of_active_owner_coverage")
     )
     if not isinstance(budget, dict) or not (
         legacy_budget_valid or v2_budget_valid or v3_budget_valid
@@ -867,9 +953,12 @@ def load_exact_date_collection_targets(
             "registration_items": [],
         }
     retired_items = {
-        item for row in selected_targets
-        if row.get("owners") and all(
-            str(owner).startswith("widget") or new_entry_retired(row.get("symbol"), owner)
+        item
+        for row in selected_targets
+        if row.get("owners")
+        and all(
+            str(owner).startswith("widget")
+            or new_entry_retired(row.get("symbol"), owner)
             for owner in row["owners"]
         )
         for item in (row.get("registration_items") or [row.get("registration_item")])

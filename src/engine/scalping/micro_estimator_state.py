@@ -432,32 +432,43 @@ class MicroEstimatorStore:
             age_ms = (now_ts - observed_at) * 1000.0
             stale = "stale" in str(data.get("source_quality_state") or "").lower()
             stale = stale or str(data.get("quote_stale") or "").strip().lower() in {
-                "1", "true", "stale",
+                "1",
+                "true",
+                "stale",
             }
             if not math.isfinite(age_ms) or not 0 <= age_ms <= 3000.0 or stale:
                 return state
-            scope = (receipt.get("item", symbol), receipt.get("market_route"),
-                     receipt.get("transport_epoch"),
-                     int((observed_at + 9 * 3600) // 86400),
-                     data.get("market_session_state"))
+            scope = (
+                receipt.get("item", symbol),
+                receipt.get("market_route"),
+                receipt.get("transport_epoch"),
+                int((observed_at + 9 * 3600) // 86400),
+                data.get("market_session_state"),
+            )
             if observed_at < state.last_ws_ts:
                 return state
             if state.last_ws_source_scope and (
-                isinstance(scope[2], int) and isinstance(state.last_ws_source_scope[2], int)
+                isinstance(scope[2], int)
+                and isinstance(state.last_ws_source_scope[2], int)
                 and scope[2] < state.last_ws_source_scope[2]
             ):
                 return state
             sequence = receipt.get("route_sequence")
             if receipt.get("transport_epoch") is not None and (
-                isinstance(sequence, bool) or not isinstance(sequence, int) or sequence <= 0
+                isinstance(sequence, bool)
+                or not isinstance(sequence, int)
+                or sequence <= 0
             ):
                 return state
             identity = (*scope, observed_at, sequence)
             if state.last_ws_source_scope == scope and (
                 identity == state.last_ws_source_identity
                 or observed_at < max(state.last_ws_ts, state.last_update_ts)
-                or (sequence is not None and state.last_ws_source_identity[-1] is not None
-                    and sequence <= state.last_ws_source_identity[-1])
+                or (
+                    sequence is not None
+                    and state.last_ws_source_identity[-1] is not None
+                    and sequence <= state.last_ws_source_identity[-1]
+                )
             ):
                 return state
             if state.last_ws_source_scope and state.last_ws_source_scope != scope:
@@ -483,8 +494,11 @@ class MicroEstimatorStore:
                 pressure=float(depth["pressure"]),
                 top_depth_ratio=float(depth["top_depth_ratio"]),
                 confidence=0.85,
-                source_state=("fresh_ws_order_flow_delta"
-                              if true_ofi_norm is not None else "fresh_ws_estimate"),
+                source_state=(
+                    "fresh_ws_order_flow_delta"
+                    if true_ofi_norm is not None
+                    else "fresh_ws_estimate"
+                ),
                 ofi_source=(
                     "ws_order_flow_delta"
                     if true_ofi_norm is not None
@@ -529,12 +543,15 @@ class MicroEstimatorStore:
             observed = _safe_float(observed_ts, 0.0)
             age_sec = float(now_ts) - observed
             source_time_proven = bool(
-                observed > 0 and math.isfinite(observed)
-                and math.isfinite(age_sec) and age_sec >= 0
+                observed > 0
+                and math.isfinite(observed)
+                and math.isfinite(age_sec)
+                and age_sec >= 0
             )
             age_confidence = (
                 _clamp(1.0 - (age_sec / max(1.0, max_age_sec)), 0.0, 1.0)
-                if source_time_proven else 0.0
+                if source_time_proven
+                else 0.0
             )
             decayed_pressure = 50.0 + (
                 (_clamp(pressure, 0.0, 100.0) - 50.0) * age_confidence

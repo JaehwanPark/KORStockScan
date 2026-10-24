@@ -1,6 +1,12 @@
 """Main source replay readers transferred from retired episode attribution."""
+
 from __future__ import annotations
-from src.engine.scalping.micro_reversion.observer_source_quality import source_close_verified, MAIN_SOURCE_CONTRACT, source_loss_counters, main_raw_epoch_validation
+from src.engine.scalping.micro_reversion.observer_source_quality import (
+    source_close_verified,
+    MAIN_SOURCE_CONTRACT,
+    source_loss_counters,
+    main_raw_epoch_validation,
+)
 import gzip
 import hashlib
 import json
@@ -10,12 +16,30 @@ from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 from zoneinfo import ZoneInfo
-from src.engine.scalping.micro_reversion.observer_source_quality import CANARY_LOSS_COUNTERS as CANARY_LOSS_COUNTERS, CANARY_FORBIDDEN_TRUE_FIELDS as CANARY_FORBIDDEN_TRUE_FIELDS, closed_pre_enqueue_epoch_quarantine_validation, timestamp_regression_row_quarantine_validation as _timestamp_regression_row_quarantine_validation
-from src.engine.scalping.micro_reversion.p2_replay import DEFAULT_SOURCE_EXCLUSION_MANIFEST, load_source_exclusion_manifest
-from src.engine.scalping.micro_reversion.path_journal import MARKET_STREAM_CONTRACT_ID, MarketDepthPoint, MarketStreamPoint, readable_partition_path_files
+from src.engine.scalping.micro_reversion.observer_source_quality import (
+    CANARY_LOSS_COUNTERS as CANARY_LOSS_COUNTERS,
+    CANARY_FORBIDDEN_TRUE_FIELDS as CANARY_FORBIDDEN_TRUE_FIELDS,
+    closed_pre_enqueue_epoch_quarantine_validation,
+    timestamp_regression_row_quarantine_validation as _timestamp_regression_row_quarantine_validation,
+)
+from src.engine.scalping.micro_reversion.p2_replay import (
+    DEFAULT_SOURCE_EXCLUSION_MANIFEST,
+    load_source_exclusion_manifest,
+)
+from src.engine.scalping.micro_reversion.path_journal import (
+    MARKET_STREAM_CONTRACT_ID,
+    MarketDepthPoint,
+    MarketStreamPoint,
+    readable_partition_path_files,
+)
 from src.engine.scalping.micro_reversion.path_capture import PathEventReference
-from src.engine.scalping.micro_reversion.depth_join import validate_depth_row as validate_canonical_depth_row
-from src.trading.market.confirmation_window import FEATURE_VERSION, build_confirmation_window
+from src.engine.scalping.micro_reversion.depth_join import (
+    validate_depth_row as validate_canonical_depth_row,
+)
+from src.trading.market.confirmation_window import (
+    FEATURE_VERSION,
+    build_confirmation_window,
+)
 from src.utils.constants import DATA_DIR
 from src.utils.market_day import is_krx_trading_day
 
@@ -45,12 +69,14 @@ CANARY_COMPLETE_AFTER_KST = time(20, 0)
 
 DUAL_AFTERMARKET_SESSION_PREFIX = "KRX_NXT_AFTERMARKET"
 
+
 def _read_json(path: Path) -> dict[str, Any] | None:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
     return payload if isinstance(payload, dict) else None
+
 
 def daily_canary_snapshot_path(
     target_date: date, *, root: Path = CANARY_DAILY_SNAPSHOT_DIR
@@ -59,9 +85,11 @@ def daily_canary_snapshot_path(
         root / f"scalp_micro_reversion_canary_snapshot_{target_date.isoformat()}.json"
     )
 
+
 def _canary_snapshot_date(payload: dict[str, Any] | None) -> date | None:
     generated_at = _parse_owner_ts((payload or {}).get("generated_at"))
     return generated_at.astimezone(KST).date() if generated_at is not None else None
+
 
 def resolve_target_canary_snapshot(
     *,
@@ -78,6 +106,7 @@ def resolve_target_canary_snapshot(
         return daily_path
     return latest_path
 
+
 def _parse_ts(value: Any) -> datetime | None:
     if not isinstance(value, str) or not value.strip():
         return None
@@ -93,6 +122,7 @@ def _parse_ts(value: Any) -> datetime | None:
             return None
     return parsed
 
+
 def _parse_owner_ts(value: Any) -> datetime | None:
     if not isinstance(value, str) or not value.strip():
         return None
@@ -103,6 +133,7 @@ def _parse_owner_ts(value: Any) -> datetime | None:
         return None
     return parsed if parsed.tzinfo is not None else None
 
+
 def _finite_float(value: Any) -> float | None:
     if isinstance(value, bool):
         return None
@@ -111,6 +142,7 @@ def _finite_float(value: Any) -> float | None:
     except (TypeError, ValueError):
         return None
     return parsed if math.isfinite(parsed) else None
+
 
 def _partition_stream_files(
     partition: Path, logical_name: str
@@ -131,6 +163,7 @@ def _partition_stream_files(
             continue
         paths.extend((path, venue, session) for path in discovered)
     return paths, errors
+
 
 def _iter_relevant_rows(
     paths: Iterable[tuple[Path, str, str]],
@@ -173,11 +206,13 @@ def _iter_relevant_rows(
                 )
             continue
 
+
 def _scope_contract_key(payload: dict[str, Any]) -> str:
     return (
         f"{str(payload.get('venue') or 'unknown')}|"
         f"{str(payload.get('session_bucket') or 'unknown')}"
     )
+
 
 def _physical_scope_contract_key(payload: dict[str, Any]) -> str:
     return (
@@ -185,11 +220,13 @@ def _physical_scope_contract_key(payload: dict[str, Any]) -> str:
         f"{str(payload.get('_partition_session_bucket') or 'unknown')}"
     )
 
+
 def _physical_scope_matches_row(payload: dict[str, Any]) -> bool:
     return bool(
         payload.get("venue") == payload.get("_partition_venue")
         and payload.get("session_bucket") == payload.get("_partition_session_bucket")
     )
+
 
 def _market_axis_context(payload: Mapping[str, Any]) -> dict[str, Any]:
     """Preserve market-data scope without inferring a physical fill venue."""
@@ -241,6 +278,7 @@ def _market_axis_context(payload: Mapping[str, Any]) -> dict[str, Any]:
         "allowed_runtime_apply": False,
     }
 
+
 def _depth_item_matches_scope(payload: dict[str, Any]) -> bool:
     symbol = str(payload.get("symbol") or "").strip()
     venue = str(payload.get("venue") or "").strip().upper()
@@ -254,6 +292,7 @@ def _depth_item_matches_scope(payload: dict[str, Any]) -> bool:
         )
     )
     return bool(symbol and expected_item and payload.get("item") == expected_item)
+
 
 def _validate_stream_row(
     payload: dict[str, Any],
@@ -330,6 +369,7 @@ def _validate_stream_row(
         best_ask,
     )
 
+
 def _validate_depth_row(
     payload: dict[str, Any],
 ) -> tuple[
@@ -380,6 +420,7 @@ def _validate_depth_row(
             valid = False
     return valid, timestamp, bid_depth, ask_depth, best_bid, best_ask
 
+
 def _validate_reference_row(
     payload: dict[str, Any], target_date: str
 ) -> tuple[bool, datetime | None]:
@@ -418,6 +459,7 @@ def _validate_reference_row(
         valid = timestamp.astimezone(KST).date().isoformat() == target_date
         return valid, timestamp
     return False, None
+
 
 def _closed_ingress_receipt_loss(
     guard: dict[str, Any], collector: dict[str, Any]
@@ -468,6 +510,7 @@ def _closed_ingress_receipt_loss(
         and all(collector.get(key) is False for key in CANARY_FORBIDDEN_TRUE_FIELDS)
         and collector.get("broker_order_forbidden") is True
     )
+
 
 def _micro_context(
     target_date: str,
@@ -694,26 +737,39 @@ def _micro_context(
 
     # Main raw rows need their own closed epoch evidence. A legacy or latest
     # receipt cannot retroactively approve unrelated collector generations.
-    allowed_main_epochs=set()
-    if canary_payload and (canary_payload.get('collector_snapshot') or {}).get('source_contract')==MAIN_SOURCE_CONTRACT:
-        main_validation=main_raw_epoch_validation(canary_payload,source_date=target_date)
-        allowed_main_epochs.update(main_validation.get('allowed_sequence_epochs',[]))
-        from src.engine.scalping.continuous_reversal_source import _source_quality_receipt
-        quality=_source_quality_receipt(observation_root.parents[1],target_date)
-        allowed_main_epochs.update(quality.get('allowed_sequence_epochs',[]))
-        allowed_main_epochs.difference_update(quality.get('denied_sequence_epochs',[]))
-        canary_source['main_raw_source_quality_receipt']=quality
-        canary_source['main_raw_epoch_validation']=main_validation
-        canary_valid=canary_valid and bool(allowed_main_epochs)
-        if not allowed_main_epochs:canary_source['status']='main_raw_closed_epoch_unverified'
+    allowed_main_epochs = set()
+    if (
+        canary_payload
+        and (canary_payload.get("collector_snapshot") or {}).get("source_contract")
+        == MAIN_SOURCE_CONTRACT
+    ):
+        main_validation = main_raw_epoch_validation(
+            canary_payload, source_date=target_date
+        )
+        allowed_main_epochs.update(main_validation.get("allowed_sequence_epochs", []))
+        from src.engine.scalping.continuous_reversal_source import (
+            _source_quality_receipt,
+        )
+
+        quality = _source_quality_receipt(observation_root.parents[1], target_date)
+        allowed_main_epochs.update(quality.get("allowed_sequence_epochs", []))
+        allowed_main_epochs.difference_update(quality.get("denied_sequence_epochs", []))
+        canary_source["main_raw_source_quality_receipt"] = quality
+        canary_source["main_raw_epoch_validation"] = main_validation
+        canary_valid = canary_valid and bool(allowed_main_epochs)
+        if not allowed_main_epochs:
+            canary_source["status"] = "main_raw_closed_epoch_unverified"
 
     def is_excluded(payload: dict[str, Any]) -> bool:
-        contract=payload.get('source_contract')
+        contract = payload.get("source_contract")
         if contract is not None and contract != MAIN_SOURCE_CONTRACT:
-            unverified_epoch_row_counts['unsupported_source_contract'] += 1
+            unverified_epoch_row_counts["unsupported_source_contract"] += 1
             return True
-        if payload.get('source_contract')==MAIN_SOURCE_CONTRACT and (type(payload.get('sequence_epoch')) is not int or payload['sequence_epoch'] not in allowed_main_epochs):
-            unverified_epoch_row_counts[str(payload.get('sequence_epoch'))] += 1
+        if payload.get("source_contract") == MAIN_SOURCE_CONTRACT and (
+            type(payload.get("sequence_epoch")) is not int
+            or payload["sequence_epoch"] not in allowed_main_epochs
+        ):
+            unverified_epoch_row_counts[str(payload.get("sequence_epoch"))] += 1
             return True
         if allowed_canary_epoch is not None:
             epoch = payload.get("sequence_epoch")
@@ -1014,7 +1070,16 @@ def _micro_context(
                         adaptive_source_rows["depth"] += 1
 
     for payload in _iter_relevant_rows(
-        (() if (canary_payload or {}).get("collector_snapshot", {}).get("source_contract") == MAIN_SOURCE_CONTRACT else ref_paths), symbols, diagnostics=read_diagnostics
+        (
+            ()
+            if (canary_payload or {})
+            .get("collector_snapshot", {})
+            .get("source_contract")
+            == MAIN_SOURCE_CONTRACT
+            else ref_paths
+        ),
+        symbols,
+        diagnostics=read_diagnostics,
     ):
         symbol = str(payload.get("symbol"))
         if not _physical_scope_matches_row(payload):
@@ -1113,6 +1178,7 @@ def _micro_context(
         windows,
     )
 
+
 def _invalid_contract_count_for_scope(
     inventory: dict[str, Any],
     *,
@@ -1133,6 +1199,7 @@ def _invalid_contract_count_for_scope(
             total += int(raw_count or 0)
     return total
 
+
 _ENTRY_CONFIRMATION_ANCHOR_ROLES = frozenset(
     {
         "actual_market_weakness_blocked_entry_signal",
@@ -1142,6 +1209,7 @@ _ENTRY_CONFIRMATION_ANCHOR_ROLES = frozenset(
         "prospective_episode_research_signal",
     }
 )
+
 
 def _entry_checkpoint_ask_depletion_feature(
     anchor: dict[str, Any],
@@ -1241,6 +1309,7 @@ def _entry_checkpoint_ask_depletion_feature(
         },
     }
 
+
 def _registration_item_for_exact_route(symbol: Any, venue: Any) -> str:
     normalized_symbol = str(symbol or "").strip().upper()
     normalized_venue = str(venue or "").strip().upper()
@@ -1253,6 +1322,7 @@ def _registration_item_for_exact_route(symbol: Any, venue: Any) -> str:
     if normalized_venue == "SOR":
         return f"{normalized_symbol}_AL"
     return ""
+
 
 def _collect_generation_source_paths(value: Any) -> set[Path]:
     """Return only producer-declared source paths from an attribution report."""
@@ -1278,6 +1348,7 @@ def _collect_generation_source_paths(value: Any) -> set[Path]:
         for item in value:
             paths.update(_collect_generation_source_paths(item))
     return paths
+
 
 def _path_generation_rows(path: Path) -> list[dict[str, Any]]:
     if not path.exists():
@@ -1309,6 +1380,7 @@ def _path_generation_rows(path: Path) -> list[dict[str, Any]]:
         rows.append({"path": str(path), "state": "empty_directory"})
     return rows
 
+
 def _source_generation_contract(
     sources: Mapping[str, Any], *, extra_paths: Iterable[Path] = ()
 ) -> dict[str, Any]:
@@ -1333,10 +1405,12 @@ def _source_generation_contract(
         "producer_sha256": producer_sha256,
     }
 
+
 # Shared source-window bounds; retained unchanged from their original contract.
 ADAPTIVE_EXIT_HORIZON_SEC = 1200
 ADAPTIVE_EXIT_MAX_SOURCE_ROWS = 30000
 ADAPTIVE_EXIT_MAX_TOTAL_SOURCE_ROWS = 120000
+
 
 def _previous_krx_trading_date(value: date) -> date:
     candidate = value - timedelta(days=1)
@@ -1345,6 +1419,7 @@ def _previous_krx_trading_date(value: date) -> date:
             return candidate
         candidate -= timedelta(days=1)
     raise ValueError("previous_krx_trading_date_unresolved")
+
 
 def resolve_completed_machine_target_date(*, now: datetime | None = None) -> date:
     current = (now or datetime.now(KST)).astimezone(KST)

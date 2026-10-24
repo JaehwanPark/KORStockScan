@@ -512,16 +512,29 @@ def _non_live_payload_valid(payload: Any, *, source_date: date) -> bool:
 def _source_report_valid(
     payload: dict[str, Any], *, source_date: date, report_dir: Path
 ) -> bool:
-    from src.engine.scalping.scanner_lookup_attention_resource import validate_integrated_selection
+    from src.engine.scalping.scanner_lookup_attention_resource import (
+        validate_integrated_selection,
+    )
+
     try:
         evaluation_date = date.fromisoformat(payload["source_evaluation_date"])
         if evaluation_date > source_date:
             return False
-        report = json.loads((report_dir / f"intraday_ws_freshness_monitor_{evaluation_date}.json").read_text())
-        section = report["scanner_unique_funnel"]["economic_cohorts"]["lookup_attention_selection"]
-        return bool(report.get("target_date") == evaluation_date.isoformat()
-                    and section.get("evaluation_phase") == "postclose_final"
-                    and not validate_integrated_selection(section, payload, target=evaluation_date))
+        report = json.loads(
+            (
+                report_dir / f"intraday_ws_freshness_monitor_{evaluation_date}.json"
+            ).read_text()
+        )
+        section = report["scanner_unique_funnel"]["economic_cohorts"][
+            "lookup_attention_selection"
+        ]
+        return bool(
+            report.get("target_date") == evaluation_date.isoformat()
+            and section.get("evaluation_phase") == "postclose_final"
+            and not validate_integrated_selection(
+                section, payload, target=evaluation_date
+            )
+        )
     except (OSError, KeyError, TypeError, ValueError):
         return False
 
@@ -563,11 +576,17 @@ def _load_active_cached(
         return _inactive(
             "prior_policy_contract_invalid", validation_errors=["policy_not_object"]
         )
-    if payload.get("prepared_effective_date") and payload["prepared_effective_date"] != target.isoformat():
+    if (
+        payload.get("prepared_effective_date")
+        and payload["prepared_effective_date"] != target.isoformat()
+    ):
         return _inactive("prepared_policy_effective_date_mismatch")
     if payload.get("status") not in ACTIVE_STATUSES:
-        if (_non_live_payload_valid(payload, source_date=source_date)
-                and _source_report_valid(payload, source_date=source_date, report_dir=Path(report_dir_text))):
+        if _non_live_payload_valid(
+            payload, source_date=source_date
+        ) and _source_report_valid(
+            payload, source_date=source_date, report_dir=Path(report_dir_text)
+        ):
             return _inactive(
                 "prior_policy_not_live_auto_apply_ready",
                 policy_source_date=source_date.isoformat(),
@@ -578,9 +597,15 @@ def _load_active_cached(
             policy_source_date=source_date.isoformat(),
             validation_errors=["non_live_policy_contract_invalid"],
         )
-    from src.engine.scalping.scanner_lookup_attention_resource import INTEGRATED_CONTRACT
-    errors = ([] if payload.get("integrated_source_contract") == INTEGRATED_CONTRACT
-              else _validate_payload(payload, source_date=source_date))
+    from src.engine.scalping.scanner_lookup_attention_resource import (
+        INTEGRATED_CONTRACT,
+    )
+
+    errors = (
+        []
+        if payload.get("integrated_source_contract") == INTEGRATED_CONTRACT
+        else _validate_payload(payload, source_date=source_date)
+    )
     if errors:
         return _inactive(
             "prior_policy_contract_invalid",
@@ -623,9 +648,7 @@ def _load_active_cached(
         "experiment_allocation_seed_sha256": experiment.get(
             "allocation_seed_sha256", ""
         ),
-        "experiment_max_marginal_slots": experiment.get(
-            "max_marginal_slots", 0
-        ),
+        "experiment_max_marginal_slots": experiment.get("max_marginal_slots", 0),
     }
 
 
@@ -656,7 +679,9 @@ def load_candidate_policy(
         )
         try:
             header = json.loads(policy_path.read_text())
-            observed = date.fromisoformat(header.get("source_evaluation_date", source_date.isoformat()))
+            observed = date.fromisoformat(
+                header.get("source_evaluation_date", source_date.isoformat())
+            )
             report_path = report_root / f"intraday_ws_freshness_monitor_{observed}.json"
         except (OSError, ValueError, TypeError):
             pass
@@ -711,19 +736,28 @@ def validate_preopen_receipt(receipt, target):
             return False
         if not receipt["active"]:
             return "source_policy" not in receipt and "source_report" not in receipt
-        from src.engine.scalping.scanner_lookup_attention_resource import INTEGRATED_CONTRACT, validate_integrated_selection
+        from src.engine.scalping.scanner_lookup_attention_resource import (
+            INTEGRATED_CONTRACT,
+            validate_integrated_selection,
+        )
+
         payload, report = receipt["source_policy"], receipt["source_report"]
         source = date.fromisoformat(payload["target_date"])
         observed = date.fromisoformat(payload["source_evaluation_date"])
-        section = report["scanner_unique_funnel"]["economic_cohorts"]["lookup_attention_selection"]
-        return bool(payload.get("integrated_source_contract") == INTEGRATED_CONTRACT
+        section = report["scanner_unique_funnel"]["economic_cohorts"][
+            "lookup_attention_selection"
+        ]
+        return bool(
+            payload.get("integrated_source_contract") == INTEGRATED_CONTRACT
             and payload.get("status") in ACTIVE_STATUSES
             and receipt.get("policy_source_date") == source.isoformat()
-            and observed <= source < target and is_krx_trading_day(source)
+            and observed <= source < target
+            and is_krx_trading_day(source)
             and count_krx_trading_days(source, target) == 1
             and payload.get("prepared_effective_date") == target.isoformat()
             and report.get("target_date") == observed.isoformat()
-            and not validate_integrated_selection(section, payload, target=observed))
+            and not validate_integrated_selection(section, payload, target=observed)
+        )
     except (KeyError, TypeError, ValueError, OverflowError, AttributeError):
         return False
 
@@ -776,17 +810,34 @@ def freeze_preopen_policy(
         )
         receipt["source_report"] = json.loads(
             (
-                Path(report_dir) / f"intraday_ws_freshness_monitor_{receipt['source_policy']['source_evaluation_date']}.json"
+                Path(report_dir)
+                / f"intraday_ws_freshness_monitor_{receipt['source_policy']['source_evaluation_date']}.json"
             ).read_text(encoding="utf-8")
         )
     if candidate.get("policy_source_date"):
-        source_path = Path(policy_dir) / f"scanner_lookup_attention_policy_{candidate['policy_source_date']}.json"
+        source_path = (
+            Path(policy_dir)
+            / f"scanner_lookup_attention_policy_{candidate['policy_source_date']}.json"
+        )
         try:
             disposition = json.loads(source_path.read_text())
-            if _source_report_valid(disposition, source_date=date.fromisoformat(candidate["policy_source_date"]), report_dir=Path(report_dir)):
-                receipt["disposition_receipt"] = {k: disposition.get(k) for k in (
-                    "source_evaluation_date", "publication_date", "target_date", "prepared_effective_date",
-                    "artifact_sha256", "source_report_artifact_sha256", "status")}
+            if _source_report_valid(
+                disposition,
+                source_date=date.fromisoformat(candidate["policy_source_date"]),
+                report_dir=Path(report_dir),
+            ):
+                receipt["disposition_receipt"] = {
+                    k: disposition.get(k)
+                    for k in (
+                        "source_evaluation_date",
+                        "publication_date",
+                        "target_date",
+                        "prepared_effective_date",
+                        "artifact_sha256",
+                        "source_report_artifact_sha256",
+                        "status",
+                    )
+                }
                 receipt["disposition_receipt"]["source_contract_verified"] = True
         except (OSError, ValueError, TypeError):
             pass
@@ -860,9 +911,7 @@ def _load_preopen_cached(target_iso, path_text, mtime_ns, size):
         "experiment_allocation_seed_sha256": experiment.get(
             "allocation_seed_sha256", ""
         ),
-        "experiment_max_marginal_slots": experiment.get(
-            "max_marginal_slots", 0
-        ),
+        "experiment_max_marginal_slots": experiment.get("max_marginal_slots", 0),
     }
 
 
@@ -1011,36 +1060,63 @@ __all__ = [
 ]
 
 
-
-
-def publish_integrated_policy(report, *, publication_date=None, policy_date=None, effective_date=None, policy_dir=POLICY_DIR):
+def publish_integrated_policy(
+    report,
+    *,
+    publication_date=None,
+    policy_date=None,
+    effective_date=None,
+    policy_dir=POLICY_DIR,
+):
     """Publish a validated bounded candidate or baseline disposition.
 
     Publication date and actual observation/evaluation date stay separate on a
     non-collection day. This prepares a candidate; it never freezes PREOPEN.
     """
-    from src.engine.scalping.scanner_lookup_attention_resource import INTEGRATED_CONTRACT, validate_integrated_selection
+    from src.engine.scalping.scanner_lookup_attention_resource import (
+        INTEGRATED_CONTRACT,
+        validate_integrated_selection,
+    )
     from src.engine.monitoring.scanner_lookup_attention_tuning import _atomic_json
+
     observed = date.fromisoformat(report["target_date"])
     published = date.fromisoformat(publication_date) if publication_date else observed
     dated = date.fromisoformat(policy_date) if policy_date else published
     if effective_date is None:
         from datetime import timedelta
+
         next_day = dated + timedelta(days=1)
         while not is_krx_trading_day(next_day):
             next_day += timedelta(days=1)
         effective_date = next_day.isoformat()
     effective = date.fromisoformat(effective_date)
-    if (dated < observed or published < dated or not is_krx_trading_day(dated)
-            or not is_krx_trading_day(effective) or count_krx_trading_days(dated, effective) != 1
-            or published >= effective):
+    if (
+        dated < observed
+        or published < dated
+        or not is_krx_trading_day(dated)
+        or not is_krx_trading_day(effective)
+        or count_krx_trading_days(dated, effective) != 1
+        or published >= effective
+    ):
         raise ValueError("integrated_policy_calendar_binding_invalid")
-    section = report["scanner_unique_funnel"]["economic_cohorts"]["lookup_attention_selection"]
+    section = report["scanner_unique_funnel"]["economic_cohorts"][
+        "lookup_attention_selection"
+    ]
     ready = section.get("status") in ACTIVE_STATUSES
     experiment_ready = section.get("status") == "experiment_ready"
-    disposition = ("source_quality_blocked" if section.get("status") == "source_gap"
-        and (section.get("source_quality",{}).get("status") != "pass" or section.get("official_symbol_master",{}).get("status") != "pass")
-        else "source_contract_blocked" if section.get("status") == "source_gap" else section["status"])
+    disposition = (
+        "source_quality_blocked"
+        if section.get("status") == "source_gap"
+        and (
+            section.get("source_quality", {}).get("status") != "pass"
+            or section.get("official_symbol_master", {}).get("status") != "pass"
+        )
+        else (
+            "source_contract_blocked"
+            if section.get("status") == "source_gap"
+            else section["status"]
+        )
+    )
     if published < observed or section.get("evaluation_phase") != "postclose_final":
         raise ValueError("integrated_final_publication_date_invalid")
     experiment = {}
@@ -1071,43 +1147,68 @@ def publish_integrated_policy(report, *, publication_date=None, policy_date=None
         }
     runtime_effect = bool(
         ready
-        and (
-            not experiment_ready
-            or experiment.get("assigned_arm") == "candidate"
-        )
+        and (not experiment_ready or experiment.get("assigned_arm") == "candidate")
     )
     effective_bonus = MAX_BONUS_POINTS if runtime_effect else 0.0
-    payload = {"schema_version": SCHEMA_VERSION, "report_type": REPORT_TYPE,
-        "target_date": dated.isoformat(), "publication_date": published.isoformat(), "source_evaluation_date": observed.isoformat(),
-        "prepared_effective_date": effective_date, "integrated_source_contract": INTEGRATED_CONTRACT,
-        "status": disposition, "decision_contract_version": DECISION_CONTRACT_VERSION,
-        "decision_authority": DECISION_AUTHORITY, "activation_mode": ACTIVATION_MODE,
-        "user_authority": USER_AUTHORITY, "operator_approval_required": False,
-        "runtime_effect": runtime_effect, "actual_order_submitted": False, "broker_order_forbidden": True,
-        "allowed_runtime_apply": ready, "effective_bonus_points": effective_bonus,
+    payload = {
+        "schema_version": SCHEMA_VERSION,
+        "report_type": REPORT_TYPE,
+        "target_date": dated.isoformat(),
+        "publication_date": published.isoformat(),
+        "source_evaluation_date": observed.isoformat(),
+        "prepared_effective_date": effective_date,
+        "integrated_source_contract": INTEGRATED_CONTRACT,
+        "status": disposition,
+        "decision_contract_version": DECISION_CONTRACT_VERSION,
+        "decision_authority": DECISION_AUTHORITY,
+        "activation_mode": ACTIVATION_MODE,
+        "user_authority": USER_AUTHORITY,
+        "operator_approval_required": False,
+        "runtime_effect": runtime_effect,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "allowed_runtime_apply": ready,
+        "effective_bonus_points": effective_bonus,
         "source_report_artifact_sha256": section["artifact_sha256"],
-        "source_quality_status": "pass" if section["source_quality"].get("status") == "pass" else "blocked",
-        "holdout_armed_since": section.get("independent_holdout", {}).get("learning_cutoff"),
-        "reason": section["status"], "source_gaps": section["primary_economics"]["source_gaps"],
-        "policy": {"policy_version": POLICY_VERSION, "min_lookup_attention_score": MIN_SCORE,
-            "max_bonus_points": MAX_BONUS_POINTS, "max_source_age_sec": MAX_SOURCE_AGE_SEC,
-            "rollback_bonus_points": 0.0, "same_priority_tier_only": True,
+        "source_quality_status": (
+            "pass" if section["source_quality"].get("status") == "pass" else "blocked"
+        ),
+        "holdout_armed_since": section.get("independent_holdout", {}).get(
+            "learning_cutoff"
+        ),
+        "reason": section["status"],
+        "source_gaps": section["primary_economics"]["source_gaps"],
+        "policy": {
+            "policy_version": POLICY_VERSION,
+            "min_lookup_attention_score": MIN_SCORE,
+            "max_bonus_points": MAX_BONUS_POINTS,
+            "max_source_age_sec": MAX_SOURCE_AGE_SEC,
+            "rollback_bonus_points": 0.0,
+            "same_priority_tier_only": True,
             "priority_tier_or_slot_change_allowed": False,
             "weight_formula": "linear_above_min_score_capped_at_max_bonus",
-            "eligible_venues": ELIGIBLE_VENUES, "eligible_session_buckets": ELIGIBLE_SESSION_BUCKETS},
+            "eligible_venues": ELIGIBLE_VENUES,
+            "eligible_session_buckets": ELIGIBLE_SESSION_BUCKETS,
+        },
     }
     if experiment:
         payload["experiment"] = experiment
     payload["artifact_sha256"] = canonical_sha256(payload)
     issues = validate_integrated_selection(section, payload, target=observed)
-    if issues or (not ready and not _non_live_payload_valid(payload, source_date=dated)):
+    if issues or (
+        not ready and not _non_live_payload_valid(payload, source_date=dated)
+    ):
         raise ValueError("integrated_policy_invalid:" + ",".join(issues))
     path = Path(policy_dir) / f"scanner_lookup_attention_policy_{dated}.json"
     # Preserve replaced generations, including proofs already frozen by PREOPEN.
     if path.exists():
         previous = json.loads(path.read_text())
         if previous != payload:
-            archive = Path(policy_dir) / "superseded" / f"scanner_lookup_attention_policy_{dated}_{canonical_sha256(previous)}.json"
+            archive = (
+                Path(policy_dir)
+                / "superseded"
+                / f"scanner_lookup_attention_policy_{dated}_{canonical_sha256(previous)}.json"
+            )
             if not archive.exists():
                 _atomic_json(archive, previous)
     _atomic_json(path, payload)

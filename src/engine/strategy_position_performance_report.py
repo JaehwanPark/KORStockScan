@@ -22,8 +22,10 @@ from src.engine.ai_response_contracts import normalize_gatekeeper_action_key
 from src.engine.log_archive_service import load_monitor_snapshot
 from src.engine.sniper_position_tags import normalize_position_tag, normalize_strategy
 from src.engine.sniper_trade_review_report import (
-    COMPLETED_CENSUS_CONTRACT_FROM, build_trade_review_report,
-    verify_completed_census_manifest, completed_census_projection_ids,
+    COMPLETED_CENSUS_CONTRACT_FROM,
+    build_trade_review_report,
+    verify_completed_census_manifest,
+    completed_census_projection_ids,
 )
 from src.engine.trade_profit import (
     calculate_net_profit_rate,
@@ -31,7 +33,10 @@ from src.engine.trade_profit import (
     get_trade_cost_rate,
 )
 from src.utils.constants import DATA_DIR
-from src.utils.jsonl_io import iter_jsonl_objects_strict, read_json_object_strict_receipt
+from src.utils.jsonl_io import (
+    iter_jsonl_objects_strict,
+    read_json_object_strict_receipt,
+)
 
 _DB = DBManager()
 _PIPELINE_EVENTS_DIR = DATA_DIR / "pipeline_events"
@@ -133,21 +138,26 @@ def _status_path(target_date: str) -> Path:
 
 def _completion_source_signature(paths):
     from src.engine.lifecycle.holding_window_generation import source_stat
+
     values = {}
     for path in paths:
         if path.is_symlink():
-            raise FactSyncSourceError('completion_snapshot_path_invalid')
+            raise FactSyncSourceError("completion_snapshot_path_invalid")
         values[str(path)] = source_stat(path.stat()) if path.exists() else None
     return values
 
 
 def _completion_source_guard_valid(target_date, quality):
     from src.engine.lifecycle.broker_cost_reconciliation import source_generation
-    guard = quality.get('_source_guard')
+
+    guard = quality.get("_source_guard")
     try:
-        return (isinstance(guard, dict)
-                and _completion_source_signature([Path(name) for name in guard]) == guard
-                and source_generation(DATA_DIR, target_date) == quality.get('actual_cost_source_generation'))
+        return (
+            isinstance(guard, dict)
+            and _completion_source_signature([Path(name) for name in guard]) == guard
+            and source_generation(DATA_DIR, target_date)
+            == quality.get("actual_cost_source_generation")
+        )
     except (OSError, ValueError, TypeError, FactSyncSourceError):
         return False
 
@@ -157,82 +167,107 @@ def _legacy_source_json(path, maximum):
     import stat
     from src.engine.lifecycle.holding_window_generation import source_stat
     from src.engine.lifecycle.research_input_budget import Claim
+
     path = Path(path)
     if path.is_symlink() or any(p.is_symlink() for p in path.parents):
-        raise FactSyncSourceError('legacy_fact_source_path_invalid')
+        raise FactSyncSourceError("legacy_fact_source_path_invalid")
     before = path.lstat()
     if not stat.S_ISREG(before.st_mode) or before.st_size > maximum:
-        raise FactSyncSourceError('legacy_fact_source_size_or_type_invalid')
+        raise FactSyncSourceError("legacy_fact_source_size_or_type_invalid")
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     try:
         opened = os.fstat(fd)
-        if not stat.S_ISREG(opened.st_mode) or source_stat(opened) != source_stat(before):
-            raise FactSyncSourceError('legacy_fact_source_changed')
-        with os.fdopen(fd, 'rb', closefd=False) as handle:
+        if not stat.S_ISREG(opened.st_mode) or source_stat(opened) != source_stat(
+            before
+        ):
+            raise FactSyncSourceError("legacy_fact_source_changed")
+        with os.fdopen(fd, "rb", closefd=False) as handle:
             raw = handle.read(maximum + 1)
-        if (len(raw) != before.st_size or source_stat(os.fstat(fd)) != source_stat(before)
-                or source_stat(path.lstat()) != source_stat(before)):
-            raise FactSyncSourceError('legacy_fact_source_changed')
+        if (
+            len(raw) != before.st_size
+            or source_stat(os.fstat(fd)) != source_stat(before)
+            or source_stat(path.lstat()) != source_stat(before)
+        ):
+            raise FactSyncSourceError("legacy_fact_source_changed")
     finally:
         os.close(fd)
+
     def unique_pairs(pairs):
         value = {}
         for key, item in pairs:
             if key in value:
-                raise FactSyncSourceError('legacy_fact_source_duplicate_key')
+                raise FactSyncSourceError("legacy_fact_source_duplicate_key")
             value[key] = item
         return value
+
     with Claim(len(raw) * 8):
         try:
             value = json.loads(raw, object_pairs_hook=unique_pairs)
         except RecursionError as exc:
-            raise FactSyncSourceError('legacy_fact_source_depth_invalid') from exc
+            raise FactSyncSourceError("legacy_fact_source_depth_invalid") from exc
     if not isinstance(value, dict):
-        raise FactSyncSourceError('legacy_fact_source_object_invalid')
+        raise FactSyncSourceError("legacy_fact_source_object_invalid")
     return value, raw
 
 
 def _legacy_value_reader(handle):
     from src.engine.lifecycle.research_json_stream import Reader
     from src.engine.lifecycle.holding_window_generation import MAX_METADATA_BYTES
+
     class LegacyReader(Reader):
         def value(self, limit=MAX_METADATA_BYTES):
             # A number may end with an incomplete exponent in a chunk. Keep
             # its token until a JSON delimiter or EOF confirms its boundary.
             from src.engine.lifecycle.research_input_budget import Claim
+
             self.spaces()
             with Claim(limit * 8):
                 while True:
                     try:
                         value, end = self.decoder.raw_decode(self.buffer, self.offset)
-                        if (type(value) in (int, float) and not self.eof
-                                and (end == len(self.buffer) or self.buffer[end] in '.eE+-')):
+                        if (
+                            type(value) in (int, float)
+                            and not self.eof
+                            and (end == len(self.buffer) or self.buffer[end] in ".eE+-")
+                        ):
                             if self.fill():
                                 continue
-                        if len(self.buffer[self.offset:end].encode('utf-8')) > limit:
-                            raise ValueError('research_legacy_json_field_partition_required')
+                        if len(self.buffer[self.offset : end].encode("utf-8")) > limit:
+                            raise ValueError(
+                                "research_legacy_json_field_partition_required"
+                            )
                         self.offset = end
                         return value
                     except RecursionError as exc:
-                        raise FactSyncSourceError('legacy_fact_source_depth_invalid') from exc
+                        raise FactSyncSourceError(
+                            "legacy_fact_source_depth_invalid"
+                        ) from exc
                     except json.JSONDecodeError:
                         if len(self.buffer) - self.offset > limit:
-                            raise ValueError('research_legacy_json_field_partition_required')
+                            raise ValueError(
+                                "research_legacy_json_field_partition_required"
+                            )
                         if not self.fill():
-                            raise ValueError('research_legacy_json_incomplete') from None
+                            raise ValueError(
+                                "research_legacy_json_incomplete"
+                            ) from None
+
     def unique_pairs(pairs):
         result = {}
         for key, item in pairs:
             if key in result:
-                raise FactSyncSourceError('legacy_fact_source_duplicate_key')
+                raise FactSyncSourceError("legacy_fact_source_duplicate_key")
             result[key] = item
         return result
+
     reader = LegacyReader(handle)
     reader.decoder = json.JSONDecoder(object_pairs_hook=unique_pairs)
     return reader
 
 
-def _legacy_original_stream(sidecar, target_date, *, projection_kind="completed_sidecar", expected_raw_sha=None):
+def _legacy_original_stream(
+    sidecar, target_date, *, projection_kind="completed_sidecar", expected_raw_sha=None
+):
     """Verify the original full self-seal and census using bounded JSON values.
 
     Canonical fragments are spooled to temporary files to sort object keys.
@@ -244,250 +279,434 @@ def _legacy_original_stream(sidecar, target_date, *, projection_kind="completed_
     import shutil
     import stat
     import zlib
-    from src.engine.lifecycle.holding_window_generation import MAX_METADATA_BYTES, source_stat
+    from src.engine.lifecycle.holding_window_generation import (
+        MAX_METADATA_BYTES,
+        source_stat,
+    )
     from src.engine.lifecycle.broker_cost_allocation import CACHED_RECEIPT_MAX_BYTES
     from src.engine.sniper_trade_review_report import completed_census_manifest
     from src.engine.lifecycle.snapshot_archive import archived_receipt
-    fields = {'id', 'rec_date', 'code', 'name', 'strategy', 'position_tag', 'status',
-        'buy_price', 'buy_qty', 'buy_time', 'sell_price', 'sell_time', 'profit_rate',
-        'holding_seconds', 'add_count', 'avg_down_count', 'pyramid_count',
-        'scanner_promotion_id', 'effective_venue', 'market_session_bucket',
-        'completion_observed_date', 'terminal_population_scope', 'strict_completion_status',
-        'broker_actual_cost_observed', 'broker_actual_fees_taxes_krw', 'realized_pnl_krw_source',
-        'realized_pnl_krw', 'configured_fee_estimate_krw', 'strict_completion_reasons',
-        'sell_submission_owner_id', 'sell_submission_account_key', 'cumulative_sell_qty',
-        'attempt_id', 'sell_order_no', 'sell_execution_no', 'exit_execution_broker_route',
-        'exit_signal', 'actual_cost_reconciliation', 'quantity_research_cost'}
+
+    fields = {
+        "id",
+        "rec_date",
+        "code",
+        "name",
+        "strategy",
+        "position_tag",
+        "status",
+        "buy_price",
+        "buy_qty",
+        "buy_time",
+        "sell_price",
+        "sell_time",
+        "profit_rate",
+        "holding_seconds",
+        "add_count",
+        "avg_down_count",
+        "pyramid_count",
+        "scanner_promotion_id",
+        "effective_venue",
+        "market_session_bucket",
+        "completion_observed_date",
+        "terminal_population_scope",
+        "strict_completion_status",
+        "broker_actual_cost_observed",
+        "broker_actual_fees_taxes_krw",
+        "realized_pnl_krw_source",
+        "realized_pnl_krw",
+        "configured_fee_estimate_krw",
+        "strict_completion_reasons",
+        "sell_submission_owner_id",
+        "sell_submission_account_key",
+        "cumulative_sell_qty",
+        "attempt_id",
+        "sell_order_no",
+        "sell_execution_no",
+        "exit_execution_broker_route",
+        "exit_signal",
+        "actual_cost_reconciliation",
+        "quantity_research_cost",
+    }
     observations = {}
     original_sha = hashlib.sha256()
     original_size = 0
+
     class OriginalTextBytes:
         def __init__(self, handle):
             self.handle = handle
+
         def read(self, count):
             nonlocal original_size
             value = self.handle.read(count)
-            raw = value.encode('utf-8')
+            raw = value.encode("utf-8")
             original_size += len(raw)
             original_sha.update(raw)
             return value
+
     def emit(value, out):
-        out.write(json.dumps(value, sort_keys=True, separators=(',', ':'),
-                             ensure_ascii=False, allow_nan=False).encode())
+        out.write(
+            json.dumps(
+                value,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                allow_nan=False,
+            ).encode()
+        )
+
     def sha(out):
-        out.flush(); out.seek(0)
-        value = hashlib.file_digest(out, 'sha256').hexdigest(); out.seek(0)
+        out.flush()
+        out.seek(0)
+        value = hashlib.file_digest(out, "sha256").hexdigest()
+        out.seek(0)
         return value
+
     def canonical(reader, out, pointer=(), depth=0):
         if depth > 64:
-            raise FactSyncSourceError('legacy_fact_source_depth_invalid')
-        special = (not pointer or pointer == ('sections',)
-                   or pointer == ('sections', 'completed_trade_projection')
-                   or len(pointer) == 3 and pointer[:2] == ('sections', 'completed_trade_projection'))
+            raise FactSyncSourceError("legacy_fact_source_depth_invalid")
+        special = (
+            not pointer
+            or pointer == ("sections",)
+            or pointer == ("sections", "completed_trade_projection")
+            or len(pointer) == 3
+            and pointer[:2] == ("sections", "completed_trade_projection")
+        )
         if not special:
             try:
-                value = reader.value(CACHED_RECEIPT_MAX_BYTES if pointer[-1:] == ('quantity_research_cost',)
-                                     else MAX_METADATA_BYTES)
+                value = reader.value(
+                    CACHED_RECEIPT_MAX_BYTES
+                    if pointer[-1:] == ("quantity_research_cost",)
+                    else MAX_METADATA_BYTES
+                )
             except ValueError as exc:
-                if str(exc) != 'research_legacy_json_field_partition_required':
+                if str(exc) != "research_legacy_json_field_partition_required":
                     raise
-                if (pointer in {('meta',), ('metrics',), ('snapshot_identity',)}
-                        or len(pointer) == 4 and pointer[:2] == ('sections', 'completed_trade_projection')
-                        and pointer[-1] in fields):
-                    raise FactSyncSourceError('legacy_fact_selected_metadata_partition_required') from exc
+                if (
+                    pointer in {("meta",), ("metrics",), ("snapshot_identity",)}
+                    or len(pointer) == 4
+                    and pointer[:2] == ("sections", "completed_trade_projection")
+                    and pointer[-1] in fields
+                ):
+                    raise FactSyncSourceError(
+                        "legacy_fact_selected_metadata_partition_required"
+                    ) from exc
             else:
                 pending = [(value, depth)]
                 while pending:
                     current, level = pending.pop()
                     if level > 64:
-                        raise FactSyncSourceError('legacy_fact_source_depth_invalid')
+                        raise FactSyncSourceError("legacy_fact_source_depth_invalid")
                     if isinstance(current, dict):
                         pending.extend((child, level + 1) for child in current.values())
                     elif isinstance(current, list):
                         pending.extend((child, level + 1) for child in current)
                 emit(value, out)
                 return value
-        reader.spaces(); first = reader.peek()
-        if first == '{':
-            selected = {}; fragments = {}
+        reader.spaces()
+        first = reader.peek()
+        if first == "{":
+            selected = {}
+            fragments = {}
             with ExitStack() as stack:
+
                 def field(key, child):
                     fragment = stack.enter_context(tempfile.TemporaryFile())
                     value = canonical(child, fragment, pointer + (key,), depth + 1)
-                    if not pointer and key == 'artifact_sha256':
-                        observations['declared_sha256'] = value
+                    if not pointer and key == "artifact_sha256":
+                        observations["declared_sha256"] = value
                     else:
                         fragments[key] = fragment
-                    if (not pointer
-                            or pointer == ('sections',) and key == 'completed_trade_projection'
-                            or len(pointer) == 3 and pointer[:2] == ('sections', 'completed_trade_projection')
-                            and key in fields):
+                    if (
+                        not pointer
+                        or pointer == ("sections",)
+                        and key == "completed_trade_projection"
+                        or len(pointer) == 3
+                        and pointer[:2] == ("sections", "completed_trade_projection")
+                        and key in fields
+                    ):
                         selected[key] = value
                     return iter(())
+
                 for _ in reader.fields(field):
                     pass
-                out.write(b'{')
+                out.write(b"{")
                 for index, (key, fragment) in enumerate(sorted(fragments.items())):
-                    if index: out.write(b',')
-                    emit(key, out); out.write(b':'); fragment.seek(0)
+                    if index:
+                        out.write(b",")
+                    emit(key, out)
+                    out.write(b":")
+                    fragment.seek(0)
                     shutil.copyfileobj(fragment, out, 65536)
-                out.write(b'}')
-            if len(pointer) == 3 and pointer[:2] == ('sections', 'completed_trade_projection'):
-                observations.setdefault('row_sha256', []).append(sha(out))
+                out.write(b"}")
+            if len(pointer) == 3 and pointer[:2] == (
+                "sections",
+                "completed_trade_projection",
+            ):
+                observations.setdefault("row_sha256", []).append(sha(out))
             return selected
-        if first == '[':
-            collected = [] if pointer == ('sections', 'completed_trade_projection') else None
-            out.write(b'[')
+        if first == "[":
+            collected = (
+                [] if pointer == ("sections", "completed_trade_projection") else None
+            )
+            out.write(b"[")
             for index, value in enumerate(reader.array(lambda current: current)):
-                if index: out.write(b',')
+                if index:
+                    out.write(b",")
                 if collected is not None:
                     if index >= 300:
-                        raise FactSyncSourceError('legacy_fact_completion_census_partition_required')
+                        raise FactSyncSourceError(
+                            "legacy_fact_completion_census_partition_required"
+                        )
                     with tempfile.TemporaryFile() as fragment:
-                        projected = canonical(value, fragment, pointer + (str(index),), depth + 1)
-                        fragment.seek(0); shutil.copyfileobj(fragment, out, 65536)
+                        projected = canonical(
+                            value, fragment, pointer + (str(index),), depth + 1
+                        )
+                        fragment.seek(0)
+                        shutil.copyfileobj(fragment, out, 65536)
                     collected.append(projected)
                 else:
                     canonical(value, out, pointer + (str(index),), depth + 1)
-            out.write(b']')
+            out.write(b"]")
             if collected is not None:
-                observations['projection_sha256'] = sha(out)
+                observations["projection_sha256"] = sha(out)
             return collected
         value = reader.value(MAX_METADATA_BYTES)
         emit(value, out)
         return value
+
     if sidecar.is_symlink() or any(p.is_symlink() for p in sidecar.parents):
-        raise FactSyncSourceError('legacy_fact_source_path_invalid')
-    archive_path = Path(str(sidecar)+'.gz')
-    receipt_path = Path(str(archive_path)+'.archive_receipt.json')
-    generation_guard = _completion_source_signature([sidecar, archive_path, receipt_path])
+        raise FactSyncSourceError("legacy_fact_source_path_invalid")
+    archive_path = Path(str(sidecar) + ".gz")
+    receipt_path = Path(str(archive_path) + ".archive_receipt.json")
+    generation_guard = _completion_source_signature(
+        [sidecar, archive_path, receipt_path]
+    )
     archive = None if sidecar.exists() else archived_receipt(sidecar)
     physical = sidecar if archive is None else archive_path
     if physical.is_symlink():
-        raise FactSyncSourceError('legacy_fact_source_path_invalid')
+        raise FactSyncSourceError("legacy_fact_source_path_invalid")
     before = physical.lstat()
     if not stat.S_ISREG(before.st_mode):
-        raise FactSyncSourceError('legacy_fact_source_size_or_type_invalid')
-    logical_size = before.st_size if archive is None else archive['logical_size_bytes']
-    if (archive is not None and projection_kind == 'original_snapshot'
-            and archive['logical_content_sha256'] != expected_raw_sha):
-        raise FactSyncSourceError('legacy_fact_original_manifest_generation_changed')
+        raise FactSyncSourceError("legacy_fact_source_size_or_type_invalid")
+    logical_size = before.st_size if archive is None else archive["logical_size_bytes"]
+    if (
+        archive is not None
+        and projection_kind == "original_snapshot"
+        and archive["logical_content_sha256"] != expected_raw_sha
+    ):
+        raise FactSyncSourceError("legacy_fact_original_manifest_generation_changed")
     fd = os.open(physical, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     try:
         if source_stat(os.fstat(fd)) != source_stat(before):
-            raise FactSyncSourceError('legacy_fact_source_changed')
-        with os.fdopen(fd, 'rb', closefd=False) as source, tempfile.TemporaryFile() as output:
+            raise FactSyncSourceError("legacy_fact_source_changed")
+        with (
+            os.fdopen(fd, "rb", closefd=False) as source,
+            tempfile.TemporaryFile() as output,
+        ):
             import gzip
+
             binary = gzip.GzipFile(fileobj=source) if archive is not None else source
-            with io.TextIOWrapper(binary, encoding='utf-8', newline='') as handle:
+            with io.TextIOWrapper(binary, encoding="utf-8", newline="") as handle:
                 reader = _legacy_value_reader(OriginalTextBytes(handle))
                 header = canonical(reader, output)
                 reader.spaces()
                 if reader.peek():
-                    raise FactSyncSourceError('legacy_fact_source_trailing_data')
+                    raise FactSyncSourceError("legacy_fact_source_trailing_data")
                 actual = sha(output)
-            if (source_stat(os.fstat(fd)) != source_stat(before)
-                    or source_stat(physical.lstat()) != source_stat(before)
-                    or generation_guard != _completion_source_signature([sidecar, archive_path, receipt_path])):
-                raise FactSyncSourceError('legacy_fact_source_changed')
+            if (
+                source_stat(os.fstat(fd)) != source_stat(before)
+                or source_stat(physical.lstat()) != source_stat(before)
+                or generation_guard
+                != _completion_source_signature([sidecar, archive_path, receipt_path])
+            ):
+                raise FactSyncSourceError("legacy_fact_source_changed")
     except (OSError, EOFError, zlib.error) as exc:
-        raise FactSyncSourceError('legacy_fact_source_archive_or_read_invalid') from exc
+        raise FactSyncSourceError("legacy_fact_source_archive_or_read_invalid") from exc
     finally:
         os.close(fd)
-    if projection_kind not in {'completed_sidecar', 'original_snapshot'}:
-        raise FactSyncSourceError('legacy_fact_projection_kind_invalid')
-    if (original_size != logical_size
-            or archive is not None and original_sha.hexdigest() != archive['logical_content_sha256']):
-        raise FactSyncSourceError('legacy_fact_source_self_seal_invalid')
-    if projection_kind == 'completed_sidecar':
-        if observations.get('declared_sha256') != actual:
-            raise FactSyncSourceError('legacy_fact_source_self_seal_invalid')
-    elif (not re.fullmatch(r'[0-9a-f]{64}', str(expected_raw_sha or ''))
-            or original_sha.hexdigest() != expected_raw_sha
-            or observations.get('declared_sha256') is not None):
-        raise FactSyncSourceError('legacy_fact_original_manifest_generation_changed')
-    if (not isinstance(header, dict) or not isinstance(header.get('meta'), dict)
-            or not isinstance(header.get('sections'), dict) or not isinstance(header.get('metrics'), dict)):
-        raise FactSyncSourceError('legacy_fact_source_shape_invalid')
-    meta = header['meta']
-    rows = header['sections'].get('completed_trade_projection')
+    if projection_kind not in {"completed_sidecar", "original_snapshot"}:
+        raise FactSyncSourceError("legacy_fact_projection_kind_invalid")
+    if (
+        original_size != logical_size
+        or archive is not None
+        and original_sha.hexdigest() != archive["logical_content_sha256"]
+    ):
+        raise FactSyncSourceError("legacy_fact_source_self_seal_invalid")
+    if projection_kind == "completed_sidecar":
+        if observations.get("declared_sha256") != actual:
+            raise FactSyncSourceError("legacy_fact_source_self_seal_invalid")
+    elif (
+        not re.fullmatch(r"[0-9a-f]{64}", str(expected_raw_sha or ""))
+        or original_sha.hexdigest() != expected_raw_sha
+        or observations.get("declared_sha256") is not None
+    ):
+        raise FactSyncSourceError("legacy_fact_original_manifest_generation_changed")
+    if (
+        not isinstance(header, dict)
+        or not isinstance(header.get("meta"), dict)
+        or not isinstance(header.get("sections"), dict)
+        or not isinstance(header.get("metrics"), dict)
+    ):
+        raise FactSyncSourceError("legacy_fact_source_shape_invalid")
+    meta = header["meta"]
+    rows = header["sections"].get("completed_trade_projection")
     # sections is deliberately a bounded projection of scalar completion rows.
     if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
-        raise FactSyncSourceError('legacy_fact_source_completion_projection_missing')
-    census = meta.get('completed_census_manifest')
-    candidate = dict(header, sections={'completed_trade_projection': rows})
+        raise FactSyncSourceError("legacy_fact_source_completion_projection_missing")
+    census = meta.get("completed_census_manifest")
+    candidate = dict(header, sections={"completed_trade_projection": rows})
     expected = completed_census_manifest(candidate)
-    for row, original_row_sha in zip(expected['rows'], observations.get('row_sha256', [])):
-        row['row_sha256'] = original_row_sha
-    expected['projection_sha256'] = observations.get('projection_sha256')
-    expected['run_id'] = _canonical_sha256(dict(date=header.get('date'),
-        source=expected['source_receipts_sha256'], profile=meta.get('snapshot_profile'),
-        input=meta.get('completed_census_input_sha256'), projection=expected['projection_sha256']))[:24]
-    if 'actual_cost_source_generation' not in meta and isinstance(census, dict) and 'actual_cost_source_generation' not in census:
-        expected.pop('actual_cost_source_generation')
-    ids = [str(row.get('id') or '') for row in rows]
-    if ((projection_kind == 'completed_sidecar' and header.get('schema') != 'trade_review_completed_projection_sidecar_v1')
-            or (projection_kind == 'original_snapshot' and header.get('scope') != 'entered')
-            or header.get('date') != target_date or header.get('code') or header.get('since')
-            or meta.get('snapshot_profile') != 'postclose_exit' or meta.get('warnings')
-            or not isinstance(census, dict) or census != expected
-            or sorted(ids) != expected['raw_terminal_ids'] or len(set(ids)) != len(ids)
-            or len(observations.get('row_sha256', [])) != len(rows)
-            or type((header.get('metrics') or {}).get('canonical_completed_trades')) is not int
-            or len(rows) != (header.get('metrics') or {}).get('canonical_completed_trades')
-            or expected['strict_count'] != 0
-            or any(type(census.get(key)) is not int for key in (
-                'raw_terminal_count', 'raw_completion_event_count', 'projected_count',
-                'valid_profit_count', 'strict_count', 'excluded_count', 'unobserved_count'))
-            or any(key in meta and type(meta[key]) is not int for key in (
-                'completion_event_id_count', 'completion_event_unresolved_id_count'))
-            or expected['source_receipts_status'] != 'structured_projection_receipts_observed'
-            or any(row.get('status') != 'COMPLETED' or row.get('completion_observed_date') != target_date for row in rows)):
-        raise FactSyncSourceError('legacy_fact_source_census_invalid')
-    header['sections'] = {'completed_trade_projection': rows}
-    if projection_kind == 'completed_sidecar':
-        header['artifact_sha256'] = actual
-    header['_verified_original_bytes'] = dict(size=original_size, sha256=original_sha.hexdigest())
+    for row, original_row_sha in zip(
+        expected["rows"], observations.get("row_sha256", [])
+    ):
+        row["row_sha256"] = original_row_sha
+    expected["projection_sha256"] = observations.get("projection_sha256")
+    expected["run_id"] = _canonical_sha256(
+        dict(
+            date=header.get("date"),
+            source=expected["source_receipts_sha256"],
+            profile=meta.get("snapshot_profile"),
+            input=meta.get("completed_census_input_sha256"),
+            projection=expected["projection_sha256"],
+        )
+    )[:24]
+    if (
+        "actual_cost_source_generation" not in meta
+        and isinstance(census, dict)
+        and "actual_cost_source_generation" not in census
+    ):
+        expected.pop("actual_cost_source_generation")
+    ids = [str(row.get("id") or "") for row in rows]
+    if (
+        (
+            projection_kind == "completed_sidecar"
+            and header.get("schema") != "trade_review_completed_projection_sidecar_v1"
+        )
+        or (projection_kind == "original_snapshot" and header.get("scope") != "entered")
+        or header.get("date") != target_date
+        or header.get("code")
+        or header.get("since")
+        or meta.get("snapshot_profile") != "postclose_exit"
+        or meta.get("warnings")
+        or not isinstance(census, dict)
+        or census != expected
+        or sorted(ids) != expected["raw_terminal_ids"]
+        or len(set(ids)) != len(ids)
+        or len(observations.get("row_sha256", [])) != len(rows)
+        or type((header.get("metrics") or {}).get("canonical_completed_trades"))
+        is not int
+        or len(rows) != (header.get("metrics") or {}).get("canonical_completed_trades")
+        or expected["strict_count"] != 0
+        or any(
+            type(census.get(key)) is not int
+            for key in (
+                "raw_terminal_count",
+                "raw_completion_event_count",
+                "projected_count",
+                "valid_profit_count",
+                "strict_count",
+                "excluded_count",
+                "unobserved_count",
+            )
+        )
+        or any(
+            key in meta and type(meta[key]) is not int
+            for key in (
+                "completion_event_id_count",
+                "completion_event_unresolved_id_count",
+            )
+        )
+        or expected["source_receipts_status"]
+        != "structured_projection_receipts_observed"
+        or any(
+            row.get("status") != "COMPLETED"
+            or row.get("completion_observed_date") != target_date
+            for row in rows
+        )
+    ):
+        raise FactSyncSourceError("legacy_fact_source_census_invalid")
+    header["sections"] = {"completed_trade_projection": rows}
+    if projection_kind == "completed_sidecar":
+        header["artifact_sha256"] = actual
+    header["_verified_original_bytes"] = dict(
+        size=original_size, sha256=original_sha.hexdigest()
+    )
     return header
 
 
-def _legacy_snapshot_manifest(target_date, *, data_dir=None, reference=None, expected_raw_sha=None):
+def _legacy_snapshot_manifest(
+    target_date, *, data_dir=None, reference=None, expected_raw_sha=None
+):
     """Retain the exact original manifest; it never creates historical DONE."""
     from src.engine.lifecycle.holding_window_generation import MAX_METADATA_BYTES
+
     root = Path(DATA_DIR if data_dir is None else data_dir).resolve()
-    raw = root/'report/monitor_snapshots'/f'trade_review_{target_date}.json'
-    path = raw.parent/'manifests'/f'monitor_snapshot_manifest_{target_date}_postclose_exit.json'
-    if reference is not None and (not isinstance(reference, dict) or reference.get('path') != str(path)):
-        raise FactSyncSourceError('legacy_fact_original_manifest_path_invalid')
+    raw = root / "report/monitor_snapshots" / f"trade_review_{target_date}.json"
+    path = (
+        raw.parent
+        / "manifests"
+        / f"monitor_snapshot_manifest_{target_date}_postclose_exit.json"
+    )
+    if reference is not None and (
+        not isinstance(reference, dict) or reference.get("path") != str(path)
+    ):
+        raise FactSyncSourceError("legacy_fact_original_manifest_path_invalid")
     value, content = _legacy_source_json(path, MAX_METADATA_BYTES)
-    observed = dict(path=str(path), size=len(content), sha256=hashlib.sha256(content).hexdigest())
+    observed = dict(
+        path=str(path), size=len(content), sha256=hashlib.sha256(content).hexdigest()
+    )
     if not isinstance(value, dict):
-        raise FactSyncSourceError('legacy_fact_original_manifest_invalid')
+        raise FactSyncSourceError("legacy_fact_original_manifest_invalid")
     try:
-        generated_at = datetime.strptime(value.get('generated_at'), '%Y-%m-%d %H:%M:%S')
+        generated_at = datetime.strptime(value.get("generated_at"), "%Y-%m-%d %H:%M:%S")
     except (TypeError, ValueError) as exc:
-        raise FactSyncSourceError('legacy_fact_original_manifest_clock_invalid') from exc
-    kinds = value.get('snapshot_kinds')
-    paths = value.get('snapshot_paths')
-    hashes = value.get('snapshot_sha256')
-    if (set(value) != {'target_date', 'profile', 'generated_at', 'snapshot_kinds', 'snapshot_paths', 'snapshot_sha256'}
-            or generated_at.strftime('%Y-%m-%d %H:%M:%S') != value['generated_at']
-            or generated_at.date().isoformat() < target_date
-            or reference is not None and observed != reference
-            or value.get('target_date') != target_date or value.get('profile') != 'postclose_exit'
-            or not isinstance(kinds, list) or any(not isinstance(k, str) for k in kinds)
-            or len(kinds) != len(set(kinds))
-            or set(kinds) != {'trade_review', 'post_sell_feedback', 'holding_exit_observation'}
-            or not isinstance(paths, dict) or not isinstance(hashes, dict)
-            or set(paths) != set(kinds) or set(hashes) != set(kinds)
-            or any(paths[kind] != str(raw.parent/f'{kind}_{target_date}.json')
-                   or not re.fullmatch(r'[0-9a-f]{64}', str(hashes[kind] or '')) for kind in kinds)
-            or expected_raw_sha is not None and hashes['trade_review'] != expected_raw_sha):
-        raise FactSyncSourceError('legacy_fact_original_manifest_invalid')
+        raise FactSyncSourceError(
+            "legacy_fact_original_manifest_clock_invalid"
+        ) from exc
+    kinds = value.get("snapshot_kinds")
+    paths = value.get("snapshot_paths")
+    hashes = value.get("snapshot_sha256")
+    if (
+        set(value)
+        != {
+            "target_date",
+            "profile",
+            "generated_at",
+            "snapshot_kinds",
+            "snapshot_paths",
+            "snapshot_sha256",
+        }
+        or generated_at.strftime("%Y-%m-%d %H:%M:%S") != value["generated_at"]
+        or generated_at.date().isoformat() < target_date
+        or reference is not None
+        and observed != reference
+        or value.get("target_date") != target_date
+        or value.get("profile") != "postclose_exit"
+        or not isinstance(kinds, list)
+        or any(not isinstance(k, str) for k in kinds)
+        or len(kinds) != len(set(kinds))
+        or set(kinds)
+        != {"trade_review", "post_sell_feedback", "holding_exit_observation"}
+        or not isinstance(paths, dict)
+        or not isinstance(hashes, dict)
+        or set(paths) != set(kinds)
+        or set(hashes) != set(kinds)
+        or any(
+            paths[kind] != str(raw.parent / f"{kind}_{target_date}.json")
+            or not re.fullmatch(r"[0-9a-f]{64}", str(hashes[kind] or ""))
+            for kind in kinds
+        )
+        or expected_raw_sha is not None
+        and hashes["trade_review"] != expected_raw_sha
+    ):
+        raise FactSyncSourceError("legacy_fact_original_manifest_invalid")
     return value, observed
 
 
-def _legacy_original_generation_issue(target_date, receipt=None, *, data_dir=None, validated_proof=None):
+def _legacy_original_generation_issue(
+    target_date, receipt=None, *, data_dir=None, validated_proof=None
+):
     """Validate a retained native proof without rescanning historical sources.
 
     Optional caller storage receives the verified proof only after every final
@@ -497,125 +716,235 @@ def _legacy_original_generation_issue(target_date, receipt=None, *, data_dir=Non
         validated_proof.clear()
     from src.engine.lifecycle.holding_window_generation import MAX_METADATA_BYTES
     from src.engine.lifecycle.broker_cost_reconciliation import source_generation
-    from src.engine.lifecycle.snapshot_archive import snapshot_identity, archived_receipt, snapshot_identity_matches
+    from src.engine.lifecycle.snapshot_archive import (
+        snapshot_identity,
+        archived_receipt,
+        snapshot_identity_matches,
+    )
+
     root = Path(DATA_DIR if data_dir is None else data_dir).resolve()
-    status_root = (_FACT_SYNC_STATUS_DIR if root == Path(DATA_DIR).resolve()
-                   else root/'report/strategy_position_fact_sync')
-    status_path = status_root/f'strategy_position_fact_sync_{target_date}.status.json'
+    status_root = (
+        _FACT_SYNC_STATUS_DIR
+        if root == Path(DATA_DIR).resolve()
+        else root / "report/strategy_position_fact_sync"
+    )
+    status_path = status_root / f"strategy_position_fact_sync_{target_date}.status.json"
     try:
         if receipt is None:
             receipt, _ = _legacy_source_json(status_path, MAX_METADATA_BYTES)
-        source = receipt.get('completion_snapshot_source')
-        reference = source.get('legacy_original_validation') if isinstance(source, dict) else None
+        source = receipt.get("completion_snapshot_source")
+        reference = (
+            source.get("legacy_original_validation")
+            if isinstance(source, dict)
+            else None
+        )
         if reference is None:
             return False, None
         observed_receipt, _ = _legacy_source_json(status_path, MAX_METADATA_BYTES)
         if observed_receipt != receipt:
-            raise FactSyncSourceError('legacy_fact_source_receipt_changed')
-        if (receipt.get('artifact_sha256') != _canonical_sha256({k:v for k,v in receipt.items() if k != 'artifact_sha256'})
-                or receipt.get('target_date') != target_date or receipt.get('status') not in {'succeeded', 'valid_empty'}
-                or source.get('source_basis') != 'native_original_snapshot_stream' or not isinstance(reference, dict)):
-            raise FactSyncSourceError('legacy_fact_source_receipt_invalid')
-        path = Path(reference.get('path', ''))
-        directory = status_root / 'legacy_sources' / target_date
-        if path.parent != directory or not path.is_absolute() or path.suffix != '.json':
-            raise FactSyncSourceError('legacy_fact_source_proof_path_invalid')
-        directory = root / 'report/monitor_snapshots'
-        originals = [directory/f'trade_review_{target_date}.json', directory/f'trade_review_{target_date}.completed_projection.json']
-        manifest_path = directory/'manifests'/f'monitor_snapshot_manifest_{target_date}_postclose_exit.json'
-        guarded = [status_path, path] + [p for logical in originals for p in (
-            logical, Path(str(logical)+'.gz'), Path(str(logical)+'.gz.archive_receipt.json'))]
+            raise FactSyncSourceError("legacy_fact_source_receipt_changed")
+        if (
+            receipt.get("artifact_sha256")
+            != _canonical_sha256(
+                {k: v for k, v in receipt.items() if k != "artifact_sha256"}
+            )
+            or receipt.get("target_date") != target_date
+            or receipt.get("status") not in {"succeeded", "valid_empty"}
+            or source.get("source_basis") != "native_original_snapshot_stream"
+            or not isinstance(reference, dict)
+        ):
+            raise FactSyncSourceError("legacy_fact_source_receipt_invalid")
+        path = Path(reference.get("path", ""))
+        directory = status_root / "legacy_sources" / target_date
+        if path.parent != directory or not path.is_absolute() or path.suffix != ".json":
+            raise FactSyncSourceError("legacy_fact_source_proof_path_invalid")
+        directory = root / "report/monitor_snapshots"
+        originals = [
+            directory / f"trade_review_{target_date}.json",
+            directory / f"trade_review_{target_date}.completed_projection.json",
+        ]
+        manifest_path = (
+            directory
+            / "manifests"
+            / f"monitor_snapshot_manifest_{target_date}_postclose_exit.json"
+        )
+        guarded = [status_path, path] + [
+            p
+            for logical in originals
+            for p in (
+                logical,
+                Path(str(logical) + ".gz"),
+                Path(str(logical) + ".gz.archive_receipt.json"),
+            )
+        ]
         before = _completion_source_signature([*guarded, manifest_path])
         guarded.append(manifest_path)
         body, raw = _legacy_source_json(path, MAX_METADATA_BYTES)
-        if (len(raw) != reference.get('size') or hashlib.sha256(raw).hexdigest() != reference.get('sha256')
-                or body.get('artifact_sha256') != _canonical_sha256({k:v for k,v in body.items() if k!='artifact_sha256'})
-                or path.name != str(body.get('artifact_sha256')) + '.json'
-                or body.get('schema') != 'strategy_position_legacy_original_source_v1'
-                or body.get('validation_contract') not in {'original_sidecar_selfseal_and_completed_census_stream_v1',
-                    'original_snapshot_manifest_and_completed_census_stream_v1'}
-                or body.get('date') != target_date or body.get('runtime_effect') is not False
-                or body.get('allowed_runtime_apply') is not False):
-            raise FactSyncSourceError('legacy_fact_source_proof_invalid')
-        kind = body.get('projection_kind', 'completed_sidecar')
-        if kind not in {'completed_sidecar', 'original_snapshot'}:
-            raise FactSyncSourceError('legacy_fact_projection_kind_invalid')
-        expected_contract = ('original_snapshot_manifest_and_completed_census_stream_v1' if kind == 'original_snapshot'
-                             else 'original_sidecar_selfseal_and_completed_census_stream_v1')
-        if body['validation_contract'] != expected_contract:
-            raise FactSyncSourceError('legacy_fact_projection_kind_invalid')
-        value = body.get('scalar_projection')
-        if (not isinstance(value, dict) or value.get('schema') != 'trade_review_fact_projection_v1'
-                or value.get('date') != target_date or value.get('source_scope') != 'entered'
-                or not isinstance(value.get('meta'), dict)
-                or not isinstance(value['meta'].get('completed_census_manifest'), dict)
-                or not isinstance(value.get('sections'), dict)
-                or value.get('artifact_sha256') != _canonical_sha256({k:v for k,v in value.items() if k!='artifact_sha256'})):
-            raise FactSyncSourceError('legacy_fact_scalar_projection_invalid')
+        if (
+            len(raw) != reference.get("size")
+            or hashlib.sha256(raw).hexdigest() != reference.get("sha256")
+            or body.get("artifact_sha256")
+            != _canonical_sha256(
+                {k: v for k, v in body.items() if k != "artifact_sha256"}
+            )
+            or path.name != str(body.get("artifact_sha256")) + ".json"
+            or body.get("schema") != "strategy_position_legacy_original_source_v1"
+            or body.get("validation_contract")
+            not in {
+                "original_sidecar_selfseal_and_completed_census_stream_v1",
+                "original_snapshot_manifest_and_completed_census_stream_v1",
+            }
+            or body.get("date") != target_date
+            or body.get("runtime_effect") is not False
+            or body.get("allowed_runtime_apply") is not False
+        ):
+            raise FactSyncSourceError("legacy_fact_source_proof_invalid")
+        kind = body.get("projection_kind", "completed_sidecar")
+        if kind not in {"completed_sidecar", "original_snapshot"}:
+            raise FactSyncSourceError("legacy_fact_projection_kind_invalid")
+        expected_contract = (
+            "original_snapshot_manifest_and_completed_census_stream_v1"
+            if kind == "original_snapshot"
+            else "original_sidecar_selfseal_and_completed_census_stream_v1"
+        )
+        if body["validation_contract"] != expected_contract:
+            raise FactSyncSourceError("legacy_fact_projection_kind_invalid")
+        value = body.get("scalar_projection")
+        if (
+            not isinstance(value, dict)
+            or value.get("schema") != "trade_review_fact_projection_v1"
+            or value.get("date") != target_date
+            or value.get("source_scope") != "entered"
+            or not isinstance(value.get("meta"), dict)
+            or not isinstance(value["meta"].get("completed_census_manifest"), dict)
+            or not isinstance(value.get("sections"), dict)
+            or value.get("artifact_sha256")
+            != _canonical_sha256(
+                {k: v for k, v in value.items() if k != "artifact_sha256"}
+            )
+        ):
+            raise FactSyncSourceError("legacy_fact_scalar_projection_invalid")
         costs = source_generation(root, target_date)
-        census = (value.get('meta') or {}).get('completed_census_manifest') or {}
-        if (costs.get('count') != 0 or costs.get('official_source_sha256')
-                or body.get('observed_actual_cost_source_generation') != costs
-                or body.get('original_actual_cost_source_generation') is not None
-                or type(body.get('original_actual_cost_generation_field_present')) is not bool
-                or (value.get('meta') or {}).get('actual_cost_source_generation') is not None
-                or kind == 'completed_sidecar' and not re.fullmatch(r'[0-9a-f]{64}', str(body.get('original_sidecar_artifact_sha256') or ''))
-                or kind == 'original_snapshot' and body.get('original_sidecar_artifact_sha256') is not None
-                or receipt.get('actual_cost_source_generation') != costs
-                or source.get('actual_cost_source_generation') != costs
-                or receipt.get('completed_census_run_ids') != [census.get('run_id')]
-                or receipt.get('completed_census_projection_sha256') != [census.get('projection_sha256')]
-                or source.get('scalar_projection_sha256') != value.get('artifact_sha256')):
-            raise FactSyncSourceError('legacy_fact_source_cost_or_census_changed')
-        directory = root / 'report/monitor_snapshots'
-        for role, logical in (('snapshot', directory/f'trade_review_{target_date}.json'),
-                              ('projection', directory/f'trade_review_{target_date}.json' if kind == 'original_snapshot'
-                               else directory/f'trade_review_{target_date}.completed_projection.json')):
+        census = (value.get("meta") or {}).get("completed_census_manifest") or {}
+        if (
+            costs.get("count") != 0
+            or costs.get("official_source_sha256")
+            or body.get("observed_actual_cost_source_generation") != costs
+            or body.get("original_actual_cost_source_generation") is not None
+            or type(body.get("original_actual_cost_generation_field_present"))
+            is not bool
+            or (value.get("meta") or {}).get("actual_cost_source_generation")
+            is not None
+            or kind == "completed_sidecar"
+            and not re.fullmatch(
+                r"[0-9a-f]{64}", str(body.get("original_sidecar_artifact_sha256") or "")
+            )
+            or kind == "original_snapshot"
+            and body.get("original_sidecar_artifact_sha256") is not None
+            or receipt.get("actual_cost_source_generation") != costs
+            or source.get("actual_cost_source_generation") != costs
+            or receipt.get("completed_census_run_ids") != [census.get("run_id")]
+            or receipt.get("completed_census_projection_sha256")
+            != [census.get("projection_sha256")]
+            or source.get("scalar_projection_sha256") != value.get("artifact_sha256")
+        ):
+            raise FactSyncSourceError("legacy_fact_source_cost_or_census_changed")
+        directory = root / "report/monitor_snapshots"
+        for role, logical in (
+            ("snapshot", directory / f"trade_review_{target_date}.json"),
+            (
+                "projection",
+                (
+                    directory / f"trade_review_{target_date}.json"
+                    if kind == "original_snapshot"
+                    else directory
+                    / f"trade_review_{target_date}.completed_projection.json"
+                ),
+            ),
+        ):
             generation = body.get(role) or {}
             identity = snapshot_identity(logical)
-            if (not snapshot_identity_matches(logical, generation.get('identity'), expected_sha256=generation.get('sha256')) or generation.get('path') != str(logical)
-                    or not re.fullmatch(r'[0-9a-f]{64}', str(generation.get('sha256') or ''))):
-                raise FactSyncSourceError('legacy_fact_original_generation_changed')
+            if (
+                not snapshot_identity_matches(
+                    logical,
+                    generation.get("identity"),
+                    expected_sha256=generation.get("sha256"),
+                )
+                or generation.get("path") != str(logical)
+                or not re.fullmatch(
+                    r"[0-9a-f]{64}", str(generation.get("sha256") or "")
+                )
+            ):
+                raise FactSyncSourceError("legacy_fact_original_generation_changed")
             if not logical.exists():
                 archive = archived_receipt(logical)
-                if archive.get('logical_content_sha256') != generation['sha256']:
-                    raise FactSyncSourceError('legacy_fact_original_generation_changed')
-        if kind == 'original_snapshot':
-            if (body['projection'] != body['snapshot']
-                    or not isinstance(body.get('original_snapshot_manifest'), dict)):
-                raise FactSyncSourceError('legacy_fact_original_manifest_generation_changed')
-            _legacy_snapshot_manifest(target_date, data_dir=root,
-                reference=body.get('original_snapshot_manifest'), expected_raw_sha=body['snapshot']['sha256'])
-        projection = body['projection']
-        expected_source = dict(schema='strategy_position_fact_snapshot_source_v1', source_date=target_date,
-            projection=dict(path=Path(projection['path']).name, size=projection['identity']['size'],
-                            sha256=projection['sha256'], snapshot_identity=body['snapshot']['identity']),
-            fact_projection=None, source_basis='native_original_snapshot_stream',
-            scalar_projection_sha256=value['artifact_sha256'], actual_cost_source_generation=costs,
-            legacy_original_validation=reference)
-        if (source != expected_source or value.get('snapshot_identity') != body['snapshot']['identity']
-                or (value.get('meta') or {}).get('snapshot_profile') != 'postclose_exit'):
-            raise FactSyncSourceError('legacy_fact_original_source_binding_invalid')
-        if (before != _completion_source_signature(guarded)
-                or source_generation(root, target_date) != costs):
-            raise FactSyncSourceError('legacy_fact_source_changed')
+                if archive.get("logical_content_sha256") != generation["sha256"]:
+                    raise FactSyncSourceError("legacy_fact_original_generation_changed")
+        if kind == "original_snapshot":
+            if body["projection"] != body["snapshot"] or not isinstance(
+                body.get("original_snapshot_manifest"), dict
+            ):
+                raise FactSyncSourceError(
+                    "legacy_fact_original_manifest_generation_changed"
+                )
+            _legacy_snapshot_manifest(
+                target_date,
+                data_dir=root,
+                reference=body.get("original_snapshot_manifest"),
+                expected_raw_sha=body["snapshot"]["sha256"],
+            )
+        projection = body["projection"]
+        expected_source = dict(
+            schema="strategy_position_fact_snapshot_source_v1",
+            source_date=target_date,
+            projection=dict(
+                path=Path(projection["path"]).name,
+                size=projection["identity"]["size"],
+                sha256=projection["sha256"],
+                snapshot_identity=body["snapshot"]["identity"],
+            ),
+            fact_projection=None,
+            source_basis="native_original_snapshot_stream",
+            scalar_projection_sha256=value["artifact_sha256"],
+            actual_cost_source_generation=costs,
+            legacy_original_validation=reference,
+        )
+        if (
+            source != expected_source
+            or value.get("snapshot_identity") != body["snapshot"]["identity"]
+            or (value.get("meta") or {}).get("snapshot_profile") != "postclose_exit"
+        ):
+            raise FactSyncSourceError("legacy_fact_original_source_binding_invalid")
+        if (
+            before != _completion_source_signature(guarded)
+            or source_generation(root, target_date) != costs
+        ):
+            raise FactSyncSourceError("legacy_fact_source_changed")
         if validated_proof is not None:
             validated_proof.update(body)
         return True, None
     except (OSError, ValueError, TypeError, KeyError, FactSyncSourceError) as exc:
-        if str(exc).startswith('shared_research_budget_'):
+        if str(exc).startswith("shared_research_budget_"):
             raise
         # An absent/unrecognized status remains owned by the regular validator.
         if receipt is None:
             return False, None
-        return True, str(exc) or 'legacy_fact_source_invalid'
+        return True, str(exc) or "legacy_fact_source_invalid"
 
 
 def _load_legacy_original_fact_projection(target_date, path, sidecar, sources, before):
-    from src.engine.lifecycle.broker_cost_reconciliation import source_generation, digest
-    from src.engine.lifecycle.snapshot_archive import generation, snapshot_identity, present
+    from src.engine.lifecycle.broker_cost_reconciliation import (
+        source_generation,
+        digest,
+    )
+    from src.engine.lifecycle.snapshot_archive import (
+        generation,
+        snapshot_identity,
+        present,
+    )
     from src.engine.lifecycle.holding_window_generation import MAX_METADATA_BYTES
     from src.engine.scalping.pre_submit_delay_initial_policy import _atomic
+
     reuse_sources = [*sources, _status_path(target_date)]
     reuse_guard = _completion_source_signature(reuse_sources)
     legacy, issue = _legacy_original_generation_issue(target_date)
@@ -623,302 +952,555 @@ def _load_legacy_original_fact_projection(target_date, path, sidecar, sources, b
         if issue:
             raise FactSyncSourceError(issue)
         status, _ = _legacy_source_json(_status_path(target_date), MAX_METADATA_BYTES)
-        reference = status['completion_snapshot_source']['legacy_original_validation']
-        proof_path = Path(reference['path'])
+        reference = status["completion_snapshot_source"]["legacy_original_validation"]
+        proof_path = Path(reference["path"])
         proof_guard = _completion_source_signature([proof_path])
         body, proof_raw = _legacy_source_json(proof_path, MAX_METADATA_BYTES)
-        if (len(proof_raw) != reference['size'] or hashlib.sha256(proof_raw).hexdigest() != reference['sha256']
-                or reuse_guard != _completion_source_signature(reuse_sources)
-                or proof_guard != _completion_source_signature([proof_path])):
-            raise FactSyncSourceError('legacy_fact_source_changed')
-        value = body['scalar_projection']
-        value['_native_source_proof'] = status['completion_snapshot_source']
-        value['_native_observed_cost_generation'] = body['observed_actual_cost_source_generation']
-        value['_source_guard'] = {**reuse_guard, **proof_guard}
+        if (
+            len(proof_raw) != reference["size"]
+            or hashlib.sha256(proof_raw).hexdigest() != reference["sha256"]
+            or reuse_guard != _completion_source_signature(reuse_sources)
+            or proof_guard != _completion_source_signature([proof_path])
+        ):
+            raise FactSyncSourceError("legacy_fact_source_changed")
+        value = body["scalar_projection"]
+        value["_native_source_proof"] = status["completion_snapshot_source"]
+        value["_native_observed_cost_generation"] = body[
+            "observed_actual_cost_source_generation"
+        ]
+        value["_source_guard"] = {**reuse_guard, **proof_guard}
         if before != _completion_source_signature(sources):
-            raise FactSyncSourceError('legacy_fact_source_changed')
+            raise FactSyncSourceError("legacy_fact_source_changed")
         return value
     costs = source_generation(DATA_DIR, target_date)
-    if costs.get('count') != 0 or costs.get('official_source_sha256'):
-        raise FactSyncSourceError('legacy_fact_source_cost_generation_unverified')
+    if costs.get("count") != 0 or costs.get("official_source_sha256"):
+        raise FactSyncSourceError("legacy_fact_source_cost_generation_unverified")
     raw_original = not present(sidecar)
     native_manifest, manifest_reference = (None, None)
     projection_path = path if raw_original else sidecar
     if raw_original:
         native_manifest, manifest_reference = _legacy_snapshot_manifest(target_date)
-        header = _legacy_original_stream(path, target_date, projection_kind='original_snapshot',
-            expected_raw_sha=native_manifest['snapshot_sha256']['trade_review'])
-        header['snapshot_identity'] = snapshot_identity(path)
+        header = _legacy_original_stream(
+            path,
+            target_date,
+            projection_kind="original_snapshot",
+            expected_raw_sha=native_manifest["snapshot_sha256"]["trade_review"],
+        )
+        header["snapshot_identity"] = snapshot_identity(path)
     else:
         header = _legacy_original_stream(sidecar, target_date)
-    if (header.get('snapshot_identity') != snapshot_identity(path)
-            or (header.get('meta') or {}).get('actual_cost_source_generation') is not None):
-        raise FactSyncSourceError('legacy_fact_original_snapshot_binding_invalid')
-    native = dict(census_sha256=digest(header['meta']['completed_census_manifest']),
-                  projection=dict(snapshot_identity=header['snapshot_identity']))
-    value = _stream_original_fact_projection(target_date, path, sidecar, native, verified_completion=header)
-    body = dict(schema='strategy_position_legacy_original_source_v1', date=target_date,
-        validation_contract='original_sidecar_selfseal_and_completed_census_stream_v1',
-        snapshot=dict(path=str(path), identity=snapshot_identity(path),
-                      sha256=header['_verified_original_bytes']['sha256'] if raw_original else generation(path)['sha256']),
-        projection=dict(path=str(projection_path), identity=snapshot_identity(projection_path),
-                        sha256=header['_verified_original_bytes']['sha256']),
-        original_sidecar_artifact_sha256=header.get('artifact_sha256') if not raw_original else None,
-        original_actual_cost_source_generation=(header.get('meta') or {}).get('actual_cost_source_generation'),
-        original_actual_cost_generation_field_present='actual_cost_source_generation' in header['meta'],
-        observed_actual_cost_source_generation=costs, scalar_projection=value,
-        runtime_effect=False, allowed_runtime_apply=False)
+    if (
+        header.get("snapshot_identity") != snapshot_identity(path)
+        or (header.get("meta") or {}).get("actual_cost_source_generation") is not None
+    ):
+        raise FactSyncSourceError("legacy_fact_original_snapshot_binding_invalid")
+    native = dict(
+        census_sha256=digest(header["meta"]["completed_census_manifest"]),
+        projection=dict(snapshot_identity=header["snapshot_identity"]),
+    )
+    value = _stream_original_fact_projection(
+        target_date, path, sidecar, native, verified_completion=header
+    )
+    body = dict(
+        schema="strategy_position_legacy_original_source_v1",
+        date=target_date,
+        validation_contract="original_sidecar_selfseal_and_completed_census_stream_v1",
+        snapshot=dict(
+            path=str(path),
+            identity=snapshot_identity(path),
+            sha256=(
+                header["_verified_original_bytes"]["sha256"]
+                if raw_original
+                else generation(path)["sha256"]
+            ),
+        ),
+        projection=dict(
+            path=str(projection_path),
+            identity=snapshot_identity(projection_path),
+            sha256=header["_verified_original_bytes"]["sha256"],
+        ),
+        original_sidecar_artifact_sha256=(
+            header.get("artifact_sha256") if not raw_original else None
+        ),
+        original_actual_cost_source_generation=(header.get("meta") or {}).get(
+            "actual_cost_source_generation"
+        ),
+        original_actual_cost_generation_field_present="actual_cost_source_generation"
+        in header["meta"],
+        observed_actual_cost_source_generation=costs,
+        scalar_projection=value,
+        runtime_effect=False,
+        allowed_runtime_apply=False,
+    )
     if raw_original:
-        body.update(projection_kind='original_snapshot',
-            validation_contract='original_snapshot_manifest_and_completed_census_stream_v1',
-            original_snapshot_manifest=manifest_reference)
-    body['artifact_sha256'] = _canonical_sha256(body)
-    if len(json.dumps(body, sort_keys=True, separators=(',', ':'), ensure_ascii=True, allow_nan=False).encode()) > MAX_METADATA_BYTES:
-        raise FactSyncSourceError('legacy_fact_source_proof_partition_required')
-    proof_path = _FACT_SYNC_STATUS_DIR/'legacy_sources'/target_date/(body['artifact_sha256']+'.json')
-    if (before != _completion_source_signature(sources)
-            or source_generation(DATA_DIR, target_date) != costs):
-        raise FactSyncSourceError('legacy_fact_source_changed_during_validation')
+        body.update(
+            projection_kind="original_snapshot",
+            validation_contract="original_snapshot_manifest_and_completed_census_stream_v1",
+            original_snapshot_manifest=manifest_reference,
+        )
+    body["artifact_sha256"] = _canonical_sha256(body)
+    if (
+        len(
+            json.dumps(
+                body,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+                allow_nan=False,
+            ).encode()
+        )
+        > MAX_METADATA_BYTES
+    ):
+        raise FactSyncSourceError("legacy_fact_source_proof_partition_required")
+    proof_path = (
+        _FACT_SYNC_STATUS_DIR
+        / "legacy_sources"
+        / target_date
+        / (body["artifact_sha256"] + ".json")
+    )
+    if (
+        before != _completion_source_signature(sources)
+        or source_generation(DATA_DIR, target_date) != costs
+    ):
+        raise FactSyncSourceError("legacy_fact_source_changed_during_validation")
     if proof_path.is_symlink():
-        raise FactSyncSourceError('legacy_fact_source_immutable_proof_conflict')
+        raise FactSyncSourceError("legacy_fact_source_immutable_proof_conflict")
     if proof_path.exists():
         existing, _ = _legacy_source_json(proof_path, MAX_METADATA_BYTES)
         if existing != body:
-            raise FactSyncSourceError('legacy_fact_source_immutable_proof_conflict')
+            raise FactSyncSourceError("legacy_fact_source_immutable_proof_conflict")
     else:
         _atomic(proof_path, body)
     proof_guard = _completion_source_signature([proof_path])
     observed, proof_raw = _legacy_source_json(proof_path, MAX_METADATA_BYTES)
     if observed != body or proof_guard != _completion_source_signature([proof_path]):
-        raise FactSyncSourceError('legacy_fact_source_changed')
-    projection = body['projection']
-    value['_native_source_proof'] = dict(schema='strategy_position_fact_snapshot_source_v1', source_date=target_date,
-        projection=dict(path=projection_path.name, size=projection['identity']['size'], sha256=projection['sha256'],
-                        snapshot_identity=header['snapshot_identity']), fact_projection=None,
-        source_basis='native_original_snapshot_stream', scalar_projection_sha256=value['artifact_sha256'],
+        raise FactSyncSourceError("legacy_fact_source_changed")
+    projection = body["projection"]
+    value["_native_source_proof"] = dict(
+        schema="strategy_position_fact_snapshot_source_v1",
+        source_date=target_date,
+        projection=dict(
+            path=projection_path.name,
+            size=projection["identity"]["size"],
+            sha256=projection["sha256"],
+            snapshot_identity=header["snapshot_identity"],
+        ),
+        fact_projection=None,
+        source_basis="native_original_snapshot_stream",
+        scalar_projection_sha256=value["artifact_sha256"],
         actual_cost_source_generation=costs,
-        legacy_original_validation=dict(path=str(proof_path), size=len(proof_raw), sha256=hashlib.sha256(proof_raw).hexdigest()))
-    value['_source_guard'] = {**before, **proof_guard}
+        legacy_original_validation=dict(
+            path=str(proof_path),
+            size=len(proof_raw),
+            sha256=hashlib.sha256(proof_raw).hexdigest(),
+        ),
+    )
+    value["_source_guard"] = {**before, **proof_guard}
     if before != _completion_source_signature(sources):
-        raise FactSyncSourceError('legacy_fact_source_changed')
-    value['_native_observed_cost_generation'] = costs
+        raise FactSyncSourceError("legacy_fact_source_changed")
+    value["_native_observed_cost_generation"] = costs
     return value
 
 
-def _stream_original_fact_projection(target_date, path, sidecar, native, *, verified_completion=None):
+def _stream_original_fact_projection(
+    target_date, path, sidecar, native, *, verified_completion=None
+):
     """Recover a small dated fact census from unchanged original native bytes."""
     import gzip
-    from src.engine.lifecycle.holding_window_generation import MAX_METADATA_BYTES, MAX_PROJECTION_BYTES
+    from src.engine.lifecycle.holding_window_generation import (
+        MAX_METADATA_BYTES,
+        MAX_PROJECTION_BYTES,
+    )
     from src.engine.lifecycle.broker_cost_allocation import CACHED_RECEIPT_MAX_BYTES
     from src.engine.lifecycle.broker_cost_reconciliation import digest
     from src.engine.scalping.initial_quantity_source_cache import ResidentFacts
-    scalar = {'id', 'rec_date', 'code', 'name', 'strategy', 'position_tag', 'status',
-        'buy_price', 'buy_qty', 'buy_time', 'sell_price', 'sell_time', 'profit_rate',
-        'holding_seconds', 'add_count', 'avg_down_count', 'pyramid_count',
-        'scanner_promotion_id', 'effective_venue', 'market_session_bucket',
-        'completion_observed_date', 'terminal_population_scope', 'strict_completion_status',
-        'broker_actual_cost_observed', 'broker_actual_fees_taxes_krw', 'realized_pnl_krw_source',
-        'realized_pnl_krw', 'configured_fee_estimate_krw', 'quantity_research_cost'}
-    nested = {'exit_signal': {'exit_rule', 'sell_reason_type', 'inferred', 'binding_status'},
-              'ai_review_summary': {'headline'}, 'gatekeeper_replay': {'action', 'action_key', 'allow_entry'},
-              'actual_cost_reconciliation': {'status'}}
+
+    scalar = {
+        "id",
+        "rec_date",
+        "code",
+        "name",
+        "strategy",
+        "position_tag",
+        "status",
+        "buy_price",
+        "buy_qty",
+        "buy_time",
+        "sell_price",
+        "sell_time",
+        "profit_rate",
+        "holding_seconds",
+        "add_count",
+        "avg_down_count",
+        "pyramid_count",
+        "scanner_promotion_id",
+        "effective_venue",
+        "market_session_bucket",
+        "completion_observed_date",
+        "terminal_population_scope",
+        "strict_completion_status",
+        "broker_actual_cost_observed",
+        "broker_actual_fees_taxes_krw",
+        "realized_pnl_krw_source",
+        "realized_pnl_krw",
+        "configured_fee_estimate_krw",
+        "quantity_research_cost",
+    }
+    nested = {
+        "exit_signal": {"exit_rule", "sell_reason_type", "inferred", "binding_status"},
+        "ai_review_summary": {"headline"},
+        "gatekeeper_replay": {"action", "action_key", "allow_entry"},
+        "actual_cost_reconciliation": {"status"},
+    }
+
     def row(reader):
         value = {}
+
         def field(key, current):
             if key in scalar:
-                value[key] = current.value(CACHED_RECEIPT_MAX_BYTES if key == 'quantity_research_cost' else 16*1024)
+                value[key] = current.value(
+                    CACHED_RECEIPT_MAX_BYTES
+                    if key == "quantity_research_cost"
+                    else 16 * 1024
+                )
             elif key in nested:
                 current.spaces()
-                if current.peek() != '{':
-                    if current.value(16*1024) is not None:
-                        raise FactSyncSourceError('completion_snapshot_legacy_nested_field_invalid')
+                if current.peek() != "{":
+                    if current.value(16 * 1024) is not None:
+                        raise FactSyncSourceError(
+                            "completion_snapshot_legacy_nested_field_invalid"
+                        )
                     value[key] = None
                 else:
                     body = {}
+
                     def selected(name, child):
-                        if name in nested[key]: body[name] = child.value(16*1024)
-                        else: child.skip()
+                        if name in nested[key]:
+                            body[name] = child.value(16 * 1024)
+                        else:
+                            child.skip()
                         return iter(())
-                    for _ in current.fields(selected): pass
+
+                    for _ in current.fields(selected):
+                        pass
                     value[key] = body
             else:
                 current.skip()
             return iter(())
-        for _ in reader.fields(field): pass
+
+        for _ in reader.fields(field):
+            pass
         return value
+
     def read_first_array(logical, expected_key):
-        physical = logical if logical.exists() else Path(str(logical)+'.gz')
+        physical = logical if logical.exists() else Path(str(logical) + ".gz")
         import io
         import stat
         from src.engine.lifecycle.holding_window_generation import source_stat
+
         if physical.is_symlink() or any(p.is_symlink() for p in physical.parents):
-            raise FactSyncSourceError('legacy_fact_source_path_invalid')
+            raise FactSyncSourceError("legacy_fact_source_path_invalid")
         before = physical.lstat()
         if not stat.S_ISREG(before.st_mode):
-            raise FactSyncSourceError('legacy_fact_source_size_or_type_invalid')
+            raise FactSyncSourceError("legacy_fact_source_size_or_type_invalid")
         fd = os.open(physical, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
         header, rows = {}, ResidentFacts([])
         try:
             opened = os.fstat(fd)
-            if not stat.S_ISREG(opened.st_mode) or source_stat(opened) != source_stat(before):
-                raise FactSyncSourceError('legacy_fact_source_changed')
-            with os.fdopen(fd, 'rb', closefd=False) as source:
-                binary = gzip.GzipFile(fileobj=source) if physical.suffix == '.gz' else source
-                with io.TextIOWrapper(binary, encoding='utf-8', newline='') as handle:
+            if not stat.S_ISREG(opened.st_mode) or source_stat(opened) != source_stat(
+                before
+            ):
+                raise FactSyncSourceError("legacy_fact_source_changed")
+            with os.fdopen(fd, "rb", closefd=False) as source:
+                binary = (
+                    gzip.GzipFile(fileobj=source)
+                    if physical.suffix == ".gz"
+                    else source
+                )
+                with io.TextIOWrapper(binary, encoding="utf-8", newline="") as handle:
                     return read_header(handle, expected_key, header, rows)
         finally:
             try:
-                if (source_stat(os.fstat(fd)) != source_stat(before)
-                        or source_stat(physical.lstat()) != source_stat(before)):
-                    raise FactSyncSourceError('legacy_fact_source_changed')
+                if source_stat(os.fstat(fd)) != source_stat(before) or source_stat(
+                    physical.lstat()
+                ) != source_stat(before):
+                    raise FactSyncSourceError("legacy_fact_source_changed")
             finally:
                 os.close(fd)
+
     def read_header(handle, expected_key, header, rows):
         reader = _legacy_value_reader(handle)
-        reader.take('{')
-        first = True; seen = set()
+        reader.take("{")
+        first = True
+        seen = set()
         while True:
-            if not first: reader.take(',')
-            key = reader.value(1024); reader.take(':'); first = False
+            if not first:
+                reader.take(",")
+            key = reader.value(1024)
+            reader.take(":")
+            first = False
             if not isinstance(key, str) or key in seen or len(seen) > 256:
-                raise FactSyncSourceError('completion_snapshot_legacy_header_invalid')
+                raise FactSyncSourceError("completion_snapshot_legacy_header_invalid")
             seen.add(key)
-            if key == 'sections':
-                reader.take('{')
+            if key == "sections":
+                reader.take("{")
                 if reader.value(1024) != expected_key:
-                    raise FactSyncSourceError('completion_snapshot_legacy_layout_invalid')
-                reader.take(':')
-                for projected in reader.array(row): rows.append(projected)
+                    raise FactSyncSourceError(
+                        "completion_snapshot_legacy_layout_invalid"
+                    )
+                reader.take(":")
+                for projected in reader.array(row):
+                    rows.append(projected)
                 return header, rows
-            if key in {'date', 'code', 'scope', 'since', 'meta', 'metrics', 'schema'}:
+            if key in {"date", "code", "scope", "since", "meta", "metrics", "schema"}:
                 header[key] = reader.value(MAX_METADATA_BYTES)
             else:
                 # Header fields are bounded before traversing any timeline.
                 reader.value(MAX_METADATA_BYTES)
-    header, rows = read_first_array(path, 'recent_trades')
-    if not isinstance(header.get('meta'), dict) or not isinstance(header.get('metrics'), dict):
-        raise FactSyncSourceError('completion_snapshot_legacy_header_invalid')
-    meta = header['meta']
-    census = meta.get('completed_census_manifest')
-    total = (header.get('metrics') or {}).get('total_trades')
-    if (header.get('date') != target_date or header.get('code') or header.get('since')
-            or header.get('scope') != 'entered' or meta.get('snapshot_profile') != 'postclose_exit'
-            or not isinstance(census, dict) or digest(census) != native['census_sha256']
-            or type(total) is not int or not 0 <= total <= 300 or len(rows) != total):
-        raise FactSyncSourceError('completion_snapshot_legacy_display_census_unverified')
-    completion_header, completed = (read_first_array(sidecar, 'completed_trade_projection')
-        if verified_completion is None else (verified_completion, verified_completion['sections']['completed_trade_projection']))
-    if (completion_header.get('date') != target_date
-            or digest((completion_header.get('meta') or {}).get('completed_census_manifest')) != native['census_sha256']):
-        raise FactSyncSourceError('completion_snapshot_legacy_census_binding_invalid')
-    value = dict(schema='trade_review_fact_projection_v1', source_scope='entered', date=target_date,
-        snapshot_identity=native['projection']['snapshot_identity'],
-        meta={key: meta.get(key) for key in ('warnings', 'snapshot_profile', 'actual_cost_source_generation', 'completed_census_manifest')},
+
+    header, rows = read_first_array(path, "recent_trades")
+    if not isinstance(header.get("meta"), dict) or not isinstance(
+        header.get("metrics"), dict
+    ):
+        raise FactSyncSourceError("completion_snapshot_legacy_header_invalid")
+    meta = header["meta"]
+    census = meta.get("completed_census_manifest")
+    total = (header.get("metrics") or {}).get("total_trades")
+    if (
+        header.get("date") != target_date
+        or header.get("code")
+        or header.get("since")
+        or header.get("scope") != "entered"
+        or meta.get("snapshot_profile") != "postclose_exit"
+        or not isinstance(census, dict)
+        or digest(census) != native["census_sha256"]
+        or type(total) is not int
+        or not 0 <= total <= 300
+        or len(rows) != total
+    ):
+        raise FactSyncSourceError(
+            "completion_snapshot_legacy_display_census_unverified"
+        )
+    completion_header, completed = (
+        read_first_array(sidecar, "completed_trade_projection")
+        if verified_completion is None
+        else (
+            verified_completion,
+            verified_completion["sections"]["completed_trade_projection"],
+        )
+    )
+    if (
+        completion_header.get("date") != target_date
+        or digest(
+            (completion_header.get("meta") or {}).get("completed_census_manifest")
+        )
+        != native["census_sha256"]
+    ):
+        raise FactSyncSourceError("completion_snapshot_legacy_census_binding_invalid")
+    value = dict(
+        schema="trade_review_fact_projection_v1",
+        source_scope="entered",
+        date=target_date,
+        snapshot_identity=native["projection"]["snapshot_identity"],
+        meta={
+            key: meta.get(key)
+            for key in (
+                "warnings",
+                "snapshot_profile",
+                "actual_cost_source_generation",
+                "completed_census_manifest",
+            )
+        },
         metrics=dict(total_trades=total, canonical_completed_trades=len(completed)),
-        sections=dict(recent_trades=rows, completed_trade_projection=completed))
+        sections=dict(recent_trades=rows, completed_trade_projection=completed),
+    )
     if len(json.dumps(value, ensure_ascii=False).encode()) > MAX_PROJECTION_BYTES:
-        raise FactSyncSourceError('completion_snapshot_legacy_scalar_partition_required')
-    value['artifact_sha256'] = _canonical_sha256(value)
+        raise FactSyncSourceError(
+            "completion_snapshot_legacy_scalar_partition_required"
+        )
+    value["artifact_sha256"] = _canonical_sha256(value)
     return value
 
 
-def _load_completion_fact_projection(target_date: str, completion_snapshot: Path) -> dict:
+def _load_completion_fact_projection(
+    target_date: str, completion_snapshot: Path
+) -> dict:
     """Read only the native producer's bounded, untruncated scalar fact input."""
-    from src.engine.lifecycle.holding_window_generation import _capture_day, MAX_PROJECTION_BYTES, MAX_METADATA_BYTES
-    from src.engine.lifecycle.snapshot_archive import logical_path, read_bytes, generation, present
+    from src.engine.lifecycle.holding_window_generation import (
+        _capture_day,
+        MAX_PROJECTION_BYTES,
+        MAX_METADATA_BYTES,
+    )
+    from src.engine.lifecycle.snapshot_archive import (
+        logical_path,
+        read_bytes,
+        generation,
+        present,
+    )
     from src.engine.lifecycle.broker_cost_reconciliation import digest
     from src.engine.lifecycle.research_input_budget import Claim
-    expected = Path(DATA_DIR) / 'report/monitor_snapshots' / f'trade_review_{target_date}.json'
+
+    expected = (
+        Path(DATA_DIR) / "report/monitor_snapshots" / f"trade_review_{target_date}.json"
+    )
     requested_path = logical_path(completion_snapshot)
-    if (not requested_path.is_absolute() or requested_path.is_symlink()
-            or requested_path.resolve() != expected.resolve()):
-        raise FactSyncSourceError('completion_snapshot_path_invalid')
+    if (
+        not requested_path.is_absolute()
+        or requested_path.is_symlink()
+        or requested_path.resolve() != expected.resolve()
+    ):
+        raise FactSyncSourceError("completion_snapshot_path_invalid")
     # Managed releases mount the canonical data directory. Native archive
     # readers forbid symlink ancestors, so pass the verified canonical spelling.
     path = requested_path.resolve()
-    sidecar = path.with_suffix('.completed_projection.json')
-    fact_path = path.with_suffix('.fact_projection.json')
-    receipt_path = Path(str(sidecar) + '.dependencies.json')
-    sources = [candidate for logical in (path, sidecar, fact_path) for candidate in (
-        logical, Path(str(logical) + '.gz'), Path(str(logical) + '.gz.archive_receipt.json'))] + [receipt_path]
-    original_manifest = path.parent/'manifests'/f'monitor_snapshot_manifest_{target_date}_postclose_exit.json'
+    sidecar = path.with_suffix(".completed_projection.json")
+    fact_path = path.with_suffix(".fact_projection.json")
+    receipt_path = Path(str(sidecar) + ".dependencies.json")
+    sources = [
+        candidate
+        for logical in (path, sidecar, fact_path)
+        for candidate in (
+            logical,
+            Path(str(logical) + ".gz"),
+            Path(str(logical) + ".gz.archive_receipt.json"),
+        )
+    ] + [receipt_path]
+    original_manifest = (
+        path.parent
+        / "manifests"
+        / f"monitor_snapshot_manifest_{target_date}_postclose_exit.json"
+    )
     sources.append(original_manifest)
     try:
         before = _completion_source_signature(sources)
-        if not receipt_path.exists() and not fact_path.exists() and (
-                present(sidecar) or original_manifest.is_file() or _legacy_original_generation_issue(target_date)[0]):
-            return _load_legacy_original_fact_projection(target_date, path, sidecar, sources, before)
+        if (
+            not receipt_path.exists()
+            and not fact_path.exists()
+            and (
+                present(sidecar)
+                or original_manifest.is_file()
+                or _legacy_original_generation_issue(target_date)[0]
+            )
+        ):
+            return _load_legacy_original_fact_projection(
+                target_date, path, sidecar, sources, before
+            )
         native = _capture_day(DATA_DIR, path.parent, target_date)
-        if native.get('profile') != 'postclose_exit' or native.get('status') not in {'observed', 'valid_empty'}:
-            raise FactSyncSourceError('completion_snapshot_native_generation_invalid')
+        if native.get("profile") != "postclose_exit" or native.get("status") not in {
+            "observed",
+            "valid_empty",
+        }:
+            raise FactSyncSourceError("completion_snapshot_native_generation_invalid")
         with Claim(MAX_METADATA_BYTES * 8):
             raw = read_bytes(receipt_path, maximum=MAX_METADATA_BYTES)
             receipt = json.loads(raw)
         if not isinstance(receipt, dict):
-            raise FactSyncSourceError('completion_snapshot_dependency_receipt_invalid')
-        expected_receipt = native['projection']['dependency_receipt']
-        if (len(raw) != expected_receipt['size'] or hashlib.sha256(raw).hexdigest() != expected_receipt['sha256']):
-            raise FactSyncSourceError('completion_snapshot_fact_projection_unsealed')
-        if receipt.get('fact_projection') is None:
+            raise FactSyncSourceError("completion_snapshot_dependency_receipt_invalid")
+        expected_receipt = native["projection"]["dependency_receipt"]
+        if (
+            len(raw) != expected_receipt["size"]
+            or hashlib.sha256(raw).hexdigest() != expected_receipt["sha256"]
+        ):
+            raise FactSyncSourceError("completion_snapshot_fact_projection_unsealed")
+        if receipt.get("fact_projection") is None:
             from src.engine.lifecycle.snapshot_archive import present
+
             if present(fact_path):
-                raise FactSyncSourceError('completion_snapshot_fact_projection_unsealed')
+                raise FactSyncSourceError(
+                    "completion_snapshot_fact_projection_unsealed"
+                )
             value = _stream_original_fact_projection(target_date, path, sidecar, native)
             fact_generation, resident = None, None
-            source_basis = 'native_original_snapshot_stream'
+            source_basis = "native_original_snapshot_stream"
         else:
             fact_generation = generation(fact_path)
-            if fact_generation != receipt['fact_projection']:
-                raise FactSyncSourceError('completion_snapshot_fact_projection_generation_changed')
+            if fact_generation != receipt["fact_projection"]:
+                raise FactSyncSourceError(
+                    "completion_snapshot_fact_projection_generation_changed"
+                )
             with Claim(MAX_PROJECTION_BYTES):
                 fact_raw = read_bytes(fact_path, maximum=MAX_PROJECTION_BYTES)
                 resident = Claim(len(fact_raw) * 8)
                 value = json.loads(fact_raw)
-            source_basis = 'native_bounded_fact_projection'
+            source_basis = "native_bounded_fact_projection"
         if not isinstance(value, dict):
-            raise FactSyncSourceError('completion_snapshot_fact_projection_contract_invalid')
-        body = {key: item for key, item in value.items() if key != 'artifact_sha256'}
-        census = (value.get('meta') or {}).get('completed_census_manifest')
-        rows = (value.get('sections') or {}).get('recent_trades')
-        completed = (value.get('sections') or {}).get('completed_trade_projection')
-        total = (value.get('metrics') or {}).get('total_trades')
-        if (value.get('schema') != 'trade_review_fact_projection_v1' or value.get('date') != target_date
-                or value.get('source_scope') != 'entered'
-                or value.get('artifact_sha256') != _canonical_sha256(body)
-                or value.get('snapshot_identity') != native['projection']['snapshot_identity']
-                or not isinstance(census, dict) or digest(census) != native['census_sha256']
-                or (value.get('meta') or {}).get('actual_cost_source_generation') != native['cost_generation']
-                or (value.get('meta') or {}).get('snapshot_profile') != 'postclose_exit'
-                or not isinstance(rows, list) or type(total) is not int or total < 0 or len(rows) != total
-                or any(not isinstance(row, dict) or str(row.get('rec_date')) != target_date for row in rows)
-                or any(not str(row.get('id') or '').isdigit() or int(row['id']) <= 0 for row in rows)
-                or len({str(row.get('id') or '') for row in rows}) != total
-                or not isinstance(completed, list)
-                or len(completed) != census.get('projected_count')
-                or any(not isinstance(row, dict) or row.get('completion_observed_date') != target_date
-                       or row.get('status') != 'COMPLETED' for row in completed)
-                or sorted(str(row.get('id') or '') for row in completed) != completed_census_projection_ids(census)):
-            raise FactSyncSourceError('completion_snapshot_fact_projection_contract_invalid')
-        if (requested_path.resolve() != path
-                or before != _completion_source_signature(sources)):
-            raise FactSyncSourceError('completion_snapshot_changed_during_read')
-        value['_native_source_proof'] = dict(schema='strategy_position_fact_snapshot_source_v1',
-            source_date=target_date, projection=native['projection'], fact_projection=fact_generation,
-            source_basis=source_basis, scalar_projection_sha256=value['artifact_sha256'],
-            actual_cost_source_generation=native['cost_generation'])
-        value['_source_guard'] = before
-        value['_native_budget_claim'] = resident
+            raise FactSyncSourceError(
+                "completion_snapshot_fact_projection_contract_invalid"
+            )
+        body = {key: item for key, item in value.items() if key != "artifact_sha256"}
+        census = (value.get("meta") or {}).get("completed_census_manifest")
+        rows = (value.get("sections") or {}).get("recent_trades")
+        completed = (value.get("sections") or {}).get("completed_trade_projection")
+        total = (value.get("metrics") or {}).get("total_trades")
+        if (
+            value.get("schema") != "trade_review_fact_projection_v1"
+            or value.get("date") != target_date
+            or value.get("source_scope") != "entered"
+            or value.get("artifact_sha256") != _canonical_sha256(body)
+            or value.get("snapshot_identity")
+            != native["projection"]["snapshot_identity"]
+            or not isinstance(census, dict)
+            or digest(census) != native["census_sha256"]
+            or (value.get("meta") or {}).get("actual_cost_source_generation")
+            != native["cost_generation"]
+            or (value.get("meta") or {}).get("snapshot_profile") != "postclose_exit"
+            or not isinstance(rows, list)
+            or type(total) is not int
+            or total < 0
+            or len(rows) != total
+            or any(
+                not isinstance(row, dict) or str(row.get("rec_date")) != target_date
+                for row in rows
+            )
+            or any(
+                not str(row.get("id") or "").isdigit() or int(row["id"]) <= 0
+                for row in rows
+            )
+            or len({str(row.get("id") or "") for row in rows}) != total
+            or not isinstance(completed, list)
+            or len(completed) != census.get("projected_count")
+            or any(
+                not isinstance(row, dict)
+                or row.get("completion_observed_date") != target_date
+                or row.get("status") != "COMPLETED"
+                for row in completed
+            )
+            or sorted(str(row.get("id") or "") for row in completed)
+            != completed_census_projection_ids(census)
+        ):
+            raise FactSyncSourceError(
+                "completion_snapshot_fact_projection_contract_invalid"
+            )
+        if requested_path.resolve() != path or before != _completion_source_signature(
+            sources
+        ):
+            raise FactSyncSourceError("completion_snapshot_changed_during_read")
+        value["_native_source_proof"] = dict(
+            schema="strategy_position_fact_snapshot_source_v1",
+            source_date=target_date,
+            projection=native["projection"],
+            fact_projection=fact_generation,
+            source_basis=source_basis,
+            scalar_projection_sha256=value["artifact_sha256"],
+            actual_cost_source_generation=native["cost_generation"],
+        )
+        value["_source_guard"] = before
+        value["_native_budget_claim"] = resident
         return value
     except FactSyncSourceError:
         raise
     except (OSError, ValueError, TypeError, KeyError) as exc:
-        if str(exc).startswith('shared_research_budget_'):
+        if str(exc).startswith("shared_research_budget_"):
             raise
-        raise FactSyncSourceError('completion_snapshot_native_projection_invalid:' + type(exc).__name__) from exc
+        raise FactSyncSourceError(
+            "completion_snapshot_native_projection_invalid:" + type(exc).__name__
+        ) from exc
 
 
 def _saved_fact_generation_issue(
-    target_date: str, *, snapshot: dict | None = None,
+    target_date: str,
+    *,
+    snapshot: dict | None = None,
 ) -> str | None:
     """Check a DB fact batch against the currently selected source snapshot."""
     try:
@@ -928,17 +1510,26 @@ def _saved_fact_generation_issue(
     expected_sha = receipt.pop("artifact_sha256", None)
     if expected_sha != _canonical_sha256(receipt):
         return "fact_sync_receipt_sha_mismatch"
-    if (receipt.get("target_date") != target_date
-            or receipt.get("status") not in {"succeeded", "valid_empty"}):
+    if receipt.get("target_date") != target_date or receipt.get("status") not in {
+        "succeeded",
+        "valid_empty",
+    }:
         return "fact_sync_receipt_not_current_success"
-    legacy, issue = _legacy_original_generation_issue(target_date, receipt={**receipt, 'artifact_sha256': expected_sha})
+    legacy, issue = _legacy_original_generation_issue(
+        target_date, receipt={**receipt, "artifact_sha256": expected_sha}
+    )
     if legacy:
         return issue
     native_projection = False
     if snapshot is None and target_date >= COMPLETED_CENSUS_CONTRACT_FROM:
         from src.engine.lifecycle.snapshot_archive import present
-        source = Path(DATA_DIR) / 'report/monitor_snapshots' / f'trade_review_{target_date}.json'
-        if present(source.with_suffix('.fact_projection.json')):
+
+        source = (
+            Path(DATA_DIR)
+            / "report/monitor_snapshots"
+            / f"trade_review_{target_date}.json"
+        )
+        if present(source.with_suffix(".fact_projection.json")):
             try:
                 snapshot = _load_completion_fact_projection(target_date, source)
                 native_projection = True
@@ -947,24 +1538,37 @@ def _saved_fact_generation_issue(
         else:
             # Original native completion sidecars remain verifiable through
             # bounded metadata, without decoding a multi-gigabyte snapshot.
-            from src.engine.scalping.initial_quantity_policy import _quantity_fact_generation_issue
+            from src.engine.scalping.initial_quantity_policy import (
+                _quantity_fact_generation_issue,
+            )
+
             return _quantity_fact_generation_issue(target_date)
     elif snapshot is None:
         snapshot = load_monitor_snapshot("trade_review", target_date)
     if not isinstance(snapshot, dict):
         return "trade_review_snapshot_missing"
-    issue = None if native_projection else verify_completed_census_manifest(snapshot, target_date)
+    issue = (
+        None
+        if native_projection
+        else verify_completed_census_manifest(snapshot, target_date)
+    )
     if issue:
         return issue
     census = snapshot["meta"]["completed_census_manifest"]
-    if (receipt.get("completed_census_run_ids") != [census["run_id"]]
-            or receipt.get("completed_census_projection_sha256")
-            != [census["projection_sha256"]]):
+    if receipt.get("completed_census_run_ids") != [census["run_id"]] or receipt.get(
+        "completed_census_projection_sha256"
+    ) != [census["projection_sha256"]]:
         return "stale_fact_source_generation"
-    if native_projection and receipt.get('completion_snapshot_source') != snapshot['_native_source_proof']:
-        return 'stale_fact_snapshot_projection_generation'
-    if native_projection and receipt.get('actual_cost_source_generation') != census.get('actual_cost_source_generation'):
-        return 'persisted_fact_cost_generation_stale'
+    if (
+        native_projection
+        and receipt.get("completion_snapshot_source")
+        != snapshot["_native_source_proof"]
+    ):
+        return "stale_fact_snapshot_projection_generation"
+    if native_projection and receipt.get("actual_cost_source_generation") != census.get(
+        "actual_cost_source_generation"
+    ):
+        return "persisted_fact_cost_generation_stale"
     return None
 
 
@@ -1093,7 +1697,9 @@ def _scanner_discovery_type(fields: dict[str, Any]) -> str:
 
 
 def _load_scanner_promotion_events(
-    target_date: str, *, scale_in_projection=None,
+    target_date: str,
+    *,
+    scale_in_projection=None,
     source_quality: dict[str, Any] | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
     path = _PIPELINE_EVENTS_DIR / f"pipeline_events_{target_date}.jsonl"
@@ -1101,15 +1707,21 @@ def _load_scanner_promotion_events(
     late_path = path.with_name(f"{path.stem}.late.jsonl")
     quality: dict[str, Any] = {
         "schema": "scanner_pipeline_source_quality_v1",
-        "status": "pending", "target_date": target_date,
+        "status": "pending",
+        "target_date": target_date,
         "counts_complete": False,
-        "parts": [], "raw_line_count": 0, "raw_row_count": 0,
+        "parts": [],
+        "raw_line_count": 0,
+        "raw_row_count": 0,
         "scanner_candidate_count": 0,
-        "scanner_valid_count": 0, "scanner_duplicate_count": 0,
-        "scanner_quarantined_count": 0, "scanner_excluded_count": 0,
+        "scanner_valid_count": 0,
+        "scanner_duplicate_count": 0,
+        "scanner_quarantined_count": 0,
+        "scanner_excluded_count": 0,
         "scanner_unobserved_count": None,
         "scanner_unobserved_reason": "raw_api_universe_not_observed",
-        "scanner_by_venue_session": {}, "scanner_by_stage": {},
+        "scanner_by_venue_session": {},
+        "scanner_by_stage": {},
         "quarantine_reasons": {},
     }
     seen_scanner_hashes: set[str] = set()
@@ -1122,22 +1734,32 @@ def _load_scanner_promotion_events(
     quarantine_reasons: dict[str, int] = defaultdict(int)
     if scale_in_projection is not None:
         from src.engine.scalping.scale_in_split_order_plan import (
-            _project_relevant_input_event, _record_id, _event_time,
+            _project_relevant_input_event,
+            _record_id,
+            _event_time,
         )
     found_part = False
     try:
         for part in (path, late_path):
             provenance: dict[str, Any] = {}
-            part_present = part.exists() or part.with_suffix(part.suffix + ".gz").exists()
+            part_present = (
+                part.exists() or part.with_suffix(part.suffix + ".gz").exists()
+            )
             try:
                 rows = iter_jsonl_objects_strict(part, provenance=provenance)
                 for event in rows:
                     found_part = True
                     if scale_in_projection is not None:
-                        projected = _project_relevant_input_event(event, source_name="pipeline_events", event_date=target_date)
-                        if (projected is not None and _event_time(projected) is not None
-                                and _event_time(projected).date().isoformat() == target_date
-                                and _record_id(projected) in scale_in_projection["record_ids"]):
+                        projected = _project_relevant_input_event(
+                            event, source_name="pipeline_events", event_date=target_date
+                        )
+                        if (
+                            projected is not None
+                            and _event_time(projected) is not None
+                            and _event_time(projected).date().isoformat() == target_date
+                            and _record_id(projected)
+                            in scale_in_projection["record_ids"]
+                        ):
                             digest = _canonical_sha256(event)
                             if digest not in seen_scale_in_hashes:
                                 seen_scale_in_hashes.add(digest)
@@ -1152,28 +1774,52 @@ def _load_scanner_promotion_events(
                         quality["scanner_duplicate_count"] += 1
                         continue
                     seen_scanner_hashes.add(digest)
-                    fields = event.get("fields") if isinstance(event.get("fields"), dict) else {}
-                    promotion_reason = _clean_scanner_value(fields.get("scanner_promotion_reason"))
-                    source_signature = _clean_scanner_value(fields.get("source_signature"))
-                    promotion_id = _clean_scanner_value(fields.get("scanner_promotion_id"))
-                    stock_code = str(event.get("stock_code") or fields.get("stock_code") or "").strip()[:10]
-                    emitted_at = _parse_scanner_clock(event.get("emitted_at") or event.get("event_time"))
+                    fields = (
+                        event.get("fields")
+                        if isinstance(event.get("fields"), dict)
+                        else {}
+                    )
+                    promotion_reason = _clean_scanner_value(
+                        fields.get("scanner_promotion_reason")
+                    )
+                    source_signature = _clean_scanner_value(
+                        fields.get("source_signature")
+                    )
+                    promotion_id = _clean_scanner_value(
+                        fields.get("scanner_promotion_id")
+                    )
+                    stock_code = str(
+                        event.get("stock_code") or fields.get("stock_code") or ""
+                    ).strip()[:10]
+                    emitted_at = _parse_scanner_clock(
+                        event.get("emitted_at") or event.get("event_time")
+                    )
                     reason = None
                     if not (promotion_reason or source_signature or promotion_id):
                         reason = "promotion_identity_absent"
                     elif not stock_code:
                         reason = "stock_code_missing"
-                    elif emitted_at is None or emitted_at.date().isoformat() != target_date:
+                    elif (
+                        emitted_at is None
+                        or emitted_at.date().isoformat() != target_date
+                    ):
                         reason = "emitted_date_invalid"
-                    elif (event.get("emitted_date") not in (None, target_date)
-                          or event.get("storage_partition_date") not in (None, target_date)):
+                    elif event.get("emitted_date") not in (
+                        None,
+                        target_date,
+                    ) or event.get("storage_partition_date") not in (None, target_date):
                         reason = "partition_date_mismatch"
                     if reason:
                         quality["scanner_quarantined_count"] += 1
                         quarantine_reasons[reason] += 1
                         continue
                     if promotion_id:
-                        identity = (stage, stock_code, promotion_id, emitted_at.isoformat())
+                        identity = (
+                            stage,
+                            stock_code,
+                            promotion_id,
+                            emitted_at.isoformat(),
+                        )
                         existing = scanner_identities.setdefault(identity, digest)
                         if existing != digest:
                             raise ValueError("scanner_promotion_identity_conflict")
@@ -1184,29 +1830,55 @@ def _load_scanner_promotion_events(
                         "scanner_promotion_reason": promotion_reason,
                         "source_signature": source_signature,
                         "scanner_source_role": _clean_scanner_value(
-                            fields.get("scanner_source_role") or fields.get("scanner_candidate_role")
+                            fields.get("scanner_source_role")
+                            or fields.get("scanner_candidate_role")
                         ),
-                        "scanner_priority_tier": _clean_scanner_value(fields.get("scanner_priority_tier")),
-                        "rising_missed_lineage": _clean_scanner_value(fields.get("rising_missed_lineage")),
-                        "effective_venue": _clean_scanner_value(fields.get("effective_venue") or fields.get("venue")),
-                        "market_session_bucket": _clean_scanner_value(fields.get("market_session_bucket") or fields.get("session")),
+                        "scanner_priority_tier": _clean_scanner_value(
+                            fields.get("scanner_priority_tier")
+                        ),
+                        "rising_missed_lineage": _clean_scanner_value(
+                            fields.get("rising_missed_lineage")
+                        ),
+                        "effective_venue": _clean_scanner_value(
+                            fields.get("effective_venue") or fields.get("venue")
+                        ),
+                        "market_session_bucket": _clean_scanner_value(
+                            fields.get("market_session_bucket") or fields.get("session")
+                        ),
                     }
                     payload["scanner_discovery_type"] = _scanner_discovery_type(payload)
                     by_code[stock_code].append(payload)
                     quality["scanner_valid_count"] += 1
                     stage_valid[stage] += 1
-                    venue = _clean_scanner_value(fields.get("effective_venue") or fields.get("venue")) or "UNKNOWN"
-                    session = _clean_scanner_value(fields.get("market_session_bucket") or fields.get("session")) or "UNKNOWN"
+                    venue = (
+                        _clean_scanner_value(
+                            fields.get("effective_venue") or fields.get("venue")
+                        )
+                        or "UNKNOWN"
+                    )
+                    session = (
+                        _clean_scanner_value(
+                            fields.get("market_session_bucket") or fields.get("session")
+                        )
+                        or "UNKNOWN"
+                    )
                     venue_session[f"{venue}|{session}"] += 1
             except FileNotFoundError:
-                if (part_present or part.exists()
-                        or part.with_suffix(part.suffix + ".gz").exists()):
+                if (
+                    part_present
+                    or part.exists()
+                    or part.with_suffix(part.suffix + ".gz").exists()
+                ):
                     raise ValueError("scanner_source_part_disappeared") from None
                 continue
             found_part = True
             archive = next(
-                (item for item in provenance["physical_representations"]
-                 if item["compression"] == "gzip"), None,
+                (
+                    item
+                    for item in provenance["physical_representations"]
+                    if item["compression"] == "gzip"
+                ),
+                None,
             )
             archive_receipt_path = Path(f"{part}.gz.archive_receipt.json")
             archive_read = None
@@ -1217,10 +1889,15 @@ def _load_scanner_promotion_events(
                     pass
             if archive_read is not None:
                 archive_receipt = archive_read.payload
-                if (not isinstance(archive_receipt, dict)
-                        or archive_receipt.get("schema") != "pipeline_raw_archive_identity_v1"
-                        or Path(str(archive_receipt.get("logical_path") or "")).resolve() != part.resolve()
-                        or archive_receipt.get("logical_content_sha256") != provenance["source_content_sha256"]):
+                if (
+                    not isinstance(archive_receipt, dict)
+                    or archive_receipt.get("schema")
+                    != "pipeline_raw_archive_identity_v1"
+                    or Path(str(archive_receipt.get("logical_path") or "")).resolve()
+                    != part.resolve()
+                    or archive_receipt.get("logical_content_sha256")
+                    != provenance["source_content_sha256"]
+                ):
                     raise ValueError("scanner_archive_receipt_generation_mismatch")
                 generation = archive_receipt.get("archive_generation") or {}
                 provenance["archive_receipt"] = {
@@ -1240,19 +1917,27 @@ def _load_scanner_promotion_events(
             quality["raw_line_count"] += int(provenance["source_line_count"])
             quality["raw_row_count"] += int(provenance["source_json_object_row_count"])
     except (ValueError, OSError, UnicodeError) as exc:
-        quality.update(status="source_blocked", reason=str(exc),
-                       scanner_unobserved_reason="source_generation_invalid")
+        quality.update(
+            status="source_blocked",
+            reason=str(exc),
+            scanner_unobserved_reason="source_generation_invalid",
+        )
         if source_quality is not None:
             source_quality.update(quality)
         raise FactSyncSourceError(f"scanner_pipeline_source_invalid:{exc}") from exc
     if not found_part:
         if target_date < _SCANNER_ARCHIVE_CONTRACT_FROM:
-            quality.update(status="legacy_source_missing", reason="pre_archive_contract")
+            quality.update(
+                status="legacy_source_missing", reason="pre_archive_contract"
+            )
             if source_quality is not None:
                 source_quality.update(quality)
             return by_code
-        quality.update(status="source_missing", reason="base_and_late_absent",
-                       scanner_unobserved_reason="source_missing")
+        quality.update(
+            status="source_missing",
+            reason="base_and_late_absent",
+            scanner_unobserved_reason="source_missing",
+        )
         if source_quality is not None:
             source_quality.update(quality)
         raise FactSyncSourceError("scanner_pipeline_source_missing")
@@ -1260,20 +1945,29 @@ def _load_scanner_promotion_events(
         quality["scanner_duplicate_count"] + quality["scanner_quarantined_count"]
     )
     quality["counts_complete"] = True
-    quality["status"] = "valid_empty" if quality["scanner_valid_count"] == 0 else "complete"
+    quality["status"] = (
+        "valid_empty" if quality["scanner_valid_count"] == 0 else "complete"
+    )
     quality["quarantine_reasons"] = dict(sorted(quarantine_reasons.items()))
     quality["scanner_by_venue_session"] = dict(sorted(venue_session.items()))
     quality["scanner_by_stage"] = {
-        stage: {"raw": stage_raw[stage], "valid": stage_valid[stage],
-                "excluded": stage_raw[stage] - stage_valid[stage]}
+        stage: {
+            "raw": stage_raw[stage],
+            "valid": stage_valid[stage],
+            "excluded": stage_raw[stage] - stage_valid[stage],
+        }
         for stage in sorted(stage_raw)
     }
-    quality["source_generation_sha256"] = _canonical_sha256([
-        {"logical_source_path": part["logical_source_path"],
-         "source_content_sha256": part["source_content_sha256"],
-         "source_content_bytes": part["source_content_bytes"]}
-        for part in quality["parts"]
-    ])
+    quality["source_generation_sha256"] = _canonical_sha256(
+        [
+            {
+                "logical_source_path": part["logical_source_path"],
+                "source_content_sha256": part["source_content_sha256"],
+                "source_content_bytes": part["source_content_bytes"],
+            }
+            for part in quality["parts"]
+        ]
+    )
     if source_quality is not None:
         source_quality.update(quality)
     if scale_in_projection is not None:
@@ -1297,18 +1991,31 @@ def _select_scanner_event_for_trade(
     expected_promotion_id = _clean_scanner_value(
         fact.get("scanner_expected_promotion_id") or fact.get("scanner_promotion_id")
     )
+
     def compatible(event: dict[str, Any]) -> bool:
         event_venue = _clean_scanner_value(event.get("effective_venue"))
         event_session = _clean_scanner_value(event.get("market_session_bucket"))
         return (
-            (not expected_promotion_id
-             or event.get("scanner_promotion_id") == expected_promotion_id)
-            and
-            (not fact_venue or fact_venue == "UNKNOWN" or not event_venue
-             or event_venue == "UNKNOWN" or fact_venue == event_venue)
-            and (not fact_session or fact_session == "UNKNOWN" or not event_session
-                 or event_session == "UNKNOWN" or fact_session == event_session)
+            (
+                not expected_promotion_id
+                or event.get("scanner_promotion_id") == expected_promotion_id
+            )
+            and (
+                not fact_venue
+                or fact_venue == "UNKNOWN"
+                or not event_venue
+                or event_venue == "UNKNOWN"
+                or fact_venue == event_venue
+            )
+            and (
+                not fact_session
+                or fact_session == "UNKNOWN"
+                or not event_session
+                or event_session == "UNKNOWN"
+                or fact_session == event_session
+            )
         )
+
     buy_time = fact.get("buy_time")
     if isinstance(buy_time, str):
         buy_time = _parse_scanner_clock(buy_time)
@@ -1318,7 +2025,8 @@ def _select_scanner_event_for_trade(
         before = [
             event
             for event in events
-            if event.get("emitted_at") and event["emitted_at"] <= buy_time
+            if event.get("emitted_at")
+            and event["emitted_at"] <= buy_time
             and compatible(event)
         ]
         if before:
@@ -1331,7 +2039,8 @@ def _select_scanner_event_for_trade(
 def _enrich_scanner_provenance(
     facts: list[dict[str, Any]],
     target_date: str,
-    *, scale_in_projection=None,
+    *,
+    scale_in_projection=None,
     scanner_source_quality: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     needs_source = any(
@@ -1342,19 +2051,23 @@ def _enrich_scanner_provenance(
         if scanner_source_quality is None:
             events_by_code = (
                 _load_scanner_promotion_events(target_date)
-                if scale_in_projection is None else
-                _load_scanner_promotion_events(target_date, scale_in_projection=scale_in_projection)
+                if scale_in_projection is None
+                else _load_scanner_promotion_events(
+                    target_date, scale_in_projection=scale_in_projection
+                )
             )
         else:
             events_by_code = _load_scanner_promotion_events(
-                target_date, scale_in_projection=scale_in_projection,
+                target_date,
+                scale_in_projection=scale_in_projection,
                 source_quality=scanner_source_quality,
             )
     else:
         events_by_code = {}
         if scanner_source_quality is not None:
             scanner_source_quality.update(
-                status="not_applicable", target_date=target_date,
+                status="not_applicable",
+                target_date=target_date,
                 reason="no_scanner_fact_or_scale_in_record",
             )
     enriched: list[dict[str, Any]] = []
@@ -1406,49 +2119,70 @@ def _enrich_scanner_provenance(
             scanner_matched_fact_count=scanner_matched_count,
             scanner_unmatched_fact_count=scanner_fact_count - scanner_matched_count,
             scanner_unmatched_recommendation_ids=unmatched_fact_ids,
-            scanner_unmatched_ids_truncated=(scanner_fact_count - scanner_matched_count) > len(unmatched_fact_ids),
+            scanner_unmatched_ids_truncated=(scanner_fact_count - scanner_matched_count)
+            > len(unmatched_fact_ids),
         )
     return enriched
 
 
 def _build_trade_fact_rows(
-    target_date: str, *, scale_in_projection=None,
+    target_date: str,
+    *,
+    scale_in_projection=None,
     scanner_source_quality: dict[str, Any] | None = None,
     completion_census_quality: dict[str, Any] | None = None,
     completion_snapshot: Path | None = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
-    report = (_load_completion_fact_projection(target_date, completion_snapshot)
-              if completion_snapshot is not None else build_trade_review_report(
-        target_date=target_date,
-        since_time=None,
-        top_n=100_000,
-        scope="entered",
-    ))
+    report = (
+        _load_completion_fact_projection(target_date, completion_snapshot)
+        if completion_snapshot is not None
+        else build_trade_review_report(
+            target_date=target_date,
+            since_time=None,
+            top_n=100_000,
+            scope="entered",
+        )
+    )
     warnings = list((report.get("meta", {}) or {}).get("warnings", []) or [])
     if target_date >= COMPLETED_CENSUS_CONTRACT_FROM or isinstance(
         (report.get("meta") or {}).get("completed_census_manifest"), dict
     ):
-        issue = (None if completion_snapshot is not None else verify_completed_census_manifest(report, target_date))
+        issue = (
+            None
+            if completion_snapshot is not None
+            else verify_completed_census_manifest(report, target_date)
+        )
         if issue:
             raise FactSyncSourceError(issue)
     census = (report.get("meta") or {}).get("completed_census_manifest") or {}
     if completion_census_quality is not None:
         completion_census_quality.update(census)
         if completion_snapshot is not None:
-            completion_census_quality['completion_snapshot_source'] = report['_native_source_proof']
-            completion_census_quality['_source_guard'] = report['_source_guard']
-            if '_native_observed_cost_generation' in report:
-                completion_census_quality['actual_cost_source_generation'] = report['_native_observed_cost_generation']
+            completion_census_quality["completion_snapshot_source"] = report[
+                "_native_source_proof"
+            ]
+            completion_census_quality["_source_guard"] = report["_source_guard"]
+            if "_native_observed_cost_generation" in report:
+                completion_census_quality["actual_cost_source_generation"] = report[
+                    "_native_observed_cost_generation"
+                ]
     if warnings and (target_date >= COMPLETED_CENSUS_CONTRACT_FROM or census):
         raise FactSyncSourceError("trade_review_source_warning")
     facts = _trade_fact_rows_from_report(target_date, report)
-    return _enrich_scanner_provenance(
-        facts, target_date, scale_in_projection=scale_in_projection,
-        scanner_source_quality=scanner_source_quality,
-    ), warnings
+    return (
+        _enrich_scanner_provenance(
+            facts,
+            target_date,
+            scale_in_projection=scale_in_projection,
+            scanner_source_quality=scanner_source_quality,
+        ),
+        warnings,
+    )
 
 
-def _trade_fact_rows_from_report(target_date: str, report: dict) -> list[dict[str, Any]]:
+def _trade_fact_rows_from_report(
+    target_date: str, report: dict
+) -> list[dict[str, Any]]:
     """Pure conversion of an already verified native report, without DB writes.
 
     Source verification stays with the caller. The as-of quantity consumer uses
@@ -1456,11 +2190,15 @@ def _trade_fact_rows_from_report(target_date: str, report: dict) -> list[dict[st
     """
     rows = list((report.get("sections") or {}).get("recent_trades") or [])
     projection = (report.get("sections") or {}).get("completed_trade_projection") or []
-    completion_by_id = {str(item.get("id") or ""): item for item in projection
-                        if isinstance(item, dict)}
+    completion_by_id = {
+        str(item.get("id") or ""): item for item in projection if isinstance(item, dict)
+    }
     census = (report.get("meta") or {}).get("completed_census_manifest") or {}
     from src.engine.lifecycle.broker_cost_reconciliation import record_source_projector
-    cost_projector = record_source_projector(census.get('actual_cost_source_generation') or {})
+
+    cost_projector = record_source_projector(
+        census.get("actual_cost_source_generation") or {}
+    )
     facts: list[dict[str, Any]] = []
     for row in rows:
         strategy = normalize_strategy(row.get("strategy"))
@@ -1488,7 +2226,8 @@ def _trade_fact_rows_from_report(target_date: str, report: dict) -> list[dict[st
         )
         main_completion = (
             (target_date >= COMPLETED_CENSUS_CONTRACT_FROM or bool(census))
-            and status == "COMPLETED" and strategy == "SCALPING"
+            and status == "COMPLETED"
+            and strategy == "SCALPING"
         )
         completed_source = completion_by_id.get(str(row.get("id") or ""))
         economics_source_status = "fixed_comparison_cost_model"
@@ -1501,7 +2240,8 @@ def _trade_fact_rows_from_report(target_date: str, report: dict) -> list[dict[st
                 == str(row.get("code") or "")[:6]
                 and normalize_position_tag(
                     strategy, completed_source.get("position_tag")
-                ) == position_tag
+                )
+                == position_tag
                 and completed_source.get("completion_observed_date") == target_date
                 and completed_source.get("terminal_population_scope")
                 == "real_record_bound"
@@ -1515,15 +2255,15 @@ def _trade_fact_rows_from_report(target_date: str, report: dict) -> list[dict[st
                 identity_bound
                 and completed_source.get("strict_completion_status") == "eligible"
                 and completed_source.get("broker_actual_cost_observed") is True
-                and _optional_float(completed_source.get(
-                    "broker_actual_fees_taxes_krw"
-                )) is not None
+                and _optional_float(
+                    completed_source.get("broker_actual_fees_taxes_krw")
+                )
+                is not None
                 and completed_source.get("realized_pnl_krw_source")
                 == "broker_actual_fee_reconciled"
                 and _optional_float(completed_source.get("realized_pnl_krw"))
                 is not None
-                and _optional_float(completed_source.get("profit_rate"))
-                is not None
+                and _optional_float(completed_source.get("profit_rate")) is not None
             )
             decision_bound = bool(
                 identity_bound
@@ -1535,11 +2275,21 @@ def _trade_fact_rows_from_report(target_date: str, report: dict) -> list[dict[st
             actual_cost = bool(actual_cost_basis and decision_bound)
             economics_complete = bool(economics_complete and actual_cost)
             economics_source_status = (
-                "broker_actual_cost_reconciled" if economics_complete else
-                "source_gap_completion_projection_identity" if not identity_bound else
-                "source_gap_broker_actual_cost_missing" if not actual_cost_basis else
-                "source_gap_exit_signal_unbound" if not decision_bound else
-                "source_gap_execution_price_or_clock"
+                "broker_actual_cost_reconciled"
+                if economics_complete
+                else (
+                    "source_gap_completion_projection_identity"
+                    if not identity_bound
+                    else (
+                        "source_gap_broker_actual_cost_missing"
+                        if not actual_cost_basis
+                        else (
+                            "source_gap_exit_signal_unbound"
+                            if not decision_bound
+                            else "source_gap_execution_price_or_clock"
+                        )
+                    )
+                )
             )
         facts.append(
             {
@@ -1547,7 +2297,9 @@ def _trade_fact_rows_from_report(target_date: str, report: dict) -> list[dict[st
                 "rec_date": _parse_date(row.get("rec_date") or target_date),
                 "stock_code": str(row.get("code") or "").strip()[:10],
                 "stock_name": str(row.get("name") or ""),
-                "scanner_expected_promotion_id": _clean_scanner_value(row.get("scanner_promotion_id")),
+                "scanner_expected_promotion_id": _clean_scanner_value(
+                    row.get("scanner_promotion_id")
+                ),
                 "effective_venue": str(row.get("effective_venue") or ""),
                 "market_session_bucket": str(row.get("market_session_bucket") or ""),
                 "strategy": strategy,
@@ -1563,35 +2315,54 @@ def _trade_fact_rows_from_report(target_date: str, report: dict) -> list[dict[st
                 # rather than becoming a misleading flat trade.
                 "profit_rate": (
                     _optional_float(completed_source.get("profit_rate"))
-                    if main_completion and economics_complete else
-                    calculate_net_profit_rate(buy_price, sell_price)
-                    if economics_complete else None
+                    if main_completion and economics_complete
+                    else (
+                        calculate_net_profit_rate(buy_price, sell_price)
+                        if economics_complete
+                        else None
+                    )
                 ),
                 "realized_pnl_krw": (
                     int(round(float(completed_source["realized_pnl_krw"])))
-                    if main_completion and economics_complete else
-                    calculate_net_realized_pnl(buy_price, sell_price, buy_qty)
-                    if economics_complete else None
+                    if main_completion and economics_complete
+                    else (
+                        calculate_net_realized_pnl(buy_price, sell_price, buy_qty)
+                        if economics_complete
+                        else None
+                    )
                 ),
                 "economics_source_status": economics_source_status,
                 "actual_cost_reconciliation_status": (
-                    (completed_source.get("actual_cost_reconciliation") or {}).get("status", "cost_source_unavailable")
-                    if main_completion and identity_bound else None
+                    (completed_source.get("actual_cost_reconciliation") or {}).get(
+                        "status", "cost_source_unavailable"
+                    )
+                    if main_completion and identity_bound
+                    else None
                 ),
-                "actual_cost_source_generation": (cost_projector(str(row.get('id') or ''),
-                    (completed_source or {}).get('quantity_research_cost'))
-                    if main_completion and census.get('actual_cost_source_generation') is not None else None),
-                "completion_census_run_id": census.get("run_id") if main_completion else None,
+                "actual_cost_source_generation": (
+                    cost_projector(
+                        str(row.get("id") or ""),
+                        (completed_source or {}).get("quantity_research_cost"),
+                    )
+                    if main_completion
+                    and census.get("actual_cost_source_generation") is not None
+                    else None
+                ),
+                "completion_census_run_id": (
+                    census.get("run_id") if main_completion else None
+                ),
                 "completion_census_projection_sha256": (
                     census.get("projection_sha256") if main_completion else None
                 ),
                 "configured_fee_estimate_krw": (
                     completed_source.get("configured_fee_estimate_krw")
-                    if main_completion and identity_bound else None
+                    if main_completion and identity_bound
+                    else None
                 ),
                 "broker_actual_fees_taxes_krw": (
                     completed_source.get("broker_actual_fees_taxes_krw")
-                    if main_completion and identity_bound else None
+                    if main_completion and identity_bound
+                    else None
                 ),
                 "holding_seconds": _safe_int(row.get("holding_seconds"), default=0)
                 or None,
@@ -2091,10 +2862,12 @@ def _build_report_payload(
 
 def _trade_fact_db_payload(fact: dict[str, Any]) -> dict[str, Any]:
     allowed = {column.name for column in TradePerformanceFact.__table__.columns}
-    payload={key: value for key, value in fact.items() if key in allowed}
-    generation=payload.get('actual_cost_source_generation')
-    if isinstance(generation,dict):
-        payload['actual_cost_source_generation']=json.dumps(generation,sort_keys=True,separators=(',',':'),allow_nan=False)
+    payload = {key: value for key, value in fact.items() if key in allowed}
+    generation = payload.get("actual_cost_source_generation")
+    if isinstance(generation, dict):
+        payload["actual_cost_source_generation"] = json.dumps(
+            generation, sort_keys=True, separators=(",", ":"), allow_nan=False
+        )
     return payload
 
 
@@ -2106,12 +2879,18 @@ def _summary_db_payload(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def _validate_fact_batch(
-    facts: list[dict[str, Any]], warnings: list[str], target_date: str,
-    *, scanner_source_quality: dict[str, Any] | None = None,
+    facts: list[dict[str, Any]],
+    warnings: list[str],
+    target_date: str,
+    *,
+    scanner_source_quality: dict[str, Any] | None = None,
 ) -> list[str]:
     issues = [f"source_warning:{warning}" for warning in warnings]
-    if (target_date >= _SCANNER_ARCHIVE_CONTRACT_FROM and scanner_source_quality
-            and scanner_source_quality.get("scanner_unmatched_fact_count", 0) > 0):
+    if (
+        target_date >= _SCANNER_ARCHIVE_CONTRACT_FROM
+        and scanner_source_quality
+        and scanner_source_quality.get("scanner_unmatched_fact_count", 0) > 0
+    ):
         issues.append(
             f"scanner_lineage_unmatched:{scanner_source_quality['scanner_unmatched_fact_count']}"
         )
@@ -2158,17 +2937,31 @@ def _sync_status_payload(
         "completed_count": len(completed),
         "economics_valid_completed_count": len(economics_valid),
         "economics_missing_completed_count": len(completed) - len(economics_valid),
-        "completed_source_quality_counts": dict(Counter(
-            str(fact.get("economics_source_status") or "unobserved")
-            for fact in completed
-        )),
-        "actual_cost_status_counts": dict(Counter(
-            str(fact.get("actual_cost_reconciliation_status") or "unassessed")
-            for fact in completed
-        )),
-        "actual_cost_source_generation": (completion_census_quality or {}).get("actual_cost_source_generation"),
-        **({'completion_snapshot_source': completion_census_quality['completion_snapshot_source']}
-           if completion_census_quality and completion_census_quality.get('completion_snapshot_source') else {}),
+        "completed_source_quality_counts": dict(
+            Counter(
+                str(fact.get("economics_source_status") or "unobserved")
+                for fact in completed
+            )
+        ),
+        "actual_cost_status_counts": dict(
+            Counter(
+                str(fact.get("actual_cost_reconciliation_status") or "unassessed")
+                for fact in completed
+            )
+        ),
+        "actual_cost_source_generation": (completion_census_quality or {}).get(
+            "actual_cost_source_generation"
+        ),
+        **(
+            {
+                "completion_snapshot_source": completion_census_quality[
+                    "completion_snapshot_source"
+                ]
+            }
+            if completion_census_quality
+            and completion_census_quality.get("completion_snapshot_source")
+            else {}
+        ),
         "completed_census_run_ids": (
             [str(completion_census_quality["run_id"])]
             if completion_census_quality and completion_census_quality.get("run_id")
@@ -2177,18 +2970,30 @@ def _sync_status_payload(
         "completed_census_projection_sha256": (
             [str(completion_census_quality["projection_sha256"])]
             if completion_census_quality
-            and completion_census_quality.get("projection_sha256") else []
+            and completion_census_quality.get("projection_sha256")
+            else []
         ),
         "completed_census_source_status": (
             completion_census_quality.get("source_receipts_status")
-            if completion_census_quality else "unobserved"
+            if completion_census_quality
+            else "unobserved"
         ),
-        "completed_census_counts": ({
-            key: completion_census_quality.get(key)
-            for key in ("raw_terminal_count", "raw_completion_event_count",
-                        "projected_count", "valid_profit_count", "strict_count",
-                        "excluded_count", "unobserved_count")
-        } if completion_census_quality else {}),
+        "completed_census_counts": (
+            {
+                key: completion_census_quality.get(key)
+                for key in (
+                    "raw_terminal_count",
+                    "raw_completion_event_count",
+                    "projected_count",
+                    "valid_profit_count",
+                    "strict_count",
+                    "excluded_count",
+                    "unobserved_count",
+                )
+            }
+            if completion_census_quality
+            else {}
+        ),
         "prior_fact_count": prior_fact_count,
         "warning_count": len(warnings),
         "warnings": warnings,
@@ -2198,12 +3003,21 @@ def _sync_status_payload(
     }
 
 
-def sync_trade_performance_for_date(target_date: str, *, completion_snapshot: Path | None = None) -> dict[str, Any]:
+def sync_trade_performance_for_date(
+    target_date: str, *, completion_snapshot: Path | None = None
+) -> dict[str, Any]:
     _DB.init_db()
-    from src.engine.scalping.scale_in_split_order_plan import _query_actual_fill_inventory
+    from src.engine.scalping.scale_in_split_order_plan import (
+        _query_actual_fill_inventory,
+    )
+
     inventory = _query_actual_fill_inventory(target_date)
-    projection = {"contract": "scale_in_execution_projection_v1", "target_date": target_date,
-                  "record_ids": sorted({row["record_id"] for row in inventory}), "rows": []}
+    projection = {
+        "contract": "scale_in_execution_projection_v1",
+        "target_date": target_date,
+        "record_ids": sorted({row["record_id"] for row in inventory}),
+        "rows": [],
+    }
     scanner_source_quality: dict[str, Any] = {}
     completion_census_quality: dict[str, Any] = {}
     rec_date = _parse_date(target_date)
@@ -2220,14 +3034,21 @@ def sync_trade_performance_for_date(target_date: str, *, completion_snapshot: Pa
             scale_in_projection=projection if inventory else None,
             scanner_source_quality=scanner_source_quality,
             completion_census_quality=completion_census_quality,
-            **({'completion_snapshot': completion_snapshot} if completion_snapshot is not None else {}),
+            **(
+                {"completion_snapshot": completion_snapshot}
+                if completion_snapshot is not None
+                else {}
+            ),
         )
     except FactSyncSourceError as exc:
         receipt = _write_status(
             target_date,
             _sync_status_payload(
-                status="source_blocked", facts=[], warnings=[],
-                issues=[str(exc)], prior_fact_count=prior_fact_count,
+                status="source_blocked",
+                facts=[],
+                warnings=[],
+                issues=[str(exc)],
+                prior_fact_count=prior_fact_count,
                 source_digest=_canonical_sha256([]),
                 scanner_source_quality=scanner_source_quality,
                 completion_census_quality=completion_census_quality,
@@ -2238,10 +3059,15 @@ def sync_trade_performance_for_date(target_date: str, *, completion_snapshot: Pa
         ) from exc
     source_digest = _canonical_sha256(facts)
     issues = _validate_fact_batch(
-        facts, warnings, target_date, scanner_source_quality=scanner_source_quality,
+        facts,
+        warnings,
+        target_date,
+        scanner_source_quality=scanner_source_quality,
     )
-    if completion_snapshot is not None and not _completion_source_guard_valid(target_date, completion_census_quality):
-        issues.append('completion_snapshot_changed_before_fact_write')
+    if completion_snapshot is not None and not _completion_source_guard_valid(
+        target_date, completion_census_quality
+    ):
+        issues.append("completion_snapshot_changed_before_fact_write")
     if issues:
         receipt = _write_status(
             target_date,
@@ -2262,15 +3088,29 @@ def sync_trade_performance_for_date(target_date: str, *, completion_snapshot: Pa
 
     summary_rows = _aggregate_daily_rows(facts)
     sync_status = "succeeded" if facts else "valid_empty"
+
     def require_current_completion_source():
-        if completion_snapshot is None or _completion_source_guard_valid(target_date, completion_census_quality):
+        if completion_snapshot is None or _completion_source_guard_valid(
+            target_date, completion_census_quality
+        ):
             return
-        receipt = _write_status(target_date, _sync_status_payload(
-            status='source_blocked', facts=facts, warnings=warnings,
-            issues=['completion_snapshot_changed_during_fact_write'], prior_fact_count=prior_fact_count,
-            source_digest=source_digest, scanner_source_quality=scanner_source_quality,
-            completion_census_quality=completion_census_quality))
-        raise FactSyncSourceError('strategy_position_fact_sync_source_blocked:' + receipt['artifact_sha256'])
+        receipt = _write_status(
+            target_date,
+            _sync_status_payload(
+                status="source_blocked",
+                facts=facts,
+                warnings=warnings,
+                issues=["completion_snapshot_changed_during_fact_write"],
+                prior_fact_count=prior_fact_count,
+                source_digest=source_digest,
+                scanner_source_quality=scanner_source_quality,
+                completion_census_quality=completion_census_quality,
+            ),
+        )
+        raise FactSyncSourceError(
+            "strategy_position_fact_sync_source_blocked:" + receipt["artifact_sha256"]
+        )
+
     with _DB.get_session() as session:
         require_current_completion_source()
         session.execute(
@@ -2304,32 +3144,48 @@ def sync_trade_performance_for_date(target_date: str, *, completion_snapshot: Pa
             )
 
         # Reconcile persisted NULLs and lineage before this transaction commits.
-        saved = {row.recommendation_id:row for row in session.query(TradePerformanceFact).filter(TradePerformanceFact.rec_date == rec_date)}
+        saved = {
+            row.recommendation_id: row
+            for row in session.query(TradePerformanceFact).filter(
+                TradePerformanceFact.rec_date == rec_date
+            )
+        }
         if set(saved) != {fact["recommendation_id"] for fact in facts}:
             raise FactSyncSourceError("fact_persisted_census_mismatch")
         for fact in facts:
             row = saved[fact["recommendation_id"]]
-            for key in ("profit_rate", "realized_pnl_krw", "economics_source_status",
-                        "actual_cost_reconciliation_status", "actual_cost_source_generation",
-                        "completion_census_run_id", "completion_census_projection_sha256",
-                        "broker_actual_fees_taxes_krw"):
-                if getattr(row,key) != _trade_fact_db_payload(fact).get(key):
-                    raise FactSyncSourceError("fact_persisted_economics_or_lineage_mismatch:"+key)
+            for key in (
+                "profit_rate",
+                "realized_pnl_krw",
+                "economics_source_status",
+                "actual_cost_reconciliation_status",
+                "actual_cost_source_generation",
+                "completion_census_run_id",
+                "completion_census_projection_sha256",
+                "broker_actual_fees_taxes_krw",
+            ):
+                if getattr(row, key) != _trade_fact_db_payload(fact).get(key):
+                    raise FactSyncSourceError(
+                        "fact_persisted_economics_or_lineage_mismatch:" + key
+                    )
         require_current_completion_source()
 
     _DB.analyze_performance_tables()
     receipt = _write_status(
         target_date,
-        {"scale_in_execution_projection": projection, **_sync_status_payload(
-            status=sync_status,
-            facts=facts,
-            warnings=warnings,
-            issues=[],
-            prior_fact_count=prior_fact_count,
-            source_digest=source_digest,
-            scanner_source_quality=scanner_source_quality,
-            completion_census_quality=completion_census_quality,
-        )},
+        {
+            "scale_in_execution_projection": projection,
+            **_sync_status_payload(
+                status=sync_status,
+                facts=facts,
+                warnings=warnings,
+                issues=[],
+                prior_fact_count=prior_fact_count,
+                source_digest=source_digest,
+                scanner_source_quality=scanner_source_quality,
+                completion_census_quality=completion_census_quality,
+            ),
+        },
     )
 
     return {
@@ -2382,9 +3238,15 @@ def build_strategy_position_performance_report(
                 else:
                     source_snapshot = load_monitor_snapshot("trade_review", target_date)
                     has_new_census = isinstance(
-                        ((source_snapshot or {}).get("meta") or {}).get("completed_census_manifest"), dict)
+                        ((source_snapshot or {}).get("meta") or {}).get(
+                            "completed_census_manifest"
+                        ),
+                        dict,
+                    )
                     if has_new_census:
-                        issue = _saved_fact_generation_issue(target_date, snapshot=source_snapshot)
+                        issue = _saved_fact_generation_issue(
+                            target_date, snapshot=source_snapshot
+                        )
                         if issue:
                             raise FactSyncSourceError(issue)
 
@@ -2527,8 +3389,9 @@ def build_strategy_position_performance_report(
                 if isinstance(exc, FactSyncSourceError)
                 else "db_unavailable_rebuilt_read_only"
             ),
-            "reason": (str(exc) if isinstance(exc, FactSyncSourceError)
-                       else "db_read_failed"),
+            "reason": (
+                str(exc) if isinstance(exc, FactSyncSourceError) else "db_read_failed"
+            ),
             "warning_count": len(_warnings),
         }
         return payload
@@ -2545,8 +3408,9 @@ def main(argv: list[str] | None = None) -> int:
         help="Target date (YYYY-MM-DD)",
     )
     parser.add_argument(
-        '--completion-snapshot', type=Path,
-        help='Consume the exact native postclose snapshot scalar fact projection.',
+        "--completion-snapshot",
+        type=Path,
+        help="Consume the exact native postclose snapshot scalar fact projection.",
     )
     parser.add_argument(
         "--print",
@@ -2556,8 +3420,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
     try:
-        result = sync_trade_performance_for_date(args.target_date,
-            **({'completion_snapshot': args.completion_snapshot} if args.completion_snapshot is not None else {}))
+        result = sync_trade_performance_for_date(
+            args.target_date,
+            **(
+                {"completion_snapshot": args.completion_snapshot}
+                if args.completion_snapshot is not None
+                else {}
+            ),
+        )
     except FactSyncSourceError as exc:
         if args.print_stdout:
             print(json.dumps({"status": "source_blocked", "reason": str(exc)}))

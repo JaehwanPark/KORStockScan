@@ -1610,14 +1610,6 @@ def test_lifecycle_submit_bucket_attribution_buckets_sim_pre_submit_guards():
     }
 
 
-
-
-
-
-
-
-
-
 def test_lifecycle_flow_bucket_fallback_identity_is_not_live_quality():
     rows = [
         {
@@ -1946,10 +1938,6 @@ def test_scalp_sim_panic_exit_rows_preserve_entry_adm_candidate_id(
     )
 
 
-
-
-
-
 def test_institutional_flow_features_do_not_leak_across_source_dates():
     rows = [
         {
@@ -1995,14 +1983,6 @@ def test_institutional_flow_features_do_not_leak_across_source_dates():
     assert set(attribution["by_regime"]) == {"DUAL_ACCUMULATION", "DISTRIBUTION"}
 
 
-
-
-
-
-
-
-
-
 def test_entry_strength_bucket_ignores_buy_pressure_without_aggressor_provenance():
     assert (
         mod._entry_strength_bucket_from_features({"buy_pressure": 90.0})
@@ -2023,10 +2003,6 @@ def test_entry_strength_bucket_ignores_buy_pressure_without_aggressor_provenance
     assert mod._entry_strength_bucket_from_features(
         {"buy_pressure": 90.0, "tick_accel": 1.3}
     ) == ("strong_strength_momentum")
-
-
-
-
 
 
 def test_lifecycle_matrix_backfills_completed_overnight_exit_outcome(
@@ -2225,12 +2201,19 @@ def test_lifecycle_flow_complete_conversion_denominator_counts_complete_flows():
     assert summary["scale_in_noise_flow_count"] == 0
 
 
-def test_retired_current_producer_preserves_prior_and_has_no_authority(tmp_path,monkeypatch):
+def test_retired_current_producer_preserves_prior_and_has_no_authority(
+    tmp_path, monkeypatch
+):
     import importlib
-    current=importlib.import_module('src.engine.lifecycle_decision_matrix')
-    prior=tmp_path/"prior.json";prior.write_text("original")
-    def forbidden(*a,**kw):raise AssertionError("retired producer accessed storage")
-    monkeypatch.setattr(type(prior),"write_text",forbidden)
-    monkeypatch.setattr(type(prior),"read_text",forbidden)
-    result=current.build_lifecycle_decision_matrix_report("2026-10-12")
-    assert result["status"]=="retired" and result["allowed_runtime_apply"] is False
+
+    current = importlib.import_module("src.engine.lifecycle_decision_matrix")
+    prior = tmp_path / "prior.json"
+    prior.write_text("original")
+
+    def forbidden(*a, **kw):
+        raise AssertionError("retired producer accessed storage")
+
+    monkeypatch.setattr(type(prior), "write_text", forbidden)
+    monkeypatch.setattr(type(prior), "read_text", forbidden)
+    result = current.build_lifecycle_decision_matrix_report("2026-10-12")
+    assert result["status"] == "retired" and result["allowed_runtime_apply"] is False

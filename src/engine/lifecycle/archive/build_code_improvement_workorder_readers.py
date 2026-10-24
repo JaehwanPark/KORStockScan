@@ -38,7 +38,6 @@ from src.engine.lifecycle.retirement import (
     retired_status,
 )
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
 
 
@@ -649,9 +648,7 @@ def _intraday_ws_freshness_followup_orders(
         order["forbidden_uses"] = (
             list(forbidden)
             if isinstance(forbidden, list)
-            else [str(forbidden)]
-            if forbidden
-            else []
+            else [str(forbidden)] if forbidden else []
         )
         orders.append(order)
     return orders
@@ -681,11 +678,16 @@ def _scanner_lookup_attention_economic_evidence(
     comparison_status = (
         "measured_no_edge"
         if opportunity_status == "hold_no_edge"
-        else "validated_edge"
-        if opportunity_status in {"validated_edge", "economic_improvement_validated"}
-        else "source_gap"
-        if opportunity_status.startswith("source_")
-        else "pending_maturity"
+        else (
+            "validated_edge"
+            if opportunity_status
+            in {"validated_edge", "economic_improvement_validated"}
+            else (
+                "source_gap"
+                if opportunity_status.startswith("source_")
+                else "pending_maturity"
+            )
+        )
     )
     primary_gaps = [
         str(value) for value in (primary.get("source_gaps") or []) if str(value).strip()
@@ -3656,37 +3658,57 @@ def _observation_source_quality_followup_orders(
                         "producer": (
                             "src/trading/market/quote_consistency.py"
                             if name.startswith("market_data_health")
-                            else "src/engine/scalping/entry_candle_context.py"
-                            if name.startswith("entry_candle_")
-                            else "src/scanners/scanner_source_census.py"
-                            if stage
-                            in {
-                                "scalping_scanner_source_fetch_census",
-                                "scalping_scanner_candidate_pool_census",
-                            }
-                            else "src/scanners/scalping_scanner.py"
-                            if name.startswith("scanner_market_gainer_")
-                            or name.startswith("lookup_attention_")
-                            or stage.startswith("scalping_scanner_")
-                            else "src/engine/scalp_entry_adm_runtime.py"
-                            if name.startswith("entry_adm_")
-                            else "src/engine/scalping/ai_market_snapshot.py"
-                            if name.startswith("ai_input_preflight_")
-                            or name.startswith("ai_market_snapshot_")
-                            else "src/engine/sniper_state_handlers.py"
-                            if stage
-                            in {
-                                "watching_runtime_skip",
-                                "ai_confirmed",
-                                "ai_confirmed_terminal_no_budget",
-                            }
-                            else None
+                            else (
+                                "src/engine/scalping/entry_candle_context.py"
+                                if name.startswith("entry_candle_")
+                                else (
+                                    "src/scanners/scanner_source_census.py"
+                                    if stage
+                                    in {
+                                        "scalping_scanner_source_fetch_census",
+                                        "scalping_scanner_candidate_pool_census",
+                                    }
+                                    else (
+                                        "src/scanners/scalping_scanner.py"
+                                        if name.startswith("scanner_market_gainer_")
+                                        or name.startswith("lookup_attention_")
+                                        or stage.startswith("scalping_scanner_")
+                                        else (
+                                            "src/engine/scalp_entry_adm_runtime.py"
+                                            if name.startswith("entry_adm_")
+                                            else (
+                                                "src/engine/scalping/ai_market_snapshot.py"
+                                                if name.startswith(
+                                                    "ai_input_preflight_"
+                                                )
+                                                or name.startswith(
+                                                    "ai_market_snapshot_"
+                                                )
+                                                else (
+                                                    "src/engine/sniper_state_handlers.py"
+                                                    if stage
+                                                    in {
+                                                        "watching_runtime_skip",
+                                                        "ai_confirmed",
+                                                        "ai_confirmed_terminal_no_budget",
+                                                    }
+                                                    else None
+                                                )
+                                            )
+                                        )
+                                    )
+                                )
+                            )
                         ),
-                        "disposition": "reviewed_not_available_before_broker_execution"
-                        if unavailable
-                        else "implemented_waiting_new_postfix_raw"
-                        if fixed
-                        else "source_gap_requires_exact_producer_context",
+                        "disposition": (
+                            "reviewed_not_available_before_broker_execution"
+                            if unavailable
+                            else (
+                                "implemented_waiting_new_postfix_raw"
+                                if fixed
+                                else "source_gap_requires_exact_producer_context"
+                            )
+                        ),
                         "closure_test": "exact_stage_field_provenance_or_reviewed_unavailable_in_new_natural_source",
                         "runtime_apply": False,
                         "eta": None,

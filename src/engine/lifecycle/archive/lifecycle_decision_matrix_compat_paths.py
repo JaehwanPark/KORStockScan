@@ -18,7 +18,6 @@ from typing import Any, Iterable
 
 from src.utils.constants import DATA_DIR
 
-
 REPORT_DIR = DATA_DIR / "report"
 
 

@@ -27,9 +27,21 @@ def _review_event(index=0):
     }
 
 
-@pytest.mark.parametrize("mutation", ["missing", "duplicate", "rewrite_during_read", "publish_failure", "profile_invalid"])
-def test_closed_producer_reconstruction_preserves_raw_and_originals(tmp_path, monkeypatch, mutation):
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "missing",
+        "duplicate",
+        "rewrite_during_read",
+        "publish_failure",
+        "profile_invalid",
+    ],
+)
+def test_closed_producer_reconstruction_preserves_raw_and_originals(
+    tmp_path, monkeypatch, mutation
+):
     from src.engine import pipeline_event_summary as owner
+
     day = "2026-09-08"
     raw_dir = tmp_path / "pipeline_events"
     raw_dir.mkdir()
@@ -40,7 +52,9 @@ def test_closed_producer_reconstruction_preserves_raw_and_originals(tmp_path, mo
     raw.write_text("".join(json.dumps(row) + "\n" for row in events))
     directory = tmp_path / "pipeline_event_summaries"
     collector = ProducerSummaryCompactor(summary_dir=directory, mode="shadow")
-    collector.submit(events[0]); collector.flush(); collector.close()
+    collector.submit(events[0])
+    collector.flush()
+    collector.close()
     summary, manifest = owner.producer_summary_paths(directory, day)
     if mutation == "profile_invalid":
         manifest.write_text("[]")
@@ -48,17 +62,21 @@ def test_closed_producer_reconstruction_preserves_raw_and_originals(tmp_path, mo
     original_raw = raw.read_bytes()
     if mutation == "rewrite_during_read":
         submit = ProducerSummaryCompactor.submit
+
         def change_source(self, payload, **kwargs):
             result = submit(self, payload, **kwargs)
             raw.write_bytes(original_raw + b" ")
             return result
+
         monkeypatch.setattr(ProducerSummaryCompactor, "submit", change_source)
     if mutation == "publish_failure":
         original_write = owner._write_json
+
         def fail_commit(path, payload):
             if path == manifest:
                 raise OSError("source recovery publication failed")
             return original_write(path, payload)
+
         monkeypatch.setattr(owner, "_write_json", fail_commit)
     if mutation != "missing":
         with pytest.raises((ValueError, OSError)):
@@ -74,73 +92,101 @@ def test_closed_producer_reconstruction_preserves_raw_and_originals(tmp_path, mo
     assert proof["reconstructed_at"]
     assert proof["runtime_effect"] is proof["live_producer_timing_claimed"] is False
     backup = Path(proof["original_backup_directory"])
-    assert ((backup / summary.name).read_bytes(), (backup / manifest.name).read_bytes()) == original
+    assert (
+        (backup / summary.name).read_bytes(),
+        (backup / manifest.name).read_bytes(),
+    ) == original
 
 
-def test_producer_reconstruction_refuses_live_writer_before_mutation(tmp_path, monkeypatch):
+def test_producer_reconstruction_refuses_live_writer_before_mutation(
+    tmp_path, monkeypatch
+):
     from src.engine import pipeline_event_summary as owner
     from src.engine import observation_source_quality_audit as audit
+
     monkeypatch.setattr(audit, "_raw_source_writer_active", lambda *_: True)
     with pytest.raises(ValueError, match="writer_active"):
         owner.rebuild_producer_summary_source(tmp_path, "2026-10-02")
 
 
-@pytest.mark.parametrize('mutation', ['unchanged', 'before_seal', 'during_seal'])
+@pytest.mark.parametrize("mutation", ["unchanged", "before_seal", "during_seal"])
 def test_sealer_binds_the_exact_quarantine_generation_before_publication(
     tmp_path, monkeypatch, mutation
 ):
     from src.engine import pipeline_event_summary as owner
-    day = '2026-09-08'
-    raw = tmp_path / 'pipeline_events' / f'pipeline_events_{day}.jsonl'
+
+    day = "2026-09-08"
+    raw = tmp_path / "pipeline_events" / f"pipeline_events_{day}.jsonl"
     raw.parent.mkdir()
-    event = {**_review_event(1), 'emitted_date': day}
-    raw.write_text(json.dumps(event) + '\n')
-    collector = ProducerSummaryCompactor(summary_dir=tmp_path / 'pipeline_event_summaries', mode='shadow')
+    event = {**_review_event(1), "emitted_date": day}
+    raw.write_text(json.dumps(event) + "\n")
+    collector = ProducerSummaryCompactor(
+        summary_dir=tmp_path / "pipeline_event_summaries", mode="shadow"
+    )
     collector.submit(event)
     collector.flush()
     collector.close()
-    _, manifest = owner.producer_summary_paths(tmp_path / 'pipeline_event_summaries', day)
+    _, manifest = owner.producer_summary_paths(
+        tmp_path / "pipeline_event_summaries", day
+    )
     original = manifest.read_bytes()
-    expected = {'path': str(raw), 'stamp': owner._part_snapshot_stamp(raw)}
-    if mutation == 'before_seal':
-        raw.write_bytes(raw.read_bytes() + b' ')
-    elif mutation == 'during_seal':
+    expected = {"path": str(raw), "stamp": owner._part_snapshot_stamp(raw)}
+    if mutation == "before_seal":
+        raw.write_bytes(raw.read_bytes() + b" ")
+    elif mutation == "during_seal":
         digest = owner._logical_body_digest
+
         def changed_after_raw_read(path):
             result = digest(path)
-            raw.write_bytes(raw.read_bytes() + b' ')
+            raw.write_bytes(raw.read_bytes() + b" ")
             return result
-        monkeypatch.setattr(owner, '_logical_body_digest', changed_after_raw_read)
-    if mutation == 'unchanged':
-        sealed = owner.seal_producer_summary_source(tmp_path, day, expected_raw_generation=expected)
-        assert sealed['raw_source_ledger']['valid_count'] == 1
+
+        monkeypatch.setattr(owner, "_logical_body_digest", changed_after_raw_read)
+    if mutation == "unchanged":
+        sealed = owner.seal_producer_summary_source(
+            tmp_path, day, expected_raw_generation=expected
+        )
+        assert sealed["raw_source_ledger"]["valid_count"] == 1
         assert owner.producer_source_ledger_issues(tmp_path, day) == []
     else:
-        with pytest.raises(ValueError, match='producer_raw_expected_generation_changed'):
-            owner.seal_producer_summary_source(tmp_path, day, expected_raw_generation=expected)
+        with pytest.raises(
+            ValueError, match="producer_raw_expected_generation_changed"
+        ):
+            owner.seal_producer_summary_source(
+                tmp_path, day, expected_raw_generation=expected
+            )
         assert manifest.read_bytes() == original
 
 
-def test_reconstruction_uses_pinned_quarantine_without_adopting_later_source(tmp_path, monkeypatch):
+def test_reconstruction_uses_pinned_quarantine_without_adopting_later_source(
+    tmp_path, monkeypatch
+):
     from src.engine import pipeline_event_summary as owner
     from src.engine import observation_source_quality_audit as audit
-    day = '2026-09-08'
-    raw = tmp_path / 'pipeline_events' / f'pipeline_events_{day}.jsonl'
+
+    day = "2026-09-08"
+    raw = tmp_path / "pipeline_events" / f"pipeline_events_{day}.jsonl"
     raw.parent.mkdir()
-    events = [{**_review_event(i), 'emitted_date': day} for i in [1, 2]]
-    raw.write_text(''.join(json.dumps(event) + '\n' for event in events))
-    collector = ProducerSummaryCompactor(summary_dir=tmp_path / 'pipeline_event_summaries', mode='shadow')
+    events = [{**_review_event(i), "emitted_date": day} for i in [1, 2]]
+    raw.write_text("".join(json.dumps(event) + "\n" for event in events))
+    collector = ProducerSummaryCompactor(
+        summary_dir=tmp_path / "pipeline_event_summaries", mode="shadow"
+    )
     collector.submit(events[0])
     collector.flush()
     collector.close()
-    monkeypatch.setattr(audit, '_raw_source_writer_active', lambda *_: True)
-    expected = {'path': str(raw), 'stamp': owner._part_snapshot_stamp(raw)}
-    recovered = owner.rebuild_producer_summary_source(tmp_path, day, expected_raw_generation=expected)
-    assert recovered['summary_event_count'] == 2
+    monkeypatch.setattr(audit, "_raw_source_writer_active", lambda *_: True)
+    expected = {"path": str(raw), "stamp": owner._part_snapshot_stamp(raw)}
+    recovered = owner.rebuild_producer_summary_source(
+        tmp_path, day, expected_raw_generation=expected
+    )
+    assert recovered["summary_event_count"] == 2
     assert owner.producer_source_ledger_issues(tmp_path, day) == []
-    raw.write_bytes(raw.read_bytes() + b' ')
-    with pytest.raises(ValueError, match='producer_raw_expected_generation_changed'):
-        owner.rebuild_producer_summary_source(tmp_path, day, expected_raw_generation=expected)
+    raw.write_bytes(raw.read_bytes() + b" ")
+    with pytest.raises(ValueError, match="producer_raw_expected_generation_changed"):
+        owner.rebuild_producer_summary_source(
+            tmp_path, day, expected_raw_generation=expected
+        )
 
 
 def test_producer_source_ledger_binds_raw_summary_and_rejects_drift(tmp_path):
@@ -165,9 +211,12 @@ def test_producer_source_ledger_binds_raw_summary_and_rejects_drift(tmp_path):
     manifest = seal_producer_summary_source(tmp_path, day)
     ledger = manifest["raw_source_ledger"]
     from src.engine import pipeline_event_verbosity_report as verbosity
+
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(verbosity, "_summary_dir", lambda: summary_dir)
-        assert verbosity._producer_timing(manifest, day)["status"] != "missing_or_unbound"
+        assert (
+            verbosity._producer_timing(manifest, day)["status"] != "missing_or_unbound"
+        )
     assert ledger["logical_sha256"] == hashlib.sha256(raw.read_bytes()).hexdigest()
     assert ledger["parts"][0]["logical_end_offset"] == len(raw.read_bytes())
     assert ledger["raw_count"] == 2
@@ -202,9 +251,12 @@ def test_producer_source_ledger_archive_late_and_source_quality(tmp_path):
     event["emitted_date"] = day
     raw.write_text(json.dumps(event) + "\n" + "{broken}\n")
     late = raw_dir / f"pipeline_events_{day}.late.jsonl"
-    next_day = {**_review_event(2), "emitted_at": "2026-09-09T00:00:01",
-                "emitted_date": "2026-09-09",
-                "storage_partition_date": day}
+    next_day = {
+        **_review_event(2),
+        "emitted_at": "2026-09-09T00:00:01",
+        "emitted_date": "2026-09-09",
+        "storage_partition_date": day,
+    }
     late.write_text(json.dumps(next_day) + "\n")
     summary_dir = tmp_path / "pipeline_event_summaries"
     compactor = ProducerSummaryCompactor(summary_dir=summary_dir, mode="shadow")
@@ -213,21 +265,35 @@ def test_producer_source_ledger_archive_late_and_source_quality(tmp_path):
 
     manifest = seal_producer_summary_source(tmp_path, day)
     ledger = manifest["raw_source_ledger"]
-    assert (ledger["raw_count"], ledger["valid_count"], ledger["excluded_count"],
-            ledger["quarantined_count"], ledger["unobserved_count"]) == (3, 1, 0, 1, 1)
+    assert (
+        ledger["raw_count"],
+        ledger["valid_count"],
+        ledger["excluded_count"],
+        ledger["quarantined_count"],
+        ledger["unobserved_count"],
+    ) == (3, 1, 0, 1, 1)
     with gzip.open(str(raw) + ".gz", "wb") as stream:
         stream.write(raw.read_bytes())
     assert producer_source_ledger_issues(tmp_path, day) == []
     raw.unlink()
     assert producer_source_ledger_issues(tmp_path, day) == []
     assert seal_producer_summary_source(tmp_path, day) == manifest
-    assert json.loads((summary_dir / f"pipeline_event_producer_summary_manifest_{day}.json").read_text()) == manifest
+    assert (
+        json.loads(
+            (
+                summary_dir / f"pipeline_event_producer_summary_manifest_{day}.json"
+            ).read_text()
+        )
+        == manifest
+    )
     with gzip.open(str(raw) + ".gz", "wb") as stream:
         stream.write(b"different\n")
     assert producer_source_ledger_issues(tmp_path, day)
 
 
-@pytest.mark.parametrize("mutation", ["duplicate", "wrong_date", "plain_gzip_conflict", "off"])
+@pytest.mark.parametrize(
+    "mutation", ["duplicate", "wrong_date", "plain_gzip_conflict", "off"]
+)
 def test_producer_source_ledger_rejects_ambiguous_raw(tmp_path, mutation):
     from src.engine.pipeline_event_summary import seal_producer_summary_source
 
@@ -249,7 +315,9 @@ def test_producer_source_ledger_rejects_ambiguous_raw(tmp_path, mutation):
         with gzip.open(str(raw) + ".gz", "wb") as stream:
             stream.write(b"different\n")
     else:
-        manifest_path = summary_dir / f"pipeline_event_producer_summary_manifest_{day}.json"
+        manifest_path = (
+            summary_dir / f"pipeline_event_producer_summary_manifest_{day}.json"
+        )
         manifest = json.loads(manifest_path.read_text())
         manifest["mode"] = "off"
         manifest_path.write_text(json.dumps(manifest))
@@ -278,8 +346,10 @@ def test_producer_source_ledger_requires_explicit_empty_and_missing_is_gap(tmp_p
 
 def test_non_profile_duplicate_is_isolated_without_blocking_summary(tmp_path):
     from src.engine.pipeline_event_summary import (
-        PRODUCER_PARITY_DETAIL_LEVEL, PRODUCER_SUMMARY_SCHEMA_VERSION,
-        PRODUCER_SUMMARY_STAGES, seal_producer_summary_source,
+        PRODUCER_PARITY_DETAIL_LEVEL,
+        PRODUCER_SUMMARY_SCHEMA_VERSION,
+        PRODUCER_SUMMARY_STAGES,
+        seal_producer_summary_source,
     )
 
     day = "2026-09-08"
@@ -291,12 +361,19 @@ def test_non_profile_duplicate_is_isolated_without_blocking_summary(tmp_path):
     summary_dir.mkdir()
     summary_path = summary_dir / f"pipeline_event_producer_summary_{day}.jsonl"
     (summary_dir / f"pipeline_event_producer_summary_manifest_{day}.json").write_text(
-        json.dumps({"schema_version": PRODUCER_SUMMARY_SCHEMA_VERSION,
-                    "summary_path": str(summary_path), "summary_row_count": 0,
-                    "summary_event_count": 0, "mode": "shadow",
-                    "summary_detail_level": PRODUCER_PARITY_DETAIL_LEVEL,
-                    "summary_stages": sorted(PRODUCER_SUMMARY_STAGES),
-                    "raw_suppression_enabled": False}))
+        json.dumps(
+            {
+                "schema_version": PRODUCER_SUMMARY_SCHEMA_VERSION,
+                "summary_path": str(summary_path),
+                "summary_row_count": 0,
+                "summary_event_count": 0,
+                "mode": "shadow",
+                "summary_detail_level": PRODUCER_PARITY_DETAIL_LEVEL,
+                "summary_stages": sorted(PRODUCER_SUMMARY_STAGES),
+                "raw_suppression_enabled": False,
+            }
+        )
+    )
     manifest = seal_producer_summary_source(tmp_path, day, explicit_valid_empty=False)
     ledger = manifest["raw_source_ledger"]
     assert ledger["valid_count"] == 0
@@ -888,7 +965,10 @@ def test_producer_summary_flushes_previous_date_before_new_date_event(tmp_path):
 
 def test_uncommitted_producer_suffix_is_explicit_and_never_double_counted(tmp_path):
     from src.engine import pipeline_event_summary as mod
-    compactor = ProducerSummaryCompactor(summary_dir=tmp_path, mode="shadow", flush_sec=3600)
+
+    compactor = ProducerSummaryCompactor(
+        summary_dir=tmp_path, mode="shadow", flush_sec=3600
+    )
     compactor.submit(_review_event(1))
     compactor.flush()
     path, manifest = mod.producer_summary_paths(tmp_path, "2026-09-08")
@@ -907,24 +987,32 @@ def test_uncommitted_producer_suffix_is_explicit_and_never_double_counted(tmp_pa
 def test_failed_rebuild_preserves_previous_generation(tmp_path, monkeypatch):
     from pathlib import Path
     from src.engine import pipeline_event_summary as mod
+
     day = "2026-09-08"
     raw = tmp_path / "raw.jsonl"
     raw.write_text(json.dumps(_review_event(1)) + "\n")
-    options = dict(raw_path=raw, summary_dir=tmp_path / "summaries", target_date=day,
-                   reason_labeler=mod.default_reason_label, summary_stages=mod.PRODUCER_SUMMARY_STAGES,
-                   summary_profile="producer_parity")
+    options = dict(
+        raw_path=raw,
+        summary_dir=tmp_path / "summaries",
+        target_date=day,
+        reason_labeler=mod.default_reason_label,
+        summary_stages=mod.PRODUCER_SUMMARY_STAGES,
+        summary_profile="producer_parity",
+    )
     _, meta = mod.update_and_load_pipeline_event_summaries(**options)
     summary = Path(meta["summary_path"])
     previous = summary.read_bytes()
     raw.write_text(json.dumps(_review_event(2)) + "\n")
     original = mod._write_json
     attempts = 0
+
     def fail_once(path, payload):
         nonlocal attempts
         attempts += 1
         if attempts == 1:
             raise OSError("manifest commit failed")
         original(path, payload)
+
     with monkeypatch.context() as patch:
         patch.setattr(mod, "_write_json", fail_once)
         with pytest.raises(OSError, match="commit failed"):
@@ -936,24 +1024,41 @@ def test_failed_rebuild_preserves_previous_generation(tmp_path, monkeypatch):
     assert summary.read_bytes() != previous
 
 
-def test_public_slim_summary_reuses_existing_projection_and_rechecks_changes(tmp_path, monkeypatch):
+def test_public_slim_summary_reuses_existing_projection_and_rechecks_changes(
+    tmp_path, monkeypatch
+):
     import gzip
     from src.engine import pipeline_event_summary as owner
-    path = tmp_path / 'summary.jsonl.gz'
-    row = {'event_count': 1, 'bucket_start': '2026-10-19T09:00:00+09:00', 'bucket_end': '2026-10-19T09:01:00+09:00', 'stage': 'decision', 'samples': [{'secret': 'large sample'}]}
-    path.write_bytes(gzip.compress((json.dumps(row) + '\n').encode()))
+
+    path = tmp_path / "summary.jsonl.gz"
+    row = {
+        "event_count": 1,
+        "bucket_start": "2026-10-19T09:00:00+09:00",
+        "bucket_end": "2026-10-19T09:01:00+09:00",
+        "stage": "decision",
+        "samples": [{"secret": "large sample"}],
+    }
+    path.write_bytes(gzip.compress((json.dumps(row) + "\n").encode()))
     native = owner.open_text_auto
     reads = []
+
     def counted(*args, **kwargs):
         reads.append(1)
         return native(*args, **kwargs)
-    monkeypatch.setattr(owner, 'open_text_auto', counted)
+
+    monkeypatch.setattr(owner, "open_text_auto", counted)
     first = owner.load_summary_rows(path, include_samples=False, strict=True)
     assert owner.load_summary_rows(path, include_samples=False, strict=True) == first
     assert len(reads) == 1
-    row['event_count'] = 2
-    path.write_bytes(gzip.compress((json.dumps(row) + '\n').encode()))
-    assert owner.load_summary_rows(path, include_samples=False, strict=True)[0]['event_count'] == 2
+    row["event_count"] = 2
+    path.write_bytes(gzip.compress((json.dumps(row) + "\n").encode()))
+    assert (
+        owner.load_summary_rows(path, include_samples=False, strict=True)[0][
+            "event_count"
+        ]
+        == 2
+    )
     assert len(reads) == 2
-    path.write_bytes(gzip.compress(b'invalid\n'))
-    with pytest.raises(ValueError):owner.load_summary_rows(path, include_samples=False, strict=True)
+    path.write_bytes(gzip.compress(b"invalid\n"))
+    with pytest.raises(ValueError):
+        owner.load_summary_rows(path, include_samples=False, strict=True)

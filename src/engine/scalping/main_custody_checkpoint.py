@@ -38,8 +38,10 @@ def enqueue(snapshot, *, query_generation):
     # Account snapshots own set-valued coverage facts. Normalize before the
     # bounded JSON queue; doing this only in publish is too late to admit it.
     # Keep all members (including unresolved order codes) and caller ownership.
-    frozen = {k: sorted(v) if isinstance(v, set) else copy.deepcopy(v)
-              for k, v in snapshot.items()}
+    frozen = {
+        k: sorted(v) if isinstance(v, set) else copy.deepcopy(v)
+        for k, v in snapshot.items()
+    }
     answer = _SOURCE_SINK(
         publish_observation,
         frozen,
@@ -56,10 +58,16 @@ def enqueue(snapshot, *, query_generation):
 def publish_observation(snapshot, *, query_generation):
     """Confirm the durable writer result without altering the hashed document."""
     import os
+
     result = publish(snapshot, query_generation=query_generation)
-    return dict(structured_append_succeeded=True, artifact_sha256=result['sha256'],
-        source_date=result['source_date'], producer_pid=os.getpid(),
-        source_status=result['status'], runtime_effect=False)
+    return dict(
+        structured_append_succeeded=True,
+        artifact_sha256=result["sha256"],
+        source_date=result["source_date"],
+        producer_pid=os.getpid(),
+        source_status=result["status"],
+        runtime_effect=False,
+    )
 
 
 def digest(value):
@@ -215,31 +223,48 @@ def view(checkpoint, registry, by_date, *, day, current_generation, assessed_at=
                 try:
                     observed = datetime.fromisoformat(event["observed_at_kst"])
                     if observed.tzinfo is not None:
-                        terminal_clocks.setdefault(identity, []).append(observed.timestamp())
+                        terminal_clocks.setdefault(identity, []).append(
+                            observed.timestamp()
+                        )
                 except (KeyError, TypeError, ValueError):
                     pass
         for identity, row in state.items():
             terminal_times = terminal_clocks.get(identity, [])
-            if (row.get("account_key") == c["account_key"]
-                    and row.get("owner_type") == "main_scalping"
-                    and row.get("side") == "BUY" and row.get("action") == "NEW"
-                    and row.get("order_date") == c["source_date"]
-                    and row.get("state") == "ORDER_TERMINAL"
-                    and terminal_times and max(terminal_times) <= at
-                    and identity in bound
-                    and row.get("broker_order_no")
-                    and str(row.get("owner_id") or "").startswith("main_scalping:")):
-                prior_terminal_ids.add(digest(["order", c["source_date"],
-                    row["owner_id"].removeprefix("main_scalping:"), c["account_key"],
-                    str(row["broker_order_no"])]))
+            if (
+                row.get("account_key") == c["account_key"]
+                and row.get("owner_type") == "main_scalping"
+                and row.get("side") == "BUY"
+                and row.get("action") == "NEW"
+                and row.get("order_date") == c["source_date"]
+                and row.get("state") == "ORDER_TERMINAL"
+                and terminal_times
+                and max(terminal_times) <= at
+                and identity in bound
+                and row.get("broker_order_no")
+                and str(row.get("owner_id") or "").startswith("main_scalping:")
+            ):
+                prior_terminal_ids.add(
+                    digest(
+                        [
+                            "order",
+                            c["source_date"],
+                            row["owner_id"].removeprefix("main_scalping:"),
+                            c["account_key"],
+                            str(row["broker_order_no"]),
+                        ]
+                    )
+                )
         superseded = 0
         for source_day, coverage in by_date.items():
             if not c["source_date"] <= source_day <= day:
                 continue
             unknown = set(coverage.get("unclassified_identities") or [])
-            if (not coverage.get("coverage_verified")
-                    or (unknown and (source_day != c["source_date"]
-                                     or not unknown <= prior_terminal_ids))):
+            if not coverage.get("coverage_verified") or (
+                unknown
+                and (
+                    source_day != c["source_date"] or not unknown <= prior_terminal_ids
+                )
+            ):
                 raise ValueError("since_checkpoint_dispatch_continuity_missing")
             superseded += len(unknown)
         if superseded:

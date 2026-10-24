@@ -5133,59 +5133,82 @@ def test_clean_baseline_rolling_latency_candidates_separates_venue_and_gaps(
     assert window["source_dates"] == ["2026-08-12", "2026-08-13"]
 
 
-def test_report_replay_preserves_all_results_and_reads_source_once(tmp_path, monkeypatch):
+def test_report_replay_preserves_all_results_and_reads_source_once(
+    tmp_path, monkeypatch
+):
     from pathlib import Path
-    path = tmp_path / 'pipeline.jsonl'
+
+    path = tmp_path / "pipeline.jsonl"
     rows = [
-        _event(1, '000001', 'sample', 'rising_missed_one_share_entry', {
-            'rising_missed_tp1_selector_active': True,
-            'rising_missed_tp1_candidate_allowed': True,
-            'current_price_observed': 10000,
-            'nested_unknown': {'text': '한글', 'values': [1, None, False]},
-        }),
-        _event(1, '000001', 'sample', 'holding_observation', {
-            'profit_rate': 1.5, 'avg_down_count': 2, 'current_price_observed': 10150,
-        }, emitted_at='2026-07-02T09:02:00', pipeline='HOLDING_PIPELINE'),
-        _event(2, '000002', 'watermark', 'other', emitted_at='2026-07-02T10:00:00'),
+        _event(
+            1,
+            "000001",
+            "sample",
+            "rising_missed_one_share_entry",
+            {
+                "rising_missed_tp1_selector_active": True,
+                "rising_missed_tp1_candidate_allowed": True,
+                "current_price_observed": 10000,
+                "nested_unknown": {"text": "한글", "values": [1, None, False]},
+            },
+        ),
+        _event(
+            1,
+            "000001",
+            "sample",
+            "holding_observation",
+            {
+                "profit_rate": 1.5,
+                "avg_down_count": 2,
+                "current_price_observed": 10150,
+            },
+            emitted_at="2026-07-02T09:02:00",
+            pipeline="HOLDING_PIPELINE",
+        ),
+        _event(2, "000002", "watermark", "other", emitted_at="2026-07-02T10:00:00"),
     ]
-    path.write_text('\n'.join(json.dumps(r) for r in rows) + '\ninvalid\n[]\n')
-    kwargs = dict(pipeline_path=path, generated_at='2026-07-02T10:01:00+09:00')
-    reference = mod._build_report('2026-07-02', **kwargs)
+    path.write_text("\n".join(json.dumps(r) for r in rows) + "\ninvalid\n[]\n")
+    kwargs = dict(pipeline_path=path, generated_at="2026-07-02T10:01:00+09:00")
+    reference = mod._build_report("2026-07-02", **kwargs)
     original = Path.open
     reads = []
+
     def tracked(self, *args, **kw):
         if self == path:
             reads.append(args)
         return original(self, *args, **kw)
-    monkeypatch.setattr(Path, 'open', tracked)
-    report = mod.build_report('2026-07-02', **kwargs)
-    receipt = report.pop('source_snapshot')
+
+    monkeypatch.setattr(Path, "open", tracked)
+    report = mod.build_report("2026-07-02", **kwargs)
+    receipt = report.pop("source_snapshot")
     assert report == reference
     assert len(reads) == 1
-    assert receipt['row_count'] == len(rows)
-    assert receipt['decoded_source_bytes'] == path.stat().st_size
+    assert receipt["row_count"] == len(rows)
+    assert receipt["decoded_source_bytes"] == path.stat().st_size
     with mod._pipeline_replay(path) as replay:
         first = list(replay)
         assert first == rows
-        first[0]['fields']['nested_unknown']['values'].append('mutated')
+        first[0]["fields"]["nested_unknown"]["values"].append("mutated")
         assert list(replay) == rows
 
 
 def test_replay_freezes_prefix_and_next_run_sees_append(tmp_path, monkeypatch):
-    path = tmp_path / 'events.jsonl'
-    first = {'fields': {'x': 1}}
-    next_row = {'fields': {'x': 2}}
-    path.write_text(json.dumps(first) + '\n')
+    path = tmp_path / "events.jsonl"
+    first = {"fields": {"x": 1}}
+    next_row = {"fields": {"x": 2}}
+    path.write_text(json.dumps(first) + "\n")
     dump = mod.pickle.dump
     appended = False
+
     def append_during_capture(*args, **kwargs):
         nonlocal appended
         if not appended:
-            with path.open('a') as handle:
-                handle.write(json.dumps(next_row) + '\n')
+            with path.open("a") as handle:
+                handle.write(json.dumps(next_row) + "\n")
             appended = True
         return dump(*args, **kwargs)
-    monkeypatch.setattr(mod.pickle, 'dump', append_during_capture)
+
+    monkeypatch.setattr(mod.pickle, "dump", append_during_capture)
     with mod._pipeline_replay(path) as replay:
         assert list(replay) == [first]
         assert list(replay) == [first]
@@ -5195,89 +5218,108 @@ def test_replay_freezes_prefix_and_next_run_sees_append(tmp_path, monkeypatch):
 
 def test_replay_spill_cleanup_gzip_and_missing_source(tmp_path, monkeypatch):
     import gzip
+
     factory = mod.tempfile.SpooledTemporaryFile
     stores = []
+
     def small_spool(**kwargs):
-        kwargs['max_size'] = 1
+        kwargs["max_size"] = 1
         store = factory(**kwargs)
         stores.append(store)
         return store
-    monkeypatch.setattr(mod.tempfile, 'SpooledTemporaryFile', small_spool)
-    path = tmp_path / 'events.jsonl'
-    with gzip.open(str(path) + '.gz', 'wt') as out:
+
+    monkeypatch.setattr(mod.tempfile, "SpooledTemporaryFile", small_spool)
+    path = tmp_path / "events.jsonl"
+    with gzip.open(str(path) + ".gz", "wt") as out:
         out.write('{"stage":"source","fields":{"extra":[1,null]}}\r\n')
     with mod._pipeline_replay(path) as replay:
         assert stores[-1]._rolled
         assert list(replay) == list(mod.iter_jsonl(path))
     assert stores[-1].closed
     import pytest
-    with pytest.raises(RuntimeError, match='consumer failure'):
+
+    with pytest.raises(RuntimeError, match="consumer failure"):
         with mod._pipeline_replay(path):
-            raise RuntimeError('consumer failure')
+            raise RuntimeError("consumer failure")
     assert stores[-1].closed
-    with mod._pipeline_replay(tmp_path / 'missing.jsonl') as replay:
+    with mod._pipeline_replay(tmp_path / "missing.jsonl") as replay:
         assert list(replay) == []
-        assert replay.receipt['source_exists'] is False
+        assert replay.receipt["source_exists"] is False
 
 
 def test_replay_rejects_source_replacement_and_releases_spool(tmp_path, monkeypatch):
     import pytest
-    path = tmp_path / 'events.jsonl'
+
+    path = tmp_path / "events.jsonl"
     path.write_text('{"stage":"original"}\n')
     dump = mod.pickle.dump
+
     def replace_during_capture(*args, **kwargs):
-        replacement = path.with_suffix('.new')
+        replacement = path.with_suffix(".new")
         replacement.write_text('{"stage":"replacement"}\n')
         replacement.replace(path)
         return dump(*args, **kwargs)
-    monkeypatch.setattr(mod.pickle, 'dump', replace_during_capture)
-    with pytest.raises(ValueError, match='source_changed_during_snapshot'):
+
+    monkeypatch.setattr(mod.pickle, "dump", replace_during_capture)
+    with pytest.raises(ValueError, match="source_changed_during_snapshot"):
         with mod._pipeline_replay(path):
-            pytest.fail('a replacement must not produce a report')
+            pytest.fail("a replacement must not produce a report")
 
 
 def test_report_uses_captured_missing_source_status(tmp_path, monkeypatch):
-    path = tmp_path / 'late.jsonl'
+    path = tmp_path / "late.jsonl"
     builder = mod._build_report
+
     def late_create(*args, **kwargs):
         path.write_text('{"stage":"arrived_after_capture"}\n')
         return builder(*args, **kwargs)
-    monkeypatch.setattr(mod, '_build_report', late_create)
-    result = mod.build_report('2026-07-02', pipeline_path=path)
-    assert result['source_quality']['status'] == 'missing_pipeline_events'
-    assert result['source_quality']['pipeline_events_exists'] is False
-    assert result['source_snapshot']['row_count'] == 0
+
+    monkeypatch.setattr(mod, "_build_report", late_create)
+    result = mod.build_report("2026-07-02", pipeline_path=path)
+    assert result["source_quality"]["status"] == "missing_pipeline_events"
+    assert result["source_quality"]["pipeline_events_exists"] is False
+    assert result["source_snapshot"]["row_count"] == 0
 
 
-def test_compressed_replay_skips_unrelated_blocks_without_changing_order(tmp_path, monkeypatch):
-    path = tmp_path / 'events.jsonl'
-    rows = [{'stage': 'unrelated', 'record_id': i} for i in range(1024)] + [{'stage': 'selected', 'record_id': i} for i in range(5)]
-    path.write_text(''.join(json.dumps(row) + '\n' for row in rows))
+def test_compressed_replay_skips_unrelated_blocks_without_changing_order(
+    tmp_path, monkeypatch
+):
+    path = tmp_path / "events.jsonl"
+    rows = [{"stage": "unrelated", "record_id": i} for i in range(1024)] + [
+        {"stage": "selected", "record_id": i} for i in range(5)
+    ]
+    path.write_text("".join(json.dumps(row) + "\n" for row in rows))
     with mod._pipeline_replay(path) as replay:
         native = mod.pickle.load
         reads = []
+
         def counted(*args, **kwargs):
             reads.append(1)
             return native(*args, **kwargs)
-        monkeypatch.setattr(mod.pickle, 'load', counted)
-        assert list(mod._pipeline_rows(replay, stages={'selected'})) == rows[-5:]
+
+        monkeypatch.setattr(mod.pickle, "load", counted)
+        assert list(mod._pipeline_rows(replay, stages={"selected"})) == rows[-5:]
         assert len(reads) == 5
         assert list(replay) == rows
 
 
-def test_prior_reports_decode_once_and_changed_generation_reloads(tmp_path, monkeypatch):
-    path = tmp_path / 'prior.json'
+def test_prior_reports_decode_once_and_changed_generation_reloads(
+    tmp_path, monkeypatch
+):
+    path = tmp_path / "prior.json"
     path.write_text('{"nested":{"id":1}}')
     native = mod.json.load
     calls = []
+
     def counted(*args, **kwargs):
         calls.append(1)
         return native(*args, **kwargs)
-    monkeypatch.setattr(mod.json, 'load', counted)
+
+    monkeypatch.setattr(mod.json, "load", counted)
     cache = {}
-    mod._prior_daily_report(path, cache)['nested']['id'] = 'changed caller'
-    assert mod._prior_daily_report(path, cache) == {'nested': {'id': 1}}
+    mod._prior_daily_report(path, cache)["nested"]["id"] = "changed caller"
+    assert mod._prior_daily_report(path, cache) == {"nested": {"id": 1}}
     assert len(calls) == 1
     path.write_text('{"nested":{"id":2}}')
-    assert mod._prior_daily_report(path, cache) == {'nested': {'id': 2}}
+    assert mod._prior_daily_report(path, cache) == {"nested": {"id": 2}}
     assert len(calls) == 2

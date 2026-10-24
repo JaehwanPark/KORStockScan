@@ -19,85 +19,185 @@ from src.engine.error_detectors.process_health import (
     POSTCLOSE_BOT_ISOLATION_PATH,
 )
 
-
 _ORIGINAL_SAMSUNG_MORNING_RUNTIME_CONTRACT = (
     process_health_module._samsung_morning_runtime_contract
 )
 
 
-@pytest.mark.parametrize('variant,expected',[('same','blocked'),('pid','unobservable'),('ticks','unobservable'),('stale','unobservable')])
-def test_ai_circuit_health_requires_exact_pid_start_and_current_heartbeat(tmp_path,monkeypatch,variant,expected):
+@pytest.mark.parametrize(
+    "variant,expected",
+    [
+        ("same", "blocked"),
+        ("pid", "unobservable"),
+        ("ticks", "unobservable"),
+        ("stale", "unobservable"),
+    ],
+)
+def test_ai_circuit_health_requires_exact_pid_start_and_current_heartbeat(
+    tmp_path, monkeypatch, variant, expected
+):
     from src.engine.monitoring import runtime_performance as R
     from copy import deepcopy
-    path=tmp_path/'heartbeat.json'
-    monkeypatch.setattr(process_health_module,'HEARTBEAT_PATH',path)
-    monkeypatch.setattr(R,'_CIRCUIT',dict(state='enabled',observed_epoch=__import__('time').time(),
-        entry_transport=dict(state='OPEN',generation=1,reason='entry_transport_deadline',not_evaluated_count=36)))
-    write_heartbeat('main_loop')
-    body=json.loads(path.read_text());receipt=body['ai_circuit']
-    if variant=='pid':receipt['pid']=-1
-    if variant=='ticks':receipt['process_start_ticks']='foreign'
-    if variant=='stale':receipt['snapshot_epoch']-=121
-    path.write_text(json.dumps(body));before=path.read_bytes()
-    health=process_health_module._current_ai_circuit_health(os.getpid(),__import__('time').time())
-    assert health['status']==expected and health['decision_authority']=='none'
-    assert path.read_bytes()==before  # Observation has no reset or restart side effect.
+
+    path = tmp_path / "heartbeat.json"
+    monkeypatch.setattr(process_health_module, "HEARTBEAT_PATH", path)
+    monkeypatch.setattr(
+        R,
+        "_CIRCUIT",
+        dict(
+            state="enabled",
+            observed_epoch=__import__("time").time(),
+            entry_transport=dict(
+                state="OPEN",
+                generation=1,
+                reason="entry_transport_deadline",
+                not_evaluated_count=36,
+            ),
+        ),
+    )
+    write_heartbeat("main_loop")
+    body = json.loads(path.read_text())
+    receipt = body["ai_circuit"]
+    if variant == "pid":
+        receipt["pid"] = -1
+    if variant == "ticks":
+        receipt["process_start_ticks"] = "foreign"
+    if variant == "stale":
+        receipt["snapshot_epoch"] -= 121
+    path.write_text(json.dumps(body))
+    before = path.read_bytes()
+    health = process_health_module._current_ai_circuit_health(
+        os.getpid(), __import__("time").time()
+    )
+    assert health["status"] == expected and health["decision_authority"] == "none"
+    assert (
+        path.read_bytes() == before
+    )  # Observation has no reset or restart side effect.
 
 
-@pytest.mark.parametrize('leak', ['none', 'timer', 'process', 'buy', 'main', 'exit'])
-def test_registry_retirement_negative_census_preserves_main_and_exits(tmp_path, monkeypatch, leak):
+@pytest.mark.parametrize("leak", ["none", "timer", "process", "buy", "main", "exit"])
+def test_registry_retirement_negative_census_preserves_main_and_exits(
+    tmp_path, monkeypatch, leak
+):
     from src.engine.infrastructure import runtime_release_router as router
     from src.trading.config.owner_retirement import RETIRED_EPISODE_PROFILES
+
     units = router._retirement_units(RETIRED_EPISODE_PROFILES)
-    monkeypatch.setattr(router, '_episode_retirement_receipts', lambda root: [])
-    states = {unit: dict(ActiveState='inactive', UnitFileState='masked', MainPID='0') for unit in units}
+    monkeypatch.setattr(router, "_episode_retirement_receipts", lambda root: [])
+    states = {
+        unit: dict(ActiveState="inactive", UnitFileState="masked", MainPID="0")
+        for unit in units
+    }
     processes, orders = [], []
-    if leak == 'timer':
-        states[next(u for u in units if u.endswith('.timer'))]['UnitFileState'] = 'enabled'
-    if leak == 'process':
-        processes = [dict(pid=1, argv=['python', '-m', 'src.trading.low_price_two_leg.runtime',
-                                      '--profile', 'renamed', '--symbol', '034020'])]
-    if leak in {'buy', 'main', 'exit'}:
-        orders = [dict(event='INTENT_RESERVED', order_date='2026-10-07', symbol='034020',
-            side='SELL' if leak == 'exit' else 'BUY', action='NEW',
-            owner_type='main_scalping' if leak == 'main' else 'episode', intent_id='i')]
-    result = process_health_module._retirement_expected_set(tmp_path,
-        datetime.fromisoformat('2026-10-07T08:00:00+09:00'),
-        states=states, processes=processes, registry_rows=orders)
-    assert result['status'] == ('retirement_leak' if leak in {'timer','process','buy'} else 'retired_not_expected')
+    if leak == "timer":
+        states[next(u for u in units if u.endswith(".timer"))][
+            "UnitFileState"
+        ] = "enabled"
+    if leak == "process":
+        processes = [
+            dict(
+                pid=1,
+                argv=[
+                    "python",
+                    "-m",
+                    "src.trading.low_price_two_leg.runtime",
+                    "--profile",
+                    "renamed",
+                    "--symbol",
+                    "034020",
+                ],
+            )
+        ]
+    if leak in {"buy", "main", "exit"}:
+        orders = [
+            dict(
+                event="INTENT_RESERVED",
+                order_date="2026-10-07",
+                symbol="034020",
+                side="SELL" if leak == "exit" else "BUY",
+                action="NEW",
+                owner_type="main_scalping" if leak == "main" else "episode",
+                intent_id="i",
+            )
+        ]
+    result = process_health_module._retirement_expected_set(
+        tmp_path,
+        datetime.fromisoformat("2026-10-07T08:00:00+09:00"),
+        states=states,
+        processes=processes,
+        registry_rows=orders,
+    )
+    assert result["status"] == (
+        "retirement_leak"
+        if leak in {"timer", "process", "buy"}
+        else "retired_not_expected"
+    )
 
 
 def test_retirement_census_missing_units_is_unverified(tmp_path, monkeypatch):
     from src.engine.infrastructure import runtime_release_router as router
-    monkeypatch.setattr(router, '_episode_retirement_receipts', lambda root: [])
-    result = process_health_module._retirement_expected_set(tmp_path,
-        datetime.fromisoformat('2026-10-07T08:00:00+09:00'), states={}, processes=[], registry_rows=[])
-    assert result['status'] == 'retirement_unverified'
+
+    monkeypatch.setattr(router, "_episode_retirement_receipts", lambda root: [])
+    result = process_health_module._retirement_expected_set(
+        tmp_path,
+        datetime.fromisoformat("2026-10-07T08:00:00+09:00"),
+        states={},
+        processes=[],
+        registry_rows=[],
+    )
+    assert result["status"] == "retirement_unverified"
 
 
 def test_retirement_process_identity_is_executed_module_not_test_targets():
-    assert process_health_module._process_entrypoint(['python','-m','pytest',
-        'src/tests/test_widget_retirement.py','src/tests/test_episode_retirement_main_watch.py']) == 'pytest'
-    assert process_health_module._process_entrypoint(['bash','-c','python -m src.trading.widget_auto_trade']) == ''
-    assert process_health_module._process_entrypoint(['python','-m','src.trading.widget_auto_trade.engine']) == 'src.trading.widget_auto_trade.engine'
+    assert (
+        process_health_module._process_entrypoint(
+            [
+                "python",
+                "-m",
+                "pytest",
+                "src/tests/test_widget_retirement.py",
+                "src/tests/test_episode_retirement_main_watch.py",
+            ]
+        )
+        == "pytest"
+    )
+    assert (
+        process_health_module._process_entrypoint(
+            ["bash", "-c", "python -m src.trading.widget_auto_trade"]
+        )
+        == ""
+    )
+    assert (
+        process_health_module._process_entrypoint(
+            ["python", "-m", "src.trading.widget_auto_trade.engine"]
+        )
+        == "src.trading.widget_auto_trade.engine"
+    )
 
 
-@pytest.mark.parametrize('error,alive', [
-    (PermissionError(1, 'different runtime user'), True),
-    (ProcessLookupError(3, 'no process'), False),
-    (OSError(5, 'unexpected I/O fault'), False),
-])
-def test_pid_presence_separates_signal_permission_from_absence(monkeypatch,error,alive):
-    def probe(pid,signal):
-        assert (pid,signal)==(1234,0)
+@pytest.mark.parametrize(
+    "error,alive",
+    [
+        (PermissionError(1, "different runtime user"), True),
+        (ProcessLookupError(3, "no process"), False),
+        (OSError(5, "unexpected I/O fault"), False),
+    ],
+)
+def test_pid_presence_separates_signal_permission_from_absence(
+    monkeypatch, error, alive
+):
+    def probe(pid, signal):
+        assert (pid, signal) == (1234, 0)
         raise error
-    monkeypatch.setattr(os,'kill',probe)
+
+    monkeypatch.setattr(os, "kill", probe)
     assert process_health_module._pid_exists(1234) is alive
 
 
 def test_retired_samsung_expected_set_accepts_disabled_timers(monkeypatch):
     monkeypatch.setattr(
-        process_health_module, "_systemd_unit_state",
+        process_health_module,
+        "_systemd_unit_state",
         lambda unit: {
             "unit": unit,
             "LoadState": "loaded",
@@ -248,7 +348,6 @@ class TestProcessHealthDetector:
         detector = ProcessHealthDetector()
         result = detector.check()
         assert result.severity == "pass"
-
 
     def test_detector_fails_for_recent_unowned_manual_control_holding_block(
         self, monkeypatch
@@ -405,26 +504,45 @@ class TestProcessHealthDetector:
         assert guard["active_block_count"] == 0
 
     @pytest.mark.parametrize("thread_alive", [True, False])
-    @pytest.mark.parametrize("other_source", [None, "", "auto_scale_in_qty_guard_block", "auto_hard_stop_handoff_extra"])
+    @pytest.mark.parametrize(
+        "other_source",
+        [None, "", "auto_scale_in_qty_guard_block", "auto_hard_stop_handoff_extra"],
+    )
     def test_hard_stop_handoff_is_expected_but_other_unowned_blocks_still_fail(
         self, monkeypatch, other_source, thread_alive
     ):
         now = datetime.now().astimezone().replace(microsecond=0)
         monkeypatch.setattr(process_health_module.time, "time", now.timestamp)
-        monkeypatch.setattr(process_health_module, "manual_control_operator_exclusion_source", lambda code: "")
         monkeypatch.setattr(
-            process_health_module, "manual_control_auto_exclusion_source",
+            process_health_module,
+            "manual_control_operator_exclusion_source",
+            lambda code: "",
+        )
+        monkeypatch.setattr(
+            process_health_module,
+            "manual_control_auto_exclusion_source",
             lambda code: "auto_hard_stop_handoff" if code == "456010" else other_source,
         )
         monkeypatch.setattr(
-            process_health_module, "evaluate_main_bot_control_exclusion",
-            lambda code, **kwargs: type("Decision", (), {"excluded": True, "reason": "operator_manual_control_excluded_symbol"})(),
+            process_health_module,
+            "evaluate_main_bot_control_exclusion",
+            lambda code, **kwargs: type(
+                "Decision",
+                (),
+                {"excluded": True, "reason": "operator_manual_control_excluded_symbol"},
+            )(),
         )
         codes = ["456010"] + (["123456"] if other_source is not None else [])
-        rows = [{"stage": "manual_control_fast_exit_monitor_blocked", "stock_code": code,
-                 "record_id": i + 1, "emitted_at": now.isoformat(),
-                 "fields": {"target_status": "HOLDING", "target_strategy": "SCALPING"}}
-                for i, code in enumerate(codes)]
+        rows = [
+            {
+                "stage": "manual_control_fast_exit_monitor_blocked",
+                "stock_code": code,
+                "record_id": i + 1,
+                "emitted_at": now.isoformat(),
+                "fields": {"target_status": "HOLDING", "target_strategy": "SCALPING"},
+            }
+            for i, code in enumerate(codes)
+        ]
         directory = process_health_module.PIPELINE_EVENTS_DIR
         directory.mkdir(parents=True)
         (directory / f"pipeline_events_{now.date().isoformat()}.jsonl").write_text(
@@ -438,11 +556,15 @@ class TestProcessHealthDetector:
         assert guard["expected_hard_stop_handoffs"][0]["stock_code"] == "456010"
         assert guard["recent_blocked_holding_count"] == len(codes)
         assert guard["active_block_count"] == len(codes) - 1
-        assert result.severity == ("pass" if other_source is None and thread_alive else "fail")
+        assert result.severity == (
+            "pass" if other_source is None and thread_alive else "fail"
+        )
         if other_source is None:
             assert guard["status"] == "expected_hard_stop_manual_handoff"
 
-    @pytest.mark.parametrize("damage", [None, "missing_file", "unknown_source", "failed_owner", "released"])
+    @pytest.mark.parametrize(
+        "damage", [None, "missing_file", "unknown_source", "failed_owner", "released"]
+    )
     @pytest.mark.parametrize("thread_alive", [True, False])
     def test_native_open_loss_registration_is_expected_without_hiding_unowned_failure(
         self, monkeypatch, tmp_path, damage, thread_alive
@@ -453,20 +575,31 @@ class TestProcessHealthDetector:
         monkeypatch.setattr(process_health_module.time, "time", now.timestamp)
         path = tmp_path / "manual_control_excluded_codes.txt"
         monkeypatch.setenv(control.EXCLUDED_CODES_FILE_ENV, str(path))
-        for key in (control.EXCLUDED_CODES_ENV, control.LEGACY_WATCH_EXCLUDED_CODES_ENV):
+        for key in (
+            control.EXCLUDED_CODES_ENV,
+            control.LEGACY_WATCH_EXCLUDED_CODES_ENV,
+        ):
             monkeypatch.delenv(key, raising=False)
-        source = "auto_open_loss" if damage != "unknown_source" else "auto_scale_in_qty_guard_block"
-        assert control.add_manual_control_exclusion_code("034020", comment=source + " KRX_OPEN").excluded
+        source = (
+            "auto_open_loss"
+            if damage != "unknown_source"
+            else "auto_scale_in_qty_guard_block"
+        )
+        assert control.add_manual_control_exclusion_code(
+            "034020", comment=source + " KRX_OPEN"
+        ).excluded
         if damage in ("missing_file", "released"):
             path.unlink()
         original = path.read_bytes() if path.exists() else None
         if damage in ("missing_file", "failed_owner", "released"):
             reason = (
                 "symbol_owner_policy_fail_closed:SymbolOwnerPolicyError"
-                if damage == "failed_owner" else "operator_manual_control_excluded_symbol"
+                if damage == "failed_owner"
+                else "operator_manual_control_excluded_symbol"
             )
             monkeypatch.setattr(
-                process_health_module, "evaluate_main_bot_control_exclusion",
+                process_health_module,
+                "evaluate_main_bot_control_exclusion",
                 lambda code, **kw: control.ManualControlExclusionDecision(
                     damage != "released", code, reason, str(path)
                 ),
@@ -474,11 +607,17 @@ class TestProcessHealthDetector:
         directory = process_health_module.PIPELINE_EVENTS_DIR
         directory.mkdir(parents=True)
         event = {
-            "event_type": "pipeline_event", "pipeline": "HOLDING_PIPELINE",
+            "event_type": "pipeline_event",
+            "pipeline": "HOLDING_PIPELINE",
             "stage": "manual_control_fast_exit_monitor_blocked",
-            "stock_code": "034020", "record_id": 49399, "emitted_at": now.isoformat(),
-            "fields": {"target_status": "HOLDING", "target_strategy": "SCALPING",
-                       "manual_control_exclusion_source": str(path)},
+            "stock_code": "034020",
+            "record_id": 49399,
+            "emitted_at": now.isoformat(),
+            "fields": {
+                "target_status": "HOLDING",
+                "target_strategy": "SCALPING",
+                "manual_control_exclusion_source": str(path),
+            },
         }
         (directory / f"pipeline_events_{now.date().isoformat()}.jsonl").write_text(
             json.dumps(event) + "\n", encoding="utf-8"
@@ -493,7 +632,10 @@ class TestProcessHealthDetector:
         assert guard["active_block_count"] == int(active)
         assert guard.get("expected_open_loss_guard_count", 0) == int(expected)
         if expected:
-            assert guard["expected_open_loss_guards"][0]["classification"] == "expected_open_loss_policy_guard"
+            assert (
+                guard["expected_open_loss_guards"][0]["classification"]
+                == "expected_open_loss_policy_guard"
+            )
             assert guard["status"] == "expected_open_loss_policy_guard"
         assert (path.read_bytes() if path.exists() else None) == original
 
@@ -1130,12 +1272,6 @@ def _mock_samsung_systemd_states(
     )
 
 
-
-
-
-
-
-
 def _write_samsung_authority(path, *, target_date: str, ready: bool):
     path.write_text(
         json.dumps(
@@ -1519,8 +1655,6 @@ def test_samsung_runtime_reports_latest_journal_failure_before_stale_bound_pid(
 
     assert result["severity"] == "fail"
     assert result["reason"] == "morning_live_service_failed"
-
-
 
 
 def test_samsung_runtime_rejects_corrupt_authority_schema(monkeypatch, tmp_path):

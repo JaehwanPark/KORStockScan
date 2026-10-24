@@ -33,101 +33,152 @@ def _isolate_buy_fill_receipt_store(monkeypatch, tmp_path):
 
 def test_exit_signal_receipt_binds_only_same_buy_and_submit_generation(monkeypatch):
     monkeypatch.setattr(
-        state_handlers, "buy_fill_identity_from_runtime",
+        state_handlers,
+        "buy_fill_identity_from_runtime",
         lambda stock: stock.get("test_buy_fill_identity"),
     )
     stock = {
-        "id": 42, "code": "123456", "strategy": "SCALPING",
-        "position_tag": "SCANNER", "test_buy_fill_identity": "buy-generation-1",
+        "id": 42,
+        "code": "123456",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "test_buy_fill_identity": "buy-generation-1",
     }
     decision = state_handlers._exit_signal_receipt_fields(
-        stock, "123456", {
+        stock,
+        "123456",
+        {
             "exit_rule": "scalp_trailing_take_profit",
             "exit_threshold_key": "SCALP_TRAILING_LIMIT_WEAK",
             "exit_threshold_effective_pct": 0.4,
             "scalp_trailing_policy_value_sha256": "a" * 64,
             "holding_context_venue": "KRX",
             "holding_context_session": "krx_regular",
-        }, now_ts=1790554200.0,
+        },
+        now_ts=1790554200.0,
     )
     assert decision["exit_signal_id"]
     contract = json.loads(decision["exit_signal_contract"])
     assert contract["source_date"] == contract["signal_at"][:10]
     assert contract["buy_fill_identity"] == "buy-generation-1"
-    stock.update({
-        "sell_submit_generation": "submit-1",
-        "sell_submit_target_id": 42,
-        "sell_submit_code": "123456",
-        "sell_submit_requested_qty": 1,
-        "sell_submit_owner_position_qty": 1,
-        "sell_submit_started_at": 1790554201.0,
-        "sell_submit_intended_route": "SOR",
-        "sell_submit_intended_effective_venue": "KRX",
-        "sell_submit_intended_session_bucket": "KRX_REGULAR",
-    })
-    stock["sell_submit_context_sha256"] = (
-        state_handlers._sell_submit_context_sha256(stock)
+    stock.update(
+        {
+            "sell_submit_generation": "submit-1",
+            "sell_submit_target_id": 42,
+            "sell_submit_code": "123456",
+            "sell_submit_requested_qty": 1,
+            "sell_submit_owner_position_qty": 1,
+            "sell_submit_started_at": 1790554201.0,
+            "sell_submit_intended_route": "SOR",
+            "sell_submit_intended_effective_venue": "KRX",
+            "sell_submit_intended_session_bucket": "KRX_REGULAR",
+        }
+    )
+    stock["sell_submit_context_sha256"] = state_handlers._sell_submit_context_sha256(
+        stock
     )
     linked = state_handlers._exit_signal_submission_fields(
-        stock, "123456", {"exit_rule": "scalp_trailing_take_profit"},
+        stock,
+        "123456",
+        {"exit_rule": "scalp_trailing_take_profit"},
     )
     assert linked["exit_signal_id"] == decision["exit_signal_id"]
     assert linked["sell_submit_generation"] == "submit-1"
     stock["test_buy_fill_identity"] = "buy-generation-2"
-    assert state_handlers._exit_signal_submission_fields(
-        stock, "123456", {"exit_rule": "scalp_trailing_take_profit"},
-    )["exit_signal_binding_status"] == "source_gap_buy_generation_mismatch"
+    assert (
+        state_handlers._exit_signal_submission_fields(
+            stock,
+            "123456",
+            {"exit_rule": "scalp_trailing_take_profit"},
+        )["exit_signal_binding_status"]
+        == "source_gap_buy_generation_mismatch"
+    )
 
 
 def test_holding_pipeline_emits_exit_decision_then_submit_reference(monkeypatch):
     emitted = []
-    monkeypatch.setattr(state_handlers, "buy_fill_identity_from_runtime",
-                        lambda _stock: "buy-generation-1")
-    monkeypatch.setattr(state_handlers, "emit_pipeline_event",
-                        lambda *args, **kwargs: emitted.append(kwargs["fields"]) or True)
-    monkeypatch.setattr(state_handlers, "pipeline_lifecycle_fields_safe",
-                        lambda *args, **kwargs: {})
-    monkeypatch.setattr(state_handlers, "observe_candidate_transition_safe",
-                        lambda *args, **kwargs: None)
-    monkeypatch.setattr(state_handlers, "scout_ai_execution_attribution_fields",
-                        lambda *args, **kwargs: {})
-    monkeypatch.setattr(state_handlers, "_strategy_owner_component_fields",
-                        lambda _stock: {})
-    monkeypatch.setattr(state_handlers, "_holding_pipeline_stable_block_log_decision",
-                        lambda *args: (True, {}))
-    monkeypatch.setattr(state_handlers, "_holding_pipeline_observation_scope_fields",
-                        lambda *args: {
-                            "holding_context_venue": "KRX",
-                            "holding_context_session": "krx_regular",
-                        })
-    stock = {"id": 42, "code": "123456", "name": "TEST",
-             "strategy": "SCALPING", "position_tag": "SCANNER"}
+    monkeypatch.setattr(
+        state_handlers,
+        "buy_fill_identity_from_runtime",
+        lambda _stock: "buy-generation-1",
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "emit_pipeline_event",
+        lambda *args, **kwargs: emitted.append(kwargs["fields"]) or True,
+    )
+    monkeypatch.setattr(
+        state_handlers, "pipeline_lifecycle_fields_safe", lambda *args, **kwargs: {}
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "observe_candidate_transition_safe",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "scout_ai_execution_attribution_fields",
+        lambda *args, **kwargs: {},
+    )
+    monkeypatch.setattr(
+        state_handlers, "_strategy_owner_component_fields", lambda _stock: {}
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_holding_pipeline_stable_block_log_decision",
+        lambda *args: (True, {}),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_holding_pipeline_observation_scope_fields",
+        lambda *args: {
+            "holding_context_venue": "KRX",
+            "holding_context_session": "krx_regular",
+        },
+    )
+    stock = {
+        "id": 42,
+        "code": "123456",
+        "name": "TEST",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+    }
     state_handlers._log_holding_pipeline(
-        stock, "123456", "exit_signal",
+        stock,
+        "123456",
+        "exit_signal",
         exit_rule="scalp_trailing_take_profit",
         exit_threshold_key="SCALP_TRAILING_LIMIT_WEAK",
         exit_threshold_effective_pct=0.4,
         scalp_trailing_policy_value_sha256="a" * 64,
     )
     assert emitted[0]["exit_signal_binding_status"] == "decision_receipt_emitted"
-    stock.update({
-        "sell_submit_generation": "submit-1",
-        "sell_submit_target_id": 42, "sell_submit_code": "123456",
-        "sell_submit_requested_qty": 1,
-        "sell_submit_owner_position_qty": 1,
-        "sell_submit_started_at": 1790554201.0,
-        "sell_submit_intended_route": "SOR",
-        "sell_submit_intended_effective_venue": "KRX",
-        "sell_submit_intended_session_bucket": "KRX_REGULAR",
-    })
-    stock["sell_submit_context_sha256"] = (
-        state_handlers._sell_submit_context_sha256(stock)
+    stock.update(
+        {
+            "sell_submit_generation": "submit-1",
+            "sell_submit_target_id": 42,
+            "sell_submit_code": "123456",
+            "sell_submit_requested_qty": 1,
+            "sell_submit_owner_position_qty": 1,
+            "sell_submit_started_at": 1790554201.0,
+            "sell_submit_intended_route": "SOR",
+            "sell_submit_intended_effective_venue": "KRX",
+            "sell_submit_intended_session_bucket": "KRX_REGULAR",
+        }
+    )
+    stock["sell_submit_context_sha256"] = state_handlers._sell_submit_context_sha256(
+        stock
     )
     state_handlers._log_holding_pipeline(
-        stock, "123456", "sell_order_sent",
-        exit_rule="scalp_trailing_take_profit", broker_order_no="SELL-1",
-        broker_route="SOR", market_session_bucket="krx_regular",
-        qty=1, actual_order_submitted=True,
+        stock,
+        "123456",
+        "sell_order_sent",
+        exit_rule="scalp_trailing_take_profit",
+        broker_order_no="SELL-1",
+        broker_route="SOR",
+        market_session_bucket="krx_regular",
+        qty=1,
+        actual_order_submitted=True,
     )
     assert emitted[1]["exit_signal_id"] == emitted[0]["exit_signal_id"]
     assert emitted[1]["exit_signal_contract_sha256"] == (
@@ -137,27 +188,53 @@ def test_holding_pipeline_emits_exit_decision_then_submit_reference(monkeypatch)
 
 def test_exit_receipt_capture_failure_does_not_block_holding_pipeline(monkeypatch):
     emitted = []
-    monkeypatch.setattr(state_handlers, "emit_pipeline_event",
-                        lambda *args, **kwargs: emitted.append(kwargs["fields"]) or True)
-    monkeypatch.setattr(state_handlers, "pipeline_lifecycle_fields_safe",
-                        lambda *args, **kwargs: {})
-    monkeypatch.setattr(state_handlers, "observe_candidate_transition_safe",
-                        lambda *args, **kwargs: None)
-    monkeypatch.setattr(state_handlers, "scout_ai_execution_attribution_fields",
-                        lambda *args, **kwargs: {})
-    monkeypatch.setattr(state_handlers, "_strategy_owner_component_fields",
-                        lambda _stock: {})
-    monkeypatch.setattr(state_handlers, "_holding_pipeline_stable_block_log_decision",
-                        lambda *args: (True, {}))
-    monkeypatch.setattr(state_handlers, "_holding_pipeline_observation_scope_fields",
-                        lambda *args: {})
-    monkeypatch.setattr(state_handlers, "_exit_signal_receipt_fields",
-                        lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("bad")))
-    stock = {"id": 42, "code": "123456", "name": "TEST",
-             "strategy": "SCALPING", "_exit_signal_receipt": {"stale": True}}
-    assert state_handlers._log_holding_pipeline(
-        stock, "123456", "exit_signal", exit_rule="scalp_soft_stop_pct"
-    ) is True
+    monkeypatch.setattr(
+        state_handlers,
+        "emit_pipeline_event",
+        lambda *args, **kwargs: emitted.append(kwargs["fields"]) or True,
+    )
+    monkeypatch.setattr(
+        state_handlers, "pipeline_lifecycle_fields_safe", lambda *args, **kwargs: {}
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "observe_candidate_transition_safe",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "scout_ai_execution_attribution_fields",
+        lambda *args, **kwargs: {},
+    )
+    monkeypatch.setattr(
+        state_handlers, "_strategy_owner_component_fields", lambda _stock: {}
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_holding_pipeline_stable_block_log_decision",
+        lambda *args: (True, {}),
+    )
+    monkeypatch.setattr(
+        state_handlers, "_holding_pipeline_observation_scope_fields", lambda *args: {}
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_exit_signal_receipt_fields",
+        lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("bad")),
+    )
+    stock = {
+        "id": 42,
+        "code": "123456",
+        "name": "TEST",
+        "strategy": "SCALPING",
+        "_exit_signal_receipt": {"stale": True},
+    }
+    assert (
+        state_handlers._log_holding_pipeline(
+            stock, "123456", "exit_signal", exit_rule="scalp_soft_stop_pct"
+        )
+        is True
+    )
     assert "_exit_signal_receipt" not in stock
     assert emitted[0]["exit_signal_binding_status"] == (
         "source_gap_receipt_capture_failed:ValueError"
@@ -166,20 +243,36 @@ def test_exit_receipt_capture_failure_does_not_block_holding_pipeline(monkeypatc
 
 def test_execution_receipt_population_scope_requires_real_order_authority(monkeypatch):
     emitted = []
-    monkeypatch.setattr(execution_receipts, "emit_pipeline_event", lambda *a, **kw: emitted.append(kw["fields"].copy()))
-    monkeypatch.setattr(execution_receipts, "observe_candidate_transition_safe", lambda *a, **kw: None)
-    monkeypatch.setattr(execution_receipts, "pipeline_lifecycle_fields_safe", lambda *a, **kw: {})
+    monkeypatch.setattr(
+        execution_receipts,
+        "emit_pipeline_event",
+        lambda *a, **kw: emitted.append(kw["fields"].copy()),
+    )
+    monkeypatch.setattr(
+        execution_receipts, "observe_candidate_transition_safe", lambda *a, **kw: None
+    )
+    monkeypatch.setattr(
+        execution_receipts, "pipeline_lifecycle_fields_safe", lambda *a, **kw: {}
+    )
     stock = {"id": 701, "code": "005930", "name": "SAMSUNG"}
     execution_receipts._log_holding_pipeline_impl(
-        "SAMSUNG", "005930", 701, "position_rebased_after_fill",
-        candidate_stock=stock, actual_order_submitted=True,
+        "SAMSUNG",
+        "005930",
+        701,
+        "position_rebased_after_fill",
+        candidate_stock=stock,
+        actual_order_submitted=True,
         broker_order_forbidden=False,
     )
     assert emitted[-1]["pipeline_lifecycle_population_scope"] == "real_record_bound"
     execution_receipts._log_holding_pipeline_impl(
-        "SAMSUNG", "005930", 701, "sell_completed",
+        "SAMSUNG",
+        "005930",
+        701,
+        "sell_completed",
         candidate_stock={**stock, "simulation_book": True},
-        actual_order_submitted=True, broker_order_forbidden=False,
+        actual_order_submitted=True,
+        broker_order_forbidden=False,
     )
     assert emitted[-1]["pipeline_lifecycle_population_scope"] == "sim_observation_only"
 
@@ -940,8 +1033,10 @@ def test_current_holding_sell_submit_session_matches_receipt_contract(
         "_log_holding_pipeline",
         lambda *args, **kwargs: (
             emitted.append(kwargs)
-            or {"structured_append_succeeded": True,
-                "structured_append_status": "raw_appended"}
+            or {
+                "structured_append_succeeded": True,
+                "structured_append_status": "raw_appended",
+            }
         ),
     )
     stock = _exact_sell_execution_stock(
@@ -1760,19 +1855,34 @@ def test_sell_local_no_call_requires_exact_process_attestation(code, tamper):
 
 def _partial_sell_cancel_stock(monkeypatch):
     stock = _exact_sell_execution_stock()
-    monkeypatch.setattr(execution_receipts, "_log_holding_pipeline", lambda *a, **k: {
-        "structured_append_succeeded": True, "structured_append_status": "raw_appended"})
+    monkeypatch.setattr(
+        execution_receipts,
+        "_log_holding_pipeline",
+        lambda *a, **k: {
+            "structured_append_succeeded": True,
+            "structured_append_status": "raw_appended",
+        },
+    )
     assert execution_receipts.persist_pending_sell_submit_custody(stock)
     assert execution_receipts._bind_pending_sell_execution_receipt(
-        target_stock=stock, target_id=stock["id"], code=stock["code"],
-        order_no="0000456", execution_no="0000002")
+        target_stock=stock,
+        target_id=stock["id"],
+        code=stock["code"],
+        order_no="0000456",
+        execution_no="0000002",
+    )
     stock[execution_receipts._SELL_EXECUTION_RECEIPT_STATE_KEY] = {
-        "order_no": "0000456", "position_qty": 2, "expected_qty": 2,
-        "cumulative_qty": 1, "aggregate_cumulative_qty": 1,
-        "remaining_qty": 1, "final": False,
+        "order_no": "0000456",
+        "position_qty": 2,
+        "expected_qty": 2,
+        "cumulative_qty": 1,
+        "aggregate_cumulative_qty": 1,
+        "remaining_qty": 1,
+        "final": False,
     }
     assert execution_receipts._persist_sell_receipt_recovery_or_interlock(
-        stock, code=stock["code"], reason="partial_fill")
+        stock, code=stock["code"], reason="partial_fill"
+    )
     return stock
 
 
@@ -1783,83 +1893,166 @@ def test_partial_sell_retains_cancel_custody_across_restart(monkeypatch):
     assert not execution_receipts.persist_pending_sell_submit_custody(stock)
     restarted = {"id": stock["id"], "code": stock["code"], "buy_qty": 2}
     state, reason = sniper_sync._restore_sell_receipt_recovery(
-        target_stock=restarted, record=SimpleNamespace(id=stock["id"], buy_qty=2),
-        code=stock["code"], broker_remaining_qty=1)
+        target_stock=restarted,
+        record=SimpleNamespace(id=stock["id"], buy_qty=2),
+        code=stock["code"],
+        broker_remaining_qty=1,
+    )
     assert state is not None and reason == "journal_exact_match"
     assert restarted["sell_submit_pending"] is False
     assert restarted["status"] == "SELL_ORDERED"
     assert execution_receipts.persist_pending_sell_cancel_intent_custody(
-        restarted, order_no="0000456", broker_route="SOR")
+        restarted, order_no="0000456", broker_route="SOR"
+    )
     assert execution_receipts.pending_sell_cancel_intent_exact(
-        restarted, code=stock["code"], order_no="0000456")
+        restarted, code=stock["code"], order_no="0000456"
+    )
 
 
-@pytest.mark.parametrize('damage', [None, 'wrong_owner', 'missing_journal',
-                                   'checksum', 'foreign_conflict', 'incomplete_quantity',
-                                   'foreign_cancel', 'manual_veto'])
-def test_coexistence_restores_exact_partial_sell_without_overwriting_db_or_external_owner(monkeypatch, damage):
-    stock=_partial_sell_cancel_stock(monkeypatch)
-    state=stock[execution_receipts._SELL_EXECUTION_RECEIPT_STATE_KEY]
-    state['quantity_contract_complete']=damage!='incomplete_quantity'
-    assert execution_receipts._persist_sell_receipt_recovery_or_interlock(stock,code=stock['code'],reason='fixture')
-    path=execution_receipts._sell_receipt_recovery_path(stock['id'])
-    if damage=='missing_journal':path.unlink()
-    elif damage=='checksum':path.write_text('{}')
-    mismatch='main_owner_registry_quantity_mismatch:registry=1:db=2'
-    target=dict(id=stock['id'],code=stock['code'],status='SELL_ORDERED',buy_qty=2,
-        sell_submit_pending=True,broker_symbol_allocation_conflict=True,
-        sell_cancel_reconciliation_required=True,sell_cancel_reconciliation_source=(
-            'multiple_active_records_share_symbol' if damage=='foreign_conflict' else mismatch))
-    if damage == 'foreign_cancel':
-        target.update(broker_symbol_allocation_conflict=False, sell_cancel_reconciliation_source='unknown_pending_cancel')
-    monkeypatch.setattr(sniper_sync, 'evaluate_main_bot_control_exclusion',
-                        lambda code: SimpleNamespace(excluded=damage == 'manual_veto'))
-    record=SimpleNamespace(id=stock['id'],stock_name='fixture',status='SELL_ORDERED',buy_qty=2,scale_in_locked=True)
-    owner='main_scalping:'+str(stock['id'] if damage!='wrong_owner' else 999)
-    registry=SimpleNamespace(symbol_registered=lambda code:True,
-        decision_activation_matches=lambda decision:True,
-        reconcile_symbol_quantity=lambda **kw:dict(position_quantities={owner:1,'manual_operator:other':3},external_manual_remainder=0))
-    monkeypatch.setattr(sniper_sync,'ACTIVE_TARGETS',[target])
-    monkeypatch.setattr(sniper_sync,'default_order_owner_registry',lambda:registry)
-    monkeypatch.setattr(sniper_sync,'resolve_symbol_owner_policy',lambda code:SimpleNamespace(
-        coexistence_enabled=True,policy_id='fixture',policy_hash='a'*64))
-    errors=[];monkeypatch.setattr(sniper_sync,'log_error',errors.append)
-    assert sniper_sync._preserve_coexistence_owner_inventory(record=record,code=stock['code'],
-        real_codes={stock['code']:dict(qty=4)},source='startup_balance_sync')
-    assert record.buy_qty==2 and record.status=='SELL_ORDERED'
+@pytest.mark.parametrize(
+    "damage",
+    [
+        None,
+        "wrong_owner",
+        "missing_journal",
+        "checksum",
+        "foreign_conflict",
+        "incomplete_quantity",
+        "foreign_cancel",
+        "manual_veto",
+    ],
+)
+def test_coexistence_restores_exact_partial_sell_without_overwriting_db_or_external_owner(
+    monkeypatch, damage
+):
+    stock = _partial_sell_cancel_stock(monkeypatch)
+    state = stock[execution_receipts._SELL_EXECUTION_RECEIPT_STATE_KEY]
+    state["quantity_contract_complete"] = damage != "incomplete_quantity"
+    assert execution_receipts._persist_sell_receipt_recovery_or_interlock(
+        stock, code=stock["code"], reason="fixture"
+    )
+    path = execution_receipts._sell_receipt_recovery_path(stock["id"])
+    if damage == "missing_journal":
+        path.unlink()
+    elif damage == "checksum":
+        path.write_text("{}")
+    mismatch = "main_owner_registry_quantity_mismatch:registry=1:db=2"
+    target = dict(
+        id=stock["id"],
+        code=stock["code"],
+        status="SELL_ORDERED",
+        buy_qty=2,
+        sell_submit_pending=True,
+        broker_symbol_allocation_conflict=True,
+        sell_cancel_reconciliation_required=True,
+        sell_cancel_reconciliation_source=(
+            "multiple_active_records_share_symbol"
+            if damage == "foreign_conflict"
+            else mismatch
+        ),
+    )
+    if damage == "foreign_cancel":
+        target.update(
+            broker_symbol_allocation_conflict=False,
+            sell_cancel_reconciliation_source="unknown_pending_cancel",
+        )
+    monkeypatch.setattr(
+        sniper_sync,
+        "evaluate_main_bot_control_exclusion",
+        lambda code: SimpleNamespace(excluded=damage == "manual_veto"),
+    )
+    record = SimpleNamespace(
+        id=stock["id"],
+        stock_name="fixture",
+        status="SELL_ORDERED",
+        buy_qty=2,
+        scale_in_locked=True,
+    )
+    owner = "main_scalping:" + str(stock["id"] if damage != "wrong_owner" else 999)
+    registry = SimpleNamespace(
+        symbol_registered=lambda code: True,
+        decision_activation_matches=lambda decision: True,
+        reconcile_symbol_quantity=lambda **kw: dict(
+            position_quantities={owner: 1, "manual_operator:other": 3},
+            external_manual_remainder=0,
+        ),
+    )
+    monkeypatch.setattr(sniper_sync, "ACTIVE_TARGETS", [target])
+    monkeypatch.setattr(sniper_sync, "default_order_owner_registry", lambda: registry)
+    monkeypatch.setattr(
+        sniper_sync,
+        "resolve_symbol_owner_policy",
+        lambda code: SimpleNamespace(
+            coexistence_enabled=True, policy_id="fixture", policy_hash="a" * 64
+        ),
+    )
+    errors = []
+    monkeypatch.setattr(sniper_sync, "log_error", errors.append)
+    assert sniper_sync._preserve_coexistence_owner_inventory(
+        record=record,
+        code=stock["code"],
+        real_codes={stock["code"]: dict(qty=4)},
+        source="startup_balance_sync",
+    )
+    assert record.buy_qty == 2 and record.status == "SELL_ORDERED"
     if damage:
-        assert errors and target['broker_symbol_allocation_conflict'] is True
-        assert target['sell_cancel_reconciliation_required'] is True
+        assert errors and target["broker_symbol_allocation_conflict"] is True
+        assert target["sell_cancel_reconciliation_required"] is True
     else:
-        assert not errors and target['buy_qty']==1 and target['broker_holding_qty']==4
-        assert target['sell_submit_pending'] is False and target['sell_odno']=='0000456'
-        assert not target.get('broker_symbol_allocation_conflict')
-        assert execution_receipts.persist_pending_sell_cancel_intent_custody(target,order_no='0000456',broker_route='SOR')
+        assert (
+            not errors and target["buy_qty"] == 1 and target["broker_holding_qty"] == 4
+        )
+        assert (
+            target["sell_submit_pending"] is False and target["sell_odno"] == "0000456"
+        )
+        assert not target.get("broker_symbol_allocation_conflict")
+        assert execution_receipts.persist_pending_sell_cancel_intent_custody(
+            target, order_no="0000456", broker_route="SOR"
+        )
 
 
-@pytest.mark.parametrize("field,value", [
-    ("id", 999), ("code", "999999"), ("status", "HOLDING"),
-    ("sell_odno", "0009999"), ("sell_submit_generation", "a" * 32),
-    ("sell_submit_context_sha256", "b" * 64), ("sell_submit_requested_qty", 3),
-    ("sell_submit_intended_route", "NXT"),
-])
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("id", 999),
+        ("code", "999999"),
+        ("status", "HOLDING"),
+        ("sell_odno", "0009999"),
+        ("sell_submit_generation", "a" * 32),
+        ("sell_submit_context_sha256", "b" * 64),
+        ("sell_submit_requested_qty", 3),
+        ("sell_submit_intended_route", "NXT"),
+    ],
+)
 def test_partial_sell_cancel_rejects_changed_order_context(monkeypatch, field, value):
     stock = _partial_sell_cancel_stock(monkeypatch)
     stock[field] = value
     assert not execution_receipts.persist_pending_sell_cancel_intent_custody(
-        stock, order_no="0000456", broker_route="SOR")
+        stock, order_no="0000456", broker_route="SOR"
+    )
 
 
 def test_partial_sell_context_clears_only_after_terminal_successor(monkeypatch):
     stock = _partial_sell_cancel_stock(monkeypatch)
     stock[execution_receipts._SELL_EXECUTION_RECEIPT_STATE_KEY].update(
-        final=True, cumulative_qty=2, aggregate_cumulative_qty=2, remaining_qty=0)
-    monkeypatch.setattr(execution_receipts, "POSITION_PEAK_LEDGER", SimpleNamespace(remove_for_stock=lambda stock: None))
-    monkeypatch.setattr(execution_receipts, "move_orders_to_terminal", lambda *a, **k: None)
+        final=True, cumulative_qty=2, aggregate_cumulative_qty=2, remaining_qty=0
+    )
+    monkeypatch.setattr(
+        execution_receipts,
+        "POSITION_PEAK_LEDGER",
+        SimpleNamespace(remove_for_stock=lambda stock: None),
+    )
+    monkeypatch.setattr(
+        execution_receipts, "move_orders_to_terminal", lambda *a, **k: None
+    )
     monkeypatch.setattr(execution_receipts, "highest_prices", {})
     execution_receipts._complete_standard_sell_runtime_after_db(
-        target_stock=stock, target_id=stock["id"], code=stock["code"],
-        now=datetime.now(), order_no="0000456")
+        target_stock=stock,
+        target_id=stock["id"],
+        code=stock["code"],
+        now=datetime.now(),
+        order_no="0000456",
+    )
     assert not execution_receipts._sell_pending_submit_path(stock["id"]).exists()
     assert "sell_submit_generation" not in stock
 

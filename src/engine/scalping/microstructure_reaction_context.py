@@ -66,7 +66,6 @@ def microstructure_delivery_fields(payload: dict) -> dict:
     return {key: payload[key] for key in DELIVERY_KEYS if key in payload}
 
 
-
 MACHINE_EVALUATION_SCHEMA = "microstructure_machine_auxiliary_evaluation_v1"
 
 
@@ -79,16 +78,27 @@ def bind_machine_microstructure_source(capture: dict) -> dict:
     snapshot = payload.get("ai_market_snapshot_v1") or {}
     mechanistic = evidence.get("mechanistic_context") or {}
     flow = mechanistic.get("flow") or {}
-    window = mechanistic.get("micro_window") or payload.get("mechanistic_micro_window") or {}
+    window = (
+        mechanistic.get("micro_window") or payload.get("mechanistic_micro_window") or {}
+    )
     from src.trading.market.micro_confirmation import _live_route_item
 
-    expected_item = _live_route_item(str(context.get("stock_code") or ""), {"krx_only": "KRX", "nxt_only": "NXT", "krx_nxt_integrated": "SOR"}.get(str(context.get("market_data_route") or ""), ""))
+    expected_item = _live_route_item(
+        str(context.get("stock_code") or ""),
+        {"krx_only": "KRX", "nxt_only": "NXT", "krx_nxt_integrated": "SOR"}.get(
+            str(context.get("market_data_route") or ""), ""
+        ),
+    )
     features = payload.get("features") or {}
-    reaction = {k: v for k, v in features.items() if k.startswith("microstructure_reaction_")}
+    reaction = {
+        k: v for k, v in features.items() if k.startswith("microstructure_reaction_")
+    }
     try:
         captured = datetime.fromisoformat(capture["captured_at"])
         cutoff = float(window["cutoff_ms"]) / 1000
-        cutoff_valid = captured.tzinfo is not None and 0 <= captured.timestamp() - cutoff <= 5
+        cutoff_valid = (
+            captured.tzinfo is not None and 0 <= captured.timestamp() - cutoff <= 5
+        )
     except (KeyError, TypeError, ValueError, OverflowError):
         cutoff_valid = False
     return {
@@ -96,8 +106,15 @@ def bind_machine_microstructure_source(capture: dict) -> dict:
         "setup_evidence_sha256": evidence.get("evidence_sha256"),
         "flow_observation_sha256": flow.get("flow_observation_sha256"),
         "decision_snapshot_id": context.get("snapshot_id"),
-        "snapshot_identity_matches": bool(context.get("snapshot_id") and context.get("snapshot_id") == snapshot.get("snapshot_id")),
-        "venue_session_matches": all(str(context.get(k) or "").upper() == str(snapshot.get(k) or "").upper() and bool(context.get(k)) for k in ("effective_venue", "session_bucket")),
+        "snapshot_identity_matches": bool(
+            context.get("snapshot_id")
+            and context.get("snapshot_id") == snapshot.get("snapshot_id")
+        ),
+        "venue_session_matches": all(
+            str(context.get(k) or "").upper() == str(snapshot.get(k) or "").upper()
+            and bool(context.get(k))
+            for k in ("effective_venue", "session_bucket")
+        ),
         "bundle_sha256": capture.get("bundle_sha256"),
         "effective_venue": context.get("effective_venue"),
         "session_bucket": context.get("session_bucket"),
@@ -106,10 +123,11 @@ def bind_machine_microstructure_source(capture: dict) -> dict:
         "reaction_context": reaction,
         "micro_window": window,
         "micro_window_cutoff_valid": cutoff_valid,
-        "micro_window_item_matches": bool(expected_item and window.get("item") == expected_item),
+        "micro_window_item_matches": bool(
+            expected_item and window.get("item") == expected_item
+        ),
         "source_authority": "hash_verified_exact_machine_capture_not_legacy_score_join",
     }
-
 
 
 def summarize_machine_capture_population(captures: list[dict]) -> dict:
@@ -124,28 +142,71 @@ def summarize_machine_capture_population(captures: list[dict]) -> dict:
             continue
         seen.add(digest)
         binding = bind_machine_microstructure_source(capture)
-        action = ((capture.get("source") or {}).get("assessment") or {}).get("action") or "UNKNOWN"
-        key = (str(capture.get("captured_at") or "")[:10], binding.get("bundle_sha256"), binding.get("effective_venue"), str(binding.get("session_bucket") or "").upper(), action)
-        partition = partitions.setdefault(key, {"source_date": key[0], "bundle_sha256": key[1], "effective_venue": key[2], "session_bucket": key[3], "machine_action": action, "capture_count": 0, "source_binding_counts": Counter()})
+        action = ((capture.get("source") or {}).get("assessment") or {}).get(
+            "action"
+        ) or "UNKNOWN"
+        key = (
+            str(capture.get("captured_at") or "")[:10],
+            binding.get("bundle_sha256"),
+            binding.get("effective_venue"),
+            str(binding.get("session_bucket") or "").upper(),
+            action,
+        )
+        partition = partitions.setdefault(
+            key,
+            {
+                "source_date": key[0],
+                "bundle_sha256": key[1],
+                "effective_venue": key[2],
+                "session_bucket": key[3],
+                "machine_action": action,
+                "capture_count": 0,
+                "source_binding_counts": Counter(),
+            },
+        )
         partition["capture_count"] += 1
-        bound = binding.get("snapshot_identity_matches") is True and binding.get("venue_session_matches") is True
-        partition["source_binding_counts"]["exact_bound" if bound else "exact_source_gap"] += 1
+        bound = (
+            binding.get("snapshot_identity_matches") is True
+            and binding.get("venue_session_matches") is True
+        )
+        partition["source_binding_counts"][
+            "exact_bound" if bound else "exact_source_gap"
+        ] += 1
         window = binding.get("micro_window") or {}
-        partition["source_binding_counts"]["micro_window_source_gap" if window.get("action") == "SOURCE_UNAVAILABLE" or not window or not binding.get("micro_window_cutoff_valid") else "micro_window_observed"] += 1
+        partition["source_binding_counts"][
+            (
+                "micro_window_source_gap"
+                if window.get("action") == "SOURCE_UNAVAILABLE"
+                or not window
+                or not binding.get("micro_window_cutoff_valid")
+                else "micro_window_observed"
+            )
+        ] += 1
     result = []
     for key in sorted(partitions, key=lambda key: tuple(str(x or "") for x in key)):
         partition = partitions[key]
-        partition["source_binding_counts"] = dict(sorted(partition["source_binding_counts"].items()))
+        partition["source_binding_counts"] = dict(
+            sorted(partition["source_binding_counts"].items())
+        )
         result.append(partition)
-    return {"verified_capture_count": len(captures), "unique_verified_capture_count": len(seen), "duplicate_capture_collapsed_count": duplicates, "partitions": result, "economic_exclusions_do_not_erase_capture_population": True}
+    return {
+        "verified_capture_count": len(captures),
+        "unique_verified_capture_count": len(seen),
+        "duplicate_capture_collapsed_count": duplicates,
+        "partitions": result,
+        "economic_exclusions_do_not_erase_capture_population": True,
+    }
 
 
-def summarize_machine_microstructure_evaluation(cases: list[dict], *, source_receipt: dict, capture_census: dict | None = None) -> dict:
+def summarize_machine_microstructure_evaluation(
+    cases: list[dict], *, source_receipt: dict, capture_census: dict | None = None
+) -> dict:
     """Use all deduplicated cases before the case table's 200-row export limit.
 
     Endpoint returns are descriptive counterfactuals, not realized strategy PnL
     or causal feature uplift. AI denominators contain only machine ENTER_NOW.
     """
+
     def finite(value):
         if isinstance(value, bool):
             return None
@@ -165,17 +226,44 @@ def summarize_machine_microstructure_evaluation(cases: list[dict], *, source_rec
     auxiliary_economic_count = 0
     for case in cases:
         binding = case.get("microstructure_evaluation_binding") or {}
-        bound = bool(binding.get("capture_sha256") and binding.get("snapshot_identity_matches") is True and binding.get("venue_session_matches") is True and binding.get("bundle_sha256") == case.get("bundle_sha256"))
+        bound = bool(
+            binding.get("capture_sha256")
+            and binding.get("snapshot_identity_matches") is True
+            and binding.get("venue_session_matches") is True
+            and binding.get("bundle_sha256") == case.get("bundle_sha256")
+        )
         recovery = binding.get("micro_recovery") or {}
         reaction = binding.get("reaction_context") or {}
         window = binding.get("micro_window") or {}
         bindings["exact_source_bound" if bound else "exact_source_gap"] += 1
-        flow_usable = bound and binding.get("flow_source_quality_status") == "fresh_consistent" and recovery.get("source_usable") is True
-        reaction_usable = bound and reaction.get("microstructure_reaction_context_status") == "ok"
-        window_usable = bound and binding.get("micro_window_cutoff_valid") is True and binding.get("micro_window_item_matches") is True and window.get("source_quality_status") == "eligible" and window.get("action") != "SOURCE_UNAVAILABLE"
-        bindings["flow_recovery_usable" if flow_usable else "flow_recovery_source_gap"] += 1
-        bindings["reaction_context_usable" if reaction_usable else "reaction_context_source_gap"] += 1
-        bindings["micro_window_usable" if window_usable else "micro_window_source_gap"] += 1
+        flow_usable = (
+            bound
+            and binding.get("flow_source_quality_status") == "fresh_consistent"
+            and recovery.get("source_usable") is True
+        )
+        reaction_usable = (
+            bound and reaction.get("microstructure_reaction_context_status") == "ok"
+        )
+        window_usable = (
+            bound
+            and binding.get("micro_window_cutoff_valid") is True
+            and binding.get("micro_window_item_matches") is True
+            and window.get("source_quality_status") == "eligible"
+            and window.get("action") != "SOURCE_UNAVAILABLE"
+        )
+        bindings[
+            "flow_recovery_usable" if flow_usable else "flow_recovery_source_gap"
+        ] += 1
+        bindings[
+            (
+                "reaction_context_usable"
+                if reaction_usable
+                else "reaction_context_source_gap"
+            )
+        ] += 1
+        bindings[
+            "micro_window_usable" if window_usable else "micro_window_source_gap"
+        ] += 1
         action = case.get("machine_action") or "UNKNOWN"
         ai = case.get("ai_and_final_guard") or {}
         verdict = "NOT_APPLICABLE_MACHINE_NONENTER"
@@ -186,17 +274,55 @@ def summarize_machine_microstructure_evaluation(cases: list[dict], *, source_rec
                 verdict = "EXACT_AI_JOIN_GAP"
             elif ai.get("provider_called") is not True:
                 verdict = "PROVIDER_NOT_CALLED"
-            elif ai.get("decision_quality_contract_status") != "pass" or ai.get("semantic_validation_status") not in {None, "pass"}:
+            elif ai.get("decision_quality_contract_status") != "pass" or ai.get(
+                "semantic_validation_status"
+            ) not in {None, "pass"}:
                 verdict = "SEMANTIC_INVALID"
             else:
-                from src.engine.ai_prompt_contracts import MACHINE_AUXILIARY_COMPACT_ENTRY_PROMPT_VERSIONS
+                from src.engine.ai_prompt_contracts import (
+                    MACHINE_AUXILIARY_COMPACT_ENTRY_PROMPT_VERSIONS,
+                )
+
                 observed = str(ai.get("ai_risk_verdict") or "").upper()
-                verdict = observed if prompt in MACHINE_AUXILIARY_COMPACT_ENTRY_PROMPT_VERSIONS and observed in {"PASS", "VETO", "CAUTION", "INSUFFICIENT"} else "UNREGISTERED_OR_INVALID_VERDICT"
+                verdict = (
+                    observed
+                    if prompt in MACHINE_AUXILIARY_COMPACT_ENTRY_PROMPT_VERSIONS
+                    and observed in {"PASS", "VETO", "CAUTION", "INSUFFICIENT"}
+                    else "UNREGISTERED_OR_INVALID_VERDICT"
+                )
             ai_routes[verdict] += 1
-        key = (case.get("source_date"), case.get("bundle_sha256"), case.get("effective_venue"), case.get("session_bucket"), action, prompt, verdict)
-        group = groups.setdefault(key, {"source_date": key[0], "bundle_sha256": key[1], "effective_venue": key[2], "session_bucket": key[3], "machine_action": action, "prompt_version": prompt, "ai_verdict": verdict, "case_count": 0, "classification_counts": Counter(), "net": [], "adverse": [], "flow_recovery_net": [], "reaction_context_net": [], "micro_window_net": []})
+        key = (
+            case.get("source_date"),
+            case.get("bundle_sha256"),
+            case.get("effective_venue"),
+            case.get("session_bucket"),
+            action,
+            prompt,
+            verdict,
+        )
+        group = groups.setdefault(
+            key,
+            {
+                "source_date": key[0],
+                "bundle_sha256": key[1],
+                "effective_venue": key[2],
+                "session_bucket": key[3],
+                "machine_action": action,
+                "prompt_version": prompt,
+                "ai_verdict": verdict,
+                "case_count": 0,
+                "classification_counts": Counter(),
+                "net": [],
+                "adverse": [],
+                "flow_recovery_net": [],
+                "reaction_context_net": [],
+                "micro_window_net": [],
+            },
+        )
         group["case_count"] += 1
-        group["classification_counts"][case.get("case_classification") or "UNKNOWN"] += 1
+        group["classification_counts"][
+            case.get("case_classification") or "UNKNOWN"
+        ] += 1
         cost = case.get("cost_evidence") or {}
         selected_cost = finite(cost.get("selected_economic_cost_pct"))
         metric = (case.get("outcome_horizon_metrics") or {}).get("3m") or {}
@@ -207,35 +333,62 @@ def summarize_machine_microstructure_evaluation(cases: list[dict], *, source_rec
             reason = case.get("policy_learning_exclusion_reason") or "lineage_excluded"
         elif case.get("exact_attempt_identity_complete") is not True or not bound:
             reason = "exact_identity_or_source_gap"
-        elif selected_cost is None or selected_cost < 0 or cost.get("selected_cost_basis") not in {"executable_estimated_cost_pct", "broker_reconciled_cost_pct"} or not cost.get("cost_source_sha256") or cost.get("missing_cost_imputed") is not False:
+        elif (
+            selected_cost is None
+            or selected_cost < 0
+            or cost.get("selected_cost_basis")
+            not in {"executable_estimated_cost_pct", "broker_reconciled_cost_pct"}
+            or not cost.get("cost_source_sha256")
+            or cost.get("missing_cost_imputed") is not False
+        ):
             reason = "full_cost_contract_gap"
-        elif path.get("status") != "evaluable" or path.get("cadence_complete") is not True or metric.get("status") != "observed" or end is None:
+        elif (
+            path.get("status") != "evaluable"
+            or path.get("cadence_complete") is not True
+            or metric.get("status") != "observed"
+            or end is None
+        ):
             reason = "mature_cadence_outcome_gap"
         if reason:
             exclusions[reason] += 1
             continue
         economic_count += 1
-        if action == "ENTER_NOW" and verdict in {"PASS", "VETO", "CAUTION"} and case.get("compact_partition_eligible") is True:
+        if (
+            action == "ENTER_NOW"
+            and verdict in {"PASS", "VETO", "CAUTION"}
+            and case.get("compact_partition_eligible") is True
+        ):
             auxiliary_economic_count += 1
         net = end - selected_cost
         group["net"].append(net)
         adverse = finite(metric.get("mae_pct"))
         if adverse is not None:
             group["adverse"].append(adverse - selected_cost)
-        for usable, name in [(flow_usable, "flow_recovery_net"), (reaction_usable, "reaction_context_net"), (window_usable, "micro_window_net")]:
+        for usable, name in [
+            (flow_usable, "flow_recovery_net"),
+            (reaction_usable, "reaction_context_net"),
+            (window_usable, "micro_window_net"),
+        ]:
             if usable:
                 group[name].append(net)
 
     def stats(values):
         values = sorted(values)
-        return {"count": len(values), "mean_net_pct": mean(values) if values else None, "sum_equal_weight_net_pct": sum(values) if values else None, "p05_net_pct": values[int((len(values)-1)*0.05)] if values else None}
+        return {
+            "count": len(values),
+            "mean_net_pct": mean(values) if values else None,
+            "sum_equal_weight_net_pct": sum(values) if values else None,
+            "p05_net_pct": values[int((len(values) - 1) * 0.05)] if values else None,
+        }
 
     partitions = []
     for key in sorted(groups, key=lambda k: tuple(str(x or "") for x in k)):
         group = groups[key]
         net = group.pop("net")
         adverse = group.pop("adverse")
-        group["classification_counts"] = dict(sorted(group["classification_counts"].items()))
+        group["classification_counts"] = dict(
+            sorted(group["classification_counts"].items())
+        )
         group["cost_adjusted_3m_endpoint_cf"] = stats(net)
         group["worst_3m_cost_adjusted_path_mae_pct"] = min(adverse) if adverse else None
         for name in ("flow_recovery", "reaction_context", "micro_window"):
@@ -243,27 +396,73 @@ def summarize_machine_microstructure_evaluation(cases: list[dict], *, source_rec
         partitions.append(group)
     return {
         "schema": MACHINE_EVALUATION_SCHEMA,
-        "status": "evaluable_descriptive_counterfactual" if economic_count else "source_gap_no_cost_adjusted_outcomes",
-        "capture_population": (capture_census or {}).get("microstructure_capture_population"),
-        "capture_exclusion_counts": {key: value for key, value in (capture_census or {}).items() if key in {"invalid_capture", "unsupported_cohort", "machine_action_mismatch_excluded", "full_round_trip_cost_missing", "executable_reference_missing", "path_or_cost_missing", "machine_action_invalid"}},
-        "case_count": len(cases), "cost_adjusted_outcome_count": economic_count,
+        "status": (
+            "evaluable_descriptive_counterfactual"
+            if economic_count
+            else "source_gap_no_cost_adjusted_outcomes"
+        ),
+        "capture_population": (capture_census or {}).get(
+            "microstructure_capture_population"
+        ),
+        "capture_exclusion_counts": {
+            key: value
+            for key, value in (capture_census or {}).items()
+            if key
+            in {
+                "invalid_capture",
+                "unsupported_cohort",
+                "machine_action_mismatch_excluded",
+                "full_round_trip_cost_missing",
+                "executable_reference_missing",
+                "path_or_cost_missing",
+                "machine_action_invalid",
+            }
+        },
+        "case_count": len(cases),
+        "cost_adjusted_outcome_count": economic_count,
         "exclusion_counts": dict(sorted(exclusions.items())),
-        "denominator_preserved": len(cases) == economic_count + sum(exclusions.values()),
+        "denominator_preserved": len(cases)
+        == economic_count + sum(exclusions.values()),
         "source_binding_counts": dict(sorted(bindings.items())),
-        "machine_action_counts": dict(sorted(Counter(case.get("machine_action") or "UNKNOWN" for case in cases).items())),
+        "machine_action_counts": dict(
+            sorted(
+                Counter(
+                    case.get("machine_action") or "UNKNOWN" for case in cases
+                ).items()
+            )
+        ),
         "machine_enter_ai_routing_counts": dict(sorted(ai_routes.items())),
         "ai_denominator_role": "exact_joined_provider_called_machine_ENTER_NOW_only; nonentry_AI_absence_is_not_a_gap",
         "partitions": partitions,
         "measurement_role": "equal_weight_3m_endpoint_counterfactual_minus_existing_full_cost; not_strategy_EV_or_causal_delta_EV",
-        "outcome_window_contract": {"owner": "ai_decision_quality.mature_outcome_labels", "horizon_end_max_lag_sec": HORIZON_END_MAX_LAG_SEC, "endpoint_role": "last_observation_within_existing_3m_window_not_exact_close_or_fill"},
-        "source_receipt_machine_tuning_input_allowed": source_receipt.get("machine_threshold_tuning_input_allowed") is True,
-        "source_receipt_auxiliary_tuning_input_allowed": source_receipt.get("tuning_input_allowed") is True,
-        "machine_tuning_input_allowed": source_receipt.get("machine_threshold_tuning_input_allowed") is True and economic_count > 0,
-        "auxiliary_tuning_input_allowed": source_receipt.get("tuning_input_allowed") is True and auxiliary_economic_count > 0,
+        "outcome_window_contract": {
+            "owner": "ai_decision_quality.mature_outcome_labels",
+            "horizon_end_max_lag_sec": HORIZON_END_MAX_LAG_SEC,
+            "endpoint_role": "last_observation_within_existing_3m_window_not_exact_close_or_fill",
+        },
+        "source_receipt_machine_tuning_input_allowed": source_receipt.get(
+            "machine_threshold_tuning_input_allowed"
+        )
+        is True,
+        "source_receipt_auxiliary_tuning_input_allowed": source_receipt.get(
+            "tuning_input_allowed"
+        )
+        is True,
+        "machine_tuning_input_allowed": source_receipt.get(
+            "machine_threshold_tuning_input_allowed"
+        )
+        is True
+        and economic_count > 0,
+        "auxiliary_tuning_input_allowed": source_receipt.get("tuning_input_allowed")
+        is True
+        and auxiliary_economic_count > 0,
         "auxiliary_cost_adjusted_outcome_count": auxiliary_economic_count,
         "tuning_authority": "existing_machine_case_table_source_partition_terminal_holdout_and_promotion_gates_only; no_independent_feature_tuner",
-        "actual_completed_ev_pct": None, "actual_net_profit": None, "causal_model_delta_ev_pct": None,
-        "runtime_effect": False, "allowed_runtime_apply": False,
+        "actual_completed_ev_pct": None,
+        "actual_net_profit": None,
+        "causal_model_delta_ev_pct": None,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
     }
 
 
@@ -272,60 +471,120 @@ def refresh_machine_evaluation_link(source_path: Path, *, report_root: Path) -> 
     before = source_path.stat()
     source_bytes = source_path.read_bytes()
     after = source_path.stat()
-    if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns):
+    if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (
+        after.st_dev,
+        after.st_ino,
+        after.st_size,
+        after.st_mtime_ns,
+    ):
         raise ValueError("machine_evaluation_parent_changed_during_read")
     source = json.loads(source_bytes)
     target_date = source.get("target_date")
-    evaluation = ((source.get("hierarchical_entry_quality") or {}).get("machine_decision_case_table") or {}).get("microstructure_evaluation")
-    if source.get("schema") != "ai_decision_action_outcome_calibration_v2" or source.get("runtime_effect") is not False or source.get("allowed_runtime_apply") is not False or not isinstance(target_date, str) or not isinstance(evaluation, dict) or evaluation.get("schema") != MACHINE_EVALUATION_SCHEMA:
+    evaluation = (
+        (source.get("hierarchical_entry_quality") or {}).get(
+            "machine_decision_case_table"
+        )
+        or {}
+    ).get("microstructure_evaluation")
+    if (
+        source.get("schema") != "ai_decision_action_outcome_calibration_v2"
+        or source.get("runtime_effect") is not False
+        or source.get("allowed_runtime_apply") is not False
+        or not isinstance(target_date, str)
+        or not isinstance(evaluation, dict)
+        or evaluation.get("schema") != MACHINE_EVALUATION_SCHEMA
+    ):
         raise ValueError("exact_date_machine_evaluation_contract_missing")
-    if datetime.strptime(target_date, "%Y-%m-%d").date().isoformat() != target_date or target_date < _DEFAULT_CLEAN_BASELINE_DATE:
+    if (
+        datetime.strptime(target_date, "%Y-%m-%d").date().isoformat() != target_date
+        or target_date < _DEFAULT_CLEAN_BASELINE_DATE
+    ):
         raise ValueError("machine_evaluation_target_date_invalid")
     if source_path.name != f"ai_decision_action_outcome_calibration_{target_date}.json":
         raise ValueError("machine_evaluation_source_filename_date_mismatch")
-    if any(part.get("source_date") and part["source_date"] > target_date for part in evaluation.get("partitions") or []):
+    if any(
+        part.get("source_date") and part["source_date"] > target_date
+        for part in evaluation.get("partitions") or []
+    ):
         raise ValueError("future_machine_evaluation_partition")
-    if evaluation.get("runtime_effect") is not False or evaluation.get("allowed_runtime_apply") is not False:
+    if (
+        evaluation.get("runtime_effect") is not False
+        or evaluation.get("allowed_runtime_apply") is not False
+    ):
         raise ValueError("machine_evaluation_diagnostic_authority_invalid")
-    path = report_root / "microstructure_reaction_context" / f"microstructure_reaction_context_{target_date}.json"
+    path = (
+        report_root
+        / "microstructure_reaction_context"
+        / f"microstructure_reaction_context_{target_date}.json"
+    )
     if path.exists():
         report = json.loads(path.read_text())
         if report.get("date") != target_date:
             raise ValueError("microstructure_report_target_date_mismatch")
     else:
-        report = {"schema_version": 6, "date": target_date, "report_type": "microstructure_reaction_context", "summary": {}, "warnings": [], "runtime_effect": False, "allowed_runtime_apply": False}
+        report = {
+            "schema_version": 6,
+            "date": target_date,
+            "report_type": "microstructure_reaction_context",
+            "summary": {},
+            "warnings": [],
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        }
     # Keep an old report's statistics as explicitly historical, never as current inputs.
     if report.get("evaluation_mode") != "machine_primary_auxiliary_only":
         if path.exists():
             legacy_bytes = path.read_bytes()
             legacy_digest = hashlib.sha256(legacy_bytes).hexdigest()
-            legacy_path = path.with_name(path.stem + ".legacy." + legacy_digest + ".json")
+            legacy_path = path.with_name(
+                path.stem + ".legacy." + legacy_digest + ".json"
+            )
             if not legacy_path.exists():
                 legacy_path.write_bytes(legacy_bytes)
         report = {
-            "schema_version": 6, "date": target_date,
+            "schema_version": 6,
+            "date": target_date,
             "report_type": "microstructure_reaction_context",
             "legacy_generated_at": report.get("generated_at"),
-            "legacy_source_sha256": hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else None,
-            "summary": {}, "warnings": [], "runtime_effect": False,
+            "legacy_source_sha256": (
+                hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else None
+            ),
+            "summary": {},
+            "warnings": [],
+            "runtime_effect": False,
             "allowed_runtime_apply": False,
         }
-    if report.get("runtime_effect") is not False or report.get("allowed_runtime_apply") is not False:
+    if (
+        report.get("runtime_effect") is not False
+        or report.get("allowed_runtime_apply") is not False
+    ):
         raise ValueError("existing_microstructure_diagnostic_authority_invalid")
     report["metric_role"] = "machine_auxiliary_source_outcome_diagnostic"
-    report["window_policy"] = "existing_case_labeler_clean_baseline_through_exact_target_date"
-    report["sample_floor"] = {"diagnostic": "source_valid_existing_cases", "promotion": "existing_owner_gates_only"}
-    report["source_quality_gate"] = ["verified_capture_identity", "exact_date_parent_payload_and_hash", "full_cost_and_existing_path_cadence"]
+    report["window_policy"] = (
+        "existing_case_labeler_clean_baseline_through_exact_target_date"
+    )
+    report["sample_floor"] = {
+        "diagnostic": "source_valid_existing_cases",
+        "promotion": "existing_owner_gates_only",
+    }
+    report["source_quality_gate"] = [
+        "verified_capture_identity",
+        "exact_date_parent_payload_and_hash",
+        "full_cost_and_existing_path_cadence",
+    ]
     report["evaluation_mode"] = "machine_primary_auxiliary_only"
     report["decision_authority"] = "postclose_diagnostic_only"
     report["forbidden_uses"] = FORBIDDEN_USES
     report["legacy_study_status"] = "retired"
     report.setdefault("summary", {})["machine_primary_auxiliary_evaluation"] = {
-        **evaluation, "source_report_path": str(source_path),
+        **evaluation,
+        "source_report_path": str(source_path),
         "source_report_sha256": hashlib.sha256(source_bytes).hexdigest(),
         "source_target_date": target_date,
     }
-    report["primary_decision_metric"] = "machine_primary_auxiliary_full_cost_outcome_diagnostic"
+    report["primary_decision_metric"] = (
+        "machine_primary_auxiliary_full_cost_outcome_diagnostic"
+    )
     report["generated_at"] = datetime.now().astimezone().isoformat(timespec="seconds")
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(path.name + "." + uuid4().hex + ".tmp")
@@ -334,14 +593,22 @@ def refresh_machine_evaluation_link(source_path: Path, *, report_root: Path) -> 
         temporary.replace(path)
     finally:
         temporary.unlink(missing_ok=True)
-    path.with_suffix(".md").write_text(render_microstructure_reaction_context_markdown(report))
+    path.with_suffix(".md").write_text(
+        render_microstructure_reaction_context_markdown(report)
+    )
     return report
 
 
 def microstructure_summary_contract(summary: dict) -> dict:
     modern = dict(summary.get("machine_primary_auxiliary_evaluation") or {})
     if not modern:
-        modern = {"schema": MACHINE_EVALUATION_SCHEMA, "status": "source_gap_exact_date_machine_evaluation_not_generated", "actual_completed_ev_pct": None, "runtime_effect": False, "allowed_runtime_apply": False}
+        modern = {
+            "schema": MACHINE_EVALUATION_SCHEMA,
+            "status": "source_gap_exact_date_machine_evaluation_not_generated",
+            "actual_completed_ev_pct": None,
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        }
     elif modern.get("source_report_path") and modern.get("source_report_sha256"):
         try:
             path = Path(modern["source_report_path"])
@@ -350,16 +617,52 @@ def microstructure_summary_contract(summary: dict) -> dict:
             digest = hashlib.sha256(source_bytes).hexdigest()
             parent = json.loads(source_bytes)
             after = path.stat()
-            valid = digest == modern.get("source_report_sha256") and (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) == (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
-            expected = ((parent.get("hierarchical_entry_quality") or {}).get("machine_decision_case_table") or {}).get("microstructure_evaluation")
-            observed = {k: v for k, v in modern.items() if k not in {"source_report_path", "source_report_sha256", "source_target_date"}}
-            valid = valid and parent.get("target_date") == modern.get("source_target_date") and path.name == f"ai_decision_action_outcome_calibration_{modern.get('source_target_date')}.json" and expected == observed and parent.get("schema") == "ai_decision_action_outcome_calibration_v2" and parent.get("runtime_effect") is False and parent.get("allowed_runtime_apply") is False
+            valid = digest == modern.get("source_report_sha256") and (
+                before.st_dev,
+                before.st_ino,
+                before.st_size,
+                before.st_mtime_ns,
+            ) == (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
+            expected = (
+                (parent.get("hierarchical_entry_quality") or {}).get(
+                    "machine_decision_case_table"
+                )
+                or {}
+            ).get("microstructure_evaluation")
+            observed = {
+                k: v
+                for k, v in modern.items()
+                if k
+                not in {
+                    "source_report_path",
+                    "source_report_sha256",
+                    "source_target_date",
+                }
+            }
+            valid = (
+                valid
+                and parent.get("target_date") == modern.get("source_target_date")
+                and path.name
+                == f"ai_decision_action_outcome_calibration_{modern.get('source_target_date')}.json"
+                and expected == observed
+                and parent.get("schema") == "ai_decision_action_outcome_calibration_v2"
+                and parent.get("runtime_effect") is False
+                and parent.get("allowed_runtime_apply") is False
+            )
         except (OSError, ValueError, TypeError, AttributeError):
             valid = False
         if not valid:
-            modern.update(status="source_gap_machine_evaluation_parent_hash_mismatch", machine_tuning_input_allowed=False, auxiliary_tuning_input_allowed=False)
+            modern.update(
+                status="source_gap_machine_evaluation_parent_hash_mismatch",
+                machine_tuning_input_allowed=False,
+                auxiliary_tuning_input_allowed=False,
+            )
     else:
-        modern.update(status="source_gap_machine_evaluation_parent_hash_mismatch", machine_tuning_input_allowed=False, auxiliary_tuning_input_allowed=False)
+        modern.update(
+            status="source_gap_machine_evaluation_parent_hash_mismatch",
+            machine_tuning_input_allowed=False,
+            auxiliary_tuning_input_allowed=False,
+        )
     cumulative = {"status": "retired"}
     cumulative.update(
         {
@@ -523,6 +826,7 @@ FORBIDDEN_USES = [
     "bot_restart",
     "cap_release",
 ]
+
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
     try:
@@ -880,8 +1184,14 @@ def _quote_age_ms(
     if "last_realtime_type_ts" in ws_data or "last_ws_update_ts" in ws_data:
         from src.trading.market.quote_consistency import ws_quote_receive_age_ms
 
-        age = ws_quote_receive_age_ms(ws_data, now_ts=(now or datetime.now()).timestamp())
-        basis = "last_realtime_type_ts:0D" if "last_realtime_type_ts" in ws_data else "last_ws_update_ts"
+        age = ws_quote_receive_age_ms(
+            ws_data, now_ts=(now or datetime.now()).timestamp()
+        )
+        basis = (
+            "last_realtime_type_ts:0D"
+            if "last_realtime_type_ts" in ws_data
+            else "last_ws_update_ts"
+        )
         return age, basis if age is not None else "invalid_quote_receive_timestamp"
     quote_ts_keys = (
         "quote_age_ms",
@@ -1162,8 +1472,11 @@ def precompute_microstructure_reaction_inputs(
         "quote_age_ms": quote_age_ms,
         "quote_age_source": quote_age_source,
         "market_data_health": build_market_data_health(
-            ws_data, now_ts=(now or datetime.now()).timestamp(),
-            quote_max_age_ms=normalize_quote_stale_threshold(ws_data.get("ai_quote_stale_max_ms"))[0],
+            ws_data,
+            now_ts=(now or datetime.now()).timestamp(),
+            quote_max_age_ms=normalize_quote_stale_threshold(
+                ws_data.get("ai_quote_stale_max_ms")
+            )[0],
         ),
         "candle_highs": candle_highs,
         "candle_lows": candle_lows,
@@ -1432,7 +1745,9 @@ def build_microstructure_reaction_context(
         )
     )
     payload["market_data_health"] = build_market_data_health(
-        source, now_ts=now.timestamp(), quote_max_age_ms=quote_threshold,
+        source,
+        now_ts=now.timestamp(),
+        quote_max_age_ms=quote_threshold,
     )
     payload.update(
         {
@@ -1592,26 +1907,6 @@ def _row_from_event(event: dict[str, Any]) -> dict[str, Any] | None:
     return row
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 _DIAGNOSTIC_ROW_KEYS = (
     (
         "stock_code",
@@ -1655,64 +1950,10 @@ _DIAGNOSTIC_ROW_KEYS = (
 )
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 def render_microstructure_reaction_context_markdown(report: dict[str, Any]) -> str:
-    modern = (report.get("summary") or {}).get("machine_primary_auxiliary_evaluation") or {}
+    modern = (report.get("summary") or {}).get(
+        "machine_primary_auxiliary_evaluation"
+    ) or {}
     lines = [
         f"# Microstructure Machine Evaluation - {report.get('date')}",
         "",
@@ -1734,4 +1975,6 @@ def render_microstructure_reaction_context_markdown(report: dict[str, Any]) -> s
 
 
 if __name__ == "__main__":
-    raise SystemExit("Legacy raw microstructure study is retired; use the existing machine calibration producer.")
+    raise SystemExit(
+        "Legacy raw microstructure study is retired; use the existing machine calibration producer."
+    )

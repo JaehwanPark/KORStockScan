@@ -179,9 +179,7 @@ def test_ka10027_exposes_verified_response_contract_for_empty_success(monkeypatc
         ),
     )
 
-    rows, meta = kiwoom_utils.get_top_fluctuation_ka10027(
-        "token", return_meta=True
-    )
+    rows, meta = kiwoom_utils.get_top_fluctuation_ka10027("token", return_meta=True)
 
     assert rows == []
     assert meta["response_contract_status"] == "verified_success"
@@ -416,26 +414,46 @@ def test_capture_panel_pacing_preserves_scope_and_exact_request_receipts():
     def fetch(_token, **kwargs):
         starts.append((elapsed[0], kwargs["stex_tp"], kwargs["trde_qty_cnd"]))
         elapsed[0] += 0.2
-        return [], {"response_contract_status": "verified_success", "response_page_count": 1,
-                    "request_attempt_count": 1, "read_rate_control_status": "admitted"}
+        return [], {
+            "response_contract_status": "verified_success",
+            "response_page_count": 1,
+            "request_attempt_count": 1,
+            "read_rate_control_status": "admitted",
+        }
 
     rows = census.capture_market_snapshots(
-        "secret-token", target_date="2026-09-28",
+        "secret-token",
+        target_date="2026-09-28",
         captured_at=datetime.fromisoformat("2026-09-28T10:00:00+09:00"),
-        fetcher=fetch, request_clock=lambda: 1000.0 + elapsed[0],
+        fetcher=fetch,
+        request_clock=lambda: 1000.0 + elapsed[0],
         monotonic_clock=lambda: elapsed[0],
         sleeper=lambda seconds: elapsed.__setitem__(0, elapsed[0] + seconds),
         panel_min_start_interval_sec=5.0,
     )
     assert [round(start[0], 1) for start in starts] == [0.0, 5.0, 10.0, 15.0]
     assert [item[1:] for item in starts] == [
-        ("1", "0010"), ("2", "0010"), ("1", "0000"), ("2", "0000")
+        ("1", "0010"),
+        ("2", "0010"),
+        ("1", "0000"),
+        ("2", "0000"),
     ]
     controls = [row["source"]["request_control"] for row in rows]
-    assert [control["panel_pacing_waited_sec"] for control in controls] == [0.0, 4.8, 4.8, 4.8]
-    assert len({control["source_only_caller_fingerprint_sha256"] for control in controls}) == 4
+    assert [control["panel_pacing_waited_sec"] for control in controls] == [
+        0.0,
+        4.8,
+        4.8,
+        4.8,
+    ]
+    assert (
+        len({control["source_only_caller_fingerprint_sha256"] for control in controls})
+        == 4
+    )
     assert all(control["request_attempt_count"] == 1 for control in controls)
-    assert all(control["request_completed_epoch"] >= control["request_started_epoch"] for control in controls)
+    assert all(
+        control["request_completed_epoch"] >= control["request_started_epoch"]
+        for control in controls
+    )
     assert "secret-token" not in json.dumps(rows)
 
 
@@ -454,14 +472,21 @@ def test_capture_panel_pacing_bypasses_deadline_and_session_boundary():
             return [], {"response_contract_status": "verified_success"}
 
         rows = census.capture_market_snapshots(
-            "token", target_date="2026-09-28", captured_at=datetime.fromisoformat(start_at),
-            venues=("KRX", "NXT"), panels=("liquid_common",), fetcher=fetch,
+            "token",
+            target_date="2026-09-28",
+            captured_at=datetime.fromisoformat(start_at),
+            venues=("KRX", "NXT"),
+            panels=("liquid_common",),
+            fetcher=fetch,
             monotonic_clock=lambda: elapsed[0],
             sleeper=lambda seconds: elapsed.__setitem__(0, elapsed[0] + seconds),
             panel_min_start_interval_sec=65.0 if fetch_duration == 58.0 else 5.0,
         )
         assert starts[1] == fetch_duration
-        assert rows[1]["source"]["request_control"]["panel_pacing_bypass_reason"] == expected_reason
+        assert (
+            rows[1]["source"]["request_control"]["panel_pacing_bypass_reason"]
+            == expected_reason
+        )
 
 
 def test_capture_panel_pacing_rechecks_after_short_sleep():
@@ -473,29 +498,50 @@ def test_capture_panel_pacing_rechecks_after_short_sleep():
         return [], {"response_contract_status": "verified_success"}
 
     census.capture_market_snapshots(
-        "token", target_date="2026-09-28",
+        "token",
+        target_date="2026-09-28",
         captured_at=datetime.fromisoformat("2026-09-28T10:00:00+09:00"),
-        venues=("KRX", "NXT"), panels=("liquid_common",), fetcher=fetch,
+        venues=("KRX", "NXT"),
+        panels=("liquid_common",),
+        fetcher=fetch,
         monotonic_clock=lambda: elapsed[0],
-        sleeper=lambda seconds: elapsed.__setitem__(0, elapsed[0] + max(1.0, seconds / 2)),
+        sleeper=lambda seconds: elapsed.__setitem__(
+            0, elapsed[0] + max(1.0, seconds / 2)
+        ),
         panel_min_start_interval_sec=5.0,
     )
     assert starts[1] >= 5.0
 
 
 def test_source_only_caller_fingerprint_is_exact_and_token_free():
-    kwargs = dict(target_date="2026-09-28", api_id="ka10027", path="/api/dostk/rkinfo",
-                  payload={"stex_tp": "1"}, use_continuous=True,
-                  max_pages=1, max_retries=3,
-                  read_rate_max_wait_sec=1.25)
+    kwargs = dict(
+        target_date="2026-09-28",
+        api_id="ka10027",
+        path="/api/dostk/rkinfo",
+        payload={"stex_tp": "1"},
+        use_continuous=True,
+        max_pages=1,
+        max_retries=3,
+        read_rate_max_wait_sec=1.25,
+    )
     first = kiwoom_utils.source_only_caller_fingerprint("token-A", **kwargs)
     assert first == kiwoom_utils.source_only_caller_fingerprint("token-A", **kwargs)
     assert first != kiwoom_utils.source_only_caller_fingerprint("token-B", **kwargs)
-    assert first != kiwoom_utils.source_only_caller_fingerprint("token-A", **{**kwargs, "target_date": "2026-09-29"})
-    assert first != kiwoom_utils.source_only_caller_fingerprint("token-A", **{**kwargs, "payload": {"stex_tp": "2"}})
-    assert first != kiwoom_utils.source_only_caller_fingerprint("token-A", **{**kwargs, "use_continuous": False})
-    assert first != kiwoom_utils.source_only_caller_fingerprint("token-A", **{**kwargs, "read_rate_max_wait_sec": 5.0})
-    assert first != kiwoom_utils.source_only_caller_fingerprint("token-A", **{**kwargs, "result_limit": 200})
+    assert first != kiwoom_utils.source_only_caller_fingerprint(
+        "token-A", **{**kwargs, "target_date": "2026-09-29"}
+    )
+    assert first != kiwoom_utils.source_only_caller_fingerprint(
+        "token-A", **{**kwargs, "payload": {"stex_tp": "2"}}
+    )
+    assert first != kiwoom_utils.source_only_caller_fingerprint(
+        "token-A", **{**kwargs, "use_continuous": False}
+    )
+    assert first != kiwoom_utils.source_only_caller_fingerprint(
+        "token-A", **{**kwargs, "read_rate_max_wait_sec": 5.0}
+    )
+    assert first != kiwoom_utils.source_only_caller_fingerprint(
+        "token-A", **{**kwargs, "result_limit": 200}
+    )
     assert "token-A" not in first
 
 
@@ -505,12 +551,17 @@ def test_census_fingerprint_includes_normalized_result_limit():
 
     def fingerprint(limit):
         rows = census.capture_market_snapshots(
-            "token", target_date="2026-09-28",
+            "token",
+            target_date="2026-09-28",
             captured_at=datetime.fromisoformat("2026-09-28T10:00:00+09:00"),
-            venues=("KRX",), panels=("liquid_common",), fetcher=fetch,
+            venues=("KRX",),
+            panels=("liquid_common",),
+            fetcher=fetch,
             limit=limit,
         )
-        return rows[0]["source"]["request_control"]["source_only_caller_fingerprint_sha256"]
+        return rows[0]["source"]["request_control"][
+            "source_only_caller_fingerprint_sha256"
+        ]
 
     assert fingerprint(20) != fingerprint(200)
 
@@ -531,9 +582,12 @@ def test_source_only_fingerprint_does_not_change_normalized_market_payload_hash(
             "source_only_caller_fingerprint_sha256": "a" * 64,
         },
     }
-    assert census._normalized_source_payload_sha256(
-        request_contract=contract, rows=[with_fingerprint]
-    ) == original
+    assert (
+        census._normalized_source_payload_sha256(
+            request_contract=contract, rows=[with_fingerprint]
+        )
+        == original
+    )
 
 
 def test_capture_blocks_transition_and_classifies_integrated_without_inventing_actual_venue():
@@ -1500,15 +1554,19 @@ def test_trigger_contract_requires_current_wrapper_and_installed_exact_lines(
     assert "trigger_schedule" in invalid_schedule["reason_codes"]
 
 
-def test_trigger_existing_four_owned_log_lines_are_verified_without_transition_call(tmp_path, monkeypatch):
+def test_trigger_existing_four_owned_log_lines_are_verified_without_transition_call(
+    tmp_path, monkeypatch
+):
     wrapper = tmp_path / "deploy" / "run_market_opportunity_census_intraday.sh"
     wrapper.parent.mkdir()
     wrapper.write_text("#!/usr/bin/env bash\nexit 0\n")
     wrapper.chmod(0o700)
     monkeypatch.setattr(census, "DEFAULT_TRIGGER_WRAPPER", wrapper)
-    command = (f"bash {tmp_path}/deploy/run_with_owned_log.sh --owner market_opportunity_census_cron "
-               f"--log {tmp_path}/logs/run_market_opportunity_census_intraday_cron.log {wrapper} "
-               "$(TZ=Asia/Seoul date +\\%F)")
+    command = (
+        f"bash {tmp_path}/deploy/run_with_owned_log.sh --owner market_opportunity_census_cron "
+        f"--log {tmp_path}/logs/run_market_opportunity_census_intraday_cron.log {wrapper} "
+        "$(TZ=Asia/Seoul date +\\%F)"
+    )
     # Literal installed schedules/markers are evidence independent of validator
     # constants. Mirroring those constants hid an aftermarket marker typo.
     lines = [
@@ -1517,63 +1575,157 @@ def test_trigger_existing_four_owned_log_lines_are_verified_without_transition_c
         f"0-30/5 15 * * 1-5 {command} # MARKET_OPPORTUNITY_CENSUS_KRX_NXT_CLOSE_5MIN",
         f"*/5 16-19 * * 1-5 {command} # MARKET_OPPORTUNITY_CENSUS_KRX_NXT_AFTERMARKET_5MIN",
     ]
-    payload = dict(schema_version=census.TRIGGER_SCHEMA_VERSION, trigger_id="MARKET_OPPORTUNITY_CENSUS_5MIN",
-                   enabled=True, contract_source="installed_crontab_verified", schedule_timezone="Asia/Seoul",
-                   capture_cadence_sec=300, installed_exec_start=str(wrapper),
-                   wrapper_sha256=hashlib.sha256(wrapper.read_bytes()).hexdigest(), trigger_lines=lines,
-                   trigger_lines_sha256=census._canonical_trigger_lines_sha256(lines),
-                   runtime_effect=False, allowed_runtime_apply=False, actual_order_submitted=False,
-                   broker_order_forbidden=True)
+    payload = dict(
+        schema_version=census.TRIGGER_SCHEMA_VERSION,
+        trigger_id="MARKET_OPPORTUNITY_CENSUS_5MIN",
+        enabled=True,
+        contract_source="installed_crontab_verified",
+        schedule_timezone="Asia/Seoul",
+        capture_cadence_sec=300,
+        installed_exec_start=str(wrapper),
+        wrapper_sha256=hashlib.sha256(wrapper.read_bytes()).hexdigest(),
+        trigger_lines=lines,
+        trigger_lines_sha256=census._canonical_trigger_lines_sha256(lines),
+        runtime_effect=False,
+        allowed_runtime_apply=False,
+        actual_order_submitted=False,
+        broker_order_forbidden=True,
+    )
     receipt = tmp_path / "trigger.json"
     receipt.write_text(json.dumps(payload))
-    result = census._load_trigger_contract(receipt, installed_crontab_text="\n".join(lines), system_timezone="Asia/Seoul")
+    result = census._load_trigger_contract(
+        receipt, installed_crontab_text="\n".join(lines), system_timezone="Asia/Seoul"
+    )
     assert result["status"] == "verified"
     assert result["trigger_line_count"] == 4
     assert not any("35-55" in line for line in lines)
-    assert not census._trigger_command_valid(lines[0].replace("--owner market_opportunity_census_cron", "--owner foreign"),
-                                            census.EXPECTED_TRIGGER_SCHEDULE_PREFIXES[0], census.EXPECTED_TRIGGER_MARKERS[0], wrapper)
-    assert not census._trigger_command_valid(lines[0].replace("$(TZ=Asia/Seoul date +\\%F)", "; touch foreign"),
-                                            census.EXPECTED_TRIGGER_SCHEDULE_PREFIXES[0], census.EXPECTED_TRIGGER_MARKERS[0], wrapper)
-    payload['trigger_lines'][-1] = lines[-1].replace('CENSUS_KRX_NXT_AFTERMARKET', 'CENSUS_NXT_AFTERMARKET')
-    payload['trigger_lines_sha256'] = census._canonical_trigger_lines_sha256(payload['trigger_lines'])
+    assert not census._trigger_command_valid(
+        lines[0].replace("--owner market_opportunity_census_cron", "--owner foreign"),
+        census.EXPECTED_TRIGGER_SCHEDULE_PREFIXES[0],
+        census.EXPECTED_TRIGGER_MARKERS[0],
+        wrapper,
+    )
+    assert not census._trigger_command_valid(
+        lines[0].replace("$(TZ=Asia/Seoul date +\\%F)", "; touch foreign"),
+        census.EXPECTED_TRIGGER_SCHEDULE_PREFIXES[0],
+        census.EXPECTED_TRIGGER_MARKERS[0],
+        wrapper,
+    )
+    payload["trigger_lines"][-1] = lines[-1].replace(
+        "CENSUS_KRX_NXT_AFTERMARKET", "CENSUS_NXT_AFTERMARKET"
+    )
+    payload["trigger_lines_sha256"] = census._canonical_trigger_lines_sha256(
+        payload["trigger_lines"]
+    )
     receipt.write_text(json.dumps(payload))
-    wrong_marker = census._load_trigger_contract(receipt,
-        installed_crontab_text='\n'.join(payload['trigger_lines']), system_timezone='Asia/Seoul')
-    assert wrong_marker['status'] == 'invalid' and 'trigger_schedule' in wrong_marker['reason_codes']
+    wrong_marker = census._load_trigger_contract(
+        receipt,
+        installed_crontab_text="\n".join(payload["trigger_lines"]),
+        system_timezone="Asia/Seoul",
+    )
+    assert (
+        wrong_marker["status"] == "invalid"
+        and "trigger_schedule" in wrong_marker["reason_codes"]
+    )
 
 
 def _zero_base_native_events(*, route="krx_nxt_integrated"):
     start = datetime.fromisoformat("2026-10-16T16:00:00+09:00")
     sha, observation = "a" * 64, "b" * 64
     promotion = f"ZBPROM-005930-{int((start.timestamp()+60)*1000)}-1"
+
     def event(stage, seconds, fields):
-        return dict(stage=stage, pipeline="ENTRY_PIPELINE", stock_code="005930", emitted_at=(start+timedelta(seconds=seconds)).isoformat(), fields=fields)
+        return dict(
+            stage=stage,
+            pipeline="ENTRY_PIPELINE",
+            stock_code="005930",
+            emitted_at=(start + timedelta(seconds=seconds)).isoformat(),
+            fields=fields,
+        )
+
     common = dict(zero_base_route=route, zero_base_source_sha256=sha)
-    final = dict(schema="zero_base_finalize_receipt_v1", attached=True, finalized=True,
-                 actual_order_submitted=False, record_id=42, code="005930", physical_probe_lease_id="lease",
-                 ws_handoff_id="handoff", machine_observation_sha256=observation, pid=123, process_start_ticks="456",
-                 decision_authority="observation_only", observed_epoch=start.timestamp()+61.05)
+    final = dict(
+        schema="zero_base_finalize_receipt_v1",
+        attached=True,
+        finalized=True,
+        actual_order_submitted=False,
+        record_id=42,
+        code="005930",
+        physical_probe_lease_id="lease",
+        ws_handoff_id="handoff",
+        machine_observation_sha256=observation,
+        pid=123,
+        process_start_ticks="456",
+        decision_authority="observation_only",
+        observed_epoch=start.timestamp() + 61.05,
+    )
     return [
-        event("zero_base_probe_claim", 1, dict(common, zero_base_claim_count="1", zero_base_claim_observed_epoch=str(start.timestamp()))),
-        event("zero_base_probe_result", 60, dict(common, zero_base_claim_count="1", zero_base_probe_result="assessed",
-             zero_base_probe_result_schema="zero_base_probe_result_v2",
-             zero_base_probe_reason="operating_independent_union_pass", physical_probe_lease_id="lease",
-             entry_mechanistic_action="ENTER_NOW", machine_observation_sha256=observation)),
-        event("scalping_scanner_runtime_target_attach", 61, dict(runtime_target_attach_outcome="attached", runtime_record_id="42",
-             scanner_promotion_id=promotion, scanner_promotion_emitted_epoch=str(start.timestamp()+60.1),
-             source_signature="ZERO_BASE_DISCOVERY:"+sha, effective_venue="KRX_NXT_INTEGRATED")),
-        event("zero_base_watch_attach", 61.1, dict(common, zero_base_attach_outcome="attached", record_id="42",
-             zero_base_attach_pid="123", zero_base_attach_process_start_ticks="456", zero_base_attach_reason="committed",
-             zero_base_physical_probe_lease_id="lease", zero_base_handoff_id="handoff", machine_observation_sha256=observation,
-             zero_base_finalize_receipt=json.dumps(final))),
+        event(
+            "zero_base_probe_claim",
+            1,
+            dict(
+                common,
+                zero_base_claim_count="1",
+                zero_base_claim_observed_epoch=str(start.timestamp()),
+            ),
+        ),
+        event(
+            "zero_base_probe_result",
+            60,
+            dict(
+                common,
+                zero_base_claim_count="1",
+                zero_base_probe_result="assessed",
+                zero_base_probe_result_schema="zero_base_probe_result_v2",
+                zero_base_probe_reason="operating_independent_union_pass",
+                physical_probe_lease_id="lease",
+                entry_mechanistic_action="ENTER_NOW",
+                machine_observation_sha256=observation,
+            ),
+        ),
+        event(
+            "scalping_scanner_runtime_target_attach",
+            61,
+            dict(
+                runtime_target_attach_outcome="attached",
+                runtime_record_id="42",
+                scanner_promotion_id=promotion,
+                scanner_promotion_emitted_epoch=str(start.timestamp() + 60.1),
+                source_signature="ZERO_BASE_DISCOVERY:" + sha,
+                effective_venue="KRX_NXT_INTEGRATED",
+            ),
+        ),
+        event(
+            "zero_base_watch_attach",
+            61.1,
+            dict(
+                common,
+                zero_base_attach_outcome="attached",
+                record_id="42",
+                zero_base_attach_pid="123",
+                zero_base_attach_process_start_ticks="456",
+                zero_base_attach_reason="committed",
+                zero_base_physical_probe_lease_id="lease",
+                zero_base_handoff_id="handoff",
+                machine_observation_sha256=observation,
+                zero_base_finalize_receipt=json.dumps(final),
+            ),
+        ),
     ]
 
 
-def test_native_zero_base_custody_observation_and_confirmed_promotion_preserve_integrated_scope(tmp_path):
+def test_native_zero_base_custody_observation_and_confirmed_promotion_preserve_integrated_scope(
+    tmp_path,
+):
     pipeline = tmp_path / "pipeline.jsonl"
     _write_jsonl(pipeline, _zero_base_native_events())
     observed = {}
-    index = census._load_stage_index(pipeline, tmp_path/"ai.jsonl", target_date="2026-10-16", zero_base_source_census=observed)
+    index = census._load_stage_index(
+        pipeline,
+        tmp_path / "ai.jsonl",
+        target_date="2026-10-16",
+        zero_base_source_census=observed,
+    )
     assert observed["valid_claim_count"] == 1
     assert observed["matched_probe_result_count"] == 1
     assert observed["confirmed_watch_admission_count"] == 1
@@ -1581,73 +1733,170 @@ def test_native_zero_base_custody_observation_and_confirmed_promotion_preserve_i
     assert len(index["005930"]["scanner_promoted"]) == 1
     assert index["005930"]["scanner_promoted"][0]["venue"] == "KRX_NXT_INTEGRATED"
     assert index["005930"]["scanner_promoted"][0]["record_id"] == "42"
-    episode = dict(stock_code="005930", venue="KRX", session="KRX_NXT_AFTERMARKET",
-                   first_census_at=datetime.fromisoformat("2026-10-16T16:00:00+09:00"))
-    row = census._coverage_row(episode, index, after=episode["first_census_at"],
-                              before=episode["first_census_at"]+timedelta(minutes=5), require_venue=True, require_lineage=True)
+    episode = dict(
+        stock_code="005930",
+        venue="KRX",
+        session="KRX_NXT_AFTERMARKET",
+        first_census_at=datetime.fromisoformat("2026-10-16T16:00:00+09:00"),
+    )
+    row = census._coverage_row(
+        episode,
+        index,
+        after=episode["first_census_at"],
+        before=episode["first_census_at"] + timedelta(minutes=5),
+        require_venue=True,
+        require_lineage=True,
+    )
     assert row["stage_reached"]["scanner_promoted"] is False
-    assert row["terminal_coverage_reason"] == "integrated_discovery_observed_physical_panel_binding_unproven"
+    assert (
+        row["terminal_coverage_reason"]
+        == "integrated_discovery_observed_physical_panel_binding_unproven"
+    )
     assert row["zero_base_source_observation"]["physical_panel_recall_proven"] is False
-    assert row["zero_base_source_observation"]["market_data_routes"] == ["krx_nxt_integrated"]
+    assert row["zero_base_source_observation"]["market_data_routes"] == [
+        "krx_nxt_integrated"
+    ]
 
 
-@pytest.mark.parametrize("mutation", ["source_hash", "claim_count", "lease", "machine_hash", "record", "finalized", "promotion", "promotion_epoch", "promotion_old_date", "promotion_time", "pid", "start_ticks", "pipeline", "schema"])
-def test_zero_base_adapter_does_not_invent_promotion_on_broken_native_custody(tmp_path, mutation):
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "source_hash",
+        "claim_count",
+        "lease",
+        "machine_hash",
+        "record",
+        "finalized",
+        "promotion",
+        "promotion_epoch",
+        "promotion_old_date",
+        "promotion_time",
+        "pid",
+        "start_ticks",
+        "pipeline",
+        "schema",
+    ],
+)
+def test_zero_base_adapter_does_not_invent_promotion_on_broken_native_custody(
+    tmp_path, mutation
+):
     rows = _zero_base_native_events()
-    if mutation == "source_hash": rows[1]["fields"]["zero_base_source_sha256"] = "c"*64
-    if mutation == "claim_count": rows[1]["fields"]["zero_base_claim_count"] = "2"
-    if mutation == "lease": rows[1]["fields"]["physical_probe_lease_id"] = "other"
-    if mutation == "machine_hash": rows[1]["fields"]["machine_observation_sha256"] = "c"*64
-    if mutation == "record": rows[2]["fields"]["runtime_record_id"] = "43"
+    if mutation == "source_hash":
+        rows[1]["fields"]["zero_base_source_sha256"] = "c" * 64
+    if mutation == "claim_count":
+        rows[1]["fields"]["zero_base_claim_count"] = "2"
+    if mutation == "lease":
+        rows[1]["fields"]["physical_probe_lease_id"] = "other"
+    if mutation == "machine_hash":
+        rows[1]["fields"]["machine_observation_sha256"] = "c" * 64
+    if mutation == "record":
+        rows[2]["fields"]["runtime_record_id"] = "43"
     if mutation == "finalized":
-        final = json.loads(rows[3]["fields"]["zero_base_finalize_receipt"]); final["finalized"] = False
+        final = json.loads(rows[3]["fields"]["zero_base_finalize_receipt"])
+        final["finalized"] = False
         rows[3]["fields"]["zero_base_finalize_receipt"] = json.dumps(final)
-    if mutation == "promotion": rows[2]["fields"]["scanner_promotion_id"] = "ZBPROM-005930-1792105200000-2"
-    if mutation == "promotion_epoch": rows[2]["fields"]["scanner_promotion_id"] = "ZBPROM-005930-1-1"
-    if mutation == "promotion_old_date": rows[2]["fields"]["scanner_promotion_id"] = "ZBPROM-005930-1792018800000-1"
-    if mutation == "promotion_time": rows[2]["fields"]["scanner_promotion_emitted_epoch"] = "1"
-    if mutation == "pid": rows[3]["fields"]["zero_base_attach_pid"] = "999"
-    if mutation == "start_ticks": rows[3]["fields"]["zero_base_attach_process_start_ticks"] = "999"
-    if mutation == "pipeline": rows[1]["pipeline"] = "FOREIGN_PIPELINE"
-    if mutation == "schema": rows[1]["fields"]["zero_base_probe_result_schema"] = "legacy_or_unknown"
-    path = tmp_path/"pipeline.jsonl"; _write_jsonl(path, rows)
+    if mutation == "promotion":
+        rows[2]["fields"]["scanner_promotion_id"] = "ZBPROM-005930-1792105200000-2"
+    if mutation == "promotion_epoch":
+        rows[2]["fields"]["scanner_promotion_id"] = "ZBPROM-005930-1-1"
+    if mutation == "promotion_old_date":
+        rows[2]["fields"]["scanner_promotion_id"] = "ZBPROM-005930-1792018800000-1"
+    if mutation == "promotion_time":
+        rows[2]["fields"]["scanner_promotion_emitted_epoch"] = "1"
+    if mutation == "pid":
+        rows[3]["fields"]["zero_base_attach_pid"] = "999"
+    if mutation == "start_ticks":
+        rows[3]["fields"]["zero_base_attach_process_start_ticks"] = "999"
+    if mutation == "pipeline":
+        rows[1]["pipeline"] = "FOREIGN_PIPELINE"
+    if mutation == "schema":
+        rows[1]["fields"]["zero_base_probe_result_schema"] = "legacy_or_unknown"
+    path = tmp_path / "pipeline.jsonl"
+    _write_jsonl(path, rows)
     observed = {}
-    index = census._load_stage_index(path, tmp_path/"ai.jsonl", target_date="2026-10-16", zero_base_source_census=observed)
+    index = census._load_stage_index(
+        path,
+        tmp_path / "ai.jsonl",
+        target_date="2026-10-16",
+        zero_base_source_census=observed,
+    )
     assert observed["confirmed_watch_admission_count"] == 0
     assert not index["005930"].get("scanner_promoted")
     assert observed["lineage_gap_counts"]
 
 
-def test_zero_base_source_failure_remains_disposition_and_pending_claim_remains_gap(tmp_path):
+def test_zero_base_source_failure_remains_disposition_and_pending_claim_remains_gap(
+    tmp_path,
+):
     rows = _zero_base_native_events()[:2]
-    rows[1]["fields"].update(zero_base_probe_result="source_unavailable", zero_base_probe_reason="quote_missing", entry_mechanistic_action="-")
-    path=tmp_path/"pipeline.jsonl"; _write_jsonl(path, rows)
-    observed={}; index=census._load_stage_index(path,tmp_path/"ai.jsonl",target_date="2026-10-16",zero_base_source_census=observed)
-    assert observed["probe_disposition_counts"] == {"source_unavailable":1}
+    rows[1]["fields"].update(
+        zero_base_probe_result="source_unavailable",
+        zero_base_probe_reason="quote_missing",
+        entry_mechanistic_action="-",
+    )
+    path = tmp_path / "pipeline.jsonl"
+    _write_jsonl(path, rows)
+    observed = {}
+    index = census._load_stage_index(
+        path,
+        tmp_path / "ai.jsonl",
+        target_date="2026-10-16",
+        zero_base_source_census=observed,
+    )
+    assert observed["probe_disposition_counts"] == {"source_unavailable": 1}
     assert observed["confirmed_watch_admission_count"] == 0
     assert index["005930"]["candidate_evaluated"][0]["reason"] == "quote_missing"
-    _write_jsonl(path,rows[:1]); observed={}
-    census._load_stage_index(path,tmp_path/"ai.jsonl",target_date="2026-10-16",zero_base_source_census=observed)
+    _write_jsonl(path, rows[:1])
+    observed = {}
+    census._load_stage_index(
+        path,
+        tmp_path / "ai.jsonl",
+        target_date="2026-10-16",
+        zero_base_source_census=observed,
+    )
     assert observed["claim_without_observed_result_count"] == 1
 
 
-def test_zero_base_rejected_finalize_cannot_be_hidden_by_earlier_runtime_attach(tmp_path):
-    rows=_zero_base_native_events()
-    rows[-1]["fields"].update(zero_base_attach_outcome="rejected",zero_base_attach_reason="attach_or_db_finalize_failed",zero_base_finalize_receipt="{}")
-    path=tmp_path/"pipeline.jsonl";_write_jsonl(path,rows);observed={}
-    index=census._load_stage_index(path,tmp_path/"ai.jsonl",target_date="2026-10-16",zero_base_source_census=observed)
+def test_zero_base_rejected_finalize_cannot_be_hidden_by_earlier_runtime_attach(
+    tmp_path,
+):
+    rows = _zero_base_native_events()
+    rows[-1]["fields"].update(
+        zero_base_attach_outcome="rejected",
+        zero_base_attach_reason="attach_or_db_finalize_failed",
+        zero_base_finalize_receipt="{}",
+    )
+    path = tmp_path / "pipeline.jsonl"
+    _write_jsonl(path, rows)
+    observed = {}
+    index = census._load_stage_index(
+        path,
+        tmp_path / "ai.jsonl",
+        target_date="2026-10-16",
+        zero_base_source_census=observed,
+    )
     assert observed["status"] == "partial_source"
-    assert observed["native_watch_attach_outcome_counts"] == {"rejected":1}
+    assert observed["native_watch_attach_outcome_counts"] == {"rejected": 1}
     assert observed["runtime_attached_receipt_count"] == 1
     assert observed["runtime_attached_without_finalized_confirmation_count"] == 1
     assert observed["confirmed_watch_admission_count"] == 0
     assert not index["005930"].get("scanner_promoted")
 
 
-def test_duplicate_finalized_receipt_keeps_one_unique_admission_and_nonnegative_accounting(tmp_path):
-    rows=_zero_base_native_events(); rows.append(json.loads(json.dumps(rows[-1])))
-    path=tmp_path/"pipeline.jsonl";_write_jsonl(path,rows);observed={}
-    index=census._load_stage_index(path,tmp_path/"ai.jsonl",target_date="2026-10-16",zero_base_source_census=observed)
+def test_duplicate_finalized_receipt_keeps_one_unique_admission_and_nonnegative_accounting(
+    tmp_path,
+):
+    rows = _zero_base_native_events()
+    rows.append(json.loads(json.dumps(rows[-1])))
+    path = tmp_path / "pipeline.jsonl"
+    _write_jsonl(path, rows)
+    observed = {}
+    index = census._load_stage_index(
+        path,
+        tmp_path / "ai.jsonl",
+        target_date="2026-10-16",
+        zero_base_source_census=observed,
+    )
     assert observed["raw_stage_counts"]["zero_base_watch_attach"] == 2
     assert observed["confirmed_watch_admission_count"] == 1
     assert observed["duplicate_finalized_confirmation_count"] == 1
@@ -1655,28 +1904,57 @@ def test_duplicate_finalized_receipt_keeps_one_unique_admission_and_nonnegative_
     assert len(index["005930"]["scanner_promoted"]) == 1
 
 
-def test_zero_base_native_identity_rejects_symbol_shape_not_accepted_by_original_producer(tmp_path):
-    rows=_zero_base_native_events()
+def test_zero_base_native_identity_rejects_symbol_shape_not_accepted_by_original_producer(
+    tmp_path,
+):
+    rows = _zero_base_native_events()
     for row in rows:
-        row['stock_code']='ABCDEF'
-        if 'scanner_promotion_id' in row['fields']:
-            row['fields']['scanner_promotion_id']=row['fields']['scanner_promotion_id'].replace('005930','ABCDEF')
-    path=tmp_path/'pipeline.jsonl';_write_jsonl(path,rows);observed={}
-    census._load_stage_index(path,tmp_path/'ai.jsonl',target_date='2026-10-16',zero_base_source_census=observed)
-    assert observed['valid_claim_count']==observed['confirmed_watch_admission_count']==0
-    assert observed['lineage_gap_counts']['zero_base_symbol_identity_invalid']==4
+        row["stock_code"] = "ABCDEF"
+        if "scanner_promotion_id" in row["fields"]:
+            row["fields"]["scanner_promotion_id"] = row["fields"][
+                "scanner_promotion_id"
+            ].replace("005930", "ABCDEF")
+    path = tmp_path / "pipeline.jsonl"
+    _write_jsonl(path, rows)
+    observed = {}
+    census._load_stage_index(
+        path,
+        tmp_path / "ai.jsonl",
+        target_date="2026-10-16",
+        zero_base_source_census=observed,
+    )
+    assert (
+        observed["valid_claim_count"]
+        == observed["confirmed_watch_admission_count"]
+        == 0
+    )
+    assert observed["lineage_gap_counts"]["zero_base_symbol_identity_invalid"] == 4
 
 
 def test_broad_external_population_and_baseline_main_buy_time_are_separate():
     for clock in ("08:00:00", "15:10:00", "19:40:00", "19:45:00"):
-        assert census._main_entry_time_scope(datetime.fromisoformat(f"2026-10-16T{clock}+09:00")) == "outside_baseline_new_buy_time_window"
-    assert census._main_entry_time_scope(datetime.fromisoformat("2026-10-16T16:00:00+09:00")) == "within_baseline_new_buy_time_window_only"
+        assert (
+            census._main_entry_time_scope(
+                datetime.fromisoformat(f"2026-10-16T{clock}+09:00")
+            )
+            == "outside_baseline_new_buy_time_window"
+        )
+    assert (
+        census._main_entry_time_scope(
+            datetime.fromisoformat("2026-10-16T16:00:00+09:00")
+        )
+        == "within_baseline_new_buy_time_window_only"
+    )
 
 
 def test_ranking_only_capture_preserves_missing_bbo_without_claiming_failed_request():
-    snapshot={"source":{"executable_bbo_collection":{"enabled":False}}}
-    assert census._external_snapshot_bbo_observation(snapshot,{},target_date="2026-10-16") == (None,"external_census_bbo_not_requested_by_capture_contract")
-    assert census._external_snapshot_bbo_observation({}, {}, target_date="2026-10-16") == (None,"external_census_bbo_contract_missing")
+    snapshot = {"source": {"executable_bbo_collection": {"enabled": False}}}
+    assert census._external_snapshot_bbo_observation(
+        snapshot, {}, target_date="2026-10-16"
+    ) == (None, "external_census_bbo_not_requested_by_capture_contract")
+    assert census._external_snapshot_bbo_observation(
+        {}, {}, target_date="2026-10-16"
+    ) == (None, "external_census_bbo_contract_missing")
 
 
 def test_existing_pipeline_events_cover_source_watch_authority_and_submit_safety(
@@ -1915,25 +2193,50 @@ def test_candidate_prune_reason_is_preserved_for_scanner_attribution(tmp_path):
         "reason_missing": 1
     }
     for reason in ("returned", "partial_adapter_return"):
-        adapter_row = {**row, "first_stage_reason_code": {
-            "candidate_evaluated": reason, "source_seen": "general_slot_limit"}}
+        adapter_row = {
+            **row,
+            "first_stage_reason_code": {
+                "candidate_evaluated": reason,
+                "source_seen": "general_slot_limit",
+            },
+        }
         summary = census._summarize_rows_base([adapter_row])
         assert summary["candidate_not_promoted_first_reason_counts"] == {
-            "candidate_disposition_missing": 1}
+            "candidate_disposition_missing": 1
+        }
     candidates = stage_index["005930"]["candidate_evaluated"]
     for candidate in candidates:
         candidate["scanner_scan_generation_id"] = "generation-a"
-    candidates.append({**candidates[0], "raw_stage": "scalping_scanner_candidate_pool_census",
-        "ts": datetime.fromisoformat("2026-07-30T10:00:00+09:00"), "reason": "returned"})
-    for generation, expected in (("generation-a", "general_slot_limit"),
-                                 ("generation-b", "candidate_disposition_missing")):
+    candidates.append(
+        {
+            **candidates[0],
+            "raw_stage": "scalping_scanner_candidate_pool_census",
+            "ts": datetime.fromisoformat("2026-07-30T10:00:00+09:00"),
+            "reason": "returned",
+        }
+    )
+    for generation, expected in (
+        ("generation-a", "general_slot_limit"),
+        ("generation-b", "candidate_disposition_missing"),
+    ):
         candidates[-1]["scanner_scan_generation_id"] = generation
-        linked = census._coverage_row({"venue": "KRX", "session": "KRX_REGULAR",
-            "stock_code": "005930", "first_census_at": candidates[-1]["ts"]}, stage_index,
-            after=candidates[-1]["ts"], before=datetime.fromisoformat("2026-07-30T10:05:00+09:00"),
-            require_venue=True, require_lineage=True)
+        linked = census._coverage_row(
+            {
+                "venue": "KRX",
+                "session": "KRX_REGULAR",
+                "stock_code": "005930",
+                "first_census_at": candidates[-1]["ts"],
+            },
+            stage_index,
+            after=candidates[-1]["ts"],
+            before=datetime.fromisoformat("2026-07-30T10:05:00+09:00"),
+            require_venue=True,
+            require_lineage=True,
+        )
         assert linked["first_stage_reason_code"]["candidate_evaluated"] == "returned"
-        assert census._summarize_rows_base([linked])["candidate_not_promoted_first_reason_counts"] == {expected: 1}
+        assert census._summarize_rows_base([linked])[
+            "candidate_not_promoted_first_reason_counts"
+        ] == {expected: 1}
 
 
 def test_report_splits_forward_exact_from_noncausal_retrospective(tmp_path):
@@ -3000,32 +3303,77 @@ def test_cadence_cannot_borrow_a_previous_sessions_floor(tmp_path):
     assert missing["cadence_floor_met"] is False
 
 
-def test_close_only_single_scheduled_slot_passes_but_missing_or_off_slot_does_not(tmp_path):
+def test_close_only_single_scheduled_slot_passes_but_missing_or_off_slot_does_not(
+    tmp_path,
+):
     def snapshot(venue, clock, panel="all", status="valid_empty"):
         when = datetime.fromisoformat(f"2026-10-16T{clock}+09:00")
-        return dict(schema_version=census.SCHEMA_VERSION, target_date="2026-10-16", captured_at=when.isoformat(),
-                    venue=venue, session=census._session_for_capture(venue=venue,captured_at=when), panel=panel,
-                    source_quality_status=status, rows=[])
-    snapshots=[snapshot(venue,clock,panel) for venue in ("KRX","NXT")
-               for panel in census.PANEL_CONTRACTS for clock in ("19:40:02","19:45:02","19:50:02","19:55:02")]
-    path=tmp_path/"snapshots.jsonl"
+        return dict(
+            schema_version=census.SCHEMA_VERSION,
+            target_date="2026-10-16",
+            captured_at=when.isoformat(),
+            venue=venue,
+            session=census._session_for_capture(venue=venue, captured_at=when),
+            panel=panel,
+            source_quality_status=status,
+            rows=[],
+        )
+
+    snapshots = [
+        snapshot(venue, clock, panel)
+        for venue in ("KRX", "NXT")
+        for panel in census.PANEL_CONTRACTS
+        for clock in ("19:40:02", "19:45:02", "19:50:02", "19:55:02")
+    ]
+    path = tmp_path / "snapshots.jsonl"
+
     def quality(rows):
-        _write_jsonl(path,rows)
-        return census.build_report("2026-10-16",snapshot_path=path,pipeline_path=tmp_path/"pipeline.jsonl",
-                                   ai_trace_path=tmp_path/"ai.jsonl",symbol_master_path=tmp_path/"master.json",
-                                   trigger_receipt_path=tmp_path/"trigger.json")["source_quality"]
-    q=quality(snapshots)
-    close=q["observed_capture_cadence_by_venue_panel"]["NXT|all"]["sessions"]["KRX_NXT_AFTERMARKET_CLOSE_ONLY"]
-    assert close["scheduled_session_slot_count"] == close["minimum_required_capture_count"] == 1
+        _write_jsonl(path, rows)
+        return census.build_report(
+            "2026-10-16",
+            snapshot_path=path,
+            pipeline_path=tmp_path / "pipeline.jsonl",
+            ai_trace_path=tmp_path / "ai.jsonl",
+            symbol_master_path=tmp_path / "master.json",
+            trigger_receipt_path=tmp_path / "trigger.json",
+        )["source_quality"]
+
+    q = quality(snapshots)
+    close = q["observed_capture_cadence_by_venue_panel"]["NXT|all"]["sessions"][
+        "KRX_NXT_AFTERMARKET_CLOSE_ONLY"
+    ]
+    assert (
+        close["scheduled_session_slot_count"]
+        == close["minimum_required_capture_count"]
+        == 1
+    )
     assert close["cadence_floor_met"] is True
-    terminal=q["observed_capture_cadence_by_venue_panel"]["NXT|all"]["sessions"]["KRX_NXT_AFTERMARKET_TERMINAL_EXIT"]
+    terminal = q["observed_capture_cadence_by_venue_panel"]["NXT|all"]["sessions"][
+        "KRX_NXT_AFTERMARKET_TERMINAL_EXIT"
+    ]
     assert terminal["minimum_required_capture_count"] == 3
     assert terminal["cadence_floor_met"] is True
     assert quality(snapshots)["capture_cadence_floor_met"] is True
-    missing=[row for row in snapshots if not (row["venue"]=="NXT" and row["panel"]=="all" and "19:40:" in row["captured_at"])]
-    q=quality(missing)
-    assert q["observed_capture_cadence_by_venue_panel"]["NXT|all"]["sessions"]["KRX_NXT_AFTERMARKET_CLOSE_ONLY"]["cadence_floor_met"] is False
-    off_slot=[{**row,"captured_at":row["captured_at"].replace("19:40:02","19:42:02")} for row in snapshots]
+    missing = [
+        row
+        for row in snapshots
+        if not (
+            row["venue"] == "NXT"
+            and row["panel"] == "all"
+            and "19:40:" in row["captured_at"]
+        )
+    ]
+    q = quality(missing)
+    assert (
+        q["observed_capture_cadence_by_venue_panel"]["NXT|all"]["sessions"][
+            "KRX_NXT_AFTERMARKET_CLOSE_ONLY"
+        ]["cadence_floor_met"]
+        is False
+    )
+    off_slot = [
+        {**row, "captured_at": row["captured_at"].replace("19:40:02", "19:42:02")}
+        for row in snapshots
+    ]
     assert quality(off_slot)["capture_cadence_floor_met"] is False
 
 
@@ -3453,37 +3801,119 @@ def test_capture_does_not_spend_reservation_after_bbo_window_expiry():
 
 def test_verified_non_common_exclusion_is_not_a_master_join_gap(tmp_path, monkeypatch):
     from types import SimpleNamespace
+
     path = tmp_path / "snapshots.jsonl"
-    _write_jsonl(path, [{"schema_version": census.SCHEMA_VERSION, "target_date": "2026-09-11",
-        "captured_at": "2026-09-11T12:00:00+09:00", "venue": "KRX", "session": "KRX_REGULAR",
-        "panel": "liquid_common", "source_quality_status": "ok", "rows": [
-            {"rank": 1, "stock_code": "005930", "current_price": 100000, "change_rate_pct": 5},
-            {"rank": 2, "stock_code": "760028", "current_price": 10000, "change_rate_pct": 6}]}])
+    _write_jsonl(
+        path,
+        [
+            {
+                "schema_version": census.SCHEMA_VERSION,
+                "target_date": "2026-09-11",
+                "captured_at": "2026-09-11T12:00:00+09:00",
+                "venue": "KRX",
+                "session": "KRX_REGULAR",
+                "panel": "liquid_common",
+                "source_quality_status": "ok",
+                "rows": [
+                    {
+                        "rank": 1,
+                        "stock_code": "005930",
+                        "current_price": 100000,
+                        "change_rate_pct": 5,
+                    },
+                    {
+                        "rank": 2,
+                        "stock_code": "760028",
+                        "current_price": 10000,
+                        "change_rate_pct": 6,
+                    },
+                ],
+            }
+        ],
+    )
+
     class Master:
         def lookup(self, code, **kwargs):
-            return SimpleNamespace(status=SimpleNamespace(value="verified" if code == "005930" else "missing"),
-                record=SimpleNamespace(listing_market=SimpleNamespace(value="KOSPI"), instrument_type=SimpleNamespace(value="EQUITY")) if code == "005930" else None)
-    monkeypatch.setattr(census, "_load_symbol_master_binding", lambda *a, **k: (Master(),
-        {"status": "verified", "non_common_stock_exclusions": {"760028": {"security_group": "EN", "archive_sha256": "a"*64}}}))
+            return SimpleNamespace(
+                status=SimpleNamespace(
+                    value="verified" if code == "005930" else "missing"
+                ),
+                record=(
+                    SimpleNamespace(
+                        listing_market=SimpleNamespace(value="KOSPI"),
+                        instrument_type=SimpleNamespace(value="EQUITY"),
+                    )
+                    if code == "005930"
+                    else None
+                ),
+            )
+
+    monkeypatch.setattr(
+        census,
+        "_load_symbol_master_binding",
+        lambda *a, **k: (
+            Master(),
+            {
+                "status": "verified",
+                "non_common_stock_exclusions": {
+                    "760028": {"security_group": "EN", "archive_sha256": "a" * 64}
+                },
+            },
+        ),
+    )
     for name in ("pipeline", "ai"):
-        _write_jsonl(tmp_path / (name+".jsonl"), [])
-    report = census.build_report("2026-09-11", snapshot_path=path, pipeline_path=tmp_path/"pipeline.jsonl",
-        ai_trace_path=tmp_path/"ai.jsonl", trigger_receipt_path=tmp_path/"missing.json")
-    assert report["source_quality"]["primary_symbol_master_lookup_counts"] == {"verified": 1, "verified_non_common_stock": 1}
+        _write_jsonl(tmp_path / (name + ".jsonl"), [])
+    report = census.build_report(
+        "2026-09-11",
+        snapshot_path=path,
+        pipeline_path=tmp_path / "pipeline.jsonl",
+        ai_trace_path=tmp_path / "ai.jsonl",
+        trigger_receipt_path=tmp_path / "missing.json",
+    )
+    assert report["source_quality"]["primary_symbol_master_lookup_counts"] == {
+        "verified": 1,
+        "verified_non_common_stock": 1,
+    }
     assert "official_symbol_master_lookup_gap" not in report["instrumentation_blockers"]
-    assert report["primary_decision"]["by_venue"]["KRX"]["denominator_unique_opportunity_episode_count"] == 1
+    assert (
+        report["primary_decision"]["by_venue"]["KRX"][
+            "denominator_unique_opportunity_episode_count"
+        ]
+        == 1
+    )
 
 
-def test_capture_preserves_benchmark_but_spares_bbo_budget_for_verified_etn(monkeypatch):
-    monkeypatch.setattr(census, "_load_symbol_master_binding", lambda *a, **k: (None,
-        {"status": "verified", "non_common_stock_exclusions": {"760028": {"security_group": "EN", "archive_sha256": "a"*64}}}))
+def test_capture_preserves_benchmark_but_spares_bbo_budget_for_verified_etn(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        census,
+        "_load_symbol_master_binding",
+        lambda *a, **k: (
+            None,
+            {
+                "status": "verified",
+                "non_common_stock_exclusions": {
+                    "760028": {"security_group": "EN", "archive_sha256": "a" * 64}
+                },
+            },
+        ),
+    )
+
     def forbidden(*a, **k):
         raise AssertionError("non-common stock must not consume BBO reservation")
-    rows = census.capture_market_snapshots("unused", target_date="2026-09-11",
+
+    rows = census.capture_market_snapshots(
+        "unused",
+        target_date="2026-09-11",
         captured_at=datetime.fromisoformat("2026-09-11T12:00:00+09:00"),
-        venues=("KRX",), panels=("liquid_common",),
+        venues=("KRX",),
+        panels=("liquid_common",),
         fetcher=lambda *a, **k: [{"Code": "760028", "Price": 10000}],
-        collect_executable_bbo=True, bbo_fetcher=forbidden, bbo_request_reserver=forbidden)
+        collect_executable_bbo=True,
+        bbo_fetcher=forbidden,
+        bbo_request_reserver=forbidden,
+    )
     assert rows[0]["rows"][0]["stock_code"] == "760028"
     observation = rows[0]["rows"][0]["executable_bbo_observation"]
     assert observation["gap_reason"] == "verified_non_common_stock_excluded"

@@ -159,26 +159,45 @@ def test_startup_announces_configuration_once_without_provider_claims(
     from src.engine.scalping import mechanistic_entry_runtime_policy
 
     rules = SimpleNamespace(
-        OPENAI_REALTIME_REPORT_MODEL="report-model", OPENAI_SCALPING_ENTRY_MODEL="watching-entry",
+        OPENAI_REALTIME_REPORT_MODEL="report-model",
+        OPENAI_SCALPING_ENTRY_MODEL="watching-entry",
         OPENAI_HOLDING_SCORE_MODEL="score-model",
         OPENAI_HOLDING_EXIT_VOTE_MODEL="vote-model",
         OPENAI_HOLDING_FLOW_MODEL="flow-model",
     )
     monkeypatch.setattr(openai_module, "TRADING_RULES", rules)
     monkeypatch.setattr(GPTSniperEngine, "_rotate_client", lambda self: None)
-    monkeypatch.setattr(mechanistic_entry_runtime_policy, "load_effective", lambda **kw: None)
+    monkeypatch.setattr(
+        mechanistic_entry_runtime_policy, "load_effective", lambda **kw: None
+    )
     keys = ["private-key-one", "private-key-two"]
     if via_main:
         # Execute Main's actual initialization branch, without starting Main/WS.
-        source = Path(openai_module.__file__).with_name("kiwoom_sniper_v2.py").read_text()
-        branch = next(n for n in ast.walk(ast.parse(source)) if isinstance(n, ast.If)
-                      and ast.unparse(n.test) == "runtime_role == 'main' and openai_api_keys")
+        source = (
+            Path(openai_module.__file__).with_name("kiwoom_sniper_v2.py").read_text()
+        )
+        branch = next(
+            n
+            for n in ast.walk(ast.parse(source))
+            if isinstance(n, ast.If)
+            and ast.unparse(n.test) == "runtime_role == 'main' and openai_api_keys"
+        )
+
         def unexpected_error(message):
             pytest.fail(message)
-        namespace = dict(runtime_role="main", openai_api_keys=keys,
-                         GPTSniperEngine=GPTSniperEngine, TRADING_RULES=rules,
-                         is_test_mode=True, log_error=unexpected_error)
-        exec(compile(ast.Module(body=[branch], type_ignores=[]), "main-ai-init", "exec"), namespace)
+
+        namespace = dict(
+            runtime_role="main",
+            openai_api_keys=keys,
+            GPTSniperEngine=GPTSniperEngine,
+            TRADING_RULES=rules,
+            is_test_mode=True,
+            log_error=unexpected_error,
+        )
+        exec(
+            compile(ast.Module(body=[branch], type_ignores=[]), "main-ai-init", "exec"),
+            namespace,
+        )
         engine = namespace["ai_engine"]
     else:
         engine = GPTSniperEngine(keys, initialize_entry_policy=False)
@@ -186,9 +205,14 @@ def test_startup_announces_configuration_once_without_provider_claims(
         output = capsys.readouterr().out
         assert output.count("OpenAI 모델 설정") == 1
         assert "기본 tier" not in output and "ENTRY_OTHER" not in output
-        for label in ("진입 보조평가: gpt-5.4-nano", "일반 진입 평가(watching): watching-entry",
-                      "보유 점수평가: score-model", "청산 투표: vote-model",
-                      "보유 수급평가(OpenAI): flow-model", "실시간 보고서(요청 시): report-model"):
+        for label in (
+            "진입 보조평가: gpt-5.4-nano",
+            "일반 진입 평가(watching): watching-entry",
+            "보유 점수평가: score-model",
+            "청산 투표: vote-model",
+            "보유 수급평가(OpenAI): flow-model",
+            "실시간 보고서(요청 시): report-model",
+        ):
             assert label in output
         assert "고정 완료" not in output and "가동!" not in output
         assert not any(key in output for key in keys)
@@ -199,18 +223,27 @@ def test_startup_announces_configuration_once_without_provider_claims(
 def test_model_configuration_reads_roles_without_mutating_engine(monkeypatch, capsys):
     engine = _build_engine()
     before = dict(engine.__dict__)
-    monkeypatch.setattr(openai_module, "TRADING_RULES", SimpleNamespace(
-        OPENAI_SCALPING_ENTRY_MODEL="changed-entry",
-        OPENAI_REALTIME_REPORT_MODEL="changed-report",
-        OPENAI_HOLDING_SCORE_MODEL="changed-score",
-        OPENAI_HOLDING_EXIT_VOTE_MODEL="changed-vote",
-        OPENAI_HOLDING_FLOW_MODEL="changed-flow",
-    ))
+    monkeypatch.setattr(
+        openai_module,
+        "TRADING_RULES",
+        SimpleNamespace(
+            OPENAI_SCALPING_ENTRY_MODEL="changed-entry",
+            OPENAI_REALTIME_REPORT_MODEL="changed-report",
+            OPENAI_HOLDING_SCORE_MODEL="changed-score",
+            OPENAI_HOLDING_EXIT_VOTE_MODEL="changed-vote",
+            OPENAI_HOLDING_FLOW_MODEL="changed-flow",
+        ),
+    )
     engine._announce_model_configuration()
     output = capsys.readouterr().out
-    for text in ("watching): changed-entry", "점수평가: changed-score", "투표: changed-vote",
-                 "수급평가(OpenAI): changed-flow", "보고서(요청 시): changed-report",
-                 "진입 보조평가: gpt-5.4-nano"):
+    for text in (
+        "watching): changed-entry",
+        "점수평가: changed-score",
+        "투표: changed-vote",
+        "수급평가(OpenAI): changed-flow",
+        "보고서(요청 시): changed-report",
+        "진입 보조평가: gpt-5.4-nano",
+    ):
         assert text in output
     assert engine.__dict__ == before
 
@@ -626,9 +659,18 @@ def test_openai_engine_default_model_routing_uses_roles():
         assert models["OPENAI_SCALPING_ENTRY_MODEL"] == "gpt-5.4-nano"
         assert models["OPENAI_REALTIME_REPORT_MODEL"] == "gpt-5.4-mini"
         assert models["OPENAI_SCALPING_SHARED_MODEL"] == "gpt-5-nano"
-        for removed in ("set_model_names", "_get_tier1_model", "_get_tier2_model", "_get_tier3_model",
-                        "current_model_name", "fast_model_name", "report_model_name", "deep_model_name",
-                        "analyze_scanner_results", "evaluate_scalping_overnight_decision"):
+        for removed in (
+            "set_model_names",
+            "_get_tier1_model",
+            "_get_tier2_model",
+            "_get_tier3_model",
+            "current_model_name",
+            "fast_model_name",
+            "report_model_name",
+            "deep_model_name",
+            "analyze_scanner_results",
+            "evaluate_scalping_overnight_decision",
+        ):
             assert not hasattr(engine, removed)
     finally:
         engine._http_deadline_executor.shutdown(wait=True)
@@ -1709,30 +1751,49 @@ def test_entry_price_evaluate_preserves_exact_request_trace_fields(monkeypatch):
     )
 
 
-@pytest.mark.parametrize('cache_hit', [False, True])
-def test_annotation_keeps_final_capture_hash_after_compact_input_recomposition(monkeypatch, cache_hit):
+@pytest.mark.parametrize("cache_hit", [False, True])
+def test_annotation_keeps_final_capture_hash_after_compact_input_recomposition(
+    monkeypatch, cache_hit
+):
     engine = _build_engine()
     observed = []
-    monkeypatch.setattr(openai_module, 'record_ai_decision_trace',
-        lambda payload, **kwargs: observed.append(dict(payload)) or {})
+    monkeypatch.setattr(
+        openai_module,
+        "record_ai_decision_trace",
+        lambda payload, **kwargs: observed.append(dict(payload)) or {},
+    )
     result = engine._annotate_analysis_result_frame(
-        {'action': 'PASS', 'ai_decision_trace_id': 'actual-wire-request',
-         'ai_input_payload_sha256': 'a'*64, 'ai_input_payload_bytes': 30,
-         'ai_request_envelope_sha256': 'b'*64},
-        prompt_type='scalping_entry', prompt_version='compact', response_ms=1,
-        parse_ok=True, parse_fail=False, fallback_score_50=False,
-        cache_hit=cache_hit, cache_mode='hit' if cache_hit else 'miss', result_source='live',
-        input_contract_fields={'ai_input_payload_sha256': 'c'*64,
-            'ai_input_payload_bytes': 1000, 'ai_request_envelope_sha256': 'd'*64,
-            'ai_trace_stock_code': '005930'})
-    assert result['ai_input_payload_sha256'] == 'a'*64
-    assert observed[0]['ai_request_envelope_sha256'] == 'b'*64
-    assert result['ai_input_payload_bytes'] == 30
-    assert result['ai_trace_stock_code'] == '005930'
+        {
+            "action": "PASS",
+            "ai_decision_trace_id": "actual-wire-request",
+            "ai_input_payload_sha256": "a" * 64,
+            "ai_input_payload_bytes": 30,
+            "ai_request_envelope_sha256": "b" * 64,
+        },
+        prompt_type="scalping_entry",
+        prompt_version="compact",
+        response_ms=1,
+        parse_ok=True,
+        parse_fail=False,
+        fallback_score_50=False,
+        cache_hit=cache_hit,
+        cache_mode="hit" if cache_hit else "miss",
+        result_source="live",
+        input_contract_fields={
+            "ai_input_payload_sha256": "c" * 64,
+            "ai_input_payload_bytes": 1000,
+            "ai_request_envelope_sha256": "d" * 64,
+            "ai_trace_stock_code": "005930",
+        },
+    )
+    assert result["ai_input_payload_sha256"] == "a" * 64
+    assert observed[0]["ai_request_envelope_sha256"] == "b" * 64
+    assert result["ai_input_payload_bytes"] == 30
+    assert result["ai_trace_stock_code"] == "005930"
     if cache_hit:
-        assert result['ai_decision_parent_trace_id'] == 'actual-wire-request'
+        assert result["ai_decision_parent_trace_id"] == "actual-wire-request"
     else:
-        assert result['ai_decision_trace_id'] == 'actual-wire-request'
+        assert result["ai_decision_trace_id"] == "actual-wire-request"
 
 
 def test_entry_price_qwen_parse_failure_falls_back_to_nova_lite_v2(monkeypatch):
@@ -2188,7 +2249,9 @@ def test_openai_entry_price_report_input_escapes_non_english_payload(monkeypatch
     assert result["action"] == "USE_REFERENCE"
     assert captured["kwargs"]["schema_name"] == "entry_price_v1"
     assert captured["kwargs"]["endpoint_name"] == "entry_price"
-    assert captured["kwargs"]["model_override"] == engine._get_role_model("OPENAI_REALTIME_REPORT_MODEL")
+    assert captured["kwargs"]["model_override"] == engine._get_role_model(
+        "OPENAI_REALTIME_REPORT_MODEL"
+    )
     assert result["semantic_validator_version"] == (
         "live_entry_price_v1_schema_semantic_v1"
     )
@@ -2393,7 +2456,9 @@ def test_entry_price_v2_5_live_policy_uses_exact_krx_contract_without_route_chan
     assert result["semantic_validation_status"] == "pass"
     assert captured["kwargs"]["schema_name"] == ("entry_price_explicit_fill_value_v1")
     assert captured["kwargs"]["endpoint_name"] == "entry_price"
-    assert captured["kwargs"]["model_override"] == engine._get_role_model("OPENAI_REALTIME_REPORT_MODEL")
+    assert captured["kwargs"]["model_override"] == engine._get_role_model(
+        "OPENAI_REALTIME_REPORT_MODEL"
+    )
     assert captured["user_input"]["exact_payload"] == exact_payload
     assert "offline" not in captured["prompt"].lower()
 
@@ -2659,7 +2724,9 @@ def test_entry_price_compact_input_reduces_payload_across_large_sample(monkeypat
     assert result["action"] == "USE_DEFENSIVE"
     assert captured["kwargs"]["schema_name"] == "entry_price_v1"
     assert captured["kwargs"]["endpoint_name"] == "entry_price"
-    assert captured["kwargs"]["model_override"] == engine._get_role_model("OPENAI_REALTIME_REPORT_MODEL")
+    assert captured["kwargs"]["model_override"] == engine._get_role_model(
+        "OPENAI_REALTIME_REPORT_MODEL"
+    )
     assert (
         captured_payload["price_context"]["resolved_order_price"]
         == samples[0][3]["resolved_order_price"]
@@ -2967,7 +3034,9 @@ def test_ai_hot_path_v2_inputs_are_structured_json_across_large_sample(monkeypat
     assert captured[0]["kwargs"]["model_override"] == "gpt-5.4-nano"
     assert captured[0]["kwargs"]["transport_mode_override"] == "http"
     assert captured[0]["kwargs"]["timeout_ms_override"] == 5000
-    assert captured[1]["kwargs"]["model_override"] == engine._get_role_model("OPENAI_REALTIME_REPORT_MODEL")
+    assert captured[1]["kwargs"]["model_override"] == engine._get_role_model(
+        "OPENAI_REALTIME_REPORT_MODEL"
+    )
     assert captured[2]["kwargs"]["model_override"] == "gpt-5.4-mini"
     assert json.loads(captured[0]["user_input"])["input_schema"] == "entry_screen_v2"
     assert json.loads(captured[1]["user_input"])["input_schema"] == "entry_price_v2"
@@ -3255,7 +3324,9 @@ def test_openai_usage_meta_includes_provider_response_id_without_usage():
 
 def test_openai_usage_meta_keeps_actual_response_model_without_usage():
     response = SimpleNamespace(
-        id="resp-holding-vote", model="gpt-5.4-nano", usage=None,
+        id="resp-holding-vote",
+        model="gpt-5.4-nano",
+        usage=None,
     )
     assert openai_module._extract_openai_usage_meta(response) == {
         "openai_response_id": "resp-holding-vote",
@@ -3445,14 +3516,24 @@ def test_entry_hot_payload_refreshes_nested_hash_after_compaction(monkeypatch):
 @pytest.mark.parametrize("quality", ["fresh_consistent", "stale", "unknown"])
 def test_machine_base_candles_survive_optional_context_off_without_promotion(quality):
     from copy import deepcopy
+
     engine = _build_engine()
     context = _allowed_entry_candle_context()
-    context.update(enabled=False, multi_timeframe_ai_input_enabled=True,
-                   multi_timeframe_context={"must_not_promote": True})
+    context.update(
+        enabled=False,
+        multi_timeframe_ai_input_enabled=True,
+        multi_timeframe_context={"must_not_promote": True},
+    )
     context["source_quality"]["status"] = quality
     original = deepcopy(context)
-    payload = json.loads(engine._format_entry_screen_hot_data(
-        _sample_ws_data(), _sample_ticks(), _sample_candles(), candle_context=context))
+    payload = json.loads(
+        engine._format_entry_screen_hot_data(
+            _sample_ws_data(),
+            _sample_ticks(),
+            _sample_candles(),
+            candle_context=context,
+        )
+    )
     assert "entry_candle_context" not in payload  # Ordinary AI path stays OFF.
     assert engine._attach_entry_candle_inputs(payload, context, machine_base_only=True)
     candle = payload["entry_candle_context"]
@@ -3461,7 +3542,9 @@ def test_machine_base_candles_survive_optional_context_off_without_promotion(qua
     assert candle["multi_timeframe_ai_input_enabled"] is False
     assert "multi_timeframe_context" not in candle
     assert "regime" not in candle and "alignment" not in candle
-    analysis = openai_module.build_exact_payload_analysis_v1(payload, stage="entry", live_entry=True)
+    analysis = openai_module.build_exact_payload_analysis_v1(
+        payload, stage="entry", live_entry=True
+    )
     assert analysis["source_quality"]["completed_bar_count"] == 1
     assert analysis["source_quality"]["status"] == quality
     assert context == original
@@ -3585,8 +3668,7 @@ def test_analyze_target_operator_promotes_decision_quality_v2_7(monkeypatch):
     assert result["ai_prompt_version"] == DECISION_QUALITY_DETAILED_PROMPT_VERSION
     assert result["ai_input_schema"] == "decision_quality_v2_7_entry_input"
     assert (
-        result["decision_quality_score_semantics"]
-        == "action_only_compatibility_score"
+        result["decision_quality_score_semantics"] == "action_only_compatibility_score"
     )
 
 
@@ -3945,17 +4027,27 @@ def test_mechanistic_primary_runtime_adapter_rejects_invalid_screen():
 
 def test_machine_adapter_contract_rejection_keeps_assessment_and_denies_screen_pass():
     from src.engine.scalping import mechanistic_entry_runtime_policy as M
-    from src.engine.scalping.entry_setup_evidence import MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1
+    from src.engine.scalping.entry_setup_evidence import (
+        MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1,
+    )
     from src.tests.test_entry_setup_evidence import _machine_screen_case
+
     setup, risk = _machine_screen_case("PASS")
-    policy = dict(enabled=False, status="active_bounded_krx_canary",
+    policy = dict(
+        enabled=False,
+        status="active_bounded_krx_canary",
         selected_prompt_version=M.AI_VERSION,
         primary_decision_owner="mechanistic_entry_adjudicator",
         ai_role="auxiliary_risk_screen_pass_veto_no_promotion",
-        mechanistic_threshold_policy=MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1)
+        mechanistic_threshold_policy=MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1,
+    )
     result = _build_engine()._normalize_entry_setup_v2_14_result(
-        risk, exact_payload={}, setup_evidence=setup, live_policy=policy,
-        prompt_version=M.AI_VERSION)
+        risk,
+        exact_payload={},
+        setup_evidence=setup,
+        live_policy=policy,
+        prompt_version=M.AI_VERSION,
+    )
     assert result["decision_quality_contract_status"] == "semantic_rejected"
     assert result["entry_mechanistic_action"] == "ENTER_NOW"
     assert result["entry_mechanistic_policy_sha256"]
@@ -4176,7 +4268,9 @@ def test_machine_initial_policy_assesses_before_provider_cache_and_lock(
         ),
     }
     monkeypatch.setattr(
-        openai_module, "resolve_live_prompt_policy", lambda **kwargs: (policy_calls.append(True), live)[1]
+        openai_module,
+        "resolve_live_prompt_policy",
+        lambda **kwargs: (policy_calls.append(True), live)[1],
     )
     monkeypatch.setattr(
         openai_module,
@@ -4186,8 +4280,11 @@ def test_machine_initial_policy_assesses_before_provider_cache_and_lock(
             OPENAI_ANALYZE_TARGET_PROMPT_VERSION=DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
         ),
     )
-    monkeypatch.setattr(engine, '_capture_prepromotion_context_candidate',
-        lambda **kw: pytest.fail('duplicate pre-machine forensic capture'))
+    monkeypatch.setattr(
+        engine,
+        "_capture_prepromotion_context_candidate",
+        lambda **kw: pytest.fail("duplicate pre-machine forensic capture"),
+    )
     analysis = _exact_analysis()
     analysis["executable_liquidity"].update(
         spread_bp=20.0, fillability_score=70.0, top3_ask_to_bid_ratio=0.8
@@ -4242,8 +4339,11 @@ def test_machine_initial_policy_assesses_before_provider_cache_and_lock(
     if not ready:
         # An adapter semantic rejection must not erase an already assessed
         # machine RECHECK or turn its terminal into an unclassified source gap.
-        monkeypatch.setattr(engine, '_normalize_decision_quality_entry_result',
-            lambda *args, **kwargs: {'action': 'WAIT', 'score': 0})
+        monkeypatch.setattr(
+            engine,
+            "_normalize_decision_quality_entry_result",
+            lambda *args, **kwargs: {"action": "WAIT", "score": 0},
+        )
 
         class NoProviderLock:
             def acquire(self, **kwargs):
@@ -4252,27 +4352,46 @@ def test_machine_initial_policy_assesses_before_provider_cache_and_lock(
         engine.lock = NoProviderLock()
     ws_data = _sample_ws_data()
     ws_data["scanner_promotion_id"] = "SCANPROM-005930-machine"
-    ws_data["evaluation_attempt_id"] = "caller-attempt" if identity_mode == "caller" else "-"
+    ws_data["evaluation_attempt_id"] = (
+        "caller-attempt" if identity_mode == "caller" else "-"
+    )
     import time
     from contextlib import nullcontext
     from src.utils import kiwoom_utils
     from src.engine.scalping.entry_deadline import EntryDeadline
-    parent_budget = EntryDeadline.create(caller_epoch=time.time() + 3) if budget_scope == "parent" else None
-    caller_budget = EntryDeadline.create(caller_epoch=time.time() + 5) if budget_scope != "none" else None
+
+    parent_budget = (
+        EntryDeadline.create(caller_epoch=time.time() + 3)
+        if budget_scope == "parent"
+        else None
+    )
+    caller_budget = (
+        EntryDeadline.create(caller_epoch=time.time() + 5)
+        if budget_scope != "none"
+        else None
+    )
     from src.engine import sniper_state_handlers as handlers
     from src.engine.scalping.avg_down_replay_capture import GLOBALS
+
     for name in GLOBALS:
-        monkeypatch.setattr(handlers, name, set() if name == 'ALERTED_STOCKS' else {})
-    monkeypatch.setattr(handlers, '_is_any_simulated_position', lambda *a: False)
-    monkeypatch.setattr(handlers, '_log_entry_pipeline', lambda *a, **kw: {'structured_append_succeeded': True})
+        monkeypatch.setattr(handlers, name, set() if name == "ALERTED_STOCKS" else {})
+    monkeypatch.setattr(handlers, "_is_any_simulated_position", lambda *a: False)
+    monkeypatch.setattr(
+        handlers,
+        "_log_entry_pipeline",
+        lambda *a, **kw: {"structured_append_succeeded": True},
+    )
     capacity_reads = []
     owner_observations = []
+
     def capacity(code, price, held, **kwargs):
         capacity_reads.append(kwargs)
-        return {'kt00011_error': 'fixture_capacity_gap', 'cash_orderable_qty_cap': None}
-    monkeypatch.setattr(handlers, '_resolve_scalp_cash_budget_context', capacity)
+        return {"kt00011_error": "fixture_capacity_gap", "cash_orderable_qty_cap": None}
+
+    monkeypatch.setattr(handlers, "_resolve_scalp_cash_budget_context", capacity)
     observed = []
     attempt_ids = []
+
     def observer(**kwargs):
         budget = kiwoom_utils._ENTRY_SOURCE_BUDGET.get()
         if caller_budget is None:
@@ -4286,74 +4405,138 @@ def test_machine_initial_policy_assesses_before_provider_cache_and_lock(
                 assert budget.perf <= parent_budget.perf
             assert budget.remaining() > 0
 
-        observed.append(kwargs['assessment']['action'])
+        observed.append(kwargs["assessment"]["action"])
         economic = handlers._observe_entry_economics_before_ai(
-            {'id': 1, 'code': '005930', 'strategy': 'SCALPING', 'buy_qty': 0}, '005930',
-            kwargs.get('observation_ws_data', ws_data),
-            **{k: kwargs[k] for k in ('exact_payload', 'assessment', 'capture', 'bundle_sha256')})
+            {"id": 1, "code": "005930", "strategy": "SCALPING", "buy_qty": 0},
+            "005930",
+            kwargs.get("observation_ws_data", ws_data),
+            **{
+                k: kwargs[k]
+                for k in ("exact_payload", "assessment", "capture", "bundle_sha256")
+            },
+        )
         owner_observations.append(economic)
-        assert economic['entry_economic_source_blocker'] == 'exact_broker_capacity_missing', economic
-        assert capacity_reads[-1]['source_only'] is True
-        assert capacity_reads[-1]['reuse_only'] is (not ready or budget is None)
-        assert capacity_reads[-1]['preparation_deadline_epoch'] == (budget.epoch if budget else None)
-        assert capacity_reads[-1]['correlation_id'] == kwargs['capture']['evaluation_attempt_id']
+        assert (
+            economic["entry_economic_source_blocker"] == "exact_broker_capacity_missing"
+        ), economic
+        assert capacity_reads[-1]["source_only"] is True
+        assert capacity_reads[-1]["reuse_only"] is (not ready or budget is None)
+        assert capacity_reads[-1]["preparation_deadline_epoch"] == (
+            budget.epoch if budget else None
+        )
+        assert (
+            capacity_reads[-1]["correlation_id"]
+            == kwargs["capture"]["evaluation_attempt_id"]
+        )
         if final_refresh:
-            assert kwargs['observation_ws_data']['final_refresh_marker'] is True
-            assert kwargs['exact_payload']['current']['price'] == kwargs['observation_ws_data']['curr']
-            trace = kwargs['exact_payload']['entry_machine_input_trace']
-            assert trace['entry_machine_input_ws_snapshot_refresh_applied'] is True
-            assert trace['entry_machine_input_as_of'] > 0
-            stages = trace['entry_machine_input_preparation_stages_ms']
-            assert set(stages) == {'policy_resolve_ms', 'runtime_context_ms',
-                                   'context_capture_ms', 'micro_source_prepare_ms', 'other_preparation_ms'}
+            assert kwargs["observation_ws_data"]["final_refresh_marker"] is True
+            assert (
+                kwargs["exact_payload"]["current"]["price"]
+                == kwargs["observation_ws_data"]["curr"]
+            )
+            trace = kwargs["exact_payload"]["entry_machine_input_trace"]
+            assert trace["entry_machine_input_ws_snapshot_refresh_applied"] is True
+            assert trace["entry_machine_input_as_of"] > 0
+            stages = trace["entry_machine_input_preparation_stages_ms"]
+            assert set(stages) == {
+                "policy_resolve_ms",
+                "runtime_context_ms",
+                "context_capture_ms",
+                "micro_source_prepare_ms",
+                "other_preparation_ms",
+            }
             assert all(value >= 0 for value in stages.values())
-            assert sum(stages.values()) == pytest.approx(trace['entry_machine_input_preparation_ms'], abs=.005)
-            assert trace['entry_machine_input_local_refresh_ms'] >= 0
-            assert trace['entry_machine_input_canonical_revalidation_ms'] >= 0
-        assert kwargs['exact_payload']['entry_candle_context']['completed_bar_count'] == 1
-        assert kwargs['exact_payload']['entry_candle_context']['multi_timeframe_ai_input_enabled'] is False
-        attempt = kwargs['exact_payload']['evaluation_attempt_id']
+            assert sum(stages.values()) == pytest.approx(
+                trace["entry_machine_input_preparation_ms"], abs=0.005
+            )
+            assert trace["entry_machine_input_local_refresh_ms"] >= 0
+            assert trace["entry_machine_input_canonical_revalidation_ms"] >= 0
+        assert (
+            kwargs["exact_payload"]["entry_candle_context"]["completed_bar_count"] == 1
+        )
+        assert (
+            kwargs["exact_payload"]["entry_candle_context"][
+                "multi_timeframe_ai_input_enabled"
+            ]
+            is False
+        )
+        attempt = kwargs["exact_payload"]["evaluation_attempt_id"]
         attempt_ids.append(attempt)
         if identity_mode == "generated":
             assert attempt.startswith("machine-evaluation-")
         else:
-            assert attempt == ("caller-attempt" if identity_mode == "caller" else "aims-machine-current")
-        assert kwargs['capture']['evaluation_attempt_id'] == attempt
-        assert kwargs['exact_payload']['broker_route'] == "SOR"
-        return {'entry_economic_source_status': 'recorded_source_only'}
+            assert attempt == (
+                "caller-attempt"
+                if identity_mode == "caller"
+                else "aims-machine-current"
+            )
+        assert kwargs["capture"]["evaluation_attempt_id"] == attempt
+        assert kwargs["exact_payload"]["broker_route"] == "SOR"
+        return {"entry_economic_source_status": "recorded_source_only"}
+
     context = _allowed_entry_candle_context()
-    context.setdefault('ai_market_snapshot_v1', {}).update(
-        snapshot_id="-" if identity_mode == "generated" else "aims-machine-current", broker_route="SOR")
+    context.setdefault("ai_market_snapshot_v1", {}).update(
+        snapshot_id="-" if identity_mode == "generated" else "aims-machine-current",
+        broker_route="SOR",
+    )
+
     def refresh(ws, ticks, candle):
         assert policy_calls
-        ws['final_refresh_marker'] = True
-        ws['curr'] = 12345
-        if identity_mode == 'snapshot':
-            candle['ai_market_snapshot_v1']['snapshot_id'] = 'aims-final-machine'
-            candle['ai_market_snapshot_v1']['captured_at'] = '2026-09-22T16:12:46+09:00'
-        return ws, ticks, candle, {'entry_ai_final_ws_snapshot_refresh_applied': True}
+        ws["final_refresh_marker"] = True
+        ws["curr"] = 12345
+        if identity_mode == "snapshot":
+            candle["ai_market_snapshot_v1"]["snapshot_id"] = "aims-final-machine"
+            candle["ai_market_snapshot_v1"]["captured_at"] = "2026-09-22T16:12:46+09:00"
+        return ws, ticks, candle, {"entry_ai_final_ws_snapshot_refresh_applied": True}
+
     if final_refresh:
         from src.engine.scalping import entry_candle_context as candle_module
-        monkeypatch.setattr(candle_module, 'revalidate_entry_candle_snapshot', lambda c, w, **kw: c)
-    with kiwoom_utils.entry_source_budget(parent_budget) if parent_budget is not None else nullcontext():
+
+        monkeypatch.setattr(
+            candle_module, "revalidate_entry_candle_snapshot", lambda c, w, **kw: c
+        )
+    with (
+        kiwoom_utils.entry_source_budget(parent_budget)
+        if parent_budget is not None
+        else nullcontext()
+    ):
         result = engine.analyze_target(
-            "test", ws_data, _sample_ticks(), _sample_candles(),
-            strategy="SCALPING", prompt_profile="watching", candle_context=context,
+            "test",
+            ws_data,
+            _sample_ticks(),
+            _sample_candles(),
+            strategy="SCALPING",
+            prompt_profile="watching",
+            candle_context=context,
             entry_economics_observer=observer,
-            **({'entry_input_refresher': refresh} if final_refresh else {}),
-            **({'entry_input_deadline_epoch': caller_budget.epoch,
-                'entry_input_deadline_perf': caller_budget.perf} if caller_budget is not None else {}),
+            **({"entry_input_refresher": refresh} if final_refresh else {}),
+            **(
+                {
+                    "entry_input_deadline_epoch": caller_budget.epoch,
+                    "entry_input_deadline_perf": caller_budget.perf,
+                }
+                if caller_budget is not None
+                else {}
+            ),
         )
         assert kiwoom_utils._ENTRY_SOURCE_BUDGET.get() is parent_budget
     assert kiwoom_utils._ENTRY_SOURCE_BUDGET.get() is None
-    assert observed == ['ENTER_NOW' if ready else 'RECHECK']
-    assert result['entry_economic_source_status'] == 'recorded_source_only', owner_observations
-    if final_refresh and identity_mode == 'snapshot':
-        assert result['ai_input_preflight_source_clock_snapshot_id'] == 'aims-final-machine'
-        assert result['ai_input_preflight_source_clock_captured_at'] == '2026-09-22T16:12:46+09:00'
+    assert observed == ["ENTER_NOW" if ready else "RECHECK"]
+    assert (
+        result["entry_economic_source_status"] == "recorded_source_only"
+    ), owner_observations
+    if final_refresh and identity_mode == "snapshot":
+        assert (
+            result["ai_input_preflight_source_clock_snapshot_id"]
+            == "aims-final-machine"
+        )
+        assert (
+            result["ai_input_preflight_source_clock_captured_at"]
+            == "2026-09-22T16:12:46+09:00"
+        )
     if final_refresh:
-        assert result['entry_machine_input_ws_snapshot_refresh_applied'] is True
-        assert 'final_refresh_marker' not in ws_data
+        assert result["entry_machine_input_ws_snapshot_refresh_applied"] is True
+        assert "final_refresh_marker" not in ws_data
     assert events == (["machine", "ai"] if ready else ["machine"]), result
     assert result["scanner_promotion_id"] == "SCANPROM-005930-machine"
     assert result["evaluation_attempt_id"] == attempt_ids[0]
@@ -4371,44 +4554,68 @@ def test_machine_initial_policy_assesses_before_provider_cache_and_lock(
 
 def test_selected_machine_only_returns_assessment_without_provider(monkeypatch):
     from src.engine.scalping import mechanistic_entry_runtime_policy as policy
-    from src.engine.scalping.entry_setup_evidence import MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1
+    from src.engine.scalping.entry_setup_evidence import (
+        MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1,
+    )
     from src.engine.scalping.entry_setup_scalping_rollout import PATH_ENV
     from src.tests.test_entry_setup_evidence import _exact_analysis, _recovery_analysis
 
     monkeypatch.setenv(PATH_ENV, "/test-selected-machine-only")
     engine = _build_engine()
-    monkeypatch.setattr(engine, "_call_openai_safe", lambda *_a, **_k: pytest.fail("provider called"))
-    monkeypatch.setattr(engine, "_cache_get", lambda *_a: pytest.fail("AI cache called"))
-    monkeypatch.setattr(openai_module, "resolve_live_prompt_policy", lambda **_kw: {
-        "enabled": True,
-        "status": "active_bounded_krx_canary",
-        "selected_prompt_version": policy.AI_VERSION,
-        "primary_decision_owner": "mechanistic_entry_adjudicator",
-        "ai_role": "auxiliary_risk_screen_pass_veto_no_promotion",
-        "mechanistic_threshold_policy": MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1,
-        "machine_bundle_sha256": "b" * 64,
-    })
-    monkeypatch.setattr(openai_module, "TRADING_RULES", replace(
-        openai_module.TRADING_RULES,
-        OPENAI_ANALYZE_TARGET_PROMPT_VERSION=(
-            DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION
+    monkeypatch.setattr(
+        engine, "_call_openai_safe", lambda *_a, **_k: pytest.fail("provider called")
+    )
+    monkeypatch.setattr(
+        engine, "_cache_get", lambda *_a: pytest.fail("AI cache called")
+    )
+    monkeypatch.setattr(
+        openai_module,
+        "resolve_live_prompt_policy",
+        lambda **_kw: {
+            "enabled": True,
+            "status": "active_bounded_krx_canary",
+            "selected_prompt_version": policy.AI_VERSION,
+            "primary_decision_owner": "mechanistic_entry_adjudicator",
+            "ai_role": "auxiliary_risk_screen_pass_veto_no_promotion",
+            "mechanistic_threshold_policy": MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1,
+            "machine_bundle_sha256": "b" * 64,
+        },
+    )
+    monkeypatch.setattr(
+        openai_module,
+        "TRADING_RULES",
+        replace(
+            openai_module.TRADING_RULES,
+            OPENAI_ANALYZE_TARGET_PROMPT_VERSION=(
+                DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION
+            ),
         ),
-    ))
+    )
     analysis = _exact_analysis()
     analysis["executable_liquidity"].update(
-        spread_bp=20.0, fillability_score=70.0, top3_ask_to_bid_ratio=0.8,
+        spread_bp=20.0,
+        fillability_score=70.0,
+        top3_ask_to_bid_ratio=0.8,
     )
-    monkeypatch.setattr(openai_module, "build_exact_payload_analysis_v1", lambda *_a, **_k: analysis)
     monkeypatch.setattr(
-        openai_module, "build_v2_13_recovery_confirmation_analysis_v1",
+        openai_module, "build_exact_payload_analysis_v1", lambda *_a, **_k: analysis
+    )
+    monkeypatch.setattr(
+        openai_module,
+        "build_v2_13_recovery_confirmation_analysis_v1",
         lambda *_a, **_k: _recovery_analysis(clean=True),
     )
     ws_data = _sample_ws_data()
     ws_data["scanner_promotion_id"] = "ZBPROM-005930-machine-only"
     result = engine.analyze_target(
-        "test", ws_data, _sample_ticks(), _sample_candles(),
-        strategy="SCALPING", prompt_profile="watching",
-        candle_context=_allowed_entry_candle_context(), machine_only=True,
+        "test",
+        ws_data,
+        _sample_ticks(),
+        _sample_candles(),
+        strategy="SCALPING",
+        prompt_profile="watching",
+        candle_context=_allowed_entry_candle_context(),
+        machine_only=True,
     )
     assert result["machine_evaluation_status"] == "assessed"
     assert result["entry_mechanistic_action"] in {"ENTER_NOW", "RECHECK", "BLOCK"}
@@ -4474,9 +4681,14 @@ def test_machine_policy_preflight_block_preserves_source_invalid_receipt(
             },
         )
 
-    async_binding = dict(async_request_id='original-async-request', async_producer_pid=123,
-        async_producer_start_ticks='456', async_origin_deadline_epoch=1234567890.,
-        async_order_venue='SOR', scanner_generation_id='original-generation')
+    async_binding = dict(
+        async_request_id="original-async-request",
+        async_producer_pid=123,
+        async_producer_start_ticks="456",
+        async_origin_deadline_epoch=1234567890.0,
+        async_order_venue="SOR",
+        scanner_generation_id="original-generation",
+    )
     result = engine.analyze_target(
         "test",
         {
@@ -4489,17 +4701,20 @@ def test_machine_policy_preflight_block_preserves_source_invalid_receipt(
         _sample_candles(),
         strategy="SCALPING",
         prompt_profile="watching",
-        metadata_extra={"scanner_promotion_id": "SCANPROM-source-invalid", **async_binding,
-                        "untrusted_runtime_action": "BUY"},
+        metadata_extra={
+            "scanner_promotion_id": "SCANPROM-source-invalid",
+            **async_binding,
+            "untrusted_runtime_action": "BUY",
+        },
         candle_context=None,
     )
 
     assert {key: result.get(key) for key in async_binding} == async_binding
-    assert 'untrusted_runtime_action' not in result
+    assert "untrusted_runtime_action" not in result
     row = _rows(trace._trace_path(trace._date_text()))[-1]
     assert {key: row.get(key) for key in async_binding} == async_binding
-    assert row['provider_called'] is False
-    assert row['actual_order_submitted'] is False
+    assert row["provider_called"] is False
+    assert row["actual_order_submitted"] is False
 
     if feature_shortfall:
         assert result["action"] == "WAIT"
@@ -4608,13 +4823,17 @@ def test_machine_enter_now_ai_timeout_preserves_bounded_recheck(monkeypatch, ter
         ),
     )
     if terminal != "timeout":
-        monkeypatch.setattr(engine, "_call_openai_safe", lambda *a, **k: pytest.fail("provider called"))
+        monkeypatch.setattr(
+            engine, "_call_openai_safe", lambda *a, **k: pytest.fail("provider called")
+        )
     if terminal == "circuit":
         monkeypatch.setattr(engine._entry_circuit(), "admit", lambda *a, **k: None)
     elif terminal == "lock":
+
         class BusyLock:
             def acquire(self, **kwargs):
                 return False
+
         engine.lock = BusyLock()
     elif terminal == "disabled":
         engine.ai_disabled = True
@@ -4628,7 +4847,11 @@ def test_machine_enter_now_ai_timeout_preserves_bounded_recheck(monkeypatch, ter
         strategy="SCALPING",
         prompt_profile="watching",
         candle_context=_allowed_entry_candle_context(),
-        **({"entry_input_deadline_epoch": openai_module.time.time() + 30} if terminal == "circuit" else {}),
+        **(
+            {"entry_input_deadline_epoch": openai_module.time.time() + 30}
+            if terminal == "circuit"
+            else {}
+        ),
     )
 
     assert result["machine_evaluation_status"] == "assessed"
@@ -4637,7 +4860,14 @@ def test_machine_enter_now_ai_timeout_preserves_bounded_recheck(monkeypatch, ter
     assert result["entry_mechanistic_action"] == "ENTER_NOW"
     if terminal != "timeout":
         assert result["action"] == ("WAIT" if terminal == "circuit" else "DROP")
-        assert result["ai_result_source"] == {"circuit": "entry_circuit_open", "lock": "lock_contention", "disabled": "engine_disabled"}[terminal]
+        assert (
+            result["ai_result_source"]
+            == {
+                "circuit": "entry_circuit_open",
+                "lock": "lock_contention",
+                "disabled": "engine_disabled",
+            }[terminal]
+        )
         assert not result.get("provider_called")
         assert not result.get("entry_ai_screen_pass")
         return
@@ -4654,12 +4884,12 @@ def test_machine_enter_now_ai_timeout_preserves_bounded_recheck(monkeypatch, ter
     assert result["entry_ai_followup_disposition"] == ("ai_unavailable_bounded_recheck")
     assert result["entry_ai_full_entry_forbidden"] is True
     assert result["openai_transport_fail_closed"] is True
-    clocks = result['entry_local_stage_clocks']
-    assert clocks['provider_started_perf'] >= clocks['analysis_started_perf']
-    assert clocks['provider_returned_perf'] >= clocks['provider_started_perf']
-    assert clocks['failure_observed_perf'] == clocks['provider_returned_perf']
-    assert clocks['analysis_return_perf'] >= clocks['annotation_started_perf']
-    assert clocks['failure_processing_seconds'] >= 0
+    clocks = result["entry_local_stage_clocks"]
+    assert clocks["provider_started_perf"] >= clocks["analysis_started_perf"]
+    assert clocks["provider_returned_perf"] >= clocks["provider_started_perf"]
+    assert clocks["failure_observed_perf"] == clocks["provider_returned_perf"]
+    assert clocks["analysis_return_perf"] >= clocks["annotation_started_perf"]
+    assert clocks["failure_processing_seconds"] >= 0
     assert result["machine_observation_sha256"] == "c" * 64
     assert result["entry_cost_source_status"] == "exact_pre_provider_replay"
     assert result["entry_conservative_execution_cost_pct"] > 0
@@ -7768,25 +7998,50 @@ def test_http_capture_timing_preserves_original_deadline(monkeypatch, capture_se
     clock = [100.0]
     calls = []
     monkeypatch.setattr(openai_module.time, "perf_counter", lambda: clock[0])
+
     def capture(**kwargs):
         clock[0] += capture_seconds
         return {"ai_trace_lock_wait_ms": capture_seconds * 1000}
+
     monkeypatch.setattr(openai_module, "capture_ai_request", capture)
+
     def create(**kwargs):
         calls.append(kwargs)
-        return SimpleNamespace(output_text='{"action":"WAIT","score":61,"reason":"test"}')
+        return SimpleNamespace(
+            output_text='{"action":"WAIT","score":61,"reason":"test"}'
+        )
+
     engine.client = SimpleNamespace(responses=SimpleNamespace(create=create))
-    kwargs = dict(require_json=True, context_name="capture-deadline-test",
-                  schema_name="entry_v1", endpoint_name="analyze_target", symbol="005930",
-                  transport_mode_override="http", timeout_ms_override=5000,
-                  metadata_extra={"selected_prompt_version": next(iter(
-                      openai_module.MACHINE_AUXILIARY_COMPACT_ENTRY_PROMPT_VERSIONS))})
+    kwargs = dict(
+        require_json=True,
+        context_name="capture-deadline-test",
+        schema_name="entry_v1",
+        endpoint_name="analyze_target",
+        symbol="005930",
+        transport_mode_override="http",
+        timeout_ms_override=5000,
+        metadata_extra={
+            "selected_prompt_version": next(
+                iter(openai_module.MACHINE_AUXILIARY_COMPACT_ENTRY_PROMPT_VERSIONS)
+            )
+        },
+    )
     if capture_seconds > 5:
         with pytest.raises(OpenAIResponsesHTTPError):
-            engine._call_openai_safe("PROMPT", "payload", **kwargs, model_override="test-model", )
+            engine._call_openai_safe(
+                "PROMPT",
+                "payload",
+                **kwargs,
+                model_override="test-model",
+            )
         assert calls == []  # Preparation does not renew the request deadline.
     else:
-        engine._call_openai_safe("PROMPT", "payload", **kwargs, model_override="test-model", )
+        engine._call_openai_safe(
+            "PROMPT",
+            "payload",
+            **kwargs,
+            model_override="test-model",
+        )
         assert len(calls) == 1
     meta = engine._consume_last_transport_meta()
     assert meta["openai_timeout_budget_ms"] == 5000
@@ -8023,11 +8278,12 @@ def test_openai_http_enforces_wall_clock_deadline_when_sdk_call_runs_late():
 
 def test_openai_http_wall_deadline_cancels_queued_duplicate_provider_call():
     from concurrent.futures import ThreadPoolExecutor
+
     engine = _build_engine()
     provider_calls = []
     release = threading.Event()
     engine._http_deadline_executor = ThreadPoolExecutor(max_workers=1)
-    engine._http_deadline_executor.submit(lambda:None).result(timeout=1)
+    engine._http_deadline_executor.submit(lambda: None).result(timeout=1)
 
     def _create(**kwargs):
         provider_calls.append(kwargs)
@@ -8055,11 +8311,19 @@ def test_openai_http_wall_deadline_cancels_queued_duplicate_provider_call():
 
     try:
         with pytest.raises(OpenAIResponsesHTTPError) as first_error:
-            engine._call_openai_responses_http(_request("req-wall-deadline-running",500))
-        assert first_error.value.timing_meta["openai_http_provider_future_cancelled"] is False
+            engine._call_openai_responses_http(
+                _request("req-wall-deadline-running", 500)
+            )
+        assert (
+            first_error.value.timing_meta["openai_http_provider_future_cancelled"]
+            is False
+        )
         with pytest.raises(OpenAIResponsesHTTPError) as queued_error:
             engine._call_openai_responses_http(_request("req-wall-deadline-queued"))
-        assert queued_error.value.timing_meta["openai_http_provider_future_cancelled"] is True
+        assert (
+            queued_error.value.timing_meta["openai_http_provider_future_cancelled"]
+            is True
+        )
     finally:
         release.set()
         engine._http_deadline_executor.shutdown(wait=True)
@@ -8784,73 +9048,164 @@ def test_transport_trace_copy_preserves_generic_provider_response_id():
     assert target["bedrock_response_id"] == "aws-request-1"
 
 
-@pytest.mark.parametrize("case", ["rebound", "pullback", "continuation", "invalid", "wide_spread", "source_gap", "policy_gap"])
-def test_shared_rebound_producer_uses_real_entry_core_and_never_provider(monkeypatch, case):
+@pytest.mark.parametrize(
+    "case",
+    [
+        "rebound",
+        "pullback",
+        "continuation",
+        "invalid",
+        "wide_spread",
+        "source_gap",
+        "policy_gap",
+    ],
+)
+def test_shared_rebound_producer_uses_real_entry_core_and_never_provider(
+    monkeypatch, case
+):
     from src.engine.scalping import mechanistic_entry_runtime_policy as policy
     from src.engine.scalping import entry_candle_context as candles
-    from src.engine.scalping.entry_setup_evidence import MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1
-    from src.trading.market import micro_confirmation, main_entry_micro_window as entry_adverse_flow
+    from src.engine.scalping.entry_setup_evidence import (
+        MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1,
+    )
+    from src.trading.market import (
+        micro_confirmation,
+        main_entry_micro_window as entry_adverse_flow,
+    )
     import copy
 
     engine = _build_engine()
-    monkeypatch.setattr(engine, "_call_openai_safe", lambda *a, **k: pytest.fail("pure signal cannot call provider"))
-    monkeypatch.setattr(candles, "resolve_entry_candle_session", lambda **k: "krx_regular")
+    monkeypatch.setattr(
+        engine,
+        "_call_openai_safe",
+        lambda *a, **k: pytest.fail("pure signal cannot call provider"),
+    )
+    monkeypatch.setattr(
+        candles, "resolve_entry_candle_session", lambda **k: "krx_regular"
+    )
     monkeypatch.setattr(candles, "resolve_entry_candle_venue", lambda *a, **k: "KRX")
     builds = []
+
     def context(*a, **kw):
         builds.append(kw)
         assert isinstance(kw["recent_candles"], list)
         assert kw["source_meta"]["multi_timeframe_auxiliary_fetch"] is False
         assert kw["include_investor_source"] is False
         return _allowed_entry_candle_context()
+
     monkeypatch.setattr(candles, "build_entry_candle_context", context)
-    bundle = {"machine_policy": copy.deepcopy(MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1),
-        "bundle_sha256": "b" * 64, "all_continuous_adopted": False}
+    bundle = {
+        "machine_policy": copy.deepcopy(MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1),
+        "bundle_sha256": "b" * 64,
+        "all_continuous_adopted": False,
+    }
     scopes = []
+
     def resolve(**kw):
         scopes.append(kw)
-        return {"enabled": case != "policy_gap", "machine_bundle_sha256": "b" * 64,
+        return {
+            "enabled": case != "policy_gap",
+            "machine_bundle_sha256": "b" * 64,
             "mechanistic_threshold_policy": bundle["machine_policy"],
-            "selected_prompt_version": next(iter(openai_module.AUXILIARY_ENTRY_RISK_PROMPT_VERSIONS))}
+            "selected_prompt_version": next(
+                iter(openai_module.AUXILIARY_ENTRY_RISK_PROMPT_VERSIONS)
+            ),
+        }
+
     monkeypatch.setattr(openai_module, "resolve_live_prompt_policy", resolve)
-    monkeypatch.setattr(openai_module, "ai_input_preflight", lambda c: {
-        "allowed": case != "source_gap",
-        "primary_blocker": "tick_context_stale",
-        "primary_blocker_category": "stale_source",
-        "blockers": ["tick_context_stale", "quote_missing"],
-        "missing_sources": ["quote"],
-    })
-    monkeypatch.setattr(openai_module, "ai_market_snapshot_log_fields", lambda c: {
-        "ai_input_preflight_source_clock_snapshot_id": "snapshot-1",
-        "ai_input_preflight_source_clock_captured_at": "2026-09-29T10:00:00+09:00",
-        "ai_input_preflight_source_timing": {
-            "tick": {"observed_at": "2026-09-29T09:59:00+09:00", "age_ms": 60000,
-                     "quality": "stale", "freshness_limit_ms": 3000}},
-    })
-    monkeypatch.setattr(micro_confirmation, "load_live_dynamic_confirmation_source", lambda: (None, "source_gap"))
-    monkeypatch.setattr(engine, "_build_entry_screen_hot_payload", lambda *a, **k: {
-        "current": {"price": 9950},
-        "features": {"tick_aggressor_pressure_usable": True, "tick_context_stale": False,
-            "quote_stale": False, "large_sell_print_detected": False,
-            "tick_aggressor_trusted_count": 10, "net_aggressive_delta_10t": 500,
-            "price_change_10t_pct": 0.1}})
-    monkeypatch.setattr(openai_module, "build_exact_payload_analysis_v1", lambda *a, **k: {
-        "schema": "exact_payload_analysis_v1",
-        "source_quality": {"status": "pass", "completed_bar_count": 20},
-        "completed_structure": {"phase": "pullback" if case == "pullback" else
-            "continuation" if case == "continuation" else "rebound_attempt"},
-        "executable_liquidity": {"execution_cost_state": "low", "spread_bp": 200 if case == "wide_spread" else 10,
-            "fillability_score": 90, "top3_ask_to_bid_ratio": 0.5},
-        "deterministic_contract_facts": {"trusted_supportive_trigger": True,
-            "orderly_pullback_recovery": case == "pullback", "blocking_overextension": case == "invalid"},
-    })
-    monkeypatch.setattr(openai_module, "build_v2_13_recovery_confirmation_analysis_v1", lambda *a, **k: {
-        "schema": "anticipatory_reversal_analysis_v1",
-        "source_mode": "fresh_dual", "hard_blockers": [],
-        "clean_continuation_probe": {"eligible": True},
-        "recovery_confirmation_probe": {"eligible": True}})
-    result = engine.evaluate_main_rebound_entry(stock_code="005930", ws_data={},
-        recent_ticks=[], recent_candles=[], candle_meta={"multi_timeframe_auxiliary_fetch": True}, now_ts=2000)
+    monkeypatch.setattr(
+        openai_module,
+        "ai_input_preflight",
+        lambda c: {
+            "allowed": case != "source_gap",
+            "primary_blocker": "tick_context_stale",
+            "primary_blocker_category": "stale_source",
+            "blockers": ["tick_context_stale", "quote_missing"],
+            "missing_sources": ["quote"],
+        },
+    )
+    monkeypatch.setattr(
+        openai_module,
+        "ai_market_snapshot_log_fields",
+        lambda c: {
+            "ai_input_preflight_source_clock_snapshot_id": "snapshot-1",
+            "ai_input_preflight_source_clock_captured_at": "2026-09-29T10:00:00+09:00",
+            "ai_input_preflight_source_timing": {
+                "tick": {
+                    "observed_at": "2026-09-29T09:59:00+09:00",
+                    "age_ms": 60000,
+                    "quality": "stale",
+                    "freshness_limit_ms": 3000,
+                }
+            },
+        },
+    )
+    monkeypatch.setattr(
+        micro_confirmation,
+        "load_live_dynamic_confirmation_source",
+        lambda: (None, "source_gap"),
+    )
+    monkeypatch.setattr(
+        engine,
+        "_build_entry_screen_hot_payload",
+        lambda *a, **k: {
+            "current": {"price": 9950},
+            "features": {
+                "tick_aggressor_pressure_usable": True,
+                "tick_context_stale": False,
+                "quote_stale": False,
+                "large_sell_print_detected": False,
+                "tick_aggressor_trusted_count": 10,
+                "net_aggressive_delta_10t": 500,
+                "price_change_10t_pct": 0.1,
+            },
+        },
+    )
+    monkeypatch.setattr(
+        openai_module,
+        "build_exact_payload_analysis_v1",
+        lambda *a, **k: {
+            "schema": "exact_payload_analysis_v1",
+            "source_quality": {"status": "pass", "completed_bar_count": 20},
+            "completed_structure": {
+                "phase": (
+                    "pullback"
+                    if case == "pullback"
+                    else "continuation" if case == "continuation" else "rebound_attempt"
+                )
+            },
+            "executable_liquidity": {
+                "execution_cost_state": "low",
+                "spread_bp": 200 if case == "wide_spread" else 10,
+                "fillability_score": 90,
+                "top3_ask_to_bid_ratio": 0.5,
+            },
+            "deterministic_contract_facts": {
+                "trusted_supportive_trigger": True,
+                "orderly_pullback_recovery": case == "pullback",
+                "blocking_overextension": case == "invalid",
+            },
+        },
+    )
+    monkeypatch.setattr(
+        openai_module,
+        "build_v2_13_recovery_confirmation_analysis_v1",
+        lambda *a, **k: {
+            "schema": "anticipatory_reversal_analysis_v1",
+            "source_mode": "fresh_dual",
+            "hard_blockers": [],
+            "clean_continuation_probe": {"eligible": True},
+            "recovery_confirmation_probe": {"eligible": True},
+        },
+    )
+    result = engine.evaluate_main_rebound_entry(
+        stock_code="005930",
+        ws_data={},
+        recent_ticks=[],
+        recent_candles=[],
+        candle_meta={"multi_timeframe_auxiliary_fetch": True},
+        now_ts=2000,
+    )
     assert scopes[0]["strategy"] == "SCALPING"
     assert scopes[0]["effective_venue"] == "KRX"
     assert scopes[0]["session_bucket"] == "krx_regular"
@@ -8864,143 +9219,291 @@ def test_shared_rebound_producer_uses_real_entry_core_and_never_provider(monkeyp
         assert result["machine_action"] == "ENTER_NOW"
         assert result["machine_bundle_sha256"] == "b" * 64
         assert len(result["source_signal_id"]) == 64
-        later = engine.evaluate_main_rebound_entry(stock_code="005930", ws_data={},
-            recent_ticks=[], recent_candles=[], candle_meta={}, now_ts=2001)
+        later = engine.evaluate_main_rebound_entry(
+            stock_code="005930",
+            ws_data={},
+            recent_ticks=[],
+            recent_candles=[],
+            candle_meta={},
+            now_ts=2001,
+        )
         assert later["source_signal_id"] == result["source_signal_id"]
 
-        aged = engine.evaluate_main_rebound_entry(stock_code="005930",
-            ws_data={"quote_age_ms": 100, "market_data_effective_quote_age_ms": 100,
-                "market_data_health": {"routes": {"KRX": {"quote_receive_age_ms": 100}}},
-                "market_session_remaining": 100},
-            recent_ticks=[], recent_candles=[], candle_meta={}, now_ts=2001)
+        aged = engine.evaluate_main_rebound_entry(
+            stock_code="005930",
+            ws_data={
+                "quote_age_ms": 100,
+                "market_data_effective_quote_age_ms": 100,
+                "market_data_health": {
+                    "routes": {"KRX": {"quote_receive_age_ms": 100}}
+                },
+                "market_session_remaining": 100,
+            },
+            recent_ticks=[],
+            recent_candles=[],
+            candle_meta={},
+            now_ts=2001,
+        )
         assert aged["source_signal_id"] == result["source_signal_id"]
-        new_bar = engine.evaluate_main_rebound_entry(stock_code="005930", ws_data={},
-            recent_ticks=[], recent_candles=[{"timestamp": 1900, "close": 9950}], candle_meta={}, now_ts=2001)
+        new_bar = engine.evaluate_main_rebound_entry(
+            stock_code="005930",
+            ws_data={},
+            recent_ticks=[],
+            recent_candles=[{"timestamp": 1900, "close": 9950}],
+            candle_meta={},
+            now_ts=2001,
+        )
         assert new_bar["source_signal_id"] != result["source_signal_id"]
 
 
-def test_shared_rebound_current_policy_uses_canonical_scope_without_legacy_fallback(monkeypatch):
-    from src.engine.scalping import entry_candle_context as candles, avg_down_rebound as adapter
+def test_shared_rebound_current_policy_uses_canonical_scope_without_legacy_fallback(
+    monkeypatch,
+):
+    from src.engine.scalping import (
+        entry_candle_context as candles,
+        avg_down_rebound as adapter,
+    )
+
     engine = _build_engine()
-    monkeypatch.setattr(engine, '_call_openai_safe', lambda *a, **k: pytest.fail('unexpected provider'))
-    monkeypatch.setattr(engine, '_build_entry_screen_hot_payload', lambda *a, **k: pytest.fail('legacy path'))
-    monkeypatch.setattr(candles, 'resolve_entry_candle_session', lambda **k: 'krx_regular')
-    monkeypatch.setattr(candles, 'build_entry_candle_context', lambda *a, **k: _allowed_entry_candle_context())
-    monkeypatch.setattr(openai_module, 'ai_input_preflight', lambda _: dict(allowed=True))
-    scopes=[]
-    family=dict(schema='continuous_reversal_policy_v6',family_sha256='f'*64)
+    monkeypatch.setattr(
+        engine, "_call_openai_safe", lambda *a, **k: pytest.fail("unexpected provider")
+    )
+    monkeypatch.setattr(
+        engine,
+        "_build_entry_screen_hot_payload",
+        lambda *a, **k: pytest.fail("legacy path"),
+    )
+    monkeypatch.setattr(
+        candles, "resolve_entry_candle_session", lambda **k: "krx_regular"
+    )
+    monkeypatch.setattr(
+        candles,
+        "build_entry_candle_context",
+        lambda *a, **k: _allowed_entry_candle_context(),
+    )
+    monkeypatch.setattr(
+        openai_module, "ai_input_preflight", lambda _: dict(allowed=True)
+    )
+    scopes = []
+    family = dict(schema="continuous_reversal_policy_v6", family_sha256="f" * 64)
+
     def resolve(**kw):
         scopes.append(kw)
-        return dict(enabled=True,machine_bundle_sha256='b'*64,continuous_reversal=family)
-    monkeypatch.setattr(openai_module,'resolve_live_prompt_policy',resolve)
-    calls=[]
+        return dict(
+            enabled=True, machine_bundle_sha256="b" * 64, continuous_reversal=family
+        )
+
+    monkeypatch.setattr(openai_module, "resolve_live_prompt_policy", resolve)
+    calls = []
+
     def native(live, **kw):
         calls.append(kw)
-        assert live['continuous_reversal']==family
-        return dict(should_add=True,source_signal_id='s'*64,machine_policy_version=family['schema'])
-    monkeypatch.setattr(adapter,'evaluate_native_rebound',native)
-    result=engine.evaluate_main_rebound_entry(stock_code='005930',
-        ws_data=dict(market_suffix='_AL',market_route='krx_nxt_integrated'),
-        recent_ticks=[],recent_candles=[],candle_meta={},now_ts=2000,position_tag='SCANNER')
-    assert result['should_add'] and result['effective_venue']=='KRX'
-    assert scopes[0]['position_tag']=='SCANNER' and scopes[0]['effective_venue']=='KRX'
-    assert calls[0]['session']=='krx_regular'
+        assert live["continuous_reversal"] == family
+        return dict(
+            should_add=True,
+            source_signal_id="s" * 64,
+            machine_policy_version=family["schema"],
+        )
+
+    monkeypatch.setattr(adapter, "evaluate_native_rebound", native)
+    result = engine.evaluate_main_rebound_entry(
+        stock_code="005930",
+        ws_data=dict(market_suffix="_AL", market_route="krx_nxt_integrated"),
+        recent_ticks=[],
+        recent_candles=[],
+        candle_meta={},
+        now_ts=2000,
+        position_tag="SCANNER",
+    )
+    assert result["should_add"] and result["effective_venue"] == "KRX"
+    assert (
+        scopes[0]["position_tag"] == "SCANNER" and scopes[0]["effective_venue"] == "KRX"
+    )
+    assert calls[0]["session"] == "krx_regular"
 
 
-def test_local_async_capture_binding_survives_provider_metadata_limit(monkeypatch,tmp_path):
+def test_local_async_capture_binding_survives_provider_metadata_limit(
+    monkeypatch, tmp_path
+):
     from src.engine.scalping import ai_decision_trace as trace
-    engine=_build_engine();wire=[]
-    engine.client=SimpleNamespace(responses=SimpleNamespace(create=lambda **kwargs:
-        (wire.append(kwargs) or SimpleNamespace(output_text='{"action":"WAIT","score":50}'))))
-    monkeypatch.setattr(openai_module,'TRADING_RULES',replace(openai_module.TRADING_RULES,
-        OPENAI_TRANSPORT_MODE='http'))
-    monkeypatch.setenv('KORSTOCKSCAN_AI_DECISION_TRACE_ENABLED','1')
-    monkeypatch.setattr(trace,'DATA_DIR',tmp_path)
-    binding=dict(async_request_id='g:key',async_producer_pid=123,async_producer_start_ticks='456',
-        async_origin_deadline_epoch=1791412205.,async_order_venue='SOR',scanner_generation_id='g')
-    metadata={**{f'diagnostic_{i}':i for i in range(32)},**binding}
-    engine._call_openai_safe('fixture','{}',require_json=True,context_name='offline',
-        endpoint_name='analyze_target',symbol='005930',metadata_extra=metadata, model_override="test-model", )
-    assert len(wire)==1 and len(wire[0]['metadata'])<=16
-    row=json.loads(trace._request_path(trace._date_text()).read_text().splitlines()[-1])
-    for key,value in binding.items():assert row[key]==value
-    receipt=engine._consume_last_transport_meta()
-    for key,value in binding.items():assert receipt[key]==value
+
+    engine = _build_engine()
+    wire = []
+    engine.client = SimpleNamespace(
+        responses=SimpleNamespace(
+            create=lambda **kwargs: (
+                wire.append(kwargs)
+                or SimpleNamespace(output_text='{"action":"WAIT","score":50}')
+            )
+        )
+    )
+    monkeypatch.setattr(
+        openai_module,
+        "TRADING_RULES",
+        replace(openai_module.TRADING_RULES, OPENAI_TRANSPORT_MODE="http"),
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_AI_DECISION_TRACE_ENABLED", "1")
+    monkeypatch.setattr(trace, "DATA_DIR", tmp_path)
+    binding = dict(
+        async_request_id="g:key",
+        async_producer_pid=123,
+        async_producer_start_ticks="456",
+        async_origin_deadline_epoch=1791412205.0,
+        async_order_venue="SOR",
+        scanner_generation_id="g",
+    )
+    metadata = {**{f"diagnostic_{i}": i for i in range(32)}, **binding}
+    engine._call_openai_safe(
+        "fixture",
+        "{}",
+        require_json=True,
+        context_name="offline",
+        endpoint_name="analyze_target",
+        symbol="005930",
+        metadata_extra=metadata,
+        model_override="test-model",
+    )
+    assert len(wire) == 1 and len(wire[0]["metadata"]) <= 16
+    row = json.loads(
+        trace._request_path(trace._date_text()).read_text().splitlines()[-1]
+    )
+    for key, value in binding.items():
+        assert row[key] == value
+    receipt = engine._consume_last_transport_meta()
+    for key, value in binding.items():
+        assert receipt[key] == value
 
 
-@pytest.mark.parametrize('version', ['continuous_reversal_policy_v5', 'continuous_reversal_policy_v6'])
-def test_reversal_normalization_retains_provider_citations_when_composer_rejects(monkeypatch, version):
+@pytest.mark.parametrize(
+    "version", ["continuous_reversal_policy_v5", "continuous_reversal_policy_v6"]
+)
+def test_reversal_normalization_retains_provider_citations_when_composer_rejects(
+    monkeypatch, version
+):
     from contextlib import nullcontext
     from copy import deepcopy
     from src.engine.scalping import continuous_reversal_policy as policy
     from src.engine.scalping import mechanistic_entry_runtime_policy as native
+
     engine = _build_engine()
-    response = dict(risk_verdict='PASS', risk_codes=['NO_BLOCKING_RISK'],
-        supporting_fact_ids=['branch:hash/observed_machine_signal']*12,
-        contradicting_fact_ids=[], confidence=71)
+    response = dict(
+        risk_verdict="PASS",
+        risk_codes=["NO_BLOCKING_RISK"],
+        supporting_fact_ids=["branch:hash/observed_machine_signal"] * 12,
+        contradicting_fact_ids=[],
+        confidence=71,
+    )
     original = deepcopy(response)
-    monkeypatch.setattr(policy, 'compose', lambda raw, live: dict(action='WAIT',
-        entry_ai_contract_valid=False, entry_ai_contract_errors=['union_pass_support_invalid']))
-    monkeypatch.setattr(native, 'signature_pass', lambda: nullcontext())
-    monkeypatch.setattr(native, 'verified_evaluation', lambda **kwargs: nullcontext())
-    result = engine._normalize_decision_quality_entry_result(response, exact_payload={},
-        live_policy={'continuous_reversal_assessment': {'policy_version': version}})
-    assert response == original and result['action'] == 'WAIT'
-    assert result['entry_ai_contract_errors'] == ['union_pass_support_invalid']
-    assert result['entry_ai_raw_risk_codes'] == original['risk_codes']
-    assert result['entry_ai_raw_supporting_fact_ids'] == original['supporting_fact_ids']
-    assert result['entry_ai_raw_contradicting_fact_ids'] == []
-    assert result['entry_ai_raw_fields_present']['contradicting_fact_ids'] is True
-    assert result['entry_ai_raw_fields_truncated'] is False
+    monkeypatch.setattr(
+        policy,
+        "compose",
+        lambda raw, live: dict(
+            action="WAIT",
+            entry_ai_contract_valid=False,
+            entry_ai_contract_errors=["union_pass_support_invalid"],
+        ),
+    )
+    monkeypatch.setattr(native, "signature_pass", lambda: nullcontext())
+    monkeypatch.setattr(native, "verified_evaluation", lambda **kwargs: nullcontext())
+    result = engine._normalize_decision_quality_entry_result(
+        response,
+        exact_payload={},
+        live_policy={"continuous_reversal_assessment": {"policy_version": version}},
+    )
+    assert response == original and result["action"] == "WAIT"
+    assert result["entry_ai_contract_errors"] == ["union_pass_support_invalid"]
+    assert result["entry_ai_raw_risk_codes"] == original["risk_codes"]
+    assert result["entry_ai_raw_supporting_fact_ids"] == original["supporting_fact_ids"]
+    assert result["entry_ai_raw_contradicting_fact_ids"] == []
+    assert result["entry_ai_raw_fields_present"]["contradicting_fact_ids"] is True
+    assert result["entry_ai_raw_fields_truncated"] is False
 
 
 def test_raw_reversal_response_projection_distinguishes_absence_and_bounded_truncation():
     engine = _build_engine()
-    missing = engine._raw_reversal_response_fields({'risk_verdict': 'PASS'})
-    assert missing['entry_ai_raw_risk_codes'] == []
-    assert missing['entry_ai_raw_fields_present']['risk_codes'] is False
-    bounded = engine._raw_reversal_response_fields({'supporting_fact_ids': ['x'*513]*65})
-    assert bounded['entry_ai_raw_fields_truncated'] is True
-    assert bounded['entry_ai_raw_truncated_field_names'] == ['supporting_fact_ids']
-    assert len(bounded['entry_ai_raw_supporting_fact_ids']) == 64
-    assert len(bounded['entry_ai_raw_supporting_fact_ids'][0]) == 512
+    missing = engine._raw_reversal_response_fields({"risk_verdict": "PASS"})
+    assert missing["entry_ai_raw_risk_codes"] == []
+    assert missing["entry_ai_raw_fields_present"]["risk_codes"] is False
+    bounded = engine._raw_reversal_response_fields(
+        {"supporting_fact_ids": ["x" * 513] * 65}
+    )
+    assert bounded["entry_ai_raw_fields_truncated"] is True
+    assert bounded["entry_ai_raw_truncated_field_names"] == ["supporting_fact_ids"]
+    assert len(bounded["entry_ai_raw_supporting_fact_ids"]) == 64
+    assert len(bounded["entry_ai_raw_supporting_fact_ids"][0]) == 512
 
 
-def test_received_reversal_validator_exception_preserves_raw_response_and_waits_without_replay(monkeypatch):
+def test_received_reversal_validator_exception_preserves_raw_response_and_waits_without_replay(
+    monkeypatch,
+):
     from src.engine.scalping import reversal_extended_union as U
     from src.tests.test_reversal_extended_policy import FIXTURES
-    fixture=next(iter(FIXTURES.values())); arm=U.V1.ARMS[1]
-    inp, _, _=U.production_request(fixture['source'],arm,event=fixture['event'])
-    response=dict(schema=U.VERSION,decision_scope='COMMON_OPPORTUNITY',
-        assessed_signal_refs=[s['ref'] for s in inp['signals']],risk_verdict=['PASS'],
-        risk_codes=['NO_BLOCKING_RISK'],supporting_fact_ids=['observed_machine_signal'],
-        contradicting_fact_ids=[],confidence=70)
-    engine=_build_engine()
-    monkeypatch.setattr(engine,'_call_openai_safe',lambda *a,**kw:pytest.fail('invalid received response must not replay provider'))
-    raw=engine._raw_reversal_response_fields(response)
+
+    fixture = next(iter(FIXTURES.values()))
+    arm = U.V1.ARMS[1]
+    inp, _, _ = U.production_request(fixture["source"], arm, event=fixture["event"])
+    response = dict(
+        schema=U.VERSION,
+        decision_scope="COMMON_OPPORTUNITY",
+        assessed_signal_refs=[s["ref"] for s in inp["signals"]],
+        risk_verdict=["PASS"],
+        risk_codes=["NO_BLOCKING_RISK"],
+        supporting_fact_ids=["observed_machine_signal"],
+        contradicting_fact_ids=[],
+        confidence=70,
+    )
+    engine = _build_engine()
+    monkeypatch.setattr(
+        engine,
+        "_call_openai_safe",
+        lambda *a, **kw: pytest.fail(
+            "invalid received response must not replay provider"
+        ),
+    )
+    raw = engine._raw_reversal_response_fields(response)
     try:
-        U.validate_response(response,inp,arm=arm)
+        U.validate_response(response, inp, arm=arm)
     except TypeError as error:
-        result=engine._received_reversal_response_failure(raw,error=error)
+        result = engine._received_reversal_response_failure(raw, error=error)
     else:
-        pytest.fail('fixture must exercise frozen validator exception')
-    assert result['entry_ai_raw_risk_codes']==response['risk_codes']
-    assert result['entry_ai_raw_supporting_fact_ids']==response['supporting_fact_ids']
-    assert result['entry_ai_raw_fields_present']['risk_verdict'] is True
-    assert result['entry_ai_raw_response_sha256']
-    assert result['action']=='WAIT' and result['entry_ai_screen_status']=='response_invalid'
-    assert result['entry_auxiliary_response_received'] is True
-    assert result['entry_auxiliary_response_contract_valid'] is False
-    assert result['openai_transport_fail_closed'] is False
+        pytest.fail("fixture must exercise frozen validator exception")
+    assert result["entry_ai_raw_risk_codes"] == response["risk_codes"]
+    assert result["entry_ai_raw_supporting_fact_ids"] == response["supporting_fact_ids"]
+    assert result["entry_ai_raw_fields_present"]["risk_verdict"] is True
+    assert result["entry_ai_raw_response_sha256"]
+    assert (
+        result["action"] == "WAIT"
+        and result["entry_ai_screen_status"] == "response_invalid"
+    )
+    assert result["entry_auxiliary_response_received"] is True
+    assert result["entry_auxiliary_response_contract_valid"] is False
+    assert result["openai_transport_fail_closed"] is False
 
 
-@pytest.mark.parametrize('failure_stage', ['frozen_validator', 'post_validation',
-    'duplicate_reservation', 'legacy_reservation', 'invalid_outbox_transition', 'corrupt_outbox',
-    'outbox_io_failure', 'corrupt_legacy_journal', 'invalid_legacy_shape',
-    'pre_adjudication_rejection', 'pre_adjudication_capture_io_failure',
-    'pre_exact_rejection', 'probe_pre_adjudication_rejection', 'post_capture_rejection',
-    'local_deadline', 'unsent_deadline'])
-def test_full_analyze_target_received_reversal_exception_keeps_raw_and_execution_separate(tmp_path, monkeypatch, failure_stage):
+@pytest.mark.parametrize(
+    "failure_stage",
+    [
+        "frozen_validator",
+        "post_validation",
+        "duplicate_reservation",
+        "legacy_reservation",
+        "invalid_outbox_transition",
+        "corrupt_outbox",
+        "outbox_io_failure",
+        "corrupt_legacy_journal",
+        "invalid_legacy_shape",
+        "pre_adjudication_rejection",
+        "pre_adjudication_capture_io_failure",
+        "pre_exact_rejection",
+        "probe_pre_adjudication_rejection",
+        "post_capture_rejection",
+        "local_deadline",
+        "unsent_deadline",
+    ],
+)
+def test_full_analyze_target_received_reversal_exception_keeps_raw_and_execution_separate(
+    tmp_path, monkeypatch, failure_stage
+):
     """Exercise real request, receipt, validator exception, fallback and trace."""
     import copy
     import os
@@ -9014,72 +9517,133 @@ def test_full_analyze_target_received_reversal_exception_keeps_raw_and_execution
     from src.engine.scalping import reversal_source_diagnostics as diagnostics
     from src.engine.scalping import mechanistic_entry_runtime_policy as runtime
     from src.engine.scalping import continuous_reversal_postclose as postclose
-    from src.engine.scalping.entry_setup_evidence import MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1
+    from src.engine.scalping.entry_setup_evidence import (
+        MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1,
+    )
     from src.tests.test_reversal_extended_policy import FIXTURES
     from src.tests.test_ai_decision_trace import _enable
     from src.utils import constants
+
     _enable(monkeypatch, tmp_path)
-    monkeypatch.setattr(constants, 'DATA_DIR', tmp_path)
+    monkeypatch.setattr(constants, "DATA_DIR", tmp_path)
     fixture = next(iter(FIXTURES.values()))
-    snapshot = (copy.deepcopy(fixture['event']), copy.deepcopy(fixture['source']))
+    snapshot = (copy.deepcopy(fixture["event"]), copy.deepcopy(fixture["source"]))
     definition = registry.definition(union.V1.ARMS[1], input_version=union.VERSION)
     registry.register(tmp_path, definition)
     inp, prompt, schema = registry.production_request(snapshot, definition)
-    snapshot[0]['epoch'] = time.time()
-    refs = [signal['ref'] for signal in inp['signals']]
-    assessment = dict(action='ENTER_NOW', reason='controlled_native_source', policy_version=native.SCHEMA,
-        auxiliary_arm=definition['base_arm'], auxiliary_binding=registry.binding(definition),
-        auxiliary_registry_sha256=definition['registry_sha256'], family_sha256='f'*64,
-        event=snapshot[0], signal_id='s'*64, signal_set_hash=postclose.digest(inp['signals']),
-        opportunity_key='e'*64, scope_execution_hash='x'*64, matched_policy_refs=refs,
-        cell_key='samsung|REGULAR|ALL', route='SOR')
-    live = dict(enabled=True, status='active_bounded_krx_canary', selected_prompt_version=runtime.AI_VERSION,
-        primary_decision_owner='mechanistic_entry_adjudicator', ai_role='auxiliary_risk_screen_pass_veto_no_promotion',
-        mechanistic_threshold_policy=MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1, machine_bundle_sha256='b'*64,
-        continuous_reversal=dict(schema=native.SCHEMA, family_sha256='f'*64, machine_cells={}, auxiliary_cells={}))
-    if failure_stage == 'post_capture_rejection':
-        live['auxiliary_soft_policy'] = {'schema': 'auxiliary_soft_policy_v2'}
-    monkeypatch.setattr(openai_module, 'resolve_live_prompt_policy', lambda **kw: copy.deepcopy(live))
-    monkeypatch.setattr(openai_module, 'TRADING_RULES', replace(openai_module.TRADING_RULES,
-        OPENAI_ANALYZE_TARGET_PROMPT_VERSION=DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION))
-    monkeypatch.setattr(policy, 'assess', lambda *a, **kw: (copy.deepcopy(assessment), inp, prompt, schema))
-    monkeypatch.setattr(diagnostics, 'validate_claim_with_receipt', lambda *a, **kw: snapshot)
-    monkeypatch.setattr(intraday, 'apply_request', lambda *a: a[-1])
-    monkeypatch.setattr(intraday, 'validate_decision', lambda *a, **kw: definition)
-    monkeypatch.setattr(runtime, 'load_effective', lambda **kw: {'bundle_sha256': 'b'*64})
-    monkeypatch.setattr(native, 'validate_active_claim', lambda *a, **kw: refs)
-    response = dict(schema=union.VERSION, decision_scope='COMMON_OPPORTUNITY', assessed_signal_refs=refs,
-        risk_verdict=['PASS'] if failure_stage == 'frozen_validator' else 'PASS',
-        risk_codes=['NO_BLOCKING_RISK'], supporting_fact_ids=['observed_machine_signal'],
-        contradicting_fact_ids=[], confidence=70)
+    snapshot[0]["epoch"] = time.time()
+    refs = [signal["ref"] for signal in inp["signals"]]
+    assessment = dict(
+        action="ENTER_NOW",
+        reason="controlled_native_source",
+        policy_version=native.SCHEMA,
+        auxiliary_arm=definition["base_arm"],
+        auxiliary_binding=registry.binding(definition),
+        auxiliary_registry_sha256=definition["registry_sha256"],
+        family_sha256="f" * 64,
+        event=snapshot[0],
+        signal_id="s" * 64,
+        signal_set_hash=postclose.digest(inp["signals"]),
+        opportunity_key="e" * 64,
+        scope_execution_hash="x" * 64,
+        matched_policy_refs=refs,
+        cell_key="samsung|REGULAR|ALL",
+        route="SOR",
+    )
+    live = dict(
+        enabled=True,
+        status="active_bounded_krx_canary",
+        selected_prompt_version=runtime.AI_VERSION,
+        primary_decision_owner="mechanistic_entry_adjudicator",
+        ai_role="auxiliary_risk_screen_pass_veto_no_promotion",
+        mechanistic_threshold_policy=MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1,
+        machine_bundle_sha256="b" * 64,
+        continuous_reversal=dict(
+            schema=native.SCHEMA,
+            family_sha256="f" * 64,
+            machine_cells={},
+            auxiliary_cells={},
+        ),
+    )
+    if failure_stage == "post_capture_rejection":
+        live["auxiliary_soft_policy"] = {"schema": "auxiliary_soft_policy_v2"}
+    monkeypatch.setattr(
+        openai_module, "resolve_live_prompt_policy", lambda **kw: copy.deepcopy(live)
+    )
+    monkeypatch.setattr(
+        openai_module,
+        "TRADING_RULES",
+        replace(
+            openai_module.TRADING_RULES,
+            OPENAI_ANALYZE_TARGET_PROMPT_VERSION=DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
+        ),
+    )
+    monkeypatch.setattr(
+        policy,
+        "assess",
+        lambda *a, **kw: (copy.deepcopy(assessment), inp, prompt, schema),
+    )
+    monkeypatch.setattr(
+        diagnostics, "validate_claim_with_receipt", lambda *a, **kw: snapshot
+    )
+    monkeypatch.setattr(intraday, "apply_request", lambda *a: a[-1])
+    monkeypatch.setattr(intraday, "validate_decision", lambda *a, **kw: definition)
+    monkeypatch.setattr(
+        runtime, "load_effective", lambda **kw: {"bundle_sha256": "b" * 64}
+    )
+    monkeypatch.setattr(native, "validate_active_claim", lambda *a, **kw: refs)
+    response = dict(
+        schema=union.VERSION,
+        decision_scope="COMMON_OPPORTUNITY",
+        assessed_signal_refs=refs,
+        risk_verdict=["PASS"] if failure_stage == "frozen_validator" else "PASS",
+        risk_codes=["NO_BLOCKING_RISK"],
+        supporting_fact_ids=["observed_machine_signal"],
+        contradicting_fact_ids=[],
+        confidence=70,
+    )
     original = copy.deepcopy(response)
     engine = _build_engine()
-    pre_rejected = failure_stage.startswith(('pre_', 'probe_pre_'))
-    probe_rejected = failure_stage == 'probe_pre_adjudication_rejection'
+    pre_rejected = failure_stage.startswith(("pre_", "probe_pre_"))
+    probe_rejected = failure_stage == "probe_pre_adjudication_rejection"
     if probe_rejected:
         from src.engine.scalping.entry_setup_scalping_rollout import SHA_ENV
-        monkeypatch.setenv(SHA_ENV, 'b'*64)
-    rejected_receipt = {'schema': 'continuous_reversal_source_receipt_v4',
-        'error': 'reversal_signal_path_changed', 'process_pid': os.getpid()}
+
+        monkeypatch.setenv(SHA_ENV, "b" * 64)
+    rejected_receipt = {
+        "schema": "continuous_reversal_source_receipt_v4",
+        "error": "reversal_signal_path_changed",
+        "process_pid": os.getpid(),
+    }
+
     def reject_native(*args, **kwargs):
-        error = ValueError('reversal_signal_path_changed')
+        error = ValueError("reversal_signal_path_changed")
         error.reversal_source_receipt = copy.deepcopy(rejected_receipt)
         raise error
+
     if pre_rejected:
-        monkeypatch.setattr(diagnostics,
-            'observe_snapshot' if probe_rejected else 'validate_claim_with_receipt', reject_native)
-    if failure_stage == 'pre_exact_rejection':
+        monkeypatch.setattr(
+            diagnostics,
+            "observe_snapshot" if probe_rejected else "validate_claim_with_receipt",
+            reject_native,
+        )
+    if failure_stage == "pre_exact_rejection":
+
         def reject_format(*args, **kwargs):
-            raise ValueError('controlled_exact_payload_failure')
-        monkeypatch.setattr(engine, '_format_entry_screen_hot_data', reject_format)
-    if failure_stage == 'pre_adjudication_capture_io_failure':
+            raise ValueError("controlled_exact_payload_failure")
+
+        monkeypatch.setattr(engine, "_format_entry_screen_hot_data", reject_format)
+    if failure_stage == "pre_adjudication_capture_io_failure":
         from src.engine.scalping import ai_decision_trace as trace_owner
+
         append = trace_owner._append_jsonl
+
         def fail_payload_write(path, body):
-            if body.get('schema') == 'mechanistic_entry_observation_v1':
-                raise OSError('controlled_payload_write_failure')
+            if body.get("schema") == "mechanistic_entry_observation_v1":
+                raise OSError("controlled_payload_write_failure")
             return append(path, body)
-        monkeypatch.setattr(trace_owner, '_append_jsonl', fail_payload_write)
+
+        monkeypatch.setattr(trace_owner, "_append_jsonl", fail_payload_write)
     # Existing failure chains must neither grow nor be discharged by a local
     # response-contract exception. Near-threshold state exposes accidental
     # provider disablement as well as an incorrect success reset.
@@ -9087,13 +9651,24 @@ def test_full_analyze_target_received_reversal_exception_keeps_raw_and_execution
     engine._common_recoverable_chain = True
     entry_circuit = engine._entry_circuit()
     common_circuit = engine._common_circuit()
-    entry_circuit.failed(entry_circuit.admit('prior-entry', eligible=True, deadline_remaining=3))
+    entry_circuit.failed(
+        entry_circuit.admit("prior-entry", eligible=True, deadline_remaining=3)
+    )
     for index in range(engine.consecutive_failures):
-        common_circuit.failed(common_circuit.admit(f'prior-http-{index}', eligible=False,
-            deadline_remaining=3), reason='provider_http_429')
+        common_circuit.failed(
+            common_circuit.admit(
+                f"prior-http-{index}", eligible=False, deadline_remaining=3
+            ),
+            reason="provider_http_429",
+        )
+
     def stable_circuit(circuit):
-        return {key: value for key, value in circuit.snapshot().items()
-                if key != 'recovery_wait_observed_epoch'}
+        return {
+            key: value
+            for key, value in circuit.snapshot().items()
+            if key != "recovery_wait_observed_epoch"
+        }
+
     circuit_before = (stable_circuit(entry_circuit), stable_circuit(common_circuit))
     failure_before = engine.consecutive_failures
     key_before = (engine.current_api_key_index, engine.current_key)
@@ -9101,267 +9676,482 @@ def test_full_analyze_target_received_reversal_exception_keeps_raw_and_execution
     engine._rotate_client = lambda: rotations.append(True)
     rotations_at_transport_exit = []
     original_call = engine._call_openai_safe
+
     def capture_transport_exit(*args, **kwargs):
         received = original_call(*args, **kwargs)
         rotations_at_transport_exit.append(len(rotations))
         return received
-    monkeypatch.setattr(engine, '_call_openai_safe', capture_transport_exit)
-    if failure_stage == 'post_validation':
+
+    monkeypatch.setattr(engine, "_call_openai_safe", capture_transport_exit)
+    if failure_stage == "post_validation":
+
         def fail_normalization(*a, **kw):
-            raise ValueError('controlled_post_response_projection_fault')
-        monkeypatch.setattr(engine, '_normalize_decision_quality_entry_result', fail_normalization)
+            raise ValueError("controlled_post_response_projection_fault")
+
+        monkeypatch.setattr(
+            engine, "_normalize_decision_quality_entry_result", fail_normalization
+        )
     from src.engine.scalping import reversal_operating_outbox as outbox_owner
-    custody_failure = failure_stage in {'duplicate_reservation', 'legacy_reservation',
-        'invalid_outbox_transition', 'corrupt_outbox', 'outbox_io_failure',
-        'corrupt_legacy_journal', 'invalid_legacy_shape'}
-    if failure_stage == 'duplicate_reservation':
-        outbox_owner.reserve(tmp_path, assessment, 'previous-request')
-    elif failure_stage == 'legacy_reservation':
-        outbox_owner.reserve_reversal_signal(tmp_path/'runtime/initial_quantity/reversal_signals',
-            signal_id=assessment['signal_id'], stage='provider_request', identity='previous-request', binding={})
-    elif failure_stage == 'corrupt_outbox':
-        folder = tmp_path/'runtime/initial_quantity/operating_opportunities'
+
+    custody_failure = failure_stage in {
+        "duplicate_reservation",
+        "legacy_reservation",
+        "invalid_outbox_transition",
+        "corrupt_outbox",
+        "outbox_io_failure",
+        "corrupt_legacy_journal",
+        "invalid_legacy_shape",
+    }
+    if failure_stage == "duplicate_reservation":
+        outbox_owner.reserve(tmp_path, assessment, "previous-request")
+    elif failure_stage == "legacy_reservation":
+        outbox_owner.reserve_reversal_signal(
+            tmp_path / "runtime/initial_quantity/reversal_signals",
+            signal_id=assessment["signal_id"],
+            stage="provider_request",
+            identity="previous-request",
+            binding={},
+        )
+    elif failure_stage == "corrupt_outbox":
+        folder = tmp_path / "runtime/initial_quantity/operating_opportunities"
         folder.mkdir(parents=True)
-        (folder/(assessment['opportunity_key']+'.json')).write_text('{')
-    elif failure_stage in {'corrupt_legacy_journal', 'invalid_legacy_shape'}:
+        (folder / (assessment["opportunity_key"] + ".json")).write_text("{")
+    elif failure_stage in {"corrupt_legacy_journal", "invalid_legacy_shape"}:
         import hashlib
-        folder = tmp_path/'runtime/initial_quantity/reversal_signals'
+
+        folder = tmp_path / "runtime/initial_quantity/reversal_signals"
         folder.mkdir(parents=True)
-        path = folder/(hashlib.sha256(assessment['signal_id'].encode()).hexdigest()+'.json')
-        path.write_text('{' if failure_stage == 'corrupt_legacy_journal' else 'null')
-    elif failure_stage == 'outbox_io_failure':
+        path = folder / (
+            hashlib.sha256(assessment["signal_id"].encode()).hexdigest() + ".json"
+        )
+        path.write_text("{" if failure_stage == "corrupt_legacy_journal" else "null")
+    elif failure_stage == "outbox_io_failure":
+
         def fail_write(*args):
-            raise OSError('controlled outbox storage failure')
-        monkeypatch.setattr(outbox_owner, '_write_target_index_atomic', fail_write)
-    elif failure_stage == 'invalid_outbox_transition':
+            raise OSError("controlled outbox storage failure")
+
+        monkeypatch.setattr(outbox_owner, "_write_target_index_atomic", fail_write)
+    elif failure_stage == "invalid_outbox_transition":
         advance = outbox_owner.advance
+
         def fail_transition(root, key, state, **kwargs):
-            if state == 'response_received':
-                raise outbox_owner.OperatingOpportunityError('operating_opportunity_already_reserved_or_transition_invalid')
+            if state == "response_received":
+                raise outbox_owner.OperatingOpportunityError(
+                    "operating_opportunity_already_reserved_or_transition_invalid"
+                )
             return advance(root, key, state, **kwargs)
-        monkeypatch.setattr(outbox_owner, 'advance', fail_transition)
-    deadline_failure = failure_stage in {'local_deadline', 'unsent_deadline'}
-    if failure_stage == 'local_deadline':
+
+        monkeypatch.setattr(outbox_owner, "advance", fail_transition)
+    deadline_failure = failure_stage in {"local_deadline", "unsent_deadline"}
+    if failure_stage == "local_deadline":
         engine.min_interval = 60
         engine.last_call_time = time.time()
         # A pre-adapter guard must never consume another call's metadata.
-        engine._set_last_transport_meta({'openai_request_id': 'stale-other-call'})
-    elif failure_stage == 'unsent_deadline':
+        engine._set_last_transport_meta({"openai_request_id": "stale-other-call"})
+    elif failure_stage == "unsent_deadline":
+
         def cancel_before_sdk(request):
-            assert request.transport_observation.fields()['provider_adapter_entered'] is True
+            assert (
+                request.transport_observation.fields()["provider_adapter_entered"]
+                is True
+            )
             error = openai_module.OpenAIHTTPWallClockDeadlineError(
-                'controlled_unsent_deadline', future_cancelled=True)
-            error.timing_meta = {'openai_http_attempt_count': 0,
-                'openai_http_provider_future_cancelled': True}
+                "controlled_unsent_deadline", future_cancelled=True
+            )
+            error.timing_meta = {
+                "openai_http_attempt_count": 0,
+                "openai_http_provider_future_cancelled": True,
+            }
             raise error
-        monkeypatch.setattr(engine, '_call_openai_responses_http', cancel_before_sdk)
+
+        monkeypatch.setattr(engine, "_call_openai_responses_http", cancel_before_sdk)
     calls = []
+
     def create(**kwargs):
         calls.append(kwargs)
-        return SimpleNamespace(output_text=json.dumps(response), id='received-malformed-test', status='completed')
+        return SimpleNamespace(
+            output_text=json.dumps(response),
+            id="received-malformed-test",
+            status="completed",
+        )
+
     engine.client = SimpleNamespace(responses=SimpleNamespace(create=create))
-    result = engine.analyze_target('test', _sample_ws_data(), _sample_ticks(), _sample_candles(),
-        strategy='SCALPING', prompt_profile='watching', candle_context=_allowed_entry_candle_context(),
+    result = engine.analyze_target(
+        "test",
+        _sample_ws_data(),
+        _sample_ticks(),
+        _sample_candles(),
+        strategy="SCALPING",
+        prompt_profile="watching",
+        candle_context=_allowed_entry_candle_context(),
         machine_only=probe_rejected,
-        reversal_signal_claim={'snapshot': snapshot, 'token': 'controlled-native-test'},
-        metadata_extra=dict(evaluation_attempt_id='controlled-evaluation',
-            scanner_promotion_id='controlled-promotion', stock_code='289220',
-            effective_venue='KRX', session_bucket='KRX_REGULAR',
-            async_request_id='controlled-generation:request', async_producer_pid=os.getpid(),
-            async_producer_start_ticks=Path('/proc/self/stat').read_text().rsplit(')',1)[1].split()[19],
-            async_origin_deadline_epoch=snapshot[0]['epoch']+5, async_order_venue='SOR',
-            scanner_generation_id='controlled-generation'))
+        reversal_signal_claim={"snapshot": snapshot, "token": "controlled-native-test"},
+        metadata_extra=dict(
+            evaluation_attempt_id="controlled-evaluation",
+            scanner_promotion_id="controlled-promotion",
+            stock_code="289220",
+            effective_venue="KRX",
+            session_bucket="KRX_REGULAR",
+            async_request_id="controlled-generation:request",
+            async_producer_pid=os.getpid(),
+            async_producer_start_ticks=Path("/proc/self/stat")
+            .read_text()
+            .rsplit(")", 1)[1]
+            .split()[19],
+            async_origin_deadline_epoch=snapshot[0]["epoch"] + 5,
+            async_order_venue="SOR",
+            scanner_generation_id="controlled-generation",
+        ),
+    )
     if deadline_failure:
         from datetime import datetime
         from src.engine.monitoring import submission_bottleneck_monitor as monitor
-        assert calls == [] and result['provider_called'] is False
-        assert result['action'] == 'WAIT' and result['score'] == 50
-        assert result['ai_result_source'] == 'entry_deadline_expired'
-        assert result['entry_ai_screen_status'] == 'not_evaluated_local'
-        assert result['entry_ai_screen_pass'] is False and result['broker_order_forbidden'] is True
+
+        assert calls == [] and result["provider_called"] is False
+        assert result["action"] == "WAIT" and result["score"] == 50
+        assert result["ai_result_source"] == "entry_deadline_expired"
+        assert result["entry_ai_screen_status"] == "not_evaluated_local"
+        assert (
+            result["entry_ai_screen_pass"] is False
+            and result["broker_order_forbidden"] is True
+        )
         assert engine.consecutive_failures == failure_before and not engine.ai_disabled
-        assert (stable_circuit(entry_circuit), stable_circuit(common_circuit)) == circuit_before
-        assert (engine.current_api_key_index, engine.current_key) == key_before and not rotations
-        traces = [json.loads(line) for p in (tmp_path/'ai_decision_trace').glob('*.jsonl')
-                  for line in p.read_text().splitlines()]
-        observations = [json.loads(line) for p in (tmp_path/'ai_decision_payloads').glob('*.jsonl')
-                        for line in p.read_text().splitlines()
-                        if json.loads(line).get('schema') == 'mechanistic_entry_observation_v1']
-        requests = [json.loads(line) for p in (tmp_path/'ai_decision_requests').glob('*.jsonl')
-                    for line in p.read_text().splitlines()]
+        assert (
+            stable_circuit(entry_circuit),
+            stable_circuit(common_circuit),
+        ) == circuit_before
+        assert (
+            engine.current_api_key_index,
+            engine.current_key,
+        ) == key_before and not rotations
+        traces = [
+            json.loads(line)
+            for p in (tmp_path / "ai_decision_trace").glob("*.jsonl")
+            for line in p.read_text().splitlines()
+        ]
+        observations = [
+            json.loads(line)
+            for p in (tmp_path / "ai_decision_payloads").glob("*.jsonl")
+            for line in p.read_text().splitlines()
+            if json.loads(line).get("schema") == "mechanistic_entry_observation_v1"
+        ]
+        requests = [
+            json.loads(line)
+            for p in (tmp_path / "ai_decision_requests").glob("*.jsonl")
+            for line in p.read_text().splitlines()
+        ]
         assert len(traces) == len(observations) == 1
         trace = traces[0]
-        assert trace['machine_observation_sha256'] == result['machine_observation_sha256']
-        assert trace['evaluation_attempt_id'] == result['evaluation_attempt_id']
-        assert trace['request_id'] != 'stale-other-call'
-        assert trace['provider_called'] is False and trace['actual_order_submitted'] is False
-        assert len(requests) == int(failure_stage == 'unsent_deadline')
+        assert (
+            trace["machine_observation_sha256"] == result["machine_observation_sha256"]
+        )
+        assert trace["evaluation_attempt_id"] == result["evaluation_attempt_id"]
+        assert trace["request_id"] != "stale-other-call"
+        assert (
+            trace["provider_called"] is False
+            and trace["actual_order_submitted"] is False
+        )
+        assert len(requests) == int(failure_stage == "unsent_deadline")
         if requests:
-            assert trace['request_id'] == requests[0]['request_id']
+            assert trace["request_id"] == requests[0]["request_id"]
         else:
-            assert engine._consume_last_transport_meta() == {'openai_request_id': 'stale-other-call'}
-        joined = monitor._reversal_provider_lineage(tmp_path, datetime.now(monitor.KST), observations,
-            tail_bytes=2**20, pid_identity=[os.getpid(), Path('/proc/self/stat').read_text().rsplit(')',1)[1].split()[19]])
-        assert joined['issues'] == joined['source_gaps'] == {}, joined
-        assert joined['trace_attempt_count'] == 1
-        assert joined['provider_transmission_attempt_count'] == joined['raw_response_observed_count'] == 0
-        assert joined['noncall_reasons'] == {'not_evaluated_local': 1}
+            assert engine._consume_last_transport_meta() == {
+                "openai_request_id": "stale-other-call"
+            }
+        joined = monitor._reversal_provider_lineage(
+            tmp_path,
+            datetime.now(monitor.KST),
+            observations,
+            tail_bytes=2**20,
+            pid_identity=[
+                os.getpid(),
+                Path("/proc/self/stat").read_text().rsplit(")", 1)[1].split()[19],
+            ],
+        )
+        assert joined["issues"] == joined["source_gaps"] == {}, joined
+        assert joined["trace_attempt_count"] == 1
+        assert (
+            joined["provider_transmission_attempt_count"]
+            == joined["raw_response_observed_count"]
+            == 0
+        )
+        assert joined["noncall_reasons"] == {"not_evaluated_local": 1}
         return
-    if pre_rejected or failure_stage == 'post_capture_rejection':
-        assert calls == [] and result['provider_called'] is False
-        assert result['action'] == 'DROP'
-        assert result['reason'] == 'mechanistic_input_contract_invalid'
-        assert result['machine_evaluation_status'] == 'assessment_contract_invalid'
+    if pre_rejected or failure_stage == "post_capture_rejection":
+        assert calls == [] and result["provider_called"] is False
+        assert result["action"] == "DROP"
+        assert result["reason"] == "mechanistic_input_contract_invalid"
+        assert result["machine_evaluation_status"] == "assessment_contract_invalid"
         assert engine.consecutive_failures == failure_before and not engine.ai_disabled
-        assert (stable_circuit(entry_circuit), stable_circuit(common_circuit)) == circuit_before
-        assert (engine.current_api_key_index, engine.current_key) == key_before and not rotations
+        assert (
+            stable_circuit(entry_circuit),
+            stable_circuit(common_circuit),
+        ) == circuit_before
+        assert (
+            engine.current_api_key_index,
+            engine.current_key,
+        ) == key_before and not rotations
         from src.engine.scalping import ai_decision_trace as trace_owner
         from src.tests.test_ai_decision_trace import _rows
-        payload_path = trace_owner._payload_path(trace_owner._date_text(trace_owner._now()))
+
+        payload_path = trace_owner._payload_path(
+            trace_owner._date_text(trace_owner._now())
+        )
         observations = _rows(payload_path) if payload_path.exists() else []
-        if failure_stage == 'post_capture_rejection':
-            assert result['machine_contract_error'] == 'auxiliary_soft_policy_invalid_before_provider'
+        if failure_stage == "post_capture_rejection":
+            assert (
+                result["machine_contract_error"]
+                == "auxiliary_soft_policy_invalid_before_provider"
+            )
             assert len(observations) == 1
-            assert result['entry_mechanistic_action'] == 'ENTER_NOW'
-            assert observations[0]['source']['assessment']['action'] == 'ENTER_NOW'
-            assert observations[0]['machine_observation_sha256'] == result['machine_observation_sha256']
-            assert result['machine_source_invalid_receipt'] is False
+            assert result["entry_mechanistic_action"] == "ENTER_NOW"
+            assert observations[0]["source"]["assessment"]["action"] == "ENTER_NOW"
+            assert (
+                observations[0]["machine_observation_sha256"]
+                == result["machine_observation_sha256"]
+            )
+            assert result["machine_source_invalid_receipt"] is False
             return
-        if probe_rejected or failure_stage == 'pre_exact_rejection':
+        if probe_rejected or failure_stage == "pre_exact_rejection":
             assert observations == []
-            assert not result.get('machine_observation_sha256')
-            assert not result.get('machine_source_invalid_receipt')
-            assert result.get('entry_mechanistic_action') != 'ENTER_NOW'
+            assert not result.get("machine_observation_sha256")
+            assert not result.get("machine_source_invalid_receipt")
+            assert result.get("entry_mechanistic_action") != "ENTER_NOW"
             return
-        assert result['machine_contract_error'] == 'reversal_signal_path_changed'
-        assert result['continuous_reversal_rejected_claim_receipt'] == rejected_receipt
-        assert result['machine_source_invalid_receipt'] is True
-        assert result['entry_mechanistic_action'] == 'source_invalid'
-        assert result['entry_ai_screen_status'] == 'not_requested_machine_source_invalid'
-        assert result['entry_ai_screen_required'] is False and result['entry_ai_screen_pass'] is False
-        assert result['evaluation_role'] == 'main_live'
-        assert result['evaluation_attempt_id'] == 'controlled-evaluation'
-        if failure_stage == 'pre_adjudication_capture_io_failure':
+        assert result["machine_contract_error"] == "reversal_signal_path_changed"
+        assert result["continuous_reversal_rejected_claim_receipt"] == rejected_receipt
+        assert result["machine_source_invalid_receipt"] is True
+        assert result["entry_mechanistic_action"] == "source_invalid"
+        assert (
+            result["entry_ai_screen_status"] == "not_requested_machine_source_invalid"
+        )
+        assert (
+            result["entry_ai_screen_required"] is False
+            and result["entry_ai_screen_pass"] is False
+        )
+        assert result["evaluation_role"] == "main_live"
+        assert result["evaluation_attempt_id"] == "controlled-evaluation"
+        if failure_stage == "pre_adjudication_capture_io_failure":
             assert observations == []
-            assert result['machine_capture_status'] == 'write_failed'
-            assert not result.get('machine_observation_sha256')
+            assert result["machine_capture_status"] == "write_failed"
+            assert not result.get("machine_observation_sha256")
         else:
             assert len(observations) == 1
             observation = observations[0]
-            assert observation['machine_observation_sha256'] == result['machine_observation_sha256']
-            assert observation['evaluation_role'] == 'main_live'
-            assert observation['runtime_consumption']['pid'] == os.getpid()
-            assert observation['source']['assessment']['schema'] == 'mechanistic_entry_source_invalid_v1'
-            assert observation['source']['assessment']['reason'] == 'reversal_signal_path_changed'
-            assert observation['provider_called'] is False and observation['broker_order_forbidden'] is True
-            assert observation['actual_order_submitted'] is False
-        from src.engine import sniper_state_handlers as handlers, buy_funnel_sentinel as sentinel
+            assert (
+                observation["machine_observation_sha256"]
+                == result["machine_observation_sha256"]
+            )
+            assert observation["evaluation_role"] == "main_live"
+            assert observation["runtime_consumption"]["pid"] == os.getpid()
+            assert (
+                observation["source"]["assessment"]["schema"]
+                == "mechanistic_entry_source_invalid_v1"
+            )
+            assert (
+                observation["source"]["assessment"]["reason"]
+                == "reversal_signal_path_changed"
+            )
+            assert (
+                observation["provider_called"] is False
+                and observation["broker_order_forbidden"] is True
+            )
+            assert observation["actual_order_submitted"] is False
+        from src.engine import (
+            sniper_state_handlers as handlers,
+            buy_funnel_sentinel as sentinel,
+        )
         from datetime import datetime
+
         fields = handlers._machine_primary_entry_provenance_fields(result)
-        funnel = sentinel._machine_primary_entry_funnel([sentinel.PipelineEvent(
-            datetime.now(), 'ENTRY_PIPELINE', 'ai_confirmed', 'fixture', '289220', '1', fields)])
-        assert funnel['evaluation_count'] == 1 and funnel['evaluation_identity_missing_event_count'] == 0
-        row = funnel['evaluation_ledger'][0]
-        assert row['final_state'] == 'machine_source_invalid'
-        assert row['source_invalid_decomposition']['primary_blocker'] == 'reversal_signal_path_changed'
-        assert row['source_invalid_decomposition']['primary_basis'] == 'producer_pre_adjudication_exception'
-        assert row['conflict_reasons'] == []
+        funnel = sentinel._machine_primary_entry_funnel(
+            [
+                sentinel.PipelineEvent(
+                    datetime.now(),
+                    "ENTRY_PIPELINE",
+                    "ai_confirmed",
+                    "fixture",
+                    "289220",
+                    "1",
+                    fields,
+                )
+            ]
+        )
+        assert (
+            funnel["evaluation_count"] == 1
+            and funnel["evaluation_identity_missing_event_count"] == 0
+        )
+        row = funnel["evaluation_ledger"][0]
+        assert row["final_state"] == "machine_source_invalid"
+        assert (
+            row["source_invalid_decomposition"]["primary_blocker"]
+            == "reversal_signal_path_changed"
+        )
+        assert (
+            row["source_invalid_decomposition"]["primary_basis"]
+            == "producer_pre_adjudication_exception"
+        )
+        assert row["conflict_reasons"] == []
         return
     if custody_failure:
-        transmitted = failure_stage == 'invalid_outbox_transition'
+        transmitted = failure_stage == "invalid_outbox_transition"
         assert len(calls) == int(transmitted), result
-        assert result['provider_called'] is transmitted
-        assert result['action'] == 'WAIT' and result['entry_ai_screen_pass'] is False
-        assert result['ai_result_source'] == 'operating_opportunity_blocked'
-        assert result['entry_recheck_intent'] is False
-        assert result['entry_ai_followup_authority'] == 'none'
-        assert result['entry_ai_followup_disposition'] == 'operating_opportunity_blocked'
-        assert result['entry_ai_screen_status'] == 'blocked_local_custody'
-        assert not result.get('openai_transport_fail_closed_reason')
-        assert result['ai_parse_fail'] is False and result['openai_transport_fail_closed'] is False
+        assert result["provider_called"] is transmitted
+        assert result["action"] == "WAIT" and result["entry_ai_screen_pass"] is False
+        assert result["ai_result_source"] == "operating_opportunity_blocked"
+        assert result["entry_recheck_intent"] is False
+        assert result["entry_ai_followup_authority"] == "none"
+        assert (
+            result["entry_ai_followup_disposition"] == "operating_opportunity_blocked"
+        )
+        assert result["entry_ai_screen_status"] == "blocked_local_custody"
+        assert not result.get("openai_transport_fail_closed_reason")
+        assert (
+            result["ai_parse_fail"] is False
+            and result["openai_transport_fail_closed"] is False
+        )
         assert engine.consecutive_failures == failure_before and not engine.ai_disabled
         assert engine._common_recoverable_chain is True
-        assert (stable_circuit(entry_circuit), stable_circuit(common_circuit)) == circuit_before
+        assert (
+            stable_circuit(entry_circuit),
+            stable_circuit(common_circuit),
+        ) == circuit_before
         assert len(rotations) == int(transmitted)
         if transmitted:
-            assert result['openai_response_id']
+            assert result["openai_response_id"]
         else:
             assert (engine.current_api_key_index, engine.current_key) == key_before
-        traces = [json.loads(line) for p in (tmp_path/'ai_decision_trace').glob('*.jsonl')
-                  for line in p.read_text().splitlines()]
-        assert len(traces) == 1 and traces[0]['provider_called'] is transmitted
-        assert traces[0]['result_source'] == 'operating_opportunity_blocked'
-        assert traces[0]['parse_status'] == 'not_evaluated_local_custody'
-        assert traces[0]['actual_order_submitted'] is False
+        traces = [
+            json.loads(line)
+            for p in (tmp_path / "ai_decision_trace").glob("*.jsonl")
+            for line in p.read_text().splitlines()
+        ]
+        assert len(traces) == 1 and traces[0]["provider_called"] is transmitted
+        assert traces[0]["result_source"] == "operating_opportunity_blocked"
+        assert traces[0]["parse_status"] == "not_evaluated_local_custody"
+        assert traces[0]["actual_order_submitted"] is False
         assert engine.lock.acquire(blocking=False)
         engine.lock.release()
         return
     assert len(calls) == 1, result  # A received failure cannot replay the provider.
     assert engine.consecutive_failures == failure_before
     assert engine.ai_disabled is False and engine._common_recoverable_chain is True
-    assert (stable_circuit(entry_circuit), stable_circuit(common_circuit)) == circuit_before
+    assert (
+        stable_circuit(entry_circuit),
+        stable_circuit(common_circuit),
+    ) == circuit_before
     assert (engine.current_api_key_index, engine.current_key) == key_before
     # The established HTTP receipt owns its normal key rotation; the local
     # response exception must not add another rotation or replay.
     assert len(rotations) == rotations_at_transport_exit[-1] == 1
     assert response == original
-    assert result['action'] == 'WAIT' and result['entry_ai_screen_pass'] is False
-    assert result['entry_auxiliary_response_received'] is True
-    assert result['entry_auxiliary_response_contract_valid'] is (failure_stage == 'post_validation')
-    assert result['entry_post_response_execution_valid'] is False
-    assert result['entry_ai_screen_status'] == 'response_invalid'
-    assert result['openai_transport_fail_closed'] is False
-    assert result['ai_parse_ok'] is True and result['ai_parse_fail'] is False
-    assert result['entry_ai_raw_response_sha256'] == postclose.digest(original)
-    assert result['entry_ai_raw_risk_codes'] == original['risk_codes']
-    assert result['entry_ai_raw_supporting_fact_ids'] == original['supporting_fact_ids']
-    assert result['entry_ai_raw_contradicting_fact_ids'] == []
-    traces = [json.loads(line) for p in (tmp_path/'ai_decision_trace').glob('*.jsonl') for line in p.read_text().splitlines()]
+    assert result["action"] == "WAIT" and result["entry_ai_screen_pass"] is False
+    assert result["entry_auxiliary_response_received"] is True
+    assert result["entry_auxiliary_response_contract_valid"] is (
+        failure_stage == "post_validation"
+    )
+    assert result["entry_post_response_execution_valid"] is False
+    assert result["entry_ai_screen_status"] == "response_invalid"
+    assert result["openai_transport_fail_closed"] is False
+    assert result["ai_parse_ok"] is True and result["ai_parse_fail"] is False
+    assert result["entry_ai_raw_response_sha256"] == postclose.digest(original)
+    assert result["entry_ai_raw_risk_codes"] == original["risk_codes"]
+    assert result["entry_ai_raw_supporting_fact_ids"] == original["supporting_fact_ids"]
+    assert result["entry_ai_raw_contradicting_fact_ids"] == []
+    traces = [
+        json.loads(line)
+        for p in (tmp_path / "ai_decision_trace").glob("*.jsonl")
+        for line in p.read_text().splitlines()
+    ]
     assert len(traces) == 1
     trace = traces[0]
-    assert trace['provider_response_id'] == 'received-malformed-test'
-    assert trace['provider_called'] is True and trace['actual_order_submitted'] is False
-    assert trace['entry_auxiliary_response_contract_valid'] is (failure_stage == 'post_validation')
-    assert trace['entry_post_response_execution_valid'] is False
-    assert trace['entry_ai_raw_response_sha256'] == postclose.digest(original)
-    requests = [json.loads(line) for p in (tmp_path/'ai_decision_requests').glob('*.jsonl') for line in p.read_text().splitlines()]
-    assert len(requests) == 1 and trace['request_id'] == requests[0]['request_id']
-    assert trace['request_envelope_sha256'] == requests[0]['request_envelope_sha256']
-    assert trace['prompt_sha256'] == requests[0]['prompt_sha256']
-    assert trace['async_request_id'] == requests[0]['async_request_id'] == 'controlled-generation:request'
-    assert trace['async_producer_pid'] == requests[0]['async_producer_pid'] == os.getpid()
-    outbox = [json.loads(p.read_text()) for p in (tmp_path/'runtime/initial_quantity/operating_opportunities').glob('*.json')]
-    assert len(outbox) == 1 and outbox[0]['state'] == 'response_received'
-    assert outbox[0]['history'][-1]['binding']['response'] == original
+    assert trace["provider_response_id"] == "received-malformed-test"
+    assert trace["provider_called"] is True and trace["actual_order_submitted"] is False
+    assert trace["entry_auxiliary_response_contract_valid"] is (
+        failure_stage == "post_validation"
+    )
+    assert trace["entry_post_response_execution_valid"] is False
+    assert trace["entry_ai_raw_response_sha256"] == postclose.digest(original)
+    requests = [
+        json.loads(line)
+        for p in (tmp_path / "ai_decision_requests").glob("*.jsonl")
+        for line in p.read_text().splitlines()
+    ]
+    assert len(requests) == 1 and trace["request_id"] == requests[0]["request_id"]
+    assert trace["request_envelope_sha256"] == requests[0]["request_envelope_sha256"]
+    assert trace["prompt_sha256"] == requests[0]["prompt_sha256"]
+    assert (
+        trace["async_request_id"]
+        == requests[0]["async_request_id"]
+        == "controlled-generation:request"
+    )
+    assert (
+        trace["async_producer_pid"] == requests[0]["async_producer_pid"] == os.getpid()
+    )
+    outbox = [
+        json.loads(p.read_text())
+        for p in (tmp_path / "runtime/initial_quantity/operating_opportunities").glob(
+            "*.json"
+        )
+    ]
+    assert len(outbox) == 1 and outbox[0]["state"] == "response_received"
+    assert outbox[0]["history"][-1]["binding"]["response"] == original
 
 
 @pytest.mark.parametrize("setting", GPTSniperEngine.MODEL_ROLE_SETTINGS)
-def test_role_override_is_isolated_and_request_model_reaches_transport(monkeypatch, setting):
+def test_role_override_is_isolated_and_request_model_reaches_transport(
+    monkeypatch, setting
+):
     engine = _build_engine()
     baseline = engine.model_configuration()
-    monkeypatch.setattr(openai_module, "TRADING_RULES", replace(
-        openai_module.TRADING_RULES, **{setting: "role-specific-model"}, OPENAI_TRANSPORT_MODE="http"))
+    monkeypatch.setattr(
+        openai_module,
+        "TRADING_RULES",
+        replace(
+            openai_module.TRADING_RULES,
+            **{setting: "role-specific-model"},
+            OPENAI_TRANSPORT_MODE="http",
+        ),
+    )
     changed = engine.model_configuration()
     assert {key for key in changed if changed[key] != baseline[key]} == {setting}
     assert changed["compact_auxiliary"] == "gpt-5.4-nano"
     requests = []
+
     def http(request):
         requests.append(request)
-        return OpenAITransportResult(payload={"action": "WAIT", "score": 50},
-                                     transport_mode="http", roundtrip_ms=1)
+        return OpenAITransportResult(
+            payload={"action": "WAIT", "score": 50},
+            transport_mode="http",
+            roundtrip_ms=1,
+        )
+
     monkeypatch.setattr(engine, "_call_openai_responses_http", http)
-    engine._call_openai_safe("PROMPT", "payload", endpoint_name="analyze_target",
-                             model_override=engine._get_role_model(setting))
+    engine._call_openai_safe(
+        "PROMPT",
+        "payload",
+        endpoint_name="analyze_target",
+        model_override=engine._get_role_model(setting),
+    )
     assert requests[0].model_name == "role-specific-model"
-    assert engine._consume_last_transport_meta()["openai_model"] == "role-specific-model"
-    assert not any(key in vars(engine) for key in ("current_model_name", "model_tier1_fast"))
+    assert (
+        engine._consume_last_transport_meta()["openai_model"] == "role-specific-model"
+    )
+    assert not any(
+        key in vars(engine) for key in ("current_model_name", "model_tier1_fast")
+    )
 
 
 @pytest.mark.parametrize("model", [None, "", "  "])
-def test_transport_requires_explicit_request_model_before_any_provider(monkeypatch, model):
+def test_transport_requires_explicit_request_model_before_any_provider(
+    monkeypatch, model
+):
     engine = _build_engine()
-    monkeypatch.setattr(engine, "_call_openai_responses_http",
-                        lambda *_: pytest.fail("missing role model reached provider"))
+    monkeypatch.setattr(
+        engine,
+        "_call_openai_responses_http",
+        lambda *_: pytest.fail("missing role model reached provider"),
+    )
     with pytest.raises(ValueError, match="explicit_role_model_required"):
         engine._call_openai_safe("PROMPT", "payload", model_override=model)
 
@@ -9369,29 +10159,42 @@ def test_transport_requires_explicit_request_model_before_any_provider(monkeypat
 def test_entry_price_audit_keeps_model_selected_before_response(monkeypatch):
     engine = _build_engine()
     original_rules = openai_module.TRADING_RULES
-    monkeypatch.setattr(openai_module, "TRADING_RULES", replace(
-        original_rules, OPENAI_REALTIME_REPORT_MODEL="original-report"))
+    monkeypatch.setattr(
+        openai_module,
+        "TRADING_RULES",
+        replace(original_rules, OPENAI_REALTIME_REPORT_MODEL="original-report"),
+    )
     ws, ticks, candles, price = _entry_price_compaction_sample(0)
     seen = []
+
     def respond(prompt, payload, **kwargs):
         seen.append(kwargs["model_override"])
-        monkeypatch.setattr(openai_module, "TRADING_RULES", replace(
-            original_rules, OPENAI_REALTIME_REPORT_MODEL="later-report"))
+        monkeypatch.setattr(
+            openai_module,
+            "TRADING_RULES",
+            replace(original_rules, OPENAI_REALTIME_REPORT_MODEL="later-report"),
+        )
         return _entry_price_fake_model_output(payload)
+
     monkeypatch.setattr(engine, "_call_openai_safe", respond)
-    result = engine.evaluate_scalping_entry_price("TEST", "005930", ws, ticks, candles, price)
+    result = engine.evaluate_scalping_entry_price(
+        "TEST", "005930", ws, ticks, candles, price
+    )
     assert seen == ["original-report"]
     assert result["ai_model"] == "original-report"
 
 
 def test_main_and_shadow_constructors_announce_models_only_once(monkeypatch, capsys):
     from src.engine.scalping import mechanistic_entry_runtime_policy
-    monkeypatch.setattr(GPTSniperEngine, '_rotate_client', lambda self: None)
-    monkeypatch.setattr(mechanistic_entry_runtime_policy, 'load_effective', lambda **kw: None)
-    main = GPTSniperEngine(['test-key'], initialize_entry_policy=False)
-    shadow = openai_module.OpenAIDualPersonaShadowEngine(['test-key'])
+
+    monkeypatch.setattr(GPTSniperEngine, "_rotate_client", lambda self: None)
+    monkeypatch.setattr(
+        mechanistic_entry_runtime_policy, "load_effective", lambda **kw: None
+    )
+    main = GPTSniperEngine(["test-key"], initialize_entry_policy=False)
+    shadow = openai_module.OpenAIDualPersonaShadowEngine(["test-key"])
     try:
-        assert capsys.readouterr().out.count('OpenAI 모델 설정') == 1
+        assert capsys.readouterr().out.count("OpenAI 모델 설정") == 1
         assert main.model_configuration() == shadow.model_configuration()
     finally:
         main._http_deadline_executor.shutdown(wait=True)

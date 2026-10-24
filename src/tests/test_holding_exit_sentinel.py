@@ -17,161 +17,324 @@ MECHANICAL_FIELDS = {
     "classifier_version": MECHANICAL["classifier_version"],
     "classifier_sha256": MECHANICAL["classifier_sha256"],
     "scalp_trailing_policy_date": "2026-09-28",
-    "mechanical_policy_receipt": {"scalp_trailing_market_values_sha256": MECHANICAL["market_values_sha256"],
-                                  "scalp_trailing_policy_date": "2026-09-28"},
+    "mechanical_policy_receipt": {
+        "scalp_trailing_market_values_sha256": MECHANICAL["market_values_sha256"],
+        "scalp_trailing_policy_date": "2026-09-28",
+    },
     "runtime_pid": 42,
     "raw_limit_pct": 0.4,
 }
 
 
-@pytest.mark.parametrize('use_cache', [False, True])
-def test_mixed_timezone_rows_use_the_same_kst_clock_in_sort_and_windows(tmp_path, monkeypatch, use_cache):
-    monkeypatch.setattr(sentinel, 'DATA_DIR', tmp_path)
-    day = '2026-10-16'
-    payloads = [_event(day, '08:20:01', 'holding_started'),
-                _event(day, '08:20:00+09:00', 'holding_started'),
-                _event(day, '08:20:02+09:00', 'holding_started')]
-    payloads[2]['emitted_at'] = '2026-10-15T23:19:59+00:00'
-    path = tmp_path/'pipeline_events'/f'pipeline_events_{day}.jsonl'
-    path.parent.mkdir();raw=''.join(json.dumps(p)+'\n' for p in payloads).encode();path.write_bytes(raw)
+@pytest.mark.parametrize("use_cache", [False, True])
+def test_mixed_timezone_rows_use_the_same_kst_clock_in_sort_and_windows(
+    tmp_path, monkeypatch, use_cache
+):
+    monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
+    day = "2026-10-16"
+    payloads = [
+        _event(day, "08:20:01", "holding_started"),
+        _event(day, "08:20:00+09:00", "holding_started"),
+        _event(day, "08:20:02+09:00", "holding_started"),
+    ]
+    payloads[2]["emitted_at"] = "2026-10-15T23:19:59+00:00"
+    path = tmp_path / "pipeline_events" / f"pipeline_events_{day}.jsonl"
+    path.parent.mkdir()
+    raw = "".join(json.dumps(p) + "\n" for p in payloads).encode()
+    path.write_bytes(raw)
     events = sentinel.load_pipeline_events(day, use_cache=use_cache)
-    assert [e.emitted_at for e in events] == [datetime(2026,10,16,8,19,59),
-        datetime(2026,10,16,8,20),datetime(2026,10,16,8,20,1)]
-    report = sentinel.build_holding_exit_sentinel_report(day,
-        as_of=datetime(2026,10,16,8,20,tzinfo=ZoneInfo('Asia/Seoul')), use_cache=use_cache, dry_run=True)
-    assert report['current']['session']['event_count'] == 2
+    assert [e.emitted_at for e in events] == [
+        datetime(2026, 10, 16, 8, 19, 59),
+        datetime(2026, 10, 16, 8, 20),
+        datetime(2026, 10, 16, 8, 20, 1),
+    ]
+    report = sentinel.build_holding_exit_sentinel_report(
+        day,
+        as_of=datetime(2026, 10, 16, 8, 20, tzinfo=ZoneInfo("Asia/Seoul")),
+        use_cache=use_cache,
+        dry_run=True,
+    )
+    assert report["current"]["session"]["event_count"] == 2
     assert path.read_bytes() == raw
 
 
 def test_legacy_aware_cache_row_is_read_without_cache_schema_rebuild():
-    row = dict(emitted_at='2026-10-15T23:20:00+00:00', pipeline='HOLDING_PIPELINE',
-               stage='holding_started',stock_name='Stock',stock_code='005930',record_id='1',fields={})
-    assert sentinel._event_from_cache_row(row).emitted_at == datetime(2026,10,16,8,20)
+    row = dict(
+        emitted_at="2026-10-15T23:20:00+00:00",
+        pipeline="HOLDING_PIPELINE",
+        stage="holding_started",
+        stock_name="Stock",
+        stock_code="005930",
+        record_id="1",
+        fields={},
+    )
+    assert sentinel._event_from_cache_row(row).emitted_at == datetime(
+        2026, 10, 16, 8, 20
+    )
 
 
 def test_indexed_scope_matches_exhaustive_nearest_including_ties_and_invalid_ids():
     import random
     from collections import defaultdict, Counter
+
     rng = random.Random(541)
     events = []
     for index in range(250):
-        fields = rng.choice([{}, {"venue": "KRX"}, {"venue": "NXT"},
-                             {"venue": "KRX", "session": "NXT_REGULAR"}])
-        events.append(sentinel.PipelineEvent(datetime(2026, 10, 16, 10) + timedelta(
-            microseconds=rng.randrange(12)), "HOLDING_PIPELINE", "exit_signal", "Stock",
-            "123456", rng.choice(["1", "2", "0", "-", ""]), fields))
+        fields = rng.choice(
+            [
+                {},
+                {"venue": "KRX"},
+                {"venue": "NXT"},
+                {"venue": "KRX", "session": "NXT_REGULAR"},
+            ]
+        )
+        events.append(
+            sentinel.PipelineEvent(
+                datetime(2026, 10, 16, 10) + timedelta(microseconds=rng.randrange(12)),
+                "HOLDING_PIPELINE",
+                "exit_signal",
+                "Stock",
+                "123456",
+                rng.choice(["1", "2", "0", "-", ""]),
+                fields,
+            )
+        )
     rng.shuffle(events)
     groups, quality = defaultdict(list), Counter()
     for event in events:
-        explicit = event_scope.explicit_event_scope(event.fields, event.emitted_at,
-            venue_keys=sentinel.VENUE_SCOPE_FIELD_KEYS, session_keys=sentinel.SESSION_SCOPE_FIELD_KEYS)
+        explicit = event_scope.explicit_event_scope(
+            event.fields,
+            event.emitted_at,
+            venue_keys=sentinel.VENUE_SCOPE_FIELD_KEYS,
+            session_keys=sentinel.SESSION_SCOPE_FIELD_KEYS,
+        )
         if explicit is not None:
             venue, session, reason = explicit
         else:
             identity = sentinel._exact_attempt_key(event)
-            candidates = [(abs((other.emitted_at-event.emitted_at).total_seconds()), scope[:2])
-                for other in events if identity is not None
+            candidates = [
+                (abs((other.emitted_at - event.emitted_at).total_seconds()), scope[:2])
+                for other in events
+                if identity is not None
                 and sentinel._exact_attempt_key(other) == identity
-                and (scope := event_scope.explicit_event_scope(other.fields, other.emitted_at,
-            venue_keys=sentinel.VENUE_SCOPE_FIELD_KEYS, session_keys=sentinel.SESSION_SCOPE_FIELD_KEYS)) is not None and scope[2] == "pass"]
-            nearest = {scope for distance, scope in candidates
-                       if distance == min(value[0] for value in candidates)} if candidates else set()
+                and (
+                    scope := event_scope.explicit_event_scope(
+                        other.fields,
+                        other.emitted_at,
+                        venue_keys=sentinel.VENUE_SCOPE_FIELD_KEYS,
+                        session_keys=sentinel.SESSION_SCOPE_FIELD_KEYS,
+                    )
+                )
+                is not None
+                and scope[2] == "pass"
+            ]
+            nearest = (
+                {
+                    scope
+                    for distance, scope in candidates
+                    if distance == min(value[0] for value in candidates)
+                }
+                if candidates
+                else set()
+            )
             if len(nearest) == 1:
-                venue, session = next(iter(nearest)); reason = "inherited_nearest_exact_attempt"
+                venue, session = next(iter(nearest))
+                reason = "inherited_nearest_exact_attempt"
             elif nearest:
                 venue, session, reason = "CONFLICT", "CONFLICT", "conflict"
             else:
                 venue, session, reason = "UNKNOWN", "UNKNOWN", "missing"
-        groups[f"{venue}|{session}"].append(event); quality[reason] += 1
-    assert sentinel._partition_events_by_venue_session(events) == (dict(groups), dict(sorted(quality.items())))
-    assert quality["conflict"] and quality["missing"] and quality["inherited_nearest_exact_attempt"]
+        groups[f"{venue}|{session}"].append(event)
+        quality[reason] += 1
+    assert sentinel._partition_events_by_venue_session(events) == (
+        dict(groups),
+        dict(sorted(quality.items())),
+    )
+    assert (
+        quality["conflict"]
+        and quality["missing"]
+        and quality["inherited_nearest_exact_attempt"]
+    )
 
 
 def test_scope_distance_work_is_bounded_per_implicit_event():
     calls = 0
+
     class Delta:
-        def __init__(self, value): self.value = value
+        def __init__(self, value):
+            self.value = value
+
         def total_seconds(self):
             nonlocal calls
             calls += 1
             return self.value.total_seconds()
+
     class Clock(datetime):
-        def __sub__(self, other): return Delta(super().__sub__(other))
-    events = [sentinel.PipelineEvent(Clock(2026, 10, 16, 10, index // 60, index % 60),
-        "HOLDING_PIPELINE", "exit_signal", "Stock", "123456", "1",
-        {"venue": "KRX"} if index % 2 else {}) for index in range(1000)]
+        def __sub__(self, other):
+            return Delta(super().__sub__(other))
+
+    events = [
+        sentinel.PipelineEvent(
+            Clock(2026, 10, 16, 10, index // 60, index % 60),
+            "HOLDING_PIPELINE",
+            "exit_signal",
+            "Stock",
+            "123456",
+            "1",
+            {"venue": "KRX"} if index % 2 else {},
+        )
+        for index in range(1000)
+    ]
     groups, quality = sentinel._partition_events_by_venue_session(events)
     assert len(groups["KRX|KRX_REGULAR"]) == 1000
     assert quality["inherited_nearest_exact_attempt"] == 500
     assert calls <= 4 * 500
 
 
-def test_baseline_projection_preserves_summaries_scopes_and_warm_read_bound(monkeypatch, tmp_path):
+def test_baseline_projection_preserves_summaries_scopes_and_warm_read_bound(
+    monkeypatch, tmp_path
+):
     from pathlib import Path
+
     monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
     day = "2026-10-15"
-    fields = dict(venue="KRX", actual_order_submitted="True", ai_cache="miss",
-        ai_parse_fail="True", holding_score_effective="50", holding_score_source="input_preflight_blocked",
-        worsen_pct="1.1", profit_rate="2.3", exit_rule="trailing", opaque_context="x"*50000)
-    payloads = [_event(day, f"10:00:0{index}", stage, record_id=1, fields=fields)
-        for index, stage in enumerate(["holding_started", "ai_holding_review",
-                                       "holding_flow_override_defer_exit", "sell_order_sent", "sell_completed"])]
-    payloads.append(_event(day, "10:00:06", "exit_signal", record_id=2,
-                          fields={"simulated_order": "True", "venue": "NXT"}))
+    fields = dict(
+        venue="KRX",
+        actual_order_submitted="True",
+        ai_cache="miss",
+        ai_parse_fail="True",
+        holding_score_effective="50",
+        holding_score_source="input_preflight_blocked",
+        worsen_pct="1.1",
+        profit_rate="2.3",
+        exit_rule="trailing",
+        opaque_context="x" * 50000,
+    )
+    payloads = [
+        _event(day, f"10:00:0{index}", stage, record_id=1, fields=fields)
+        for index, stage in enumerate(
+            [
+                "holding_started",
+                "ai_holding_review",
+                "holding_flow_override_defer_exit",
+                "sell_order_sent",
+                "sell_completed",
+            ]
+        )
+    ]
+    payloads.append(
+        _event(
+            day,
+            "10:00:06",
+            "exit_signal",
+            record_id=2,
+            fields={"simulated_order": "True", "venue": "NXT"},
+        )
+    )
     _write_events(tmp_path, day, payloads)
     full = sentinel.load_pipeline_events(day)
     projected = sentinel.load_pipeline_events(day, use_cache=True, summary_only=True)
     assert "opaque_context" not in projected[0].fields
-    assert "opaque_context" in sentinel.load_pipeline_events(day, use_cache=True)[0].fields
+    assert (
+        "opaque_context" in sentinel.load_pipeline_events(day, use_cache=True)[0].fields
+    )
     # Restore the baseline owner's metadata after the full-reader compatibility check.
     projected = sentinel.load_pipeline_events(day, use_cache=True, summary_only=True)
     for start in [datetime(2026, 10, 15, 8), datetime(2026, 10, 15, 10, 0, 3)]:
-        assert sentinel._summarize_events(full, start_at=start, end_at=datetime(2026, 10, 15, 11)) == sentinel._summarize_events(projected, start_at=start, end_at=datetime(2026, 10, 15, 11))
-    assert sentinel._partition_events_by_venue_session(full)[1] == sentinel._partition_events_by_venue_session(projected)[1]
-    cache = tmp_path/"runtime/sentinel_event_cache"/f"holding_exit_sentinel_events_{day}.jsonl"
+        assert sentinel._summarize_events(
+            full, start_at=start, end_at=datetime(2026, 10, 15, 11)
+        ) == sentinel._summarize_events(
+            projected, start_at=start, end_at=datetime(2026, 10, 15, 11)
+        )
+    assert (
+        sentinel._partition_events_by_venue_session(full)[1]
+        == sentinel._partition_events_by_venue_session(projected)[1]
+    )
+    cache = (
+        tmp_path
+        / "runtime/sentinel_event_cache"
+        / f"holding_exit_sentinel_events_{day}.jsonl"
+    )
     original_open = Path.open
+
     def guarded(path, mode="r", *args, **kwargs):
         if path == cache and "r" in mode:
             pytest.fail("warm baseline reread the full native cache")
         return original_open(path, mode, *args, **kwargs)
+
     monkeypatch.setattr(Path, "open", guarded)
-    assert sentinel.load_pipeline_events(day, use_cache=True, summary_only=True) == projected
+    assert (
+        sentinel.load_pipeline_events(day, use_cache=True, summary_only=True)
+        == projected
+    )
 
 
 @pytest.mark.parametrize("change", ["append", "projection_hash", "reader_contract"])
-def test_baseline_projection_invalidates_on_source_or_contract_change(monkeypatch, tmp_path, change):
+def test_baseline_projection_invalidates_on_source_or_contract_change(
+    monkeypatch, tmp_path, change
+):
     from src.engine.monitoring import sentinel_compact_store as store
+
     monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
     day = "2026-10-15"
-    _write_events(tmp_path, day, [_event(day, "10:00:00", "holding_started", record_id=1)])
+    _write_events(
+        tmp_path, day, [_event(day, "10:00:00", "holding_started", record_id=1)]
+    )
     first = sentinel.load_pipeline_events(day, use_cache=True, summary_only=True)
-    cache = tmp_path/"runtime/sentinel_event_cache"/f"holding_exit_sentinel_events_{day}.jsonl"
-    projection = cache.with_name(cache.name+".sentinel-slim.json")
+    cache = (
+        tmp_path
+        / "runtime/sentinel_event_cache"
+        / f"holding_exit_sentinel_events_{day}.jsonl"
+    )
+    projection = cache.with_name(cache.name + ".sentinel-slim.json")
     if change == "append":
-        with (tmp_path/"pipeline_events"/f"pipeline_events_{day}.jsonl").open("a") as f:
-            f.write(json.dumps(_event(day, "10:00:01", "sell_completed", record_id=1))+"\n")
+        with (tmp_path / "pipeline_events" / f"pipeline_events_{day}.jsonl").open(
+            "a"
+        ) as f:
+            f.write(
+                json.dumps(_event(day, "10:00:01", "sell_completed", record_id=1))
+                + "\n"
+            )
     else:
         value = json.loads(projection.read_text())
-        if change == "projection_hash": value["sha256"] = "0"*64
+        if change == "projection_hash":
+            value["sha256"] = "0" * 64
         else:
-            value["body"]["contract"]["reader_sha256"] = "0"*64
-            value["sha256"] = __import__('hashlib').sha256(json.dumps(value["body"], sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+            value["body"]["contract"]["reader_sha256"] = "0" * 64
+            value["sha256"] = (
+                __import__("hashlib")
+                .sha256(
+                    json.dumps(
+                        value["body"], sort_keys=True, separators=(",", ":")
+                    ).encode()
+                )
+                .hexdigest()
+            )
         projection.write_text(json.dumps(value))
     result = sentinel.load_pipeline_events(day, use_cache=True, summary_only=True)
     assert len(result) == (2 if change == "append" else len(first))
-    assert json.loads(projection.read_text())["body"]["contract"]["reader_sha256"] != "0"*64
+    assert (
+        json.loads(projection.read_text())["body"]["contract"]["reader_sha256"]
+        != "0" * 64
+    )
 
 
-def test_baseline_source_mutation_cannot_publish_a_projected_population(monkeypatch, tmp_path):
+def test_baseline_source_mutation_cannot_publish_a_projected_population(
+    monkeypatch, tmp_path
+):
     from src.engine.monitoring import sentinel_compact_store as store
+
     monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
     day = "2026-10-15"
     _write_events(tmp_path, day, [_event(day, "10:00:00", "holding_started")])
     original = store.slim_summary_projection
+
     def racing(path, loader, **kwargs):
         rows = original(path, loader, **kwargs)
-        with path.open("a") as f: f.write("{}\n")
+        with path.open("a") as f:
+            f.write("{}\n")
         return rows
+
     monkeypatch.setattr(store, "slim_summary_projection", racing)
     with pytest.raises(ValueError, match="projection_population_changed"):
         sentinel.load_pipeline_events(day, use_cache=True, summary_only=True)
@@ -180,16 +343,28 @@ def test_baseline_source_mutation_cannot_publish_a_projected_population(monkeypa
 def test_baseline_projection_covers_summary_field_contract():
     import ast
     import inspect
-    readers = (sentinel._is_non_real_observation, sentinel._is_explicit_real_sell_execution,
-        sentinel._count_cache_miss, sentinel._count_parse_fail, sentinel._score50_origin_counts,
-        sentinel._count_holding_score_preflight_blocked, sentinel._stage_reason_top,
-        event_scope.actual_execution_venue)
+
+    readers = (
+        sentinel._is_non_real_observation,
+        sentinel._is_explicit_real_sell_execution,
+        sentinel._count_cache_miss,
+        sentinel._count_parse_fail,
+        sentinel._score50_origin_counts,
+        sentinel._count_holding_score_preflight_blocked,
+        sentinel._stage_reason_top,
+        event_scope.actual_execution_venue,
+    )
     required = set(sentinel.VENUE_SCOPE_FIELD_KEYS + sentinel.SESSION_SCOPE_FIELD_KEYS)
     for reader in readers:
         for node in ast.walk(ast.parse(inspect.getsource(reader))):
-            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-                    and node.func.attr == 'get' and node.args
-                    and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str)):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "get"
+                and node.args
+                and isinstance(node.args[0], ast.Constant)
+                and isinstance(node.args[0].value, str)
+            ):
                 required.add(node.args[0].value)
     assert required <= sentinel.BASELINE_SUMMARY_FIELDS
 
@@ -197,73 +372,187 @@ def test_baseline_projection_covers_summary_field_contract():
 def test_typed_semantics_pins_actual_position_and_current_effective_receipt():
     from src.engine.scalping import holding_profit_exit_semantics as semantics
     from src.engine.scalping import trailing_situation_policy as typed
-    bundle=typed.initial_bundle(MECHANICAL['market_values'],
-        parent_sha256=MECHANICAL['market_values_sha256'], source_date='2026-09-25',target_date='2026-09-28',
-        parent_classifier_parameters=MECHANICAL['classifier_parameters'])
-    pin=typed.pin_context(None,position_key='record:7',entry_at=1)
-    transition={**MECHANICAL_FIELDS,'position_key':'record:7', 'trailing_situation_pin':json.dumps(pin),
-        'classification_origin_hash':pin['classification_origin_hash'],
-        'effective_trailing_policy_sha256':bundle['policy_sha256'],
-        'trailing_start_pct':MECHANICAL['market_values']['PREMARKET']['SCALP_TRAILING_START_PCT'],
-        'raw_limit_pct':MECHANICAL['market_values']['PREMARKET']['SCALP_TRAILING_LIMIT_WEAK'],
-        'first_crossing':{'threshold_key':'SCALP_TRAILING_LIMIT_WEAK'}}
-    snapshot={**MECHANICAL_FIELDS, 'position_key':'record:7','trailing_situation_pin':json.dumps(pin),
-              'effective_trailing_policy_sha256':bundle['policy_sha256']}
-    receipt={**MECHANICAL,'situation_policy':bundle}
-    assert semantics._mechanical_check(transition,snapshot,receipt,'PREMARKET','2026-09-28') is None
-    foreign=typed.pin_context(None,position_key='record:8',entry_at=1)
-    assert semantics._mechanical_check({**transition,'trailing_situation_pin':foreign},snapshot,receipt,
-        'PREMARKET','2026-09-28')=='tp_mechanical_policy_contract_invalid'
-    assert semantics._mechanical_check(transition,{**snapshot,'position_key':'record:8'},receipt,
-        'PREMARKET','2026-09-28')=='tp_situation_origin_or_snapshot_unbound'
+
+    bundle = typed.initial_bundle(
+        MECHANICAL["market_values"],
+        parent_sha256=MECHANICAL["market_values_sha256"],
+        source_date="2026-09-25",
+        target_date="2026-09-28",
+        parent_classifier_parameters=MECHANICAL["classifier_parameters"],
+    )
+    pin = typed.pin_context(None, position_key="record:7", entry_at=1)
+    transition = {
+        **MECHANICAL_FIELDS,
+        "position_key": "record:7",
+        "trailing_situation_pin": json.dumps(pin),
+        "classification_origin_hash": pin["classification_origin_hash"],
+        "effective_trailing_policy_sha256": bundle["policy_sha256"],
+        "trailing_start_pct": MECHANICAL["market_values"]["PREMARKET"][
+            "SCALP_TRAILING_START_PCT"
+        ],
+        "raw_limit_pct": MECHANICAL["market_values"]["PREMARKET"][
+            "SCALP_TRAILING_LIMIT_WEAK"
+        ],
+        "first_crossing": {"threshold_key": "SCALP_TRAILING_LIMIT_WEAK"},
+    }
+    snapshot = {
+        **MECHANICAL_FIELDS,
+        "position_key": "record:7",
+        "trailing_situation_pin": json.dumps(pin),
+        "effective_trailing_policy_sha256": bundle["policy_sha256"],
+    }
+    receipt = {**MECHANICAL, "situation_policy": bundle}
+    assert (
+        semantics._mechanical_check(
+            transition, snapshot, receipt, "PREMARKET", "2026-09-28"
+        )
+        is None
+    )
+    foreign = typed.pin_context(None, position_key="record:8", entry_at=1)
+    assert (
+        semantics._mechanical_check(
+            {**transition, "trailing_situation_pin": foreign},
+            snapshot,
+            receipt,
+            "PREMARKET",
+            "2026-09-28",
+        )
+        == "tp_mechanical_policy_contract_invalid"
+    )
+    assert (
+        semantics._mechanical_check(
+            transition,
+            {**snapshot, "position_key": "record:8"},
+            receipt,
+            "PREMARKET",
+            "2026-09-28",
+        )
+        == "tp_situation_origin_or_snapshot_unbound"
+    )
 
 
-
-@pytest.mark.parametrize('damage',[None,'json_pin','native_record_repr','context_missing','symbol','record',
-    'nonbase','entry','classifier','features','reason','hash','snapshot_position','snapshot_pin',
-    'snapshot_policy','origin','generation','large_literal','call_literal','duplicate_literal','width'])
-def test_original_legacy_base_pin_binds_record_symbol_and_parent_without_rewriting(damage):
+@pytest.mark.parametrize(
+    "damage",
+    [
+        None,
+        "json_pin",
+        "native_record_repr",
+        "context_missing",
+        "symbol",
+        "record",
+        "nonbase",
+        "entry",
+        "classifier",
+        "features",
+        "reason",
+        "hash",
+        "snapshot_position",
+        "snapshot_pin",
+        "snapshot_policy",
+        "origin",
+        "generation",
+        "large_literal",
+        "call_literal",
+        "duplicate_literal",
+        "width",
+    ],
+)
+def test_original_legacy_base_pin_binds_record_symbol_and_parent_without_rewriting(
+    damage,
+):
     from copy import deepcopy
     from src.engine.scalping import holding_profit_exit_semantics as semantics
     from src.engine.scalping import trailing_situation_policy as typed
-    bundle=typed.initial_bundle(MECHANICAL['market_values'],parent_sha256=MECHANICAL['market_values_sha256'],
-        source_date='2026-09-25',target_date='2026-09-28',parent_classifier_parameters=MECHANICAL['classifier_parameters'])
-    pin=typed.pin_context(None,position_key='target:7:005930',entry_at=0)
-    context=('7','005930')
-    if damage=='native_record_repr':pin=typed.pin_context(None,position_key='record:7',entry_at=1)
-    if damage=='context_missing':context=None
-    elif damage=='symbol':context=('7','000001')
-    elif damage=='record':context=('8','005930')
-    elif damage=='nonbase':pin['situation_type']='TREND_CONTINUATION'
-    elif damage=='entry':pin['entry_at']=1
-    elif damage=='classifier':pin['classifier_sha256']='b'*64
-    elif damage=='features':pin['feature_sha256']='c'*64
-    elif damage=='reason':pin['reason']='classified'
-    pin['classification_origin_hash']=typed.digest({k:v for k,v in pin.items() if k!='classification_origin_hash'})
-    if damage=='hash':pin['classification_origin_hash']='d'*64
-    transition={**MECHANICAL_FIELDS,'position_key':'record:7','trailing_situation_pin':json.dumps(pin),
-        'classification_origin_hash':pin['classification_origin_hash'],
-        'effective_trailing_policy_sha256':bundle['policy_sha256'],
-        'trailing_start_pct':MECHANICAL['market_values']['PREMARKET']['SCALP_TRAILING_START_PCT'],
-        'raw_limit_pct':MECHANICAL['market_values']['PREMARKET']['SCALP_TRAILING_LIMIT_WEAK'],
-        'first_crossing':{'threshold_key':'SCALP_TRAILING_LIMIT_WEAK'}}
-    snapshot={**MECHANICAL_FIELDS,'position_key':'record:7','trailing_situation_pin':repr(pin),
-        'buy_fill_identity':'a'*64,'effective_trailing_policy_sha256':bundle['policy_sha256']}
-    if damage=='json_pin':snapshot['trailing_situation_pin']=json.dumps(pin)
-    elif damage=='snapshot_position':snapshot['position_key']='record:8'
-    elif damage=='snapshot_pin':snapshot['trailing_situation_pin']=repr(typed.pin_context(None,position_key='target:8:005930',entry_at=0))
-    elif damage=='snapshot_policy':snapshot['effective_trailing_policy_sha256']='f'*64
-    elif damage=='origin':transition['classification_origin_hash']='f'*64
-    elif damage=='generation':snapshot['buy_fill_identity']=None
-    elif damage=='large_literal':snapshot['trailing_situation_pin']=' '*4097+repr(pin)
-    elif damage=='call_literal':snapshot['trailing_situation_pin']="dict(schema='main_trailing_situation_pin_v1')"
-    elif damage=='duplicate_literal':snapshot['trailing_situation_pin']=repr(pin)[:-1]+", 'reason':'legacy_context_unbound'}"
-    elif damage=='width':transition['raw_limit_pct']=99
-    receipt={**MECHANICAL,'situation_policy':bundle}
-    before=deepcopy((transition,snapshot,receipt))
-    error=semantics._mechanical_check(transition,snapshot,receipt,'PREMARKET','2026-09-28',record_symbol=context)
-    assert (error is None)==(damage in (None,'json_pin','native_record_repr')),error
-    assert (transition,snapshot,receipt)==before
+
+    bundle = typed.initial_bundle(
+        MECHANICAL["market_values"],
+        parent_sha256=MECHANICAL["market_values_sha256"],
+        source_date="2026-09-25",
+        target_date="2026-09-28",
+        parent_classifier_parameters=MECHANICAL["classifier_parameters"],
+    )
+    pin = typed.pin_context(None, position_key="target:7:005930", entry_at=0)
+    context = ("7", "005930")
+    if damage == "native_record_repr":
+        pin = typed.pin_context(None, position_key="record:7", entry_at=1)
+    if damage == "context_missing":
+        context = None
+    elif damage == "symbol":
+        context = ("7", "000001")
+    elif damage == "record":
+        context = ("8", "005930")
+    elif damage == "nonbase":
+        pin["situation_type"] = "TREND_CONTINUATION"
+    elif damage == "entry":
+        pin["entry_at"] = 1
+    elif damage == "classifier":
+        pin["classifier_sha256"] = "b" * 64
+    elif damage == "features":
+        pin["feature_sha256"] = "c" * 64
+    elif damage == "reason":
+        pin["reason"] = "classified"
+    pin["classification_origin_hash"] = typed.digest(
+        {k: v for k, v in pin.items() if k != "classification_origin_hash"}
+    )
+    if damage == "hash":
+        pin["classification_origin_hash"] = "d" * 64
+    transition = {
+        **MECHANICAL_FIELDS,
+        "position_key": "record:7",
+        "trailing_situation_pin": json.dumps(pin),
+        "classification_origin_hash": pin["classification_origin_hash"],
+        "effective_trailing_policy_sha256": bundle["policy_sha256"],
+        "trailing_start_pct": MECHANICAL["market_values"]["PREMARKET"][
+            "SCALP_TRAILING_START_PCT"
+        ],
+        "raw_limit_pct": MECHANICAL["market_values"]["PREMARKET"][
+            "SCALP_TRAILING_LIMIT_WEAK"
+        ],
+        "first_crossing": {"threshold_key": "SCALP_TRAILING_LIMIT_WEAK"},
+    }
+    snapshot = {
+        **MECHANICAL_FIELDS,
+        "position_key": "record:7",
+        "trailing_situation_pin": repr(pin),
+        "buy_fill_identity": "a" * 64,
+        "effective_trailing_policy_sha256": bundle["policy_sha256"],
+    }
+    if damage == "json_pin":
+        snapshot["trailing_situation_pin"] = json.dumps(pin)
+    elif damage == "snapshot_position":
+        snapshot["position_key"] = "record:8"
+    elif damage == "snapshot_pin":
+        snapshot["trailing_situation_pin"] = repr(
+            typed.pin_context(None, position_key="target:8:005930", entry_at=0)
+        )
+    elif damage == "snapshot_policy":
+        snapshot["effective_trailing_policy_sha256"] = "f" * 64
+    elif damage == "origin":
+        transition["classification_origin_hash"] = "f" * 64
+    elif damage == "generation":
+        snapshot["buy_fill_identity"] = None
+    elif damage == "large_literal":
+        snapshot["trailing_situation_pin"] = " " * 4097 + repr(pin)
+    elif damage == "call_literal":
+        snapshot["trailing_situation_pin"] = (
+            "dict(schema='main_trailing_situation_pin_v1')"
+        )
+    elif damage == "duplicate_literal":
+        snapshot["trailing_situation_pin"] = (
+            repr(pin)[:-1] + ", 'reason':'legacy_context_unbound'}"
+        )
+    elif damage == "width":
+        transition["raw_limit_pct"] = 99
+    receipt = {**MECHANICAL, "situation_policy": bundle}
+    before = deepcopy((transition, snapshot, receipt))
+    error = semantics._mechanical_check(
+        transition, snapshot, receipt, "PREMARKET", "2026-09-28", record_symbol=context
+    )
+    assert (error is None) == (
+        damage in (None, "json_pin", "native_record_repr")
+    ), error
+    assert (transition, snapshot, receipt) == before
+
 
 def _event(
     target_date: str,
@@ -295,35 +584,64 @@ def _event(
 def test_profit_semantics_accepts_premarket_zero_vote_first_crossing():
     at = datetime(2026, 9, 28, 8, 30, tzinfo=ZoneInfo("Asia/Seoul"))
     epoch = at.timestamp()
-    common = {**MECHANICAL_FIELDS, "pipeline_lifecycle_population_scope": "real_record_bound"}
+    common = {
+        **MECHANICAL_FIELDS,
+        "pipeline_lifecycle_population_scope": "real_record_bound",
+    }
     transition = sentinel.PipelineEvent(
-        at, "HOLDING_PIPELINE", "scalp_trailing_input_transition",
-        "Stock", "000001", "7", {
-            **common, "position_key": "record:7", "evaluator": "fast_rest_confirmed",
-            "first_crossing": json.dumps({
-                "at_epoch": epoch, "market": "PREMARKET",
-                "threshold_key": "SCALP_TRAILING_LIMIT_WEAK",
-            }),
-            "trailing_start_pct": "0.4", "tuning_exit_allowed_by_clock": "True",
+        at,
+        "HOLDING_PIPELINE",
+        "scalp_trailing_input_transition",
+        "Stock",
+        "000001",
+        "7",
+        {
+            **common,
+            "position_key": "record:7",
+            "evaluator": "fast_rest_confirmed",
+            "first_crossing": json.dumps(
+                {
+                    "at_epoch": epoch,
+                    "market": "PREMARKET",
+                    "threshold_key": "SCALP_TRAILING_LIMIT_WEAK",
+                }
+            ),
+            "trailing_start_pct": "0.4",
+            "tuning_exit_allowed_by_clock": "True",
             "trigger_kind": "trailing_peak_worsen_floor",
         },
     )
     snapshot = sentinel.PipelineEvent(
-        at + timedelta(seconds=1), "HOLDING_PIPELINE",
-        "holding_path_signal_snapshot", "Stock", "000001", "7", {
-            **common, "path_id": "EXIT_TRAILING_TP", "position_key": "record:7",
-            "market": "PREMARKET", "session_key": "2026-09-28",
-            "signal_id": "first", "signal_at": str(epoch),
-            "buy_fill_identity": "a" * 64, "vote_count": "0",
+        at + timedelta(seconds=1),
+        "HOLDING_PIPELINE",
+        "holding_path_signal_snapshot",
+        "Stock",
+        "000001",
+        "7",
+        {
+            **common,
+            "path_id": "EXIT_TRAILING_TP",
+            "position_key": "record:7",
+            "market": "PREMARKET",
+            "session_key": "2026-09-28",
+            "signal_id": "first",
+            "signal_at": str(epoch),
+            "buy_fill_identity": "a" * 64,
+            "vote_count": "0",
             "decision": "INSUFFICIENT",
-            "signal_snapshot_ms": 4, "signal_provider_wait_ms": 0,
+            "signal_snapshot_ms": 4,
+            "signal_provider_wait_ms": 0,
             "policy_sha256": input_snapshot_id(
-                PATH_POLICY_BY_MARKET[("EXIT_TRAILING_TP", "PREMARKET")]),
+                PATH_POLICY_BY_MARKET[("EXIT_TRAILING_TP", "PREMARKET")]
+            ),
         },
     )
     report = audit_profit_exit_flow(
-        [transition, snapshot], target_date="2026-09-28",
-        load_votes=lambda _: [], mechanical_policy_receipt=MECHANICAL, consumed_pid=42,
+        [transition, snapshot],
+        target_date="2026-09-28",
+        load_votes=lambda _: [],
+        mechanical_policy_receipt=MECHANICAL,
+        consumed_pid=42,
     )
     assert report["status"] == "pass"
     assert report["by_market_trigger"] == {"PREMARKET|fast": 1}
@@ -334,195 +652,382 @@ def test_profit_semantics_accepts_premarket_zero_vote_first_crossing():
     assert report["latency_ms"]["signal_provider_wait_ms"]["p99_ms"] == 0
     assert report["funnel"]["tp_decision_INSUFFICIENT"] == 1
     broken = sentinel.PipelineEvent(
-        snapshot.emitted_at, snapshot.pipeline, snapshot.stage,
-        snapshot.stock_name, snapshot.stock_code, snapshot.record_id,
+        snapshot.emitted_at,
+        snapshot.pipeline,
+        snapshot.stage,
+        snapshot.stock_name,
+        snapshot.stock_code,
+        snapshot.record_id,
         {**snapshot.fields, "policy_sha256": "0" * 64},
     )
-    assert audit_profit_exit_flow(
-        [transition, broken], target_date="2026-09-28",
-        load_votes=lambda _: [], mechanical_policy_receipt=MECHANICAL, consumed_pid=42,
-    )["status"] == "semantic_contract_invalid"
-    unconsumed = sentinel.PipelineEvent(
-        snapshot.emitted_at, snapshot.pipeline, snapshot.stage,
-        snapshot.stock_name, snapshot.stock_code, snapshot.record_id,
-        {**snapshot.fields, "policy_bundle_sha256": "b" * 64,
-         "policy_load_status": "baseline_policy_env_missing_or_mismatch"},
+    assert (
+        audit_profit_exit_flow(
+            [transition, broken],
+            target_date="2026-09-28",
+            load_votes=lambda _: [],
+            mechanical_policy_receipt=MECHANICAL,
+            consumed_pid=42,
+        )["status"]
+        == "semantic_contract_invalid"
     )
-    assert audit_profit_exit_flow(
-        [transition, unconsumed], target_date="2026-09-28",
-        load_votes=lambda _: [], mechanical_policy_receipt=MECHANICAL, consumed_pid=42, policy_bundle_sha256="b" * 64,
-    )["status"] == "runtime_not_consumed"
+    unconsumed = sentinel.PipelineEvent(
+        snapshot.emitted_at,
+        snapshot.pipeline,
+        snapshot.stage,
+        snapshot.stock_name,
+        snapshot.stock_code,
+        snapshot.record_id,
+        {
+            **snapshot.fields,
+            "policy_bundle_sha256": "b" * 64,
+            "policy_load_status": "baseline_policy_env_missing_or_mismatch",
+        },
+    )
+    assert (
+        audit_profit_exit_flow(
+            [transition, unconsumed],
+            target_date="2026-09-28",
+            load_votes=lambda _: [],
+            mechanical_policy_receipt=MECHANICAL,
+            consumed_pid=42,
+            policy_bundle_sha256="b" * 64,
+        )["status"]
+        == "runtime_not_consumed"
+    )
 
 
-@pytest.mark.parametrize('damage', ['hash', 'buy', 'pid', 'clock', 'symbol', 'budget'])
+@pytest.mark.parametrize("damage", ["hash", "buy", "pid", "clock", "symbol", "budget"])
 def test_native_first_crossing_source_rejects_misbound_receipt(damage):
     from src.engine.scalping.holding_profit_exit_semantics import first_crossing_source
-    at=datetime(2026,9,28,10,tzinfo=ZoneInfo('Asia/Seoul'));epoch=at.timestamp()
-    first=dict(position_key='record:7',at_epoch=epoch,market='REGULAR',
-        threshold_key='SCALP_TRAILING_LIMIT_WEAK',threshold_pct=.4,
-        source_runtime_pid=42,buy_fill_identity='a'*64)
-    body=first_crossing_source(first,stock_code='000001',buy_fill_identity='a'*64,
-        mechanical_fields=MECHANICAL_FIELDS,policy_fields=MECHANICAL_FIELDS,
-        start_pct=.4,observed_at=epoch,evaluator='fast')
-    if damage=='hash':body['raw_limit_pct']=.8
-    elif damage=='buy':body['buy_fill_identity']='b'*64
-    elif damage=='pid':body['runtime_pid']=43
-    elif damage=='clock':body['observed_at']=epoch+100
-    elif damage=='symbol':body['stock_code']='000002'
-    elif damage=='budget':body['oversized']='x'*9000
-    if damage!='hash':body['source_sha256']=input_snapshot_id({k:v for k,v in body.items() if k!='source_sha256'})
-    event=sentinel.PipelineEvent(at,'HOLDING_PIPELINE','scalp_trailing_first_crossing_transition',
-        'Stock','000001','7',dict(first_crossing_source=json.dumps(body),position_key='record:7',
-        buy_fill_identity='a'*64,first_crossing_at=epoch,pipeline_lifecycle_population_scope='real_record_bound'))
-    snapshot=sentinel.PipelineEvent(at+timedelta(seconds=1),'HOLDING_PIPELINE',
-        'holding_path_signal_snapshot','Stock','000001','7',dict(path_id='EXIT_TRAILING_TP',
-        position_key='record:7',buy_fill_identity='a'*64,signal_at=epoch,signal_id='first',
-        market='REGULAR',session_key='2026-09-28',runtime_pid=42,vote_count=0,decision='INSUFFICIENT',
-        policy_sha256=input_snapshot_id(PATH_POLICY_BY_MARKET[('EXIT_TRAILING_TP','REGULAR')]),
-        pipeline_lifecycle_population_scope='real_record_bound'))
-    report=audit_profit_exit_flow([event,snapshot],target_date='2026-09-28',load_votes=lambda _:[],
-        mechanical_policy_receipt=MECHANICAL,consumed_pid=42)
-    assert {'position_id':'7','reason':'tp_first_crossing_source_invalid'} in report['source_gaps']
+
+    at = datetime(2026, 9, 28, 10, tzinfo=ZoneInfo("Asia/Seoul"))
+    epoch = at.timestamp()
+    first = dict(
+        position_key="record:7",
+        at_epoch=epoch,
+        market="REGULAR",
+        threshold_key="SCALP_TRAILING_LIMIT_WEAK",
+        threshold_pct=0.4,
+        source_runtime_pid=42,
+        buy_fill_identity="a" * 64,
+    )
+    body = first_crossing_source(
+        first,
+        stock_code="000001",
+        buy_fill_identity="a" * 64,
+        mechanical_fields=MECHANICAL_FIELDS,
+        policy_fields=MECHANICAL_FIELDS,
+        start_pct=0.4,
+        observed_at=epoch,
+        evaluator="fast",
+    )
+    if damage == "hash":
+        body["raw_limit_pct"] = 0.8
+    elif damage == "buy":
+        body["buy_fill_identity"] = "b" * 64
+    elif damage == "pid":
+        body["runtime_pid"] = 43
+    elif damage == "clock":
+        body["observed_at"] = epoch + 100
+    elif damage == "symbol":
+        body["stock_code"] = "000002"
+    elif damage == "budget":
+        body["oversized"] = "x" * 9000
+    if damage != "hash":
+        body["source_sha256"] = input_snapshot_id(
+            {k: v for k, v in body.items() if k != "source_sha256"}
+        )
+    event = sentinel.PipelineEvent(
+        at,
+        "HOLDING_PIPELINE",
+        "scalp_trailing_first_crossing_transition",
+        "Stock",
+        "000001",
+        "7",
+        dict(
+            first_crossing_source=json.dumps(body),
+            position_key="record:7",
+            buy_fill_identity="a" * 64,
+            first_crossing_at=epoch,
+            pipeline_lifecycle_population_scope="real_record_bound",
+        ),
+    )
+    snapshot = sentinel.PipelineEvent(
+        at + timedelta(seconds=1),
+        "HOLDING_PIPELINE",
+        "holding_path_signal_snapshot",
+        "Stock",
+        "000001",
+        "7",
+        dict(
+            path_id="EXIT_TRAILING_TP",
+            position_key="record:7",
+            buy_fill_identity="a" * 64,
+            signal_at=epoch,
+            signal_id="first",
+            market="REGULAR",
+            session_key="2026-09-28",
+            runtime_pid=42,
+            vote_count=0,
+            decision="INSUFFICIENT",
+            policy_sha256=input_snapshot_id(
+                PATH_POLICY_BY_MARKET[("EXIT_TRAILING_TP", "REGULAR")]
+            ),
+            pipeline_lifecycle_population_scope="real_record_bound",
+        ),
+    )
+    report = audit_profit_exit_flow(
+        [event, snapshot],
+        target_date="2026-09-28",
+        load_votes=lambda _: [],
+        mechanical_policy_receipt=MECHANICAL,
+        consumed_pid=42,
+    )
+    assert {"position_id": "7", "reason": "tp_first_crossing_source_invalid"} in report[
+        "source_gaps"
+    ]
 
 
 def test_profit_semantics_distinguishes_empty_and_missing_vote_source():
-    assert audit_profit_exit_flow(
-        [], target_date="2026-09-28", load_votes=lambda _: [], mechanical_policy_receipt=MECHANICAL, consumed_pid=42,
-    )["status"] == "valid_empty"
+    assert (
+        audit_profit_exit_flow(
+            [],
+            target_date="2026-09-28",
+            load_votes=lambda _: [],
+            mechanical_policy_receipt=MECHANICAL,
+            consumed_pid=42,
+        )["status"]
+        == "valid_empty"
+    )
     at = datetime(2026, 9, 28, 9, 10, tzinfo=ZoneInfo("Asia/Seoul"))
     signal = sentinel.PipelineEvent(
-        at, "HOLDING_PIPELINE", "holding_path_signal_snapshot",
-        "Stock", "000001", "8", {
+        at,
+        "HOLDING_PIPELINE",
+        "holding_path_signal_snapshot",
+        "Stock",
+        "000001",
+        "8",
+        {
             "pipeline_lifecycle_population_scope": "real_record_bound",
-            "path_id": "EXIT_TRAILING_TP", "position_key": "record:8",
-            "market": "REGULAR", "session_key": "2026-09-28",
-            "signal_id": "first", "signal_at": str(at.timestamp()),
-            "buy_fill_identity": "a" * 64, "vote_count": "2",
+            "path_id": "EXIT_TRAILING_TP",
+            "position_key": "record:8",
+            "market": "REGULAR",
+            "session_key": "2026-09-28",
+            "signal_id": "first",
+            "signal_at": str(at.timestamp()),
+            "buy_fill_identity": "a" * 64,
+            "vote_count": "2",
             "decision": "VETO",
             "policy_sha256": input_snapshot_id(
-                PATH_POLICY_BY_MARKET[("EXIT_TRAILING_TP", "REGULAR")]),
+                PATH_POLICY_BY_MARKET[("EXIT_TRAILING_TP", "REGULAR")]
+            ),
         },
     )
     report = audit_profit_exit_flow(
-        [signal], target_date="2026-09-28", load_votes=lambda _: [], mechanical_policy_receipt=MECHANICAL, consumed_pid=42,
+        [signal],
+        target_date="2026-09-28",
+        load_votes=lambda _: [],
+        mechanical_policy_receipt=MECHANICAL,
+        consumed_pid=42,
     )
     assert report["status"] == "source_gap"
-    assert "tp_vote_ledger_missing" in {
-        row["reason"] for row in report["source_gaps"]}
+    assert "tp_vote_ledger_missing" in {row["reason"] for row in report["source_gaps"]}
 
 
-def test_empty_natural_flow_still_detects_invalid_selected_policy(monkeypatch, tmp_path):
+def test_empty_natural_flow_still_detects_invalid_selected_policy(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
     selected = policy_path(tmp_path, "2026-09-28")
     selected.parent.mkdir(parents=True)
     selected.write_text('{"invalid": true}', encoding="utf-8")
     report = sentinel.build_holding_exit_sentinel_report(
-        "2026-09-28", as_of=sentinel._parse_as_of("2026-09-28", "08:10:00"),
+        "2026-09-28",
+        as_of=sentinel._parse_as_of("2026-09-28", "08:10:00"),
     )
     assert report["profit_exit_semantics"]["status"] == "policy_binding_gap"
-    assert report["profit_exit_semantics"]["funnel"].get(
-        "tp_signal_snapshots", 0) == 0
+    assert report["profit_exit_semantics"]["funnel"].get("tp_signal_snapshots", 0) == 0
 
 
 def test_profit_semantics_detects_tp_exit_without_vote_snapshot():
     at = datetime(2026, 9, 28, 9, 10, tzinfo=ZoneInfo("Asia/Seoul"))
     exit_event = sentinel.PipelineEvent(
-        at, "HOLDING_PIPELINE", "exit_signal", "Stock", "000001", "8", {
+        at,
+        "HOLDING_PIPELINE",
+        "exit_signal",
+        "Stock",
+        "000001",
+        "8",
+        {
             "pipeline_lifecycle_population_scope": "real_record_bound",
             "exit_rule": "scalp_trailing_take_profit",
             "holding_path_signal_id": "missing",
         },
     )
     report = audit_profit_exit_flow(
-        [exit_event], target_date="2026-09-28", load_votes=lambda _: [], mechanical_policy_receipt=MECHANICAL, consumed_pid=42,
+        [exit_event],
+        target_date="2026-09-28",
+        load_votes=lambda _: [],
+        mechanical_policy_receipt=MECHANICAL,
+        consumed_pid=42,
     )
     assert report["status"] == "source_gap"
     assert report["funnel"]["tp_exit_signals"] == 1
     assert "tp_exit_without_vote_snapshot" in {
-        row["reason"] for row in report["source_gaps"]}
+        row["reason"] for row in report["source_gaps"]
+    }
 
 
 def test_profit_semantics_distinguishes_partial_terminal_and_cost_layers():
     at = datetime(2026, 9, 28, 10, 0, tzinfo=ZoneInfo("Asia/Seoul"))
     epoch = at.timestamp()
-    common = {**MECHANICAL_FIELDS, "pipeline_lifecycle_population_scope": "real_record_bound"}
+    common = {
+        **MECHANICAL_FIELDS,
+        "pipeline_lifecycle_population_scope": "real_record_bound",
+    }
 
     def event(offset, stage, fields):
         return sentinel.PipelineEvent(
-            at + timedelta(seconds=offset), "HOLDING_PIPELINE", stage,
-            "Stock", "000001", "21", {**common, "holding_path_position_key": "record:21",
-                             "holding_path_buy_fill_identity": "a" * 64, **fields},
+            at + timedelta(seconds=offset),
+            "HOLDING_PIPELINE",
+            stage,
+            "Stock",
+            "000001",
+            "21",
+            {
+                **common,
+                "holding_path_position_key": "record:21",
+                "holding_path_buy_fill_identity": "a" * 64,
+                **fields,
+            },
         )
 
-    transition = event(0, "scalp_trailing_input_transition", {
-        "position_key": "record:21", "evaluator": "normal",
-        "first_crossing": {"at_epoch": epoch, "market": "REGULAR",
-                           "threshold_key": "SCALP_TRAILING_LIMIT_WEAK"},
-        "trailing_start_pct": 0.4, "tuning_exit_allowed_by_clock": True,
-        "trigger_kind": "trailing_peak_worsen_floor",
-    })
-    snapshot = event(1, "holding_path_signal_snapshot", {
-        "path_id": "EXIT_TRAILING_TP", "position_key": "record:21",
-        "market": "REGULAR", "session_key": "2026-09-28",
-        "signal_id": "sig-21", "signal_at": epoch,
-        "buy_fill_identity": "a" * 64, "vote_count": 0,
-        "decision": "INSUFFICIENT",
-        "policy_sha256": input_snapshot_id(
-            PATH_POLICY_BY_MARKET[("EXIT_TRAILING_TP", "REGULAR")]),
-    })
-    exit_signal = event(2, "exit_signal", {
-        "exit_rule": "scalp_trailing_take_profit",
-        "holding_path_signal_id": "sig-21", "buy_qty": 2,
-    })
-    sent = event(3, "sell_order_sent", {
-        "exit_rule": "scalp_trailing_take_profit",
-        "holding_path_signal_id": "sig-21", "ord_no": "SELL-21", "qty": 2,
-    })
-    partial = event(4, "sell_partial_fill_progress", {
-        "exit_rule": "scalp_trailing_take_profit",
-        "holding_path_terminal_signal_binding": "same_position_buy_generation",
-        "holding_path_signal_id": "sig-21", "order_no": "SELL-21",
-    })
-    complete = event(5, "sell_completed", {
-        "exit_rule": "scalp_trailing_take_profit",
-        "holding_path_terminal_signal_binding": "same_position_buy_generation",
-        "holding_path_signal_id": "sig-21", "order_no": "SELL-21",
-        "remaining_sell_qty": 0,
-    })
+    transition = event(
+        0,
+        "scalp_trailing_input_transition",
+        {
+            "position_key": "record:21",
+            "evaluator": "normal",
+            "first_crossing": {
+                "at_epoch": epoch,
+                "market": "REGULAR",
+                "threshold_key": "SCALP_TRAILING_LIMIT_WEAK",
+            },
+            "trailing_start_pct": 0.4,
+            "tuning_exit_allowed_by_clock": True,
+            "trigger_kind": "trailing_peak_worsen_floor",
+        },
+    )
+    snapshot = event(
+        1,
+        "holding_path_signal_snapshot",
+        {
+            "path_id": "EXIT_TRAILING_TP",
+            "position_key": "record:21",
+            "market": "REGULAR",
+            "session_key": "2026-09-28",
+            "signal_id": "sig-21",
+            "signal_at": epoch,
+            "buy_fill_identity": "a" * 64,
+            "vote_count": 0,
+            "decision": "INSUFFICIENT",
+            "policy_sha256": input_snapshot_id(
+                PATH_POLICY_BY_MARKET[("EXIT_TRAILING_TP", "REGULAR")]
+            ),
+        },
+    )
+    exit_signal = event(
+        2,
+        "exit_signal",
+        {
+            "exit_rule": "scalp_trailing_take_profit",
+            "holding_path_signal_id": "sig-21",
+            "buy_qty": 2,
+        },
+    )
+    sent = event(
+        3,
+        "sell_order_sent",
+        {
+            "exit_rule": "scalp_trailing_take_profit",
+            "holding_path_signal_id": "sig-21",
+            "ord_no": "SELL-21",
+            "qty": 2,
+        },
+    )
+    partial = event(
+        4,
+        "sell_partial_fill_progress",
+        {
+            "exit_rule": "scalp_trailing_take_profit",
+            "holding_path_terminal_signal_binding": "same_position_buy_generation",
+            "holding_path_signal_id": "sig-21",
+            "order_no": "SELL-21",
+        },
+    )
+    complete = event(
+        5,
+        "sell_completed",
+        {
+            "exit_rule": "scalp_trailing_take_profit",
+            "holding_path_terminal_signal_binding": "same_position_buy_generation",
+            "holding_path_signal_id": "sig-21",
+            "order_no": "SELL-21",
+            "remaining_sell_qty": 0,
+        },
+    )
     pending = audit_profit_exit_flow(
         [transition, snapshot, exit_signal, sent, partial],
-        target_date="2026-09-28", load_votes=lambda _: [], mechanical_policy_receipt=MECHANICAL, consumed_pid=42,
+        target_date="2026-09-28",
+        load_votes=lambda _: [],
+        mechanical_policy_receipt=MECHANICAL,
+        consumed_pid=42,
     )
     assert pending["status"] == "pending_terminal"
     assert pending["funnel"]["tp_sell_partial_fill"] == 1
     observation = {
         "meta": {"knowledge_cutoff": "2026-09-28T10:00:05+09:00"},
         "completed_population_quality": {"strict_completed_position_ids": ["21"]},
-        "position_outcomes": [{
-            "record_id": "21", "sell_quantity_conserved": True,
-            "profit_rate": 0.5, "realized_pnl_krw": 100,
-            "exact_sell_fill_time": "2026-09-28T10:00:05+09:00",
-            "post_sell_status": "pass",
-            "post_sell_observed_at": "2026-09-28T10:00:05+09:00",
-            "holding_path_buy_fill_identity": "a" * 64,
-            "actual_cost_reconciliation": {"status": "actual_cost_reconciled",
-                "cost_available_at": "2026-09-28T10:00:05+09:00",
-                "reconciled_at": "2026-09-28T10:00:05+09:00"},
-        }],
+        "position_outcomes": [
+            {
+                "record_id": "21",
+                "sell_quantity_conserved": True,
+                "profit_rate": 0.5,
+                "realized_pnl_krw": 100,
+                "exact_sell_fill_time": "2026-09-28T10:00:05+09:00",
+                "post_sell_status": "pass",
+                "post_sell_observed_at": "2026-09-28T10:00:05+09:00",
+                "holding_path_buy_fill_identity": "a" * 64,
+                "actual_cost_reconciliation": {
+                    "status": "actual_cost_reconciled",
+                    "cost_available_at": "2026-09-28T10:00:05+09:00",
+                    "reconciled_at": "2026-09-28T10:00:05+09:00",
+                },
+            }
+        ],
     }
     closed = audit_profit_exit_flow(
         [transition, snapshot, exit_signal, sent, partial, complete],
-        target_date="2026-09-28", load_votes=lambda _: [], mechanical_policy_receipt=MECHANICAL, consumed_pid=42,
+        target_date="2026-09-28",
+        load_votes=lambda _: [],
+        mechanical_policy_receipt=MECHANICAL,
+        consumed_pid=42,
         observation=observation,
     )
     assert closed["status"] == "pass"
     assert closed["funnel"]["tp_forward_observed"] == 1
     observation["completed_population_quality"]["strict_completed_position_ids"] = []
-    assert audit_profit_exit_flow(
-        [transition, snapshot, exit_signal, sent, partial, complete],
-        target_date="2026-09-28", load_votes=lambda _: [], mechanical_policy_receipt=MECHANICAL, consumed_pid=42,
-        observation=observation,
-    )["economics_status"] == "unavailable"
+    assert (
+        audit_profit_exit_flow(
+            [transition, snapshot, exit_signal, sent, partial, complete],
+            target_date="2026-09-28",
+            load_votes=lambda _: [],
+            mechanical_policy_receipt=MECHANICAL,
+            consumed_pid=42,
+            observation=observation,
+        )["economics_status"]
+        == "unavailable"
+    )
 
 
 def test_sell_drought_is_classified_without_cross_venue_denominator(
@@ -586,8 +1091,12 @@ def test_current_holding_nxt_phase_overrides_legacy_krx_entry_venue():
     event = sentinel._event_from_cache_row(sentinel._payload_to_cache_row(payload))
 
     assert event is not None
-    assert event_scope.explicit_event_scope(event.fields, event.emitted_at,
-            venue_keys=sentinel.VENUE_SCOPE_FIELD_KEYS, session_keys=sentinel.SESSION_SCOPE_FIELD_KEYS) == (
+    assert event_scope.explicit_event_scope(
+        event.fields,
+        event.emitted_at,
+        venue_keys=sentinel.VENUE_SCOPE_FIELD_KEYS,
+        session_keys=sentinel.SESSION_SCOPE_FIELD_KEYS,
+    ) == (
         "NXT",
         "NXT_AFTERMARKET",
         "pass",
@@ -609,8 +1118,12 @@ def test_dual_aftermarket_scope_keeps_broker_actual_venue_separate():
     event = sentinel._event_from_cache_row(sentinel._payload_to_cache_row(payload))
 
     assert event is not None
-    assert event_scope.explicit_event_scope(event.fields, event.emitted_at,
-            venue_keys=sentinel.VENUE_SCOPE_FIELD_KEYS, session_keys=sentinel.SESSION_SCOPE_FIELD_KEYS) == (
+    assert event_scope.explicit_event_scope(
+        event.fields,
+        event.emitted_at,
+        venue_keys=sentinel.VENUE_SCOPE_FIELD_KEYS,
+        session_keys=sentinel.SESSION_SCOPE_FIELD_KEYS,
+    ) == (
         "KRX_NXT_INTEGRATED",
         "KRX_NXT_AFTERMARKET_CLOSE_ONLY",
         "pass",
@@ -648,8 +1161,12 @@ def test_premarket_venue_rejects_regular_krx_session():
     event = sentinel._event_from_cache_row(sentinel._payload_to_cache_row(payload))
 
     assert event is not None
-    assert event_scope.explicit_event_scope(event.fields, event.emitted_at,
-            venue_keys=sentinel.VENUE_SCOPE_FIELD_KEYS, session_keys=sentinel.SESSION_SCOPE_FIELD_KEYS) == (
+    assert event_scope.explicit_event_scope(
+        event.fields,
+        event.emitted_at,
+        venue_keys=sentinel.VENUE_SCOPE_FIELD_KEYS,
+        session_keys=sentinel.SESSION_SCOPE_FIELD_KEYS,
+    ) == (
         "CONFLICT",
         "CONFLICT",
         "conflict",
@@ -669,8 +1186,12 @@ def test_runtime_krx_like_premarket_session_token_is_preserved():
     event = sentinel._event_from_cache_row(sentinel._payload_to_cache_row(payload))
 
     assert event is not None
-    assert event_scope.explicit_event_scope(event.fields, event.emitted_at,
-            venue_keys=sentinel.VENUE_SCOPE_FIELD_KEYS, session_keys=sentinel.SESSION_SCOPE_FIELD_KEYS) == (
+    assert event_scope.explicit_event_scope(
+        event.fields,
+        event.emitted_at,
+        venue_keys=sentinel.VENUE_SCOPE_FIELD_KEYS,
+        session_keys=sentinel.SESSION_SCOPE_FIELD_KEYS,
+    ) == (
         "PREMARKET_KRX_LIKE",
         "PREMARKET_KRX_LIKE",
         "pass",
@@ -1355,245 +1876,542 @@ def test_use_cache_reads_only_appended_holding_raw_bytes(monkeypatch, tmp_path):
 
 def _semantic_flow(day="2026-10-09", start=0.5):
     from src.engine.scalping.trailing_mechanical_policy import baseline_receipt
-    mechanical = baseline_receipt({"KORSTOCKSCAN_SCALP_TRAILING_START_PCT": start},
-                                  source="reviewed_selected_candidate")
+
+    mechanical = baseline_receipt(
+        {"KORSTOCKSCAN_SCALP_TRAILING_START_PCT": start},
+        source="reviewed_selected_candidate",
+    )
     at = datetime.fromisoformat(day + "T10:00:00+09:00")
     common = {"pipeline_lifecycle_population_scope": "real_record_bound"}
+
     def event(offset, stage, fields):
-        return sentinel.PipelineEvent(at + timedelta(seconds=offset), "HOLDING_PIPELINE",
-                                      stage, "Stock", "123456", "21", {**common, **fields})
-    transition = event(0, "scalp_trailing_input_transition", {
-        "position_key": "record:21", "trailing_start_pct": start, "raw_limit_pct": 0.4,
-        "tuning_exit_allowed_by_clock": True, "trigger_kind": "trailing_peak_worsen_floor",
-        "first_crossing": {"at_epoch": at.timestamp(), "market": "REGULAR",
-                           "threshold_key": "SCALP_TRAILING_LIMIT_WEAK"},
-        "scalp_trailing_policy_date": day,
-        "scalp_trailing_market_values": mechanical["market_values"],
-        "scalp_trailing_market_values_sha256": mechanical["market_values_sha256"],
-        "classifier_version": mechanical["classifier_version"],
-        "classifier_sha256": mechanical["classifier_sha256"]})
-    snapshot = event(1, "holding_path_signal_snapshot", {
-        "position_key": "record:21", "buy_fill_identity": "a" * 64,
-        "signal_id": "first", "signal_at": at.timestamp(), "market": "REGULAR",
-        "session_key": day, "path_id": "EXIT_TRAILING_TP", "vote_count": 0,
-        "decision": "INSUFFICIENT", "runtime_pid": 42,
-        "policy_sha256": input_snapshot_id(PATH_POLICY_BY_MARKET[("EXIT_TRAILING_TP", "REGULAR")]),
-        "mechanical_policy_receipt": {"scalp_trailing_market_values_sha256": mechanical["market_values_sha256"],
-                                      "scalp_trailing_policy_date": day}})
-    lineage = {"exit_rule": "scalp_trailing_take_profit", "holding_path_signal_id": "first",
-               "holding_path_position_key": "record:21", "holding_path_buy_fill_identity": "a" * 64}
+        return sentinel.PipelineEvent(
+            at + timedelta(seconds=offset),
+            "HOLDING_PIPELINE",
+            stage,
+            "Stock",
+            "123456",
+            "21",
+            {**common, **fields},
+        )
+
+    transition = event(
+        0,
+        "scalp_trailing_input_transition",
+        {
+            "position_key": "record:21",
+            "trailing_start_pct": start,
+            "raw_limit_pct": 0.4,
+            "tuning_exit_allowed_by_clock": True,
+            "trigger_kind": "trailing_peak_worsen_floor",
+            "first_crossing": {
+                "at_epoch": at.timestamp(),
+                "market": "REGULAR",
+                "threshold_key": "SCALP_TRAILING_LIMIT_WEAK",
+            },
+            "scalp_trailing_policy_date": day,
+            "scalp_trailing_market_values": mechanical["market_values"],
+            "scalp_trailing_market_values_sha256": mechanical["market_values_sha256"],
+            "classifier_version": mechanical["classifier_version"],
+            "classifier_sha256": mechanical["classifier_sha256"],
+        },
+    )
+    snapshot = event(
+        1,
+        "holding_path_signal_snapshot",
+        {
+            "position_key": "record:21",
+            "buy_fill_identity": "a" * 64,
+            "signal_id": "first",
+            "signal_at": at.timestamp(),
+            "market": "REGULAR",
+            "session_key": day,
+            "path_id": "EXIT_TRAILING_TP",
+            "vote_count": 0,
+            "decision": "INSUFFICIENT",
+            "runtime_pid": 42,
+            "policy_sha256": input_snapshot_id(
+                PATH_POLICY_BY_MARKET[("EXIT_TRAILING_TP", "REGULAR")]
+            ),
+            "mechanical_policy_receipt": {
+                "scalp_trailing_market_values_sha256": mechanical[
+                    "market_values_sha256"
+                ],
+                "scalp_trailing_policy_date": day,
+            },
+        },
+    )
+    lineage = {
+        "exit_rule": "scalp_trailing_take_profit",
+        "holding_path_signal_id": "first",
+        "holding_path_position_key": "record:21",
+        "holding_path_buy_fill_identity": "a" * 64,
+    }
     return event, mechanical, [transition, snapshot], lineage, at
 
 
 def test_semantic_v2_accepts_approved_point_five_rejects_unapproved_generation_and_tracks_pending():
     event, mechanical, rows, lineage, at = _semantic_flow()
     rows.append(event(2, "exit_signal", lineage))
-    report = audit_profit_exit_flow(rows, target_date="2026-10-09", load_votes=lambda _: [],
-                                   mechanical_policy_receipt=mechanical, consumed_pid=42)
+    report = audit_profit_exit_flow(
+        rows,
+        target_date="2026-10-09",
+        load_votes=lambda _: [],
+        mechanical_policy_receipt=mechanical,
+        consumed_pid=42,
+    )
     assert report["schema"] == "holding_profit_exit_semantics_v2"
     assert report["semantic_status"] == "pass"
     assert report["status"] == "pending_submit"
     assert report["lifecycle"][0]["lifecycle_state"] == "pending_submit"
     assert report["economics_status"] == "pending"
-    unapproved = audit_profit_exit_flow(rows, target_date="2026-10-09", load_votes=lambda _: [],
-                                        mechanical_policy_receipt=MECHANICAL, consumed_pid=42)
+    unapproved = audit_profit_exit_flow(
+        rows,
+        target_date="2026-10-09",
+        load_votes=lambda _: [],
+        mechanical_policy_receipt=MECHANICAL,
+        consumed_pid=42,
+    )
     assert unapproved["semantic_status"] == "policy_binding_gap"
     rows[0].fields["scalp_trailing_market_values_sha256"] = "0" * 64
-    assert audit_profit_exit_flow(rows, target_date="2026-10-09", load_votes=lambda _: [],
-        mechanical_policy_receipt=mechanical, consumed_pid=42)["semantic_status"] == "policy_binding_gap"
+    assert (
+        audit_profit_exit_flow(
+            rows,
+            target_date="2026-10-09",
+            load_votes=lambda _: [],
+            mechanical_policy_receipt=mechanical,
+            consumed_pid=42,
+        )["semantic_status"]
+        == "policy_binding_gap"
+    )
 
 
 def test_same_record_previous_signal_does_not_close_new_pending_signal_or_import_future_terminal():
     event, mechanical, rows, lineage, at = _semantic_flow()
-    rows += [event(2, "exit_signal", lineage), event(3, "sell_order_sent", {**lineage, "ord_no": "S"}),
-             event(4, "sell_completed", {**lineage, "order_no": "S", "remaining_sell_qty": 0,
-                 "holding_path_terminal_signal_binding": "same_position_buy_generation"})]
-    second = event(5, "holding_path_signal_snapshot", {**rows[1].fields, "signal_id": "second"})
-    rows += [second, event(6, "exit_signal", {**lineage, "holding_path_signal_id": "second"}),
-             event(8, "sell_order_sent", {**lineage, "holding_path_signal_id": "second", "ord_no": "S2"})]
-    late_vote = {"path_id": "EXIT_TRAILING_TP", "market": "REGULAR", "status": "VALID",
-                 "requested_at": at.timestamp() - 2, "received_at": at.timestamp() + 100,
-                 "persisted_at": at.timestamp() + 101, "provider_called": True}
-    report = audit_profit_exit_flow(rows, target_date="2026-10-09", as_of=at + timedelta(seconds=6),
-        load_votes=lambda _: [late_vote], mechanical_policy_receipt=mechanical, consumed_pid=42)
+    rows += [
+        event(2, "exit_signal", lineage),
+        event(3, "sell_order_sent", {**lineage, "ord_no": "S"}),
+        event(
+            4,
+            "sell_completed",
+            {
+                **lineage,
+                "order_no": "S",
+                "remaining_sell_qty": 0,
+                "holding_path_terminal_signal_binding": "same_position_buy_generation",
+            },
+        ),
+    ]
+    second = event(
+        5, "holding_path_signal_snapshot", {**rows[1].fields, "signal_id": "second"}
+    )
+    rows += [
+        second,
+        event(6, "exit_signal", {**lineage, "holding_path_signal_id": "second"}),
+        event(
+            8,
+            "sell_order_sent",
+            {**lineage, "holding_path_signal_id": "second", "ord_no": "S2"},
+        ),
+    ]
+    late_vote = {
+        "path_id": "EXIT_TRAILING_TP",
+        "market": "REGULAR",
+        "status": "VALID",
+        "requested_at": at.timestamp() - 2,
+        "received_at": at.timestamp() + 100,
+        "persisted_at": at.timestamp() + 101,
+        "provider_called": True,
+    }
+    report = audit_profit_exit_flow(
+        rows,
+        target_date="2026-10-09",
+        as_of=at + timedelta(seconds=6),
+        load_votes=lambda _: [late_vote],
+        mechanical_policy_receipt=mechanical,
+        consumed_pid=42,
+    )
     assert report["semantic_status"] == "pass"
-    assert [row["lifecycle_state"] for row in report["lifecycle"]] == ["completed", "pending_submit"]
+    assert [row["lifecycle_state"] for row in report["lifecycle"]] == [
+        "completed",
+        "pending_submit",
+    ]
     assert report["funnel"].get("tp_vote_provider_called", 0) == 0
     assert report["funnel"]["tp_sell_submitted"] == 1
     assert report["economics_status"] == "unavailable"
 
 
-@pytest.mark.parametrize("changes,offset,reason", [
-    ({"order_no": "OTHER"}, 4, "tp_terminal_attempt_unmatched"),
-    ({}, 2, "tp_terminal_attempt_unmatched"),
-    ({"holding_path_terminal_signal_binding": "source_gap"}, 4, "tp_terminal_buy_generation_unbound"),
-    ({"remaining_sell_qty": None}, 4, "tp_terminal_remaining_quantity_missing"),
-    ({"remaining_sell_qty": 1}, 4, "tp_terminal_remaining_quantity_nonzero"),
-])
+@pytest.mark.parametrize(
+    "changes,offset,reason",
+    [
+        ({"order_no": "OTHER"}, 4, "tp_terminal_attempt_unmatched"),
+        ({}, 2, "tp_terminal_attempt_unmatched"),
+        (
+            {"holding_path_terminal_signal_binding": "source_gap"},
+            4,
+            "tp_terminal_buy_generation_unbound",
+        ),
+        ({"remaining_sell_qty": None}, 4, "tp_terminal_remaining_quantity_missing"),
+        ({"remaining_sell_qty": 1}, 4, "tp_terminal_remaining_quantity_nonzero"),
+    ],
+)
 def test_unproven_terminal_never_advances_signal_to_completed(changes, offset, reason):
     event, mechanical, rows, lineage, _ = _semantic_flow()
-    rows += [event(2, "exit_signal", lineage),
-             event(3, "sell_order_sent", {**lineage, "ord_no": "S"}),
-             event(offset, "sell_completed", {**lineage, "order_no": "S", "remaining_sell_qty": 0,
-                 "holding_path_terminal_signal_binding": "same_position_buy_generation", **changes})]
-    report = audit_profit_exit_flow(rows, target_date="2026-10-09", load_votes=lambda _: [],
-                                   mechanical_policy_receipt=mechanical, consumed_pid=42)
+    rows += [
+        event(2, "exit_signal", lineage),
+        event(3, "sell_order_sent", {**lineage, "ord_no": "S"}),
+        event(
+            offset,
+            "sell_completed",
+            {
+                **lineage,
+                "order_no": "S",
+                "remaining_sell_qty": 0,
+                "holding_path_terminal_signal_binding": "same_position_buy_generation",
+                **changes,
+            },
+        ),
+    ]
+    report = audit_profit_exit_flow(
+        rows,
+        target_date="2026-10-09",
+        load_votes=lambda _: [],
+        mechanical_policy_receipt=mechanical,
+        consumed_pid=42,
+    )
     assert report["lifecycle"][0]["lifecycle_state"] == "pending_terminal"
-    assert reason in {item["reason"] for item in report["source_gaps"] + report["findings"]}
+    assert reason in {
+        item["reason"] for item in report["source_gaps"] + report["findings"]
+    }
     assert report["lifecycle"][0]["economics_status"] != "verified"
 
 
-@pytest.mark.parametrize('identity,expected', [(None,'source_gap'), ('None','source_gap'), ('bad','semantic_contract_invalid'), ('z'*64,'semantic_contract_invalid')])
-def test_missing_buy_source_is_a_gap_and_malformed_identity_remains_invalid(identity,expected):
-    _,mechanical,rows,_,_=_semantic_flow()
-    rows[1].fields['buy_fill_identity']=identity
-    report=audit_profit_exit_flow(rows,target_date='2026-10-09',load_votes=lambda _:[],
-        mechanical_policy_receipt=mechanical,consumed_pid=42)
-    assert report['semantic_status']==expected
-    assert report['lifecycle']==[] and report['economics_status']=='pending'
-    if identity in (None,'None'):
-        assert report['source_gaps']==[dict(position_id='21',reason='tp_signal_buy_generation_missing')]
+@pytest.mark.parametrize(
+    "identity,expected",
+    [
+        (None, "source_gap"),
+        ("None", "source_gap"),
+        ("bad", "semantic_contract_invalid"),
+        ("z" * 64, "semantic_contract_invalid"),
+    ],
+)
+def test_missing_buy_source_is_a_gap_and_malformed_identity_remains_invalid(
+    identity, expected
+):
+    _, mechanical, rows, _, _ = _semantic_flow()
+    rows[1].fields["buy_fill_identity"] = identity
+    report = audit_profit_exit_flow(
+        rows,
+        target_date="2026-10-09",
+        load_votes=lambda _: [],
+        mechanical_policy_receipt=mechanical,
+        consumed_pid=42,
+    )
+    assert report["semantic_status"] == expected
+    assert report["lifecycle"] == [] and report["economics_status"] == "pending"
+    if identity in (None, "None"):
+        assert report["source_gaps"] == [
+            dict(position_id="21", reason="tp_signal_buy_generation_missing")
+        ]
 
 
 def _missing_buy_flow_report(*, damage=None):
     from dataclasses import replace
+
     event, mechanical, rows, lineage, at = _semantic_flow()
-    rows[1].fields['buy_fill_identity'] = 'None'
-    terminal = replace(rows[1], emitted_at=at + timedelta(seconds=4), stage='sell_completed', fields={
-        'pipeline_lifecycle_population_scope': 'real_record_bound', 'exit_rule': 'scalp_trailing_take_profit',
-        'holding_path_terminal_signal_binding': 'source_gap_generation_mismatch',
-        'order_no': '0017685', 'remaining_sell_qty': 0, 'execution_no': '9708'})
-    rows += [event(2, 'exit_signal', lineage),
-             event(3, 'sell_order_sent', {**lineage, 'ord_no': '0017685'}), terminal]
-    if damage == 'policy': rows[1].fields['policy_sha256'] = 'f' * 64
-    if damage == 'terminal': terminal.fields['execution_no'] = '9709'
-    if damage == 'duplicate': rows.append(terminal)
-    if damage == 'symbol': rows[-1] = replace(terminal, stock_code='999999')
-    if damage == 'unrelated': rows.append(replace(terminal, record_id='99', stage='holding_started', fields={}))
-    return audit_profit_exit_flow(rows, target_date='2026-10-09', load_votes=lambda _: [],
-        mechanical_policy_receipt=mechanical, consumed_pid=42)
+    rows[1].fields["buy_fill_identity"] = "None"
+    terminal = replace(
+        rows[1],
+        emitted_at=at + timedelta(seconds=4),
+        stage="sell_completed",
+        fields={
+            "pipeline_lifecycle_population_scope": "real_record_bound",
+            "exit_rule": "scalp_trailing_take_profit",
+            "holding_path_terminal_signal_binding": "source_gap_generation_mismatch",
+            "order_no": "0017685",
+            "remaining_sell_qty": 0,
+            "execution_no": "9708",
+        },
+    )
+    rows += [
+        event(2, "exit_signal", lineage),
+        event(3, "sell_order_sent", {**lineage, "ord_no": "0017685"}),
+        terminal,
+    ]
+    if damage == "policy":
+        rows[1].fields["policy_sha256"] = "f" * 64
+    if damage == "terminal":
+        terminal.fields["execution_no"] = "9709"
+    if damage == "duplicate":
+        rows.append(terminal)
+    if damage == "symbol":
+        rows[-1] = replace(terminal, stock_code="999999")
+    if damage == "unrelated":
+        rows.append(
+            replace(terminal, record_id="99", stage="holding_started", fields={})
+        )
+    return audit_profit_exit_flow(
+        rows,
+        target_date="2026-10-09",
+        load_votes=lambda _: [],
+        mechanical_policy_receipt=mechanical,
+        consumed_pid=42,
+    )
 
 
 def _historical_resolution_fixture(tmp_path, monkeypatch):
     from copy import deepcopy
     from src.engine.ai.holding_exit_vote import persist_buy_fill_receipt
     from src.engine.error_detectors import artifact_freshness as detector
-    data = tmp_path/'data'
+
+    data = tmp_path / "data"
     semantics = _missing_buy_flow_report()
-    at = datetime.fromisoformat('2026-10-09T10:00:00+09:00').timestamp()
-    for row in semantics['source_gap_details']:
-        row['signal_id'] = str(at)+':SCALP_TRAILING_LIMIT_WEAK'
+    at = datetime.fromisoformat("2026-10-09T10:00:00+09:00").timestamp()
+    for row in semantics["source_gap_details"]:
+        row["signal_id"] = str(at) + ":SCALP_TRAILING_LIMIT_WEAK"
     identities = {}
     for rid in (21, 22):
-        identities[rid] = persist_buy_fill_receipt(dict(id=rid, code='123456',
-            buy_time='2026-10-09T09:00:00', buy_qty=1, buy_price=100.,
-            _entry_receipt_filled_by_order_no={str(rid):1},
-            _entry_receipt_executions_by_order_no={str(rid):{'1':dict(cumulative_qty=1)}}), data)
-    semantics.update(policy_status='verified_incumbent_carried', economics_status='unavailable',
-        lifecycle=[dict(position_key='record:22', buy_fill_identity=identities[22],
-            signal_id=str(at+60)+':SCALP_TRAILING_LIMIT_WEAK', signal_at=at+60,
-            lifecycle_state='completed', economics_status='unavailable', blocking_reason=None,
-            orders=['2'])])
-    report = dict(target_date='2026-10-09', as_of=semantics['as_of'],
-        source_generation=semantics['source_generation'], profit_exit_semantics=semantics, dry_run=False)
-    path = data/'report/holding_exit_sentinel/holding_exit_sentinel_2026-10-09.json'
-    path.parent.mkdir(parents=True);path.write_text(json.dumps(report))
-    monkeypatch.setattr(sentinel, 'DATA_DIR', data)
-    monkeypatch.setattr(sentinel, 'build_holding_exit_sentinel_report', lambda *a, **k: deepcopy(report))
-    now = datetime.fromisoformat('2026-10-10T07:00:00+09:00')
+        identities[rid] = persist_buy_fill_receipt(
+            dict(
+                id=rid,
+                code="123456",
+                buy_time="2026-10-09T09:00:00",
+                buy_qty=1,
+                buy_price=100.0,
+                _entry_receipt_filled_by_order_no={str(rid): 1},
+                _entry_receipt_executions_by_order_no={
+                    str(rid): {"1": dict(cumulative_qty=1)}
+                },
+            ),
+            data,
+        )
+    semantics.update(
+        policy_status="verified_incumbent_carried",
+        economics_status="unavailable",
+        lifecycle=[
+            dict(
+                position_key="record:22",
+                buy_fill_identity=identities[22],
+                signal_id=str(at + 60) + ":SCALP_TRAILING_LIMIT_WEAK",
+                signal_at=at + 60,
+                lifecycle_state="completed",
+                economics_status="unavailable",
+                blocking_reason=None,
+                orders=["2"],
+            )
+        ],
+    )
+    report = dict(
+        target_date="2026-10-09",
+        as_of=semantics["as_of"],
+        source_generation=semantics["source_generation"],
+        profit_exit_semantics=semantics,
+        dry_run=False,
+    )
+    path = data / "report/holding_exit_sentinel/holding_exit_sentinel_2026-10-09.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(report))
+    monkeypatch.setattr(sentinel, "DATA_DIR", data)
+    monkeypatch.setattr(
+        sentinel, "build_holding_exit_sentinel_report", lambda *a, **k: deepcopy(report)
+    )
+    now = datetime.fromisoformat("2026-10-10T07:00:00+09:00")
     return detector, report, path, now
 
 
-def test_native_historical_resolution_reaches_detector_without_rewriting_original(tmp_path, monkeypatch):
+def test_native_historical_resolution_reaches_detector_without_rewriting_original(
+    tmp_path, monkeypatch
+):
     detector, report, path, now = _historical_resolution_fixture(tmp_path, monkeypatch)
     original = path.read_bytes()
-    assert detector._holding_profit_exit_semantics(tmp_path, '2026-10-09', now=now)['status'] == 'source_gap'
-    receipt = sentinel.publish_historical_buy_resolution('2026-10-09', ['21'], now=now)
-    observed = detector._holding_profit_exit_semantics(tmp_path, '2026-10-09', now=now)
-    assert observed['status'] == 'historical_diagnostic' and observed['findings'] == []
-    assert observed['source_gap_count'] == 2 and observed['semantic_status'] == 'source_gap'
-    assert observed['economics_status'] == 'unavailable'
-    assert detector._semantic_alert_candidates('holding_profit_exit', observed, '2026-10-09') == []
+    assert (
+        detector._holding_profit_exit_semantics(tmp_path, "2026-10-09", now=now)[
+            "status"
+        ]
+        == "source_gap"
+    )
+    receipt = sentinel.publish_historical_buy_resolution("2026-10-09", ["21"], now=now)
+    observed = detector._holding_profit_exit_semantics(tmp_path, "2026-10-09", now=now)
+    assert observed["status"] == "historical_diagnostic" and observed["findings"] == []
+    assert (
+        observed["source_gap_count"] == 2
+        and observed["semantic_status"] == "source_gap"
+    )
+    assert observed["economics_status"] == "unavailable"
+    assert (
+        detector._semantic_alert_candidates(
+            "holding_profit_exit", observed, "2026-10-09"
+        )
+        == []
+    )
     assert path.read_bytes() == original
-    assert sentinel.publish_historical_buy_resolution('2026-10-09', ['21'], now=now+timedelta(minutes=1)) == receipt
+    assert (
+        sentinel.publish_historical_buy_resolution(
+            "2026-10-09", ["21"], now=now + timedelta(minutes=1)
+        )
+        == receipt
+    )
 
 
-@pytest.mark.parametrize('fault', ['new_gap', 'new_generation', 'receipt', 'code', 'raw', 'new_pid',
-                                  'current_date', 'no_natural', 'unrepaired_display', 'reaudit', 'wrong_ids'])
-def test_historical_resolution_never_hides_current_or_changed_loss(tmp_path, monkeypatch, fault):
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "new_gap",
+        "new_generation",
+        "receipt",
+        "code",
+        "raw",
+        "new_pid",
+        "current_date",
+        "no_natural",
+        "unrepaired_display",
+        "reaudit",
+        "wrong_ids",
+    ],
+)
+def test_historical_resolution_never_hides_current_or_changed_loss(
+    tmp_path, monkeypatch, fault
+):
     from src.engine.scalping import holding_profit_exit_semantics as native
     from src.engine.ai import holding_exit_vote
+
     detector, report, path, now = _historical_resolution_fixture(tmp_path, monkeypatch)
-    prepublication = fault in {'current_date', 'no_natural', 'unrepaired_display', 'reaudit', 'wrong_ids'}
+    prepublication = fault in {
+        "current_date",
+        "no_natural",
+        "unrepaired_display",
+        "reaudit",
+        "wrong_ids",
+    }
     if not prepublication:
-        sentinel.publish_historical_buy_resolution('2026-10-09', ['21'], now=now)
-    if fault == 'new_gap':
-        report['profit_exit_semantics']['source_gaps'].append(dict(position_id='23', reason='tp_signal_buy_generation_missing'))
+        sentinel.publish_historical_buy_resolution("2026-10-09", ["21"], now=now)
+    if fault == "new_gap":
+        report["profit_exit_semantics"]["source_gaps"].append(
+            dict(position_id="23", reason="tp_signal_buy_generation_missing")
+        )
         path.write_text(json.dumps(report))
-    elif fault == 'new_generation':
-        report['source_generation'] = report['profit_exit_semantics']['source_generation'] = 'f'*64
+    elif fault == "new_generation":
+        report["source_generation"] = report["profit_exit_semantics"][
+            "source_generation"
+        ] = ("f" * 64)
         path.write_text(json.dumps(report))
-    elif fault == 'receipt':
-        p=tmp_path/'data/runtime/holding_buy_fill_receipts/21.json';p.write_bytes(p.read_bytes()+b'\n')
-    elif fault == 'code': monkeypatch.setattr(native,'historical_resolution_code',lambda: {})
-    elif fault in {'raw', 'new_pid'}:
-        p=(tmp_path/'data/pipeline_events/pipeline_events_2026-10-09.jsonl' if fault=='raw' else
-           tmp_path/'data/runtime/policy_bootstrap/verified_holding_profit_pid/2026-10-09/new.json')
-        p.parent.mkdir(parents=True,exist_ok=True);p.write_text('{}\n')
-    elif fault == 'current_date': now=now-timedelta(days=1)
-    elif fault == 'no_natural':
-        report['profit_exit_semantics']['lifecycle']=[];path.write_text(json.dumps(report))
-    elif fault == 'unrepaired_display':
-        monkeypatch.setattr(holding_exit_vote,'restore_buy_fill_receipt',lambda *a,**k:'position_price_mismatch')
-    elif fault == 'reaudit':
-        monkeypatch.setattr(sentinel,'build_holding_exit_sentinel_report',lambda *a,**k:dict(report,source_generation='e'*64))
+    elif fault == "receipt":
+        p = tmp_path / "data/runtime/holding_buy_fill_receipts/21.json"
+        p.write_bytes(p.read_bytes() + b"\n")
+    elif fault == "code":
+        monkeypatch.setattr(native, "historical_resolution_code", lambda: {})
+    elif fault in {"raw", "new_pid"}:
+        p = (
+            tmp_path / "data/pipeline_events/pipeline_events_2026-10-09.jsonl"
+            if fault == "raw"
+            else tmp_path
+            / "data/runtime/policy_bootstrap/verified_holding_profit_pid/2026-10-09/new.json"
+        )
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("{}\n")
+    elif fault == "current_date":
+        now = now - timedelta(days=1)
+    elif fault == "no_natural":
+        report["profit_exit_semantics"]["lifecycle"] = []
+        path.write_text(json.dumps(report))
+    elif fault == "unrepaired_display":
+        monkeypatch.setattr(
+            holding_exit_vote,
+            "restore_buy_fill_receipt",
+            lambda *a, **k: "position_price_mismatch",
+        )
+    elif fault == "reaudit":
+        monkeypatch.setattr(
+            sentinel,
+            "build_holding_exit_sentinel_report",
+            lambda *a, **k: dict(report, source_generation="e" * 64),
+        )
     if prepublication:
         with pytest.raises(ValueError):
-            sentinel.publish_historical_buy_resolution('2026-10-09', ['99'] if fault=='wrong_ids' else ['21'], now=now)
-    observed=detector._holding_profit_exit_semantics(tmp_path,'2026-10-09',now=now)
-    assert observed['status'] != 'historical_diagnostic'
-    assert detector._semantic_alert_candidates('holding_profit_exit',observed,'2026-10-09')
+            sentinel.publish_historical_buy_resolution(
+                "2026-10-09", ["99"] if fault == "wrong_ids" else ["21"], now=now
+            )
+    observed = detector._holding_profit_exit_semantics(tmp_path, "2026-10-09", now=now)
+    assert observed["status"] != "historical_diagnostic"
+    assert detector._semantic_alert_candidates(
+        "holding_profit_exit", observed, "2026-10-09"
+    )
 
 
 def test_original_missing_buy_evidence_is_stable_without_fabricating_lineage_or_policy_success():
     from src.engine.monitoring.semantic_incident_contract import holding_gap_identity
+
     report = _missing_buy_flow_report()
     identity = holding_gap_identity(report)
-    assert identity and identity['schema'] == 'holding_source_gap_identity_v2'
-    assert len(identity['gaps']) == 2 and report['lifecycle'] == []
-    assert report['status'] == 'source_gap' and report['economics_status'] == 'pending'
-    assert identity == holding_gap_identity(_missing_buy_flow_report(damage='unrelated'))
-    assert identity != holding_gap_identity(_missing_buy_flow_report(damage='terminal'))
-    for damage in ('duplicate', 'symbol', 'policy'):
+    assert identity and identity["schema"] == "holding_source_gap_identity_v2"
+    assert len(identity["gaps"]) == 2 and report["lifecycle"] == []
+    assert report["status"] == "source_gap" and report["economics_status"] == "pending"
+    assert identity == holding_gap_identity(
+        _missing_buy_flow_report(damage="unrelated")
+    )
+    assert identity != holding_gap_identity(_missing_buy_flow_report(damage="terminal"))
+    for damage in ("duplicate", "symbol", "policy"):
         assert holding_gap_identity(_missing_buy_flow_report(damage=damage)) is None
-    assert _missing_buy_flow_report(damage='policy')['findings'] == [
-        dict(position_id='21', reason='tp_signal_policy_hash_mismatch')]
+    assert _missing_buy_flow_report(damage="policy")["findings"] == [
+        dict(position_id="21", reason="tp_signal_policy_hash_mismatch")
+    ]
 
 
-@pytest.mark.parametrize('damage', [False,True])
-def test_terminal_funnel_counts_one_native_receipt_without_promoting_missing_buy_generation(damage):
+@pytest.mark.parametrize("damage", [False, True])
+def test_terminal_funnel_counts_one_native_receipt_without_promoting_missing_buy_generation(
+    damage,
+):
     from dataclasses import replace
     from src.tests.test_trade_review_research_cost import reobserved_sell_fixture
-    _,events=reobserved_sell_fixture()
-    terminal=events[-2:]
+
+    _, events = reobserved_sell_fixture()
+    terminal = events[-2:]
     from zoneinfo import ZoneInfo
-    rows=[sentinel.PipelineEvent(datetime.fromisoformat(e.timestamp).replace(tzinfo=ZoneInfo('Asia/Seoul')),
-        'HOLDING_PIPELINE',e.stage,e.name,e.code,'1',
-        {**{k:v for k,v in e.fields.items() if k!='id'},'exit_rule':'scalp_trailing_take_profit',
-         'pipeline_lifecycle_population_scope':'real_record_bound'}) for e in terminal]
-    if damage: rows[-1]=replace(rows[-1],fields={**rows[-1].fields,'sell_price':'different'})
-    report=audit_profit_exit_flow(rows,target_date='2026-10-08',load_votes=lambda _:[])
-    assert report['funnel']['tp_sell_completed']==(2 if damage else 1)
-    assert len(report['terminal_receipt_observations'])==(0 if damage else 1)
-    assert report['economics_status']=='pending'
+
+    rows = [
+        sentinel.PipelineEvent(
+            datetime.fromisoformat(e.timestamp).replace(tzinfo=ZoneInfo("Asia/Seoul")),
+            "HOLDING_PIPELINE",
+            e.stage,
+            e.name,
+            e.code,
+            "1",
+            {
+                **{k: v for k, v in e.fields.items() if k != "id"},
+                "exit_rule": "scalp_trailing_take_profit",
+                "pipeline_lifecycle_population_scope": "real_record_bound",
+            },
+        )
+        for e in terminal
+    ]
+    if damage:
+        rows[-1] = replace(
+            rows[-1], fields={**rows[-1].fields, "sell_price": "different"}
+        )
+    report = audit_profit_exit_flow(
+        rows, target_date="2026-10-08", load_votes=lambda _: []
+    )
+    assert report["funnel"]["tp_sell_completed"] == (2 if damage else 1)
+    assert len(report["terminal_receipt_observations"]) == (0 if damage else 1)
+    assert report["economics_status"] == "pending"
 
 
 def test_bound_existing_sell_guard_reports_wait_then_new_permission_clears_wait():
     event, mechanical, rows, lineage, _ = _semantic_flow()
-    rows += [event(2, "exit_signal", lineage), event(3, "sell_submit_pre_call_custody_blocked", lineage)]
+    rows += [
+        event(2, "exit_signal", lineage),
+        event(3, "sell_submit_pre_call_custody_blocked", lineage),
+    ]
+
     def audit():
-        return audit_profit_exit_flow(rows, target_date="2026-10-09", load_votes=lambda _: [],
-                                     mechanical_policy_receipt=mechanical, consumed_pid=42)
+        return audit_profit_exit_flow(
+            rows,
+            target_date="2026-10-09",
+            load_votes=lambda _: [],
+            mechanical_policy_receipt=mechanical,
+            consumed_pid=42,
+        )
+
     blocked = audit()["lifecycle"][0]
     assert blocked["lifecycle_state"] == "guard_wait"
     assert blocked["blocking_reason"] == "sell_submit_pre_call_custody_blocked"
@@ -1601,39 +2419,73 @@ def test_bound_existing_sell_guard_reports_wait_then_new_permission_clears_wait(
     assert audit()["lifecycle"][0]["lifecycle_state"] == "pending_submit"
 
 
-def test_sentinel_cutoff_and_semantic_generation_match_through_structured_cache(monkeypatch, tmp_path):
+def test_sentinel_cutoff_and_semantic_generation_match_through_structured_cache(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
-    rows = [_event("2026-10-09", "10:00:00", "exit_signal", fields={
-        "pipeline_lifecycle_population_scope": "real_record_bound",
-        "exit_rule": "scalp_trailing_take_profit", "holding_path_signal_id": "first"}),
-        _event("2026-10-09", "10:10:00", "sell_completed", fields={
-        "pipeline_lifecycle_population_scope": "real_record_bound", "exit_rule": "scalp_trailing_take_profit"})]
+    rows = [
+        _event(
+            "2026-10-09",
+            "10:00:00",
+            "exit_signal",
+            fields={
+                "pipeline_lifecycle_population_scope": "real_record_bound",
+                "exit_rule": "scalp_trailing_take_profit",
+                "holding_path_signal_id": "first",
+            },
+        ),
+        _event(
+            "2026-10-09",
+            "10:10:00",
+            "sell_completed",
+            fields={
+                "pipeline_lifecycle_population_scope": "real_record_bound",
+                "exit_rule": "scalp_trailing_take_profit",
+            },
+        ),
+    ]
     _write_events(tmp_path, "2026-10-09", rows)
-    report = sentinel.build_holding_exit_sentinel_report("2026-10-09", as_of=datetime(2026, 10, 9, 10, 1), use_cache=True)
+    report = sentinel.build_holding_exit_sentinel_report(
+        "2026-10-09", as_of=datetime(2026, 10, 9, 10, 1), use_cache=True
+    )
     assert report["current"]["session"]["stage_events"].get("sell_completed", 0) == 0
     assert report["profit_exit_semantics"]["funnel"].get("tp_sell_completed", 0) == 0
-    assert report["source_generation"] == report["profit_exit_semantics"]["source_generation"]
+    assert (
+        report["source_generation"]
+        == report["profit_exit_semantics"]["source_generation"]
+    )
 
 
-@pytest.mark.parametrize("as_of", [
-    datetime(2026, 10, 12, 9, 5, 2, 494303),
-    datetime(2026, 10, 12, 9, 5, 2, 494303, tzinfo=ZoneInfo("Asia/Seoul")),
-    datetime(2026, 10, 12, 0, 5, 2, 494303, tzinfo=ZoneInfo("UTC")),
-    datetime(2026, 10, 12, 9, 5, 2, 999999),
-    datetime(2026, 10, 12, 9, 5, 2),
-])
+@pytest.mark.parametrize(
+    "as_of",
+    [
+        datetime(2026, 10, 12, 9, 5, 2, 494303),
+        datetime(2026, 10, 12, 9, 5, 2, 494303, tzinfo=ZoneInfo("Asia/Seoul")),
+        datetime(2026, 10, 12, 0, 5, 2, 494303, tzinfo=ZoneInfo("UTC")),
+        datetime(2026, 10, 12, 9, 5, 2, 999999),
+        datetime(2026, 10, 12, 9, 5, 2),
+    ],
+)
 def test_sentinel_preserves_native_cutoff_and_consumer_rejects_time_tampering(
-    monkeypatch, tmp_path, as_of,
+    monkeypatch,
+    tmp_path,
+    as_of,
 ):
-    from src.engine.error_detectors.artifact_freshness import _holding_profit_exit_semantics
+    from src.engine.error_detectors.artifact_freshness import (
+        _holding_profit_exit_semantics,
+    )
 
     day = "2026-10-12"
     data = tmp_path / "data"
     monkeypatch.setattr(sentinel, "DATA_DIR", data)
-    monkeypatch.setattr(sentinel, "_profit_exit_bootstrap_binding", lambda *_: (None, {}))
+    monkeypatch.setattr(
+        sentinel, "_profit_exit_bootstrap_binding", lambda *_: (None, {})
+    )
     report = sentinel.build_holding_exit_sentinel_report(day, as_of=as_of)
     semantics = report["profit_exit_semantics"]
-    expected = as_of.replace(tzinfo=ZoneInfo("Asia/Seoul")) if as_of.tzinfo is None else as_of
+    expected = (
+        as_of.replace(tzinfo=ZoneInfo("Asia/Seoul")) if as_of.tzinfo is None else as_of
+    )
     assert report["as_of"] == semantics["as_of"]
     assert datetime.fromisoformat(report["as_of"]).timestamp() == expected.timestamp()
 
@@ -1646,7 +2498,9 @@ def test_sentinel_preserves_native_cutoff_and_consumer_rejects_time_tampering(
     assert checked["economics_status"] == "pending"
     assert checked["findings"] == []
 
-    report["as_of"] = (datetime.fromisoformat(report["as_of"]) + timedelta(microseconds=1)).isoformat()
+    report["as_of"] = (
+        datetime.fromisoformat(report["as_of"]) + timedelta(microseconds=1)
+    ).isoformat()
     path.write_text(json.dumps(report), encoding="utf-8")
     assert _holding_profit_exit_semantics(tmp_path, day)["findings"] == [
         "semantic_v2_generation_or_state_invalid",
@@ -1654,83 +2508,172 @@ def test_sentinel_preserves_native_cutoff_and_consumer_rejects_time_tampering(
 
 
 @pytest.mark.parametrize("use_cache", [False, True])
-def test_sentinel_fractional_cutoff_preserves_event_selection(monkeypatch, tmp_path, use_cache):
+def test_sentinel_fractional_cutoff_preserves_event_selection(
+    monkeypatch, tmp_path, use_cache
+):
     day = "2026-10-12"
     monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
-    monkeypatch.setattr(sentinel, "_profit_exit_bootstrap_binding", lambda *_: (None, {}))
-    _write_events(tmp_path, day, [
-        _event(day, "09:05:02.494302", "holding_ai_gate_pass"),
-        _event(day, "09:05:02.494303", "holding_ai_gate_pass"),
-        _event(day, "09:05:02.494304", "holding_ai_gate_pass"),
-    ])
+    monkeypatch.setattr(
+        sentinel, "_profit_exit_bootstrap_binding", lambda *_: (None, {})
+    )
+    _write_events(
+        tmp_path,
+        day,
+        [
+            _event(day, "09:05:02.494302", "holding_ai_gate_pass"),
+            _event(day, "09:05:02.494303", "holding_ai_gate_pass"),
+            _event(day, "09:05:02.494304", "holding_ai_gate_pass"),
+        ],
+    )
     report = sentinel.build_holding_exit_sentinel_report(
-        day, as_of=datetime(2026, 10, 12, 9, 5, 2, 494303), use_cache=use_cache,
+        day,
+        as_of=datetime(2026, 10, 12, 9, 5, 2, 494303),
+        use_cache=use_cache,
     )
     assert report["current"]["session"]["stage_events"]["holding_ai_gate_pass"] == 2
-    assert report["source_generation"] == report["profit_exit_semantics"]["source_generation"]
+    assert (
+        report["source_generation"]
+        == report["profit_exit_semantics"]["source_generation"]
+    )
     assert report["as_of"] == report["profit_exit_semantics"]["as_of"]
 
 
 def test_semantics_uses_each_verified_pid_policy_after_same_day_restart():
     _, older, rows, _, _ = _semantic_flow(start=0.4)
-    later = baseline_receipt({"KORSTOCKSCAN_SCALP_TRAILING_START_PCT": 0.5}, source="reviewed_selected_candidate")
-    result = audit_profit_exit_flow(rows, target_date="2026-10-09", load_votes=lambda _: [],
-        mechanical_policy_receipt=later, consumed_pids=[42,43], mechanical_receipts_by_pid={42: older, 43: later})
+    later = baseline_receipt(
+        {"KORSTOCKSCAN_SCALP_TRAILING_START_PCT": 0.5},
+        source="reviewed_selected_candidate",
+    )
+    result = audit_profit_exit_flow(
+        rows,
+        target_date="2026-10-09",
+        load_votes=lambda _: [],
+        mechanical_policy_receipt=later,
+        consumed_pids=[42, 43],
+        mechanical_receipts_by_pid={42: older, 43: later},
+    )
     assert result["semantic_status"] == "pass"
-    assert result["mechanical_policy_sha256_by_pid"]["42"] != result["mechanical_policy_sha256_by_pid"]["43"]
+    assert (
+        result["mechanical_policy_sha256_by_pid"]["42"]
+        != result["mechanical_policy_sha256_by_pid"]["43"]
+    )
 
 
-@pytest.mark.parametrize('damage',[None,'no_archive','typed_hash','typed_parent','archive_conflict',
-    'historical_late', 'historical_missing', 'historical_badseal', 'historical_wrong_date', 'historical_future'])
-def test_current_typed_pid_receipt_matches_native_archive_without_false_conflict(tmp_path,monkeypatch,damage):
+@pytest.mark.parametrize(
+    "damage",
+    [
+        None,
+        "no_archive",
+        "typed_hash",
+        "typed_parent",
+        "archive_conflict",
+        "historical_late",
+        "historical_missing",
+        "historical_badseal",
+        "historical_wrong_date",
+        "historical_future",
+    ],
+)
+def test_current_typed_pid_receipt_matches_native_archive_without_false_conflict(
+    tmp_path, monkeypatch, damage
+):
     from copy import deepcopy
     from src.engine.scalping import trailing_situation_policy as typed
     from src.engine.automation.runtime_policy_bootstrap import _digest_json
-    monkeypatch.setattr(sentinel,'DATA_DIR',tmp_path)
-    day='2026-09-28';pid=42
-    policy=typed.initial_bundle(MECHANICAL['market_values'],parent_sha256=MECHANICAL['market_values_sha256'],
-        source_date='2026-09-25',target_date=day,parent_classifier_parameters=MECHANICAL['classifier_parameters'])
-    if damage=='typed_hash':policy['policy_sha256']='f'*64
-    elif damage=='typed_parent':policy['parent_sha256']='f'*64
-    manifest=dict(target_date=day,env_overrides={typed.ENV_KEY:json.dumps(policy)},
-        scalp_trailing_mechanical_policy_receipt=MECHANICAL)
-    manifest['manifest_sha256']=_digest_json(manifest)
-    verification=dict(target_date=day,manifest_sha256=manifest['manifest_sha256'],status='pass',passed=True,
-        pid=pid,pid_passed=True,pid_env_available=True,verified_at=day+'T09:00:00+09:00')
-    root=tmp_path/'runtime/policy_bootstrap';root.mkdir(parents=True)
-    (root/f'runtime_policy_bootstrap_{day}.json').write_text(json.dumps(manifest))
-    (root/f'runtime_policy_bootstrap_verify_{day}.json').write_text(json.dumps(verification))
-    augmented={**MECHANICAL,'situation_policy':deepcopy(policy)}
-    archived=deepcopy(augmented)
-    if damage=='archive_conflict':archived['market_values_sha256']='f'*64
-    prior=dict(schema='holding_profit_pid_verification_v1',target_date=day,pid=pid,
-        manifest_sha256=manifest['manifest_sha256'],mechanical_policy_receipt=archived,
-        verified_at=day+'T09:00:00+09:00')
-    if damage=='historical_wrong_date':prior['target_date']='2026-09-25'
-    if damage=='historical_future':prior['verified_at']=day+'T09:03:00+09:00'
-    prior['receipt_sha256']=_digest_json(prior)
-    if damage=='historical_badseal':prior['receipt_sha256']='f'*64
-    if damage and damage.startswith('historical_'):
-        verification['verified_at']=day+'T09:02:00+09:00'
-        (root/f'runtime_policy_bootstrap_verify_{day}.json').write_text(json.dumps(verification))
-    if damage=='historical_missing':(root/f'runtime_policy_bootstrap_verify_{day}.json').unlink()
-    archive=root/'verified_holding_profit_pid'/day;archive.mkdir(parents=True)
-    if damage!='no_archive':(archive/f'holding_profit_pid_{pid}_{manifest["manifest_sha256"]}.json').write_text(json.dumps(prior))
-    before={p:p.read_bytes() for p in root.rglob('*.json')}
-    receipt,consumed=sentinel._profit_exit_bootstrap_binding(day,datetime.fromisoformat(day+'T09:01:00+09:00'))
-    if damage and damage.startswith('historical_'):
-        assert receipt is None and consumed=={}
-        receipt,consumed=sentinel._profit_exit_bootstrap_binding(day,datetime.fromisoformat(day+'T09:01:00+09:00'),historical=True)
-        if damage in ('historical_late','historical_missing'):assert receipt==augmented and consumed=={pid:augmented}
-        else:assert receipt is None and consumed=={}
-    elif damage in ('typed_hash','typed_parent'):assert receipt is None and consumed=={}
-    elif damage=='archive_conflict':assert receipt==augmented and pid not in consumed
-    else:assert receipt==augmented and consumed=={pid:augmented}
-    assert all(p.read_bytes()==raw for p,raw in before.items())
+
+    monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
+    day = "2026-09-28"
+    pid = 42
+    policy = typed.initial_bundle(
+        MECHANICAL["market_values"],
+        parent_sha256=MECHANICAL["market_values_sha256"],
+        source_date="2026-09-25",
+        target_date=day,
+        parent_classifier_parameters=MECHANICAL["classifier_parameters"],
+    )
+    if damage == "typed_hash":
+        policy["policy_sha256"] = "f" * 64
+    elif damage == "typed_parent":
+        policy["parent_sha256"] = "f" * 64
+    manifest = dict(
+        target_date=day,
+        env_overrides={typed.ENV_KEY: json.dumps(policy)},
+        scalp_trailing_mechanical_policy_receipt=MECHANICAL,
+    )
+    manifest["manifest_sha256"] = _digest_json(manifest)
+    verification = dict(
+        target_date=day,
+        manifest_sha256=manifest["manifest_sha256"],
+        status="pass",
+        passed=True,
+        pid=pid,
+        pid_passed=True,
+        pid_env_available=True,
+        verified_at=day + "T09:00:00+09:00",
+    )
+    root = tmp_path / "runtime/policy_bootstrap"
+    root.mkdir(parents=True)
+    (root / f"runtime_policy_bootstrap_{day}.json").write_text(json.dumps(manifest))
+    (root / f"runtime_policy_bootstrap_verify_{day}.json").write_text(
+        json.dumps(verification)
+    )
+    augmented = {**MECHANICAL, "situation_policy": deepcopy(policy)}
+    archived = deepcopy(augmented)
+    if damage == "archive_conflict":
+        archived["market_values_sha256"] = "f" * 64
+    prior = dict(
+        schema="holding_profit_pid_verification_v1",
+        target_date=day,
+        pid=pid,
+        manifest_sha256=manifest["manifest_sha256"],
+        mechanical_policy_receipt=archived,
+        verified_at=day + "T09:00:00+09:00",
+    )
+    if damage == "historical_wrong_date":
+        prior["target_date"] = "2026-09-25"
+    if damage == "historical_future":
+        prior["verified_at"] = day + "T09:03:00+09:00"
+    prior["receipt_sha256"] = _digest_json(prior)
+    if damage == "historical_badseal":
+        prior["receipt_sha256"] = "f" * 64
+    if damage and damage.startswith("historical_"):
+        verification["verified_at"] = day + "T09:02:00+09:00"
+        (root / f"runtime_policy_bootstrap_verify_{day}.json").write_text(
+            json.dumps(verification)
+        )
+    if damage == "historical_missing":
+        (root / f"runtime_policy_bootstrap_verify_{day}.json").unlink()
+    archive = root / "verified_holding_profit_pid" / day
+    archive.mkdir(parents=True)
+    if damage != "no_archive":
+        (
+            archive / f'holding_profit_pid_{pid}_{manifest["manifest_sha256"]}.json'
+        ).write_text(json.dumps(prior))
+    before = {p: p.read_bytes() for p in root.rglob("*.json")}
+    receipt, consumed = sentinel._profit_exit_bootstrap_binding(
+        day, datetime.fromisoformat(day + "T09:01:00+09:00")
+    )
+    if damage and damage.startswith("historical_"):
+        assert receipt is None and consumed == {}
+        receipt, consumed = sentinel._profit_exit_bootstrap_binding(
+            day, datetime.fromisoformat(day + "T09:01:00+09:00"), historical=True
+        )
+        if damage in ("historical_late", "historical_missing"):
+            assert receipt == augmented and consumed == {pid: augmented}
+        else:
+            assert receipt is None and consumed == {}
+    elif damage in ("typed_hash", "typed_parent"):
+        assert receipt is None and consumed == {}
+    elif damage == "archive_conflict":
+        assert receipt == augmented and pid not in consumed
+    else:
+        assert receipt == augmented and consumed == {pid: augmented}
+    assert all(p.read_bytes() == raw for p, raw in before.items())
 
 
 def test_historical_policy_audit_cannot_accept_today():
     from zoneinfo import ZoneInfo
-    today=datetime.now(ZoneInfo('Asia/Seoul')).date().isoformat()
-    with pytest.raises(ValueError,match='requires_closed_date'):
-        sentinel.build_holding_exit_sentinel_report(today,historical_policy=True)
+
+    today = datetime.now(ZoneInfo("Asia/Seoul")).date().isoformat()
+    with pytest.raises(ValueError, match="requires_closed_date"):
+        sentinel.build_holding_exit_sentinel_report(today, historical_policy=True)

@@ -113,14 +113,6 @@ def test_holding_flow_exact_correlation_uses_payload_hash_without_market_snapsho
     }
 
 
-
-
-
-
-
-
-
-
 def _fresh_reversal_features():
     return {
         "tick_context_quality": "fresh_computed",
@@ -231,19 +223,27 @@ def test_holding_flow_ofi_falls_back_to_legacy_observer_without_micro_state(
     assert stock["holding_flow_ofi_reason"] == "ready"
 
 
-
 def test_holding_micro_estimator_rejected_receipt_is_not_logged_as_applied(monkeypatch):
     store = handlers.MicroEstimatorStore()
     monkeypatch.setattr(handlers, "_SCALPING_MICRO_ESTIMATOR_STORE", store)
     fields = handlers._scalping_micro_estimator_log_fields(
-        stock={}, code="005930",
-        ws_data={"best_bid": 10000, "best_ask": 10010,
-                 "best_bid_qty": 100, "best_ask_qty": 100, "quote_age_ms": 0},
-        now_ts=1000, prefix="micro", consumer_stage="holding_flow_override",
+        stock={},
+        code="005930",
+        ws_data={
+            "best_bid": 10000,
+            "best_ask": 10010,
+            "best_bid_qty": 100,
+            "best_ask_qty": 100,
+            "quote_age_ms": 0,
+        },
+        now_ts=1000,
+        prefix="micro",
+        consumer_stage="holding_flow_override",
     )
     assert fields["micro_update_attempted"] is True
     assert fields["micro_update_applied"] is False
     assert fields["micro_sample_count"] == 0
+
 
 def test_holding_flow_micro_estimator_reads_nested_orderbook_ws(monkeypatch):
     store = handlers.MicroEstimatorStore()
@@ -1878,38 +1878,6 @@ def test_review_price_trigger_bypasses_min_interval_reuse(monkeypatch):
         and fields.get("flow_reason") == "prior hold"
         for stage, fields in logs
     )
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 def test_hard_stop_is_outside_holding_flow_override_scope():

@@ -5,12 +5,12 @@ from datetime import datetime
 
 import pytest
 
-from src.engine.lifecycle.archive import scalp_entry_action_decision_matrix_readers as mod
+from src.engine.lifecycle.archive import (
+    scalp_entry_action_decision_matrix_readers as mod,
+)
 from src.engine import scalp_entry_adm_runtime as runtime_mod
 from src.engine.scalping import entry_ai_gate as entry_gate_mod
 from src.engine.scalping import entry_observation_events as observations
-
-
 
 
 def _write_jsonl(path, rows):
@@ -45,19 +45,30 @@ def test_entry_observation_consumers_share_scoped_source(
     monkeypatch.setattr(observations, "THRESHOLD_EVENT_DIR", threshold)
     monkeypatch.setattr(observations, "THRESHOLD_SNAPSHOT_DIR", snapshots)
     accepted = {
-        "stage": "ai_confirmed", "stock_code": "005930", "record_id": "r1",
-        "emitted_date": day, "emitted_at": f"{day}T09:10:00+09:00",
+        "stage": "ai_confirmed",
+        "stock_code": "005930",
+        "record_id": "r1",
+        "emitted_date": day,
+        "emitted_at": f"{day}T09:10:00+09:00",
         "fields": {"record_id": "r1", "ai_score": 72, "action": "BUY"},
     }
     rows = [
         accepted,
         dict(accepted, emitted_date="2026-09-22", record_id="wrong-date"),
-        dict(accepted, record_id="retry", fields={
-            "ai_call_trigger_reason": "early_accel_recheck",
-        }),
-        dict(accepted, record_id="cancel", fields={
-            "runtime_family": "entry_cancel_wait_runtime",
-        }),
+        dict(
+            accepted,
+            record_id="retry",
+            fields={
+                "ai_call_trigger_reason": "early_accel_recheck",
+            },
+        ),
+        dict(
+            accepted,
+            record_id="cancel",
+            fields={
+                "runtime_family": "entry_cancel_wait_runtime",
+            },
+        ),
     ]
     path = pipeline / f"pipeline_events_{day}.jsonl"
     if storage == "snapshot":
@@ -80,14 +91,16 @@ def test_entry_observation_consumers_share_scoped_source(
     assert len(result["rows"]) == 1
     row = result["rows"][0]
     assert (row["record_id"], row["ai_score"], row["chosen_action"]) == (
-        "r1", 72, "BUY_NOW",
+        "r1",
+        72,
+        "BUY_NOW",
     )
     assert result["decision_authority"] == "source_only"
     assert result["runtime_effect"] is False
     assert result["allowed_runtime_apply"] is False
 
 
-@pytest.mark.parametrize("payload", [None, "", "scalp-not-json\n[\"scalp\"]\n"])
+@pytest.mark.parametrize("payload", [None, "", 'scalp-not-json\n["scalp"]\n'])
 def test_entry_observation_empty_source_keeps_existing_status(
     tmp_path, monkeypatch, payload
 ):
@@ -174,12 +187,6 @@ def test_entry_adm_excludes_early_accel_recheck_retry_rows(tmp_path, monkeypatch
     assert rows[0]["stock_code"] == "222222"
 
 
-
-
-
-
-
-
 def test_scalp_entry_adm_loads_gzip_sim_evaluations(tmp_path, monkeypatch):
     post_sell_dir = tmp_path / "post_sell"
     monkeypatch.setattr(mod, "POST_SELL_DIR", post_sell_dir)
@@ -243,8 +250,12 @@ def test_scalp_entry_adm_event_paths_include_gzip_threshold_events(
 ):
     threshold_dir = tmp_path / "threshold_cycle"
     monkeypatch.setattr(observations, "THRESHOLD_EVENT_DIR", threshold_dir)
-    monkeypatch.setattr(observations, "PIPELINE_EVENT_DIR", tmp_path / "pipeline_events")
-    monkeypatch.setattr(observations, "THRESHOLD_SNAPSHOT_DIR", threshold_dir / "snapshots")
+    monkeypatch.setattr(
+        observations, "PIPELINE_EVENT_DIR", tmp_path / "pipeline_events"
+    )
+    monkeypatch.setattr(
+        observations, "THRESHOLD_SNAPSHOT_DIR", threshold_dir / "snapshots"
+    )
     _write_gzip_jsonl(
         threshold_dir / "threshold_events_2026-05-18.jsonl.gz",
         [{"stage": "scalp_entry_action_decision_snapshot", "fields": {}}],
@@ -253,8 +264,6 @@ def test_scalp_entry_adm_event_paths_include_gzip_threshold_events(
     assert observations._event_paths("2026-05-18") == [
         threshold_dir / "threshold_events_2026-05-18.jsonl.gz"
     ]
-
-
 
 
 def test_scalp_entry_adm_normalizes_submitted_snapshot_action():
@@ -376,7 +385,9 @@ def test_scalp_entry_adm_ai_confirmed_uses_score_as_prior_not_hard_gate(monkeypa
         == "BUY_NOW"
     )
     assert (
-        observations._chosen_action("ai_confirmed", {"action": "WAIT", "ai_score": "90"})
+        observations._chosen_action(
+            "ai_confirmed", {"action": "WAIT", "ai_score": "90"}
+        )
         == "NO_BUY_AI"
     )
 
@@ -779,8 +790,6 @@ def test_scalp_entry_adm_runtime_strength_bucket_still_works_without_pressure_pr
     )
 
 
-
-
 def test_scalp_entry_adm_bucket_sample_floor_blocks_force_wait(tmp_path, monkeypatch):
     report_dir = tmp_path / "report" / "scalp_entry_action_decision_matrix"
     report_dir.mkdir(parents=True)
@@ -865,14 +874,6 @@ def test_scalp_entry_adm_hypothesis_fallback_is_provenance_only_by_default(
     )
     assert context["applied"] is False
     assert context["prompt_context"] == ""
-
-
-
-
-
-
-
-
 
 
 def test_scalp_entry_adm_unknown_bucket_summary_splits_context_root_causes():
@@ -1062,7 +1063,9 @@ def test_entry_adm_revalidation_block_backfills_score_and_canary_context_is_opti
         }
     )
 
-    observations._backfill_score_context([block_event], source_rows=[score_event, block_event])
+    observations._backfill_score_context(
+        [block_event], source_rows=[score_event, block_event]
+    )
 
     assert block_event["score_bucket"] == "score65_74"
     assert block_event["score_backfill_match_type"] == "exact_key"
@@ -1096,8 +1099,6 @@ def test_scalp_entry_adm_non_actionable_context_unknown_does_not_create_source_q
     }
 
 
-
-
 def test_scalp_entry_adm_explicit_runtime_block_context_is_not_available():
     row = observations._base_row(
         {
@@ -1117,18 +1118,6 @@ def test_scalp_entry_adm_explicit_runtime_block_context_is_not_available():
     summary = mod._unknown_bucket_summary([row])
     assert "risk_context_bucket" not in summary["dimension_counts"]
     assert summary["not_available_dimension_counts"]["risk_context_bucket"] == 1
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 def test_entry_price_skip_followup_cumulative_uses_clean_daily_reports(
@@ -1227,8 +1216,6 @@ def test_scalp_entry_adm_runtime_pre_submit_missing_context_is_not_available():
     assert (
         fields["entry_adm_price_resolution_bucket"] == "price_not_available_pre_submit"
     )
-
-
 
 
 def test_scalp_entry_adm_hypothesis_force_requires_explicit_flag(tmp_path, monkeypatch):
@@ -1381,15 +1368,22 @@ def test_adm_lookup_closure_splits_new_bucket_and_producer_context_missing():
     }
 
 
-def test_retired_current_producer_preserves_prior_and_has_no_authority(tmp_path,monkeypatch,capsys):
+def test_retired_current_producer_preserves_prior_and_has_no_authority(
+    tmp_path, monkeypatch, capsys
+):
     import importlib
-    current=importlib.import_module('src.engine.scalp_entry_action_decision_matrix')
-    prior=tmp_path/"prior.json";prior.write_text("original")
-    def forbidden(*a,**kw):raise AssertionError("retired producer accessed storage")
-    monkeypatch.setattr(type(prior),"write_text",forbidden)
-    monkeypatch.setattr(type(prior),"read_text",forbidden)
-    result=current.build_scalp_entry_action_decision_matrix_report("2026-10-12")
-    assert result["status"]=="retired" and result["allowed_runtime_apply"] is False
+
+    current = importlib.import_module("src.engine.scalp_entry_action_decision_matrix")
+    prior = tmp_path / "prior.json"
+    prior.write_text("original")
+
+    def forbidden(*a, **kw):
+        raise AssertionError("retired producer accessed storage")
+
+    monkeypatch.setattr(type(prior), "write_text", forbidden)
+    monkeypatch.setattr(type(prior), "read_text", forbidden)
+    result = current.build_scalp_entry_action_decision_matrix_report("2026-10-12")
+    assert result["status"] == "retired" and result["allowed_runtime_apply"] is False
     assert current.render_scalp_entry_action_decision_matrix_markdown(result) == result
     assert current.main([]) == 0
     assert json.loads(capsys.readouterr().out) == result

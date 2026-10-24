@@ -42,9 +42,7 @@ UNMATCH_GRACE_SEC = 30  # 이탈 이벤트 후 유예 시간(초)
 HYSTERESIS_USE_MA20 = False  # 3분봉 20MA 완전 이탈 체크 사용 여부 (API 호출 부담 큼)
 UNMATCH_MAX_HOLD_SEC = 600  # 이탈 상태가 길게 지속될 때 최종 정리 (안전장치)
 
-HYSTERESIS_DROP_PCT_STRONG = (
-    0.006  # -0.6% (scalp_candid_aggressive_01)
-)
+HYSTERESIS_DROP_PCT_STRONG = 0.006  # -0.6% (scalp_candid_aggressive_01)
 HYSTERESIS_DROP_PCT_MED = 0.012  # -1.2% (scalp_underpress_01, scalp_afternoon_01)
 HYSTERESIS_DROP_PCT_SWING = (
     0.040  # -4.0% (kospi_short_swing_01, kospi_midterm_swing_01)
@@ -574,11 +572,9 @@ def handle_condition_matched(payload):
     profile = resolve_condition_profile(cnd_name)
     if not profile:
         return
-    if (
-        profile["strategy"] == "SCALPING"
-        and str(os.getenv("KORSTOCKSCAN_ZERO_BASE_SCANNER_ENABLED", "false")).strip().lower()
-        in {"1", "true", "yes", "on"}
-    ):
+    if profile["strategy"] == "SCALPING" and str(
+        os.getenv("KORSTOCKSCAN_ZERO_BASE_SCANNER_ENABLED", "false")
+    ).strip().lower() in {"1", "true", "yes", "on"}:
         return
 
     if not _in_time_window(now_t, profile["start"], profile["end"]):
@@ -608,8 +604,7 @@ def handle_condition_matched(payload):
         _ensure_condition_guard_state(key, code, now_ts=now_ts, confirmed=True)
 
     is_debounce_target = (
-        bool(profile.get("use_debounce", True))
-        and not profile["is_next_day_target"]
+        bool(profile.get("use_debounce", True)) and not profile["is_next_day_target"]
     )
     if is_debounce_target:
         state = _CONDITION_STATE.get(key)

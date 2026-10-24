@@ -77,12 +77,16 @@ def _valid_profit_rate(value: Any) -> bool:
         return False
 
 
-def _build_event_id(event: Dict[str, Any], *, source_sha256: str | None = None) -> str | None:
+def _build_event_id(
+    event: Dict[str, Any], *, source_sha256: str | None = None
+) -> str | None:
     event_id = event.get("event_id")
     if event_id:
         return str(event_id)
     if event.get("event_type") == "pipeline_event":
-        return "pipeline-content-sha256:" + (source_sha256 or _source_payload_sha256(event))
+        return "pipeline-content-sha256:" + (
+            source_sha256 or _source_payload_sha256(event)
+        )
     post_sell_id = event.get("post_sell_id")
     if post_sell_id:
         return f"post_sell:{post_sell_id}"
@@ -101,15 +105,25 @@ def _build_event_id(event: Dict[str, Any], *, source_sha256: str | None = None) 
 def _source_payload_sha256(event: Dict[str, Any]) -> str:
     # This raw-side census is independent of the Parquet extractor/dedupe.
     # Include every source field even when aggregate metrics do not use it.
-    return hashlib.sha256(json.dumps(event, ensure_ascii=False, sort_keys=True,
-        separators=(",", ":"), allow_nan=False).encode("utf-8")).hexdigest()
+    return hashlib.sha256(
+        json.dumps(
+            event,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    ).hexdigest()
 
 
 def _population_receipt(keys) -> dict:
     ordered = sorted(keys)
     digest = hashlib.sha256()
     for identity, payload_sha256 in ordered:
-        digest.update(json.dumps([identity, payload_sha256], separators=(",", ":")).encode() + b"\n")
+        digest.update(
+            json.dumps([identity, payload_sha256], separators=(",", ":")).encode()
+            + b"\n"
+        )
     return {"count": len(ordered), "identity_payload_sha256": digest.hexdigest()}
 
 
@@ -130,11 +144,19 @@ def _count_jsonl_metrics(
         ]
         for path in pipeline_files:
             for event in _iter_jsonl(path):
-                source_date = next((str(event[key])[:10] for key in (
-                    "emitted_date", "event_date", "signal_date") if event.get(key)), ds)
+                source_date = next(
+                    (
+                        str(event[key])[:10]
+                        for key in ("emitted_date", "event_date", "signal_date")
+                        if event.get(key)
+                    ),
+                    ds,
+                )
                 if source_date != ds:
                     if target == end_date:
-                        excluded_dates[source_date] = excluded_dates.get(source_date, 0) + 1
+                        excluded_dates[source_date] = (
+                            excluded_dates.get(source_date, 0) + 1
+                        )
                     continue
                 payload_sha256 = _source_payload_sha256(event)
                 event_id = _build_event_id(event, source_sha256=payload_sha256)
@@ -192,15 +214,20 @@ def _count_jsonl_metrics(
                     seen_post_sell_ids.add(event_id)
                 outcome = str(event.get("outcome") or "")
                 profit_rate = event.get("profit_rate")
-                if outcome in {"GOOD_EXIT", "COMPLETED"} and _valid_profit_rate(profit_rate):
+                if outcome in {"GOOD_EXIT", "COMPLETED"} and _valid_profit_rate(
+                    profit_rate
+                ):
                     metrics["trade_count"] += 1
                     metrics["completed_count"] += 1
                 if outcome == "MISSED_UPSIDE":
                     metrics["missed_upside"] += 1
     if pipeline_population is not None:
-        pipeline_population.update(_population_receipt(source_keys),
-            source_date=end_date.isoformat(), excluded_date_counts=excluded_dates,
-            contract="all_source_fields_identity_census_v1")
+        pipeline_population.update(
+            _population_receipt(source_keys),
+            source_date=end_date.isoformat(),
+            excluded_date_counts=excluded_dates,
+            contract="all_source_fields_identity_census_v1",
+        )
     return metrics
 
 
@@ -210,36 +237,60 @@ def _count_duckdb_metrics(
     # Shadow comparison needs external files, not a writable operational DB.
     with TuningDuckDBRepository(duckdb_path=Path(":memory:"), read_only=False) as repo:
         try:
-            repo.register_parquet_dataset("pipeline_events", start_date=start_date, end_date=end_date)
+            repo.register_parquet_dataset(
+                "pipeline_events", start_date=start_date, end_date=end_date
+            )
         except (OSError, ValueError, KeyError, TypeError) as exc:
             if pipeline_population is None:
                 raise
-            pipeline_population.update(status='source_gap', reason='source_receipt:' + str(exc))
+            pipeline_population.update(
+                status="source_gap", reason="source_receipt:" + str(exc)
+            )
             return _empty_metrics()
-        repo.register_parquet_dataset("post_sell", start_date=start_date, end_date=end_date)
+        repo.register_parquet_dataset(
+            "post_sell", start_date=start_date, end_date=end_date
+        )
 
         if pipeline_population is not None:
             receipt = repo.pipeline_source_receipts.get(end_date.isoformat())
             if receipt is not None:
-                pipeline_population['source_receipt_status'] = receipt['status']
+                pipeline_population["source_receipt_status"] = receipt["status"]
             else:
-                pipeline_population.update(status='source_gap', reason='source_receipt_missing')
-            columns = set(repo.conn.execute("DESCRIBE v_pipeline_events").fetchdf()["column_name"])
+                pipeline_population.update(
+                    status="source_gap", reason="source_receipt_missing"
+                )
+            columns = set(
+                repo.conn.execute("DESCRIBE v_pipeline_events").fetchdf()["column_name"]
+            )
             if "source_event_sha256" not in columns:
-                pipeline_population.update(status="source_gap", reason="source_payload_identity_column_missing")
+                pipeline_population.update(
+                    status="source_gap", reason="source_payload_identity_column_missing"
+                )
             else:
-                cursor = repo.conn.execute("SELECT event_id, source_event_sha256 FROM v_pipeline_events WHERE emitted_date = ?",
-                                           [end_date.isoformat()])
-                keys = []; invalid = 0
+                cursor = repo.conn.execute(
+                    "SELECT event_id, source_event_sha256 FROM v_pipeline_events WHERE emitted_date = ?",
+                    [end_date.isoformat()],
+                )
+                keys = []
+                invalid = 0
                 while batch := cursor.fetchmany(5000):
                     for identity, payload_sha256 in batch:
-                        if (not isinstance(payload_sha256, str) or len(payload_sha256) != 64
-                                or any(ch not in "0123456789abcdef" for ch in payload_sha256)):
+                        if (
+                            not isinstance(payload_sha256, str)
+                            or len(payload_sha256) != 64
+                            or any(
+                                ch not in "0123456789abcdef" for ch in payload_sha256
+                            )
+                        ):
                             invalid += 1
                         else:
                             keys.append((identity or "", payload_sha256))
-                pipeline_population.update(_population_receipt(keys), source_date=end_date.isoformat(),
-                    invalid_identity_count=invalid, contract="all_source_fields_identity_census_v1")
+                pipeline_population.update(
+                    _population_receipt(keys),
+                    source_date=end_date.isoformat(),
+                    invalid_identity_count=invalid,
+                    contract="all_source_fields_identity_census_v1",
+                )
 
         pipeline_df = repo.query(
             """
@@ -284,13 +335,20 @@ def _count_duckdb_metrics(
 
         # Judge each original file before union_by_name can coerce BOOLEAN or
         # VARCHAR profits into a numeric type contributed by another day.
-        post_sell_row = {key: 0 for key in ("trade_count", "completed_count", "missed_upside")}
+        post_sell_row = {
+            key: 0 for key in ("trade_count", "completed_count", "missed_upside")
+        }
         post_sell_files = repo.registered_parquet_files["post_sell"]
 
         def file_generation(path):
             value = path.stat()
-            return (value.st_dev, value.st_ino, value.st_size,
-                    value.st_mtime_ns, value.st_ctime_ns)
+            return (
+                value.st_dev,
+                value.st_ino,
+                value.st_size,
+                value.st_mtime_ns,
+                value.st_ctime_ns,
+            )
 
         source_generations = {path: file_generation(path) for path in post_sell_files}
         for path in post_sell_files:
@@ -329,10 +387,17 @@ def _count_duckdb_metrics(
             """,
                 [str(path), start_date.isoformat(), end_date.isoformat()],
             )
-            counts = post_sell_df.fillna(0).iloc[0].to_dict() if not post_sell_df.empty else {}
+            counts = (
+                post_sell_df.fillna(0).iloc[0].to_dict()
+                if not post_sell_df.empty
+                else {}
+            )
             for key in post_sell_row:
                 post_sell_row[key] += int(counts.get(key, 0))
-        if any(file_generation(path) != source_generations[path] for path in post_sell_files):
+        if any(
+            file_generation(path) != source_generations[path]
+            for path in post_sell_files
+        ):
             raise ValueError("shadow_diff_post_sell_parquet_changed_during_read")
 
     metrics = _empty_metrics()
@@ -387,27 +452,40 @@ def main(argv: list[str] | None = None) -> int:
     start_date = datetime.strptime(args.start, "%Y-%m-%d").date()
     end_date = datetime.strptime(args.end, "%Y-%m-%d").date()
     raw_population, parquet_population = {}, {}
-    jsonl_metrics = _count_jsonl_metrics(start_date, end_date, pipeline_population=raw_population)
-    duckdb_metrics = _count_duckdb_metrics(start_date, end_date, pipeline_population=parquet_population)
-    population_match = bool(parquet_population.get("status") != "source_gap"
+    jsonl_metrics = _count_jsonl_metrics(
+        start_date, end_date, pipeline_population=raw_population
+    )
+    duckdb_metrics = _count_duckdb_metrics(
+        start_date, end_date, pipeline_population=parquet_population
+    )
+    population_match = bool(
+        parquet_population.get("status") != "source_gap"
         and parquet_population.get("invalid_identity_count") == 0
-        and all(raw_population.get(key) == parquet_population.get(key) for key in (
-            "count", "identity_payload_sha256", "source_date", "contract")))
+        and all(
+            raw_population.get(key) == parquet_population.get(key)
+            for key in ("count", "identity_payload_sha256", "source_date", "contract")
+        )
+    )
     result = {
         "start_date": start_date.isoformat(),
         "end_date": end_date.isoformat(),
         "generated_at": datetime.now().isoformat(),
         **_build_diff(jsonl_metrics, duckdb_metrics),
-        "pipeline_population": {"source_date": end_date.isoformat(),
+        "pipeline_population": {
+            "source_date": end_date.isoformat(),
             "scope": "exact_source_date_all_event_source_identities",
             "transformed_payload_semantics_verified": False,
-            "raw": raw_population, "parquet": parquet_population, "match": population_match},
+            "raw": raw_population,
+            "parquet": parquet_population,
+            "match": population_match,
+        },
     }
     result["all_match"] = result["all_match"] and population_match
 
     out_path = Path(args.output)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     from src.engine.scalping.micro_reversion.economic_reference import atomic_write_json
+
     atomic_write_json(out_path, result)
     print(json.dumps(result, ensure_ascii=False, indent=2))
     print(f"saved: {out_path}")

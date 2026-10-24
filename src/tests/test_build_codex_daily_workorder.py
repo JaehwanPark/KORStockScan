@@ -135,9 +135,7 @@ def test_build_runbook_operational_checks_for_slot(monkeypatch):
     assert "runtime_policy_bootstrap_2026-05-11.json" in "\n".join(
         checks[0].artifact_checks
     )
-    assert "threshold_apply_2026-05-11.json" not in "\n".join(
-        checks[0].artifact_checks
-    )
+    assert "threshold_apply_2026-05-11.json" not in "\n".join(checks[0].artifact_checks)
     assert "family publisher receipt" in "\n".join(checks[0].artifact_checks)
     assert "수동 env override" in checks[0].forbidden
     assert "final approval artifact 없는 스윙 env 반영" in checks[0].forbidden
@@ -154,7 +152,10 @@ def test_build_runbook_operational_checks_for_slot(monkeypatch):
         postclose.artifact_checks
     )
     assert postclose.time_window == "20:05~06:50"
-    assert "monitoring_instruction_refresh/2026-05-11/intraday/status.json" in "\n".join(postclose.artifact_checks)
+    assert (
+        "monitoring_instruction_refresh/2026-05-11/intraday/status.json"
+        in "\n".join(postclose.artifact_checks)
+    )
     assert "19:30" in postclose.decision_rule
     assert "19:59" in postclose.decision_rule
     assert "blocked_publication" in postclose.decision_rule

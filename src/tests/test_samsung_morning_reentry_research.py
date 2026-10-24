@@ -241,7 +241,9 @@ def test_metric_contract_and_report_authority_are_source_only(monkeypatch):
     [(True, False), (True, True), (False, True)],
 )
 def test_family_is_fixed_before_single_holdout_validation(
-    monkeypatch, first_calibration_ready, holdout_pass,
+    monkeypatch,
+    first_calibration_ready,
+    holdout_pass,
 ):
     dates = [date(2026, 6, 5) + timedelta(days=index) for index in range(44)]
     contexts = {trade_date: object() for trade_date in dates}
@@ -279,13 +281,15 @@ def test_family_is_fixed_before_single_holdout_validation(
             full_families.append(candidate.family)
         fixed_family = (
             "direct_low_proximity"
-            if first_calibration_ready else "low_hold_reclaim_close_split"
+            if first_calibration_ready
+            else "low_hold_reclaim_close_split"
         )
         held = int(
             (not first_calibration_ready and candidate.family == "direct_low_proximity")
             or (
                 (is_holdout or is_full)
-                and candidate.family == fixed_family and not holdout_pass
+                and candidate.family == fixed_family
+                and not holdout_pass
             )
         )
         result = {
@@ -305,7 +309,8 @@ def test_family_is_fixed_before_single_holdout_validation(
     selection = research.select_candidate(contexts)
 
     fixed_family = (
-        "direct_low_proximity" if first_calibration_ready
+        "direct_low_proximity"
+        if first_calibration_ready
         else "low_hold_reclaim_close_split"
     )
     assert holdout_families == full_families == [fixed_family]
@@ -323,7 +328,10 @@ def test_family_is_fixed_before_single_holdout_validation(
         if family != fixed_family:
             result = selection["family_results"][family]
             assert result["candidate"]["holdout"] is None
-            assert result["decision"] == "calibration_family_not_selected_holdout_untouched"
+            assert (
+                result["decision"]
+                == "calibration_family_not_selected_holdout_untouched"
+            )
 
 
 def test_no_calibration_candidate_leaves_holdout_untouched(monkeypatch):
@@ -332,7 +340,8 @@ def test_no_calibration_candidate_leaves_holdout_untouched(monkeypatch):
     }
     monkeypatch.setattr(research, "candidate_grid", lambda: ())
     monkeypatch.setattr(
-        research, "evaluate_candidate",
+        research,
+        "evaluate_candidate",
         lambda *args, **kwargs: pytest.fail("holdout must remain untouched"),
     )
 

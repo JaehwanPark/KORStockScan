@@ -897,8 +897,12 @@ def _ws_machine_route_payload(row: Any, *, now_ts: float) -> dict[str, Any]:
             }
             if realtime_type == "0B":
                 normalized["provider_trade_epoch"] = source.get("provider_trade_epoch")
-                normalized["provider_trade_time_precision_ms"] = source.get("provider_trade_time_precision_ms")
-                normalized["provider_trade_date_basis"] = source.get("provider_trade_date_basis")
+                normalized["provider_trade_time_precision_ms"] = source.get(
+                    "provider_trade_time_precision_ms"
+                )
+                normalized["provider_trade_date_basis"] = source.get(
+                    "provider_trade_date_basis"
+                )
                 normalized.update(
                     {
                         "trade_price": _safe_int(source.get("trade_price")),
@@ -945,10 +949,15 @@ def _ws_machine_route_payload(row: Any, *, now_ts: float) -> dict[str, Any]:
                     "best_ask": _safe_int(source.get("best_ask")),
                     "aggressor_side": str(source.get("aggressor_side") or "UNKNOWN"),
                     "aggressor_quality": str(source.get("aggressor_quality") or ""),
-                    **{key: source[key] for key in (
-                        "provider_trade_epoch", "provider_trade_time_precision_ms",
-                        "provider_trade_date_basis",
-                    ) if key in source},
+                    **{
+                        key: source[key]
+                        for key in (
+                            "provider_trade_epoch",
+                            "provider_trade_time_precision_ms",
+                            "provider_trade_date_basis",
+                        )
+                        if key in source
+                    },
                 }
             )
         recent_depth = []
@@ -1146,8 +1155,10 @@ def write_ws_snapshot(
     }
     if shared_transport_producer is not None:
         from src.trading.market.shared_ws_snapshot import producer_provenance
+
         payload["shared_transport_producer"] = {
-            **producer_provenance(), **shared_transport_producer,
+            **producer_provenance(),
+            **shared_transport_producer,
         }
     try:
         WS_SNAPSHOT_PATH.parent.mkdir(parents=True, exist_ok=True)

@@ -50,7 +50,10 @@ from src.utils.constants import TRADING_RULES
 
 def test_submit_machine_revision_rejects_superseded_observation():
     key = ["promotion", "attempt", "005930", "KRX", "REGULAR", "bundle", 1]
-    receipt = {"evaluation_attempt_id": "attempt", "machine_observation_sha256": "a" * 64}
+    receipt = {
+        "evaluation_attempt_id": "attempt",
+        "machine_observation_sha256": "a" * 64,
+    }
     stock = {"_machine_observation_revision": {"key": key, "digest": "a" * 64}}
     assert handlers._machine_submit_revision_is_current(stock, receipt)
     stock["_machine_observation_revision"]["digest"] = "b" * 64
@@ -315,8 +318,6 @@ def test_caution_micro_block_log_deduplicates_explicit_block_reason():
 
     assert '"block_reason",' in block_source
     assert "block_reason=block_reason" in block_source
-
-
 
 
 def _fresh_spread_latency_gate(**overrides):
@@ -3834,9 +3835,7 @@ def test_build_ai_ops_log_fields_preserves_machine_primary_provenance():
             "entry_ai_screen_required": True,
             "entry_ai_screen_pass": True,
             "entry_ai_followup_disposition": "ai_pass_existing_submit_guard",
-            "entry_ai_followup_authority": (
-                "existing_runtime_submit_and_order_guards"
-            ),
+            "entry_ai_followup_authority": ("existing_runtime_submit_and_order_guards"),
             "evaluation_attempt_id": "aims-v27-test",
             "evaluation_attempt_identity_source": "exact_snapshot_id",
             "scanner_promotion_id": "SCANPROM-005930-test",
@@ -6367,8 +6366,11 @@ def test_log_ai_confirmed_terminal_no_budget_emits_contract_fields(monkeypatch):
 @pytest.mark.parametrize("with_attempt", [False, True])
 def test_terminal_no_budget_merges_source_invalid_receipts(monkeypatch, with_attempt):
     emitted = []
-    monkeypatch.setattr(handlers, "emit_pipeline_event",
-                        lambda *args, **kwargs: emitted.append(kwargs["fields"]))
+    monkeypatch.setattr(
+        handlers,
+        "emit_pipeline_event",
+        lambda *args, **kwargs: emitted.append(kwargs["fields"]),
+    )
     old_quality = {
         "entry_source_invalid_schema": "old-schema",
         "entry_source_invalid_primary_blocker": "old-blocker",
@@ -6376,7 +6378,8 @@ def test_terminal_no_budget_merges_source_invalid_receipts(monkeypatch, with_att
     }
     stock = {"id": 44, "last_watching_ai_source_quality_fields": old_quality.copy()}
     decision = {
-        "action": "WAIT", "entry_mechanistic_action": "SOURCE_INVALID",
+        "action": "WAIT",
+        "entry_mechanistic_action": "SOURCE_INVALID",
         "entry_source_invalid_schema": "current-schema",
         "entry_source_invalid_primary_blocker": "quote_stale",
         "entry_source_invalid_blockers": ["quote_stale"],
@@ -6385,11 +6388,18 @@ def test_terminal_no_budget_merges_source_invalid_receipts(monkeypatch, with_att
     if with_attempt:
         decision["evaluation_attempt_id"] = "current-attempt"
     handlers._log_ai_confirmed_terminal_no_budget(
-        stock, "000035", terminal_reason="source_invalid", source_stage="first_ai_wait",
+        stock,
+        "000035",
+        terminal_reason="source_invalid",
+        source_stage="first_ai_wait",
         ai_decision=decision,
-        extra_fields={"entry_source_invalid_schema": "current-schema",
-                      "actual_order_submitted": True, "broker_order_forbidden": False,
-                      "allowed_runtime_apply": True, "terminal_reason": "wrong"},
+        extra_fields={
+            "entry_source_invalid_schema": "current-schema",
+            "actual_order_submitted": True,
+            "broker_order_forbidden": False,
+            "allowed_runtime_apply": True,
+            "terminal_reason": "wrong",
+        },
     )
     fields = emitted[-1]
     assert fields["entry_source_invalid_schema"] == "current-schema"
@@ -6436,18 +6446,6 @@ def test_first_ai_big_bite_wait_uses_action_and_source_instead_of_score():
         )
         is False
     )
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 def test_first_ai_big_bite_wait_arms_rebound_anchor_for_score_band(monkeypatch):
@@ -6974,17 +6972,22 @@ def test_watching_entry_uses_action_and_source_not_score_50(
     action, source, fallback, score, blocked
 ):
     role_gate = handlers.evaluate_entry_score_role_gate(
-        {"action": action, "score": score, "ai_result_source": source,
-         "ai_fallback_score_50": fallback},
+        {
+            "action": action,
+            "score": score,
+            "ai_result_source": source,
+            "ai_fallback_score_50": fallback,
+        },
         ai_action=action,
         ai_score=score,
     )
-    assert handlers._entry_ai_watching_nonbuy_or_unusable(
-        action, role_gate
-    ) is blocked
-    assert handlers._entry_ai_wait_drop_cooldown_sec(
-        score, role_gate, {"AI_WAIT_DROP_COOLDOWN": 180}
-    ) == 0
+    assert handlers._entry_ai_watching_nonbuy_or_unusable(action, role_gate) is blocked
+    assert (
+        handlers._entry_ai_wait_drop_cooldown_sec(
+            score, role_gate, {"AI_WAIT_DROP_COOLDOWN": 180}
+        )
+        == 0
+    )
 
 
 def test_watching_entry_preserves_evaluated_nonbuy_cooldown_and_wait_probe():
@@ -6993,14 +6996,20 @@ def test_watching_entry_preserves_evaluated_nonbuy_cooldown_and_wait_probe():
     assert not handlers._entry_ai_watching_nonbuy_or_unusable(
         "WAIT", role_gate, wait_probe_unlocked=True
     )
-    assert handlers._entry_ai_wait_drop_cooldown_sec(
-        72, role_gate, {"AI_WAIT_DROP_COOLDOWN": 180}
-    ) == 0
-    assert handlers._entry_ai_wait_drop_cooldown_sec(
-        0,
-        {**role_gate, "entry_score_action": "DROP"},
-        {"AI_WAIT_DROP_COOLDOWN": 180},
-    ) == 180
+    assert (
+        handlers._entry_ai_wait_drop_cooldown_sec(
+            72, role_gate, {"AI_WAIT_DROP_COOLDOWN": 180}
+        )
+        == 0
+    )
+    assert (
+        handlers._entry_ai_wait_drop_cooldown_sec(
+            0,
+            {**role_gate, "entry_score_action": "DROP"},
+            {"AI_WAIT_DROP_COOLDOWN": 180},
+        )
+        == 180
+    )
 
 
 def test_watching_buy_analysis_telegram_suppresses_sim_and_probe_context():
@@ -7085,9 +7094,13 @@ def test_apply_wait6579_probe_canary_allows_unlimited_qty_cap():
 def test_retired_whipsaw_does_not_replace_shared_single_grace():
     from src.engine.scalping.main_stop_policy import soft_decision
     from src.tests.test_main_stop_policy import baseline
-    assert not hasattr(handlers,'_build_soft_stop_whipsaw_confirmation_decision')
-    assert soft_decision(baseline(),profit_pct=-3.2,now=100).due_at==160
-    assert soft_decision(baseline(),profit_pct=-5.1,now=101,touch_at=100).rule=='scalp_hard_stop_pct'
+
+    assert not hasattr(handlers, "_build_soft_stop_whipsaw_confirmation_decision")
+    assert soft_decision(baseline(), profit_pct=-3.2, now=100).due_at == 160
+    assert (
+        soft_decision(baseline(), profit_pct=-5.1, now=101, touch_at=100).rule
+        == "scalp_hard_stop_pct"
+    )
 
 
 def test_apply_initial_entry_qty_cap_limits_total_qty_without_reordering():
@@ -7192,15 +7205,36 @@ def test_entry_ai_price_input_audit_uses_frozen_feature_packet(monkeypatch):
 
 def test_terminal_no_budget_uses_call_local_ai_result_over_later_stock(monkeypatch):
     emitted = []
-    monkeypatch.setattr(handlers, "emit_pipeline_event", lambda *args, **kwargs: emitted.append(kwargs["fields"]))
-    lineage = {"entry_primary_decision_owner": "mechanistic_entry_adjudicator",
-        "entry_mechanistic_action": "ENTER_NOW", "evaluation_attempt_id": "original",
-        "scanner_promotion_id": "original-promotion", "policy_bundle_hash": "a" * 64,
-        "entry_ai_screen_status": "pass", "entry_ai_screen_pass": True,
-        "effective_venue": "KRX_NXT_INTEGRATED", "market_session_bucket": "KRX_NXT_AFTERMARKET"}
-    stock = {"id": 9, "last_watching_ai_machine_primary_fields": {**lineage, "evaluation_attempt_id": "later"}}
-    handlers._log_ai_confirmed_terminal_no_budget(stock, "031330",
-        terminal_reason="actual_guard_block", source_stage="first_ai_wait", ai_decision={**lineage, "action": "WAIT"})
+    monkeypatch.setattr(
+        handlers,
+        "emit_pipeline_event",
+        lambda *args, **kwargs: emitted.append(kwargs["fields"]),
+    )
+    lineage = {
+        "entry_primary_decision_owner": "mechanistic_entry_adjudicator",
+        "entry_mechanistic_action": "ENTER_NOW",
+        "evaluation_attempt_id": "original",
+        "scanner_promotion_id": "original-promotion",
+        "policy_bundle_hash": "a" * 64,
+        "entry_ai_screen_status": "pass",
+        "entry_ai_screen_pass": True,
+        "effective_venue": "KRX_NXT_INTEGRATED",
+        "market_session_bucket": "KRX_NXT_AFTERMARKET",
+    }
+    stock = {
+        "id": 9,
+        "last_watching_ai_machine_primary_fields": {
+            **lineage,
+            "evaluation_attempt_id": "later",
+        },
+    }
+    handlers._log_ai_confirmed_terminal_no_budget(
+        stock,
+        "031330",
+        terminal_reason="actual_guard_block",
+        source_stage="first_ai_wait",
+        ai_decision={**lineage, "action": "WAIT"},
+    )
     assert emitted[-1]["evaluation_attempt_id"] == "original"
     assert emitted[-1]["actual_order_submitted"] is False
     assert emitted[-1]["allowed_runtime_apply"] is False
@@ -7208,37 +7242,74 @@ def test_terminal_no_budget_uses_call_local_ai_result_over_later_stock(monkeypat
 
 @pytest.mark.parametrize("stage", ["ai_confirmed", "blocked_ai_score"])
 @pytest.mark.parametrize("action", ["BLOCK", "RECHECK", "SOURCE_INVALID"])
-def test_machine_ops_log_keeps_current_scope_despite_unknown_scanner(stage, action, monkeypatch):
+def test_machine_ops_log_keeps_current_scope_despite_unknown_scanner(
+    stage, action, monkeypatch
+):
     emitted = []
-    monkeypatch.setattr(handlers, "emit_pipeline_event", lambda *args, **kwargs: emitted.append(kwargs["fields"]))
-    monkeypatch.setattr(handlers, "_is_scanner_watching_runtime_observation_target", lambda stock: True)
-    monkeypatch.setattr(handlers, "_scanner_runtime_event_venue_fields", lambda stock: {
-        "venue": "UNKNOWN", "effective_venue": "UNKNOWN"})
+    monkeypatch.setattr(
+        handlers,
+        "emit_pipeline_event",
+        lambda *args, **kwargs: emitted.append(kwargs["fields"]),
+    )
+    monkeypatch.setattr(
+        handlers, "_is_scanner_watching_runtime_observation_target", lambda stock: True
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_scanner_runtime_event_venue_fields",
+        lambda stock: {"venue": "UNKNOWN", "effective_venue": "UNKNOWN"},
+    )
     decision = {
-        "entry_mechanistic_action": action, "evaluation_attempt_id": "current",
-        "scanner_promotion_id": "promotion-current", "machine_bundle_sha256": "a" * 64,
+        "entry_mechanistic_action": action,
+        "evaluation_attempt_id": "current",
+        "scanner_promotion_id": "promotion-current",
+        "machine_bundle_sha256": "a" * 64,
         "entry_setup_live_policy_effective_venue": "KRX_NXT_INTEGRATED",
         "entry_setup_live_policy_session_bucket": "KRX_NXT_AFTERMARKET",
     }
     if action == "SOURCE_INVALID":
-        decision["effective_venue"] = decision.pop("entry_setup_live_policy_effective_venue")
-        decision["market_session_bucket"] = decision.pop("entry_setup_live_policy_session_bucket")
-    stock = {"id": 9, "last_watching_ai_machine_primary_fields": {
-        **decision, "evaluation_attempt_id": "later", "effective_venue": "KRX"}}
+        decision["effective_venue"] = decision.pop(
+            "entry_setup_live_policy_effective_venue"
+        )
+        decision["market_session_bucket"] = decision.pop(
+            "entry_setup_live_policy_session_bucket"
+        )
+    stock = {
+        "id": 9,
+        "last_watching_ai_machine_primary_fields": {
+            **decision,
+            "evaluation_attempt_id": "later",
+            "effective_venue": "KRX",
+        },
+    }
     fields = handlers._build_ai_ops_log_fields(decision)
     handlers._log_entry_pipeline(stock, "003670", stage, **fields)
     assert emitted[-1]["effective_venue"] == "KRX_NXT_INTEGRATED"
     assert emitted[-1]["market_session_bucket"] == "KRX_NXT_AFTERMARKET"
     assert emitted[-1]["evaluation_attempt_id"] == "current"
     assert emitted[-1]["venue"] == "UNKNOWN"  # no actual execution venue inferred
-    from src.engine.buy_funnel_sentinel import PipelineEvent, _machine_primary_evaluation_key
-    event = PipelineEvent(emitted_at="2026-09-22T17:30:00", pipeline="ENTRY_PIPELINE",
-                          stage=stage, stock_code="003670", stock_name="test", record_id="9", fields=emitted[-1])
+    from src.engine.buy_funnel_sentinel import (
+        PipelineEvent,
+        _machine_primary_evaluation_key,
+    )
+
+    event = PipelineEvent(
+        emitted_at="2026-09-22T17:30:00",
+        pipeline="ENTRY_PIPELINE",
+        stage=stage,
+        stock_code="003670",
+        stock_name="test",
+        record_id="9",
+        fields=emitted[-1],
+    )
     assert _machine_primary_evaluation_key(event)
 
 
 def test_machine_ops_log_does_not_infer_missing_or_replace_explicit_scope():
     assert "effective_venue" not in handlers._build_ai_ops_log_fields({})
-    decision = {"entry_mechanistic_action": "BLOCK", "effective_venue": "UNKNOWN",
-                "entry_setup_live_policy_effective_venue": "KRX_NXT_INTEGRATED"}
+    decision = {
+        "entry_mechanistic_action": "BLOCK",
+        "effective_venue": "UNKNOWN",
+        "entry_setup_live_policy_effective_venue": "KRX_NXT_INTEGRATED",
+    }
     assert handlers._build_ai_ops_log_fields(decision)["effective_venue"] == "UNKNOWN"

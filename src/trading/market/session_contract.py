@@ -11,7 +11,6 @@ from datetime import date, datetime, time as dt_time
 from zoneinfo import ZoneInfo
 from typing import Any
 
-
 KST = ZoneInfo("Asia/Seoul")
 
 
@@ -183,9 +182,11 @@ def resolve_symbol_venue_eligibility(
             stock_code,
             trade_date,
             (
-                VENDOR_SOURCE_MISSING
-                if source_snapshot is None
-                else VENDOR_SOURCE_INVALID,
+                (
+                    VENDOR_SOURCE_MISSING
+                    if source_snapshot is None
+                    else VENDOR_SOURCE_INVALID
+                ),
             ),
         )
 
@@ -207,15 +208,17 @@ def resolve_symbol_venue_eligibility(
     source_sha256 = _coerce_text(source_snapshot.get("source_sha256")) or _coerce_text(
         source_snapshot.get("payload_sha256")
     )
-    observed_at_snapshot = _coerce_observed_at(
-        source_snapshot.get("observed_at_kst")
-    )[0]
-    quality_state = _coerce_text(
-        source_snapshot.get("quality_state")
-    ) or SOURCE_QUALITY_UNKNOWN
-    source_id = _coerce_text(source_snapshot.get("source_id")) or source_snapshot.get(
-        "source", ""
-    ).strip() or stock_code
+    observed_at_snapshot = _coerce_observed_at(source_snapshot.get("observed_at_kst"))[
+        0
+    ]
+    quality_state = (
+        _coerce_text(source_snapshot.get("quality_state")) or SOURCE_QUALITY_UNKNOWN
+    )
+    source_id = (
+        _coerce_text(source_snapshot.get("source_id"))
+        or source_snapshot.get("source", "").strip()
+        or stock_code
+    )
 
     return SymbolVenueEligibility(
         trade_date=trade_date,
@@ -234,7 +237,9 @@ def resolve_symbol_venue_eligibility(
     )
 
 
-def resolve_market_data_route(session_context: MarketSessionContext, purpose: str) -> str:
+def resolve_market_data_route(
+    session_context: MarketSessionContext, purpose: str
+) -> str:
     """Return market data route for context.
 
     Purpose currently does not alter resolution in AM-S01; it is reserved for AM-S02+
@@ -266,7 +271,10 @@ def resolve_broker_order_route(
     }:
         return MARKET_DATA_ROUTE_UNKNOWN
     route = session_context.preferred_market_data_route
-    if session_context.session_regime == MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET_CLOSE_ONLY:
+    if (
+        session_context.session_regime
+        == MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET_CLOSE_ONLY
+    ):
         return route
     if side == "sell":
         return route
@@ -403,13 +411,19 @@ def _aftermarket_buy_eligibility_blocker(
     route: str,
     eligibility: SymbolVenueEligibility | None,
 ) -> str | None:
-    if (eligibility is None or eligibility.trade_date != session_context.trade_date
-            or eligibility.source_trade_date != session_context.trade_date.isoformat()):
+    if (
+        eligibility is None
+        or eligibility.trade_date != session_context.trade_date
+        or eligibility.source_trade_date != session_context.trade_date.isoformat()
+    ):
         return ORDER_TYPE_PREFLIGHT_ELIGIBILITY_UNKNOWN
     observed = eligibility.observed_at_kst
-    if (not isinstance(observed, datetime) or observed.utcoffset() is None
-            or observed.date() != session_context.trade_date
-            or observed > session_context.observed_at_kst):
+    if (
+        not isinstance(observed, datetime)
+        or observed.utcoffset() is None
+        or observed.date() != session_context.trade_date
+        or observed > session_context.observed_at_kst
+    ):
         return ORDER_TYPE_PREFLIGHT_ELIGIBILITY_UNKNOWN
     missing_axes = set()
     if eligibility.krx_aftermarket_eligible is None:
@@ -434,7 +448,8 @@ def _aftermarket_buy_eligibility_blocker(
     )
     if not partial_source_complete and (
         eligibility.quality_state != SOURCE_QUALITY_VALID
-        or eligibility.blockers or missing_axes
+        or eligibility.blockers
+        or missing_axes
     ):
         return ORDER_TYPE_PREFLIGHT_ELIGIBILITY_UNKNOWN
     if route == BROKER_ORDER_ROUTE_KRX:
@@ -446,7 +461,9 @@ def _aftermarket_buy_eligibility_blocker(
             eligibility.krx_aftermarket_eligible,
             eligibility.nxt_eligible,
         )
-    if route == BROKER_ORDER_ROUTE_SOR and any(value is True for value in route_eligibility):
+    if route == BROKER_ORDER_ROUTE_SOR and any(
+        value is True for value in route_eligibility
+    ):
         return None
     if any(value is None for value in route_eligibility):
         return ORDER_TYPE_PREFLIGHT_ELIGIBILITY_UNKNOWN
@@ -458,9 +475,15 @@ def _aftermarket_buy_eligibility_blocker(
 def classify_actual_execution_venue(broker_receipt: dict[str, Any]) -> str:
     if not isinstance(broker_receipt, dict):
         return ACTUAL_EXECUTION_VENUE_UNKNOWN
-    requested_route = str(
-        broker_receipt.get("broker_route_requested") or broker_receipt.get("route") or ""
-    ).strip().upper()
+    requested_route = (
+        str(
+            broker_receipt.get("broker_route_requested")
+            or broker_receipt.get("route")
+            or ""
+        )
+        .strip()
+        .upper()
+    )
     if requested_route == "SOR":
         return ACTUAL_EXECUTION_VENUE_UNKNOWN
     for field in ("actual_execution_venue", "execution_venue", "market"):
@@ -544,10 +567,15 @@ def _derive_eligible_venues(
     normalized: list[str] = []
     for venue in venues:
         upper = venue.upper()
-        if upper in (ACTUAL_EXECUTION_VENUE_KRX, ACTUAL_EXECUTION_VENUE_NXT) and upper not in normalized:
+        if (
+            upper in (ACTUAL_EXECUTION_VENUE_KRX, ACTUAL_EXECUTION_VENUE_NXT)
+            and upper not in normalized
+        ):
             normalized.append(upper)
     if not normalized and (
-        krx_regular_eligible is None and nxt_eligible is None and krx_aftermarket_eligible is None
+        krx_regular_eligible is None
+        and nxt_eligible is None
+        and krx_aftermarket_eligible is None
     ):
         # Preserve explicit unknown state; caller should use quality/blockers to decide.
         pass
@@ -828,9 +856,17 @@ def market_source_partition_venue(item: str) -> str:
 
 def market_source_session_bucket(venue: str, clock: dt_time) -> str:
     if not isinstance(clock, dt_time):
-        raise TypeError('clock must be a time')
+        raise TypeError("clock must be a time")
     # Preserve wall-clock boundaries without constructing time objects.
-    minute=clock.hour*60+clock.minute
-    prefix=venue if venue in {'NXT','SOR'} else 'KRX'
-    suffix='PREMARKET' if minute<540 else 'REGULAR_OVERLAP' if minute<930 and prefix=='NXT' else 'REGULAR' if minute<930 else 'AFTERMARKET'
-    return prefix+'_'+suffix
+    minute = clock.hour * 60 + clock.minute
+    prefix = venue if venue in {"NXT", "SOR"} else "KRX"
+    suffix = (
+        "PREMARKET"
+        if minute < 540
+        else (
+            "REGULAR_OVERLAP"
+            if minute < 930 and prefix == "NXT"
+            else "REGULAR" if minute < 930 else "AFTERMARKET"
+        )
+    )
+    return prefix + "_" + suffix

@@ -160,8 +160,9 @@ def _parse_dt(value: Any) -> datetime | None:
     return None
 
 
-def _source_time_status(payload: dict[str, Any], target_date: str, as_of: datetime,
-                        *, timestamp_field: str) -> str:
+def _source_time_status(
+    payload: dict[str, Any], target_date: str, as_of: datetime, *, timestamp_field: str
+) -> str:
     for field in ("target_date", "date", "cached_session_date"):
         if payload.get(field) is not None and str(payload[field]) != target_date:
             return "source_date_mismatch"
@@ -699,7 +700,10 @@ def _stream_pipeline_inputs(
             event_dt = _parse_dt(row.get("emitted_at"))
             status = _source_time_status(
                 {"timestamp": row.get("emitted_at"), "date": row.get("emitted_date")},
-                target_date, as_of, timestamp_field="timestamp")
+                target_date,
+                as_of,
+                timestamp_field="timestamp",
+            )
             if status != "ok":
                 excluded_time_counts[status] += 1
                 continue
@@ -744,14 +748,22 @@ def _stream_pipeline_inputs(
         "source_path": str(path),
         "source_exists": path.is_file(),
         "source_status": (
-            "missing" if not path.is_file() else
-            "empty_or_no_valid_json_rows" if not scanned_row_count else
-            "no_eligible_time_rows" if scanned_row_count == sum(excluded_time_counts.values()) else
-            "ready"
+            "missing"
+            if not path.is_file()
+            else (
+                "empty_or_no_valid_json_rows"
+                if not scanned_row_count
+                else (
+                    "no_eligible_time_rows"
+                    if scanned_row_count == sum(excluded_time_counts.values())
+                    else "ready"
+                )
+            )
         ),
         "scanned_row_count": scanned_row_count,
         "excluded_time_counts": dict(excluded_time_counts),
-        "accepted_time_row_count": scanned_row_count - sum(excluded_time_counts.values()),
+        "accepted_time_row_count": scanned_row_count
+        - sum(excluded_time_counts.values()),
         "retained_exit_event_count": len(retained_exit_events),
         "retained_non_real_provenance_count": retained_non_real_provenance_count,
         "retained_broker_exit_receipt_count": retained_broker_exit_receipt_count,
@@ -862,13 +874,18 @@ def _summarize_active_recovery(target_date: str, *, as_of: datetime) -> dict[str
     observed_rows = swing_rows + scalp_rows
     rows = []
     for source_rows, meta in ((swing_rows, swing_meta), (scalp_rows, scalp_meta)):
-        status = _source_time_status(meta, target_date, as_of, timestamp_field="updated_at")
+        status = _source_time_status(
+            meta, target_date, as_of, timestamp_field="updated_at"
+        )
         meta["time_status"] = status
         meta["used_for_recovery"] = status == "ok"
         if status == "ok":
-            rows.extend(row for row in source_rows
-                        if row.get("actual_order_submitted_false")
-                        and row.get("broker_order_forbidden_true"))
+            rows.extend(
+                row
+                for row in source_rows
+                if row.get("actual_order_submitted_false")
+                and row.get("broker_order_forbidden_true")
+            )
     profits = [
         row["profit_rate_pct"] for row in rows if row.get("profit_rate_pct") is not None
     ]
@@ -958,7 +975,11 @@ def _post_sell_recovery_metrics(target_date: str, *, as_of: datetime) -> dict[st
         payload = payload[-1] if payload and isinstance(payload[-1], dict) else {}
     if not isinstance(payload, dict):
         payload = {}
-    source_date_status = "ok" if str(payload.get("date")) == target_date else "source_date_missing_or_mismatch"
+    source_date_status = (
+        "ok"
+        if str(payload.get("date")) == target_date
+        else "source_date_missing_or_mismatch"
+    )
     meta = payload.get("meta") if isinstance(payload.get("meta"), dict) else {}
     generated_at = _parse_dt(meta.get("generated_at"))
     if source_date_status == "ok" and (generated_at is None or generated_at > as_of):
@@ -1172,20 +1193,38 @@ def _load_source_summary(target_date: str, *, as_of: datetime) -> dict[str, Any]
     }
 
     market_status = _source_time_status(
-        market if isinstance(market, dict) else {}, target_date, as_of, timestamp_field="timestamp")
+        market if isinstance(market, dict) else {},
+        target_date,
+        as_of,
+        timestamp_field="timestamp",
+    )
     breadth_status = _source_time_status(
-        market_breadth if isinstance(market_breadth, dict) else {}, target_date, as_of, timestamp_field="as_of")
-    if breadth_status == "ok" and summary["market_panic_breadth"]["source_quality_status"] != "ok":
+        market_breadth if isinstance(market_breadth, dict) else {},
+        target_date,
+        as_of,
+        timestamp_field="as_of",
+    )
+    if (
+        breadth_status == "ok"
+        and summary["market_panic_breadth"]["source_quality_status"] != "ok"
+    ):
         breadth_status = "source_quality_not_ok"
     summary["market_regime"].update(
-        time_status=market_status, timestamp=(market or {}).get("timestamp") if isinstance(market, dict) else None,
-        reported_risk_state=summary["market_regime"]["risk_state"])
+        time_status=market_status,
+        timestamp=(market or {}).get("timestamp") if isinstance(market, dict) else None,
+        reported_risk_state=summary["market_regime"]["risk_state"],
+    )
     if market_status != "ok":
-        summary["market_regime"].update(risk_state="UNKNOWN", allow_swing_entry=None, swing_score=None)
+        summary["market_regime"].update(
+            risk_state="UNKNOWN", allow_swing_entry=None, swing_score=None
+        )
     summary["market_panic_breadth"]["time_status"] = breadth_status
     if breadth_status != "ok":
         summary["market_panic_breadth"].update(
-            risk_off_advisory=False, single_market_risk_off_advisory=False, market_weakness_observation={})
+            risk_off_advisory=False,
+            single_market_risk_off_advisory=False,
+            market_weakness_observation={},
+        )
     return summary
 
 
@@ -1235,9 +1274,14 @@ def _microstructure_market_context(
         threshold_source="same_day_microstructure_risk_off_ratio_p95",
     )
     live_breadth_risk_off = market_breadth.get("risk_off_advisory") is True
-    source_blockers = [f"{name}:{payload.get('time_status', 'source_time_unverified')}"
-                       for name, payload in (("market_regime", market), ("market_panic_breadth", market_breadth))
-                       if payload.get("exists") and payload.get("time_status") != "ok"]
+    source_blockers = [
+        f"{name}:{payload.get('time_status', 'source_time_unverified')}"
+        for name, payload in (
+            ("market_regime", market),
+            ("market_panic_breadth", market_breadth),
+        )
+        if payload.get("exists") and payload.get("time_status") != "ok"
+    ]
     market_confirms = risk_state == "RISK_OFF"
     breadth_confirms = (
         bool(evaluated_contract["sample_ready"])
@@ -1307,7 +1351,8 @@ def _microstructure_market_context(
                 and risk_off_contract["sample_ready"]
                 else "insufficient_sample"
             ),
-            "source_quality_blockers": source_blockers + (
+            "source_quality_blockers": source_blockers
+            + (
                 []
                 if evaluated_contract["sample_ready"]
                 and risk_off_contract["sample_ready"]
@@ -1691,7 +1736,9 @@ def build_panic_sell_defense_report(
         as_of = datetime.now(KST)
     as_of = _parse_dt(as_of.isoformat())
     events, microstructure_detector, latest_dt, input_streaming = (
-        _stream_pipeline_inputs(_pipeline_events_path(target_date), as_of=as_of, target_date=target_date)
+        _stream_pipeline_inputs(
+            _pipeline_events_path(target_date), as_of=as_of, target_date=target_date
+        )
     )
     panic_metrics = _summarize_exit_metrics(events, as_of=as_of)
     active_recovery = _summarize_active_recovery(target_date, as_of=as_of)
@@ -1701,8 +1748,9 @@ def build_panic_sell_defense_report(
         microstructure_detector, source_summary
     )
     if input_streaming["source_status"] != "ready":
-        microstructure_market_context["threshold_contract"]["source_quality_blockers"].append(
-            "pipeline_source:" + input_streaming["source_status"])
+        microstructure_market_context["threshold_contract"][
+            "source_quality_blockers"
+        ].append("pipeline_source:" + input_streaming["source_status"])
     panic_state, reasons = _resolve_panic_state(
         panic_metrics,
         active_recovery,
@@ -1725,7 +1773,8 @@ def build_panic_sell_defense_report(
         ),
         "dry_run": bool(dry_run),
         "analysis_status": (
-            "pipeline_source_unavailable" if input_streaming["source_status"] != "ready"
+            "pipeline_source_unavailable"
+            if input_streaming["source_status"] != "ready"
             else "risk_context_only_no_economic_evaluation"
         ),
         "policy": {

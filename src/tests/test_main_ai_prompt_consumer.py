@@ -21,8 +21,6 @@ def _source_only() -> dict[str, bool]:
     }
 
 
-
-
 def test_exhausted_entry_registry_is_terminal_source_only_patch_handoff(monkeypatch):
     day = "2026-09-07"
     version = optimizer.ENTRY_CANDIDATE_ORDER[0]
@@ -248,9 +246,10 @@ def test_replaced_calibration_preserves_frozen_entry_route_census(
     report = consumer.build_report(day)
 
     assert report["status"] == "blocked_source_contract"
-    assert "optimizer_action_outcome_calibration_hash_binding_mismatch" in report[
-        "blockers"
-    ]
+    assert (
+        "optimizer_action_outcome_calibration_hash_binding_mismatch"
+        in report["blockers"]
+    )
     assert report["request_paths"]["entry_base"]["cohorts"] == [blocked]
     assert report["runtime_effect"] is False
 
@@ -523,8 +522,6 @@ def test_holding_base_manifest_rejects_missing_optimizer_cohort_with_requests(
     assert report["blockers"] == ["holding_optimizer_cohort_missing"]
 
 
-
-
 def test_consumer_report_keeps_runtime_blocked_and_detects_unclassified(
     monkeypatch, tmp_path: Path
 ):
@@ -612,8 +609,6 @@ def test_consumer_report_keeps_runtime_blocked_and_detects_unclassified(
         report["request_paths"]["optional_micro_enriched_2x2"]["path_status"]
         == consumer.RETIRED
     )
-
-
 
 
 @pytest.mark.parametrize("bound", [True, False])
@@ -768,19 +763,33 @@ def test_retired_micro_inputs_are_never_loaded_or_repaired(monkeypatch, tmp_path
     day = "2026-09-17"
     optimizer_path = tmp_path / "optimizer.json"
     optimizer_path.write_text(json.dumps(_optimizer_report(day)))
-    monkeypatch.setattr(optimizer, "report_paths", lambda _: (optimizer_path, tmp_path / "optimizer.md"))
+    monkeypatch.setattr(
+        optimizer, "report_paths", lambda _: (optimizer_path, tmp_path / "optimizer.md")
+    )
+
     def forbidden(*args, **kwargs):
         raise AssertionError("Retired cycle input must not be read")
-    for name in ("micro_reversion_prepared_request_path", "micro_reversion_bridge_report_path", "micro_reversion_materialized_request_path", "micro_reversion_execution_result_path"):
+
+    for name in (
+        "micro_reversion_prepared_request_path",
+        "micro_reversion_bridge_report_path",
+        "micro_reversion_materialized_request_path",
+        "micro_reversion_execution_result_path",
+    ):
         monkeypatch.setattr(consumer.quality, name, forbidden)
     monkeypatch.setattr(consumer, "_entry_base_paths", lambda *args, **kwargs: ([], {}))
-    monkeypatch.setattr(consumer, "_holding_base_paths", lambda *args, **kwargs: ([], {}))
+    monkeypatch.setattr(
+        consumer, "_holding_base_paths", lambda *args, **kwargs: ([], {})
+    )
     report = consumer.build_report(day)
     assert report["blockers"] == []
     assert report["optional_input_blockers"] == []
     retired = report["request_paths"]["optional_micro_enriched_2x2"]
     assert retired["path_status"] == consumer.RETIRED
     assert retired["cells"] == []
-    assert not any("r0_r3" in key or "micro_bridge" in key or "prepared_request" in key for key in report["source_bindings"])
+    assert not any(
+        "r0_r3" in key or "micro_bridge" in key or "prepared_request" in key
+        for key in report["source_bindings"]
+    )
     assert report["provider_call_performed"] is False
     assert report["runtime_effect"] is False

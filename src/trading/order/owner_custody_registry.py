@@ -23,7 +23,11 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from src.trading.config.owner_identity import ACTIVATION_SCHEMA, normalize_symbol
-from src.trading.config.owner_retirement import automatic_owner_retired, main_manual_after_episode_retirement, new_entry_retired
+from src.trading.config.owner_retirement import (
+    automatic_owner_retired,
+    main_manual_after_episode_retirement,
+    new_entry_retired,
+)
 from src.utils.constants import DATA_DIR
 from src.trading.order import owner_journal_recovery as journal_recovery
 
@@ -205,7 +209,13 @@ class OrderOwnerRegistry:
             value = self.path.stat()
         except FileNotFoundError:
             return None
-        return (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+        return (
+            value.st_dev,
+            value.st_ino,
+            value.st_size,
+            value.st_mtime_ns,
+            value.st_ctime_ns,
+        )
 
     @staticmethod
     def _canonical(event: dict[str, Any]) -> bytes:
@@ -262,15 +272,27 @@ class OrderOwnerRegistry:
                 try:
                     receipt = json.loads(lines[line_no])
                     journal_recovery.validate_recovery(
-                        events, event, receipt, b''.join(lines[:line_no]))
-                except (ValueError, TypeError, KeyError, IndexError, AttributeError) as exc:
+                        events, event, receipt, b"".join(lines[:line_no])
+                    )
+                except (
+                    ValueError,
+                    TypeError,
+                    KeyError,
+                    IndexError,
+                    AttributeError,
+                ) as exc:
                     raise OwnerRegistryConflict(
                         f"owner_registry_chain_invalid:line={line_no}"
                     ) from exc
                 previous = event["previous_hash"]
                 recovery_line = line_no + 1
-            if event.get('event') == journal_recovery.EVENT and line_no != recovery_line:
-                raise OwnerRegistryConflict(f"owner_registry_recovery_unbound:line={line_no}")
+            if (
+                event.get("event") == journal_recovery.EVENT
+                and line_no != recovery_line
+            ):
+                raise OwnerRegistryConflict(
+                    f"owner_registry_recovery_unbound:line={line_no}"
+                )
             expected = hashlib.sha256(
                 previous.encode("ascii") + self._canonical(event)
             ).hexdigest()
@@ -282,7 +304,9 @@ class OrderOwnerRegistry:
             events.append(event)
         return events
 
-    def reconcile_stale_terminal_tail(self, *, expected_sha256: str, apply: bool = False):
+    def reconcile_stale_terminal_tail(
+        self, *, expected_sha256: str, apply: bool = False
+    ):
         """Explicit CAS repair; never called by live receipt processing.
 
         A dry run and an apply use the same validator. The only mutation is one
@@ -292,33 +316,54 @@ class OrderOwnerRegistry:
         try:
             raw = self.path.read_bytes()
             if hashlib.sha256(raw).hexdigest() != expected_sha256:
-                raise OwnerRegistryConflict('owner_registry_recovery_source_changed')
+                raise OwnerRegistryConflict("owner_registry_recovery_source_changed")
             lines = raw.splitlines(keepends=True)
-            if not lines or not raw.endswith(b'\n'):
-                raise OwnerRegistryConflict('owner_registry_recovery_tail_incomplete')
-            events = self._validated_events(b''.join(lines[:-1]))
+            if not lines or not raw.endswith(b"\n"):
+                raise OwnerRegistryConflict("owner_registry_recovery_tail_incomplete")
+            events = self._validated_events(b"".join(lines[:-1]))
             try:
                 stale = json.loads(lines[-1])
                 payload = journal_recovery.recovery_payload(events, stale, raw)
-                expected = hashlib.sha256(stale['previous_hash'].encode('ascii')
-                                          + self._canonical(stale)).hexdigest()
-                if stale.get('schema') != REGISTRY_SCHEMA or stale.get('event_hash') != expected:
-                    raise ValueError('stale terminal hash invalid')
+                expected = hashlib.sha256(
+                    stale["previous_hash"].encode("ascii") + self._canonical(stale)
+                ).hexdigest()
+                if (
+                    stale.get("schema") != REGISTRY_SCHEMA
+                    or stale.get("event_hash") != expected
+                ):
+                    raise ValueError("stale terminal hash invalid")
             except (ValueError, KeyError, TypeError, AttributeError) as exc:
-                raise OwnerRegistryConflict('owner_registry_recovery_proof_invalid') from exc
+                raise OwnerRegistryConflict(
+                    "owner_registry_recovery_proof_invalid"
+                ) from exc
             # Validate the complete prospective journal before any append.
             preview = self._event_row([*events, stale], payload)
-            proposed = raw + (json.dumps(preview, ensure_ascii=True, sort_keys=True,
-                                        separators=(',', ':')) + '\n').encode()
+            proposed = (
+                raw
+                + (
+                    json.dumps(
+                        preview,
+                        ensure_ascii=True,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    )
+                    + "\n"
+                ).encode()
+            )
             self._validated_events(proposed)
             if apply:
                 receipt = self._append_locked([*events, stale], payload)
                 self._read_locked()
             else:
                 receipt = preview
-            return {'status': 'applied' if apply else 'validated', 'receipt': receipt,
-                    'original_sha256': expected_sha256, 'original_bytes': len(raw),
-                    'original_events_preserved': True, 'broker_order_attempted': False}
+            return {
+                "status": "applied" if apply else "validated",
+                "receipt": receipt,
+                "original_sha256": expected_sha256,
+                "original_bytes": len(raw),
+                "original_events_preserved": True,
+                "broker_order_attempted": False,
+            }
         finally:
             fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
             lock.close()
@@ -563,17 +608,23 @@ class OrderOwnerRegistry:
                     or type(quantity) is not int
                     or quantity != remaining
                 ):
-                    raise OwnerRegistryConflict("owner_registry_amend_requires_unfilled_owned_sell")
+                    raise OwnerRegistryConflict(
+                        "owner_registry_amend_requires_unfilled_owned_sell"
+                    )
                 if clean_action == "AMEND":
                     ancestor, visited = original, set()
                     while ancestor.get("amendment_parent_intent_id"):
                         ancestor_id = ancestor["amendment_parent_intent_id"]
                         if ancestor_id in visited or ancestor_id not in state:
-                            raise OwnerRegistryConflict("owner_registry_amend_lineage_invalid")
+                            raise OwnerRegistryConflict(
+                                "owner_registry_amend_lineage_invalid"
+                            )
                         visited.add(ancestor_id)
                         ancestor = state[ancestor_id]
                         if ancestor.get("filled_qty", 0) != 0:
-                            raise OwnerRegistryConflict("owner_registry_amend_ancestor_partially_filled")
+                            raise OwnerRegistryConflict(
+                                "owner_registry_amend_ancestor_partially_filled"
+                            )
                 if remaining <= 0:
                     raise OwnerRegistryConflict(
                         "owner_registry_cancel_original_no_remaining_quantity"
@@ -629,8 +680,10 @@ class OrderOwnerRegistry:
             for row in state.values():
                 if (
                     row.get("account_key") == account_key
-                    and not (self._manual_disposition(events, account_key)
-                             and automatic_owner_retired(row.get("owner_type")))
+                    and not (
+                        self._manual_disposition(events, account_key)
+                        and automatic_owner_retired(row.get("owner_type"))
+                    )
                     and row.get("order_date") == clean_date
                     and row.get("symbol") == clean_symbol
                     and row.get("side") == clean_side
@@ -668,8 +721,15 @@ class OrderOwnerRegistry:
             lock.close()
 
     def reconcile_sell_amendment(
-        self, *, context, intent_id, parent_filled_qty, child_quantity,
-        child_filled_qty, child_remaining_qty, receipt_sha256,
+        self,
+        *,
+        context,
+        intent_id,
+        parent_filled_qty,
+        child_quantity,
+        child_filled_qty,
+        child_remaining_qty,
+        receipt_sha256,
     ):
         """Atomically replace commitment only after exact dated/current proof.
 
@@ -678,13 +738,20 @@ class OrderOwnerRegistry:
         its original-order linkage and immutable amendment proof remain.
         """
         context.validate()
-        counts = (parent_filled_qty, child_quantity, child_filled_qty, child_remaining_qty)
-        if (any(type(n) is not int or n < 0 for n in counts)
+        counts = (
+            parent_filled_qty,
+            child_quantity,
+            child_filled_qty,
+            child_remaining_qty,
+        )
+        if (
+            any(type(n) is not int or n < 0 for n in counts)
             or child_quantity <= 0
             or child_filled_qty + child_remaining_qty != child_quantity
             or not isinstance(receipt_sha256, str)
             or len(receipt_sha256) != 64
-            or any(c not in "0123456789abcdef" for c in receipt_sha256)):
+            or any(c not in "0123456789abcdef" for c in receipt_sha256)
+        ):
             raise OwnerRegistryConflict("owner_registry_amend_proof_invalid")
         lock = self._locked()
         try:
@@ -692,38 +759,71 @@ class OrderOwnerRegistry:
             state = self._state(events)
             child = state.get(intent_id, {})
             parent = self._assert_owner_from_state(
-                state, context=context, order_date=child.get("order_date"),
+                state,
+                context=context,
+                order_date=child.get("order_date"),
                 broker_order_no=child.get("original_order_no"),
             )
-            if (child.get("account_key") != broker_account_key(require_explicit=True)
-                or any(child.get(k) != getattr(context, k) for k in ("owner_type", "owner_id", "position_id"))
+            if (
+                child.get("account_key") != broker_account_key(require_explicit=True)
+                or any(
+                    child.get(k) != getattr(context, k)
+                    for k in ("owner_type", "owner_id", "position_id")
+                )
                 or child.get("authority_policy_id") != "machine_ws_target_ratchet_v1"
                 or child.get("side") != "SELL"
                 or child.get("symbol") != parent.get("symbol")
                 or child.get("route") != parent.get("route")
                 or parent.get("quantity") != parent_filled_qty + child_quantity
-                or parent.get("filled_qty", 0) > parent_filled_qty):
+                or parent.get("filled_qty", 0) > parent_filled_qty
+            ):
                 raise OwnerRegistryConflict("owner_registry_amend_binding_invalid")
             if child.get("amendment_receipt_sha256"):
-                if (child.get("quantity") != child_quantity
-                    or child.get("amendment_parent_filled_qty") != parent_filled_qty):
+                if (
+                    child.get("quantity") != child_quantity
+                    or child.get("amendment_parent_filled_qty") != parent_filled_qty
+                ):
                     raise OwnerRegistryConflict("owner_registry_amend_replay_conflict")
                 return dict(child)
-            if (child.get("action") != "AMEND" or child.get("state") != "ORDER_BOUND"
+            if (
+                child.get("action") != "AMEND"
+                or child.get("state") != "ORDER_BOUND"
                 or parent.get("state") != "ORDER_BOUND"
-                or parent.get("canceled_qty", 0) != 0):
+                or parent.get("canceled_qty", 0) != 0
+            ):
                 raise OwnerRegistryConflict("owner_registry_amend_not_pending")
-            retained = {k: v for k, v in child.items() if k not in {
-                "schema", "event_id", "observed_at_kst", "previous_hash", "event_hash",
-            }}
-            return dict(self._append_locked(events, {
-                **retained, "event": "SELL_AMEND_RECONCILED", "action": "NEW",
-                "state": "ORDER_TERMINAL" if child_remaining_qty == 0 else "ORDER_BOUND",
-                "quantity": child_quantity, "filled_qty": child_filled_qty,
-                "amendment_parent_intent_id": parent["intent_id"],
-                "amendment_parent_filled_qty": parent_filled_qty,
-                "amendment_receipt_sha256": receipt_sha256,
-            }))
+            retained = {
+                k: v
+                for k, v in child.items()
+                if k
+                not in {
+                    "schema",
+                    "event_id",
+                    "observed_at_kst",
+                    "previous_hash",
+                    "event_hash",
+                }
+            }
+            return dict(
+                self._append_locked(
+                    events,
+                    {
+                        **retained,
+                        "event": "SELL_AMEND_RECONCILED",
+                        "action": "NEW",
+                        "state": (
+                            "ORDER_TERMINAL"
+                            if child_remaining_qty == 0
+                            else "ORDER_BOUND"
+                        ),
+                        "quantity": child_quantity,
+                        "filled_qty": child_filled_qty,
+                        "amendment_parent_intent_id": parent["intent_id"],
+                        "amendment_parent_filled_qty": parent_filled_qty,
+                        "amendment_receipt_sha256": receipt_sha256,
+                    },
+                )
+            )
         finally:
             fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
             lock.close()
@@ -1642,9 +1742,8 @@ class OrderOwnerRegistry:
                 or cancel.get("original_order_no") != target_order_no
                 or type(cancel.get("quantity")) is not int
                 or not 0 < confirmed_qty <= cancel["quantity"]
-                or cancel.get("authority_policy_id") not in {
-                    "machine_adaptive_exit_v1", "machine_profit_stagnation_v1"
-                }
+                or cancel.get("authority_policy_id")
+                not in {"machine_adaptive_exit_v1", "machine_profit_stagnation_v1"}
                 or any(cancel.get(k) != target.get(k) for k in ("symbol", "route"))
                 or target.get("filled_qty", 0) > filled_qty
                 or target.get("event_hash") != target_event_hash
@@ -1957,7 +2056,9 @@ class OrderOwnerRegistry:
                 account_key=broker_account_key(),
                 symbol=clean_symbol,
                 broker_quantity=int(broker_quantity),
-                retired_manual=bool(self._manual_disposition(events, broker_account_key())),
+                retired_manual=bool(
+                    self._manual_disposition(events, broker_account_key())
+                ),
             )
         finally:
             fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
@@ -1965,12 +2066,18 @@ class OrderOwnerRegistry:
 
     @staticmethod
     def _manual_disposition(events, account_key):
-        rows = [row for row in events if row.get("event") == "RETIRED_OWNERS_MANUAL_MANAGEMENT"
-                and row.get("account_key") == account_key]
+        rows = [
+            row
+            for row in events
+            if row.get("event") == "RETIRED_OWNERS_MANUAL_MANAGEMENT"
+            and row.get("account_key") == account_key
+        ]
         if len(rows) > 1:
             raise OwnerRegistryConflict("manual_management_disposition_ambiguous")
-        if rows and (rows[0].get("retired_owners") != ["episode", "widget_auto_trade"]
-                     or rows[0].get("authority") != "operator_manual_management_2026_10_08"):
+        if rows and (
+            rows[0].get("retired_owners") != ["episode", "widget_auto_trade"]
+            or rows[0].get("authority") != "operator_manual_management_2026_10_08"
+        ):
             raise OwnerRegistryConflict("manual_management_disposition_invalid")
         return rows[0] if rows else None
 
@@ -1983,14 +2090,17 @@ class OrderOwnerRegistry:
             prior = self._manual_disposition(events, account)
             if prior:
                 return dict(prior)
-            return self._append_locked(events, {
-                "event": "RETIRED_OWNERS_MANUAL_MANAGEMENT",
-                "account_key": account,
-                "retired_owners": ["episode", "widget_auto_trade"],
-                "authority": "operator_manual_management_2026_10_08",
-                "management_only": True,
-                "broker_flat_verified": False,
-            })
+            return self._append_locked(
+                events,
+                {
+                    "event": "RETIRED_OWNERS_MANUAL_MANAGEMENT",
+                    "account_key": account,
+                    "retired_owners": ["episode", "widget_auto_trade"],
+                    "authority": "operator_manual_management_2026_10_08",
+                    "management_only": True,
+                    "broker_flat_verified": False,
+                },
+            )
         finally:
             fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
             lock.close()
@@ -2016,8 +2126,13 @@ class OrderOwnerRegistry:
         """One verified snapshot binds account, registration and disposition."""
         clean = _registry_symbol(symbol)
         if not self.path.exists():
-            return {"registered": False, "account_key": broker_account_key(),
-                    "disposition_hash": "", "effective_at": "", "registry_path": str(self.path)}
+            return {
+                "registered": False,
+                "account_key": broker_account_key(),
+                "disposition_hash": "",
+                "effective_at": "",
+                "registry_path": str(self.path),
+            }
         # Read-only authority lookup must also work inside frozen replay. The
         # live reader shares the writer lock across the complete projection.
         # Hash/generation checks still reject corrupt or externally changed data.
@@ -2028,31 +2143,51 @@ class OrderOwnerRegistry:
                 events = self._read_locked()
                 accounts = {}
                 for row in self._state(events).values():
-                    accounts.setdefault(row.get('symbol'), set()).add(row.get('account_key'))
+                    accounts.setdefault(row.get("symbol"), set()).add(
+                        row.get("account_key")
+                    )
                 if identity != (str(self.path.absolute()), self._journal_identity()):
-                    raise OwnerRegistryConflict('owner_registry_changed_during_read')
-                self._native_projection_accounts = {s: frozenset(v) for s, v in accounts.items()}
-                self._native_projection_manual_events = tuple(copy.deepcopy(row) for row in events
-                    if row.get('event') == 'RETIRED_OWNERS_MANUAL_MANAGEMENT')
+                    raise OwnerRegistryConflict("owner_registry_changed_during_read")
+                self._native_projection_accounts = {
+                    s: frozenset(v) for s, v in accounts.items()
+                }
+                self._native_projection_manual_events = tuple(
+                    copy.deepcopy(row)
+                    for row in events
+                    if row.get("event") == "RETIRED_OWNERS_MANUAL_MANAGEMENT"
+                )
                 self._native_projection_disposition = {}
                 self._native_projection_signature = identity
             account = broker_account_key()
             rows = self._native_projection_accounts.get(clean, frozenset())
             if rows and account not in rows:
-                raise OwnerRegistryConflict("owner_registry_account_identity_missing_or_mismatched")
+                raise OwnerRegistryConflict(
+                    "owner_registry_account_identity_missing_or_mismatched"
+                )
             if account not in self._native_projection_disposition:
-                disposition = self._manual_disposition(self._native_projection_manual_events, account)
+                disposition = self._manual_disposition(
+                    self._native_projection_manual_events, account
+                )
                 # Bound account churn without retaining mutable journal rows.
                 if len(self._native_projection_disposition) >= 16:
                     self._native_projection_disposition.clear()
                 self._native_projection_disposition[account] = (
-                    disposition['event_hash'], disposition['observed_at_kst']) if disposition else ('', '')
-            disposition_hash, effective_at = self._native_projection_disposition[account]
+                    (disposition["event_hash"], disposition["observed_at_kst"])
+                    if disposition
+                    else ("", "")
+                )
+            disposition_hash, effective_at = self._native_projection_disposition[
+                account
+            ]
             if identity != (str(self.path.absolute()), self._journal_identity()):
-                raise OwnerRegistryConflict('owner_registry_changed_during_read')
-            return {"registered": bool(rows), "account_key": account,
-                    "disposition_hash": disposition_hash, "effective_at": effective_at,
-                    "registry_path": str(self.path)}
+                raise OwnerRegistryConflict("owner_registry_changed_during_read")
+            return {
+                "registered": bool(rows),
+                "account_key": account,
+                "disposition_hash": disposition_hash,
+                "effective_at": effective_at,
+                "registry_path": str(self.path),
+            }
 
     def unresolved_intent_summary(
         self,
@@ -2063,7 +2198,9 @@ class OrderOwnerRegistry:
         """Describe unbound intents; None includes all dates for retirement."""
 
         clean_symbol = _registry_symbol(symbol)
-        clean_date = _registry_order_date(active_date) if active_date is not None else None
+        clean_date = (
+            _registry_order_date(active_date) if active_date is not None else None
+        )
         lock = self._locked()
         try:
             events = self._read_locked()
@@ -2077,7 +2214,9 @@ class OrderOwnerRegistry:
                 and (clean_date is None or row.get("order_date") == clean_date)
                 and row.get("symbol") == clean_symbol
                 and row.get("state") in _ACTIVE_UNBOUND_STATES
-                and not (manual_management and automatic_owner_retired(row.get("owner_type")))
+                and not (
+                    manual_management and automatic_owner_retired(row.get("owner_type"))
+                )
             ]
         finally:
             fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
@@ -2208,9 +2347,17 @@ class OrderOwnerRegistry:
             or any(ch in clean_policy_id for ch in "\r\n\t")
             or clean_mode not in {"COEXIST_ENTRY_ENABLED", "COEXIST_EXIT_ONLY"}
             or "main_scalping" not in clean_owners
-            or ("episode" not in clean_owners and not main_manual_after_episode_retirement(clean_symbol, clean_owners))
+            or (
+                "episode" not in clean_owners
+                and not main_manual_after_episode_retirement(clean_symbol, clean_owners)
+            )
             or "widget_auto_trade" in clean_owners
-            or (clean_mode == "COEXIST_ENTRY_ENABLED" and any(new_entry_retired(clean_symbol, owner) for owner in clean_owners))
+            or (
+                clean_mode == "COEXIST_ENTRY_ENABLED"
+                and any(
+                    new_entry_retired(clean_symbol, owner) for owner in clean_owners
+                )
+            )
         ):
             raise OwnerRegistryError("owner_registry_policy_activation_input_invalid")
         if len(clean_entry_hash) != 64 or any(
@@ -2312,26 +2459,44 @@ class OrderOwnerRegistry:
                     row.get("event") == "POLICY_ACTIVATED"
                     and row.get("account_key") == account_key
                     and row.get("symbol") == clean_symbol
-                    and main_manual_after_episode_retirement(clean_symbol, row.get("allowed_owners") or ())
+                    and main_manual_after_episode_retirement(
+                        clean_symbol, row.get("allowed_owners") or ()
+                    )
                     for row in events
                 )
-                relevant = [row for row in state.values()
-                            if row.get("account_key") == account_key and row.get("symbol") == clean_symbol]
+                relevant = [
+                    row
+                    for row in state.values()
+                    if row.get("account_key") == account_key
+                    and row.get("symbol") == clean_symbol
+                ]
                 episode_remaining = sum(
-                    int(row.get("filled_qty") or 0) * (1 if row.get("side") == "BUY" else -1)
-                    for row in relevant if row.get("owner_type") == "episode" and row.get("action") == "NEW"
+                    int(row.get("filled_qty") or 0)
+                    * (1 if row.get("side") == "BUY" else -1)
+                    for row in relevant
+                    if row.get("owner_type") == "episode" and row.get("action") == "NEW"
                 )
                 episode_open = any(
-                    row.get("owner_type") == "episode" and row.get("action") != "CANCEL"
+                    row.get("owner_type") == "episode"
+                    and row.get("action") != "CANCEL"
                     and row.get("state") == "ORDER_BOUND"
                     and int(row.get("filled_qty") or 0) < int(row.get("quantity") or 0)
                     for row in relevant
                 )
                 # Initial transition is flat. Later exact-date renewals retain
                 # native Main custody; they cannot revive an episode position.
-                if (not prior and (int(migration_receipt.get("broker_quantity", -1)) != 0 or broker_orders)
-                    or episode_remaining != 0 or episode_open
-                    or any(row.get("state") in _ACTIVE_UNBOUND_STATES for row in relevant)):
+                if (
+                    not prior
+                    and (
+                        int(migration_receipt.get("broker_quantity", -1)) != 0
+                        or broker_orders
+                    )
+                    or episode_remaining != 0
+                    or episode_open
+                    or any(
+                        row.get("state") in _ACTIVE_UNBOUND_STATES for row in relevant
+                    )
+                ):
                     raise OwnerRegistryConflict("owner_registry_retirement_not_flat")
 
             current_tail = str(events[-1].get("event_hash")) if events else "0" * 64
@@ -2464,9 +2629,14 @@ class OrderOwnerRegistry:
             raise OwnerRegistryError(
                 f"owner_registry_read_failed:{type(exc).__name__}"
             ) from exc
-        return (str(self.path.absolute()), resolved, *(
-            (s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns, s.st_ctime_ns)
-            for s in (link, source)))
+        return (
+            str(self.path.absolute()),
+            resolved,
+            *(
+                (s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns, s.st_ctime_ns)
+                for s in (link, source)
+            ),
+        )
 
     def _activation_row_locked(self, expected_hash):
         """Reuse only a hash-chain verified row; callers still check authority.
@@ -2485,14 +2655,26 @@ class OrderOwnerRegistry:
                 encoded = self._activation_rows[expected_hash]
                 row = json.loads(encoded) if encoded is not None else None
             else:
-                matches = [row for row in self._read_locked()
-                           if str(row.get('event_hash') or '').strip().lower() == expected_hash]
+                matches = [
+                    row
+                    for row in self._read_locked()
+                    if str(row.get("event_hash") or "").strip().lower() == expected_hash
+                ]
                 row = matches[0] if len(matches) == 1 else None
-                encoded = json.dumps(row, ensure_ascii=True, separators=(',', ':')) if row is not None else None
+                encoded = (
+                    json.dumps(row, ensure_ascii=True, separators=(",", ":"))
+                    if row is not None
+                    else None
+                )
             if self._activation_file_identity() != before:
-                raise OwnerRegistryConflict('owner_registry_changed_during_activation_read')
+                raise OwnerRegistryConflict(
+                    "owner_registry_changed_during_activation_read"
+                )
             if encoded is None or len(encoded) <= 4096:
-                if expected_hash not in self._activation_rows and len(self._activation_rows) >= 64:
+                if (
+                    expected_hash not in self._activation_rows
+                    and len(self._activation_rows) >= 64
+                ):
                     self._activation_rows.pop(next(iter(self._activation_rows)))
                 self._activation_rows[expected_hash] = encoded
             return row
@@ -2552,9 +2734,11 @@ class OrderOwnerRegistry:
     def decision_activation_matches(self, decision: Any) -> bool:
         if getattr(decision, "policy_id", "") == "main_manual_native_custody_v1":
             status = self.native_owner_contract(decision.symbol)
-            return bool(status["disposition_hash"]
-                        and status["disposition_hash"] == decision.activation_event_hash
-                        and status["account_key"] == decision.account_key)
+            return bool(
+                status["disposition_hash"]
+                and status["disposition_hash"] == decision.activation_event_hash
+                and status["account_key"] == decision.account_key
+            )
         """Verify a resolved coexistence decision without duplicating fields."""
 
         if not bool(getattr(decision, "coexistence_enabled", False)):

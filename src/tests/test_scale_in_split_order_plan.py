@@ -175,11 +175,22 @@ def _valid_runtime_refresh_evidence():
         "modeled_fill_participation": 1.0,
         "downside_p10_profit_rate": 0.05,
         "blockers": [],
-        "holdout_evidence": [{"runtime_apply_allowed": True, "runtime_apply_blockers": [], "blockers": [],
-            "paired_economic_sample_count": 3, "economic_source_dates": ["2026-07-06", "2026-07-07"],
-            "holdout_dates": ["2026-07-06", "2026-07-07"], "calibration_dates": ["2026-07-02", "2026-07-03"],
-            "source_quality_adjusted_ev_pct": 0.10, "average_daily_delta_net_pnl_krw": 10,
-            "price_join_coverage": 1.0, "modeled_fill_participation": 1.0, "downside_p10_profit_rate": 0.05}],
+        "holdout_evidence": [
+            {
+                "runtime_apply_allowed": True,
+                "runtime_apply_blockers": [],
+                "blockers": [],
+                "paired_economic_sample_count": 3,
+                "economic_source_dates": ["2026-07-06", "2026-07-07"],
+                "holdout_dates": ["2026-07-06", "2026-07-07"],
+                "calibration_dates": ["2026-07-02", "2026-07-03"],
+                "source_quality_adjusted_ev_pct": 0.10,
+                "average_daily_delta_net_pnl_krw": 10,
+                "price_join_coverage": 1.0,
+                "modeled_fill_participation": 1.0,
+                "downside_p10_profit_rate": 0.05,
+            }
+        ],
     }
 
 
@@ -259,10 +270,19 @@ def _economic_attempt_events(
         event["broker_route"] = "KRX"
         if "curr_price" in event:
             stamp = datetime.fromisoformat(event["emitted_at"]).timestamp()
-            event.update(market_data_effective_best_ask=event["curr_price"], market_data_effective_best_ask_qty=requested_qty,
-                         market_data_effective_best_ask_qty_source_valid=True, market_data_effective_quote_reference_epoch=stamp,
-                         scale_in_quote_source_receipt={"source_type": "0D", "item": code, "observed_epoch": stamp,
-                                                        "transport_epoch": 1, "route_sequence": sequence})
+            event.update(
+                market_data_effective_best_ask=event["curr_price"],
+                market_data_effective_best_ask_qty=requested_qty,
+                market_data_effective_best_ask_qty_source_valid=True,
+                market_data_effective_quote_reference_epoch=stamp,
+                scale_in_quote_source_receipt={
+                    "source_type": "0D",
+                    "item": code,
+                    "observed_epoch": stamp,
+                    "transport_epoch": 1,
+                    "route_sequence": sequence,
+                },
+            )
         if event["stage"] == "sell_completed":
             event.update(sell_qty=requested_qty, profit_rate=0.1)
     return events
@@ -278,11 +298,20 @@ def _seed_prior_economic_report(data_dir, **kwargs):
 
 
 def _seed_independent_economic_reports(data_dir, **kwargs):
-    for day, indices in [("2026-07-02", (4, 5, 6)), ("2026-07-03", (7, 8, 9)), ("2026-07-06", (10, 11, 12))]:
+    for day, indices in [
+        ("2026-07-02", (4, 5, 6)),
+        ("2026-07-03", (7, 8, 9)),
+        ("2026-07-06", (10, 11, 12)),
+    ]:
         _write_source_quality_pass(data_dir, day)
-        events = [event for idx in indices for event in _economic_attempt_events(target_date=day, idx=idx, **kwargs)]
+        events = [
+            event
+            for idx in indices
+            for event in _economic_attempt_events(target_date=day, idx=idx, **kwargs)
+        ]
         _write_pipeline_events(data_dir, day, events)
         split_plan.write_outputs(day, split_plan._build_report_from_events(day))
+
 
 def test_allocator_preserves_avg_down_qty_and_offsets(monkeypatch, tmp_path):
     target_date = "2026-07-07"
@@ -691,10 +720,6 @@ def test_runtime_bucket_contract_rejects_unbounded_offset():
     assert status == "context_bucket_price_offsets_invalid"
 
 
-
-
-
-
 def test_report_selects_low_pct_touch_70_30_counterfactual(monkeypatch, tmp_path):
     target_date = "2026-07-07"
     data_dir = _patch_dirs(monkeypatch, tmp_path)
@@ -1092,7 +1117,9 @@ def test_report_blocks_negative_cost_adjusted_split_economics(monkeypatch, tmp_p
     report = split_plan._build_report_from_events(target_date)
     candidate = report["recommended_policy"]["candidates"][0]
 
-    economic = split_plan._evaluate_candidate_economics(report["daily_attempt_outcomes"], candidate)
+    economic = split_plan._evaluate_candidate_economics(
+        report["daily_attempt_outcomes"], candidate
+    )
     assert economic["source_quality_adjusted_ev_pct"] < 0
     assert "cost_adjusted_ev_not_positive" in economic["runtime_apply_blockers"]
     assert "modeled_fill_participation_floor" in economic["runtime_apply_blockers"]
@@ -1115,7 +1142,9 @@ def test_report_rolls_unique_attempt_outcomes_across_dates(monkeypatch, tmp_path
             for event in _economic_attempt_events(target_date=first_date, idx=idx)
         ],
     )
-    split_plan.write_outputs(first_date, split_plan._build_report_from_events(first_date))
+    split_plan.write_outputs(
+        first_date, split_plan._build_report_from_events(first_date)
+    )
     _write_source_quality_pass(data_dir, target_date)
     _write_pipeline_events(
         data_dir,
@@ -1129,7 +1158,10 @@ def test_report_rolls_unique_attempt_outcomes_across_dates(monkeypatch, tmp_path
     assert report["rolling_summary"]["current_unique_attempt_count"] == 1
     assert report["rolling_summary"]["rolling_unique_attempt_count"] == 3
     assert report["recommended_policy"]["runtime_apply_allowed"] is False
-    assert "independent_calibration_sample_floor" in report["recommended_policy"]["candidates"][0]["holdout_evidence"]["blockers"]
+    assert (
+        "independent_calibration_sample_floor"
+        in report["recommended_policy"]["candidates"][0]["holdout_evidence"]["blockers"]
+    )
 
 
 def test_three_leg_candidate_stays_diagnostic_when_missed_upside_is_high():
@@ -1423,7 +1455,9 @@ def test_policy_artifact_repeats_runtime_refresh_gate():
                 "economic_source_dates": ["2026-07-06", "2026-07-07"],
                 "context_bucket": "scalping:late_loss_retry:normal",
                 "runtime_apply_allowed": True,
-                "holdout_evidence": _valid_runtime_refresh_evidence()["holdout_evidence"][0],
+                "holdout_evidence": _valid_runtime_refresh_evidence()[
+                    "holdout_evidence"
+                ][0],
                 "real_outcome_joined_sample": 3,
                 "additional_mfe_mae_joined_sample": 3,
                 "price_observation_joined_sample": 4,
@@ -1441,7 +1475,9 @@ def test_policy_artifact_repeats_runtime_refresh_gate():
             {
                 "context_bucket": "scalping:late_loss_retry:normal",
                 "runtime_apply_allowed": True,
-                "holdout_evidence": _valid_runtime_refresh_evidence()["holdout_evidence"][0],
+                "holdout_evidence": _valid_runtime_refresh_evidence()[
+                    "holdout_evidence"
+                ][0],
             }
         ],
         refresh_evidence=ready_evidence,
@@ -1478,9 +1514,9 @@ def test_generated_policy_contract_detects_content_change():
     )
 
     assert split_plan.policy_runtime_contract_error(policy) == ""
-    policy["buckets"]["scalping:late_loss_retry:normal"]["selection_reason"] = (
-        "tampered"
-    )
+    policy["buckets"]["scalping:late_loss_retry:normal"][
+        "selection_reason"
+    ] = "tampered"
     assert split_plan.policy_runtime_contract_error(policy) == (
         "policy_content_hash_mismatch"
     )
@@ -1536,7 +1572,9 @@ def _anchor_from_events(events):
             stamp = datetime.fromisoformat(event["emitted_at"]).timestamp()
             event["market_data_effective_best_ask"] = event["curr_price"]
             event["market_data_effective_quote_reference_epoch"] = stamp
-            event["scale_in_quote_source_receipt"].update(observed_epoch=stamp, route_sequence=sequence)
+            event["scale_in_quote_source_receipt"].update(
+                observed_epoch=stamp, route_sequence=sequence
+            )
     events = sorted(events, key=split_plan._event_time)
     anchor = next(
         item for item in events if item["stage"] == "scale_in_order_submitted"
@@ -1594,9 +1632,14 @@ def test_scale_in_partial_fills_preserve_each_position_increment():
     events = _economic_attempt_events(target_date="2026-09-28", idx=1)
     first = events[1]
     first.update(fill_qty=1, pre_fill_buy_qty=5, post_fill_buy_qty=6)
-    second = {**first, "execution_no": "EXEC1-B", "fill_qty": 1,
-              "pre_fill_buy_qty": 6, "post_fill_buy_qty": 7,
-              "emitted_at": "2026-09-28T09:05:02+09:00"}
+    second = {
+        **first,
+        "execution_no": "EXEC1-B",
+        "fill_qty": 1,
+        "pre_fill_buy_qty": 6,
+        "post_fill_buy_qty": 7,
+        "emitted_at": "2026-09-28T09:05:02+09:00",
+    }
     events.append(second)
     outcome = _anchor_from_events(events)
     assert outcome["actual_fill_qty"] == 2
@@ -1628,10 +1671,15 @@ def test_scale_in_first_reader_rejects_wrong_date_and_conflicting_projection():
     row = split_plan._project_relevant_input_event(
         event, source_name="pipeline_events", event_date=day
     )
-    receipt = {"artifact_sha256": "receipt-sha", "scale_in_execution_projection": {
-        "contract": "scale_in_execution_projection_v1", "target_date": day,
-        "record_ids": ["1"], "rows": [row],
-    }}
+    receipt = {
+        "artifact_sha256": "receipt-sha",
+        "scale_in_execution_projection": {
+            "contract": "scale_in_execution_projection_v1",
+            "target_date": day,
+            "record_ids": ["1"],
+            "rows": [row],
+        },
+    }
     rows, summary = split_plan._conditioned_source_events(day, receipt, {"1"})
     assert rows == [row]
     assert summary["source_read_contract"]["catalog_sha256"] == "receipt-sha"
@@ -1661,7 +1709,8 @@ def test_scale_in_first_reader_missing_source_is_not_valid_empty(monkeypatch, tm
         split_plan._conditioned_source_events("2026-09-28", {}, {"1"})
     with pytest.raises(ValueError, match="execution_projection_contract_invalid"):
         split_plan._conditioned_source_events(
-            "2026-09-28", {"scale_in_execution_projection": {"contract": "unknown"}},
+            "2026-09-28",
+            {"scale_in_execution_projection": {"contract": "unknown"}},
             {"1"},
         )
 
@@ -1709,7 +1758,9 @@ def test_scale_in_compressed_source_uses_signed_fact_projection(monkeypatch, tmp
     row = receipt["scale_in_execution_projection"]["rows"][0]
     rows, summary = split_plan._conditioned_source_events(day, receipt, {"1"})
     assert rows == [row]
-    assert summary["source_read_contract"]["catalog_sha256"] == split_plan._semantic_digest(receipt)
+    assert summary["source_read_contract"][
+        "catalog_sha256"
+    ] == split_plan._semantic_digest(receipt)
 
 
 @pytest.mark.parametrize(
@@ -1815,8 +1866,6 @@ def test_current_incumbent_self_comparison_preserves_policy_and_records_versione
     )
 
 
-
-
 @pytest.mark.parametrize("flag", [False, "false", 0, None])
 def test_false_rising_missed_flag_does_not_change_context_bucket(flag):
     row = {
@@ -1901,8 +1950,6 @@ def test_partial_execution_r6_is_not_pooled_with_full_fill_ev():
     assert result["negative_economic_evidence"] is False
 
 
-
-
 def test_runtime_ttl_decorator_and_submission_provenance_contract():
     source = Path("src/engine/sniper_state_handlers.py").read_text(encoding="utf-8")
     tree = ast.parse(source)
@@ -1982,13 +2029,31 @@ def test_unattributed_split_provenance_has_source_only_workorder():
 
 
 def _write_fact_catalog(data_dir, day, events=()):
-    rows = [split_plan._project_relevant_input_event(event, source_name="pipeline_events", event_date=day)
-            for event in events]
-    payload = {"schema_version": 1, "report_type": "strategy_position_fact_sync", "target_date": day, "status": "succeeded", "consumer_ready": True, "issues": [],
-               "scale_in_execution_projection": {"contract": "scale_in_execution_projection_v1",
-                                                   "target_date": day, "rows": [r for r in rows if r is not None]}}
+    rows = [
+        split_plan._project_relevant_input_event(
+            event, source_name="pipeline_events", event_date=day
+        )
+        for event in events
+    ]
+    payload = {
+        "schema_version": 1,
+        "report_type": "strategy_position_fact_sync",
+        "target_date": day,
+        "status": "succeeded",
+        "consumer_ready": True,
+        "issues": [],
+        "scale_in_execution_projection": {
+            "contract": "scale_in_execution_projection_v1",
+            "target_date": day,
+            "rows": [r for r in rows if r is not None],
+        },
+    }
     payload["artifact_sha256"] = split_plan._semantic_digest(payload)
-    path = data_dir / "report/strategy_position_fact_sync" / f"strategy_position_fact_sync_{day}.status.json"
+    path = (
+        data_dir
+        / "report/strategy_position_fact_sync"
+        / f"strategy_position_fact_sync_{day}.status.json"
+    )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload))
     return path
@@ -1996,25 +2061,44 @@ def _write_fact_catalog(data_dir, day, events=()):
 
 def _actual_inventory(day, idx=1, status="COMPLETED", qty=2):
     events = _economic_attempt_events(target_date=day, idx=idx, requested_qty=qty)
-    return {"history_id": idx, "record_id": str(idx), "code": f"{idx:06d}", "order_no": f"BUY{idx}",
-            "source_date": day, "fill_time": events[1]["emitted_at"], "request_qty": qty, "fill_qty": qty,
-            "fill_price": 10000, "request_price": 10000, "status": status,
-            "sell_time": events[-1]["emitted_at"] if status == "COMPLETED" else None,
-            "sell_price": 10050 if status == "COMPLETED" else None,
-            "profit_rate": 0.1 if status == "COMPLETED" else None}
+    return {
+        "history_id": idx,
+        "record_id": str(idx),
+        "code": f"{idx:06d}",
+        "order_no": f"BUY{idx}",
+        "source_date": day,
+        "fill_time": events[1]["emitted_at"],
+        "request_qty": qty,
+        "fill_qty": qty,
+        "fill_price": 10000,
+        "request_price": 10000,
+        "status": status,
+        "sell_time": events[-1]["emitted_at"] if status == "COMPLETED" else None,
+        "sell_price": 10050 if status == "COMPLETED" else None,
+        "profit_rate": 0.1 if status == "COMPLETED" else None,
+    }
 
 
-@pytest.mark.parametrize("inventory,status", [([], "skipped_no_actual_fill"),
-    ([_actual_inventory("2026-09-17", qty=1)], "skipped_no_applicable_fill"),
-    ([_actual_inventory("2026-09-17", status="HOLDING")], "pending_filled_outcome")])
-def test_public_trigger_skips_raw_and_grid_without_new_ready_fill(monkeypatch, tmp_path, inventory, status):
+@pytest.mark.parametrize(
+    "inventory,status",
+    [
+        ([], "skipped_no_actual_fill"),
+        ([_actual_inventory("2026-09-17", qty=1)], "skipped_no_applicable_fill"),
+        ([_actual_inventory("2026-09-17", status="HOLDING")], "pending_filled_outcome"),
+    ],
+)
+def test_public_trigger_skips_raw_and_grid_without_new_ready_fill(
+    monkeypatch, tmp_path, inventory, status
+):
     data = _patch_dirs(monkeypatch, tmp_path)
     day = "2026-09-17"
     _write_source_quality_pass(data, day)
     _write_fact_catalog(data, day)
     monkeypatch.setattr(split_plan, "_query_actual_fill_inventory", lambda _: inventory)
+
     def forbidden(*args, **kwargs):
         pytest.fail("no ready actual fill must not read raw or evaluate candidates")
+
     monkeypatch.setattr(split_plan, "_iter_input_events", forbidden)
     monkeypatch.setattr(split_plan, "_build_report_from_events", forbidden)
     report = split_plan.build_report(day)
@@ -2031,29 +2115,50 @@ def test_public_trigger_invalid_catalog_is_blocked_not_zero_fill(monkeypatch, tm
     payload = json.loads(path.read_text())
     payload["consumer_ready"] = False
     path.write_text(json.dumps(payload))
-    monkeypatch.setattr(split_plan, "_query_actual_fill_inventory", lambda _: pytest.fail("invalid catalog"))
+    monkeypatch.setattr(
+        split_plan,
+        "_query_actual_fill_inventory",
+        lambda _: pytest.fail("invalid catalog"),
+    )
     report = split_plan.build_report(day)
     assert report["evaluation_state"]["status"] == "blocked_execution_source"
     assert report["evaluation_state"]["modeled_ev_pct"] is None
 
 
-def test_public_filled_outcome_and_unchanged_revision_do_not_repeat_grid(monkeypatch, tmp_path):
+def test_public_filled_outcome_and_unchanged_revision_do_not_repeat_grid(
+    monkeypatch, tmp_path
+):
     data = _patch_dirs(monkeypatch, tmp_path)
     day = "2026-07-07"
     _seed_independent_economic_reports(data)
     _write_source_quality_pass(data, day)
-    events = [e for idx in (1, 2, 3) for e in _economic_attempt_events(target_date=day, idx=idx)]
+    events = [
+        e
+        for idx in (1, 2, 3)
+        for e in _economic_attempt_events(target_date=day, idx=idx)
+    ]
     _write_fact_catalog(data, day, events)
-    monkeypatch.setattr(split_plan, "_query_actual_fill_inventory", lambda _: [_actual_inventory(day, idx) for idx in (1, 2, 3)])
+    monkeypatch.setattr(
+        split_plan,
+        "_query_actual_fill_inventory",
+        lambda _: [_actual_inventory(day, idx) for idx in (1, 2, 3)],
+    )
     report = split_plan.build_report(day)
     assert report["evaluation_state"]["status"] == "evaluated"
     assert report["recommended_policy"]["runtime_apply_allowed"] is True
     split_plan.write_outputs(day, report)
-    monkeypatch.setattr(split_plan, "_build_report_from_events", lambda *a, **k: pytest.fail("unchanged outcome replayed"))
+    monkeypatch.setattr(
+        split_plan,
+        "_build_report_from_events",
+        lambda *a, **k: pytest.fail("unchanged outcome replayed"),
+    )
     again = split_plan.build_report(day)
     assert again["evaluation_state"]["status"] == "skipped_unchanged_filled_outcome"
     assert again["evaluation_state"]["modeled_ev_pct"] is None
-    assert again["last_valid_evaluation"]["inventory_key"] == report["evaluation_state"]["inventory_key"]
+    assert (
+        again["last_valid_evaluation"]["inventory_key"]
+        == report["evaluation_state"]["inventory_key"]
+    )
     assert len(again["outcome_revisions"]) == 6
     assert len({r["attempt_id"] for r in again["outcome_revisions"]}) == 6
 
@@ -2072,7 +2177,8 @@ def test_scale_in_fact_catalog_regeneration_invalidates_old_evaluation(
     ]
     catalog_path = _write_fact_catalog(data, day, events)
     monkeypatch.setattr(
-        split_plan, "_query_actual_fill_inventory",
+        split_plan,
+        "_query_actual_fill_inventory",
         lambda _: [_actual_inventory(day, idx) for idx in (1, 2, 3)],
     )
     first = split_plan.build_report(day)
@@ -2089,18 +2195,26 @@ def test_scale_in_fact_catalog_regeneration_invalidates_old_evaluation(
     assert second["processed_inventory_key"] != first["processed_inventory_key"]
 
 
-def test_late_evaluation_cannot_reuse_consumed_earlier_fill_dates(monkeypatch, tmp_path):
+def test_late_evaluation_cannot_reuse_consumed_earlier_fill_dates(
+    monkeypatch, tmp_path
+):
     _patch_dirs(monkeypatch, tmp_path)
     rows = [
-        {"record_id": f"{day}:{idx}", "source_date": day,
-         "real_outcome_joined": True, "additional_mfe_mae_joined": True,
-         "outcome_available_at": f"{day}T15:00:00+09:00"}
+        {
+            "record_id": f"{day}:{idx}",
+            "source_date": day,
+            "real_outcome_joined": True,
+            "additional_mfe_mae_joined": True,
+            "outcome_available_at": f"{day}T15:00:00+09:00",
+        }
         for day in ("2026-07-02", "2026-07-03", "2026-07-06", "2026-07-07")
         for idx in range(2)
     ]
     split_plan.REPORT_DIR.mkdir(parents=True)
     ledger = split_plan.report_paths("2026-07-08")[0]
-    ledger.write_text(json.dumps({"consumed_holdout_dates": ["2026-07-06", "2026-07-07"]}))
+    ledger.write_text(
+        json.dumps({"consumed_holdout_dates": ["2026-07-06", "2026-07-07"]})
+    )
     _, _, partition = split_plan._partition_outcomes(rows)
     assert partition["holdout_dates"] == ["2026-07-06", "2026-07-07"]
     assert "holdout_already_consumed" in partition["blockers"]
@@ -2119,7 +2233,9 @@ def test_existing_fill_late_terminal_rejoins_original_date(monkeypatch, tmp_path
     _write_fact_catalog(data, day, [terminal])
     inventory = _actual_inventory(origin)
     inventory["sell_time"] = terminal["emitted_at"]
-    monkeypatch.setattr(split_plan, "_query_actual_fill_inventory", lambda _: [inventory])
+    monkeypatch.setattr(
+        split_plan, "_query_actual_fill_inventory", lambda _: [inventory]
+    )
     report = split_plan.build_report(day)
     assert report["evaluation_state"]["status"] == "evaluated"
     assert len(report["daily_attempt_outcomes"]) == 1
@@ -2153,7 +2269,9 @@ def test_touch_only_and_repeated_quote_cannot_manufacture_fills():
     assert split_plan._replay_execution(anchor, _equal_variant()) is None
 
 
-def test_no_fill_main_generates_dated_base_order_policy_for_preopen(monkeypatch, tmp_path):
+def test_no_fill_main_generates_dated_base_order_policy_for_preopen(
+    monkeypatch, tmp_path
+):
     data = _patch_dirs(monkeypatch, tmp_path)
     source, target = "2026-09-17", "2026-09-21"
     _write_source_quality_pass(data, source)
@@ -2173,39 +2291,92 @@ def test_old_market_order_does_not_exclude_later_limit_retry(monkeypatch, tmp_pa
     day = "2026-09-17"
     _write_source_quality_pass(data, day)
     _write_fact_catalog(data, day)
-    old = {"source_quality": {"tuning_input_allowed": True}, "daily_attempt_outcomes": [{"record_id": "1", "attempt_id": f"{day}:000001:order:OLD", "market_like_order": True}]}
+    old = {
+        "source_quality": {"tuning_input_allowed": True},
+        "daily_attempt_outcomes": [
+            {
+                "record_id": "1",
+                "attempt_id": f"{day}:000001:order:OLD",
+                "market_like_order": True,
+            }
+        ],
+    }
     path = split_plan.report_paths(day)[0]
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(old))
-    monkeypatch.setattr(split_plan, "_query_actual_fill_inventory", lambda _: [_actual_inventory(day, status="HOLDING")])
+    monkeypatch.setattr(
+        split_plan,
+        "_query_actual_fill_inventory",
+        lambda _: [_actual_inventory(day, status="HOLDING")],
+    )
     report = split_plan.build_report(day)
     assert report["evaluation_state"]["status"] == "pending_filled_outcome"
     assert report["evaluation_state"]["applicable_receipt_count"] == 1
-    assert report["evaluation_state"]["excluded_receipt_reasons"]["market_like_from_frozen_anchor"] == 0
+    assert (
+        report["evaluation_state"]["excluded_receipt_reasons"][
+            "market_like_from_frozen_anchor"
+        ]
+        == 0
+    )
 
 
-def test_actual_fill_inventory_keeps_main_scanner_and_excludes_other_custody(monkeypatch, tmp_path):
+def test_actual_fill_inventory_keeps_main_scanner_and_excludes_other_custody(
+    monkeypatch, tmp_path
+):
     from contextlib import contextmanager
     from types import SimpleNamespace
     from src.database import db_manager
+
     _patch_dirs(monkeypatch, tmp_path)
     day = "2026-09-17"
     pairs = []
-    for idx, tag in enumerate(("SCANNER", "SCALP_BASE", "WIDGET", "EPISODE", "MANUAL"), 1):
-        receipt = SimpleNamespace(id=idx, recommendation_id=idx, order_no=f"BUY{idx}",
-            event_time=datetime.fromisoformat(f"{day}T10:00:00"), executed_price=10000,
-            stock_code=f"{idx:06d}", request_qty=4, executed_qty=4, request_price=10000)
-        position = SimpleNamespace(strategy="SCALPING", position_tag=tag, sell_time=None, status="COMPLETED" if tag == "SCANNER" else "HOLDING", sell_price=None, profit_rate=None)
+    for idx, tag in enumerate(
+        ("SCANNER", "SCALP_BASE", "WIDGET", "EPISODE", "MANUAL"), 1
+    ):
+        receipt = SimpleNamespace(
+            id=idx,
+            recommendation_id=idx,
+            order_no=f"BUY{idx}",
+            event_time=datetime.fromisoformat(f"{day}T10:00:00"),
+            executed_price=10000,
+            stock_code=f"{idx:06d}",
+            request_qty=4,
+            executed_qty=4,
+            request_price=10000,
+        )
+        position = SimpleNamespace(
+            strategy="SCALPING",
+            position_tag=tag,
+            sell_time=None,
+            status="COMPLETED" if tag == "SCANNER" else "HOLDING",
+            sell_price=None,
+            profit_rate=None,
+        )
         pairs.append((receipt, position))
+
     class Session:
-        def query(self, *args): return self
-        def outerjoin(self, *args): return self
-        def filter(self, *args): return self
-        def order_by(self, *args): return self
-        def all(self): return pairs
+        def query(self, *args):
+            return self
+
+        def outerjoin(self, *args):
+            return self
+
+        def filter(self, *args):
+            return self
+
+        def order_by(self, *args):
+            return self
+
+        def all(self):
+            return pairs
+
     @contextmanager
-    def session(): yield Session()
-    monkeypatch.setattr(db_manager, "DBManager", lambda: SimpleNamespace(get_session=session))
+    def session():
+        yield Session()
+
+    monkeypatch.setattr(
+        db_manager, "DBManager", lambda: SimpleNamespace(get_session=session)
+    )
     result = split_plan._query_actual_fill_inventory(day)
     assert [row["record_id"] for row in result] == ["1", "2"]
     assert result[0]["status"] == "COMPLETED"
@@ -2215,7 +2386,15 @@ def test_actual_fill_inventory_keeps_main_scanner_and_excludes_other_custody(mon
 def test_runtime_refresh_rejects_reversed_holdout_and_future_approval_dates():
     evidence = _valid_runtime_refresh_evidence()
     evidence["holdout_evidence"][0]["calibration_dates"] = ["2026-07-08", "2026-07-09"]
-    assert split_plan.runtime_refresh_contract_error(evidence) == "runtime_refresh_holdout_chronology_invalid"
-    policy = {"runtime_refresh_evidence": _valid_runtime_refresh_evidence(),
-              "policy_version": "scale_in_split_order_plan:2026-07-03:untrusted"}
-    assert split_plan.policy_runtime_contract_error(policy) == "runtime_refresh_holdout_after_approval_source_date"
+    assert (
+        split_plan.runtime_refresh_contract_error(evidence)
+        == "runtime_refresh_holdout_chronology_invalid"
+    )
+    policy = {
+        "runtime_refresh_evidence": _valid_runtime_refresh_evidence(),
+        "policy_version": "scale_in_split_order_plan:2026-07-03:untrusted",
+    }
+    assert (
+        split_plan.policy_runtime_contract_error(policy)
+        == "runtime_refresh_holdout_after_approval_source_date"
+    )

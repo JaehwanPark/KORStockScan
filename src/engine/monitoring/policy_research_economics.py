@@ -198,9 +198,7 @@ def joint_capital_demand(
         "status": (
             "source_gap"
             if invalid
-            else "observed"
-            if valid_limit
-            else "allocation_contract_missing"
+            else "observed" if valid_limit else "allocation_contract_missing"
         ),
         "modeled_peak_concurrent_notional_krw": peak if not invalid else None,
         "independent_modeled_net_profit_krw": pnl if not invalid else None,
@@ -435,10 +433,6 @@ def population_dispositions(rows, admitted_ids):
         "unaccounted_count": len(rows) - sum(counts.values()),
         **AUTHORITY,
     }
-
-
-
-
 
 
 def _load_bounded_research_summary(path, *, maximum_bytes):

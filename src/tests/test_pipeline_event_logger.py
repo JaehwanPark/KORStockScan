@@ -87,28 +87,53 @@ def _reset_logger_state(monkeypatch):
     monkeypatch.setattr(logger_mod, "_PRODUCER_COMPACTOR", None)
 
 
-def test_bounded_queue_normal_load_preserves_raw_and_compact_transitions(tmp_path, monkeypatch):
+def test_bounded_queue_normal_load_preserves_raw_and_compact_transitions(
+    tmp_path, monkeypatch
+):
     _reset_logger_state(monkeypatch)
-    monkeypatch.setattr(logger_mod, 'DATA_DIR', tmp_path)
-    monkeypatch.setattr(logger_mod, 'TRADING_RULES', SimpleNamespace(PIPELINE_EVENT_JSONL_ENABLED=True))
-    monkeypatch.setattr(logger_mod, 'log_info', lambda *a, **k: None)
+    monkeypatch.setattr(logger_mod, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(
+        logger_mod, "TRADING_RULES", SimpleNamespace(PIPELINE_EVENT_JSONL_ENABLED=True)
+    )
+    monkeypatch.setattr(logger_mod, "log_info", lambda *a, **k: None)
     with ThreadPoolExecutor(max_workers=1) as executor:
         queue = logger_mod.BoundedObservationQueue(executor)
         for i in range(32):
-            assert queue.submit(logger_mod.emit_pipeline_event, 'ENTRY_PIPELINE', 'TEST', '005930',
-                'entry_async_disposition', fields={'async_disposition_event_id': str(i),
-                'async_disposition': 'entry_path_returned', 'metric_role': 'source_quality_gate'})['status'] == 'queued'
+            assert (
+                queue.submit(
+                    logger_mod.emit_pipeline_event,
+                    "ENTRY_PIPELINE",
+                    "TEST",
+                    "005930",
+                    "entry_async_disposition",
+                    fields={
+                        "async_disposition_event_id": str(i),
+                        "async_disposition": "entry_path_returned",
+                        "metric_role": "source_quality_gate",
+                    },
+                )["status"]
+                == "queued"
+            )
         assert queue.close(timeout=5)
     logger_mod.flush_pipeline_event_producer_summary()
     stats = queue.snapshot()
-    assert stats['append_confirmed'] == stats['completed'] == 32
-    assert stats['failed'] == stats['unavailable'] == stats['pending_bytes'] == 0
+    assert stats["append_confirmed"] == stats["completed"] == 32
+    assert stats["failed"] == stats["unavailable"] == stats["pending_bytes"] == 0
+
     def identities(base):
-        return [row['fields']['async_disposition_event_id']
-            for path in base.glob('*.jsonl') for line in path.read_text().splitlines()
-            if (row := json.loads(line)).get('stage') == 'entry_async_disposition']
-    assert sorted(identities(tmp_path/'pipeline_events')) == sorted(map(str, range(32)))
-    assert sorted(identities(tmp_path/'threshold_cycle')) == sorted(map(str, range(32)))
+        return [
+            row["fields"]["async_disposition_event_id"]
+            for path in base.glob("*.jsonl")
+            for line in path.read_text().splitlines()
+            if (row := json.loads(line)).get("stage") == "entry_async_disposition"
+        ]
+
+    assert sorted(identities(tmp_path / "pipeline_events")) == sorted(
+        map(str, range(32))
+    )
+    assert sorted(identities(tmp_path / "threshold_cycle")) == sorted(
+        map(str, range(32))
+    )
 
 
 @pytest.mark.parametrize("failure", ["construct", "submit"])
@@ -585,13 +610,17 @@ def test_pipeline_event_writer_pins_parent_directory_across_path_swap(
     assert not (outside_dir / logical_path.name).exists()
 
 
-def test_append_revalidates_existing_parent_without_repeated_mkdir(monkeypatch, tmp_path):
+def test_append_revalidates_existing_parent_without_repeated_mkdir(
+    monkeypatch, tmp_path
+):
     from pathlib import Path
     from src.engine.automation.main_trailing_source_store import _database
+
     # Main prepares its index before collection. This regression exercises
     # the same warm append boundary while preserving native raw-parent checks.
-    prepared=tmp_path/'pipeline_events/pipeline_events_2026-10-10.jsonl'
-    with _database(tmp_path,prepared,writer=True):pass
+    prepared = tmp_path / "pipeline_events/pipeline_events_2026-10-10.jsonl"
+    with _database(tmp_path, prepared, writer=True):
+        pass
     original = Path.mkdir
     created = []
 
@@ -599,19 +628,19 @@ def test_append_revalidates_existing_parent_without_repeated_mkdir(monkeypatch, 
         created.append(path)
         return original(path, *args, **kwargs)
 
-    monkeypatch.setattr(Path, 'mkdir', mkdir)
-    monkeypatch.setattr(logger_mod, 'DATA_DIR', tmp_path)
-    path = logger_mod._event_path('2026-10-10')
+    monkeypatch.setattr(Path, "mkdir", mkdir)
+    monkeypatch.setattr(logger_mod, "DATA_DIR", tmp_path)
+    path = logger_mod._event_path("2026-10-10")
     assert not created
     logger_mod._append_jsonl(path, '{"first":true}\n')
     assert created == [path.parent]
     logger_mod._append_jsonl(path, '{"second":true}\n')
     assert created == [path.parent]
     # A warm writer still validates a replaced parent on its next append.
-    saved = tmp_path / 'saved'
+    saved = tmp_path / "saved"
     path.parent.rename(saved)
     path.parent.symlink_to(saved, target_is_directory=True)
-    with pytest.raises(OSError, match='not a real directory'):
+    with pytest.raises(OSError, match="not a real directory"):
         logger_mod._append_jsonl(path, '{"redirected":true}\n')
     assert (saved / path.name).read_text() == '{"first":true}\n{"second":true}\n'
 
@@ -1512,99 +1541,176 @@ def test_emit_pipeline_event_keeps_id_in_submit_stage_text_payload(
     assert "id=77" in payload["text_payload"]
 
 
-@pytest.mark.parametrize("stage", ["entry_execution_sizing_plan", "order_leg_sent", "order_bundle_submitted",
-    "entry_cancel_wait_submission","entry_order_cancel_confirmed"])
+@pytest.mark.parametrize(
+    "stage",
+    [
+        "entry_execution_sizing_plan",
+        "order_leg_sent",
+        "order_bundle_submitted",
+        "entry_cancel_wait_submission",
+        "entry_order_cancel_confirmed",
+    ],
+)
 def test_compact_execution_contract_survives_large_field_count(stage):
     fields = {f"extra_{i}": str(i) for i in range(80)}
-    fields.update(entry_execution_sizing_plan_id="parent", entry_execution_sizing_plan_sha256="a" * 64,
-        entry_price_plan_sha256="b" * 64, entry_opportunity_replay_seed="{frozen}", broker_order_no="007")
+    fields.update(
+        entry_execution_sizing_plan_id="parent",
+        entry_execution_sizing_plan_sha256="a" * 64,
+        entry_price_plan_sha256="b" * 64,
+        entry_opportunity_replay_seed="{frozen}",
+        broker_order_no="007",
+    )
     compact = logger_mod._project_fields_for_compact_stream(stage, fields)
-    for key in ("entry_execution_sizing_plan_id", "entry_execution_sizing_plan_sha256",
-                "entry_price_plan_sha256", "entry_opportunity_replay_seed", "broker_order_no"):
+    for key in (
+        "entry_execution_sizing_plan_id",
+        "entry_execution_sizing_plan_sha256",
+        "entry_price_plan_sha256",
+        "entry_opportunity_replay_seed",
+        "broker_order_no",
+    ):
         assert compact[key] == fields[key]
 
 
-def test_execution_producer_family_projection_has_reconciled_census(monkeypatch, tmp_path):
+def test_execution_producer_family_projection_has_reconciled_census(
+    monkeypatch, tmp_path
+):
     from src.engine.scalping import entry_split_order_plan as owner
     from src.engine.pipeline_event_summary import execution_projection_identity
+
     _reset_logger_state(monkeypatch)
-    monkeypatch.setattr(logger_mod, 'DATA_DIR', tmp_path)
-    monkeypatch.setattr(owner, 'DATA_DIR', tmp_path)
-    monkeypatch.setattr(logger_mod, 'TRADING_RULES', SimpleNamespace(PIPELINE_EVENT_JSONL_ENABLED=True,
-        PIPELINE_EVENT_SCHEMA_VERSION=3, PIPELINE_EVENT_TEXT_INFO_LOG_ENABLED=False))
-    monkeypatch.setattr(logger_mod, 'log_info', lambda *a, **k: None)
-    event = logger_mod.emit_pipeline_event('ENTRY_PIPELINE','TEST','005930',
-        'entry_ai_economic_source_gap', record_id=1, fields={'evaluation_attempt_id':'pre-ai-1',
-        'entry_economic_source_blocker':'exact_broker_capacity_missing',
-        **{f'field-{i}':str(i) for i in range(80)}})
-    day = event['emitted_date']
+    monkeypatch.setattr(logger_mod, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(owner, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(
+        logger_mod,
+        "TRADING_RULES",
+        SimpleNamespace(
+            PIPELINE_EVENT_JSONL_ENABLED=True,
+            PIPELINE_EVENT_SCHEMA_VERSION=3,
+            PIPELINE_EVENT_TEXT_INFO_LOG_ENABLED=False,
+        ),
+    )
+    monkeypatch.setattr(logger_mod, "log_info", lambda *a, **k: None)
+    event = logger_mod.emit_pipeline_event(
+        "ENTRY_PIPELINE",
+        "TEST",
+        "005930",
+        "entry_ai_economic_source_gap",
+        record_id=1,
+        fields={
+            "evaluation_attempt_id": "pre-ai-1",
+            "entry_economic_source_blocker": "exact_broker_capacity_missing",
+            **{f"field-{i}": str(i) for i in range(80)},
+        },
+    )
+    day = event["emitted_date"]
     logger_mod.flush_pipeline_event_producer_summary(day)
-    flat = tmp_path / 'threshold_cycle' / f'threshold_events_{day}.jsonl'
+    flat = tmp_path / "threshold_cycle" / f"threshold_events_{day}.jsonl"
     # A growing unrelated flat stream must not force a raw scan.
-    with flat.open('r+b') as handle: handle.truncate(65*1024*1024)
+    with flat.open("r+b") as handle:
+        handle.truncate(65 * 1024 * 1024)
     rows, contract = owner._bounded_execution_projection(day)
     assert len(rows) == 1
-    assert rows[0]['fields']['field-79'] == '79'
-    assert contract['producer_census']['identity_conservation_holds'] is True
-    assert contract['full_population_coverage_verified'] is True
-    assert contract['flat_compact_included'] is False
-    part = next((tmp_path / 'threshold_cycle' / f'date={day}' / 'family=dynamic_entry_price_resolver').glob('part-execution-*'))
-    tampered = json.loads(part.read_text());tampered['fields']['evaluation_attempt_id']='changed'
-    part.write_text(json.dumps(tampered)+'\n')
-    with pytest.raises(ValueError, match='content_identity_mismatch'):
+    assert rows[0]["fields"]["field-79"] == "79"
+    assert contract["producer_census"]["identity_conservation_holds"] is True
+    assert contract["full_population_coverage_verified"] is True
+    assert contract["flat_compact_included"] is False
+    part = next(
+        (
+            tmp_path
+            / "threshold_cycle"
+            / f"date={day}"
+            / "family=dynamic_entry_price_resolver"
+        ).glob("part-execution-*")
+    )
+    tampered = json.loads(part.read_text())
+    tampered["fields"]["evaluation_attempt_id"] = "changed"
+    part.write_text(json.dumps(tampered) + "\n")
+    with pytest.raises(ValueError, match="content_identity_mismatch"):
         owner._bounded_execution_projection(day)
     # Even a correctly resealed projection cannot alter the original producer census.
-    tampered['execution_source_event_sha256'] = execution_projection_identity(tampered)
-    part.write_text(json.dumps(tampered)+'\n')
+    tampered["execution_source_event_sha256"] = execution_projection_identity(tampered)
+    part.write_text(json.dumps(tampered) + "\n")
     _, bad = owner._bounded_execution_projection(day)
-    assert bad['status'] == 'source_gap'
+    assert bad["status"] == "source_gap"
     logger_mod._flush_producer_summary_at_exit()
-    monkeypatch.setattr(logger_mod,'_PRODUCER_COMPACTOR',None)
+    monkeypatch.setattr(logger_mod, "_PRODUCER_COMPACTOR", None)
 
 
 def test_restart_drain_closes_loaded_observers_before_summary(monkeypatch):
     import sys
+
     calls = []
-    monkeypatch.setitem(sys.modules, 'src.engine.kiwoom_sniper_v2', SimpleNamespace(
-        close_observation_sources=lambda: calls.append('observations') or True))
-    monkeypatch.setattr(logger_mod, '_PRODUCER_COMPACTOR', SimpleNamespace(
-        enable_termination_drain=lambda: calls.append('synchronous'),
-        flush=lambda: calls.append('summary')))
-    monkeypatch.setattr(logger_mod, '_RETIRING_COMPACTORS', [])
-    monkeypatch.setattr(logger_mod, '_TERMINATION_DRAIN_ACTIVE', False)
+    monkeypatch.setitem(
+        sys.modules,
+        "src.engine.kiwoom_sniper_v2",
+        SimpleNamespace(
+            close_observation_sources=lambda: calls.append("observations") or True
+        ),
+    )
+    monkeypatch.setattr(
+        logger_mod,
+        "_PRODUCER_COMPACTOR",
+        SimpleNamespace(
+            enable_termination_drain=lambda: calls.append("synchronous"),
+            flush=lambda: calls.append("summary"),
+        ),
+    )
+    monkeypatch.setattr(logger_mod, "_RETIRING_COMPACTORS", [])
+    monkeypatch.setattr(logger_mod, "_TERMINATION_DRAIN_ACTIVE", False)
     logger_mod.drain_pipeline_event_summary_before_termination()
-    assert calls == ['observations', 'synchronous', 'summary']
+    assert calls == ["observations", "synchronous", "summary"]
 
 
 def test_summary_drain_does_not_import_an_unstarted_engine(monkeypatch):
     import sys
-    monkeypatch.delitem(sys.modules, 'src.engine.kiwoom_sniper_v2', raising=False)
+
+    monkeypatch.delitem(sys.modules, "src.engine.kiwoom_sniper_v2", raising=False)
     calls = []
-    monkeypatch.setattr(logger_mod, '_PRODUCER_COMPACTOR', SimpleNamespace(
-        enable_termination_drain=lambda: None, flush=lambda: calls.append('summary')))
-    monkeypatch.setattr(logger_mod, '_RETIRING_COMPACTORS', [])
-    monkeypatch.setattr(logger_mod, '_TERMINATION_DRAIN_ACTIVE', False)
+    monkeypatch.setattr(
+        logger_mod,
+        "_PRODUCER_COMPACTOR",
+        SimpleNamespace(
+            enable_termination_drain=lambda: None, flush=lambda: calls.append("summary")
+        ),
+    )
+    monkeypatch.setattr(logger_mod, "_RETIRING_COMPACTORS", [])
+    monkeypatch.setattr(logger_mod, "_TERMINATION_DRAIN_ACTIVE", False)
     logger_mod.drain_pipeline_event_summary_before_termination()
-    assert calls == ['summary']
-    assert 'src.engine.kiwoom_sniper_v2' not in sys.modules
+    assert calls == ["summary"]
+    assert "src.engine.kiwoom_sniper_v2" not in sys.modules
 
 
-@pytest.mark.parametrize('fault', ['missing', 'raise'])
-def test_restart_observation_failure_remains_visible_and_summary_still_drains(monkeypatch, fault):
+@pytest.mark.parametrize("fault", ["missing", "raise"])
+def test_restart_observation_failure_remains_visible_and_summary_still_drains(
+    monkeypatch, fault
+):
     import sys
+
     calls = []
+
     def fail():
-        raise OSError('fixture')
-    monkeypatch.setitem(sys.modules, 'src.engine.kiwoom_sniper_v2', SimpleNamespace(
-        **({'close_observation_sources': fail} if fault == 'raise' else {})))
-    monkeypatch.setattr(logger_mod, 'log_error', lambda value: calls.append(value))
-    monkeypatch.setattr(logger_mod, '_PRODUCER_COMPACTOR', SimpleNamespace(
-        enable_termination_drain=lambda: None, flush=lambda: calls.append('summary')))
-    monkeypatch.setattr(logger_mod, '_RETIRING_COMPACTORS', [])
-    monkeypatch.setattr(logger_mod, '_TERMINATION_DRAIN_ACTIVE', False)
+        raise OSError("fixture")
+
+    monkeypatch.setitem(
+        sys.modules,
+        "src.engine.kiwoom_sniper_v2",
+        SimpleNamespace(
+            **({"close_observation_sources": fail} if fault == "raise" else {})
+        ),
+    )
+    monkeypatch.setattr(logger_mod, "log_error", lambda value: calls.append(value))
+    monkeypatch.setattr(
+        logger_mod,
+        "_PRODUCER_COMPACTOR",
+        SimpleNamespace(
+            enable_termination_drain=lambda: None, flush=lambda: calls.append("summary")
+        ),
+    )
+    monkeypatch.setattr(logger_mod, "_RETIRING_COMPACTORS", [])
+    monkeypatch.setattr(logger_mod, "_TERMINATION_DRAIN_ACTIVE", False)
     logger_mod.drain_pipeline_event_summary_before_termination()
-    assert len(calls) == 2 and 'SOURCE_OBSERVATION_SHUTDOWN' in calls[0]
-    assert calls[-1] == 'summary'
+    assert len(calls) == 2 and "SOURCE_OBSERVATION_SHUTDOWN" in calls[0]
+    assert calls[-1] == "summary"
 
 
 def test_graceful_sigterm_drain_preserves_admitted_rows(tmp_path):
@@ -1612,9 +1718,10 @@ def test_graceful_sigterm_drain_preserves_admitted_rows(tmp_path):
     import subprocess
     import sys
     from pathlib import Path
+
     for drained in (False, True):
         directory = tmp_path / str(drained)
-        script = f'''
+        script = f"""
 import ast, os, signal, sys
 sys.addaudithook(lambda event,args: (_ for _ in ()).throw(RuntimeError('child_network_forbidden'))
     if event in ('socket.connect','socket.getaddrinfo','socket.sendto') else None)
@@ -1641,31 +1748,54 @@ sys.modules['src.engine.kiwoom_sniper_v2'] = SimpleNamespace(close_observation_s
 if {drained!r}:
     logger.drain_pipeline_event_summary_before_termination()
 os.kill(os.getpid(), signal.SIGTERM)
-'''
-        result = subprocess.run([sys.executable, "-c", script], cwd=Path(__file__).parents[2], capture_output=True, timeout=15)
+"""
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=Path(__file__).parents[2],
+            capture_output=True,
+            timeout=15,
+        )
         assert result.returncode == -15
-        raw = [json.loads(line) for p in directory.glob("pipeline_events/*.jsonl")
-               for line in p.read_text().splitlines()]
+        raw = [
+            json.loads(line)
+            for p in directory.glob("pipeline_events/*.jsonl")
+            for line in p.read_text().splitlines()
+        ]
         if drained:
             assert len(raw) == 5, result.stdout + result.stderr
         else:
             assert 1 <= len(raw) <= 3  # Enqueue alone cannot promise raw append.
-        terminals = [row for row in raw if row['stage']=='pre_submit_delay_intent_terminal']
+        terminals = [
+            row for row in raw if row["stage"] == "pre_submit_delay_intent_terminal"
+        ]
         assert len(terminals) == (2 if drained else 0)
         for row in terminals:
-            assert row['fields']['observation_only']=='True'
-            assert row['fields']['actual_order_submitted']=='False'
-            assert row['fields']['broker_order_forbidden']=='True'
-        paths = list(directory.glob("pipeline_event_summaries/pipeline_event_producer_summary_*.jsonl"))
+            assert row["fields"]["observation_only"] == "True"
+            assert row["fields"]["actual_order_submitted"] == "False"
+            assert row["fields"]["broker_order_forbidden"] == "True"
+        paths = list(
+            directory.glob(
+                "pipeline_event_summaries/pipeline_event_producer_summary_*.jsonl"
+            )
+        )
         assert bool(paths) is drained
         if drained:
-            assert sum(json.loads(line)["event_count"] for p in paths for line in p.read_text().splitlines()) == 5
+            assert (
+                sum(
+                    json.loads(line)["event_count"]
+                    for p in paths
+                    for line in p.read_text().splitlines()
+                )
+                == 5
+            )
     # Self-SIGTERM was removed: Main joins the engine's real collector finally
     # before the existing summary drain. End-to-end branches live in the restart
     # race suite; this test keeps only its original summary-loss demonstration.
 
 
-def test_restart_drain_keeps_late_scanner_rows_bound_to_first_stage(monkeypatch, tmp_path):
+def test_restart_drain_keeps_late_scanner_rows_bound_to_first_stage(
+    monkeypatch, tmp_path
+):
     from src.engine.automation import postclose_summary_handoff as handoff
 
     _reset_logger_state(monkeypatch)
@@ -1673,17 +1803,28 @@ def test_restart_drain_keeps_late_scanner_rows_bound_to_first_stage(monkeypatch,
     monkeypatch.setattr(logger_mod, "DATA_DIR", tmp_path / "data")
     monkeypatch.setenv("PIPELINE_EVENT_HIGH_VOLUME_COMPACTION_MODE", "shadow")
     monkeypatch.setenv("PIPELINE_EVENT_COMPACTION_FLUSH_SEC", "3600")
-    fields = {"scanner_promotion_id": "fixture-promotion", "broker_order_forbidden": True}
+    fields = {
+        "scanner_promotion_id": "fixture-promotion",
+        "broker_order_forbidden": True,
+    }
     first = logger_mod.emit_pipeline_event(
-        "ENTRY_PIPELINE", "fixture", "122350", "scalping_scanner_fast_precheck",
-        record_id=47859, fields=fields,
+        "ENTRY_PIPELINE",
+        "fixture",
+        "122350",
+        "scalping_scanner_fast_precheck",
+        record_id=47859,
+        fields=fields,
     )
     day = first["emitted_date"]
     logger_mod.drain_pipeline_event_summary_before_termination()
     late = [
         logger_mod.emit_pipeline_event(
-            "ENTRY_PIPELINE", "fixture", "122350", stage,
-            record_id=47859, fields=fields,
+            "ENTRY_PIPELINE",
+            "fixture",
+            "122350",
+            stage,
+            record_id=47859,
+            fields=fields,
         )
         for stage in (
             "scalping_scanner_promotion_latency_trace",
@@ -1693,14 +1834,19 @@ def test_restart_drain_keeps_late_scanner_rows_bound_to_first_stage(monkeypatch,
     ]
     assert all(row["structured_append_succeeded"] for row in late)
 
-    monkeypatch.setattr(handoff, "stage_commands", lambda *args, **kwargs: [["fixture"]])
+    monkeypatch.setattr(
+        handoff, "stage_commands", lambda *args, **kwargs: [["fixture"]]
+    )
     monkeypatch.setattr(handoff, "_stage_code", lambda *args, **kwargs: "fixture-code")
     monkeypatch.setattr(handoff, "stage_artifacts", lambda *args, **kwargs: {})
     monkeypatch.setattr(handoff, "_safe_stage_output_issues", lambda *args: [])
     report_dir = tmp_path / "data" / "report"
     calls = []
     receipt = handoff.run_stage(
-        "pre_submit_delay", day, report_dir=report_dir, project=tmp_path,
+        "pre_submit_delay",
+        day,
+        report_dir=report_dir,
+        project=tmp_path,
         runner=lambda *args, **kwargs: calls.append(args) or 0,
     )
     assert receipt["status"] == "succeeded", receipt
@@ -1709,35 +1855,54 @@ def test_restart_drain_keeps_late_scanner_rows_bound_to_first_stage(monkeypatch,
         report_dir, day, "pre_submit_delay", code_hash="fixture-code"
     )
     from src.engine.scalping.pre_submit_delay_tuning import family_source_ledger_path
+
     ledger = json.loads(family_source_ledger_path(tmp_path / "data", day).read_text())
     assert sum(part["raw_count"] for part in ledger["raw_parts"]) == 4
-    if ledger['schema']=='pre_submit_delay_family_source_ledger_v2':
+    if ledger["schema"] == "pre_submit_delay_family_source_ledger_v2":
         # Scanner timing is summary telemetry; v2 selects only committed
         # same-intent delay observations into its economic source ledger.
-        assert ledger['raw_event_id_n']==0
-        assert ledger['matched_event_ids_ref']['count']==0
-        assert ledger['raw_only_event_count']==ledger['compact_only_event_count']==0
-        from src.engine.pipeline_event_summary import producer_summary_paths,load_summary_rows
-        summary_path,_=producer_summary_paths(tmp_path/'data/pipeline_event_summaries',day)
-        stages={row['stage']:row['event_count'] for row in load_summary_rows(summary_path,strict=True)}
-        assert stages=={row['stage']:1 for row in [first,*late]}
+        assert ledger["raw_event_id_n"] == 0
+        assert ledger["matched_event_ids_ref"]["count"] == 0
+        assert ledger["raw_only_event_count"] == ledger["compact_only_event_count"] == 0
+        from src.engine.pipeline_event_summary import (
+            producer_summary_paths,
+            load_summary_rows,
+        )
+
+        summary_path, _ = producer_summary_paths(
+            tmp_path / "data/pipeline_event_summaries", day
+        )
+        stages = {
+            row["stage"]: row["event_count"]
+            for row in load_summary_rows(summary_path, strict=True)
+        }
+        assert stages == {row["stage"]: 1 for row in [first, *late]}
     else:
         assert ledger["summary_diagnostic"]["raw_summary_gap_by_stage"] == {}
 
     logger_mod.emit_pipeline_event(
-        "ENTRY_PIPELINE", "fixture", "122350", "scalping_scanner_fast_precheck",
-        record_id=47860, fields=fields,
+        "ENTRY_PIPELINE",
+        "fixture",
+        "122350",
+        "scalping_scanner_fast_precheck",
+        record_id=47860,
+        fields=fields,
     )
-    issues = handoff.stage_receipt_issues(report_dir, day, "pre_submit_delay", code_hash="fixture-code")
+    issues = handoff.stage_receipt_issues(
+        report_dir, day, "pre_submit_delay", code_hash="fixture-code"
+    )
     # Native v2 detects the changed partition inside its lineage validator;
     # legacy ledgers expose the same rejection through raw generation checks.
-    assert set(issues) & {"pre_submit_delay:raw_generation_changed",
-                          "pre_submit_delay:family_source_ledger_missing_or_invalid"}
+    assert set(issues) & {
+        "pre_submit_delay:raw_generation_changed",
+        "pre_submit_delay:family_source_ledger_missing_or_invalid",
+    }
     logger_mod._flush_producer_summary_at_exit()
 
 
 def test_mode_handover_keeps_old_compactor_for_shutdown_drain(monkeypatch, tmp_path):
     import threading
+
     _reset_logger_state(monkeypatch)
     monkeypatch.setattr(logger_mod, "_RETIRING_COMPACTORS", [])
     monkeypatch.setattr(logger_mod, "DATA_DIR", tmp_path)
@@ -1746,12 +1911,20 @@ def test_mode_handover_keeps_old_compactor_for_shutdown_drain(monkeypatch, tmp_p
     old = logger_mod._get_producer_compactor()
     entered, release = threading.Event(), threading.Event()
     publish = old._publish
+
     def delayed(*args):
         entered.set()
         assert release.wait(3)
         return publish(*args)
+
     monkeypatch.setattr(old, "_publish", delayed)
-    payload = logger_mod.emit_pipeline_event("ENTRY_PIPELINE", "TEST", "005930", "scalping_scanner_fast_precheck", record_id=1)
+    payload = logger_mod.emit_pipeline_event(
+        "ENTRY_PIPELINE",
+        "TEST",
+        "005930",
+        "scalping_scanner_fast_precheck",
+        record_id=1,
+    )
     monkeypatch.setenv("PIPELINE_EVENT_HIGH_VOLUME_COMPACTION_MODE", "off")
     try:
         assert logger_mod._get_producer_compactor() is None
@@ -1761,8 +1934,19 @@ def test_mode_handover_keeps_old_compactor_for_shutdown_drain(monkeypatch, tmp_p
         release.set()
         logger_mod.drain_pipeline_event_summary_before_termination()
     assert logger_mod._RETIRING_COMPACTORS == []
-    paths = list((tmp_path / "pipeline_event_summaries").glob("pipeline_event_producer_summary_*.jsonl"))
-    assert sum(json.loads(line)["event_count"] for path in paths for line in path.read_text().splitlines()) == 1
+    paths = list(
+        (tmp_path / "pipeline_event_summaries").glob(
+            "pipeline_event_producer_summary_*.jsonl"
+        )
+    )
+    assert (
+        sum(
+            json.loads(line)["event_count"]
+            for path in paths
+            for line in path.read_text().splitlines()
+        )
+        == 1
+    )
 
 
 def test_repeated_failed_handover_has_two_bounded_owners(monkeypatch, tmp_path):
@@ -1772,13 +1956,25 @@ def test_repeated_failed_handover_has_two_bounded_owners(monkeypatch, tmp_path):
     monkeypatch.setenv("PIPELINE_EVENT_HIGH_VOLUME_COMPACTION_MODE", "shadow")
     monkeypatch.setenv("PIPELINE_EVENT_COMPACTION_FLUSH_SEC", "3600")
     old = logger_mod._get_producer_compactor()
-    logger_mod.emit_pipeline_event("ENTRY_PIPELINE", "TEST", "005930", "scalping_scanner_fast_precheck", record_id=1)
+    logger_mod.emit_pipeline_event(
+        "ENTRY_PIPELINE",
+        "TEST",
+        "005930",
+        "scalping_scanner_fast_precheck",
+        record_id=1,
+    )
     with monkeypatch.context() as patch:
         # Hold actual admitted buffers across asynchronous handover failure.
         patch.setattr(old, "close", lambda **kwargs: None)
         patch.setenv("PIPELINE_EVENT_HIGH_VOLUME_COMPACTION_MODE", "suppress")
         current = logger_mod._get_producer_compactor()
-        logger_mod.emit_pipeline_event("ENTRY_PIPELINE", "TEST", "005930", "scalping_scanner_fast_precheck", record_id=2)
+        logger_mod.emit_pipeline_event(
+            "ENTRY_PIPELINE",
+            "TEST",
+            "005930",
+            "scalping_scanner_fast_precheck",
+            record_id=2,
+        )
         patch.setattr(current, "close", lambda **kwargs: None)
         for mode in ("off", "shadow", "off", "shadow"):
             patch.setenv("PIPELINE_EVENT_HIGH_VOLUME_COMPACTION_MODE", mode)
@@ -1791,93 +1987,192 @@ def test_repeated_failed_handover_has_two_bounded_owners(monkeypatch, tmp_path):
 
 def test_delay_category_reserves_capacity_and_drain_yields_to_existing_executor():
     import threading
-    entered,released=threading.Event(),threading.Event()
-    order=[]
+
+    entered, released = threading.Event(), threading.Event()
+    order = []
+
     def append(identity):
-        if identity==0:
-            entered.set();assert released.wait(5)
+        if identity == 0:
+            entered.set()
+            assert released.wait(5)
         order.append(identity)
-        return {'structured_append_succeeded':True}
+        return {"structured_append_succeeded": True}
+
     with ThreadPoolExecutor(max_workers=1) as executor:
-        queue=logger_mod.BoundedObservationQueue(executor,max_items=32,max_bytes=128*1024)
-        assert queue.submit(append,0,observation_category='pre_submit_delay')['status']=='queued'
+        queue = logger_mod.BoundedObservationQueue(
+            executor, max_items=32, max_bytes=128 * 1024
+        )
+        assert (
+            queue.submit(append, 0, observation_category="pre_submit_delay")["status"]
+            == "queued"
+        )
         assert entered.wait(5)
-        for n in range(1,8):
-            assert queue.submit(append,n,observation_category='pre_submit_delay')['status']=='queued'
-        assert queue.submit(append,8,observation_category='pre_submit_delay')['status']=='unavailable'
-        for n in range(8,32):
-            assert queue.submit(append,n)['status']=='queued'
-        urgent=executor.submit(lambda:order.append('main'))
-        released.set();assert queue.close(timeout=5);urgent.result(timeout=5)
-    assert order.index('main')<=8
-    assert sorted(v for v in order if isinstance(v,int))==list(range(32))
-    stats=queue.snapshot()
-    assert stats['append_confirmed']==32 and stats['failed']==stats['pending_bytes']==0
+        for n in range(1, 8):
+            assert (
+                queue.submit(append, n, observation_category="pre_submit_delay")[
+                    "status"
+                ]
+                == "queued"
+            )
+        assert (
+            queue.submit(append, 8, observation_category="pre_submit_delay")["status"]
+            == "unavailable"
+        )
+        for n in range(8, 32):
+            assert queue.submit(append, n)["status"] == "queued"
+        urgent = executor.submit(lambda: order.append("main"))
+        released.set()
+        assert queue.close(timeout=5)
+        urgent.result(timeout=5)
+    assert order.index("main") <= 8
+    assert sorted(v for v in order if isinstance(v, int)) == list(range(32))
+    stats = queue.snapshot()
+    assert (
+        stats["append_confirmed"] == 32
+        and stats["failed"] == stats["pending_bytes"] == 0
+    )
 
 
 def test_main_stop_source_keeps_one_structured_body_and_text_reference():
-    from src.utils.pipeline_event_logger import _project_fields_for_text, _project_fields_for_compact_stream
-    fields={'main_stop_source':'{"source":"full"}','position_key':'record:1','stop_source_sha256':'a'*64}
-    assert _project_fields_for_compact_stream('main_stop_source',fields)==fields
-    diagnostic=_project_fields_for_text('main_stop_source',fields)
-    assert 'main_stop_source' not in diagnostic and diagnostic['stop_source_sha256']=='a'*64
+    from src.utils.pipeline_event_logger import (
+        _project_fields_for_text,
+        _project_fields_for_compact_stream,
+    )
+
+    fields = {
+        "main_stop_source": '{"source":"full"}',
+        "position_key": "record:1",
+        "stop_source_sha256": "a" * 64,
+    }
+    assert _project_fields_for_compact_stream("main_stop_source", fields) == fields
+    diagnostic = _project_fields_for_text("main_stop_source", fields)
+    assert (
+        "main_stop_source" not in diagnostic
+        and diagnostic["stop_source_sha256"] == "a" * 64
+    )
 
 
 def test_append_outcomes_conserve_completed_and_bound_owner_diagnostics():
-    def confirmed(): return {'structured_append_succeeded': True}
-    def skipped(): return {'status': 'intentionally_not_written', 'reason': 'throttled'}
-    def absent(): return None
-    def failed(): return {'structured_append_succeeded': False}
+    def confirmed():
+        return {"structured_append_succeeded": True}
+
+    def skipped():
+        return {"status": "intentionally_not_written", "reason": "throttled"}
+
+    def absent():
+        return None
+
+    def failed():
+        return {"structured_append_succeeded": False}
+
     with ThreadPoolExecutor(max_workers=1) as executor:
         queue = logger_mod.BoundedObservationQueue(executor)
         for callback in (confirmed, skipped, absent, failed):
-            assert queue.submit(callback)['status'] == 'queued'
+            assert queue.submit(callback)["status"] == "queued"
         assert queue.close(timeout=3)
     stats = queue.snapshot()
-    assert stats['completed'] == stats['append_confirmed'] + stats['intentionally_not_written'] + stats['append_unobservable'] == 3
-    assert stats['queued'] == stats['completed'] + stats['append_failed'] + stats['pending_items'] == 4
-    assert stats['failed'] == 1 and len(stats['outcomes_by_owner']) == 4
+    assert (
+        stats["completed"]
+        == stats["append_confirmed"]
+        + stats["intentionally_not_written"]
+        + stats["append_unobservable"]
+        == 3
+    )
+    assert (
+        stats["queued"]
+        == stats["completed"] + stats["append_failed"] + stats["pending_items"]
+        == 4
+    )
+    assert stats["failed"] == 1 and len(stats["outcomes_by_owner"]) == 4
 
 
-def test_trailing_queue_freezes_inputs_reserves_capacity_and_reports_writer_failure(monkeypatch):
+def test_trailing_queue_freezes_inputs_reserves_capacity_and_reports_writer_failure(
+    monkeypatch,
+):
     from src.engine.scalping.universal_trailing_replay import decode_quote
     from src.tests.test_main_all_scope_trailing import quote
+
     class Executor:
-        def __init__(self): self.jobs=[]
-        def submit(self, callback): self.jobs.append(callback)
+        def __init__(self):
+            self.jobs = []
+
+        def submit(self, callback):
+            self.jobs.append(callback)
+
         def drain(self):
-            while self.jobs: self.jobs.pop(0)()
+            while self.jobs:
+                self.jobs.pop(0)()
+
     executor = Executor()
-    queue = logger_mod.BoundedObservationQueue(executor, max_items=32, max_bytes=128*1024)
-    monkeypatch.setattr(logger_mod, '_TRAILING_OBSERVATION_SINK', queue.submit)
-    saved=[]
+    queue = logger_mod.BoundedObservationQueue(
+        executor, max_items=32, max_bytes=128 * 1024
+    )
+    monkeypatch.setattr(logger_mod, "_TRAILING_OBSERVATION_SINK", queue.submit)
+    saved = []
+
     def emit(*args, **kwargs):
         saved.append(kwargs)
         return dict(structured_append_succeeded=len(saved) != 299)
-    monkeypatch.setattr(logger_mod,'emit_pipeline_event',emit)
-    raw = quote(1,'2026-10-08T09:00:01')
-    for start in range(0,320,4):
-        for seq in range(start+1,start+5):
-            fields=dict(universal_trailing_quote=raw, event_sequence=seq, evaluation_at_epoch=raw['known_at'])
-            result=logger_mod.enqueue_trailing_observation('Test','123456',7,fields)
-            assert result == dict(status='queued',structured_append_succeeded=False)
-            fields['event_sequence'] = -1
-        assert logger_mod.enqueue_trailing_observation('Test','123456',7,fields)['status']=='unavailable'
+
+    monkeypatch.setattr(logger_mod, "emit_pipeline_event", emit)
+    raw = quote(1, "2026-10-08T09:00:01")
+    for start in range(0, 320, 4):
+        for seq in range(start + 1, start + 5):
+            fields = dict(
+                universal_trailing_quote=raw,
+                event_sequence=seq,
+                evaluation_at_epoch=raw["known_at"],
+            )
+            result = logger_mod.enqueue_trailing_observation(
+                "Test", "123456", 7, fields
+            )
+            assert result == dict(status="queued", structured_append_succeeded=False)
+            fields["event_sequence"] = -1
+        assert (
+            logger_mod.enqueue_trailing_observation("Test", "123456", 7, fields)[
+                "status"
+            ]
+            == "unavailable"
+        )
         # Exhausting trailing's reservation never consumes Main-stop's slot.
-        assert queue.submit(lambda:dict(structured_append_succeeded=True),observation_category='main_stop')['status']=='queued'
-        assert not saved or len(saved)==start
+        assert (
+            queue.submit(
+                lambda: dict(structured_append_succeeded=True),
+                observation_category="main_stop",
+            )["status"]
+            == "queued"
+        )
+        assert not saved or len(saved) == start
         executor.drain()
-    assert [r['fields']['event_sequence'] for r in saved]==list(range(1,321))
-    assert all(decode_quote(r['fields']['universal_trailing_quote'])==raw for r in saved)
-    text_fields=logger_mod._project_fields_for_text('scalp_trailing_input_transition', saved[-1]['fields'])
-    assert 'universal_trailing_quote' not in text_fields
-    assert text_fields['universal_trailing_quote_source_sha256']==raw['source_sha256']
-    assert logger_mod._project_fields_for_compact_stream('scalp_trailing_input_transition', saved[-1]['fields'])==saved[-1]['fields']
-    assert all(r['observed_at_epoch']==raw['known_at'] for r in saved)
+    assert [r["fields"]["event_sequence"] for r in saved] == list(range(1, 321))
+    assert all(
+        decode_quote(r["fields"]["universal_trailing_quote"]) == raw for r in saved
+    )
+    text_fields = logger_mod._project_fields_for_text(
+        "scalp_trailing_input_transition", saved[-1]["fields"]
+    )
+    assert "universal_trailing_quote" not in text_fields
+    assert text_fields["universal_trailing_quote_source_sha256"] == raw["source_sha256"]
+    assert (
+        logger_mod._project_fields_for_compact_stream(
+            "scalp_trailing_input_transition", saved[-1]["fields"]
+        )
+        == saved[-1]["fields"]
+    )
+    assert all(r["observed_at_epoch"] == raw["known_at"] for r in saved)
     assert queue.close(timeout=0)
-    stats=queue.snapshot()
-    assert stats['append_failed']==1 and stats['pending_items']==stats['pending_bytes']==0
-    assert stats['peak_items']==5 and stats['peak_bytes']<queue.max_bytes
-    assert logger_mod.enqueue_trailing_observation('Test','123456',7,fields)['status']=='unavailable'
-    monkeypatch.setattr(logger_mod,'_TRAILING_OBSERVATION_SINK',None)
-    assert logger_mod.enqueue_trailing_observation('Test','123456',7,fields)['reason']=='trailing_observation_sink_missing'
+    stats = queue.snapshot()
+    assert (
+        stats["append_failed"] == 1
+        and stats["pending_items"] == stats["pending_bytes"] == 0
+    )
+    assert stats["peak_items"] == 5 and stats["peak_bytes"] < queue.max_bytes
+    assert (
+        logger_mod.enqueue_trailing_observation("Test", "123456", 7, fields)["status"]
+        == "unavailable"
+    )
+    monkeypatch.setattr(logger_mod, "_TRAILING_OBSERVATION_SINK", None)
+    assert (
+        logger_mod.enqueue_trailing_observation("Test", "123456", 7, fields)["reason"]
+        == "trailing_observation_sink_missing"
+    )

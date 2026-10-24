@@ -188,9 +188,7 @@ def test_currentness_audit_emits_runtime_false_orders_for_gaps(tmp_path, monkeyp
     target_date = "2026-05-15"
     _seed_labs(project_root, target_date)
 
-    (
-        project_root / "analysis" / "deepseek_swing_pattern_lab" / "README.md"
-    ).write_text(
+    (project_root / "analysis" / "deepseek_swing_pattern_lab" / "README.md").write_text(
         "legacy shadow-only wording\n",
         encoding="utf-8",
     )
@@ -233,9 +231,7 @@ def test_currentness_audit_surfaces_pattern_lab_feedback_and_ai_review_gaps(
     target_date = "2026-05-15"
     _seed_labs(project_root, target_date)
 
-    (
-        project_root / "analysis" / "deepseek_swing_pattern_lab" / "README.md"
-    ).write_text(
+    (project_root / "analysis" / "deepseek_swing_pattern_lab" / "README.md").write_text(
         "report_only_observation\n",
         encoding="utf-8",
     )

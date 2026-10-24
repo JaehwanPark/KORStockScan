@@ -953,7 +953,9 @@ def test_provider_endpoint_compare_runs_bedrock_primary_and_openai_then_restores
     assert result["candidate_pairwise"]["entry_price"]["summary"]["pair_count"] == 0
 
 
-def test_provider_endpoint_compare_retires_entry_price_before_provider_init(monkeypatch):
+def test_provider_endpoint_compare_retires_entry_price_before_provider_init(
+    monkeypatch,
+):
     from src.engine import ai_engine_openai as openai_module
 
     class FailIfConstructed:

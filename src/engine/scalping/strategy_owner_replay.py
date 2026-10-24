@@ -965,20 +965,27 @@ def first_use_policies(
         diagnostics["state"] = "waiting_or_no_edge_see_cohort_checks"
     return candidates[:1]
 
+
 # Existing entry-owner research: fixed before looking at the subsequent path.
-ENTRY_REPLAY_SCHEMA = 'entry_opportunity_executable_replay_v1'
-ENTRY_PRICE_SELECTION = 'entry_price_chronological_union_v2'
+ENTRY_REPLAY_SCHEMA = "entry_opportunity_executable_replay_v1"
+ENTRY_PRICE_SELECTION = "entry_price_chronological_union_v2"
 ENTRY_REPLAY_EXIT = dict(horizon_sec=180, take_profit_pct=0.5, stop_loss_pct=-0.5)
-ENTRY_REPLAY_COST = dict(round_trip_pct=0.23, stress_round_trip_pct=0.28,
-                         basis='missed_entry_research_cost_not_broker_actual')
-ENTRY_REPLAY_ALLOCATION = dict(max_concurrent_research_positions=1,
-    reservation_sec=180, basis='conservative_common_reservation_not_live_capacity')
+ENTRY_REPLAY_COST = dict(
+    round_trip_pct=0.23,
+    stress_round_trip_pct=0.28,
+    basis="missed_entry_research_cost_not_broker_actual",
+)
+ENTRY_REPLAY_ALLOCATION = dict(
+    max_concurrent_research_positions=1,
+    reservation_sec=180,
+    basis="conservative_common_reservation_not_live_capacity",
+)
 ENTRY_REPLAY_PROFILES = {
-    'normal': 'normal_defensive_bps',
-    'strong_1tick_pressure': 'conditional_strong_defensive_bps',
-    'favorable_micro': 'normal_favorable_defensive_bps',
-    'favorable_wide_micro': 'normal_favorable_defensive_bps',
-    'weak_liquidity_wide_spread': 'normal_weak_defensive_bps',
+    "normal": "normal_defensive_bps",
+    "strong_1tick_pressure": "conditional_strong_defensive_bps",
+    "favorable_micro": "normal_favorable_defensive_bps",
+    "favorable_wide_micro": "normal_favorable_defensive_bps",
+    "weak_liquidity_wide_spread": "normal_weak_defensive_bps",
 }
 
 
@@ -989,15 +996,28 @@ def entry_native_market_venue(venue):
 
 def entry_operating_route_supported(venue, session, broker_route):
     from src.engine.scalping.entry_setup_evidence import mechanistic_scope_supported
+
     venue, session = str(venue or "").upper(), str(session or "").upper()
-    return bool(mechanistic_scope_supported(venue, session)
+    return bool(
+        mechanistic_scope_supported(venue, session)
         and broker_route in {"KRX", "NXT", "SOR"}
-        and (broker_route == "SOR" or broker_route == entry_native_market_venue(venue)))
+        and (broker_route == "SOR" or broker_route == entry_native_market_venue(venue))
+    )
 
 
-def freeze_entry_opportunity(plan, *, stock_code, observed_at, profile=None,
-                             profile_bps=None, anchor_price=None, sizing_context=None, candidate_leg_plan=None, operating_context=None,
-                             diagnostic=None):
+def freeze_entry_opportunity(
+    plan,
+    *,
+    stock_code,
+    observed_at,
+    profile=None,
+    profile_bps=None,
+    anchor_price=None,
+    sizing_context=None,
+    candidate_leg_plan=None,
+    operating_context=None,
+    diagnostic=None,
+):
     """Freeze an order-free, non-increasing research menu alongside an owner plan.
 
     The original orders, quantities, prices and signed plan are never changed.
@@ -1005,180 +1025,357 @@ def freeze_entry_opportunity(plan, *, stock_code, observed_at, profile=None,
     """
     from src.utils.evidence_digest import digest
     from src.trading.order.tick_utils import move_price_down_by_bps, clamp_price_to_tick
+
     def gap(reason):
         if isinstance(diagnostic, dict):
-            diagnostic.update(status='source_gap', blocker=str(reason))
+            diagnostic.update(status="source_gap", blocker=str(reason))
         return None
+
     try:
-        if (not _finite(observed_at, positive=True) or plan.get('valid') is not True or plan.get('blockers')
-            or type(plan.get('total_qty')) is not int or plan['total_qty'] <= 0
-            or plan.get('deferred_probe_residual_qty') != 0
-            or not re.fullmatch(r'\d{6}', stock_code)
-            or not entry_operating_route_supported(plan.get('effective_venue'), plan.get('market_session_bucket'),
-                (operating_context or {}).get('broker_route') or entry_native_market_venue(plan.get('effective_venue')))
-            or not plan.get('market_session_bucket') or not _sha(plan.get('policy_bundle_hash'))):
-            return gap('frozen_plan_or_route_contract_missing')
+        if (
+            not _finite(observed_at, positive=True)
+            or plan.get("valid") is not True
+            or plan.get("blockers")
+            or type(plan.get("total_qty")) is not int
+            or plan["total_qty"] <= 0
+            or plan.get("deferred_probe_residual_qty") != 0
+            or not re.fullmatch(r"\d{6}", stock_code)
+            or not entry_operating_route_supported(
+                plan.get("effective_venue"),
+                plan.get("market_session_bucket"),
+                (operating_context or {}).get("broker_route")
+                or entry_native_market_venue(plan.get("effective_venue")),
+            )
+            or not plan.get("market_session_bucket")
+            or not _sha(plan.get("policy_bundle_hash"))
+        ):
+            return gap("frozen_plan_or_route_contract_missing")
         clock = datetime.fromtimestamp(observed_at, KST)
-        legs = plan['legs']
+        legs = plan["legs"]
+
         def frozen_legs(owner_plan):
-            issued = {x.get('price_leg_id'): x for x in owner_plan.get('price_candidates', [])}
+            issued = {
+                x.get("price_leg_id"): x for x in owner_plan.get("price_candidates", [])
+            }
             result = []
-            for x in owner_plan['legs']:
-                order_type = str(issued.get(x.get('price_leg_id'), {}).get('order_type_code') or '00')
-                price = x['numeric_price']
-                if (type(x['qty']) is not int or x['qty'] <= 0 or type(price) is not int
-                    or price < 0 or (price == 0 and order_type not in ('3', '03'))
-                    or x.get('execution_phase') != 'immediate'):
-                    raise ValueError('registered_order_price_or_leg_missing')
-                result.append(dict(qty=x['qty'], price=price, order_type_code=order_type))
-            if not 0 < len(result) <= 3 or sum(x['qty'] for x in result) != plan['total_qty']:
-                raise ValueError('registered_leg_quantity_conservation_failed')
+            for x in owner_plan["legs"]:
+                order_type = str(
+                    issued.get(x.get("price_leg_id"), {}).get("order_type_code") or "00"
+                )
+                price = x["numeric_price"]
+                if (
+                    type(x["qty"]) is not int
+                    or x["qty"] <= 0
+                    or type(price) is not int
+                    or price < 0
+                    or (price == 0 and order_type not in ("3", "03"))
+                    or x.get("execution_phase") != "immediate"
+                ):
+                    raise ValueError("registered_order_price_or_leg_missing")
+                result.append(
+                    dict(qty=x["qty"], price=price, order_type_code=order_type)
+                )
+            if (
+                not 0 < len(result) <= 3
+                or sum(x["qty"] for x in result) != plan["total_qty"]
+            ):
+                raise ValueError("registered_leg_quantity_conservation_failed")
             return result
+
         original_legs = frozen_legs(plan)
         # Reuse the registered flat-10 quantity alternative with the ORIGINAL
         # context/caps. Missing context is an unchanged quantity control.
-        candidate_qty, candidate_quantity_version = plan['total_qty'], plan['quantity_policy_version']
+        candidate_qty, candidate_quantity_version = (
+            plan["total_qty"],
+            plan["quantity_policy_version"],
+        )
         if sizing_context is not None:
             from dataclasses import replace
             from src.engine.scalping.position_sizing_allocator import (
-                resolve_scalping_allocation, FORMULA_VERSION, ROLLBACK_FORMULA_VERSION)
-            alternative = resolve_scalping_allocation(replace(sizing_context,
-                simulation=True, initial_tier=1, initial_formula_version=FORMULA_VERSION))
-            if alternative.ratio != .10 or alternative.effective_qty <= 0:
-                return gap('registered_quantity_replay_alternative_unsupported')
-            candidate_qty = min(plan['total_qty'], alternative.effective_qty)
+                resolve_scalping_allocation,
+                FORMULA_VERSION,
+                ROLLBACK_FORMULA_VERSION,
+            )
+
+            alternative = resolve_scalping_allocation(
+                replace(
+                    sizing_context,
+                    simulation=True,
+                    initial_tier=1,
+                    initial_formula_version=FORMULA_VERSION,
+                )
+            )
+            if alternative.ratio != 0.10 or alternative.effective_qty <= 0:
+                return gap("registered_quantity_replay_alternative_unsupported")
+            candidate_qty = min(plan["total_qty"], alternative.effective_qty)
             candidate_quantity_version = ROLLBACK_FORMULA_VERSION
         candidate_legs = original_legs
-        candidate_leg_version, candidate_leg_sha = plan['split_policy_version'], digest(plan)
+        candidate_leg_version, candidate_leg_sha = plan["split_policy_version"], digest(
+            plan
+        )
         if candidate_leg_plan is not None:
             alternative_legs = frozen_legs(candidate_leg_plan)
-            if (candidate_leg_plan.get('valid') is not True or candidate_leg_plan.get('blockers')
-                or candidate_leg_plan.get('deferred_probe_residual_qty') != 0
-                or candidate_leg_plan.get('total_qty') != plan['total_qty']
-                or any(candidate_leg_plan.get(k) != plan.get(k) for k in (
-                    'scanner_promotion_id', 'action_receipt_id', 'effective_venue',
-                    'market_session_bucket', 'policy_bundle_hash', 'quantity_policy_version'))
-                or not candidate_leg_plan.get('split_policy_version')
+            if (
+                candidate_leg_plan.get("valid") is not True
+                or candidate_leg_plan.get("blockers")
+                or candidate_leg_plan.get("deferred_probe_residual_qty") != 0
+                or candidate_leg_plan.get("total_qty") != plan["total_qty"]
+                or any(
+                    candidate_leg_plan.get(k) != plan.get(k)
+                    for k in (
+                        "scanner_promotion_id",
+                        "action_receipt_id",
+                        "effective_venue",
+                        "market_session_bucket",
+                        "policy_bundle_hash",
+                        "quantity_policy_version",
+                    )
+                )
+                or not candidate_leg_plan.get("split_policy_version")
                 or not 0 < len(alternative_legs) <= 3
-                or sum(x['qty'] for x in alternative_legs) != plan['total_qty']
-                or any(type(x['qty']) is not int or x['qty'] <= 0
-                    or (x['price'], x['order_type_code']) not in {(a['price'], a['order_type_code']) for a in original_legs} for x in alternative_legs)):
-                return gap('candidate_leg_plan_not_exact_same_intent')
+                or sum(x["qty"] for x in alternative_legs) != plan["total_qty"]
+                or any(
+                    type(x["qty"]) is not int
+                    or x["qty"] <= 0
+                    or (x["price"], x["order_type_code"])
+                    not in {(a["price"], a["order_type_code"]) for a in original_legs}
+                    for x in alternative_legs
+                )
+            ):
+                return gap("candidate_leg_plan_not_exact_same_intent")
             candidate_legs = alternative_legs
-            candidate_leg_version = candidate_leg_plan['split_policy_version']
+            candidate_leg_version = candidate_leg_plan["split_policy_version"]
             candidate_leg_sha = digest(candidate_leg_plan)
         if operating_context is not None and candidate_leg_plan is None:
             # Existing capped weight menu retains every price
             # issued by the original owner and keep quantity fixed in phase one.
             n = len(original_legs)
-            if plan['total_qty'] >= n:
+            if plan["total_qty"] >= n:
                 from src.trading.order.split_execution_math import split_qty
-                from src.engine.scalping.entry_split_order_plan import PASSIVE_CENTER_MAX_FIRST_WEIGHT
-                counts = split_qty(plan['total_qty'], n, min(1 / n, PASSIVE_CENTER_MAX_FIRST_WEIGHT))
-                candidate_legs = [{**x, 'qty': counts[i]} for i, x in enumerate(original_legs)]
-                candidate_leg_version = 'entry_split_quantity_fixed_guarded_weights_v1'
+                from src.engine.scalping.entry_split_order_plan import (
+                    PASSIVE_CENTER_MAX_FIRST_WEIGHT,
+                )
+
+                counts = split_qty(
+                    plan["total_qty"], n, min(1 / n, PASSIVE_CENTER_MAX_FIRST_WEIGHT)
+                )
+                candidate_legs = [
+                    {**x, "qty": counts[i]} for i, x in enumerate(original_legs)
+                ]
+                candidate_leg_version = "entry_split_quantity_fixed_guarded_weights_v1"
                 candidate_leg_sha = digest(candidate_legs)
-                candidate_qty, candidate_quantity_version = plan['total_qty'], plan['quantity_policy_version']
-        seed = dict(schema=ENTRY_REPLAY_SCHEMA, stock_code=stock_code,
-            source_date=clock.date().isoformat(), observed_at=clock.isoformat(),
-            scanner_promotion_id=plan['scanner_promotion_id'],
-            evaluation_attempt_id=plan['action_receipt_id'],
-            effective_venue=plan['effective_venue'], session_bucket=plan['market_session_bucket'],
-            policy_bundle_sha256=plan['policy_bundle_hash'],
-            plan_sha256=digest(plan), entry_price_receipt_sha256=plan['price_plan_sha256'],
-            entry_price_policy_sha256=plan['price_policy_sha256'],
-            incumbent_quantity_policy_version=plan['quantity_policy_version'],
+                candidate_qty, candidate_quantity_version = (
+                    plan["total_qty"],
+                    plan["quantity_policy_version"],
+                )
+        seed = dict(
+            schema=ENTRY_REPLAY_SCHEMA,
+            stock_code=stock_code,
+            source_date=clock.date().isoformat(),
+            observed_at=clock.isoformat(),
+            scanner_promotion_id=plan["scanner_promotion_id"],
+            evaluation_attempt_id=plan["action_receipt_id"],
+            effective_venue=plan["effective_venue"],
+            session_bucket=plan["market_session_bucket"],
+            policy_bundle_sha256=plan["policy_bundle_hash"],
+            plan_sha256=digest(plan),
+            entry_price_receipt_sha256=plan["price_plan_sha256"],
+            entry_price_policy_sha256=plan["price_policy_sha256"],
+            incumbent_quantity_policy_version=plan["quantity_policy_version"],
             candidate_quantity_policy_version=candidate_quantity_version,
-            incumbent_leg_policy_version=plan['split_policy_version'],
+            incumbent_leg_policy_version=plan["split_policy_version"],
             candidate_leg_policy_version=candidate_leg_version,
-            candidate_leg_plan_sha256=candidate_leg_sha, candidate_legs=candidate_legs,
+            candidate_leg_plan_sha256=candidate_leg_sha,
+            candidate_legs=candidate_legs,
             candidate_leg_control_only=candidate_leg_plan is None,
-            total_qty=plan['total_qty'], candidate_qty=candidate_qty,
+            total_qty=plan["total_qty"],
+            candidate_qty=candidate_qty,
             legs=original_legs,
-            exit_contract=ENTRY_REPLAY_EXIT.copy(), cost_contract=ENTRY_REPLAY_COST.copy(),
-            research_entry_ttl_sec=10, modeled_submit_delay_ms=150,
+            exit_contract=ENTRY_REPLAY_EXIT.copy(),
+            cost_contract=ENTRY_REPLAY_COST.copy(),
+            research_entry_ttl_sec=10,
+            modeled_submit_delay_ms=150,
             allocation_contract=ENTRY_REPLAY_ALLOCATION.copy(),
-            price_candidates={}, **AUTHORITY)
-        if plan.get('observation_only'):
-            seed['observed_machine_action'] = plan.get('observed_machine_action', 'ENTER_NOW')
+            price_candidates={},
+            **AUTHORITY,
+        )
+        if plan.get("observation_only"):
+            seed["observed_machine_action"] = plan.get(
+                "observed_machine_action", "ENTER_NOW"
+            )
         if operating_context is not None:
-            seed['operating_contract'] = copy.deepcopy(operating_context)
+            seed["operating_contract"] = copy.deepcopy(operating_context)
         # Only the exact existing BPS formula can become an automatic price policy.
         # Other price branches remain quantity/leg research, not guessed BPS joins.
-        if (all(x['price'] > 0 and x['order_type_code'] not in ('3', '03') for x in original_legs)
-            and profile in ENTRY_REPLAY_PROFILES and type(profile_bps) is int and profile_bps > 0
-            and type(anchor_price) is int and anchor_price > 0
-            and legs[0]['numeric_price'] == move_price_down_by_bps(anchor_price, profile_bps)):
-            seed.update(profile=profile, target_value_key=ENTRY_REPLAY_PROFILES[profile],
-                        incumbent_bps=profile_bps, anchor_price=anchor_price)
-            from src.engine.scalping.entry_execution_sizing_plan import PRICE_POLICY_BPS_BOUNDS
-            lower, upper = PRICE_POLICY_BPS_BOUNDS[seed['target_value_key']]
+        if (
+            all(
+                x["price"] > 0 and x["order_type_code"] not in ("3", "03")
+                for x in original_legs
+            )
+            and profile in ENTRY_REPLAY_PROFILES
+            and type(profile_bps) is int
+            and profile_bps > 0
+            and type(anchor_price) is int
+            and anchor_price > 0
+            and legs[0]["numeric_price"]
+            == move_price_down_by_bps(anchor_price, profile_bps)
+        ):
+            seed.update(
+                profile=profile,
+                target_value_key=ENTRY_REPLAY_PROFILES[profile],
+                incumbent_bps=profile_bps,
+                anchor_price=anchor_price,
+            )
+            from src.engine.scalping.entry_execution_sizing_plan import (
+                PRICE_POLICY_BPS_BOUNDS,
+            )
+
+            lower, upper = PRICE_POLICY_BPS_BOUNDS[seed["target_value_key"]]
             if not lower <= profile_bps <= upper:
-                for key in ('profile', 'target_value_key', 'incumbent_bps', 'anchor_price'):
+                for key in (
+                    "profile",
+                    "target_value_key",
+                    "incumbent_bps",
+                    "anchor_price",
+                ):
                     seed.pop(key)
-                return {**seed, 'seed_sha256': digest(seed)}
-            for bps in sorted({max(lower, profile_bps - 1), profile_bps, min(upper, profile_bps + 1)}):
-                shift = move_price_down_by_bps(anchor_price, bps) - legs[0]['numeric_price']
-                seed['price_candidates'][str(bps)] = [clamp_price_to_tick(x['numeric_price'] + shift) for x in legs]
-        result={**seed, 'seed_sha256': digest(seed)}
-        if isinstance(diagnostic, dict):diagnostic.update(status='ready', blocker=None)
+                return {**seed, "seed_sha256": digest(seed)}
+            for bps in sorted(
+                {max(lower, profile_bps - 1), profile_bps, min(upper, profile_bps + 1)}
+            ):
+                shift = (
+                    move_price_down_by_bps(anchor_price, bps) - legs[0]["numeric_price"]
+                )
+                seed["price_candidates"][str(bps)] = [
+                    clamp_price_to_tick(x["numeric_price"] + shift) for x in legs
+                ]
+        result = {**seed, "seed_sha256": digest(seed)}
+        if isinstance(diagnostic, dict):
+            diagnostic.update(status="ready", blocker=None)
         return result
     except (TypeError, ValueError, KeyError, OverflowError, AttributeError) as exc:
-        return gap('frozen_seed_build_failed:'+type(exc).__name__+':'+str(exc)[:120])
+        return gap(
+            "frozen_seed_build_failed:" + type(exc).__name__ + ":" + str(exc)[:120]
+        )
 
 
 def _entry_seed_valid(seed):
     from src.utils.evidence_digest import digest
     from src.trading.order.tick_utils import move_price_down_by_bps, clamp_price_to_tick
+
     try:
         if not isinstance(seed, dict):
             return False
-        if seed.get('price_candidates'):
-            bps, anchor, legs = seed['incumbent_bps'], seed['anchor_price'], seed['legs']
-            if (type(bps) is not int or bps <= 0 or type(anchor) is not int or anchor <= 0
-                or ENTRY_REPLAY_PROFILES.get(seed['profile']) != seed['target_value_key']
-                or legs[0]['price'] != move_price_down_by_bps(anchor, bps)):
+        if seed.get("price_candidates"):
+            bps, anchor, legs = (
+                seed["incumbent_bps"],
+                seed["anchor_price"],
+                seed["legs"],
+            )
+            if (
+                type(bps) is not int
+                or bps <= 0
+                or type(anchor) is not int
+                or anchor <= 0
+                or ENTRY_REPLAY_PROFILES.get(seed["profile"])
+                != seed["target_value_key"]
+                or legs[0]["price"] != move_price_down_by_bps(anchor, bps)
+            ):
                 return False
-            from src.engine.scalping.entry_execution_sizing_plan import PRICE_POLICY_BPS_BOUNDS
-            lower, upper = PRICE_POLICY_BPS_BOUNDS[seed['target_value_key']]
+            from src.engine.scalping.entry_execution_sizing_plan import (
+                PRICE_POLICY_BPS_BOUNDS,
+            )
+
+            lower, upper = PRICE_POLICY_BPS_BOUNDS[seed["target_value_key"]]
             if not lower <= bps <= upper:
                 return False
-            expected = {str(b): [clamp_price_to_tick(x['price'] +
-                move_price_down_by_bps(anchor, b) - legs[0]['price']) for x in legs]
-                for b in sorted({max(lower, bps - 1), bps, min(upper, bps + 1)})}
-            if seed['price_candidates'] != expected:
+            expected = {
+                str(b): [
+                    clamp_price_to_tick(
+                        x["price"]
+                        + move_price_down_by_bps(anchor, b)
+                        - legs[0]["price"]
+                    )
+                    for x in legs
+                ]
+                for b in sorted({max(lower, bps - 1), bps, min(upper, bps + 1)})
+            }
+            if seed["price_candidates"] != expected:
                 return False
-        return bool(isinstance(seed, dict) and seed.get('schema') == ENTRY_REPLAY_SCHEMA
-            and digest({k: v for k, v in seed.items() if k != 'seed_sha256'}) == seed.get('seed_sha256')
+        return bool(
+            isinstance(seed, dict)
+            and seed.get("schema") == ENTRY_REPLAY_SCHEMA
+            and digest({k: v for k, v in seed.items() if k != "seed_sha256"})
+            == seed.get("seed_sha256")
             and all(seed.get(k) is v for k, v in AUTHORITY.items())
-            and seed.get('exit_contract') == ENTRY_REPLAY_EXIT
-            and seed.get('cost_contract') == ENTRY_REPLAY_COST
-            and seed.get('allocation_contract') == ENTRY_REPLAY_ALLOCATION
-            and seed.get('research_entry_ttl_sec') == 10
-            and seed.get('modeled_submit_delay_ms') == 150
-            and seed['source_date'] >= '2026-06-05'
-            and _timestamp(seed['observed_at'], seed['source_date'])
-            and type(seed['total_qty']) is int and seed['total_qty'] > 0
-            and type(seed['candidate_qty']) is int and 0 < seed['candidate_qty'] <= seed['total_qty']
-            and 0 < len(seed['legs']) <= 3
-            and sum(x['qty'] for x in seed['legs']) == seed['total_qty']
-            and all(type(x['qty']) is int and x['qty'] > 0
-                    and type(x['price']) is int and (x['price'] > 0 or
-                        (x['price'] == 0 and x.get('order_type_code') in ('3', '03'))) for x in seed['legs'])
-            and (not seed.get('candidate_legs') or (
-                _sha(seed.get('candidate_leg_plan_sha256'))
-                and 0 < len(seed['candidate_legs']) <= 3
-                and sum(x['qty'] for x in seed['candidate_legs']) == seed['total_qty']
-                and all(type(x['qty']) is int and x['qty'] > 0
-                    and type(x['price']) is int and (x['price'], x.get('order_type_code', '00')) in
-                        {(a['price'], a.get('order_type_code', '00')) for a in seed['legs']}
-                    for x in seed['candidate_legs'])))
-            and re.fullmatch(r'\d{6}', seed['stock_code'])
-            and entry_operating_route_supported(seed['effective_venue'], seed['session_bucket'],
-                (seed.get('operating_contract') or {}).get('broker_route') or entry_native_market_venue(seed['effective_venue']))
-            and all(seed[k] for k in ('scanner_promotion_id', 'evaluation_attempt_id', 'session_bucket'))
-            and all(_sha(seed[k]) for k in ('policy_bundle_sha256', 'plan_sha256',
-                'entry_price_receipt_sha256', 'entry_price_policy_sha256')))
+            and seed.get("exit_contract") == ENTRY_REPLAY_EXIT
+            and seed.get("cost_contract") == ENTRY_REPLAY_COST
+            and seed.get("allocation_contract") == ENTRY_REPLAY_ALLOCATION
+            and seed.get("research_entry_ttl_sec") == 10
+            and seed.get("modeled_submit_delay_ms") == 150
+            and seed["source_date"] >= "2026-06-05"
+            and _timestamp(seed["observed_at"], seed["source_date"])
+            and type(seed["total_qty"]) is int
+            and seed["total_qty"] > 0
+            and type(seed["candidate_qty"]) is int
+            and 0 < seed["candidate_qty"] <= seed["total_qty"]
+            and 0 < len(seed["legs"]) <= 3
+            and sum(x["qty"] for x in seed["legs"]) == seed["total_qty"]
+            and all(
+                type(x["qty"]) is int
+                and x["qty"] > 0
+                and type(x["price"]) is int
+                and (
+                    x["price"] > 0
+                    or (x["price"] == 0 and x.get("order_type_code") in ("3", "03"))
+                )
+                for x in seed["legs"]
+            )
+            and (
+                not seed.get("candidate_legs")
+                or (
+                    _sha(seed.get("candidate_leg_plan_sha256"))
+                    and 0 < len(seed["candidate_legs"]) <= 3
+                    and sum(x["qty"] for x in seed["candidate_legs"])
+                    == seed["total_qty"]
+                    and all(
+                        type(x["qty"]) is int
+                        and x["qty"] > 0
+                        and type(x["price"]) is int
+                        and (x["price"], x.get("order_type_code", "00"))
+                        in {
+                            (a["price"], a.get("order_type_code", "00"))
+                            for a in seed["legs"]
+                        }
+                        for x in seed["candidate_legs"]
+                    )
+                )
+            )
+            and re.fullmatch(r"\d{6}", seed["stock_code"])
+            and entry_operating_route_supported(
+                seed["effective_venue"],
+                seed["session_bucket"],
+                (seed.get("operating_contract") or {}).get("broker_route")
+                or entry_native_market_venue(seed["effective_venue"]),
+            )
+            and all(
+                seed[k]
+                for k in (
+                    "scanner_promotion_id",
+                    "evaluation_attempt_id",
+                    "session_bucket",
+                )
+            )
+            and all(
+                _sha(seed[k])
+                for k in (
+                    "policy_bundle_sha256",
+                    "plan_sha256",
+                    "entry_price_receipt_sha256",
+                    "entry_price_policy_sha256",
+                )
+            )
+        )
     except (KeyError, TypeError, ValueError, OverflowError):
         return False
 
@@ -1187,29 +1384,48 @@ def entry_decision_version_identity(seed, receipt=None):
     """Return the immutable machine/AI decision versions bound to this entry."""
     if not isinstance(seed, dict):
         return None
-    context = seed.get('operating_contract') or {}
-    decision = receipt if isinstance(receipt, dict) else context.get('entry_decision_version_receipt')
+    context = seed.get("operating_contract") or {}
+    decision = (
+        receipt
+        if isinstance(receipt, dict)
+        else context.get("entry_decision_version_receipt")
+    )
     if not isinstance(decision, dict):
         return None
-    identity = {key: decision.get(key) for key in (
-        'machine_bundle_sha256', 'machine_policy_version', 'machine_policy_sha256',
-        'compact_prompt_version', 'compact_prompt_sha256')}
-    if (decision.get('sha256') != owner.digest({k:v for k,v in decision.items() if k!='sha256'})
-        or decision.get('machine_bundle_sha256') != seed.get('policy_bundle_sha256')
-        or decision.get('evaluation_attempt_id') != seed.get('evaluation_attempt_id')
-        or not _sha(identity['machine_bundle_sha256'])
-        or not _sha(identity['machine_policy_sha256'])
-        or not _sha(identity['compact_prompt_sha256'])
-        or not all(isinstance(identity[k], str) and identity[k].strip() for k in (
-            'machine_policy_version', 'compact_prompt_version'))
-        or not isinstance(decision.get('decision_trace_id'), str)
-        or not decision.get('decision_trace_id')
-        or type(decision.get('runtime_pid')) is not int or decision['runtime_pid'] <= 0):
+    identity = {
+        key: decision.get(key)
+        for key in (
+            "machine_bundle_sha256",
+            "machine_policy_version",
+            "machine_policy_sha256",
+            "compact_prompt_version",
+            "compact_prompt_sha256",
+        )
+    }
+    if (
+        decision.get("sha256")
+        != owner.digest({k: v for k, v in decision.items() if k != "sha256"})
+        or decision.get("machine_bundle_sha256") != seed.get("policy_bundle_sha256")
+        or decision.get("evaluation_attempt_id") != seed.get("evaluation_attempt_id")
+        or not _sha(identity["machine_bundle_sha256"])
+        or not _sha(identity["machine_policy_sha256"])
+        or not _sha(identity["compact_prompt_sha256"])
+        or not all(
+            isinstance(identity[k], str) and identity[k].strip()
+            for k in ("machine_policy_version", "compact_prompt_version")
+        )
+        or not isinstance(decision.get("decision_trace_id"), str)
+        or not decision.get("decision_trace_id")
+        or type(decision.get("runtime_pid")) is not int
+        or decision["runtime_pid"] <= 0
+    ):
         return None
     return identity
 
 
-def replay_entry_opportunity(seed, depth_rows, trade_rows, *, source_ready, evaluated_at, cancel_model=None):
+def replay_entry_opportunity(
+    seed, depth_rows, trade_rows, *, source_ready, evaluated_at, cancel_model=None
+):
     """Replay all arms on one continuous exact-scope native path, without requests.
 
     Marketable full-depth fills are modeled; a passive price touch is unresolved.
@@ -1217,81 +1433,126 @@ def replay_entry_opportunity(seed, depth_rows, trade_rows, *, source_ready, eval
     every limit throughout the entire declared TTL. Actual outcomes stay separate.
     """
     from src.utils.evidence_digest import digest
-    from src.engine.scalping.native_packet_validation import _validate_depth_row, _validate_stream_row
+    from src.engine.scalping.native_packet_validation import (
+        _validate_depth_row,
+        _validate_stream_row,
+    )
     from src.engine.scalping.entry_split_order_plan import QUANTITY_LEG_FOUR_ARM_IDS
-    result = dict(schema=ENTRY_REPLAY_SCHEMA, status='source_gap', blocker=None,
-                  seed_sha256=seed.get('seed_sha256') if isinstance(seed, dict) else None,
-                  arms=None, price_arms=None, **AUTHORITY)
+
+    result = dict(
+        schema=ENTRY_REPLAY_SCHEMA,
+        status="source_gap",
+        blocker=None,
+        seed_sha256=seed.get("seed_sha256") if isinstance(seed, dict) else None,
+        arms=None,
+        price_arms=None,
+        **AUTHORITY,
+    )
     try:
-        if not source_ready or not _entry_seed_valid(seed) or not _finite(evaluated_at, positive=True):
-            raise ValueError('seed_or_source_contract_invalid')
-        start = _timestamp(seed['observed_at'], seed['source_date']).timestamp()
-        end = start + ENTRY_REPLAY_EXIT['horizon_sec']
+        if (
+            not source_ready
+            or not _entry_seed_valid(seed)
+            or not _finite(evaluated_at, positive=True)
+        ):
+            raise ValueError("seed_or_source_contract_invalid")
+        start = _timestamp(seed["observed_at"], seed["source_date"]).timestamp()
+        end = start + ENTRY_REPLAY_EXIT["horizon_sec"]
         if evaluated_at < end:
-            result.update(status='maturity_waiting', blocker='declared_replay_window_not_due', seed=seed)
+            result.update(
+                status="maturity_waiting",
+                blocker="declared_replay_window_not_due",
+                seed=seed,
+            )
             return result
         quotes, trades, epochs, identities, trade_identities = [], [], set(), {}, {}
         for row in depth_rows:
             valid, clock, _, _, bid, ask = _validate_depth_row(row)
             if not valid or clock is None:
-                raise ValueError('native_depth_contract_invalid')
+                raise ValueError("native_depth_contract_invalid")
             at = clock.timestamp()
             if not start - 1.5 <= at <= end + 1.5:
                 continue
-            if (row.get('symbol') != seed['stock_code'] or row.get('venue') != entry_native_market_venue(seed['effective_venue'])
-                or row.get('session_bucket') != seed['session_bucket']
-                or row.get('path_consumer_eligible') is False):
-                raise ValueError('native_scope_mismatch')
-            epoch, seq = row.get('sequence_epoch'), row.get('source_sequence')
+            if (
+                row.get("symbol") != seed["stock_code"]
+                or row.get("venue")
+                != entry_native_market_venue(seed["effective_venue"])
+                or row.get("session_bucket") != seed["session_bucket"]
+                or row.get("path_consumer_eligible") is False
+            ):
+                raise ValueError("native_scope_mismatch")
+            epoch, seq = row.get("sequence_epoch"), row.get("source_sequence")
             if type(epoch) is not int or epoch <= 0 or type(seq) is not int or seq <= 0:
-                raise ValueError('native_identity_missing')
+                raise ValueError("native_identity_missing")
             identity, sha = (epoch, seq), digest(row)
             if identity in identities:
                 if identities[identity] != sha:
-                    raise ValueError('native_identity_conflict')
+                    raise ValueError("native_identity_conflict")
                 continue
             identities[identity] = sha
             epochs.add(epoch)
-            series = row.get('series_sequence')
+            series = row.get("series_sequence")
             if type(series) is not int or series <= 0:
-                raise ValueError('native_depth_series_identity_missing')
-            quotes.append((at, bid, ask, row['best_bid_qty'], row['best_ask_qty'], seq, series))
+                raise ValueError("native_depth_series_identity_missing")
+            quotes.append(
+                (at, bid, ask, row["best_bid_qty"], row["best_ask_qty"], seq, series)
+            )
         quotes.sort()
-        if (len(epochs) != 1 or not quotes or quotes[0][0] > start
+        if (
+            len(epochs) != 1
+            or not quotes
+            or quotes[0][0] > start
             or end - quotes[-1][0] > 1.5
-            or any(b[0] - a[0] > 1.5 or b[-2] <= a[-2] or b[-1] != a[-1] + 1 for a, b in zip(quotes, quotes[1:]))):
-            raise ValueError('native_quote_window_incomplete_or_cross_epoch')
+            or any(
+                b[0] - a[0] > 1.5 or b[-2] <= a[-2] or b[-1] != a[-1] + 1
+                for a, b in zip(quotes, quotes[1:])
+            )
+        ):
+            raise ValueError("native_quote_window_incomplete_or_cross_epoch")
         for row in trade_rows:
             valid, eligible, clock, price, _, _ = _validate_stream_row(row)
             if not valid or not eligible or clock is None:
-                raise ValueError('native_trade_contract_invalid')
+                raise ValueError("native_trade_contract_invalid")
             at = clock.timestamp()
-            if start <= at <= start + seed['research_entry_ttl_sec']:
-                if (row.get('symbol') != seed['stock_code'] or row.get('venue') != entry_native_market_venue(seed['effective_venue'])
-                    or row.get('session_bucket') != seed['session_bucket']
-                    or row.get('sequence_epoch') not in epochs
-                    or type(row.get('source_sequence')) is not int
-                    or type(row.get('series_sequence')) is not int):
-                    raise ValueError('native_trade_scope_or_identity_invalid')
-                identity, sha = (row['sequence_epoch'], row['source_sequence']), digest(row)
+            if start <= at <= start + seed["research_entry_ttl_sec"]:
+                if (
+                    row.get("symbol") != seed["stock_code"]
+                    or row.get("venue")
+                    != entry_native_market_venue(seed["effective_venue"])
+                    or row.get("session_bucket") != seed["session_bucket"]
+                    or row.get("sequence_epoch") not in epochs
+                    or type(row.get("source_sequence")) is not int
+                    or type(row.get("series_sequence")) is not int
+                ):
+                    raise ValueError("native_trade_scope_or_identity_invalid")
+                identity, sha = (row["sequence_epoch"], row["source_sequence"]), digest(
+                    row
+                )
                 if identity in trade_identities:
                     if trade_identities[identity] != sha:
-                        raise ValueError('native_trade_identity_conflict')
+                        raise ValueError("native_trade_identity_conflict")
                     continue
                 trade_identities[identity] = sha
-                trades.append((at, price, row['series_sequence']))
+                trades.append((at, price, row["series_sequence"]))
         trades.sort()
-        if (not trades or trades[0][0] - start > 1.5
-            or start + seed['research_entry_ttl_sec'] - trades[-1][0] > 1.5
-            or any(b[2] != a[2] + 1 for a, b in zip(trades, trades[1:]))):
-            raise ValueError('native_trade_window_unproven')
+        if (
+            not trades
+            or trades[0][0] - start > 1.5
+            or start + seed["research_entry_ttl_sec"] - trades[-1][0] > 1.5
+            or any(b[2] != a[2] + 1 for a, b in zip(trades, trades[1:]))
+        ):
+            raise ValueError("native_trade_window_unproven")
+
         def arm(quantity, candidate_leg, prices, *, execution_only=False):
-            if type(quantity) is not int or not 0 < quantity <= seed['total_qty']:
-                raise ValueError('candidate_quantity_outside_frozen_bound')
-            shape = (seed.get('candidate_legs') or seed['legs']) if candidate_leg else seed['legs']
-            counts = [quantity * x['qty'] // seed['total_qty'] for x in shape]
+            if type(quantity) is not int or not 0 < quantity <= seed["total_qty"]:
+                raise ValueError("candidate_quantity_outside_frozen_bound")
+            shape = (
+                (seed.get("candidate_legs") or seed["legs"])
+                if candidate_leg
+                else seed["legs"]
+            )
+            counts = [quantity * x["qty"] // seed["total_qty"] for x in shape]
             counts[0] += quantity - sum(counts)
-            entry_at = start + seed['modeled_submit_delay_ms'] / 1000
+            entry_at = start + seed["modeled_submit_delay_ms"] / 1000
             total_buy = fill_qty = 0
             filled_legs = []
             fill_events = []
@@ -1299,105 +1560,225 @@ def replay_entry_opportunity(seed, depth_rows, trade_rows, *, source_ready, eval
             for index, (qty, limit) in enumerate(zip(counts, prices)):
                 if not qty:
                     continue
-                market_order = shape[index].get('order_type_code') in ('3', '03')
-                if type(limit) is not int or limit < 0 or (limit == 0 and not market_order):
-                    raise ValueError('registered_numeric_price_invalid')
-                arrival = entry_at + index * seed['modeled_submit_delay_ms'] / 1000
+                market_order = shape[index].get("order_type_code") in ("3", "03")
+                if (
+                    type(limit) is not int
+                    or limit < 0
+                    or (limit == 0 and not market_order)
+                ):
+                    raise ValueError("registered_numeric_price_invalid")
+                arrival = entry_at + index * seed["modeled_submit_delay_ms"] / 1000
                 entry = max((q for q in quotes if q[0] <= arrival), default=None)
-                if entry is None or arrival - entry[0] > .7:
-                    raise ValueError('modeled_entry_quote_missing_or_stale')
+                if entry is None or arrival - entry[0] > 0.7:
+                    raise ValueError("modeled_entry_quote_missing_or_stale")
                 if market_order or limit >= entry[2]:
                     remaining = entry[4] - depth_used.get(entry[-2], 0)
                     if remaining < qty:
-                        raise ValueError('full_quantity_depth_unproven')
+                        raise ValueError("full_quantity_depth_unproven")
                     depth_used[entry[-2]] = depth_used.get(entry[-2], 0) + qty
                     fill_qty += qty
                     total_buy += qty * entry[2]
                     filled_legs.append((arrival, qty * entry[2]))
-                    fill_events.append(dict(at=datetime.fromtimestamp(arrival, KST).isoformat(), qty=qty, price=entry[2], reserved_price=limit or entry[2]))
-                elif not (all(q[2] > limit for q in quotes if arrival <= q[0] <= start + seed['research_entry_ttl_sec'])
-                          and all(t[1] > limit for t in trades if arrival <= t[0])):
-                    raise ValueError('passive_queue_fill_or_partial_unproven')
-            common = dict(terminal_conservation_holds=True, cost_complete=True,
-                counterfactual_executable=True, entry_price_receipt_sha256=seed['entry_price_receipt_sha256'],
-                exit_policy_sha256=digest(seed['exit_contract']), cost_contract_sha256=digest(seed['cost_contract']),
-                terminal_contract_version='fixed_quote_research_exit_180sec_v1',
+                    fill_events.append(
+                        dict(
+                            at=datetime.fromtimestamp(arrival, KST).isoformat(),
+                            qty=qty,
+                            price=entry[2],
+                            reserved_price=limit or entry[2],
+                        )
+                    )
+                elif not (
+                    all(
+                        q[2] > limit
+                        for q in quotes
+                        if arrival <= q[0] <= start + seed["research_entry_ttl_sec"]
+                    )
+                    and all(t[1] > limit for t in trades if arrival <= t[0])
+                ):
+                    raise ValueError("passive_queue_fill_or_partial_unproven")
+            common = dict(
+                terminal_conservation_holds=True,
+                cost_complete=True,
+                counterfactual_executable=True,
+                entry_price_receipt_sha256=seed["entry_price_receipt_sha256"],
+                exit_policy_sha256=digest(seed["exit_contract"]),
+                cost_contract_sha256=digest(seed["cost_contract"]),
+                terminal_contract_version="fixed_quote_research_exit_180sec_v1",
                 terminal_observed_at=datetime.fromtimestamp(end, KST).isoformat(),
-                requested_qty=quantity, modeled_filled_qty=fill_qty,
-                actual_fill_evidence=False, modeled_fill_events=fill_events,
-                modeled_reserved_notional_krw=sum(q * p for q, p in zip(counts, prices)))
+                requested_qty=quantity,
+                modeled_filled_qty=fill_qty,
+                actual_fill_evidence=False,
+                modeled_fill_events=fill_events,
+                modeled_reserved_notional_krw=sum(
+                    q * p for q, p in zip(counts, prices)
+                ),
+            )
             if not fill_qty:
-                return dict(net_return_pct=0.0, net_pnl_krw=0.0, capital_krw_minutes=0.0,
-                    stress_net_return_pct=0.0, fill_participation_rate=0.0,
-                    modeled_outcome='supported_no_fill', **common)
+                return dict(
+                    net_return_pct=0.0,
+                    net_pnl_krw=0.0,
+                    capital_krw_minutes=0.0,
+                    stress_net_return_pct=0.0,
+                    fill_participation_rate=0.0,
+                    modeled_outcome="supported_no_fill",
+                    **common,
+                )
             entry_price = total_buy / fill_qty
             last_fill_at = max(at for at, _ in filled_legs)
             if execution_only:
-                return dict(modeled_entry_vwap=entry_price,
-                    modeled_last_fill_at=datetime.fromtimestamp(last_fill_at, KST).isoformat(),
-                    modeled_entry_at=datetime.fromtimestamp(min(at for at, _ in filled_legs), KST).isoformat(),
-                    modeled_outcome='operating_entry_execution_only', **common)
-            exit_quote = next((q for q in quotes if q[0] > last_fill_at and q[0] <= end and
-                (q[1] / entry_price - 1) * 100 >= ENTRY_REPLAY_EXIT['take_profit_pct']), None)
-            stop_quote = next((q for q in quotes if q[0] > last_fill_at and q[0] <= end and
-                (q[1] / entry_price - 1) * 100 <= ENTRY_REPLAY_EXIT['stop_loss_pct']), None)
+                return dict(
+                    modeled_entry_vwap=entry_price,
+                    modeled_last_fill_at=datetime.fromtimestamp(
+                        last_fill_at, KST
+                    ).isoformat(),
+                    modeled_entry_at=datetime.fromtimestamp(
+                        min(at for at, _ in filled_legs), KST
+                    ).isoformat(),
+                    modeled_outcome="operating_entry_execution_only",
+                    **common,
+                )
+            exit_quote = next(
+                (
+                    q
+                    for q in quotes
+                    if q[0] > last_fill_at
+                    and q[0] <= end
+                    and (q[1] / entry_price - 1) * 100
+                    >= ENTRY_REPLAY_EXIT["take_profit_pct"]
+                ),
+                None,
+            )
+            stop_quote = next(
+                (
+                    q
+                    for q in quotes
+                    if q[0] > last_fill_at
+                    and q[0] <= end
+                    and (q[1] / entry_price - 1) * 100
+                    <= ENTRY_REPLAY_EXIT["stop_loss_pct"]
+                ),
+                None,
+            )
             terminal = min((q for q in (exit_quote, stop_quote) if q), default=None)
             terminal = terminal or max((q for q in quotes if q[0] <= end), default=None)
-            if terminal is None or terminal[3] < fill_qty or terminal[0] <= last_fill_at:
-                raise ValueError('full_exit_depth_or_duration_unproven')
+            if (
+                terminal is None
+                or terminal[3] < fill_qty
+                or terminal[0] <= last_fill_at
+            ):
+                raise ValueError("full_exit_depth_or_duration_unproven")
             gross = (terminal[1] / entry_price - 1) * 100
-            net = gross - ENTRY_REPLAY_COST['round_trip_pct']
-            return dict(net_return_pct=net, stress_net_return_pct=gross - ENTRY_REPLAY_COST['stress_round_trip_pct'],
+            net = gross - ENTRY_REPLAY_COST["round_trip_pct"]
+            return dict(
+                net_return_pct=net,
+                stress_net_return_pct=gross
+                - ENTRY_REPLAY_COST["stress_round_trip_pct"],
                 net_pnl_krw=total_buy * net / 100,
-                capital_krw_minutes=sum(notional * (terminal[0] - at) / 60 for at, notional in filled_legs),
+                capital_krw_minutes=sum(
+                    notional * (terminal[0] - at) / 60 for at, notional in filled_legs
+                ),
                 fill_participation_rate=fill_qty / quantity,
                 modeled_entry_vwap=entry_price,
-                modeled_last_fill_at=datetime.fromtimestamp(last_fill_at, KST).isoformat(),
-                modeled_entry_at=datetime.fromtimestamp(min(at for at, _ in filled_legs), KST).isoformat(),
+                modeled_last_fill_at=datetime.fromtimestamp(
+                    last_fill_at, KST
+                ).isoformat(),
+                modeled_entry_at=datetime.fromtimestamp(
+                    min(at for at, _ in filled_legs), KST
+                ).isoformat(),
                 modeled_exit_at=datetime.fromtimestamp(terminal[0], KST).isoformat(),
-                modeled_outcome='modeled_full_or_partial_filled_terminal', **common)
-        prices = [x['price'] for x in seed['legs']]
+                modeled_outcome="modeled_full_or_partial_filled_terminal",
+                **common,
+            )
+
+        prices = [x["price"] for x in seed["legs"]]
         arms, price_arms, operating_arms = {}, {}, {}
         for i, name in enumerate(QUANTITY_LEG_FOUR_ARM_IDS):
-            quantity=seed['candidate_qty'] if i % 2 else seed['total_qty']
-            values=[x['price'] for x in (seed.get('candidate_legs') or seed['legs'])] if i>=2 else prices
+            quantity = seed["candidate_qty"] if i % 2 else seed["total_qty"]
+            values = (
+                [x["price"] for x in (seed.get("candidate_legs") or seed["legs"])]
+                if i >= 2
+                else prices
+            )
             try:
-                execution=arm(quantity,i>=2,values,execution_only=True)
-                if seed.get('operating_contract'):
+                execution = arm(quantity, i >= 2, values, execution_only=True)
+                if seed.get("operating_contract"):
                     cancel = None
-                    if execution['modeled_filled_qty'] < quantity and quantity == seed['total_qty']:
-                        cancel = entry_native_cancel_terminal(seed, execution, depth_rows, trade_rows, cancel_model,
-                            planned_prices=values)
-                        execution['cancel_wait_terminal'] = cancel
-                    operating_arms[name]=replay_operating_entry_arm(seed,execution,depth_rows,trade_rows=trade_rows,
-                        cancel_wait_validator=(lambda value: value == cancel) if cancel else None)
-                try:arms[name]=arm(quantity,i>=2,values)
+                    if (
+                        execution["modeled_filled_qty"] < quantity
+                        and quantity == seed["total_qty"]
+                    ):
+                        cancel = entry_native_cancel_terminal(
+                            seed,
+                            execution,
+                            depth_rows,
+                            trade_rows,
+                            cancel_model,
+                            planned_prices=values,
+                        )
+                        execution["cancel_wait_terminal"] = cancel
+                    operating_arms[name] = replay_operating_entry_arm(
+                        seed,
+                        execution,
+                        depth_rows,
+                        trade_rows=trade_rows,
+                        cancel_wait_validator=(
+                            (lambda value: value == cancel) if cancel else None
+                        ),
+                    )
+                try:
+                    arms[name] = arm(quantity, i >= 2, values)
                 except ValueError:
-                    if not seed.get('operating_contract'):raise
-                    arms[name]=execution
+                    if not seed.get("operating_contract"):
+                        raise
+                    arms[name] = execution
             except ValueError as exc:
-                if not seed.get('operating_contract'):raise
-                gap=dict(schema=ENTRY_OPERATING_SCHEMA,status='unsupported_scope',blocker=str(exc),
-                    net_pnl_krw=None,stress_net_pnl_krw=None,capital_krw_minutes=None,reserve_krw_minutes=None,
-                    requested_qty=quantity,actual_fill_evidence=False,**AUTHORITY)
+                if not seed.get("operating_contract"):
+                    raise
+                gap = dict(
+                    schema=ENTRY_OPERATING_SCHEMA,
+                    status="unsupported_scope",
+                    blocker=str(exc),
+                    net_pnl_krw=None,
+                    stress_net_pnl_krw=None,
+                    capital_krw_minutes=None,
+                    reserve_krw_minutes=None,
+                    requested_qty=quantity,
+                    actual_fill_evidence=False,
+                    **AUTHORITY,
+                )
                 from src.engine.scalping.entry_split_order_plan import _canonical_sha256
-                operating_arms[name]={**gap,'sha256':_canonical_sha256(gap)}
-        for bps,values in seed['price_candidates'].items():
-            try:price_arms[bps]=arm(seed['total_qty'],False,values)
+
+                operating_arms[name] = {**gap, "sha256": _canonical_sha256(gap)}
+        for bps, values in seed["price_candidates"].items():
+            try:
+                price_arms[bps] = arm(seed["total_qty"], False, values)
             except ValueError:
-                if not seed.get('operating_contract'):raise
-        result.update(status='completed_source_only', blocker=None, seed=seed,
-                      arms=arms, price_arms=price_arms,
-                      native_window_sha256=digest([depth_rows, trade_rows]))
-        if seed.get('operating_contract'):result['operating_arms']=operating_arms
-        result['replay_sha256'] = digest(result)
+                if not seed.get("operating_contract"):
+                    raise
+        result.update(
+            status="completed_source_only",
+            blocker=None,
+            seed=seed,
+            arms=arms,
+            price_arms=price_arms,
+            native_window_sha256=digest([depth_rows, trade_rows]),
+        )
+        if seed.get("operating_contract"):
+            result["operating_arms"] = operating_arms
+        result["replay_sha256"] = digest(result)
     except (KeyError, TypeError, ValueError, OverflowError) as exc:
         result.update(blocker=str(exc), arms=None, price_arms=None)
     return result
 
 
-def build_entry_opportunity_replays(day, events, *, evaluated_at=None, micro_loader=None,
-                                    source_stage="entry_execution_sizing_plan"):
+def build_entry_opportunity_replays(
+    day,
+    events,
+    *,
+    evaluated_at=None,
+    micro_loader=None,
+    source_stage="entry_execution_sizing_plan",
+):
     """Existing missed-entry report embeds exact plan/path replays, including submits.
 
     Reads the existing native collector via its canonical exclusion/parser owner.
@@ -1409,21 +1790,31 @@ def build_entry_opportunity_replays(day, events, *, evaluated_at=None, micro_loa
     from src.utils.evidence_digest import digest
     from src.engine.sniper_missed_entry_counterfactual import _price_ready_plan
     from src.engine.scalping.entry_split_order_plan import QUANTITY_LEG_FOUR_ARM_IDS
-    output = dict(schema=ENTRY_REPLAY_SCHEMA, source_date=day, rows=[],
-                  counts={}, quantity_leg_events=[], **AUTHORITY)
+
+    output = dict(
+        schema=ENTRY_REPLAY_SCHEMA,
+        source_date=day,
+        rows=[],
+        counts={},
+        quantity_leg_events=[],
+        **AUTHORITY,
+    )
     from src.engine.scalping import entry_probe_conditional_replay as conditional
+
     conditional_rows, conditional_seen = [], {}
     conditional_counts, conditional_conflicts, receipt_index = Counter(), set(), {}
     receipt_unbound_count = 0
     for followup in events:
-        if followup.stage == 'entry_probe_conditional_receipt_observed':
+        if followup.stage == "entry_probe_conditional_receipt_observed":
             try:
-                receipt = _decode(followup.fields.get('entry_probe_conditional_receipt'))
+                receipt = _decode(
+                    followup.fields.get("entry_probe_conditional_receipt")
+                )
                 if not isinstance(receipt, dict):
-                    raise ValueError('conditional_receipt_object_missing')
-                key = (receipt.get('evaluation_attempt_id'), receipt.get('plan_sha256'))
+                    raise ValueError("conditional_receipt_object_missing")
+                key = (receipt.get("evaluation_attempt_id"), receipt.get("plan_sha256"))
                 if not all(isinstance(v, str) and v for v in key):
-                    raise ValueError('conditional_receipt_key_invalid')
+                    raise ValueError("conditional_receipt_key_invalid")
                 receipt_index.setdefault(key, []).append(receipt)
             except (ValueError, TypeError):
                 receipt_unbound_count += 1
@@ -1434,7 +1825,10 @@ def build_entry_opportunity_replays(day, events, *, evaluated_at=None, micro_loa
         for event in events:
             if event.stage != "entry_ai_economic_decision_available":
                 continue
-            key = (event.fields.get("evaluation_attempt_id"), event.fields.get("entry_economic_plan_sha256"))
+            key = (
+                event.fields.get("evaluation_attempt_id"),
+                event.fields.get("entry_economic_plan_sha256"),
+            )
             value = event.fields.get("entry_economic_decision_available_at")
             if key in availability and availability[key] != value:
                 availability_conflicts.add(key)
@@ -1442,19 +1836,23 @@ def build_entry_opportunity_replays(day, events, *, evaluated_at=None, micro_loa
     for event in events:
         if event.stage != source_stage:
             continue
-        seed = event.fields.get('entry_opportunity_replay_seed')
+        seed = event.fields.get("entry_opportunity_replay_seed")
         try:
             if isinstance(seed, str) and len(seed) <= 2 * 1024 * 1024:
                 try:
                     seed = json.loads(seed)
                 except ValueError:
                     seed = ast.literal_eval(seed)
-            if isinstance(seed, dict) and seed.get('schema') == conditional.SCHEMA:
-                if (not conditional.valid_seed(seed) or seed['source_date'] != day
-                    or seed['stock_code'] != event.code
-                    or seed['plan_sha256'] != event.fields.get('entry_execution_sizing_plan_sha256')):
-                    raise ValueError('conditional_original_plan_or_seed_invalid')
-                key = (seed['evaluation_attempt_id'], seed['plan_sha256'])
+            if isinstance(seed, dict) and seed.get("schema") == conditional.SCHEMA:
+                if (
+                    not conditional.valid_seed(seed)
+                    or seed["source_date"] != day
+                    or seed["stock_code"] != event.code
+                    or seed["plan_sha256"]
+                    != event.fields.get("entry_execution_sizing_plan_sha256")
+                ):
+                    raise ValueError("conditional_original_plan_or_seed_invalid")
+                key = (seed["evaluation_attempt_id"], seed["plan_sha256"])
                 conditional_counts[key] += 1
                 if key in conditional_seen and conditional_seen[key] != seed:
                     conditional_conflicts.add(key)
@@ -1462,254 +1860,523 @@ def build_entry_opportunity_replays(day, events, *, evaluated_at=None, micro_loa
                     conditional_seen[key] = seed
                 continue
             plan = _price_ready_plan(event)
-            if (not plan or not _entry_seed_valid(seed) or seed.get('source_date') != day
-                or seed.get('plan_sha256') != digest(plan)
-                or seed.get('plan_sha256') != event.fields.get('entry_execution_sizing_plan_sha256')
-                or seed.get('stock_code') != event.code
-                or seed.get('evaluation_attempt_id') != plan['action_receipt_id']):
-                raise ValueError('original_plan_or_frozen_seed_missing_or_invalid')
+            if (
+                not plan
+                or not _entry_seed_valid(seed)
+                or seed.get("source_date") != day
+                or seed.get("plan_sha256") != digest(plan)
+                or seed.get("plan_sha256")
+                != event.fields.get("entry_execution_sizing_plan_sha256")
+                or seed.get("stock_code") != event.code
+                or seed.get("evaluation_attempt_id") != plan["action_receipt_id"]
+            ):
+                raise ValueError("original_plan_or_frozen_seed_missing_or_invalid")
             if source_stage == "entry_ai_economic_plan_observed":
-                available_key = (seed['evaluation_attempt_id'], seed['plan_sha256'])
-                nonentry = (plan.get('observation_only') is True
-                    and plan.get('observed_machine_action') in {'BLOCK', 'RECHECK'}
-                    and seed.get('observed_machine_action') == plan['observed_machine_action'])
+                available_key = (seed["evaluation_attempt_id"], seed["plan_sha256"])
+                nonentry = (
+                    plan.get("observation_only") is True
+                    and plan.get("observed_machine_action") in {"BLOCK", "RECHECK"}
+                    and seed.get("observed_machine_action")
+                    == plan["observed_machine_action"]
+                )
                 if nonentry:
                     if available_key in availability:
-                        raise ValueError('nonentry_unexpected_auxiliary_availability')
-                elif available_key in availability_conflicts or available_key not in availability:
-                    raise ValueError('pre_ai_decision_availability_missing_or_conflicting')
+                        raise ValueError("nonentry_unexpected_auxiliary_availability")
+                elif (
+                    available_key in availability_conflicts
+                    or available_key not in availability
+                ):
+                    raise ValueError(
+                        "pre_ai_decision_availability_missing_or_conflicting"
+                    )
                 if not nonentry:
                     available_at = _timestamp(availability[available_key], day)
-                    if available_at < _timestamp(seed['observed_at'], day):
-                        raise ValueError('pre_ai_decision_availability_before_plan')
+                    if available_at < _timestamp(seed["observed_at"], day):
+                        raise ValueError("pre_ai_decision_availability_before_plan")
                     # Derived replay clock; preserve the original immutable seed/plan identity.
-                    seed = {**seed, 'original_pre_ai_seed_sha256': seed['seed_sha256'],
-                            'plan_observed_at': seed['observed_at'], 'observed_at': available_at.isoformat()}
-                    seed['seed_sha256'] = digest({k:v for k,v in seed.items() if k != 'seed_sha256'})
-            key = digest([seed[k] for k in ('stock_code', 'scanner_promotion_id',
-                'evaluation_attempt_id', 'effective_venue', 'session_bucket', 'policy_bundle_sha256')])
+                    seed = {
+                        **seed,
+                        "original_pre_ai_seed_sha256": seed["seed_sha256"],
+                        "plan_observed_at": seed["observed_at"],
+                        "observed_at": available_at.isoformat(),
+                    }
+                    seed["seed_sha256"] = digest(
+                        {k: v for k, v in seed.items() if k != "seed_sha256"}
+                    )
+            key = digest(
+                [
+                    seed[k]
+                    for k in (
+                        "stock_code",
+                        "scanner_promotion_id",
+                        "evaluation_attempt_id",
+                        "effective_venue",
+                        "session_bucket",
+                        "policy_bundle_sha256",
+                    )
+                ]
+            )
             valid_counts[key] += 1
             if key in candidates:
                 if candidates[key] != seed:
                     conflicts.add(key)
                 else:
-                    rejected['duplicate_exact_plan'] += 1
+                    rejected["duplicate_exact_plan"] += 1
             else:
                 candidates[key] = seed
         except (TypeError, ValueError, KeyError, SyntaxError, RecursionError) as exc:
-            fields=event.fields if isinstance(getattr(event,"fields",None),dict) else {}
-            seed_blocker=str(fields.get('entry_opportunity_replay_seed_blocker') or '').strip()
-            seed_status=str(fields.get('entry_opportunity_replay_seed_status') or '').strip()
-            if str(exc)=='original_plan_or_frozen_seed_missing_or_invalid' and seed_status=='source_gap' and seed_blocker:
-                first_blockers['replay_seed:'+seed_blocker] += 1
+            fields = (
+                event.fields if isinstance(getattr(event, "fields", None), dict) else {}
+            )
+            seed_blocker = str(
+                fields.get("entry_opportunity_replay_seed_blocker") or ""
+            ).strip()
+            seed_status = str(
+                fields.get("entry_opportunity_replay_seed_status") or ""
+            ).strip()
+            if (
+                str(exc) == "original_plan_or_frozen_seed_missing_or_invalid"
+                and seed_status == "source_gap"
+                and seed_blocker
+            ):
+                first_blockers["replay_seed:" + seed_blocker] += 1
             else:
                 first_blockers[str(exc)] += 1
-            rejected['original_plan_or_frozen_seed_missing_or_invalid'] += 1
-    rejected['conflicting_exact_plan'] += len(conflicts)
+            rejected["original_plan_or_frozen_seed_missing_or_invalid"] += 1
+    rejected["conflicting_exact_plan"] += len(conflicts)
     conditional_raw_count = sum(conditional_counts.values())
-    conditional_duplicates = sum(n-1 for k,n in conditional_counts.items() if k not in conditional_conflicts)
+    conditional_duplicates = sum(
+        n - 1 for k, n in conditional_counts.items() if k not in conditional_conflicts
+    )
     for key, seed in conditional_seen.items():
         if key in conditional_conflicts:
-            conditional_rows.append(conditional.seal(dict(schema=conditional.REPLAY_SCHEMA,
-                seed=seed, status='source_gap', blocker='conditional_original_seed_conflict',
-                paired_economic_eligible=False, net_pnl_krw=None, **AUTHORITY), 'sha256'))
+            conditional_rows.append(
+                conditional.seal(
+                    dict(
+                        schema=conditional.REPLAY_SCHEMA,
+                        seed=seed,
+                        status="source_gap",
+                        blocker="conditional_original_seed_conflict",
+                        paired_economic_eligible=False,
+                        net_pnl_krw=None,
+                        **AUTHORITY,
+                    ),
+                    "sha256",
+                )
+            )
         else:
-            conditional_rows.append(conditional.reconstruct_prices(seed, receipt_index.get(key, [])))
-    output['conditional_probe_replays'] = conditional_rows
-    output['conditional_probe_source_census'] = dict(raw_plan_rows=conditional_raw_count,
-        unique_plan_count=len(conditional_seen), duplicate_plan_rows=conditional_duplicates,
+            conditional_rows.append(
+                conditional.reconstruct_prices(seed, receipt_index.get(key, []))
+            )
+    output["conditional_probe_replays"] = conditional_rows
+    output["conditional_probe_source_census"] = dict(
+        raw_plan_rows=conditional_raw_count,
+        unique_plan_count=len(conditional_seen),
+        duplicate_plan_rows=conditional_duplicates,
         conflicting_plan_rows=sum(conditional_counts[k] for k in conditional_conflicts),
         unbound_receipt_rows=receipt_unbound_count,
-        orphan_exact_receipt_rows=sum(len(v) for k,v in receipt_index.items() if k not in conditional_seen),
-        status_counts=dict(Counter(r['status'] for r in conditional_rows)),
-        first_blocker_counts=dict(Counter(r['blocker'] for r in conditional_rows if r.get('blocker'))),
-        paired_economic_eligible_count=0)
+        orphan_exact_receipt_rows=sum(
+            len(v) for k, v in receipt_index.items() if k not in conditional_seen
+        ),
+        status_counts=dict(Counter(r["status"] for r in conditional_rows)),
+        first_blocker_counts=dict(
+            Counter(r["blocker"] for r in conditional_rows if r.get("blocker"))
+        ),
+        paired_economic_eligible_count=0,
+    )
     # Raw-row and unique-attempt dispositions are separate conserved populations.
-    row_disposition = dict(retained_anchor_rows=len(candidates) - len(conflicts)+len(conditional_seen)-len(conditional_conflicts),
-        duplicate_rows=sum(n - 1 for k, n in valid_counts.items() if k not in conflicts)+conditional_duplicates,
-        conflicting_rows=sum(valid_counts[k] for k in conflicts)+sum(conditional_counts[k] for k in conditional_conflicts),
-        rejected_rows=rejected['original_plan_or_frozen_seed_missing_or_invalid'])
+    row_disposition = dict(
+        retained_anchor_rows=len(candidates)
+        - len(conflicts)
+        + len(conditional_seen)
+        - len(conditional_conflicts),
+        duplicate_rows=sum(n - 1 for k, n in valid_counts.items() if k not in conflicts)
+        + conditional_duplicates,
+        conflicting_rows=sum(valid_counts[k] for k in conflicts)
+        + sum(conditional_counts[k] for k in conditional_conflicts),
+        rejected_rows=rejected["original_plan_or_frozen_seed_missing_or_invalid"],
+    )
     seeds = {k: v for k, v in candidates.items() if k not in conflicts}
-    plan_only = {k: v for k, v in seeds.items() if source_stage == 'entry_ai_economic_plan_observed'
-                 and v.get('observed_machine_action') in {'BLOCK', 'RECHECK'}}
+    plan_only = {
+        k: v
+        for k, v in seeds.items()
+        if source_stage == "entry_ai_economic_plan_observed"
+        and v.get("observed_machine_action") in {"BLOCK", "RECHECK"}
+    }
     for seed in plan_only.values():
-        value = dict(schema=ENTRY_REPLAY_SCHEMA, status='nonentry_plan_only',
-            blocker=None, seed=seed, arms=None, price_arms=None,
-            auxiliary_called=False, **AUTHORITY)
-        output['rows'].append({**value, 'replay_sha256': digest(value)})
+        value = dict(
+            schema=ENTRY_REPLAY_SCHEMA,
+            status="nonentry_plan_only",
+            blocker=None,
+            seed=seed,
+            arms=None,
+            price_arms=None,
+            auxiliary_called=False,
+            **AUTHORITY,
+        )
+        output["rows"].append({**value, "replay_sha256": digest(value)})
     now = evaluated_at if evaluated_at is not None else time.time()
-    ready = {k: v for k, v in seeds.items() if k not in plan_only
-             if _timestamp(v['observed_at'], day).timestamp() + ENTRY_REPLAY_EXIT['horizon_sec'] <= now}
+    ready = {
+        k: v
+        for k, v in seeds.items()
+        if k not in plan_only
+        if _timestamp(v["observed_at"], day).timestamp()
+        + ENTRY_REPLAY_EXIT["horizon_sec"]
+        <= now
+    }
     waiting = len(seeds) - len(ready) - len(plan_only)
     for key, seed in seeds.items():
         if key not in ready and key not in plan_only:
-            output['rows'].append(dict(schema=ENTRY_REPLAY_SCHEMA, status='maturity_waiting',
-                blocker='declared_replay_window_not_due', seed=seed, arms=None, price_arms=None, **AUTHORITY))
+            output["rows"].append(
+                dict(
+                    schema=ENTRY_REPLAY_SCHEMA,
+                    status="maturity_waiting",
+                    blocker="declared_replay_window_not_due",
+                    seed=seed,
+                    arms=None,
+                    price_arms=None,
+                    **AUTHORITY,
+                )
+            )
     if ready:
         cancel_model = load_entry_cancel_model(day)
-        anchors = [dict(anchor_id=k, symbol=v['stock_code'], anchor_at=v['observed_at'],
-                    expected_venues=[entry_native_market_venue(v['effective_venue'])], expected_session_buckets=[v['session_bucket']],
-                    bounded_entry_opportunity_replay=True) for k, v in ready.items()]
+        anchors = [
+            dict(
+                anchor_id=k,
+                symbol=v["stock_code"],
+                anchor_at=v["observed_at"],
+                expected_venues=[entry_native_market_venue(v["effective_venue"])],
+                expected_session_buckets=[v["session_bucket"]],
+                bounded_entry_opportunity_replay=True,
+            )
+            for k, v in ready.items()
+        ]
         try:
-            canary = micro.resolve_target_canary_snapshot(target_date=date.fromisoformat(day),
-                latest_path=micro.DEFAULT_CANARY_SNAPSHOT_PATH, daily_root=micro.CANARY_DAILY_SNAPSHOT_DIR)
-            generation_paths = [micro.OBSERVATION_ROOT / f'trade_date={day}',
-                                micro.DEFAULT_SOURCE_EXCLUSION_MANIFEST]
+            canary = micro.resolve_target_canary_snapshot(
+                target_date=date.fromisoformat(day),
+                latest_path=micro.DEFAULT_CANARY_SNAPSHOT_PATH,
+                daily_root=micro.CANARY_DAILY_SNAPSHOT_DIR,
+            )
+            generation_paths = [
+                micro.OBSERVATION_ROOT / f"trade_date={day}",
+                micro.DEFAULT_SOURCE_EXCLUSION_MANIFEST,
+            ]
             if canary is not None:
                 generation_paths.append(canary)
-            generation = micro._source_generation_contract({}, extra_paths=generation_paths)
-            if any(Path(r['path']).is_symlink() for r in generation['source_rows']):
-                raise ValueError('native_source_final_symlink')
+            generation = micro._source_generation_contract(
+                {}, extra_paths=generation_paths
+            )
+            if any(Path(r["path"]).is_symlink() for r in generation["source_rows"]):
+                raise ValueError("native_source_final_symlink")
             source, inventory, windows = (micro_loader or micro._micro_context)(
-                day, micro.OBSERVATION_ROOT, {v['stock_code'] for v in ready.values()}, anchors,
-                micro.DEFAULT_SOURCE_EXCLUSION_MANIFEST, canary, datetime.fromtimestamp(now, KST))
+                day,
+                micro.OBSERVATION_ROOT,
+                {v["stock_code"] for v in ready.values()},
+                anchors,
+                micro.DEFAULT_SOURCE_EXCLUSION_MANIFEST,
+                canary,
+                datetime.fromtimestamp(now, KST),
+            )
             after = micro._source_generation_contract({}, extra_paths=generation_paths)
             if generation != after:
-                raise ValueError('native_source_generation_changed_during_replay')
-            output['native_source'] = {**source, 'source_generation': generation,
-                'prior_cancel_model_sha256': (cancel_model or {}).get('sha256'),
-                'prior_cancel_model_available_after_date': (cancel_model or {}).get('available_after_date')}
+                raise ValueError("native_source_generation_changed_during_replay")
+            output["native_source"] = {
+                **source,
+                "source_generation": generation,
+                "prior_cancel_model_sha256": (cancel_model or {}).get("sha256"),
+                "prior_cancel_model_available_after_date": (cancel_model or {}).get(
+                    "available_after_date"
+                ),
+            }
             for key, seed in ready.items():
                 window = windows.get(key) or {}
-                result = replay_entry_opportunity(seed, window.get('raw_depth_rows') or [],
-                    window.get('raw_market_rows') or [], evaluated_at=now,
+                result = replay_entry_opportunity(
+                    seed,
+                    window.get("raw_depth_rows") or [],
+                    window.get("raw_market_rows") or [],
+                    evaluated_at=now,
                     cancel_model=cancel_model,
-                    source_ready=(source.get('source_contract_ready') is True
-                                  and not window.get('adaptive_exit_source_overflow')
-                                  and not micro._invalid_contract_count_for_scope(
-                                      inventory.get(seed['stock_code']) or {},
-                                      expected_venues=[entry_native_market_venue(seed['effective_venue'])],
-                                      expected_sessions=[seed['session_bucket']])))
-                if result.get('seed') is None:
-                    result['seed'] = seed
-                output['rows'].append(result)
+                    source_ready=(
+                        source.get("source_contract_ready") is True
+                        and not window.get("adaptive_exit_source_overflow")
+                        and not micro._invalid_contract_count_for_scope(
+                            inventory.get(seed["stock_code"]) or {},
+                            expected_venues=[
+                                entry_native_market_venue(seed["effective_venue"])
+                            ],
+                            expected_sessions=[seed["session_bucket"]],
+                        )
+                    ),
+                )
+                if result.get("seed") is None:
+                    result["seed"] = seed
+                output["rows"].append(result)
         except (OSError, KeyError, TypeError, ValueError) as exc:
-            output['native_source'] = dict(status='source_gap', reason=str(exc))
-            output['rows'] = [r for r in output['rows'] if r['status'] in ('maturity_waiting', 'nonentry_plan_only')]
-            output['rows'].extend(dict(schema=ENTRY_REPLAY_SCHEMA, status='source_gap',
-                blocker='native_source_contract_unavailable', seed=seed, arms=None, price_arms=None,
-                **AUTHORITY) for seed in ready.values())
+            output["native_source"] = dict(status="source_gap", reason=str(exc))
+            output["rows"] = [
+                r
+                for r in output["rows"]
+                if r["status"] in ("maturity_waiting", "nonentry_plan_only")
+            ]
+            output["rows"].extend(
+                dict(
+                    schema=ENTRY_REPLAY_SCHEMA,
+                    status="source_gap",
+                    blocker="native_source_contract_unavailable",
+                    seed=seed,
+                    arms=None,
+                    price_arms=None,
+                    **AUTHORITY,
+                )
+                for seed in ready.values()
+            )
     reservation, promotions, admitted = -math.inf, set(), set()
-    for key, seed in sorted(ready.items(), key=lambda kv: (kv[1]['observed_at'], kv[1]['seed_sha256'])):
-        at = _timestamp(seed['observed_at'], day).timestamp()
-        promotion = (seed['stock_code'], seed['scanner_promotion_id'])
+    for key, seed in sorted(
+        ready.items(), key=lambda kv: (kv[1]["observed_at"], kv[1]["seed_sha256"])
+    ):
+        at = _timestamp(seed["observed_at"], day).timestamp()
+        promotion = (seed["stock_code"], seed["scanner_promotion_id"])
         if at >= reservation and promotion not in promotions:
             admitted.add(key)
-            reservation = at + ENTRY_REPLAY_ALLOCATION['reservation_sec']
+            reservation = at + ENTRY_REPLAY_ALLOCATION["reservation_sec"]
             promotions.add(promotion)
-    for row in output['rows']:
-        if row['status'] != 'completed_source_only':
+    for row in output["rows"]:
+        if row["status"] != "completed_source_only":
             continue
-        seed = row['seed']
-        key = digest([seed[k] for k in ('stock_code', 'scanner_promotion_id',
-            'evaluation_attempt_id', 'effective_venue', 'session_bucket', 'policy_bundle_sha256')])
-        row['incumbent_execution_arm'] = dict(row['arms'].get(QUANTITY_LEG_FOUR_ARM_IDS[0]) or {})
-        row['allocation_admitted'] = key in admitted
+        seed = row["seed"]
+        key = digest(
+            [
+                seed[k]
+                for k in (
+                    "stock_code",
+                    "scanner_promotion_id",
+                    "evaluation_attempt_id",
+                    "effective_venue",
+                    "session_bucket",
+                    "policy_bundle_sha256",
+                )
+            ]
+        )
+        row["incumbent_execution_arm"] = dict(
+            row["arms"].get(QUANTITY_LEG_FOUR_ARM_IDS[0]) or {}
+        )
+        row["allocation_admitted"] = key in admitted
         if key not in admitted:
-            for arm in row['arms'].values():
-                arm.update(net_return_pct=0., stress_net_return_pct=0., net_pnl_krw=0.,
-                    capital_krw_minutes=0., fill_participation_rate=0., modeled_filled_qty=0,
-                    modeled_outcome='modeled_no_exposure_common_reservation')
-        row['replay_sha256'] = digest({k: v for k, v in row.items() if k != 'replay_sha256'})
+            for arm in row["arms"].values():
+                arm.update(
+                    net_return_pct=0.0,
+                    stress_net_return_pct=0.0,
+                    net_pnl_krw=0.0,
+                    capital_krw_minutes=0.0,
+                    fill_participation_rate=0.0,
+                    modeled_filled_qty=0,
+                    modeled_outcome="modeled_no_exposure_common_reservation",
+                )
+        row["replay_sha256"] = digest(
+            {k: v for k, v in row.items() if k != "replay_sha256"}
+        )
     # Preserve exact TTL closure from the existing watch owner. FIFO eviction
     # remains diagnostic because a changed policy can change queue occupancy.
     terminals_by_identity = {}
     for event in events:
-        if event.stage == 'entry_machine_watch_terminal':
-            terminals_by_identity.setdefault((event.code, event.fields.get('scanner_promotion_id')), []).append(event)
-    for row in output['rows']:
-        seed = row.get('seed') or {}
-        lifetime = (seed.get('operating_contract') or {}).get('watch_lifetime_contract') or {}
-        terminals = terminals_by_identity.get((seed.get('stock_code'), seed.get('scanner_promotion_id')), [])
+        if event.stage == "entry_machine_watch_terminal":
+            terminals_by_identity.setdefault(
+                (event.code, event.fields.get("scanner_promotion_id")), []
+            ).append(event)
+    for row in output["rows"]:
+        seed = row.get("seed") or {}
+        lifetime = (seed.get("operating_contract") or {}).get(
+            "watch_lifetime_contract"
+        ) or {}
+        terminals = terminals_by_identity.get(
+            (seed.get("stock_code"), seed.get("scanner_promotion_id")), []
+        )
         matching = []
         for event in terminals:
             try:
-                at = float(event.fields['watch_terminal_epoch'])
-                deadline = float(event.fields['watch_deadline_epoch'])
-                if (event.fields.get('watch_terminal_reason') == 'ttl_expired'
-                    and event.fields.get('watch_terminal_owner') == lifetime.get('owner')
-                    and lifetime.get('scanner_promotion_id') == seed.get('scanner_promotion_id')
-                    and deadline == lifetime.get('deadline_epoch') and math.isfinite(at)
-                    and at > deadline >= _timestamp(seed['observed_at'], day).timestamp()):
-                    matching.append(dict(terminal_epoch=at, deadline_epoch=deadline,
-                        owner=lifetime['owner'], scanner_promotion_id=seed['scanner_promotion_id']))
+                at = float(event.fields["watch_terminal_epoch"])
+                deadline = float(event.fields["watch_deadline_epoch"])
+                if (
+                    event.fields.get("watch_terminal_reason") == "ttl_expired"
+                    and event.fields.get("watch_terminal_owner")
+                    == lifetime.get("owner")
+                    and lifetime.get("scanner_promotion_id")
+                    == seed.get("scanner_promotion_id")
+                    and deadline == lifetime.get("deadline_epoch")
+                    and math.isfinite(at)
+                    and at
+                    > deadline
+                    >= _timestamp(seed["observed_at"], day).timestamp()
+                ):
+                    matching.append(
+                        dict(
+                            terminal_epoch=at,
+                            deadline_epoch=deadline,
+                            owner=lifetime["owner"],
+                            scanner_promotion_id=seed["scanner_promotion_id"],
+                        )
+                    )
             except (KeyError, TypeError, ValueError):
                 continue
         if matching:
-            row['machine_watch_terminal'] = min(matching, key=lambda r:r['terminal_epoch'])
-            row['replay_sha256'] = digest({k:v for k,v in row.items() if k != 'replay_sha256'})
-    completed = [r for r in output['rows'] if r['status'] == 'completed_source_only']
+            row["machine_watch_terminal"] = min(
+                matching, key=lambda r: r["terminal_epoch"]
+            )
+            row["replay_sha256"] = digest(
+                {k: v for k, v in row.items() if k != "replay_sha256"}
+            )
+    completed = [r for r in output["rows"] if r["status"] == "completed_source_only"]
     # Receipt denominator includes incomplete usable-anchor attempts; exclude no row silently.
     for row in completed:
-        seed = row['seed']
-        receipt = {k: seed[k] for k in ('source_date', 'scanner_promotion_id', 'evaluation_attempt_id',
-            'stock_code', 'effective_venue', 'session_bucket', 'policy_bundle_sha256',
-            'incumbent_quantity_policy_version', 'candidate_quantity_policy_version',
-            'incumbent_leg_policy_version', 'candidate_leg_policy_version', 'entry_price_policy_sha256')}
-        receipt.update(schema='entry_quantity_leg_four_arm_evaluation_v1', arms=row['arms'],
-                       eligible_attempt_count=len(seeds), native_replay_sha256=row['replay_sha256'])
-        receipt['entry_price_replay_row'] = row
-        receipt['receipt_sha256'] = digest(receipt)
-        output['quantity_leg_events'].append(dict(source_date=day, stock_code=seed['stock_code'],
-            stage='entry_quantity_leg_four_arm_evaluation',
-            observed_at=seed['observed_at'], effective_venue=seed['effective_venue'],
-            market_session_bucket=seed['session_bucket'],
-            entry_quantity_leg_four_arm_evaluation=receipt))
-    output['counts'] = dict(unique_retained=len(seeds), completed=len(completed),
-        nonentry_plan_only=len(plan_only), maturity_waiting=waiting, source_gap=len(ready) - len(completed), excluded=dict(rejected),
-        source_stage=source_stage, raw_plan_rows=sum(e.stage == source_stage for e in events),
-        raw_row_disposition=row_disposition, first_blocker_counts=dict(first_blockers))
-    output['sha256'] = digest(output)
+        seed = row["seed"]
+        receipt = {
+            k: seed[k]
+            for k in (
+                "source_date",
+                "scanner_promotion_id",
+                "evaluation_attempt_id",
+                "stock_code",
+                "effective_venue",
+                "session_bucket",
+                "policy_bundle_sha256",
+                "incumbent_quantity_policy_version",
+                "candidate_quantity_policy_version",
+                "incumbent_leg_policy_version",
+                "candidate_leg_policy_version",
+                "entry_price_policy_sha256",
+            )
+        }
+        receipt.update(
+            schema="entry_quantity_leg_four_arm_evaluation_v1",
+            arms=row["arms"],
+            eligible_attempt_count=len(seeds),
+            native_replay_sha256=row["replay_sha256"],
+        )
+        receipt["entry_price_replay_row"] = row
+        receipt["receipt_sha256"] = digest(receipt)
+        output["quantity_leg_events"].append(
+            dict(
+                source_date=day,
+                stock_code=seed["stock_code"],
+                stage="entry_quantity_leg_four_arm_evaluation",
+                observed_at=seed["observed_at"],
+                effective_venue=seed["effective_venue"],
+                market_session_bucket=seed["session_bucket"],
+                entry_quantity_leg_four_arm_evaluation=receipt,
+            )
+        )
+    output["counts"] = dict(
+        unique_retained=len(seeds),
+        completed=len(completed),
+        nonentry_plan_only=len(plan_only),
+        maturity_waiting=waiting,
+        source_gap=len(ready) - len(completed),
+        excluded=dict(rejected),
+        source_stage=source_stage,
+        raw_plan_rows=sum(e.stage == source_stage for e in events),
+        raw_row_disposition=row_disposition,
+        first_blocker_counts=dict(first_blockers),
+    )
+    output["sha256"] = digest(output)
     return output
 
 
 def entry_price_comparison_metrics(sample, bps, target_group):
     def group_key(seed):
-        return tuple(seed.get(k) for k in ('profile', 'target_value_key', 'incumbent_bps',
-            'effective_venue', 'session_bucket', 'policy_bundle_sha256', 'entry_price_policy_sha256'))
+        return tuple(
+            seed.get(k)
+            for k in (
+                "profile",
+                "target_value_key",
+                "incumbent_bps",
+                "effective_venue",
+                "session_bucket",
+                "policy_bundle_sha256",
+                "entry_price_policy_sha256",
+            )
+        )
+
     if not sample:
         raise ValueError("latest_source_partition_missing_outcomes")
-    ordered = sorted(sample, key=lambda r: (r['seed']['observed_at'], r['seed']['seed_sha256']))
+    ordered = sorted(
+        sample, key=lambda r: (r["seed"]["observed_at"], r["seed"]["seed_sha256"])
+    )
     arms, reserved_until, promotions = [], -math.inf, set()
     for r in ordered:
-        seed = r['seed']
-        at = _timestamp(seed['observed_at'], seed['source_date']).timestamp()
-        promotion = (seed['source_date'], seed['stock_code'], seed['scanner_promotion_id'])
-        if r.get('allocation_admitted') is False or at < reserved_until or promotion in promotions:
+        seed = r["seed"]
+        at = _timestamp(seed["observed_at"], seed["source_date"]).timestamp()
+        promotion = (
+            seed["source_date"],
+            seed["stock_code"],
+            seed["scanner_promotion_id"],
+        )
+        if (
+            r.get("allocation_admitted") is False
+            or at < reserved_until
+            or promotion in promotions
+        ):
             # Explicit modeled no exposure from the SAME allocation rule for both policies.
-            arms.append(dict(net_return_pct=0., stress_net_return_pct=0., net_pnl_krw=0.,
-                capital_krw_minutes=0., fill_participation_rate=0., cost_complete=True,
-                counterfactual_executable=True))
+            arms.append(
+                dict(
+                    net_return_pct=0.0,
+                    stress_net_return_pct=0.0,
+                    net_pnl_krw=0.0,
+                    capital_krw_minutes=0.0,
+                    fill_participation_rate=0.0,
+                    cost_complete=True,
+                    counterfactual_executable=True,
+                )
+            )
         else:
             if bps is not None and group_key(seed) == target_group:
-                arms.append(r['price_arms'][str(bps)])
-            elif seed.get('price_candidates'):
-                arms.append(r['price_arms'][str(seed['incumbent_bps'])])
+                arms.append(r["price_arms"][str(bps)])
+            elif seed.get("price_candidates"):
+                arms.append(r["price_arms"][str(seed["incumbent_bps"])])
             else:
                 # Other price branches stay on their original owner-issued plan.
-                from src.engine.scalping.entry_split_order_plan import QUANTITY_LEG_FOUR_ARM_IDS
-                arms.append(r['arms'][QUANTITY_LEG_FOUR_ARM_IDS[0]])
-            reserved_until = at + ENTRY_REPLAY_ALLOCATION['reservation_sec']
+                from src.engine.scalping.entry_split_order_plan import (
+                    QUANTITY_LEG_FOUR_ARM_IDS,
+                )
+
+                arms.append(r["arms"][QUANTITY_LEG_FOUR_ARM_IDS[0]])
+            reserved_until = at + ENTRY_REPLAY_ALLOCATION["reservation_sec"]
             promotions.add(promotion)
     for a in arms:
-        if (not all(_finite(a.get(k)) for k in ('net_return_pct', 'stress_net_return_pct',
-                'net_pnl_krw', 'capital_krw_minutes', 'fill_participation_rate'))
-            or a['capital_krw_minutes'] < 0 or not 0 <= a['fill_participation_rate'] <= 1
-            or a.get('cost_complete') is not True or a.get('counterfactual_executable') is not True):
-            raise ValueError('paired_arm_invalid')
-    net = [a['net_return_pct'] for a in arms]
-    pnl = sum(a['net_pnl_krw'] for a in arms)
-    capital = sum(a['capital_krw_minutes'] for a in arms)
-    dates = {r['seed']['source_date'] for r in sample}
-    return dict(source_quality_adjusted_ev_pct=sum(net) / len(net),
-        stress_ev_pct=sum(a['stress_net_return_pct'] for a in arms) / len(arms),
-        modeled_net_profit_krw=pnl, modeled_net_profit_per_source_day=pnl / len(dates),
-        downside_p10_net_pct=sorted(net)[max(0, math.ceil(len(net) * .1) - 1)],
+        if (
+            not all(
+                _finite(a.get(k))
+                for k in (
+                    "net_return_pct",
+                    "stress_net_return_pct",
+                    "net_pnl_krw",
+                    "capital_krw_minutes",
+                    "fill_participation_rate",
+                )
+            )
+            or a["capital_krw_minutes"] < 0
+            or not 0 <= a["fill_participation_rate"] <= 1
+            or a.get("cost_complete") is not True
+            or a.get("counterfactual_executable") is not True
+        ):
+            raise ValueError("paired_arm_invalid")
+    net = [a["net_return_pct"] for a in arms]
+    pnl = sum(a["net_pnl_krw"] for a in arms)
+    capital = sum(a["capital_krw_minutes"] for a in arms)
+    dates = {r["seed"]["source_date"] for r in sample}
+    return dict(
+        source_quality_adjusted_ev_pct=sum(net) / len(net),
+        stress_ev_pct=sum(a["stress_net_return_pct"] for a in arms) / len(arms),
+        modeled_net_profit_krw=pnl,
+        modeled_net_profit_per_source_day=pnl / len(dates),
+        downside_p10_net_pct=sorted(net)[max(0, math.ceil(len(net) * 0.1) - 1)],
         positive_terminal_frequency=sum(n > 0 for n in net) / len(net),
-        fill_participation_rate=sum(a['fill_participation_rate'] for a in arms) / len(arms),
+        fill_participation_rate=sum(a["fill_participation_rate"] for a in arms)
+        / len(arms),
         modeled_capital_krw_minutes=capital,
         modeled_net_profit_per_capital_minute=pnl / capital if capital > 0 else 0.0,
-        paired_sample_count=len(arms), qualified_source_day_count=len(dates))
+        paired_sample_count=len(arms),
+        qualified_source_day_count=len(dates),
+    )
 
 
 def select_entry_price_replay(rows, *, eligible_count=None, source_counts=None):
@@ -1720,29 +2387,47 @@ def select_entry_price_replay(rows, *, eligible_count=None, source_counts=None):
     """
     from collections import Counter, defaultdict
     from src.utils.evidence_digest import digest
+
     groups, seen, conflicts = defaultdict(list), {}, set()
     # A completed-row list cannot prove the original population or its latest
     # eligible date. Formal selection always needs the producer's full census.
     try:
-        if (not isinstance(source_counts, dict) or type(eligible_count) is not int
-            or any(date.fromisoformat(d).isoformat() != d or d < '2026-06-05'
-                   or type(n) is not int or n < 0 for d, n in source_counts.items())
-            or sum(source_counts.values()) != eligible_count):
+        if (
+            not isinstance(source_counts, dict)
+            or type(eligible_count) is not int
+            or any(
+                date.fromisoformat(d).isoformat() != d
+                or d < "2026-06-05"
+                or type(n) is not int
+                or n < 0
+                for d, n in source_counts.items()
+            )
+            or sum(source_counts.values()) != eligible_count
+        ):
             return []
     except (TypeError, ValueError):
         return []
     for row in rows:
         try:
-            if row.get('status') != 'completed_source_only':
+            if row.get("status") != "completed_source_only":
                 continue
-            body = {k: v for k, v in row.items() if k != 'replay_sha256'}
-            if digest(body) != row.get('replay_sha256'):
+            body = {k: v for k, v in row.items() if k != "replay_sha256"}
+            if digest(body) != row.get("replay_sha256"):
                 continue
-            seed = row['seed']
+            seed = row["seed"]
             if not _entry_seed_valid(seed):
                 continue
-            identity = tuple(seed[k] for k in ('stock_code', 'scanner_promotion_id',
-                'evaluation_attempt_id', 'effective_venue', 'session_bucket', 'policy_bundle_sha256'))
+            identity = tuple(
+                seed[k]
+                for k in (
+                    "stock_code",
+                    "scanner_promotion_id",
+                    "evaluation_attempt_id",
+                    "effective_venue",
+                    "session_bucket",
+                    "policy_bundle_sha256",
+                )
+            )
             if identity in seen:
                 if seen[identity] != row:
                     conflicts.add(identity)
@@ -1751,55 +2436,99 @@ def select_entry_price_replay(rows, *, eligible_count=None, source_counts=None):
         except (KeyError, TypeError, ValueError, OverflowError):
             continue
     union = [row for identity, row in seen.items() if identity not in conflicts]
-    complete_by_date = Counter(r['seed']['source_date'] for r in union)
+    complete_by_date = Counter(r["seed"]["source_date"] for r in union)
     if any(n > source_counts.get(day, 0) for day, n in complete_by_date.items()):
         return []
+
     def group_key(seed):
-        return tuple(seed.get(k) for k in ('profile', 'target_value_key', 'incumbent_bps',
-            'effective_venue', 'session_bucket', 'policy_bundle_sha256', 'entry_price_policy_sha256'))
+        return tuple(
+            seed.get(k)
+            for k in (
+                "profile",
+                "target_value_key",
+                "incumbent_bps",
+                "effective_venue",
+                "session_bucket",
+                "policy_bundle_sha256",
+                "entry_price_policy_sha256",
+            )
+        )
+
     for identity, row in seen.items():
         if identity in conflicts:
             continue
-        seed = row['seed']
-        if not seed.get('price_candidates') or str(seed.get('incumbent_bps')) not in row['price_arms']:
+        seed = row["seed"]
+        if (
+            not seed.get("price_candidates")
+            or str(seed.get("incumbent_bps")) not in row["price_arms"]
+        ):
             continue
         group = group_key(seed)
         groups[group].append(row)
     metrics = entry_price_comparison_metrics
+
     def improved(c, i):
-        return bool(c['source_quality_adjusted_ev_pct'] > 0 and c['stress_ev_pct'] > 0
-            and c['source_quality_adjusted_ev_pct'] > i['source_quality_adjusted_ev_pct']
-            and c['modeled_net_profit_per_source_day'] > i['modeled_net_profit_per_source_day']
-            and c['stress_ev_pct'] >= i['stress_ev_pct']
-            and c['downside_p10_net_pct'] >= i['downside_p10_net_pct']
-            and c['positive_terminal_frequency'] >= i['positive_terminal_frequency']
-            and c['fill_participation_rate'] >= i['fill_participation_rate'] - .05
-            and c['modeled_net_profit_per_capital_minute'] >= i['modeled_net_profit_per_capital_minute'])
+        return bool(
+            c["source_quality_adjusted_ev_pct"] > 0
+            and c["stress_ev_pct"] > 0
+            and c["source_quality_adjusted_ev_pct"]
+            > i["source_quality_adjusted_ev_pct"]
+            and c["modeled_net_profit_per_source_day"]
+            > i["modeled_net_profit_per_source_day"]
+            and c["stress_ev_pct"] >= i["stress_ev_pct"]
+            and c["downside_p10_net_pct"] >= i["downside_p10_net_pct"]
+            and c["positive_terminal_frequency"] >= i["positive_terminal_frequency"]
+            and c["fill_participation_rate"] >= i["fill_participation_rate"] - 0.05
+            and c["modeled_net_profit_per_capital_minute"]
+            >= i["modeled_net_profit_per_capital_minute"]
+        )
+
     selected, proposals = [], []
     for group, sample in groups.items():
         try:
-            days = sorted(d for d, n in source_counts.items() if n > 0) if source_counts is not None else sorted({r['seed']['source_date'] for r in union})
-            if source_counts is not None and any(r['seed']['source_date'] not in source_counts for r in union):
+            days = (
+                sorted(d for d, n in source_counts.items() if n > 0)
+                if source_counts is not None
+                else sorted({r["seed"]["source_date"] for r in union})
+            )
+            if source_counts is not None and any(
+                r["seed"]["source_date"] not in source_counts for r in union
+            ):
                 continue
             if len(sample) < 20 or len(days) < 2:
                 continue
-            cal = [r for r in union if r['seed']['source_date'] < days[-1]]
-            hold = [r for r in union if r['seed']['source_date'] == days[-1]]
+            cal = [r for r in union if r["seed"]["source_date"] < days[-1]]
+            hold = [r for r in union if r["seed"]["source_date"] == days[-1]]
             inc_bps = group[2]
-            menu = set.intersection(*(set(r['price_arms']) for r in sample))
+            menu = set.intersection(*(set(r["price_arms"]) for r in sample))
             incumbent = metrics(cal, None, group)
-            candidates = [(int(bps), metrics(cal, bps, group)) for bps in menu if int(bps) != inc_bps]
+            candidates = [
+                (int(bps), metrics(cal, bps, group))
+                for bps in menu
+                if int(bps) != inc_bps
+            ]
             candidates = [(bps, m) for bps, m in candidates if improved(m, incumbent)]
             if not candidates:
                 continue
-            bps, _ = max(candidates, key=lambda x: (x[1]['modeled_net_profit_per_source_day'], -x[0]))
+            bps, _ = max(
+                candidates,
+                key=lambda x: (x[1]["modeled_net_profit_per_source_day"], -x[0]),
+            )
             denominator = eligible_count if eligible_count is not None else len(rows)
-            if type(denominator) is not int or denominator < len(union) or len(union) / denominator < .8:
+            if (
+                type(denominator) is not int
+                or denominator < len(union)
+                or len(union) / denominator < 0.8
+            ):
                 continue
-            proposals.append((group, sample, days, cal, hold, bps, metrics(cal, bps, group)))
+            proposals.append(
+                (group, sample, days, cal, hold, bps, metrics(cal, bps, group))
+            )
         except (KeyError, TypeError, ValueError, OverflowError):
             continue
-    proposals.sort(key=lambda p: (-p[-1]['modeled_net_profit_per_source_day'], str(p[0]), p[5]))
+    proposals.sort(
+        key=lambda p: (-p[-1]["modeled_net_profit_per_source_day"], str(p[0]), p[5])
+    )
     for group, sample, days, cal, hold, bps, _ in proposals[:1]:
         try:
             inc_bps = group[2]
@@ -1810,26 +2539,47 @@ def select_entry_price_replay(rows, *, eligible_count=None, source_counts=None):
             if not improved(candidate_metrics, metrics(union, None, group)):
                 continue
             denominator = eligible_count if eligible_count is not None else len(rows)
-            if type(denominator) is not int or denominator < len(union) or len(union) / denominator < .8:
+            if (
+                type(denominator) is not int
+                or denominator < len(union)
+                or len(union) / denominator < 0.8
+            ):
                 continue
-            proof = dict(selection_contract=ENTRY_PRICE_SELECTION, profile=group[0],
-                target_value_key=group[1], incumbent_bps=inc_bps, selected_bps=bps,
-                scope_parent=list(group[3:]), eligible_attempt_count=denominator,
-                paired_rows=union, changed_profile_paired_sample_count=len(sample),
-                union_contract='all_valid_price_ready_fixed_other_profiles_v1',
-                calibration_dates=days[:-1], holdout_dates=[days[-1]],
+            proof = dict(
+                selection_contract=ENTRY_PRICE_SELECTION,
+                profile=group[0],
+                target_value_key=group[1],
+                incumbent_bps=inc_bps,
+                selected_bps=bps,
+                scope_parent=list(group[3:]),
+                eligible_attempt_count=denominator,
+                paired_rows=union,
+                changed_profile_paired_sample_count=len(sample),
+                union_contract="all_valid_price_ready_fixed_other_profiles_v1",
+                calibration_dates=days[:-1],
+                holdout_dates=[days[-1]],
                 source_counts=source_counts,
-                metrics=candidate_metrics, incumbent_metrics=metrics(union, None, group),
+                metrics=candidate_metrics,
+                incumbent_metrics=metrics(union, None, group),
                 allocation_contract=ENTRY_REPLAY_ALLOCATION.copy(),
-                minimum_cost_adjusted_ev_pct=0.0, positive_net_required=True,
-                cost_scope='conditional_price_execution_common_upstream_screen_cost_not_reestimated',
+                minimum_cost_adjusted_ev_pct=0.0,
+                positive_net_required=True,
+                cost_scope="conditional_price_execution_common_upstream_screen_cost_not_reestimated",
                 actual_provider_cost_krw=None,
-                metric_role='primary_ev', decision_authority='existing_bounded_price_family',
-                window_policy='same_frozen_opportunity_union_chronological_latest_day_holdout',
-                sample_floor=20, primary_decision_metric='source_quality_adjusted_ev_pct',
-                source_quality_gate='exact_signed_native_quote_trade_cost_exit_source',
-                forbidden_uses=['broker_fill_quality', 'realized_pnl', 'end_to_end_entry_net_profit', 'quantity_or_action_authority'])
-            proof['evidence_sha256'] = digest(proof)
+                metric_role="primary_ev",
+                decision_authority="existing_bounded_price_family",
+                window_policy="same_frozen_opportunity_union_chronological_latest_day_holdout",
+                sample_floor=20,
+                primary_decision_metric="source_quality_adjusted_ev_pct",
+                source_quality_gate="exact_signed_native_quote_trade_cost_exit_source",
+                forbidden_uses=[
+                    "broker_fill_quality",
+                    "realized_pnl",
+                    "end_to_end_entry_net_profit",
+                    "quantity_or_action_authority",
+                ],
+            )
+            proof["evidence_sha256"] = digest(proof)
             selected.append(proof)
         except (KeyError, TypeError, ValueError, OverflowError):
             continue
@@ -1838,31 +2588,43 @@ def select_entry_price_replay(rows, *, eligible_count=None, source_counts=None):
 
 def entry_price_selection_evidence_valid(proof):
     from src.utils.evidence_digest import digest
+
     try:
-        if not isinstance(proof, dict) or proof.get('selection_contract') != ENTRY_PRICE_SELECTION:
+        if (
+            not isinstance(proof, dict)
+            or proof.get("selection_contract") != ENTRY_PRICE_SELECTION
+        ):
             return False
-        candidates = select_entry_price_replay(proof['paired_rows'], eligible_count=proof['eligible_attempt_count'],
-            source_counts=proof.get('source_counts'))
+        candidates = select_entry_price_replay(
+            proof["paired_rows"],
+            eligible_count=proof["eligible_attempt_count"],
+            source_counts=proof.get("source_counts"),
+        )
         return any(digest(p) == digest(proof) for p in candidates)
     except (KeyError, TypeError, ValueError, OverflowError):
         return False
 
+
 # Initial-entry economics reuse the full holding interpreter, not the fixed
 # research TP/SL kernel. Missing exact-state services never become assumed HOLD.
-ENTRY_OPERATING_SCHEMA = 'entry_split_operating_economics_v1'
-ENTRY_MODEL_SELECTION = 'entry_split_empirical_model_holdout_v1'
+ENTRY_OPERATING_SCHEMA = "entry_split_operating_economics_v1"
+ENTRY_MODEL_SELECTION = "entry_split_empirical_model_holdout_v1"
 
 
 @lru_cache(maxsize=1)
 def entry_operating_model_identity():
     from src.engine.lifecycle.avg_down_policy_replay import implementation_identity
-    identity=implementation_identity()
-    base=Path(__file__).resolve().parents[3]
-    import hashlib
-    for name in ("src/engine/scalping/avg_down_replay_capture.py","src/engine/scalping/micro_reversion/path_journal.py"):
-        identity[name]=hashlib.sha256((base/name).read_bytes()).hexdigest()
-    return owner.digest(identity)
 
+    identity = implementation_identity()
+    base = Path(__file__).resolve().parents[3]
+    import hashlib
+
+    for name in (
+        "src/engine/scalping/avg_down_replay_capture.py",
+        "src/engine/scalping/micro_reversion/path_journal.py",
+    ):
+        identity[name] = hashlib.sha256((base / name).read_bytes()).hexdigest()
+    return owner.digest(identity)
 
 
 def freeze_entry_capital_source(capacity, sizing_context, *, now_ts):
@@ -1873,69 +2635,103 @@ def freeze_entry_capital_source(capacity, sizing_context, *, now_ts):
     deposits from changes in the quoted cap.
     """
     from src.trading.order.owner_custody_registry import broker_account_key
-    value = dict(schema='entry_capital_observation_v1', status='source_gap',
-        blocker='capacity_receipt_missing', owner='main_entry_cash_budget_owner',
-        closure_test='dated_capacity_source_and_same_account_order_cash_reconciliation',
-        frozen_at=datetime.fromtimestamp(now_ts, KST).isoformat(), **AUTHORITY)
+
+    value = dict(
+        schema="entry_capital_observation_v1",
+        status="source_gap",
+        blocker="capacity_receipt_missing",
+        owner="main_entry_cash_budget_owner",
+        closure_test="dated_capacity_source_and_same_account_order_cash_reconciliation",
+        frozen_at=datetime.fromtimestamp(now_ts, KST).isoformat(),
+        **AUTHORITY,
+    )
     try:
         capacity = capacity or {}
-        if (capacity.get('kt00011_error')
-            or capacity.get('kt00011_cash_orderable_contract_status') != 'valid'
-            or not _sha(capacity.get('kt00011_capacity_source_sha256'))):
-            raise ValueError('capacity_source_hash_or_contract_missing')
-        observed = capacity.get('kt00011_capacity_observed_at')
+        if (
+            capacity.get("kt00011_error")
+            or capacity.get("kt00011_cash_orderable_contract_status") != "valid"
+            or not _sha(capacity.get("kt00011_capacity_source_sha256"))
+        ):
+            raise ValueError("capacity_source_hash_or_contract_missing")
+        observed = capacity.get("kt00011_capacity_observed_at")
         clock = datetime.fromisoformat(observed)
         if clock.tzinfo is None or clock.timestamp() > now_ts:
-            raise ValueError('capacity_source_clock_invalid')
-        components = {k: capacity.get(k) for k in (
-            'account_deposit', 'cash_orderable_amount', 'cash_orderable_qty_cap',
-            'budget_base', 'kt00011_requested_unit_price')}
-        if any(type(v) not in (int, float) or not math.isfinite(v) or v < 0
-               for v in components.values()):
-            raise ValueError('capacity_component_invalid')
-        if capacity.get('general_entry_margin_one_share_authorized'):
-            raise ValueError('margin_capacity_not_cash_flow')
-        value.update(status='recorded_source_only', blocker=None,
-            account_scope_sha256=owner.digest(['broker_account', broker_account_key()]),
+            raise ValueError("capacity_source_clock_invalid")
+        components = {
+            k: capacity.get(k)
+            for k in (
+                "account_deposit",
+                "cash_orderable_amount",
+                "cash_orderable_qty_cap",
+                "budget_base",
+                "kt00011_requested_unit_price",
+            )
+        }
+        if any(
+            type(v) not in (int, float) or not math.isfinite(v) or v < 0
+            for v in components.values()
+        ):
+            raise ValueError("capacity_component_invalid")
+        if capacity.get("general_entry_margin_one_share_authorized"):
+            raise ValueError("margin_capacity_not_cash_flow")
+        value.update(
+            status="recorded_source_only",
+            blocker=None,
+            account_scope_sha256=owner.digest(["broker_account", broker_account_key()]),
             capacity_observed_at=observed,
-            capacity_source_sha256=capacity['kt00011_capacity_source_sha256'],
-            capacity_contract_version=capacity.get('kt00011_capacity_contract_version'),
-            stock_code=capacity.get('kt00011_requested_stock_code'),
-            budget_source=capacity.get('budget_source'), components=components,
+            capacity_source_sha256=capacity["kt00011_capacity_source_sha256"],
+            capacity_contract_version=capacity.get("kt00011_capacity_contract_version"),
+            stock_code=capacity.get("kt00011_requested_stock_code"),
+            budget_source=capacity.get("budget_source"),
+            components=components,
             safety_ratio=sizing_context.safety_ratio,
             absolute_budget_cap_krw=sizing_context.absolute_budget_cap_krw,
-            capital_semantics='frozen_symbol_admission_cap_not_external_cashflow')
+            capital_semantics="frozen_symbol_admission_cap_not_external_cashflow",
+        )
     except (ValueError, TypeError, KeyError, AttributeError) as exc:
-        value['blocker'] = str(exc)
-    return {**value, 'sha256': owner.digest(value)}
+        value["blocker"] = str(exc)
+    return {**value, "sha256": owner.digest(value)}
 
 
-def freeze_entry_operating_context(handlers, stock, sizing_context, *, now_ts, capacity_receipt=None, strict=False):
+def freeze_entry_operating_context(
+    handlers, stock, sizing_context, *, now_ts, capacity_receipt=None, strict=False
+):
     from src.engine.scalping import avg_down_replay_capture as capture
     from src.engine.lifecycle.avg_down_policy_replay import snapshot_version
     from src.engine.trade_profit import get_trade_cost_rate
-    timings={};phase=time.perf_counter()
+
+    timings = {}
+    phase = time.perf_counter()
     try:
-        if handlers._is_any_simulated_position(stock, stock.get('strategy')):
-            raise ValueError('unsupported_simulated_initial_position')
+        if handlers._is_any_simulated_position(stock, stock.get("strategy")):
+            raise ValueError("unsupported_simulated_initial_position")
         budget = sizing_context.budget_base_krw * sizing_context.safety_ratio
         if sizing_context.absolute_budget_cap_krw > 0:
             budget = min(budget, sizing_context.absolute_budget_cap_krw)
         if not _finite(budget, positive=True):
-            raise ValueError('initial_operating_budget_invalid')
+            raise ValueError("initial_operating_budget_invalid")
         snapshot = capture._cached_policy(handlers, now_ts)
-        point=time.perf_counter();timings['cached_policy_verify']=round((point-phase)*1000,3);phase=point
+        point = time.perf_counter()
+        timings["cached_policy_verify"] = round((point - phase) * 1000, 3)
+        phase = point
         compact_snapshot = capture.compact_policy_snapshot(snapshot)
         from types import SimpleNamespace
         from src.engine.sniper_execution_receipts import initial_main_entry_exit_fields
-        initial_exit = initial_main_entry_exit_fields(stock, rules=SimpleNamespace(**snapshot["rules"]))
-        decision_source=stock.get("last_watching_ai_machine_primary_fields") or {}
+
+        initial_exit = initial_main_entry_exit_fields(
+            stock, rules=SimpleNamespace(**snapshot["rules"])
+        )
+        decision_source = stock.get("last_watching_ai_machine_primary_fields") or {}
         broker_route = decision_source.get("ai_trace_broker_route")
         from src.engine.scalping import main_fixed_watch
-        if (main_fixed_watch.is_fixed_watch(stock)
-                or str(stock.get("source_signature") or "").startswith("ZERO_BASE_DISCOVERY:")):
+
+        if main_fixed_watch.is_fixed_watch(stock) or str(
+            stock.get("source_signature") or ""
+        ).startswith("ZERO_BASE_DISCOVERY:"):
             request = {}
-            if not handlers._bind_main_entry_order_request(stock, request, now_ts=now_ts):
+            if not handlers._bind_main_entry_order_request(
+                stock, request, now_ts=now_ts
+            ):
                 raise ValueError("initial_operating_main_route_invalid")
             observed_route = request["dmst_stex_tp"]
             if broker_route and broker_route != observed_route:
@@ -1943,95 +2739,175 @@ def freeze_entry_operating_context(handlers, stock, sizing_context, *, now_ts, c
             broker_route = observed_route
         # Record the SAME existing listing owner used by holding routing. A
         # quote scope or SOR route never manufactures NXT eligibility.
-        nxt_enabled, nxt_owner = handlers._holding_sell_nxt_enabled_status(stock, stock.get("code", ""))
-        initial_state = capture.holding_state(handlers, {k:v for k,v in stock.items() if k not in
-            {"entry_split_initial_entry_seed", "entry_split_initial_entry_lineage_conflict"}})
-        point=time.perf_counter();timings['initial_owner_state_freeze']=round((point-phase)*1000,3);phase=point
+        nxt_enabled, nxt_owner = handlers._holding_sell_nxt_enabled_status(
+            stock, stock.get("code", "")
+        )
+        initial_state = capture.holding_state(
+            handlers,
+            {
+                k: v
+                for k, v in stock.items()
+                if k
+                not in {
+                    "entry_split_initial_entry_seed",
+                    "entry_split_initial_entry_lineage_conflict",
+                }
+            },
+        )
+        point = time.perf_counter()
+        timings["initial_owner_state_freeze"] = round((point - phase) * 1000, 3)
+        phase = point
         initial_state["stock"]["is_nxt"] = nxt_enabled
         from src.engine.scalping.entry_cancel_wait_runtime import resolve_profile
-        value = dict(schema=ENTRY_OPERATING_SCHEMA,
-            cancel_wait_profile=resolve_profile(stock.get('position_tag'), stock.get('entry_mode')),
-            nxt_listing_receipt=dict(value=nxt_enabled, owner=nxt_owner, stock_code=stock.get("code"),
-                frozen_at=datetime.fromtimestamp(now_ts, KST).isoformat()),
+
+        value = dict(
+            schema=ENTRY_OPERATING_SCHEMA,
+            cancel_wait_profile=resolve_profile(
+                stock.get("position_tag"), stock.get("entry_mode")
+            ),
+            nxt_listing_receipt=dict(
+                value=nxt_enabled,
+                owner=nxt_owner,
+                stock_code=stock.get("code"),
+                frozen_at=datetime.fromtimestamp(now_ts, KST).isoformat(),
+            ),
             broker_route=broker_route,
             initial_fill_exit_contract_version="main_role_initial_fill_v2",
             initial_fill_exit_owner="sniper_execution_receipts.initial_main_entry_exit_fields",
             initial_fill_exit_state=initial_exit,
-            initial_micro_estimator_state=capture.micro_state(handlers, stock.get('code', '')),
+            initial_micro_estimator_state=capture.micro_state(
+                handlers, stock.get("code", "")
+            ),
             frozen_at=datetime.fromtimestamp(now_ts, KST).isoformat(),
-            policy_snapshot=compact_snapshot, exit_policy_version=snapshot_version(compact_snapshot),
+            policy_snapshot=compact_snapshot,
+            exit_policy_version=snapshot_version(compact_snapshot),
             initial_policy_state=initial_state,
-            budget_krw=budget, cost_rate=get_trade_cost_rate(),
+            budget_krw=budget,
+            cost_rate=get_trade_cost_rate(),
             model_implementation_sha256=entry_operating_model_identity(),
-            cost_policy_version='trade_profit_net_realized_pnl:rate=' + str(get_trade_cost_rate()),
-            cost_provenance='frozen_loaded_trade_profit_configuration_not_broker_settlement',
-            stress_cost_rate_increment=(ENTRY_REPLAY_COST['stress_round_trip_pct'] - ENTRY_REPLAY_COST['round_trip_pct']) / 100,
-            max_frame_gap_sec=capture.MAX_FRAME_GAP_SEC, **AUTHORITY)
+            cost_policy_version="trade_profit_net_realized_pnl:rate="
+            + str(get_trade_cost_rate()),
+            cost_provenance="frozen_loaded_trade_profit_configuration_not_broker_settlement",
+            stress_cost_rate_increment=(
+                ENTRY_REPLAY_COST["stress_round_trip_pct"]
+                - ENTRY_REPLAY_COST["round_trip_pct"]
+            )
+            / 100,
+            max_frame_gap_sec=capture.MAX_FRAME_GAP_SEC,
+            **AUTHORITY,
+        )
         if capacity_receipt is not None:
-            value['capital_source'] = freeze_entry_capital_source(
-                capacity_receipt, sizing_context, now_ts=now_ts)
-        timings['context_build']=round((time.perf_counter()-phase)*1000,3)
-        value['pre_ai_stage_timings_ms']=timings
-        return {**value, 'sha256': owner.digest(value)}
+            value["capital_source"] = freeze_entry_capital_source(
+                capacity_receipt, sizing_context, now_ts=now_ts
+            )
+        timings["context_build"] = round((time.perf_counter() - phase) * 1000, 3)
+        value["pre_ai_stage_timings_ms"] = timings
+        return {**value, "sha256": owner.digest(value)}
     except (ValueError, TypeError, AttributeError, KeyError) as exc:
         if strict:
-            raise ValueError(f"frozen_operating_contract:{type(exc).__name__}:{exc}") from exc
+            raise ValueError(
+                f"frozen_operating_contract:{type(exc).__name__}:{exc}"
+            ) from exc
         return None
 
 
 def load_entry_cancel_model(day):
     """Reuse prior cancel-owner evidence; no source replay or model fitting job."""
     from src.engine.automation import entry_cancel_wait_tuning as cancel
-    from src.engine.automation.source_quality_clean_baseline import clean_baseline_policy, is_date_allowed
+    from src.engine.automation.source_quality_clean_baseline import (
+        clean_baseline_policy,
+        is_date_allowed,
+    )
+
     baseline = clean_baseline_policy()
-    paths = sorted(cancel.REPORT_DIR.glob('entry_cancel_wait_tuning_????-??-??.json'), reverse=True)
-    for path in [p for p in paths if p.stem[-10:] < day and is_date_allowed(p.stem[-10:], baseline)][:3]:
+    paths = sorted(
+        cancel.REPORT_DIR.glob("entry_cancel_wait_tuning_????-??-??.json"), reverse=True
+    )
+    for path in [
+        p
+        for p in paths
+        if p.stem[-10:] < day and is_date_allowed(p.stem[-10:], baseline)
+    ][:3]:
         try:
             if path.is_symlink() or path.stat().st_size > 8 * 1024 * 1024:
                 continue
             report = json.loads(path.read_text())
-            if report.get('proof_sha256') != owner.digest({k:v for k,v in report.items() if k not in ('generated_at','proof_sha256')}):
+            if report.get("proof_sha256") != owner.digest(
+                {
+                    k: v
+                    for k, v in report.items()
+                    if k not in ("generated_at", "proof_sha256")
+                }
+            ):
                 continue
-            rows = report['economic_state']['model_rows']
-            if any(not is_date_allowed(r.get('source_date',''), baseline) for r in rows):
+            rows = report["economic_state"]["model_rows"]
+            if any(
+                not is_date_allowed(r.get("source_date", ""), baseline) for r in rows
+            ):
                 continue
             model = cancel._fit_model(rows, entry_operating_model_identity())
-            if model.get('validated') and model.get('available_after_date', day) < day:
+            if model.get("validated") and model.get("available_after_date", day) < day:
                 return model
         except (OSError, ValueError, TypeError, KeyError):
             continue
     return None
 
 
-def entry_native_cancel_terminal(seed, execution, depths, trades, model, *, planned_prices):
+def entry_native_cancel_terminal(
+    seed, execution, depths, trades, model, *, planned_prices
+):
     """Model only untouched residual limits, using the existing cancel owner.
 
     A touched passive queue or fills during cancellation remain unsupported.
     Each state needs prior independent empirical cancel/late-fill validation.
     """
-    from src.engine.scalping.native_packet_validation import _validate_depth_row, _validate_stream_row
-    context = seed['operating_contract']
-    kind = 'partial' if execution['modeled_filled_qty'] else 'no_fill'
-    scope = [seed['effective_venue'], seed['session_bucket'], context.get('broker_route'), context.get('cancel_wait_profile')]
-    if (not model or not model.get('validated') or model.get('model_identity') != entry_operating_model_identity()
-        or model.get('sha256') != owner.digest({k:v for k,v in model.items() if k != 'sha256'})
-        or model.get('available_after_date', seed['source_date']) >= seed['source_date']
-        or model.get('scope') != scope or kind not in model.get('supported_states', [])):
-        raise ValueError('entry_prior_state_specific_cancel_model_unverified')
-    if any(not _finite(model.get(k)) or model[k] < 0 for k in ('cancel_ack_delay_sec','late_fill_window_sec')):
-        raise ValueError('entry_cancel_model_delay_invalid')
-    ttls = context['order_leg_ttl_sec']
+    from src.engine.scalping.native_packet_validation import (
+        _validate_depth_row,
+        _validate_stream_row,
+    )
+
+    context = seed["operating_contract"]
+    kind = "partial" if execution["modeled_filled_qty"] else "no_fill"
+    scope = [
+        seed["effective_venue"],
+        seed["session_bucket"],
+        context.get("broker_route"),
+        context.get("cancel_wait_profile"),
+    ]
+    if (
+        not model
+        or not model.get("validated")
+        or model.get("model_identity") != entry_operating_model_identity()
+        or model.get("sha256")
+        != owner.digest({k: v for k, v in model.items() if k != "sha256"})
+        or model.get("available_after_date", seed["source_date"]) >= seed["source_date"]
+        or model.get("scope") != scope
+        or kind not in model.get("supported_states", [])
+    ):
+        raise ValueError("entry_prior_state_specific_cancel_model_unverified")
+    if any(
+        not _finite(model.get(k)) or model[k] < 0
+        for k in ("cancel_ack_delay_sec", "late_fill_window_sec")
+    ):
+        raise ValueError("entry_cancel_model_delay_invalid")
+    ttls = context["order_leg_ttl_sec"]
     # The current envelope has one cancellation clock. Different child TTLs
     # require separate residual receipts, not an invented simultaneous ACK.
     if len(set(ttls)) != 1:
-        raise ValueError('entry_distinct_child_cancel_clocks_unsupported')
-    start = _timestamp(seed['observed_at'], seed['source_date']).timestamp()
-    delay = seed['modeled_submit_delay_ms'] / 1000
-    ended = start + delay * len(seed['legs']) + max(ttls) + model['cancel_ack_delay_sec'] + model['late_fill_window_sec']
-    filled_prices = {f['reserved_price'] for f in execution['modeled_fill_events']}
+        raise ValueError("entry_distinct_child_cancel_clocks_unsupported")
+    start = _timestamp(seed["observed_at"], seed["source_date"]).timestamp()
+    delay = seed["modeled_submit_delay_ms"] / 1000
+    ended = (
+        start
+        + delay * len(seed["legs"])
+        + max(ttls)
+        + model["cancel_ack_delay_sec"]
+        + model["late_fill_window_sec"]
+    )
+    filled_prices = {f["reserved_price"] for f in execution["modeled_fill_events"]}
     residual = [p for p in planned_prices if p not in filled_prices]
     if not residual:
-        raise ValueError('entry_residual_leg_identity_ambiguous')
+        raise ValueError("entry_residual_leg_identity_ambiguous")
     clocks = []
     for rows, depth in ((depths, True), (trades, False)):
         values = []
@@ -2041,27 +2917,56 @@ def entry_native_cancel_terminal(seed, execution, depths, trades, model, *, plan
             else:
                 valid, eligible, at, price, *_ = _validate_stream_row(row)
                 valid = valid and eligible
-            if valid and at is not None and start - 1.5 <= at.timestamp() <= ended + 1.5:
-                if (row.get('symbol') != seed['stock_code'] or row.get('venue') != entry_native_market_venue(seed['effective_venue'])
-                    or row.get('session_bucket') != seed['session_bucket'] or row.get('path_consumer_eligible') is False):
-                    raise ValueError('entry_cancel_native_scope_conflict')
-                values.append((at.timestamp(), price, row.get('sequence_epoch'), row.get('series_sequence')))
+            if (
+                valid
+                and at is not None
+                and start - 1.5 <= at.timestamp() <= ended + 1.5
+            ):
+                if (
+                    row.get("symbol") != seed["stock_code"]
+                    or row.get("venue")
+                    != entry_native_market_venue(seed["effective_venue"])
+                    or row.get("session_bucket") != seed["session_bucket"]
+                    or row.get("path_consumer_eligible") is False
+                ):
+                    raise ValueError("entry_cancel_native_scope_conflict")
+                values.append(
+                    (
+                        at.timestamp(),
+                        price,
+                        row.get("sequence_epoch"),
+                        row.get("series_sequence"),
+                    )
+                )
         values = sorted(set(values))
-        if (not values or values[0][0] > start or ended - values[-1][0] > 1.5
+        if (
+            not values
+            or values[0][0] > start
+            or ended - values[-1][0] > 1.5
             or len({v[2] for v in values}) != 1
-            or any(b[0]-a[0] > 1.5 or b[3] != a[3]+1 for a,b in zip(values,values[1:]))):
-            raise ValueError('entry_cancel_native_window_incomplete')
+            or any(
+                b[0] - a[0] > 1.5 or b[3] != a[3] + 1
+                for a, b in zip(values, values[1:])
+            )
+        ):
+            raise ValueError("entry_cancel_native_window_incomplete")
         if any(v[1] <= max(residual) for v in values if start <= v[0] <= ended):
-            raise ValueError('entry_cancel_passive_touch_or_late_fill_unproven')
+            raise ValueError("entry_cancel_passive_touch_or_late_fill_unproven")
         clocks.append(values)
     if clocks[0][0][2] != clocks[1][0][2]:
-        raise ValueError('entry_cancel_native_epoch_conflict')
-    result = dict(schema='entry_cancel_wait_terminal_v1', seed_sha256=seed['seed_sha256'],
-        model_identity=entry_operating_model_identity(), filled_qty=execution['modeled_filled_qty'],
-        terminal_at=datetime.fromtimestamp(ended,KST).isoformat(), cancel_ack_and_late_fill_resolved=True,
-        model_sha256=model['sha256'], native_path_sha256=owner.digest(clocks),
-        source_kind='prior_model_untouched_residual_not_broker_receipt')
-    return {**result, 'sha256':owner.digest(result)}
+        raise ValueError("entry_cancel_native_epoch_conflict")
+    result = dict(
+        schema="entry_cancel_wait_terminal_v1",
+        seed_sha256=seed["seed_sha256"],
+        model_identity=entry_operating_model_identity(),
+        filled_qty=execution["modeled_filled_qty"],
+        terminal_at=datetime.fromtimestamp(ended, KST).isoformat(),
+        cancel_ack_and_late_fill_resolved=True,
+        model_sha256=model["sha256"],
+        native_path_sha256=owner.digest(clocks),
+        source_kind="prior_model_untouched_residual_not_broker_receipt",
+    )
+    return {**result, "sha256": owner.digest(result)}
 
 
 def entry_conditional_capital_envelope(seeds):
@@ -2071,48 +2976,76 @@ def entry_conditional_capital_envelope(seeds):
     deposit-basis change is excluded, never injected into the candidate wallet.
     This conditional experiment does not simulate other owners' decisions.
     """
-    seeds = sorted(seeds, key=lambda s: (s['observed_at'], s['seed_sha256']))
+    seeds = sorted(seeds, key=lambda s: (s["observed_at"], s["seed_sha256"]))
     if not seeds:
-        raise ValueError('capital_source_population_empty')
-    budgets = [s['operating_contract']['budget_krw'] for s in seeds]
+        raise ValueError("capital_source_population_empty")
+    budgets = [s["operating_contract"]["budget_krw"] for s in seeds]
     if any(not _finite(b, positive=True) for b in budgets):
-        raise ValueError('capital_frozen_budget_invalid')
-    if len({b for s,b in zip(seeds,budgets) if s['observed_at'] == seeds[0]['observed_at']}) != 1:
-        raise ValueError('capital_initial_clock_budget_conflict')
-    sources = [s['operating_contract'].get('capital_source') for s in seeds]
+        raise ValueError("capital_frozen_budget_invalid")
+    if (
+        len(
+            {
+                b
+                for s, b in zip(seeds, budgets)
+                if s["observed_at"] == seeds[0]["observed_at"]
+            }
+        )
+        != 1
+    ):
+        raise ValueError("capital_initial_clock_budget_conflict")
+    sources = [s["operating_contract"].get("capital_source") for s in seeds]
     if not any(sources):
         if len(set(budgets)) != 1:
-            raise ValueError('shared_cash_envelope_changed_without_cashflow_witness')
-        return dict(initial_budget_krw=budgets[0], source_contract='legacy_equal_frozen_envelope')
+            raise ValueError("shared_cash_envelope_changed_without_cashflow_witness")
+        return dict(
+            initial_budget_krw=budgets[0],
+            source_contract="legacy_equal_frozen_envelope",
+        )
     for seed, value in zip(seeds, sources):
-        if (not isinstance(value, dict) or value.get('status') != 'recorded_source_only'
-            or value.get('schema') != 'entry_capital_observation_v1'
-            or value.get('sha256') != owner.digest({k:v for k,v in value.items() if k != 'sha256'})
-            or not _sha(value.get('capacity_source_sha256')) or not _sha(value.get('account_scope_sha256'))
-            or value.get('stock_code') != seed['stock_code']
-            or _timestamp(value['capacity_observed_at'], seed['source_date']) > _timestamp(seed['observed_at'], seed['source_date'])):
-            raise ValueError('capital_capacity_source_missing_or_conflicting')
-        source_budget = value['components']['budget_base'] * value['safety_ratio']
-        cap = value['absolute_budget_cap_krw']
-        if (not _finite(source_budget, positive=True) or not _finite(cap) or cap < 0
-            or not _finite(value['components']['account_deposit'], positive=True)):
-            raise ValueError('capital_capacity_components_invalid')
+        if (
+            not isinstance(value, dict)
+            or value.get("status") != "recorded_source_only"
+            or value.get("schema") != "entry_capital_observation_v1"
+            or value.get("sha256")
+            != owner.digest({k: v for k, v in value.items() if k != "sha256"})
+            or not _sha(value.get("capacity_source_sha256"))
+            or not _sha(value.get("account_scope_sha256"))
+            or value.get("stock_code") != seed["stock_code"]
+            or _timestamp(value["capacity_observed_at"], seed["source_date"])
+            > _timestamp(seed["observed_at"], seed["source_date"])
+        ):
+            raise ValueError("capital_capacity_source_missing_or_conflicting")
+        source_budget = value["components"]["budget_base"] * value["safety_ratio"]
+        cap = value["absolute_budget_cap_krw"]
+        if (
+            not _finite(source_budget, positive=True)
+            or not _finite(cap)
+            or cap < 0
+            or not _finite(value["components"]["account_deposit"], positive=True)
+        ):
+            raise ValueError("capital_capacity_components_invalid")
         if cap > 0:
             source_budget = min(source_budget, cap)
-        if source_budget != seed['operating_contract']['budget_krw']:
-            raise ValueError('capital_capacity_to_frozen_budget_mismatch')
-    if len({v['account_scope_sha256'] for v in sources}) != 1:
-        raise ValueError('capital_shared_account_identity_conflict')
-    if len({v['components']['account_deposit'] for v in sources}) != 1:
-        raise ValueError('capital_external_flow_or_settlement_basis_unreconciled')
-    return dict(initial_budget_krw=budgets[0], source_contract='first_approved_budget_frozen_later_symbol_caps_v1',
-        account_scope_sha256=sources[0]['account_scope_sha256'],
-        capacity_source_hashes=[v['sha256'] for v in sources],
+        if source_budget != seed["operating_contract"]["budget_krw"]:
+            raise ValueError("capital_capacity_to_frozen_budget_mismatch")
+    if len({v["account_scope_sha256"] for v in sources}) != 1:
+        raise ValueError("capital_shared_account_identity_conflict")
+    if len({v["components"]["account_deposit"] for v in sources}) != 1:
+        raise ValueError("capital_external_flow_or_settlement_basis_unreconciled")
+    return dict(
+        initial_budget_krw=budgets[0],
+        source_contract="first_approved_budget_frozen_later_symbol_caps_v1",
+        account_scope_sha256=sources[0]["account_scope_sha256"],
+        capacity_source_hashes=[v["sha256"] for v in sources],
         varying_attempt_cap_count=sum(b != budgets[0] for b in budgets),
-        external_cashflow_inferred=False, cross_owner_counterfactual_supported=False)
+        external_cashflow_inferred=False,
+        cross_owner_counterfactual_supported=False,
+    )
 
 
-def replay_operating_entry_arm(seed, arm, depth_rows, *, executor=None, trade_rows=(), cancel_wait_validator=None):
+def replay_operating_entry_arm(
+    seed, arm, depth_rows, *, executor=None, trade_rows=(), cancel_wait_validator=None
+):
     """Independent CF holding path, original reserve and conservative full exit.
 
     Default executor is the existing no-network/no-write disposable interpreter.
@@ -2121,254 +3054,503 @@ def replay_operating_entry_arm(seed, arm, depth_rows, *, executor=None, trade_ro
     """
     from src.engine.lifecycle import avg_down_policy_replay as adapter
     from src.engine.trade_profit import calculate_net_realized_pnl
-    from src.engine.scalping.entry_split_order_plan import _canonical_sha256 as economics_digest
-    result = dict(schema=ENTRY_OPERATING_SCHEMA, status='source_gap', net_pnl_krw=None,
-        stress_net_pnl_krw=None, net_return_pct=None, capital_krw_minutes=None,
-        reserve_krw_minutes=None, blocker=None, actual_fill_evidence=False,
-        source_gap_owner='entry_execution_sizing_plan->sniper_state_handlers->strategy_owner_replay',
-        closure_test='frozen operating timeout/cost/state; full executable initial fill then independent full holding exit; partial/no-fill requires state-specific cancel acknowledgement and late-fill inventory witness', **AUTHORITY)
+    from src.engine.scalping.entry_split_order_plan import (
+        _canonical_sha256 as economics_digest,
+    )
+
+    result = dict(
+        schema=ENTRY_OPERATING_SCHEMA,
+        status="source_gap",
+        net_pnl_krw=None,
+        stress_net_pnl_krw=None,
+        net_return_pct=None,
+        capital_krw_minutes=None,
+        reserve_krw_minutes=None,
+        blocker=None,
+        actual_fill_evidence=False,
+        source_gap_owner="entry_execution_sizing_plan->sniper_state_handlers->strategy_owner_replay",
+        closure_test="frozen operating timeout/cost/state; full executable initial fill then independent full holding exit; partial/no-fill requires state-specific cancel acknowledgement and late-fill inventory witness",
+        **AUTHORITY,
+    )
     try:
-        context = seed.get('operating_contract')
-        if (not isinstance(context, dict) or context.get('schema') != ENTRY_OPERATING_SCHEMA
-            or owner.digest({k: v for k, v in context.items() if k != 'sha256'}) != context.get('sha256')
-            or context.get('exit_policy_version') != adapter.snapshot_version(context['policy_snapshot'])
-            or context.get('model_implementation_sha256') != entry_operating_model_identity()
+        context = seed.get("operating_contract")
+        if (
+            not isinstance(context, dict)
+            or context.get("schema") != ENTRY_OPERATING_SCHEMA
+            or owner.digest({k: v for k, v in context.items() if k != "sha256"})
+            != context.get("sha256")
+            or context.get("exit_policy_version")
+            != adapter.snapshot_version(context["policy_snapshot"])
+            or context.get("model_implementation_sha256")
+            != entry_operating_model_identity()
             or any(context.get(k) is not v for k, v in AUTHORITY.items())
-            or not _finite(context.get('cost_rate')) or not 0 <= context['cost_rate'] < 1
-            or not _finite(context.get('stress_cost_rate_increment')) or context['stress_cost_rate_increment'] < 0
-            or context.get('cost_policy_version') != 'trade_profit_net_realized_pnl:rate=' + str(context['cost_rate'])
-            or context.get('cost_provenance') != 'frozen_loaded_trade_profit_configuration_not_broker_settlement'
-            or not _finite(context.get('budget_krw'), positive=True)
-            or _timestamp(context['frozen_at'], seed['source_date']) > _timestamp(seed['observed_at'], seed['source_date'])
-            or not _entry_seed_valid(seed) or arm.get('requested_qty') != seed['total_qty']):
-            raise ValueError('frozen_operating_contract_or_quantity_scope_invalid')
-        if not entry_operating_route_supported(seed['effective_venue'], seed['session_bucket'],
-                context.get('broker_route') or entry_native_market_venue(seed['effective_venue'])):
-            result.update(status='unsupported_scope',blocker='operating_session_market_route_contract_invalid')
-            return {**result,'sha256':economics_digest(result)}
-        started = _timestamp(seed['observed_at'], seed['source_date']).timestamp()
-        fills = arm.get('modeled_fill_events') or []
-        qty = arm.get('modeled_filled_qty')
-        if type(qty) is not int or qty < 0 or qty > seed['total_qty']:
-            raise ValueError('operating_entry_quantity_invalid')
-        if sum(x['qty'] for x in fills) != qty:
-            raise ValueError('operating_entry_fill_conservation_invalid')
-        reserve = arm.get('modeled_reserved_notional_krw')
+            or not _finite(context.get("cost_rate"))
+            or not 0 <= context["cost_rate"] < 1
+            or not _finite(context.get("stress_cost_rate_increment"))
+            or context["stress_cost_rate_increment"] < 0
+            or context.get("cost_policy_version")
+            != "trade_profit_net_realized_pnl:rate=" + str(context["cost_rate"])
+            or context.get("cost_provenance")
+            != "frozen_loaded_trade_profit_configuration_not_broker_settlement"
+            or not _finite(context.get("budget_krw"), positive=True)
+            or _timestamp(context["frozen_at"], seed["source_date"])
+            > _timestamp(seed["observed_at"], seed["source_date"])
+            or not _entry_seed_valid(seed)
+            or arm.get("requested_qty") != seed["total_qty"]
+        ):
+            raise ValueError("frozen_operating_contract_or_quantity_scope_invalid")
+        if not entry_operating_route_supported(
+            seed["effective_venue"],
+            seed["session_bucket"],
+            context.get("broker_route")
+            or entry_native_market_venue(seed["effective_venue"]),
+        ):
+            result.update(
+                status="unsupported_scope",
+                blocker="operating_session_market_route_contract_invalid",
+            )
+            return {**result, "sha256": economics_digest(result)}
+        started = _timestamp(seed["observed_at"], seed["source_date"]).timestamp()
+        fills = arm.get("modeled_fill_events") or []
+        qty = arm.get("modeled_filled_qty")
+        if type(qty) is not int or qty < 0 or qty > seed["total_qty"]:
+            raise ValueError("operating_entry_quantity_invalid")
+        if sum(x["qty"] for x in fills) != qty:
+            raise ValueError("operating_entry_fill_conservation_invalid")
+        reserve = arm.get("modeled_reserved_notional_krw")
         if not _finite(reserve, positive=True):
-            reserve = sum(x['qty'] * (x['price'] or seed.get('anchor_price', 0)) for x in seed['legs'])
-        if not _finite(reserve, positive=True) or reserve > context['budget_krw']:
-            raise ValueError('frozen_reservation_or_budget_unproven')
-        result.update(budget_krw=context['budget_krw'], source_date=seed['source_date'],
-            exit_policy_sha256=context['exit_policy_version'], cost_policy_version=context['cost_policy_version'],
-            cost_provenance=context['cost_provenance'], contract_sha256=context['sha256'],
-            requested_qty=seed['total_qty'], modeled_filled_qty=qty,
-            fill_participation_rate=qty / seed['total_qty'])
-        ttls=context.get('order_leg_ttl_sec')
-        if (not isinstance(ttls,list) or len(ttls)!=len(seed['legs']) or any(not _finite(t,positive=True) for t in ttls)
-            or not _finite(context.get('order_bundle_hard_ttl_sec'),positive=True) or not context.get('order_timeout_owner')):
-            raise ValueError('frozen_operating_order_timeout_contract_missing')
-        cancel = arm.get('cancel_wait_terminal') or {}
-        cancel_valid = (cancel_wait_validator is not None and cancel_wait_validator(cancel)
-            and cancel.get('schema') == 'entry_cancel_wait_terminal_v1'
-            and cancel.get('sha256') == owner.digest({k:v for k,v in cancel.items() if k != 'sha256'})
-            and cancel.get('seed_sha256') == seed.get('seed_sha256')
-            and cancel.get('filled_qty') == qty and cancel.get('model_identity') == entry_operating_model_identity()
-            and cancel.get('cancel_ack_and_late_fill_resolved') is True)
-        if 0 < qty < seed['total_qty'] and not cancel_valid:
-            result.update(status='unsupported_scope',blocker='counterfactual_partial_pending_entry_cancel_and_late_fill_inventory_unproven')
-            return {**result,'sha256':economics_digest(result)}
+            reserve = sum(
+                x["qty"] * (x["price"] or seed.get("anchor_price", 0))
+                for x in seed["legs"]
+            )
+        if not _finite(reserve, positive=True) or reserve > context["budget_krw"]:
+            raise ValueError("frozen_reservation_or_budget_unproven")
+        result.update(
+            budget_krw=context["budget_krw"],
+            source_date=seed["source_date"],
+            exit_policy_sha256=context["exit_policy_version"],
+            cost_policy_version=context["cost_policy_version"],
+            cost_provenance=context["cost_provenance"],
+            contract_sha256=context["sha256"],
+            requested_qty=seed["total_qty"],
+            modeled_filled_qty=qty,
+            fill_participation_rate=qty / seed["total_qty"],
+        )
+        ttls = context.get("order_leg_ttl_sec")
+        if (
+            not isinstance(ttls, list)
+            or len(ttls) != len(seed["legs"])
+            or any(not _finite(t, positive=True) for t in ttls)
+            or not _finite(context.get("order_bundle_hard_ttl_sec"), positive=True)
+            or not context.get("order_timeout_owner")
+        ):
+            raise ValueError("frozen_operating_order_timeout_contract_missing")
+        cancel = arm.get("cancel_wait_terminal") or {}
+        cancel_valid = (
+            cancel_wait_validator is not None
+            and cancel_wait_validator(cancel)
+            and cancel.get("schema") == "entry_cancel_wait_terminal_v1"
+            and cancel.get("sha256")
+            == owner.digest({k: v for k, v in cancel.items() if k != "sha256"})
+            and cancel.get("seed_sha256") == seed.get("seed_sha256")
+            and cancel.get("filled_qty") == qty
+            and cancel.get("model_identity") == entry_operating_model_identity()
+            and cancel.get("cancel_ack_and_late_fill_resolved") is True
+        )
+        if 0 < qty < seed["total_qty"] and not cancel_valid:
+            result.update(
+                status="unsupported_scope",
+                blocker="counterfactual_partial_pending_entry_cancel_and_late_fill_inventory_unproven",
+            )
+            return {**result, "sha256": economics_digest(result)}
         if not qty and not cancel_valid:
-            result.update(status='unsupported_scope',blocker='counterfactual_zero_fill_cancel_ack_and_late_fill_window_unproven')
-            return {**result,'sha256':economics_digest(result)}
+            result.update(
+                status="unsupported_scope",
+                blocker="counterfactual_zero_fill_cancel_ack_and_late_fill_window_unproven",
+            )
+            return {**result, "sha256": economics_digest(result)}
         if not qty:
-            ended = _timestamp(cancel['terminal_at'], seed['source_date']).timestamp()
+            ended = _timestamp(cancel["terminal_at"], seed["source_date"]).timestamp()
             if ended < started:
-                raise ValueError('cancel_wait_terminal_before_submit')
-            result.update(status='completed_source_only', net_pnl_krw=0., stress_net_pnl_krw=0.,
-                net_return_pct=0., stress_net_return_pct=0., capital_krw_minutes=0.,
-                reserve_krw_minutes=reserve * (ended-started)/60,
-                modeled_exit_at=cancel['terminal_at'], modeled_entry_at=seed['observed_at'],
-                modeled_outcome='operating_verified_no_fill', terminal_evidence_sha256=cancel['sha256'],
+                raise ValueError("cancel_wait_terminal_before_submit")
+            result.update(
+                status="completed_source_only",
+                net_pnl_krw=0.0,
+                stress_net_pnl_krw=0.0,
+                net_return_pct=0.0,
+                stress_net_return_pct=0.0,
+                capital_krw_minutes=0.0,
+                reserve_krw_minutes=reserve * (ended - started) / 60,
+                modeled_exit_at=cancel["terminal_at"],
+                modeled_entry_at=seed["observed_at"],
+                modeled_outcome="operating_verified_no_fill",
+                terminal_evidence_sha256=cancel["sha256"],
                 cancel_wait_terminal=copy.deepcopy(cancel),
-                cash_commitment_path=entry_cash_commitment_path(seed, [], reserve,
-                    cancel['terminal_at'], cancel_terminal=cancel['terminal_at']))
-            return {**result,'sha256':economics_digest(result)}
-        if any(type(x['qty']) is not int or x['qty'] <= 0 or not _finite(x['price'], positive=True)
-               or _timestamp(x['at'], seed['source_date']).timestamp() < started for x in fills):
-            raise ValueError('operating_entry_fill_clock_or_price_invalid')
-        last_at = max(_timestamp(x['at'], seed['source_date']).timestamp() for x in fills)
-        first_at=min(_timestamp(x['at'],seed['source_date']).timestamp() for x in fills)
-        if qty < seed['total_qty']:
-            ack_at = _timestamp(cancel['terminal_at'], seed['source_date']).timestamp()
+                cash_commitment_path=entry_cash_commitment_path(
+                    seed,
+                    [],
+                    reserve,
+                    cancel["terminal_at"],
+                    cancel_terminal=cancel["terminal_at"],
+                ),
+            )
+            return {**result, "sha256": economics_digest(result)}
+        if any(
+            type(x["qty"]) is not int
+            or x["qty"] <= 0
+            or not _finite(x["price"], positive=True)
+            or _timestamp(x["at"], seed["source_date"]).timestamp() < started
+            for x in fills
+        ):
+            raise ValueError("operating_entry_fill_clock_or_price_invalid")
+        last_at = max(
+            _timestamp(x["at"], seed["source_date"]).timestamp() for x in fills
+        )
+        first_at = min(
+            _timestamp(x["at"], seed["source_date"]).timestamp() for x in fills
+        )
+        if qty < seed["total_qty"]:
+            ack_at = _timestamp(cancel["terminal_at"], seed["source_date"]).timestamp()
             if ack_at < last_at:
-                raise ValueError('cancel_terminal_before_final_fill')
+                raise ValueError("cancel_terminal_before_final_fill")
         from src.engine.scalping.native_packet_validation import _validate_depth_row
-        if any(valid and clock is not None and first_at < clock.timestamp() < last_at
-            for valid,clock,*_ in (_validate_depth_row(row) for row in depth_rows)):
-            raise ValueError('operating_pre_final_fill_holding_transition_unmodeled')
-        amount = sum(x['qty'] * x['price'] for x in fills)
+
+        if any(
+            valid and clock is not None and first_at < clock.timestamp() < last_at
+            for valid, clock, *_ in (_validate_depth_row(row) for row in depth_rows)
+        ):
+            raise ValueError("operating_pre_final_fill_holding_transition_unmodeled")
+        amount = sum(x["qty"] * x["price"] for x in fills)
         weighted = amount / qty
-        state = copy.deepcopy(context['initial_policy_state'])
-        stock = state['stock']
+        state = copy.deepcopy(context["initial_policy_state"])
+        stock = state["stock"]
         if "nxt_listing_receipt" in context:
             listing = context["nxt_listing_receipt"]
-            if (not isinstance(listing, dict) or listing.get("stock_code") != seed['stock_code']
-                or listing.get("frozen_at") != context['frozen_at']
+            if (
+                not isinstance(listing, dict)
+                or listing.get("stock_code") != seed["stock_code"]
+                or listing.get("frozen_at") != context["frozen_at"]
                 or not listing.get("owner")
                 or listing.get("value") not in (None, True, False)
-                or stock.get("is_nxt") is not listing.get("value")):
-                raise ValueError('frozen_nxt_listing_owner_receipt_invalid')
+                or stock.get("is_nxt") is not listing.get("value")
+            ):
+                raise ValueError("frozen_nxt_listing_owner_receipt_invalid")
         if "initial_fill_exit_state" in context:
             from types import SimpleNamespace
-            from src.engine.sniper_execution_receipts import initial_main_entry_exit_fields, initial_scalp_preset_exit_fields
-            role_v2 = context.get('initial_fill_exit_contract_version') == 'main_role_initial_fill_v2'
-            expected = (initial_main_entry_exit_fields if role_v2 else initial_scalp_preset_exit_fields)(
-                stock, rules=SimpleNamespace(**context['policy_snapshot']['rules']))
-            expected_owner = 'sniper_execution_receipts.' + ('initial_main_entry_exit_fields'
-                if role_v2 else 'initial_scalp_preset_exit_fields')
-            if (context.get('initial_fill_exit_contract_version') not in {'main_role_initial_fill_v2','main_scalp_preset_initial_fill_v1'}
-                or context.get('initial_fill_exit_owner') != expected_owner
-                or context['initial_fill_exit_state'] != expected):
-                raise ValueError('frozen_initial_fill_exit_transition_invalid')
+            from src.engine.sniper_execution_receipts import (
+                initial_main_entry_exit_fields,
+                initial_scalp_preset_exit_fields,
+            )
+
+            role_v2 = (
+                context.get("initial_fill_exit_contract_version")
+                == "main_role_initial_fill_v2"
+            )
+            expected = (
+                initial_main_entry_exit_fields
+                if role_v2
+                else initial_scalp_preset_exit_fields
+            )(stock, rules=SimpleNamespace(**context["policy_snapshot"]["rules"]))
+            expected_owner = "sniper_execution_receipts." + (
+                "initial_main_entry_exit_fields"
+                if role_v2
+                else "initial_scalp_preset_exit_fields"
+            )
+            if (
+                context.get("initial_fill_exit_contract_version")
+                not in {
+                    "main_role_initial_fill_v2",
+                    "main_scalp_preset_initial_fill_v1",
+                }
+                or context.get("initial_fill_exit_owner") != expected_owner
+                or context["initial_fill_exit_state"] != expected
+            ):
+                raise ValueError("frozen_initial_fill_exit_transition_invalid")
             stock.update(expected)
         # These are modeled inventory fields, never a receipt of a real fill.
-        stock.update(code=seed['stock_code'], status='HOLDING', strategy='SCALPING',
-            buy_price=weighted, buy_qty=qty, pending_add_order=None, pending_entry_orders=[],
-            entry_requested_qty=seed['total_qty'], entry_filled_qty=qty, entry_fill_amount=amount,
-            sell_submit_pending=False, buy_time=datetime.fromtimestamp(last_at, KST).isoformat(),
-            holding_started_at=adapter._json_value(datetime.fromtimestamp(last_at, KST)), order_time=last_at)
-        if context.get('broker_route'):
-            stock.update(entry_execution_broker_route=context['broker_route'],
-                entry_execution_broker_route_resolution='frozen_planned_route_counterfactual',
-                effective_venue=seed['effective_venue'])
-        episode = 'entry-operating-' + seed['seed_sha256']
-        observation = dict(source_event_id=episode, scale_in_decision_id=episode,
-            position_episode_id=episode, stock_code=seed['stock_code'], venue=seed['effective_venue'],
+        stock.update(
+            code=seed["stock_code"],
+            status="HOLDING",
+            strategy="SCALPING",
+            buy_price=weighted,
+            buy_qty=qty,
+            pending_add_order=None,
+            pending_entry_orders=[],
+            entry_requested_qty=seed["total_qty"],
+            entry_filled_qty=qty,
+            entry_fill_amount=amount,
+            sell_submit_pending=False,
+            buy_time=datetime.fromtimestamp(last_at, KST).isoformat(),
+            holding_started_at=adapter._json_value(
+                datetime.fromtimestamp(last_at, KST)
+            ),
+            order_time=last_at,
+        )
+        if context.get("broker_route"):
+            stock.update(
+                entry_execution_broker_route=context["broker_route"],
+                entry_execution_broker_route_resolution="frozen_planned_route_counterfactual",
+                effective_venue=seed["effective_venue"],
+            )
+        episode = "entry-operating-" + seed["seed_sha256"]
+        observation = dict(
+            source_event_id=episode,
+            scale_in_decision_id=episode,
+            position_episode_id=episode,
+            stock_code=seed["stock_code"],
+            venue=seed["effective_venue"],
             emitted_at=datetime.fromtimestamp(last_at, KST).isoformat(),
-            exit_policy_version=context['exit_policy_version'], policy_snapshot=context['policy_snapshot'],
-            initial_policy_state=state, pre_add_buy_qty=qty, pre_add_buy_price=weighted,
-            replay_peak_price=weighted, replay_start_sequence=0,
-            replay_max_frame_gap_sec=context['max_frame_gap_sec'], cost_rate=context['cost_rate'],
-            entry_split_initial_only=True, effective_min_buy_pressure=1,
-            route_replay={'ENTRY': dict(should_add=False, route_evaluation_complete=True)})
-        if qty < seed['total_qty']:
-            observation['entry_residual_cancel_contract'] = dict(terminal=copy.deepcopy(cancel),
-                pending_qty=seed['total_qty']-qty, final_fill_at=datetime.fromtimestamp(last_at,KST).isoformat())
+            exit_policy_version=context["exit_policy_version"],
+            policy_snapshot=context["policy_snapshot"],
+            initial_policy_state=state,
+            pre_add_buy_qty=qty,
+            pre_add_buy_price=weighted,
+            replay_peak_price=weighted,
+            replay_start_sequence=0,
+            replay_max_frame_gap_sec=context["max_frame_gap_sec"],
+            cost_rate=context["cost_rate"],
+            entry_split_initial_only=True,
+            effective_min_buy_pressure=1,
+            route_replay={
+                "ENTRY": dict(should_add=False, route_evaluation_complete=True)
+            },
+        )
+        if qty < seed["total_qty"]:
+            observation["entry_residual_cancel_contract"] = dict(
+                terminal=copy.deepcopy(cancel),
+                pending_qty=seed["total_qty"] - qty,
+                final_fill_at=datetime.fromtimestamp(last_at, KST).isoformat(),
+            )
         micro_store = None
-        if context.get('initial_micro_estimator_state') is not None:
-            from src.engine.scalping.micro_estimator_state import MicroEstimatorStore, MicroEstimatorConfig, SymbolMicroEstimatorState
-            micro = context['initial_micro_estimator_state']
-            if not isinstance(micro, dict) or not isinstance(micro.get('config'), dict):
-                raise ValueError('frozen_micro_estimator_contract_invalid')
-            micro_store = MicroEstimatorStore(MicroEstimatorConfig(**micro['config']))
-            if micro.get('state') is not None:
-                micro_store._states[seed['stock_code']] = SymbolMicroEstimatorState(**adapter.thaw(copy.deepcopy(micro['state'])))
+        if context.get("initial_micro_estimator_state") is not None:
+            from src.engine.scalping.micro_estimator_state import (
+                MicroEstimatorStore,
+                MicroEstimatorConfig,
+                SymbolMicroEstimatorState,
+            )
+
+            micro = context["initial_micro_estimator_state"]
+            if not isinstance(micro, dict) or not isinstance(micro.get("config"), dict):
+                raise ValueError("frozen_micro_estimator_contract_invalid")
+            micro_store = MicroEstimatorStore(MicroEstimatorConfig(**micro["config"]))
+            if micro.get("state") is not None:
+                micro_store._states[seed["stock_code"]] = SymbolMicroEstimatorState(
+                    **adapter.thaw(copy.deepcopy(micro["state"]))
+                )
         frames = []
         for row in depth_rows:
-            clock = row.get('exchange_at') or row.get('observed_at') or row.get('emitted_at')
+            clock = (
+                row.get("exchange_at")
+                or row.get("observed_at")
+                or row.get("emitted_at")
+            )
             # Native validation precedes this helper; exact policy/service values
             # remain bound to the recorded frame, never looked up from today's env.
             from src.engine.scalping.native_packet_validation import _validate_depth_row
-            if (row.get('symbol') != seed['stock_code'] or row.get('venue') != entry_native_market_venue(seed['effective_venue'])
-                or row.get('session_bucket') != seed['session_bucket']):
-                raise ValueError('operating_native_frame_scope_mismatch')
+
+            if (
+                row.get("symbol") != seed["stock_code"]
+                or row.get("venue")
+                != entry_native_market_venue(seed["effective_venue"])
+                or row.get("session_bucket") != seed["session_bucket"]
+            ):
+                raise ValueError("operating_native_frame_scope_mismatch")
             valid, parsed, _, _, bid, ask = _validate_depth_row(row)
-            if not valid or parsed is None or row.get('path_consumer_eligible') is False:
-                raise ValueError('operating_native_frame_invalid')
+            if (
+                not valid
+                or parsed is None
+                or row.get("path_consumer_eligible") is False
+            ):
+                raise ValueError("operating_native_frame_invalid")
             if parsed.timestamp() <= last_at:
                 continue
-            ws = row.get('ws_data')
+            ws = row.get("ws_data")
             if not isinstance(ws, dict):
-                from src.engine.scalping.native_packet_validation import _validate_stream_row
+                from src.engine.scalping.native_packet_validation import (
+                    _validate_stream_row,
+                )
+
                 tick_values = []
                 for tick in trade_rows:
-                    valid_tick, eligible_tick, tick_at, tick_price, _, _ = _validate_stream_row(tick)
-                    if (valid_tick and eligible_tick and tick_at is not None
-                        and tick.get('symbol') == seed['stock_code'] and tick.get('venue') == entry_native_market_venue(seed['effective_venue'])
-                        and tick.get('session_bucket') == seed['session_bucket']
-                        and 0 <= parsed.timestamp() - tick_at.timestamp() <= context['max_frame_gap_sec']):
+                    valid_tick, eligible_tick, tick_at, tick_price, _, _ = (
+                        _validate_stream_row(tick)
+                    )
+                    if (
+                        valid_tick
+                        and eligible_tick
+                        and tick_at is not None
+                        and tick.get("symbol") == seed["stock_code"]
+                        and tick.get("venue")
+                        == entry_native_market_venue(seed["effective_venue"])
+                        and tick.get("session_bucket") == seed["session_bucket"]
+                        and 0
+                        <= parsed.timestamp() - tick_at.timestamp()
+                        <= context["max_frame_gap_sec"]
+                    ):
                         tick_values.append((tick_at.timestamp(), tick_price))
                 if not tick_values:
-                    raise ValueError('operating_recorded_trade_price_missing')
-                ws = dict(curr=max(tick_values)[1], best_bid=bid, best_ask=ask,
-                    best_bid_qty=row['best_bid_qty'], best_ask_qty=row['best_ask_qty'],
-                    last_ws_update_ts=parsed.timestamp(), last_realtime_type_ts={'0D':parsed.timestamp()},quote_stale=False)
+                    raise ValueError("operating_recorded_trade_price_missing")
+                ws = dict(
+                    curr=max(tick_values)[1],
+                    best_bid=bid,
+                    best_ask=ask,
+                    best_bid_qty=row["best_bid_qty"],
+                    best_ask_qty=row["best_ask_qty"],
+                    last_ws_update_ts=parsed.timestamp(),
+                    last_realtime_type_ts={"0D": parsed.timestamp()},
+                    quote_stale=False,
+                )
             # Reconstruct only metadata carried by the validated native depth
             # identity. Keep supplied metadata so conflicts still hit guards.
             ws = copy.deepcopy(ws)
-            native_route = {"KRX": "krx_only", "NXT": "nxt_only", "SOR": "krx_nxt_integrated"}[row['venue']]
-            for key, value in (("last_realtime_type_item", row['item']),
-                    ("last_realtime_type_market_suffix", row['item'][6:]),
-                    ("last_realtime_type_market_route", native_route),
-                    ("last_realtime_type_ts", parsed.timestamp())):
+            native_route = {
+                "KRX": "krx_only",
+                "NXT": "nxt_only",
+                "SOR": "krx_nxt_integrated",
+            }[row["venue"]]
+            for key, value in (
+                ("last_realtime_type_item", row["item"]),
+                ("last_realtime_type_market_suffix", row["item"][6:]),
+                ("last_realtime_type_market_route", native_route),
+                ("last_realtime_type_ts", parsed.timestamp()),
+            ):
                 mapping = ws.setdefault(key, {})
                 if not isinstance(mapping, dict):
-                    raise ValueError('operating_ws_native_provenance_invalid')
+                    raise ValueError("operating_ws_native_provenance_invalid")
                 mapping.setdefault("0D", value)
-            micro_frame = row.get('micro_estimator_state')
+            micro_frame = row.get("micro_estimator_state")
             if micro_store is not None:
-                micro_store.update_from_ws_quote(seed['stock_code'], ws, now_ts=parsed.timestamp(), tier='hot')
+                micro_store.update_from_ws_quote(
+                    seed["stock_code"], ws, now_ts=parsed.timestamp(), tier="hot"
+                )
                 from dataclasses import asdict
-                micro_frame = dict(config=asdict(micro_store.config),
-                    state=asdict(micro_store._states[seed['stock_code']]))
-            frames.append(dict(source_event_id='entry-frame-' + owner.digest(row),
-                source_observation_id=episode, scale_in_decision_id=episode,
-                position_episode_id=episode, stock_code=seed['stock_code'], venue=seed['effective_venue'],
-                exit_policy_version=context['exit_policy_version'],
-                replay_frame_schema='avg_down_exit_replay_frame_v1', sequence=len(frames) + 1,
-                emitted_at=parsed.isoformat(), market=dict(best_bid=bid, best_ask=ask,
-                    best_bid_qty=row['best_bid_qty'], best_ask_qty=row['best_ask_qty'],
-                    source_quality='fresh_conflict_free', ws_data=copy.deepcopy(ws),
-                    micro_estimator_state=micro_frame,
-                    market_regime=row.get('market_regime'),market_regime_observed_at=row.get('market_regime_observed_at'),
-                    recorded_inputs=row.get('recorded_inputs', {})),
-                full_policy_decisions=row.get('full_policy_decisions', {}), external_results=row.get('external_results', {})))
+
+                micro_frame = dict(
+                    config=asdict(micro_store.config),
+                    state=asdict(micro_store._states[seed["stock_code"]]),
+                )
+            frames.append(
+                dict(
+                    source_event_id="entry-frame-" + owner.digest(row),
+                    source_observation_id=episode,
+                    scale_in_decision_id=episode,
+                    position_episode_id=episode,
+                    stock_code=seed["stock_code"],
+                    venue=seed["effective_venue"],
+                    exit_policy_version=context["exit_policy_version"],
+                    replay_frame_schema="avg_down_exit_replay_frame_v1",
+                    sequence=len(frames) + 1,
+                    emitted_at=parsed.isoformat(),
+                    market=dict(
+                        best_bid=bid,
+                        best_ask=ask,
+                        best_bid_qty=row["best_bid_qty"],
+                        best_ask_qty=row["best_ask_qty"],
+                        source_quality="fresh_conflict_free",
+                        ws_data=copy.deepcopy(ws),
+                        micro_estimator_state=micro_frame,
+                        market_regime=row.get("market_regime"),
+                        market_regime_observed_at=row.get("market_regime_observed_at"),
+                        recorded_inputs=row.get("recorded_inputs", {}),
+                    ),
+                    full_policy_decisions=row.get("full_policy_decisions", {}),
+                    external_results=row.get("external_results", {}),
+                )
+            )
         exit_result = (executor or adapter.isolated_replay)(observation, frames)
-        if exit_result.get('evidence_digest') != owner.digest({k: v for k, v in exit_result.items() if k != 'evidence_digest'}):
-            raise ValueError('operating_full_policy_result_digest_invalid')
-        outcome = (exit_result.get('outcomes') or {}).get('ENTRY') or {}
-        if (exit_result.get('state') != 'paired_exit_complete_source_only' or exit_result.get('blockers')
-            or exit_result.get('actual_order_submitted') is not False or exit_result.get('broker_order_forbidden') is not True
-            or outcome.get('status') != 'COMPLETED' or outcome.get('full_policy_evaluation') is not True
-            or outcome.get('exit_qty') != qty):
-            result['status'] = 'terminal_pending' if 'pending_exit_outcome' in str(exit_result.get('blockers')) else 'unsupported_scope'
-            result['blocker'] = 'operating_full_policy_incomplete:' + str(exit_result.get('blockers') or exit_result.get('adapter_error'))
-            return {**result, 'sha256': economics_digest(result)}
-        terminal = _timestamp(outcome['exit_time'], seed['source_date']).timestamp()
-        if terminal <= last_at or not _finite(outcome.get('exit_price'), positive=True):
-            raise ValueError('operating_exit_clock_or_price_invalid')
-        net = calculate_net_realized_pnl(round(weighted, 4), outcome['exit_price'], qty, cost_rate=context['cost_rate'])
-        if net != outcome.get('net_pnl_krw'):
-            raise ValueError('operating_cost_owner_result_mismatch')
-        stress = calculate_net_realized_pnl(round(weighted, 4), outcome['exit_price'], qty,
-            cost_rate=context['cost_rate'] + context['stress_cost_rate_increment'])
-        holding = sum(x['qty'] * x['price'] * (terminal - _timestamp(x['at'], seed['source_date']).timestamp()) / 60 for x in fills)
+        if exit_result.get("evidence_digest") != owner.digest(
+            {k: v for k, v in exit_result.items() if k != "evidence_digest"}
+        ):
+            raise ValueError("operating_full_policy_result_digest_invalid")
+        outcome = (exit_result.get("outcomes") or {}).get("ENTRY") or {}
+        if (
+            exit_result.get("state") != "paired_exit_complete_source_only"
+            or exit_result.get("blockers")
+            or exit_result.get("actual_order_submitted") is not False
+            or exit_result.get("broker_order_forbidden") is not True
+            or outcome.get("status") != "COMPLETED"
+            or outcome.get("full_policy_evaluation") is not True
+            or outcome.get("exit_qty") != qty
+        ):
+            result["status"] = (
+                "terminal_pending"
+                if "pending_exit_outcome" in str(exit_result.get("blockers"))
+                else "unsupported_scope"
+            )
+            result["blocker"] = "operating_full_policy_incomplete:" + str(
+                exit_result.get("blockers") or exit_result.get("adapter_error")
+            )
+            return {**result, "sha256": economics_digest(result)}
+        terminal = _timestamp(outcome["exit_time"], seed["source_date"]).timestamp()
+        if terminal <= last_at or not _finite(outcome.get("exit_price"), positive=True):
+            raise ValueError("operating_exit_clock_or_price_invalid")
+        net = calculate_net_realized_pnl(
+            round(weighted, 4),
+            outcome["exit_price"],
+            qty,
+            cost_rate=context["cost_rate"],
+        )
+        if net != outcome.get("net_pnl_krw"):
+            raise ValueError("operating_cost_owner_result_mismatch")
+        stress = calculate_net_realized_pnl(
+            round(weighted, 4),
+            outcome["exit_price"],
+            qty,
+            cost_rate=context["cost_rate"] + context["stress_cost_rate_increment"],
+        )
+        holding = sum(
+            x["qty"]
+            * x["price"]
+            * (terminal - _timestamp(x["at"], seed["source_date"]).timestamp())
+            / 60
+            for x in fills
+        )
         # A timeout requests cancellation; it never releases unconfirmed cash.
         # Full fills release their reservation at their actual modeled clocks.
-        ttl = (_timestamp(cancel['terminal_at'], seed['source_date']).timestamp()
-               if qty < seed['total_qty'] else last_at)
-        reserved=0.; outstanding=reserve; reserve_clock=started
-        for fill in sorted(fills,key=lambda x:x['at']):
-            at=_timestamp(fill['at'],seed['source_date']).timestamp()
-            reserved+=outstanding*max(0.,min(at,ttl)-reserve_clock)/60
-            outstanding-=fill['qty']*fill.get('reserved_price',fill['price'])
-            if outstanding < -1e-8:raise ValueError('operating_reserve_conservation_invalid')
-            reserve_clock=at
-        reserved+=max(0.,outstanding)*max(0.,ttl-reserve_clock)/60
-        result.update(status='completed_source_only', net_pnl_krw=net, stress_net_pnl_krw=stress,
-            net_return_pct=net / context['budget_krw'] * 100,
-            stress_net_return_pct=stress / context['budget_krw'] * 100,
+        ttl = (
+            _timestamp(cancel["terminal_at"], seed["source_date"]).timestamp()
+            if qty < seed["total_qty"]
+            else last_at
+        )
+        reserved = 0.0
+        outstanding = reserve
+        reserve_clock = started
+        for fill in sorted(fills, key=lambda x: x["at"]):
+            at = _timestamp(fill["at"], seed["source_date"]).timestamp()
+            reserved += outstanding * max(0.0, min(at, ttl) - reserve_clock) / 60
+            outstanding -= fill["qty"] * fill.get("reserved_price", fill["price"])
+            if outstanding < -1e-8:
+                raise ValueError("operating_reserve_conservation_invalid")
+            reserve_clock = at
+        reserved += max(0.0, outstanding) * max(0.0, ttl - reserve_clock) / 60
+        result.update(
+            status="completed_source_only",
+            net_pnl_krw=net,
+            stress_net_pnl_krw=stress,
+            net_return_pct=net / context["budget_krw"] * 100,
+            stress_net_return_pct=stress / context["budget_krw"] * 100,
             modeled_entry_at=datetime.fromtimestamp(first_at, KST).isoformat(),
-            capital_krw_minutes=holding, reserve_krw_minutes=reserved,
-            modeled_entry_notional_krw=amount, modeled_exit_at=outcome['exit_time'],
-            terminal_evidence_sha256=exit_result['evidence_digest'], modeled_outcome='operating_terminal',
-            cash_commitment_path=entry_cash_commitment_path(seed, fills, reserve, outcome['exit_time'],
-                cancel_terminal=cancel.get('terminal_at') if qty < seed['total_qty'] else None))
-        if qty < seed['total_qty']:
-            result['cancel_wait_terminal'] = copy.deepcopy(cancel)
+            capital_krw_minutes=holding,
+            reserve_krw_minutes=reserved,
+            modeled_entry_notional_krw=amount,
+            modeled_exit_at=outcome["exit_time"],
+            terminal_evidence_sha256=exit_result["evidence_digest"],
+            modeled_outcome="operating_terminal",
+            cash_commitment_path=entry_cash_commitment_path(
+                seed,
+                fills,
+                reserve,
+                outcome["exit_time"],
+                cancel_terminal=(
+                    cancel.get("terminal_at") if qty < seed["total_qty"] else None
+                ),
+            ),
+        )
+        if qty < seed["total_qty"]:
+            result["cancel_wait_terminal"] = copy.deepcopy(cancel)
     except (ValueError, TypeError, KeyError, OverflowError) as exc:
-        result['blocker'] = str(exc)
-    return {**result, 'sha256': economics_digest(result)}
+        result["blocker"] = str(exc)
+    return {**result, "sha256": economics_digest(result)}
 
 
 def entry_cash_commitment_path(seed, fills, reserve, exit_at, *, cancel_terminal=None):
@@ -2377,200 +3559,394 @@ def entry_cash_commitment_path(seed, fills, reserve, exit_at, *, cancel_terminal
     Reservation to held principal is a transfer, not another cash debit.
     This models capital use, and does not attest broker settlement cash.
     """
-    day = seed['source_date']
-    start = _timestamp(seed['observed_at'], day)
+    day = seed["source_date"]
+    start = _timestamp(seed["observed_at"], day)
     terminal = _timestamp(exit_at, day)
     cancel_at = _timestamp(cancel_terminal, day) if cancel_terminal else None
-    pending, held, quantity, prior = reserve, 0., 0, start
+    pending, held, quantity, prior = reserve, 0.0, 0, start
     releases = []
-    for fill in sorted(fills, key=lambda f: f['at']):
-        at = _timestamp(fill['at'], day)
-        q, price = fill['qty'], fill['price']
-        reserved_price = fill.get('reserved_price', price)
-        if (type(q) is not int or q <= 0 or not _finite(price, positive=True)
-            or not _finite(reserved_price, positive=True) or reserved_price < price
-            or at < prior or at > terminal or cancel_at is not None and at > cancel_at):
-            raise ValueError('cash_path_fill_price_quantity_or_clock_invalid')
-        released = q * (reserved_price-price)
+    for fill in sorted(fills, key=lambda f: f["at"]):
+        at = _timestamp(fill["at"], day)
+        q, price = fill["qty"], fill["price"]
+        reserved_price = fill.get("reserved_price", price)
+        if (
+            type(q) is not int
+            or q <= 0
+            or not _finite(price, positive=True)
+            or not _finite(reserved_price, positive=True)
+            or reserved_price < price
+            or at < prior
+            or at > terminal
+            or cancel_at is not None
+            and at > cancel_at
+        ):
+            raise ValueError("cash_path_fill_price_quantity_or_clock_invalid")
+        released = q * (reserved_price - price)
         pending -= q * reserved_price
         held += q * price
         quantity += q
-        if pending < -1e-8 or quantity > seed['total_qty']:
-            raise ValueError('cash_path_quantity_or_principal_conflict')
-        releases.append(dict(at=fill['at'], principal_release_krw=released, kind='fill_transfer'))
+        if pending < -1e-8 or quantity > seed["total_qty"]:
+            raise ValueError("cash_path_quantity_or_principal_conflict")
+        releases.append(
+            dict(at=fill["at"], principal_release_krw=released, kind="fill_transfer")
+        )
         prior = at
     if pending > 1e-8:
         if cancel_at is None or not prior <= cancel_at <= terminal:
-            raise ValueError('cash_path_pending_reservation_terminal_missing')
-        releases.append(dict(at=cancel_terminal, principal_release_krw=pending, kind='cancel_confirmed'))
-    releases.append(dict(at=exit_at, principal_release_krw=held, kind='owner_exit'))
-    if abs(sum(e['principal_release_krw'] for e in releases)-reserve) > 1e-8:
-        raise ValueError('cash_path_principal_conservation_failed')
-    value = dict(schema='entry_operating_cash_commitment_v1', initial_reserve_krw=reserve,
-        seed_sha256=seed['seed_sha256'], events=releases, filled_qty=quantity,
-        cost_timing='full_round_trip_net_cost_in_independent_exit_owner',
-        broker_settlement_cash=False)
-    return {**value, 'sha256': owner.digest(value)}
+            raise ValueError("cash_path_pending_reservation_terminal_missing")
+        releases.append(
+            dict(
+                at=cancel_terminal,
+                principal_release_krw=pending,
+                kind="cancel_confirmed",
+            )
+        )
+    releases.append(dict(at=exit_at, principal_release_krw=held, kind="owner_exit"))
+    if abs(sum(e["principal_release_krw"] for e in releases) - reserve) > 1e-8:
+        raise ValueError("cash_path_principal_conservation_failed")
+    value = dict(
+        schema="entry_operating_cash_commitment_v1",
+        initial_reserve_krw=reserve,
+        seed_sha256=seed["seed_sha256"],
+        events=releases,
+        filled_qty=quantity,
+        cost_timing="full_round_trip_net_cost_in_independent_exit_owner",
+        broker_settlement_cash=False,
+    )
+    return {**value, "sha256": owner.digest(value)}
 
 
-def replay_cancel_wait_arm(seed, timeout, journal_legs, depth_rows, trade_rows, *,
-                           incumbent_timeout, cancel_model=None, executor=None):
+def replay_cancel_wait_arm(
+    seed,
+    timeout,
+    journal_legs,
+    depth_rows,
+    trade_rows,
+    *,
+    incumbent_timeout,
+    cancel_model=None,
+    executor=None,
+):
     """Matched actual fills are causal witnesses, never actual-exit substitutes.
 
     A shorter wait can prove no-fill on a continuous native no-touch window.
     Unknown passive queues, pending holding transitions and cancel races stay
     unsupported. Longer waits cannot manufacture fills after the real cancel.
     """
-    from src.engine.scalping.native_packet_validation import _validate_depth_row, _validate_stream_row
+    from src.engine.scalping.native_packet_validation import (
+        _validate_depth_row,
+        _validate_stream_row,
+    )
     from src.engine.scalping.entry_cancel_wait_runtime import bounded_candidates
-    gap = dict(status='unsupported_scope', net_pnl_krw=None, blocker=None, **AUTHORITY)
+
+    gap = dict(status="unsupported_scope", net_pnl_krw=None, blocker=None, **AUTHORITY)
     try:
         if not _entry_seed_valid(seed) or not journal_legs or type(timeout) is not int:
-            raise ValueError('cancel_wait_frozen_seed_or_journal_missing')
-        context = copy.deepcopy(seed['operating_contract'])
-        profile = context['cancel_wait_profile']
+            raise ValueError("cancel_wait_frozen_seed_or_journal_missing")
+        context = copy.deepcopy(seed["operating_contract"])
+        profile = context["cancel_wait_profile"]
         if timeout not in bounded_candidates(profile, incumbent_timeout):
-            raise ValueError('cancel_wait_unevaluated_timeout')
-        original = context['order_leg_ttl_sec']
-        cap = {'standard':300, 'breakout':300, 'pullback':600, 'reserve':1200}[profile]
-        ttls = [max(5, min(cap, round(t * timeout / incumbent_timeout))) for t in original]
-        if len(ttls) != len(journal_legs) or len(ttls) != len(seed['legs']):
-            raise ValueError('cancel_wait_actual_child_union_incomplete')
-        start = _timestamp(seed['observed_at'], seed['source_date']).timestamp()
+            raise ValueError("cancel_wait_unevaluated_timeout")
+        original = context["order_leg_ttl_sec"]
+        cap = {"standard": 300, "breakout": 300, "pullback": 600, "reserve": 1200}[
+            profile
+        ]
+        ttls = [
+            max(5, min(cap, round(t * timeout / incumbent_timeout))) for t in original
+        ]
+        if len(ttls) != len(journal_legs) or len(ttls) != len(seed["legs"]):
+            raise ValueError("cancel_wait_actual_child_union_incomplete")
+        start = _timestamp(seed["observed_at"], seed["source_date"]).timestamp()
         fills, deadlines, terminals = [], [], []
-        for index, (leg, planned, ttl) in enumerate(zip(journal_legs, seed['legs'], ttls)):
+        for index, (leg, planned, ttl) in enumerate(
+            zip(journal_legs, seed["legs"], ttls)
+        ):
             fill_start = len(fills)
-            if (leg['quantity'] != planned['qty'] or leg['submitted_price'] != planned['price']
-                or leg.get('terminal_reconciled') is not True):
-                raise ValueError('cancel_wait_signed_inventory_terminal_missing')
-            sent = _timestamp(leg['submitted_at'], seed['source_date']).timestamp()
+            if (
+                leg["quantity"] != planned["qty"]
+                or leg["submitted_price"] != planned["price"]
+                or leg.get("terminal_reconciled") is not True
+            ):
+                raise ValueError("cancel_wait_signed_inventory_terminal_missing")
+            sent = _timestamp(leg["submitted_at"], seed["source_date"]).timestamp()
             deadline = sent + ttl
             deadlines.append(deadline)
-            actual_end = _timestamp(leg['terminal_at'], seed['source_date']).timestamp()
+            actual_end = _timestamp(leg["terminal_at"], seed["source_date"]).timestamp()
             if actual_end < sent:
-                raise ValueError('cancel_wait_terminal_before_submit')
+                raise ValueError("cancel_wait_terminal_before_submit")
             if timeout == incumbent_timeout:
                 ended = actual_end
-            elif cancel_model and cancel_model.get('validated') is True:
-                ended = deadline + cancel_model['cancel_ack_delay_sec'] + cancel_model['late_fill_window_sec']
+            elif cancel_model and cancel_model.get("validated") is True:
+                ended = (
+                    deadline
+                    + cancel_model["cancel_ack_delay_sec"]
+                    + cancel_model["late_fill_window_sec"]
+                )
             else:
-                raise ValueError('cancel_wait_independent_cancel_model_missing')
+                raise ValueError("cancel_wait_independent_cancel_model_missing")
             terminals.append(ended)
-            previous = 0; amount = 0.; prior_at = sent
-            for fill in sorted(leg['fills'], key=lambda x:x['observed_at_kst']):
-                at = _timestamp(fill['observed_at_kst'], seed['source_date']).timestamp()
-                q, value = fill['filled_qty'], fill['fill_amount']
-                if (type(q) is not int or not previous <= q <= planned['qty'] or value < amount or at < prior_at
-                    or q == previous and value != amount):
-                    raise ValueError('cancel_wait_cumulative_fill_conflict')
+            previous = 0
+            amount = 0.0
+            prior_at = sent
+            for fill in sorted(leg["fills"], key=lambda x: x["observed_at_kst"]):
+                at = _timestamp(
+                    fill["observed_at_kst"], seed["source_date"]
+                ).timestamp()
+                q, value = fill["filled_qty"], fill["fill_amount"]
+                if (
+                    type(q) is not int
+                    or not previous <= q <= planned["qty"]
+                    or value < amount
+                    or at < prior_at
+                    or q == previous
+                    and value != amount
+                ):
+                    raise ValueError("cancel_wait_cumulative_fill_conflict")
                 if at > actual_end:
-                    raise ValueError('cancel_wait_fill_after_terminal_requires_reconciliation')
-                if q > previous and (at <= deadline or timeout == incumbent_timeout and at <= actual_end):
-                    fills.append(dict(at=fill['observed_at_kst'], qty=q-previous,
-                        price=(value-amount)/(q-previous), reserved_price=planned['price']))
+                    raise ValueError(
+                        "cancel_wait_fill_after_terminal_requires_reconciliation"
+                    )
+                if q > previous and (
+                    at <= deadline or timeout == incumbent_timeout and at <= actual_end
+                ):
+                    fills.append(
+                        dict(
+                            at=fill["observed_at_kst"],
+                            qty=q - previous,
+                            price=(value - amount) / (q - previous),
+                            reserved_price=planned["price"],
+                        )
+                    )
                 elif q > previous and at <= ended and timeout != incumbent_timeout:
-                    raise ValueError('cancel_wait_ack_late_fill_race_unproven')
+                    raise ValueError("cancel_wait_ack_late_fill_race_unproven")
                 previous, amount, prior_at = q, value, at
-            if sum(f['qty'] for f in fills) > seed['total_qty']:
-                raise ValueError('cancel_wait_fill_quantity_conflict')
+            if sum(f["qty"] for f in fills) > seed["total_qty"]:
+                raise ValueError("cancel_wait_fill_quantity_conflict")
             # A passive touch is never a fill or a proven zero. Native clocks,
             # identities, continuous series and scope must cover the whole wait.
-            retained = sum(f['qty'] for f in fills[fill_start:])
-            if previous < planned['qty'] or timeout != incumbent_timeout and retained < planned['qty']:
+            retained = sum(f["qty"] for f in fills[fill_start:])
+            if (
+                previous < planned["qty"]
+                or timeout != incumbent_timeout
+                and retained < planned["qty"]
+            ):
                 quotes, trades = [], []
                 for row in depth_rows:
                     valid, at, *rest = _validate_depth_row(row)
-                    if not valid or at is None:raise ValueError('cancel_wait_native_quote_invalid')
-                    if sent-1.5 <= at.timestamp() <= ended+1.5:
-                        if (row.get('symbol') != seed['stock_code'] or row.get('venue') != entry_native_market_venue(seed['effective_venue'])
-                            or row.get('session_bucket') != seed['session_bucket'] or row.get('path_consumer_eligible') is False):
-                            raise ValueError('cancel_wait_quote_scope_conflict')
-                        quotes.append((at.timestamp(), rest[-1], row['sequence_epoch'], row['source_sequence'], row['series_sequence']))
+                    if not valid or at is None:
+                        raise ValueError("cancel_wait_native_quote_invalid")
+                    if sent - 1.5 <= at.timestamp() <= ended + 1.5:
+                        if (
+                            row.get("symbol") != seed["stock_code"]
+                            or row.get("venue")
+                            != entry_native_market_venue(seed["effective_venue"])
+                            or row.get("session_bucket") != seed["session_bucket"]
+                            or row.get("path_consumer_eligible") is False
+                        ):
+                            raise ValueError("cancel_wait_quote_scope_conflict")
+                        quotes.append(
+                            (
+                                at.timestamp(),
+                                rest[-1],
+                                row["sequence_epoch"],
+                                row["source_sequence"],
+                                row["series_sequence"],
+                            )
+                        )
                 quotes.sort()
-                if (not quotes or quotes[0][0] > sent or ended-quotes[-1][0] > 1.5
+                if (
+                    not quotes
+                    or quotes[0][0] > sent
+                    or ended - quotes[-1][0] > 1.5
                     or len({r[2] for r in quotes}) != 1
-                    or any(b[0]-a[0] > 1.5 or b[3] <= a[3] or b[4] != a[4]+1 for a,b in zip(quotes,quotes[1:]))):
-                    raise ValueError('cancel_wait_continuous_quote_window_missing')
+                    or any(
+                        b[0] - a[0] > 1.5 or b[3] <= a[3] or b[4] != a[4] + 1
+                        for a, b in zip(quotes, quotes[1:])
+                    )
+                ):
+                    raise ValueError("cancel_wait_continuous_quote_window_missing")
                 for row in trade_rows:
                     valid, eligible, at, price, *_ = _validate_stream_row(row)
-                    if not valid or not eligible or at is None:raise ValueError('cancel_wait_native_trade_invalid')
+                    if not valid or not eligible or at is None:
+                        raise ValueError("cancel_wait_native_trade_invalid")
                     if sent <= at.timestamp() <= ended:
-                        if (row.get('symbol') != seed['stock_code'] or row.get('venue') != entry_native_market_venue(seed['effective_venue'])
-                            or row.get('session_bucket') != seed['session_bucket'] or row.get('sequence_epoch') != quotes[0][2]):
-                            raise ValueError('cancel_wait_trade_scope_conflict')
-                        trades.append((at.timestamp(), price, row['series_sequence']))
+                        if (
+                            row.get("symbol") != seed["stock_code"]
+                            or row.get("venue")
+                            != entry_native_market_venue(seed["effective_venue"])
+                            or row.get("session_bucket") != seed["session_bucket"]
+                            or row.get("sequence_epoch") != quotes[0][2]
+                        ):
+                            raise ValueError("cancel_wait_trade_scope_conflict")
+                        trades.append((at.timestamp(), price, row["series_sequence"]))
                 trades.sort()
-                if (not trades or trades[0][0]-sent > 1.5 or ended-trades[-1][0] > 1.5
-                    or any(b[2] != a[2]+1 or b[0]-a[0] > 1.5 for a,b in zip(trades,trades[1:]))):
-                    raise ValueError('cancel_wait_continuous_trade_window_missing')
+                if (
+                    not trades
+                    or trades[0][0] - sent > 1.5
+                    or ended - trades[-1][0] > 1.5
+                    or any(
+                        b[2] != a[2] + 1 or b[0] - a[0] > 1.5
+                        for a, b in zip(trades, trades[1:])
+                    )
+                ):
+                    raise ValueError("cancel_wait_continuous_trade_window_missing")
                 # Exclude actual witnessed fill clocks. All remaining pending
                 # intervals must prove no touch; no queue model is invented.
-                last_fill = max([sent]+[_timestamp(f['at'],seed['source_date']).timestamp() for f in fills[fill_start:]])
-                if any(q[1] <= planned['price'] for q in quotes if last_fill < q[0] <= ended) or any(t[1] <= planned['price'] for t in trades if last_fill < t[0] <= ended):
-                    raise ValueError('cancel_wait_unwitnessed_passive_fill_or_late_inventory')
+                last_fill = max(
+                    [sent]
+                    + [
+                        _timestamp(f["at"], seed["source_date"]).timestamp()
+                        for f in fills[fill_start:]
+                    ]
+                )
+                if any(
+                    q[1] <= planned["price"]
+                    for q in quotes
+                    if last_fill < q[0] <= ended
+                ) or any(
+                    t[1] <= planned["price"]
+                    for t in trades
+                    if last_fill < t[0] <= ended
+                ):
+                    raise ValueError(
+                        "cancel_wait_unwitnessed_passive_fill_or_late_inventory"
+                    )
         context.update(order_leg_ttl_sec=ttls, order_bundle_hard_ttl_sec=max(ttls))
-        context['sha256'] = owner.digest({k:v for k,v in context.items() if k!='sha256'})
-        derived = {**seed, 'operating_contract':context}
-        derived['seed_sha256'] = owner.digest({k:v for k,v in derived.items() if k!='seed_sha256'})
-        qty = sum(f['qty'] for f in fills)
-        cancel = dict(schema='entry_cancel_wait_terminal_v1', seed_sha256=derived['seed_sha256'],
-            model_identity=entry_operating_model_identity(), filled_qty=qty,
-            terminal_at=datetime.fromtimestamp(max(terminals),KST).isoformat(),
+        context["sha256"] = owner.digest(
+            {k: v for k, v in context.items() if k != "sha256"}
+        )
+        derived = {**seed, "operating_contract": context}
+        derived["seed_sha256"] = owner.digest(
+            {k: v for k, v in derived.items() if k != "seed_sha256"}
+        )
+        qty = sum(f["qty"] for f in fills)
+        cancel = dict(
+            schema="entry_cancel_wait_terminal_v1",
+            seed_sha256=derived["seed_sha256"],
+            model_identity=entry_operating_model_identity(),
+            filled_qty=qty,
+            terminal_at=datetime.fromtimestamp(max(terminals), KST).isoformat(),
             cancel_ack_and_late_fill_resolved=True,
-            source_journal_sha256=owner.digest(journal_legs), native_path_sha256=owner.digest([depth_rows,trade_rows]))
-        cancel['sha256'] = owner.digest(cancel)
-        arm = dict(requested_qty=seed['total_qty'], modeled_filled_qty=qty, modeled_fill_events=fills,
-            modeled_reserved_notional_krw=sum(l['qty']*l['price'] for l in seed['legs']), cancel_wait_terminal=cancel)
-        result = replay_operating_entry_arm(derived, arm, depth_rows, trade_rows=trade_rows, executor=executor,
-            cancel_wait_validator=lambda witness: witness == cancel)
-        return {**result, 'cancel_wait_terminal':cancel, 'timeout_sec':timeout,
-                'behavior_sha256':owner.digest([fills, max(terminals) if qty < seed['total_qty'] else None])}
-    except (KeyError,ValueError,TypeError,OverflowError) as exc:
-        return {**gap, 'blocker':str(exc), 'timeout_sec':timeout}
+            source_journal_sha256=owner.digest(journal_legs),
+            native_path_sha256=owner.digest([depth_rows, trade_rows]),
+        )
+        cancel["sha256"] = owner.digest(cancel)
+        arm = dict(
+            requested_qty=seed["total_qty"],
+            modeled_filled_qty=qty,
+            modeled_fill_events=fills,
+            modeled_reserved_notional_krw=sum(
+                l["qty"] * l["price"] for l in seed["legs"]
+            ),
+            cancel_wait_terminal=cancel,
+        )
+        result = replay_operating_entry_arm(
+            derived,
+            arm,
+            depth_rows,
+            trade_rows=trade_rows,
+            executor=executor,
+            cancel_wait_validator=lambda witness: witness == cancel,
+        )
+        return {
+            **result,
+            "cancel_wait_terminal": cancel,
+            "timeout_sec": timeout,
+            "behavior_sha256": owner.digest(
+                [fills, max(terminals) if qty < seed["total_qty"] else None]
+            ),
+        }
+    except (KeyError, ValueError, TypeError, OverflowError) as exc:
+        return {**gap, "blocker": str(exc), "timeout_sec": timeout}
 
-def entry_split_actual_economic_receipt(stock, *, buy_price, buy_qty, profit_rate, completion_at):
+
+def entry_split_actual_economic_receipt(
+    stock, *, buy_price, buy_qty, profit_rate, completion_at
+):
     """Observe the existing completed sell receipt; missing fields remain null."""
     from src.engine.scalping import entry_split_order_plan as split
     from src.engine.trade_profit import get_trade_cost_rate
-    seed=stock.get('entry_split_initial_entry_seed') or {}
-    from src.engine.scalping.entry_probe_conditional_replay import valid_seed as conditional_seed_valid
-    conditional_actual = (conditional_seed_valid(seed)
-        and seed['atomic_plan'].get('observation_only') is False)
-    if not (_entry_seed_valid(seed) or conditional_actual) or not seed.get('operating_contract'):
+
+    seed = stock.get("entry_split_initial_entry_seed") or {}
+    from src.engine.scalping.entry_probe_conditional_replay import (
+        valid_seed as conditional_seed_valid,
+    )
+
+    conditional_actual = (
+        conditional_seed_valid(seed)
+        and seed["atomic_plan"].get("observation_only") is False
+    )
+    if not (_entry_seed_valid(seed) or conditional_actual) or not seed.get(
+        "operating_contract"
+    ):
         return None
-    context=seed['operating_contract']
-    completion_at=completion_at.replace(tzinfo=KST) if completion_at.tzinfo is None else completion_at.astimezone(KST)
-    cost_version='trade_profit_net_realized_pnl:rate=' + str(get_trade_cost_rate())
-    qty=int(buy_qty) if _finite(buy_qty,positive=True) and int(buy_qty)==buy_qty else None
-    net=stock.get('realized_pnl_krw')
-    decision=context.get('entry_decision_version_receipt') or {}
-    decision_identity=entry_decision_version_identity(seed, decision)
-    complete=(stock.get('sell_execution_receipt_economics_complete') is True
-        and stock.get('sell_execution_receipt_quantity_contract_complete') is True
-        and _finite(net) and _finite(profit_rate) and qty is not None and 0<qty<=seed['total_qty']
-        and stock.get('entry_split_initial_entry_lineage_conflict') is not True
+    context = seed["operating_contract"]
+    completion_at = (
+        completion_at.replace(tzinfo=KST)
+        if completion_at.tzinfo is None
+        else completion_at.astimezone(KST)
+    )
+    cost_version = "trade_profit_net_realized_pnl:rate=" + str(get_trade_cost_rate())
+    qty = (
+        int(buy_qty)
+        if _finite(buy_qty, positive=True) and int(buy_qty) == buy_qty
+        else None
+    )
+    net = stock.get("realized_pnl_krw")
+    decision = context.get("entry_decision_version_receipt") or {}
+    decision_identity = entry_decision_version_identity(seed, decision)
+    complete = (
+        stock.get("sell_execution_receipt_economics_complete") is True
+        and stock.get("sell_execution_receipt_quantity_contract_complete") is True
+        and _finite(net)
+        and _finite(profit_rate)
+        and qty is not None
+        and 0 < qty <= seed["total_qty"]
+        and stock.get("entry_split_initial_entry_lineage_conflict") is not True
         and decision_identity is not None
-        and cost_version==context['cost_policy_version'])
-    decision_valid=decision_identity is not None
-    value=dict(episode_id=str(stock.get('position_episode_id') or seed['plan_sha256']),
-        plan_sha256=seed['plan_sha256'],source_date=seed['source_date'],
-        completion_date=completion_at.astimezone(KST).date().isoformat(),completed_at=completion_at.isoformat(),
-        status='COMPLETED',origin='real',owner='main_scalping',
-        scope_sha256=split._entry_operating_scope(seed),entry_qty=qty,
-        requested_qty=seed['total_qty'],actual_entry_vwap=buy_price,profit_rate=profit_rate if _finite(profit_rate) else None,
-        net_pnl_krw=net if _finite(net) else None,cost_complete=complete,exact_lineage=complete,
-        cost_policy_version=cost_version,cost_provenance='completed_sell_execution_receipt_trade_profit_configuration',
+        and cost_version == context["cost_policy_version"]
+    )
+    decision_valid = decision_identity is not None
+    value = dict(
+        episode_id=str(stock.get("position_episode_id") or seed["plan_sha256"]),
+        plan_sha256=seed["plan_sha256"],
+        source_date=seed["source_date"],
+        completion_date=completion_at.astimezone(KST).date().isoformat(),
+        completed_at=completion_at.isoformat(),
+        status="COMPLETED",
+        origin="real",
+        owner="main_scalping",
+        scope_sha256=split._entry_operating_scope(seed),
+        entry_qty=qty,
+        requested_qty=seed["total_qty"],
+        actual_entry_vwap=buy_price,
+        profit_rate=profit_rate if _finite(profit_rate) else None,
+        net_pnl_krw=net if _finite(net) else None,
+        cost_complete=complete,
+        exact_lineage=complete,
+        cost_policy_version=cost_version,
+        cost_provenance="completed_sell_execution_receipt_trade_profit_configuration",
         decision_policy_identity=decision_identity,
-        budget_krw=context['budget_krw'],capital_krw_minutes=None,reserve_krw_minutes=None,
+        budget_krw=context["budget_krw"],
+        capital_krw_minutes=None,
+        reserve_krw_minutes=None,
         entry_decision_version_receipt=decision if decision_valid else None,
         entry_decision_pid_consumed=bool(decision_valid),
-        entry_decision_version_blocker=None if decision_valid else 'exact_submit_decision_version_receipt_missing_or_invalid',
-        policy_version=stock.get('entry_split_order_policy_version'),
-        policy_sha256=stock.get('entry_split_order_policy_sha256'),
-        policy_applied=stock.get('entry_split_order_policy_applied') is True,
-        runtime_pid=stock.get('entry_split_order_runtime_pid'),
-        pid_consumed=stock.get('entry_split_order_runtime_consumed') is True,
-        fill_class='full' if qty==seed['total_qty'] else 'partial',
-        cost_settlement_reconciled=stock.get('broker_cost_settlement_reconciled') is True,
-        blocker=None if complete else 'completed_initial_inventory_cost_or_lineage_unproven')
-    return {**value,'sha256':split._canonical_sha256(value)}
+        entry_decision_version_blocker=(
+            None
+            if decision_valid
+            else "exact_submit_decision_version_receipt_missing_or_invalid"
+        ),
+        policy_version=stock.get("entry_split_order_policy_version"),
+        policy_sha256=stock.get("entry_split_order_policy_sha256"),
+        policy_applied=stock.get("entry_split_order_policy_applied") is True,
+        runtime_pid=stock.get("entry_split_order_runtime_pid"),
+        pid_consumed=stock.get("entry_split_order_runtime_consumed") is True,
+        fill_class="full" if qty == seed["total_qty"] else "partial",
+        cost_settlement_reconciled=stock.get("broker_cost_settlement_reconciled")
+        is True,
+        blocker=(
+            None if complete else "completed_initial_inventory_cost_or_lineage_unproven"
+        ),
+    )
+    return {**value, "sha256": split._canonical_sha256(value)}

@@ -741,9 +741,9 @@ def build_daily(
                 path=str(path.resolve()),
                 bytes=byte_count,
                 sha256=source_hash.hexdigest(),
-                byte_basis="decompressed_prefix"
-                if path.suffix == ".gz"
-                else "file_prefix",
+                byte_basis=(
+                    "decompressed_prefix" if path.suffix == ".gz" else "file_prefix"
+                ),
             ),
             trace_source_receipt=trace_receipt,
             price_source_receipts=price_receipts,

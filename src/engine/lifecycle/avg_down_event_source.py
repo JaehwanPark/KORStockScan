@@ -110,9 +110,11 @@ def _iter_events(paths: list[Path]) -> Iterable[dict[str, Any]]:
             reason = (
                 "invalid_or_prebaseline_timestamp"
                 if stamp is None or stamp < CLEAN_BASELINE_TS
-                else "timestamp_file_date_mismatch"
-                if stamp.date().isoformat() != source_date
-                else "irrelevant_valid_event_count"
+                else (
+                    "timestamp_file_date_mismatch"
+                    if stamp.date().isoformat() != source_date
+                    else "irrelevant_valid_event_count"
+                )
             )
             return {"_census": {reason: 1, "projected_out_count": 1}}
 

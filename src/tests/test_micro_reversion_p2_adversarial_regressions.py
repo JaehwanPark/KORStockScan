@@ -84,12 +84,6 @@ def _replace_referenced_source_row(
     )
 
 
-
-
-
-
-
-
 @pytest.fixture(scope="module")
 def bound_source_fixture() -> dict:
     prepared, seed_bundle = _micro_reversion_materialization_fixture()
@@ -180,36 +174,6 @@ def bound_source_fixture() -> dict:
     }
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 def test_provider_capacity_receipt_recomputes_state_and_rejects_aliases(
     tmp_path,
     monkeypatch,
@@ -254,16 +218,6 @@ def test_provider_capacity_receipt_recomputes_state_and_rejects_aliases(
             forged_authority,
             expected_target_date=target_date,
         )
-
-
-
-
-
-
-
-
-
-
 
 
 def test_current_source_bundle_rejects_unreferenced_raw_pool_row(
@@ -367,10 +321,6 @@ def test_current_source_validator_rejects_resealed_noncanonical_rows(
         quality._validate_micro_reversion_source_bundle_artifact(source_bundle)
 
 
-
-
-
-
 @pytest.mark.parametrize(
     ("mutation", "reason"),
     (
@@ -463,12 +413,6 @@ def test_current_source_and_bridge_reject_resealed_positive_authority_alias(
         )
 
 
-
-
-
-
-
-
 def test_current_provider_custody_rejects_present_empty_checkpoint_generation():
     with pytest.raises(
         ValueError,
@@ -481,20 +425,6 @@ def test_current_provider_custody_rejects_present_empty_checkpoint_generation():
             checkpoint_artifact={},
             provider_ablation_sample_floor_content_sha256="f" * 64,
         )
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 def test_current_bridge_rejects_unreferenced_future_outcome_pool_row(
@@ -882,12 +812,6 @@ def test_current_action_neutral_resealed_authority_escalation_is_rejected(
 
     with pytest.raises(ValueError, match=error):
         validator(value)
-
-
-
-
-
-
 
 
 def test_source_bundle_second_pass_uses_each_distinct_parent_trace():

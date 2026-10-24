@@ -305,9 +305,7 @@ def _market_axes(
         "market_session_regime": session,
         "actual_execution_venue": "UNKNOWN",
         "route_source_quality": (
-            "PARTIAL"
-            if integrated and route != "krx_nxt_integrated"
-            else "PASS"
+            "PARTIAL" if integrated and route != "krx_nxt_integrated" else "PASS"
         ),
     }
 

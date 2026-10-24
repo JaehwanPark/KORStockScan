@@ -20,7 +20,9 @@ def _isolate_active_targets(monkeypatch, tmp_path):
     """Each cancellation case must use only the positions it constructs."""
 
     monkeypatch.setattr(handlers, "ACTIVE_TARGETS", [])
-    monkeypatch.setenv("KORSTOCKSCAN_ORDER_OWNER_REGISTRY_PATH", str(tmp_path / "owner-registry.jsonl"))
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_ORDER_OWNER_REGISTRY_PATH", str(tmp_path / "owner-registry.jsonl")
+    )
 
 
 def test_trailing_transition_keeps_type_specific_and_rest_source_clocks(monkeypatch):
@@ -91,136 +93,287 @@ def test_trailing_transition_keeps_type_specific_and_rest_source_clocks(monkeypa
     assert rest_fields["bid_source_received_at_epoch"] == 999.0
 
 
-@pytest.mark.parametrize('failure', [None, 'false_return', 'exception'])
-def test_native_first_crossing_survives_legacy_grid_gap_and_retries_frozen_receipt(monkeypatch, failure):
+@pytest.mark.parametrize("failure", [None, "false_return", "exception"])
+def test_native_first_crossing_survives_legacy_grid_gap_and_retries_frozen_receipt(
+    monkeypatch, failure
+):
     from src.engine import holding_exit_sentinel as sentinel
     from src.engine.scalping.holding_profit_exit_semantics import audit_profit_exit_flow
     from src.engine.scalping.trailing_mechanical_policy import baseline_receipt
     from src.engine.ai.holding_exit_vote import PATH_POLICY_BY_MARKET, input_snapshot_id
-    at = datetime(2026, 10, 16, 10, tzinfo=ZoneInfo('Asia/Seoul')).timestamp()
-    monkeypatch.setenv('KORSTOCKSCAN_RUNTIME_POLICY_BOOTSTRAP_DATE', '2026-10-16')
-    monkeypatch.setattr(handlers, 'buy_fill_identity_from_runtime', lambda stock: 'a'*64)
-    stock = dict(id=123, code='123456', buy_price=10000, buy_qty=1,
-        scalp_trailing_observation_position_key='record:123',
-        scalp_trailing_observation_sequence=256, scalp_trailing_observation_coverage_exhausted=True)
+
+    at = datetime(2026, 10, 16, 10, tzinfo=ZoneInfo("Asia/Seoul")).timestamp()
+    monkeypatch.setenv("KORSTOCKSCAN_RUNTIME_POLICY_BOOTSTRAP_DATE", "2026-10-16")
+    monkeypatch.setattr(
+        handlers, "buy_fill_identity_from_runtime", lambda stock: "a" * 64
+    )
+    stock = dict(
+        id=123,
+        code="123456",
+        buy_price=10000,
+        buy_qty=1,
+        scalp_trailing_observation_position_key="record:123",
+        scalp_trailing_observation_sequence=256,
+        scalp_trailing_observation_coverage_exhausted=True,
+    )
     policy = handlers._scalp_trailing_policy_observation_fields()
-    mechanical = dict(classifier_version=policy['scalp_trailing_classifier_version'],
-        classifier_sha256=policy['scalp_trailing_classifier_sha256'], classifier_state='WEAK')
-    decision = handlers.evaluate_trailing_take_profit(peak_price=10100, executable_bid=10050,
-        peak_profit_pct=1., start_pct=.4, strong=False, weak_limit_pct=.4, strong_limit_pct=.8)
-    decision = handlers._scalp_trailing_latch_first_crossing(stock, '123456', decision,
-        observed_at=at, mechanical_fields=mechanical, market='REGULAR')
-    calls=[]; accepted=[]; observations=[]
+    mechanical = dict(
+        classifier_version=policy["scalp_trailing_classifier_version"],
+        classifier_sha256=policy["scalp_trailing_classifier_sha256"],
+        classifier_state="WEAK",
+    )
+    decision = handlers.evaluate_trailing_take_profit(
+        peak_price=10100,
+        executable_bid=10050,
+        peak_profit_pct=1.0,
+        start_pct=0.4,
+        strong=False,
+        weak_limit_pct=0.4,
+        strong_limit_pct=0.8,
+    )
+    decision = handlers._scalp_trailing_latch_first_crossing(
+        stock,
+        "123456",
+        decision,
+        observed_at=at,
+        mechanical_fields=mechanical,
+        market="REGULAR",
+    )
+    calls = []
+    accepted = []
+    observations = []
 
     def emit(stock, code, stage, **fields):
         if stage == "scalp_trailing_input_transition":
             observations.append(fields)
             return True
         calls.append((stage, fields))
-        if failure and len(calls)==1:
-            if failure=='exception':raise OSError('full queue')
+        if failure and len(calls) == 1:
+            if failure == "exception":
+                raise OSError("full queue")
             return False
         accepted.append((stage, fields))
         return True
 
-    monkeypatch.setattr(handlers, '_log_holding_pipeline', emit)
-    args=dict(ws_data={}, decision=decision, peak_price=10100, executable_bid=10050,
-        bid_source='missing', strong=False, ai_score=0., ai_usable=False, start_pct=.4,
-        evaluator='fast', mechanical_fields=mechanical)
-    handlers._observe_scalp_trailing_input_transition(stock, '123456', now_ts=at, **args)
+    monkeypatch.setattr(handlers, "_log_holding_pipeline", emit)
+    args = dict(
+        ws_data={},
+        decision=decision,
+        peak_price=10100,
+        executable_bid=10050,
+        bid_source="missing",
+        strong=False,
+        ai_score=0.0,
+        ai_usable=False,
+        start_pct=0.4,
+        evaluator="fast",
+        mechanical_fields=mechanical,
+    )
+    handlers._observe_scalp_trailing_input_transition(
+        stock, "123456", now_ts=at, **args
+    )
     if failure:
-        mechanical['classifier_state']='STRONG'
-        handlers._observe_scalp_trailing_input_transition(stock, '123456', now_ts=at+.1, **args)
-        assert len(calls)==1
-        handlers._observe_scalp_trailing_input_transition(stock, '123456', now_ts=at+1.1, **args)
-        assert calls[0][1]['first_crossing_source']==calls[1][1]['first_crossing_source']
-    handlers._observe_scalp_trailing_input_transition(stock, '123456', now_ts=at+2, **args)
-    assert stock['scalp_trailing_observation_sequence']>256
-    assert observations and all(row['observation_telemetry_gap'] for row in observations)
-    assert len(accepted)==1 and accepted[0][0]=='scalp_trailing_first_crossing_transition'
-    source=json.loads(accepted[0][1]['first_crossing_source'])
-    assert source['first_crossing']['at_epoch']==at and len(accepted[0][1]['first_crossing_source'])<8192
-    assert 'universal_trailing_quote' not in source and decision.triggered is True
-    emitted=datetime.fromtimestamp(at+1.2,ZoneInfo('Asia/Seoul'))
-    event=sentinel.PipelineEvent(emitted,'HOLDING_PIPELINE',accepted[0][0],'Stock','123456','123',
-        {**accepted[0][1], 'pipeline_lifecycle_population_scope':'real_record_bound'})
-    snapshot=sentinel.PipelineEvent(datetime.fromtimestamp(at+2.1,ZoneInfo('Asia/Seoul')),
-        'HOLDING_PIPELINE','holding_path_signal_snapshot','Stock','123456','123',dict(
-        path_id='EXIT_TRAILING_TP',position_key='record:123',buy_fill_identity='a'*64,
-        signal_at=at,signal_id='first',market='REGULAR',session_key='2026-10-16',
-        runtime_pid=handlers.os.getpid(),vote_count=0,decision='INSUFFICIENT',
-        policy_sha256=input_snapshot_id(PATH_POLICY_BY_MARKET[('EXIT_TRAILING_TP','REGULAR')]),
-        mechanical_policy_receipt=policy,pipeline_lifecycle_population_scope='real_record_bound'))
-    report=audit_profit_exit_flow([event,snapshot],target_date='2026-10-16',load_votes=lambda _:[],
-        mechanical_policy_receipt=baseline_receipt({},source='operator_directed_m1_baseline'),
-        consumed_pid=handlers.os.getpid())
-    assert report['source_gaps']==[] and report['policy_binding_gaps']==[]
-    assert report['status']=='pass'
+        mechanical["classifier_state"] = "STRONG"
+        handlers._observe_scalp_trailing_input_transition(
+            stock, "123456", now_ts=at + 0.1, **args
+        )
+        assert len(calls) == 1
+        handlers._observe_scalp_trailing_input_transition(
+            stock, "123456", now_ts=at + 1.1, **args
+        )
+        assert (
+            calls[0][1]["first_crossing_source"] == calls[1][1]["first_crossing_source"]
+        )
+    handlers._observe_scalp_trailing_input_transition(
+        stock, "123456", now_ts=at + 2, **args
+    )
+    assert stock["scalp_trailing_observation_sequence"] > 256
+    assert observations and all(
+        row["observation_telemetry_gap"] for row in observations
+    )
+    assert (
+        len(accepted) == 1
+        and accepted[0][0] == "scalp_trailing_first_crossing_transition"
+    )
+    source = json.loads(accepted[0][1]["first_crossing_source"])
+    assert (
+        source["first_crossing"]["at_epoch"] == at
+        and len(accepted[0][1]["first_crossing_source"]) < 8192
+    )
+    assert "universal_trailing_quote" not in source and decision.triggered is True
+    emitted = datetime.fromtimestamp(at + 1.2, ZoneInfo("Asia/Seoul"))
+    event = sentinel.PipelineEvent(
+        emitted,
+        "HOLDING_PIPELINE",
+        accepted[0][0],
+        "Stock",
+        "123456",
+        "123",
+        {**accepted[0][1], "pipeline_lifecycle_population_scope": "real_record_bound"},
+    )
+    snapshot = sentinel.PipelineEvent(
+        datetime.fromtimestamp(at + 2.1, ZoneInfo("Asia/Seoul")),
+        "HOLDING_PIPELINE",
+        "holding_path_signal_snapshot",
+        "Stock",
+        "123456",
+        "123",
+        dict(
+            path_id="EXIT_TRAILING_TP",
+            position_key="record:123",
+            buy_fill_identity="a" * 64,
+            signal_at=at,
+            signal_id="first",
+            market="REGULAR",
+            session_key="2026-10-16",
+            runtime_pid=handlers.os.getpid(),
+            vote_count=0,
+            decision="INSUFFICIENT",
+            policy_sha256=input_snapshot_id(
+                PATH_POLICY_BY_MARKET[("EXIT_TRAILING_TP", "REGULAR")]
+            ),
+            mechanical_policy_receipt=policy,
+            pipeline_lifecycle_population_scope="real_record_bound",
+        ),
+    )
+    report = audit_profit_exit_flow(
+        [event, snapshot],
+        target_date="2026-10-16",
+        load_votes=lambda _: [],
+        mechanical_policy_receipt=baseline_receipt(
+            {}, source="operator_directed_m1_baseline"
+        ),
+        consumed_pid=handlers.os.getpid(),
+    )
+    assert report["source_gaps"] == [] and report["policy_binding_gaps"] == []
+    assert report["status"] == "pass"
 
 
-@pytest.mark.parametrize('historical', [False, True])
-def test_first_crossing_receipt_never_backfills_old_latch_or_retries_without_bound(monkeypatch, historical):
+@pytest.mark.parametrize("historical", [False, True])
+def test_first_crossing_receipt_never_backfills_old_latch_or_retries_without_bound(
+    monkeypatch, historical
+):
     import os
-    stock=dict(id=7,code='000001')
-    fields=dict(first_crossing=dict(position_key='record:7',at_epoch=100.,market='REGULAR',
-        threshold_key='SCALP_TRAILING_LIMIT_WEAK',threshold_pct=.4,
-        source_runtime_pid=os.getpid()-1 if historical else os.getpid(),buy_fill_identity='a'*64))
-    calls=[]
-    monkeypatch.setattr(handlers,'_log_holding_pipeline',lambda *a,**k:calls.append(k) or False)
-    for at in range(100,110):
-        handlers._observe_scalp_trailing_first_crossing(stock,'000001',mechanical_fields=fields,
-            policy_fields={},start_pct=.4,now_ts=float(at),evaluator='fast',buy_fill_identity='a'*64)
-    assert len(calls)==(0 if historical else 3)
-    assert stock.get('scalp_trailing_first_crossing') is None
+
+    stock = dict(id=7, code="000001")
+    fields = dict(
+        first_crossing=dict(
+            position_key="record:7",
+            at_epoch=100.0,
+            market="REGULAR",
+            threshold_key="SCALP_TRAILING_LIMIT_WEAK",
+            threshold_pct=0.4,
+            source_runtime_pid=os.getpid() - 1 if historical else os.getpid(),
+            buy_fill_identity="a" * 64,
+        )
+    )
+    calls = []
+    monkeypatch.setattr(
+        handlers, "_log_holding_pipeline", lambda *a, **k: calls.append(k) or False
+    )
+    for at in range(100, 110):
+        handlers._observe_scalp_trailing_first_crossing(
+            stock,
+            "000001",
+            mechanical_fields=fields,
+            policy_fields={},
+            start_pct=0.4,
+            now_ts=float(at),
+            evaluator="fast",
+            buy_fill_identity="a" * 64,
+        )
+    assert len(calls) == (0 if historical else 3)
+    assert stock.get("scalp_trailing_first_crossing") is None
 
 
-@pytest.mark.parametrize('hour', [8, 10, 16])
-def test_trailing_observation_continues_beyond_256_and_keeps_admission_loss(monkeypatch, hour):
+@pytest.mark.parametrize("hour", [8, 10, 16])
+def test_trailing_observation_continues_beyond_256_and_keeps_admission_loss(
+    monkeypatch, hour
+):
     from src.engine.ai import holding_vote_replay_source
-    monkeypatch.setattr(holding_vote_replay_source, 'runtime_source', lambda *a, **k: {})
-    monkeypatch.setattr(handlers, 'buy_fill_identity_from_runtime', lambda s: 'a'*64)
-    stock = dict(id=7, code='123456', buy_price=10000, buy_qty=1)
+
+    monkeypatch.setattr(
+        holding_vote_replay_source, "runtime_source", lambda *a, **k: {}
+    )
+    monkeypatch.setattr(handlers, "buy_fill_identity_from_runtime", lambda s: "a" * 64)
+    stock = dict(id=7, code="123456", buy_price=10000, buy_qty=1)
     seen = []
+
     def emit(stock, code, stage, **fields):
-        if stage == 'scalp_trailing_input_transition':
+        if stage == "scalp_trailing_input_transition":
             seen.append(fields)
-            return dict(status='unavailable' if len(seen) == 280 else 'queued',
-                        structured_append_succeeded=False)
+            return dict(
+                status="unavailable" if len(seen) == 280 else "queued",
+                structured_append_succeeded=False,
+            )
         return True
-    monkeypatch.setattr(handlers, '_log_holding_pipeline', emit)
-    decision = handlers.evaluate_trailing_take_profit(peak_price=10000, executable_bid=10000,
-        peak_profit_pct=0., start_pct=.4, strong=False, weak_limit_pct=.4, strong_limit_pct=.8)
-    at = datetime(2026, 10, 23, hour, 10, tzinfo=ZoneInfo('Asia/Seoul')).timestamp()
-    common = dict(ws_data={}, decision=decision, peak_price=10000, executable_bid=10000,
-        bid_source='missing', strong=False, ai_score=0., ai_usable=False, start_pct=.4,
-        evaluator='fast', mechanical_fields={'classifier_new_event_count':1})
+
+    monkeypatch.setattr(handlers, "_log_holding_pipeline", emit)
+    decision = handlers.evaluate_trailing_take_profit(
+        peak_price=10000,
+        executable_bid=10000,
+        peak_profit_pct=0.0,
+        start_pct=0.4,
+        strong=False,
+        weak_limit_pct=0.4,
+        strong_limit_pct=0.8,
+    )
+    at = datetime(2026, 10, 23, hour, 10, tzinfo=ZoneInfo("Asia/Seoul")).timestamp()
+    common = dict(
+        ws_data={},
+        decision=decision,
+        peak_price=10000,
+        executable_bid=10000,
+        bid_source="missing",
+        strong=False,
+        ai_score=0.0,
+        ai_usable=False,
+        start_pct=0.4,
+        evaluator="fast",
+        mechanical_fields={"classifier_new_event_count": 1},
+    )
     for i in range(320):
-        handlers._observe_scalp_trailing_input_transition(stock, '123456', now_ts=at+i*.1, **common)
-    assert [r['event_sequence'] for r in seen] == list(range(1,321))
-    assert not any(r['observation_coverage_exhausted'] for r in seen)
-    assert not seen[279]['observation_telemetry_gap']
-    assert all(r['observation_telemetry_gap'] for r in seen[280:])
-    stock['id'] = 8
-    handlers._observe_scalp_trailing_input_transition(stock, '123456', now_ts=at+33, **common)
-    assert seen[-1]['event_sequence'] == 1 and not seen[-1]['observation_telemetry_gap']
+        handlers._observe_scalp_trailing_input_transition(
+            stock, "123456", now_ts=at + i * 0.1, **common
+        )
+    assert [r["event_sequence"] for r in seen] == list(range(1, 321))
+    assert not any(r["observation_coverage_exhausted"] for r in seen)
+    assert not seen[279]["observation_telemetry_gap"]
+    assert all(r["observation_telemetry_gap"] for r in seen[280:])
+    stock["id"] = 8
+    handlers._observe_scalp_trailing_input_transition(
+        stock, "123456", now_ts=at + 33, **common
+    )
+    assert seen[-1]["event_sequence"] == 1 and not seen[-1]["observation_telemetry_gap"]
 
 
 def test_trailing_grid_heartbeat_exposes_evaluation_gap(monkeypatch):
     events = []
     monkeypatch.setattr(
-        handlers, "_log_holding_pipeline",
+        handlers,
+        "_log_holding_pipeline",
         lambda stock, code, stage, **fields: events.append((stage, fields)) or True,
     )
     stock = {"id": 123, "code": "123456"}
     decision = handlers.evaluate_trailing_take_profit(
-        peak_price=10100, executable_bid=10050, peak_profit_pct=1.0,
-        start_pct=0.6, strong=False, weak_limit_pct=0.4,
+        peak_price=10100,
+        executable_bid=10050,
+        peak_profit_pct=1.0,
+        start_pct=0.6,
+        strong=False,
+        weak_limit_pct=0.4,
         strong_limit_pct=0.8,
     )
     common = dict(
-        ws_data={}, decision=decision, peak_price=10100,
-        executable_bid=10050, bid_source="missing", strong=False,
-        ai_score=50.0, ai_usable=True, start_pct=0.6,
+        ws_data={},
+        decision=decision,
+        peak_price=10100,
+        executable_bid=10050,
+        bid_source="missing",
+        strong=False,
+        ai_score=50.0,
+        ai_usable=True,
+        start_pct=0.6,
         evaluator="fast",
     )
     for at in (1000.0, 1000.2, 1000.4):
@@ -242,13 +395,16 @@ def test_trailing_grid_heartbeat_exposes_evaluation_gap(monkeypatch):
 def test_trailing_grid_uses_exact_route_depth_without_top_level_qty(monkeypatch):
     events = []
     monkeypatch.setattr(
-        handlers, "_log_holding_pipeline",
+        handlers,
+        "_log_holding_pipeline",
         lambda stock, code, stage, **fields: events.append((stage, fields)) or True,
     )
     at = datetime(2026, 9, 25, 10, tzinfo=ZoneInfo("Asia/Seoul")).timestamp()
     depth = {
-        "item": "123456", "market_route": "krx_only",
-        "transport_epoch": 1, "observed_epoch": at,
+        "item": "123456",
+        "market_route": "krx_only",
+        "transport_epoch": 1,
+        "observed_epoch": at,
         "orderbook": {"bids": [{"price": 10050, "volume": 20}]},
     }
     snapshot = {
@@ -256,21 +412,36 @@ def test_trailing_grid_uses_exact_route_depth_without_top_level_qty(monkeypatch)
         "realtime_type_snapshots_by_route": {"krx_only": {"0D": depth}},
         "last_realtime_type_item": {"0D": "123456"},
         "last_realtime_type_ts": {"0D": at},
-        "best_bid": 10050, "best_ask": 10060,
+        "best_bid": 10050,
+        "best_ask": 10060,
     }
     decision = handlers.evaluate_trailing_take_profit(
-        peak_price=10100, executable_bid=10050, peak_profit_pct=1.0,
-        start_pct=0.6, strong=False, weak_limit_pct=0.4,
+        peak_price=10100,
+        executable_bid=10050,
+        peak_profit_pct=1.0,
+        start_pct=0.6,
+        strong=False,
+        weak_limit_pct=0.4,
         strong_limit_pct=0.8,
     )
     handlers._observe_scalp_trailing_input_transition(
-        {"id": 123, "code": "123456", "buy_price": 10000}, "123456",
-        ws_data=snapshot, decision=decision, peak_price=10100,
-        executable_bid=10050, bid_source="fresh_ws_executable_bid",
-        strong=False, ai_score=50.0, ai_usable=True, start_pct=0.6,
-        now_ts=at, evaluator="fast",
-        quote_fields={"quote_consistency_state": "consistent",
-                      "executable_buy_price": 10060},
+        {"id": 123, "code": "123456", "buy_price": 10000},
+        "123456",
+        ws_data=snapshot,
+        decision=decision,
+        peak_price=10100,
+        executable_bid=10050,
+        bid_source="fresh_ws_executable_bid",
+        strong=False,
+        ai_score=50.0,
+        ai_usable=True,
+        start_pct=0.6,
+        now_ts=at,
+        evaluator="fast",
+        quote_fields={
+            "quote_consistency_state": "consistent",
+            "executable_buy_price": 10060,
+        },
     )
     fields = events[-1][1]
     assert fields["executable_bid_qty"] == 20
@@ -280,39 +451,64 @@ def test_trailing_grid_uses_exact_route_depth_without_top_level_qty(monkeypatch)
 def test_operational_candidate_boundary_forces_a_transition_event(monkeypatch):
     events = []
     monkeypatch.setattr(
-        handlers, "_log_holding_pipeline",
+        handlers,
+        "_log_holding_pipeline",
         lambda stock, code, stage, **fields: events.append(fields),
     )
     at = datetime(2026, 9, 25, 10, tzinfo=ZoneInfo("Asia/Seoul")).timestamp()
     stock = {"id": 123, "code": "123456", "buy_price": 10000}
     decision = handlers.evaluate_trailing_take_profit(
-        peak_price=10100, executable_bid=10050, peak_profit_pct=1.0,
-        start_pct=0.6, strong=False, weak_limit_pct=0.4,
+        peak_price=10100,
+        executable_bid=10050,
+        peak_profit_pct=1.0,
+        start_pct=0.6,
+        strong=False,
+        weak_limit_pct=0.4,
         strong_limit_pct=0.8,
     )
     common = dict(
-        ws_data={}, decision=decision, peak_price=10100,
-        executable_bid=10050, bid_source="missing", strong=False,
-        ai_score=50.0, ai_usable=True, start_pct=0.6,
-        evaluator="normal", holding_profit_rate_at_eval=0.9,
-        holding_ai_gate_evidence={"elapsed_sec": 25,
-                                  "price_change_pct": 0.0,
-                                  "prerequisites_met": True},
+        ws_data={},
+        decision=decision,
+        peak_price=10100,
+        executable_bid=10050,
+        bid_source="missing",
+        strong=False,
+        ai_score=50.0,
+        ai_usable=True,
+        start_pct=0.6,
+        evaluator="normal",
+        holding_profit_rate_at_eval=0.9,
+        holding_ai_gate_evidence={
+            "elapsed_sec": 25,
+            "price_change_pct": 0.0,
+            "prerequisites_met": True,
+        },
     )
     handlers._observe_scalp_trailing_input_transition(
-        stock, "123456", now_ts=at,
-        quote_fields={"quote_consistency_state": "consistent",
-                      "quote_consistency_ws_age_ms": 650}, **common,
+        stock,
+        "123456",
+        now_ts=at,
+        quote_fields={
+            "quote_consistency_state": "consistent",
+            "quote_consistency_ws_age_ms": 650,
+        },
+        **common,
     )
     handlers._observe_scalp_trailing_input_transition(
-        stock, "123456", now_ts=at + 0.2,
-        quote_fields={"quote_consistency_state": "consistent",
-                      "quote_consistency_ws_age_ms": 750}, **common,
+        stock,
+        "123456",
+        now_ts=at + 0.2,
+        quote_fields={
+            "quote_consistency_state": "consistent",
+            "quote_consistency_ws_age_ms": 750,
+        },
+        **common,
     )
     assert len(events) == 2
-    assert events[0]["tuning_operational_shadow_sha256"] != events[1][
-        "tuning_operational_shadow_sha256"
-    ]
+    assert (
+        events[0]["tuning_operational_shadow_sha256"]
+        != events[1]["tuning_operational_shadow_sha256"]
+    )
 
 
 def test_trailing_arm_persistence_failure_does_not_block_live_decision(monkeypatch):
@@ -320,15 +516,18 @@ def test_trailing_arm_persistence_failure_does_not_block_live_decision(monkeypat
     monkeypatch.setattr(
         handlers.POSITION_PEAK_LEDGER, "get_for_stock", lambda stock: None
     )
+
     def fail(*args, **kwargs):
         raise OSError("test persistence failure")
-    monkeypatch.setattr(
-        handlers.POSITION_PEAK_LEDGER, "record_trailing_arm", fail
-    )
+
+    monkeypatch.setattr(handlers.POSITION_PEAK_LEDGER, "record_trailing_arm", fail)
     monkeypatch.setattr(handlers, "log_error", lambda message: None)
     handlers._scalp_trailing_latch_arm(
-        stock, armed=True, observed_at=1000.0,
-        start_pct=0.6, market="REGULAR",
+        stock,
+        armed=True,
+        observed_at=1000.0,
+        start_pct=0.6,
+        market="REGULAR",
     )
     assert stock["scalp_trailing_arm_latched"] is True
     assert stock["scalp_trailing_arm_persist_gap"] is True
@@ -419,14 +618,22 @@ def test_trailing_rest_bid_rejects_other_symbol_and_request_route():
     fields = {"quote_consistency_state": "consistent", "quote_consistency_reason": "ok"}
 
     bid, _ = handlers._trusted_scalp_trailing_bid(
-        {}, code="123456", quote_fields=fields, now_ts=now_ts,
-        rest_snapshot=rest, rest_request_code="123456"
+        {},
+        code="123456",
+        quote_fields=fields,
+        now_ts=now_ts,
+        rest_snapshot=rest,
+        rest_request_code="123456",
     )
     assert bid == 0
     rest["stock_code"] = "123456"
     bid, _ = handlers._trusted_scalp_trailing_bid(
-        {}, code="123456", quote_fields=fields, now_ts=now_ts,
-        rest_snapshot=rest, rest_request_code="123456"
+        {},
+        code="123456",
+        quote_fields=fields,
+        now_ts=now_ts,
+        rest_snapshot=rest,
+        rest_request_code="123456",
     )
     assert bid == 0
 
@@ -492,7 +699,9 @@ def test_fast_exit_skips_manual_control_excluded_holding(monkeypatch):
 
 
 @pytest.mark.parametrize("replayed_peak", [10077, 10100])
-def test_fast_exit_claims_once_and_dispatches_without_holding_ai(monkeypatch, replayed_peak):
+def test_fast_exit_claims_once_and_dispatches_without_holding_ai(
+    monkeypatch, replayed_peak
+):
     now_ts = 1_784_778_400.0
     monkeypatch.setenv("KORSTOCKSCAN_SCALP_FAST_EXIT_GUARD_ENABLED", "false")
     monkeypatch.setenv("KORSTOCKSCAN_SCALP_FAST_EXIT_GUARD_ACTIVE_DATE", "2026-01-01")
@@ -535,14 +744,21 @@ def test_fast_exit_claims_once_and_dispatches_without_holding_ai(monkeypatch, re
     monkeypatch.setattr(handlers, "_holding_score_role_log_fields", lambda context: {})
     monkeypatch.setattr(handlers, "_log_holding_pipeline", lambda *args, **kwargs: None)
     monkeypatch.setattr(
-        handlers, "_scalp_trailing_strength_and_event_replay",
-        lambda stock, *args, **kwargs: (False, {
-            "classifier_validated_peak_price": replayed_peak
-        } if stock.get("id") == 1 else {}),
+        handlers,
+        "_scalp_trailing_strength_and_event_replay",
+        lambda stock, *args, **kwargs: (
+            False,
+            (
+                {"classifier_validated_peak_price": replayed_peak}
+                if stock.get("id") == 1
+                else {}
+            ),
+        ),
     )
     observed_peaks = []
     monkeypatch.setattr(
-        handlers, "_observe_scalp_trailing_input_transition_safe",
+        handlers,
+        "_observe_scalp_trailing_input_transition_safe",
         lambda *args, **kwargs: observed_peaks.append(kwargs["peak_price"]),
     )
     monkeypatch.setattr(
@@ -609,12 +825,15 @@ def test_fast_exit_claims_once_and_dispatches_without_holding_ai(monkeypatch, re
         "scalp_trailing_trusted_peak_price": 10_000,
         "scalp_trailing_peak_position_key": "record:2",
     }
-    assert handlers.evaluate_and_dispatch_fast_scalp_exit(
-        stop_only,
-        "123456",
-        {"curr": 9_800, "best_bid": 9_800, "last_ws_update_ts": now_ts},
-        now_ts=now_ts,
-    ) is False
+    assert (
+        handlers.evaluate_and_dispatch_fast_scalp_exit(
+            stop_only,
+            "123456",
+            {"curr": 9_800, "best_bid": 9_800, "last_ws_update_ts": now_ts},
+            now_ts=now_ts,
+        )
+        is False
+    )
     assert len(dispatches) == 1
     assert len(dispatches) == 1
 
@@ -767,10 +986,10 @@ def test_dongyang_wide_spread_trailing_uses_confirmed_rest_bid(monkeypatch):
             {
                 "best_bid": 1133,
                 "best_ask": 1135,
-                    "rest_received_ts_ms": now_ts * 1000,
-                    "source": "ka10004_rest_orderbook",
-                    "stock_code": "001520",
-                    "request_code": "001520",
+                "rest_received_ts_ms": now_ts * 1000,
+                "source": "ka10004_rest_orderbook",
+                "stock_code": "001520",
+                "request_code": "001520",
             },
             "ok",
             12.0,
@@ -826,7 +1045,10 @@ def test_dongyang_wide_spread_trailing_uses_confirmed_rest_bid(monkeypatch):
     }
 
     assert handlers.evaluate_and_dispatch_fast_scalp_exit(
-        stock, "001520", {"curr": 1133, "best_bid": 1121, "best_ask": 1145, "last_ws_update_ts": now_ts}, now_ts=now_ts
+        stock,
+        "001520",
+        {"curr": 1133, "best_bid": 1121, "best_ask": 1145, "last_ws_update_ts": now_ts},
+        now_ts=now_ts,
     )
     assert dispatches[0]["curr_p"] == 1134
     assert dispatches[0]["ws_data"]["executable_sell_price"] == 1133
@@ -893,10 +1115,10 @@ def test_wide_spread_trailing_rechecks_rest_when_mark_pnl_is_slightly_negative(
             {
                 "best_bid": 2_995,
                 "best_ask": 3_005,
-                    "rest_received_ts_ms": now_ts * 1000,
-                    "source": "ka10004_rest_orderbook",
-                    "stock_code": "475040",
-                    "request_code": "475040",
+                "rest_received_ts_ms": now_ts * 1000,
+                "source": "ka10004_rest_orderbook",
+                "stock_code": "475040",
+                "request_code": "475040",
             },
             "ok",
             12.0,
@@ -958,7 +1180,15 @@ def test_wide_spread_trailing_rechecks_rest_when_mark_pnl_is_slightly_negative(
     }
 
     assert handlers.evaluate_and_dispatch_fast_scalp_exit(
-        stock, "475040", {"curr": 2_995, "best_bid": 2_990, "best_ask": 3_030, "last_ws_update_ts": now_ts}, now_ts=now_ts
+        stock,
+        "475040",
+        {
+            "curr": 2_995,
+            "best_bid": 2_990,
+            "best_ask": 3_030,
+            "last_ws_update_ts": now_ts,
+        },
+        now_ts=now_ts,
     )
     assert len(rest_fetches) == 1
     assert dispatches[0]["ws_data"]["executable_sell_price"] == 2_995
@@ -1007,6 +1237,7 @@ def test_wide_spread_trailing_defers_when_rest_bbo_is_not_narrow(monkeypatch):
         ),
     )
     rest_fetches = []
+
     def fetch_rest(*args, **kwargs):
         rest_fetches.append((args, kwargs))
         return (
@@ -1018,6 +1249,7 @@ def test_wide_spread_trailing_defers_when_rest_bbo_is_not_narrow(monkeypatch):
             "ok",
             12.0,
         )
+
     monkeypatch.setattr(handlers, "_fetch_rest_orderbook_snapshot_bounded", fetch_rest)
     monkeypatch.setattr(
         handlers,
@@ -1062,19 +1294,34 @@ def test_wide_spread_trailing_defers_when_rest_bbo_is_not_narrow(monkeypatch):
 
     assert (
         handlers.evaluate_and_dispatch_fast_scalp_exit(
-            stock, "001520", {"curr": 1133, "best_bid": 1121,
-                              "best_ask": 1145, "last_ws_update_ts": now_ts},
-            now_ts=now_ts
+            stock,
+            "001520",
+            {
+                "curr": 1133,
+                "best_bid": 1121,
+                "best_ask": 1145,
+                "last_ws_update_ts": now_ts,
+            },
+            now_ts=now_ts,
         )
         is False
     )
     assert dispatches == []
     assert not stock.get("exit_token")
-    assert handlers.evaluate_and_dispatch_fast_scalp_exit(
-        stock, "001520", {"curr": 1133, "best_bid": 1121,
-                          "best_ask": 1145, "last_ws_update_ts": now_ts + 0.1},
-        now_ts=now_ts + 0.1
-    ) is False
+    assert (
+        handlers.evaluate_and_dispatch_fast_scalp_exit(
+            stock,
+            "001520",
+            {
+                "curr": 1133,
+                "best_bid": 1121,
+                "best_ask": 1145,
+                "last_ws_update_ts": now_ts + 0.1,
+            },
+            now_ts=now_ts + 0.1,
+        )
+        is False
+    )
     assert len(rest_fetches) == 1
 
 
@@ -1160,10 +1407,6 @@ def test_fast_exit_dispatch_survives_claim_logging_failure(monkeypatch):
     assert len(dispatches) == 1
     assert dispatches[0]["fast_exit"] is True
     assert stock["exit_requested"] is True
-
-
-
-
 
 
 def _nxt_quote_snapshot(code: str, now_ts: float) -> dict:
@@ -2522,16 +2765,34 @@ def test_sell_cancel_exact_success_releases_generation_after_db_commit(monkeypat
     # now create a different generation through the same custody boundary.
     stock.update(strategy="SCALPING", buy_price=10000)
     monkeypatch.setattr(handlers, "DB", db)
-    monkeypatch.setattr(handlers, "_confirm_cancel_or_reload_remaining",
-                        sniper_trade_utils.confirm_cancel_or_reload_remaining)
-    monkeypatch.setattr(handlers, "_sell_side_open_time_block_fields", lambda **kwargs: {})
+    monkeypatch.setattr(
+        handlers,
+        "_confirm_cancel_or_reload_remaining",
+        sniper_trade_utils.confirm_cancel_or_reload_remaining,
+    )
+    monkeypatch.setattr(
+        handlers, "_sell_side_open_time_block_fields", lambda **kwargs: {}
+    )
     sends = []
-    monkeypatch.setattr(handlers, "_send_exit_best_ioc", lambda *a, **k:
-                        sends.append((a, k)) or {"return_code": "0", "ord_no": "0000009"})
-    handlers._dispatch_scalp_preset_exit(stock=stock, code=stock["code"],
-        now_ts=handlers.time.time(), curr_p=9800, buy_p=10000, profit_rate=-2,
-        peak_profit=0, strategy="SCALPING", sell_reason_type="LOSS",
-        reason="after exact cancellation", exit_rule="scalp_preset_hard_stop_pct")
+    monkeypatch.setattr(
+        handlers,
+        "_send_exit_best_ioc",
+        lambda *a, **k: sends.append((a, k))
+        or {"return_code": "0", "ord_no": "0000009"},
+    )
+    handlers._dispatch_scalp_preset_exit(
+        stock=stock,
+        code=stock["code"],
+        now_ts=handlers.time.time(),
+        curr_p=9800,
+        buy_p=10000,
+        profit_rate=-2,
+        peak_profit=0,
+        strategy="SCALPING",
+        sell_reason_type="LOSS",
+        reason="after exact cancellation",
+        exit_rule="scalp_preset_hard_stop_pct",
+    )
     assert len(sends) == 1
     assert stock["sell_submit_generation"] != generation
     assert stock["buy_qty"] == stock["sell_submit_requested_qty"] == 7

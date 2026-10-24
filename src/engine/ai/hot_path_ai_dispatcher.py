@@ -15,7 +15,9 @@ import threading
 import time
 from typing import AbstractSet, Any
 
-from src.engine.infrastructure.snapshot_copy import immutable_mapping as _immutable_mapping
+from src.engine.infrastructure.snapshot_copy import (
+    immutable_mapping as _immutable_mapping,
+)
 
 HOT_PATH_AI_DISPATCHER_VERSION = "hot_path_ai_dispatcher_v1"
 
@@ -34,7 +36,9 @@ class HotPathAIRequest:
         compare=False,
     )
     metadata: Mapping[str, Any] = field(default_factory=dict)
-    on_complete: Callable[[Any], bool] | None = field(default=None, repr=False, compare=False)
+    on_complete: Callable[[Any], bool] | None = field(
+        default=None, repr=False, compare=False
+    )
 
     @classmethod
     def create(
@@ -54,7 +58,7 @@ class HotPathAIRequest:
         if not callable(execute):
             raise TypeError("hot-path AI request requires callable execute")
         if on_complete is not None and not callable(on_complete):
-            raise TypeError('hot-path AI completion must be callable')
+            raise TypeError("hot-path AI completion must be callable")
         normalized_request_id = str(request_id or "").strip()
         normalized_generation_id = str(generation_id or "").strip()
         normalized_cache_key = str(cache_key or "").strip()
@@ -286,7 +290,8 @@ class HotPathAIDispatcher:
         self.restore_completed(result, front=False)
         if callback_error is not None:
             from src.engine.monitoring.runtime_performance import failure
-            failure('async_completion_delivery', callback_error, emit_log=False)
+
+            failure("async_completion_delivery", callback_error, emit_log=False)
 
     def restore_completed(self, result, *, front=True):
         """Retain the same settled result; never reevaluate or renew its deadline."""
@@ -296,7 +301,7 @@ class HotPathAIDispatcher:
                     self._completed.appendleft(result)
                 else:
                     self._completed.append(result)
-            notification = getattr(self, 'completion_event', None)
+            notification = getattr(self, "completion_event", None)
             if notification is not None:
                 notification.set()
 

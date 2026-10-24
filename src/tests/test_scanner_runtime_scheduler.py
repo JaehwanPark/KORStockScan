@@ -36,9 +36,7 @@ def test_scheduler_mode_and_venue_parsing_fail_closed():
     assert normalize_scanner_scheduler_mode("unknown") == "legacy"
     assert parse_scanner_scheduler_venues(
         "KRX,premarket,nxt,krx_nxt_integrated,unknown"
-    ) == frozenset(
-        {"KRX", "PREMARKET_KRX_LIKE", "NXT", "KRX_NXT_INTEGRATED"}
-    )
+    ) == frozenset({"KRX", "PREMARKET_KRX_LIKE", "NXT", "KRX_NXT_INTEGRATED"})
 
 
 def test_integrated_aftermarket_generation_is_schedulable():

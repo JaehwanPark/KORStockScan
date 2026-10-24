@@ -21,70 +21,94 @@ from src.engine.error_detectors.base import (
 )
 
 
-def test_artifact_checks_reuse_digests_between_invocations_but_run_semantics(monkeypatch, tmp_path):
+def test_artifact_checks_reuse_digests_between_invocations_but_run_semantics(
+    monkeypatch, tmp_path
+):
     import hashlib
     import src.engine.error_detector as module
     from src.engine.infrastructure import validation_digest_session as D
     from src.engine.scalping import mechanistic_entry_runtime_policy as N
-    data = tmp_path / 'data'
+
+    data = tmp_path / "data"
     data.mkdir()
-    source = data / 'large-report.json'
-    source.write_bytes(b'a' * (D.MIN_BYTES + 1))
-    monkeypatch.setattr(module, 'PROJECT_ROOT', tmp_path)
-    monkeypatch.setattr(D, 'code_generation', lambda: {'code': 'same-reviewed-generation'})
+    source = data / "large-report.json"
+    source.write_bytes(b"a" * (D.MIN_BYTES + 1))
+    monkeypatch.setattr(module, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(
+        D, "code_generation", lambda: {"code": "same-reviewed-generation"}
+    )
     engine = ErrorDetectionEngine.__new__(ErrorDetectionEngine)
-    engine.mode = 'artifact_only'
+    engine.mode = "artifact_only"
     engine.postclose_source_date = None
     calls = []
+
     def check():
         calls.append(N._source_hash(str(source), N._signature(source)))
-        return [DetectionResult(detector_id='artifact_freshness', category='artifact',
-            severity='warning' if len(calls) == 3 else 'pass', summary='fresh semantic check')]
+        return [
+            DetectionResult(
+                detector_id="artifact_freshness",
+                category="artifact",
+                severity="warning" if len(calls) == 3 else "pass",
+                summary="fresh semantic check",
+            )
+        ]
+
     engine._run_all = check
     first = engine.run_all()[0]
     N._HASH_CACHE.clear()
     second = engine.run_all()[0]
-    assert first.details['validation_io']['full_reads'] == 1
-    assert second.details['validation_io']['full_reads'] == 0
-    assert second.details['validation_io']['reused_reads'] == 1
-    source.write_bytes(b'b' * (D.MIN_BYTES + 1))
+    assert first.details["validation_io"]["full_reads"] == 1
+    assert second.details["validation_io"]["full_reads"] == 0
+    assert second.details["validation_io"]["reused_reads"] == 1
+    source.write_bytes(b"b" * (D.MIN_BYTES + 1))
     third = engine.run_all()[0]
-    assert third.severity == 'warning'
-    assert third.details['validation_io']['full_reads'] == 1
+    assert third.severity == "warning"
+    assert third.details["validation_io"]["full_reads"] == 1
     assert len(calls) == 3 and calls[0] == calls[1] != calls[2]
 
 
-def test_digest_contention_defers_artifact_only_and_keeps_health_failure(monkeypatch, tmp_path):
+def test_digest_contention_defers_artifact_only_and_keeps_health_failure(
+    monkeypatch, tmp_path
+):
     from contextlib import contextmanager
     import src.engine.error_detector as module
     from src.engine.infrastructure import validation_digest_session as D
-    monkeypatch.setattr(module, 'PROJECT_ROOT', tmp_path)
-    monkeypatch.setattr(D, 'code_generation', lambda: {'code':'same'})
-    (tmp_path/'data').mkdir()
+
+    monkeypatch.setattr(module, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(D, "code_generation", lambda: {"code": "same"})
+    (tmp_path / "data").mkdir()
+
     @contextmanager
     def deferred(self):
-        raise D.ValidationDeferred('validation_deferred:resource_wait')
+        raise D.ValidationDeferred("validation_deferred:resource_wait")
         yield  # pragma: no cover
-    monkeypatch.setattr(D.DigestSession, 'activate', deferred)
+
+    monkeypatch.setattr(D.DigestSession, "activate", deferred)
     calls = []
+
     class Health:
-        id, category = 'process_health', 'system'
+        id, category = "process_health", "system"
+
         def check(self):
             calls.append(self.id)
-            return DetectionResult(self.id, self.category, 'fail', 'Main missing')
+            return DetectionResult(self.id, self.category, "fail", "Main missing")
+
     class Artifact:
-        id, category = 'artifact_freshness', 'artifact'
-        def check(self): pytest.fail('contended artifact validation was repeated')
+        id, category = "artifact_freshness", "artifact"
+
+        def check(self):
+            pytest.fail("contended artifact validation was repeated")
+
     engine = ErrorDetectionEngine.__new__(ErrorDetectionEngine)
-    engine.mode, engine.postclose_source_date = 'full', None
+    engine.mode, engine.postclose_source_date = "full", None
     engine.initialization_failures = []
     engine.detectors = [Artifact(), Health()]
     artifact, health = engine.run_all()
-    assert artifact.severity == 'warning'
-    assert artifact.details['observation_complete'] is False
-    assert artifact.details['validation_status'] == 'deferred'
-    assert artifact.details['validation_io']['full_reads'] == 0
-    assert health.severity == 'fail' and calls == ['process_health']
+    assert artifact.severity == "warning"
+    assert artifact.details["observation_complete"] is False
+    assert artifact.details["validation_status"] == "deferred"
+    assert artifact.details["validation_io"]["full_reads"] == 0
+    assert health.severity == "fail" and calls == ["process_health"]
 
 
 class TestBaseDetector:
@@ -518,7 +542,9 @@ def test_recovery_dispatcher_passes_scope_to_real_log_scanner(tmp_path, monkeypa
     monkeypatch.setattr(scanner_module, "_get_error_log_files", lambda: [log])
     monkeypatch.setattr(scanner_module, "SCAN_STATE_PATH", tmp_path / "state.json")
     os.utime(log, (time.time() - 3 * 86400, time.time() - 3 * 86400))
-    source = (datetime.now(ZoneInfo("Asia/Seoul")).date() - timedelta(days=3)).isoformat()
+    source = (
+        datetime.now(ZoneInfo("Asia/Seoul")).date() - timedelta(days=3)
+    ).isoformat()
     engine = ErrorDetectionEngine(postclose_source_date=source)
     result = next(r for r in engine.run_all() if r.detector_id == "log_scanner")
     assert result.severity == "warning"
@@ -533,126 +559,204 @@ def test_recovery_dispatcher_passes_scope_to_real_log_scanner(tmp_path, monkeypa
 
 def test_daemon_alert_events_keep_health_fail_and_ignore_observation_clocks():
     from src.engine.error_detector import iter_daemon_alert_events
+
     state = {}
-    results = [DetectionResult('cron_completion', 'cron', 'fail', 'terminal failure',
-               {'postclose_finalization_source_date': '2026-10-01',
-                'poll_clock': 'first'})]
-    assert [kind for kind, _ in iter_daemon_alert_events(results, state, target_date='2026-10-02')] == ['alert']
-    for clock in ['second', 'third', 'fourth']:
-        results[0].details['poll_clock'] = clock
+    results = [
+        DetectionResult(
+            "cron_completion",
+            "cron",
+            "fail",
+            "terminal failure",
+            {"postclose_finalization_source_date": "2026-10-01", "poll_clock": "first"},
+        )
+    ]
+    assert [
+        kind
+        for kind, _ in iter_daemon_alert_events(
+            results, state, target_date="2026-10-02"
+        )
+    ] == ["alert"]
+    for clock in ["second", "third", "fourth"]:
+        results[0].details["poll_clock"] = clock
         results[0].checked_at = clock
-        assert list(iter_daemon_alert_events(results, state, target_date='2026-10-02')) == []
-        assert results[0].severity == 'fail'
+        assert (
+            list(iter_daemon_alert_events(results, state, target_date="2026-10-02"))
+            == []
+        )
+        assert results[0].severity == "fail"
 
 
 def test_daemon_alert_events_realert_new_source_or_terminal_reason():
     from src.engine.error_detector import iter_daemon_alert_events
+
     state = {}
-    r = DetectionResult('cron_completion', 'cron', 'fail', 'terminal failure',
-                        {'postclose_finalization_source_date': '2026-10-01',
-                         'log_rotation_cleanup_predecessor': {'reason': 'first'}})
-    for source, reason in [('2026-10-01', 'first'), ('2026-10-02', 'first'), ('2026-10-02', 'second')]:
-        r.details['postclose_finalization_source_date'] = source
-        r.details['log_rotation_cleanup_predecessor']['reason'] = reason
-        assert [kind for kind, _ in iter_daemon_alert_events([r], state, target_date='2026-10-02')] == ['alert']
+    r = DetectionResult(
+        "cron_completion",
+        "cron",
+        "fail",
+        "terminal failure",
+        {
+            "postclose_finalization_source_date": "2026-10-01",
+            "log_rotation_cleanup_predecessor": {"reason": "first"},
+        },
+    )
+    for source, reason in [
+        ("2026-10-01", "first"),
+        ("2026-10-02", "first"),
+        ("2026-10-02", "second"),
+    ]:
+        r.details["postclose_finalization_source_date"] = source
+        r.details["log_rotation_cleanup_predecessor"]["reason"] = reason
+        assert [
+            kind
+            for kind, _ in iter_daemon_alert_events(
+                [r], state, target_date="2026-10-02"
+            )
+        ] == ["alert"]
 
 
 def test_daemon_alert_events_warning_is_not_recovery_and_recurrence_alerts():
     from src.engine.error_detector import iter_daemon_alert_events
+
     state = {}
+
     def events(severity):
-        r = DetectionResult('cron_completion', 'cron', severity, severity)
-        return [kind for kind, _ in iter_daemon_alert_events([r], state, target_date='2026-10-02')]
-    assert events('fail') == ['alert']
-    assert events('warning') == []
+        r = DetectionResult("cron_completion", "cron", severity, severity)
+        return [
+            kind
+            for kind, _ in iter_daemon_alert_events(
+                [r], state, target_date="2026-10-02"
+            )
+        ]
+
+    assert events("fail") == ["alert"]
+    assert events("warning") == []
     assert state
-    assert events('pass') == ['recovered']
+    assert events("pass") == ["recovered"]
     assert not state
-    assert events('pass') == []
-    assert events('fail') == ['alert']
+    assert events("pass") == []
+    assert events("fail") == ["alert"]
 
 
 def test_daemon_alert_events_date_rollover_does_not_claim_historical_recovery():
     from src.engine.error_detector import iter_daemon_alert_events
+
     state = {}
-    fail = DetectionResult('cron_completion', 'cron', 'fail', 'terminal failure')
-    assert [k for k, _ in iter_daemon_alert_events([fail], state, target_date='2026-10-02')] == ['alert']
-    passed = DetectionResult('cron_completion', 'cron', 'pass', 'ok')
-    assert [k for k, _ in iter_daemon_alert_events([passed], state, target_date='2026-10-05')] == ['current_date_pass']
-    assert fail.severity == 'fail'
-    assert [k for k, _ in iter_daemon_alert_events([fail], state, target_date='2026-10-05')] == ['alert']
+    fail = DetectionResult("cron_completion", "cron", "fail", "terminal failure")
+    assert [
+        k for k, _ in iter_daemon_alert_events([fail], state, target_date="2026-10-02")
+    ] == ["alert"]
+    passed = DetectionResult("cron_completion", "cron", "pass", "ok")
+    assert [
+        k
+        for k, _ in iter_daemon_alert_events([passed], state, target_date="2026-10-05")
+    ] == ["current_date_pass"]
+    assert fail.severity == "fail"
+    assert [
+        k for k, _ in iter_daemon_alert_events([fail], state, target_date="2026-10-05")
+    ] == ["alert"]
 
 
 def test_daemon_alert_events_auth_warning_escalation_and_failed_handler_retry():
     from src.engine.error_detector import iter_daemon_alert_events
+
     state = {}
-    r = DetectionResult('kiwoom_auth_8005_restart', 'auth', 'warning', 'pending')
-    pending = iter_daemon_alert_events([r], state, target_date='2026-10-02')
-    assert next(pending)[0] == 'alert'
+    r = DetectionResult("kiwoom_auth_8005_restart", "auth", "warning", "pending")
+    pending = iter_daemon_alert_events([r], state, target_date="2026-10-02")
+    assert next(pending)[0] == "alert"
     pending.close()  # Consumer failed: it has not acknowledged the alert.
     assert not state
-    assert [k for k, _ in iter_daemon_alert_events([r], state, target_date='2026-10-02')] == ['alert']
-    assert list(iter_daemon_alert_events([r], state, target_date='2026-10-02')) == []
-    r.severity = 'fail'
-    assert [k for k, _ in iter_daemon_alert_events([r], state, target_date='2026-10-02')] == ['alert']
+    assert [
+        k for k, _ in iter_daemon_alert_events([r], state, target_date="2026-10-02")
+    ] == ["alert"]
+    assert list(iter_daemon_alert_events([r], state, target_date="2026-10-02")) == []
+    r.severity = "fail"
+    assert [
+        k for k, _ in iter_daemon_alert_events([r], state, target_date="2026-10-02")
+    ] == ["alert"]
 
 
 def test_standalone_daemon_keeps_reporting_an_unresolved_incident(monkeypatch):
     from src.engine import error_detector as module
+
     reports, errors = [], []
-    result = DetectionResult('cron_completion', 'cron', 'fail', 'terminal failure')
+    result = DetectionResult("cron_completion", "cron", "fail", "terminal failure")
+
     class FakeEngine:
-        def __init__(self, **kwargs): pass
-        def run_all(self): return [result]
-        def build_report(self, results): return {'target_date': '2026-10-02', 'severity': results[0].severity}
-        def write_report(self, report): reports.append(report)
+        def __init__(self, **kwargs):
+            pass
+
+        def run_all(self):
+            return [result]
+
+        def build_report(self, results):
+            return {"target_date": "2026-10-02", "severity": results[0].severity}
+
+        def write_report(self, report):
+            reports.append(report)
+
     def stop_after_four(_interval):
-        if len(reports) == 4: raise KeyboardInterrupt
-    monkeypatch.setattr(module, 'ErrorDetectionEngine', FakeEngine)
-    monkeypatch.setattr(module, 'log_error', errors.append)
-    monkeypatch.setattr(module, 'log_info', lambda _message: None)
-    monkeypatch.setattr(module.time, 'sleep', stop_after_four)
-    with pytest.raises(KeyboardInterrupt): module._daemon_loop(60, True)
-    assert len(reports) == 4 and all(r['severity'] == 'fail' for r in reports)
-    assert errors == ['[ERROR_DETECTION] cron_completion: terminal failure']
+        if len(reports) == 4:
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(module, "ErrorDetectionEngine", FakeEngine)
+    monkeypatch.setattr(module, "log_error", errors.append)
+    monkeypatch.setattr(module, "log_info", lambda _message: None)
+    monkeypatch.setattr(module.time, "sleep", stop_after_four)
+    with pytest.raises(KeyboardInterrupt):
+        module._daemon_loop(60, True)
+    assert len(reports) == 4 and all(r["severity"] == "fail" for r in reports)
+    assert errors == ["[ERROR_DETECTION] cron_completion: terminal failure"]
 
 
-def test_sqlite_failure_preserves_database_phase_and_extended_code_without_downgrade(tmp_path):
+def test_sqlite_failure_preserves_database_phase_and_extended_code_without_downgrade(
+    tmp_path,
+):
     import sqlite3
     from src.engine.automation import main_trailing_source_store as store
-    target = tmp_path/'missing.sqlite'
+
+    target = tmp_path / "missing.sqlite"
+
     class Broken(BaseDetector):
-        id = 'artifact_freshness'
-        category = 'artifact'
+        id = "artifact_freshness"
+        category = "artifact"
+
         def check(self):
             store._open_database(target, readonly=True, writer=False)
+
     engine = ErrorDetectionEngine.__new__(ErrorDetectionEngine)
     engine.initialization_failures = []
     engine.detectors = [Broken(dry_run=True)]
     engine.postclose_source_date = None
     result = engine._run_all()[0]
-    assert result.severity == 'fail'
-    assert result.details['database'] == str(target)
-    assert result.details['database_phase'] == 'connect'
-    assert result.details['sqlite_errorcode'] == sqlite3.SQLITE_CANTOPEN
-    assert result.details['sqlite_errorname'] == 'SQLITE_CANTOPEN'
-    assert result.details['error_type'] == 'OperationalError'
+    assert result.severity == "fail"
+    assert result.details["database"] == str(target)
+    assert result.details["database_phase"] == "connect"
+    assert result.details["sqlite_errorcode"] == sqlite3.SQLITE_CANTOPEN
+    assert result.details["sqlite_errorname"] == "SQLITE_CANTOPEN"
+    assert result.details["error_type"] == "OperationalError"
 
 
-@pytest.mark.parametrize('context', [None, 'invalid', {'error': 'hidden', 'sqlite_errorcode': -1}])
+@pytest.mark.parametrize(
+    "context", [None, "invalid", {"error": "hidden", "sqlite_errorcode": -1}]
+)
 def test_sqlite_diagnostic_context_cannot_hide_or_replace_original_failure(context):
     import sqlite3
+
     class Broken(BaseDetector):
-        id = 'artifact_freshness'
-        category = 'artifact'
+        id = "artifact_freshness"
+        category = "artifact"
+
         def check(self):
-            error = sqlite3.OperationalError('original database failure')
+            error = sqlite3.OperationalError("original database failure")
             error.sqlite_context = context
             raise error
+
     engine = ErrorDetectionEngine.__new__(ErrorDetectionEngine)
-    engine.initialization_failures = [];engine.detectors = [Broken(dry_run=True)]
+    engine.initialization_failures = []
+    engine.detectors = [Broken(dry_run=True)]
     engine.postclose_source_date = None
     result = engine._run_all()[0]
-    assert result.severity == 'fail'
-    assert result.details['error'] == 'original database failure'
-    assert result.details['sqlite_errorcode'] is None
+    assert result.severity == "fail"
+    assert result.details["error"] == "original database failure"
+    assert result.details["sqlite_errorcode"] is None

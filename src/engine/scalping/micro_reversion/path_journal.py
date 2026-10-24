@@ -326,7 +326,10 @@ class MarketStreamPoint:
             value = getattr(self, name)
             if value is not None and value < 0:
                 raise ValueError(f"{name} must not be negative")
-        if self.source_item and registration_item_identity(self.source_item) != (symbol, venue):
+        if self.source_item and registration_item_identity(self.source_item) != (
+            symbol,
+            venue,
+        ):
             raise ValueError("trade source item conflicts with symbol or venue")
         for name in ("cumulative_volume_raw", "trade_volume_raw"):
             value = getattr(self, name)
@@ -487,8 +490,15 @@ class MarketDepthPoint:
         object.__setattr__(self, "symbol", symbol)
         object.__setattr__(self, "venue", venue)
         if self.recorded_inputs is None:
-            from src.engine.scalping.avg_down_replay_capture import recorded_market_inputs
-            object.__setattr__(self,"recorded_inputs",recorded_market_inputs(symbol,cutoff_ts=exchange_ts.timestamp()))
+            from src.engine.scalping.avg_down_replay_capture import (
+                recorded_market_inputs,
+            )
+
+            object.__setattr__(
+                self,
+                "recorded_inputs",
+                recorded_market_inputs(symbol, cutoff_ts=exchange_ts.timestamp()),
+            )
 
     def as_dict(self) -> dict[str, Any]:
         payload = asdict(self)
@@ -866,8 +876,11 @@ class NonBlockingPathJournalWriter:
             self._path
         ).exists()
         while not stopping:
-            timeout = (self._flush_interval_sec if flush_deadline is None
-                       else max(0.0, flush_deadline - time.monotonic()))
+            timeout = (
+                self._flush_interval_sec
+                if flush_deadline is None
+                else max(0.0, flush_deadline - time.monotonic())
+            )
             try:
                 item = self._queue.get(timeout=timeout)
             except queue.Empty:
@@ -882,7 +895,9 @@ class NonBlockingPathJournalWriter:
                 if self._stop_requested.is_set() and self._queue.empty():
                     stopping = True
             if batch and (
-                stopping or item is None or len(batch) >= self._max_batch_size
+                stopping
+                or item is None
+                or len(batch) >= self._max_batch_size
                 or time.monotonic() >= flush_deadline
             ):
                 started = time.monotonic()
@@ -1004,8 +1019,13 @@ class NonBlockingPathJournalWriter:
                         try:
                             integrity = dict(self._source_integrity())
                             self._completed_bar_projection.consume(
-                                tuple(batch), integrity=integrity, journal_path=active_path,
-                                durable_cursor={"path": str(active_path), "end_byte": active_path.stat().st_size},
+                                tuple(batch),
+                                integrity=integrity,
+                                journal_path=active_path,
+                                durable_cursor={
+                                    "path": str(active_path),
+                                    "end_byte": active_path.stat().st_size,
+                                },
                             )
                         except Exception:
                             # Durable raw capture has succeeded. A projection
@@ -1079,7 +1099,8 @@ def append_market_path_points(
 def _append_market_path_points_locked(
     path: Path,
     points: Iterable[PathJournalPoint],
-    *, encoded: bytes | None = None,
+    *,
+    encoded: bytes | None = None,
 ) -> PathAppendMetrics:
     materialized = tuple(points)
     _validate_batch_order(materialized)
@@ -1398,7 +1419,9 @@ def _validate_positive_optional(value: float | None, *, field_name: str) -> None
 
 def _encode_points(points: Iterable[PathJournalPoint]) -> bytes:
     return b"".join(
-        (json.dumps(point.as_dict(), ensure_ascii=False, sort_keys=True) + "\n").encode("utf-8")
+        (json.dumps(point.as_dict(), ensure_ascii=False, sort_keys=True) + "\n").encode(
+            "utf-8"
+        )
         for point in points
     )
 

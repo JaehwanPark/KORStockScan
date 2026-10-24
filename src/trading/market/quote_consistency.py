@@ -104,7 +104,9 @@ def ws_quote_receive_age_ms(data: Mapping[str, Any], *, now_ts: float) -> float 
     return (now_ts - stamp) * 1000.0
 
 
-def ws_quote_source_receipt(data: Mapping[str, Any], *, now_ts: float) -> dict[str, Any]:
+def ws_quote_source_receipt(
+    data: Mapping[str, Any], *, now_ts: float
+) -> dict[str, Any]:
     """Identity of the adopted quote clock; never infer an execution venue."""
     age = ws_quote_receive_age_ms(data, now_ts=now_ts)
     if age is None:
@@ -123,22 +125,44 @@ def ws_quote_source_receipt(data: Mapping[str, Any], *, now_ts: float) -> dict[s
                 if item and row.get("item") != item:
                     continue
                 stamp = _to_float(row.get("observed_epoch"))
-                if abs(stamp - adopted_at) > .000001:
+                if abs(stamp - adopted_at) > 0.000001:
                     continue
-                if kind == "0B" and (
-                    _to_int(row.get("inline_best_bid")), _to_int(row.get("inline_best_ask"))
-                ) != visible:
+                if (
+                    kind == "0B"
+                    and (
+                        _to_int(row.get("inline_best_bid")),
+                        _to_int(row.get("inline_best_ask")),
+                    )
+                    != visible
+                ):
                     continue
                 depth = records.get("0D")
                 depth = depth if isinstance(depth, Mapping) else {}
-                return {"source_type": kind, "observed_epoch": stamp,
-                        "best_bid": visible[0], "best_ask": visible[1],
-                        "depth_receipt": {key: depth.get(key)
-                                          for key in ("item", "market_route", "transport_epoch", "observed_epoch")},
-                        "item": row.get("item"), "market_route": row.get("market_route"),
-                        "transport_epoch": epoch, "route_sequence": row.get("route_sequence")}
-    return {"observed_epoch": adopted_at, "identity_status": "legacy_source_clock_only",
-            "best_bid": visible[0], "best_ask": visible[1]}
+                return {
+                    "source_type": kind,
+                    "observed_epoch": stamp,
+                    "best_bid": visible[0],
+                    "best_ask": visible[1],
+                    "depth_receipt": {
+                        key: depth.get(key)
+                        for key in (
+                            "item",
+                            "market_route",
+                            "transport_epoch",
+                            "observed_epoch",
+                        )
+                    },
+                    "item": row.get("item"),
+                    "market_route": row.get("market_route"),
+                    "transport_epoch": epoch,
+                    "route_sequence": row.get("route_sequence"),
+                }
+    return {
+        "observed_epoch": adopted_at,
+        "identity_status": "legacy_source_clock_only",
+        "best_bid": visible[0],
+        "best_ask": visible[1],
+    }
 
 
 def ws_trade_receive_age_ms(data: Mapping[str, Any], *, now_ts: float) -> float | None:
@@ -294,7 +318,9 @@ def build_market_data_health(
             "quote_receive_age_ms": quote_age,
             "trade_receive_age_ms": trade_age,
             "trade_event_age_ms": age(trade.get("provider_trade_epoch")),
-            "provider_trade_time_precision_ms": trade.get("provider_trade_time_precision_ms"),
+            "provider_trade_time_precision_ms": trade.get(
+                "provider_trade_time_precision_ms"
+            ),
             "provider_trade_date_basis": trade.get("provider_trade_date_basis"),
             "quote_state": quote_state,
             **quiet_facts,
@@ -615,8 +641,13 @@ def rest_quote_receive_age_ms(
 
 
 def build_rest_market_data_health(
-    data: Mapping[str, Any], *, api_id: str, request_code: str,
-    source_meta: Mapping[str, Any], now_ts: float, quote_max_age_ms: int = 2000,
+    data: Mapping[str, Any],
+    *,
+    api_id: str,
+    request_code: str,
+    source_meta: Mapping[str, Any],
+    now_ts: float,
+    quote_max_age_ms: int = 2000,
 ) -> dict[str, Any]:
     """Project exact REST receipts; response freshness never attests trade activity.
 
@@ -635,7 +666,9 @@ def build_rest_market_data_health(
         "best_ask": abs(_to_int(data.get("sel_fpr_bid"))),
     }
     health = build_market_data_health(
-        envelope, now_ts=now_ts, quote_max_age_ms=quote_max_age_ms,
+        envelope,
+        now_ts=now_ts,
+        quote_max_age_ms=quote_max_age_ms,
     )
     response_item = str(data.get("stk_cd") or "").strip()
     response_symbol = response_item.removesuffix("_NX").removesuffix("_AL")
@@ -643,10 +676,13 @@ def build_rest_market_data_health(
         source_meta.get("api_id") not in (None, api_id)
         or source_meta.get("request_code") not in (None, request_code)
         or bool(response_item and response_symbol != symbol)
-        or bool(response_item.endswith(("_NX", "_AL")) and response_item != request_code)
+        or bool(
+            response_item.endswith(("_NX", "_AL")) and response_item != request_code
+        )
     )
     binding_proven = bool(
-        request_code and source_meta.get("api_id") == api_id
+        request_code
+        and source_meta.get("api_id") == api_id
         and source_meta.get("request_code") == request_code
         and not binding_conflict
     )

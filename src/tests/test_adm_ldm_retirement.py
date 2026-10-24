@@ -12,22 +12,30 @@ from src.engine.lifecycle import retirement as policy
 
 def test_limit_down_stale_candidates_and_env_cannot_regain_authority():
     active = {"family": "samsung_machine_entry_policy"}
-    stale = {"family": "limit_down_watch", "selected": True, "allowed_runtime_apply": True}
+    stale = {
+        "family": "limit_down_watch",
+        "selected": True,
+        "allowed_runtime_apply": True,
+    }
     raw = {"source_signature": "LIMIT_DOWN_LIVE_UNLOCK", "stage": "sell_completed"}
-    cleaned = policy.current_report_view({
-        "calibration_candidates": [stale, active],
-        "limit_down_watch": stale,
-        "raw_rows": [raw],
-    })
+    cleaned = policy.current_report_view(
+        {
+            "calibration_candidates": [stale, active],
+            "limit_down_watch": stale,
+            "raw_rows": [raw],
+        }
+    )
     assert cleaned["calibration_candidates"] == [active]
     assert "limit_down_watch" not in cleaned
     assert cleaned["raw_rows"] == [raw]
-    assert policy.without_retired_env({
-        "KORSTOCKSCAN_LIMIT_DOWN_WATCH_ENABLED": "true",
-        "KORSTOCKSCAN_LIMIT_DOWN_LIVE_POLICY_FILE": "/tmp/stale.json",
-        "THRESHOLD_CYCLE_RUN_LIMIT_DOWN_WATCH_REPORT": "true",
-        "KORSTOCKSCAN_SCALPING_MAX_QTY": "25",
-    }) == {"KORSTOCKSCAN_SCALPING_MAX_QTY": "25"}
+    assert policy.without_retired_env(
+        {
+            "KORSTOCKSCAN_LIMIT_DOWN_WATCH_ENABLED": "true",
+            "KORSTOCKSCAN_LIMIT_DOWN_LIVE_POLICY_FILE": "/tmp/stale.json",
+            "THRESHOLD_CYCLE_RUN_LIMIT_DOWN_WATCH_REPORT": "true",
+            "KORSTOCKSCAN_SCALPING_MAX_QTY": "25",
+        }
+    ) == {"KORSTOCKSCAN_SCALPING_MAX_QTY": "25"}
     assert policy.retirement_env()["KORSTOCKSCAN_LIMIT_DOWN_WATCH_ENABLED"] == "false"
 
 
@@ -235,8 +243,6 @@ def test_live_adapters_are_noops_even_with_advisory_true(monkeypatch):
     )
 
 
-
-
 def test_source_adapter_uses_raw_normalization_without_matrix_or_sim_outcomes(
     monkeypatch,
 ):
@@ -257,7 +263,9 @@ def test_source_adapter_uses_raw_normalization_without_matrix_or_sim_outcomes(
     monkeypatch.setattr(
         source.observations, "_iter_relevant_events", lambda day: iter([raw])
     )
-    assert not hasattr(source.observations,"build_scalp_entry_action_decision_matrix_report")
+    assert not hasattr(
+        source.observations, "build_scalp_entry_action_decision_matrix_report"
+    )
     result = source.load_entry_observations("2026-09-04")
     assert result["rows"][0]["record_id"] == "r1"
     assert result["rows"][0]["ai_score"] == 67
@@ -313,8 +321,6 @@ def test_scale_in_counterfactual_report_is_archive_but_avg_down_math_survives():
     assert economics["runtime_authority_ready"] is False
 
 
-
-
 @pytest.mark.parametrize("invalid", [None, True, "invalid", {}])
 def test_malformed_catalog_cannot_restore_archived_seeds(invalid):
     cleaned = policy.current_report_view(
@@ -343,53 +349,79 @@ def test_greenfield_env_cannot_reactivate_retired_gate(monkeypatch):
     )  # No additional veto; existing order guards still own submit.
 
 
-
-
 def test_shared_rebound_retirement_removes_only_independent_scale_in_authority():
-    families = ["scalping_pyramid_quality_gate", "scalping_avg_down_recovery_quality_gate", "post_probe_winner_recovery"]
-    assert policy.current_report_view({"calibration_candidates": [
-        *({"family": f} for f in families), {"family": "mechanistic_entry_runtime"}
-    ]})["calibration_candidates"] == [{"family": "mechanistic_entry_runtime"}]
-    env = policy.without_retired_env({
-        "KORSTOCKSCAN_SCALPING_PYRAMID_MIN_PROFIT_PCT": "0.1",
-        "KORSTOCKSCAN_AVG_DOWN_RUNTIME_EVIDENCE_DIGEST": "old",
-        "KORSTOCKSCAN_REAL_PYRAMID_SCALE_IN_QUALITY_GUARD_ENABLED": "true",
-        "KORSTOCKSCAN_ENABLE_SCALE_IN": "true",
-    })
+    families = [
+        "scalping_pyramid_quality_gate",
+        "scalping_avg_down_recovery_quality_gate",
+        "post_probe_winner_recovery",
+    ]
+    assert policy.current_report_view(
+        {
+            "calibration_candidates": [
+                *({"family": f} for f in families),
+                {"family": "mechanistic_entry_runtime"},
+            ]
+        }
+    )["calibration_candidates"] == [{"family": "mechanistic_entry_runtime"}]
+    env = policy.without_retired_env(
+        {
+            "KORSTOCKSCAN_SCALPING_PYRAMID_MIN_PROFIT_PCT": "0.1",
+            "KORSTOCKSCAN_AVG_DOWN_RUNTIME_EVIDENCE_DIGEST": "old",
+            "KORSTOCKSCAN_REAL_PYRAMID_SCALE_IN_QUALITY_GUARD_ENABLED": "true",
+            "KORSTOCKSCAN_ENABLE_SCALE_IN": "true",
+        }
+    )
     assert len(env) == 2  # Shared safety and ADD enable are preserved.
     assert policy.retirement_env()["KORSTOCKSCAN_SCALPING_ENABLE_PYRAMID"] == "false"
     for report in policy.SCALE_IN_RETIRED_REPORTS:
         assert policy.retired_artifact(Path("data/report") / report / "old.json")
-        assert policy.retired_status(report)["retirement_id"] == policy.SCALE_IN_RETIREMENT_ID
+        assert (
+            policy.retired_status(report)["retirement_id"]
+            == policy.SCALE_IN_RETIREMENT_ID
+        )
 
 
 def test_scale_in_retirement_preserves_avg_down_common_spread_guard():
     from src.engine.lifecycle.retirement import without_retired_env
-    common = {"KORSTOCKSCAN_SCALPING_PYRAMID_PRICE_GUARD_ENABLED": "true",
-              "KORSTOCKSCAN_SCALPING_PYRAMID_MAX_SPREAD_BPS": "80"}
+
+    common = {
+        "KORSTOCKSCAN_SCALPING_PYRAMID_PRICE_GUARD_ENABLED": "true",
+        "KORSTOCKSCAN_SCALPING_PYRAMID_MAX_SPREAD_BPS": "80",
+    }
     assert without_retired_env(common) == common
 
 
 def test_rising_missed_scout_retirement_cannot_be_overridden_by_old_env():
-    old = {"KORSTOCKSCAN_RISING_MISSED_ONE_SHARE_ENTRY_ENABLED": "true",
-           "KORSTOCKSCAN_RISING_MISSED_SCOUT_ENTRY_BUDGET_CAP_KRW": "999999",
-           "KORSTOCKSCAN_RISING_MISSED_NORMAL_BUY_BRIDGE_ENABLED": "true",
-           "KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ENABLED": "true"}
+    old = {
+        "KORSTOCKSCAN_RISING_MISSED_ONE_SHARE_ENTRY_ENABLED": "true",
+        "KORSTOCKSCAN_RISING_MISSED_SCOUT_ENTRY_BUDGET_CAP_KRW": "999999",
+        "KORSTOCKSCAN_RISING_MISSED_NORMAL_BUY_BRIDGE_ENABLED": "true",
+        "KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ENABLED": "true",
+    }
     clean = policy.without_retired_env(old)
     assert "KORSTOCKSCAN_RISING_MISSED_ONE_SHARE_ENTRY_ENABLED" not in clean
     assert "KORSTOCKSCAN_RISING_MISSED_SCOUT_ENTRY_BUDGET_CAP_KRW" not in clean
     assert clean["KORSTOCKSCAN_RISING_MISSED_NORMAL_BUY_BRIDGE_ENABLED"] == "true"
     assert clean["KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ENABLED"] == "true"
     for name in policy.RISING_MISSED_SCOUT_RETIRED_REPORTS:
-        assert policy.retired_status(name)["retirement_id"] == policy.RISING_MISSED_SCOUT_RETIREMENT_ID
+        assert (
+            policy.retired_status(name)["retirement_id"]
+            == policy.RISING_MISSED_SCOUT_RETIREMENT_ID
+        )
 
 
-@pytest.mark.parametrize("name", ["one_share_threshold_opportunity", "rising_missed_scout_workorder"])
-def test_rising_missed_scout_sources_are_not_read_by_current_consumers(name, monkeypatch):
+@pytest.mark.parametrize(
+    "name", ["one_share_threshold_opportunity", "rising_missed_scout_workorder"]
+)
+def test_rising_missed_scout_sources_are_not_read_by_current_consumers(
+    name, monkeypatch
+):
     from src.engine import build_code_improvement_workorder as workorder
     from src.engine import build_next_stage2_checklist as checklist
+
     def forbidden(*args, **kwargs):
         pytest.fail("retired source was read")
+
     monkeypatch.setattr(Path, "read_bytes", forbidden)
     path = Path("data/report") / name / (name + "_2026-09-18.json")
     assert workorder._load_json(path) == {}
@@ -398,48 +430,101 @@ def test_rising_missed_scout_sources_are_not_read_by_current_consumers(name, mon
 
 def test_retired_scout_orders_cannot_reenter_current_mixed_bundle():
     active = {"source_report_type": "buy_funnel_sentinel", "order_id": "ordinary"}
-    stale = [{"source_report_type": name, "order_id": "old", "runtime_effect": True}
-             for name in policy.RISING_MISSED_SCOUT_RETIRED_REPORTS]
+    stale = [
+        {"source_report_type": name, "order_id": "old", "runtime_effect": True}
+        for name in policy.RISING_MISSED_SCOUT_RETIRED_REPORTS
+    ]
     raw = {"stage": "sell_completed", "record_id": 7, "profit_rate": 0.2}
-    cleaned = policy.current_report_view({"orders": stale + [active], "raw_rows": [raw]})
+    cleaned = policy.current_report_view(
+        {"orders": stale + [active], "raw_rows": [raw]}
+    )
     assert cleaned["orders"] == [active]
     assert cleaned["raw_rows"] == [raw]
 
 
-@pytest.mark.parametrize("key", ["entry_opportunity_recheck_armed", "entry_opportunity_recheck_pending"])
+@pytest.mark.parametrize(
+    "key", ["entry_opportunity_recheck_armed", "entry_opportunity_recheck_pending"]
+)
 @pytest.mark.parametrize("where", ["stock", "runtime"])
 def test_retired_recheck_intent_cannot_reach_buy_submission(monkeypatch, key, where):
     from src.engine import sniper_state_handlers as handlers
+
     stock, runtime = {"record_id": 71}, {}
     (stock if where == "stock" else runtime)[key] = True
     monkeypatch.setenv("KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ENABLED", "true")
-    monkeypatch.setattr(handlers.kiwoom_orders, "send_buy_order", lambda *a, **k: pytest.fail("retired broker submit"))
-    assert handlers._submit_watching_triggered_entry(stock, "005930", {}, "test", runtime) is False
+    monkeypatch.setattr(
+        handlers.kiwoom_orders,
+        "send_buy_order",
+        lambda *a, **k: pytest.fail("retired broker submit"),
+    )
+    assert (
+        handlers._submit_watching_triggered_entry(stock, "005930", {}, "test", runtime)
+        is False
+    )
 
 
 def test_retired_recheck_policy_env_and_workorder_are_filtered():
-    stale = {"family": "entry_opportunity_recheck_runtime", "allowed_runtime_apply": True}
+    stale = {
+        "family": "entry_opportunity_recheck_runtime",
+        "allowed_runtime_apply": True,
+    }
     active = {"family": "samsung_machine_entry_policy"}
     assert policy.current_calibration_rows([stale, active]) == [active]
-    assert policy.current_report_view({"orders": [{"order_id": "order_entry_recheck_repair", "runtime_effect": True}, {"order_id": "order_entry_submit_drought_auto_resolution"}]})["orders"] == [{"order_id": "order_entry_submit_drought_auto_resolution"}]
-    assert policy.without_retired_env({"KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ENABLED": "true", "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MAX_DAILY_RECHECK": "100", "COMMON": "keep"}) == {"COMMON": "keep"}
-    assert policy.retirement_env()["KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ENABLED"] == "false"
+    assert policy.current_report_view(
+        {
+            "orders": [
+                {"order_id": "order_entry_recheck_repair", "runtime_effect": True},
+                {"order_id": "order_entry_submit_drought_auto_resolution"},
+            ]
+        }
+    )["orders"] == [{"order_id": "order_entry_submit_drought_auto_resolution"}]
+    assert policy.without_retired_env(
+        {
+            "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ENABLED": "true",
+            "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MAX_DAILY_RECHECK": "100",
+            "COMMON": "keep",
+        }
+    ) == {"COMMON": "keep"}
+    assert (
+        policy.retirement_env()["KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ENABLED"]
+        == "false"
+    )
 
 
 def test_retired_recheck_custody_events_cannot_recreate_threshold_partitions():
     from src.utils.threshold_cycle_registry import threshold_family_for_stage
+
     assert threshold_family_for_stage("entry_opportunity_recheck_filled") == ""
     assert threshold_family_for_stage("entry_opportunity_recheck_sell_completed") == ""
-    assert threshold_family_for_stage("unknown", {"threshold_family": "entry_opportunity_recheck_runtime"}) == ""
+    assert (
+        threshold_family_for_stage(
+            "unknown", {"threshold_family": "entry_opportunity_recheck_runtime"}
+        )
+        == ""
+    )
     assert threshold_family_for_stage("budget_pass") == "entry_mechanical_momentum"
 
 
 def test_claude_lab_stale_orders_are_excluded_without_retiring_existing_families():
     from src.engine.lifecycle.retirement import current_report_view, retired_artifact
-    old = {"orders": [
-        {"order_id": "shared_identity", "source_report_type": "scalping_pattern_lab_automation", "delta_ev": 100},
-        {"order_id": "shared_identity", "source_report_type": "entry_split_order_plan", "family": "score65_74_recovery_probe"},
-    ], "non_selected_orders": [{"source_report_type": "scalping_pattern_lab_automation"}]}
+
+    old = {
+        "orders": [
+            {
+                "order_id": "shared_identity",
+                "source_report_type": "scalping_pattern_lab_automation",
+                "delta_ev": 100,
+            },
+            {
+                "order_id": "shared_identity",
+                "source_report_type": "entry_split_order_plan",
+                "family": "score65_74_recovery_probe",
+            },
+        ],
+        "non_selected_orders": [
+            {"source_report_type": "scalping_pattern_lab_automation"}
+        ],
+    }
     filtered = current_report_view(old)
     assert len(filtered["orders"]) == 1
     assert filtered["orders"][0]["source_report_type"] == "entry_split_order_plan"
@@ -451,24 +536,48 @@ def test_main_shared_lab_clis_are_retired_before_any_provider_or_file_read(monke
     from src.engine import pattern_lab_ai_review as reviewer
     from src.engine import pattern_lab_currentness_audit as currentness
     from src.engine import pattern_lab_propagation_audit as propagation
+
     def forbidden(*args, **kwargs):
         raise AssertionError("Retired Main Lab must not read or call provider")
+
     monkeypatch.setattr(reviewer, "_build_input_context", forbidden)
     monkeypatch.setattr(currentness, "_lab_paths", forbidden)
     monkeypatch.setattr(propagation, "_load_json", forbidden)
-    assert reviewer.review_current_generation("2026-09-17", include_swing=False)["status"] == "retired"
-    assert currentness.build_pattern_lab_currentness_audit("2026-09-17", include_swing=False)["status"] == "retired"
-    assert propagation.build_pattern_lab_propagation_audit("2026-09-17", include_swing=False)["status"] == "retired"
+    assert (
+        reviewer.review_current_generation("2026-09-17", include_swing=False)["status"]
+        == "retired"
+    )
+    assert (
+        currentness.build_pattern_lab_currentness_audit(
+            "2026-09-17", include_swing=False
+        )["status"]
+        == "retired"
+    )
+    assert (
+        propagation.build_pattern_lab_propagation_audit(
+            "2026-09-17", include_swing=False
+        )["status"]
+        == "retired"
+    )
 
 
 def test_old_auto_checklist_lab_source_is_not_carried_forward():
-    from src.engine.build_next_stage2_checklist import _merge_preserved_auto_tasks, AUTO_START, AUTO_END
-    previous = AUTO_START + "\n## 장후\n- [ ] `[OldLabWork]` old lab\n  - Source: data/report/scalping_pattern_lab_automation/old.json\n- [ ] `[ActiveOwner]` independent source\n  - Source: data/report/entry_split_order_plan/current.json\n" + AUTO_END
-    result = _merge_preserved_auto_tasks(previous, AUTO_START + "\n## 장후\n" + AUTO_END)
+    from src.engine.build_next_stage2_checklist import (
+        _merge_preserved_auto_tasks,
+        AUTO_START,
+        AUTO_END,
+    )
+
+    previous = (
+        AUTO_START
+        + "\n## 장후\n- [ ] `[OldLabWork]` old lab\n  - Source: data/report/scalping_pattern_lab_automation/old.json\n- [ ] `[ActiveOwner]` independent source\n  - Source: data/report/entry_split_order_plan/current.json\n"
+        + AUTO_END
+    )
+    result = _merge_preserved_auto_tasks(
+        previous, AUTO_START + "\n## 장후\n" + AUTO_END
+    )
     assert "OldLabWork" not in result
     assert "ActiveOwner" in result
-
-
 
 
 def test_retired_entry_scale_in_is_blocked_before_common_buy_guards(monkeypatch):
@@ -477,12 +586,18 @@ def test_retired_entry_scale_in_is_blocked_before_common_buy_guards(monkeypatch)
     def unexpected_guard(*args, **kwargs):
         pytest.fail("Retired entry source reached a common buy guard")
 
-    monkeypatch.setattr(handlers, "_scale_in_exit_authority_block_reason", unexpected_guard)
+    monkeypatch.setattr(
+        handlers, "_scale_in_exit_authority_block_reason", unexpected_guard
+    )
     for key in ("source_signature", "scanner_source_signature"):
         result = handlers.can_consider_scale_in(
             {key: "PRICE_JUMP_START,LIMIT_DOWN_LIVE_UNLOCK"},
-            "005930", {}, "SCALPING", "NORMAL",
-            bypass_scalping_buy_window=True, bypass_scale_in_cooldown=True,
+            "005930",
+            {},
+            "SCALPING",
+            "NORMAL",
+            bypass_scalping_buy_window=True,
+            bypass_scale_in_cooldown=True,
         )
         assert result == {
             "allowed": False,

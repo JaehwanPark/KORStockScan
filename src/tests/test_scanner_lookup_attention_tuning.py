@@ -10,14 +10,18 @@ from src.tests.test_scanner_lookup_attention_resource import ready_resource_rows
 
 
 def test_lineage_refresh_excludes_old_and_future_preserves_missing_receipts():
-    events = {day: [_observation_event(day=date.fromisoformat(day))]
-              for day in ("2026-09-28", "2026-09-29", "2026-10-24")}
+    events = {
+        day: [_observation_event(day=date.fromisoformat(day))]
+        for day in ("2026-09-28", "2026-09-29", "2026-10-24")
+    }
     rows, lineage = tuning.collect_lineage(date(2026, 10, 23), events_by_date=events)
     assert lineage["window_start"] == "2026-09-29"
     assert [row["observation_date"] for row in rows] == ["2026-09-29"]
     assert lineage["fill_receipt_missing_count"] == 1
     assert tuning._resource_window_start(date(2026, 10, 23)) == date(2026, 9, 29)
-    historical, lineage = tuning.collect_lineage(date(2026, 9, 28), events_by_date=events)
+    historical, lineage = tuning.collect_lineage(
+        date(2026, 9, 28), events_by_date=events
+    )
     assert [row["observation_date"] for row in historical] == ["2026-09-28"]
     assert lineage["window_start"] == "2026-09-02"
 
@@ -840,8 +844,18 @@ def test_lineage_contract_excludes_isolated_bad_observations_without_hiding_join
     assert tuning._lineage_contract_pass(lineage) is False
 
 
-@pytest.mark.parametrize("count,symbol,valid", [(1.5, "005930", False), (1, "005930", True), (1, "0000A0", True), (1, "0000a0", False)])
-def test_symbol_master_census_and_official_symbol_identity(monkeypatch, tmp_path, count, symbol, valid):
+@pytest.mark.parametrize(
+    "count,symbol,valid",
+    [
+        (1.5, "005930", False),
+        (1, "005930", True),
+        (1, "0000A0", True),
+        (1, "0000a0", False),
+    ],
+)
+def test_symbol_master_census_and_official_symbol_identity(
+    monkeypatch, tmp_path, count, symbol, valid
+):
     monkeypatch.setattr(tuning, "SYMBOL_MASTER_DIR", tmp_path)
     source_date = date(2026, 9, 1)
     target = date(2026, 9, 2)

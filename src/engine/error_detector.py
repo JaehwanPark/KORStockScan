@@ -78,20 +78,38 @@ def iter_daemon_alert_events(results, state, *, target_date):
         if is_alert:
             details = result.details or {}
             source_binding = (
-                {key: value for key, value in details.items()
-                 if key.endswith("_source_date") or key.endswith("_predecessor")}
-                if did == "cron_completion" else {}
+                {
+                    key: value
+                    for key, value in details.items()
+                    if key.endswith("_source_date") or key.endswith("_predecessor")
+                }
+                if did == "cron_completion"
+                else {}
             )
-            identity = (target_date, result.severity, result.summary,
-                        json.dumps(source_binding, sort_keys=True, default=str))
+            identity = (
+                target_date,
+                result.severity,
+                result.summary,
+                json.dumps(source_binding, sort_keys=True, default=str),
+            )
             if previous is None or previous["identity"] != identity:
                 yield "alert", result
                 state[did] = {"identity": identity, "target_date": target_date}
-        elif (result.severity == "pass" and previous is not None
-                and not (did == 'artifact_freshness' and (result.details or {}).get(
-                    'submission_bottleneck_monitor_observation_exception'))):
-            kind = ("recovered" if previous["target_date"] == target_date
-                    else "current_date_pass")
+        elif (
+            result.severity == "pass"
+            and previous is not None
+            and not (
+                did == "artifact_freshness"
+                and (result.details or {}).get(
+                    "submission_bottleneck_monitor_observation_exception"
+                )
+            )
+        ):
+            kind = (
+                "recovered"
+                if previous["target_date"] == target_date
+                else "current_date_pass"
+            )
             yield kind, result
             state.pop(did, None)
 
@@ -115,7 +133,9 @@ class ErrorDetectionEngine:
             if (
                 source_day.isoformat() != postclose_source_date
                 or mode != "full"
-                or not datetime(2026, 6, 5).date() <= source_day <= datetime.now(KST).date()
+                or not datetime(2026, 6, 5).date()
+                <= source_day
+                <= datetime.now(KST).date()
             ):
                 raise ValueError(
                     "Postclose recovery requires full mode and a completed clean-baseline source date"
@@ -183,45 +203,80 @@ class ErrorDetectionEngine:
         if self.mode not in {"full", "artifact_only"}:
             return self._run_all()
         from contextlib import ExitStack
-        from src.engine.infrastructure.validation_digest_session import DigestSession, code_generation, ValidationDeferred
+        from src.engine.infrastructure.validation_digest_session import (
+            DigestSession,
+            code_generation,
+            ValidationDeferred,
+        )
+
         day = self.postclose_source_date or datetime.now(KST).date().isoformat()
-        session = DigestSession(PROJECT_ROOT / "data", day, role="observer",
-            generation={"code": code_generation(), "caller": "error_detector",
-                        "source_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest()})
+        session = DigestSession(
+            PROJECT_ROOT / "data",
+            day,
+            role="observer",
+            generation={
+                "code": code_generation(),
+                "caller": "error_detector",
+                "source_sha256": hashlib.sha256(
+                    Path(__file__).read_bytes()
+                ).hexdigest(),
+            },
+        )
         with ExitStack() as stack:
             try:
                 stack.enter_context(session.activate())
             except ValidationDeferred as exc:
-                session.stats['cache_status'] = 'validation_deferred_resource_wait'
+                session.stats["cache_status"] = "validation_deferred_resource_wait"
                 results = self._run_all(deferred_artifact=str(exc))
             else:
                 results = self._run_all()
         for result in results:
             if result.detector_id == "artifact_freshness":
-                result.details = {**result.details, "validation_io": dict(session.stats)}
+                result.details = {
+                    **result.details,
+                    "validation_io": dict(session.stats),
+                }
         return results
 
-    def _run_all(self, *, deferred_artifact: str | None = None) -> list[DetectionResult]:
+    def _run_all(
+        self, *, deferred_artifact: str | None = None
+    ) -> list[DetectionResult]:
         results: list[DetectionResult] = list(self.initialization_failures)
         for detector in self.detectors:
-            if deferred_artifact is not None and detector.id == 'artifact_freshness':
-                results.append(DetectionResult(detector.id, detector.category, 'warning',
-                    'Artifact validation deferred: resource contention',
-                    details={'validation_status':'deferred', 'observation_complete':False,
-                             'error':deferred_artifact},
-                    recommended_action='Retry the scheduled artifact validation after the current reader completes.'))
+            if deferred_artifact is not None and detector.id == "artifact_freshness":
+                results.append(
+                    DetectionResult(
+                        detector.id,
+                        detector.category,
+                        "warning",
+                        "Artifact validation deferred: resource contention",
+                        details={
+                            "validation_status": "deferred",
+                            "observation_complete": False,
+                            "error": deferred_artifact,
+                        },
+                        recommended_action="Retry the scheduled artifact validation after the current reader completes.",
+                    )
+                )
                 continue
             try:
                 result = detector.check()
             except Exception as e:
-                details={"error":str(e),"error_type":type(e).__name__}
-                if isinstance(e,sqlite3.Error):
-                    details.update(sqlite_errorcode=getattr(e,'sqlite_errorcode',None),
-                        sqlite_errorname=getattr(e,'sqlite_errorname',None))
-                    context=getattr(e,'sqlite_context',None)
-                    if isinstance(context,dict):
-                        details.update({key:context[key] for key in ('database','database_phase')
-                            if isinstance(context.get(key),str)})
+                details = {"error": str(e), "error_type": type(e).__name__}
+                if isinstance(e, sqlite3.Error):
+                    details.update(
+                        sqlite_errorcode=getattr(e, "sqlite_errorcode", None),
+                        sqlite_errorname=getattr(e, "sqlite_errorname", None),
+                    )
+                    context = getattr(e, "sqlite_context", None)
+                    if isinstance(context, dict):
+                        details.update(
+                            {
+                                key: context[key]
+                                for key in ("database", "database_phase")
+                                if isinstance(context.get(key), str)
+                            }
+                        )
                 result = DetectionResult(
                     detector_id=detector.id,
                     category=detector.category,
@@ -255,18 +310,37 @@ class ErrorDetectionEngine:
         now = datetime.now(KST)
         operational_mutations = self._operational_mutations(results)
         root = Path(__file__).resolve().parents[2]
-        provenance = {"root": str(root), "source_sha256": {
-            name: hashlib.sha256((root / "src/engine" / name).read_bytes()).hexdigest()
-            for name in ("error_detector.py", "error_detectors/artifact_freshness.py",
-                         "notify_error_detection_admin.py")}}
+        provenance = {
+            "root": str(root),
+            "source_sha256": {
+                name: hashlib.sha256(
+                    (root / "src/engine" / name).read_bytes()
+                ).hexdigest()
+                for name in (
+                    "error_detector.py",
+                    "error_detectors/artifact_freshness.py",
+                    "notify_error_detection_admin.py",
+                )
+            },
+        }
         try:
-            commit = subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"],
-                                             text=True, timeout=3).strip()
-            selection = json.loads((PROJECT_ROOT / "data/runtime/runtime_release_selection.json").read_text())
-            provenance.update(commit=commit, selected_commit=selection.get("git_commit"),
+            commit = subprocess.check_output(
+                ["git", "-C", str(root), "rev-parse", "HEAD"], text=True, timeout=3
+            ).strip()
+            selection = json.loads(
+                (
+                    PROJECT_ROOT / "data/runtime/runtime_release_selection.json"
+                ).read_text()
+            )
+            provenance.update(
+                commit=commit,
+                selected_commit=selection.get("git_commit"),
                 selected_root=selection.get("release_root"),
-                selected_release_consumed=(commit == selection.get("git_commit")
-                                          and str(root) == selection.get("release_root")))
+                selected_release_consumed=(
+                    commit == selection.get("git_commit")
+                    and str(root) == selection.get("release_root")
+                ),
+            )
         except (OSError, ValueError, subprocess.SubprocessError):
             provenance["selected_release_consumed"] = None
         return {
@@ -570,7 +644,9 @@ def _daemon_loop(interval: int, dry_run: bool, mode: str = "full"):
                 elif kind == "recovered":
                     log_info(f"[ERROR_DETECTION] {r.detector_id}: recovered to pass")
                 else:
-                    log_info(f"[ERROR_DETECTION] {r.detector_id}: current-date check passed; previous-date failure preserved")
+                    log_info(
+                        f"[ERROR_DETECTION] {r.detector_id}: current-date check passed; previous-date failure preserved"
+                    )
         except Exception as e:
             log_error(f"[ERROR_DETECTION] Daemon loop error: {e}")
         time.sleep(interval)

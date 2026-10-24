@@ -36,9 +36,15 @@ def active_source_labels(target_date):
     # producer for a current generation. Only native recommendation producers.
     if target_date < "2026-10-11":
         return SOURCE_LABELS
-    return ("rising_missed_classifier_prior", "rising_missed_intraday_feedback",
-            "producer_gap_discovery", "pattern_lab_currentness_audit",
-            "pattern_lab_ai_review", "swing_pattern_lab_automation")
+    return (
+        "rising_missed_classifier_prior",
+        "rising_missed_intraday_feedback",
+        "producer_gap_discovery",
+        "pattern_lab_currentness_audit",
+        "pattern_lab_ai_review",
+        "swing_pattern_lab_automation",
+    )
+
 
 IMPLEMENT = {"implement_now", "code_patch_required", "already_implemented"}
 COMPLETED = {"already_implemented_verified", "implemented_pass1", "implemented_pass2"}
@@ -692,7 +698,9 @@ def build_intake(report_dir: Path, target_date: str) -> dict[str, Any]:
         }
     )
     missing_sources = [
-        label for label in active_source_labels(target_date) if sources[label]["status"] == "missing"
+        label
+        for label in active_source_labels(target_date)
+        if sources[label]["status"] == "missing"
     ]
     return {
         "schema": SCHEMA,

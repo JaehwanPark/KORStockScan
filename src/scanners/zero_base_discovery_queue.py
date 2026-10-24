@@ -13,13 +13,17 @@ import re
 import uuid
 from zoneinfo import ZoneInfo
 
-
 SCHEMA = "zero_base_discovery_queue_v3"
 ROUTES = {"krx_only", "nxt_only", "krx_nxt_integrated"}
 RESULTS = {
-    "source_unavailable", "required_feature_insufficient", "policy_unavailable",
-    "active_conflict", "probe_capacity_deferred", "assessed",
-    "pattern_not_matched", "observation_incomplete",
+    "source_unavailable",
+    "required_feature_insufficient",
+    "policy_unavailable",
+    "active_conflict",
+    "probe_capacity_deferred",
+    "assessed",
+    "pattern_not_matched",
+    "observation_incomplete",
 }
 ACTIONS = {"ENTER_NOW", "RECHECK", "BLOCK"}
 MAX_LONG_PROBES = 4  # Base reservation; runtime may borrow the idle fifth slot.
@@ -49,8 +53,8 @@ class Candidate:
     claimed_observed_epoch: float = 0.0
     claimed_source_sha256: str = ""
     residence_deadline_epoch: float = 0.0
-    lease_phase: str = 'closed'
-    handoff_id: str = ''
+    lease_phase: str = "closed"
+    handoff_id: str = ""
     residence_wait_since_epoch: float = 0.0
     long_residence_deferred_count: int = 0
 
@@ -103,9 +107,11 @@ class DiscoveryQueue:
         ):
             return "source_clock_invalid"
         try:
-            source_date = datetime.fromtimestamp(
-                observed_epoch, ZoneInfo("Asia/Seoul")
-            ).date().isoformat()
+            source_date = (
+                datetime.fromtimestamp(observed_epoch, ZoneInfo("Asia/Seoul"))
+                .date()
+                .isoformat()
+            )
         except (OverflowError, OSError, ValueError):
             return "source_clock_invalid"
         if source_date != self.session_date:
@@ -157,7 +163,11 @@ class DiscoveryQueue:
         return "queued"
 
     def claim(
-        self, *, now_epoch: float, limit: int, min_interval_sec: float = 0,
+        self,
+        *,
+        now_epoch: float,
+        limit: int,
+        min_interval_sec: float = 0,
         max_observation_age_sec: float | None = None,
         eligible_routes: set[str] | None = None,
         activity_claims_per_gainer: int = 3,
@@ -171,15 +181,24 @@ class DiscoveryQueue:
 
         if limit < 0 or min_interval_sec < 0:
             raise ValueError("negative queue budget")
-        if type(activity_claims_per_gainer) is not int or activity_claims_per_gainer < 1:
+        if (
+            type(activity_claims_per_gainer) is not int
+            or activity_claims_per_gainer < 1
+        ):
             raise ValueError("invalid source rotation budget")
         if max_observation_age_sec is not None and max_observation_age_sec <= 0:
             raise ValueError("invalid observation age budget")
         ready_by_cohort: dict[tuple[str, str, str], list[Candidate]] = {}
         cohort_claims: dict[tuple[str, str, str], int] = {}
-        self.claim_eligibility = dict(eligible_due_count=0, active_target_deferred_count=0,
-            stale_count=0, in_flight_count=0, retry_not_due_count=0, route_ineligible_count=0,
-            product_ineligible_count=0)
+        self.claim_eligibility = dict(
+            eligible_due_count=0,
+            active_target_deferred_count=0,
+            stale_count=0,
+            in_flight_count=0,
+            retry_not_due_count=0,
+            route_ineligible_count=0,
+            product_ineligible_count=0,
+        )
         eligible_wait = []
         products = {}
         for candidate in self._candidates.values():
@@ -190,40 +209,53 @@ class DiscoveryQueue:
             cohort_claims[cohort] = cohort_claims.get(cohort, 0) + candidate.claim_count
             if product_check is not None and not candidate.in_flight:
                 products[(candidate.code, candidate.route)] = product_check(
-                    candidate.code, candidate.name, candidate.market)
+                    candidate.code, candidate.name, candidate.market
+                )
             if candidate.in_flight:
-                self.claim_eligibility['in_flight_count'] += 1
+                self.claim_eligibility["in_flight_count"] += 1
             elif is_non_equity_product_name(candidate.name):
-                self.claim_eligibility['product_ineligible_count'] += 1
-            elif product_check is not None and products[(candidate.code, candidate.route)].get('eligible') is not True:
-                self.claim_eligibility['product_ineligible_count'] += 1
+                self.claim_eligibility["product_ineligible_count"] += 1
+            elif (
+                product_check is not None
+                and products[(candidate.code, candidate.route)].get("eligible")
+                is not True
+            ):
+                self.claim_eligibility["product_ineligible_count"] += 1
             elif eligible_routes is not None and candidate.route not in eligible_routes:
-                self.claim_eligibility['route_ineligible_count'] += 1
+                self.claim_eligibility["route_ineligible_count"] += 1
             elif max_observation_age_sec is not None and not (
-                    0 <= now_epoch - candidate.observed_epoch <= max_observation_age_sec):
-                self.claim_eligibility['stale_count'] += 1
-            elif candidate.next_due_epoch > now_epoch or candidate.last_claim_epoch + min_interval_sec > now_epoch:
-                self.claim_eligibility['retry_not_due_count'] += 1
+                0 <= now_epoch - candidate.observed_epoch <= max_observation_age_sec
+            ):
+                self.claim_eligibility["stale_count"] += 1
+            elif (
+                candidate.next_due_epoch > now_epoch
+                or candidate.last_claim_epoch + min_interval_sec > now_epoch
+            ):
+                self.claim_eligibility["retry_not_due_count"] += 1
             elif candidate.code in (deferred_active_codes or ()):
-                self.claim_eligibility['active_target_deferred_count'] += 1
+                self.claim_eligibility["active_target_deferred_count"] += 1
             else:
-                self.claim_eligibility['eligible_due_count'] += 1
+                self.claim_eligibility["eligible_due_count"] += 1
                 key = (candidate.code, candidate.route)
                 first_eligible = self._eligible_since.setdefault(key, now_epoch)
-                eligible_wait.append(max(0.0, now_epoch-first_eligible))
+                eligible_wait.append(max(0.0, now_epoch - first_eligible))
                 ready_by_cohort.setdefault(cohort, []).append(candidate)
                 continue
             self._eligible_since.pop((candidate.code, candidate.route), None)
-        self.claim_eligibility['eligible_due_wait_max_seconds'] = max(eligible_wait, default=None)
-        self.claim_eligibility['wait_basis'] = 'observed_fresh_due_at_dispatch'
-        self.claim_eligibility['wait_continuity'] = 'dispatch_samples_only'
+        self.claim_eligibility["eligible_due_wait_max_seconds"] = max(
+            eligible_wait, default=None
+        )
+        self.claim_eligibility["wait_basis"] = "observed_fresh_due_at_dispatch"
+        self.claim_eligibility["wait_continuity"] = "dispatch_samples_only"
         for cohort_ready in ready_by_cohort.values():
-            cohort_ready.sort(key=lambda row: (
-                row.last_claim_epoch,
-                row.first_seen_epoch,
-                -row.discovery_volume,
-                row.code,
-            ))
+            cohort_ready.sort(
+                key=lambda row: (
+                    row.last_claim_epoch,
+                    row.first_seen_epoch,
+                    -row.discovery_volume,
+                    row.code,
+                )
+            )
         ready = []
         requirements = {}
         # Keep the short reservation whenever any currently eligible candidate
@@ -231,19 +263,27 @@ class DiscoveryQueue:
         # demand; existing leases are never preempted or given a new deadline.
         long_limit = MAX_LONG_PROBES
         if borrow_idle_short_slot:
-            limit = min(limit, max(0, 5-self.in_flight_count()))
+            limit = min(limit, max(0, 5 - self.in_flight_count()))
         if borrow_idle_short_slot and limit > 0:
             for rows in ready_by_cohort.values():
                 for row in rows:
-                    requirements[(row.code, row.route)] = (residence_requirements(row, now_epoch)
-                        if residence_requirements else {'minimum_seconds': 0})
-            short_demand = any(type(r.get('minimum_seconds')) in (int, float)
-                and isfinite(r['minimum_seconds']) and 0 <= r['minimum_seconds'] < 60
-                for r in requirements.values())
+                    requirements[(row.code, row.route)] = (
+                        residence_requirements(row, now_epoch)
+                        if residence_requirements
+                        else {"minimum_seconds": 0}
+                    )
+            short_demand = any(
+                type(r.get("minimum_seconds")) in (int, float)
+                and isfinite(r["minimum_seconds"])
+                and 0 <= r["minimum_seconds"] < 60
+                for r in requirements.values()
+            )
             if not short_demand:
                 long_limit += 1
-        long_used = sum(r.in_flight and r.residence_deadline_epoch-r.last_claim_epoch > 60
-                        for r in self._candidates.values())
+        long_used = sum(
+            r.in_flight and r.residence_deadline_epoch - r.last_claim_epoch > 60
+            for r in self._candidates.values()
+        )
         allocation = {}
         self.residence_deferred = {}
         while len(ready) < limit:
@@ -254,27 +294,66 @@ class DiscoveryQueue:
                 # Three activity/liquidity turns and one oldest-service turn.
                 # Never-tested rows precede retries; the oldest-service turn
                 # prevents an endless stream of active newcomers starving them.
-                rows.sort(key=lambda row: (
-                    -row.long_residence_deferred_count if long_used < long_limit else 0,
-                    (row.last_claim_epoch, row.first_seen_epoch, -row.discovery_volume)
-                        if age_turn else
-                    (bool(row.last_claim_epoch), -row.discovery_volume,
-                     -row.observed_epoch, row.last_claim_epoch, row.first_seen_epoch),
-                    row.code))
+                rows.sort(
+                    key=lambda row: (
+                        (
+                            -row.long_residence_deferred_count
+                            if long_used < long_limit
+                            else 0
+                        ),
+                        (
+                            (
+                                row.last_claim_epoch,
+                                row.first_seen_epoch,
+                                -row.discovery_volume,
+                            )
+                            if age_turn
+                            else (
+                                bool(row.last_claim_epoch),
+                                -row.discovery_volume,
+                                -row.observed_epoch,
+                                row.last_claim_epoch,
+                                row.first_seen_epoch,
+                            )
+                        ),
+                        row.code,
+                    )
+                )
                 while rows:
                     row = rows[0]
                     key = (row.code, row.route)
                     if key not in requirements:
-                        requirements[key] = (residence_requirements(row, now_epoch)
-                            if residence_requirements else {'minimum_seconds': 0})
-                    needed = requirements[key].get('minimum_seconds')
-                    valid_requirement = type(needed) in (float, int) and isfinite(needed) and needed >= 0
-                    if (not valid_requirement or needed >= 150
-                            or (needed >= 60 and long_used >= long_limit)):
-                        reason = ('requirement_unobservable' if not valid_requirement
-                                  else 'beyond_residence_limit' if needed >= 150 else 'long_slot_wait')
-                        row.residence_wait_since_epoch = row.residence_wait_since_epoch or now_epoch
-                        self.residence_deferred[reason] = self.residence_deferred.get(reason, 0)+1
+                        requirements[key] = (
+                            residence_requirements(row, now_epoch)
+                            if residence_requirements
+                            else {"minimum_seconds": 0}
+                        )
+                    needed = requirements[key].get("minimum_seconds")
+                    valid_requirement = (
+                        type(needed) in (float, int)
+                        and isfinite(needed)
+                        and needed >= 0
+                    )
+                    if (
+                        not valid_requirement
+                        or needed >= 150
+                        or (needed >= 60 and long_used >= long_limit)
+                    ):
+                        reason = (
+                            "requirement_unobservable"
+                            if not valid_requirement
+                            else (
+                                "beyond_residence_limit"
+                                if needed >= 150
+                                else "long_slot_wait"
+                            )
+                        )
+                        row.residence_wait_since_epoch = (
+                            row.residence_wait_since_epoch or now_epoch
+                        )
+                        self.residence_deferred[reason] = (
+                            self.residence_deferred.get(reason, 0) + 1
+                        )
                         rows.pop(0)
                     else:
                         break
@@ -282,7 +361,8 @@ class DiscoveryQueue:
             if not available:
                 break
             preferred_kind = (
-                "gainers" if (
+                "gainers"
+                if (
                     (self._claim_sequence + len(ready))
                     % (activity_claims_per_gainer + 1)
                     == activity_claims_per_gainer
@@ -290,17 +370,28 @@ class DiscoveryQueue:
                 else "activity"
             )
             preferred = [key for key in available if key[2] == preferred_kind]
-            cohort = min(preferred or available,
-                         key=lambda key: (cohort_claims[key], key))
+            cohort = min(
+                preferred or available, key=lambda key: (cohort_claims[key], key)
+            )
             row = ready_by_cohort[cohort].pop(0)
             ready.append(row)
-            needed = requirements[(row.code, row.route)]['minimum_seconds']
-            full = requirements[(row.code, row.route)].get('full_input_requirement_seconds', needed)
-            wants_long = type(full) in (int, float) and isfinite(full) and 60 <= full < 150
-            residence = 150 if long_used < long_limit and (needed >= 60 or wants_long or residence_requirements is None) else 60
+            needed = requirements[(row.code, row.route)]["minimum_seconds"]
+            full = requirements[(row.code, row.route)].get(
+                "full_input_requirement_seconds", needed
+            )
+            wants_long = (
+                type(full) in (int, float) and isfinite(full) and 60 <= full < 150
+            )
+            residence = (
+                150
+                if long_used < long_limit
+                and (needed >= 60 or wants_long or residence_requirements is None)
+                else 60
+            )
             if wants_long:
-                row.long_residence_deferred_count = (0 if residence > 60
-                    else row.long_residence_deferred_count + 1)
+                row.long_residence_deferred_count = (
+                    0 if residence > 60 else row.long_residence_deferred_count + 1
+                )
             allocation[(row.code, row.route)] = residence
             long_used += int(residence > 60)
             cohort_claims[cohort] += 1
@@ -312,18 +403,27 @@ class DiscoveryQueue:
             candidate.claimed_observed_epoch = candidate.observed_epoch
             candidate.claimed_source_sha256 = candidate.source_sha256
             candidate.residence_deadline_epoch = 0.0
-            candidate.residence_deadline_epoch = now_epoch + allocation[(candidate.code, candidate.route)]
-            candidate.lease_phase = 'observing'
+            candidate.residence_deadline_epoch = (
+                now_epoch + allocation[(candidate.code, candidate.route)]
+            )
+            candidate.lease_phase = "observing"
             candidate.handoff_id = uuid.uuid4().hex
         self._claim_sequence += len(ready)
-        checked = [r.get('minimum_seconds') for r in requirements.values()]
+        checked = [r.get("minimum_seconds") for r in requirements.values()]
         self.claim_eligibility.update(
             long_slot_limit=long_limit,
             idle_short_slot_borrowed=long_used > MAX_LONG_PROBES,
             residence_requirement_checked_count=len(checked),
-            short_capable_checked_count=sum(type(v) in (float, int) and isfinite(v) and 0 <= v < 60 for v in checked),
-            long_required_checked_count=sum(type(v) in (float, int) and isfinite(v) and 60 <= v < 150 for v in checked),
-            requirement_unobservable_checked_count=sum(type(v) not in (float, int) or not isfinite(v) or v < 0 for v in checked),
+            short_capable_checked_count=sum(
+                type(v) in (float, int) and isfinite(v) and 0 <= v < 60 for v in checked
+            ),
+            long_required_checked_count=sum(
+                type(v) in (float, int) and isfinite(v) and 60 <= v < 150
+                for v in checked
+            ),
+            requirement_unobservable_checked_count=sum(
+                type(v) not in (float, int) or not isfinite(v) or v < 0 for v in checked
+            ),
         )
         claims = [
             {
@@ -345,8 +445,11 @@ class DiscoveryQueue:
                 "observation_requirements": requirements[(row.code, row.route)],
                 "product_binding": products.get((row.code, row.route), {}),
                 "long_residence_deferred_count": row.long_residence_deferred_count,
-                "residence_wait_seconds": max(0, now_epoch-row.residence_wait_since_epoch)
-                    if row.residence_wait_since_epoch else 0,
+                "residence_wait_seconds": (
+                    max(0, now_epoch - row.residence_wait_since_epoch)
+                    if row.residence_wait_since_epoch
+                    else 0
+                ),
             }
             for row in ready
         ]
@@ -359,10 +462,12 @@ class DiscoveryQueue:
             raise ValueError("invalid probe timeout")
         abandoned = 0
         for row in self._candidates.values():
-            if row.in_flight and now_epoch >= (row.residence_deadline_epoch or row.last_claim_epoch+timeout_sec):
+            if row.in_flight and now_epoch >= (
+                row.residence_deadline_epoch or row.last_claim_epoch + timeout_sec
+            ):
                 if row.handoff_id:
-                    if row.lease_phase != 'cleanup_pending':
-                        row.lease_phase = 'cleanup_pending'
+                    if row.lease_phase != "cleanup_pending":
+                        row.lease_phase = "cleanup_pending"
                         abandoned += 1
                     continue  # Physical release acknowledgement owns capacity.
                 row.in_flight = False
@@ -372,11 +477,13 @@ class DiscoveryQueue:
                 row.last_result = "probe_capacity_deferred"
                 row.machine_action = ""
                 row.next_due_epoch = now_epoch
-                row.lease_phase = 'cleanup_pending'
+                row.lease_phase = "cleanup_pending"
                 abandoned += 1
         return abandoned
 
-    def stale_candidate_count(self, *, now_epoch: float, max_observation_age_sec: float) -> int:
+    def stale_candidate_count(
+        self, *, now_epoch: float, max_observation_age_sec: float
+    ) -> int:
         if max_observation_age_sec <= 0:
             raise ValueError("invalid observation age budget")
         return sum(
@@ -391,14 +498,20 @@ class DiscoveryQueue:
     def matches_claim(self, claim: dict) -> bool:
         """Check the original reservation before an inbox may deduplicate it."""
         if not isinstance(claim, dict) or any(
-                not isinstance(claim.get(key), str) for key in ('code', 'route')):
+            not isinstance(claim.get(key), str) for key in ("code", "route")
+        ):
             return False
-        row = self._candidates.get((claim['code'], claim['route']))
-        return bool(row is not None and row.in_flight
-            and claim.get('observed_epoch') == row.claimed_observed_epoch
-            and claim.get('source_sha256') == row.claimed_source_sha256
-            and all(claim.get(field) == getattr(row, field)
-                    for field in ('source_scope', 'claim_count', 'last_claim_epoch')))
+        row = self._candidates.get((claim["code"], claim["route"]))
+        return bool(
+            row is not None
+            and row.in_flight
+            and claim.get("observed_epoch") == row.claimed_observed_epoch
+            and claim.get("source_sha256") == row.claimed_source_sha256
+            and all(
+                claim.get(field) == getattr(row, field)
+                for field in ("source_scope", "claim_count", "last_claim_epoch")
+            )
+        )
 
     def resolve(
         self,
@@ -407,17 +520,19 @@ class DiscoveryQueue:
         result: str,
         next_due_epoch: float,
         machine_action: str = "",
-        handoff_id: str = '',
+        handoff_id: str = "",
     ) -> bool:
         """Bind an assessment to the exact claimed generation."""
-        if result not in RESULTS or (result == "assessed") != (machine_action in ACTIONS):
+        if result not in RESULTS or (result == "assessed") != (
+            machine_action in ACTIONS
+        ):
             raise ValueError("invalid assessment result")
         if not self.matches_claim(claim):
             return False
-        row = self._candidates[(claim['code'], claim['route'])]
+        row = self._candidates[(claim["code"], claim["route"])]
         if (
             not row.in_flight
-            or row.lease_phase in {'handoff_pending', 'cleanup_pending'}
+            or row.lease_phase in {"handoff_pending", "cleanup_pending"}
             or (handoff_id and row.handoff_id and handoff_id != row.handoff_id)
             or row.last_claim_epoch <= 0
             or not isfinite(next_due_epoch)
@@ -425,14 +540,14 @@ class DiscoveryQueue:
         ):
             return False
         row.last_result = result
-        row.lease_phase = 'closed'
+        row.lease_phase = "closed"
         row.machine_action = machine_action
         row.next_due_epoch = next_due_epoch
         if row.observed_epoch > row.claimed_observed_epoch and result == "assessed":
             row.next_due_epoch = min(row.next_due_epoch, row.last_seen_epoch)
         row.handoff_id = handoff_id
         if handoff_id:
-            row.lease_phase = 'handoff_pending'
+            row.lease_phase = "handoff_pending"
             return True
         row.in_flight = False
         row.claimed_observed_epoch = 0.0
@@ -442,14 +557,14 @@ class DiscoveryQueue:
     def close_handoff(self, claim, handoff_id):
         if not self.matches_claim(claim):
             return False
-        row = self._candidates[(claim['code'], claim['route'])]
+        row = self._candidates[(claim["code"], claim["route"])]
         if not handoff_id or row.handoff_id != handoff_id:
             return False
         row.in_flight = False
-        row.lease_phase = 'closed'
-        row.handoff_id = ''
+        row.lease_phase = "closed"
+        row.handoff_id = ""
         row.claimed_observed_epoch = 0.0
-        row.claimed_source_sha256 = ''
+        row.claimed_source_sha256 = ""
         return True
 
     def snapshot(self) -> dict:
@@ -468,7 +583,15 @@ class DiscoveryQueue:
     @classmethod
     def restore(cls, snapshot: dict, *, session_date: str) -> "DiscoveryQueue":
         queue = cls(session_date)
-        if snapshot.get("schema") not in {SCHEMA, 'zero_base_discovery_queue_v1', 'zero_base_discovery_queue_v2'} or snapshot.get("session_date") != queue.session_date:
+        if (
+            snapshot.get("schema")
+            not in {
+                SCHEMA,
+                "zero_base_discovery_queue_v1",
+                "zero_base_discovery_queue_v2",
+            }
+            or snapshot.get("session_date") != queue.session_date
+        ):
             raise ValueError("queue snapshot date or schema mismatch")
         sequence = snapshot.get("claim_sequence", 0)
         if type(sequence) is not int or sequence < 0:
@@ -491,14 +614,21 @@ class DiscoveryQueue:
                 or row.claimed_observed_epoch < 0
                 or not isfinite(row.residence_deadline_epoch)
                 or row.residence_deadline_epoch < 0
-                or row.lease_phase not in {'closed', 'observing', 'handoff_pending', 'cleanup_pending'}
+                or row.lease_phase
+                not in {"closed", "observing", "handoff_pending", "cleanup_pending"}
                 or not isinstance(row.handoff_id, str)
-                or (row.claimed_source_sha256 and re.fullmatch(
-                    r"[0-9a-f]{64}", row.claimed_source_sha256,
-                ) is None)
-                or (not row.in_flight and (
-                    row.claimed_observed_epoch or row.claimed_source_sha256
-                ))
+                or (
+                    row.claimed_source_sha256
+                    and re.fullmatch(
+                        r"[0-9a-f]{64}",
+                        row.claimed_source_sha256,
+                    )
+                    is None
+                )
+                or (
+                    not row.in_flight
+                    and (row.claimed_observed_epoch or row.claimed_source_sha256)
+                )
                 or not all(
                     isfinite(value) and value >= 0
                     for value in (
@@ -521,9 +651,11 @@ class DiscoveryQueue:
             ):
                 raise ValueError("invalid queue snapshot candidate")
             try:
-                source_date = datetime.fromtimestamp(
-                    row.observed_epoch, ZoneInfo("Asia/Seoul")
-                ).date().isoformat()
+                source_date = (
+                    datetime.fromtimestamp(row.observed_epoch, ZoneInfo("Asia/Seoul"))
+                    .date()
+                    .isoformat()
+                )
             except (OverflowError, OSError, ValueError) as exc:
                 raise ValueError("invalid queue snapshot source clock") from exc
             if source_date != queue.session_date:
@@ -536,8 +668,8 @@ class DiscoveryQueue:
                 row.next_due_epoch = min(row.next_due_epoch, row.last_claim_epoch)
                 row.claimed_observed_epoch = 0.0
                 row.claimed_source_sha256 = ""
-            row.lease_phase = 'closed'
-            row.handoff_id = ''
+            row.lease_phase = "closed"
+            row.handoff_id = ""
             row.residence_deadline_epoch = 0.0
             queue._candidates[key] = row
         return queue

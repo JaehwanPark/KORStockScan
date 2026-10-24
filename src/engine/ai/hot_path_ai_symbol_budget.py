@@ -165,7 +165,8 @@ class HotPathAISymbolBudget:
                 allowed=allowed,
                 reason=reason,
                 policy_version=(
-                    POLICY_VERSION if self.total_cap is None and self.group_cap is None
+                    POLICY_VERSION
+                    if self.total_cap is None and self.group_cap is None
                     else "hot_path_ai_symbol_budget_v1"
                 ),
                 code=canonical_code,

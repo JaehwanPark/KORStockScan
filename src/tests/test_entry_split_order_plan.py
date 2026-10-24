@@ -29,14 +29,16 @@ def test_legacy_probe_circuit_does_not_block_unrelated_reservations(
     now = datetime(2026, 9, 30, 11, 15, tzinfo=timezone(timedelta(hours=9)))
     path = tmp_path / "probe-state.json"
     path.write_text(
-        json.dumps({
-            "schema_version": split_plan.PROBE_RUNTIME_STATE_SCHEMA_VERSION,
-            "target_date": "2026-09-30",
-            "submitted_bundle_count": 0,
-            "bundles": {},
-            "circuit_open": True,
-            "circuit_reason": "probe_fill_submit_contract_missing",
-        }),
+        json.dumps(
+            {
+                "schema_version": split_plan.PROBE_RUNTIME_STATE_SCHEMA_VERSION,
+                "target_date": "2026-09-30",
+                "submitted_bundle_count": 0,
+                "bundles": {},
+                "circuit_open": True,
+                "circuit_reason": "probe_fill_submit_contract_missing",
+            }
+        ),
         encoding="utf-8",
     )
     monkeypatch.setattr(split_plan, "PROBE_RUNTIME_STATE_PATH", path)
@@ -55,13 +57,19 @@ def test_legacy_probe_circuit_does_not_block_unrelated_reservations(
     }
 
     first, reason = split_plan._reserve_probe_runtime_bundle(
-        stock={"id": 1, "code": "123456"}, total_qty=3,
-        submit_contract=contract, now=now,
+        stock={"id": 1, "code": "123456"},
+        total_qty=3,
+        submit_contract=contract,
+        now=now,
     )
-    split_plan.record_probe_runtime_violation("probe_fill_submit_contract_missing", now=now)
+    split_plan.record_probe_runtime_violation(
+        "probe_fill_submit_contract_missing", now=now
+    )
     second, second_reason = split_plan._reserve_probe_runtime_bundle(
-        stock={"id": 2, "code": "654321"}, total_qty=3,
-        submit_contract=contract, now=now,
+        stock={"id": 2, "code": "654321"},
+        total_qty=3,
+        submit_contract=contract,
+        now=now,
     )
 
     state = json.loads(path.read_text(encoding="utf-8"))
@@ -84,7 +92,8 @@ def test_invalid_probe_state_still_blocks_new_reservation(monkeypatch, tmp_path)
     )
 
     bundle, reason = split_plan._reserve_probe_runtime_bundle(
-        stock={"id": 1, "code": "123456"}, total_qty=3,
+        stock={"id": 1, "code": "123456"},
+        total_qty=3,
         submit_contract={
             "continuation": {
                 "requested_qty": 3,
@@ -103,9 +112,12 @@ def test_invalid_probe_state_still_blocks_new_reservation(monkeypatch, tmp_path)
 
 def _probe_ready_gate(action="WAIT"):
     return {
-        "latency_state": "SAFE", "canonical_mark_price": 10000,
-        "best_bid": 9990, "best_ask_at_submit": 10010,
-        "quote_consistency_state": "ok", "quote_stale_at_submit": False,
+        "latency_state": "SAFE",
+        "canonical_mark_price": 10000,
+        "best_bid": 9990,
+        "best_ask_at_submit": 10010,
+        "quote_consistency_state": "ok",
+        "quote_stale_at_submit": False,
         "entry_ai_submit_authority_blocked": False,
         "entry_ai_submit_authority_action": action,
         "entry_ai_submit_authority_result_source": "live",
@@ -133,7 +145,9 @@ def test_probe_admission_rejects_cached_pressure_without_live_successor():
         "entry_split_probe_successor_live_micro_ready": False,
     }
     assert split_plan._probe_residual_admission(cached_only, 3) == (
-        False, "residual_source_path_unavailable", "price_tick"
+        False,
+        "residual_source_path_unavailable",
+        "price_tick",
     )
     live = {
         **cached_only,
@@ -142,7 +156,9 @@ def test_probe_admission_rejects_cached_pressure_without_live_successor():
         "entry_split_probe_successor_ws_tick_at": 1790120000,
     }
     assert split_plan._probe_residual_admission(live, 3) == (
-        True, "ready", "price_tick,signed_pressure"
+        True,
+        "ready",
+        "price_tick,signed_pressure",
     )
     live["entry_split_probe_successor_ws_tick_age_sec"] = 3.1
     assert split_plan._probe_residual_admission(live, 3)[0] is False
@@ -153,10 +169,13 @@ def test_probe_successor_observer_uses_live_sources_and_excludes_negative(monkey
 
     now = 1_790_120_000.0
     monkeypatch.setattr(
-        handlers, "_build_live_orderbook_micro_context",
+        handlers,
+        "_build_live_orderbook_micro_context",
         lambda *args, **kwargs: {
-            "ready": True, "observer_healthy": True,
-            "micro_state": "neutral", "snapshot_age_ms": 100,
+            "ready": True,
+            "observer_healthy": True,
+            "micro_state": "neutral",
+            "snapshot_age_ms": 100,
             "captured_at_ms": int(now * 1000) - 100,
         },
     )
@@ -179,50 +198,81 @@ def test_probe_successor_observer_uses_live_sources_and_excludes_negative(monkey
         "095610", ws, curr_price=10000, now_ts=now
     )
     assert weak["entry_split_probe_successor_ws_tick_negative"] is True
-    gate = {**_probe_ready_gate("BUY"), **weak,
-            "orderbook_micro_ready": False, "tick_context_quality": "fresh_computed",
-            "tick_aggressor_pressure_usable": True, "buy_pressure_10t": 0}
+    gate = {
+        **_probe_ready_gate("BUY"),
+        **weak,
+        "orderbook_micro_ready": False,
+        "tick_context_quality": "fresh_computed",
+        "tick_aggressor_pressure_usable": True,
+        "buy_pressure_10t": 0,
+    }
     assert split_plan._probe_residual_admission(gate, 3)[0] is False
 
 
-def test_probe_successor_recomputes_current_ws_ticks_when_derived_keys_are_absent(monkeypatch):
+def test_probe_successor_recomputes_current_ws_ticks_when_derived_keys_are_absent(
+    monkeypatch,
+):
     from src.engine import sniper_state_handlers as handlers
 
     now = 1_790_120_000.0
     seen = []
+
     def feature_packet(ws, ticks, *, now):
         seen.append((ws, ticks, now))
-        return {"tick_context_quality": "fresh_computed",
-                "tick_aggressor_pressure_usable": True,
-                "tick_context_stale": False, "buy_pressure_10t": 80}
+        return {
+            "tick_context_quality": "fresh_computed",
+            "tick_aggressor_pressure_usable": True,
+            "tick_context_stale": False,
+            "buy_pressure_10t": 80,
+        }
+
     monkeypatch.setattr(handlers, "extract_scalping_feature_packet", feature_packet)
-    monkeypatch.setattr(handlers, "_build_live_orderbook_micro_context",
-                        lambda *args, **kwargs: {})
-    ws = {"last_realtime_type_ts": {"0B": now - 0.1},
-          "recent_trade_ticks": [{"received_at_ms": int((now - 0.2) * 1000)}]}
+    monkeypatch.setattr(
+        handlers, "_build_live_orderbook_micro_context", lambda *args, **kwargs: {}
+    )
+    ws = {
+        "last_realtime_type_ts": {"0B": now - 0.1},
+        "recent_trade_ticks": [{"received_at_ms": int((now - 0.2) * 1000)}],
+    }
     proof = handlers._probe_residual_successor_source_fields(
-        "095610", ws, curr_price=10000, now_ts=now)
+        "095610", ws, curr_price=10000, now_ts=now
+    )
     assert seen and seen[0][1] == ws["recent_trade_ticks"]
     assert proof["entry_split_probe_successor_ws_tick_ready"] is True
-    assert proof["entry_split_probe_successor_ws_tick_proof_source"] == "current_ws_ticks_recomputed"
+    assert (
+        proof["entry_split_probe_successor_ws_tick_proof_source"]
+        == "current_ws_ticks_recomputed"
+    )
     assert proof["entry_split_probe_successor_ws_tick_quality"] == "fresh_computed"
     assert proof["entry_split_probe_successor_ws_tick_pressure_usable"] is True
     assert proof["entry_split_probe_successor_ws_tick_age_sec"] == pytest.approx(0.2)
     assert len(seen) == 1
-    gate = {**_probe_ready_gate("BUY"), **proof,
-            "orderbook_micro_ready": False, "tick_context_quality": "fresh_computed",
-            "tick_aggressor_pressure_usable": True, "buy_pressure_10t": 80}
+    gate = {
+        **_probe_ready_gate("BUY"),
+        **proof,
+        "orderbook_micro_ready": False,
+        "tick_context_quality": "fresh_computed",
+        "tick_aggressor_pressure_usable": True,
+        "buy_pressure_10t": 80,
+    }
     assert split_plan._probe_residual_admission(gate, 3) == (
-        True, "ready", "price_tick,signed_pressure")
-    stale_ws = {**ws, "recent_trade_ticks": [
-        {"received_at_ms": int((now - 4.0) * 1000)}]}
+        True,
+        "ready",
+        "price_tick,signed_pressure",
+    )
+    stale_ws = {
+        **ws,
+        "recent_trade_ticks": [{"received_at_ms": int((now - 4.0) * 1000)}],
+    }
     stale = handlers._probe_residual_successor_source_fields(
-        "095610", stale_ws, curr_price=10000, now_ts=now)
+        "095610", stale_ws, curr_price=10000, now_ts=now
+    )
     assert split_plan._probe_residual_admission({**gate, **stale}, 3)[0] is False
     assert len(seen) == 2
     ws["recent_trade_ticks"] = [{"price": 10000}]
     missing_clock = handlers._probe_residual_successor_source_fields(
-        "095610", ws, curr_price=10000, now_ts=now)
+        "095610", ws, curr_price=10000, now_ts=now
+    )
     assert missing_clock["entry_split_probe_successor_ws_tick_ready"] is False
     assert len(seen) == 2
 
@@ -233,47 +283,77 @@ def test_acknowledged_entry_leg_merges_duplicate_policy_receipts():
     import textwrap
     from pathlib import Path
     from src.engine import sniper_state_handlers as handlers
+
     source = Path(handlers.__file__).read_text()
-    expression = source.split('        entry_submit_event = _log_entry_pipeline(', 1)[1]
-    expression = 'entry_submit_event = _log_entry_pipeline(' + expression.split(
-        '        _record_lifecycle_submit_telemetry_if_raw_appended(', 1)[0]
+    expression = source.split("        entry_submit_event = _log_entry_pipeline(", 1)[1]
+    expression = (
+        "entry_submit_event = _log_entry_pipeline("
+        + expression.split(
+            "        _record_lifecycle_submit_telemetry_if_raw_appended(", 1
+        )[0]
+    )
     tree = ast.parse(textwrap.dedent(expression))
-    stock = dict(entry_split_order_policy_sha256='old', entry_split_order_runtime_pid=1,
-                 entry_split_order_runtime_consumed=True, market_session_bucket='KRX_REGULAR')
-    env = dict(stock=stock, code='000001', request={'tag':'primary'}, qty=2,
-        ord_no='acknowledged-1', price=1000, order_sent_ts=1790036000,
-        datetime=datetime, _KST=timezone(timedelta(hours=9)),
-        order_resolution_fields={'broker_route':'KRX'}, entry_execution_cohort='KRX',
-        split_leg_meta_fields={**stock, 'entry_split_order_policy_sha256':'leg-policy'},
-        real_pre_submit_guard_fields={}, submit_revalidation_fields={},
-            buy_parent_id='attempt-1', buy_child_id='attempt-1:acknowledged-1',
-            buy_owner_type='main_scalping', buy_owner_id='main_scalping:1',
-            buy_owner_context=None,
-            buy_account_key='account-a', buy_intent_id='intent-1',
-        buy_registry_mode='registry_managed', buy_owner_policy_fields={},
-        buy_planned_qty=None, sequential_first=False,
+    stock = dict(
+        entry_split_order_policy_sha256="old",
+        entry_split_order_runtime_pid=1,
+        entry_split_order_runtime_consumed=True,
+        market_session_bucket="KRX_REGULAR",
+    )
+    env = dict(
+        stock=stock,
+        code="000001",
+        request={"tag": "primary"},
+        qty=2,
+        ord_no="acknowledged-1",
+        price=1000,
+        order_sent_ts=1790036000,
+        datetime=datetime,
+        _KST=timezone(timedelta(hours=9)),
+        order_resolution_fields={"broker_route": "KRX"},
+        entry_execution_cohort="KRX",
+        split_leg_meta_fields={
+            **stock,
+            "entry_split_order_policy_sha256": "leg-policy",
+        },
+        real_pre_submit_guard_fields={},
+        submit_revalidation_fields={},
+        buy_parent_id="attempt-1",
+        buy_child_id="attempt-1:acknowledged-1",
+        buy_owner_type="main_scalping",
+        buy_owner_id="main_scalping:1",
+        buy_owner_context=None,
+        buy_account_key="account-a",
+        buy_intent_id="intent-1",
+        buy_registry_mode="registry_managed",
+        buy_owner_policy_fields={},
+        buy_planned_qty=None,
+        sequential_first=False,
         _entry_price_ai_trace_fields=lambda _: {},
         _merge_entry_pipeline_field_groups=handlers._merge_entry_pipeline_field_groups,
-        _log_entry_pipeline=lambda *args, **fields: fields)
+        _log_entry_pipeline=lambda *args, **fields: fields,
+    )
     # The session field belongs to the explicit event, not split metadata.
-    env['split_leg_meta_fields'].pop('market_session_bucket')
-    exec(compile(tree, '<post-ack-entry-log>', 'exec'), env)
-    event = env['entry_submit_event']
-    assert event['entry_split_order_policy_sha256'] == 'leg-policy'
-    assert event['entry_split_order_runtime_pid'] == 1
-    assert event['broker_order_no'] == 'acknowledged-1'
-    assert event['actual_order_submitted'] is True
-    assert event['broker_order_forbidden'] is False
-    assert event['buy_parent_id'] == 'attempt-1'
-    assert event['owner_registry_intent_id'] == 'intent-1'
+    env["split_leg_meta_fields"].pop("market_session_bucket")
+    exec(compile(tree, "<post-ack-entry-log>", "exec"), env)
+    event = env["entry_submit_event"]
+    assert event["entry_split_order_policy_sha256"] == "leg-policy"
+    assert event["entry_split_order_runtime_pid"] == 1
+    assert event["broker_order_no"] == "acknowledged-1"
+    assert event["actual_order_submitted"] is True
+    assert event["broker_order_forbidden"] is False
+    assert event["buy_parent_id"] == "attempt-1"
+    assert event["owner_registry_intent_id"] == "intent-1"
 
 
 @pytest.fixture(autouse=True)
 def isolate_native_replay_generation(monkeypatch, tmp_path):
     """Fixture replays must not fingerprint a growing production collector."""
     from src.engine.scalping import native_packet_validation as micro
+
     monkeypatch.setattr(micro, "OBSERVATION_ROOT", tmp_path / "native_observations")
-    monkeypatch.setattr(micro, "DEFAULT_SOURCE_EXCLUSION_MANIFEST", tmp_path / "exclusions.json")
+    monkeypatch.setattr(
+        micro, "DEFAULT_SOURCE_EXCLUSION_MANIFEST", tmp_path / "exclusions.json"
+    )
     monkeypatch.setattr(micro, "DEFAULT_CANARY_SNAPSHOT_PATH", tmp_path / "canary.json")
     monkeypatch.setattr(micro, "CANARY_DAILY_SNAPSHOT_DIR", tmp_path / "canary_daily")
 
@@ -332,7 +412,9 @@ def _quantity_leg_four_arm_events():
 
 
 def test_quantity_leg_four_arm_requires_same_attempt_and_cost_adjusted_edge():
-    result = split_plan.build_quantity_leg_four_arm_evaluation(_quantity_leg_four_arm_events())
+    result = split_plan.build_quantity_leg_four_arm_evaluation(
+        _quantity_leg_four_arm_events()
+    )
 
     assert result["complete_exact_attempt_count"] == 30
     assert result["exact_attempt_join_coverage"] == 1.0
@@ -355,24 +437,42 @@ def test_quantity_leg_four_arm_requires_same_attempt_and_cost_adjusted_edge():
 def _resign_four_arm_receipt(receipt):
     body = {key: value for key, value in receipt.items() if key != "receipt_sha256"}
     receipt["receipt_sha256"] = hashlib.sha256(
-        json.dumps(body, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("ascii")
+        json.dumps(
+            body, ensure_ascii=True, sort_keys=True, separators=(",", ":")
+        ).encode("ascii")
     ).hexdigest()
 
 
 def test_four_arm_chronology_and_independent_selection_validation():
-    evaluation = split_plan.build_quantity_leg_four_arm_evaluation(_quantity_leg_four_arm_events())
+    evaluation = split_plan.build_quantity_leg_four_arm_evaluation(
+        _quantity_leg_four_arm_events()
+    )
     assert split_plan.quantity_leg_promotion_evidence_valid(evaluation)
-    assert evaluation["chronological_partitions"]["calibration"]["complete_exact_attempt_count"] == 20
-    assert evaluation["chronological_partitions"]["holdout"]["complete_exact_attempt_count"] == 10
-    for field, value in (("exact_attempt_join_coverage", True),
-                         ("complete_exact_attempt_count", True),
-                         ("selection_contract", "legacy")):
-        assert not split_plan.quantity_leg_promotion_evidence_valid({**evaluation, field: value})
+    assert (
+        evaluation["chronological_partitions"]["calibration"][
+            "complete_exact_attempt_count"
+        ]
+        == 20
+    )
+    assert (
+        evaluation["chronological_partitions"]["holdout"][
+            "complete_exact_attempt_count"
+        ]
+        == 10
+    )
+    for field, value in (
+        ("exact_attempt_join_coverage", True),
+        ("complete_exact_attempt_count", True),
+        ("selection_contract", "legacy"),
+    ):
+        assert not split_plan.quantity_leg_promotion_evidence_valid(
+            {**evaluation, field: value}
+        )
 
 
-
-
-@pytest.mark.parametrize("mode", ["unsigned", "one_date", "losing_holdout", "small_positive_holdout"])
+@pytest.mark.parametrize(
+    "mode", ["unsigned", "one_date", "losing_holdout", "small_positive_holdout"]
+)
 def test_four_arm_holdout_not_replaced_by_aggregate_or_extra_absolute_floor(mode):
     events = _quantity_leg_four_arm_events()
     for index, event in enumerate(events):
@@ -386,19 +486,26 @@ def test_four_arm_holdout_not_replaced_by_aggregate_or_extra_absolute_floor(mode
         elif index >= 20:
             receipt["arms"][split_plan.QUANTITY_LEG_FOUR_ARM_IDS[-1]].update(
                 net_return_pct=-0.01 if mode == "losing_holdout" else 0.09,
-                net_pnl_krw=-10 if mode == "losing_holdout" else 90)
+                net_pnl_krw=-10 if mode == "losing_holdout" else 90,
+            )
         _resign_four_arm_receipt(receipt)
     evaluation = split_plan.build_quantity_leg_four_arm_evaluation(events)
     assert evaluation["complete_exact_attempt_count"] == 30
     assert evaluation["promotion_gate"]["passed"] is (mode == "small_positive_holdout")
     evaluation["promotion_gate"]["passed"] = True
     evaluation["promotion_gate"]["blockers"] = []
-    assert split_plan.quantity_leg_promotion_evidence_valid(evaluation) is (mode == "small_positive_holdout")
+    assert split_plan.quantity_leg_promotion_evidence_valid(evaluation) is (
+        mode == "small_positive_holdout"
+    )
 
 
-@pytest.mark.parametrize("tamper", ["count", "future_date", "aggregate", "hash", "arm_count", "nonfinite"])
+@pytest.mark.parametrize(
+    "tamper", ["count", "future_date", "aggregate", "hash", "arm_count", "nonfinite"]
+)
 def test_four_arm_independent_validator_rejects_tampered_evidence(tamper):
-    evaluation = split_plan.build_quantity_leg_four_arm_evaluation(_quantity_leg_four_arm_events())
+    evaluation = split_plan.build_quantity_leg_four_arm_evaluation(
+        _quantity_leg_four_arm_events()
+    )
     holdout = evaluation["chronological_partitions"]["holdout"]
     if tamper == "count":
         holdout["complete_exact_attempt_count"] += 1
@@ -407,23 +514,32 @@ def test_four_arm_independent_validator_rejects_tampered_evidence(tamper):
     elif tamper == "aggregate":
         evaluation["arms"][split_plan.QUANTITY_LEG_FOUR_ARM_IDS[-1]]["net_pnl_krw"] += 1
     elif tamper == "hash":
-        evaluation["validated_source_receipt_sha256s"][1] = evaluation["validated_source_receipt_sha256s"][0]
+        evaluation["validated_source_receipt_sha256s"][1] = evaluation[
+            "validated_source_receipt_sha256s"
+        ][0]
     elif tamper == "arm_count":
-        holdout["arms"][split_plan.QUANTITY_LEG_FOUR_ARM_IDS[-1]]["paired_sample_count"] = True
+        holdout["arms"][split_plan.QUANTITY_LEG_FOUR_ARM_IDS[-1]][
+            "paired_sample_count"
+        ] = True
     else:
-        holdout["arms"][split_plan.QUANTITY_LEG_FOUR_ARM_IDS[-1]]["net_pnl_krw"] = float("nan")
+        holdout["arms"][split_plan.QUANTITY_LEG_FOUR_ARM_IDS[-1]]["net_pnl_krw"] = (
+            float("nan")
+        )
     assert not split_plan.quantity_leg_promotion_evidence_valid(evaluation)
 
 
-@pytest.mark.parametrize("field,value", [
-    ("net_return_pct", float("nan")),
-    ("net_pnl_krw", float("inf")),
-    ("capital_krw_minutes", -1),
-    ("capital_krw_minutes", 0),
-    ("fill_participation_rate", 1.1),
-    ("fill_participation_rate", -0.1),
-    ("net_return_pct", True),
-])
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("net_return_pct", float("nan")),
+        ("net_pnl_krw", float("inf")),
+        ("capital_krw_minutes", -1),
+        ("capital_krw_minutes", 0),
+        ("fill_participation_rate", 1.1),
+        ("fill_participation_rate", -0.1),
+        ("net_return_pct", True),
+    ],
+)
 def test_four_arm_quarantines_invalid_economics(field, value):
     events = _quantity_leg_four_arm_events()
     receipt = events[0]["entry_quantity_leg_four_arm_evaluation"]
@@ -477,12 +593,19 @@ def test_four_arm_confirmed_no_exposure_stays_in_paired_denominator():
     events = _quantity_leg_four_arm_events()
     receipt = events[0]["entry_quantity_leg_four_arm_evaluation"]
     for arm in receipt["arms"].values():
-        arm.update(net_return_pct=0, net_pnl_krw=0, capital_krw_minutes=0, fill_participation_rate=0)
+        arm.update(
+            net_return_pct=0,
+            net_pnl_krw=0,
+            capital_krw_minutes=0,
+            fill_participation_rate=0,
+        )
     _resign_four_arm_receipt(receipt)
     result = split_plan.build_quantity_leg_four_arm_evaluation(events)
     assert result["complete_exact_attempt_count"] == 30
     assert result["exact_attempt_join_coverage"] == 1
-    assert result["arms"][split_plan.QUANTITY_LEG_FOUR_ARM_IDS[-1]]["positive_terminal_frequency"] == pytest.approx(29 / 30)
+    assert result["arms"][split_plan.QUANTITY_LEG_FOUR_ARM_IDS[-1]][
+        "positive_terminal_frequency"
+    ] == pytest.approx(29 / 30)
 
 
 def test_quantity_leg_four_arm_sums_daily_eligible_denominators_for_cumulative_gate():
@@ -636,9 +759,7 @@ def test_quantity_leg_four_arm_rejects_mixed_price_exit_cost_or_terminal_contrac
     )
 
     assert result["complete_exact_attempt_count"] == 0
-    assert result["excluded_counts"][
-        "arm_economics_or_executability_invalid"
-    ] == 1
+    assert result["excluded_counts"]["arm_economics_or_executability_invalid"] == 1
     assert result["promotion_gate"]["passed"] is False
 
 
@@ -1084,45 +1205,72 @@ def test_postclose_report_blocks_selection_on_atomic_entry_contract_failure(
 def _atomic_lineage_fixture(day="2026-09-28"):
     core = {
         "schema_version": "entry_execution_sizing_plan_v1",
-        "stage": "entry", "action_receipt_id": "action-1",
-        "effective_venue": "KRX", "market_session_bucket": "KRX_REGULAR",
-        "total_qty": 3, "immediate_qty": 1, "deferred_probe_residual_qty": 2,
-        "leg_count": 2, "legs": [{"leg_index": 1, "qty": 1}, {"leg_index": 2, "qty": 2}],
-        "valid": True, "blockers": [], "quantity_conservation_holds": True,
+        "stage": "entry",
+        "action_receipt_id": "action-1",
+        "effective_venue": "KRX",
+        "market_session_bucket": "KRX_REGULAR",
+        "total_qty": 3,
+        "immediate_qty": 1,
+        "deferred_probe_residual_qty": 2,
+        "leg_count": 2,
+        "legs": [{"leg_index": 1, "qty": 1}, {"leg_index": 2, "qty": 2}],
+        "valid": True,
+        "blockers": [],
+        "quantity_conservation_holds": True,
     }
     sha = split_plan._canonical_sha256(core)
-    fields = {"entry_execution_sizing_plan_id": f"entry-sizing-{sha[:24]}",
-              "entry_execution_sizing_plan_sha256": sha,
-              "entry_execution_sizing_action_receipt_id": "action-1",
-              "entry_execution_sizing_plan_emitted": True,
-              "entry_execution_sizing_valid": True,
-              "entry_execution_sizing_total_qty": 3,
-              "entry_execution_sizing_leg_count": 2,
-              "entry_submit_attempt_id": "attempt-1",
-              "stock_code": "005930", "record_id": "record-1",
-              "effective_venue": "KRX", "market_session_bucket": "KRX_REGULAR",
-              "source_date": day}
-    plan = {**fields, "stage": "entry_execution_sizing_plan",
-            "emitted_at": f"{day}T10:00:00+09:00",
-            "entry_execution_sizing_plan": core, "requested_qty": 3}
-    leg = {**fields, "stage": "order_leg_sent", "actual_order_submitted": True,
-           "emitted_at": f"{day}T10:00:01+09:00", "broker_order_no": "0012345",
-           "entry_split_order_leg_index": 0, "requested_qty": 1,
-           "submitted_qty": 1, "buy_parent_id": "attempt-1",
-           "buy_owner_type": "main_scalping",
-           "buy_owner_id": "main_scalping:record-1",
-           "buy_account_key": "account-1", "broker_route": "KRX"}
-    bundle = {**leg, "stage": "order_bundle_submitted",
-              "emitted_at": f"{day}T10:00:02+09:00", "requested_qty": 3}
-    source = {"status": "ready", "source_date": day,
-              "generation_sha256": "a" * 64}
+    fields = {
+        "entry_execution_sizing_plan_id": f"entry-sizing-{sha[:24]}",
+        "entry_execution_sizing_plan_sha256": sha,
+        "entry_execution_sizing_action_receipt_id": "action-1",
+        "entry_execution_sizing_plan_emitted": True,
+        "entry_execution_sizing_valid": True,
+        "entry_execution_sizing_total_qty": 3,
+        "entry_execution_sizing_leg_count": 2,
+        "entry_submit_attempt_id": "attempt-1",
+        "stock_code": "005930",
+        "record_id": "record-1",
+        "effective_venue": "KRX",
+        "market_session_bucket": "KRX_REGULAR",
+        "source_date": day,
+    }
+    plan = {
+        **fields,
+        "stage": "entry_execution_sizing_plan",
+        "emitted_at": f"{day}T10:00:00+09:00",
+        "entry_execution_sizing_plan": core,
+        "requested_qty": 3,
+    }
+    leg = {
+        **fields,
+        "stage": "order_leg_sent",
+        "actual_order_submitted": True,
+        "emitted_at": f"{day}T10:00:01+09:00",
+        "broker_order_no": "0012345",
+        "entry_split_order_leg_index": 0,
+        "requested_qty": 1,
+        "submitted_qty": 1,
+        "buy_parent_id": "attempt-1",
+        "buy_owner_type": "main_scalping",
+        "buy_owner_id": "main_scalping:record-1",
+        "buy_account_key": "account-1",
+        "broker_route": "KRX",
+    }
+    bundle = {
+        **leg,
+        "stage": "order_bundle_submitted",
+        "emitted_at": f"{day}T10:00:02+09:00",
+        "requested_qty": 3,
+    }
+    source = {"status": "ready", "source_date": day, "generation_sha256": "a" * 64}
     return plan, leg, bundle, source
 
 
 def test_atomic_sizing_lineage_joins_plan_and_one_leg_without_double_count():
     plan, leg, bundle, source = _atomic_lineage_fixture()
     result = split_plan.build_atomic_execution_sizing_lineage(
-        "2026-09-28", [plan, leg, bundle], source_generation=source)
+        "2026-09-28", [plan, leg, bundle], source_generation=source
+    )
     assert result["counts"]["raw_plan_events"] == 1
     assert result["counts"]["raw_submit_events"] == 2
     assert result["counts"]["unique_leg_orders"] == 1
@@ -1130,84 +1278,142 @@ def test_atomic_sizing_lineage_joins_plan_and_one_leg_without_double_count():
     assert result["counts"]["valid_plan_count"] == 1
     assert result["counts"]["unjoined_submit_count"] == 0
     row = result["rows"][0]
-    assert (row["attempt_id"], row["plan_id"], row["submitted_qty"],
-            row["not_submitted_qty"]) == ("attempt-1", plan["entry_execution_sizing_plan_id"], 1, 2)
+    assert (
+        row["attempt_id"],
+        row["plan_id"],
+        row["submitted_qty"],
+        row["not_submitted_qty"],
+    ) == ("attempt-1", plan["entry_execution_sizing_plan_id"], 1, 2)
     assert row["filled_qty"] is None
     assert row["terminal_state"] == "not_observed"
 
 
 def test_compact_execution_dates_preserve_112_event_population_without_source_rewrite():
     day = "2026-10-16"
-    stages = {"entry_execution_sizing_plan": 9, "order_leg_sent": 10,
-              "order_bundle_submitted": 8, "entry_ai_economic_plan_observed": 22,
-              "entry_ai_economic_decision_available": 22, "entry_probe_conditional_receipt_observed": 28,
-              "entry_ai_economic_source_gap": 13}
-    events = [dict(stage=stage, emitted_date=day,
-                   emitted_at=f"{day}T14:00:00+09:00", record_id=str(index),
-                   fields={"entry_submit_attempt_id": f"attempt-{index}"})
-              for stage, count in stages.items() for index in range(count)]
+    stages = {
+        "entry_execution_sizing_plan": 9,
+        "order_leg_sent": 10,
+        "order_bundle_submitted": 8,
+        "entry_ai_economic_plan_observed": 22,
+        "entry_ai_economic_decision_available": 22,
+        "entry_probe_conditional_receipt_observed": 28,
+        "entry_ai_economic_source_gap": 13,
+    }
+    events = [
+        dict(
+            stage=stage,
+            emitted_date=day,
+            emitted_at=f"{day}T14:00:00+09:00",
+            record_id=str(index),
+            fields={"entry_submit_attempt_id": f"attempt-{index}"},
+        )
+        for stage, count in stages.items()
+        for index in range(count)
+    ]
     original = copy.deepcopy(events)
     details = []
-    allowed, excluded = split_plan._source_quality_filtered_events(events,
-        {day: {"tuning_input_allowed": True}}, exclusion_details=details)
+    allowed, excluded = split_plan._source_quality_filtered_events(
+        events, {day: {"tuning_input_allowed": True}}, exclusion_details=details
+    )
     assert len(allowed) == 112 and excluded == 0 and details == []
     assert all(event["source_date"] == day for event in allowed)
     assert all("entry_submit_attempt_id" in event for event in allowed)
     assert events == original
 
 
-@pytest.mark.parametrize("timestamp", ["2026-10-16T10:00:00+09:00", "2026-10-15T15:00:00Z"])
+@pytest.mark.parametrize(
+    "timestamp", ["2026-10-16T10:00:00+09:00", "2026-10-15T15:00:00Z"]
+)
 def test_execution_source_date_uses_emitted_at_and_kst_day(timestamp):
     allowed, excluded = split_plan._source_quality_filtered_events(
         [dict(stage="order_leg_sent", emitted_at=timestamp)],
-        {"2026-10-16": {"tuning_input_allowed": True}})
+        {"2026-10-16": {"tuning_input_allowed": True}},
+    )
     assert excluded == 0 and allowed[0]["source_date"] == "2026-10-16"
 
 
 def test_atomic_sizing_census_rejects_unexplained_deficit_even_when_no_rows_survive():
     day = "2026-10-16"
     plan, leg, bundle, source = _atomic_lineage_fixture(day)
-    source["stage_census"] = {event["stage"]: {"valid_count": 1}
-                              for event in (plan, leg, bundle)}
+    source["stage_census"] = {
+        event["stage"]: {"valid_count": 1} for event in (plan, leg, bundle)
+    }
     for events in ([], [plan, leg]):
-        lineage = split_plan.build_atomic_execution_sizing_lineage(day, events,
-            source_generation=source)
-        assert lineage["status"] == "source_gap" and lineage["selection_blocked"] is True
+        lineage = split_plan.build_atomic_execution_sizing_lineage(
+            day, events, source_generation=source
+        )
+        assert (
+            lineage["status"] == "source_gap" and lineage["selection_blocked"] is True
+        )
         assert lineage["source_quality_reason"] == "producer_stage_census_mismatch"
-        row = lineage["reader_population_conservation"]["stages"]["order_bundle_submitted"]
-        assert row == dict(expected=1, observed=0, verified_excluded=0, unobserved=1, unexpected=0)
+        row = lineage["reader_population_conservation"]["stages"][
+            "order_bundle_submitted"
+        ]
+        assert row == dict(
+            expected=1, observed=0, verified_excluded=0, unobserved=1, unexpected=0
+        )
 
 
 def test_atomic_sizing_census_preserves_explicit_stage_exclusion_without_blanket_block():
     day = "2026-10-16"
     plan, leg, bundle, source = _atomic_lineage_fixture(day)
-    excluded_event = dict(stage="entry_execution_sizing_plan_block", emitted_date=day,
-                          record_id="bad-record", entry_submit_attempt_id="bad-attempt")
-    source["stage_census"] = {event["stage"]: {"valid_count": 1}
-                              for event in (plan, leg, bundle, excluded_event)}
+    excluded_event = dict(
+        stage="entry_execution_sizing_plan_block",
+        emitted_date=day,
+        record_id="bad-record",
+        entry_submit_attempt_id="bad-attempt",
+    )
+    source["stage_census"] = {
+        event["stage"]: {"valid_count": 1}
+        for event in (plan, leg, bundle, excluded_event)
+    }
     details = []
     allowed, excluded = split_plan._source_quality_filtered_events(
         [plan, leg, bundle, excluded_event],
-        {day: {"tuning_input_allowed": True,
-               "hard_blocking_stages": ["entry_execution_sizing_plan_block"]}},
-        exclusion_details=details)
-    lineage = split_plan.build_atomic_execution_sizing_lineage(day, allowed,
-        source_generation=source, source_quality_exclusions=details)
+        {
+            day: {
+                "tuning_input_allowed": True,
+                "hard_blocking_stages": ["entry_execution_sizing_plan_block"],
+            }
+        },
+        exclusion_details=details,
+    )
+    lineage = split_plan.build_atomic_execution_sizing_lineage(
+        day, allowed, source_generation=source, source_quality_exclusions=details
+    )
     assert excluded == 1 and lineage["status"] == "ready"
     assert lineage["counts"]["valid_plan_count"] == 1
     assert lineage["source_quality_exclusions"][0]["record_id"] == "bad-record"
-    assert lineage["reader_population_conservation"]["verified_quality_excluded_count"] == 1
-    assert lineage["reader_population_conservation"]["stages"]["entry_execution_sizing_plan_block"]["unobserved"] == 0
+    assert (
+        lineage["reader_population_conservation"]["verified_quality_excluded_count"]
+        == 1
+    )
+    assert (
+        lineage["reader_population_conservation"]["stages"][
+            "entry_execution_sizing_plan_block"
+        ]["unobserved"]
+        == 0
+    )
     corrupt = copy.deepcopy(details)
     corrupt[0]["source_quality_contract"]["hard_blocking_stages"] = []
-    assert split_plan.build_atomic_execution_sizing_lineage(day, allowed,
-        source_generation=source, source_quality_exclusions=corrupt)["status"] == "source_gap"
+    assert (
+        split_plan.build_atomic_execution_sizing_lineage(
+            day, allowed, source_generation=source, source_quality_exclusions=corrupt
+        )["status"]
+        == "source_gap"
+    )
 
 
-@pytest.mark.parametrize("fault", ["missing_date", "invalid_date", "preflight_missing", "global_block"])
-def test_atomic_census_does_not_accept_unknown_or_globally_blocked_rows_as_verified_exclusions(fault):
+@pytest.mark.parametrize(
+    "fault", ["missing_date", "invalid_date", "preflight_missing", "global_block"]
+)
+def test_atomic_census_does_not_accept_unknown_or_globally_blocked_rows_as_verified_exclusions(
+    fault,
+):
     day = "2026-10-16"
-    event = dict(stage="entry_execution_sizing_plan", emitted_date=day, record_id="record-1")
+    event = dict(
+        stage="entry_execution_sizing_plan", emitted_date=day, record_id="record-1"
+    )
     quality = {day: {"tuning_input_allowed": True}}
     if fault == "missing_date":
         event.pop("emitted_date")
@@ -1218,70 +1424,111 @@ def test_atomic_census_does_not_accept_unknown_or_globally_blocked_rows_as_verif
     else:
         quality[day]["tuning_input_allowed"] = False
     details = []
-    allowed, excluded = split_plan._source_quality_filtered_events([event], quality,
-        exclusion_details=details)
-    source = dict(status="ready", source_date=day, generation_sha256="a" * 64,
-                  stage_census={event["stage"]: {"valid_count": 1}})
-    lineage = split_plan.build_atomic_execution_sizing_lineage(day, allowed,
-        source_generation=source, source_quality_exclusions=details)
+    allowed, excluded = split_plan._source_quality_filtered_events(
+        [event], quality, exclusion_details=details
+    )
+    source = dict(
+        status="ready",
+        source_date=day,
+        generation_sha256="a" * 64,
+        stage_census={event["stage"]: {"valid_count": 1}},
+    )
+    lineage = split_plan.build_atomic_execution_sizing_lineage(
+        day, allowed, source_generation=source, source_quality_exclusions=details
+    )
     assert allowed == [] and excluded == 1
     assert lineage["status"] == "source_gap"
-    assert len(lineage["reader_population_conservation"]["unverified_quality_exclusions"]) == 1
+    assert (
+        len(lineage["reader_population_conservation"]["unverified_quality_exclusions"])
+        == 1
+    )
 
 
 @pytest.mark.parametrize("invalid_count", [-1, True, "0"])
 def test_atomic_census_rejects_invalid_declared_count(invalid_count):
-    lineage = split_plan.build_atomic_execution_sizing_lineage("2026-10-16", [],
-        source_generation=dict(status="ready", source_date="2026-10-16",
+    lineage = split_plan.build_atomic_execution_sizing_lineage(
+        "2026-10-16",
+        [],
+        source_generation=dict(
+            status="ready",
+            source_date="2026-10-16",
             generation_sha256="a" * 64,
-            stage_census={"entry_execution_sizing_plan": {"valid_count": invalid_count}}))
+            stage_census={
+                "entry_execution_sizing_plan": {"valid_count": invalid_count}
+            },
+        ),
+    )
     assert lineage["status"] == "source_gap"
 
 
 def test_atomic_sizing_lineage_resolves_exact_immediate_plan_leg_index():
     plan, leg, bundle, source = _atomic_lineage_fixture()
-    core = {**plan["entry_execution_sizing_plan"], "total_qty": 1,
-            "immediate_qty": 1, "deferred_probe_residual_qty": 0,
-            "leg_count": 1, "legs": [{"leg_index": 1, "qty": 1,
-                                       "execution_phase": "immediate"}]}
+    core = {
+        **plan["entry_execution_sizing_plan"],
+        "total_qty": 1,
+        "immediate_qty": 1,
+        "deferred_probe_residual_qty": 0,
+        "leg_count": 1,
+        "legs": [{"leg_index": 1, "qty": 1, "execution_phase": "immediate"}],
+    }
     digest = split_plan._canonical_sha256(core)
-    identity = {"entry_execution_sizing_plan_id": f"entry-sizing-{digest[:24]}",
-                "entry_execution_sizing_plan_sha256": digest,
-                "entry_execution_sizing_total_qty": 1,
-                "entry_execution_sizing_leg_count": 1}
-    plan = {**plan, **identity, "entry_execution_sizing_plan": core,
-            "requested_qty": 1}
+    identity = {
+        "entry_execution_sizing_plan_id": f"entry-sizing-{digest[:24]}",
+        "entry_execution_sizing_plan_sha256": digest,
+        "entry_execution_sizing_total_qty": 1,
+        "entry_execution_sizing_leg_count": 1,
+    }
+    plan = {**plan, **identity, "entry_execution_sizing_plan": core, "requested_qty": 1}
     leg = {**leg, **identity, "requested_qty": 1}
     leg.pop("entry_split_order_leg_index")
     bundle = {**bundle, **identity, "requested_qty": 1}
     report = split_plan.build_atomic_execution_sizing_lineage(
-        "2026-09-28", [plan, leg, bundle], source_generation=source)
+        "2026-09-28", [plan, leg, bundle], source_generation=source
+    )
     row = report["rows"][0]
     assert row["source_quality_reasons"] == []
     assert row["submitted_legs"][0]["leg_index"] is None
     assert row["submitted_legs"][0]["resolved_plan_leg_index"] == 1
     assert row["submitted_qty"] == 1
 
-    ambiguous = {**core, "total_qty": 2, "immediate_qty": 2, "leg_count": 2,
-                 "legs": [{"leg_index": 1, "qty": 1, "execution_phase": "immediate"},
-                          {"leg_index": 2, "qty": 1, "execution_phase": "immediate"}]}
+    ambiguous = {
+        **core,
+        "total_qty": 2,
+        "immediate_qty": 2,
+        "leg_count": 2,
+        "legs": [
+            {"leg_index": 1, "qty": 1, "execution_phase": "immediate"},
+            {"leg_index": 2, "qty": 1, "execution_phase": "immediate"},
+        ],
+    }
     digest = split_plan._canonical_sha256(ambiguous)
-    changed = {"entry_execution_sizing_plan_id": f"entry-sizing-{digest[:24]}",
-               "entry_execution_sizing_plan_sha256": digest,
-               "entry_execution_sizing_total_qty": 2,
-               "entry_execution_sizing_leg_count": 2}
-    plan = {**plan, **changed, "entry_execution_sizing_plan": ambiguous,
-            "requested_qty": 2}
+    changed = {
+        "entry_execution_sizing_plan_id": f"entry-sizing-{digest[:24]}",
+        "entry_execution_sizing_plan_sha256": digest,
+        "entry_execution_sizing_total_qty": 2,
+        "entry_execution_sizing_leg_count": 2,
+    }
+    plan = {
+        **plan,
+        **changed,
+        "entry_execution_sizing_plan": ambiguous,
+        "requested_qty": 2,
+    }
     leg = {**leg, **changed}
     bundle = {**bundle, **changed, "requested_qty": 2}
     report = split_plan.build_atomic_execution_sizing_lineage(
-        "2026-09-28", [plan, leg, bundle], source_generation=source)
-    assert "submit_leg_plan_quantity_or_index_invalid" in report["rows"][0]["source_quality_reasons"]
+        "2026-09-28", [plan, leg, bundle], source_generation=source
+    )
+    assert (
+        "submit_leg_plan_quantity_or_index_invalid"
+        in report["rows"][0]["source_quality_reasons"]
+    )
 
 
 def _atomic_residual_fixture():
     from types import SimpleNamespace
     from src.engine.scalping import entry_cancel_wait_runtime as runtime
+
     day = "2026-09-28"
     plan, leg, bundle, source = _atomic_lineage_fixture(day)
     core = copy.deepcopy(plan["entry_execution_sizing_plan"])
@@ -1289,39 +1536,84 @@ def _atomic_residual_fixture():
     core["legs"][1]["execution_phase"] = "after_verified_probe_fill"
     sha = split_plan._canonical_sha256(core)
     for event in (plan, leg, bundle):
-        event.update(entry_execution_sizing_plan_id=f"entry-sizing-{sha[:24]}",
-                     entry_execution_sizing_plan_sha256=sha)
+        event.update(
+            entry_execution_sizing_plan_id=f"entry-sizing-{sha[:24]}",
+            entry_execution_sizing_plan_sha256=sha,
+        )
     plan["entry_execution_sizing_plan"] = core
-    leg.update(entry_split_order_probe_first_applied="True",
-               entry_split_order_probe_bundle_id="probe-1", owner_registry_intent_id="intent-1")
-    stock = dict(id="record-1", code="005930", entry_split_probe_bundle_id="probe-1",
-                 entry_split_probe_requested_qty=3)
-    owner = SimpleNamespace(owner_type="main_scalping", owner_id="main_scalping:record-1",
-                            client_intent_id="residual-client")
-    stock["entry_split_probe_submit_source"] = runtime.probe_submit_source(stock,
-        parent_id="attempt-1", account_key="account-1", owner_context=owner,
-        planned_qty=3, source_date=day)
-    at = datetime.fromisoformat(day+"T10:01:00+09:00").timestamp()
-    fields = runtime.residual_submission_fields(stock, {"tag":"entry_split_probe_residual_1"},
-        owner_context=owner, account_key="account-1", intent_id="intent-2", order_no="0023456",
-        qty=2, price=10000, route="KRX", now_ts=at)
-    residual = {**fields, "stage":"order_leg_sent", "source_date":day,
-        "record_id":"record-1", "stock_code":"005930", "effective_venue":"KRX",
-        "market_session_bucket":"KRX_REGULAR", "residual_source_only":"True",
-        "tag":"entry_split_probe_residual_1", "actual_order_submitted":True,
-        "broker_order_no":"0023456", "requested_qty":"2", "submitted_qty":"2", "broker_route":"KRX"}
+    leg.update(
+        entry_split_order_probe_first_applied="True",
+        entry_split_order_probe_bundle_id="probe-1",
+        owner_registry_intent_id="intent-1",
+    )
+    stock = dict(
+        id="record-1",
+        code="005930",
+        entry_split_probe_bundle_id="probe-1",
+        entry_split_probe_requested_qty=3,
+    )
+    owner = SimpleNamespace(
+        owner_type="main_scalping",
+        owner_id="main_scalping:record-1",
+        client_intent_id="residual-client",
+    )
+    stock["entry_split_probe_submit_source"] = runtime.probe_submit_source(
+        stock,
+        parent_id="attempt-1",
+        account_key="account-1",
+        owner_context=owner,
+        planned_qty=3,
+        source_date=day,
+    )
+    at = datetime.fromisoformat(day + "T10:01:00+09:00").timestamp()
+    fields = runtime.residual_submission_fields(
+        stock,
+        {"tag": "entry_split_probe_residual_1"},
+        owner_context=owner,
+        account_key="account-1",
+        intent_id="intent-2",
+        order_no="0023456",
+        qty=2,
+        price=10000,
+        route="KRX",
+        now_ts=at,
+    )
+    residual = {
+        **fields,
+        "stage": "order_leg_sent",
+        "source_date": day,
+        "record_id": "record-1",
+        "stock_code": "005930",
+        "effective_venue": "KRX",
+        "market_session_bucket": "KRX_REGULAR",
+        "residual_source_only": "True",
+        "tag": "entry_split_probe_residual_1",
+        "actual_order_submitted": True,
+        "broker_order_no": "0023456",
+        "requested_qty": "2",
+        "submitted_qty": "2",
+        "broker_route": "KRX",
+    }
     registry = _atomic_registry_rows(day, 1, 1)
-    registry.extend({**row, "intent_id":"intent-2", "broker_order_no":"0023456",
-                     "client_intent_id":"residual-client", "execution_no":"execution-2"}
-                    for row in _atomic_registry_rows(day, 2, 2))
+    registry.extend(
+        {
+            **row,
+            "intent_id": "intent-2",
+            "broker_order_no": "0023456",
+            "client_intent_id": "residual-client",
+            "execution_no": "execution-2",
+        }
+        for row in _atomic_registry_rows(day, 2, 2)
+    )
     return day, [plan, leg, residual, bundle], source, registry
 
 
 def test_atomic_residual_sealed_parent_joins_distinct_intents_without_source_rewrite():
     day, events, source, registry = _atomic_residual_fixture()
     original = copy.deepcopy(events)
-    result = split_plan.build_atomic_execution_sizing_lineage(day, events,
-        source_generation=source, registry_events=registry)
+    result = split_plan.build_atomic_execution_sizing_lineage(
+        day, events, source_generation=source, registry_events=registry
+    )
     assert events == original
     assert result["status"] == "ready"
     assert result["counts"]["unique_leg_orders"] == 2
@@ -1333,25 +1625,44 @@ def test_atomic_residual_sealed_parent_joins_distinct_intents_without_source_rew
     assert row["terminal_state"] == "partial_open"
     assert row["submitted_legs"][1]["resolved_plan_leg_index"] == 2
     assert row["submitted_legs"][1]["leg_index"] is None
-    assert row["residual_plan_bindings"][0]["original_event_sha256"] == split_plan._canonical_sha256(original[2])
+    assert row["residual_plan_bindings"][0][
+        "original_event_sha256"
+    ] == split_plan._canonical_sha256(original[2])
 
 
 def test_wrapped_compact_residual_survives_quality_normalization_and_census_join():
     day, events, source, registry = _atomic_residual_fixture()
-    wrapped = [dict(stage=event["stage"], emitted_date=day,
-        emitted_at=event.get("emitted_at", day+"T10:01:00+09:00"),
-        record_id=event["record_id"], fields={key: value for key, value in event.items()
-            if key not in {"stage", "source_date", "emitted_at", "record_id"}})
-        for event in events]
+    wrapped = [
+        dict(
+            stage=event["stage"],
+            emitted_date=day,
+            emitted_at=event.get("emitted_at", day + "T10:01:00+09:00"),
+            record_id=event["record_id"],
+            fields={
+                key: value
+                for key, value in event.items()
+                if key not in {"stage", "source_date", "emitted_at", "record_id"}
+            },
+        )
+        for event in events
+    ]
     original = copy.deepcopy(wrapped)
     source["stage_census"] = {
         "entry_execution_sizing_plan": {"valid_count": 1},
-        "order_leg_sent": {"valid_count": 2}, "order_bundle_submitted": {"valid_count": 1}}
+        "order_leg_sent": {"valid_count": 2},
+        "order_bundle_submitted": {"valid_count": 1},
+    }
     details = []
-    allowed, excluded = split_plan._source_quality_filtered_events(wrapped,
-        {day: {"tuning_input_allowed": True}}, exclusion_details=details)
-    lineage = split_plan.build_atomic_execution_sizing_lineage(day, allowed,
-        source_generation=source, registry_events=registry, source_quality_exclusions=details)
+    allowed, excluded = split_plan._source_quality_filtered_events(
+        wrapped, {day: {"tuning_input_allowed": True}}, exclusion_details=details
+    )
+    lineage = split_plan.build_atomic_execution_sizing_lineage(
+        day,
+        allowed,
+        source_generation=source,
+        registry_events=registry,
+        source_quality_exclusions=details,
+    )
     assert excluded == 0 and wrapped == original
     assert lineage["status"] == "ready"
     assert lineage["counts"]["unjoined_submit_count"] == 0
@@ -1359,65 +1670,118 @@ def test_wrapped_compact_residual_survives_quality_normalization_and_census_join
     assert lineage["reader_population_conservation"]["status"] == "verified"
 
 
-def test_full_input_reader_preserves_residual_parent_context_and_registry_identity(monkeypatch, tmp_path):
+def test_full_input_reader_preserves_residual_parent_context_and_registry_identity(
+    monkeypatch, tmp_path
+):
     data_dir = _patch_dirs(monkeypatch, tmp_path)
     day, events, source, registry = _atomic_residual_fixture()
-    wrapped = [dict(stage=event['stage'], pipeline='ENTRY_PIPELINE', emitted_date=day,
-        emitted_at=event.get('emitted_at', day+'T10:01:00+09:00'),
-        record_id=event['record_id'], stock_code=event['stock_code'],
-        fields={key: value for key, value in event.items()
-                if key not in {'stage', 'source_date', 'emitted_at', 'record_id', 'stock_code'}})
-        for event in events]
-    path = data_dir/'pipeline_events'/f'pipeline_events_{day}.jsonl'
+    wrapped = [
+        dict(
+            stage=event["stage"],
+            pipeline="ENTRY_PIPELINE",
+            emitted_date=day,
+            emitted_at=event.get("emitted_at", day + "T10:01:00+09:00"),
+            record_id=event["record_id"],
+            stock_code=event["stock_code"],
+            fields={
+                key: value
+                for key, value in event.items()
+                if key
+                not in {"stage", "source_date", "emitted_at", "record_id", "stock_code"}
+            },
+        )
+        for event in events
+    ]
+    path = data_dir / "pipeline_events" / f"pipeline_events_{day}.jsonl"
     _write_jsonl(path, wrapped)
     original = path.read_bytes()
-    source['stage_census'] = {stage: dict(valid_count=sum(event['stage'] == stage for event in events))
-        for stage in ('entry_execution_sizing_plan', 'entry_execution_sizing_plan_block',
-                      'order_leg_sent', 'order_bundle_submitted')}
-    quality = dict(status='pass', tuning_input_allowed=True, hard_blocking_stages=[])
-    monkeypatch.setattr(split_plan, '_source_quality_summary', lambda _day: quality)
-    monkeypatch.setattr(split_plan, 'is_date_allowed', lambda *_: True)
+    source["stage_census"] = {
+        stage: dict(valid_count=sum(event["stage"] == stage for event in events))
+        for stage in (
+            "entry_execution_sizing_plan",
+            "entry_execution_sizing_plan_block",
+            "order_leg_sent",
+            "order_bundle_submitted",
+        )
+    }
+    quality = dict(status="pass", tuning_input_allowed=True, hard_blocking_stages=[])
+    monkeypatch.setattr(split_plan, "_source_quality_summary", lambda _day: quality)
+    monkeypatch.setattr(split_plan, "is_date_allowed", lambda *_: True)
     rows, _ = split_plan._iter_input_events(day)
     details = []
-    allowed, excluded = split_plan._source_quality_filtered_events(rows, {day: quality},
-        exclusion_details=details)
-    lineage = split_plan.build_atomic_execution_sizing_lineage(day, allowed,
-        source_generation=source, registry_events=registry, source_quality_exclusions=details)
+    allowed, excluded = split_plan._source_quality_filtered_events(
+        rows, {day: quality}, exclusion_details=details
+    )
+    lineage = split_plan.build_atomic_execution_sizing_lineage(
+        day,
+        allowed,
+        source_generation=source,
+        registry_events=registry,
+        source_quality_exclusions=details,
+    )
     assert path.read_bytes() == original
-    assert excluded == 0 and lineage['status'] == 'ready'
-    assert lineage['reader_population_conservation']['status'] == 'verified'
-    assert lineage['counts']['unjoined_submit_count'] == 0
-    assert len(lineage['rows'][0]['residual_plan_bindings']) == 1
-    assert lineage['rows'][0]['submitted_qty'] == lineage['rows'][0]['filled_qty'] == 3
+    assert excluded == 0 and lineage["status"] == "ready"
+    assert lineage["reader_population_conservation"]["status"] == "verified"
+    assert lineage["counts"]["unjoined_submit_count"] == 0
+    assert len(lineage["rows"][0]["residual_plan_bindings"]) == 1
+    assert lineage["rows"][0]["submitted_qty"] == lineage["rows"][0]["filled_qty"] == 3
     # The actual full-report consumer must use the same projection and outcome.
-    monkeypatch.setattr(split_plan, '_atomic_sizing_source_generation', lambda _day: source)
-    monkeypatch.setattr(split_plan, '_execution_registry_snapshot',
-        lambda: (registry, dict(status='verified')))
+    monkeypatch.setattr(
+        split_plan, "_atomic_sizing_source_generation", lambda _day: source
+    )
+    monkeypatch.setattr(
+        split_plan,
+        "_execution_registry_snapshot",
+        lambda: (registry, dict(status="verified")),
+    )
     report = split_plan.build_report(day, write=False)
-    atomic = report['input_summary']['atomic_execution_sizing']
-    assert atomic['lineage']['status'] == 'ready'
-    assert atomic['lineage']['counts']['unjoined_submit_count'] == 0
-    assert len(atomic['lineage']['rows'][0]['residual_plan_bindings']) == 1
+    atomic = report["input_summary"]["atomic_execution_sizing"]
+    assert atomic["lineage"]["status"] == "ready"
+    assert atomic["lineage"]["counts"]["unjoined_submit_count"] == 0
+    assert len(atomic["lineage"]["rows"][0]["residual_plan_bindings"]) == 1
 
 
-@pytest.mark.parametrize("fault", ["hash", "parent", "bundle", "owner", "quantity", "tag",
-                                  "registry", "client", "explicit_conflict", "phase"])
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "hash",
+        "parent",
+        "bundle",
+        "owner",
+        "quantity",
+        "tag",
+        "registry",
+        "client",
+        "explicit_conflict",
+        "phase",
+    ],
+)
 def test_atomic_residual_rejects_unproven_binding(fault):
     day, events, source, registry = _atomic_residual_fixture()
     event = events[2]
     if fault == "hash":
         event["entry_cancel_wait_submission_context"] = "{}"
-    elif fault == "parent": event["buy_parent_id"] = "other"
-    elif fault == "bundle": events[1]["entry_split_order_probe_bundle_id"] = "other"
-    elif fault == "owner": event["buy_owner_id"] = "main_scalping:other"
-    elif fault == "quantity": event["submitted_qty"] = 3
-    elif fault == "tag": event["tag"] = "entry_split_probe_residual_2"
-    elif fault == "registry": registry = []
-    elif fault == "client": event["buy_owner_client_intent_id"] = "other"
-    elif fault == "explicit_conflict": event["entry_execution_sizing_plan_id"] = "other"
-    elif fault == "phase": event["residual_source_only"] = False
-    result = split_plan.build_atomic_execution_sizing_lineage(day, events,
-        source_generation=source, registry_events=registry)
+    elif fault == "parent":
+        event["buy_parent_id"] = "other"
+    elif fault == "bundle":
+        events[1]["entry_split_order_probe_bundle_id"] = "other"
+    elif fault == "owner":
+        event["buy_owner_id"] = "main_scalping:other"
+    elif fault == "quantity":
+        event["submitted_qty"] = 3
+    elif fault == "tag":
+        event["tag"] = "entry_split_probe_residual_2"
+    elif fault == "registry":
+        registry = []
+    elif fault == "client":
+        event["buy_owner_client_intent_id"] = "other"
+    elif fault == "explicit_conflict":
+        event["entry_execution_sizing_plan_id"] = "other"
+    elif fault == "phase":
+        event["residual_source_only"] = False
+    result = split_plan.build_atomic_execution_sizing_lineage(
+        day, events, source_generation=source, registry_events=registry
+    )
     assert result["status"] == "source_gap"
     assert result["counts"]["unjoined_submit_count"] == 1
 
@@ -1426,154 +1790,259 @@ def test_atomic_sizing_lineage_quarantines_wrong_attempt_and_changed_plan():
     plan, leg, bundle, source = _atomic_lineage_fixture()
     wrong = {**leg, "entry_submit_attempt_id": "other-attempt"}
     result = split_plan.build_atomic_execution_sizing_lineage(
-        "2026-09-28", [plan, wrong, bundle], source_generation=source)
+        "2026-09-28", [plan, wrong, bundle], source_generation=source
+    )
     assert result["counts"]["unjoined_submit_count"] == 1
     assert result["source_quality_reason"] == "plan_or_owner_row_quarantined"
     assert result["unjoined_submits"][0]["source_quality_reason"] == (
-        "submit_plan_identity_unjoined")
+        "submit_plan_identity_unjoined"
+    )
     assert result["unjoined_submits"][0]["attempt_id"] == "other-attempt"
     assert result["counts"]["valid_plan_count"] == 0
-    changed = {**plan, "entry_execution_sizing_plan": {
-        **plan["entry_execution_sizing_plan"], "total_qty": 4}}
+    changed = {
+        **plan,
+        "entry_execution_sizing_plan": {
+            **plan["entry_execution_sizing_plan"],
+            "total_qty": 4,
+        },
+    }
     result = split_plan.build_atomic_execution_sizing_lineage(
-        "2026-09-28", [changed, leg, bundle], source_generation=source)
+        "2026-09-28", [changed, leg, bundle], source_generation=source
+    )
     assert result["counts"]["quarantined_plan_count"] == 1
     assert result["source_quality_reason"] == "plan_or_owner_row_quarantined"
     assert "plan_content_sha_mismatch" in result["rows"][0]["source_quality_reasons"]
     owner_missing = {**leg, "buy_owner_id": None, "buy_account_key": None}
     result = split_plan.build_atomic_execution_sizing_lineage(
-        "2026-09-28", [plan, owner_missing, bundle], source_generation=source)
+        "2026-09-28", [plan, owner_missing, bundle], source_generation=source
+    )
     assert result["counts"]["identity_joined_plan_count"] == 1
     assert result["counts"]["quarantined_plan_count"] == 1
-    assert "submit_owner_account_route_missing" in result["rows"][0]["source_quality_reasons"]
+    assert (
+        "submit_owner_account_route_missing"
+        in result["rows"][0]["source_quality_reasons"]
+    )
 
 
 def test_atomic_sizing_lineage_separates_deferred_and_intentional_block():
     plan, leg, bundle, source = _atomic_lineage_fixture()
-    deferred = {**plan, "record_id": "record-2", "entry_submit_attempt_id": "attempt-2",
-                "entry_execution_sizing_plan": None, "entry_execution_sizing_plan_id": None,
-                "entry_execution_sizing_plan_sha256": None,
-                "entry_execution_sizing_plan_emitted": False,
-                "entry_execution_sizing_valid": True}
-    blocked = {**deferred, "stage": "entry_execution_sizing_plan_block",
-               "record_id": "record-3", "entry_submit_attempt_id": "attempt-3",
-               "entry_execution_sizing_valid": False,
-               "entry_execution_sizing_blockers": ["planned_orders_missing"]}
+    deferred = {
+        **plan,
+        "record_id": "record-2",
+        "entry_submit_attempt_id": "attempt-2",
+        "entry_execution_sizing_plan": None,
+        "entry_execution_sizing_plan_id": None,
+        "entry_execution_sizing_plan_sha256": None,
+        "entry_execution_sizing_plan_emitted": False,
+        "entry_execution_sizing_valid": True,
+    }
+    blocked = {
+        **deferred,
+        "stage": "entry_execution_sizing_plan_block",
+        "record_id": "record-3",
+        "entry_submit_attempt_id": "attempt-3",
+        "entry_execution_sizing_valid": False,
+        "entry_execution_sizing_blockers": ["planned_orders_missing"],
+    }
     result = split_plan.build_atomic_execution_sizing_lineage(
-        "2026-09-28", [plan, leg, bundle, deferred, blocked], source_generation=source)
+        "2026-09-28", [plan, leg, bundle, deferred, blocked], source_generation=source
+    )
     assert result["counts"]["issued_plan_count"] == 1
     assert result["counts"]["deferred_no_plan_count"] == 1
     assert result["counts"]["blocked_no_plan_count"] == 1
     assert result["counts"]["quarantined_plan_count"] == 0
-    no_receipt = {**blocked,
-                  "entry_execution_sizing_disposition": "blocked_no_action_receipt",
-                  "entry_execution_sizing_blockers": ["machine_action_receipt_absent"]}
+    no_receipt = {
+        **blocked,
+        "entry_execution_sizing_disposition": "blocked_no_action_receipt",
+        "entry_execution_sizing_blockers": ["machine_action_receipt_absent"],
+    }
     result = split_plan.build_atomic_execution_sizing_lineage(
-        "2026-09-28", [no_receipt], source_generation=source)
+        "2026-09-28", [no_receipt], source_generation=source
+    )
     assert result["counts"]["blocked_no_action_receipt_count"] == 1
     assert result["counts"]["quarantined_plan_count"] == 0
     corrupt = {**deferred, "entry_execution_sizing_blockers": ["unexpected"]}
     result = split_plan.build_atomic_execution_sizing_lineage(
-        "2026-09-28", [corrupt], source_generation=source)
+        "2026-09-28", [corrupt], source_generation=source
+    )
     assert result["rows"][0]["state"] == "quarantined"
     assert result["counts"]["quarantined_plan_count"] == 1
 
 
 def _atomic_registry_rows(day, qty, filled, *, terminal=False, cancel_pending=False):
-    common = {"intent_id": "intent-1", "account_key": "account-1",
-              "order_date": day, "symbol": "005930", "side": "BUY", "action": "NEW",
-              "quantity": qty, "route": "KRX", "owner_type": "main_scalping",
-              "owner_id": "main_scalping:record-1", "broker_order_no": "0012345",
-              "canceled_qty": 0}
-    rows = [{**common, "event": "ORDER_BOUND", "state": "ORDER_BOUND",
-             "filled_qty": 0}]
+    common = {
+        "intent_id": "intent-1",
+        "account_key": "account-1",
+        "order_date": day,
+        "symbol": "005930",
+        "side": "BUY",
+        "action": "NEW",
+        "quantity": qty,
+        "route": "KRX",
+        "owner_type": "main_scalping",
+        "owner_id": "main_scalping:record-1",
+        "broker_order_no": "0012345",
+        "canceled_qty": 0,
+    }
+    rows = [{**common, "event": "ORDER_BOUND", "state": "ORDER_BOUND", "filled_qty": 0}]
     if filled:
-        rows.append({**common, "event": "FILL_RECORDED", "state": "ORDER_BOUND",
-                     "filled_qty": filled, "execution_no": "execution-1"})
+        rows.append(
+            {
+                **common,
+                "event": "FILL_RECORDED",
+                "state": "ORDER_BOUND",
+                "filled_qty": filled,
+                "execution_no": "execution-1",
+            }
+        )
     if cancel_pending:
-        rows.append({**common, "intent_id": "cancel-1", "action": "CANCEL",
-                     "original_order_no": "0012345", "event": "INTENT_RESERVED",
-                     "state": "INTENT_RESERVED"})
+        rows.append(
+            {
+                **common,
+                "intent_id": "cancel-1",
+                "action": "CANCEL",
+                "original_order_no": "0012345",
+                "event": "INTENT_RESERVED",
+                "state": "INTENT_RESERVED",
+            }
+        )
     if terminal:
-        rows.append({**common, "event": "ORDER_TERMINAL", "state": "ORDER_TERMINAL",
-                     "filled_qty": filled})
-        proof = {**common, "schema": "order_owner_terminal_reconciliation_v1",
-                 "filled_qty": filled, "receipt_sha256": "f" * 64}
-        rows.append({"intent_id": "intent-1", "account_key": "account-1",
-                     "event": "TERMINAL_RECONCILIATION_RECORDED",
-                     "observed_at_kst": f"{day}T10:15:00+09:00",
-                     "terminal_reconciliation": proof})
+        rows.append(
+            {
+                **common,
+                "event": "ORDER_TERMINAL",
+                "state": "ORDER_TERMINAL",
+                "filled_qty": filled,
+            }
+        )
+        proof = {
+            **common,
+            "schema": "order_owner_terminal_reconciliation_v1",
+            "filled_qty": filled,
+            "receipt_sha256": "f" * 64,
+        }
+        rows.append(
+            {
+                "intent_id": "intent-1",
+                "account_key": "account-1",
+                "event": "TERMINAL_RECONCILIATION_RECORDED",
+                "observed_at_kst": f"{day}T10:15:00+09:00",
+                "terminal_reconciliation": proof,
+            }
+        )
     return rows
 
 
 def test_atomic_sizing_lineage_registry_full_partial_cancel_and_restart():
     day = "2026-09-28"
     plan, leg, bundle, source = _atomic_lineage_fixture(day)
-    leg = {**leg, "buy_owner_type": "main_scalping",
-           "buy_owner_id": "main_scalping:record-1",
-           "buy_account_key": "account-1", "owner_registry_intent_id": "intent-1",
-           "broker_route": "KRX"}
-    bundle = {**bundle, **{key: leg[key] for key in
-              ("buy_owner_type", "buy_owner_id", "buy_account_key",
-               "owner_registry_intent_id", "broker_route")}}
+    leg = {
+        **leg,
+        "buy_owner_type": "main_scalping",
+        "buy_owner_id": "main_scalping:record-1",
+        "buy_account_key": "account-1",
+        "owner_registry_intent_id": "intent-1",
+        "broker_route": "KRX",
+    }
+    bundle = {
+        **bundle,
+        **{
+            key: leg[key]
+            for key in (
+                "buy_owner_type",
+                "buy_owner_id",
+                "buy_account_key",
+                "owner_registry_intent_id",
+                "broker_route",
+            )
+        },
+    }
     full = split_plan.build_atomic_execution_sizing_lineage(
-        day, [plan, leg, leg, bundle], source_generation=source,
-        registry_events=_atomic_registry_rows(day, 1, 1, terminal=True))
+        day,
+        [plan, leg, leg, bundle],
+        source_generation=source,
+        registry_events=_atomic_registry_rows(day, 1, 1, terminal=True),
+    )
     assert full["counts"]["excluded_duplicate_submit_event_count"] == 1
     assert full["rows"][0]["terminal_state"] == "full"
     assert full["rows"][0]["execution_ids"] == ["execution-1"]
     assert full["rows"][0]["cost_krw"] is None
 
-    core = {**plan["entry_execution_sizing_plan"], "immediate_qty": 2,
-            "deferred_probe_residual_qty": 1,
-            "legs": [{"leg_index": 1, "qty": 2}, {"leg_index": 2, "qty": 1}]}
+    core = {
+        **plan["entry_execution_sizing_plan"],
+        "immediate_qty": 2,
+        "deferred_probe_residual_qty": 1,
+        "legs": [{"leg_index": 1, "qty": 2}, {"leg_index": 2, "qty": 1}],
+    }
     sha = split_plan._canonical_sha256(core)
-    fields = {"entry_execution_sizing_plan_id": f"entry-sizing-{sha[:24]}",
-              "entry_execution_sizing_plan_sha256": sha}
+    fields = {
+        "entry_execution_sizing_plan_id": f"entry-sizing-{sha[:24]}",
+        "entry_execution_sizing_plan_sha256": sha,
+    }
     plan = {**plan, **fields, "entry_execution_sizing_plan": core}
     leg = {**leg, **fields, "requested_qty": 2, "submitted_qty": 2}
     bundle = {**bundle, **fields, "submitted_qty": 2}
     partial = split_plan.build_atomic_execution_sizing_lineage(
-        day, [plan, leg, bundle], source_generation=source,
-        registry_events=_atomic_registry_rows(day, 2, 1))
+        day,
+        [plan, leg, bundle],
+        source_generation=source,
+        registry_events=_atomic_registry_rows(day, 2, 1),
+    )
     assert partial["rows"][0]["terminal_state"] == "partial_open"
     assert partial["rows"][0]["filled_qty"] == 1
     cancel = split_plan.build_atomic_execution_sizing_lineage(
-        day, [plan, leg, bundle], source_generation=source,
-        registry_events=_atomic_registry_rows(day, 2, 1, cancel_pending=True))
+        day,
+        [plan, leg, bundle],
+        source_generation=source,
+        registry_events=_atomic_registry_rows(day, 2, 1, cancel_pending=True),
+    )
     assert cancel["rows"][0]["terminal_state"] == "cancel_pending"
     resolved_cancel_journal = _atomic_registry_rows(day, 2, 1, cancel_pending=True)
-    resolved_cancel_journal.append({"intent_id": "cancel-1", "event": "ORDER_TERMINAL",
-                                    "state": "ORDER_TERMINAL"})
+    resolved_cancel_journal.append(
+        {"intent_id": "cancel-1", "event": "ORDER_TERMINAL", "state": "ORDER_TERMINAL"}
+    )
     resolved = split_plan.build_atomic_execution_sizing_lineage(
-        day, [plan, leg, bundle], source_generation=source,
-        registry_events=resolved_cancel_journal)
+        day,
+        [plan, leg, bundle],
+        source_generation=source,
+        registry_events=resolved_cancel_journal,
+    )
     assert resolved["rows"][0]["terminal_state"] == "partial_open"
 
 
 def test_atomic_sizing_lineage_uncertain_response_and_source_only_are_not_orders():
     day = "2026-09-28"
     plan, leg, bundle, source = _atomic_lineage_fixture(day)
-    uncertain = {**leg, "stage": "order_leg_no_response",
-                 "actual_order_submitted": False, "broker_order_no": None,
-                 "broker_submission_reconciliation_required": True}
+    uncertain = {
+        **leg,
+        "stage": "order_leg_no_response",
+        "actual_order_submitted": False,
+        "broker_order_no": None,
+        "broker_submission_reconciliation_required": True,
+    }
     pending = split_plan.build_atomic_execution_sizing_lineage(
-        day, [plan, uncertain], source_generation=source)
+        day, [plan, uncertain], source_generation=source
+    )
     assert pending["counts"]["response_uncertain_attempt_count"] == 1
     assert pending["counts"]["unique_leg_orders"] == 0
     assert pending["rows"][0]["state"] == "response_uncertain"
     sim_core = {**plan["entry_execution_sizing_plan"], "observation_only": True}
     sha = split_plan._canonical_sha256(sim_core)
-    sim_plan = {**plan, "entry_execution_sizing_plan": sim_core,
-                "entry_execution_sizing_plan_id": f"entry-sizing-{sha[:24]}",
-                "entry_execution_sizing_plan_sha256": sha}
+    sim_plan = {
+        **plan,
+        "entry_execution_sizing_plan": sim_core,
+        "entry_execution_sizing_plan_id": f"entry-sizing-{sha[:24]}",
+        "entry_execution_sizing_plan_sha256": sha,
+    }
     sim = split_plan.build_atomic_execution_sizing_lineage(
-        day, [sim_plan], source_generation=source)
+        day, [sim_plan], source_generation=source
+    )
     assert sim["counts"]["excluded_source_only_plan_count"] == 1
     assert sim["counts"]["valid_plan_count"] == 0
     corrupt_sim = {**sim_plan, "entry_execution_sizing_plan_sha256": "0" * 64}
     sim = split_plan.build_atomic_execution_sizing_lineage(
-        day, [corrupt_sim], source_generation=source)
+        day, [corrupt_sim], source_generation=source
+    )
     assert sim["counts"]["excluded_source_only_plan_count"] == 0
     assert sim["counts"]["quarantined_plan_count"] == 1
 
@@ -1585,22 +2054,34 @@ def test_atomic_sizing_policy_reader_rejects_regenerated_source_generation(
     plan, leg, bundle, source = _atomic_lineage_fixture(day)
     compact = tmp_path / "part-1.jsonl"
     compact.write_text('{"stage":"order_leg_sent"}\n', encoding="utf-8")
-    source = {**source, "reader_projection": split_plan._atomic_sizing_projection_identity({
-        "status": "ready", "sources": [{"path": str(compact), "sha256": "c" * 64}],
-        "producer_census": {"manifest_sha256": "d" * 64},
-        "retained_event_count": 1, "full_population_coverage_verified": True})}
-    monkeypatch.setattr(split_plan, "_atomic_sizing_compact_inventory",
-                        lambda _day: [str(compact)])
+    source = {
+        **source,
+        "reader_projection": split_plan._atomic_sizing_projection_identity(
+            {
+                "status": "ready",
+                "sources": [{"path": str(compact), "sha256": "c" * 64}],
+                "producer_census": {"manifest_sha256": "d" * 64},
+                "retained_event_count": 1,
+                "full_population_coverage_verified": True,
+            }
+        ),
+    }
+    monkeypatch.setattr(
+        split_plan, "_atomic_sizing_compact_inventory", lambda _day: [str(compact)]
+    )
     lineage = split_plan.build_atomic_execution_sizing_lineage(
-        day, [plan, leg, bundle], source_generation=source)
+        day, [plan, leg, bundle], source_generation=source
+    )
     monkeypatch.setattr(split_plan, "REPORT_DIR", tmp_path / "reports")
     current = dict(source)
-    monkeypatch.setattr(split_plan, "_atomic_sizing_source_generation",
-                        lambda _day: current)
+    monkeypatch.setattr(
+        split_plan, "_atomic_sizing_source_generation", lambda _day: current
+    )
     report_path = tmp_path / "entry_split_order_plan_2026-09-28.json"
     policy = {
         "schema_version": split_plan.POLICY_SCHEMA_VERSION,
-        "source_date": day, "source_report": str(report_path),
+        "source_date": day,
+        "source_report": str(report_path),
         "policy_version": "entry_split_order_plan:2026-09-28:fixture",
         "entry_execution_sizing_plan_schema": split_plan.ATOMIC_EXECUTION_SIZING_SCHEMA,
         "entry_execution_sizing_policy": split_plan.ATOMIC_EXECUTION_SIZING_BASELINE_POLICY,
@@ -1620,18 +2101,23 @@ def test_atomic_sizing_policy_reader_rejects_regenerated_source_generation(
     }
     report, policy = split_plan.bind_report_policy_generation(report, policy)
     immutable = split_plan.generation_report_path(
-        day, report["artifact_generation_binding"]["generation_id"])
+        day, report["artifact_generation_binding"]["generation_id"]
+    )
     split_plan._write_json(immutable, report)
     assert split_plan.policy_report_generation_contract_status(policy) == (
-        True, "generation_binding_valid")
+        True,
+        "generation_binding_valid",
+    )
     compact.write_text('{"stage":"order_leg_fail"}\n', encoding="utf-8")
     assert split_plan.policy_report_generation_contract_status(policy) == (
-        False, "atomic_sizing_reader_projection_stale")
+        False,
+        "atomic_sizing_reader_projection_stale",
+    )
     current = {**source, "generation_sha256": "b" * 64}
     assert split_plan.policy_report_generation_contract_status(policy) == (
-        False, "atomic_sizing_source_generation_stale")
-
-
+        False,
+        "atomic_sizing_source_generation_stale",
+    )
 
 
 def test_split_candidate_disables_previous_policy_after_mature_negative_early_ev():
@@ -1886,10 +2372,15 @@ def test_allocator_applies_child_shape_seed_only_for_exact_observed_shape(
     orders, fields = split_plan.apply_entry_split_order_policy(
         [{"tag": "normal", "qty": 2, "price": 1000}],
         stock={"code": "005930", "id": 1, "strategy": "SCALPING"},
-        latency_gate={**_probe_ready_gate("WAIT"), "spread_bps": 40,
-                      "buy_pressure_10t": 40, "action": "WAIT",
-                      "canonical_mark_price": 1000, "best_bid": 999,
-                      "best_ask_at_submit": 1000},
+        latency_gate={
+            **_probe_ready_gate("WAIT"),
+            "spread_bps": 40,
+            "buy_pressure_10t": 40,
+            "action": "WAIT",
+            "canonical_mark_price": 1000,
+            "best_bid": 999,
+            "best_ask_at_submit": 1000,
+        },
         now=now,
     )
     assert fields["entry_split_order_policy_applied"] is True
@@ -1922,23 +2413,39 @@ def test_operating_shape_mismatch_cannot_submit_full_order_when_probe_required(
             }
         },
     }
-    monkeypatch.setattr(split_plan, "_load_policy_from_env", lambda *a, **k: (policy, "loaded"))
+    monkeypatch.setattr(
+        split_plan, "_load_policy_from_env", lambda *a, **k: (policy, "loaded")
+    )
     monkeypatch.setattr(split_plan, "_context_bucket", lambda fields: "balanced_normal")
-    monkeypatch.setattr(split_plan, "_entry_operating_scope", lambda fields: "test-scope")
+    monkeypatch.setattr(
+        split_plan, "_entry_operating_scope", lambda fields: "test-scope"
+    )
     monkeypatch.setattr(split_plan, "_market_first_leg_active", lambda **k: False)
-    monkeypatch.setattr(split_plan, "_probe_runtime_config", lambda **k: {"enabled": True, "timeout_sec": 3})
+    monkeypatch.setattr(
+        split_plan,
+        "_probe_runtime_config",
+        lambda **k: {"enabled": True, "timeout_sec": 3},
+    )
     monkeypatch.setattr(split_plan, "_probe_first_eligible", lambda *a: (True, "ready"))
 
     orders, fields = split_plan.apply_entry_split_order_policy(
         [{"tag": "normal", "qty": 4, "price": 1000}],
-        stock={"code": "005930", "strategy": "SCALPING", "effective_venue": "KRX", "market_session_bucket": "KRX_REGULAR"},
+        stock={
+            "code": "005930",
+            "strategy": "SCALPING",
+            "effective_venue": "KRX",
+            "market_session_bucket": "KRX_REGULAR",
+        },
         latency_gate={"latency_state": "SAFE", "best_bid": 999},
         operating_context={"scope": "test"},
         now=datetime(2026, 9, 23, 9, 30, tzinfo=timezone(timedelta(hours=9))),
     )
 
     assert orders == []
-    assert fields["entry_split_order_skip_reason"] == "probe_operating_shape_mismatch_deferred"
+    assert (
+        fields["entry_split_order_skip_reason"]
+        == "probe_operating_shape_mismatch_deferred"
+    )
     assert fields["entry_split_order_probe_first_required"] is True
     assert fields["actual_order_submitted"] is False
     assert fields["broker_order_forbidden"] is True
@@ -3606,13 +4113,21 @@ def test_pre_ai_probe_observation_with_optional_clock_never_reserves(
 
     monkeypatch.setattr(split_plan, "datetime", FixedDatetime)
     policy_file = tmp_path / "entry-policy.json"
-    policy_file.write_text(json.dumps({
-        "schema_version": "entry_split_order_policy_v1",
-        "policy_version": "probe-observation-test", "source_date": "2026-07-16",
-        "buckets": {},
-    }), encoding="utf-8")
+    policy_file.write_text(
+        json.dumps(
+            {
+                "schema_version": "entry_split_order_policy_v1",
+                "policy_version": "probe-observation-test",
+                "source_date": "2026-07-16",
+                "buckets": {},
+            }
+        ),
+        encoding="utf-8",
+    )
     monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED", "true")
-    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ACTIVE_DATE", "2026-07-20")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ACTIVE_DATE", "2026-07-20"
+    )
     monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_FILE", str(policy_file))
     monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ENABLED", "true")
     monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ACTIVE_DATE", "2026-07-20")
@@ -3621,18 +4136,22 @@ def test_pre_ai_probe_observation_with_optional_clock_never_reserves(
     def forbidden_reservation(**kwargs):
         raise AssertionError("Observation cannot reserve a live probe bundle")
 
-    monkeypatch.setattr(split_plan, "_reserve_probe_runtime_bundle", forbidden_reservation)
+    monkeypatch.setattr(
+        split_plan, "_reserve_probe_runtime_bundle", forbidden_reservation
+    )
     stock = {"id": 7, "code": "018880", "strategy": "SCALPING"}
     before = dict(stock)
     optional_clock = {"now": frozen} if explicit_clock else {}
     orders, fields = split_plan.apply_entry_split_order_policy(
         [{"qty": 10, "price": 3985, "order_type_code": "00"}],
-        stock=stock, latency_gate={"latency_state": "SAFE", "best_ask_at_submit": 3985},
-        observation_only=True, **optional_clock,
+        stock=stock,
+        latency_gate={"latency_state": "SAFE", "best_ask_at_submit": 3985},
+        observation_only=True,
+        **optional_clock,
     )
-    assert len(orders) == 1 and orders[0]['qty'] == 1
-    assert orders[0]['entry_split_order_observation_only'] is True
-    assert orders[0]['actual_order_submitted'] is False
+    assert len(orders) == 1 and orders[0]["qty"] == 1
+    assert orders[0]["entry_split_order_observation_only"] is True
+    assert orders[0]["actual_order_submitted"] is False
     assert fields["entry_split_order_skip_reason"] == ""
     contract = fields["entry_split_order_observation_probe_contract"]
     assert contract["observed_at"] == frozen.isoformat()
@@ -3640,13 +4159,15 @@ def test_pre_ai_probe_observation_with_optional_clock_never_reserves(
     assert contract["probe_qty"] == 1
     assert contract["residual_conditional_qty"] == 9
     assert sum(contract["continuation"]["residual_quantities"]) == 9
-    assert contract["owner_replay_status"] == "conditional_prices_require_future_receipts"
+    assert (
+        contract["owner_replay_status"] == "conditional_prices_require_future_receipts"
+    )
     assert contract["reservation_performed"] is False
     assert contract["runtime_effect"] is False
     assert contract["order_authority_forbidden"] is True
-    assert contract["sha256"] == split_plan._canonical_sha256({
-        key: value for key, value in contract.items() if key != "sha256"
-    })
+    assert contract["sha256"] == split_plan._canonical_sha256(
+        {key: value for key, value in contract.items() if key != "sha256"}
+    )
     assert stock == before
 
 
@@ -3687,19 +4208,22 @@ def test_allocator_probe_first_reserves_one_share_and_builds_fill_anchored_resid
         now=datetime(2026, 7, 20, 10, 0, tzinfo=timezone(timedelta(hours=9))),
         observation_only=True,
     )
-    assert len(observed) == 1 and observed[0]['qty'] == 1
-    assert observed[0]['actual_order_submitted'] is False
-    assert observed[0]['entry_split_order_probe_committed_qty'] == 0
+    assert len(observed) == 1 and observed[0]["qty"] == 1
+    assert observed[0]["actual_order_submitted"] is False
+    assert observed[0]["entry_split_order_probe_committed_qty"] == 0
     assert not split_plan.PROBE_RUNTIME_STATE_PATH.exists()
-    observed_contract = observation_fields['entry_split_order_observation_probe_contract']
-    assert observed_contract['reservation_performed'] is False
-    assert observed_contract['order_authority_forbidden'] is True
-    assert observed_contract['requested_qty'] == 10
-    assert observed_contract['probe_qty'] == 1
-    assert observed_contract['residual_conditional_qty'] == 9
-    assert sum(observed_contract['continuation']['residual_quantities']) == 9
-    assert observed_contract['sha256'] == split_plan._canonical_sha256(
-        {key: value for key, value in observed_contract.items() if key != 'sha256'})
+    observed_contract = observation_fields[
+        "entry_split_order_observation_probe_contract"
+    ]
+    assert observed_contract["reservation_performed"] is False
+    assert observed_contract["order_authority_forbidden"] is True
+    assert observed_contract["requested_qty"] == 10
+    assert observed_contract["probe_qty"] == 1
+    assert observed_contract["residual_conditional_qty"] == 9
+    assert sum(observed_contract["continuation"]["residual_quantities"]) == 9
+    assert observed_contract["sha256"] == split_plan._canonical_sha256(
+        {key: value for key, value in observed_contract.items() if key != "sha256"}
+    )
 
     orders, fields = split_plan.apply_entry_split_order_policy(
         [{"tag": "normal", "qty": 10, "price": 10000, "tif": "DAY"}],
@@ -3775,7 +4299,6 @@ def test_allocator_probe_first_reserves_one_share_and_builds_fill_anchored_resid
     assert fill_race_stock["entry_split_probe_wait_contract_at_submit"] is True
     assert fill_race_stock["entry_split_probe_ai_decision_trace_id"] == "entry-trace-1"
 
-
     untrusted_orders, untrusted_fields = split_plan.apply_entry_split_order_policy(
         [{"tag": "normal", "qty": 4, "price": 9000, "tif": "DAY"}],
         stock={"code": "654321", "strategy": "SCALPING"},
@@ -3795,10 +4318,21 @@ def test_allocator_probe_first_reserves_one_share_and_builds_fill_anchored_resid
     assert untrusted_fields["entry_split_order_probe_residual_admission_reason"] == (
         "ai_authority_missing_stale_or_untrusted"
     )
-    assert untrusted_fields["entry_split_order_probe_residual_admission_ai_ttl_sec"] == 3
-    assert untrusted_fields["entry_split_order_probe_residual_admission_ai_action"] == "WAIT"
-    assert untrusted_fields["entry_split_order_probe_residual_admission_ai_blocked"] is True
-    assert untrusted_fields["entry_split_order_probe_residual_admission_ai_trace_present"] is False
+    assert (
+        untrusted_fields["entry_split_order_probe_residual_admission_ai_ttl_sec"] == 3
+    )
+    assert (
+        untrusted_fields["entry_split_order_probe_residual_admission_ai_action"]
+        == "WAIT"
+    )
+    assert (
+        untrusted_fields["entry_split_order_probe_residual_admission_ai_blocked"]
+        is True
+    )
+    assert (
+        untrusted_fields["entry_split_order_probe_residual_admission_ai_trace_present"]
+        is False
+    )
 
     drop_orders, _ = split_plan.apply_entry_split_order_policy(
         [{"tag": "normal", "qty": 4, "price": 8900, "tif": "DAY"}],
@@ -3872,11 +4406,17 @@ def test_probe_first_defers_before_order_when_residual_direction_source_is_missi
 ):
     target_date = "2026-07-20"
     policy_file = tmp_path / "entry-policy.json"
-    policy_file.write_text(json.dumps({
-        "schema_version": "entry_split_order_policy_v1",
-        "policy_version": "probe-readiness-test", "source_date": "2026-07-16",
-        "buckets": {},
-    }), encoding="utf-8")
+    policy_file.write_text(
+        json.dumps(
+            {
+                "schema_version": "entry_split_order_policy_v1",
+                "policy_version": "probe-readiness-test",
+                "source_date": "2026-07-16",
+                "buckets": {},
+            }
+        ),
+        encoding="utf-8",
+    )
     monkeypatch.setattr(split_plan, "PROBE_RUNTIME_STATE_PATH", tmp_path / "probe.json")
     monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED", "true")
     monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ACTIVE_DATE", target_date)
@@ -3887,11 +4427,13 @@ def test_probe_first_defers_before_order_when_residual_direction_source_is_missi
     gate.pop("orderbook_micro_ready")
     gate.pop("orderbook_micro_observer_healthy")
     gate.pop("orderbook_micro_snapshot_age_ms")
-    gate.update({
-        "tick_context_quality": "fresh_computed",
-        "tick_aggressor_pressure_usable": True,
-        "buy_pressure_10t": 80,
-    })
+    gate.update(
+        {
+            "tick_context_quality": "fresh_computed",
+            "tick_aggressor_pressure_usable": True,
+            "buy_pressure_10t": 80,
+        }
+    )
     orders, fields = split_plan.apply_entry_split_order_policy(
         [{"tag": "normal", "qty": 4, "price": 10000}],
         stock={"code": "005930", "id": 3, "strategy": "SCALPING"},
@@ -3908,20 +4450,32 @@ def test_probe_first_defers_before_order_when_residual_direction_source_is_missi
     stale_authority = _probe_ready_gate("WAIT")
     stale_authority["entry_ai_submit_authority_confirmed_age_sec"] = 3.1
     assert split_plan._probe_residual_admission(stale_authority, 3) == (
-        False, "ai_authority_missing_stale_or_untrusted", "-"
+        False,
+        "ai_authority_missing_stale_or_untrusted",
+        "-",
     )
 
 
-def test_probe_quote_deferral_records_exact_quote_reason_without_submitting(monkeypatch):
+def test_probe_quote_deferral_records_exact_quote_reason_without_submitting(
+    monkeypatch,
+):
     from src.engine import sniper_state_handlers as handlers
 
     events = []
-    monkeypatch.setattr(handlers, "_log_entry_pipeline", lambda *args, **fields: events.append(fields))
-    monkeypatch.setattr(handlers, "update_probe_runtime_bundle", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        handlers, "_log_entry_pipeline", lambda *args, **fields: events.append(fields)
+    )
+    monkeypatch.setattr(
+        handlers, "update_probe_runtime_bundle", lambda *args, **kwargs: None
+    )
     stock = {"entry_split_probe_bundle_id": "probe-1"}
     handlers._defer_entry_split_probe_source_quality(
-        stock, "003160", reason="stale_or_conflicted_fresh_quote",
-        now_ts=100.0, filled_at=99.0, timeout_sec=3,
+        stock,
+        "003160",
+        reason="stale_or_conflicted_fresh_quote",
+        now_ts=100.0,
+        filled_at=99.0,
+        timeout_sec=3,
         quote_fields={
             "quote_consistency_state": "diverged",
             "quote_consistency_reason": "price_conflict",
@@ -4280,7 +4834,10 @@ def test_probe_runtime_restart_recovery_restores_bundle_and_fails_closed_on_mism
     assert mismatched_stock["entry_execution_cohort"] == "KRX"
     state = split_plan._load_json(state_path)
     assert "circuit_open" not in state
-    assert state["last_probe_violation_reason"] == "probe_restart_recovery_quantity_mismatch"
+    assert (
+        state["last_probe_violation_reason"]
+        == "probe_restart_recovery_quantity_mismatch"
+    )
     assert (
         state["bundles"]["123456-probe-restart"]["entry_split_probe_scale_in_forbidden"]
         is True
@@ -4999,38 +5556,58 @@ def test_allocator_keeps_original_order_when_scoped_policy_omits_bucket(
     assert fields["entry_split_order_skip_reason"] == "policy_bucket_not_selected"
 
 
-def test_allocator_selects_price_tick_type_then_legacy_state_parent(monkeypatch, tmp_path):
+def test_allocator_selects_price_tick_type_then_legacy_state_parent(
+    monkeypatch, tmp_path
+):
     policy_file = tmp_path / "entry-policy-types.json"
-    policy_file.write_text(json.dumps({
-        "schema_version": "entry_split_order_policy_v1",
-        "policy_version": "type-leaf-and-parent",
-        "source_date": "2026-09-23",
-        "runtime_apply_allowed": True,
-        "runtime_apply_compatibility_semantics": split_plan.RUNTIME_APPLY_COMPATIBILITY_SEMANTICS,
-        "exploration_seed_allowed": True,
-        "ev_validated_runtime_apply_allowed": False,
-        "runtime_apply_authority_classes": ["bounded_exploration_seed"],
-        "baseline_runtime_defaults_enabled": False,
-        "missing_bucket_action": "keep_original_order",
-        "explicit_bucket_count": 2,
-        "buckets": {
-            "balanced_normal|GE_10BP": {"leg_count": 1, "price_offsets_ticks": [0], "qty_weight_min": 1.0},
-            "balanced_normal": {"leg_count": 2, "price_offsets_ticks": [0, 1], "qty_weight_min": 0.5},
-        },
-    }), encoding="utf-8")
+    policy_file.write_text(
+        json.dumps(
+            {
+                "schema_version": "entry_split_order_policy_v1",
+                "policy_version": "type-leaf-and-parent",
+                "source_date": "2026-09-23",
+                "runtime_apply_allowed": True,
+                "runtime_apply_compatibility_semantics": split_plan.RUNTIME_APPLY_COMPATIBILITY_SEMANTICS,
+                "exploration_seed_allowed": True,
+                "ev_validated_runtime_apply_allowed": False,
+                "runtime_apply_authority_classes": ["bounded_exploration_seed"],
+                "baseline_runtime_defaults_enabled": False,
+                "missing_bucket_action": "keep_original_order",
+                "explicit_bucket_count": 2,
+                "buckets": {
+                    "balanced_normal|GE_10BP": {
+                        "leg_count": 1,
+                        "price_offsets_ticks": [0],
+                        "qty_weight_min": 1.0,
+                    },
+                    "balanced_normal": {
+                        "leg_count": 2,
+                        "price_offsets_ticks": [0, 1],
+                        "qty_weight_min": 0.5,
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
     monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED", "true")
     monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_FILE", str(policy_file))
     # This test isolates the runtime selector. Generation binding is covered
     # by the report/policy contract tests and needs a full signed report.
-    monkeypatch.setattr(split_plan, "_load_policy_from_env",
-                        lambda *a, **kw: (json.loads(policy_file.read_text()), "loaded"))
+    monkeypatch.setattr(
+        split_plan,
+        "_load_policy_from_env",
+        lambda *a, **kw: (json.loads(policy_file.read_text()), "loaded"),
+    )
     now = datetime(2026, 9, 24, 9, 3, tzinfo=timezone(timedelta(hours=9)))
     gate = {"spread_bps": 18, "buy_pressure_10t": 55, "latency_state": "SAFE"}
     stock = {"code": "005930", "id": 1, "strategy": "SCALPING"}
     _, leaf = split_plan.apply_entry_split_order_policy(
-        [{"qty": 4, "price": 1000}], stock=stock, latency_gate=gate, now=now)
+        [{"qty": 4, "price": 1000}], stock=stock, latency_gate=gate, now=now
+    )
     _, parent = split_plan.apply_entry_split_order_policy(
-        [{"qty": 4, "price": 1564}], stock=stock, latency_gate=gate, now=now)
+        [{"qty": 4, "price": 1564}], stock=stock, latency_gate=gate, now=now
+    )
     assert leaf["entry_split_order_bucket"] == "balanced_normal|GE_10BP"
     assert leaf["entry_split_order_skip_reason"] == "single_leg_policy"
     assert parent["entry_split_order_bucket"] == "balanced_normal"
@@ -5263,16 +5840,6 @@ def test_allocator_fail_closed_for_qty_one_missing_invalid_and_stale_policy(
     assert stale_fields["entry_split_order_skip_reason"] == "stale_policy"
 
 
-
-
-
-
-
-
-
-
-
-
 @pytest.mark.parametrize("existing", [None, False])
 @pytest.mark.parametrize("wrong_target", [False, True])
 def test_hydrated_exploration_restores_terminal_guards_exact_target(
@@ -5321,8 +5888,12 @@ def test_hydrated_exploration_restores_terminal_guards_exact_target(
         )
 
 
-@pytest.mark.parametrize("signed_date,expected", [("2026-09-18", 30), ("2026-09-19", 0)])
-def test_four_arm_source_date_uses_kst_and_rejects_future_date(monkeypatch, signed_date, expected):
+@pytest.mark.parametrize(
+    "signed_date,expected", [("2026-09-18", 30), ("2026-09-19", 0)]
+)
+def test_four_arm_source_date_uses_kst_and_rejects_future_date(
+    monkeypatch, signed_date, expected
+):
     instant = datetime(2026, 9, 17, 16, 0, tzinfo=timezone.utc)
 
     class HostUTCDate(date):
@@ -5352,138 +5923,259 @@ def test_four_arm_source_date_uses_kst_and_rejects_future_date(monkeypatch, sign
 
 
 def test_four_arm_latest_source_with_no_completed_receipt_retains_denominator():
-    result = split_plan.build_quantity_leg_four_arm_evaluation(_quantity_leg_four_arm_events(),
-        source_counts={'2026-09-14': 20, '2026-09-15': 10, '2026-09-17': 1})
-    assert result['eligible_attempt_count'] == 31
-    assert result['exact_attempt_join_coverage'] == pytest.approx(30 / 31)
-    assert result['chronological_partitions']['holdout']['complete_exact_attempt_count'] == 0
-    assert not result['promotion_gate']['passed']
+    result = split_plan.build_quantity_leg_four_arm_evaluation(
+        _quantity_leg_four_arm_events(),
+        source_counts={"2026-09-14": 20, "2026-09-15": 10, "2026-09-17": 1},
+    )
+    assert result["eligible_attempt_count"] == 31
+    assert result["exact_attempt_join_coverage"] == pytest.approx(30 / 31)
+    assert (
+        result["chronological_partitions"]["holdout"]["complete_exact_attempt_count"]
+        == 0
+    )
+    assert not result["promotion_gate"]["passed"]
     assert not split_plan.quantity_leg_promotion_evidence_valid(result)
 
 
-@pytest.mark.parametrize('census', [{'2026-09-14': 0, '2026-09-15': 30},
-    {'2026-09-14': 10, '2026-09-15': 20}, {'2026-09-15': 30}])
+@pytest.mark.parametrize(
+    "census",
+    [
+        {"2026-09-14": 0, "2026-09-15": 30},
+        {"2026-09-14": 10, "2026-09-15": 20},
+        {"2026-09-15": 30},
+    ],
+)
 def test_four_arm_census_cannot_shift_or_erase_original_source_dates(census):
     events = _quantity_leg_four_arm_events()
-    result = split_plan.build_quantity_leg_four_arm_evaluation(events, source_counts=census)
-    assert not result['promotion_gate']['passed']
+    result = split_plan.build_quantity_leg_four_arm_evaluation(
+        events, source_counts=census
+    )
+    assert not result["promotion_gate"]["passed"]
     assert not split_plan.quantity_leg_promotion_evidence_valid(result)
-    valid = split_plan.build_quantity_leg_four_arm_evaluation(events,
-        source_counts={'2026-09-14': 20, '2026-09-15': 10})
+    valid = split_plan.build_quantity_leg_four_arm_evaluation(
+        events, source_counts={"2026-09-14": 20, "2026-09-15": 10}
+    )
     assert split_plan.quantity_leg_promotion_evidence_valid(valid)
-    valid['native_source_counts'] = census
+    valid["native_source_counts"] = census
     assert not split_plan.quantity_leg_promotion_evidence_valid(valid)
 
 
 def test_four_arm_per_day_count_underflow_blocks_even_with_matching_total():
     events = _quantity_leg_four_arm_events()
     for event in events:
-        receipt = event['entry_quantity_leg_four_arm_evaluation']
-        receipt['eligible_attempt_count'] = 10 if receipt['source_date'] == '2026-09-14' else 20
+        receipt = event["entry_quantity_leg_four_arm_evaluation"]
+        receipt["eligible_attempt_count"] = (
+            10 if receipt["source_date"] == "2026-09-14" else 20
+        )
         _resign_four_arm_receipt(receipt)
-    result = split_plan.build_quantity_leg_four_arm_evaluation(events,
-        source_counts={'2026-09-14': 10, '2026-09-15': 20})
-    assert result['complete_exact_attempt_count'] == 30
-    assert result['excluded_counts']['eligible_population_source_date_underflow'] == 1
-    assert not result['promotion_gate']['passed']
+    result = split_plan.build_quantity_leg_four_arm_evaluation(
+        events, source_counts={"2026-09-14": 10, "2026-09-15": 20}
+    )
+    assert result["complete_exact_attempt_count"] == 30
+    assert result["excluded_counts"]["eligible_population_source_date_underflow"] == 1
+    assert not result["promotion_gate"]["passed"]
 
 
-@pytest.mark.parametrize('census', [{}, {'2026-09-17': 0}])
-def test_four_arm_empty_native_census_preserves_existing_signed_actual_population(census):
-    result = split_plan.build_quantity_leg_four_arm_evaluation(_quantity_leg_four_arm_events(),
-        source_counts=census)
-    assert result['eligible_attempt_count'] == 30
-    assert result['promotion_gate']['passed']
+@pytest.mark.parametrize("census", [{}, {"2026-09-17": 0}])
+def test_four_arm_empty_native_census_preserves_existing_signed_actual_population(
+    census,
+):
+    result = split_plan.build_quantity_leg_four_arm_evaluation(
+        _quantity_leg_four_arm_events(), source_counts=census
+    )
+    assert result["eligible_attempt_count"] == 30
+    assert result["promotion_gate"]["passed"]
     assert split_plan.quantity_leg_promotion_evidence_valid(result)
 
 
 def test_split_native_replay_persists_census_across_prior_state(monkeypatch, tmp_path):
-    from src.tests.test_strategy_owner_replay import entry_owner_event, native_entry_loader
-    from src.engine.scalping.strategy_owner_replay import build_entry_opportunity_replays
+    from src.tests.test_strategy_owner_replay import (
+        entry_owner_event,
+        native_entry_loader,
+    )
+    from src.engine.scalping.strategy_owner_replay import (
+        build_entry_opportunity_replays,
+    )
     from src.engine.scalping import native_packet_validation as micro
+
     _patch_dirs(monkeypatch, tmp_path)
     from src.engine.scalping import strategy_owner_replay as native_replay
+
     original_replay = native_replay.build_entry_opportunity_replays
-    frozen_at = datetime.fromisoformat('2026-09-17T15:00:00+09:00').timestamp()
-    monkeypatch.setattr(native_replay, 'build_entry_opportunity_replays',
-        lambda *a, **kw: original_replay(*a, **{'evaluated_at': frozen_at, **kw}))
-    days = ['2026-09-14', '2026-09-15', '2026-09-17']
+    frozen_at = datetime.fromisoformat("2026-09-17T15:00:00+09:00").timestamp()
+    monkeypatch.setattr(
+        native_replay,
+        "build_entry_opportunity_replays",
+        lambda *a, **kw: original_replay(*a, **{"evaluated_at": frozen_at, **kw}),
+    )
+    days = ["2026-09-14", "2026-09-15", "2026-09-17"]
     events = []
     for day in days[:-1]:
-        native = build_entry_opportunity_replays(day, [entry_owner_event(day, i) for i in range(10)],
-            evaluated_at=datetime.fromisoformat('2026-09-17T15:00:00+09:00').timestamp(),
-            micro_loader=native_entry_loader)
-        events.extend(native['quantity_leg_events'])
-    prior = {'quantity_leg_four_arm_events': events, 'source_dates': days[:-1],
-        'entry_opportunity_replay_source_counts': {d: 10 for d in days[:-1]}}
-    monkeypatch.setattr(split_plan, '_latest_prior_cumulative_state', lambda d: (prior, 'fixture-prior'))
-    monkeypatch.setattr(split_plan, '_available_calibration_dates', lambda d: days)
-    monkeypatch.setattr(split_plan, '_source_quality_summary', lambda d: {'tuning_input_allowed': True})
-    monkeypatch.setattr(split_plan, '_iter_input_events', lambda d: ([],
-        {'_entry_opportunity_plan_events': [entry_owner_event(d)]}))
-    monkeypatch.setattr(micro, '_micro_context', native_entry_loader)
+        native = build_entry_opportunity_replays(
+            day,
+            [entry_owner_event(day, i) for i in range(10)],
+            evaluated_at=datetime.fromisoformat(
+                "2026-09-17T15:00:00+09:00"
+            ).timestamp(),
+            micro_loader=native_entry_loader,
+        )
+        events.extend(native["quantity_leg_events"])
+    prior = {
+        "quantity_leg_four_arm_events": events,
+        "source_dates": days[:-1],
+        "entry_opportunity_replay_source_counts": {d: 10 for d in days[:-1]},
+    }
+    monkeypatch.setattr(
+        split_plan, "_latest_prior_cumulative_state", lambda d: (prior, "fixture-prior")
+    )
+    monkeypatch.setattr(split_plan, "_available_calibration_dates", lambda d: days)
+    monkeypatch.setattr(
+        split_plan, "_source_quality_summary", lambda d: {"tuning_input_allowed": True}
+    )
+    monkeypatch.setattr(
+        split_plan,
+        "_iter_input_events",
+        lambda d: ([], {"_entry_opportunity_plan_events": [entry_owner_event(d)]}),
+    )
+    monkeypatch.setattr(micro, "_micro_context", native_entry_loader)
     report = split_plan.build_report(days[-1], write=False)
-    ledger = report['cumulative_state']['entry_opportunity_replay_source_counts']
+    ledger = report["cumulative_state"]["entry_opportunity_replay_source_counts"]
     assert ledger == {days[0]: 10, days[1]: 10, days[2]: 1}
-    assert len(report['cumulative_state']['quantity_leg_four_arm_events']) == 21
-    assert report['quantity_leg_four_arm_evaluation']['eligible_attempt_count'] == 21
+    assert len(report["cumulative_state"]["quantity_leg_four_arm_events"]) == 21
+    assert report["quantity_leg_four_arm_evaluation"]["eligible_attempt_count"] == 21
 
 
-def test_split_reader_reuses_owner_plan_without_second_pipeline_scan(monkeypatch, tmp_path):
-    from src.tests.test_strategy_owner_replay import entry_owner_event, native_entry_loader
+def test_split_reader_reuses_owner_plan_without_second_pipeline_scan(
+    monkeypatch, tmp_path
+):
+    from src.tests.test_strategy_owner_replay import (
+        entry_owner_event,
+        native_entry_loader,
+    )
     from src.engine import sniper_missed_entry_counterfactual as missed
     from src.engine.scalping import native_packet_validation as micro
+
     data_dir = _patch_dirs(monkeypatch, tmp_path)
     from src.engine.scalping import strategy_owner_replay as native_replay
+
     original_replay = native_replay.build_entry_opportunity_replays
-    frozen_at = datetime.fromisoformat('2026-09-17T15:00:00+09:00').timestamp()
-    monkeypatch.setattr(native_replay, 'build_entry_opportunity_replays',
-        lambda *a, **kw: original_replay(*a, **{'evaluated_at': frozen_at, **kw}))
-    day = '2026-09-17'
+    frozen_at = datetime.fromisoformat("2026-09-17T15:00:00+09:00").timestamp()
+    monkeypatch.setattr(
+        native_replay,
+        "build_entry_opportunity_replays",
+        lambda *a, **kw: original_replay(*a, **{"evaluated_at": frozen_at, **kw}),
+    )
+    day = "2026-09-17"
     event = entry_owner_event(day)
-    row = {'pipeline': 'ENTRY_PIPELINE', 'stage': event.stage, 'emitted_at': event.emitted_at,
-        'emitted_date': day, 'stock_code': event.code, 'record_id': event.record_id,
-        'fields': {k: str(v) for k, v in event.fields.items()}}
-    _write_jsonl(data_dir / 'pipeline_events' / f'pipeline_events_{day}.jsonl', [row])
-    monkeypatch.setattr(split_plan, '_available_calibration_dates', lambda d: [day])
-    monkeypatch.setattr(split_plan, '_latest_prior_cumulative_state', lambda d: ({}, ''))
-    monkeypatch.setattr(split_plan, '_source_quality_summary', lambda d: {'tuning_input_allowed': True})
+    row = {
+        "pipeline": "ENTRY_PIPELINE",
+        "stage": event.stage,
+        "emitted_at": event.emitted_at,
+        "emitted_date": day,
+        "stock_code": event.code,
+        "record_id": event.record_id,
+        "fields": {k: str(v) for k, v in event.fields.items()},
+    }
+    _write_jsonl(data_dir / "pipeline_events" / f"pipeline_events_{day}.jsonl", [row])
+    monkeypatch.setattr(split_plan, "_available_calibration_dates", lambda d: [day])
+    monkeypatch.setattr(
+        split_plan, "_latest_prior_cumulative_state", lambda d: ({}, "")
+    )
+    monkeypatch.setattr(
+        split_plan, "_source_quality_summary", lambda d: {"tuning_input_allowed": True}
+    )
+
     def forbidden_second_read(path):
-        raise AssertionError('second pipeline read')
-    monkeypatch.setattr(missed, 'iter_jsonl', forbidden_second_read)
-    monkeypatch.setattr(micro, '_micro_context', native_entry_loader)
+        raise AssertionError("second pipeline read")
+
+    monkeypatch.setattr(missed, "iter_jsonl", forbidden_second_read)
+    monkeypatch.setattr(micro, "_micro_context", native_entry_loader)
     report = split_plan.build_report(day, write=False)
-    native = report['input_summary']['daily_diagnostic']['entry_opportunity_executable_replay']
-    assert native['counts']['completed'] == 1
-    assert report['cumulative_state']['entry_opportunity_replay_source_counts'] == {day: 1}
-    assert len(report['cumulative_state']['quantity_leg_four_arm_events']) == 1
-    assert '_entry_opportunity_plan_events' not in report['input_summary']['daily_diagnostic']
+    native = report["input_summary"]["daily_diagnostic"][
+        "entry_opportunity_executable_replay"
+    ]
+    assert native["counts"]["completed"] == 1
+    assert report["cumulative_state"]["entry_opportunity_replay_source_counts"] == {
+        day: 1
+    }
+    assert len(report["cumulative_state"]["quantity_leg_four_arm_events"]) == 1
+    assert (
+        "_entry_opportunity_plan_events"
+        not in report["input_summary"]["daily_diagnostic"]
+    )
 
 
-@pytest.mark.parametrize("actual_qty,model_qty,state,expected", [
-    (2, 2, "ORDER_TERMINAL", "ready_for_validation"),
-    (0, 0, "ORDER_TERMINAL", "ready_for_validation"),
-    (0, 2, "ORDER_TERMINAL", "validation_failed"),
-    (2, 0, "ORDER_TERMINAL", "validation_failed"),
-    (1, 2, "ORDER_TERMINAL", "validation_failed"),
-    (2, 2, "ORDER_BOUND", "terminal_pending"),
-])
-def test_execution_model_actual_census_and_no_false_economic_pass(actual_qty, model_qty, state, expected):
+@pytest.mark.parametrize(
+    "actual_qty,model_qty,state,expected",
+    [
+        (2, 2, "ORDER_TERMINAL", "ready_for_validation"),
+        (0, 0, "ORDER_TERMINAL", "ready_for_validation"),
+        (0, 2, "ORDER_TERMINAL", "validation_failed"),
+        (2, 0, "ORDER_TERMINAL", "validation_failed"),
+        (1, 2, "ORDER_TERMINAL", "validation_failed"),
+        (2, 2, "ORDER_BOUND", "terminal_pending"),
+    ],
+)
+def test_execution_model_actual_census_and_no_false_economic_pass(
+    actual_qty, model_qty, state, expected
+):
     at = "2026-09-17T10:00:00+09:00"
-    common = dict(owner_type="main_scalping", side="BUY", action="NEW", order_date="2026-09-17",
-        intent_id="intent", broker_order_no="007", account_key="account", symbol="123456", quantity=2)
-    events = [dict(stage="order_leg_sent", emitted_at=at, actual_order_submitted=True,
-        broker_order_no="007", effective_venue="KRX", market_session_bucket="regular", submitted_qty=2,
-        entry_execution_sizing_plan_id="parent", entry_execution_sizing_plan_sha256="a" * 64)]
-    actual = [dict(common, event="ORDER_BOUND", state="ORDER_BOUND"),
-        dict(common, event="FILL_RECORDED", state=state, filled_qty=actual_qty,
-            fill_amount=actual_qty * 1000, observed_at_kst=at)]
-    arm = dict(modeled_filled_qty=model_qty, modeled_entry_vwap=1000,
-        modeled_entry_at=at, modeled_last_fill_at=at)
-    replay = dict(status="completed_source_only", schema="model", seed=dict(plan_sha256="a" * 64,
-        total_qty=2, stock_code="123456", effective_venue="KRX", session_bucket="regular"),
-        incumbent_execution_arm=arm)
-    report = split_plan.build_execution_model_validation("2026-09-17", events, [replay], actual)
+    common = dict(
+        owner_type="main_scalping",
+        side="BUY",
+        action="NEW",
+        order_date="2026-09-17",
+        intent_id="intent",
+        broker_order_no="007",
+        account_key="account",
+        symbol="123456",
+        quantity=2,
+    )
+    events = [
+        dict(
+            stage="order_leg_sent",
+            emitted_at=at,
+            actual_order_submitted=True,
+            broker_order_no="007",
+            effective_venue="KRX",
+            market_session_bucket="regular",
+            submitted_qty=2,
+            entry_execution_sizing_plan_id="parent",
+            entry_execution_sizing_plan_sha256="a" * 64,
+        )
+    ]
+    actual = [
+        dict(common, event="ORDER_BOUND", state="ORDER_BOUND"),
+        dict(
+            common,
+            event="FILL_RECORDED",
+            state=state,
+            filled_qty=actual_qty,
+            fill_amount=actual_qty * 1000,
+            observed_at_kst=at,
+        ),
+    ]
+    arm = dict(
+        modeled_filled_qty=model_qty,
+        modeled_entry_vwap=1000,
+        modeled_entry_at=at,
+        modeled_last_fill_at=at,
+    )
+    replay = dict(
+        status="completed_source_only",
+        schema="model",
+        seed=dict(
+            plan_sha256="a" * 64,
+            total_qty=2,
+            stock_code="123456",
+            effective_venue="KRX",
+            session_bucket="regular",
+        ),
+        incumbent_execution_arm=arm,
+    )
+    report = split_plan.build_execution_model_validation(
+        "2026-09-17", events, [replay], actual
+    )
     assert report["counts"] == {expected: 1}
     assert report["census_conserved"] is True
     assert report["allowed_runtime_apply"] is False
@@ -5492,34 +6184,54 @@ def test_execution_model_actual_census_and_no_false_economic_pass(actual_qty, mo
         assert report["rows"][0]["reason"] == "tolerance_contract_missing"
     # Same order number on another day cannot join this frozen parent.
     actual[0]["order_date"] = actual[1]["order_date"] = "2026-09-16"
-    other = split_plan.build_execution_model_validation("2026-09-17", events, [replay], actual)
+    other = split_plan.build_execution_model_validation(
+        "2026-09-17", events, [replay], actual
+    )
     assert other["counts"] == {"source_gap": 2}
     assert other["unclassified_main_buy_parent_count"] == 2
     assert other["projection_unregistered_order_count"] == 1
     # A replay conflict stays quarantined even if a third row repeats the first.
     actual[0]["order_date"] = actual[1]["order_date"] = "2026-09-17"
     conflict = {**replay, "schema": "conflicting_model"}
-    bad = split_plan.build_execution_model_validation("2026-09-17", events, [replay, conflict, replay], actual)
+    bad = split_plan.build_execution_model_validation(
+        "2026-09-17", events, [replay, conflict, replay], actual
+    )
     if state == "ORDER_TERMINAL":
         assert bad["counts"] == {"source_gap": 1}
 
 
 def test_execution_model_policy_hash_and_supporting_exit_cannot_promote():
     section = split_plan.build_execution_model_validation("2026-09-17", [], [], [])
-    policy = dict(source_date="2026-09-17", execution_model_validation_contract=split_plan.EXECUTION_MODEL_CONTRACT,
-        execution_model_validation_sha256=split_plan._canonical_sha256(section), runtime_apply_allowed=False)
+    policy = dict(
+        source_date="2026-09-17",
+        execution_model_validation_contract=split_plan.EXECUTION_MODEL_CONTRACT,
+        execution_model_validation_sha256=split_plan._canonical_sha256(section),
+        runtime_apply_allowed=False,
+    )
     report = dict(execution_model_validation=section)
     assert split_plan.execution_model_policy_contract_status(report, policy)[0]
-    assert not split_plan.execution_model_policy_contract_status(report, {**policy, "runtime_apply_allowed": True})[0]
-    assert not split_plan.execution_model_policy_contract_status(report, {**policy, "source_date": "2026-09-18"})[0]
-    assert not split_plan.execution_model_policy_contract_status(report, {**policy, "execution_model_validation_sha256": "f" * 64})[0]
+    assert not split_plan.execution_model_policy_contract_status(
+        report, {**policy, "runtime_apply_allowed": True}
+    )[0]
+    assert not split_plan.execution_model_policy_contract_status(
+        report, {**policy, "source_date": "2026-09-18"}
+    )[0]
+    assert not split_plan.execution_model_policy_contract_status(
+        report, {**policy, "execution_model_validation_sha256": "f" * 64}
+    )[0]
 
 
 def test_submitted_main_order_missing_owner_journal_stays_in_census():
-    event = {"stage": "order_leg_sent", "emitted_date": "2026-09-22",
-        "fields": {"actual_order_submitted": True, "broker_order_no": "0022991",
+    event = {
+        "stage": "order_leg_sent",
+        "emitted_date": "2026-09-22",
+        "fields": {
+            "actual_order_submitted": True,
+            "broker_order_no": "0022991",
             "entry_execution_sizing_plan_id": "entry-sizing-1",
-            "entry_execution_sizing_plan_sha256": "a" * 64}}
+            "entry_execution_sizing_plan_sha256": "a" * 64,
+        },
+    }
     report = split_plan.build_execution_model_validation("2026-09-22", [event], [], [])
     assert report["projection_submitted_order_count"] == 1
     assert report["projection_unregistered_order_count"] == 1
@@ -5530,7 +6242,9 @@ def test_submitted_main_order_missing_owner_journal_stays_in_census():
     assert report["allowed_runtime_apply"] is False
 
 
-def test_large_pipeline_and_threshold_logs_reuse_one_execution_projection(monkeypatch, tmp_path):
+def test_large_pipeline_and_threshold_logs_reuse_one_execution_projection(
+    monkeypatch, tmp_path
+):
     day = "2026-09-23"
     pipeline = tmp_path / "pipeline.jsonl"
     threshold = tmp_path / "threshold.jsonl"
@@ -5548,13 +6262,20 @@ def test_large_pipeline_and_threshold_logs_reuse_one_execution_projection(monkey
     monkeypatch.setattr(split_plan, "_threshold_events_path", lambda _day: threshold)
     monkeypatch.setattr(split_plan, "existing_or_gzip_path", lambda path: path)
     monkeypatch.setattr(split_plan, "clean_baseline_policy", lambda: {})
-    monkeypatch.setattr(split_plan, "_source_quality_summary", lambda _day: {"hard_blocking_stages": []})
+    monkeypatch.setattr(
+        split_plan, "_source_quality_summary", lambda _day: {"hard_blocking_stages": []}
+    )
     monkeypatch.setattr(split_plan, "is_date_allowed", lambda _day, _policy: True)
     monkeypatch.setattr(split_plan, "_event_fields", lambda row: row["fields"])
     monkeypatch.setattr(split_plan, "_event_date", lambda fields: fields.get("date"))
-    monkeypatch.setattr(split_plan, "_bounded_execution_projection", lambda _day: (
-        projection_calls.append(_day) or [event], {"status": "ready", "raw_not_read": True}
-    ))
+    monkeypatch.setattr(
+        split_plan,
+        "_bounded_execution_projection",
+        lambda _day: (
+            projection_calls.append(_day) or [event],
+            {"status": "ready", "raw_not_read": True},
+        ),
+    )
     monkeypatch.setattr(split_plan, "_existing_jsonl_source", lambda path: str(path))
 
     events, summary = split_plan._iter_input_events(day)
@@ -5569,28 +6290,45 @@ def test_input_reader_never_assigns_target_day_to_undated_event(monkeypatch, tmp
     day = "2026-10-16"
     path = split_plan._pipeline_events_path(day)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(dict(stage="entry_execution_sizing_plan_block",
-                                  record_id="undated-record"))+"\n")
-    monkeypatch.setattr(split_plan, "_source_quality_summary", lambda _day: {"tuning_input_allowed": True})
+    path.write_text(
+        json.dumps(
+            dict(stage="entry_execution_sizing_plan_block", record_id="undated-record")
+        )
+        + "\n"
+    )
+    monkeypatch.setattr(
+        split_plan,
+        "_source_quality_summary",
+        lambda _day: {"tuning_input_allowed": True},
+    )
     monkeypatch.setattr(split_plan, "is_date_allowed", lambda _day, _policy: True)
     rows, summary = split_plan._iter_input_events(day)
     assert len(rows) == 1 and rows[0]["source_date"] == ""
     details = []
-    allowed, excluded = split_plan._source_quality_filtered_events(rows,
-        {day: {"tuning_input_allowed": True}}, exclusion_details=details)
+    allowed, excluded = split_plan._source_quality_filtered_events(
+        rows, {day: {"tuning_input_allowed": True}}, exclusion_details=details
+    )
     assert allowed == [] and excluded == 1
     assert details[0]["reason"] == "source_date_missing_or_invalid"
     assert summary["excluded_pre_baseline_count"] == 0
 
 
-def test_execution_projection_is_not_valid_empty_and_preserves_exact_contract(monkeypatch, tmp_path):
+def test_execution_projection_is_not_valid_empty_and_preserves_exact_contract(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(split_plan, "DATA_DIR", tmp_path)
     rows, source = split_plan._bounded_execution_projection("2026-09-17")
     assert not rows and source["status"] == "source_gap"
-    part = tmp_path / "threshold_cycle/date=2026-09-17/family=dynamic_entry_price_resolver/part-000001.jsonl"
+    part = (
+        tmp_path
+        / "threshold_cycle/date=2026-09-17/family=dynamic_entry_price_resolver/part-000001.jsonl"
+    )
     part.parent.mkdir(parents=True)
-    event = dict(stage="entry_execution_sizing_plan", emitted_date="2026-09-17",
-        fields={"entry_execution_sizing_plan": {"plan_sha256": "a" * 64}})
+    event = dict(
+        stage="entry_execution_sizing_plan",
+        emitted_date="2026-09-17",
+        fields={"entry_execution_sizing_plan": {"plan_sha256": "a" * 64}},
+    )
     part.write_text(json.dumps(event) + "\n" + json.dumps(event) + "\n")
     rows, source = split_plan._bounded_execution_projection("2026-09-17")
     assert rows == [event] and source["full_population_coverage_verified"] is False
@@ -5599,141 +6337,266 @@ def test_execution_projection_is_not_valid_empty_and_preserves_exact_contract(mo
         split_plan._bounded_execution_projection("2026-09-17")
 
 
-def test_execution_producer_census_accepts_sealed_summary_above_old_limit(monkeypatch, tmp_path):
-    from src.engine.pipeline_event_summary import IDENTITY_CONTRACT, producer_summary_paths
+def test_execution_producer_census_accepts_sealed_summary_above_old_limit(
+    monkeypatch, tmp_path
+):
+    from src.engine.pipeline_event_summary import (
+        IDENTITY_CONTRACT,
+        producer_summary_paths,
+    )
 
     monkeypatch.setattr(split_plan, "DATA_DIR", tmp_path)
-    path, manifest_path = producer_summary_paths(tmp_path / "pipeline_event_summaries", "2026-09-22")
+    path, manifest_path = producer_summary_paths(
+        tmp_path / "pipeline_event_summaries", "2026-09-22"
+    )
     path.parent.mkdir(parents=True)
     path.write_text('{"stage":"unrelated"}\n')
     assert split_plan.EXECUTION_PRODUCER_CENSUS_MAX_BYTES > 74_018_715
-    manifest_path.write_text(json.dumps({"summary_stages": [], "identity_contract": IDENTITY_CONTRACT,
-        "summary_storage_size_bytes": path.stat().st_size}))
-    monkeypatch.setattr(split_plan, "EXECUTION_PRODUCER_CENSUS_MAX_BYTES", path.stat().st_size - 1)
-    assert split_plan._execution_projection_census("2026-09-22", [], stages=frozenset())["reason"] == "execution_producer_census_unsealed"
-    monkeypatch.setattr(split_plan, "EXECUTION_PRODUCER_CENSUS_MAX_BYTES", path.stat().st_size)
-    assert split_plan._execution_projection_census("2026-09-22", [], stages=frozenset())["status"] == "ready"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "summary_stages": [],
+                "identity_contract": IDENTITY_CONTRACT,
+                "summary_storage_size_bytes": path.stat().st_size,
+            }
+        )
+    )
+    monkeypatch.setattr(
+        split_plan, "EXECUTION_PRODUCER_CENSUS_MAX_BYTES", path.stat().st_size - 1
+    )
+    assert (
+        split_plan._execution_projection_census("2026-09-22", [], stages=frozenset())[
+            "reason"
+        ]
+        == "execution_producer_census_unsealed"
+    )
+    monkeypatch.setattr(
+        split_plan, "EXECUTION_PRODUCER_CENSUS_MAX_BYTES", path.stat().st_size
+    )
+    assert (
+        split_plan._execution_projection_census("2026-09-22", [], stages=frozenset())[
+            "status"
+        ]
+        == "ready"
+    )
 
 
-@pytest.mark.parametrize('fault', ['none', 'alias_conflict', 'crc', 'size'])
-def test_execution_census_uses_logical_gzip_source_and_preserves_seal(monkeypatch, tmp_path, fault):
+@pytest.mark.parametrize("fault", ["none", "alias_conflict", "crc", "size"])
+def test_execution_census_uses_logical_gzip_source_and_preserves_seal(
+    monkeypatch, tmp_path, fault
+):
     import gzip
-    from src.engine.pipeline_event_summary import IDENTITY_CONTRACT, producer_summary_paths
-    day='2026-10-15'
-    path, manifest = producer_summary_paths(tmp_path/'pipeline_event_summaries', day)
+    from src.engine.pipeline_event_summary import (
+        IDENTITY_CONTRACT,
+        producer_summary_paths,
+    )
+
+    day = "2026-10-15"
+    path, manifest = producer_summary_paths(tmp_path / "pipeline_event_summaries", day)
     path.parent.mkdir(parents=True)
-    raw=b'{"stage":"unrelated"}\n'
-    archive=path.with_name(path.name+'.gz')
+    raw = b'{"stage":"unrelated"}\n'
+    archive = path.with_name(path.name + ".gz")
     archive.write_bytes(gzip.compress(raw))
-    manifest.write_text(json.dumps(dict(summary_stages=[], identity_contract=IDENTITY_CONTRACT,
-        summary_storage_size_bytes=len(raw)+(1 if fault=='size' else 0))))
-    monkeypatch.setattr(split_plan, 'DATA_DIR', tmp_path)
-    if fault=='alias_conflict':path.write_text('{"stage":"different"}\n')
-    if fault=='crc':archive.write_bytes(archive.read_bytes()[:-4])
-    if fault in {'alias_conflict','crc'}:
-        with pytest.raises(ValueError, match='conflict|payload_invalid'):
+    manifest.write_text(
+        json.dumps(
+            dict(
+                summary_stages=[],
+                identity_contract=IDENTITY_CONTRACT,
+                summary_storage_size_bytes=len(raw) + (1 if fault == "size" else 0),
+            )
+        )
+    )
+    monkeypatch.setattr(split_plan, "DATA_DIR", tmp_path)
+    if fault == "alias_conflict":
+        path.write_text('{"stage":"different"}\n')
+    if fault == "crc":
+        archive.write_bytes(archive.read_bytes()[:-4])
+    if fault in {"alias_conflict", "crc"}:
+        with pytest.raises(ValueError, match="conflict|payload_invalid"):
             split_plan._execution_projection_census(day, [], stages=frozenset())
     else:
-        result=split_plan._execution_projection_census(day, [], stages=frozenset())
-        assert result['status']==('ready' if fault=='none' else 'source_gap')
-    assert not path.exists() or fault=='alias_conflict'
+        result = split_plan._execution_projection_census(day, [], stages=frozenset())
+        assert result["status"] == ("ready" if fault == "none" else "source_gap")
+    assert not path.exists() or fault == "alias_conflict"
 
 
-@pytest.mark.parametrize('has_atomic_lineage', [False, True])
-@pytest.mark.parametrize('wrapped_projection', [False, True])
-def test_bounded_refresh_reuses_revision_and_rejects_stale_policy(monkeypatch, tmp_path, has_atomic_lineage, wrapped_projection):
+@pytest.mark.parametrize("has_atomic_lineage", [False, True])
+@pytest.mark.parametrize("wrapped_projection", [False, True])
+def test_bounded_refresh_reuses_revision_and_rejects_stale_policy(
+    monkeypatch, tmp_path, has_atomic_lineage, wrapped_projection
+):
     _patch_dirs(monkeypatch, tmp_path)
     target = "2026-09-17"
     path, _ = split_plan.report_paths(target)
-    original = dict(schema_version=split_plan.SCHEMA_VERSION, date=target,
-        generated_at="2026-09-18T00:14:34+09:00", cumulative_state={"preserved": "frozen"},
+    original = dict(
+        schema_version=split_plan.SCHEMA_VERSION,
+        date=target,
+        generated_at="2026-09-18T00:14:34+09:00",
+        cumulative_state={"preserved": "frozen"},
         input_summary={"atomic_execution_sizing": {"plan_observed": 3, "invalid": 3}},
-        recommended_policy={"runtime_apply_allowed": False, "policy_version": "old",
+        recommended_policy={
+            "runtime_apply_allowed": False,
+            "policy_version": "old",
             "entry_execution_sizing_plan_schema": split_plan.ATOMIC_EXECUTION_SIZING_SCHEMA,
             "entry_execution_sizing_policy": split_plan.ATOMIC_EXECUTION_SIZING_BASELINE_POLICY,
-            "entry_price_plan_schema": split_plan.ATOMIC_PRICE_PLAN_SCHEMA}, candidate_grid=[])
+            "entry_price_plan_schema": split_plan.ATOMIC_PRICE_PLAN_SCHEMA,
+        },
+        candidate_grid=[],
+    )
     if has_atomic_lineage:
         plan, leg, bundle, source = _atomic_lineage_fixture(target)
         events = [plan, leg, bundle]
-        source['stage_census'] = {event['stage']: {'valid_count':1} for event in events}
+        source["stage_census"] = {
+            event["stage"]: {"valid_count": 1} for event in events
+        }
         # The sealed producer represents an absent stage by an empty census.
-        source['stage_census']['entry_execution_sizing_plan_block'] = {}
+        source["stage_census"]["entry_execution_sizing_plan_block"] = {}
         if wrapped_projection:
-            events = [dict(stage=event['stage'], emitted_date=target,
-                emitted_at=event['emitted_at'], record_id=event['record_id'],
-                fields={k:v for k,v in event.items() if k not in {'stage','source_date','emitted_at','record_id'}})
-                for event in events]
-        original['input_summary']['atomic_execution_sizing'] = dict(
-            status='fail', daily_plan_observed_count=1, daily_plan_invalid_count=0,
-            lineage=dict(schema=split_plan.ATOMIC_SIZING_LINEAGE_SCHEMA,
-                         source_generation=source, status='source_gap'))
-        monkeypatch.setattr(split_plan, '_atomic_sizing_source_generation', lambda _day: copy.deepcopy(source))
-        monkeypatch.setattr(split_plan, '_bounded_execution_projection', lambda _day: (
-            events, {'status':'ready','sources':[]}))
-        monkeypatch.setattr(split_plan, '_source_quality_summary', lambda _day: {'tuning_input_allowed':True})
+            events = [
+                dict(
+                    stage=event["stage"],
+                    emitted_date=target,
+                    emitted_at=event["emitted_at"],
+                    record_id=event["record_id"],
+                    fields={
+                        k: v
+                        for k, v in event.items()
+                        if k not in {"stage", "source_date", "emitted_at", "record_id"}
+                    },
+                )
+                for event in events
+            ]
+        original["input_summary"]["atomic_execution_sizing"] = dict(
+            status="fail",
+            daily_plan_observed_count=1,
+            daily_plan_invalid_count=0,
+            lineage=dict(
+                schema=split_plan.ATOMIC_SIZING_LINEAGE_SCHEMA,
+                source_generation=source,
+                status="source_gap",
+            ),
+        )
+        monkeypatch.setattr(
+            split_plan,
+            "_atomic_sizing_source_generation",
+            lambda _day: copy.deepcopy(source),
+        )
+        monkeypatch.setattr(
+            split_plan,
+            "_bounded_execution_projection",
+            lambda _day: (events, {"status": "ready", "sources": []}),
+        )
+        monkeypatch.setattr(
+            split_plan,
+            "_source_quality_summary",
+            lambda _day: {"tuning_input_allowed": True},
+        )
     split_plan._write_json(path, original)
-    monkeypatch.setattr(split_plan, "_execution_registry_snapshot", lambda: ([], {"status": "verified", "tail_hash": "0" * 64}))
-    first = split_plan.refresh_execution_model_only(target, prepared_effective_date="2026-09-21")
+    monkeypatch.setattr(
+        split_plan,
+        "_execution_registry_snapshot",
+        lambda: ([], {"status": "verified", "tail_hash": "0" * 64}),
+    )
+    first = split_plan.refresh_execution_model_only(
+        target, prepared_effective_date="2026-09-21"
+    )
     assert first["generated_at"] == original["generated_at"]
     assert first["cumulative_state"] == original["cumulative_state"]
     assert first["recommended_policy"]["missing_bucket_action"] == "keep_original_order"
     assert first["recommended_policy"]["runtime_apply_allowed"] is False
     if has_atomic_lineage:
-        assert first['input_summary']['atomic_execution_sizing']['status']=='pass'
-        lineage = first['input_summary']['atomic_execution_sizing']['lineage']
-        assert lineage['counts']['valid_plan_count'] == 1
-        assert lineage['counts']['unique_leg_orders'] == 1
-        assert lineage['reader_population_conservation']['status'] == 'verified'
-        assert first['execution_model_validation']['source_inventory']['original_atomic_contract']==original['input_summary']['atomic_execution_sizing']
+        assert first["input_summary"]["atomic_execution_sizing"]["status"] == "pass"
+        lineage = first["input_summary"]["atomic_execution_sizing"]["lineage"]
+        assert lineage["counts"]["valid_plan_count"] == 1
+        assert lineage["counts"]["unique_leg_orders"] == 1
+        assert lineage["reader_population_conservation"]["status"] == "verified"
+        assert (
+            first["execution_model_validation"]["source_inventory"][
+                "original_atomic_contract"
+            ]
+            == original["input_summary"]["atomic_execution_sizing"]
+        )
     before = path.read_bytes()
-    second = split_plan.refresh_execution_model_only(target, prepared_effective_date="2026-09-21")
+    second = split_plan.refresh_execution_model_only(
+        target, prepared_effective_date="2026-09-21"
+    )
     assert first == second and path.read_bytes() == before
     policy = json.loads(split_plan.policy_path(target).read_text())
     assert split_plan.validate_report_policy_generation(first, policy)[0]
     # A source revision invalidates reuse without touching frozen original facts.
-    monkeypatch.setattr(split_plan, "_execution_registry_snapshot", lambda: ([], {"status": "verified", "tail_hash": "1" * 64}))
-    revised = split_plan.refresh_execution_model_only(target, prepared_effective_date="2026-09-21")
-    assert revised["artifact_generation_binding"] != first["artifact_generation_binding"]
+    monkeypatch.setattr(
+        split_plan,
+        "_execution_registry_snapshot",
+        lambda: ([], {"status": "verified", "tail_hash": "1" * 64}),
+    )
+    revised = split_plan.refresh_execution_model_only(
+        target, prepared_effective_date="2026-09-21"
+    )
+    assert (
+        revised["artifact_generation_binding"] != first["artifact_generation_binding"]
+    )
     assert revised["cumulative_state"] == original["cumulative_state"]
     policy["execution_model_validation_sha256"] = "bad"
     split_plan._write_json(split_plan.policy_path(target), policy)
     with pytest.raises(ValueError, match="cached_generation_invalid"):
-        split_plan.refresh_execution_model_only(target, prepared_effective_date="2026-09-21")
+        split_plan.refresh_execution_model_only(
+            target, prepared_effective_date="2026-09-21"
+        )
     if has_atomic_lineage:
-        monkeypatch.setattr(split_plan, '_source_quality_summary', lambda _day: {'tuning_input_allowed':False})
-        excluded = split_plan.refresh_execution_model_only(target, prepared_effective_date='2026-09-21')
-        atomic = excluded['input_summary']['atomic_execution_sizing']
-        assert atomic['status']=='fail' and atomic['selection_blocked'] is True
-        assert atomic['lineage']['reader_population_conservation']['status']=='source_gap'
+        monkeypatch.setattr(
+            split_plan,
+            "_source_quality_summary",
+            lambda _day: {"tuning_input_allowed": False},
+        )
+        excluded = split_plan.refresh_execution_model_only(
+            target, prepared_effective_date="2026-09-21"
+        )
+        atomic = excluded["input_summary"]["atomic_execution_sizing"]
+        assert atomic["status"] == "fail" and atomic["selection_blocked"] is True
+        assert (
+            atomic["lineage"]["reader_population_conservation"]["status"]
+            == "source_gap"
+        )
 
 
-def test_native_report_above_raw_shard_bound_uses_bounded_refresh(monkeypatch,tmp_path):
-    _patch_dirs(monkeypatch,tmp_path)
-    day='2026-10-07';path,_=split_plan.report_paths(day)
-    path.parent.mkdir(parents=True,exist_ok=True)
+def test_native_report_above_raw_shard_bound_uses_bounded_refresh(
+    monkeypatch, tmp_path
+):
+    _patch_dirs(monkeypatch, tmp_path)
+    day = "2026-10-07"
+    path, _ = split_plan.report_paths(day)
+    path.parent.mkdir(parents=True, exist_ok=True)
     # Whitespace is valid JSON and reproduces the former size-only rejection
     # without retaining a large decoded fixture in memory.
-    with path.open('wb') as f:
-        f.write(b' '* (64*1024*1024+1))
-        f.write(json.dumps(dict(date=day,cumulative_state={'retained':True})).encode())
-    seen=[]
-    monkeypatch.setattr(split_plan,'refresh_execution_model_only',lambda *a,**kw:seen.append(a) or {'refreshed':True})
-    assert split_plan.build_report(day)=={'refreshed':True}
-    assert seen==[(day,)]
-    monkeypatch.setattr(split_plan,'ENTRY_REPORT_MAX_BYTES',path.stat().st_size-1)
-    with pytest.raises(ValueError,match='bounded_entry_split_predecessor_required'):
+    with path.open("wb") as f:
+        f.write(b" " * (64 * 1024 * 1024 + 1))
+        f.write(
+            json.dumps(dict(date=day, cumulative_state={"retained": True})).encode()
+        )
+    seen = []
+    monkeypatch.setattr(
+        split_plan,
+        "refresh_execution_model_only",
+        lambda *a, **kw: seen.append(a) or {"refreshed": True},
+    )
+    assert split_plan.build_report(day) == {"refreshed": True}
+    assert seen == [(day,)]
+    monkeypatch.setattr(split_plan, "ENTRY_REPORT_MAX_BYTES", path.stat().st_size - 1)
+    with pytest.raises(ValueError, match="bounded_entry_split_predecessor_required"):
         split_plan.build_report(day)
-
-
 
 
 def test_repaired_atomic_source_generation_requires_daily_rebuild(monkeypatch):
     target = "2026-09-30"
-    lineage = {"schema": split_plan.ATOMIC_SIZING_LINEAGE_SCHEMA,
-        "source_generation": {"status": "source_gap", "generation_sha256": None}}
+    lineage = {
+        "schema": split_plan.ATOMIC_SIZING_LINEAGE_SCHEMA,
+        "source_generation": {"status": "source_gap", "generation_sha256": None},
+    }
     report = {"input_summary": {"atomic_execution_sizing": {"lineage": lineage}}}
     current = {"status": "ready", "generation_sha256": "a" * 64}
-    monkeypatch.setattr(split_plan, "_atomic_sizing_source_generation", lambda _day: current)
+    monkeypatch.setattr(
+        split_plan, "_atomic_sizing_source_generation", lambda _day: current
+    )
 
     assert split_plan._same_date_atomic_source_requires_rebuild(target, report)
 
@@ -5751,32 +6614,63 @@ def test_real_atomic_producer_wire_compact_decoder_roundtrip(monkeypatch, tmp_pa
     from src.tests.test_pipeline_event_logger import _reset_logger_state
     from src.utils import pipeline_event_logger as logger
     from src.engine import sniper_state_handlers as handlers
-    from src.engine.sniper_missed_entry_counterfactual import _load_entry_events, _price_ready_plan
+    from src.engine.sniper_missed_entry_counterfactual import (
+        _load_entry_events,
+        _price_ready_plan,
+    )
+
     day = datetime.now(timezone(timedelta(hours=9))).date().isoformat()
     original = entry_owner_event(day)
     _reset_logger_state(monkeypatch)
     monkeypatch.setattr(logger, "DATA_DIR", tmp_path)
     monkeypatch.setattr(split_plan, "DATA_DIR", tmp_path)
-    monkeypatch.setattr(logger, "TRADING_RULES", SimpleNamespace(PIPELINE_EVENT_JSONL_ENABLED=True,
-        PIPELINE_EVENT_SCHEMA_VERSION=3, PIPELINE_EVENT_TEXT_INFO_LOG_ENABLED=False))
+    monkeypatch.setattr(
+        logger,
+        "TRADING_RULES",
+        SimpleNamespace(
+            PIPELINE_EVENT_JSONL_ENABLED=True,
+            PIPELINE_EVENT_SCHEMA_VERSION=3,
+            PIPELINE_EVENT_TEXT_INFO_LOG_ENABLED=False,
+        ),
+    )
     monkeypatch.setattr(logger, "log_info", lambda *a, **k: None)
     monkeypatch.setattr(handlers, "emit_pipeline_event", logger.emit_pipeline_event)
-    monkeypatch.setattr(handlers, "observe_candidate_transition_safe", lambda *a, **k: None)
-    monkeypatch.setattr(handlers, "_maybe_register_rising_missed_nxt_downstream_block_sampler", lambda *a, **k: None)
-    payload = handlers._log_entry_pipeline({"name": "TEST", "id": 77, "strategy": "SCALPING"},
-        original.code, original.stage, **original.fields,
-        **{f"extra_{i}": str(i) for i in range(60)})
+    monkeypatch.setattr(
+        handlers, "observe_candidate_transition_safe", lambda *a, **k: None
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_maybe_register_rising_missed_nxt_downstream_block_sampler",
+        lambda *a, **k: None,
+    )
+    payload = handlers._log_entry_pipeline(
+        {"name": "TEST", "id": 77, "strategy": "SCALPING"},
+        original.code,
+        original.stage,
+        **original.fields,
+        **{f"extra_{i}": str(i) for i in range(60)},
+    )
     assert payload["structured_append_succeeded"] is True
     rows, _ = split_plan._bounded_execution_projection(day)
     assert len(rows) == 1
     decoded = _load_entry_events(day, rows=rows)
     assert len(decoded) == 1
     assert _price_ready_plan(decoded[0]) == _price_ready_plan(original)
-    assert json.loads(decoded[0].fields["entry_opportunity_replay_seed"]) == original.fields["entry_opportunity_replay_seed"]
+    assert (
+        json.loads(decoded[0].fields["entry_opportunity_replay_seed"])
+        == original.fields["entry_opportunity_replay_seed"]
+    )
     from src.tests.test_strategy_owner_replay import native_entry_loader
-    from src.engine.scalping.strategy_owner_replay import build_entry_opportunity_replays
-    replay = build_entry_opportunity_replays(day, decoded, micro_loader=native_entry_loader,
-        evaluated_at=datetime.fromisoformat(original.emitted_at).timestamp() + 180)
+    from src.engine.scalping.strategy_owner_replay import (
+        build_entry_opportunity_replays,
+    )
+
+    replay = build_entry_opportunity_replays(
+        day,
+        decoded,
+        micro_loader=native_entry_loader,
+        evaluated_at=datetime.fromisoformat(original.emitted_at).timestamp() + 180,
+    )
     assert replay["counts"]["completed"] == 1
     assert len(replay["quantity_leg_events"]) == 1
     logger._flush_producer_summary_at_exit()
@@ -5784,7 +6678,11 @@ def test_real_atomic_producer_wire_compact_decoder_roundtrip(monkeypatch, tmp_pa
 
 
 def test_verified_owner_snapshot_preserves_bytes_and_rejects_corruption(tmp_path):
-    from src.trading.order.owner_custody_registry import OrderOwnerRegistry, OwnerRegistryError
+    from src.trading.order.owner_custody_registry import (
+        OrderOwnerRegistry,
+        OwnerRegistryError,
+    )
+
     registry = OrderOwnerRegistry(tmp_path / "owner.jsonl")
     registry.lock_path.touch()
     registry._append_locked([], {"event": "INTENT_RESERVED", "intent_id": "fixture"})
@@ -5798,609 +6696,1239 @@ def test_verified_owner_snapshot_preserves_bytes_and_rejects_corruption(tmp_path
         registry.verified_events_snapshot()
 
 
-
 def test_atomic_quantity_leg_loader_cannot_bypass_missing_execution_model(tmp_path):
     split = tmp_path / "split.json"
-    split.write_text(json.dumps(dict(source_date="2026-09-17", runtime_apply_allowed=True)))
-    policy = dict(source_date="2026-09-17", split_policy_file=str(split),
-        split_policy_sha256=hashlib.sha256(split.read_bytes()).hexdigest())
+    split.write_text(
+        json.dumps(dict(source_date="2026-09-17", runtime_apply_allowed=True))
+    )
+    policy = dict(
+        source_date="2026-09-17",
+        split_policy_file=str(split),
+        split_policy_sha256=hashlib.sha256(split.read_bytes()).hexdigest(),
+    )
     assert split_plan.quantity_leg_policy_selection_evidence_valid(policy) is False
-    split.write_text(json.dumps(dict(source_date="2026-09-17", runtime_apply_allowed=False)))
+    split.write_text(
+        json.dumps(dict(source_date="2026-09-17", runtime_apply_allowed=False))
+    )
     policy["split_policy_sha256"] = hashlib.sha256(split.read_bytes()).hexdigest()
     assert split_plan.quantity_leg_policy_selection_evidence_valid(policy) is False
 
 
-
 def test_entry_replay_maturity_changes_reuse_identity_only_at_declared_boundary():
     start = datetime.fromisoformat("2026-09-17T10:00:00+09:00").timestamp()
-    events = [dict(fields={"entry_opportunity_replay_seed": json.dumps(dict(
-        observed_at="2026-09-17T10:00:00+09:00", seed_sha256="a" * 64))})]
+    events = [
+        dict(
+            fields={
+                "entry_opportunity_replay_seed": json.dumps(
+                    dict(observed_at="2026-09-17T10:00:00+09:00", seed_sha256="a" * 64)
+                )
+            }
+        )
+    ]
     waiting = split_plan._entry_replay_maturity_revision(events, now=start + 179)
-    assert waiting == split_plan._entry_replay_maturity_revision(events, now=start + 179.5)
-    assert waiting != split_plan._entry_replay_maturity_revision(events, now=start + 180)
-    assert split_plan._entry_replay_maturity_revision(events, now=start + 180) == split_plan._entry_replay_maturity_revision(events, now=start + 181)
+    assert waiting == split_plan._entry_replay_maturity_revision(
+        events, now=start + 179.5
+    )
+    assert waiting != split_plan._entry_replay_maturity_revision(
+        events, now=start + 180
+    )
+    assert split_plan._entry_replay_maturity_revision(
+        events, now=start + 180
+    ) == split_plan._entry_replay_maturity_revision(events, now=start + 181)
 
 
-def _operating_economic_fixture(candidate_counts=(15,15)):
-    scope='8'*64
-    template=dict(leg_count=2,price_offsets_ticks=[0,1],qty_weight_min=.4,qty_weight_max=.4,
-        urgency_score=0.,passive_edge_score=0.,policy_mode=split_plan.POLICY_MODE_REAL_PRIMARY_EV,
-        candidate_leg_policy_version='entry_split_quantity_fixed_guarded_weights_v1',effective_venue='KRX',
-        session_bucket='krx_regular',order_types=['00','00'])
-    models=[]
-    for day in ['2026-09-08','2026-09-09']:
+def _operating_economic_fixture(candidate_counts=(15, 15)):
+    scope = "8" * 64
+    template = dict(
+        leg_count=2,
+        price_offsets_ticks=[0, 1],
+        qty_weight_min=0.4,
+        qty_weight_max=0.4,
+        urgency_score=0.0,
+        passive_edge_score=0.0,
+        policy_mode=split_plan.POLICY_MODE_REAL_PRIMARY_EV,
+        candidate_leg_policy_version="entry_split_quantity_fixed_guarded_weights_v1",
+        effective_venue="KRX",
+        session_bucket="krx_regular",
+        order_types=["00", "00"],
+    )
+    models = []
+    for day in ["2026-09-08", "2026-09-09"]:
         for n in range(10):
-            models.append(dict(episode_id=f'model-{day}-{n}',scope_sha256=scope,source_date=day,
-                status='COMPLETED',origin='real',cost_complete=True,exact_lineage=True,owner='main_scalping',
-                vwap_error_bps=0.,receipt_clock_error_sec=.1,quantity_error=0,
-                net_error_budget_pct=0.,capital_error_minutes=0.,reserve_error_minutes=0.,false_fill=False,missed_fill=False))
-    for n,model in enumerate(models):
-        decision=dict(evaluation_attempt_id=f'model-attempt-{n}',machine_bundle_sha256='a'*64,
-            machine_policy_version='machine-v1',machine_policy_sha256='1'*64,
-            compact_prompt_version='compact-v1',compact_prompt_sha256='2'*64,
-            decision_trace_id=f'model-trace-{n}',runtime_pid=123)
-        decision['sha256']=split_plan._canonical_sha256(decision)
-        model['entry_decision_version_receipt']=decision
-        model['entry_decision_pid_consumed']=True
-        model['decision_policy_identity']={k:decision[k] for k in (
-            'machine_bundle_sha256','machine_policy_version','machine_policy_sha256',
-            'compact_prompt_version','compact_prompt_sha256')}
-    from src.engine.scalping.strategy_owner_replay import freeze_entry_opportunity, AUTHORITY, ENTRY_OPERATING_SCHEMA, entry_operating_model_identity
+            models.append(
+                dict(
+                    episode_id=f"model-{day}-{n}",
+                    scope_sha256=scope,
+                    source_date=day,
+                    status="COMPLETED",
+                    origin="real",
+                    cost_complete=True,
+                    exact_lineage=True,
+                    owner="main_scalping",
+                    vwap_error_bps=0.0,
+                    receipt_clock_error_sec=0.1,
+                    quantity_error=0,
+                    net_error_budget_pct=0.0,
+                    capital_error_minutes=0.0,
+                    reserve_error_minutes=0.0,
+                    false_fill=False,
+                    missed_fill=False,
+                )
+            )
+    for n, model in enumerate(models):
+        decision = dict(
+            evaluation_attempt_id=f"model-attempt-{n}",
+            machine_bundle_sha256="a" * 64,
+            machine_policy_version="machine-v1",
+            machine_policy_sha256="1" * 64,
+            compact_prompt_version="compact-v1",
+            compact_prompt_sha256="2" * 64,
+            decision_trace_id=f"model-trace-{n}",
+            runtime_pid=123,
+        )
+        decision["sha256"] = split_plan._canonical_sha256(decision)
+        model["entry_decision_version_receipt"] = decision
+        model["entry_decision_pid_consumed"] = True
+        model["decision_policy_identity"] = {
+            k: decision[k]
+            for k in (
+                "machine_bundle_sha256",
+                "machine_policy_version",
+                "machine_policy_sha256",
+                "compact_prompt_version",
+                "compact_prompt_sha256",
+            )
+        }
+    from src.engine.scalping.strategy_owner_replay import (
+        freeze_entry_opportunity,
+        AUTHORITY,
+        ENTRY_OPERATING_SCHEMA,
+        entry_operating_model_identity,
+    )
     from src.engine.lifecycle.avg_down_policy_replay import snapshot_version
-    snapshot={'rules':{},'environment':{},'implementation':{}}
-    context=dict(order_leg_ttl_sec=[10,10],order_bundle_hard_ttl_sec=10,order_timeout_owner='explicit_fixture',model_implementation_sha256=entry_operating_model_identity(),schema=ENTRY_OPERATING_SCHEMA,frozen_at='2026-09-08T09:00:00+09:00',policy_snapshot=snapshot,
-        exit_policy_version=snapshot_version(snapshot),initial_policy_state={'stock':{'entry_split_order_bucket':'balanced_normal'}},
-        budget_krw=100000.,cost_rate=.0023,cost_policy_version='trade_profit_net_realized_pnl:rate=0.0023',
-        cost_provenance='frozen_loaded_trade_profit_configuration_not_broker_settlement',stress_cost_rate_increment=.0005,max_frame_gap_sec=5.,**AUTHORITY)
-    context['sha256']=split_plan._canonical_sha256(context)
-    rows=[]
-    for day,count in zip(['2026-09-10','2026-09-11'],candidate_counts):
+
+    snapshot = {"rules": {}, "environment": {}, "implementation": {}}
+    context = dict(
+        order_leg_ttl_sec=[10, 10],
+        order_bundle_hard_ttl_sec=10,
+        order_timeout_owner="explicit_fixture",
+        model_implementation_sha256=entry_operating_model_identity(),
+        schema=ENTRY_OPERATING_SCHEMA,
+        frozen_at="2026-09-08T09:00:00+09:00",
+        policy_snapshot=snapshot,
+        exit_policy_version=snapshot_version(snapshot),
+        initial_policy_state={"stock": {"entry_split_order_bucket": "balanced_normal"}},
+        budget_krw=100000.0,
+        cost_rate=0.0023,
+        cost_policy_version="trade_profit_net_realized_pnl:rate=0.0023",
+        cost_provenance="frozen_loaded_trade_profit_configuration_not_broker_settlement",
+        stress_cost_rate_increment=0.0005,
+        max_frame_gap_sec=5.0,
+        **AUTHORITY,
+    )
+    context["sha256"] = split_plan._canonical_sha256(context)
+    rows = []
+    for day, count in zip(["2026-09-10", "2026-09-11"], candidate_counts):
         for n in range(count):
-            arms={}
-            for i,key in enumerate(split_plan.QUANTITY_LEG_FOUR_ARM_IDS):
-                arm=dict(**AUTHORITY,status='completed_source_only',actual_fill_evidence=False,requested_qty=10,modeled_filled_qty=10,
-                    budget_krw=100000.,net_pnl_krw=200. if i>=2 else 100.,stress_net_pnl_krw=190. if i>=2 else 90.,
-                    capital_krw_minutes=100. if i>=2 else 200.,reserve_krw_minutes=10.,fill_participation_rate=1.)
-                arm['sha256']=split_plan._canonical_sha256(arm);arms[key]=arm
-            plan=dict(valid=True,blockers=[],total_qty=10,deferred_probe_residual_qty=0,
-                scanner_promotion_id=f'p-{day}-{n}',action_receipt_id=f'a-{day}-{n}',effective_venue='KRX',
-                market_session_bucket='krx_regular',policy_bundle_hash='a'*64,quantity_policy_version='qty-original',
-                split_policy_version='leg-original',price_policy_sha256='c'*64,price_plan_sha256='d'*64,
-                legs=[dict(qty=8,numeric_price=1000,execution_phase='immediate'),dict(qty=2,numeric_price=999,execution_phase='immediate')])
-            operating_context=dict(context)
-            decision=dict(evaluation_attempt_id=plan['action_receipt_id'],
-                machine_bundle_sha256=plan['policy_bundle_hash'],
-                machine_policy_version='machine-v1',machine_policy_sha256='1'*64,
-                compact_prompt_version='compact-v1',compact_prompt_sha256='2'*64,
-                decision_trace_id=f'trace-{day}-{n}',runtime_pid=123)
-            decision['sha256']=split_plan._canonical_sha256(decision)
-            operating_context['entry_decision_version_receipt']=decision
-            operating_context.pop('sha256',None)
-            operating_context['sha256']=split_plan._canonical_sha256(operating_context)
-            seed=freeze_entry_opportunity(plan,stock_code='005930',observed_at=datetime.fromisoformat(day+'T10:00:00+09:00').timestamp()+n*240,operating_context=operating_context)
-            scope=split_plan._entry_operating_scope(seed)
-            for model in models:model['scope_sha256']=scope
+            arms = {}
+            for i, key in enumerate(split_plan.QUANTITY_LEG_FOUR_ARM_IDS):
+                arm = dict(
+                    **AUTHORITY,
+                    status="completed_source_only",
+                    actual_fill_evidence=False,
+                    requested_qty=10,
+                    modeled_filled_qty=10,
+                    budget_krw=100000.0,
+                    net_pnl_krw=200.0 if i >= 2 else 100.0,
+                    stress_net_pnl_krw=190.0 if i >= 2 else 90.0,
+                    capital_krw_minutes=100.0 if i >= 2 else 200.0,
+                    reserve_krw_minutes=10.0,
+                    fill_participation_rate=1.0,
+                )
+                arm["sha256"] = split_plan._canonical_sha256(arm)
+                arms[key] = arm
+            plan = dict(
+                valid=True,
+                blockers=[],
+                total_qty=10,
+                deferred_probe_residual_qty=0,
+                scanner_promotion_id=f"p-{day}-{n}",
+                action_receipt_id=f"a-{day}-{n}",
+                effective_venue="KRX",
+                market_session_bucket="krx_regular",
+                policy_bundle_hash="a" * 64,
+                quantity_policy_version="qty-original",
+                split_policy_version="leg-original",
+                price_policy_sha256="c" * 64,
+                price_plan_sha256="d" * 64,
+                legs=[
+                    dict(qty=8, numeric_price=1000, execution_phase="immediate"),
+                    dict(qty=2, numeric_price=999, execution_phase="immediate"),
+                ],
+            )
+            operating_context = dict(context)
+            decision = dict(
+                evaluation_attempt_id=plan["action_receipt_id"],
+                machine_bundle_sha256=plan["policy_bundle_hash"],
+                machine_policy_version="machine-v1",
+                machine_policy_sha256="1" * 64,
+                compact_prompt_version="compact-v1",
+                compact_prompt_sha256="2" * 64,
+                decision_trace_id=f"trace-{day}-{n}",
+                runtime_pid=123,
+            )
+            decision["sha256"] = split_plan._canonical_sha256(decision)
+            operating_context["entry_decision_version_receipt"] = decision
+            operating_context.pop("sha256", None)
+            operating_context["sha256"] = split_plan._canonical_sha256(
+                operating_context
+            )
+            seed = freeze_entry_opportunity(
+                plan,
+                stock_code="005930",
+                observed_at=datetime.fromisoformat(day + "T10:00:00+09:00").timestamp()
+                + n * 240,
+                operating_context=operating_context,
+            )
+            scope = split_plan._entry_operating_scope(seed)
+            for model in models:
+                model["scope_sha256"] = scope
             for arm in arms.values():
-                arm.update(modeled_exit_at=day+'T12:00:00+09:00',cost_policy_version=context['cost_policy_version'],
-                    cost_provenance=context['cost_provenance'],exit_policy_sha256=context['exit_policy_version'],contract_sha256=operating_context['sha256'],terminal_evidence_sha256='9'*64);arm.pop('sha256');arm['sha256']=split_plan._canonical_sha256(arm)
-            row=dict(attempt_id=seed['seed_sha256'],episode_id=seed['plan_sha256'],
-                plan_sha256=seed['plan_sha256'],scope_sha256=scope,source_date=day,total_qty=10,budget_krw=100000.,arms=arms,
-                context_bucket=split_plan._execution_type_bucket('balanced_normal', 1000),
-                candidate_template=template,origin='counterfactual',owner='main_scalping',seed=seed)
-            row['sha256']=split_plan._canonical_sha256(row);rows.append(row)
-    return rows,models,{'2026-09-08':10,'2026-09-09':10,
-        '2026-09-10':candidate_counts[0],'2026-09-11':candidate_counts[1]}
+                arm.update(
+                    modeled_exit_at=day + "T12:00:00+09:00",
+                    cost_policy_version=context["cost_policy_version"],
+                    cost_provenance=context["cost_provenance"],
+                    exit_policy_sha256=context["exit_policy_version"],
+                    contract_sha256=operating_context["sha256"],
+                    terminal_evidence_sha256="9" * 64,
+                )
+                arm.pop("sha256")
+                arm["sha256"] = split_plan._canonical_sha256(arm)
+            row = dict(
+                attempt_id=seed["seed_sha256"],
+                episode_id=seed["plan_sha256"],
+                plan_sha256=seed["plan_sha256"],
+                scope_sha256=scope,
+                source_date=day,
+                total_qty=10,
+                budget_krw=100000.0,
+                arms=arms,
+                context_bucket=split_plan._execution_type_bucket(
+                    "balanced_normal", 1000
+                ),
+                candidate_template=template,
+                origin="counterfactual",
+                owner="main_scalping",
+                seed=seed,
+            )
+            row["sha256"] = split_plan._canonical_sha256(row)
+            rows.append(row)
+    return (
+        rows,
+        models,
+        {
+            "2026-09-08": 10,
+            "2026-09-09": 10,
+            "2026-09-10": candidate_counts[0],
+            "2026-09-11": candidate_counts[1],
+        },
+    )
 
 
 def test_operating_economics_positive_and_recomputed_policy_contract(tmp_path):
-    rows,models,census=_operating_economic_fixture()
-    evidence=split_plan.evaluate_entry_split_operating_economics(rows,models,census,target_date='2026-09-17')
-    assert evidence['status']=='positive_candidate'
-    assert evidence['primary_operating_ev_pct']==pytest.approx(.2)
-    assert evidence['robust_paired_delta_ev_lower_bound_pct']==pytest.approx(.09)
-    validation=split_plan.build_execution_model_validation('2026-09-17',[],[],[])
-    split_plan._apply_operating_model_support(validation,evidence)
-    policy,grid=split_plan._operating_policy('2026-09-17',tmp_path/'report.json',evidence)
-    policy.update(execution_model_validation_contract=split_plan.EXECUTION_MODEL_CONTRACT,
-        execution_model_validation_sha256=split_plan._canonical_sha256(validation))
-    events=split_plan._operating_four_arm_events(evidence)
-    proof=split_plan.build_quantity_leg_four_arm_evaluation(events,source_counts={d:n for d,n in census.items() if d>"2026-09-09"})
+    rows, models, census = _operating_economic_fixture()
+    evidence = split_plan.evaluate_entry_split_operating_economics(
+        rows, models, census, target_date="2026-09-17"
+    )
+    assert evidence["status"] == "positive_candidate"
+    assert evidence["primary_operating_ev_pct"] == pytest.approx(0.2)
+    assert evidence["robust_paired_delta_ev_lower_bound_pct"] == pytest.approx(0.09)
+    validation = split_plan.build_execution_model_validation("2026-09-17", [], [], [])
+    split_plan._apply_operating_model_support(validation, evidence)
+    policy, grid = split_plan._operating_policy(
+        "2026-09-17", tmp_path / "report.json", evidence
+    )
+    policy.update(
+        execution_model_validation_contract=split_plan.EXECUTION_MODEL_CONTRACT,
+        execution_model_validation_sha256=split_plan._canonical_sha256(validation),
+    )
+    events = split_plan._operating_four_arm_events(evidence)
+    proof = split_plan.build_quantity_leg_four_arm_evaluation(
+        events, source_counts={d: n for d, n in census.items() if d > "2026-09-09"}
+    )
     assert split_plan.quantity_leg_promotion_evidence_valid(proof)
-    report=dict(execution_model_validation=validation,economic_acceptance=evidence,operating_quantity_leg_four_arm_evaluation=proof)
-    assert policy['runtime_apply_allowed'] is True and len(grid)==1
-    assert split_plan.execution_model_policy_contract_status(report,policy)[0]
-    evidence['candidates'][0]['partitions']['holdout']['candidate']['ev_pct']=999.
-    assert not split_plan.execution_model_policy_contract_status(report,policy)[0]
+    report = dict(
+        execution_model_validation=validation,
+        economic_acceptance=evidence,
+        operating_quantity_leg_four_arm_evaluation=proof,
+    )
+    assert policy["runtime_apply_allowed"] is True and len(grid) == 1
+    assert split_plan.execution_model_policy_contract_status(report, policy)[0]
+    evidence["candidates"][0]["partitions"]["holdout"]["candidate"]["ev_pct"] = 999.0
+    assert not split_plan.execution_model_policy_contract_status(report, policy)[0]
 
 
 def test_operating_model_skips_early_incomplete_dates_without_outcome_selection():
-    rows,models,census=_operating_economic_fixture()
-    models.append(dict(episode_id='early-source-gap',scope_sha256=models[0]['scope_sha256'],
-        source_date='2026-09-07',status='source_gap',origin='real',owner='main_scalping'))
-    evidence=split_plan.evaluate_entry_split_operating_economics(rows,models,census,target_date='2026-09-17')
-    assert evidence['status']=='positive_candidate'
-    scope=evidence['model_scopes'][0]
-    assert scope['calibration_dates']==['2026-09-08']
-    assert scope['holdout_dates']==['2026-09-09']
-    check=evidence['cohort_checks'][0]
-    assert check['declared_model_dates'][0]=='2026-09-07'
-    assert check['eligible_model_dates']==['2026-09-08','2026-09-09']
+    rows, models, census = _operating_economic_fixture()
+    models.append(
+        dict(
+            episode_id="early-source-gap",
+            scope_sha256=models[0]["scope_sha256"],
+            source_date="2026-09-07",
+            status="source_gap",
+            origin="real",
+            owner="main_scalping",
+        )
+    )
+    evidence = split_plan.evaluate_entry_split_operating_economics(
+        rows, models, census, target_date="2026-09-17"
+    )
+    assert evidence["status"] == "positive_candidate"
+    scope = evidence["model_scopes"][0]
+    assert scope["calibration_dates"] == ["2026-09-08"]
+    assert scope["holdout_dates"] == ["2026-09-09"]
+    check = evidence["cohort_checks"][0]
+    assert check["declared_model_dates"][0] == "2026-09-07"
+    assert check["eligible_model_dates"] == ["2026-09-08", "2026-09-09"]
 
 
 def test_operating_scope_binds_machine_and_compact_prompt_versions():
     from copy import deepcopy
-    rows,_,_=_operating_economic_fixture()
-    seed=deepcopy(rows[0]['seed'])
-    original=split_plan._entry_operating_scope(seed)
-    receipt=seed['operating_contract']['entry_decision_version_receipt']
-    receipt['machine_policy_sha256']='3'*64
-    receipt['compact_prompt_sha256']='4'*64
-    receipt.pop('sha256');receipt['sha256']=split_plan._canonical_sha256(receipt)
-    context=seed['operating_contract'];context.pop('sha256')
-    context['sha256']=split_plan._canonical_sha256(context)
-    seed.pop('seed_sha256');seed['seed_sha256']=split_plan._canonical_sha256(seed)
-    assert split_plan._entry_operating_scope(seed)!=original
+
+    rows, _, _ = _operating_economic_fixture()
+    seed = deepcopy(rows[0]["seed"])
+    original = split_plan._entry_operating_scope(seed)
+    receipt = seed["operating_contract"]["entry_decision_version_receipt"]
+    receipt["machine_policy_sha256"] = "3" * 64
+    receipt["compact_prompt_sha256"] = "4" * 64
+    receipt.pop("sha256")
+    receipt["sha256"] = split_plan._canonical_sha256(receipt)
+    context = seed["operating_contract"]
+    context.pop("sha256")
+    context["sha256"] = split_plan._canonical_sha256(context)
+    seed.pop("seed_sha256")
+    seed["seed_sha256"] = split_plan._canonical_sha256(seed)
+    assert split_plan._entry_operating_scope(seed) != original
 
 
 def test_operating_paired_holdout_requires_minimum_partition_floor():
-    rows,models,census=_operating_economic_fixture(candidate_counts=(29,1))
-    evidence=split_plan.evaluate_entry_split_operating_economics(rows,models,census,target_date='2026-09-17')
-    assert evidence['status']=='insufficient_sample'
-    assert not evidence['candidates']
-    assert evidence['cohort_checks'][0]['candidates'][0]['blockers']==[
-        'paired_sample_coverage_or_latest_holdout_floor']
+    rows, models, census = _operating_economic_fixture(candidate_counts=(29, 1))
+    evidence = split_plan.evaluate_entry_split_operating_economics(
+        rows, models, census, target_date="2026-09-17"
+    )
+    assert evidence["status"] == "insufficient_sample"
+    assert not evidence["candidates"]
+    assert evidence["cohort_checks"][0]["candidates"][0]["blockers"] == [
+        "paired_sample_coverage_or_latest_holdout_floor"
+    ]
 
 
 def test_operating_paired_sample_cannot_be_inflated_by_relabeling_seed_attempt():
-    rows,models,census=_operating_economic_fixture(candidate_counts=(14,15))
-    duplicate=dict(rows[0],attempt_id='forged-attempt-id')
-    duplicate.pop('sha256');duplicate['sha256']=split_plan._canonical_sha256(duplicate)
+    rows, models, census = _operating_economic_fixture(candidate_counts=(14, 15))
+    duplicate = dict(rows[0], attempt_id="forged-attempt-id")
+    duplicate.pop("sha256")
+    duplicate["sha256"] = split_plan._canonical_sha256(duplicate)
     rows.append(duplicate)
-    evidence=split_plan.evaluate_entry_split_operating_economics(rows,models,census,target_date='2026-09-17')
-    assert evidence['status']=='insufficient_sample'
-    assert not evidence['candidates']
+    evidence = split_plan.evaluate_entry_split_operating_economics(
+        rows, models, census, target_date="2026-09-17"
+    )
+    assert evidence["status"] == "insufficient_sample"
+    assert not evidence["candidates"]
 
 
-@pytest.mark.parametrize('defect,expected', [('no_models','insufficient_sample'),('holdout_error','model_validation_failed'),
-    ('no_candidate_holdout','insufficient_sample'),('no_edge','valid_no_edge'),('qty_change','source_gap'),
-    ('missing_cost','source_gap')])
-def test_operating_economic_dispositions(defect,expected):
-    rows,models,census=_operating_economic_fixture()
-    if defect=='no_models':models=[]
-    if defect=='holdout_error':models[-1]['vwap_error_bps']=1.
-    if defect=='no_candidate_holdout':rows=rows[:15];census.pop('2026-09-11')
-    if defect=='no_edge':
+@pytest.mark.parametrize(
+    "defect,expected",
+    [
+        ("no_models", "insufficient_sample"),
+        ("holdout_error", "model_validation_failed"),
+        ("no_candidate_holdout", "insufficient_sample"),
+        ("no_edge", "valid_no_edge"),
+        ("qty_change", "source_gap"),
+        ("missing_cost", "source_gap"),
+    ],
+)
+def test_operating_economic_dispositions(defect, expected):
+    rows, models, census = _operating_economic_fixture()
+    if defect == "no_models":
+        models = []
+    if defect == "holdout_error":
+        models[-1]["vwap_error_bps"] = 1.0
+    if defect == "no_candidate_holdout":
+        rows = rows[:15]
+        census.pop("2026-09-11")
+    if defect == "no_edge":
         for row in rows:
             for key in split_plan.QUANTITY_LEG_FOUR_ARM_IDS[2:]:
-                arm=row['arms'][key];arm.update(net_pnl_krw=80.,stress_net_pnl_krw=70.);arm.pop('sha256');arm['sha256']=split_plan._canonical_sha256(arm)
-            row.pop('sha256');row['sha256']=split_plan._canonical_sha256(row)
-    if defect in ('qty_change','missing_cost'):
+                arm = row["arms"][key]
+                arm.update(net_pnl_krw=80.0, stress_net_pnl_krw=70.0)
+                arm.pop("sha256")
+                arm["sha256"] = split_plan._canonical_sha256(arm)
+            row.pop("sha256")
+            row["sha256"] = split_plan._canonical_sha256(row)
+    if defect in ("qty_change", "missing_cost"):
         for row in rows:
-            arm=row['arms'][split_plan.QUANTITY_LEG_FOUR_ARM_IDS[2]]
-            if defect=='qty_change':arm['requested_qty']=11
-            else:arm['net_pnl_krw']=None
-            arm.pop('sha256');arm['sha256']=split_plan._canonical_sha256(arm);row.pop('sha256');row['sha256']=split_plan._canonical_sha256(row)
-    result=split_plan.evaluate_entry_split_operating_economics(rows,models,census,target_date='2026-09-17')
-    assert result['status']==expected
-    assert not result['candidates']
-    assert result['valid_no_edge']==(expected=='valid_no_edge')
+            arm = row["arms"][split_plan.QUANTITY_LEG_FOUR_ARM_IDS[2]]
+            if defect == "qty_change":
+                arm["requested_qty"] = 11
+            else:
+                arm["net_pnl_krw"] = None
+            arm.pop("sha256")
+            arm["sha256"] = split_plan._canonical_sha256(arm)
+            row.pop("sha256")
+            row["sha256"] = split_plan._canonical_sha256(row)
+    result = split_plan.evaluate_entry_split_operating_economics(
+        rows, models, census, target_date="2026-09-17"
+    )
+    assert result["status"] == expected
+    assert not result["candidates"]
+    assert result["valid_no_edge"] == (expected == "valid_no_edge")
 
 
 def test_operating_holdout_revision_cannot_reuse_a_consumed_date():
-    rows,models,census=_operating_economic_fixture()
-    first=split_plan.evaluate_entry_split_operating_economics(rows,models,census,target_date='2026-09-17')
-    reused=split_plan.evaluate_entry_split_operating_economics(rows,models,census,target_date='2026-09-17',consumed_holdouts=first['consumed_holdouts'])
-    assert reused==first
-    arm=rows[-1]['arms'][split_plan.QUANTITY_LEG_FOUR_ARM_IDS[2]]
-    arm['net_pnl_krw']+=1.;arm.pop('sha256');arm['sha256']=split_plan._canonical_sha256(arm)
-    rows[-1].pop('sha256');rows[-1]['sha256']=split_plan._canonical_sha256(rows[-1])
-    revised=split_plan.evaluate_entry_split_operating_economics(rows,models,census,target_date='2026-09-17',consumed_holdouts=first['consumed_holdouts'])
-    assert revised['status']=='source_gap' and not revised['candidates']
+    rows, models, census = _operating_economic_fixture()
+    first = split_plan.evaluate_entry_split_operating_economics(
+        rows, models, census, target_date="2026-09-17"
+    )
+    reused = split_plan.evaluate_entry_split_operating_economics(
+        rows,
+        models,
+        census,
+        target_date="2026-09-17",
+        consumed_holdouts=first["consumed_holdouts"],
+    )
+    assert reused == first
+    arm = rows[-1]["arms"][split_plan.QUANTITY_LEG_FOUR_ARM_IDS[2]]
+    arm["net_pnl_krw"] += 1.0
+    arm.pop("sha256")
+    arm["sha256"] = split_plan._canonical_sha256(arm)
+    rows[-1].pop("sha256")
+    rows[-1]["sha256"] = split_plan._canonical_sha256(rows[-1])
+    revised = split_plan.evaluate_entry_split_operating_economics(
+        rows,
+        models,
+        census,
+        target_date="2026-09-17",
+        consumed_holdouts=first["consumed_holdouts"],
+    )
+    assert revised["status"] == "source_gap" and not revised["candidates"]
 
 
 def test_signed_actual_fill_capital_and_reserve_are_distinct():
-    diagnostic={'actual_journal_legs':[dict(quantity=10,submitted_price=10000,
-        submitted_at='2026-09-17T10:00:00+09:00',terminal_at='2026-09-17T10:00:06+09:00',fills=[
-            dict(event_hash='a',observed_at_kst='2026-09-17T10:00:02+09:00',filled_qty=4,fill_amount=40000),
-            dict(event_hash='b',observed_at_kst='2026-09-17T10:00:04+09:00',filled_qty=8,fill_amount=80000)])]}
-    capital,reserve=split_plan._actual_entry_capital(diagnostic,'2026-09-17T10:01:02+09:00')
-    assert capital==pytest.approx(40000+40000*58/60)
-    assert reserve==pytest.approx((100000*2+60000*2+20000*2)/60)
-    diagnostic['actual_journal_legs'][0]['fills'][1]['filled_qty']=11
-    with pytest.raises(ValueError,match='conservation'):split_plan._actual_entry_capital(diagnostic,'2026-09-17T10:01:02+09:00')
+    diagnostic = {
+        "actual_journal_legs": [
+            dict(
+                quantity=10,
+                submitted_price=10000,
+                submitted_at="2026-09-17T10:00:00+09:00",
+                terminal_at="2026-09-17T10:00:06+09:00",
+                fills=[
+                    dict(
+                        event_hash="a",
+                        observed_at_kst="2026-09-17T10:00:02+09:00",
+                        filled_qty=4,
+                        fill_amount=40000,
+                    ),
+                    dict(
+                        event_hash="b",
+                        observed_at_kst="2026-09-17T10:00:04+09:00",
+                        filled_qty=8,
+                        fill_amount=80000,
+                    ),
+                ],
+            )
+        ]
+    }
+    capital, reserve = split_plan._actual_entry_capital(
+        diagnostic, "2026-09-17T10:01:02+09:00"
+    )
+    assert capital == pytest.approx(40000 + 40000 * 58 / 60)
+    assert reserve == pytest.approx((100000 * 2 + 60000 * 2 + 20000 * 2) / 60)
+    diagnostic["actual_journal_legs"][0]["fills"][1]["filled_qty"] = 11
+    with pytest.raises(ValueError, match="conservation"):
+        split_plan._actual_entry_capital(diagnostic, "2026-09-17T10:01:02+09:00")
 
 
 def test_post_apply_version_episode_dedup_and_real_only():
-    row=dict(episode_id='actual-episode',status='COMPLETED',origin='real',owner='main_scalping',cost_complete=True,
-        exact_lineage=True,pid_consumed=True,policy_applied=True,policy_version='v1',policy_sha256='1'*64,
-        scope_sha256='2'*64,fill_class='full',completion_date='2026-09-17',net_pnl_krw=200.,profit_rate=.2,reserve_krw_minutes=10.,
-        budget_krw=100000.,capital_krw_minutes=100.,net_error_budget_pct=.01)
-    result=split_plan.build_entry_split_post_apply_performance([row,row,{**row,'episode_id':'sim','origin':'sim'}],target_date='2026-09-17')
-    assert result['groups'][0]['cumulative']['completed_episodes']==1
-    assert result['groups'][0]['cumulative']['cost_adjusted_ev_pct']==pytest.approx(.2)
-    assert not result['model_delta_ev_is_actual_profit']
-    bad=split_plan.build_entry_split_post_apply_performance([row,{**row,'net_pnl_krw':999}],target_date='2026-09-17')
-    assert not bad['groups'] and bad['quarantined_episodes']==['actual-episode']
+    row = dict(
+        episode_id="actual-episode",
+        status="COMPLETED",
+        origin="real",
+        owner="main_scalping",
+        cost_complete=True,
+        exact_lineage=True,
+        pid_consumed=True,
+        policy_applied=True,
+        policy_version="v1",
+        policy_sha256="1" * 64,
+        scope_sha256="2" * 64,
+        fill_class="full",
+        completion_date="2026-09-17",
+        net_pnl_krw=200.0,
+        profit_rate=0.2,
+        reserve_krw_minutes=10.0,
+        budget_krw=100000.0,
+        capital_krw_minutes=100.0,
+        net_error_budget_pct=0.01,
+    )
+    result = split_plan.build_entry_split_post_apply_performance(
+        [row, row, {**row, "episode_id": "sim", "origin": "sim"}],
+        target_date="2026-09-17",
+    )
+    assert result["groups"][0]["cumulative"]["completed_episodes"] == 1
+    assert result["groups"][0]["cumulative"]["cost_adjusted_ev_pct"] == pytest.approx(
+        0.2
+    )
+    assert not result["model_delta_ev_is_actual_profit"]
+    bad = split_plan.build_entry_split_post_apply_performance(
+        [row, {**row, "net_pnl_krw": 999}], target_date="2026-09-17"
+    )
+    assert not bad["groups"] and bad["quarantined_episodes"] == ["actual-episode"]
 
 
-
-
-def test_operating_predecessor_state_is_bounded_and_source_bound(monkeypatch,tmp_path):
-    monkeypatch.setattr(split_plan,'REPORT_DIR',tmp_path)
-    quality={'tuning_input_allowed':True,'status':'PASS'}
-    monkeypatch.setattr(split_plan,'_source_quality_summary',lambda day:quality)
-    state=dict(through_date='2026-09-16',source_counts={'2026-09-16':2},rows=[],model_rows=[],
-        source_quality_bindings={'2026-09-16':split_plan._source_quality_contract_sha256(quality)})
-    state['sha256']=split_plan._canonical_sha256(state)
-    path=tmp_path/'entry_split_order_plan_2026-09-16.json'
-    path.write_text(json.dumps({'operating_economic_state':state}))
-    assert split_plan._previous_operating_state('2026-09-17')==state
-    quality['tuning_input_allowed']=False
-    with pytest.raises(ValueError,match='source_quality_changed'):split_plan._previous_operating_state('2026-09-17')
+def test_operating_predecessor_state_is_bounded_and_source_bound(monkeypatch, tmp_path):
+    monkeypatch.setattr(split_plan, "REPORT_DIR", tmp_path)
+    quality = {"tuning_input_allowed": True, "status": "PASS"}
+    monkeypatch.setattr(split_plan, "_source_quality_summary", lambda day: quality)
+    state = dict(
+        through_date="2026-09-16",
+        source_counts={"2026-09-16": 2},
+        rows=[],
+        model_rows=[],
+        source_quality_bindings={
+            "2026-09-16": split_plan._source_quality_contract_sha256(quality)
+        },
+    )
+    state["sha256"] = split_plan._canonical_sha256(state)
+    path = tmp_path / "entry_split_order_plan_2026-09-16.json"
+    path.write_text(json.dumps({"operating_economic_state": state}))
+    assert split_plan._previous_operating_state("2026-09-17") == state
+    quality["tuning_input_allowed"] = False
+    with pytest.raises(ValueError, match="source_quality_changed"):
+        split_plan._previous_operating_state("2026-09-17")
 
 
 def test_operating_late_model_availability_and_dispositions():
-    rows,models,census=_operating_economic_fixture()
-    models[-1]['completion_date']='2026-09-11'
-    ev=split_plan.evaluate_entry_split_operating_economics(rows,models,census,target_date='2026-09-17')
-    assert not ev['candidates'] and ev['status']=='insufficient_sample'
-    for disposition,expected in [('unsupported_scope','unsupported_scope'),('terminal_pending','pending'),('source_gap','source_gap')]:
-        row=rows[0].copy();row['arms']={key:{'status':disposition} for key in split_plan.QUANTITY_LEG_FOUR_ARM_IDS}
-        ev=split_plan.evaluate_entry_split_operating_economics([row],[],census,target_date='2026-09-17')
-        assert ev['status']==expected and ev['primary_operating_ev_pct'] is None
+    rows, models, census = _operating_economic_fixture()
+    models[-1]["completion_date"] = "2026-09-11"
+    ev = split_plan.evaluate_entry_split_operating_economics(
+        rows, models, census, target_date="2026-09-17"
+    )
+    assert not ev["candidates"] and ev["status"] == "insufficient_sample"
+    for disposition, expected in [
+        ("unsupported_scope", "unsupported_scope"),
+        ("terminal_pending", "pending"),
+        ("source_gap", "source_gap"),
+    ]:
+        row = rows[0].copy()
+        row["arms"] = {
+            key: {"status": disposition} for key in split_plan.QUANTITY_LEG_FOUR_ARM_IDS
+        }
+        ev = split_plan.evaluate_entry_split_operating_economics(
+            [row], [], census, target_date="2026-09-17"
+        )
+        assert ev["status"] == expected and ev["primary_operating_ev_pct"] is None
 
 
 def test_operating_model_change_cannot_reuse_candidate_holdout():
-    rows,models,census=_operating_economic_fixture()
-    first=split_plan.evaluate_entry_split_operating_economics(rows,models,census,target_date='2026-09-17')
-    assert first['candidates']
-    models[0]['net_error_budget_pct']=.001
-    changed=split_plan.evaluate_entry_split_operating_economics(rows,models,census,target_date='2026-09-17',consumed_holdouts=first['consumed_holdouts'])
-    assert changed['status']=='source_gap' and not changed['candidates']
-    assert any('already_consumed' in b for c in changed['cohort_checks'] for choice in c['candidates'] for b in choice['blockers'])
+    rows, models, census = _operating_economic_fixture()
+    first = split_plan.evaluate_entry_split_operating_economics(
+        rows, models, census, target_date="2026-09-17"
+    )
+    assert first["candidates"]
+    models[0]["net_error_budget_pct"] = 0.001
+    changed = split_plan.evaluate_entry_split_operating_economics(
+        rows,
+        models,
+        census,
+        target_date="2026-09-17",
+        consumed_holdouts=first["consumed_holdouts"],
+    )
+    assert changed["status"] == "source_gap" and not changed["candidates"]
+    assert any(
+        "already_consumed" in b
+        for c in changed["cohort_checks"]
+        for choice in c["candidates"]
+        for b in choice["blockers"]
+    )
 
 
-def test_initial_seed_survives_baseline_fill_and_completed_cost_producer(monkeypatch,tmp_path):
+def test_initial_seed_survives_baseline_fill_and_completed_cost_producer(
+    monkeypatch, tmp_path
+):
     from copy import deepcopy
     from src.engine import sniper_state_handlers as handlers
-    from src.engine.scalping.strategy_owner_replay import entry_split_actual_economic_receipt
-    rows,_,_=_operating_economic_fixture();seed=deepcopy(rows[0]['seed'])
-    decision=dict(evaluation_attempt_id=seed['evaluation_attempt_id'],
-        machine_bundle_sha256=seed['policy_bundle_sha256'],
-        machine_policy_version='machine-v1',machine_policy_sha256='1'*64,
-        compact_prompt_version='compact-v1',compact_prompt_sha256='2'*64,
-        decision_trace_id='trace-v1',runtime_pid=123)
-    decision['sha256']=split_plan._canonical_sha256(decision)
-    seed['operating_contract']['entry_decision_version_receipt']=decision
-    seed['operating_contract']['sha256']=split_plan._canonical_sha256({
-        k:v for k,v in seed['operating_contract'].items() if k!='sha256'})
-    seed['seed_sha256']=split_plan._canonical_sha256({k:v for k,v in seed.items() if k!='seed_sha256'})
-    order={'qty':10,'entry_split_initial_entry_seed':seed,'entry_split_initial_entry_lineage_conflict':False,
-        'entry_split_replay_seed_status':'ready','entry_split_replay_seed_blocker':None}
-    meta=handlers._split_order_meta_fields(order)
-    stock=handlers._entry_split_position_provenance([meta])
-    assert stock['entry_split_initial_entry_seed']==seed
-    assert stock['entry_split_replay_seed_status']=='ready'
+    from src.engine.scalping.strategy_owner_replay import (
+        entry_split_actual_economic_receipt,
+    )
+
+    rows, _, _ = _operating_economic_fixture()
+    seed = deepcopy(rows[0]["seed"])
+    decision = dict(
+        evaluation_attempt_id=seed["evaluation_attempt_id"],
+        machine_bundle_sha256=seed["policy_bundle_sha256"],
+        machine_policy_version="machine-v1",
+        machine_policy_sha256="1" * 64,
+        compact_prompt_version="compact-v1",
+        compact_prompt_sha256="2" * 64,
+        decision_trace_id="trace-v1",
+        runtime_pid=123,
+    )
+    decision["sha256"] = split_plan._canonical_sha256(decision)
+    seed["operating_contract"]["entry_decision_version_receipt"] = decision
+    seed["operating_contract"]["sha256"] = split_plan._canonical_sha256(
+        {k: v for k, v in seed["operating_contract"].items() if k != "sha256"}
+    )
+    seed["seed_sha256"] = split_plan._canonical_sha256(
+        {k: v for k, v in seed.items() if k != "seed_sha256"}
+    )
+    order = {
+        "qty": 10,
+        "entry_split_initial_entry_seed": seed,
+        "entry_split_initial_entry_lineage_conflict": False,
+        "entry_split_replay_seed_status": "ready",
+        "entry_split_replay_seed_blocker": None,
+    }
+    meta = handlers._split_order_meta_fields(order)
+    stock = handlers._entry_split_position_provenance([meta])
+    assert stock["entry_split_initial_entry_seed"] == seed
+    assert stock["entry_split_replay_seed_status"] == "ready"
     from src.engine.sniper_post_sell_feedback import _entry_split_post_sell_fields
-    assert _entry_split_post_sell_fields(stock)['entry_split_replay_seed_status']=='ready'
+
+    assert (
+        _entry_split_post_sell_fields(stock)["entry_split_replay_seed_status"]
+        == "ready"
+    )
     from src.engine import sniper_execution_receipts as receipts
-    for keys in (receipts._BUY_RECEIPT_SNAPSHOT_KEYS,receipts._SELL_RECEIPT_SNAPSHOT_KEYS):
-        snapshot=receipts._normalized_receipt_snapshot(receipts._receipt_snapshot(stock,keys))
-        assert snapshot['entry_split_initial_entry_seed']==seed
-        assert snapshot['entry_split_replay_seed_status']=='ready'
-    stock.update(code='005930',strategy='SCALPING',realized_pnl_krw=177,sell_execution_receipt_economics_complete=True,sell_execution_receipt_quantity_contract_complete=True)
+
+    for keys in (
+        receipts._BUY_RECEIPT_SNAPSHOT_KEYS,
+        receipts._SELL_RECEIPT_SNAPSHOT_KEYS,
+    ):
+        snapshot = receipts._normalized_receipt_snapshot(
+            receipts._receipt_snapshot(stock, keys)
+        )
+        assert snapshot["entry_split_initial_entry_seed"] == seed
+        assert snapshot["entry_split_replay_seed_status"] == "ready"
+    stock.update(
+        code="005930",
+        strategy="SCALPING",
+        realized_pnl_krw=177,
+        sell_execution_receipt_economics_complete=True,
+        sell_execution_receipt_quantity_contract_complete=True,
+    )
     # Existing producer accepts KST wall-clock values; no UTC day shift at 20:00.
-    result=entry_split_actual_economic_receipt(stock,buy_price=1000,buy_qty=10,profit_rate=1.7654,
-        completion_at=datetime.fromisoformat('2026-09-11T20:00:00'))
-    assert result['cost_complete'] is True and result['completed_at'].endswith('+09:00')
-    assert result['completion_date']=='2026-09-11'
-    assert result['entry_decision_pid_consumed'] is True
-    assert result['entry_decision_version_receipt']==decision
-    assert result['sha256']==split_plan._canonical_sha256({k:v for k,v in result.items() if k!='sha256'})
-    invalid_seed=deepcopy(seed)
-    invalid_seed['operating_contract'].pop('entry_decision_version_receipt')
-    invalid_seed['operating_contract']['sha256']=split_plan._canonical_sha256({
-        k:v for k,v in invalid_seed['operating_contract'].items() if k!='sha256'})
-    invalid_seed['seed_sha256']=split_plan._canonical_sha256({
-        k:v for k,v in invalid_seed.items() if k!='seed_sha256'})
-    invalid_stock=dict(stock,entry_split_initial_entry_seed=invalid_seed)
-    invalid=entry_split_actual_economic_receipt(invalid_stock,buy_price=1000,buy_qty=10,
-        profit_rate=1.7654,completion_at=datetime.fromisoformat('2026-09-11T20:00:00'))
-    assert invalid['cost_complete'] is False and invalid['exact_lineage'] is False
-    assert invalid['entry_decision_pid_consumed'] is False
-    monkeypatch.setattr(split_plan,'DATA_DIR',tmp_path)
-    path=split_plan._real_post_sell_candidate_path('2026-09-11');path.parent.mkdir(parents=True)
-    path.write_text(json.dumps({'fields':{'entry_split_actual_economics':repr(result)}})+'\n')
-    found,source=split_plan._bounded_actual_entry_outcomes('2026-09-11')
-    assert found==[result] and source['status']=='ready'
-    assert source['receipt_census']=={'post_sell_record_count':1,'exact_completed_cost_receipt_count':1,
-        'receipt_source_gap_count':0,'not_attributed_count':0,'legacy_unclassified_count':1,'status':'ready'}
-    path.write_text(json.dumps({'fields':{'entry_split_actual_economic_receipt_status':'source_gap',
-        'entry_split_actual_economic_receipt_blocker':'frozen_seed_missing'}})+'\n')
-    found,source=split_plan._bounded_actual_entry_outcomes('2026-09-11')
-    assert found==[] and source['receipt_census']['receipt_source_gap_count']==1
+    result = entry_split_actual_economic_receipt(
+        stock,
+        buy_price=1000,
+        buy_qty=10,
+        profit_rate=1.7654,
+        completion_at=datetime.fromisoformat("2026-09-11T20:00:00"),
+    )
+    assert result["cost_complete"] is True and result["completed_at"].endswith("+09:00")
+    assert result["completion_date"] == "2026-09-11"
+    assert result["entry_decision_pid_consumed"] is True
+    assert result["entry_decision_version_receipt"] == decision
+    assert result["sha256"] == split_plan._canonical_sha256(
+        {k: v for k, v in result.items() if k != "sha256"}
+    )
+    invalid_seed = deepcopy(seed)
+    invalid_seed["operating_contract"].pop("entry_decision_version_receipt")
+    invalid_seed["operating_contract"]["sha256"] = split_plan._canonical_sha256(
+        {k: v for k, v in invalid_seed["operating_contract"].items() if k != "sha256"}
+    )
+    invalid_seed["seed_sha256"] = split_plan._canonical_sha256(
+        {k: v for k, v in invalid_seed.items() if k != "seed_sha256"}
+    )
+    invalid_stock = dict(stock, entry_split_initial_entry_seed=invalid_seed)
+    invalid = entry_split_actual_economic_receipt(
+        invalid_stock,
+        buy_price=1000,
+        buy_qty=10,
+        profit_rate=1.7654,
+        completion_at=datetime.fromisoformat("2026-09-11T20:00:00"),
+    )
+    assert invalid["cost_complete"] is False and invalid["exact_lineage"] is False
+    assert invalid["entry_decision_pid_consumed"] is False
+    monkeypatch.setattr(split_plan, "DATA_DIR", tmp_path)
+    path = split_plan._real_post_sell_candidate_path("2026-09-11")
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        json.dumps({"fields": {"entry_split_actual_economics": repr(result)}}) + "\n"
+    )
+    found, source = split_plan._bounded_actual_entry_outcomes("2026-09-11")
+    assert found == [result] and source["status"] == "ready"
+    assert source["receipt_census"] == {
+        "post_sell_record_count": 1,
+        "exact_completed_cost_receipt_count": 1,
+        "receipt_source_gap_count": 0,
+        "not_attributed_count": 0,
+        "legacy_unclassified_count": 1,
+        "status": "ready",
+    }
+    path.write_text(
+        json.dumps(
+            {
+                "fields": {
+                    "entry_split_actual_economic_receipt_status": "source_gap",
+                    "entry_split_actual_economic_receipt_blocker": "frozen_seed_missing",
+                }
+            }
+        )
+        + "\n"
+    )
+    found, source = split_plan._bounded_actual_entry_outcomes("2026-09-11")
+    assert found == [] and source["receipt_census"]["receipt_source_gap_count"] == 1
     path.write_text('{"incomplete":')
-    found,source=split_plan._bounded_actual_entry_outcomes('2026-09-11')
-    assert found==[] and source['status']=='source_gap'
+    found, source = split_plan._bounded_actual_entry_outcomes("2026-09-11")
+    assert found == [] and source["status"] == "source_gap"
 
 
 def test_entry_split_missing_frozen_seed_reason_is_preserved():
     from src.engine.scalping.strategy_owner_replay import freeze_entry_opportunity
-    diagnostic={}
-    assert freeze_entry_opportunity({},stock_code='005930',observed_at=1,diagnostic=diagnostic) is None
-    assert diagnostic=={'status':'source_gap','blocker':'frozen_plan_or_route_contract_missing'}
+
+    diagnostic = {}
+    assert (
+        freeze_entry_opportunity(
+            {}, stock_code="005930", observed_at=1, diagnostic=diagnostic
+        )
+        is None
+    )
+    assert diagnostic == {
+        "status": "source_gap",
+        "blocker": "frozen_plan_or_route_contract_missing",
+    }
 
 
 def test_entry_split_clean_baseline_census_does_not_infer_missing_days_as_zero():
-    census=split_plan._paired_economic_population_census(
-        {'cumulative_state':{'clean_tuning_baseline_date':'2026-06-05',
-            'source_dates':['2026-06-05','2026-06-08']}},
-        {'through_date':'2026-06-08','source_counts':{'2026-06-05':0},'actual_outcomes':[]},
-        {'source_date':'2026-06-08','source_counts':{'2026-06-05':0},'input_rows':[],'model_rows':[]})
-    assert census['status']=='source_gap'
-    assert census['missing_dates_are_not_zero'] is True
-    assert [row['disposition'] for row in census['dates']]==[
-        'censused_zero_eligible_attempts','operating_attempt_census_missing']
+    census = split_plan._paired_economic_population_census(
+        {
+            "cumulative_state": {
+                "clean_tuning_baseline_date": "2026-06-05",
+                "source_dates": ["2026-06-05", "2026-06-08"],
+            }
+        },
+        {
+            "through_date": "2026-06-08",
+            "source_counts": {"2026-06-05": 0},
+            "actual_outcomes": [],
+        },
+        {
+            "source_date": "2026-06-08",
+            "source_counts": {"2026-06-05": 0},
+            "input_rows": [],
+            "model_rows": [],
+        },
+    )
+    assert census["status"] == "source_gap"
+    assert census["missing_dates_are_not_zero"] is True
+    assert [row["disposition"] for row in census["dates"]] == [
+        "censused_zero_eligible_attempts",
+        "operating_attempt_census_missing",
+    ]
 
 
 def test_entry_split_missing_realized_outcome_source_blocks_paired_selection():
-    blockers=split_plan._operating_owner_source_blockers(
-        {'source_contract':{'actual_outcomes':{'status':'missing'}}})
-    assert blockers==['operating_owner_source_invalid:actual_outcomes']
+    blockers = split_plan._operating_owner_source_blockers(
+        {"source_contract": {"actual_outcomes": {"status": "missing"}}}
+    )
+    assert blockers == ["operating_owner_source_invalid:actual_outcomes"]
 
 
 def test_actual_pnl_is_reported_with_null_unsupported_model_error():
-    row=dict(episode_id='completed-partial',status='COMPLETED',origin='real',owner='main_scalping',cost_complete=True,
-        exact_lineage=True,pid_consumed=True,policy_applied=True,policy_version='v1',policy_sha256='1'*64,
-        scope_sha256='2'*64,fill_class='partial',completion_date='2026-09-17',net_pnl_krw=200.,profit_rate=.2,
-        reserve_krw_minutes=10.,budget_krw=100000.,capital_krw_minutes=100.,net_error_budget_pct=None)
-    result=split_plan.build_entry_split_post_apply_performance([row,row],target_date='2026-09-17')
-    assert result['groups'][0]['cumulative']['net_pnl_krw']==200.
-    assert result['groups'][0]['cumulative']['model_error']['mean_signed_budget_pct'] is None
+    row = dict(
+        episode_id="completed-partial",
+        status="COMPLETED",
+        origin="real",
+        owner="main_scalping",
+        cost_complete=True,
+        exact_lineage=True,
+        pid_consumed=True,
+        policy_applied=True,
+        policy_version="v1",
+        policy_sha256="1" * 64,
+        scope_sha256="2" * 64,
+        fill_class="partial",
+        completion_date="2026-09-17",
+        net_pnl_krw=200.0,
+        profit_rate=0.2,
+        reserve_krw_minutes=10.0,
+        budget_krw=100000.0,
+        capital_krw_minutes=100.0,
+        net_error_budget_pct=None,
+    )
+    result = split_plan.build_entry_split_post_apply_performance(
+        [row, row], target_date="2026-09-17"
+    )
+    assert result["groups"][0]["cumulative"]["net_pnl_krw"] == 200.0
+    assert (
+        result["groups"][0]["cumulative"]["model_error"]["mean_signed_budget_pct"]
+        is None
+    )
 
 
-@pytest.mark.parametrize('missing', ['capital_krw_minutes', 'reserve_krw_minutes'])
+@pytest.mark.parametrize("missing", ["capital_krw_minutes", "reserve_krw_minutes"])
 def test_completed_net_survives_missing_exposure_with_explicit_gap(missing):
-    row=dict(episode_id='actual-missing-exposure',status='COMPLETED',origin='real',owner='main_scalping',cost_complete=True,
-        exact_lineage=True,pid_consumed=True,policy_applied=True,policy_version='v1',policy_sha256='1'*64,
-        scope_sha256='2'*64,fill_class='full',completion_date='2026-09-17',net_pnl_krw=200.,profit_rate=.2,
-        reserve_krw_minutes=10.,budget_krw=100000.,capital_krw_minutes=100.,net_error_budget_pct=None)
-    row[missing]=None
-    result=split_plan.build_entry_split_post_apply_performance([row,row],target_date='2026-09-17')
-    metrics=result['groups'][0]['cumulative']
-    assert metrics['completed_episodes']==1 and metrics['net_pnl_krw']==200.
-    assert metrics['cost_adjusted_ev_pct']==pytest.approx(.2)
-    assert metrics['exposure'][missing] is None
-    assert metrics['exposure']['status']=='source_gap'
-    assert metrics['exposure']['covered_episodes'][missing]==0
-    assert metrics['exposure']['owner'] and metrics['exposure']['closure_test']
-    assert result['exposure_gap_episodes']==['actual-missing-exposure']
+    row = dict(
+        episode_id="actual-missing-exposure",
+        status="COMPLETED",
+        origin="real",
+        owner="main_scalping",
+        cost_complete=True,
+        exact_lineage=True,
+        pid_consumed=True,
+        policy_applied=True,
+        policy_version="v1",
+        policy_sha256="1" * 64,
+        scope_sha256="2" * 64,
+        fill_class="full",
+        completion_date="2026-09-17",
+        net_pnl_krw=200.0,
+        profit_rate=0.2,
+        reserve_krw_minutes=10.0,
+        budget_krw=100000.0,
+        capital_krw_minutes=100.0,
+        net_error_budget_pct=None,
+    )
+    row[missing] = None
+    result = split_plan.build_entry_split_post_apply_performance(
+        [row, row], target_date="2026-09-17"
+    )
+    metrics = result["groups"][0]["cumulative"]
+    assert metrics["completed_episodes"] == 1 and metrics["net_pnl_krw"] == 200.0
+    assert metrics["cost_adjusted_ev_pct"] == pytest.approx(0.2)
+    assert metrics["exposure"][missing] is None
+    assert metrics["exposure"]["status"] == "source_gap"
+    assert metrics["exposure"]["covered_episodes"][missing] == 0
+    assert metrics["exposure"]["owner"] and metrics["exposure"]["closure_test"]
+    assert result["exposure_gap_episodes"] == ["actual-missing-exposure"]
 
 
 def test_verified_completed_receipt_survives_capital_join_gap_in_producer():
-    rows,_,_=_operating_economic_fixture(); seed=rows[0]['seed']; plan=seed['plan_sha256'];scope=split_plan._entry_operating_scope(seed)
-    actual=dict(episode_id='verified-completed-capital-gap',plan_sha256=plan,scope_sha256=scope,
-        source_date=seed['source_date'],completion_date=seed['source_date'],completed_at=seed['source_date']+'T12:00:00+09:00',
-        entry_qty=10,actual_entry_vwap=1000.,status='COMPLETED',origin='real',owner='main_scalping',cost_complete=True,
-        exact_lineage=True,pid_consumed=True,policy_applied=True,policy_version='v1',policy_sha256='1'*64,
-        fill_class='full',net_pnl_krw=200.,profit_rate=.2,budget_krw=100000.,
-        cost_policy_version=seed['operating_contract']['cost_policy_version'],capital_krw_minutes=None,reserve_krw_minutes=None,
-        entry_decision_version_receipt=seed['operating_contract']['entry_decision_version_receipt'],
-        entry_decision_pid_consumed=True)
-    actual['sha256']=split_plan._canonical_sha256(actual)
-    diagnostic=dict(scope={'plan_sha256':plan},actual_filled_qty=10,actual_entry_vwap=1000.,actual_journal_legs=[],
-        modeled_filled_qty=10,vwap_error_krw=0.,receipt_clock_error_sec=0.,false_fill=False,missed_fill=False)
-    validation={'rows':[diagnostic]}
-    models=split_plan._attach_operating_model_outcomes(validation,[{'seed':seed,'operating_arms':rows[0]['arms']}],[actual])
-    perf=split_plan.build_entry_split_post_apply_performance(models,target_date='2026-09-17')
-    assert perf['groups'][0]['cumulative']['net_pnl_krw']==200.
-    assert perf['groups'][0]['cumulative']['exposure']['capital_krw_minutes'] is None
-    assert validation['actual_completed_net_comparable_count']==0
-    assert models[0]['blocker']=='actual_capital_or_reservation_source_missing'
-    evidence=split_plan.evaluate_entry_split_operating_economics(rows,models,{},target_date='2026-09-17')
-    assert evidence['status']=='source_gap' and not evidence['candidates'] and not any(x['validated'] for x in evidence['model_scopes'])
+    rows, _, _ = _operating_economic_fixture()
+    seed = rows[0]["seed"]
+    plan = seed["plan_sha256"]
+    scope = split_plan._entry_operating_scope(seed)
+    actual = dict(
+        episode_id="verified-completed-capital-gap",
+        plan_sha256=plan,
+        scope_sha256=scope,
+        source_date=seed["source_date"],
+        completion_date=seed["source_date"],
+        completed_at=seed["source_date"] + "T12:00:00+09:00",
+        entry_qty=10,
+        actual_entry_vwap=1000.0,
+        status="COMPLETED",
+        origin="real",
+        owner="main_scalping",
+        cost_complete=True,
+        exact_lineage=True,
+        pid_consumed=True,
+        policy_applied=True,
+        policy_version="v1",
+        policy_sha256="1" * 64,
+        fill_class="full",
+        net_pnl_krw=200.0,
+        profit_rate=0.2,
+        budget_krw=100000.0,
+        cost_policy_version=seed["operating_contract"]["cost_policy_version"],
+        capital_krw_minutes=None,
+        reserve_krw_minutes=None,
+        entry_decision_version_receipt=seed["operating_contract"][
+            "entry_decision_version_receipt"
+        ],
+        entry_decision_pid_consumed=True,
+    )
+    actual["sha256"] = split_plan._canonical_sha256(actual)
+    diagnostic = dict(
+        scope={"plan_sha256": plan},
+        actual_filled_qty=10,
+        actual_entry_vwap=1000.0,
+        actual_journal_legs=[],
+        modeled_filled_qty=10,
+        vwap_error_krw=0.0,
+        receipt_clock_error_sec=0.0,
+        false_fill=False,
+        missed_fill=False,
+    )
+    validation = {"rows": [diagnostic]}
+    models = split_plan._attach_operating_model_outcomes(
+        validation, [{"seed": seed, "operating_arms": rows[0]["arms"]}], [actual]
+    )
+    perf = split_plan.build_entry_split_post_apply_performance(
+        models, target_date="2026-09-17"
+    )
+    assert perf["groups"][0]["cumulative"]["net_pnl_krw"] == 200.0
+    assert perf["groups"][0]["cumulative"]["exposure"]["capital_krw_minutes"] is None
+    assert validation["actual_completed_net_comparable_count"] == 0
+    assert models[0]["blocker"] == "actual_capital_or_reservation_source_missing"
+    evidence = split_plan.evaluate_entry_split_operating_economics(
+        rows, models, {}, target_date="2026-09-17"
+    )
+    assert (
+        evidence["status"] == "source_gap"
+        and not evidence["candidates"]
+        and not any(x["validated"] for x in evidence["model_scopes"])
+    )
 
 
-@pytest.mark.parametrize('mode', ['deferred', 'admission_deferred', 'probe', 'invalid_sizing', 'opening'])
-def test_live_submit_split_branch_binds_or_releases_reservation(monkeypatch, tmp_path, mode):
+@pytest.mark.parametrize(
+    "mode", ["deferred", "admission_deferred", "probe", "invalid_sizing", "opening"]
+)
+def test_live_submit_split_branch_binds_or_releases_reservation(
+    monkeypatch, tmp_path, mode
+):
     """Run the actual pre-broker branch, including its enclosing conditions."""
     import ast
     from pathlib import Path
     from src.engine import sniper_state_handlers as handlers
     from src.engine.scalping import strategy_owner_replay
 
-    monkeypatch.setattr(split_plan, 'PROBE_RUNTIME_STATE_PATH', tmp_path / 'probe.json')
+    monkeypatch.setattr(split_plan, "PROBE_RUNTIME_STATE_PATH", tmp_path / "probe.json")
     # The native optional source producer returns None on capture failure;
     # an empty dict is not a valid frozen operating context.
-    monkeypatch.setattr(strategy_owner_replay, 'freeze_entry_operating_context', lambda *a, **k: None)
+    monkeypatch.setattr(
+        strategy_owner_replay, "freeze_entry_operating_context", lambda *a, **k: None
+    )
     source = ast.parse(Path(handlers.__file__).read_text())
-    function = next(n for n in source.body if isinstance(n, ast.FunctionDef)
-                    and n.name == '_submit_watching_triggered_entry')
-    start = next(i for i, n in enumerate(function.body)
-                 if isinstance(n, ast.Assign) and ast.unparse(n.targets[0]) == 'entry_execution_sizing_fields')
-    end = next(i for i in range(start, len(function.body))
-               if isinstance(function.body[i], ast.Assign)
-               and ast.unparse(function.body[i].targets[0]) == 'msg')
-    branch = ast.parse('def run(planned_orders):\n    return True\n').body[0]
+    function = next(
+        n
+        for n in source.body
+        if isinstance(n, ast.FunctionDef)
+        and n.name == "_submit_watching_triggered_entry"
+    )
+    start = next(
+        i
+        for i, n in enumerate(function.body)
+        if isinstance(n, ast.Assign)
+        and ast.unparse(n.targets[0]) == "entry_execution_sizing_fields"
+    )
+    end = next(
+        i
+        for i in range(start, len(function.body))
+        if isinstance(function.body[i], ast.Assign)
+        and ast.unparse(function.body[i].targets[0]) == "msg"
+    )
+    branch = ast.parse("def run(planned_orders):\n    return True\n").body[0]
     branch.body = function.body[start:end] + branch.body
     module = ast.fix_missing_locations(ast.Module(body=[branch], type_ignores=[]))
-    fields = {'entry_split_order_probe_first_required': True,
-              'entry_split_order_probe_first_applied': mode not in {'deferred', 'admission_deferred'},
-              'entry_split_order_probe_capacity_deferred': mode == 'deferred',
-              'actual_order_submitted': True,
-              'broker_order_forbidden': False,
-              'entry_split_order_skip_reason': (
-                  'probe_residual_admission_deferred' if mode == 'admission_deferred' else ''),
-              'entry_split_order_probe_first_skip_reason': 'probe_active_bundle_cap_reached',
-              'entry_split_order_probe_bundle_id': 'new-plan'}
-    probe = {'qty': 1, 'price': 1000, 'entry_split_order_probe_continuation': {'requested_qty': 5},
-             'entry_split_order_probe_submit_best_ask': 1000}
-    split_plan.update_probe_runtime_bundle('new-plan', phase='planned')
-    calls, stock = [], {
-        'id': 1,
-        'entry_armed': True,
-        'entry_armed_until': 999999,
-        'entry_signal_price': 1000,
-        'entry_signal_time': datetime(2026, 7, 20, tzinfo=timezone(timedelta(hours=9))),
-        'entry_signal_strategy_id': 'SCALPING',
+    fields = {
+        "entry_split_order_probe_first_required": True,
+        "entry_split_order_probe_first_applied": mode
+        not in {"deferred", "admission_deferred"},
+        "entry_split_order_probe_capacity_deferred": mode == "deferred",
+        "actual_order_submitted": True,
+        "broker_order_forbidden": False,
+        "entry_split_order_skip_reason": (
+            "probe_residual_admission_deferred" if mode == "admission_deferred" else ""
+        ),
+        "entry_split_order_probe_first_skip_reason": "probe_active_bundle_cap_reached",
+        "entry_split_order_probe_bundle_id": "new-plan",
     }
-    env = {**vars(handlers), 'stock': stock, 'code': '000001', 'strategy': 'SCALPING',
-               'ws_data': {}, 'curr_price': 1000, 'sizing_decision': {},
-               '_initial_quantity_cap_research_context': lambda *a, **k: None,
-               'submit_attempt_fields': lambda *a: {},
-           '_probe_residual_successor_source_fields': lambda *a, **k: {},
-           'opening_rotation_active': mode == 'opening', 'sizing_context': {}, 'budget_context': {},
-           'planned_orders': [probe], 'latency_gate': {}, 'latency_price_snapshot': {},
-           'entry_orderbook_micro_fields': {}, 'microstructure_submit_log_fields': {},
-           'submit_revalidation_fields': {}, 'entry_ai_submit_authority': {}, 'requested_qty': 5,
-           'entry_mode': 'normal', 'wait_probe_required': False,
-           'apply_entry_split_order_policy': lambda *a, **k: (
-               [] if mode in {'deferred', 'admission_deferred'} else [probe], fields),
-           'submit_attempt_machine_lineage': lambda *a: {'evaluation_attempt_id': 'current'},
-           '_decorate_entry_split_leg_ttls': lambda orders, *a: orders,
-           'compose_entry_execution_sizing_plan': lambda orders, **k: (orders, {
-               'entry_execution_sizing_valid': mode != 'invalid_sizing'}),
-           'clear_signal_reference': handlers.clear_signal_reference,
-           '_log_entry_pipeline': lambda stock, code, stage, **kw: calls.append((stage, kw))}
-    exec(compile(module, '<live-pre-broker-branch>', 'exec'), env)
-    assert env['run']([probe]) is (mode in {'probe', 'opening'})
+    probe = {
+        "qty": 1,
+        "price": 1000,
+        "entry_split_order_probe_continuation": {"requested_qty": 5},
+        "entry_split_order_probe_submit_best_ask": 1000,
+    }
+    split_plan.update_probe_runtime_bundle("new-plan", phase="planned")
+    calls, stock = [], {
+        "id": 1,
+        "entry_armed": True,
+        "entry_armed_until": 999999,
+        "entry_signal_price": 1000,
+        "entry_signal_time": datetime(2026, 7, 20, tzinfo=timezone(timedelta(hours=9))),
+        "entry_signal_strategy_id": "SCALPING",
+    }
+    env = {
+        **vars(handlers),
+        "stock": stock,
+        "code": "000001",
+        "strategy": "SCALPING",
+        "ws_data": {},
+        "curr_price": 1000,
+        "sizing_decision": {},
+        "_initial_quantity_cap_research_context": lambda *a, **k: None,
+        "submit_attempt_fields": lambda *a: {},
+        "_probe_residual_successor_source_fields": lambda *a, **k: {},
+        "opening_rotation_active": mode == "opening",
+        "sizing_context": {},
+        "budget_context": {},
+        "planned_orders": [probe],
+        "latency_gate": {},
+        "latency_price_snapshot": {},
+        "entry_orderbook_micro_fields": {},
+        "microstructure_submit_log_fields": {},
+        "submit_revalidation_fields": {},
+        "entry_ai_submit_authority": {},
+        "requested_qty": 5,
+        "entry_mode": "normal",
+        "wait_probe_required": False,
+        "apply_entry_split_order_policy": lambda *a, **k: (
+            [] if mode in {"deferred", "admission_deferred"} else [probe],
+            fields,
+        ),
+        "submit_attempt_machine_lineage": lambda *a: {
+            "evaluation_attempt_id": "current"
+        },
+        "_decorate_entry_split_leg_ttls": lambda orders, *a: orders,
+        "compose_entry_execution_sizing_plan": lambda orders, **k: (
+            orders,
+            {"entry_execution_sizing_valid": mode != "invalid_sizing"},
+        ),
+        "clear_signal_reference": handlers.clear_signal_reference,
+        "_log_entry_pipeline": lambda stock, code, stage, **kw: calls.append(
+            (stage, kw)
+        ),
+    }
+    exec(compile(module, "<live-pre-broker-branch>", "exec"), env)
+    assert env["run"]([probe]) is (mode in {"probe", "opening"})
     stages = [stage for stage, _ in calls]
-    split_events = [(stage, fields) for stage, fields in calls
-                    if stage.startswith('entry_split_order_plan_')
-                    or stage.startswith('entry_split_probe_')]
+    split_events = [
+        (stage, fields)
+        for stage, fields in calls
+        if stage.startswith("entry_split_order_plan_")
+        or stage.startswith("entry_split_probe_")
+    ]
     if split_events:
-        assert split_events[0][1]['actual_order_submitted'] is False
-        assert split_events[0][1]['broker_order_forbidden'] is (mode in {'deferred', 'admission_deferred'})
-    state = json.loads((tmp_path / 'probe.json').read_text())['bundles']['new-plan']
-    if mode == 'probe':
-        assert stock['entry_split_probe_bundle_id'] == 'new-plan'
-        assert stock['entry_split_probe_phase'] == state['phase'] == 'probe_submitting'
-        assert stock['entry_split_probe_continuation'] == probe['entry_split_order_probe_continuation']
-    elif mode == 'deferred':
-        assert stages[-1] == 'entry_split_probe_capacity_deferred'
-        assert calls[-1][1]['broker_order_forbidden'] is True
-        assert 'order_bundle_failed' not in stages
-        assert stock.get('entry_armed') is None
-        assert stock.get('entry_signal_time') is None
-    elif mode == 'admission_deferred':
-        assert stages[-1] == 'entry_split_probe_admission_deferred'
-        assert calls[-1][1]['broker_order_forbidden'] is True
-        assert 'order_bundle_failed' not in stages
-        assert stock.get('entry_armed') is None
-        assert stock.get('entry_signal_time') is None
-    elif mode == 'invalid_sizing':
-        assert state['phase'] == 'aborted'
+        assert split_events[0][1]["actual_order_submitted"] is False
+        assert split_events[0][1]["broker_order_forbidden"] is (
+            mode in {"deferred", "admission_deferred"}
+        )
+    state = json.loads((tmp_path / "probe.json").read_text())["bundles"]["new-plan"]
+    if mode == "probe":
+        assert stock["entry_split_probe_bundle_id"] == "new-plan"
+        assert stock["entry_split_probe_phase"] == state["phase"] == "probe_submitting"
+        assert (
+            stock["entry_split_probe_continuation"]
+            == probe["entry_split_order_probe_continuation"]
+        )
+    elif mode == "deferred":
+        assert stages[-1] == "entry_split_probe_capacity_deferred"
+        assert calls[-1][1]["broker_order_forbidden"] is True
+        assert "order_bundle_failed" not in stages
+        assert stock.get("entry_armed") is None
+        assert stock.get("entry_signal_time") is None
+    elif mode == "admission_deferred":
+        assert stages[-1] == "entry_split_probe_admission_deferred"
+        assert calls[-1][1]["broker_order_forbidden"] is True
+        assert "order_bundle_failed" not in stages
+        assert stock.get("entry_armed") is None
+        assert stock.get("entry_signal_time") is None
+    elif mode == "invalid_sizing":
+        assert state["phase"] == "aborted"
     else:
-        assert stock.get('entry_split_probe_bundle_id') is None
-        assert stages == ['entry_split_order_plan_skipped']
+        assert stock.get("entry_split_probe_bundle_id") is None
+        assert stages == ["entry_split_order_plan_skipped"]
 
 
-@pytest.mark.parametrize('phase', ['planned', 'probe_submitting', 'probe_submitted', 'residual_submitted', 'complete'])
-def test_unused_probe_release_never_releases_inflight_or_completed(monkeypatch, tmp_path, phase):
-    monkeypatch.setattr(split_plan, 'PROBE_RUNTIME_STATE_PATH', tmp_path / 'probe.json')
-    split_plan.update_probe_runtime_bundle('bundle', phase=phase)
-    assert split_plan.release_unsubmitted_probe_reservation('bundle', reason='sizing_blocked') is (phase == 'planned')
+@pytest.mark.parametrize(
+    "phase",
+    [
+        "planned",
+        "probe_submitting",
+        "probe_submitted",
+        "residual_submitted",
+        "complete",
+    ],
+)
+def test_unused_probe_release_never_releases_inflight_or_completed(
+    monkeypatch, tmp_path, phase
+):
+    monkeypatch.setattr(split_plan, "PROBE_RUNTIME_STATE_PATH", tmp_path / "probe.json")
+    split_plan.update_probe_runtime_bundle("bundle", phase=phase)
+    assert split_plan.release_unsubmitted_probe_reservation(
+        "bundle", reason="sizing_blocked"
+    ) is (phase == "planned")
 
 
 def test_completed_probe_is_not_reopened_by_late_submit(monkeypatch, tmp_path):
-    monkeypatch.setattr(split_plan, 'PROBE_RUNTIME_STATE_PATH', tmp_path / 'probe.json')
-    split_plan.update_probe_runtime_bundle('bundle', phase='complete', filled_qty=5)
-    late = split_plan.update_probe_runtime_bundle('bundle', phase='residual_submitted', filled_qty=1)
-    assert late['phase'] == 'complete'
-    assert late['filled_qty'] == 5
+    monkeypatch.setattr(split_plan, "PROBE_RUNTIME_STATE_PATH", tmp_path / "probe.json")
+    split_plan.update_probe_runtime_bundle("bundle", phase="complete", filled_qty=5)
+    late = split_plan.update_probe_runtime_bundle(
+        "bundle", phase="residual_submitted", filled_qty=1
+    )
+    assert late["phase"] == "complete"
+    assert late["filled_qty"] == 5
 
 
-@pytest.mark.parametrize('inflight', [False, True])
-def test_submit_scope_reclaims_plan_on_exception_but_preserves_broker_ambiguity(monkeypatch, tmp_path, inflight):
-    monkeypatch.setattr(split_plan, 'PROBE_RUNTIME_STATE_PATH', tmp_path / 'probe.json')
-    monkeypatch.setenv('KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ENABLED', 'true')
-    monkeypatch.setenv('KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ACTIVE_DATE', 'DAILY')
-    with pytest.raises(RuntimeError, match='injected'):
+@pytest.mark.parametrize("inflight", [False, True])
+def test_submit_scope_reclaims_plan_on_exception_but_preserves_broker_ambiguity(
+    monkeypatch, tmp_path, inflight
+):
+    monkeypatch.setattr(split_plan, "PROBE_RUNTIME_STATE_PATH", tmp_path / "probe.json")
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ACTIVE_DATE", "DAILY")
+    with pytest.raises(RuntimeError, match="injected"):
         with split_plan.probe_submission_scope():
             bundle_id, reason = split_plan._reserve_probe_runtime_bundle(
-                stock={'id': 1, 'code': '000001'}, total_qty=2,
-                submit_contract={'probe_submit_best_ask': 1000, 'continuation': {
-                    'requested_qty': 2, 'residual_qty': 1, 'residual_quantities': [1]}})
-            assert reason == 'reserved'
+                stock={"id": 1, "code": "000001"},
+                total_qty=2,
+                submit_contract={
+                    "probe_submit_best_ask": 1000,
+                    "continuation": {
+                        "requested_qty": 2,
+                        "residual_qty": 1,
+                        "residual_quantities": [1],
+                    },
+                },
+            )
+            assert reason == "reserved"
             if inflight:
-                split_plan.update_probe_runtime_bundle(bundle_id, phase='probe_submitting')
-            raise RuntimeError('injected')
-    state = json.loads((tmp_path / 'probe.json').read_text())['bundles'][bundle_id]
-    assert state['phase'] == ('probe_submitting' if inflight else 'aborted')
+                split_plan.update_probe_runtime_bundle(
+                    bundle_id, phase="probe_submitting"
+                )
+            raise RuntimeError("injected")
+    state = json.loads((tmp_path / "probe.json").read_text())["bundles"][bundle_id]
+    assert state["phase"] == ("probe_submitting" if inflight else "aborted")
 
 
-def test_execution_projection_bounds_decoded_aggregate_separately_from_shards(monkeypatch, tmp_path):
-    monkeypatch.setattr(split_plan, 'DATA_DIR', tmp_path)
-    day='2026-10-06';folder=tmp_path/'threshold_cycle'/f'date={day}'/'family=dynamic_entry_price_resolver'
+def test_execution_projection_bounds_decoded_aggregate_separately_from_shards(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(split_plan, "DATA_DIR", tmp_path)
+    day = "2026-10-06"
+    folder = (
+        tmp_path
+        / "threshold_cycle"
+        / f"date={day}"
+        / "family=dynamic_entry_price_resolver"
+    )
     folder.mkdir(parents=True)
-    event=dict(stage='entry_execution_sizing_plan',emitted_date=day,fields=dict(stock_code='005930'))
-    line=json.dumps(event)+'\n'
-    for n in range(2):(folder/f'part-{n:06}.jsonl').write_text(line)
-    monkeypatch.setattr(split_plan, 'EXECUTION_PROJECTION_MAX_DECODED_BYTES', len(line.encode()))
-    rows,source=split_plan._bounded_execution_projection(day)
-    assert list(rows)==[event] and list(rows)==[event]
-    assert source['streamed_native_rows'] is True
-    monkeypatch.setattr(split_plan, 'EXECUTION_PROJECTION_MAX_IO_BYTES', len(line.encode()))
-    with pytest.raises(ValueError,match='decoded_byte_budget'):split_plan._bounded_execution_projection(day)
-    monkeypatch.setattr(split_plan, 'EXECUTION_PROJECTION_MAX_IO_BYTES', 2*len(line.encode()))
-    monkeypatch.setattr(split_plan, 'EXECUTION_PROJECTION_MAX_DECODED_BYTES', 2*len(line.encode()))
-    rows,source=split_plan._bounded_execution_projection(day)
-    assert rows==[event] and source['status']=='source_gap'
-    assert source['full_population_coverage_verified'] is False
+    event = dict(
+        stage="entry_execution_sizing_plan",
+        emitted_date=day,
+        fields=dict(stock_code="005930"),
+    )
+    line = json.dumps(event) + "\n"
+    for n in range(2):
+        (folder / f"part-{n:06}.jsonl").write_text(line)
+    monkeypatch.setattr(
+        split_plan, "EXECUTION_PROJECTION_MAX_DECODED_BYTES", len(line.encode())
+    )
+    rows, source = split_plan._bounded_execution_projection(day)
+    assert list(rows) == [event] and list(rows) == [event]
+    assert source["streamed_native_rows"] is True
+    monkeypatch.setattr(
+        split_plan, "EXECUTION_PROJECTION_MAX_IO_BYTES", len(line.encode())
+    )
+    with pytest.raises(ValueError, match="decoded_byte_budget"):
+        split_plan._bounded_execution_projection(day)
+    monkeypatch.setattr(
+        split_plan, "EXECUTION_PROJECTION_MAX_IO_BYTES", 2 * len(line.encode())
+    )
+    monkeypatch.setattr(
+        split_plan, "EXECUTION_PROJECTION_MAX_DECODED_BYTES", 2 * len(line.encode())
+    )
+    rows, source = split_plan._bounded_execution_projection(day)
+    assert rows == [event] and source["status"] == "source_gap"
+    assert source["full_population_coverage_verified"] is False
 
 
-def test_streamed_execution_projection_rejects_source_change(monkeypatch,tmp_path):
-    monkeypatch.setattr(split_plan,'DATA_DIR',tmp_path)
-    monkeypatch.setattr(split_plan,'EXECUTION_PROJECTION_MAX_DECODED_BYTES',1)
-    day='2026-10-07';folder=tmp_path/'threshold_cycle'/f'date={day}'/'family=dynamic_entry_price_resolver'
+def test_streamed_execution_projection_rejects_source_change(monkeypatch, tmp_path):
+    monkeypatch.setattr(split_plan, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(split_plan, "EXECUTION_PROJECTION_MAX_DECODED_BYTES", 1)
+    day = "2026-10-07"
+    folder = (
+        tmp_path
+        / "threshold_cycle"
+        / f"date={day}"
+        / "family=dynamic_entry_price_resolver"
+    )
     folder.mkdir(parents=True)
-    path=folder/'part-1.jsonl'
-    event=dict(stage='entry_execution_sizing_plan',emitted_date=day,fields=dict(stock_code='005930'))
-    path.write_text(json.dumps(event)+'\n')
-    rows,source=split_plan._bounded_execution_projection(day)
-    assert source['streamed_native_rows'] and list(rows)==[event]
-    path.write_text(json.dumps({**event,'fields':dict(stock_code='000660')})+'\n')
-    with pytest.raises(ValueError,match='changed_during_read'):list(rows)
+    path = folder / "part-1.jsonl"
+    event = dict(
+        stage="entry_execution_sizing_plan",
+        emitted_date=day,
+        fields=dict(stock_code="005930"),
+    )
+    path.write_text(json.dumps(event) + "\n")
+    rows, source = split_plan._bounded_execution_projection(day)
+    assert source["streamed_native_rows"] and list(rows) == [event]
+    path.write_text(json.dumps({**event, "fields": dict(stock_code="000660")}) + "\n")
+    with pytest.raises(ValueError, match="changed_during_read"):
+        list(rows)
 
 
-def test_streamed_projection_reuses_only_verified_selected_lines_and_rejects_restored_mtime(monkeypatch,tmp_path):
-    import os,gc
+def test_streamed_projection_reuses_only_verified_selected_lines_and_rejects_restored_mtime(
+    monkeypatch, tmp_path
+):
+    import os, gc
     from src.engine.lifecycle import research_input_budget as budget
-    monkeypatch.setattr(split_plan,'DATA_DIR',tmp_path)
-    monkeypatch.setattr(split_plan,'EXECUTION_PROJECTION_MAX_DECODED_BYTES',1)
-    day='2026-10-07';folder=tmp_path/'threshold_cycle'/f'date={day}'/'family=dynamic_entry_price_resolver'
-    folder.mkdir(parents=True);path=folder/'part-1.jsonl'
-    event=dict(stage='entry_execution_sizing_plan',emitted_date=day,fields=dict(stock_code='005930'))
-    path.write_text(json.dumps(dict(stage='unrelated',payload='x'*100000))+'\n'+json.dumps(event)+'\n')
-    calls=[];original=split_plan.open_text_auto
-    def counted(path,*args,**kwargs):
-        calls.append(str(path));return original(path,*args,**kwargs)
-    monkeypatch.setattr(split_plan,'open_text_auto',counted)
-    used=budget.health()['used_bytes']
-    rows,proof=split_plan._bounded_execution_projection(day)
-    assert list(rows)==[event]
-    reads=len(calls)
-    for _ in range(5):assert list(rows)==[event]
-    assert len(calls)==reads and proof['streamed_native_rows'] is True
-    assert budget.health()['used_bytes']>used
+
+    monkeypatch.setattr(split_plan, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(split_plan, "EXECUTION_PROJECTION_MAX_DECODED_BYTES", 1)
+    day = "2026-10-07"
+    folder = (
+        tmp_path
+        / "threshold_cycle"
+        / f"date={day}"
+        / "family=dynamic_entry_price_resolver"
+    )
+    folder.mkdir(parents=True)
+    path = folder / "part-1.jsonl"
+    event = dict(
+        stage="entry_execution_sizing_plan",
+        emitted_date=day,
+        fields=dict(stock_code="005930"),
+    )
+    path.write_text(
+        json.dumps(dict(stage="unrelated", payload="x" * 100000))
+        + "\n"
+        + json.dumps(event)
+        + "\n"
+    )
+    calls = []
+    original = split_plan.open_text_auto
+
+    def counted(path, *args, **kwargs):
+        calls.append(str(path))
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(split_plan, "open_text_auto", counted)
+    used = budget.health()["used_bytes"]
+    rows, proof = split_plan._bounded_execution_projection(day)
+    assert list(rows) == [event]
+    reads = len(calls)
+    for _ in range(5):
+        assert list(rows) == [event]
+    assert len(calls) == reads and proof["streamed_native_rows"] is True
+    assert budget.health()["used_bytes"] > used
     # Returned objects cannot mutate the immutable cached source lines.
-    list(rows)[0]['fields']['stock_code']='000660'
-    assert list(rows)==[event]
-    before=path.stat();raw=path.read_text();path.write_text(raw.replace('005930','000660'))
-    os.utime(path,ns=(before.st_atime_ns,before.st_mtime_ns))
-    with pytest.raises(ValueError,match='changed_during_read'):list(rows)
-    del rows;gc.collect()
-    assert budget.health()['used_bytes']==used
+    list(rows)[0]["fields"]["stock_code"] = "000660"
+    assert list(rows) == [event]
+    before = path.stat()
+    raw = path.read_text()
+    path.write_text(raw.replace("005930", "000660"))
+    os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+    with pytest.raises(ValueError, match="changed_during_read"):
+        list(rows)
+    del rows
+    gc.collect()
+    assert budget.health()["used_bytes"] == used
 
 
-def test_streamed_projection_optional_cache_never_widens_resident_budget(monkeypatch,tmp_path):
+def test_streamed_projection_optional_cache_never_widens_resident_budget(
+    monkeypatch, tmp_path
+):
     from src.engine.lifecycle import research_input_budget as budget
-    monkeypatch.setattr(split_plan,'DATA_DIR',tmp_path)
-    monkeypatch.setattr(split_plan,'EXECUTION_PROJECTION_MAX_DECODED_BYTES',1)
-    monkeypatch.setattr(budget,'LIMIT_BYTES',budget.health()['used_bytes'])
-    day='2026-10-07';folder=tmp_path/'threshold_cycle'/f'date={day}'/'family=dynamic_entry_price_resolver'
-    folder.mkdir(parents=True);path=folder/'part-1.jsonl'
-    event=dict(stage='entry_execution_sizing_plan',emitted_date=day,fields=dict(stock_code='005930'))
-    path.write_text(json.dumps(event)+'\n')
-    rows,_=split_plan._bounded_execution_projection(day)
-    assert list(rows)==list(rows)==[event] and rows._cached_lines is None
+
+    monkeypatch.setattr(split_plan, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(split_plan, "EXECUTION_PROJECTION_MAX_DECODED_BYTES", 1)
+    monkeypatch.setattr(budget, "LIMIT_BYTES", budget.health()["used_bytes"])
+    day = "2026-10-07"
+    folder = (
+        tmp_path
+        / "threshold_cycle"
+        / f"date={day}"
+        / "family=dynamic_entry_price_resolver"
+    )
+    folder.mkdir(parents=True)
+    path = folder / "part-1.jsonl"
+    event = dict(
+        stage="entry_execution_sizing_plan",
+        emitted_date=day,
+        fields=dict(stock_code="005930"),
+    )
+    path.write_text(json.dumps(event) + "\n")
+    rows, _ = split_plan._bounded_execution_projection(day)
+    assert list(rows) == list(rows) == [event] and rows._cached_lines is None

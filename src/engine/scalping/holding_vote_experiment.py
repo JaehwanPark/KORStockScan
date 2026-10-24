@@ -61,13 +61,17 @@ def _code_paths():
         "lifecycle/research_storage.py",
         "lifecycle/research_input_budget.py",
     )
-    return names + ("lifecycle/holding_window_generation.py", "lifecycle/snapshot_archive.py")
+    return names + (
+        "lifecycle/holding_window_generation.py",
+        "lifecycle/snapshot_archive.py",
+    )
 
 
 def code_sha():
     engine = Path(__file__).parents[1]
     names = _code_paths()
     from src.engine.lifecycle.holding_window_generation import cached_code_generation
+
     values = cached_code_generation([engine / name for name in names])
     return digest({name: values[str(engine / name)] for name in names})
 
@@ -475,6 +479,7 @@ def _native_research(root, day, *, trailing_assembly=None, skip_experiment=False
         snapshot = root / "report/monitor_snapshots" / f"trade_review_{d}.json"
         for path in (snapshot, snapshot.with_suffix(".completed_projection.json")):
             from src.engine.lifecycle.snapshot_archive import identity_available
+
             if identity_available(path):
                 inventory[str(path)] = byte_generation(path)
     inventory_sha = digest(dict(files=inventory, cost_generations=cost_generations))
@@ -680,8 +685,13 @@ def _native_research(root, day, *, trailing_assembly=None, skip_experiment=False
                 policy=arms[chosen["selected"]], receipt=receipt
             )
     for path, generation in {**inventory, **vote_sources}.items():
-        from src.engine.automation.main_trailing_source_assembler import source_generation_matches
-        if not source_generation_matches(root, generation.get('source_date',day), Path(path), generation):
+        from src.engine.automation.main_trailing_source_assembler import (
+            source_generation_matches,
+        )
+
+        if not source_generation_matches(
+            root, generation.get("source_date", day), Path(path), generation
+        ):
             raise ValueError("holding_vote_source_changed_during_research")
     if any(source_generation(root, d) != g for d, g in cost_generations.items()):
         raise ValueError("holding_vote_cost_generation_changed_during_research")

@@ -784,8 +784,6 @@ def test_bucket_discovery_taxonomy_correction_does_not_block_parsed_sim_policy(
     assert "ai_two_pass_review_fail_closed_sim_auto_blocked" not in report["warnings"]
 
 
-
-
 def test_bucket_discovery_non_sim_shard_missing_does_not_block_parsed_sim_policy(
     tmp_path, monkeypatch
 ):

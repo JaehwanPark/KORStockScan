@@ -36,7 +36,9 @@ def _reset_state(monkeypatch, tmp_path):
     monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
     # Existing tests exercise historical simulator receipts, not the retired
     # production activation gate.
-    monkeypatch.setattr(state_handlers, "_is_scalp_live_simulator_enabled", lambda: True)
+    monkeypatch.setattr(
+        state_handlers, "_is_scalp_live_simulator_enabled", lambda: True
+    )
     monkeypatch.setattr(state_handlers, "ACTIVE_TARGETS", [])
     monkeypatch.setattr(state_handlers, "EVENT_BUS", FakeEventBus())
     monkeypatch.setattr(state_handlers, "HIGHEST_PRICES", {})
@@ -100,7 +102,9 @@ def _reset_state(monkeypatch, tmp_path):
 
 def test_retired_runtime_does_not_arm_or_restore_simulator(monkeypatch):
     monkeypatch.setattr(
-        state_handlers, "_is_scalp_live_simulator_enabled", RETIRED_RUNTIME_SIMULATOR_GATE
+        state_handlers,
+        "_is_scalp_live_simulator_enabled",
+        RETIRED_RUNTIME_SIMULATOR_GATE,
     )
     assert state_handlers._is_scalp_live_simulator_enabled() is False
     legacy = {
@@ -5122,8 +5126,6 @@ def test_runtime_heartbeat_classifies_scalp_sim_as_non_real_holding():
             "actual_order_submitted": True,
         }
     )
-
-
 
 
 def test_performance_tuning_source_split_combines_real_and_scalp_sim():

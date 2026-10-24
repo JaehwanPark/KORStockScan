@@ -22,12 +22,15 @@ def test_lock_values_normalize_boolean_and_single_key_contracts():
 
 
 def test_explicit_off_and_manual_veto_remain_protected():
-    assert mod.classify(
-        {
-            "family": mod.SCORE,
-            "env_overrides": {mod.SCORE_PREFIX + "ENABLED": "false"},
-        }
-    ) == "protected_veto"
+    assert (
+        mod.classify(
+            {
+                "family": mod.SCORE,
+                "env_overrides": {mod.SCORE_PREFIX + "ENABLED": "false"},
+            }
+        )
+        == "protected_veto"
+    )
     assert mod.classify({"family": mod.SCORE, "manual_veto": True}) == (
         "protected_veto"
     )
@@ -35,9 +38,7 @@ def test_explicit_off_and_manual_veto_remain_protected():
 
 def test_operator_env_parser_reads_assignments_without_executing_shell(tmp_path):
     path = tmp_path / "operator.env"
-    path.write_text(
-        "export KORSTOCKSCAN_EXAMPLE=true UNRELATED=1\n", encoding="utf-8"
-    )
+    path.write_text("export KORSTOCKSCAN_EXAMPLE=true UNRELATED=1\n", encoding="utf-8")
     assert mod.read_operator_env(path) == {
         "KORSTOCKSCAN_EXAMPLE": "true",
         "UNRELATED": "1",
@@ -82,11 +83,14 @@ def test_retired_scale_in_succession_cannot_recompute_policy(family):
         "stage": "scale_in",
         "allowed_runtime_apply": True,
     }
-    assert mod.succession_reason(
-        candidate,
-        {},
-        {},
-        {},
-        ordinary_allowed=True,
-        target_date="2026-09-19",
-    ) == "independent_scale_in_strategy_retired_20260918"
+    assert (
+        mod.succession_reason(
+            candidate,
+            {},
+            {},
+            {},
+            ordinary_allowed=True,
+            target_date="2026-09-19",
+        )
+        == "independent_scale_in_strategy_retired_20260918"
+    )

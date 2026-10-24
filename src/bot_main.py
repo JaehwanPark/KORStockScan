@@ -12,17 +12,18 @@ from pathlib import Path
 # 🚀 [핵심 1] 단독 실행을 위한 루트 경로 탐지
 # ==========================================
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-if __name__ == '__main__' and '--validate-startup' in sys.argv[1:]:
+if __name__ == "__main__" and "--validate-startup" in sys.argv[1:]:
     # This branch runs before DB, logging, Telegram, calendar and engine imports.
     # The dedicated child installs mandatory isolation before loading policies.
-    if len(sys.argv) != 3 or sys.argv[1] != '--validate-startup':
-        raise SystemExit('usage: bot_main.py --validate-startup REQUEST_JSON')
+    if len(sys.argv) != 3 or sys.argv[1] != "--validate-startup":
+        raise SystemExit("usage: bot_main.py --validate-startup REQUEST_JSON")
     sys.path.insert(0, str(PROJECT_ROOT))
     from src.engine.automation.main_startup_validation import child_main
+
     raise SystemExit(child_main(sys.argv[2]))
-_STARTUP_HOLD = PROJECT_ROOT / 'data/runtime/operator_startup_hold.json'
-if __name__ == '__main__' and (_STARTUP_HOLD.exists() or _STARTUP_HOLD.is_symlink()):
-    raise SystemExit('operator_postclose_startup_hold_active')
+_STARTUP_HOLD = PROJECT_ROOT / "data/runtime/operator_startup_hold.json"
+if __name__ == "__main__" and (_STARTUP_HOLD.exists() or _STARTUP_HOLD.is_symlink()):
+    raise SystemExit("operator_postclose_startup_hold_active")
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
 
@@ -79,7 +80,10 @@ from src.engine.error_detector import (
     REPORT_DIR as ERROR_REPORT_DIR,
 )
 from src.engine.infrastructure.restart_requests import (
-    consume_restart_request, request_shutdown, shutdown_requested, finish_main_shutdown,
+    consume_restart_request,
+    request_shutdown,
+    shutdown_requested,
+    finish_main_shutdown,
 )
 
 
@@ -147,42 +151,67 @@ def install_dual_logger():
 def _startup_consumption_identity():
     """Pin this launch once; polling cannot renew its startup deadline."""
     from src.engine.infrastructure import runtime_release_router as router
+
     try:
         root = PROJECT_ROOT.resolve(strict=True)
-        commit = os.environ.get('KORSTOCKSCAN_RUNTIME_GIT_COMMIT', '')
-        if (os.environ.get('KORSTOCKSCAN_RUNTIME_SOURCE_ROOT') != str(root)
-                or os.environ.get('KORSTOCKSCAN_RUNTIME_SOURCE_DIRTY') != 'false'):
-            raise ValueError('startup_launcher_source_provenance_invalid')
+        commit = os.environ.get("KORSTOCKSCAN_RUNTIME_GIT_COMMIT", "")
+        if (
+            os.environ.get("KORSTOCKSCAN_RUNTIME_SOURCE_ROOT") != str(root)
+            or os.environ.get("KORSTOCKSCAN_RUNTIME_SOURCE_DIRTY") != "false"
+        ):
+            raise ValueError("startup_launcher_source_provenance_invalid")
         ticks = router._process_start_ticks(os.getpid())
-        age = max(0., float(Path('/proc/uptime').read_text().split()[0])
-                  - int(ticks) / os.sysconf('SC_CLK_TCK'))
-        return dict(workspace=(root / 'data').resolve(strict=True).parent,
-                    pid=os.getpid(), start_ticks=ticks, release_root=root,
-                    git_commit=commit, target_date=datetime.now(ZoneInfo('Asia/Seoul')).date().isoformat(),
-                    process_started_monotonic=time.monotonic() - age)
+        age = max(
+            0.0,
+            float(Path("/proc/uptime").read_text().split()[0])
+            - int(ticks) / os.sysconf("SC_CLK_TCK"),
+        )
+        return dict(
+            workspace=(root / "data").resolve(strict=True).parent,
+            pid=os.getpid(),
+            start_ticks=ticks,
+            release_root=root,
+            git_commit=commit,
+            target_date=datetime.now(ZoneInfo("Asia/Seoul")).date().isoformat(),
+            process_started_monotonic=time.monotonic() - age,
+        )
     except (OSError, ValueError, IndexError, TypeError) as exc:
-        return {'identity_error': str(exc)}
+        return {"identity_error": str(exc)}
 
 
 def _startup_consumption_check(identity):
     from src.engine.infrastructure import runtime_release_router as router
-    if identity.get('identity_error'):
-        return dict(status='failed', reason=identity['identity_error'], runtime_effect=False)
-    return router.startup_consumption_state(**{key: value for key, value in identity.items()
-        if key != 'process_started_monotonic'})
+
+    if identity.get("identity_error"):
+        return dict(
+            status="failed", reason=identity["identity_error"], runtime_effect=False
+        )
+    return router.startup_consumption_state(
+        **{
+            key: value
+            for key, value in identity.items()
+            if key != "process_started_monotonic"
+        }
+    )
 
 
-def _await_startup_consumption(identity, *, check=None, monotonic=None, wait=None, heartbeat=None):
+def _await_startup_consumption(
+    identity, *, check=None, monotonic=None, wait=None, heartbeat=None
+):
     """Wait only for the launcher's final receipt, keeping health heartbeat alive."""
     from src.engine.infrastructure import runtime_release_router as router
     from src.utils.logger import log_info
+
     check = check or _startup_consumption_check
     monotonic = monotonic or time.monotonic
     wait = wait or threading.Event().wait
-    heartbeat = heartbeat or (lambda: write_heartbeat('error_detection'))
+    heartbeat = heartbeat or (lambda: write_heartbeat("error_detection"))
     started = monotonic()
-    deadline = identity.get('process_started_monotonic', started) + router.STARTUP_CONSUMPTION_TIMEOUT_SEC
-    last_heartbeat = float('-inf')
+    deadline = (
+        identity.get("process_started_monotonic", started)
+        + router.STARTUP_CONSUMPTION_TIMEOUT_SEC
+    )
+    last_heartbeat = float("-inf")
     waiting_logged = False
     while True:
         now = monotonic()
@@ -191,17 +220,24 @@ def _await_startup_consumption(identity, *, check=None, monotonic=None, wait=Non
             last_heartbeat = now
         result = check(identity)
         now = monotonic()
-        if result.get('status') == 'failed':
-            return dict(result, waited_seconds=max(0., now - started))
+        if result.get("status") == "failed":
+            return dict(result, waited_seconds=max(0.0, now - started))
         if now >= deadline:
-            return dict(result, status='failed', reason='startup_consumption_deadline_expired',
-                        waited_seconds=max(0., now - started), runtime_effect=False)
-        if result.get('status') == 'ready':
-            return dict(result, waited_seconds=max(0., now - started))
+            return dict(
+                result,
+                status="failed",
+                reason="startup_consumption_deadline_expired",
+                waited_seconds=max(0.0, now - started),
+                runtime_effect=False,
+            )
+        if result.get("status") == "ready":
+            return dict(result, waited_seconds=max(0.0, now - started))
         if not waiting_logged:
-            log_info('[STARTUP_CONSUMPTION_WAIT] first full health sweep waits for exact launcher PID consumption')
+            log_info(
+                "[STARTUP_CONSUMPTION_WAIT] first full health sweep waits for exact launcher PID consumption"
+            )
             waiting_logged = True
-        wait(min(.25, deadline - now))
+        wait(min(0.25, deadline - now))
 
 
 def _refresh_startup_observer(identity, *, monotonic=None, wait=None, heartbeat=None):
@@ -212,35 +248,52 @@ def _refresh_startup_observer(identity, *, monotonic=None, wait=None, heartbeat=
     """
     import fcntl
     from src.engine.infrastructure import runtime_release_router as router
+
     monotonic = monotonic or time.monotonic
     wait = wait or threading.Event().wait
-    heartbeat = heartbeat or (lambda: write_heartbeat('error_detection'))
-    deadline = identity['process_started_monotonic'] + router.STARTUP_CONSUMPTION_TIMEOUT_SEC
-    last_heartbeat = [float('-inf')]
+    heartbeat = heartbeat or (lambda: write_heartbeat("error_detection"))
+    deadline = (
+        identity["process_started_monotonic"] + router.STARTUP_CONSUMPTION_TIMEOUT_SEC
+    )
+    last_heartbeat = [float("-inf")]
+
     def beat():
         now = monotonic()
         if now - last_heartbeat[0] >= 5:
             heartbeat()
             last_heartbeat[0] = now
-    workspace, root, day = Path(identity['workspace']), Path(identity['release_root']), identity['target_date']
-    receipt = dict(status='failed', target_date=day, pid=identity['pid'], runtime_effect=False)
-    log = workspace/'tmp'/('startup-observer-' + str(identity['pid']) + '.log')
-    receipt['log'] = str(log)
+
+    workspace, root, day = (
+        Path(identity["workspace"]),
+        Path(identity["release_root"]),
+        identity["target_date"],
+    )
+    receipt = dict(
+        status="failed", target_date=day, pid=identity["pid"], runtime_effect=False
+    )
+    log = workspace / "tmp" / ("startup-observer-" + str(identity["pid"]) + ".log")
+    receipt["log"] = str(log)
+
     def run(args, limit):
         remaining = min(limit, deadline - monotonic() - 5)
         if remaining < 1:
             # No child ran. Do not confuse exhausted startup time with a
             # failed source producer and overwrite a current full observation.
             return None
-        with log.open('ab') as output:
-            child = subprocess.Popen([str(root/'.venv/bin/python'), '-B', '-m', *args],
-                cwd=root, env={**os.environ, 'PYTHONPATH': str(root)},
-                stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
+        with log.open("ab") as output:
+            child = subprocess.Popen(
+                [str(root / ".venv/bin/python"), "-B", "-m", *args],
+                cwd=root,
+                env={**os.environ, "PYTHONPATH": str(root)},
+                stdout=output,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
             end = monotonic() + remaining
             try:
                 while child.poll() is None and monotonic() < end:
                     beat()
-                    wait(min(.5, max(0., end-monotonic())))
+                    wait(min(0.5, max(0.0, end - monotonic())))
                 if child.poll() is None:
                     return 75
                 return child.returncode
@@ -252,8 +305,9 @@ def _refresh_startup_observer(identity, *, monotonic=None, wait=None, heartbeat=
                     except subprocess.TimeoutExpired:
                         os.killpg(child.pid, signal.SIGKILL)
                         child.wait(timeout=2)
+
     try:
-        with (workspace/'tmp/run_buy_funnel_sentinel.lock').open('a') as lock:
+        with (workspace / "tmp/run_buy_funnel_sentinel.lock").open("a") as lock:
             while True:
                 try:
                     fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -261,51 +315,104 @@ def _refresh_startup_observer(identity, *, monotonic=None, wait=None, heartbeat=
                 except BlockingIOError:
                     beat()
                     if deadline - monotonic() < 25:
-                        return dict(receipt, reason='startup_observer_owner_busy')
-                    wait(.5)
-            if _startup_consumption_check(identity).get('status') != 'ready':
-                return dict(receipt, reason='startup_observer_identity_changed')
+                        return dict(receipt, reason="startup_observer_owner_busy")
+                    wait(0.5)
+            if _startup_consumption_check(identity).get("status") != "ready":
+                return dict(receipt, reason="startup_observer_identity_changed")
             # Preserve late admission: an unstarted producer must not replace
             # an already completed current observation with source-only output.
             if deadline - monotonic() - 45 < 1:
-                return dict(receipt, reason='startup_observer_deadline_expired',
-                            producer_started=False, publication_attempted=False)
+                return dict(
+                    receipt,
+                    reason="startup_observer_deadline_expired",
+                    producer_started=False,
+                    publication_attempted=False,
+                )
             # Keep 25 seconds for the observer plus its five-second cleanup.
             # Attestation uses the same original 150-second process deadline.
-            producer = run(['src.engine.buy_funnel_sentinel', '--date', day,
-                            '--use-cache', '--use-summary'], max(0., deadline-monotonic()-30))
+            producer = run(
+                [
+                    "src.engine.buy_funnel_sentinel",
+                    "--date",
+                    day,
+                    "--use-cache",
+                    "--use-summary",
+                ],
+                max(0.0, deadline - monotonic() - 30),
+            )
             if producer is None:
-                return dict(receipt, reason='startup_observer_deadline_expired',
-                            producer_started=False, publication_attempted=False)
-            remaining = min(120., deadline - monotonic() - 5)
+                return dict(
+                    receipt,
+                    reason="startup_observer_deadline_expired",
+                    producer_started=False,
+                    publication_attempted=False,
+                )
+            remaining = min(120.0, deadline - monotonic() - 5)
             if remaining < 20:
-                return dict(receipt, reason='startup_observer_deadline_expired', producer_exit=producer)
-            observer = ['src.engine.monitoring.submission_bottleneck_monitor', '--date', day,
-                '--report', str(workspace/'data/report/buy_funnel_sentinel'/('submission_bottleneck_source_'+day+'.json')),
-                '--reuse-validation-digests', '--budget-seconds', str(remaining)]
+                return dict(
+                    receipt,
+                    reason="startup_observer_deadline_expired",
+                    producer_exit=producer,
+                )
+            observer = [
+                "src.engine.monitoring.submission_bottleneck_monitor",
+                "--date",
+                day,
+                "--report",
+                str(
+                    workspace
+                    / "data/report/buy_funnel_sentinel"
+                    / ("submission_bottleneck_source_" + day + ".json")
+                ),
+                "--reuse-validation-digests",
+                "--budget-seconds",
+                str(remaining),
+            ]
             if producer != 0:
-                observer.append('--source-only')
+                observer.append("--source-only")
             code = run(observer, remaining)
             if code is None:
-                return dict(receipt, reason='startup_observer_deadline_expired',
-                            producer_exit=producer, publication_attempted=False)
+                return dict(
+                    receipt,
+                    reason="startup_observer_deadline_expired",
+                    producer_exit=producer,
+                    publication_attempted=False,
+                )
             # The full detector immediately verifies generation, completeness
             # and semantic failures. Exit zero alone is not a health receipt.
-            return dict(receipt, status='attempted', producer_exit=producer, observer_exit=code)
+            return dict(
+                receipt, status="attempted", producer_exit=producer, observer_exit=code
+            )
     except (OSError, ValueError, KeyError, TypeError) as exc:
-        return dict(receipt, reason='startup_observer_refresh_failed:'+type(exc).__name__)
+        return dict(
+            receipt, reason="startup_observer_refresh_failed:" + type(exc).__name__
+        )
 
 
 def _bind_startup_health(results, state):
     """Surface a failed barrier through existing process health, not a fake PASS."""
-    if state is None or state.get('status') == 'ready':
+    if state is None or state.get("status") == "ready":
         return results
     from dataclasses import replace
-    return [replace(result, severity='fail',
-                    summary=result.summary + '; startup consumption failed: ' + str(state.get('reason')),
-                    details={**(result.details if isinstance(result.details, dict) else {}),
-                             'startup_consumption': dict(state)})
-            if result.detector_id == 'process_health' else result for result in results]
+
+    return [
+        (
+            replace(
+                result,
+                severity="fail",
+                summary=result.summary
+                + "; startup consumption failed: "
+                + str(state.get("reason")),
+                details={
+                    **(result.details if isinstance(result.details, dict) else {}),
+                    "startup_consumption": dict(state),
+                },
+            )
+            if result.detector_id == "process_health"
+            else result
+        )
+        for result in results
+    ]
 
 
 def error_detection_loop(interval: int, event_bus, *, startup_identity=None):
@@ -314,26 +421,36 @@ def error_detection_loop(interval: int, event_bus, *, startup_identity=None):
     from src.utils.logger import log_info as ed_log_info
 
     alert_state: dict[str, dict] = {}
-    startup_state = (_await_startup_consumption(startup_identity)
-                     if startup_identity is not None else None)
-    startup_observer = (_refresh_startup_observer(startup_identity)
-        if startup_state is not None and startup_state.get('status') == 'ready' else None)
+    startup_state = (
+        _await_startup_consumption(startup_identity)
+        if startup_identity is not None
+        else None
+    )
+    startup_observer = (
+        _refresh_startup_observer(startup_identity)
+        if startup_state is not None and startup_state.get("status") == "ready"
+        else None
+    )
     first_report_completed = False
     while True:
         try:
             write_heartbeat("error_detection")
-            if first_report_completed and startup_state is not None and startup_state.get('status') != 'ready':
+            if (
+                first_report_completed
+                and startup_state is not None
+                and startup_state.get("status") != "ready"
+            ):
                 refreshed = _startup_consumption_check(startup_identity)
-                if refreshed.get('status') == 'ready':
+                if refreshed.get("status") == "ready":
                     startup_state = refreshed
             engine = ErrorDetectionEngine(dry_run=False, mode="full")
-            health_sweep_started_at = datetime.now(ZoneInfo('Asia/Seoul')).isoformat()
+            health_sweep_started_at = datetime.now(ZoneInfo("Asia/Seoul")).isoformat()
             results = _bind_startup_health(engine.run_all(), startup_state)
             report = engine.build_report(results)
-            report['health_sweep_started_at_kst'] = health_sweep_started_at
+            report["health_sweep_started_at_kst"] = health_sweep_started_at
             if startup_state is not None:
-                report['startup_consumption'] = dict(startup_state)
-                report['startup_observer'] = startup_observer
+                report["startup_consumption"] = dict(startup_state)
+                report["startup_observer"] = startup_observer
             engine.write_report(report)
             first_report_completed = True
             for kind, r in iter_daemon_alert_events(
@@ -352,7 +469,9 @@ def error_detection_loop(interval: int, event_bus, *, startup_identity=None):
                 elif kind == "recovered":
                     ed_log_info(f"[ERROR_DETECTION] {r.detector_id}: recovered to pass")
                 else:
-                    ed_log_info(f"[ERROR_DETECTION] {r.detector_id}: current-date check passed; previous-date failure preserved")
+                    ed_log_info(
+                        f"[ERROR_DETECTION] {r.detector_id}: current-date check passed; previous-date failure preserved"
+                    )
         except Exception as e:
             ed_log_error(f"[ERROR_DETECTION] Daemon loop error: {e}")
         time.sleep(interval)
@@ -442,9 +561,16 @@ def run_monitor_snapshot_isolated(target_date: str) -> dict[str, str]:
     started_ns = time.time_ns()
     completed = subprocess.run(
         [
-            "systemd-run", "--user", "--scope", "--collect",
-            "-p", "MemoryMax=2G", "-p", "MemorySwapMax=512M",
-            str(wrapper), target_date,
+            "systemd-run",
+            "--user",
+            "--scope",
+            "--collect",
+            "-p",
+            "MemoryMax=2G",
+            "-p",
+            "MemorySwapMax=512M",
+            str(wrapper),
+            target_date,
         ],
         cwd=PROJECT_ROOT,
         env=env,
@@ -579,9 +705,13 @@ if __name__ == "__main__":
 
     # 🚀 영업일 체크
     is_open, reason = kiwoom_utils.is_trading_day()
-    from src.engine.infrastructure.market_eligibility_source import RuntimeMarketEligibilitySource
+    from src.engine.infrastructure.market_eligibility_source import (
+        RuntimeMarketEligibilitySource,
+    )
+
     market_eligibility_source = RuntimeMarketEligibilitySource(
-        PROJECT_ROOT / 'data/runtime/market_eligibility_source')
+        PROJECT_ROOT / "data/runtime/market_eligibility_source"
+    )
     # Prepare canonical current-date listing evidence before entry workers start.
     # An incomplete read remains fail-closed and retries on natural main ticks.
     market_eligibility_source.tick(db_manager)
@@ -595,8 +725,12 @@ if __name__ == "__main__":
     if ed_enabled:
         write_heartbeat("error_detection")
         error_detect_thread = threading.Thread(
-            target=error_detection_loop, args=(ed_interval, event_bus),
-            kwargs={'startup_identity': _startup_consumption_identity() if is_open else None}, daemon=True
+            target=error_detection_loop,
+            args=(ed_interval, event_bus),
+            kwargs={
+                "startup_identity": _startup_consumption_identity() if is_open else None
+            },
+            daemon=True,
         )
         error_detect_thread.start()
         print(f"[시스템] 에러 탐지 데몬 ({ed_interval}초 주기) 가동 완료.")

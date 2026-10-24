@@ -22,8 +22,15 @@ class FrozenRows(Sequence):
         self._offsets = []
 
     def append(self, row):
-        self._append_encoded(json.dumps(row, sort_keys=True, ensure_ascii=False,
-            allow_nan=False, separators=(",", ":")).encode())
+        self._append_encoded(
+            json.dumps(
+                row,
+                sort_keys=True,
+                ensure_ascii=False,
+                allow_nan=False,
+                separators=(",", ":"),
+            ).encode()
+        )
 
     def _append_encoded(self, raw):
         self._file.seek(0, 2)
@@ -50,7 +57,9 @@ class FrozenRows(Sequence):
     def __eq__(self, other):
         if not isinstance(other, Sequence):
             return NotImplemented
-        return len(self) == len(other) and all(left == right for left, right in zip(self, other))
+        return len(self) == len(other) and all(
+            left == right for left, right in zip(self, other)
+        )
 
     def __getitem__(self, index):
         if isinstance(index, slice):
@@ -67,24 +76,49 @@ def source_identifier(value):
     if not isinstance(value, str):
         return None
     value = value.strip()
-    return (value if value.lower() not in {
-        "", "-", "none", "null", "nan", "n/a", "unknown", "undefined",
-    } else None)
+    return (
+        value
+        if value.lower()
+        not in {
+            "",
+            "-",
+            "none",
+            "null",
+            "nan",
+            "n/a",
+            "unknown",
+            "undefined",
+        }
+        else None
+    )
 
 
 def source_identifiers(value):
     values = value if isinstance(value, (list, tuple, set)) else [value]
-    return sorted({identity for item in values if (identity := source_identifier(item))})
+    return sorted(
+        {identity for item in values if (identity := source_identifier(item))}
+    )
 
 
 def opportunity_identity(row):
-    values = tuple(source_identifier(row.get(key)) for key in (
-        "source_date", "stock_code", "effective_venue", "session_bucket",
-    ))
+    values = tuple(
+        source_identifier(row.get(key))
+        for key in (
+            "source_date",
+            "stock_code",
+            "effective_venue",
+            "session_bucket",
+        )
+    )
     if row.get("watch_origin") == "MAIN_FIXED_WATCH":
-        lineage = tuple(source_identifier(row.get(key)) for key in (
-            "watch_origin", "watch_admission_id", "watch_generation_id",
-        ))
+        lineage = tuple(
+            source_identifier(row.get(key))
+            for key in (
+                "watch_origin",
+                "watch_admission_id",
+                "watch_generation_id",
+            )
+        )
     else:
         lineage = (source_identifier(row.get("scanner_promotion_id")),)
     if any(value is None for value in (*values, *lineage)):
@@ -96,7 +130,10 @@ def opportunity_identity(row):
 
 def decision_time(row):
     value = datetime.fromisoformat(row["decision_ts"])
-    if value.tzinfo is None or value.astimezone(KST).date().isoformat() != row["source_date"]:
+    if (
+        value.tzinfo is None
+        or value.astimezone(KST).date().isoformat() != row["source_date"]
+    ):
         raise ValueError("decision_clock_invalid")
     return value
 
@@ -137,12 +174,18 @@ def chronological_split(rows, *, training_through_date=None):
         seen[trace] = (identity, row)
     for trace, (identity, row) in seen.items():
         if trace in conflicted:
-            excluded.append({"attempt_id": trace, "reason": "attempt_identity_conflict"})
+            excluded.append(
+                {"attempt_id": trace, "reason": "attempt_identity_conflict"}
+            )
         else:
             groups[identity].append(row)
     dates = sorted({key[0] for key in groups})
     if not dates:
-        return [], [], {"version": "chronological_opportunity_purge_v1", "exclusions": excluded}
+        return (
+            [],
+            [],
+            {"version": "chronological_opportunity_purge_v1", "exclusions": excluded},
+        )
     if training_through_date:
         train_ids = {key for key in groups if key[0] <= training_through_date}
         hold_ids = set(groups) - train_ids
@@ -152,23 +195,50 @@ def chronological_split(rows, *, training_through_date=None):
         hold_ids = set(groups) - train_ids
         basis = "last_source_date"
     else:
-        ordered = sorted(groups, key=lambda key: (min(decision_time(r) for r in groups[key]), key))
-        boundary = max(1, int(len(ordered) * .7))
+        ordered = sorted(
+            groups, key=lambda key: (min(decision_time(r) for r in groups[key]), key)
+        )
+        boundary = max(1, int(len(ordered) * 0.7))
         train_ids, hold_ids = set(ordered[:boundary]), set(ordered[boundary:])
         basis = "same_day_70_30_opportunities"
-    hold_start = min((decision_time(r) for key in hold_ids for r in groups[key]), default=None)
-    purged = {key for key in train_ids if hold_start is not None
-              and max(observation_end(r) for r in groups[key]) >= hold_start}
+    hold_start = min(
+        (decision_time(r) for key in hold_ids for r in groups[key]), default=None
+    )
+    purged = {
+        key
+        for key in train_ids
+        if hold_start is not None
+        and max(observation_end(r) for r in groups[key]) >= hold_start
+    }
     train_ids -= purged
-    train = sorted((r for key in train_ids for r in groups[key]), key=lambda r: (decision_time(r), str(r.get("decision_trace_id") or r.get("evaluation_key"))))
-    held = sorted((r for key in hold_ids for r in groups[key]), key=lambda r: (decision_time(r), str(r.get("decision_trace_id") or r.get("evaluation_key"))))
-    manifest = {"version": "chronological_opportunity_purge_v1", "basis": basis,
-                "train_opportunity_ids": [list(key) for key in sorted(train_ids)],
-                "holdout_opportunity_ids": [list(key) for key in sorted(hold_ids)],
-                "purged_opportunity_ids": [list(key) for key in sorted(purged)],
-                "train_observation_end": max((observation_end(r) for r in train), default=None).isoformat() if train else None,
-                "holdout_start": hold_start.isoformat() if hold_start else None,
-                "exclusions": excluded}
+    train = sorted(
+        (r for key in train_ids for r in groups[key]),
+        key=lambda r: (
+            decision_time(r),
+            str(r.get("decision_trace_id") or r.get("evaluation_key")),
+        ),
+    )
+    held = sorted(
+        (r for key in hold_ids for r in groups[key]),
+        key=lambda r: (
+            decision_time(r),
+            str(r.get("decision_trace_id") or r.get("evaluation_key")),
+        ),
+    )
+    manifest = {
+        "version": "chronological_opportunity_purge_v1",
+        "basis": basis,
+        "train_opportunity_ids": [list(key) for key in sorted(train_ids)],
+        "holdout_opportunity_ids": [list(key) for key in sorted(hold_ids)],
+        "purged_opportunity_ids": [list(key) for key in sorted(purged)],
+        "train_observation_end": (
+            max((observation_end(r) for r in train), default=None).isoformat()
+            if train
+            else None
+        ),
+        "holdout_start": hold_start.isoformat() if hold_start else None,
+        "exclusions": excluded,
+    }
     return train, held, manifest
 
 
@@ -176,8 +246,12 @@ def split_manifest_valid(manifest, train_ids, held_ids):
     try:
         end = datetime.fromisoformat(manifest["train_observation_end"])
         start = datetime.fromisoformat(manifest["holdout_start"])
-        return (manifest.get("version") == "chronological_opportunity_purge_v1"
-                and end.tzinfo is not None and start.tzinfo is not None and end < start
-                and not set(train_ids) & set(held_ids))
+        return (
+            manifest.get("version") == "chronological_opportunity_purge_v1"
+            and end.tzinfo is not None
+            and start.tzinfo is not None
+            and end < start
+            and not set(train_ids) & set(held_ids)
+        )
     except (ValueError, TypeError, KeyError):
         return False

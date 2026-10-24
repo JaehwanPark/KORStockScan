@@ -187,9 +187,14 @@ def market_weakness_observation_contract_errors(
     elif response_contract.get("status") == MARKET_WEAKNESS_RESPONSE_CONTRACT_STATUS:
         # Current observations carry no research arms or adoption metrics.
         # Historical static metadata remains readable, without execution use.
-        if any(response_contract.get(field) != [] for field in (
-            "owner_isolation_required", "candidate_arms", "required_outcomes"
-        )):
+        if any(
+            response_contract.get(field) != []
+            for field in (
+                "owner_isolation_required",
+                "candidate_arms",
+                "required_outcomes",
+            )
+        ):
             errors.append("observation_only_response_contract_invalid")
     if not (
         observation.get("decision_authority") == "source_quality_observation_only"
@@ -1121,8 +1126,9 @@ def build_market_weakness_observation(
     elif bool(summary.get("single_market_risk_off_advisory")) and affected_markets:
         # Independent market triggers can cover both markets even when the
         # weighted composite panic threshold is not met.
-        raw_state = ("BROAD_WEAKNESS" if len(affected_markets) == 2
-                     else "SINGLE_MARKET_WEAKNESS")
+        raw_state = (
+            "BROAD_WEAKNESS" if len(affected_markets) == 2 else "SINGLE_MARKET_WEAKNESS"
+        )
     elif release_margin_pass:
         raw_state = "RECOVERY_EVIDENCE"
     else:

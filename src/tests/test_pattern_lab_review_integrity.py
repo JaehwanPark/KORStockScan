@@ -123,9 +123,9 @@ def test_bounded_review_reentry_closes_new_material_and_stops_at_daily_cap(
     monkeypatch.setattr(ai, "_call_openai_ai_review", provider)
     first = ai.review_current_generation(DAY, include_swing=True)
     assert first["material_review_current"] and len(calls) == 1
-    isolated["sources"]["swing_pattern_lab_automation"]["summary"][
-        "economic_evidence"
-    ]["net"] = 2
+    isolated["sources"]["swing_pattern_lab_automation"]["summary"]["economic_evidence"][
+        "net"
+    ] = 2
     metadata = ai.refresh_pattern_lab_ai_review_source_provenance(
         DAY, include_swing=True
     )
@@ -141,9 +141,9 @@ def test_bounded_review_reentry_closes_new_material_and_stops_at_daily_cap(
     )
     again = ai.review_current_generation(DAY, include_swing=True)
     assert again["review_reentry"]["new_provider_calls"] == 0
-    isolated["sources"]["swing_pattern_lab_automation"]["summary"][
-        "economic_evidence"
-    ]["net"] = 3
+    isolated["sources"]["swing_pattern_lab_automation"]["summary"]["economic_evidence"][
+        "net"
+    ] = 3
     exhausted = ai.review_current_generation(DAY, include_swing=True)
     assert not exhausted["material_review_current"]
     assert exhausted["review_reentry"]["state"] == "budget_exhausted"
@@ -366,8 +366,6 @@ def test_active_scalping_gap_survives_swing_mention(isolated):
     assert r["code_improvement_orders"][0]["review_id"] == "net_research"
 
 
-
-
 @pytest.mark.parametrize("raw", ["[]", "null", '"text"', "42", "true", "{bad"])
 def test_invalid_root_is_rejected_without_exception(raw):
     assert ai._parse_ai_review_response(raw)[0] == "parse_rejected"
@@ -401,9 +399,9 @@ def test_refresh_preserves_original_input_and_response(isolated):
 
 def test_refresh_does_not_relabel_new_economics_as_reviewed(isolated):
     first = build()
-    isolated["sources"]["swing_pattern_lab_automation"]["summary"][
-        "economic_evidence"
-    ]["net"] = -5
+    isolated["sources"]["swing_pattern_lab_automation"]["summary"]["economic_evidence"][
+        "net"
+    ] = -5
     r = ai.refresh_pattern_lab_ai_review_source_provenance(DAY, include_swing=True)
     assert r["material_review_current"] is False
     assert r["status"] == "warning"
@@ -445,12 +443,6 @@ def test_feedback_rejects_malformed_wrong_date_or_failed(tmp_path, value):
     p = tmp_path / "feedback.json"
     p.write_text(json.dumps(value))
     assert read_feedback(p, DAY, DAY)["validation_status"] == "invalid"
-
-
-
-
-
-
 
 
 @pytest.mark.parametrize("schema", ["bad", True, None, [], {}])
@@ -500,8 +492,6 @@ def test_refresh_tampered_response_does_not_overwrite_previous(isolated):
     with pytest.raises(RuntimeError, match="response_hash_mismatch"):
         ai.refresh_pattern_lab_ai_review_source_provenance(DAY, include_swing=True)
     assert path.read_bytes() == before
-
-
 
 
 def test_trigger_tracks_primary_generation_and_contract_code():

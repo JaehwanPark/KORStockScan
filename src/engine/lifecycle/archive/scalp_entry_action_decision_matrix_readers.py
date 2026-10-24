@@ -29,7 +29,6 @@ from src.engine.scalping.entry_observation_events import (
 )
 from src.utils.jsonl_io import existing_or_gzip_path
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
 
 
@@ -880,9 +879,7 @@ def _unknown_bucket_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     unknown_source_quality_gate = (
         "source_quality_blocker"
         if actionable_unknown_roots
-        else "classified_non_actionable"
-        if unknown_affected_row_count
-        else "pass"
+        else "classified_non_actionable" if unknown_affected_row_count else "pass"
     )
     unknown_recommended_route = (
         "source_quality_workorder"

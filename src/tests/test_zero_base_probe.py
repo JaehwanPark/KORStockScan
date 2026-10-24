@@ -5,7 +5,9 @@ import time
 import pytest
 
 from src.engine.scalping.zero_base_probe import (
-    exact_probe_rest_source_issue, exact_probe_rest_sources, exact_probe_ws_data,
+    exact_probe_rest_source_issue,
+    exact_probe_rest_sources,
+    exact_probe_ws_data,
     probe_registration_receipt,
     run_zero_base_probe,
     wait_for_exact_probe_ws_data,
@@ -19,45 +21,91 @@ def _completed_registration():
 
 
 def _snapshot(route="krx_only", item="123456", epoch=11.0):
-    key = {"krx_only": "KRX|krx_only", "nxt_only": "_NX|nxt_only",
-           "krx_nxt_integrated": "_AL|krx_nxt_integrated"}[route]
+    key = {
+        "krx_only": "KRX|krx_only",
+        "nxt_only": "_NX|nxt_only",
+        "krx_nxt_integrated": "_AL|krx_nxt_integrated",
+    }[route]
     return {
         "market_data_transport_epoch": 3,
         "last_realtime_type_item": {"0B": item, "0D": item},
         "last_realtime_type_market_route": {"0B": route, "0D": route},
-        "realtime_type_snapshots_by_route": {key: {
-            "0B": {"item": item, "market_route": route,
-                   "transport_epoch": 3, "observed_epoch": epoch,
-                   "current_price": 10000},
-            "0D": {"item": item, "market_route": route,
-                   "transport_epoch": 3, "observed_epoch": epoch,
-                   "orderbook": {"asks": [{"price": 10010, "volume": 10}],
-                                 "bids": [{"price": 10000, "volume": 10}]}},
-        }},
+        "realtime_type_snapshots_by_route": {
+            key: {
+                "0B": {
+                    "item": item,
+                    "market_route": route,
+                    "transport_epoch": 3,
+                    "observed_epoch": epoch,
+                    "current_price": 10000,
+                },
+                "0D": {
+                    "item": item,
+                    "market_route": route,
+                    "transport_epoch": 3,
+                    "observed_epoch": epoch,
+                    "orderbook": {
+                        "asks": [{"price": 10010, "volume": 10}],
+                        "bids": [{"price": 10000, "volume": 10}],
+                    },
+                },
+            }
+        },
     }
 
 
 def test_probe_rejects_cross_route_or_old_transport_without_machine_call():
-    good, reason = exact_probe_ws_data(_snapshot(), code="123456", route="krx_only", after_epoch=10)
+    good, reason = exact_probe_ws_data(
+        _snapshot(), code="123456", route="krx_only", after_epoch=10
+    )
     assert reason == "ready" and good["curr"] == 10000
     missing_transport = _snapshot()
     missing_transport.pop("market_data_transport_epoch")
-    missing_transport["realtime_type_snapshots_by_route"]["KRX|krx_only"]["0B"]["transport_epoch"] = None
-    missing_transport["realtime_type_snapshots_by_route"]["KRX|krx_only"]["0D"]["transport_epoch"] = None
-    assert exact_probe_ws_data(missing_transport, code="123456", route="krx_only", after_epoch=10)[1] == "transport_epoch_missing"
-    assert exact_probe_ws_data(_snapshot(epoch=9), code="123456", route="krx_only", after_epoch=10)[1] == "0B_stale_or_route_conflict"
-    assert exact_probe_ws_data(_snapshot(route="nxt_only", item="123456_NX"), code="123456", route="krx_only", after_epoch=10)[1] == "route_snapshot_missing"
+    missing_transport["realtime_type_snapshots_by_route"]["KRX|krx_only"]["0B"][
+        "transport_epoch"
+    ] = None
+    missing_transport["realtime_type_snapshots_by_route"]["KRX|krx_only"]["0D"][
+        "transport_epoch"
+    ] = None
+    assert (
+        exact_probe_ws_data(
+            missing_transport, code="123456", route="krx_only", after_epoch=10
+        )[1]
+        == "transport_epoch_missing"
+    )
+    assert (
+        exact_probe_ws_data(
+            _snapshot(epoch=9), code="123456", route="krx_only", after_epoch=10
+        )[1]
+        == "0B_stale_or_route_conflict"
+    )
+    assert (
+        exact_probe_ws_data(
+            _snapshot(route="nxt_only", item="123456_NX"),
+            code="123456",
+            route="krx_only",
+            after_epoch=10,
+        )[1]
+        == "route_snapshot_missing"
+    )
     mixed = _snapshot()
     mixed["last_realtime_type_item"]["0D"] = "123456_NX"
-    assert exact_probe_ws_data(mixed, code="123456", route="krx_only", after_epoch=10)[1] == "aggregate_route_conflict"
+    assert (
+        exact_probe_ws_data(mixed, code="123456", route="krx_only", after_epoch=10)[1]
+        == "aggregate_route_conflict"
+    )
     nxt, reason = exact_probe_ws_data(
         _snapshot(route="nxt_only", item="123456_NX"),
-        code="123456", route="nxt_only", after_epoch=10,
+        code="123456",
+        route="nxt_only",
+        after_epoch=10,
     )
     assert reason == "ready" and nxt["market_data_route"] == "nxt_only"
     integrated, reason = exact_probe_ws_data(
         _snapshot(route="krx_nxt_integrated", item="123456_AL"),
-        code="123456", route="krx_nxt_integrated", after_epoch=10,
+        code="123456",
+        route="krx_nxt_integrated",
+        after_epoch=10,
     )
     assert reason == "ready" and integrated["effective_venue"] == "SOR"
 
@@ -65,74 +113,132 @@ def test_probe_rejects_cross_route_or_old_transport_without_machine_call():
 def test_probe_freshness_allows_three_seconds_but_rejects_older_receipt():
     snapshot = _snapshot(route="nxt_only", item="123456_NX", epoch=10.5)
     ready, reason = exact_probe_ws_data(
-        snapshot, code="123456", route="nxt_only", after_epoch=10,
+        snapshot,
+        code="123456",
+        route="nxt_only",
+        after_epoch=10,
         now_epoch=13.5,
     )
     assert reason == "ready" and ready
     blocked, reason = exact_probe_ws_data(
-        snapshot, code="123456", route="nxt_only", after_epoch=10,
+        snapshot,
+        code="123456",
+        route="nxt_only",
+        after_epoch=10,
         now_epoch=13.501,
     )
     assert not blocked and reason == "0B_age_exceeded"
 
 
-@pytest.mark.parametrize("route,item,key", [
-    ("nxt_only", "123456_NX", "_NX|nxt_only"),
-    ("krx_nxt_integrated", "123456_AL", "_AL|krx_nxt_integrated"),
-])
+@pytest.mark.parametrize(
+    "route,item,key",
+    [
+        ("nxt_only", "123456_NX", "_NX|nxt_only"),
+        ("krx_nxt_integrated", "123456_AL", "_AL|krx_nxt_integrated"),
+    ],
+)
 def test_exact_probe_feature_ticks_exclude_aggregate_and_old_subscription(
-    route, item, key,
+    route,
+    item,
+    key,
 ):
     snapshot = _snapshot(route=route, item=item)
     snapshot["recent_trade_ticks"] = [
         {"item": "123456", "market_route": "krx_only", "price": 99999}
     ]
-    snapshot["recent_trade_ticks_by_route"] = {key: [
-        {"item": item, "market_route": route, "transport_epoch": 3,
-         "received_at_ms": 10800, "price": 10000},
-        {"item": item, "market_route": route, "transport_epoch": 3,
-         "received_at_ms": 9900, "price": 10001},
-        {"item": item, "market_route": route, "transport_epoch": 2,
-         "received_at_ms": 10900, "price": 10002},
-        {"item": "123456", "market_route": "krx_only", "transport_epoch": 3,
-         "received_at_ms": 10900, "price": 10003},
-        {"item": item, "market_route": route, "market_suffix": "_NX"
-         if route == "krx_nxt_integrated" else "_AL", "transport_epoch": 3,
-         "received_at_ms": 10900, "price": 10004},
-    ]}
+    snapshot["recent_trade_ticks_by_route"] = {
+        key: [
+            {
+                "item": item,
+                "market_route": route,
+                "transport_epoch": 3,
+                "received_at_ms": 10800,
+                "price": 10000,
+            },
+            {
+                "item": item,
+                "market_route": route,
+                "transport_epoch": 3,
+                "received_at_ms": 9900,
+                "price": 10001,
+            },
+            {
+                "item": item,
+                "market_route": route,
+                "transport_epoch": 2,
+                "received_at_ms": 10900,
+                "price": 10002,
+            },
+            {
+                "item": "123456",
+                "market_route": "krx_only",
+                "transport_epoch": 3,
+                "received_at_ms": 10900,
+                "price": 10003,
+            },
+            {
+                "item": item,
+                "market_route": route,
+                "market_suffix": "_NX" if route == "krx_nxt_integrated" else "_AL",
+                "transport_epoch": 3,
+                "received_at_ms": 10900,
+                "price": 10004,
+            },
+        ]
+    }
     data, reason = exact_probe_ws_data(
-        snapshot, code="123456", route=route, after_epoch=10,
+        snapshot,
+        code="123456",
+        route=route,
+        after_epoch=10,
     )
     assert reason == "ready"
     assert [tick["price"] for tick in data["recent_trade_ticks"]] == [10000]
     assert data["zero_base_probe_exact_tick_source"] == key
     assert data["zero_base_probe_exact_tick_filter"] == {
-        "source_row_count": 5, "accepted_row_count": 1,
-        "rejected_counts": {"item_or_route": 2, "transport_epoch": 1,
-                            "before_registration": 1},
+        "source_row_count": 5,
+        "accepted_row_count": 1,
+        "rejected_counts": {
+            "item_or_route": 2,
+            "transport_epoch": 1,
+            "before_registration": 1,
+        },
     }
     assert snapshot["recent_trade_ticks"][0]["price"] == 99999
 
 
 def test_integrated_probe_never_reuses_plain_route_subscription():
-    ws = SimpleNamespace(subscribed_codes={"123456"},
-                         _registered_items_by_code={"123456": ("123456",)})
+    ws = SimpleNamespace(
+        subscribed_codes={"123456"}, _registered_items_by_code={"123456": ("123456",)}
+    )
     result = run_zero_base_probe(
-        {"claim": {"code": "123456", "route": "krx_nxt_integrated",
-                   "observed_epoch": 10},
-         "candidate": {"code": "123456", "route": "krx_nxt_integrated"}},
-        ws_manager=ws, ai_engine=object(), token="token", now=lambda: 11,
+        {
+            "claim": {
+                "code": "123456",
+                "route": "krx_nxt_integrated",
+                "observed_epoch": 10,
+            },
+            "candidate": {"code": "123456", "route": "krx_nxt_integrated"},
+        },
+        ws_manager=ws,
+        ai_engine=object(),
+        token="token",
+        now=lambda: 11,
     )
     assert result["reason"] == "exact_route_subscription_conflict"
     assert result["result"] == "source_unavailable"
 
 
 @pytest.mark.parametrize("action", ["ENTER_NOW", "SOURCE_INVALID"])
-def test_machine_only_probe_passes_only_exact_fresh_input_and_releases_ws(monkeypatch, action):
+def test_machine_only_probe_passes_only_exact_fresh_input_and_releases_ws(
+    monkeypatch, action
+):
     import src.engine.scalping.zero_base_probe as module
 
     monkeypatch.setattr(module, "resolve_entry_candle_session", lambda: "KRX_REGULAR")
-    monkeypatch.setattr(module, "resolve_entry_candle_request_code", lambda *_args, **_kwargs: "123456")
+    monkeypatch.setattr(
+        module, "resolve_entry_candle_request_code", lambda *_args, **_kwargs: "123456"
+    )
     calls = []
     ws = SimpleNamespace(
         subscribed_codes=set(),
@@ -143,6 +249,7 @@ def test_machine_only_probe_passes_only_exact_fresh_input_and_releases_ws(monkey
         wait_for_data=lambda *args, **kwargs: _snapshot(epoch=11),
         get_latest_data=lambda *_args, **_kwargs: _snapshot(epoch=11),
     )
+
     def subscribe(*args, **kwargs):
         calls.append((args, kwargs))
         ws.subscribed_codes.add("123456")
@@ -150,6 +257,7 @@ def test_machine_only_probe_passes_only_exact_fresh_input_and_releases_ws(monkey
         ws._registered_item_epochs["123456"] = 3
         ws._registered_item_types["123456"] = ("0B", "0D")
         return _completed_registration()
+
     ws.execute_subscribe = subscribe
     machine_calls = []
     context_calls = []
@@ -157,31 +265,50 @@ def test_machine_only_probe_passes_only_exact_fresh_input_and_releases_ws(monkey
     class Machine:
         def analyze_target(self, *args, **kwargs):
             machine_calls.append(kwargs)
-            return {"machine_evaluation_status": "assessed",
-                    "entry_mechanistic_action": action,
-                    "machine_bundle_sha256": "a" * 64,
-                    "machine_capture_status": "captured",
-                    "machine_observation_sha256": "c" * 64,
-                    "mechanistic_entry_assessment": {"reason": "test_pass"}}
+            return {
+                "machine_evaluation_status": "assessed",
+                "entry_mechanistic_action": action,
+                "machine_bundle_sha256": "a" * 64,
+                "machine_capture_status": "captured",
+                "machine_observation_sha256": "c" * 64,
+                "mechanistic_entry_assessment": {"reason": "test_pass"},
+            }
 
     result = run_zero_base_probe(
-        {"claim": {"code": "123456", "route": "krx_only", "observed_epoch": 10,
-                   "source_sha256": "b" * 64},
-         "candidate": {"code": "123456", "route": "krx_only", "name": "TEST"}},
-        ws_manager=ws, ai_engine=Machine(), token="token", now=lambda: 11,
-        tick_fetcher=lambda *_args, **_kwargs: [{
-            "price": 10000, "request_code": "123456", "rest_received_ts_ms": 11000,
-        }],
+        {
+            "claim": {
+                "code": "123456",
+                "route": "krx_only",
+                "observed_epoch": 10,
+                "source_sha256": "b" * 64,
+            },
+            "candidate": {"code": "123456", "route": "krx_only", "name": "TEST"},
+        },
+        ws_manager=ws,
+        ai_engine=Machine(),
+        token="token",
+        now=lambda: 11,
+        tick_fetcher=lambda *_args, **_kwargs: [
+            {
+                "price": 10000,
+                "request_code": "123456",
+                "rest_received_ts_ms": 11000,
+            }
+        ],
         candle_fetcher=lambda *_args, **_kwargs: (
-            [{"close": 10000}], {"request_code": "123456", "rest_received_ts_ms": 11000},
+            [{"close": 10000}],
+            {"request_code": "123456", "rest_received_ts_ms": 11000},
         ),
         context_builder=lambda *_args, **kwargs: (
-            context_calls.append(kwargs), {"ready": True}
+            context_calls.append(kwargs),
+            {"ready": True},
         )[1],
         release_ws=lambda code, item: calls.append(("release", code, item)),
         ws_wait_min_exact_0b_count=0,
     )
-    assert result["result"] == ("assessed" if action == "ENTER_NOW" else "source_unavailable")
+    assert result["result"] == (
+        "assessed" if action == "ENTER_NOW" else "source_unavailable"
+    )
     assert result["machine_action"] == action
     assert result["machine_observation_id"] == "c" * 64
     assert result["machine_observation_sha256"] == "c" * 64
@@ -197,29 +324,49 @@ def test_probe_attach_receipt_keeps_capture_digest_without_order_authority(monke
     from src.engine import kiwoom_sniper_v2 as sniper
 
     emitted = []
-    monkeypatch.setattr(sniper, "emit_pipeline_event", lambda *args, **kwargs:
-                        emitted.append((args, kwargs)))
-    sniper._zero_base_attach_receipt({
-        "claim": {"code": "005930", "route": "krx_nxt_integrated",
-                  "source_sha256": "a" * 64},
-        "machine_observation_sha256": "b" * 64,
-    }, outcome="attached", reason="committed")
+    monkeypatch.setattr(
+        sniper,
+        "emit_pipeline_event",
+        lambda *args, **kwargs: emitted.append((args, kwargs)),
+    )
+    sniper._zero_base_attach_receipt(
+        {
+            "claim": {
+                "code": "005930",
+                "route": "krx_nxt_integrated",
+                "source_sha256": "a" * 64,
+            },
+            "machine_observation_sha256": "b" * 64,
+        },
+        outcome="attached",
+        reason="committed",
+    )
     assert emitted[-1][0][3] == "zero_base_watch_attach"
     assert emitted[-1][1]["fields"]["machine_observation_sha256"] == "b" * 64
     assert emitted[-1][1]["fields"]["actual_order_submitted"] is False
-    sniper._zero_base_inbox_attach_receipt({
-        "code": "005930", "market_data_route": "krx_nxt_integrated",
-        "source_signature": "ZERO_BASE_DISCOVERY:" + "a" * 64,
-        "zero_base_probe_machine_observation_sha256": "b" * 64,
-    }, outcome="attached", reason="committed")
+    sniper._zero_base_inbox_attach_receipt(
+        {
+            "code": "005930",
+            "market_data_route": "krx_nxt_integrated",
+            "source_signature": "ZERO_BASE_DISCOVERY:" + "a" * 64,
+            "zero_base_probe_machine_observation_sha256": "b" * 64,
+        },
+        outcome="attached",
+        reason="committed",
+    )
     assert emitted[-1][1]["fields"]["machine_observation_sha256"] == "b" * 64
 
 
 def test_ready_ws_still_observes_minimum_warmup():
     ws = SimpleNamespace(get_latest_data=lambda *_args: _snapshot(epoch=11))
     data, observation, reason = wait_for_exact_probe_ws_data(
-        ws, code="123456", route="krx_only", after_epoch=10,
-        now=lambda: 11, timeout_sec=0.2, min_warmup_sec=0.04,
+        ws,
+        code="123456",
+        route="krx_only",
+        after_epoch=10,
+        now=lambda: 11,
+        timeout_sec=0.2,
+        min_warmup_sec=0.04,
         poll_interval_sec=0.005,
     )
     assert reason == "ready" and data
@@ -230,8 +377,13 @@ def test_ready_ws_still_observes_minimum_warmup():
 def test_warmup_longer_than_lease_never_promotes_early_ready_snapshot():
     ws = SimpleNamespace(get_latest_data=lambda *_args: _snapshot(epoch=11))
     data, observation, reason = wait_for_exact_probe_ws_data(
-        ws, code="123456", route="krx_only", after_epoch=10,
-        now=lambda: 11, timeout_sec=0.01, min_warmup_sec=0.05,
+        ws,
+        code="123456",
+        route="krx_only",
+        after_epoch=10,
+        now=lambda: 11,
+        timeout_sec=0.01,
+        min_warmup_sec=0.05,
         poll_interval_sec=0.005,
     )
     assert not data and reason == "warmup_timeout"
@@ -242,10 +394,14 @@ def test_recheck_can_retain_owned_exact_subscription_for_one_followup(monkeypatc
     import src.engine.scalping.zero_base_probe as module
 
     monkeypatch.setattr(module, "resolve_entry_candle_session", lambda: "KRX_REGULAR")
-    monkeypatch.setattr(module, "resolve_entry_candle_request_code", lambda *_args, **_kwargs: "123456")
+    monkeypatch.setattr(
+        module, "resolve_entry_candle_request_code", lambda *_args, **_kwargs: "123456"
+    )
     ws = SimpleNamespace(
-        subscribed_codes=set(), _registered_items_by_code={},
-        _registered_item_epochs={}, _registered_item_types={},
+        subscribed_codes=set(),
+        _registered_items_by_code={},
+        _registered_item_epochs={},
+        _registered_item_types={},
         _market_data_transport_epoch=3,
         get_latest_data=lambda *_args: _snapshot(epoch=11),
     )
@@ -260,18 +416,26 @@ def test_recheck_can_retain_owned_exact_subscription_for_one_followup(monkeypatc
     ws.execute_subscribe = subscribe
     released = []
     result = run_zero_base_probe(
-        {"claim": {"code": "123456", "route": "krx_only", "observed_epoch": 10},
-         "candidate": {"code": "123456", "route": "krx_only"}},
+        {
+            "claim": {"code": "123456", "route": "krx_only", "observed_epoch": 10},
+            "candidate": {"code": "123456", "route": "krx_only"},
+        },
         ws_manager=ws,
-        ai_engine=SimpleNamespace(analyze_target=lambda *_args, **_kwargs: {
-            "machine_evaluation_status": "assessed",
-            "entry_mechanistic_action": "RECHECK",
-            "mechanistic_entry_assessment": {"reason": "wait_for_trigger"},
-        }),
-        token="token", now=lambda: 11,
-        tick_fetcher=lambda *_args, **_kwargs: [{
-            "request_code": "123456", "rest_received_ts_ms": 11000,
-        }],
+        ai_engine=SimpleNamespace(
+            analyze_target=lambda *_args, **_kwargs: {
+                "machine_evaluation_status": "assessed",
+                "entry_mechanistic_action": "RECHECK",
+                "mechanistic_entry_assessment": {"reason": "wait_for_trigger"},
+            }
+        ),
+        token="token",
+        now=lambda: 11,
+        tick_fetcher=lambda *_args, **_kwargs: [
+            {
+                "request_code": "123456",
+                "rest_received_ts_ms": 11000,
+            }
+        ],
         candle_fetcher=lambda *_args, **_kwargs: (
             [{"close": 10000}],
             {"request_code": "123456", "rest_received_ts_ms": 11000},
@@ -289,8 +453,10 @@ def test_recheck_can_retain_owned_exact_subscription_for_one_followup(monkeypatc
 
 def test_probe_registration_receipt_rejects_silent_send_failure_and_old_transport():
     ws = SimpleNamespace(
-        subscribed_codes=set(), _registered_items_by_code={},
-        _registered_item_epochs={}, _registered_item_types={},
+        subscribed_codes=set(),
+        _registered_items_by_code={},
+        _registered_item_epochs={},
+        _registered_item_types={},
         _market_data_transport_epoch=3,
         execute_subscribe=lambda *_args, **_kwargs: _completed_registration(),
         get_latest_data=lambda *_args: (_ for _ in ()).throw(
@@ -303,8 +469,12 @@ def test_probe_registration_receipt_rejects_silent_send_failure_and_old_transpor
         "candidate": {"code": "123456", "route": "krx_only"},
     }
     result = run_zero_base_probe(
-        request, ws_manager=ws, ai_engine=object(), token="token",
-        now=lambda: 11, release_ws=lambda code, item: released.append((code, item)),
+        request,
+        ws_manager=ws,
+        ai_engine=object(),
+        token="token",
+        now=lambda: 11,
+        release_ws=lambda code, item: released.append((code, item)),
     )
     assert result["reason"] == "ws_registration_not_recorded"
     assert released == [("123456", "123456")]
@@ -335,9 +505,14 @@ def test_reused_exact_item_with_old_transport_is_not_reported_as_missing_route()
         ),
     )
     result = run_zero_base_probe(
-        {"claim": {"code": "123456", "route": "nxt_only", "observed_epoch": 10},
-         "candidate": {"code": "123456", "route": "nxt_only"}},
-        ws_manager=ws, ai_engine=object(), token="token", now=lambda: 11,
+        {
+            "claim": {"code": "123456", "route": "nxt_only", "observed_epoch": 10},
+            "candidate": {"code": "123456", "route": "nxt_only"},
+        },
+        ws_manager=ws,
+        ai_engine=object(),
+        token="token",
+        now=lambda: 11,
     )
     assert result["reason"] == "ws_registration_transport_mismatch"
     assert result["result"] == "source_unavailable"
@@ -358,8 +533,12 @@ def test_empty_exact_route_rechecks_transport_without_hiding_real_no_receipt():
         "candidate": {"code": "123456", "route": "nxt_only"},
     }
     no_receipt = run_zero_base_probe(
-        request, ws_manager=ws, ai_engine=object(), token="token",
-        now=lambda: 11, ws_wait_timeout_sec=0.01,
+        request,
+        ws_manager=ws,
+        ai_engine=object(),
+        token="token",
+        now=lambda: 11,
+        ws_wait_timeout_sec=0.01,
     )
     assert no_receipt["reason"] == "route_snapshot_missing"
     assert no_receipt["ws_observation"]["empty_source_flushed"] is True
@@ -370,8 +549,12 @@ def test_empty_exact_route_rechecks_transport_without_hiding_real_no_receipt():
 
     ws.get_exact_item_data = disconnect_during_wait
     disconnected = run_zero_base_probe(
-        request, ws_manager=ws, ai_engine=object(), token="token",
-        now=lambda: 11, ws_wait_timeout_sec=0.01,
+        request,
+        ws_manager=ws,
+        ai_engine=object(),
+        token="token",
+        now=lambda: 11,
+        ws_wait_timeout_sec=0.01,
     )
     assert disconnected["reason"] == "ws_registration_transport_mismatch"
 
@@ -387,9 +570,14 @@ def test_missing_bbo_never_calls_machine_and_releases_ws():
         get_latest_data=lambda *_args, **_kwargs: snapshot,
     )
     result = run_zero_base_probe(
-        {"claim": {"code": "123456", "route": "krx_only", "observed_epoch": 10},
-         "candidate": {"code": "123456", "route": "krx_only"}},
-        ws_manager=ws, ai_engine=object(), token="token", now=lambda: 11,
+        {
+            "claim": {"code": "123456", "route": "krx_only", "observed_epoch": 10},
+            "candidate": {"code": "123456", "route": "krx_only"},
+        },
+        ws_manager=ws,
+        ai_engine=object(),
+        token="token",
+        now=lambda: 11,
         release_ws=lambda code, item: released.append((code, item)),
         ws_wait_timeout_sec=0.01,
     )
@@ -407,9 +595,14 @@ def test_existing_ws_owner_is_reused_without_changing_registration():
         get_latest_data=lambda *_args, **_kwargs: snapshot,
     )
     result = run_zero_base_probe(
-        {"claim": {"code": "123456", "route": "krx_only", "observed_epoch": 10},
-         "candidate": {"code": "123456", "route": "krx_only"}},
-        ws_manager=ws, ai_engine=object(), token="token", now=lambda: 11,
+        {
+            "claim": {"code": "123456", "route": "krx_only", "observed_epoch": 10},
+            "candidate": {"code": "123456", "route": "krx_only"},
+        },
+        ws_manager=ws,
+        ai_engine=object(),
+        token="token",
+        now=lambda: 11,
         release_ws=lambda *_args: calls.append("remove"),
         ws_wait_timeout_sec=0.01,
     )
@@ -419,10 +612,13 @@ def test_existing_ws_owner_is_reused_without_changing_registration():
 
 @pytest.mark.parametrize("preparation_ms", [None, 0, 12.5])
 def test_reused_observation_item_reads_exact_view_through_pre_machine_check(
-        monkeypatch, preparation_ms):
+    monkeypatch, preparation_ms
+):
     import src.engine.scalping.zero_base_probe as module
 
-    monkeypatch.setattr(module, "resolve_entry_candle_session", lambda: "SOR_AFTERMARKET")
+    monkeypatch.setattr(
+        module, "resolve_entry_candle_session", lambda: "SOR_AFTERMARKET"
+    )
     exact = _snapshot(route="krx_nxt_integrated", item="123456_AL")
     reads = []
 
@@ -438,26 +634,45 @@ def test_reused_observation_item_reads_exact_view_through_pre_machine_check(
             AssertionError("generic runtime view must not be used")
         ),
     )
-    timing = ({"entry_machine_input_as_of": 11,
-               "entry_machine_input_preparation_ms": preparation_ms,
-               "entry_machine_input_preparation_stages_ms": {"policy_resolve_ms": 1.5},
-               "response_ms": 43} if preparation_ms is not None else {})
+    timing = (
+        {
+            "entry_machine_input_as_of": 11,
+            "entry_machine_input_preparation_ms": preparation_ms,
+            "entry_machine_input_preparation_stages_ms": {"policy_resolve_ms": 1.5},
+            "response_ms": 43,
+        }
+        if preparation_ms is not None
+        else {}
+    )
     result = run_zero_base_probe(
-        {"claim": {"code": "123456", "route": "krx_nxt_integrated",
-                   "observed_epoch": 10},
-         "candidate": {"code": "123456", "route": "krx_nxt_integrated"}},
+        {
+            "claim": {
+                "code": "123456",
+                "route": "krx_nxt_integrated",
+                "observed_epoch": 10,
+            },
+            "candidate": {"code": "123456", "route": "krx_nxt_integrated"},
+        },
         ws_manager=ws,
-        ai_engine=SimpleNamespace(analyze_target=lambda *_args, **_kwargs: {
-            "machine_evaluation_status": "assessment_contract_invalid",
-            "machine_contract_error": "missing_stock_code",
-            "provider_called": False,
-            "continuous_reversal_rejected_claim_receipt": {"sha256":"preserved-native-proof"},
-            **timing,
-        }),
-        token="token", now=lambda: 11,
-        tick_fetcher=lambda *_args, **_kwargs: [{
-            "request_code": "123456_AL", "rest_received_ts_ms": 11000,
-        }],
+        ai_engine=SimpleNamespace(
+            analyze_target=lambda *_args, **_kwargs: {
+                "machine_evaluation_status": "assessment_contract_invalid",
+                "machine_contract_error": "missing_stock_code",
+                "provider_called": False,
+                "continuous_reversal_rejected_claim_receipt": {
+                    "sha256": "preserved-native-proof"
+                },
+                **timing,
+            }
+        ),
+        token="token",
+        now=lambda: 11,
+        tick_fetcher=lambda *_args, **_kwargs: [
+            {
+                "request_code": "123456_AL",
+                "rest_received_ts_ms": 11000,
+            }
+        ],
         candle_fetcher=lambda *_args, **_kwargs: (
             [{"close": 10000}],
             {"request_code": "123456_AL", "rest_received_ts_ms": 11000},
@@ -469,11 +684,15 @@ def test_reused_observation_item_reads_exact_view_through_pre_machine_check(
     assert reads == [("123456", "123456_AL")] * 4
     assert result["machine_evaluation_status"] == "assessment_contract_invalid"
     assert result["provider_called"] is False
-    assert result["continuous_reversal_rejected_claim_receipt"] == {"sha256":"preserved-native-proof"}
+    assert result["continuous_reversal_rejected_claim_receipt"] == {
+        "sha256": "preserved-native-proof"
+    }
     assert result.get("machine_input_trace", {}) == timing
     if timing:
         timing["entry_machine_input_preparation_stages_ms"]["policy_resolve_ms"] = 99
-        assert result["machine_input_trace"]["entry_machine_input_preparation_stages_ms"] == {"policy_resolve_ms": 1.5}
+        assert result["machine_input_trace"][
+            "entry_machine_input_preparation_stages_ms"
+        ] == {"policy_resolve_ms": 1.5}
     else:
         assert "machine_input_trace" not in result
 
@@ -481,53 +700,105 @@ def test_reused_observation_item_reads_exact_view_through_pre_machine_check(
 @pytest.mark.parametrize("fault", ["empty", "wrong_route", "stale"])
 def test_chart_failure_never_spends_followup_tick_budget(monkeypatch, fault):
     import src.engine.scalping.zero_base_probe as module
+
     snapshot = _snapshot(epoch=11)
-    ws = SimpleNamespace(subscribed_codes={"123456"},
-        get_latest_data=lambda *_args: snapshot)
-    meta = {"request_code": "OTHER" if fault == "wrong_route" else "123456",
-            "rest_received_ts_ms": -200000 if fault == "stale" else 11000,
-            "read_rate_control_reason": "shared_read_rate_wait_budget_exhausted"}
+    ws = SimpleNamespace(
+        subscribed_codes={"123456"}, get_latest_data=lambda *_args: snapshot
+    )
+    meta = {
+        "request_code": "OTHER" if fault == "wrong_route" else "123456",
+        "rest_received_ts_ms": -200000 if fault == "stale" else 11000,
+        "read_rate_control_reason": "shared_read_rate_wait_budget_exhausted",
+    }
     result = run_zero_base_probe(
-        {"claim": {"code": "123456", "route": "krx_only", "observed_epoch": 10},
-         "candidate": {"code": "123456", "route": "krx_only"}},
-        ws_manager=ws, ai_engine=object(), token="token", now=lambda: 11,
-        candle_fetcher=lambda *a, **k: ([] if fault == "empty" else [{"close": 10000}], meta),
+        {
+            "claim": {"code": "123456", "route": "krx_only", "observed_epoch": 10},
+            "candidate": {"code": "123456", "route": "krx_only"},
+        },
+        ws_manager=ws,
+        ai_engine=object(),
+        token="token",
+        now=lambda: 11,
+        candle_fetcher=lambda *a, **k: (
+            [] if fault == "empty" else [{"close": 10000}],
+            meta,
+        ),
         tick_fetcher=lambda *a, **k: pytest.fail("chart failure must not fetch ticks"),
         ws_wait_min_exact_0b_count=0,
     )
     assert result["result"] != "assessed"
     if fault == "empty":
-        assert result["reason"] == result["machine_source_gap_kind"] == "candle_source_missing"
-        assert result["rest_source_gap_detail"] == "shared_read_rate_wait_budget_exhausted"
+        assert (
+            result["reason"]
+            == result["machine_source_gap_kind"]
+            == "candle_source_missing"
+        )
+        assert (
+            result["rest_source_gap_detail"] == "shared_read_rate_wait_budget_exhausted"
+        )
 
 
 def test_probe_skips_rest_only_for_actual_trusted_exact_feature_window():
     from datetime import datetime
     from zoneinfo import ZoneInfo
     from src.engine.scalping_feature_packet import _select_recent_ticks_with_source
+
     epoch = datetime(2026, 10, 2, 12, 0, 11, tzinfo=ZoneInfo("Asia/Seoul")).timestamp()
     snapshot = _snapshot(epoch=epoch)
-    snapshot["recent_trade_ticks_by_route"] = {"KRX|krx_only": [{
-        "item": "123456", "market_route": "krx_only", "transport_epoch": 3,
-        "received_at_ms": epoch*1000, "time": "12:00:11", "price": 10000,
-        "volume": 10, "volume_source": "15_abs", "aggressor_side": "BUY",
-        "aggressor_source": "kiwoom_0b_signed_trade_volume"}]}
-    ws = SimpleNamespace(subscribed_codes={"123456"}, get_latest_data=lambda *a: snapshot)
-    seen=[]
+    snapshot["recent_trade_ticks_by_route"] = {
+        "KRX|krx_only": [
+            {
+                "item": "123456",
+                "market_route": "krx_only",
+                "transport_epoch": 3,
+                "received_at_ms": epoch * 1000,
+                "time": "12:00:11",
+                "price": 10000,
+                "volume": 10,
+                "volume_source": "15_abs",
+                "aggressor_side": "BUY",
+                "aggressor_source": "kiwoom_0b_signed_trade_volume",
+            }
+        ]
+    }
+    ws = SimpleNamespace(
+        subscribed_codes={"123456"}, get_latest_data=lambda *a: snapshot
+    )
+    seen = []
+
     def assess(*args, **kwargs):
-        selected, source, _ = _select_recent_ticks_with_source(args[1], args[2], now=epoch)
+        selected, source, _ = _select_recent_ticks_with_source(
+            args[1], args[2], now=epoch
+        )
         seen.append((source, selected))
-        return {"machine_evaluation_status": "assessed", "entry_mechanistic_action": "RECHECK"}
+        return {
+            "machine_evaluation_status": "assessed",
+            "entry_mechanistic_action": "RECHECK",
+        }
+
     result = run_zero_base_probe(
-        {"claim": {"code": "123456", "route": "krx_only", "observed_epoch": epoch-1},
-         "candidate": {"code": "123456", "route": "krx_only"}},
-        ws_manager=ws, ai_engine=SimpleNamespace(analyze_target=assess), token="token",
+        {
+            "claim": {
+                "code": "123456",
+                "route": "krx_only",
+                "observed_epoch": epoch - 1,
+            },
+            "candidate": {"code": "123456", "route": "krx_only"},
+        },
+        ws_manager=ws,
+        ai_engine=SimpleNamespace(analyze_target=assess),
+        token="token",
         now=lambda: epoch,
-        candle_fetcher=lambda *a, **k: ([{"close": 10000}], {
-            "request_code": "123456", "rest_received_ts_ms": int(epoch*1000)}),
+        candle_fetcher=lambda *a, **k: (
+            [{"close": 10000}],
+            {"request_code": "123456", "rest_received_ts_ms": int(epoch * 1000)},
+        ),
         context_builder=lambda *a, **k: {"ready": True},
-        tick_fetcher=lambda *a, **k: pytest.fail("trusted WS must replace REST tick read"),
-        ws_wait_min_exact_0b_count=0)
+        tick_fetcher=lambda *a, **k: pytest.fail(
+            "trusted WS must replace REST tick read"
+        ),
+        ws_wait_min_exact_0b_count=0,
+    )
     assert result["result"] == "assessed"
     assert result["tick_read_source"] == seen[0][0] == "ws_exact_route"
     assert len(seen[0][1]) == 1
@@ -540,8 +811,13 @@ def test_probe_waits_for_later_exact_0d_after_first_0b():
     snapshots = iter((first, first, second))
     ws = SimpleNamespace(get_latest_data=lambda *_args: next(snapshots))
     data, observation, reason = wait_for_exact_probe_ws_data(
-        ws, code="123456", route="krx_nxt_integrated", after_epoch=10,
-        now=lambda: 11, timeout_sec=0.2, poll_interval_sec=0.01,
+        ws,
+        code="123456",
+        route="krx_nxt_integrated",
+        after_epoch=10,
+        now=lambda: 11,
+        timeout_sec=0.2,
+        poll_interval_sec=0.01,
     )
     assert reason == "ready"
     assert data["market_data_route"] == "krx_nxt_integrated"
@@ -554,8 +830,13 @@ def test_probe_wait_timeout_retains_exact_route_gap():
     partial["realtime_type_snapshots_by_route"]["_AL|krx_nxt_integrated"].pop("0D")
     ws = SimpleNamespace(get_latest_data=lambda *_args: partial)
     data, observation, reason = wait_for_exact_probe_ws_data(
-        ws, code="123456", route="krx_nxt_integrated", after_epoch=10,
-        now=lambda: 11, timeout_sec=0.02, poll_interval_sec=0.01,
+        ws,
+        code="123456",
+        route="krx_nxt_integrated",
+        after_epoch=10,
+        now=lambda: 11,
+        timeout_sec=0.02,
+        poll_interval_sec=0.01,
     )
     assert not data and reason == "0D_missing"
     assert observation["wait_ms"] >= 10
@@ -567,22 +848,46 @@ def test_partial_aftermarket_receipt_extends_bounded_wait_for_exact_pair():
     key = "_AL|krx_nxt_integrated"
     partial = _snapshot(route="krx_nxt_integrated", item="123456_AL")
     partial["realtime_type_snapshots_by_route"][key].pop("0D")
-    partial["recent_trade_ticks_by_route"] = {key: [
-        {"received_at_ms": 10500, "item": "123456_AL", "market_route": "krx_nxt_integrated", "transport_epoch": 3, "route_sequence": 1}
-    ]}
+    partial["recent_trade_ticks_by_route"] = {
+        key: [
+            {
+                "received_at_ms": 10500,
+                "item": "123456_AL",
+                "market_route": "krx_nxt_integrated",
+                "transport_epoch": 3,
+                "route_sequence": 1,
+            }
+        ]
+    }
     full = _snapshot(route="krx_nxt_integrated", item="123456_AL")
     full["recent_trade_ticks_by_route"] = partial["recent_trade_ticks_by_route"]
-    full["recent_depth_ticks_by_route"] = {key: [
-        {"received_at_ms": 10600, "item": "123456_AL", "market_route": "krx_nxt_integrated", "transport_epoch": 3, "route_sequence": 1}
-    ]}
+    full["recent_depth_ticks_by_route"] = {
+        key: [
+            {
+                "received_at_ms": 10600,
+                "item": "123456_AL",
+                "market_route": "krx_nxt_integrated",
+                "transport_epoch": 3,
+                "route_sequence": 1,
+            }
+        ]
+    }
     started = time.monotonic()
-    ws = SimpleNamespace(get_latest_data=lambda *_args: (
-        partial if time.monotonic() - started < 0.04 else full
-    ))
+    ws = SimpleNamespace(
+        get_latest_data=lambda *_args: (
+            partial if time.monotonic() - started < 0.04 else full
+        )
+    )
     data, observation, reason = wait_for_exact_probe_ws_data(
-        ws, code="123456", route="krx_nxt_integrated", after_epoch=10,
-        now=lambda: 11, timeout_sec=0.01, partial_extension_sec=0.07,
-        poll_interval_sec=0.005, min_exact_0b_count=1,
+        ws,
+        code="123456",
+        route="krx_nxt_integrated",
+        after_epoch=10,
+        now=lambda: 11,
+        timeout_sec=0.01,
+        partial_extension_sec=0.07,
+        poll_interval_sec=0.005,
+        min_exact_0b_count=1,
     )
     assert reason == "ready" and data
     assert observation["partial_extension_applied"] is True
@@ -594,8 +899,13 @@ def test_partial_aftermarket_receipt_extends_bounded_wait_for_exact_pair():
 def test_empty_receipt_does_not_extend_wait():
     ws = SimpleNamespace(get_latest_data=lambda *_args: {})
     data, observation, _reason = wait_for_exact_probe_ws_data(
-        ws, code="123456", route="nxt_only", after_epoch=10,
-        now=lambda: 11, timeout_sec=0.01, partial_extension_sec=0.07,
+        ws,
+        code="123456",
+        route="nxt_only",
+        after_epoch=10,
+        now=lambda: 11,
+        timeout_sec=0.01,
+        partial_extension_sec=0.07,
         poll_interval_sec=0.005,
     )
     assert not data
@@ -607,8 +917,13 @@ def test_empty_receipt_does_not_extend_wait():
 def test_empty_exact_source_flushes_before_full_ws_wait():
     ws = SimpleNamespace(get_latest_data=lambda *_args: {})
     data, observation, reason = wait_for_exact_probe_ws_data(
-        ws, code="123456", route="krx_nxt_integrated", after_epoch=10,
-        now=lambda: 11, timeout_sec=0.2, empty_timeout_sec=0.03,
+        ws,
+        code="123456",
+        route="krx_nxt_integrated",
+        after_epoch=10,
+        now=lambda: 11,
+        timeout_sec=0.2,
+        empty_timeout_sec=0.03,
         poll_interval_sec=0.005,
     )
     assert not data and reason == "route_snapshot_missing"
@@ -618,29 +933,43 @@ def test_empty_exact_source_flushes_before_full_ws_wait():
     assert observation["effective_wait_budget_ms"] == 30
 
 
-@pytest.mark.parametrize("route,item,warmup,timeout", [
-    ("krx_nxt_integrated", "123456_AL", 10.0, 15.0),
-    ("nxt_only", "123456_NX", 15.0, 20.0),
-])
+@pytest.mark.parametrize(
+    "route,item,warmup,timeout",
+    [
+        ("krx_nxt_integrated", "123456_AL", 10.0, 15.0),
+        ("nxt_only", "123456_NX", 15.0, 20.0),
+    ],
+)
 @pytest.mark.parametrize("ready", [False, True])
 def test_exact_source_waits_for_session_probe_floor(
-    monkeypatch, route, item, warmup, timeout, ready,
+    monkeypatch,
+    route,
+    item,
+    warmup,
+    timeout,
+    ready,
 ):
     import src.engine.scalping.zero_base_probe as module
 
     elapsed = [0.0]
     monkeypatch.setattr(module.time, "monotonic", lambda: elapsed[0])
     monkeypatch.setattr(
-        module.time, "sleep",
+        module.time,
+        "sleep",
         lambda seconds: elapsed.__setitem__(0, elapsed[0] + seconds),
     )
     ws = SimpleNamespace(
         get_latest_data=lambda *_args: _snapshot(route, item) if ready else {},
     )
     data, observation, reason = wait_for_exact_probe_ws_data(
-        ws, code="123456", route=route, after_epoch=10,
-        now=lambda: 11, timeout_sec=timeout,
-        empty_timeout_sec=warmup, min_warmup_sec=warmup,
+        ws,
+        code="123456",
+        route=route,
+        after_epoch=10,
+        now=lambda: 11,
+        timeout_sec=timeout,
+        empty_timeout_sec=warmup,
+        min_warmup_sec=warmup,
     )
     assert (reason == "ready" and bool(data)) is ready
     assert warmup * 1000 <= observation["wait_ms"] < warmup * 1000 + 100
@@ -650,13 +979,20 @@ def test_exact_source_waits_for_session_probe_floor(
 def test_one_exact_stream_keeps_full_ws_wait_budget():
     partial = _snapshot(route="krx_nxt_integrated", item="123456_AL")
     partial["realtime_type_snapshots_by_route"]["_AL|krx_nxt_integrated"].pop("0B")
-    partial["recent_depth_ticks_by_route"] = {"_AL|krx_nxt_integrated": [
-        {"received_at_ms": 10500, "item": "123456_AL", "transport_epoch": 3}
-    ]}
+    partial["recent_depth_ticks_by_route"] = {
+        "_AL|krx_nxt_integrated": [
+            {"received_at_ms": 10500, "item": "123456_AL", "transport_epoch": 3}
+        ]
+    }
     ws = SimpleNamespace(get_latest_data=lambda *_args: partial)
     data, observation, reason = wait_for_exact_probe_ws_data(
-        ws, code="123456", route="krx_nxt_integrated", after_epoch=10,
-        now=lambda: 11, timeout_sec=0.05, empty_timeout_sec=0.01,
+        ws,
+        code="123456",
+        route="krx_nxt_integrated",
+        after_epoch=10,
+        now=lambda: 11,
+        timeout_sec=0.05,
+        empty_timeout_sec=0.01,
         poll_interval_sec=0.005,
     )
     assert not data and reason == "0B_missing"
@@ -670,8 +1006,13 @@ def test_exact_typed_receipt_without_tick_history_is_not_empty_source():
     partial["realtime_type_snapshots_by_route"]["_AL|krx_nxt_integrated"].pop("0B")
     ws = SimpleNamespace(get_latest_data=lambda *_args: partial)
     data, observation, reason = wait_for_exact_probe_ws_data(
-        ws, code="123456", route="krx_nxt_integrated", after_epoch=10,
-        now=lambda: 11, timeout_sec=0.05, empty_timeout_sec=0.01,
+        ws,
+        code="123456",
+        route="krx_nxt_integrated",
+        after_epoch=10,
+        now=lambda: 11,
+        timeout_sec=0.05,
+        empty_timeout_sec=0.01,
         poll_interval_sec=0.005,
     )
     assert not data and reason == "0B_missing"
@@ -684,19 +1025,26 @@ def test_exact_typed_receipt_without_tick_history_is_not_empty_source():
 def test_late_exact_pair_arrives_after_initially_empty_ws_snapshot():
     ready = _snapshot(route="krx_nxt_integrated", item="123456_AL")
     key = "_AL|krx_nxt_integrated"
-    ready["recent_trade_ticks_by_route"] = {key: [
-        {"received_at_ms": 10500, "item": "123456_AL", "transport_epoch": 3}
-    ]}
-    ready["recent_depth_ticks_by_route"] = {key: [
-        {"received_at_ms": 10600, "item": "123456_AL", "transport_epoch": 3}
-    ]}
+    ready["recent_trade_ticks_by_route"] = {
+        key: [{"received_at_ms": 10500, "item": "123456_AL", "transport_epoch": 3}]
+    }
+    ready["recent_depth_ticks_by_route"] = {
+        key: [{"received_at_ms": 10600, "item": "123456_AL", "transport_epoch": 3}]
+    }
     started = time.monotonic()
-    ws = SimpleNamespace(get_latest_data=lambda *_args: (
-        {} if time.monotonic() - started < 0.04 else ready
-    ))
+    ws = SimpleNamespace(
+        get_latest_data=lambda *_args: (
+            {} if time.monotonic() - started < 0.04 else ready
+        )
+    )
     data, observation, reason = wait_for_exact_probe_ws_data(
-        ws, code="123456", route="krx_nxt_integrated", after_epoch=10,
-        now=lambda: 11, timeout_sec=0.1, poll_interval_sec=0.005,
+        ws,
+        code="123456",
+        route="krx_nxt_integrated",
+        after_epoch=10,
+        now=lambda: 11,
+        timeout_sec=0.1,
+        poll_interval_sec=0.005,
     )
     assert reason == "ready" and data
     assert 35 <= observation["wait_ms"] < 100
@@ -709,7 +1057,8 @@ def test_default_empty_wait_accepts_exact_pair_after_three_seconds(monkeypatch):
     elapsed = [0.0]
     monkeypatch.setattr(module.time, "monotonic", lambda: elapsed[0])
     monkeypatch.setattr(
-        module.time, "sleep",
+        module.time,
+        "sleep",
         lambda seconds: elapsed.__setitem__(0, elapsed[0] + seconds),
     )
     ready = _snapshot(route="krx_nxt_integrated", item="123456_AL")
@@ -718,8 +1067,12 @@ def test_default_empty_wait_accepts_exact_pair_after_three_seconds(monkeypatch):
     )
 
     data, observation, reason = wait_for_exact_probe_ws_data(
-        ws, code="123456", route="krx_nxt_integrated", after_epoch=10,
-        now=lambda: 11, timeout_sec=10.0,
+        ws,
+        code="123456",
+        route="krx_nxt_integrated",
+        after_epoch=10,
+        now=lambda: 11,
+        timeout_sec=10.0,
     )
 
     assert reason == "ready" and data
@@ -731,20 +1084,57 @@ def test_default_empty_wait_accepts_exact_pair_after_three_seconds(monkeypatch):
 def test_probe_observation_counts_only_exact_route_and_transport():
     snapshot = _snapshot(route="krx_nxt_integrated", item="123456_AL")
     key = "_AL|krx_nxt_integrated"
-    snapshot["recent_trade_ticks_by_route"] = {key: [
-        {"received_at_ms": 10500, "item": "123456_AL", "market_route": "krx_nxt_integrated", "transport_epoch": 3,
-         "aggressor_source": "kiwoom_0b_signed_trade_volume", "aggressor_side": "BUY", "route_sequence": 1},
-        {"received_at_ms": 10600, "item": "123456_AL", "market_route": "krx_nxt_integrated", "transport_epoch": 3, "route_sequence": 2},
-        {"received_at_ms": 10700, "item": "123456", "market_route": "krx_nxt_integrated", "transport_epoch": 3},
-        {"received_at_ms": 10800, "item": "123456_AL", "market_route": "krx_nxt_integrated", "transport_epoch": 2},
-    ]}
-    snapshot["recent_depth_ticks_by_route"] = {key: [
-        {"received_at_ms": 10400, "item": "123456_AL", "market_route": "krx_nxt_integrated", "transport_epoch": 3, "route_sequence": 1},
-    ]}
+    snapshot["recent_trade_ticks_by_route"] = {
+        key: [
+            {
+                "received_at_ms": 10500,
+                "item": "123456_AL",
+                "market_route": "krx_nxt_integrated",
+                "transport_epoch": 3,
+                "aggressor_source": "kiwoom_0b_signed_trade_volume",
+                "aggressor_side": "BUY",
+                "route_sequence": 1,
+            },
+            {
+                "received_at_ms": 10600,
+                "item": "123456_AL",
+                "market_route": "krx_nxt_integrated",
+                "transport_epoch": 3,
+                "route_sequence": 2,
+            },
+            {
+                "received_at_ms": 10700,
+                "item": "123456",
+                "market_route": "krx_nxt_integrated",
+                "transport_epoch": 3,
+            },
+            {
+                "received_at_ms": 10800,
+                "item": "123456_AL",
+                "market_route": "krx_nxt_integrated",
+                "transport_epoch": 2,
+            },
+        ]
+    }
+    snapshot["recent_depth_ticks_by_route"] = {
+        key: [
+            {
+                "received_at_ms": 10400,
+                "item": "123456_AL",
+                "market_route": "krx_nxt_integrated",
+                "transport_epoch": 3,
+                "route_sequence": 1,
+            },
+        ]
+    }
     ws = SimpleNamespace(get_latest_data=lambda *_args: snapshot)
     _data, observation, reason = wait_for_exact_probe_ws_data(
-        ws, code="123456", route="krx_nxt_integrated", after_epoch=10,
-        now=lambda: 11, timeout_sec=0,
+        ws,
+        code="123456",
+        route="krx_nxt_integrated",
+        after_epoch=10,
+        now=lambda: 11,
+        timeout_sec=0,
     )
     assert reason == "ready"
     assert observation["first_0b_ms"] == 500
@@ -758,20 +1148,34 @@ def test_probe_waits_for_five_exact_ticks_within_bounded_cap():
     snapshot = _snapshot(route="krx_nxt_integrated", item="123456_AL")
     key = "_AL|krx_nxt_integrated"
     calls = []
+
     def latest(_code):
         calls.append(None)
         count = 1 if len(calls) < 3 else 5
         current = dict(snapshot)
-        current["recent_trade_ticks_by_route"] = {key: [
-            {"received_at_ms": 10100 + index * 100,
-             "item": "123456_AL", "market_route": "krx_nxt_integrated", "transport_epoch": 3, "route_sequence": index+1}
-            for index in range(count)
-        ]}
+        current["recent_trade_ticks_by_route"] = {
+            key: [
+                {
+                    "received_at_ms": 10100 + index * 100,
+                    "item": "123456_AL",
+                    "market_route": "krx_nxt_integrated",
+                    "transport_epoch": 3,
+                    "route_sequence": index + 1,
+                }
+                for index in range(count)
+            ]
+        }
         return current
+
     data, observation, reason = wait_for_exact_probe_ws_data(
-        SimpleNamespace(get_latest_data=latest), code="123456",
-        route="krx_nxt_integrated", after_epoch=10, now=lambda: 11,
-        timeout_sec=0.2, poll_interval_sec=0.01, min_exact_0b_count=5,
+        SimpleNamespace(get_latest_data=latest),
+        code="123456",
+        route="krx_nxt_integrated",
+        after_epoch=10,
+        now=lambda: 11,
+        timeout_sec=0.2,
+        poll_interval_sec=0.01,
+        min_exact_0b_count=5,
     )
     assert reason == "ready" and data
     assert len(calls) == 3
@@ -783,25 +1187,38 @@ def test_machine_contract_error_is_retained_without_promoting(monkeypatch):
     import src.engine.scalping.zero_base_probe as module
 
     monkeypatch.setattr(module, "resolve_entry_candle_session", lambda: "KRX_REGULAR")
-    monkeypatch.setattr(module, "resolve_entry_candle_request_code", lambda *_args, **_kwargs: "123456")
+    monkeypatch.setattr(
+        module, "resolve_entry_candle_request_code", lambda *_args, **_kwargs: "123456"
+    )
     ws = SimpleNamespace(
         subscribed_codes={"123456"},
         wait_for_data=lambda *_args, **_kwargs: _snapshot(epoch=11),
         get_latest_data=lambda *_args, **_kwargs: _snapshot(epoch=11),
     )
-    machine = SimpleNamespace(analyze_target=lambda *_args, **_kwargs: {
-        "machine_evaluation_status": "assessment_contract_invalid",
-        "machine_contract_error": "missing_stock_code",
-    })
+    machine = SimpleNamespace(
+        analyze_target=lambda *_args, **_kwargs: {
+            "machine_evaluation_status": "assessment_contract_invalid",
+            "machine_contract_error": "missing_stock_code",
+        }
+    )
     result = run_zero_base_probe(
-        {"claim": {"code": "123456", "route": "krx_only", "observed_epoch": 10},
-         "candidate": {"code": "123456", "route": "krx_only"}},
-        ws_manager=ws, ai_engine=machine, token="token", now=lambda: 11,
-        tick_fetcher=lambda *_args, **_kwargs: [{
-            "request_code": "123456", "rest_received_ts_ms": 11000,
-        }],
+        {
+            "claim": {"code": "123456", "route": "krx_only", "observed_epoch": 10},
+            "candidate": {"code": "123456", "route": "krx_only"},
+        },
+        ws_manager=ws,
+        ai_engine=machine,
+        token="token",
+        now=lambda: 11,
+        tick_fetcher=lambda *_args, **_kwargs: [
+            {
+                "request_code": "123456",
+                "rest_received_ts_ms": 11000,
+            }
+        ],
         candle_fetcher=lambda *_args, **_kwargs: (
-            [{"close": 10000}], {"request_code": "123456", "rest_received_ts_ms": 11000},
+            [{"close": 10000}],
+            {"request_code": "123456", "rest_received_ts_ms": 11000},
         ),
         context_builder=lambda *_args, **_kwargs: {"ready": True},
         ws_wait_min_exact_0b_count=0,
@@ -813,31 +1230,49 @@ def test_machine_contract_error_is_retained_without_promoting(monkeypatch):
 
 def test_missing_trusted_tape_is_a_feature_gap_not_a_policy_outage(monkeypatch):
     import src.engine.scalping.zero_base_probe as module
+
     monkeypatch.setattr(module, "resolve_entry_candle_session", lambda: "KRX_REGULAR")
     ws = SimpleNamespace(
         subscribed_codes={"123456"},
         _registered_items_by_code={"123456": ("123456_AL",)},
         wait_for_data=lambda *_args, **_kwargs: _snapshot(
-            route="krx_nxt_integrated", item="123456_AL", epoch=11,
+            route="krx_nxt_integrated",
+            item="123456_AL",
+            epoch=11,
         ),
         get_latest_data=lambda *_args, **_kwargs: _snapshot(
-            route="krx_nxt_integrated", item="123456_AL", epoch=11,
+            route="krx_nxt_integrated",
+            item="123456_AL",
+            epoch=11,
         ),
     )
-    machine = SimpleNamespace(analyze_target=lambda *_args, **_kwargs: {
-        "machine_evaluation_status": "assessment_contract_invalid",
-        "machine_contract_error": "strategy_tape_score_source_missing",
-        "machine_source_gap_kind": "trusted_tape_source_insufficient",
-        "machine_feature_source_receipt": {"feature_tick_source": "rest"},
-    })
+    machine = SimpleNamespace(
+        analyze_target=lambda *_args, **_kwargs: {
+            "machine_evaluation_status": "assessment_contract_invalid",
+            "machine_contract_error": "strategy_tape_score_source_missing",
+            "machine_source_gap_kind": "trusted_tape_source_insufficient",
+            "machine_feature_source_receipt": {"feature_tick_source": "rest"},
+        }
+    )
     result = run_zero_base_probe(
-        {"claim": {"code": "123456", "route": "krx_nxt_integrated",
-                   "observed_epoch": 10},
-         "candidate": {"code": "123456", "route": "krx_nxt_integrated"}},
-        ws_manager=ws, ai_engine=machine, token="token", now=lambda: 11,
-        tick_fetcher=lambda *_args, **_kwargs: [{
-            "request_code": "123456_AL", "rest_received_ts_ms": 11000,
-        }],
+        {
+            "claim": {
+                "code": "123456",
+                "route": "krx_nxt_integrated",
+                "observed_epoch": 10,
+            },
+            "candidate": {"code": "123456", "route": "krx_nxt_integrated"},
+        },
+        ws_manager=ws,
+        ai_engine=machine,
+        token="token",
+        now=lambda: 11,
+        tick_fetcher=lambda *_args, **_kwargs: [
+            {
+                "request_code": "123456_AL",
+                "rest_received_ts_ms": 11000,
+            }
+        ],
         candle_fetcher=lambda *_args, **_kwargs: (
             [{"close": 10000}],
             {"request_code": "123456_AL", "rest_received_ts_ms": 11000},
@@ -852,14 +1287,36 @@ def test_missing_trusted_tape_is_a_feature_gap_not_a_policy_outage(monkeypatch):
     assert result["machine_action"] == ""
 
 
-@pytest.mark.parametrize("status,existing_kind,primary,expected", [
-    ("source_quality_blocked_before_assessment", None, "runtime_preflight_artifact_not_ready", "runtime_preflight_artifact_not_ready"),
-    ("source_quality_blocked_before_assessment", "trusted_tape_source_insufficient", "runtime_preflight_artifact_not_ready", "trusted_tape_source_insufficient"),
-    ("source_quality_blocked_before_assessment", None, None, None),
-    ("required_feature_blocked_before_assessment", None, "required_feature_provider_trade_late", "required_feature_provider_trade_late"),
-])
+@pytest.mark.parametrize(
+    "status,existing_kind,primary,expected",
+    [
+        (
+            "source_quality_blocked_before_assessment",
+            None,
+            "runtime_preflight_artifact_not_ready",
+            "runtime_preflight_artifact_not_ready",
+        ),
+        (
+            "source_quality_blocked_before_assessment",
+            "trusted_tape_source_insufficient",
+            "runtime_preflight_artifact_not_ready",
+            "trusted_tape_source_insufficient",
+        ),
+        ("source_quality_blocked_before_assessment", None, None, None),
+        (
+            "required_feature_blocked_before_assessment",
+            None,
+            "required_feature_provider_trade_late",
+            "required_feature_provider_trade_late",
+        ),
+    ],
+)
 def test_source_blocked_probe_keeps_exact_identity_and_primary_cause(
-    monkeypatch, status, existing_kind, primary, expected,
+    monkeypatch,
+    status,
+    existing_kind,
+    primary,
+    expected,
 ):
     import src.engine.scalping.zero_base_probe as module
 
@@ -868,7 +1325,8 @@ def test_source_blocked_probe_keeps_exact_identity_and_primary_cause(
         subscribed_codes={"123456"},
         _registered_items_by_code={"123456": ("123456_AL",)},
         get_latest_data=lambda *_args, **_kwargs: _snapshot(
-            route="krx_nxt_integrated", item="123456_AL", epoch=11),
+            route="krx_nxt_integrated", item="123456_AL", epoch=11
+        ),
     )
     receipt = {
         "machine_evaluation_status": status,
@@ -883,15 +1341,25 @@ def test_source_blocked_probe_keeps_exact_identity_and_primary_cause(
         "ai_input_runtime_preflight_artifact_status": "artifact_missing",
     }
     result = run_zero_base_probe(
-        {"claim": {"code": "123456", "route": "krx_nxt_integrated", "observed_epoch": 10},
-         "candidate": {"code": "123456", "route": "krx_nxt_integrated"}},
+        {
+            "claim": {
+                "code": "123456",
+                "route": "krx_nxt_integrated",
+                "observed_epoch": 10,
+            },
+            "candidate": {"code": "123456", "route": "krx_nxt_integrated"},
+        },
         ws_manager=ws,
         ai_engine=SimpleNamespace(analyze_target=lambda *_args, **_kwargs: receipt),
-        token="token", now=lambda: 11,
+        token="token",
+        now=lambda: 11,
         tick_fetcher=lambda *_args, **_kwargs: [
-            {"request_code": "123456_AL", "rest_received_ts_ms": 11000}],
+            {"request_code": "123456_AL", "rest_received_ts_ms": 11000}
+        ],
         candle_fetcher=lambda *_args, **_kwargs: (
-            [{"close": 10000}], {"request_code": "123456_AL", "rest_received_ts_ms": 11000}),
+            [{"close": 10000}],
+            {"request_code": "123456_AL", "rest_received_ts_ms": 11000},
+        ),
         context_builder=lambda *_args, **_kwargs: {"ready": True},
         ws_wait_min_exact_0b_count=0,
     )
@@ -918,9 +1386,14 @@ def test_late_ws_registration_releases_only_after_registration_finishes():
         ),
     )
     result = run_zero_base_probe(
-        {"claim": {"code": "123456", "route": "krx_only", "observed_epoch": 10},
-         "candidate": {"code": "123456", "route": "krx_only"}},
-        ws_manager=ws, ai_engine=object(), token="token", now=lambda: 11,
+        {
+            "claim": {"code": "123456", "route": "krx_only", "observed_epoch": 10},
+            "candidate": {"code": "123456", "route": "krx_only"},
+        },
+        ws_manager=ws,
+        ai_engine=object(),
+        token="token",
+        now=lambda: 11,
         release_ws=lambda code, item: released.append((code, item)),
     )
     assert result["reason"] == "ws_registration_timeout"
@@ -934,16 +1407,23 @@ def test_tick_probe_keeps_explicit_krx_route(monkeypatch):
 
     requests = []
     monkeypatch.setattr(
-        kiwoom_utils, "get_effective_kiwoom_code",
+        kiwoom_utils,
+        "get_effective_kiwoom_code",
         lambda _code: (_ for _ in ()).throw(AssertionError("route rewritten")),
     )
     monkeypatch.setattr(
-        kiwoom_utils, "fetch_kiwoom_api_continuous",
+        kiwoom_utils,
+        "fetch_kiwoom_api_continuous",
         lambda **kwargs: (requests.append(kwargs), ([], {}))[1],
     )
-    assert kiwoom_utils.get_tick_history_ka10003(
-        "token", "123456", explicit_request_code=True,
-    ) == []
+    assert (
+        kiwoom_utils.get_tick_history_ka10003(
+            "token",
+            "123456",
+            explicit_request_code=True,
+        )
+        == []
+    )
     assert requests[0]["payload"]["stk_cd"] == "123456"
 
 
@@ -951,71 +1431,128 @@ def test_rest_probe_rejects_reused_or_cross_route_feature_rows():
     tick = {"request_code": "123456", "rest_received_ts_ms": 11000}
     candle = {"request_code": "123456", "rest_received_ts_ms": 11000}
     assert exact_probe_rest_sources([tick], candle, request_code="123456", now_epoch=11)
-    assert not exact_probe_rest_sources([tick], candle, request_code="123456_NX", now_epoch=11)
-    assert not exact_probe_rest_sources([tick], candle, request_code="123456", now_epoch=30)
+    assert not exact_probe_rest_sources(
+        [tick], candle, request_code="123456_NX", now_epoch=11
+    )
+    assert not exact_probe_rest_sources(
+        [tick], candle, request_code="123456", now_epoch=30
+    )
     assert not exact_probe_rest_sources([], candle, request_code="123456", now_epoch=11)
     assert exact_probe_rest_sources(
-        [], candle, request_code="123456", now_epoch=11,
+        [],
+        candle,
+        request_code="123456",
+        now_epoch=11,
         allow_empty_ticks=True,
     )
     assert not exact_probe_rest_sources(
-        [], candle, request_code="123456_NX", now_epoch=11,
+        [],
+        candle,
+        request_code="123456_NX",
+        now_epoch=11,
         allow_empty_ticks=True,
     )
-    assert exact_probe_rest_source_issue(
-        [tick], candle, request_code="123456_NX", now_epoch=11,
-    ) == "candle_route_mismatch"
-    assert exact_probe_rest_source_issue(
-        [tick], candle, request_code="123456", now_epoch=22,
-    ) == "tick_receive_clock_invalid"
+    assert (
+        exact_probe_rest_source_issue(
+            [tick],
+            candle,
+            request_code="123456_NX",
+            now_epoch=11,
+        )
+        == "candle_route_mismatch"
+    )
+    assert (
+        exact_probe_rest_source_issue(
+            [tick],
+            candle,
+            request_code="123456",
+            now_epoch=22,
+        )
+        == "tick_receive_clock_invalid"
+    )
 
 
 def test_reduced_probe_uses_sealed_close_and_original_live_transport_clocks():
     from datetime import timedelta
     from copy import deepcopy
     from src.tests.test_micro_reversion_completed_bars import BASE
+
     opened = (BASE + timedelta(seconds=60)).timestamp()
     close = opened + 60
     now = close + 59
-    source = dict(source="kiwoom_ws_AL_completed_1m", request_code="123456_AL",
-        adjustment="raw_same_day", transport_epoch=2, source_epoch=7, revision=3,
-        content_sha256="a" * 64, generated_at_epoch=close+2, available_at_epoch=close+2,
-        transport_snapshot_generated_at_epoch=now, watermark_epoch=close+1,
+    source = dict(
+        source="kiwoom_ws_AL_completed_1m",
+        request_code="123456_AL",
+        adjustment="raw_same_day",
+        transport_epoch=2,
+        source_epoch=7,
+        revision=3,
+        content_sha256="a" * 64,
+        generated_at_epoch=close + 2,
+        available_at_epoch=close + 2,
+        transport_snapshot_generated_at_epoch=now,
+        watermark_epoch=close + 1,
         integrity=dict(observer_epoch=7, transport_epoch=2),
-        latest_completed_bar=dict(minute_epoch=int(opened), source_time="20260921160100",
-            source_epoch=7, available_at_epoch=close+2, status="complete", issues=[]))
-    meta = dict(api_id="WS_0B_completed_1m", request_code="123456_AL",
-        decision_input_profile="reduced_completed_v1", completed_bar_source=source)
+        latest_completed_bar=dict(
+            minute_epoch=int(opened),
+            source_time="20260921160100",
+            source_epoch=7,
+            available_at_epoch=close + 2,
+            status="complete",
+            issues=[],
+        ),
+    )
+    meta = dict(
+        api_id="WS_0B_completed_1m",
+        request_code="123456_AL",
+        decision_input_profile="reduced_completed_v1",
+        completed_bar_source=source,
+    )
+
     def issue(value=meta, stamp=now):
-        return exact_probe_rest_source_issue([], value, request_code="123456_AL",
-            now_epoch=stamp, allow_empty_ticks=True, transport_epoch=2)
+        return exact_probe_rest_source_issue(
+            [],
+            value,
+            request_code="123456_AL",
+            now_epoch=stamp,
+            allow_empty_ticks=True,
+            transport_epoch=2,
+        )
+
     assert issue() == ""  # Publication is 57s old; close and live transport are proven.
     strict = dict(meta, decision_input_profile="strict_adjusted")
     assert issue(strict) == "candle_ws_clock_invalid"
-    assert issue(stamp=now+1) == "candle_latest_completed_missing"
+    assert issue(stamp=now + 1) == "candle_latest_completed_missing"
     for field, value in (("source_epoch", 8), ("transport_epoch", 3)):
         altered = deepcopy(meta)
         altered["completed_bar_source"][field] = value
         assert issue(altered) == "candle_ws_provenance_invalid"
     stale_transport = deepcopy(meta)
-    stale_transport["completed_bar_source"]["transport_snapshot_generated_at_epoch"] = now-21
+    stale_transport["completed_bar_source"]["transport_snapshot_generated_at_epoch"] = (
+        now - 21
+    )
     assert issue(stale_transport) == "candle_ws_clock_invalid"
     unavailable = deepcopy(meta)
-    unavailable["completed_bar_source"]["latest_completed_bar"]["available_at_epoch"] = now+1
+    unavailable["completed_bar_source"]["latest_completed_bar"][
+        "available_at_epoch"
+    ] = (now + 1)
     assert issue(unavailable) == "candle_ws_clock_invalid"
     unsealed = deepcopy(meta)
     unsealed["completed_bar_source"]["watermark_epoch"] = close
     assert issue(unsealed) == "candle_ws_clock_invalid"
     future_watermark = deepcopy(meta)
-    future_watermark["completed_bar_source"]["watermark_epoch"] = now+60
+    future_watermark["completed_bar_source"]["watermark_epoch"] = now + 60
     assert issue(future_watermark) == "candle_ws_clock_invalid"
     old_bar_fresh_read = deepcopy(meta)
-    old_bar_fresh_read["completed_bar_source"]["transport_snapshot_generated_at_epoch"] = now+1
-    assert issue(old_bar_fresh_read, stamp=now+1) == "candle_latest_completed_missing"
+    old_bar_fresh_read["completed_bar_source"][
+        "transport_snapshot_generated_at_epoch"
+    ] = (now + 1)
+    assert issue(old_bar_fresh_read, stamp=now + 1) == "candle_latest_completed_missing"
 
 
 def test_probe_fetches_short_lived_ticks_after_slow_candle_source(monkeypatch):
     import src.engine.scalping.zero_base_probe as module
+
     monkeypatch.setattr(module, "resolve_entry_candle_session", lambda: "KRX_REGULAR")
     clock = [11.0]
     calls = []
@@ -1023,35 +1560,50 @@ def test_probe_fetches_short_lived_ticks_after_slow_candle_source(monkeypatch):
         subscribed_codes={"123456"},
         _registered_items_by_code={"123456": ("123456_AL",)},
         get_exact_item_data=lambda *_args: _snapshot(
-            route="krx_nxt_integrated", item="123456_AL", epoch=clock[0],
+            route="krx_nxt_integrated",
+            item="123456_AL",
+            epoch=clock[0],
         ),
     )
 
     def candle_fetcher(*_args, **_kwargs):
         calls.append("candle")
         clock[0] += 11
-        return ([{"close": 10000}], {
-            "request_code": "123456_AL",
-            "rest_received_ts_ms": int(clock[0] * 1000),
-        })
+        return (
+            [{"close": 10000}],
+            {
+                "request_code": "123456_AL",
+                "rest_received_ts_ms": int(clock[0] * 1000),
+            },
+        )
 
     def tick_fetcher(*_args, **_kwargs):
         calls.append("tick")
-        return [{
-            "request_code": "123456_AL",
-            "rest_received_ts_ms": int(clock[0] * 1000),
-        }]
+        return [
+            {
+                "request_code": "123456_AL",
+                "rest_received_ts_ms": int(clock[0] * 1000),
+            }
+        ]
 
     result = run_zero_base_probe(
-        {"claim": {"code": "123456", "route": "krx_nxt_integrated",
-                   "observed_epoch": 10},
-         "candidate": {"code": "123456", "route": "krx_nxt_integrated"}},
+        {
+            "claim": {
+                "code": "123456",
+                "route": "krx_nxt_integrated",
+                "observed_epoch": 10,
+            },
+            "candidate": {"code": "123456", "route": "krx_nxt_integrated"},
+        },
         ws_manager=ws,
-        ai_engine=SimpleNamespace(analyze_target=lambda *_args, **_kwargs: {
-            "machine_evaluation_status": "assessed",
-            "entry_mechanistic_action": "RECHECK",
-        }),
-        token="token", now=lambda: clock[0],
+        ai_engine=SimpleNamespace(
+            analyze_target=lambda *_args, **_kwargs: {
+                "machine_evaluation_status": "assessed",
+                "entry_mechanistic_action": "RECHECK",
+            }
+        ),
+        token="token",
+        now=lambda: clock[0],
         tick_fetcher=tick_fetcher,
         candle_fetcher=candle_fetcher,
         context_builder=lambda *_args, **_kwargs: {"ready": True},
@@ -1071,8 +1623,10 @@ def test_integrated_chart_waits_for_actual_route_before_shared_resolution(monkey
 
     epoch = datetime(2026, 10, 12, 10, 55, tzinfo=ZoneInfo("Asia/Seoul")).timestamp()
     exact = _snapshot(route="krx_nxt_integrated", item="123456_AL", epoch=epoch)
-    exact.update(last_realtime_type_ts={"0B": epoch, "0D": epoch},
-                 last_realtime_type_market_suffix={"0B": "_AL", "0D": "_AL"})
+    exact.update(
+        last_realtime_type_ts={"0B": epoch, "0D": epoch},
+        last_realtime_type_market_suffix={"0B": "_AL", "0D": "_AL"},
+    )
     reads = []
 
     def read(*args):
@@ -1081,30 +1635,50 @@ def test_integrated_chart_waits_for_actual_route_before_shared_resolution(monkey
 
     calls = []
     monkeypatch.setattr(module, "resolve_entry_candle_session", lambda: "krx_regular")
-    monkeypatch.setattr(shared_ws_snapshot, "selected_completed_bar_payload", lambda *a, **k: None)
+    monkeypatch.setattr(
+        shared_ws_snapshot, "selected_completed_bar_payload", lambda *a, **k: None
+    )
 
     def native_chart(_token, request_code, **kwargs):
         calls.append((request_code, kwargs))
         assert len(reads) >= 2
-        return [{"close": 10000}], {"request_code": request_code,
-                                   "rest_received_ts_ms": int(epoch * 1000)}
+        return [{"close": 10000}], {
+            "request_code": request_code,
+            "rest_received_ts_ms": int(epoch * 1000),
+        }
 
-    monkeypatch.setattr(module.kiwoom_utils,
-                        "get_minute_candles_ka10080_with_meta", native_chart)
-    ws = SimpleNamespace(subscribed_codes={"123456"},
-                         _registered_items_by_code={"123456": ("123456_AL",)},
-                         get_exact_item_data=read)
+    monkeypatch.setattr(
+        module.kiwoom_utils, "get_minute_candles_ka10080_with_meta", native_chart
+    )
+    ws = SimpleNamespace(
+        subscribed_codes={"123456"},
+        _registered_items_by_code={"123456": ("123456_AL",)},
+        get_exact_item_data=read,
+    )
     result = run_zero_base_probe(
-        {"claim": {"code": "123456", "route": "krx_nxt_integrated",
-                   "observed_epoch": epoch - 1},
-         "candidate": {"code": "123456", "route": "krx_nxt_integrated"}},
-        ws_manager=ws, ai_engine=SimpleNamespace(analyze_target=lambda *a, **k: {
-            "machine_evaluation_status": "assessed", "entry_mechanistic_action": "RECHECK"}),
-        token="token", now=lambda: epoch,
+        {
+            "claim": {
+                "code": "123456",
+                "route": "krx_nxt_integrated",
+                "observed_epoch": epoch - 1,
+            },
+            "candidate": {"code": "123456", "route": "krx_nxt_integrated"},
+        },
+        ws_manager=ws,
+        ai_engine=SimpleNamespace(
+            analyze_target=lambda *a, **k: {
+                "machine_evaluation_status": "assessed",
+                "entry_mechanistic_action": "RECHECK",
+            }
+        ),
+        token="token",
+        now=lambda: epoch,
         candle_fetcher=charts.fetch_entry_candles_with_meta,
-        tick_fetcher=lambda *a, **k: [{"request_code": "123456_AL",
-                                     "rest_received_ts_ms": int(epoch * 1000)}],
-        context_builder=lambda *a, **k: {"ready": True}, ws_wait_min_exact_0b_count=0,
+        tick_fetcher=lambda *a, **k: [
+            {"request_code": "123456_AL", "rest_received_ts_ms": int(epoch * 1000)}
+        ],
+        context_builder=lambda *a, **k: {"ready": True},
+        ws_wait_min_exact_0b_count=0,
     )
     assert [code for code, _ in calls] == ["123456_AL"]
     assert calls[0][1]["explicit_request_code"] is True
@@ -1112,15 +1686,22 @@ def test_integrated_chart_waits_for_actual_route_before_shared_resolution(monkey
 
 
 def test_missing_exact_ws_never_fetches_unbound_chart():
-    ws = SimpleNamespace(subscribed_codes={"123456"},
-                         get_latest_data=lambda *a: {})
+    ws = SimpleNamespace(subscribed_codes={"123456"}, get_latest_data=lambda *a: {})
     result = run_zero_base_probe(
-        {"claim": {"code": "123456", "route": "krx_only", "observed_epoch": 10},
-         "candidate": {"code": "123456", "route": "krx_only"}},
-        ws_manager=ws, ai_engine=object(), token="token", now=lambda: 11,
-        candle_fetcher=lambda *a, **k: pytest.fail("absent route cannot select a chart"),
+        {
+            "claim": {"code": "123456", "route": "krx_only", "observed_epoch": 10},
+            "candidate": {"code": "123456", "route": "krx_only"},
+        },
+        ws_manager=ws,
+        ai_engine=object(),
+        token="token",
+        now=lambda: 11,
+        candle_fetcher=lambda *a, **k: pytest.fail(
+            "absent route cannot select a chart"
+        ),
         tick_fetcher=lambda *a, **k: pytest.fail("absent route cannot select ticks"),
-        ws_wait_timeout_sec=0, ws_wait_empty_timeout_sec=0,
+        ws_wait_timeout_sec=0,
+        ws_wait_empty_timeout_sec=0,
     )
     assert result["result"] == "source_unavailable"
     assert result["reason"] == "route_snapshot_missing"
@@ -1128,12 +1709,21 @@ def test_missing_exact_ws_never_fetches_unbound_chart():
 
 def test_probe_uses_exact_ws_tick_when_rest_tick_history_is_empty(monkeypatch):
     import src.engine.scalping.zero_base_probe as module
+
     monkeypatch.setattr(module, "resolve_entry_candle_session", lambda: "KRX_REGULAR")
     snapshot = _snapshot(epoch=11)
-    snapshot["recent_trade_ticks_by_route"] = {"KRX|krx_only": [{
-        "item": "123456", "market_route": "krx_only", "transport_epoch": 3,
-        "received_at_ms": 11000, "price": 10000, "volume": 1,
-    }]}
+    snapshot["recent_trade_ticks_by_route"] = {
+        "KRX|krx_only": [
+            {
+                "item": "123456",
+                "market_route": "krx_only",
+                "transport_epoch": 3,
+                "received_at_ms": 11000,
+                "price": 10000,
+                "volume": 1,
+            }
+        ]
+    }
     ws = SimpleNamespace(
         subscribed_codes={"123456"},
         _registered_items_by_code={"123456": ("123456",)},
@@ -1141,16 +1731,24 @@ def test_probe_uses_exact_ws_tick_when_rest_tick_history_is_empty(monkeypatch):
         get_latest_data=lambda *_args, **_kwargs: snapshot,
     )
     received = []
-    machine = SimpleNamespace(analyze_target=lambda *args, **kwargs: (
-        received.append((args, kwargs)), {
-            "machine_evaluation_status": "assessed",
-            "entry_mechanistic_action": "BLOCK",
-        }
-    )[1])
+    machine = SimpleNamespace(
+        analyze_target=lambda *args, **kwargs: (
+            received.append((args, kwargs)),
+            {
+                "machine_evaluation_status": "assessed",
+                "entry_mechanistic_action": "BLOCK",
+            },
+        )[1]
+    )
     result = run_zero_base_probe(
-        {"claim": {"code": "123456", "route": "krx_only", "observed_epoch": 10},
-         "candidate": {"code": "123456", "route": "krx_only"}},
-        ws_manager=ws, ai_engine=machine, token="token", now=lambda: 11,
+        {
+            "claim": {"code": "123456", "route": "krx_only", "observed_epoch": 10},
+            "candidate": {"code": "123456", "route": "krx_only"},
+        },
+        ws_manager=ws,
+        ai_engine=machine,
+        token="token",
+        now=lambda: 11,
         tick_fetcher=lambda *_args, **_kwargs: [],
         candle_fetcher=lambda *_args, **_kwargs: (
             [{"close": 10000}],
@@ -1168,6 +1766,7 @@ def test_probe_uses_exact_ws_tick_when_rest_tick_history_is_empty(monkeypatch):
 def test_exact_probe_lease_reaches_machine_with_nx_beside_existing_al(monkeypatch):
     import src.engine.scalping.zero_base_probe as module
     from concurrent.futures import Future
+
     calls = []
     ws = SimpleNamespace(
         subscribed_codes={"123456"},
@@ -1175,8 +1774,11 @@ def test_exact_probe_lease_reaches_machine_with_nx_beside_existing_al(monkeypatc
         _registered_item_epochs={"123456_AL": 3},
         _registered_item_types={"123456_AL": ("0B", "0D")},
         _market_data_transport_epoch=3,
-        get_exact_item_data=lambda code, item: _snapshot(epoch=11, route="nxt_only", item="123456_NX"),
+        get_exact_item_data=lambda code, item: _snapshot(
+            epoch=11, route="nxt_only", item="123456_NX"
+        ),
     )
+
     def acquire(item, lease_id):
         assert item == "123456_NX"
         ws._registered_items_by_code["123456"] += (item,)
@@ -1186,22 +1788,45 @@ def test_exact_probe_lease_reaches_machine_with_nx_beside_existing_al(monkeypatc
         completion = Future()
         completion.set_result({"registered": True, "created": True, "item": item})
         return completion
+
     ws.execute_acquire_exact_probe_item = acquire
-    ws.execute_release_exact_probe_item = lambda item, lease_id: calls.append(("release", item, lease_id))
-    monkeypatch.setattr(module, "resolve_entry_candle_session", lambda: "LEGACY_PREMARKET")
-    monkeypatch.setattr(module, "resolve_entry_candle_request_code", lambda *a, **kw: "123456_NX")
-    engine = SimpleNamespace(analyze_target=lambda *a, **kw: (
-        calls.append(("machine", kw["machine_only"])),
-        {"machine_evaluation_status": "assessed", "entry_mechanistic_action": "BLOCK",
-         "mechanistic_entry_assessment": {"reason": "valid_source"}},
-    )[1])
+    ws.execute_release_exact_probe_item = lambda item, lease_id: calls.append(
+        ("release", item, lease_id)
+    )
+    monkeypatch.setattr(
+        module, "resolve_entry_candle_session", lambda: "LEGACY_PREMARKET"
+    )
+    monkeypatch.setattr(
+        module, "resolve_entry_candle_request_code", lambda *a, **kw: "123456_NX"
+    )
+    engine = SimpleNamespace(
+        analyze_target=lambda *a, **kw: (
+            calls.append(("machine", kw["machine_only"])),
+            {
+                "machine_evaluation_status": "assessed",
+                "entry_mechanistic_action": "BLOCK",
+                "mechanistic_entry_assessment": {"reason": "valid_source"},
+            },
+        )[1]
+    )
     result = run_zero_base_probe(
-        {"claim": {"code": "123456", "route": "nxt_only", "observed_epoch": 10},
-         "candidate": {"code": "123456", "route": "nxt_only"}},
-        ws_manager=ws, ai_engine=engine, token="test", now=lambda: 11, ws_lease_id="same-probe",
+        {
+            "claim": {"code": "123456", "route": "nxt_only", "observed_epoch": 10},
+            "candidate": {"code": "123456", "route": "nxt_only"},
+        },
+        ws_manager=ws,
+        ai_engine=engine,
+        token="test",
+        now=lambda: 11,
+        ws_lease_id="same-probe",
         ws_wait_min_exact_0b_count=0,
-        tick_fetcher=lambda *a, **kw: [{"request_code": "123456_NX", "rest_received_ts_ms": 11000}],
-        candle_fetcher=lambda *a, **kw: ([{"close": 10000}], {"request_code": "123456_NX", "rest_received_ts_ms": 11000}),
+        tick_fetcher=lambda *a, **kw: [
+            {"request_code": "123456_NX", "rest_received_ts_ms": 11000}
+        ],
+        candle_fetcher=lambda *a, **kw: (
+            [{"close": 10000}],
+            {"request_code": "123456_NX", "rest_received_ts_ms": 11000},
+        ),
         context_builder=lambda *a, **kw: {"ready": True},
     )
     assert result["result"] == "assessed" and result["machine_action"] == "BLOCK"
@@ -1214,24 +1839,39 @@ def test_exact_probe_lease_reaches_machine_with_nx_beside_existing_al(monkeypatc
 def test_exact_probe_late_registration_defers_only_lease_cleanup():
     from concurrent.futures import Future
     from concurrent.futures import TimeoutError
+
     cleanup = []
+
     class LateFuture(Future):
         def result(self, timeout=None):
             if timeout is not None:
                 raise TimeoutError()
             return super().result()
+
     completion = LateFuture()
     ws = SimpleNamespace(
-        subscribed_codes={"123456"}, _registered_items_by_code={"123456": ("123456_AL",)},
+        subscribed_codes={"123456"},
+        _registered_items_by_code={"123456": ("123456_AL",)},
         execute_acquire_exact_probe_item=lambda item, lease: completion,
-        execute_release_exact_probe_item=lambda item, lease: cleanup.append((item, lease)),
+        execute_release_exact_probe_item=lambda item, lease: cleanup.append(
+            (item, lease)
+        ),
     )
     result = run_zero_base_probe(
-        {"claim": {"code": "123456", "route": "nxt_only", "observed_epoch": 10},
-         "candidate": {"code": "123456", "route": "nxt_only"}},
-        ws_manager=ws, ai_engine=object(), token="test", now=lambda: 11, ws_lease_id="timed-out",
+        {
+            "claim": {"code": "123456", "route": "nxt_only", "observed_epoch": 10},
+            "candidate": {"code": "123456", "route": "nxt_only"},
+        },
+        ws_manager=ws,
+        ai_engine=object(),
+        token="test",
+        now=lambda: 11,
+        ws_lease_id="timed-out",
     )
-    assert result["reason"] == "ws_registration_timeout" and result["_ws_cleanup_deferred"] is True
+    assert (
+        result["reason"] == "ws_registration_timeout"
+        and result["_ws_cleanup_deferred"] is True
+    )
     assert not cleanup
     completion.set_result({"registered": True})
     assert cleanup == [("123456_NX", "timed-out")]
@@ -1257,19 +1897,33 @@ def _sent_registration_with_delayed_completion(monkeypatch):
     item, lease_id = "123456_AL", "same-probe"
     cleanup, source_waits = [], []
     ws = SimpleNamespace(
-        lock=threading.RLock(), _session_ready=ready, _stop_event=threading.Event(), websocket=object(),
-        _market_data_transport_epoch=3, subscribed_codes={"123456"},
+        lock=threading.RLock(),
+        _session_ready=ready,
+        _stop_event=threading.Event(),
+        websocket=object(),
+        _market_data_transport_epoch=3,
+        subscribed_codes={"123456"},
         _registered_items_by_code={"123456": (item,)},
-        _registered_item_epochs={item: 3}, _registered_item_types={item: ("0B", "0D")},
-        _exact_probe_item_leases={item: {"lease_id": lease_id, "epoch": 3,
-                                      "interval_started_epoch": 11.2}},
+        _registered_item_epochs={item: 3},
+        _registered_item_types={item: ("0B", "0D")},
+        _exact_probe_item_leases={
+            item: {"lease_id": lease_id, "epoch": 3, "interval_started_epoch": 11.2}
+        },
         _micro_reversion_observation_only_items={item},
-        _micro_reversion_registration_receipt={"items": {item: {
-            "source": "zero_base_exact_probe", "registration_transport_epoch": 3,
-            "registration_sent_at_epoch": 11.5}}},
+        _micro_reversion_registration_receipt={
+            "items": {
+                item: {
+                    "source": "zero_base_exact_probe",
+                    "registration_transport_epoch": 3,
+                    "registration_sent_at_epoch": 11.5,
+                }
+            }
+        },
         execute_acquire_exact_probe_item=lambda *a: completion,
         execute_release_exact_probe_item=lambda *a: cleanup.append(a),
-        get_exact_item_data=lambda *a: _snapshot(route="krx_nxt_integrated", item=item, epoch=15),
+        get_exact_item_data=lambda *a: _snapshot(
+            route="krx_nxt_integrated", item=item, epoch=15
+        ),
     )
 
     def wait_for_source(*args, **kwargs):
@@ -1278,81 +1932,169 @@ def _sent_registration_with_delayed_completion(monkeypatch):
 
     monkeypatch.setattr(module, "wait_for_exact_probe_ws_data", wait_for_source)
     monkeypatch.setattr(module, "resolve_entry_candle_session", lambda: "KRX_REGULAR")
-    request = {"claim": {"code": "123456", "route": "krx_nxt_integrated", "observed_epoch": 10},
-               "candidate": {"code": "123456", "route": "krx_nxt_integrated"}}
+    request = {
+        "claim": {
+            "code": "123456",
+            "route": "krx_nxt_integrated",
+            "observed_epoch": 10,
+        },
+        "candidate": {"code": "123456", "route": "krx_nxt_integrated"},
+    }
     return ws, request, clock, completion, cleanup, source_waits
 
 
 def test_sent_registration_survives_delayed_future_without_renewing_lease(monkeypatch):
-    ws, request, clock, completion, cleanup, waits = _sent_registration_with_delayed_completion(monkeypatch)
+    ws, request, clock, completion, cleanup, waits = (
+        _sent_registration_with_delayed_completion(monkeypatch)
+    )
     result = run_zero_base_probe(
-        request, ws_manager=ws, ai_engine=object(), token="test", now=lambda: clock[0],
-        ws_lease_id="same-probe", native_wait_deadline_epoch=160,
-        candle_fetcher=lambda *a, **kw: pytest.fail("no source must not call REST"))
+        request,
+        ws_manager=ws,
+        ai_engine=object(),
+        token="test",
+        now=lambda: clock[0],
+        ws_lease_id="same-probe",
+        native_wait_deadline_epoch=160,
+        candle_fetcher=lambda *a, **kw: pytest.fail("no source must not call REST"),
+    )
     assert result["reason"] == "0B_missing"
     assert len(waits) == 1 and waits[0]["after_epoch"] == 11.2
     assert waits[0]["residence_deadline_epoch"] == 160
-    assert result["ws_registration"]["registration_basis"] == "local_sent_registry_not_broker_ack"
+    assert (
+        result["ws_registration"]["registration_basis"]
+        == "local_sent_registry_not_broker_ack"
+    )
     assert result["actual_order_submitted"] is False
     assert cleanup == [("123456_AL", "same-probe")]
     completion.set_result({"registered": True})
     assert cleanup == [("123456_AL", "same-probe")]
 
 
-@pytest.mark.parametrize("damage", ["late_send", "lease", "epoch", "types", "missing_item",
-                                    "session", "stopped", "adopted", "removing", "expired",
-                                    "corrupt_lease", "corrupt_proof", "bool_epoch", "future_send",
-                                    "source", "not_observation_only", "lock_busy"])
-def test_delayed_registration_without_timely_exact_ownership_keeps_timeout(monkeypatch, damage):
-    ws, request, clock, completion, cleanup, waits = _sent_registration_with_delayed_completion(monkeypatch)
+@pytest.mark.parametrize(
+    "damage",
+    [
+        "late_send",
+        "lease",
+        "epoch",
+        "types",
+        "missing_item",
+        "session",
+        "stopped",
+        "adopted",
+        "removing",
+        "expired",
+        "corrupt_lease",
+        "corrupt_proof",
+        "bool_epoch",
+        "future_send",
+        "source",
+        "not_observation_only",
+        "lock_busy",
+    ],
+)
+def test_delayed_registration_without_timely_exact_ownership_keeps_timeout(
+    monkeypatch, damage
+):
+    ws, request, clock, completion, cleanup, waits = (
+        _sent_registration_with_delayed_completion(monkeypatch)
+    )
     item = "123456_AL"
     deadline = 160
     if damage == "late_send":
-        ws._micro_reversion_registration_receipt['items'][item]['registration_sent_at_epoch'] = 14.1
-    elif damage == "lease": ws._exact_probe_item_leases[item]['lease_id'] = 'successor'
-    elif damage == "epoch": ws._registered_item_epochs[item] = 2
-    elif damage == "types": ws._registered_item_types[item] = ('0B',)
-    elif damage == "missing_item": ws._registered_items_by_code.clear()
-    elif damage == "session": ws._session_ready.clear()
-    elif damage == "stopped": ws._stop_event.set()
-    elif damage == "adopted": ws._exact_probe_item_leases[item]['adopted'] = True
-    elif damage == "removing": ws._exact_probe_item_leases[item]['removing'] = True
-    elif damage == "expired": deadline = 14
-    elif damage == "corrupt_lease": ws._exact_probe_item_leases[item] = ['invalid']
-    elif damage == "corrupt_proof": ws._micro_reversion_registration_receipt['items'][item] = ['invalid']
-    elif damage == "bool_epoch": ws._registered_item_epochs[item] = True
+        ws._micro_reversion_registration_receipt["items"][item][
+            "registration_sent_at_epoch"
+        ] = 14.1
+    elif damage == "lease":
+        ws._exact_probe_item_leases[item]["lease_id"] = "successor"
+    elif damage == "epoch":
+        ws._registered_item_epochs[item] = 2
+    elif damage == "types":
+        ws._registered_item_types[item] = ("0B",)
+    elif damage == "missing_item":
+        ws._registered_items_by_code.clear()
+    elif damage == "session":
+        ws._session_ready.clear()
+    elif damage == "stopped":
+        ws._stop_event.set()
+    elif damage == "adopted":
+        ws._exact_probe_item_leases[item]["adopted"] = True
+    elif damage == "removing":
+        ws._exact_probe_item_leases[item]["removing"] = True
+    elif damage == "expired":
+        deadline = 14
+    elif damage == "corrupt_lease":
+        ws._exact_probe_item_leases[item] = ["invalid"]
+    elif damage == "corrupt_proof":
+        ws._micro_reversion_registration_receipt["items"][item] = ["invalid"]
+    elif damage == "bool_epoch":
+        ws._registered_item_epochs[item] = True
     elif damage == "future_send":
-        ws._micro_reversion_registration_receipt['items'][item]['registration_sent_at_epoch'] = 20
-    elif damage == "source": ws._micro_reversion_registration_receipt['items'][item]['source'] = 'main_fixed_watch'
-    elif damage == "not_observation_only": ws._micro_reversion_observation_only_items.clear()
+        ws._micro_reversion_registration_receipt["items"][item][
+            "registration_sent_at_epoch"
+        ] = 20
+    elif damage == "source":
+        ws._micro_reversion_registration_receipt["items"][item][
+            "source"
+        ] = "main_fixed_watch"
+    elif damage == "not_observation_only":
+        ws._micro_reversion_observation_only_items.clear()
     elif damage == "lock_busy":
         import threading
+
         ws.lock = threading.Lock()
         ws.lock.acquire()
     result = run_zero_base_probe(
-        request, ws_manager=ws, ai_engine=object(), token='test', now=lambda: clock[0],
-        ws_lease_id='same-probe', native_wait_deadline_epoch=deadline)
-    assert result['reason'] == 'ws_registration_timeout' and result['_ws_cleanup_deferred']
+        request,
+        ws_manager=ws,
+        ai_engine=object(),
+        token="test",
+        now=lambda: clock[0],
+        ws_lease_id="same-probe",
+        native_wait_deadline_epoch=deadline,
+    )
+    assert (
+        result["reason"] == "ws_registration_timeout" and result["_ws_cleanup_deferred"]
+    )
     assert not waits and not cleanup
-    if damage == 'lock_busy': ws.lock.release()
-    completion.set_result({'registered': True})
-    assert cleanup == [(item, 'same-probe')]
+    if damage == "lock_busy":
+        ws.lock.release()
+    completion.set_result({"registered": True})
+    assert cleanup == [(item, "same-probe")]
 
 
 def test_bound_server_rejection_ends_original_probe_without_source_or_machine_calls():
     cleanup = []
     future = Future()
-    future.set_result({'registered': True, 'server_registration_rejected': True,
-                       'reason': 'exact_probe_registration_rejected'})
-    ws = SimpleNamespace(subscribed_codes=set(), _registered_items_by_code={},
+    future.set_result(
+        {
+            "registered": True,
+            "server_registration_rejected": True,
+            "reason": "exact_probe_registration_rejected",
+        }
+    )
+    ws = SimpleNamespace(
+        subscribed_codes=set(),
+        _registered_items_by_code={},
         execute_acquire_exact_probe_item=lambda item, lease: future,
-        execute_release_exact_probe_item=lambda item, lease: cleanup.append((item, lease)))
+        execute_release_exact_probe_item=lambda item, lease: cleanup.append(
+            (item, lease)
+        ),
+    )
     result = run_zero_base_probe(
-        {'claim': {'code': '123456', 'route': 'nxt_only', 'observed_epoch': 10},
-         'candidate': {'code': '123456', 'route': 'nxt_only'}},
-        ws_manager=ws, ai_engine=object(), token='fixture', now=lambda: 11, ws_lease_id='rejected',
-        candle_fetcher=lambda *a, **k: pytest.fail('rejected registration must not fetch REST'))
-    assert result['reason'] == 'exact_probe_registration_rejected'
-    assert result['ws_registration']['registered'] is True
-    assert result['actual_order_submitted'] is False
-    assert cleanup == [('123456_NX', 'rejected')]
+        {
+            "claim": {"code": "123456", "route": "nxt_only", "observed_epoch": 10},
+            "candidate": {"code": "123456", "route": "nxt_only"},
+        },
+        ws_manager=ws,
+        ai_engine=object(),
+        token="fixture",
+        now=lambda: 11,
+        ws_lease_id="rejected",
+        candle_fetcher=lambda *a, **k: pytest.fail(
+            "rejected registration must not fetch REST"
+        ),
+    )
+    assert result["reason"] == "exact_probe_registration_rejected"
+    assert result["ws_registration"]["registered"] is True
+    assert result["actual_order_submitted"] is False
+    assert cleanup == [("123456_NX", "rejected")]

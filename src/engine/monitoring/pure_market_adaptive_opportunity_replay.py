@@ -5972,8 +5972,6 @@ def _fixed_tp_split_walk_forward(
     }
 
 
-
-
 def _equal_share_carry_path_diagnostics(
     trades: Sequence[dict[str, Any]],
 ) -> dict[str, Any]:
@@ -6073,10 +6071,6 @@ def _equal_share_carry_path_diagnostics(
             row.get("right_censored_terminal_mark_pct") for row in censored
         ],
     }
-
-
-
-
 
 
 def _fixed_tp_entry_quality_features(trade: dict[str, Any]) -> list[float]:

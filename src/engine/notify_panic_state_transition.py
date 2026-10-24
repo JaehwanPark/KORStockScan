@@ -486,10 +486,7 @@ def _market_weakness_message(observation: dict, transition: str, state: dict) ->
         [
             title,
             body,
-            (
-                "- 관찰 시장: "
-                + (", ".join(active_markets) or "해제/확인중")
-            ),
+            ("- 관찰 시장: " + (", ".join(active_markets) or "해제/확인중")),
             f"- 지수: KOSPI {_fmt_pct(indices.get('KOSPI'))} / KOSDAQ {_fmt_pct(indices.get('KOSDAQ'))}",
             (
                 "- breadth: 업종 하락 "
@@ -711,7 +708,10 @@ def _notify_market_weakness_from_report(
             _write_state(state_file, state)
         pending_status = (
             _deliver_market_weakness_pending(
-                state, state_file=state_file, audience=audience, now=now,
+                state,
+                state_file=state_file,
+                audience=audience,
+                now=now,
                 observation=observation,
             )
             if notification_enabled
@@ -742,7 +742,10 @@ def _notify_market_weakness_from_report(
             return "source_quality_blocked"
         pending_status = (
             _deliver_market_weakness_pending(
-                state, state_file=state_file, audience=audience, now=now,
+                state,
+                state_file=state_file,
+                audience=audience,
+                now=now,
                 observation=observation,
             )
             if notification_enabled
@@ -905,7 +908,10 @@ def _notify_market_weakness_from_report(
     if not notification_enabled:
         return "state_updated_notify_disabled"
     pending_status = _deliver_market_weakness_pending(
-        state, state_file=state_file, audience=audience, now=now,
+        state,
+        state_file=state_file,
+        audience=audience,
+        now=now,
         observation=observation,
     )
     if pending_status is not None:

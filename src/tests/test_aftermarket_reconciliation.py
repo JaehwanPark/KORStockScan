@@ -8,11 +8,12 @@ from src.trading.order.aftermarket_reconciliation import (
     reconcile_aftermarket_boundary,
 )
 
-
 INTENT_HASH = "a" * 64
 
 
-def _binding(order_no: str, route: str, qty: int, **kwargs: object) -> ChildOrderBinding:
+def _binding(
+    order_no: str, route: str, qty: int, **kwargs: object
+) -> ChildOrderBinding:
     return ChildOrderBinding(
         broker_order_no=order_no,
         original_order_no=str(kwargs.get("original_order_no", "")),
@@ -22,7 +23,9 @@ def _binding(order_no: str, route: str, qty: int, **kwargs: object) -> ChildOrde
     )
 
 
-def _intent(route: str, qty: int, children: tuple[ChildOrderBinding, ...]) -> DurableParentIntent:
+def _intent(
+    route: str, qty: int, children: tuple[ChildOrderBinding, ...]
+) -> DurableParentIntent:
     return DurableParentIntent(
         intent_id="intent-1",
         account_key="account-a",
@@ -70,7 +73,17 @@ def test_krx_terminal_cancel_releases_only_conserved_quantity() -> None:
     child = _binding("1000001", "KRX", 10, cancel_order_no="2000001")
     result = reconcile_aftermarket_boundary(
         _intent("KRX", 10, (child,)),
-        [_evidence(child, "kt00007", filled=4, canceled=6, remaining=0, state="TERMINAL", hash_char="b")],
+        [
+            _evidence(
+                child,
+                "kt00007",
+                filled=4,
+                canceled=6,
+                remaining=0,
+                state="TERMINAL",
+                hash_char="b",
+            )
+        ],
         [],
         current_snapshot_complete=True,
     )
@@ -80,15 +93,23 @@ def test_krx_terminal_cancel_releases_only_conserved_quantity() -> None:
     assert result.intent_sha256 == INTENT_HASH
     assert result.parent_order_no == "9000001"
     assert result.source_sha256s == ("b" * 64,)
-    assert (result.filled_qty, result.confirmed_cancel_qty, result.broker_remaining_qty) == (4, 6, 0)
+    assert (
+        result.filled_qty,
+        result.confirmed_cancel_qty,
+        result.broker_remaining_qty,
+    ) == (4, 6, 0)
     assert result.releasable_qty == 6
     assert result.successor_blocked is False
 
 
 def test_nxt_open_child_blocks_successor_and_preserves_remaining() -> None:
     child = _binding("1000002", "NXT", 10)
-    dated = _evidence(child, "kt00007", filled=3, canceled=0, remaining=7, state="OPEN", hash_char="c")
-    current = _evidence(child, "ka10075", filled=3, canceled=0, remaining=7, state="OPEN", hash_char="d")
+    dated = _evidence(
+        child, "kt00007", filled=3, canceled=0, remaining=7, state="OPEN", hash_char="c"
+    )
+    current = _evidence(
+        child, "ka10075", filled=3, canceled=0, remaining=7, state="OPEN", hash_char="d"
+    )
     result = reconcile_aftermarket_boundary(
         _intent("NXT", 10, (child,)),
         [dated],
@@ -110,10 +131,36 @@ def test_sor_parent_is_not_terminal_when_krx_closes_but_nxt_is_open() -> None:
     result = reconcile_aftermarket_boundary(
         _intent("SOR", 10, (krx, nxt)),
         [
-            _evidence(krx, "kt00007", filled=4, canceled=0, remaining=0, state="TERMINAL", hash_char="e"),
-            _evidence(nxt, "kt00007", filled=0, canceled=0, remaining=6, state="OPEN", hash_char="f"),
+            _evidence(
+                krx,
+                "kt00007",
+                filled=4,
+                canceled=0,
+                remaining=0,
+                state="TERMINAL",
+                hash_char="e",
+            ),
+            _evidence(
+                nxt,
+                "kt00007",
+                filled=0,
+                canceled=0,
+                remaining=6,
+                state="OPEN",
+                hash_char="f",
+            ),
         ],
-        [_evidence(nxt, "ka10075", filled=0, canceled=0, remaining=6, state="OPEN", hash_char="1")],
+        [
+            _evidence(
+                nxt,
+                "ka10075",
+                filled=0,
+                canceled=0,
+                remaining=6,
+                state="OPEN",
+                hash_char="1",
+            )
+        ],
         current_snapshot_complete=True,
     )
 
@@ -127,7 +174,17 @@ def test_partial_cancel_quantity_mismatch_fails_closed() -> None:
     child = _binding("1000005", "KRX", 10, cancel_order_no="2000005")
     result = reconcile_aftermarket_boundary(
         _intent("KRX", 10, (child,)),
-        [_evidence(child, "kt00007", filled=4, canceled=5, remaining=0, state="TERMINAL", hash_char="2")],
+        [
+            _evidence(
+                child,
+                "kt00007",
+                filled=4,
+                canceled=5,
+                remaining=0,
+                state="TERMINAL",
+                hash_char="2",
+            )
+        ],
         [],
         current_snapshot_complete=True,
     )
@@ -140,7 +197,9 @@ def test_partial_cancel_quantity_mismatch_fails_closed() -> None:
 
 def test_empty_incomplete_page_and_ack_cannot_prove_terminal() -> None:
     child = _binding("1000006", "KRX", 1)
-    ack = _evidence(child, "kt00007", filled=0, canceled=1, remaining=0, state="ACK", hash_char="3")
+    ack = _evidence(
+        child, "kt00007", filled=0, canceled=1, remaining=0, state="ACK", hash_char="3"
+    )
     ack = replace(ack, cancel_order_no="2000006")
     intent = _intent("KRX", 1, (replace(child, cancel_order_no="2000006"),))
     result = reconcile_aftermarket_boundary(
@@ -158,8 +217,12 @@ def test_empty_incomplete_page_and_ack_cannot_prove_terminal() -> None:
 
 def test_restart_requires_exact_durable_intent_hash() -> None:
     child = _binding("1000007", "NXT", 2)
-    dated = _evidence(child, "kt00007", filled=1, canceled=0, remaining=1, state="OPEN", hash_char="4")
-    current = _evidence(child, "ka10075", filled=1, canceled=0, remaining=1, state="OPEN", hash_char="5")
+    dated = _evidence(
+        child, "kt00007", filled=1, canceled=0, remaining=1, state="OPEN", hash_char="4"
+    )
+    current = _evidence(
+        child, "ka10075", filled=1, canceled=0, remaining=1, state="OPEN", hash_char="5"
+    )
     intent = _intent("NXT", 2, (child,))
 
     blocked = reconcile_aftermarket_boundary(
@@ -186,7 +249,15 @@ def test_restart_requires_exact_durable_intent_hash() -> None:
 
 def test_cancel_and_route_identity_must_match_explicit_binding() -> None:
     child = _binding("1000008", "KRX", 3, cancel_order_no="2000008")
-    wrong = _evidence(child, "kt00007", filled=0, canceled=3, remaining=0, state="TERMINAL", hash_char="6")
+    wrong = _evidence(
+        child,
+        "kt00007",
+        filled=0,
+        canceled=3,
+        remaining=0,
+        state="TERMINAL",
+        hash_char="6",
+    )
     wrong = replace(
         wrong,
         account_key="account-b",

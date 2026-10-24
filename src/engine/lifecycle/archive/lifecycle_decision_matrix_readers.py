@@ -33,7 +33,6 @@ from typing import Any, Iterable
 
 from src.utils.constants import DATA_DIR
 
-
 REPORT_DIR = DATA_DIR / "report"
 
 
@@ -64,7 +63,6 @@ from src.engine.lifecycle.archive.scale_in_incremental_counterfactual_readers im
     RUNTIME_AUTHORITY_METHOD as SCALE_IN_RUNTIME_AUTHORITY_METHOD,
     report_paths as cf_report_paths,
 )
-
 
 MATRIX_DIR = REPORT_DIR / "lifecycle_decision_matrix"
 
@@ -3055,9 +3053,7 @@ def _submit_bucket_row(
     source_quality = (
         "source_quality_blocker"
         if unknown_bucket
-        else "pass"
-        if len(rows) >= SUBMIT_BUCKET_SAMPLE_FLOOR
-        else "hold_sample"
+        else "pass" if len(rows) >= SUBMIT_BUCKET_SAMPLE_FLOOR else "hold_sample"
     )
     unknown_context = _unknown_taxonomy_context(
         bucket_type=bucket_type,
@@ -5362,9 +5358,7 @@ def _flow_record(
     scale_in_applicability = (
         "applied"
         if "applied" in scale_in_states
-        else "considered_not_applied"
-        if scale_in_rows
-        else "not_applicable"
+        else "considered_not_applied" if scale_in_rows else "not_applicable"
     )
     complete = all(stage_presence[stage] for stage in LIFECYCLE_FLOW_REQUIRED_STAGES)
     ev = _flow_ev(by_stage)
@@ -5426,9 +5420,7 @@ def _flow_record(
             else (
                 "real"
                 if real_flow and joined_flow
-                else "sim_probe"
-                if joined_flow
-                else "none"
+                else "sim_probe" if joined_flow else "none"
             )
         ),
     }
@@ -5497,9 +5489,7 @@ def _flow_record(
             1.0
             if _safe_float(labels.get("profit_rate"), None)
             and _safe_float(labels.get("profit_rate"), 0.0) > 0
-            else 0.0
-            if labels.get("profit_rate") is not None
-            else None
+            else 0.0 if labels.get("profit_rate") is not None else None
         ),
         "outcome_state": (
             "completed" if exit_row and ev is not None else "open_or_unjoined"

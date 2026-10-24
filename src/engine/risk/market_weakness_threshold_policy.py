@@ -104,7 +104,9 @@ def threshold_recommendation_review_hash(
 
 
 def validate_threshold_recommendation(
-    recommendation: Any, *, allow_retired_history: bool = False,
+    recommendation: Any,
+    *,
+    allow_retired_history: bool = False,
 ) -> tuple[bool, str]:
     if not isinstance(recommendation, Mapping):
         return False, "market_weakness_policy_recommendation_missing"
@@ -247,8 +249,12 @@ def validate_threshold_recommendation(
         }
         # Preserve previously approved, hash-bound reviews. New generations
         # never require or admit the retired owner stratum.
-        if (allow_retired_history and str(recommendation.get("window_end") or "") < "2026-10-06"
-            and isinstance(stratum_guards, Mapping) and "owner:widget" in stratum_guards):
+        if (
+            allow_retired_history
+            and str(recommendation.get("window_end") or "") < "2026-10-06"
+            and isinstance(stratum_guards, Mapping)
+            and "owner:widget" in stratum_guards
+        ):
             required_strata.add("owner:widget")
         stratum_guards_valid = (
             isinstance(stratum_guards, Mapping)
@@ -321,15 +327,19 @@ def validate_threshold_recommendation(
         ):
             return False, "market_weakness_policy_economic_review_invalid"
     if str(recommendation.get("window_end") or "") >= "2026-09-17":
-        if (
-            recommendation.get("selection_window")
-            != "calibration_only_single_holdout_no_fallback"
-            or (isinstance(selected, Mapping) and (
+        if recommendation.get(
+            "selection_window"
+        ) != "calibration_only_single_holdout_no_fallback" or (
+            isinstance(selected, Mapping)
+            and (
                 selected.get("candidate_key")
                 != recommendation.get("calibration_selected_candidate_key")
-            ))
+            )
         ):
-            return False, "market_weakness_policy_calibration_selection_missing_or_mismatched"
+            return (
+                False,
+                "market_weakness_policy_calibration_selection_missing_or_mismatched",
+            )
     review_hash = recommendation.get("review_hash")
     if (
         not isinstance(review_hash, str)
@@ -433,7 +443,9 @@ def validate_applied_policy(payload: Any, *, target_date: date) -> tuple[bool, s
         return False, "market_weakness_policy_target_date_not_trading_day"
     try:
         source_date = date.fromisoformat(str(payload.get("source_date") or ""))
-        publication_date = date.fromisoformat(str(payload.get("publication_date") or source_date))
+        publication_date = date.fromisoformat(
+            str(payload.get("publication_date") or source_date)
+        )
     except ValueError:
         return False, "market_weakness_policy_source_date_invalid"
     if (
@@ -579,7 +591,8 @@ def load_applied_policy(
         not isinstance(source_payload, dict)
         or source_payload.get("schema") != SOURCE_SNAPSHOT_SCHEMA
         or source_payload.get("source_date") != source_date.isoformat()
-        or source_payload.get("publication_date", str(source_date)) != payload.get("publication_date", str(source_date))
+        or source_payload.get("publication_date", str(source_date))
+        != payload.get("publication_date", str(source_date))
         or source_payload.get("source_origin_report")
         != payload.get("source_origin_report")
         or source_payload.get("source_origin_report_canonical_sha256")

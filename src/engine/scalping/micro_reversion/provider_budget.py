@@ -994,14 +994,10 @@ class ProviderBudgetLedger:
             "ledger_bytes_sha256": hashlib.sha256(state.ledger_bytes).hexdigest(),
             "budget_contract_sha256": self._budget_contract_sha256,
             "pricing_artifact_id": self.pricing.artifact_id,
-            "pricing_artifact_content_sha256": (
-                self.pricing.artifact_content_sha256
-            ),
+            "pricing_artifact_content_sha256": (self.pricing.artifact_content_sha256),
             "pricing_artifact_file_sha256": self.pricing.artifact_file_sha256,
             "pricing_basis": self.pricing.pricing_basis,
-            "raw_pricing_source_bytes_sha256": (
-                self.pricing.raw_source_bytes_sha256
-            ),
+            "raw_pricing_source_bytes_sha256": (self.pricing.raw_source_bytes_sha256),
             "raw_pricing_source_path": str(self.pricing.raw_source_path),
             "raw_pricing_source_size_bytes": self.pricing.raw_source_size_bytes,
             "pricing_effective_from": self.pricing.effective_from.isoformat(),

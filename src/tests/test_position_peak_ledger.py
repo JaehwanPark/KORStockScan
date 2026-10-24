@@ -84,20 +84,29 @@ def test_trailing_arm_is_durable_for_same_cycle_and_add_cost_basis(tmp_path):
     stock = _dongyang_stock()
     ledger.record(stock, peak_price=1140, observed_at=1.0, reason="peak")
     armed = ledger.record_trailing_arm(
-        stock, observed_at=2.0, market="REGULAR",
-        start_pct=0.6, policy_sha256="policy-hash",
+        stock,
+        observed_at=2.0,
+        market="REGULAR",
+        start_pct=0.6,
+        policy_sha256="policy-hash",
     )
     assert armed["trailing_arm_at_epoch"] == 2.0
     ledger.record(stock, peak_price=1150, observed_at=3.0, reason="higher_peak")
     assert ledger.get_for_stock(_dongyang_stock())["trailing_arm_market"] == "REGULAR"
     new_basis = _dongyang_stock(buy_price=1130)
     ledger.record(new_basis, peak_price=1150, observed_at=4.0, reason="scale_in")
-    assert ledger.get_for_stock(new_basis)['trailing_arm_at_epoch'] == 2.0
+    assert ledger.get_for_stock(new_basis)["trailing_arm_at_epoch"] == 2.0
     different_cycle = _dongyang_stock(id=118)
-    assert ledger.record_trailing_arm(
-        different_cycle, observed_at=5.0, market="REGULAR",
-        start_pct=0.6, policy_sha256="policy-hash",
-    ) is None
+    assert (
+        ledger.record_trailing_arm(
+            different_cycle,
+            observed_at=5.0,
+            market="REGULAR",
+            start_pct=0.6,
+            policy_sha256="policy-hash",
+        )
+        is None
+    )
 
 
 def test_simulated_scalp_never_writes_real_peak_ledger(monkeypatch):

@@ -559,9 +559,9 @@ def test_machine_capture_matures_with_existing_cost_owner_without_ai(
         "load_pipeline_price_and_lifecycle_rows",
         lambda *args, **kwargs: (prices, []),
     )
-    if missing == 'path':
+    if missing == "path":
         prices.clear()
-    if missing == 'cost':
+    if missing == "cost":
         profile.clear()
     capture = trace.capture_machine_observation(
         exact_payload={
@@ -570,13 +570,17 @@ def test_machine_capture_matures_with_existing_cost_owner_without_ai(
             "best_ask": 10000,
             "effective_venue": "KRX",
             "session_bucket": "KRX_REGULAR",
-            "snapshot_id": "snapshot-cost-owner", "broker_route": "KRX",
+            "snapshot_id": "snapshot-cost-owner",
+            "broker_route": "KRX",
             "market_data_route": "krx_only",
             "ai_market_snapshot_v1": {
-                "stock_code": "005930", "effective_venue": "KRX",
+                "stock_code": "005930",
+                "effective_venue": "KRX",
                 "session_bucket": "KRX_REGULAR",
-                "snapshot_id": "snapshot-cost-owner", "broker_route": "KRX",
-                "market_data_route": "krx_only"},
+                "snapshot_id": "snapshot-cost-owner",
+                "broker_route": "KRX",
+                "market_data_route": "krx_only",
+            },
             "conservative_execution_cost_pct": 0.02,
         },
         setup_evidence=setup,
@@ -584,12 +588,18 @@ def test_machine_capture_matures_with_existing_cost_owner_without_ai(
         bundle_sha256="b" * 64,
     )
     assert capture["machine_capture_status"] == "captured"
-    monkeypatch.setattr(calibration, '_machine_ai_trace_index', lambda *a: pytest.fail('independent machine joined AI'))
-    rows, census = calibration.load_machine_observation_rows(tmp_path, target_date=day, independent_machine=True)
+    monkeypatch.setattr(
+        calibration,
+        "_machine_ai_trace_index",
+        lambda *a: pytest.fail("independent machine joined AI"),
+    )
+    rows, census = calibration.load_machine_observation_rows(
+        tmp_path, target_date=day, independent_machine=True
+    )
     assert census["captured"] == 1
     if missing:
-        assert census['retained_without_economic_outcome'] == 1
-        assert len(rows) == 1 and rows[0]['entry_quality_contract_valid'] is False
+        assert census["retained_without_economic_outcome"] == 1
+        assert len(rows) == 1 and rows[0]["entry_quality_contract_valid"] is False
         assert calibration._machine_path_value(rows[0])[0] is None
         return
     assert census["evaluable"] == 1
@@ -619,45 +629,81 @@ def test_machine_nonentry_completed_bars_survive_probe_ws_removal_and_cache(
     day = "2026-09-29"
     now = datetime.fromisoformat(day + "T10:00:00+09:00")
     monkeypatch.setattr(trace, "_now", lambda: now)
-    monkeypatch.setattr(calibration, "_hierarchy_cost_profiles", lambda *_args: {
-        "005930": {"profile_id": "reviewed", "economic_source_sha256": "a" * 64,
-                   "buy_fee_bps": 1, "sell_fee_bps": 1,
-                   "statutory_sell_tax_bps": 15, "uncertainty_buffer_bps": 1},
-    })
+    monkeypatch.setattr(
+        calibration,
+        "_hierarchy_cost_profiles",
+        lambda *_args: {
+            "005930": {
+                "profile_id": "reviewed",
+                "economic_source_sha256": "a" * 64,
+                "buy_fee_bps": 1,
+                "sell_fee_bps": 1,
+                "statutory_sell_tax_bps": 15,
+                "uncertainty_buffer_bps": 1,
+            },
+        },
+    )
     from src.engine.scalping import ai_decision_quality as quality
-    monkeypatch.setattr(quality, "load_pipeline_price_and_lifecycle_rows",
-                        lambda *_args, **_kwargs: ([], []))
+
+    monkeypatch.setattr(
+        quality,
+        "load_pipeline_price_and_lifecycle_rows",
+        lambda *_args, **_kwargs: ([], []),
+    )
     capture = trace.capture_machine_observation(
         exact_payload={
-            "stock_code": "005930", "best_ask": 10000,
-            "snapshot_id": "snapshot-1", "effective_venue": "KRX",
-            "session_bucket": "KRX_REGULAR", "broker_route": "SOR",
+            "stock_code": "005930",
+            "best_ask": 10000,
+            "snapshot_id": "snapshot-1",
+            "effective_venue": "KRX",
+            "session_bucket": "KRX_REGULAR",
+            "broker_route": "SOR",
             "market_data_route": "krx_nxt_integrated",
             "ai_market_snapshot_v1": {
-                "stock_code": "005930", "effective_venue": "KRX",
+                "stock_code": "005930",
+                "effective_venue": "KRX",
                 "session_bucket": "KRX_REGULAR",
-                "snapshot_id": "snapshot-1", "broker_route": "SOR",
-                "market_data_route": "krx_nxt_integrated"},
+                "snapshot_id": "snapshot-1",
+                "broker_route": "SOR",
+                "market_data_route": "krx_nxt_integrated",
+            },
             "conservative_execution_cost_pct": 0.02,
         },
         setup_evidence=_hierarchy_case()[0],
-        assessment={"action": "RECHECK"}, bundle_sha256="b" * 64,
-        metadata={"source_event_stage": "zero_base_probe_machine_only_v1",
-                  "zero_base_source_sha256": "c" * 64,
-                  "zero_base_route": "krx_nxt_integrated"},
+        assessment={"action": "RECHECK"},
+        bundle_sha256="b" * 64,
+        metadata={
+            "source_event_stage": "zero_base_probe_machine_only_v1",
+            "zero_base_source_sha256": "c" * 64,
+            "zero_base_route": "krx_nxt_integrated",
+        },
     )
     assert capture["machine_capture_status"] == "captured"
     calls = []
+
     def fetcher(code, request_code):
         calls.append((code, request_code))
-        return ([{"source_timestamp": day.replace("-", "") + f"10{i:02d}00",
-                  "현재가": 10050, "고가": 10055, "저가": 10000}
-                 for i in range(1, 11)], {"api_id": "ka10080",
-                                            "request_code": request_code,
-                                            "request_base_dt": day.replace("-", "")})
+        return (
+            [
+                {
+                    "source_timestamp": day.replace("-", "") + f"10{i:02d}00",
+                    "현재가": 10050,
+                    "고가": 10055,
+                    "저가": 10000,
+                }
+                for i in range(1, 11)
+            ],
+            {
+                "api_id": "ka10080",
+                "request_code": request_code,
+                "request_base_dt": day.replace("-", ""),
+            },
+        )
 
     rows, census = calibration.load_machine_observation_rows(
-        tmp_path, target_date=day, independent_machine=True,
+        tmp_path,
+        target_date=day,
+        independent_machine=True,
         completed_price_fetcher=fetcher,
         completed_price_as_of=datetime.fromisoformat(day + "T20:10:00+09:00"),
     )
@@ -673,11 +719,16 @@ def test_machine_nonentry_completed_bars_survive_probe_ws_removal_and_cache(
     assert rows[0]["outcome_stop_owner"] == "fixed_counterfactual_entry_boundary"
     assert rows[0]["outcome_stop_distance_pct"] == quality.ENTRY_PATH_ADVERSE_PCT
     assert rows[0]["entry_quality_contract_valid"] is True
-    cache = (tmp_path / "report/machine_completed_price_source"
-             / f"machine_completed_price_source_{day}.json")
+    cache = (
+        tmp_path
+        / "report/machine_completed_price_source"
+        / f"machine_completed_price_source_{day}.json"
+    )
     assert cache.is_file()
     again, census_again = calibration.load_machine_observation_rows(
-        tmp_path, target_date=day, independent_machine=True,
+        tmp_path,
+        target_date=day,
+        independent_machine=True,
         completed_price_fetcher=lambda *_args: pytest.fail("cache not reused"),
         completed_price_as_of=datetime.fromisoformat(day + "T20:11:00+09:00"),
     )
@@ -688,59 +739,111 @@ def test_machine_nonentry_completed_bars_survive_probe_ws_removal_and_cache(
     with archive.open("a") as handle:
         handle.write(original_line + "\n")
     deduped, dedupe_census = calibration.load_machine_observation_rows(
-        tmp_path, target_date=day, independent_machine=True,
+        tmp_path,
+        target_date=day,
+        independent_machine=True,
     )
     assert dedupe_census["duplicate_machine_capture_collapsed"] == 1
     assert len(deduped) == 1
     assert dedupe_census["completed_price_source_verified_cache_reused"] == 1
     cache.unlink()
-    monkeypatch.setattr(quality, "load_pipeline_price_and_lifecycle_rows",
-                        lambda *_args, **_kwargs: ([{
-                            "stock_code": "005930", "effective_venue": "KRX",
-                            "session_bucket": "KRX_REGULAR",
-                            "timestamp": day + "T10:01:00+09:00", "price": 10050,
-                            "source_quality": "pass",
-                        }], []))
+    monkeypatch.setattr(
+        quality,
+        "load_pipeline_price_and_lifecycle_rows",
+        lambda *_args, **_kwargs: (
+            [
+                {
+                    "stock_code": "005930",
+                    "effective_venue": "KRX",
+                    "session_bucket": "KRX_REGULAR",
+                    "timestamp": day + "T10:01:00+09:00",
+                    "price": 10050,
+                    "source_quality": "pass",
+                }
+            ],
+            [],
+        ),
+    )
     missing, missing_census = calibration.load_machine_observation_rows(
-        tmp_path, target_date=day, independent_machine=True,
+        tmp_path,
+        target_date=day,
+        independent_machine=True,
     )
     assert missing_census["completed_price_source_cache_missing"] == 1
     assert missing[0]["outcome_request_code"] == "005930_AL"
     assert missing[0]["entry_quality_contract_valid"] is False
 
 
-@pytest.mark.parametrize("venue,session,route,broker,expected", [
-    ("PREMARKET_KRX_LIKE", "PREMARKET_KRX_LIKE", "nxt_only", "NXT", "005930_NX"),
-    ("NXT", "NXT_PREMARKET", "nxt_only", "NXT", "005930_NX"),
-    ("KRX", "KRX_REGULAR", "krx_nxt_integrated", "SOR", "005930_AL"),
-    ("KRX_NXT_INTEGRATED", "KRX_NXT_AFTERMARKET", "krx_nxt_integrated", "SOR", "005930_AL"),
-    ("KRX_NXT_INTEGRATED", "KRX_NXT_AFTERMARKET", "krx_nxt_integrated", "NXT", "005930_AL"),
-    ("KRX", "KRX_REGULAR", "krx_only", "SOR", "005930"),
-    ("KRX", "KRX_REGULAR", "nxt_only", "SOR", None),
-])
+@pytest.mark.parametrize(
+    "venue,session,route,broker,expected",
+    [
+        ("PREMARKET_KRX_LIKE", "PREMARKET_KRX_LIKE", "nxt_only", "NXT", "005930_NX"),
+        ("NXT", "NXT_PREMARKET", "nxt_only", "NXT", "005930_NX"),
+        ("KRX", "KRX_REGULAR", "krx_nxt_integrated", "SOR", "005930_AL"),
+        (
+            "KRX_NXT_INTEGRATED",
+            "KRX_NXT_AFTERMARKET",
+            "krx_nxt_integrated",
+            "SOR",
+            "005930_AL",
+        ),
+        (
+            "KRX_NXT_INTEGRATED",
+            "KRX_NXT_AFTERMARKET",
+            "krx_nxt_integrated",
+            "NXT",
+            "005930_AL",
+        ),
+        ("KRX", "KRX_REGULAR", "krx_only", "SOR", "005930"),
+        ("KRX", "KRX_REGULAR", "nxt_only", "SOR", None),
+    ],
+)
 def test_machine_outcome_exact_request_route_requires_snapshot_proof(
     venue, session, route, broker, expected
 ):
-    capture = {"label_context": {
-        "stock_code": "005930", "effective_venue": venue,
-        "session_bucket": session, "broker_route": broker,
-        "market_data_route": route, "snapshot_id": "snapshot-1"},
-        "source": {"exact_payload": {"ai_market_snapshot_v1": {
-            "stock_code": "005930", "effective_venue": venue,
-            "session_bucket": session, "snapshot_id": "snapshot-1", "market_data_route": route,
-            "broker_route": broker}}}}
+    capture = {
+        "label_context": {
+            "stock_code": "005930",
+            "effective_venue": venue,
+            "session_bucket": session,
+            "broker_route": broker,
+            "market_data_route": route,
+            "snapshot_id": "snapshot-1",
+        },
+        "source": {
+            "exact_payload": {
+                "ai_market_snapshot_v1": {
+                    "stock_code": "005930",
+                    "effective_venue": venue,
+                    "session_bucket": session,
+                    "snapshot_id": "snapshot-1",
+                    "market_data_route": route,
+                    "broker_route": broker,
+                }
+            }
+        },
+    }
     assert calibration._machine_outcome_request_code(capture) == expected
-    direct = {**capture, "source": {"exact_payload": {
-        "schema": "ai_market_snapshot_v1",
-        **capture["source"]["exact_payload"]["ai_market_snapshot_v1"],
-    }}}
+    direct = {
+        **capture,
+        "source": {
+            "exact_payload": {
+                "schema": "ai_market_snapshot_v1",
+                **capture["source"]["exact_payload"]["ai_market_snapshot_v1"],
+            }
+        },
+    }
     assert calibration._machine_outcome_request_code(direct) == expected
     if venue == "PREMARKET_KRX_LIKE":
-        assert calibration._machine_capture_cost_reference_venue(
-            direct, (venue, session)) == "NXT"
+        assert (
+            calibration._machine_capture_cost_reference_venue(direct, (venue, session))
+            == "NXT"
+        )
     if venue == "KRX_NXT_INTEGRATED":
-        assert calibration._machine_capture_cost_reference_venue(
-            direct, (venue, session)) == broker
+        assert (
+            calibration._machine_capture_cost_reference_venue(direct, (venue, session))
+            == broker
+        )
         assert calibration._machine_cost_route_compatible(
             capture["label_context"], (venue, session)
         ) is (broker == "SOR")
@@ -753,73 +856,127 @@ def test_machine_completed_price_gap_isolated_by_session_not_request_code(
 ):
     from datetime import datetime
 
-    day = '2026-09-29'
+    day = "2026-09-29"
     captures = []
-    for session in ('NXT_PREMARKET', 'NXT_AFTERMARKET'):
-        captures.append({
-            'machine_observation_sha256': session,
-            'captured_at': day + 'T08:00:00+09:00',
-            'label_context': {
-                'stock_code': '005930', 'effective_venue': 'NXT',
-                'session_bucket': session, 'broker_route': 'NXT',
-                'market_data_route': 'nxt_only', 'snapshot_id': 's1',
-            },
-            'source': {
-                'assessment': {'action': 'RECHECK'},
-                'exact_payload': {'ai_market_snapshot_v1': {
-                    'stock_code': '005930', 'effective_venue': 'NXT',
-                    'session_bucket': session,
-                    'snapshot_id': 's1', 'broker_route': 'NXT',
-                    'market_data_route': 'nxt_only',
-                }},
-            },
-        })
+    for session in ("NXT_PREMARKET", "NXT_AFTERMARKET"):
+        captures.append(
+            {
+                "machine_observation_sha256": session,
+                "captured_at": day + "T08:00:00+09:00",
+                "label_context": {
+                    "stock_code": "005930",
+                    "effective_venue": "NXT",
+                    "session_bucket": session,
+                    "broker_route": "NXT",
+                    "market_data_route": "nxt_only",
+                    "snapshot_id": "s1",
+                },
+                "source": {
+                    "assessment": {"action": "RECHECK"},
+                    "exact_payload": {
+                        "ai_market_snapshot_v1": {
+                            "stock_code": "005930",
+                            "effective_venue": "NXT",
+                            "session_bucket": session,
+                            "snapshot_id": "s1",
+                            "broker_route": "NXT",
+                            "market_data_route": "nxt_only",
+                        }
+                    },
+                },
+            }
+        )
     calls = []
+
     def fetcher(code, request_code):
         calls.append((code, request_code))
-        return ([{'source_timestamp': '20260929081000', '현재가': 10000,
-                  '고가': 10000, '저가': 10000}], {
-                      'api_id': 'ka10080', 'request_code': request_code,
-                      'request_base_dt': day.replace('-', ''),
-                  })
+        return (
+            [
+                {
+                    "source_timestamp": "20260929081000",
+                    "현재가": 10000,
+                    "고가": 10000,
+                    "저가": 10000,
+                }
+            ],
+            {
+                "api_id": "ka10080",
+                "request_code": request_code,
+                "request_base_dt": day.replace("-", ""),
+            },
+        )
 
     rows, receipt, _codes = calibration._machine_completed_price_rows(
-        data_root=tmp_path, day=day, observations=captures,
-        fetcher=fetcher, as_of=datetime.fromisoformat(day + 'T20:10:00+09:00'),
+        data_root=tmp_path,
+        day=day,
+        observations=captures,
+        fetcher=fetcher,
+        as_of=datetime.fromisoformat(day + "T20:10:00+09:00"),
     )
-    assert calls == [('005930', '005930_NX')]
-    assert receipt['status'] == 'partial_source_gap'
-    assert receipt['rejected_route_count'] == 1
-    assert len(rows) == 1 and rows[0]['session_bucket'] == 'NXT_PREMARKET'
-    (tmp_path / 'report/machine_completed_price_source'
-     / f'machine_completed_price_source_{day}.json').unlink()
-    monkeypatch.setattr(calibration, 'MACHINE_COMPLETED_PRICE_MAX_ROUTES', 1)
+    assert calls == [("005930", "005930_NX")]
+    assert receipt["status"] == "partial_source_gap"
+    assert receipt["rejected_route_count"] == 1
+    assert len(rows) == 1 and rows[0]["session_bucket"] == "NXT_PREMARKET"
+    (
+        tmp_path
+        / "report/machine_completed_price_source"
+        / f"machine_completed_price_source_{day}.json"
+    ).unlink()
+    monkeypatch.setattr(calibration, "MACHINE_COMPLETED_PRICE_MAX_ROUTES", 1)
     _limited_rows, limited, _codes = calibration._machine_completed_price_rows(
-        data_root=tmp_path, day=day, observations=captures,
-        fetcher=fetcher, as_of=datetime.fromisoformat(day + 'T20:10:00+09:00'),
+        data_root=tmp_path,
+        day=day,
+        observations=captures,
+        fetcher=fetcher,
+        as_of=datetime.fromisoformat(day + "T20:10:00+09:00"),
     )
-    assert limited['status'] == 'partial_source_gap'
-    assert limited['deferred_route_count'] == 1
-    (tmp_path / 'report/machine_completed_price_source'
-     / f'machine_completed_price_source_{day}.json').unlink()
+    assert limited["status"] == "partial_source_gap"
+    assert limited["deferred_route_count"] == 1
+    (
+        tmp_path
+        / "report/machine_completed_price_source"
+        / f"machine_completed_price_source_{day}.json"
+    ).unlink()
     mismatched_rows, mismatched, _codes = calibration._machine_completed_price_rows(
-        data_root=tmp_path, day=day, observations=captures,
+        data_root=tmp_path,
+        day=day,
+        observations=captures,
         fetcher=lambda code, request_code: (
-            [{'source_timestamp': '20260929081000', '현재가': 10000}],
-            {'api_id': 'ka10080', 'request_code': code,
-             'request_base_dt': day.replace('-', '')}),
-        as_of=datetime.fromisoformat(day + 'T20:10:00+09:00'),
+            [{"source_timestamp": "20260929081000", "현재가": 10000}],
+            {
+                "api_id": "ka10080",
+                "request_code": code,
+                "request_base_dt": day.replace("-", ""),
+            },
+        ),
+        as_of=datetime.fromisoformat(day + "T20:10:00+09:00"),
     )
     assert mismatched_rows == []
-    assert mismatched['rejected_route_count'] == 1
+    assert mismatched["rejected_route_count"] == 1
 
 
-@pytest.mark.parametrize("venue,session,broker,market_route,request_code,start", [
-    ("PREMARKET_KRX_LIKE", "PREMARKET_KRX_LIKE", "NXT", "nxt_only", "005930_NX", "08"),
-    ("KRX", "KRX_REGULAR", "SOR", "krx_nxt_integrated", "005930_AL", "09"),
-    ("KRX_NXT_INTEGRATED", "KRX_NXT_AFTERMARKET", "SOR",
-     "krx_nxt_integrated", "005930_AL", "16"),
-])
+@pytest.mark.parametrize(
+    "venue,session,broker,market_route,request_code,start",
+    [
+        (
+            "PREMARKET_KRX_LIKE",
+            "PREMARKET_KRX_LIKE",
+            "NXT",
+            "nxt_only",
+            "005930_NX",
+            "08",
+        ),
+        ("KRX", "KRX_REGULAR", "SOR", "krx_nxt_integrated", "005930_AL", "09"),
+        (
+            "KRX_NXT_INTEGRATED",
+            "KRX_NXT_AFTERMARKET",
+            "SOR",
+            "krx_nxt_integrated",
+            "005930_AL",
+            "16",
+        ),
+    ],
+)
 def test_machine_completed_price_accepts_page_limit_only_after_target_day_covered(
     tmp_path, venue, session, broker, market_route, request_code, start
 ):
@@ -830,58 +987,87 @@ def test_machine_completed_price_accepts_page_limit_only_after_target_day_covere
         "machine_observation_sha256": "a" * 64,
         "captured_at": f"{day}T{start}:10:00+09:00",
         "label_context": {
-            "stock_code": "005930", "effective_venue": venue,
-            "session_bucket": session, "broker_route": broker,
-            "market_data_route": market_route, "snapshot_id": "s1",
+            "stock_code": "005930",
+            "effective_venue": venue,
+            "session_bucket": session,
+            "broker_route": broker,
+            "market_data_route": market_route,
+            "snapshot_id": "s1",
         },
         "source": {
             "assessment": {"action": "RECHECK"},
-            "exact_payload": {"ai_market_snapshot_v1": {
-                "stock_code": "005930", "effective_venue": venue,
-                "session_bucket": session, "broker_route": broker,
-                "market_data_route": market_route, "snapshot_id": "s1",
-            }},
+            "exact_payload": {
+                "ai_market_snapshot_v1": {
+                    "stock_code": "005930",
+                    "effective_venue": venue,
+                    "session_bucket": session,
+                    "broker_route": broker,
+                    "market_data_route": market_route,
+                    "snapshot_id": "s1",
+                }
+            },
         },
     }
     current_rows = [
-        {"source_timestamp": f"20260929{start}{minute:02d}00",
-         "현재가": 10000, "고가": 10010, "저가": 9990}
+        {
+            "source_timestamp": f"20260929{start}{minute:02d}00",
+            "현재가": 10000,
+            "고가": 10010,
+            "저가": 9990,
+        }
         for minute in (11, 20)
     ]
 
     def fetcher(stock_code, code):
         assert (stock_code, code) == ("005930", request_code)
-        return ([{"source_timestamp": "20260928140000", "현재가": 10000},
-                 *current_rows], {
-                     "api_id": "ka10080", "request_code": code,
-                     "request_base_dt": "20260929",
-                     "continuous_page_limit_reached": True,
-                     "sort_direction_detected": "descending",
-                     "last_http_status_code": 200,
-                 })
+        return (
+            [{"source_timestamp": "20260928140000", "현재가": 10000}, *current_rows],
+            {
+                "api_id": "ka10080",
+                "request_code": code,
+                "request_base_dt": "20260929",
+                "continuous_page_limit_reached": True,
+                "sort_direction_detected": "descending",
+                "last_http_status_code": 200,
+            },
+        )
 
     rows, receipt, _ = calibration._machine_completed_price_rows(
-        data_root=tmp_path, day=day, observations=[capture],
-        fetcher=fetcher, as_of=datetime.fromisoformat(day + "T20:10:00+09:00"),
+        data_root=tmp_path,
+        day=day,
+        observations=[capture],
+        fetcher=fetcher,
+        as_of=datetime.fromisoformat(day + "T20:10:00+09:00"),
     )
     assert receipt["status"] == "collected"
     assert receipt["rejected_route_count"] == 0
     assert [row["timestamp"][11:16] for row in rows] == [f"{start}:11", f"{start}:20"]
-    cache = json.loads((tmp_path / "report/machine_completed_price_source"
-                        / f"machine_completed_price_source_{day}.json").read_text())
+    cache = json.loads(
+        (
+            tmp_path
+            / "report/machine_completed_price_source"
+            / f"machine_completed_price_source_{day}.json"
+        ).read_text()
+    )
     assert cache["provenance"][0]["continuation_page_limit_reached"] is True
     assert cache["provenance"][0]["pagination_target_day_covered"] is True
 
     # A page limit reached while still inside today cannot prove an early
     # decision's later window. It remains a source gap, never a no-edge label.
-    (tmp_path / "report/machine_completed_price_source"
-     / f"machine_completed_price_source_{day}.json").unlink()
+    (
+        tmp_path
+        / "report/machine_completed_price_source"
+        / f"machine_completed_price_source_{day}.json"
+    ).unlink()
+
     def truncated_fetcher(stock_code, code):
         _, meta = fetcher(stock_code, code)
         return current_rows, meta
 
     missing, partial, _ = calibration._machine_completed_price_rows(
-        data_root=tmp_path, day=day, observations=[capture],
+        data_root=tmp_path,
+        day=day,
+        observations=[capture],
         fetcher=truncated_fetcher,
         as_of=datetime.fromisoformat(day + "T20:10:00+09:00"),
     )
@@ -903,16 +1089,25 @@ def test_machine_completed_source_recovery_waits_for_close_but_allows_past_date(
     assert eligible("2026-09-28", now=after_close, write=False) is False
 
 
-def test_machine_report_waits_for_parallel_exact_day_preflight_receipt(monkeypatch, tmp_path):
+def test_machine_report_waits_for_parallel_exact_day_preflight_receipt(
+    monkeypatch, tmp_path
+):
     from datetime import datetime
 
-    reads = iter(({"status": "missing"},
-                  {"status": "ready", "machine_threshold_tuning_input_allowed": True}))
-    monkeypatch.setattr(calibration, "_machine_ai_natural_source_receipt",
-                        lambda *_args: next(reads))
+    reads = iter(
+        (
+            {"status": "missing"},
+            {"status": "ready", "machine_threshold_tuning_input_allowed": True},
+        )
+    )
+    monkeypatch.setattr(
+        calibration, "_machine_ai_natural_source_receipt", lambda *_args: next(reads)
+    )
     monkeypatch.setattr(calibration.time, "sleep", lambda *_args: None)
     receipt = calibration._await_machine_ai_natural_source_receipt(
-        tmp_path, "2026-09-29", max_wait_sec=1,
+        tmp_path,
+        "2026-09-29",
+        max_wait_sec=1,
         now=datetime.fromisoformat("2026-09-29T20:10:00+09:00"),
     )
     assert receipt["status"] == "ready"
@@ -920,57 +1115,83 @@ def test_machine_report_waits_for_parallel_exact_day_preflight_receipt(monkeypat
 
 
 def test_machine_probe_lineage_counts_two_assessments_as_two_captures():
-    first, second = 'a' * 64, 'b' * 64
-    captures = [{
-        'machine_observation_sha256': value,
-        'source_event_stage': 'zero_base_probe_machine_only_v1',
-        'zero_base_source_sha256': 'c' * 64,
-        'zero_base_route': 'krx_nxt_integrated',
-        'label_context': {'stock_code': '005930'},
-        'source': {'assessment': {'action': action}},
-    } for value, action in ((first, 'RECHECK'), (second, 'ENTER_NOW'))]
-    common = {'zero_base_source_sha256': 'c' * 64,
-              'zero_base_route': 'krx_nxt_integrated',
-              'zero_base_claim_count': '1'}
-    receipts = [{
-        'stage': 'zero_base_probe_result', 'stock_code': '005930',
-        'fields': {**common, 'zero_base_probe_result': 'assessed',
-                   'entry_mechanistic_action': 'ENTER_NOW',
-                   'machine_observation_sha256': second,
-                   'recheck_first_machine_observation_sha256': first},
-    }, {
-        'stage': 'zero_base_watch_attach', 'stock_code': '005930',
-        'fields': {**common, 'zero_base_attach_outcome': 'attached',
-                   'machine_observation_sha256': second},
-    }, {
-        'stage': 'zero_base_probe_claim', 'stock_code': '005930',
-        'fields': common,
-    }]
-    census = calibration._machine_probe_lineage_counts(captures, receipts)
-    assert census['probe_result_receipt'] == 1
-    assert census['probe_assessed_result'] == 1
-    assert census['probe_capture_exact_join'] == 2
-    assert census['probe_capture_without_result'] == 0
-    assert census['probe_watch_attached_exact_capture'] == 1
-    assert census['probe_claim_without_result'] == 0
-    assert census['probe_result_without_claim'] == 0
-    receipts[0]['fields']['zero_base_source_sha256'] = 'd' * 64
-    conflicting = calibration._machine_probe_lineage_counts(captures, receipts)
-    assert conflicting['probe_capture_missing_or_conflict'] == 2
-    assert conflicting['probe_capture_without_result'] == 2
-    assert conflicting['probe_claim_without_result'] == 1
-    invalid_capture = {**captures[0],
-                       'machine_observation_sha256': 'd' * 64,
-                       'source': {'assessment': {'action': 'source_invalid'}}}
-    invalid_receipt = {
-        'stage': 'zero_base_probe_result', 'stock_code': '005930',
-        'fields': {**common, 'zero_base_probe_result': 'source_unavailable',
-                   'entry_mechanistic_action': 'SOURCE_INVALID',
-                   'machine_observation_sha256': 'd' * 64},
+    first, second = "a" * 64, "b" * 64
+    captures = [
+        {
+            "machine_observation_sha256": value,
+            "source_event_stage": "zero_base_probe_machine_only_v1",
+            "zero_base_source_sha256": "c" * 64,
+            "zero_base_route": "krx_nxt_integrated",
+            "label_context": {"stock_code": "005930"},
+            "source": {"assessment": {"action": action}},
+        }
+        for value, action in ((first, "RECHECK"), (second, "ENTER_NOW"))
+    ]
+    common = {
+        "zero_base_source_sha256": "c" * 64,
+        "zero_base_route": "krx_nxt_integrated",
+        "zero_base_claim_count": "1",
     }
-    invalid = calibration._machine_probe_lineage_counts([invalid_capture], [invalid_receipt])
-    assert invalid['probe_source_invalid_capture_exact_join'] == 1
-    assert invalid['probe_capture_without_result'] == 0
+    receipts = [
+        {
+            "stage": "zero_base_probe_result",
+            "stock_code": "005930",
+            "fields": {
+                **common,
+                "zero_base_probe_result": "assessed",
+                "entry_mechanistic_action": "ENTER_NOW",
+                "machine_observation_sha256": second,
+                "recheck_first_machine_observation_sha256": first,
+            },
+        },
+        {
+            "stage": "zero_base_watch_attach",
+            "stock_code": "005930",
+            "fields": {
+                **common,
+                "zero_base_attach_outcome": "attached",
+                "machine_observation_sha256": second,
+            },
+        },
+        {
+            "stage": "zero_base_probe_claim",
+            "stock_code": "005930",
+            "fields": common,
+        },
+    ]
+    census = calibration._machine_probe_lineage_counts(captures, receipts)
+    assert census["probe_result_receipt"] == 1
+    assert census["probe_assessed_result"] == 1
+    assert census["probe_capture_exact_join"] == 2
+    assert census["probe_capture_without_result"] == 0
+    assert census["probe_watch_attached_exact_capture"] == 1
+    assert census["probe_claim_without_result"] == 0
+    assert census["probe_result_without_claim"] == 0
+    receipts[0]["fields"]["zero_base_source_sha256"] = "d" * 64
+    conflicting = calibration._machine_probe_lineage_counts(captures, receipts)
+    assert conflicting["probe_capture_missing_or_conflict"] == 2
+    assert conflicting["probe_capture_without_result"] == 2
+    assert conflicting["probe_claim_without_result"] == 1
+    invalid_capture = {
+        **captures[0],
+        "machine_observation_sha256": "d" * 64,
+        "source": {"assessment": {"action": "source_invalid"}},
+    }
+    invalid_receipt = {
+        "stage": "zero_base_probe_result",
+        "stock_code": "005930",
+        "fields": {
+            **common,
+            "zero_base_probe_result": "source_unavailable",
+            "entry_mechanistic_action": "SOURCE_INVALID",
+            "machine_observation_sha256": "d" * 64,
+        },
+    }
+    invalid = calibration._machine_probe_lineage_counts(
+        [invalid_capture], [invalid_receipt]
+    )
+    assert invalid["probe_source_invalid_capture_exact_join"] == 1
+    assert invalid["probe_capture_without_result"] == 0
 
 
 def test_machine_capture_normalizes_runtime_session_for_scope_lookup(
@@ -1030,13 +1251,17 @@ def test_machine_capture_normalizes_runtime_session_for_scope_lookup(
             "effective_venue": "KRX",
             # This is the actual casing persisted by _request_context.
             "session_bucket": "krx_regular",
-            "snapshot_id": "snapshot-lowercase", "broker_route": "KRX",
+            "snapshot_id": "snapshot-lowercase",
+            "broker_route": "KRX",
             "market_data_route": "krx_only",
             "ai_market_snapshot_v1": {
-                "stock_code": "005930", "effective_venue": "KRX",
+                "stock_code": "005930",
+                "effective_venue": "KRX",
                 "session_bucket": "krx_regular",
-                "snapshot_id": "snapshot-lowercase", "broker_route": "KRX",
-                "market_data_route": "krx_only"},
+                "snapshot_id": "snapshot-lowercase",
+                "broker_route": "KRX",
+                "market_data_route": "krx_only",
+            },
             "conservative_execution_cost_pct": 0.02,
         },
         setup_evidence=setup,
@@ -1362,54 +1587,89 @@ def test_compact_screen_conserves_caution_and_not_evaluated_without_veto():
     }
 
 
-def _compact_router_case_table(*, verdict="CAUTION", submitted=False, disposition="ai_caution_bounded_recheck", adverse_count=0, decision_gate=True):
+def _compact_router_case_table(
+    *,
+    verdict="CAUTION",
+    submitted=False,
+    disposition="ai_caution_bounded_recheck",
+    adverse_count=0,
+    decision_gate=True,
+):
     from src.engine.scalping.mechanistic_entry_runtime_policy import AI_VERSION
-    rows = [{
-        "decision_trace_id": f"router-trace-{index}",
-        "evaluation_attempt_id": f"router-attempt-{index}",
-        "scanner_promotion_id": f"promotion-{index}",
-        "decision_snapshot_id": f"snapshot-{index}",
-        "decision_ts": f"2026-09-15T12:00:{index:02d}+09:00",
-        "source_date": "2026-09-15", "stock_code": "005930",
-        "effective_venue": "KRX", "session_bucket": "KRX_REGULAR",
-        "bundle_sha256": "a" * 64, "machine_action": "ENTER_NOW",
-        "entry_quality_path": {
-            "status": "evaluable", "entry_quality_label": "CLEAN_FAST_PROFIT",
-            "conservative_execution_cost_pct": 0.23,
-            "first_hit": "net_target_first", "gross_net_target_pct": 0.30,
-        },
-        "ai_and_final_guard": {
-            "provider_called": True, "prompt_version": AI_VERSION,
-            "ai_risk_verdict": verdict, "decision_quality_contract_status": "pass",
-            "semantic_validation_status": "pass", "followup_disposition": disposition,
-            "observed_actual_order_submitted": submitted,
-        },
-    } for index in range(20)]
+
+    rows = [
+        {
+            "decision_trace_id": f"router-trace-{index}",
+            "evaluation_attempt_id": f"router-attempt-{index}",
+            "scanner_promotion_id": f"promotion-{index}",
+            "decision_snapshot_id": f"snapshot-{index}",
+            "decision_ts": f"2026-09-15T12:00:{index:02d}+09:00",
+            "source_date": "2026-09-15",
+            "stock_code": "005930",
+            "effective_venue": "KRX",
+            "session_bucket": "KRX_REGULAR",
+            "bundle_sha256": "a" * 64,
+            "machine_action": "ENTER_NOW",
+            "entry_quality_path": {
+                "status": "evaluable",
+                "entry_quality_label": "CLEAN_FAST_PROFIT",
+                "conservative_execution_cost_pct": 0.23,
+                "first_hit": "net_target_first",
+                "gross_net_target_pct": 0.30,
+            },
+            "ai_and_final_guard": {
+                "provider_called": True,
+                "prompt_version": AI_VERSION,
+                "ai_risk_verdict": verdict,
+                "decision_quality_contract_status": "pass",
+                "semantic_validation_status": "pass",
+                "followup_disposition": disposition,
+                "observed_actual_order_submitted": submitted,
+            },
+        }
+        for index in range(20)
+    ]
     for row in rows[:adverse_count]:
         row["entry_quality_path"].update(
-            entry_quality_label="CLEAN_FAST_LOSS_OR_ADVERSE", first_hit="exact_stop_first",
+            entry_quality_label="CLEAN_FAST_LOSS_OR_ADVERSE",
+            first_hit="exact_stop_first",
             exact_stop_distance_pct=-0.70,
         )
     receipt = {
-        "target_date": "2026-09-15", "source_manifest_sha256": "d" * 64,
+        "target_date": "2026-09-15",
+        "source_manifest_sha256": "d" * 64,
         "tuning_input_allowed": True,
-        "machine_terminal_tuning_gate": {"decision_counterfactual_tuning_input_allowed": decision_gate},
-        "compact_auxiliary_policy_measurement": {"prompt_version": AI_VERSION, "measurement_allowed": True},
+        "machine_terminal_tuning_gate": {
+            "decision_counterfactual_tuning_input_allowed": decision_gate
+        },
+        "compact_auxiliary_policy_measurement": {
+            "prompt_version": AI_VERSION,
+            "measurement_allowed": True,
+        },
     }
     return calibration.build_machine_decision_case_table(rows, source_receipt=receipt)
 
 
-@pytest.mark.parametrize("submitted,disposition", [
-    (False, "ai_caution_bounded_recheck"),
-    (True, "ai_caution_bounded_recheck"),
-    (None, "ai_caution_bounded_recheck"),
-    (False, "ai_pass_existing_submit_guard"),
-])
-def test_compact_caution_opportunity_cost_preserves_router_nonexposure(submitted, disposition):
+@pytest.mark.parametrize(
+    "submitted,disposition",
+    [
+        (False, "ai_caution_bounded_recheck"),
+        (True, "ai_caution_bounded_recheck"),
+        (None, "ai_caution_bounded_recheck"),
+        (False, "ai_pass_existing_submit_guard"),
+    ],
+)
+def test_compact_caution_opportunity_cost_preserves_router_nonexposure(
+    submitted, disposition
+):
     from src.engine.scalping import mechanistic_entry_runtime_policy as policy
+
     table = _compact_router_case_table(submitted=submitted, disposition=disposition)
     outcomes = table["compact_auxiliary_screen_outcomes"]
-    economic, selection = outcomes["economic_contract"], outcomes["automatic_successor_selection"]
+    economic, selection = (
+        outcomes["economic_contract"],
+        outcomes["automatic_successor_selection"],
+    )
     allowed = submitted is False and disposition == "ai_caution_bounded_recheck"
     assert economic["denominator_preserved"] is True
     assert outcomes["terminal_verdict_counts"] == {"CAUTION": 20}
@@ -1417,36 +1677,57 @@ def test_compact_caution_opportunity_cost_preserves_router_nonexposure(submitted
     assert economic["economic_eligible_count"] == (20 if allowed else 0)
     assert economic["evaluable_caution_count"] == (20 if allowed else 0)
     assert economic["missed_profit_caution_count"] == (20 if allowed else 0)
-    assert economic["missed_profit_caution_net_sum_pct"] == pytest.approx(1.4 if allowed else 0)
+    assert economic["missed_profit_caution_net_sum_pct"] == pytest.approx(
+        1.4 if allowed else 0
+    )
     assert economic["caution_is_not_veto"] is True
-    assert economic["screened_policy_counterfactual_net_ev_pct"] == (0 if allowed else None)
+    assert economic["screened_policy_counterfactual_net_ev_pct"] == (
+        0 if allowed else None
+    )
     assert policy.compact_outcome_counts_valid(economic)
     assert selection["eligible"] is allowed
-    assert selection["selected_prompt_version"] == (policy.ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION if allowed else policy.AI_VERSION)
+    assert selection["selected_prompt_version"] == (
+        policy.ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION
+        if allowed
+        else policy.AI_VERSION
+    )
     if allowed:
         corrupted = json.loads(json.dumps(economic))
         corrupted["missed_profit_caution_count"] -= 1
         assert not policy.compact_outcome_counts_valid(corrupted)
-        assert policy.compact_economic_direction(corrupted) == "carry_balanced_compact_contract"
+        assert (
+            policy.compact_economic_direction(corrupted)
+            == "carry_balanced_compact_contract"
+        )
 
 
 def test_compact_insufficient_is_source_repair_not_opportunity_policy_training():
-    table = _compact_router_case_table(verdict="INSUFFICIENT", disposition="ai_insufficient_bounded_recheck")
+    table = _compact_router_case_table(
+        verdict="INSUFFICIENT", disposition="ai_insufficient_bounded_recheck"
+    )
     outcomes = table["compact_auxiliary_screen_outcomes"]
     assert outcomes["economic_contract"]["economic_eligible_count"] == 0
-    assert outcomes["economic_contract"]["exclusion_counts"] == {"source_gap_router_verdict": 20}
+    assert outcomes["economic_contract"]["exclusion_counts"] == {
+        "source_gap_router_verdict": 20
+    }
     assert outcomes["automatic_successor_selection"]["eligible"] is False
 
 
 def test_compact_caution_avoided_losses_prevent_one_sided_relaxation():
     from src.engine.scalping import mechanistic_entry_runtime_policy as policy
-    outcomes = _compact_router_case_table(adverse_count=15)["compact_auxiliary_screen_outcomes"]
+
+    outcomes = _compact_router_case_table(adverse_count=15)[
+        "compact_auxiliary_screen_outcomes"
+    ]
     economic = outcomes["economic_contract"]
     assert economic["missed_profit_caution_count"] == 5
     assert economic["missed_profit_caution_net_sum_pct"] == pytest.approx(0.35)
     assert economic["avoided_nonentry_loss_sum_pct"] == pytest.approx(13.95)
     assert outcomes["automatic_successor_selection"]["eligible"] is True
-    assert outcomes["automatic_successor_selection"]["selected_prompt_version"] == policy.AI_VERSION
+    assert (
+        outcomes["automatic_successor_selection"]["selected_prompt_version"]
+        == policy.AI_VERSION
+    )
 
 
 @pytest.mark.parametrize("corruption", [None, "count", "nan_amount", "terminal_gate"])
@@ -1528,7 +1809,9 @@ def test_machine_case_table_automatically_selects_bounded_compact_variant():
         source_receipt={
             "target_date": "2026-09-14",
             "tuning_input_allowed": True,
-            "machine_terminal_tuning_gate": {"decision_counterfactual_tuning_input_allowed": True},
+            "machine_terminal_tuning_gate": {
+                "decision_counterfactual_tuning_input_allowed": True
+            },
             "compact_auxiliary_policy_measurement": {
                 "prompt_version": AI_VERSION,
                 "measurement_allowed": True,
@@ -1541,7 +1824,10 @@ def test_machine_case_table_automatically_selects_bounded_compact_variant():
     ]
     assert selection["eligible"] is True
     assert selection["minimum_economic_eligible_count"] == 20
-    assert selection["contract_version"] == "compact_auxiliary_router_economic_selection_v3"
+    assert (
+        selection["contract_version"]
+        == "compact_auxiliary_router_economic_selection_v3"
+    )
     # The same exact source is evaluable on an all-VETO day, with no actual
     # submit/fill prerequisites. Do not relax partition or cost/path gates.
     all_veto = json.loads(json.dumps(rows))
@@ -1583,7 +1869,9 @@ def test_machine_case_table_automatically_selects_bounded_compact_variant():
         source_receipt={
             "target_date": "2026-09-14",
             "tuning_input_allowed": True,
-            "machine_terminal_tuning_gate": {"decision_counterfactual_tuning_input_allowed": True},
+            "machine_terminal_tuning_gate": {
+                "decision_counterfactual_tuning_input_allowed": True
+            },
             "compact_auxiliary_policy_measurement": {
                 "prompt_version": AI_VERSION,
                 "measurement_allowed": True,
@@ -1606,7 +1894,9 @@ def test_machine_case_table_automatically_selects_bounded_compact_variant():
         source_receipt={
             "target_date": "2026-09-14",
             "tuning_input_allowed": True,
-            "machine_terminal_tuning_gate": {"decision_counterfactual_tuning_input_allowed": True},
+            "machine_terminal_tuning_gate": {
+                "decision_counterfactual_tuning_input_allowed": True
+            },
             "compact_auxiliary_policy_measurement": {
                 "prompt_version": AI_VERSION,
                 "measurement_allowed": True,
@@ -1632,7 +1922,9 @@ def test_machine_case_table_automatically_selects_bounded_compact_variant():
         source_receipt={
             "target_date": "2026-09-14",
             "tuning_input_allowed": True,
-            "machine_terminal_tuning_gate": {"decision_counterfactual_tuning_input_allowed": True},
+            "machine_terminal_tuning_gate": {
+                "decision_counterfactual_tuning_input_allowed": True
+            },
             "compact_auxiliary_policy_measurement": {
                 "prompt_version": AI_VERSION,
                 "measurement_allowed": True,
@@ -1661,7 +1953,9 @@ def test_machine_case_table_automatically_selects_bounded_compact_variant():
         source_receipt={
             "target_date": "2026-09-14",
             "tuning_input_allowed": True,
-            "machine_terminal_tuning_gate": {"decision_counterfactual_tuning_input_allowed": True},
+            "machine_terminal_tuning_gate": {
+                "decision_counterfactual_tuning_input_allowed": True
+            },
             "compact_auxiliary_policy_measurement": {
                 "prompt_version": AI_VERSION,
                 "measurement_allowed": True,
@@ -1682,7 +1976,9 @@ def test_machine_case_table_automatically_selects_bounded_compact_variant():
         source_receipt={
             "target_date": "2026-09-14",
             "tuning_input_allowed": True,
-            "machine_terminal_tuning_gate": {"decision_counterfactual_tuning_input_allowed": True},
+            "machine_terminal_tuning_gate": {
+                "decision_counterfactual_tuning_input_allowed": True
+            },
             "compact_auxiliary_policy_measurement": {
                 "prompt_version": AI_VERSION,
                 "measurement_allowed": True,
@@ -2455,12 +2751,15 @@ def test_mechanistic_refinement_uses_clean_chronological_holdout(
 
 def _natural_refinement_fixture():
     import copy
+
     rows = copy.deepcopy(_hierarchy_training_rows())
     earlier = copy.deepcopy(rows[:4])
     for row in earlier:
         row["source_date"] = "2026-09-04"
         row["decision_ts"] = row["decision_ts"].replace("2026-09-07", "2026-09-04")
-        row["decision_trace_id"] = row["decision_trace_id"].replace("2026-09-07", "2026-09-04")
+        row["decision_trace_id"] = row["decision_trace_id"].replace(
+            "2026-09-07", "2026-09-04"
+        )
         row["comparison"]["entry_cost_contract"]["source_date"] = "2026-09-04"
     rows = earlier + rows
     for i, row in enumerate(rows):
@@ -2468,8 +2767,10 @@ def _natural_refinement_fixture():
             stock_code=("005930", "000660", "035420", "051910", "005380")[i % 5],
             scanner_promotion_id=f"promotion-{i}",
             evaluation_attempt_id=f"attempt-{i}",
-            effective_venue="KRX", session_bucket="KRX_REGULAR",
-            bundle_sha256="b" * 64, machine_action="BLOCK",
+            effective_venue="KRX",
+            session_bucket="KRX_REGULAR",
+            bundle_sha256="b" * 64,
+            machine_action="BLOCK",
             machine_observation_hash_verified=True,
             source_report_hash_verified=False,
         )
@@ -2480,7 +2781,8 @@ def _natural_refinement_fixture():
         "machine_threshold_tuning_input_allowed": True,
         "machine_terminal_tuning_gate": {
             "economic_tuning_input_allowed": False,
-            "excluded_evaluation_keys": [], "pending_evaluation_keys": [],
+            "excluded_evaluation_keys": [],
+            "pending_evaluation_keys": [],
         },
     }
     return rows, receipt
@@ -2489,21 +2791,38 @@ def _natural_refinement_fixture():
 def test_current_structure_population_preserves_old_rows_and_rebinds_receipt():
     from copy import deepcopy
     from src.engine.scalping.entry_candle_context import LOCAL_BREAKOUT_VERSION
-    rows = [dict(setup_evidence={"structure_contract_version": version},
-                 source_date="2026-09-21", decision_trace_id=str(index), fingerprint=str(index),
-                 refinement_source_lane="natural")
-            for index, version in enumerate([None, LOCAL_BREAKOUT_VERSION])]
+
+    rows = [
+        dict(
+            setup_evidence={"structure_contract_version": version},
+            source_date="2026-09-21",
+            decision_trace_id=str(index),
+            fingerprint=str(index),
+            refinement_source_lane="natural",
+        )
+        for index, version in enumerate([None, LOCAL_BREAKOUT_VERSION])
+    ]
     original = deepcopy(rows)
-    contract = {"input_row_disposition_complete": True, "row_exclusion_reason_counts": {}}
+    contract = {
+        "input_row_disposition_complete": True,
+        "row_exclusion_reason_counts": {},
+    }
     selected, receipt = calibration._current_structure_population(rows, contract)
     assert rows == original
     assert selected == rows[1:]
-    assert receipt["structure_contract_input_counts"] == {"legacy_session_high_v1": 1, LOCAL_BREAKOUT_VERSION: 1}
+    assert receipt["structure_contract_input_counts"] == {
+        "legacy_session_high_v1": 1,
+        LOCAL_BREAKOUT_VERSION: 1,
+    }
     assert receipt["structure_contract_population_count"] == 2
     assert receipt["accepted_unique_trace_count"] == 1
-    assert receipt["row_exclusion_reason_counts"]["structure_contract_version_mismatch"] == 1
-    assert receipt["accepted_rows_sha256"] == calibration._canonical_sha256([
-        {"decision_trace_id": "1", "fingerprint": "1"}])
+    assert (
+        receipt["row_exclusion_reason_counts"]["structure_contract_version_mismatch"]
+        == 1
+    )
+    assert receipt["accepted_rows_sha256"] == calibration._canonical_sha256(
+        [{"decision_trace_id": "1", "fingerprint": "1"}]
+    )
     assert contract["row_exclusion_reason_counts"] == {}
 
 
@@ -2512,7 +2831,10 @@ def test_common_refinement_keeps_natural_block_for_research_without_promoting_pr
 ):
     rows, receipt = _natural_refinement_fixture()
     normalized, contract = calibration._common_refinement_population(
-        [], rows, target_date="2026-09-15", source_receipt=receipt,
+        [],
+        rows,
+        target_date="2026-09-15",
+        source_receipt=receipt,
         paired_contract={},
     )
     assert len(normalized) == len(rows)
@@ -2526,28 +2848,42 @@ def test_common_refinement_keeps_natural_block_for_research_without_promoting_pr
         10_000,
     )
     result = calibration.build_clean_baseline_mechanistic_refinement(
-        Path("unused"), target_date="2026-09-15", source_rows=normalized,
-        source_contract=contract, parent_policy=parent,
+        Path("unused"),
+        target_date="2026-09-15",
+        source_rows=normalized,
+        source_contract=contract,
+        parent_policy=parent,
     )
     assert result["promotion_pass"] is False
     assert result["policy_candidate"] is None
     assert result["status"] == "insufficient_mature_sample"
     assert result["evaluated_distinct_policy_count"] > 0
     assert result["economically_evaluable_candidate_count"] > 0
-    assert result["best_observed_candidate"]["calibration"][
-        "cost_adjusted_terminal_proxy_ev_pct"
-    ] is not None
+    assert (
+        result["best_observed_candidate"]["calibration"][
+            "cost_adjusted_terminal_proxy_ev_pct"
+        ]
+        is not None
+    )
     assert result["calibration_gate_passing_candidate_count"] == 0
-    assert result["best_observed_candidate"]["calibration_paired_population"][
-        "paired_terminal_proxy_delta_pct"
-    ] > 0
-    assert result["best_observed_candidate"]["calibration_paired_population"][
-        "downstream_operating_evidence_complete"
-    ] is False
+    assert (
+        result["best_observed_candidate"]["calibration_paired_population"][
+            "paired_terminal_proxy_delta_pct"
+        ]
+        > 0
+    )
+    assert (
+        result["best_observed_candidate"]["calibration_paired_population"][
+            "downstream_operating_evidence_complete"
+        ]
+        is False
+    )
     assert rows[0]["comparison"]["control_action"] == "WAIT"
 
 
-@pytest.mark.parametrize("block", ["receipt", "cost", "pending", "hash", "conflict", "date"])
+@pytest.mark.parametrize(
+    "block", ["receipt", "cost", "pending", "hash", "conflict", "date"]
+)
 def test_common_refinement_fails_closed_for_natural_source_gaps(block):
     rows, receipt = _natural_refinement_fixture()
     kwargs = {}
@@ -2568,8 +2904,12 @@ def test_common_refinement_fails_closed_for_natural_source_gaps(block):
     else:
         receipt["target_date"] = "2026-09-14"
     normalized, contract = calibration._common_refinement_population(
-        [], rows, target_date="2026-09-15", source_receipt=receipt,
-        paired_contract={}, **kwargs,
+        [],
+        rows,
+        target_date="2026-09-15",
+        source_receipt=receipt,
+        paired_contract={},
+        **kwargs,
     )
     assert normalized == []
     assert sum(contract["row_exclusion_reason_counts"].values()) == len(rows)
@@ -2578,14 +2918,20 @@ def test_common_refinement_fails_closed_for_natural_source_gaps(block):
 def test_common_refinement_no_improvement_over_incumbent_does_not_promote():
     rows, receipt = _natural_refinement_fixture()
     normalized, contract = calibration._common_refinement_population(
-        [], rows, target_date="2026-09-15", source_receipt=receipt,
+        [],
+        rows,
+        target_date="2026-09-15",
+        source_receipt=receipt,
         paired_contract={},
     )
     parent = json.loads(json.dumps(calibration.MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1))
     parent["thresholds"]["maximum_spread_bp"] = 35
     result = calibration.build_clean_baseline_mechanistic_refinement(
-        Path("unused"), target_date="2026-09-15", source_rows=normalized,
-        source_contract=contract, parent_policy=parent,
+        Path("unused"),
+        target_date="2026-09-15",
+        source_rows=normalized,
+        source_contract=contract,
+        parent_policy=parent,
     )
     assert result["promotion_pass"] is False
     assert result["policy_candidate"] is None
@@ -2612,11 +2958,16 @@ def test_localized_natural_attempt_conflict_preserves_unaffected_population(reve
     assert all(
         row["policy_learning_excluded"] is True
         and row["policy_learning_exclusion_reason"] == "conflicting_exact_attempt"
-        for row in case_table["rows"] if row["evaluation_key"] == key
+        for row in case_table["rows"]
+        if row["evaluation_key"] == key
     )
     normalized, contract = calibration._common_refinement_population(
-        [], originals, target_date="2026-09-15", source_receipt=receipt,
-        paired_contract={}, natural_conflicting_attempt_identity_count=1,
+        [],
+        originals,
+        target_date="2026-09-15",
+        source_receipt=receipt,
+        paired_contract={},
+        natural_conflicting_attempt_identity_count=1,
         natural_conflicting_evaluation_keys=case_table["conflicting_evaluation_keys"],
     )
     assert len(normalized) == len(rows) - 1
@@ -2634,8 +2985,11 @@ def test_localized_conflict_excludes_matching_paired_alias_too():
     conflicting["machine_action"] = "ENTER_NOW"
     key = calibration._machine_evaluation_key(rows[0])
     normalized, contract = calibration._common_refinement_population(
-        [alias], [*rows, conflicting], target_date="2026-09-15",
-        source_receipt=receipt, paired_contract={},
+        [alias],
+        [*rows, conflicting],
+        target_date="2026-09-15",
+        source_receipt=receipt,
+        paired_contract={},
         natural_conflicting_attempt_identity_count=1,
         natural_conflicting_evaluation_keys=[key],
     )
@@ -2668,8 +3022,11 @@ def test_unproven_conflict_manifest_cannot_bypass_global_natural_block(manifest)
     conflicting = copy.deepcopy(rows[0])
     conflicting["comparison"]["entry_path_target_pct"] = 0.9
     normalized, contract = calibration._common_refinement_population(
-        [], [*rows, conflicting], target_date="2026-09-15",
-        source_receipt=receipt, paired_contract={},
+        [],
+        [*rows, conflicting],
+        target_date="2026-09-15",
+        source_receipt=receipt,
+        paired_contract={},
         natural_conflicting_attempt_identity_count=1,
         natural_conflicting_evaluation_keys=manifest,
     )
@@ -2686,8 +3043,11 @@ def test_invalid_manifest_cannot_restore_conflicted_attempt_through_paired_lane(
     conflicting = copy.deepcopy(rows[0])
     conflicting["machine_action"] = "ENTER_NOW"
     normalized, contract = calibration._common_refinement_population(
-        [alias], [*rows, conflicting], target_date="2026-09-15",
-        source_receipt=receipt, paired_contract={},
+        [alias],
+        [*rows, conflicting],
+        target_date="2026-09-15",
+        source_receipt=receipt,
+        paired_contract={},
         natural_conflicting_attempt_identity_count=1,
         natural_conflicting_evaluation_keys=["machine:unproven"],
     )
@@ -2705,20 +3065,23 @@ def _compact_conflict_case_table(valid_count=20):
     for index in range(valid_count + 1):
         row = copy.deepcopy(template)
         row.update(
-            decision_trace_id=f"trace-{index}", evaluation_attempt_id=f"attempt-{index}",
+            decision_trace_id=f"trace-{index}",
+            evaluation_attempt_id=f"attempt-{index}",
             scanner_promotion_id=f"promotion-{index}",
         )
         rows.append(row)
     conflicting = copy.deepcopy(rows[0])
     conflicting["entry_quality_path"]["gross_net_target_pct"] = 999.0
     receipt = {
-        "target_date": "2026-09-15", "tuning_input_allowed": True,
+        "target_date": "2026-09-15",
+        "tuning_input_allowed": True,
         "source_manifest_sha256": "d" * 64,
         "machine_terminal_tuning_gate": {
             "decision_counterfactual_tuning_input_allowed": True,
         },
         "compact_auxiliary_policy_measurement": {
-            "prompt_version": AI_VERSION, "measurement_allowed": True,
+            "prompt_version": AI_VERSION,
+            "measurement_allowed": True,
         },
     }
     return calibration.build_machine_decision_case_table(
@@ -2727,13 +3090,17 @@ def _compact_conflict_case_table(valid_count=20):
 
 
 @pytest.mark.parametrize("valid_count", [19, 20])
-def test_compact_conflicting_veto_attempt_does_not_freeze_unaffected_screens(valid_count):
+def test_compact_conflicting_veto_attempt_does_not_freeze_unaffected_screens(
+    valid_count,
+):
     report = _compact_conflict_case_table(valid_count)
     compact = report["compact_auxiliary_screen_outcomes"]
     economic = compact["economic_contract"]
     assert report["conflicting_attempt_identity_count"] == 1
     assert economic["economic_eligible_count"] == valid_count
-    assert economic["missed_profit_veto_net_sum_pct"] == pytest.approx(valid_count * 0.07)
+    assert economic["missed_profit_veto_net_sum_pct"] == pytest.approx(
+        valid_count * 0.07
+    )
     assert economic["exclusion_counts"]["conflicting_exact_attempt"] == 2
     assert economic["denominator_preserved"] is True
     assert compact["automatic_successor_selection"]["eligible"] is (valid_count == 20)
@@ -2741,12 +3108,18 @@ def test_compact_conflicting_veto_attempt_does_not_freeze_unaffected_screens(val
 
 @pytest.mark.parametrize("net_ev", [0.12, 0.07, 0.0, -0.01])
 @pytest.mark.parametrize("next_generation", [False, True])
-def test_full_population_research_value_does_not_bypass_live_10bp_and_downstream_gate(net_ev, next_generation):
+def test_full_population_research_value_does_not_bypass_live_10bp_and_downstream_gate(
+    net_ev, next_generation
+):
     rows, receipt = _natural_refinement_fixture()
     for row in rows:
         row["comparison"]["entry_path_target_pct"] = 0.2 + net_ev
     normalized, contract = calibration._common_refinement_population(
-        [], rows, target_date="2026-09-15", source_receipt=receipt, paired_contract={},
+        [],
+        rows,
+        target_date="2026-09-15",
+        source_receipt=receipt,
+        paired_contract={},
     )
     parent = json.loads(json.dumps(calibration.MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1))
     parent["thresholds"]["maximum_spread_bp"] = 20
@@ -2754,20 +3127,30 @@ def test_full_population_research_value_does_not_bypass_live_10bp_and_downstream
         parent["version"] = calibration.MECHANISTIC_FULL_POPULATION_POLICY_VERSION
         parent["postclose_selection"]["minimum_cost_adjusted_ev_pct"] = 0.0
     result = calibration.build_clean_baseline_mechanistic_refinement(
-        Path("unused"), target_date="2026-09-15", source_rows=normalized,
-        source_contract=contract, parent_policy=parent,
+        Path("unused"),
+        target_date="2026-09-15",
+        source_rows=normalized,
+        source_contract=contract,
+        parent_policy=parent,
     )
     assert result["promotion_pass"] is False
     assert result["objective"]["minimum_ev_pct"] == 0.1
-    assert result["policy_version"] == calibration.MECHANISTIC_FULL_POPULATION_POLICY_VERSION
+    assert (
+        result["policy_version"]
+        == calibration.MECHANISTIC_FULL_POPULATION_POLICY_VERSION
+    )
 
 
 def test_common_refinement_deduplicates_exact_natural_attempts():
     import copy
+
     rows, receipt = _natural_refinement_fixture()
     normalized, contract = calibration._common_refinement_population(
-        [], rows + [copy.deepcopy(rows[0])], target_date="2026-09-15",
-        source_receipt=receipt, paired_contract={},
+        [],
+        rows + [copy.deepcopy(rows[0])],
+        target_date="2026-09-15",
+        source_receipt=receipt,
+        paired_contract={},
     )
     assert len(normalized) == len(rows)
     assert contract["row_exclusion_reason_counts"]["identical_duplicate"] == 1
@@ -2779,31 +3162,57 @@ def test_common_refinement_indexes_sealed_operating_projection_once(monkeypatch)
 
     rows, receipt = _natural_refinement_fixture()
     rows = rows[:2]
+
     def projection_row(row):
-        return {key: row[key] for key in (
-            "evaluation_attempt_id", "source_date", "stock_code",
-            "scanner_promotion_id", "effective_venue", "session_bucket",
-        )}
-    projection = compact.sealed({"rows": [
-        projection_row(rows[0]), projection_row(rows[0]), projection_row(rows[1]),
-    ]})
+        return {
+            key: row[key]
+            for key in (
+                "evaluation_attempt_id",
+                "source_date",
+                "stock_code",
+                "scanner_promotion_id",
+                "effective_venue",
+                "session_bucket",
+            )
+        }
+
+    projection = compact.sealed(
+        {
+            "rows": [
+                projection_row(rows[0]),
+                projection_row(rows[0]),
+                projection_row(rows[1]),
+            ]
+        }
+    )
     valid = compact.valid
     calls = []
+
     def checked(value):
         calls.append(value)
         return valid(value)
+
     monkeypatch.setattr(compact, "valid", checked)
-    monkeypatch.setattr(calibration, "_machine_nonentry_seed", lambda source: {"valid": True})
+    monkeypatch.setattr(
+        calibration, "_machine_nonentry_seed", lambda source: {"valid": True}
+    )
 
     result, contract = calibration._common_refinement_population(
-        [], rows, target_date="2026-09-15", source_receipt=receipt,
-        paired_contract={}, operating_projection=projection,
+        [],
+        rows,
+        target_date="2026-09-15",
+        source_receipt=receipt,
+        paired_contract={},
+        operating_projection=projection,
     )
 
     assert len(calls) == 1
     assert contract["operating_economic_enrichment_count"] == 1
     assert "operating_comparison_input" not in result[0]
-    assert result[1]["operating_comparison_input"]["evaluation_attempt_id"] == rows[1]["evaluation_attempt_id"]
+    assert (
+        result[1]["operating_comparison_input"]["evaluation_attempt_id"]
+        == rows[1]["evaluation_attempt_id"]
+    )
     assert all(row["machine_sequence_expected_count"] == 1 for row in result)
 
 
@@ -2813,8 +3222,12 @@ def test_common_refinement_ignores_invalid_optional_projection_attempt_id():
     rows, receipt = _natural_refinement_fixture()
     projection = compact.sealed({"rows": [{"evaluation_attempt_id": ["invalid"]}]})
     result, contract = calibration._common_refinement_population(
-        [], rows[:1], target_date="2026-09-15", source_receipt=receipt,
-        paired_contract={}, operating_projection=projection,
+        [],
+        rows[:1],
+        target_date="2026-09-15",
+        source_receipt=receipt,
+        paired_contract={},
+        operating_projection=projection,
     )
     assert len(result) == 1
     assert contract["operating_economic_enrichment_count"] == 0
@@ -2823,17 +3236,24 @@ def test_common_refinement_ignores_invalid_optional_projection_attempt_id():
 @pytest.mark.parametrize("conflict", [False, True])
 def test_common_refinement_trace_cannot_inflate_cross_lane_population(conflict):
     import copy
+
     rows, receipt = _natural_refinement_fixture()
     paired = copy.deepcopy(rows[0])
     if conflict:
         paired["comparison"]["entry_path_target_pct"] = 0.4
     normalized, contract = calibration._common_refinement_population(
-        [paired], rows, target_date="2026-09-15", source_receipt=receipt, paired_contract={},
+        [paired],
+        rows,
+        target_date="2026-09-15",
+        source_receipt=receipt,
+        paired_contract={},
     )
     assert len(normalized) == len(rows) - int(conflict)
     assert contract["input_row_disposition_complete"] is True
     assert len({r["decision_trace_id"] for r in normalized}) == len(normalized)
-    assert contract["row_exclusion_reason_counts"]["conflicting_duplicate" if conflict else "identical_duplicate"] == (2 if conflict else 1)
+    assert contract["row_exclusion_reason_counts"][
+        "conflicting_duplicate" if conflict else "identical_duplicate"
+    ] == (2 if conflict else 1)
 
 
 @pytest.mark.parametrize("net_ev", [0.07, 0.0, -0.01])
@@ -2842,23 +3262,36 @@ def test_hierarchy_full_population_recovers_small_net_non_entries(net_ev, scope)
     rows, receipt = _natural_refinement_fixture()
     cohort = tuple(scope.split("|"))
     for row in rows:
-        row["entry_group_observation"]["key_parts"].update(venue=cohort[0], session_bucket=cohort[1])
+        row["entry_group_observation"]["key_parts"].update(
+            venue=cohort[0], session_bucket=cohort[1]
+        )
         row.update(effective_venue=cohort[0], session_bucket=cohort[1])
-        row["comparison"]["entry_cost_contract"].update(effective_venue=cohort[0], session_bucket=cohort[1])
+        row["comparison"]["entry_cost_contract"].update(
+            effective_venue=cohort[0], session_bucket=cohort[1]
+        )
         row["comparison"]["entry_path_target_pct"] = 0.2 + net_ev
         evidence = row["setup_evidence"]
         evidence["micro_recovery_observation"] = {
-            "source_usable": True, "net_aggressive_delta_10t": 20, "price_change_10t_pct": 0.1,
+            "source_usable": True,
+            "net_aggressive_delta_10t": 20,
+            "price_change_10t_pct": 0.1,
         }
-        evidence["evidence_sha256"] = calibration._canonical_sha256({
-            k: v for k, v in evidence.items() if k != "evidence_sha256"
-        })
+        evidence["evidence_sha256"] = calibration._canonical_sha256(
+            {k: v for k, v in evidence.items() if k != "evidence_sha256"}
+        )
     normalized, contract = calibration._common_refinement_population(
-        [], rows, target_date="2026-09-15", source_receipt=receipt, paired_contract={}, cohort=cohort,
+        [],
+        rows,
+        target_date="2026-09-15",
+        source_receipt=receipt,
+        paired_contract={},
+        cohort=cohort,
     )
     scoped = calibration.build_clean_baseline_mechanistic_refinement(
-        Path("unused"), target_date="2026-09-15",
-        source_rows=normalized, source_contract=contract,
+        Path("unused"),
+        target_date="2026-09-15",
+        source_rows=normalized,
+        source_contract=contract,
         parent_policy=calibration.MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1,
     )
     assert scoped["scope"]["venue"] == cohort[0]
@@ -2866,81 +3299,135 @@ def test_hierarchy_full_population_recovers_small_net_non_entries(net_ev, scope)
     parent = json.loads(json.dumps(calibration.MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1))
     parent["thresholds"]["maximum_spread_bp"] = 20
     result = calibration.build_mechanistic_hierarchy_candidate(
-        normalized, target_date="2026-09-15", parent_policy=parent,
+        normalized,
+        target_date="2026-09-15",
+        parent_policy=parent,
         population_source_contract=contract,
         cohort=cohort,
     )
     assert result["promotion_pass"] is (net_ev >= 0.10)
     if net_ev >= 0.10:
-        assert calibration.validate_hierarchy_candidate(result, source_date="2026-09-15", cohort=cohort) == []
+        assert (
+            calibration.validate_hierarchy_candidate(
+                result, source_date="2026-09-15", cohort=cohort
+            )
+            == []
+        )
         if cohort != ("KRX", "KRX_REGULAR"):
-            assert calibration.validate_hierarchy_candidate(result, source_date="2026-09-15", cohort=("KRX", "KRX_REGULAR"))
+            assert calibration.validate_hierarchy_candidate(
+                result, source_date="2026-09-15", cohort=("KRX", "KRX_REGULAR")
+            )
         candidate = result["policy_candidate"]
-        assert candidate["incumbent_machine_policy_sha256"] == calibration._canonical_sha256(parent)
-        assert candidate["holdout"]["paired_population"]["paired_terminal_proxy_delta_pct"] > 0
-        assert candidate["threshold_policy"]["version"] == calibration.MECHANISTIC_FULL_POPULATION_POLICY_VERSION
+        assert candidate[
+            "incumbent_machine_policy_sha256"
+        ] == calibration._canonical_sha256(parent)
+        assert (
+            candidate["holdout"]["paired_population"]["paired_terminal_proxy_delta_pct"]
+            > 0
+        )
+        assert (
+            candidate["threshold_policy"]["version"]
+            == calibration.MECHANISTIC_FULL_POPULATION_POLICY_VERSION
+        )
         again = calibration.build_mechanistic_hierarchy_candidate(
-            normalized, target_date="2026-09-15", parent_policy=candidate["threshold_policy"],
+            normalized,
+            target_date="2026-09-15",
+            parent_policy=candidate["threshold_policy"],
             population_source_contract=contract,
             cohort=cohort,
         )
         assert again["promotion_pass"] is False
-        candidate["holdout"]["paired_population"]["paired_terminal_proxy_delta_pct"] = 0.0
-        candidate["candidate_content_sha256"] = calibration._canonical_sha256({
-            k: v for k, v in candidate.items() if k != "candidate_content_sha256"
-        })
-        assert "candidate_full_population_economic_proof_invalid" in calibration.validate_hierarchy_candidate(
-            result, source_date="2026-09-15", cohort=cohort
+        candidate["holdout"]["paired_population"][
+            "paired_terminal_proxy_delta_pct"
+        ] = 0.0
+        candidate["candidate_content_sha256"] = calibration._canonical_sha256(
+            {k: v for k, v in candidate.items() if k != "candidate_content_sha256"}
+        )
+        assert (
+            "candidate_full_population_economic_proof_invalid"
+            in calibration.validate_hierarchy_candidate(
+                result, source_date="2026-09-15", cohort=cohort
+            )
         )
 
 
 def test_hierarchy_full_population_no_gain_over_current_incumbent_carries():
     rows, receipt = _natural_refinement_fixture()
     normalized, contract = calibration._common_refinement_population(
-        [], rows, target_date="2026-09-15", source_receipt=receipt, paired_contract={},
+        [],
+        rows,
+        target_date="2026-09-15",
+        source_receipt=receipt,
+        paired_contract={},
     )
     parent = json.loads(json.dumps(calibration.MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1))
     parent["thresholds"]["maximum_spread_bp"] = 35
     result = calibration.build_mechanistic_hierarchy_candidate(
-        normalized, target_date="2026-09-15", parent_policy=parent,
+        normalized,
+        target_date="2026-09-15",
+        parent_policy=parent,
         population_source_contract=contract,
     )
     assert result["promotion_pass"] is False
     contract["accepted_rows_sha256"] = "0" * 64
-    with pytest.raises(ValueError, match="hierarchy_full_population_source_contract_invalid"):
+    with pytest.raises(
+        ValueError, match="hierarchy_full_population_source_contract_invalid"
+    ):
         calibration.build_mechanistic_hierarchy_candidate(
-            normalized, target_date="2026-09-15", parent_policy=parent,
+            normalized,
+            target_date="2026-09-15",
+            parent_policy=parent,
             population_source_contract=contract,
         )
 
 
-def test_report_common_refinement_uses_natural_population_and_current_parent(monkeypatch, tmp_path):
+def test_report_common_refinement_uses_natural_population_and_current_parent(
+    monkeypatch, tmp_path
+):
     from src.engine.scalping import mechanistic_entry_runtime_policy as runtime_policy
+
     rows, receipt = _natural_refinement_fixture()
     parent = json.loads(json.dumps(calibration.MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1))
     parent["thresholds"]["maximum_spread_bp"] = 20
-    monkeypatch.setattr(runtime_policy, "load_effective", lambda **kw: {"machine_policy": parent})
-    monkeypatch.setattr(calibration, "load_machine_observation_rows", lambda *a, **kw: (rows, {"evaluable": len(rows)}))
-    monkeypatch.setattr(calibration, "_machine_ai_natural_source_receipt", lambda *a: receipt)
-    monkeypatch.setattr(calibration, "_compact_history_receipt", lambda root, day, observations, incumbent, receipt: receipt)
+    monkeypatch.setattr(
+        runtime_policy, "load_effective", lambda **kw: {"machine_policy": parent}
+    )
+    monkeypatch.setattr(
+        calibration,
+        "load_machine_observation_rows",
+        lambda *a, **kw: (rows, {"evaluable": len(rows)}),
+    )
+    monkeypatch.setattr(
+        calibration, "_machine_ai_natural_source_receipt", lambda *a: receipt
+    )
+    monkeypatch.setattr(
+        calibration,
+        "_compact_history_receipt",
+        lambda root, day, observations, incumbent, receipt: receipt,
+    )
     report = calibration.build_report(target_date="2026-09-15", data_root=tmp_path)
     result = report["mechanistic_entry_refinement"]
     # A producer cannot promote a proxy-only BLOCK population without the
     # uncalled downstream AI and frozen operating owner contract.
     assert result["promotion_pass"] is False
     assert result["source_contract"]["accepted_lane_counts"] == {"natural": len(rows)}
-    assert result["source_contract"][
-        "machine_population_independent_of_compact_projection"
-    ] is True
+    assert (
+        result["source_contract"][
+            "machine_population_independent_of_compact_projection"
+        ]
+        is True
+    )
     assert report["report_scope"] == "main_mechanistic_entry"
     assert report["noncompact_sections_refreshed"] is True
     assert report["machine_full_evaluation"]["full_population_count"] == len(rows)
-    assert result["incumbent_machine_policy_sha256"] == calibration._canonical_sha256(parent)
+    assert result["incumbent_machine_policy_sha256"] == calibration._canonical_sha256(
+        parent
+    )
 
 
-@pytest.mark.parametrize('native_reversal',[False,True])
+@pytest.mark.parametrize("native_reversal", [False, True])
 def test_machine_only_report_does_not_scan_unrelated_pipeline_history(
-    monkeypatch, tmp_path,native_reversal
+    monkeypatch, tmp_path, native_reversal
 ):
     from src.engine.scalping import mechanistic_entry_runtime_policy as runtime_policy
     from src.engine.scalping import continuous_reversal_policy_v6 as native
@@ -2955,7 +3442,14 @@ def test_machine_only_report_does_not_scan_unrelated_pipeline_history(
     monkeypatch.setattr(
         runtime_policy,
         "load_effective",
-        lambda **kw: {"machine_policy": parent,**({'continuous_reversal':{'schema':native.SCHEMA}} if native_reversal else {})},
+        lambda **kw: {
+            "machine_policy": parent,
+            **(
+                {"continuous_reversal": {"schema": native.SCHEMA}}
+                if native_reversal
+                else {}
+            ),
+        },
     )
     monkeypatch.setattr(
         calibration,
@@ -2980,12 +3474,17 @@ def test_machine_only_report_does_not_scan_unrelated_pipeline_history(
         ),
     )
     from src.engine.scalping import main_submit_drought_research as legacy
-    calls=[]
+
+    calls = []
+
     def compare(*args):
-        assert not native_reversal,'native captures cannot enter the legacy recipe comparator'
+        assert (
+            not native_reversal
+        ), "native captures cannot enter the legacy recipe comparator"
         calls.append(True)
-        return {'status':'legacy_recipe_comparison'}
-    monkeypatch.setattr(legacy,'refresh_daily_projection',compare)
+        return {"status": "legacy_recipe_comparison"}
+
+    monkeypatch.setattr(legacy, "refresh_daily_projection", compare)
 
     report = calibration.build_main_mechanistic_report(
         target_date="2026-09-15", data_root=tmp_path
@@ -2994,16 +3493,19 @@ def test_machine_only_report_does_not_scan_unrelated_pipeline_history(
     assert report["report_scope"] == "main_mechanistic_entry"
     assert report["noncompact_sections_refreshed"] is True
     assert bool(calls) is (not native_reversal)
-    assert ('submission_drought_price_comparison' in report) is (not native_reversal)
+    assert ("submission_drought_price_comparison" in report) is (not native_reversal)
     assert report["machine_full_evaluation"]["full_population_count"] == len(rows)
     machine_selection = report["strategy_refinements_by_scope"]["KRX|KRX_REGULAR"]
     assert machine_selection["population_count"] == len(rows)
-    assert machine_selection["source_acceptance"]["attempt_identity_fallback_count"] == len(rows)
+    assert machine_selection["source_acceptance"][
+        "attempt_identity_fallback_count"
+    ] == len(rows)
     assert report["ofi_smoothing_audit"]["status"] == "not_recomputed_machine_only"
     assert report["hierarchical_entry_quality"]["policy_candidate"] is None
-    assert report["hierarchical_entry_quality"]["runtime_extension"][
-        "promotion_pass"
-    ] is False
+    assert (
+        report["hierarchical_entry_quality"]["runtime_extension"]["promotion_pass"]
+        is False
+    )
 
 
 def test_mechanistic_source_loader_includes_supported_nxt_only_for_all_scope_mode(
@@ -4327,9 +4829,11 @@ def test_same_prompt_isolated_krx_and_nxt_are_separate_candidates(
     } == {("KRX", "KRX_REGULAR"), ("NXT", "NXT_AFTERMARKET")}
 
 
-@pytest.mark.parametrize("source_date,count", [("2026-09-07",1),("2026-10-21",2)])
+@pytest.mark.parametrize("source_date,count", [("2026-09-07", 1), ("2026-10-21", 2)])
 def test_dual_aftermarket_uses_route_key_and_remains_observe_only(
-    tmp_path: Path, source_date, count,
+    tmp_path: Path,
+    source_date,
+    count,
 ) -> None:
     assert calibration._cohort_route_scope("KRX", "KRX_REGULAR", "") == (
         "KRX:KRX_REGULAR"
@@ -4862,9 +5366,12 @@ def test_runtime_policy_publication_receipt_requires_exact_source_binding():
             "artifact_content_sha256": "a" * 64,
         },
     }
-    assert calibration._runtime_policy_publication_errors(
-        mixed_successor, source, publication_date="2026-09-20"
-    ) == []
+    assert (
+        calibration._runtime_policy_publication_errors(
+            mixed_successor, source, publication_date="2026-09-20"
+        )
+        == []
+    )
     assert calibration._runtime_policy_publication_errors(
         {
             **mixed_successor,
@@ -4884,219 +5391,449 @@ def test_runtime_policy_publication_receipt_requires_exact_source_binding():
     ]
 
 
-def _bound_microstructure_case_row(index, *, bundle='a' * 64, action='BLOCK'):
-    from src.engine.ai_prompt_contracts import ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION
+def _bound_microstructure_case_row(index, *, bundle="a" * 64, action="BLOCK"):
+    from src.engine.ai_prompt_contracts import (
+        ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION,
+    )
 
     return {
-        'decision_trace_id': f'trace-{index}', 'evaluation_attempt_id': f'attempt-{index}',
-        'scanner_promotion_id': f'promotion-{index}', 'decision_snapshot_id': f'snapshot-{index}',
-        'decision_ts': '2026-09-17T10:00:00+09:00', 'source_date': '2026-09-17',
-        'stock_code': '005930', 'effective_venue': 'KRX_NXT_INTEGRATED',
-        'session_bucket': 'KRX_NXT_AFTERMARKET', 'bundle_sha256': bundle,
-        'machine_action': action,
-        'microstructure_evaluation_binding': {
-            'capture_sha256': 'b' * 64, 'snapshot_identity_matches': True,
-            'venue_session_matches': True, 'bundle_sha256': bundle,
-            'flow_source_quality_status': 'fresh_consistent',
-            'micro_recovery': {'source_usable': True},
-            'reaction_context': {'microstructure_reaction_context_status': 'ok'},
-            'micro_window': {'action': 'SOURCE_UNAVAILABLE', 'source_quality_status': 'source_gap'},
+        "decision_trace_id": f"trace-{index}",
+        "evaluation_attempt_id": f"attempt-{index}",
+        "scanner_promotion_id": f"promotion-{index}",
+        "decision_snapshot_id": f"snapshot-{index}",
+        "decision_ts": "2026-09-17T10:00:00+09:00",
+        "source_date": "2026-09-17",
+        "stock_code": "005930",
+        "effective_venue": "KRX_NXT_INTEGRATED",
+        "session_bucket": "KRX_NXT_AFTERMARKET",
+        "bundle_sha256": bundle,
+        "machine_action": action,
+        "microstructure_evaluation_binding": {
+            "capture_sha256": "b" * 64,
+            "snapshot_identity_matches": True,
+            "venue_session_matches": True,
+            "bundle_sha256": bundle,
+            "flow_source_quality_status": "fresh_consistent",
+            "micro_recovery": {"source_usable": True},
+            "reaction_context": {"microstructure_reaction_context_status": "ok"},
+            "micro_window": {
+                "action": "SOURCE_UNAVAILABLE",
+                "source_quality_status": "source_gap",
+            },
         },
-        'entry_quality_path': {
-            'status': 'evaluable', 'entry_quality_label': 'CLEAN_FAST_PROFIT',
-            'cadence_complete': True,
+        "entry_quality_path": {
+            "status": "evaluable",
+            "entry_quality_label": "CLEAN_FAST_PROFIT",
+            "cadence_complete": True,
         },
-        'comparison': {'cost_evidence': {
-            'selected_economic_cost_pct': 0.5,
-            'selected_cost_basis': 'executable_estimated_cost_pct',
-            'cost_source_sha256': 'c' * 64, 'missing_cost_imputed': False,
-        }},
-        'outcome_horizon_metrics': {'3m': {'status': 'observed', 'end_return_pct': 1, 'mae_pct': -0.2}},
-        'ai_and_final_guard': {
-            'join_status': 'exact_snapshot_machine_action_join', 'provider_called': True,
-            'prompt_version': ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION,
-            'ai_risk_verdict': 'PASS', 'decision_quality_contract_status': 'pass',
+        "comparison": {
+            "cost_evidence": {
+                "selected_economic_cost_pct": 0.5,
+                "selected_cost_basis": "executable_estimated_cost_pct",
+                "cost_source_sha256": "c" * 64,
+                "missing_cost_imputed": False,
+            }
+        },
+        "outcome_horizon_metrics": {
+            "3m": {"status": "observed", "end_return_pct": 1, "mae_pct": -0.2}
+        },
+        "ai_and_final_guard": {
+            "join_status": "exact_snapshot_machine_action_join",
+            "provider_called": True,
+            "prompt_version": ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION,
+            "ai_risk_verdict": "PASS",
+            "decision_quality_contract_status": "pass",
         },
     }
 
 
 def test_microstructure_full_denominator_precedes_export_limit_and_keeps_policy_partitions():
     rows = [_bound_microstructure_case_row(i) for i in range(205)]
-    rows.append(_bound_microstructure_case_row(205, bundle='d' * 64, action='ENTER_NOW'))
+    rows.append(
+        _bound_microstructure_case_row(205, bundle="d" * 64, action="ENTER_NOW")
+    )
     rows.append(dict(rows[0]))
     table = calibration.build_machine_decision_case_table(rows)
-    result = table['microstructure_evaluation']
-    assert len(table['rows']) == 200
-    assert table['duplicate_same_action_collapsed_count'] == 1
-    assert result['case_count'] == result['cost_adjusted_outcome_count'] == 206
-    assert result['denominator_preserved'] is True
-    assert result['machine_enter_ai_routing_counts'] == {'PASS': 1}
-    assert len(result['partitions']) == 2
-    assert result['source_binding_counts']['micro_window_source_gap'] == 206
-    assert result['actual_completed_ev_pct'] is None
-    assert result['causal_model_delta_ev_pct'] is None
-    assert all(p['cost_adjusted_3m_endpoint_cf']['mean_net_pct'] == 0.5 for p in result['partitions'])
+    result = table["microstructure_evaluation"]
+    assert len(table["rows"]) == 200
+    assert table["duplicate_same_action_collapsed_count"] == 1
+    assert result["case_count"] == result["cost_adjusted_outcome_count"] == 206
+    assert result["denominator_preserved"] is True
+    assert result["machine_enter_ai_routing_counts"] == {"PASS": 1}
+    assert len(result["partitions"]) == 2
+    assert result["source_binding_counts"]["micro_window_source_gap"] == 206
+    assert result["actual_completed_ev_pct"] is None
+    assert result["causal_model_delta_ev_pct"] is None
+    assert all(
+        p["cost_adjusted_3m_endpoint_cf"]["mean_net_pct"] == 0.5
+        for p in result["partitions"]
+    )
 
 
 def test_microstructure_cost_identity_cadence_and_conflict_exclusions_are_not_zero_returns():
     import copy
 
     rows = [_bound_microstructure_case_row(i) for i in range(6)]
-    rows[1]['comparison']['cost_evidence']['selected_economic_cost_pct'] = None
-    rows[2]['microstructure_evaluation_binding']['venue_session_matches'] = False
-    rows[3]['entry_quality_path']['cadence_complete'] = False
+    rows[1]["comparison"]["cost_evidence"]["selected_economic_cost_pct"] = None
+    rows[2]["microstructure_evaluation_binding"]["venue_session_matches"] = False
+    rows[3]["entry_quality_path"]["cadence_complete"] = False
     conflict = copy.deepcopy(rows[4])
-    conflict['outcome_horizon_metrics']['3m']['end_return_pct'] = -2
+    conflict["outcome_horizon_metrics"]["3m"]["end_return_pct"] = -2
     rows.append(conflict)
     table = calibration.build_machine_decision_case_table(rows)
-    result = table['microstructure_evaluation']
-    assert result['cost_adjusted_outcome_count'] == 2
-    assert result['exclusion_counts'] == {
-        'full_cost_contract_gap': 1, 'exact_identity_or_source_gap': 1,
-        'mature_cadence_outcome_gap': 1, 'conflicting_exact_attempt': 2,
+    result = table["microstructure_evaluation"]
+    assert result["cost_adjusted_outcome_count"] == 2
+    assert result["exclusion_counts"] == {
+        "full_cost_contract_gap": 1,
+        "exact_identity_or_source_gap": 1,
+        "mature_cadence_outcome_gap": 1,
+        "conflicting_exact_attempt": 2,
     }
-    assert result['denominator_preserved'] is True
+    assert result["denominator_preserved"] is True
 
 
 def test_machine_capture_binding_does_not_invent_venue_or_future_cutoff():
-    from src.engine.scalping.microstructure_reaction_context import bind_machine_microstructure_source
+    from src.engine.scalping.microstructure_reaction_context import (
+        bind_machine_microstructure_source,
+    )
     from datetime import datetime
 
-    captured = '2026-09-17T10:00:00+09:00'
+    captured = "2026-09-17T10:00:00+09:00"
     epoch = datetime.fromisoformat(captured).timestamp() * 1000
     capture = {
-        'captured_at': captured, 'machine_observation_sha256': 'a' * 64,
-        'bundle_sha256': 'b' * 64,
-        'label_context': {'snapshot_id': 's1', 'effective_venue': 'KRX', 'session_bucket': 'KRX_REGULAR'},
-        'source': {'exact_payload': {'ai_market_snapshot_v1': {
-            'snapshot_id': 's1', 'effective_venue': 'NXT', 'session_bucket': 'KRX_REGULAR'},
-            'mechanistic_micro_window': {'cutoff_ms': epoch + 1}}, 'setup_evidence': {}},
+        "captured_at": captured,
+        "machine_observation_sha256": "a" * 64,
+        "bundle_sha256": "b" * 64,
+        "label_context": {
+            "snapshot_id": "s1",
+            "effective_venue": "KRX",
+            "session_bucket": "KRX_REGULAR",
+        },
+        "source": {
+            "exact_payload": {
+                "ai_market_snapshot_v1": {
+                    "snapshot_id": "s1",
+                    "effective_venue": "NXT",
+                    "session_bucket": "KRX_REGULAR",
+                },
+                "mechanistic_micro_window": {"cutoff_ms": epoch + 1},
+            },
+            "setup_evidence": {},
+        },
     }
     binding = bind_machine_microstructure_source(capture)
-    assert binding['venue_session_matches'] is False
-    assert binding['micro_window_cutoff_valid'] is False
-    assert binding['reaction_context'] == {}
+    assert binding["venue_session_matches"] is False
+    assert binding["micro_window_cutoff_valid"] is False
+    assert binding["reaction_context"] == {}
 
 
-def test_machine_cost_prerequisite_preserves_valid_source_and_does_not_backdate(monkeypatch, tmp_path):
+def test_machine_cost_prerequisite_preserves_valid_source_and_does_not_backdate(
+    monkeypatch, tmp_path
+):
     from src.engine.scalping.micro_reversion import economic_reference as reference
 
-    path = tmp_path / 'report/micro_reversion_economic_reference/micro_reversion_economic_reference_2026-09-17.json'
+    path = (
+        tmp_path
+        / "report/micro_reversion_economic_reference/micro_reversion_economic_reference_2026-09-17.json"
+    )
     path.parent.mkdir(parents=True)
-    path.write_text('original-cost-proof')
-    monkeypatch.setattr(calibration, '_hierarchy_cost_profiles', lambda *a, **k: {'005930': {'verified': True}})
-    monkeypatch.setattr(reference, 'publish_canonical_symbol_master', lambda *a, **k: {'status': 'verified_existing'})
-    receipt = calibration.ensure_machine_economic_reference(data_root=tmp_path, target_date='2026-09-17')
-    assert receipt['status'] == 'existing_verified_sources_preserved'
-    assert path.read_text() == 'original-cost-proof'
-    monkeypatch.setattr(calibration, '_hierarchy_cost_profiles', lambda *a, **k: {})
-    receipt = calibration.ensure_machine_economic_reference(data_root=tmp_path, target_date='2026-06-05')
-    assert receipt['status'] == 'source_gap_historical_official_master_unavailable'
-    assert not (path.parent / 'micro_reversion_economic_reference_2026-06-05.json').exists()
+    path.write_text("original-cost-proof")
+    monkeypatch.setattr(
+        calibration,
+        "_hierarchy_cost_profiles",
+        lambda *a, **k: {"005930": {"verified": True}},
+    )
+    monkeypatch.setattr(
+        reference,
+        "publish_canonical_symbol_master",
+        lambda *a, **k: {"status": "verified_existing"},
+    )
+    receipt = calibration.ensure_machine_economic_reference(
+        data_root=tmp_path, target_date="2026-09-17"
+    )
+    assert receipt["status"] == "existing_verified_sources_preserved"
+    assert path.read_text() == "original-cost-proof"
+    monkeypatch.setattr(calibration, "_hierarchy_cost_profiles", lambda *a, **k: {})
+    receipt = calibration.ensure_machine_economic_reference(
+        data_root=tmp_path, target_date="2026-06-05"
+    )
+    assert receipt["status"] == "source_gap_historical_official_master_unavailable"
+    assert not (
+        path.parent / "micro_reversion_economic_reference_2026-06-05.json"
+    ).exists()
 
 
 def test_capture_population_survives_cost_exclusion_and_collapses_same_capture():
-    from src.engine.scalping.microstructure_reaction_context import summarize_machine_capture_population
+    from src.engine.scalping.microstructure_reaction_context import (
+        summarize_machine_capture_population,
+    )
+
     capture = {
-        'machine_observation_sha256': 'a' * 64, 'bundle_sha256': 'b' * 64,
-        'captured_at': '2026-09-17T10:00:00+09:00',
-        'label_context': {'snapshot_id': 's', 'effective_venue': 'KRX_NXT_INTEGRATED', 'session_bucket': 'krx_nxt_aftermarket'},
-        'source': {'assessment': {'action': 'BLOCK'}, 'exact_payload': {'ai_market_snapshot_v1': {
-            'snapshot_id': 's', 'effective_venue': 'KRX_NXT_INTEGRATED', 'session_bucket': 'krx_nxt_aftermarket'}}, 'setup_evidence': {}},
+        "machine_observation_sha256": "a" * 64,
+        "bundle_sha256": "b" * 64,
+        "captured_at": "2026-09-17T10:00:00+09:00",
+        "label_context": {
+            "snapshot_id": "s",
+            "effective_venue": "KRX_NXT_INTEGRATED",
+            "session_bucket": "krx_nxt_aftermarket",
+        },
+        "source": {
+            "assessment": {"action": "BLOCK"},
+            "exact_payload": {
+                "ai_market_snapshot_v1": {
+                    "snapshot_id": "s",
+                    "effective_venue": "KRX_NXT_INTEGRATED",
+                    "session_bucket": "krx_nxt_aftermarket",
+                }
+            },
+            "setup_evidence": {},
+        },
     }
     result = summarize_machine_capture_population([capture, capture])
-    assert result['verified_capture_count'] == 2
-    assert result['unique_verified_capture_count'] == 1
-    assert result['duplicate_capture_collapsed_count'] == 1
-    assert result['partitions'][0]['source_binding_counts'] == {'exact_bound': 1, 'micro_window_source_gap': 1}
+    assert result["verified_capture_count"] == 2
+    assert result["unique_verified_capture_count"] == 1
+    assert result["duplicate_capture_collapsed_count"] == 1
+    assert result["partitions"][0]["source_binding_counts"] == {
+        "exact_bound": 1,
+        "micro_window_source_gap": 1,
+    }
 
 
 @pytest.mark.parametrize("relative_root", [False, True])
-def test_machine_cost_prerequisite_uses_private_sources_not_live_provider_budget(monkeypatch, tmp_path, relative_root):
+def test_machine_cost_prerequisite_uses_private_sources_not_live_provider_budget(
+    monkeypatch, tmp_path, relative_root
+):
     from datetime import datetime
     from zoneinfo import ZoneInfo
-    from src.engine.scalping.micro_reversion import economic_reference as reference, economic_reference_owner as owner
+    from src.engine.scalping.micro_reversion import (
+        economic_reference as reference,
+        economic_reference_owner as owner,
+    )
     import json
 
-    day = datetime.now(ZoneInfo('Asia/Seoul')).date().isoformat()
+    day = datetime.now(ZoneInfo("Asia/Seoul")).date().isoformat()
     calls = []
+
     def build_sources(**kwargs):
         calls.append(kwargs)
-        root = kwargs['output_root']
+        root = kwargs["output_root"]
         root.mkdir(parents=True)
-        (root / 'provider_budget_policy.json').write_text('private-source-only')
-    monkeypatch.setattr(owner, 'build_daily_sources', build_sources)
-    monkeypatch.setattr(reference, 'build_daily_resolution', lambda **kwargs: {'verified': True, 'status': 'verified', 'target_date': day})
-    monkeypatch.setattr(reference, 'publish_canonical_symbol_master', lambda *a, **k: {'status': 'published'})
+        (root / "provider_budget_policy.json").write_text("private-source-only")
+
+    monkeypatch.setattr(owner, "build_daily_sources", build_sources)
+    monkeypatch.setattr(
+        reference,
+        "build_daily_resolution",
+        lambda **kwargs: {"verified": True, "status": "verified", "target_date": day},
+    )
+    monkeypatch.setattr(
+        reference,
+        "publish_canonical_symbol_master",
+        lambda *a, **k: {"status": "published"},
+    )
     monkeypatch.chdir(tmp_path)
-    receipt = calibration.ensure_machine_economic_reference(data_root=Path('.') if relative_root else tmp_path, target_date=day)
-    assert receipt['verified'] is True
-    assert calls[0]['output_root'] == tmp_path / 'report/micro_reversion_economic_reference/machine_source_inputs' / day
-    assert not (tmp_path / 'policy').exists()
-    assert json.loads((tmp_path / 'report/micro_reversion_economic_reference' / f'micro_reversion_economic_reference_{day}.json').read_text())['target_date'] == day
+    receipt = calibration.ensure_machine_economic_reference(
+        data_root=Path(".") if relative_root else tmp_path, target_date=day
+    )
+    assert receipt["verified"] is True
+    assert (
+        calls[0]["output_root"]
+        == tmp_path
+        / "report/micro_reversion_economic_reference/machine_source_inputs"
+        / day
+    )
+    assert not (tmp_path / "policy").exists()
+    assert (
+        json.loads(
+            (
+                tmp_path
+                / "report/micro_reversion_economic_reference"
+                / f"micro_reversion_economic_reference_{day}.json"
+            ).read_text()
+        )["target_date"]
+        == day
+    )
 
 
-def test_calibration_write_publishes_machine_link_before_policy_with_valid_parent_seal(monkeypatch, tmp_path):
+def test_calibration_write_publishes_machine_link_before_policy_with_valid_parent_seal(
+    monkeypatch, tmp_path
+):
     from src.engine.scalping import mechanistic_entry_runtime_policy as policy
-    from src.engine.scalping.microstructure_reaction_context import microstructure_summary_contract
+    from src.engine.scalping.microstructure_reaction_context import (
+        microstructure_summary_contract,
+    )
     import json
 
-    table = calibration.build_machine_decision_case_table([_bound_microstructure_case_row(0)])
-    report = {'schema': calibration.SCHEMA, 'target_date': '2026-09-17',
-              'runtime_effect': False, 'allowed_runtime_apply': False,
-              'hierarchical_entry_quality': {'machine_decision_case_table': table}}
-    monkeypatch.setattr(calibration, 'build_report', lambda **kwargs: calibration._with_artifact_content_sha256(report))
-    monkeypatch.setattr(calibration, 'ensure_machine_economic_reference', lambda **kwargs: {'status': 'source_only_test'})
+    table = calibration.build_machine_decision_case_table(
+        [_bound_microstructure_case_row(0)]
+    )
+    report = {
+        "schema": calibration.SCHEMA,
+        "target_date": "2026-09-17",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "hierarchical_entry_quality": {"machine_decision_case_table": table},
+    }
+    monkeypatch.setattr(
+        calibration,
+        "build_report",
+        lambda **kwargs: calibration._with_artifact_content_sha256(report),
+    )
+    monkeypatch.setattr(
+        calibration,
+        "ensure_machine_economic_reference",
+        lambda **kwargs: {"status": "source_only_test"},
+    )
     published = []
+
     def publish(path, **kwargs):
         parent = json.loads(path.read_text())
         assert calibration._artifact_content_sha256_valid(parent)
-        linked_path = tmp_path / 'report/microstructure_reaction_context/microstructure_reaction_context_2026-09-17.json'
-        linked = microstructure_summary_contract(json.loads(linked_path.read_text())['summary'])['machine_primary_auxiliary_evaluation']
-        assert linked['cost_adjusted_outcome_count'] == 1
+        linked_path = (
+            tmp_path
+            / "report/microstructure_reaction_context/microstructure_reaction_context_2026-09-17.json"
+        )
+        linked = microstructure_summary_contract(
+            json.loads(linked_path.read_text())["summary"]
+        )["machine_primary_auxiliary_evaluation"]
+        assert linked["cost_adjusted_outcome_count"] == 1
         published.append(path)
-    monkeypatch.setattr(policy, 'publish', publish)
-    assert calibration.main(['--target-date', '2026-09-17', '--data-root', str(tmp_path), '--write']) == 0
+
+    monkeypatch.setattr(policy, "publish", publish)
+    assert (
+        calibration.main(
+            ["--target-date", "2026-09-17", "--data-root", str(tmp_path), "--write"]
+        )
+        == 0
+    )
     assert len(published) == 1
 
 
 def test_integrated_and_premarket_cost_reference_requires_exact_broker_route_not_venue_guess():
     import copy
-    capture = {'label_context': {'snapshot_id': 's', 'broker_route': 'NXT', 'market_data_route': 'krx_nxt_integrated'},
-               'source': {'exact_payload': {'ai_market_snapshot_v1': {'snapshot_id': 's', 'broker_route': 'NXT', 'market_data_route': 'krx_nxt_integrated'}}}}
-    for cohort in [('KRX_NXT_INTEGRATED', 'KRX_NXT_AFTERMARKET'), ('PREMARKET_KRX_LIKE', 'PREMARKET_KRX_LIKE')]:
-        assert calibration._machine_capture_cost_reference_venue(capture, cohort) == 'NXT'
+
+    capture = {
+        "label_context": {
+            "snapshot_id": "s",
+            "broker_route": "NXT",
+            "market_data_route": "krx_nxt_integrated",
+        },
+        "source": {
+            "exact_payload": {
+                "ai_market_snapshot_v1": {
+                    "snapshot_id": "s",
+                    "broker_route": "NXT",
+                    "market_data_route": "krx_nxt_integrated",
+                }
+            }
+        },
+    }
+    for cohort in [
+        ("KRX_NXT_INTEGRATED", "KRX_NXT_AFTERMARKET"),
+        ("PREMARKET_KRX_LIKE", "PREMARKET_KRX_LIKE"),
+    ]:
+        assert (
+            calibration._machine_capture_cost_reference_venue(capture, cohort) == "NXT"
+        )
         missing = copy.deepcopy(capture)
-        missing['source']['exact_payload']['ai_market_snapshot_v1'].pop('broker_route')
-        assert calibration._machine_capture_cost_reference_venue(missing, cohort) is None
+        missing["source"]["exact_payload"]["ai_market_snapshot_v1"].pop("broker_route")
+        assert (
+            calibration._machine_capture_cost_reference_venue(missing, cohort) is None
+        )
         conflict = copy.deepcopy(capture)
-        conflict['source']['exact_payload']['ai_market_snapshot_v1']['broker_route'] = 'SOR'
-        assert calibration._machine_capture_cost_reference_venue(conflict, cohort) is None
-    assert calibration._machine_capture_cost_reference_venue({}, ('KRX', 'KRX_REGULAR')) == 'KRX'
+        conflict["source"]["exact_payload"]["ai_market_snapshot_v1"][
+            "broker_route"
+        ] = "SOR"
+        assert (
+            calibration._machine_capture_cost_reference_venue(conflict, cohort) is None
+        )
+    assert (
+        calibration._machine_capture_cost_reference_venue({}, ("KRX", "KRX_REGULAR"))
+        == "KRX"
+    )
 
 
 def test_machine_micro_window_is_bound_to_market_data_item_not_order_route():
     from datetime import datetime
-    from src.engine.scalping.microstructure_reaction_context import bind_machine_microstructure_source
-    capture = {'captured_at': '2026-09-17T10:00:00+09:00',
-               'label_context': {'stock_code': '005930', 'broker_route': 'SOR', 'market_data_route': 'krx_only'},
-               'source': {'exact_payload': {'mechanistic_micro_window': {
-                   'item': '005930', 'cutoff_ms': int(datetime.fromisoformat('2026-09-17T10:00:00+09:00').timestamp()*1000)}}}}
-    assert bind_machine_microstructure_source(capture)['micro_window_item_matches'] is True
-    capture['source']['exact_payload']['mechanistic_micro_window']['item'] = '005930_AL'
-    assert bind_machine_microstructure_source(capture)['micro_window_item_matches'] is False
+    from src.engine.scalping.microstructure_reaction_context import (
+        bind_machine_microstructure_source,
+    )
+
+    capture = {
+        "captured_at": "2026-09-17T10:00:00+09:00",
+        "label_context": {
+            "stock_code": "005930",
+            "broker_route": "SOR",
+            "market_data_route": "krx_only",
+        },
+        "source": {
+            "exact_payload": {
+                "mechanistic_micro_window": {
+                    "item": "005930",
+                    "cutoff_ms": int(
+                        datetime.fromisoformat("2026-09-17T10:00:00+09:00").timestamp()
+                        * 1000
+                    ),
+                }
+            }
+        },
+    }
+    assert (
+        bind_machine_microstructure_source(capture)["micro_window_item_matches"] is True
+    )
+    capture["source"]["exact_payload"]["mechanistic_micro_window"]["item"] = "005930_AL"
+    assert (
+        bind_machine_microstructure_source(capture)["micro_window_item_matches"]
+        is False
+    )
 
 
-def test_cost_prerequisite_only_never_builds_report_or_publishes_policy(monkeypatch, tmp_path):
+def test_cost_prerequisite_only_never_builds_report_or_publishes_policy(
+    monkeypatch, tmp_path
+):
     from src.engine.scalping import mechanistic_entry_runtime_policy as policy
+
     def forbidden(**kwargs):
-        raise AssertionError('unexpected report or policy work')
-    monkeypatch.setattr(calibration, 'build_report', forbidden)
-    monkeypatch.setattr(policy, 'publish', forbidden)
-    monkeypatch.setattr(calibration, 'ensure_machine_economic_reference', lambda **kwargs: {'status': 'verified', 'verified': True})
-    assert calibration.main(['--target-date', '2026-09-17', '--data-root', str(tmp_path), '--write', '--ensure-economic-reference-only']) == 0
-    monkeypatch.setattr(calibration, 'ensure_machine_economic_reference', lambda **kwargs: {'status': 'source_gap_historical_official_master_unavailable'})
-    assert calibration.main(['--target-date', '2026-09-17', '--write', '--ensure-economic-reference-only']) == 2
+        raise AssertionError("unexpected report or policy work")
+
+    monkeypatch.setattr(calibration, "build_report", forbidden)
+    monkeypatch.setattr(policy, "publish", forbidden)
+    monkeypatch.setattr(
+        calibration,
+        "ensure_machine_economic_reference",
+        lambda **kwargs: {"status": "verified", "verified": True},
+    )
+    assert (
+        calibration.main(
+            [
+                "--target-date",
+                "2026-09-17",
+                "--data-root",
+                str(tmp_path),
+                "--write",
+                "--ensure-economic-reference-only",
+            ]
+        )
+        == 0
+    )
+    monkeypatch.setattr(
+        calibration,
+        "ensure_machine_economic_reference",
+        lambda **kwargs: {
+            "status": "source_gap_historical_official_master_unavailable"
+        },
+    )
+    assert (
+        calibration.main(
+            [
+                "--target-date",
+                "2026-09-17",
+                "--write",
+                "--ensure-economic-reference-only",
+            ]
+        )
+        == 2
+    )
 
 
 def test_machine_only_write_reuses_exact_input_fingerprint(monkeypatch, tmp_path):
@@ -5141,16 +5878,19 @@ def test_machine_only_write_reuses_exact_input_fingerprint(monkeypatch, tmp_path
     )
     monkeypatch.setattr(policy, "publish", lambda *_args, **_kwargs: None)
 
-    assert calibration.main(
-        [
-            "--target-date",
-            target,
-            "--data-root",
-            str(tmp_path),
-            "--machine-only",
-            "--write",
-        ]
-    ) == 0
+    assert (
+        calibration.main(
+            [
+                "--target-date",
+                target,
+                "--data-root",
+                str(tmp_path),
+                "--machine-only",
+                "--write",
+            ]
+        )
+        == 0
+    )
     assert json.loads(path.read_text(encoding="utf-8")) == report
 
 
@@ -5167,236 +5907,369 @@ def test_main_fingerprint_ignores_same_compact_projection_rewrite(
     )
     projection.parent.mkdir(parents=True)
     projection.write_text('{"sealed":"same"}\n', encoding="utf-8")
-    first = calibration._main_mechanistic_input_fingerprint(
-        tmp_path, "2026-09-17"
-    )
+    first = calibration._main_mechanistic_input_fingerprint(tmp_path, "2026-09-17")
     replacement = projection.with_suffix(".replacement")
     replacement.write_bytes(projection.read_bytes())
     replacement.replace(projection)
     assert (
-        calibration._main_mechanistic_input_fingerprint(tmp_path, "2026-09-17")
-        == first
+        calibration._main_mechanistic_input_fingerprint(tmp_path, "2026-09-17") == first
     )
     projection.write_text('{"sealed":"changed"}\n', encoding="utf-8")
     assert (
-        calibration._main_mechanistic_input_fingerprint(tmp_path, "2026-09-17")
-        != first
+        calibration._main_mechanistic_input_fingerprint(tmp_path, "2026-09-17") != first
     )
 
 
 def test_machine_microstructure_diagnostic_preserves_existing_auxiliary_gate():
-    table = calibration.build_machine_decision_case_table([_bound_microstructure_case_row(1, action='ENTER_NOW')], source_receipt={
-        'tuning_input_allowed': True, 'machine_threshold_tuning_input_allowed': True,
-        'compact_auxiliary_policy_measurement': {'measurement_allowed': False},
-    })
-    summary = table['microstructure_evaluation']
-    assert summary['cost_adjusted_outcome_count'] == 1
-    assert summary['machine_tuning_input_allowed'] is True
-    assert summary['auxiliary_tuning_input_allowed'] is False
+    table = calibration.build_machine_decision_case_table(
+        [_bound_microstructure_case_row(1, action="ENTER_NOW")],
+        source_receipt={
+            "tuning_input_allowed": True,
+            "machine_threshold_tuning_input_allowed": True,
+            "compact_auxiliary_policy_measurement": {"measurement_allowed": False},
+        },
+    )
+    summary = table["microstructure_evaluation"]
+    assert summary["cost_adjusted_outcome_count"] == 1
+    assert summary["machine_tuning_input_allowed"] is True
+    assert summary["auxiliary_tuning_input_allowed"] is False
 
 
 def test_current_machine_operating_filter_uses_same_downstream_ai_and_model():
     from src.tests.test_entry_setup_paired_replay_batch import full_compact_proof
     from src.engine.scalping import compact_auxiliary_paired_replay as compact
-    proof=full_compact_proof()
-    source=proof['chronological_validation']['holdout_pairs'][0]
+
+    proof = full_compact_proof()
+    source = proof["chronological_validation"]["holdout_pairs"][0]
     # Current machine ENTER_NOW with an actual VETO remains no exposure even
     # when a machine challenger retains that selection.
-    row=dict(decision_trace_id='machine-exact',comparison={'control_action':'BUY'},
-        operating_comparison_input=source,operating_model_validation=proof['owner_execution_model_validation'],
-        operating_runtime_cost_receipt={'delta_krw':0.})
-    unchanged=calibration._mechanistic_paired_population_metrics([row],[row])
-    assert unchanged['paired_terminal_proxy_delta_pct']==0.
-    assert unchanged['operating_economic_comparison']['status']=='supported_operating_comparison'
-    assert unchanged['paired_terminal_contract_complete']
-    assert unchanged['operating_economic_promotion_pass'] is False
-    assert unchanged['baseline_preserved'] is True
-    assert unchanged['daily_net_profit_delta_krw'] == 0.0
-    assert unchanged['daily_net_profit_status'] == 'baseline_preserved_no_independent_policy_change'
+    row = dict(
+        decision_trace_id="machine-exact",
+        comparison={"control_action": "BUY"},
+        operating_comparison_input=source,
+        operating_model_validation=proof["owner_execution_model_validation"],
+        operating_runtime_cost_receipt={"delta_krw": 0.0},
+    )
+    unchanged = calibration._mechanistic_paired_population_metrics([row], [row])
+    assert unchanged["paired_terminal_proxy_delta_pct"] == 0.0
+    assert (
+        unchanged["operating_economic_comparison"]["status"]
+        == "supported_operating_comparison"
+    )
+    assert unchanged["paired_terminal_contract_complete"]
+    assert unchanged["operating_economic_promotion_pass"] is False
+    assert unchanged["baseline_preserved"] is True
+    assert unchanged["daily_net_profit_delta_krw"] == 0.0
+    assert (
+        unchanged["daily_net_profit_status"]
+        == "baseline_preserved_no_independent_policy_change"
+    )
     # Recompute a signed losing operating arm, never copy a real SELL outcome.
     import copy
-    losing=copy.deepcopy(row)
-    s=losing['operating_comparison_input']
-    s['incumbent_verdict']='PASS'
-    replay=s['owner_replay']; arm=next(iter(replay['operating_arms'].values()))
-    for key in ('net_pnl_krw','stress_net_pnl_krw','net_return_pct','stress_net_return_pct'):
-        arm[key]=-abs(arm[key])
-    arm['sha256']=compact.digest({k:v for k,v in arm.items() if k!='sha256'})
-    replay['replay_sha256']=compact.digest({k:v for k,v in replay.items() if k!='replay_sha256'})
-    filtered=calibration._mechanistic_paired_population_metrics([losing],[])
-    assert filtered['operating_economic_comparison']['robust_paired_delta_ev_lower_bound_pct']>0
-    assert filtered['operating_economic_comparison']['candidate']['net_pnl_krw']==0.
-    assert filtered['paired_terminal_contract_complete']
+
+    losing = copy.deepcopy(row)
+    s = losing["operating_comparison_input"]
+    s["incumbent_verdict"] = "PASS"
+    replay = s["owner_replay"]
+    arm = next(iter(replay["operating_arms"].values()))
+    for key in (
+        "net_pnl_krw",
+        "stress_net_pnl_krw",
+        "net_return_pct",
+        "stress_net_return_pct",
+    ):
+        arm[key] = -abs(arm[key])
+    arm["sha256"] = compact.digest({k: v for k, v in arm.items() if k != "sha256"})
+    replay["replay_sha256"] = compact.digest(
+        {k: v for k, v in replay.items() if k != "replay_sha256"}
+    )
+    filtered = calibration._mechanistic_paired_population_metrics([losing], [])
+    assert (
+        filtered["operating_economic_comparison"][
+            "robust_paired_delta_ev_lower_bound_pct"
+        ]
+        > 0
+    )
+    assert filtered["operating_economic_comparison"]["candidate"]["net_pnl_krw"] == 0.0
+    assert filtered["paired_terminal_contract_complete"]
 
 
 def _supported_machine_owner_row():
     import copy
     from src.tests.test_entry_setup_paired_replay_batch import full_compact_proof
+
     proof = full_compact_proof()
-    source = copy.deepcopy(proof['chronological_validation']['holdout_pairs'][0])
-    source['incumbent_verdict'] = 'PASS'
-    return dict(decision_trace_id='recovered-machine-point', source_date=source['source_date'],
-                comparison={'control_action': 'WAIT'}, operating_comparison_input=source,
-                operating_model_validation=proof['owner_execution_model_validation'],
-                operating_runtime_cost_receipt={'delta_krw': 0.})
+    source = copy.deepcopy(proof["chronological_validation"]["holdout_pairs"][0])
+    source["incumbent_verdict"] = "PASS"
+    return dict(
+        decision_trace_id="recovered-machine-point",
+        source_date=source["source_date"],
+        comparison={"control_action": "WAIT"},
+        operating_comparison_input=source,
+        operating_model_validation=proof["owner_execution_model_validation"],
+        operating_runtime_cost_receipt={"delta_krw": 0.0},
+    )
 
 
 def test_current_machine_recovery_uses_supported_frozen_auxiliary_without_fabricating_call():
     import copy
     from src.engine.scalping import compact_auxiliary_paired_replay as compact
+
     row = _supported_machine_owner_row()
     before = copy.deepcopy(row)
     metrics = calibration._mechanistic_paired_population_metrics([row], [row])
-    arm = compact.owner_operating_arm(row['operating_comparison_input']['owner_replay'], row['operating_comparison_input'])
-    assert metrics['daily_net_profit_delta_krw'] == arm['net_pnl_krw']
-    assert metrics['operating_economic_comparison']['incumbent']['net_pnl_krw'] == 0.
-    assert metrics['operating_economic_comparison']['candidate']['net_pnl_krw'] == arm['net_pnl_krw']
-    assert metrics['changed_decision_count'] == 1
+    arm = compact.owner_operating_arm(
+        row["operating_comparison_input"]["owner_replay"],
+        row["operating_comparison_input"],
+    )
+    assert metrics["daily_net_profit_delta_krw"] == arm["net_pnl_krw"]
+    assert metrics["operating_economic_comparison"]["incumbent"]["net_pnl_krw"] == 0.0
+    assert (
+        metrics["operating_economic_comparison"]["candidate"]["net_pnl_krw"]
+        == arm["net_pnl_krw"]
+    )
+    assert metrics["changed_decision_count"] == 1
     assert row == before
 
 
 def test_machine_partial_owner_coverage_cannot_claim_full_portfolio_uplift():
     row = _supported_machine_owner_row()
-    missing = dict(decision_trace_id='other-unchanged', source_date=row['source_date'],
-                   comparison={'control_action': 'WAIT', 'conservative_execution_cost_pct': 0.2,
-                               'entry_path_first_hit': 'target_first', 'entry_path_target_pct': 0.4})
+    missing = dict(
+        decision_trace_id="other-unchanged",
+        source_date=row["source_date"],
+        comparison={
+            "control_action": "WAIT",
+            "conservative_execution_cost_pct": 0.2,
+            "entry_path_first_hit": "target_first",
+            "entry_path_target_pct": 0.4,
+        },
+    )
     result = calibration._mechanistic_paired_population_metrics([row, missing], [row])
-    assert result['daily_net_profit_delta_krw'] is None
-    assert result['operating_economic_promotion_pass'] is False
-    assert result['operating_population_complete'] is False
+    assert result["daily_net_profit_delta_krw"] is None
+    assert result["operating_economic_promotion_pass"] is False
+    assert result["operating_population_complete"] is False
 
 
 def test_machine_repeated_promotion_cannot_double_count_owner_returns():
     import copy
+
     row = _supported_machine_owner_row()
     duplicate = copy.deepcopy(row)
-    duplicate['decision_trace_id'] = 'another-evaluation-same-episode'
-    result = calibration._mechanistic_paired_population_metrics([row, duplicate], [row, duplicate])
+    duplicate["decision_trace_id"] = "another-evaluation-same-episode"
+    result = calibration._mechanistic_paired_population_metrics(
+        [row, duplicate], [row, duplicate]
+    )
     single = calibration._mechanistic_paired_population_metrics([row], [row])
-    assert result['daily_net_profit_delta_krw'] == single['daily_net_profit_delta_krw']
-    assert result['operating_economic_comparison']['economic_episode_count'] == 1
-    assert result['operating_economic_comparison']['deduplicated_attempt_count'] == 1
+    assert result["daily_net_profit_delta_krw"] == single["daily_net_profit_delta_krw"]
+    assert result["operating_economic_comparison"]["economic_episode_count"] == 1
+    assert result["operating_economic_comparison"]["deduplicated_attempt_count"] == 1
 
 
 def test_machine_equal_training_actions_choose_incumbent_not_strictest(monkeypatch):
     rows, receipt = _natural_refinement_fixture()
     normalized, contract = calibration._common_refinement_population(
-        [], rows, target_date='2026-09-15', source_receipt=receipt, paired_contract={})
-    monkeypatch.setattr(calibration, '_mechanistic_policy_rows', lambda *a, **k: [])
+        [], rows, target_date="2026-09-15", source_receipt=receipt, paired_contract={}
+    )
+    monkeypatch.setattr(calibration, "_mechanistic_policy_rows", lambda *a, **k: [])
     result = calibration.build_clean_baseline_mechanistic_refinement(
-        Path('unused'), target_date='2026-09-15', source_rows=normalized,
-        source_contract=contract, parent_policy=calibration.MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1)
-    expected = {k: calibration.MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1['thresholds'][k]
-                for k in calibration.MECHANISTIC_COMMON_FEATURE_GRID}
-    assert result['best_observed_candidate']['policy'] == expected
-    assert result['evaluated_distinct_policy_count'] == 1
+        Path("unused"),
+        target_date="2026-09-15",
+        source_rows=normalized,
+        source_contract=contract,
+        parent_policy=calibration.MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1,
+    )
+    expected = {
+        k: calibration.MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1["thresholds"][k]
+        for k in calibration.MECHANISTIC_COMMON_FEATURE_GRID
+    }
+    assert result["best_observed_candidate"]["policy"] == expected
+    assert result["evaluated_distinct_policy_count"] == 1
 
 
 def test_machine_frozen_selection_does_not_reuse_pre_freeze_holdout():
     rows, receipt = _natural_refinement_fixture()
     normalized, contract = calibration._common_refinement_population(
-        [], rows, target_date='2026-09-15', source_receipt=receipt, paired_contract={})
+        [], rows, target_date="2026-09-15", source_receipt=receipt, paired_contract={}
+    )
     parent = calibration.MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1
-    contract.update(forward_holdout_required=True, frozen_selection={
-        'incumbent_sha256': calibration._canonical_sha256(parent),
-        'policy': {k: parent['thresholds'][k] for k in calibration.MECHANISTIC_COMMON_FEATURE_GRID},
-        'frozen_date': '2026-09-20'})
+    contract.update(
+        forward_holdout_required=True,
+        frozen_selection={
+            "incumbent_sha256": calibration._canonical_sha256(parent),
+            "policy": {
+                k: parent["thresholds"][k]
+                for k in calibration.MECHANISTIC_COMMON_FEATURE_GRID
+            },
+            "frozen_date": "2026-09-20",
+        },
+    )
     result = calibration.build_clean_baseline_mechanistic_refinement(
-        Path('unused'), target_date='2026-09-15', source_rows=normalized,
-        source_contract=contract, parent_policy=parent)
-    assert result['holdout_source_dates'] == []
-    assert result['promotion_checks']['unseen_forward_holdout'] is False
-    assert result['promotion_pass'] is False
+        Path("unused"),
+        target_date="2026-09-15",
+        source_rows=normalized,
+        source_contract=contract,
+        parent_policy=parent,
+    )
+    assert result["holdout_source_dates"] == []
+    assert result["promotion_checks"]["unseen_forward_holdout"] is False
+    assert result["promotion_pass"] is False
 
 
 def test_machine_recheck_requires_terminal_sequence_even_with_valid_entry_arm():
     row = _supported_machine_owner_row()
-    row['comparison']['incumbent_machine_action'] = 'RECHECK'
+    row["comparison"]["incumbent_machine_action"] = "RECHECK"
     result = calibration._mechanistic_paired_population_metrics([row], [row])
-    assert result['daily_net_profit_delta_krw'] is None
-    assert result['recheck_sequence_unproven_count'] == 1
-    assert result['unsupported_changed_decision_count'] == 1
-    assert result['downstream_operating_evidence_complete'] is False
+    assert result["daily_net_profit_delta_krw"] is None
+    assert result["recheck_sequence_unproven_count"] == 1
+    assert result["unsupported_changed_decision_count"] == 1
+    assert result["downstream_operating_evidence_complete"] is False
 
 
 def test_machine_identity_does_not_manufacture_daily_currency_without_operating_proof():
-    row = dict(decision_trace_id='missing-owner', source_date='2026-09-17',
-        comparison={'control_action': 'WAIT', 'conservative_execution_cost_pct': 0.2,
-                    'entry_path_first_hit': 'target_first', 'entry_path_target_pct': 0.4})
+    row = dict(
+        decision_trace_id="missing-owner",
+        source_date="2026-09-17",
+        comparison={
+            "control_action": "WAIT",
+            "conservative_execution_cost_pct": 0.2,
+            "entry_path_first_hit": "target_first",
+            "entry_path_target_pct": 0.4,
+        },
+    )
     result = calibration._mechanistic_paired_population_metrics([row], [])
-    assert result['baseline_preserved'] is True
-    assert result['paired_terminal_proxy_delta_pct'] == 0.
-    assert result['daily_net_profit_delta_krw'] is None
-    assert result['downstream_operating_evidence_complete'] is False
+    assert result["baseline_preserved"] is True
+    assert result["paired_terminal_proxy_delta_pct"] == 0.0
+    assert result["daily_net_profit_delta_krw"] is None
+    assert result["downstream_operating_evidence_complete"] is False
 
 
 def test_hierarchy_already_priced_rows_do_not_rescan_pipeline(monkeypatch, tmp_path):
     from src.engine.scalping import ai_decision_quality as quality
+
     rows, _ = _natural_refinement_fixture()
     row = rows[0]
-    row['label_context'] = {'reference_price_type': 'executable_ask'}
-    assert calibration._full_entry_cost_pct(row['comparison']['entry_cost_contract'], source_date=row['source_date']) is not None
-    monkeypatch.setattr(calibration, '_hierarchy_cost_profiles', lambda *a: {row['stock_code']: {}})
+    row["label_context"] = {"reference_price_type": "executable_ask"}
+    assert (
+        calibration._full_entry_cost_pct(
+            row["comparison"]["entry_cost_contract"], source_date=row["source_date"]
+        )
+        is not None
+    )
+    monkeypatch.setattr(
+        calibration, "_hierarchy_cost_profiles", lambda *a: {row["stock_code"]: {}}
+    )
+
     def unexpected_read(*a, **kw):
-        raise AssertionError('already full-cost labeled path must not reread raw')
-    monkeypatch.setattr(quality, 'load_pipeline_price_and_lifecycle_rows', unexpected_read)
+        raise AssertionError("already full-cost labeled path must not reread raw")
+
+    monkeypatch.setattr(
+        quality, "load_pipeline_price_and_lifecycle_rows", unexpected_read
+    )
     repriced, _ = calibration.relabel_hierarchy_source_rows([row], tmp_path)
     assert repriced == [row]
 
 
-def _machine_plan_only_anchor(row, *, minutes_before=1, action='RECHECK'):
+def _machine_plan_only_anchor(row, *, minutes_before=1, action="RECHECK"):
     import copy
     from datetime import datetime, timedelta
     from src.engine.scalping import compact_auxiliary_paired_replay as compact
+
     result = copy.deepcopy(row)
-    source = result['operating_comparison_input']
-    replay = source['owner_replay']
-    seed = replay['seed']
-    seed['observed_at'] = (datetime.fromisoformat(seed['observed_at']) - timedelta(minutes=minutes_before)).isoformat()
-    seed['evaluation_attempt_id'] += '-prior'
-    seed['observed_machine_action'] = action
-    seed['seed_sha256'] = compact.digest({k:v for k,v in seed.items() if k != 'seed_sha256'})
-    replay = {k:v for k,v in replay.items() if k in ('schema', *compact.AUTHORITY)} if hasattr(compact, 'AUTHORITY') else {'schema': replay['schema']}
+    source = result["operating_comparison_input"]
+    replay = source["owner_replay"]
+    seed = replay["seed"]
+    seed["observed_at"] = (
+        datetime.fromisoformat(seed["observed_at"]) - timedelta(minutes=minutes_before)
+    ).isoformat()
+    seed["evaluation_attempt_id"] += "-prior"
+    seed["observed_machine_action"] = action
+    seed["seed_sha256"] = compact.digest(
+        {k: v for k, v in seed.items() if k != "seed_sha256"}
+    )
+    replay = (
+        {k: v for k, v in replay.items() if k in ("schema", *compact.AUTHORITY)}
+        if hasattr(compact, "AUTHORITY")
+        else {"schema": replay["schema"]}
+    )
     from src.engine.scalping.strategy_owner_replay import AUTHORITY
+
     replay.update(AUTHORITY)
-    replay.update(seed=seed, status='nonentry_plan_only', auxiliary_called=False, arms=None, price_arms=None)
-    replay['replay_sha256'] = compact.digest(replay)
-    source.update({k:seed[k] for k in ('evaluation_attempt_id','source_date','stock_code','scanner_promotion_id','effective_venue','session_bucket')})
+    replay.update(
+        seed=seed,
+        status="nonentry_plan_only",
+        auxiliary_called=False,
+        arms=None,
+        price_arms=None,
+    )
+    replay["replay_sha256"] = compact.digest(replay)
+    source.update(
+        {
+            k: seed[k]
+            for k in (
+                "evaluation_attempt_id",
+                "source_date",
+                "stock_code",
+                "scanner_promotion_id",
+                "effective_venue",
+                "session_bucket",
+            )
+        }
+    )
     source.update(owner_replay=replay, incumbent_verdict=None)
-    result.update(decision_trace_id='prior-machine-point', comparison={'incumbent_machine_action': action, 'control_action':'WAIT'}, setup_evidence={'test_action': action})
+    result.update(
+        decision_trace_id="prior-machine-point",
+        comparison={"incumbent_machine_action": action, "control_action": "WAIT"},
+        setup_evidence={"test_action": action},
+    )
     return result
 
 
-def test_machine_repeated_recheck_closes_on_exact_followup_without_ai_fabrication(monkeypatch):
+def test_machine_repeated_recheck_closes_on_exact_followup_without_ai_fabrication(
+    monkeypatch,
+):
     final = _supported_machine_owner_row()
-    final.update(comparison={'incumbent_machine_action':'ENTER_NOW','control_action':'BUY'}, setup_evidence={'test_action':'ENTER_NOW'})
+    final.update(
+        comparison={"incumbent_machine_action": "ENTER_NOW", "control_action": "BUY"},
+        setup_evidence={"test_action": "ENTER_NOW"},
+    )
     first = _machine_plan_only_anchor(final, minutes_before=2)
     second = _machine_plan_only_anchor(final)
-    second['decision_trace_id'] = 'second-recheck'
-    members = sorted(r['decision_trace_id'] for r in (first,second,final))
-    for row in (first,second,final): row['machine_sequence_members'] = members
-    monkeypatch.setattr(calibration, 'mechanistic_entry_policy_decision', lambda evidence, **kw: {'action': evidence['test_action']})
-    result = calibration._machine_sequence_operating_metrics([final,second,first], set(), {})
-    assert result['status'] == 'supported_operating_comparison', result
-    assert result['economic_episode_count'] == 1
-    assert result['daily_net_profit_delta_krw'] == 0.
-    assert result['candidate']['net_pnl_krw'] > 0
-    assert first['operating_comparison_input']['incumbent_verdict'] is None
+    second["decision_trace_id"] = "second-recheck"
+    members = sorted(r["decision_trace_id"] for r in (first, second, final))
+    for row in (first, second, final):
+        row["machine_sequence_members"] = members
+    monkeypatch.setattr(
+        calibration,
+        "mechanistic_entry_policy_decision",
+        lambda evidence, **kw: {"action": evidence["test_action"]},
+    )
+    result = calibration._machine_sequence_operating_metrics(
+        [final, second, first], set(), {}
+    )
+    assert result["status"] == "supported_operating_comparison", result
+    assert result["economic_episode_count"] == 1
+    assert result["daily_net_profit_delta_krw"] == 0.0
+    assert result["candidate"]["net_pnl_krw"] > 0
+    assert first["operating_comparison_input"]["incumbent_verdict"] is None
     # A slice missing a retained recheck cannot close the promotion.
-    missing = calibration._machine_sequence_operating_metrics([first,final], set(), {})
-    assert missing['blocker'] == 'recheck_sequence_capture_incomplete'
+    missing = calibration._machine_sequence_operating_metrics([first, final], set(), {})
+    assert missing["blocker"] == "recheck_sequence_capture_incomplete"
     # A previously uncalled AI cannot be manufactured for a new entry.
-    first['setup_evidence']['test_action'] = 'ENTER_NOW'
-    unsupported = calibration._machine_sequence_operating_metrics([first,second,final], set(), {})
-    assert unsupported['blocker'] == 'frozen_auxiliary_verdict_missing'
+    first["setup_evidence"]["test_action"] = "ENTER_NOW"
+    unsupported = calibration._machine_sequence_operating_metrics(
+        [first, second, final], set(), {}
+    )
+    assert unsupported["blocker"] == "frozen_auxiliary_verdict_missing"
 
 
 def test_machine_both_block_with_producer_plan_is_zero_exposure_not_missing_return():
-    row = _machine_plan_only_anchor(_supported_machine_owner_row(), action='BLOCK')
+    row = _machine_plan_only_anchor(_supported_machine_owner_row(), action="BLOCK")
     result = calibration._machine_sequence_operating_metrics([row], set())
-    assert result['status'] == 'supported_operating_comparison', result
-    assert result['candidate']['net_pnl_krw'] == result['incumbent']['net_pnl_krw'] == 0.
-    assert result['robust_paired_delta_ev_lower_bound_pct'] == 0.
+    assert result["status"] == "supported_operating_comparison", result
+    assert (
+        result["candidate"]["net_pnl_krw"] == result["incumbent"]["net_pnl_krw"] == 0.0
+    )
+    assert result["robust_paired_delta_ev_lower_bound_pct"] == 0.0
 
 
 def _with_machine_capacity(row, budget, *, deposit=1000000):
@@ -5404,119 +6277,202 @@ def _with_machine_capacity(row, budget, *, deposit=1000000):
     from datetime import datetime
     from src.engine.scalping import strategy_owner_replay as owner
     from src.engine.scalping import compact_auxiliary_paired_replay as compact
-    source = row['operating_comparison_input']; replay = source['owner_replay']; seed = replay['seed']
-    context = seed['operating_contract']
-    capacity = dict(kt00011_cash_orderable_contract_status='valid', kt00011_capacity_source_sha256='9'*64,
-        kt00011_capacity_observed_at=seed['observed_at'], kt00011_requested_stock_code=seed['stock_code'],
-        kt00011_requested_unit_price=10000, account_deposit=deposit, cash_orderable_amount=budget,
-        cash_orderable_qty_cap=int(budget/10000), budget_base=budget)
-    context['capital_source'] = owner.freeze_entry_capital_source(capacity,
-        SimpleNamespace(safety_ratio=1., absolute_budget_cap_krw=0),
-        now_ts=datetime.fromisoformat(seed['observed_at']).timestamp())
-    context['budget_krw'] = budget
-    context['sha256'] = compact.digest({k:v for k,v in context.items() if k != 'sha256'})
-    seed['seed_sha256'] = compact.digest({k:v for k,v in seed.items() if k != 'seed_sha256'})
-    for arm in (replay.get('operating_arms') or {}).values():
-        arm.update(budget_krw=budget, contract_sha256=context['sha256'],
-            net_return_pct=arm['net_pnl_krw']/budget*100,
-            stress_net_return_pct=arm['stress_net_pnl_krw']/budget*100)
-        arm['sha256'] = compact.digest({k:v for k,v in arm.items() if k != 'sha256'})
-    replay['replay_sha256'] = compact.digest({k:v for k,v in replay.items() if k != 'replay_sha256'})
+
+    source = row["operating_comparison_input"]
+    replay = source["owner_replay"]
+    seed = replay["seed"]
+    context = seed["operating_contract"]
+    capacity = dict(
+        kt00011_cash_orderable_contract_status="valid",
+        kt00011_capacity_source_sha256="9" * 64,
+        kt00011_capacity_observed_at=seed["observed_at"],
+        kt00011_requested_stock_code=seed["stock_code"],
+        kt00011_requested_unit_price=10000,
+        account_deposit=deposit,
+        cash_orderable_amount=budget,
+        cash_orderable_qty_cap=int(budget / 10000),
+        budget_base=budget,
+    )
+    context["capital_source"] = owner.freeze_entry_capital_source(
+        capacity,
+        SimpleNamespace(safety_ratio=1.0, absolute_budget_cap_krw=0),
+        now_ts=datetime.fromisoformat(seed["observed_at"]).timestamp(),
+    )
+    context["budget_krw"] = budget
+    context["sha256"] = compact.digest(
+        {k: v for k, v in context.items() if k != "sha256"}
+    )
+    seed["seed_sha256"] = compact.digest(
+        {k: v for k, v in seed.items() if k != "seed_sha256"}
+    )
+    for arm in (replay.get("operating_arms") or {}).values():
+        arm.update(
+            budget_krw=budget,
+            contract_sha256=context["sha256"],
+            net_return_pct=arm["net_pnl_krw"] / budget * 100,
+            stress_net_return_pct=arm["stress_net_pnl_krw"] / budget * 100,
+        )
+        arm["sha256"] = compact.digest({k: v for k, v in arm.items() if k != "sha256"})
+    replay["replay_sha256"] = compact.digest(
+        {k: v for k, v in replay.items() if k != "replay_sha256"}
+    )
     return row
 
 
 def test_machine_reevaluation_cap_is_not_a_fictitious_cash_deposit(monkeypatch):
     final = _supported_machine_owner_row()
-    final.update(comparison={'incumbent_machine_action':'ENTER_NOW'}, setup_evidence={'test_action':'ENTER_NOW'})
+    final.update(
+        comparison={"incumbent_machine_action": "ENTER_NOW"},
+        setup_evidence={"test_action": "ENTER_NOW"},
+    )
     prior = _machine_plan_only_anchor(final)
     _with_machine_capacity(prior, 100000)
     _with_machine_capacity(final, 200000)
-    for row in (prior, final): row['machine_sequence_members'] = sorted([prior['decision_trace_id'], final['decision_trace_id']])
-    monkeypatch.setattr(calibration, 'mechanistic_entry_policy_decision', lambda x, **kw: {'action':x['test_action']})
+    for row in (prior, final):
+        row["machine_sequence_members"] = sorted(
+            [prior["decision_trace_id"], final["decision_trace_id"]]
+        )
+    monkeypatch.setattr(
+        calibration,
+        "mechanistic_entry_policy_decision",
+        lambda x, **kw: {"action": x["test_action"]},
+    )
     result = calibration._machine_sequence_operating_metrics([final, prior], set(), {})
-    assert result['status'] == 'supported_operating_comparison', result
-    envelope = next(iter(result['capital_envelopes'].values()))
-    assert envelope['initial_budget_krw'] == 100000
-    assert envelope['varying_attempt_cap_count'] == 1
-    assert envelope['external_cashflow_inferred'] is False
-    assert result['daily_net_profit_delta_krw'] == 0
+    assert result["status"] == "supported_operating_comparison", result
+    envelope = next(iter(result["capital_envelopes"].values()))
+    assert envelope["initial_budget_krw"] == 100000
+    assert envelope["varying_attempt_cap_count"] == 1
+    assert envelope["external_cashflow_inferred"] is False
+    assert result["daily_net_profit_delta_krw"] == 0
     _with_machine_capacity(final, 200000, deposit=2000000)
     failed = calibration._machine_sequence_operating_metrics([final, prior], set(), {})
-    assert failed['blocker'] == 'capital_external_flow_or_settlement_basis_unreconciled'
-    assert failed['daily_net_profit_delta_krw'] is None
+    assert failed["blocker"] == "capital_external_flow_or_settlement_basis_unreconciled"
+    assert failed["daily_net_profit_delta_krw"] is None
 
 
-def _second_machine_owner_row(row, *, second_offset=30, symbol='000660', promotion='second-promotion'):
+def _second_machine_owner_row(
+    row, *, second_offset=30, symbol="000660", promotion="second-promotion"
+):
     import copy
     from datetime import datetime, timedelta
     from src.engine.scalping import compact_auxiliary_paired_replay as compact
+
     result = copy.deepcopy(row)
-    source = result['operating_comparison_input']; replay = source['owner_replay']; seed = replay['seed']
-    seed.update(stock_code=symbol, scanner_promotion_id=promotion, evaluation_attempt_id='second-attempt')
-    seed['observed_at'] = (datetime.fromisoformat(seed['observed_at']) + timedelta(seconds=second_offset)).isoformat()
-    for k in ('stock_code', 'scanner_promotion_id', 'evaluation_attempt_id'): source[k] = seed[k]
+    source = result["operating_comparison_input"]
+    replay = source["owner_replay"]
+    seed = replay["seed"]
+    seed.update(
+        stock_code=symbol,
+        scanner_promotion_id=promotion,
+        evaluation_attempt_id="second-attempt",
+    )
+    seed["observed_at"] = (
+        datetime.fromisoformat(seed["observed_at"]) + timedelta(seconds=second_offset)
+    ).isoformat()
+    for k in ("stock_code", "scanner_promotion_id", "evaluation_attempt_id"):
+        source[k] = seed[k]
     _resign_machine_owner_replay(replay)
-    result.update(decision_trace_id='second-machine', stock_code=symbol, scanner_promotion_id=promotion)
+    result.update(
+        decision_trace_id="second-machine",
+        stock_code=symbol,
+        scanner_promotion_id=promotion,
+    )
     return result
 
 
 def _resign_machine_owner_replay(replay):
     """Keep the synthetic decision receipt bound after changing its attempt."""
     from src.engine.scalping import compact_auxiliary_paired_replay as compact
-    seed = replay['seed']
-    context = seed['operating_contract']
-    receipt = context['entry_decision_version_receipt']
-    receipt['evaluation_attempt_id'] = seed['evaluation_attempt_id']
-    receipt['sha256'] = compact.digest({k:v for k,v in receipt.items() if k != 'sha256'})
-    context['frozen_at'] = seed['observed_at']
-    context['sha256'] = compact.digest({k:v for k,v in context.items() if k != 'sha256'})
-    seed['seed_sha256'] = compact.digest({k:v for k,v in seed.items() if k != 'seed_sha256'})
-    for arm in (replay.get('operating_arms') or {}).values():
-        arm['contract_sha256'] = context['sha256']
-        arm['sha256'] = compact.digest({k:v for k,v in arm.items() if k != 'sha256'})
-    replay['replay_sha256'] = compact.digest({k:v for k,v in replay.items() if k != 'replay_sha256'})
+
+    seed = replay["seed"]
+    context = seed["operating_contract"]
+    receipt = context["entry_decision_version_receipt"]
+    receipt["evaluation_attempt_id"] = seed["evaluation_attempt_id"]
+    receipt["sha256"] = compact.digest(
+        {k: v for k, v in receipt.items() if k != "sha256"}
+    )
+    context["frozen_at"] = seed["observed_at"]
+    context["sha256"] = compact.digest(
+        {k: v for k, v in context.items() if k != "sha256"}
+    )
+    seed["seed_sha256"] = compact.digest(
+        {k: v for k, v in seed.items() if k != "seed_sha256"}
+    )
+    for arm in (replay.get("operating_arms") or {}).values():
+        arm["contract_sha256"] = context["sha256"]
+        arm["sha256"] = compact.digest({k: v for k, v in arm.items() if k != "sha256"})
+    replay["replay_sha256"] = compact.digest(
+        {k: v for k, v in replay.items() if k != "replay_sha256"}
+    )
 
 
 def test_machine_common_capital_rejects_overlap_without_resizing_or_double_profit():
     import copy
+
     one = _supported_machine_owner_row()
-    one['comparison'] = {'control_action':'BUY', 'incumbent_machine_action':'ENTER_NOW'}
+    one["comparison"] = {
+        "control_action": "BUY",
+        "incumbent_machine_action": "ENTER_NOW",
+    }
     two = _second_machine_owner_row(one)
-    before = copy.deepcopy([one,two])
-    result = calibration._machine_sequence_operating_metrics([two,one], {'second-machine'})
-    assert result['status'] == 'supported_operating_comparison', result
-    assert result['capital_rejection_counts'] == {'incumbent':1, 'candidate':0}
-    assert result['economic_episode_count'] == 2
-    assert result['candidate']['net_pnl_krw'] == result['incumbent']['net_pnl_krw'] == 600.
-    assert result['candidate']['fill_participation'] == result['incumbent']['fill_participation'] == .5
-    assert [one,two] == before
+    before = copy.deepcopy([one, two])
+    result = calibration._machine_sequence_operating_metrics(
+        [two, one], {"second-machine"}
+    )
+    assert result["status"] == "supported_operating_comparison", result
+    assert result["capital_rejection_counts"] == {"incumbent": 1, "candidate": 0}
+    assert result["economic_episode_count"] == 2
+    assert (
+        result["candidate"]["net_pnl_krw"]
+        == result["incumbent"]["net_pnl_krw"]
+        == 600.0
+    )
+    assert (
+        result["candidate"]["fill_participation"]
+        == result["incumbent"]["fill_participation"]
+        == 0.5
+    )
+    assert [one, two] == before
 
 
 def test_joint_scope_allocator_uses_whole_frozen_bundle(monkeypatch):
     one = _supported_machine_owner_row()
     two = _second_machine_owner_row(one)
-    for row, scope in ((one,('KRX','KRX_REGULAR')),(two,('NXT','NXT_REGULAR'))):
-        row['entry_group_observation'] = {'key_parts':dict(zip(('venue','session_bucket'),scope))}
-        row['setup_evidence'] = {'test':1}
-    monkeypatch.setattr(calibration, 'mechanistic_entry_policy_decision', lambda setup, policy: {'action': policy['action']})
-    parents = {s:{'action':'ENTER_NOW'} for s in ('KRX|KRX_REGULAR','NXT|NXT_REGULAR')}
-    policies = {**parents,'KRX|KRX_REGULAR':{'action':'BLOCK'}}
-    result = calibration._machine_joint_scope_metrics([one,two], policies, parents)
-    assert result['status'] == 'supported_operating_comparison', result
-    assert result['capital_rejection_counts'] == {'incumbent':1,'candidate':0}
-    assert result['daily_net_profit_delta_krw'] == 0.
+    for row, scope in ((one, ("KRX", "KRX_REGULAR")), (two, ("NXT", "NXT_REGULAR"))):
+        row["entry_group_observation"] = {
+            "key_parts": dict(zip(("venue", "session_bucket"), scope))
+        }
+        row["setup_evidence"] = {"test": 1}
+    monkeypatch.setattr(
+        calibration,
+        "mechanistic_entry_policy_decision",
+        lambda setup, policy: {"action": policy["action"]},
+    )
+    parents = {
+        s: {"action": "ENTER_NOW"} for s in ("KRX|KRX_REGULAR", "NXT|NXT_REGULAR")
+    }
+    policies = {**parents, "KRX|KRX_REGULAR": {"action": "BLOCK"}}
+    result = calibration._machine_joint_scope_metrics([one, two], policies, parents)
+    assert result["status"] == "supported_operating_comparison", result
+    assert result["capital_rejection_counts"] == {"incumbent": 1, "candidate": 0}
+    assert result["daily_net_profit_delta_krw"] == 0.0
 
 
 def test_machine_model_holdout_must_follow_model_calibration():
     import copy
     from src.engine.scalping import compact_auxiliary_paired_replay as compact
+
     row = _supported_machine_owner_row()
-    model = copy.deepcopy(row['operating_model_validation'])
-    scope = model['validated_scopes'][0]
-    scope['calibration_rows'][0]['source_date'] = scope['holdout_rows'][0]['source_date']
-    scope['actual_rows_sha256'] = compact.digest(scope['calibration_rows']+scope['holdout_rows'])
-    scope['sha256'] = compact.digest({k:v for k,v in scope.items() if k != 'sha256'})
-    assert not compact.owner_model_scope_valid(model, row['operating_comparison_input'])
+    model = copy.deepcopy(row["operating_model_validation"])
+    scope = model["validated_scopes"][0]
+    scope["calibration_rows"][0]["source_date"] = scope["holdout_rows"][0][
+        "source_date"
+    ]
+    scope["actual_rows_sha256"] = compact.digest(
+        scope["calibration_rows"] + scope["holdout_rows"]
+    )
+    scope["sha256"] = compact.digest({k: v for k, v in scope.items() if k != "sha256"})
+    assert not compact.owner_model_scope_valid(model, row["operating_comparison_input"])
 
 
 def test_mechanistic_threshold_candidate_normalizes_strategy_parent_selection():
@@ -5530,7 +6486,9 @@ def test_mechanistic_threshold_candidate_normalizes_strategy_parent_selection():
     from src.engine.scalping import entry_strategy_policy
 
     parent = entry_strategy_policy.seed(parent, ("KRX", "KRX_REGULAR"))
-    coords = {k: parent["thresholds"][k] for k in calibration.MECHANISTIC_COMMON_FEATURE_GRID}
+    coords = {
+        k: parent["thresholds"][k] for k in calibration.MECHANISTIC_COMMON_FEATURE_GRID
+    }
 
     candidate = calibration._mechanistic_threshold_policy(coords, parent)
     assert candidate["version"] == calibration.MECHANISTIC_REFINEMENT_POLICY_VERSION
@@ -5538,53 +6496,84 @@ def test_mechanistic_threshold_candidate_normalizes_strategy_parent_selection():
     assert candidate["postclose_selection"]["minimum_unique_symbol_count"] == 3
     assert validate_mechanistic_entry_threshold_policy(candidate) == []
 
-    published = calibration._mechanistic_threshold_policy(coords, parent, publication=True)
-    assert published["version"] == calibration.MECHANISTIC_FULL_POPULATION_POLICY_VERSION
+    published = calibration._mechanistic_threshold_policy(
+        coords, parent, publication=True
+    )
+    assert (
+        published["version"] == calibration.MECHANISTIC_FULL_POPULATION_POLICY_VERSION
+    )
     assert validate_mechanistic_entry_threshold_policy(published) == []
 
 
 @pytest.mark.parametrize("veto", [False, True])
 @pytest.mark.parametrize("recipe", [False, True])
-def test_strategy_common_grid_reuse_preserves_complete_report_and_population(monkeypatch, veto, recipe):
+def test_strategy_common_grid_reuse_preserves_complete_report_and_population(
+    monkeypatch, veto, recipe
+):
     from copy import deepcopy
     from src.engine.scalping import entry_strategy_policy as strategy
     from src.tests.test_entry_strategy_policy import raw, setup
 
     rows, receipt = _natural_refinement_fixture()
     rows, contract = calibration._common_refinement_population(
-        [], rows, target_date="2026-09-15", source_receipt=receipt, paired_contract={})
-    parent = strategy.seed(calibration.MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1, ("KRX", "KRX_REGULAR"))
-    parent['strategy']['nodes']['root']['profile'].update(
-        overextension_runup_pct=20, overextension_vwap_bp=120,
-        overextension_ma5_bp=120, tape_supportive_score=60)
+        [], rows, target_date="2026-09-15", source_receipt=receipt, paired_contract={}
+    )
+    parent = strategy.seed(
+        calibration.MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1, ("KRX", "KRX_REGULAR")
+    )
+    parent["strategy"]["nodes"]["root"]["profile"].update(
+        overextension_runup_pct=20,
+        overextension_vwap_bp=120,
+        overextension_ma5_bp=120,
+        tape_supportive_score=60,
+    )
     if veto:
-        parent['entry_situation_veto'] = calibration._winrate_veto_payload(68.75)
+        parent["entry_situation_veto"] = calibration._winrate_veto_payload(68.75)
     if recipe:
         from src.engine.scalping.entry_admission_recipe import candidate_policy
+
         parent = candidate_policy(parent)
     for i, row in enumerate(rows):
         payload = raw()
-        payload['features'].update(spread_bp=20 if i % 2 else 100,
-            micro_vwap_available=True, minute_candle_window_fresh=True,
-            curr_vs_micro_vwap_bp=60 if i % 3 else 90)
-        row['setup_evidence'] = setup(payload)
-        row['fingerprint'] = calibration._canonical_sha256(row['setup_evidence'])
+        payload["features"].update(
+            spread_bp=20 if i % 2 else 100,
+            micro_vwap_available=True,
+            minute_candle_window_fresh=True,
+            curr_vs_micro_vwap_bp=60 if i % 3 else 90,
+        )
+        row["setup_evidence"] = setup(payload)
+        row["fingerprint"] = calibration._canonical_sha256(row["setup_evidence"])
     original = deepcopy((rows, contract, parent))
-    grid = {k: (min(v), max(v)) for k, v in calibration.MECHANISTIC_COMMON_FEATURE_GRID.items()}
-    monkeypatch.setattr(calibration, 'MECHANISTIC_COMMON_FEATURE_GRID', grid)
+    grid = {
+        k: (min(v), max(v))
+        for k, v in calibration.MECHANISTIC_COMMON_FEATURE_GRID.items()
+    }
+    monkeypatch.setattr(calibration, "MECHANISTIC_COMMON_FEATURE_GRID", grid)
     calls = []
     real_rows = calibration._mechanistic_policy_rows
+
     def counted(*args, **kwargs):
         calls.append(1)
         return real_rows(*args, **kwargs)
-    monkeypatch.setattr(calibration, '_mechanistic_policy_rows', counted)
-    kwargs = dict(target_date="2026-09-15", source_rows=rows,
-                  source_contract=contract, parent_policy=parent)
-    fast = calibration.build_clean_baseline_mechanistic_refinement(Path('unused'), **kwargs)
+
+    monkeypatch.setattr(calibration, "_mechanistic_policy_rows", counted)
+    kwargs = dict(
+        target_date="2026-09-15",
+        source_rows=rows,
+        source_contract=contract,
+        parent_policy=parent,
+    )
+    fast = calibration.build_clean_baseline_mechanistic_refinement(
+        Path("unused"), **kwargs
+    )
     fast_calls = len(calls)
     calls.clear()
-    monkeypatch.setattr(calibration, '_mechanistic_selection_reuse_key', calibration._canonical_sha256)
-    baseline = calibration.build_clean_baseline_mechanistic_refinement(Path('unused'), **kwargs)
+    monkeypatch.setattr(
+        calibration, "_mechanistic_selection_reuse_key", calibration._canonical_sha256
+    )
+    baseline = calibration.build_clean_baseline_mechanistic_refinement(
+        Path("unused"), **kwargs
+    )
     assert fast == baseline
     assert fast_calls < len(calls)
     assert (rows, contract, parent) == original
@@ -5593,28 +6582,33 @@ def test_strategy_common_grid_reuse_preserves_complete_report_and_population(mon
 def test_strategy_selection_reuse_keeps_other_authorities_and_legacy_thresholds():
     from copy import deepcopy
     from src.engine.scalping import entry_strategy_policy as strategy
-    parent = strategy.seed(calibration.MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1, ("KRX", "KRX_REGULAR"))
-    coords = {k: parent['thresholds'][k] for k in calibration.MECHANISTIC_COMMON_FEATURE_GRID}
+
+    parent = strategy.seed(
+        calibration.MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1, ("KRX", "KRX_REGULAR")
+    )
+    coords = {
+        k: parent["thresholds"][k] for k in calibration.MECHANISTIC_COMMON_FEATURE_GRID
+    }
     one = calibration._mechanistic_threshold_policy(coords, parent)
     two = deepcopy(one)
-    two['thresholds']['maximum_spread_bp'] = 40.
+    two["thresholds"]["maximum_spread_bp"] = 40.0
     key = calibration._mechanistic_selection_reuse_key
     assert key(one) == key(two)
-    two['strategy']['nodes']['root']['profile']['maximum_spread_bp'] = 40.
+    two["strategy"]["nodes"]["root"]["profile"]["maximum_spread_bp"] = 40.0
     assert key(one) != key(two)
     two = deepcopy(one)
-    two['entry_situation_veto'] = calibration._winrate_veto_payload(68.75)
+    two["entry_situation_veto"] = calibration._winrate_veto_payload(68.75)
     assert key(one) != key(two)
     two = deepcopy(one)
-    two['thresholds']['unknown_future_threshold'] = 1
+    two["thresholds"]["unknown_future_threshold"] = 1
     assert key(two) == calibration._canonical_sha256(two)
     two = deepcopy(one)
-    two['strategy']['nodes']['root']['profile'].pop('maximum_spread_bp')
+    two["strategy"]["nodes"]["root"]["profile"].pop("maximum_spread_bp")
     assert key(two) == calibration._canonical_sha256(two)
     legacy = deepcopy(one)
-    legacy.pop('strategy')
+    legacy.pop("strategy")
     changed = deepcopy(legacy)
-    changed['thresholds']['maximum_spread_bp'] = 40.
+    changed["thresholds"]["maximum_spread_bp"] = 40.0
     assert key(legacy) != key(changed)
 
 
@@ -5623,347 +6617,696 @@ def test_strategy_recipe_selection_reuse_ignores_only_valid_parent_binding():
     from src.engine.scalping import entry_strategy_policy as strategy
     from src.engine.scalping.entry_admission_recipe import candidate_policy
 
-    parent = candidate_policy(strategy.seed(
-        calibration.MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1, ("KRX", "KRX_REGULAR")))
-    coords = {k: parent['thresholds'][k] for k in calibration.MECHANISTIC_COMMON_FEATURE_GRID}
+    parent = candidate_policy(
+        strategy.seed(
+            calibration.MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1, ("KRX", "KRX_REGULAR")
+        )
+    )
+    coords = {
+        k: parent["thresholds"][k] for k in calibration.MECHANISTIC_COMMON_FEATURE_GRID
+    }
     one = calibration._mechanistic_threshold_policy(coords, parent)
-    two = calibration._mechanistic_threshold_policy({**coords, 'maximum_spread_bp': 40.}, parent)
+    two = calibration._mechanistic_threshold_policy(
+        {**coords, "maximum_spread_bp": 40.0}, parent
+    )
     key = calibration._mechanistic_selection_reuse_key
-    assert one['entry_admission_recipe']['parent_policy_sha256'] != two['entry_admission_recipe']['parent_policy_sha256']
+    assert (
+        one["entry_admission_recipe"]["parent_policy_sha256"]
+        != two["entry_admission_recipe"]["parent_policy_sha256"]
+    )
     assert key(one) == key(two)
 
     changed = deepcopy(one)
-    changed.pop('entry_admission_recipe')
-    changed['strategy']['nodes']['root']['profile']['maximum_spread_bp'] = 40.
+    changed.pop("entry_admission_recipe")
+    changed["strategy"]["nodes"]["root"]["profile"]["maximum_spread_bp"] = 40.0
     changed = candidate_policy(changed)
     assert key(one) != key(changed)
     corrupted = deepcopy(two)
-    corrupted['entry_admission_recipe']['parent_policy_sha256'] = '0' * 64
+    corrupted["entry_admission_recipe"]["parent_policy_sha256"] = "0" * 64
     assert key(corrupted) == calibration._canonical_sha256(corrupted)
     corrupted = deepcopy(two)
-    corrupted['entry_admission_recipe']['parameters']['minimum_buy_pressure_10t'] = 50
+    corrupted["entry_admission_recipe"]["parameters"]["minimum_buy_pressure_10t"] = 50
     assert key(corrupted) == calibration._canonical_sha256(corrupted)
 
 
-def test_joint_frozen_bundle_qualifies_then_hash_date_and_subset_fail_closed(monkeypatch):
+def test_joint_frozen_bundle_qualifies_then_hash_date_and_subset_fail_closed(
+    monkeypatch,
+):
     import copy
     from datetime import datetime, timedelta
     from src.engine.scalping import compact_auxiliary_paired_replay as compact
+
     parent = copy.deepcopy(calibration.MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1)
-    coords = {k: parent['thresholds'][k] for k in calibration.MECHANISTIC_COMMON_FEATURE_GRID}
-    coords['maximum_spread_bp'] = 40.
-    successor = calibration._mechanistic_threshold_policy(coords, parent, publication=True)
-    scopes = ['KRX|KRX_REGULAR','NXT|NXT_REGULAR']
-    parents = {s:parent for s in scopes}
-    policies = {s:successor for s in scopes}
+    coords = {
+        k: parent["thresholds"][k] for k in calibration.MECHANISTIC_COMMON_FEATURE_GRID
+    }
+    coords["maximum_spread_bp"] = 40.0
+    successor = calibration._mechanistic_threshold_policy(
+        coords, parent, publication=True
+    )
+    scopes = ["KRX|KRX_REGULAR", "NXT|NXT_REGULAR"]
+    parents = {s: parent for s in scopes}
+    policies = {s: successor for s in scopes}
     rows = []
     for n, scope in enumerate(scopes):
-        for losing in (True,False):
-            row = _supported_machine_owner_row(); source = row['operating_comparison_input']
-            replay = source['owner_replay']; seed = replay['seed']
+        for losing in (True, False):
+            row = _supported_machine_owner_row()
+            source = row["operating_comparison_input"]
+            replay = source["owner_replay"]
+            seed = replay["seed"]
             delta = timedelta(days=n, minutes=0 if losing else 4)
-            seed['observed_at'] = (datetime.fromisoformat(seed['observed_at'])+delta).isoformat()
-            seed['source_date'] = seed['observed_at'][:10]
-            seed['scanner_promotion_id'] = f'joint-{n}-{losing}'
-            seed['evaluation_attempt_id'] = f'joint-attempt-{n}-{losing}'
-            for k in ('source_date','scanner_promotion_id','evaluation_attempt_id'): source[k] = seed[k]
-            arm = next(iter(replay['operating_arms'].values()))
-            arm['modeled_exit_at'] = (datetime.fromisoformat(arm['modeled_exit_at'])+delta).isoformat()
+            seed["observed_at"] = (
+                datetime.fromisoformat(seed["observed_at"]) + delta
+            ).isoformat()
+            seed["source_date"] = seed["observed_at"][:10]
+            seed["scanner_promotion_id"] = f"joint-{n}-{losing}"
+            seed["evaluation_attempt_id"] = f"joint-attempt-{n}-{losing}"
+            for k in ("source_date", "scanner_promotion_id", "evaluation_attempt_id"):
+                source[k] = seed[k]
+            arm = next(iter(replay["operating_arms"].values()))
+            arm["modeled_exit_at"] = (
+                datetime.fromisoformat(arm["modeled_exit_at"]) + delta
+            ).isoformat()
             if losing:
-                arm.update(net_pnl_krw=-600.,stress_net_pnl_krw=-720.,net_return_pct=-.5,stress_net_return_pct=-.6)
+                arm.update(
+                    net_pnl_krw=-600.0,
+                    stress_net_pnl_krw=-720.0,
+                    net_return_pct=-0.5,
+                    stress_net_return_pct=-0.6,
+                )
             _resign_machine_owner_replay(replay)
-            row.update(source_date=seed['source_date'],decision_trace_id=seed['evaluation_attempt_id'],
-                entry_group_observation={'key_parts':dict(zip(('venue','session_bucket'),scope.split('|')))},
-                setup_evidence={'losing':losing})
+            row.update(
+                source_date=seed["source_date"],
+                decision_trace_id=seed["evaluation_attempt_id"],
+                entry_group_observation={
+                    "key_parts": dict(
+                        zip(("venue", "session_bucket"), scope.split("|"))
+                    )
+                },
+                setup_evidence={"losing": losing},
+            )
             rows.append(row)
-    monkeypatch.setattr(calibration, 'mechanistic_entry_policy_decision', lambda setup, policy: {
-        'action':'BLOCK' if setup['losing'] and policy['thresholds']['maximum_spread_bp'] == 40. else 'ENTER_NOW'})
-    frozen = dict(parents=parents,policies=policies,changed_scopes=scopes,
-        frozen_date='2026-09-15',economic_kernel_sha256='kernel')
-    refinements = {s:{'forward_selection':{'policy':coords,'incumbent_sha256':calibration._canonical_sha256(parent)},
-        'source_contract':{'economic_kernel_sha256':'kernel'},
-        'policy_candidate':{'thresholds':coords}} for s in scopes}
-    proof = calibration._machine_joint_scope_evaluation(rows,parents,refinements,{},
-        {'forward_selection':frozen},'kernel','2026-09-17')
-    assert proof['promotion_pass'], proof
-    assert proof['holdout']['daily_net_profit_delta_krw'] == 600.
-    report = {'target_date':'2026-09-17','joint_scope_economics':proof,'mechanistic_refinements_by_scope':refinements}
-    assert calibration.machine_joint_scope_evidence_valid(report,scopes)
-    assert not calibration.machine_joint_scope_evidence_valid(report,scopes[:1])
-    stale = copy.deepcopy(report); stale['joint_scope_economics']['forward_selection']['frozen_date']='2026-09-17'
-    p = stale['joint_scope_economics']; p['sha256'] = calibration._canonical_sha256({k:v for k,v in p.items() if k!='sha256'})
-    assert not calibration.machine_joint_scope_evidence_valid(stale,scopes)
-    report['joint_scope_economics']['holdout']['daily_net_profit_delta_krw'] += 1
-    assert not calibration.machine_joint_scope_evidence_valid(report,scopes)
+    monkeypatch.setattr(
+        calibration,
+        "mechanistic_entry_policy_decision",
+        lambda setup, policy: {
+            "action": (
+                "BLOCK"
+                if setup["losing"] and policy["thresholds"]["maximum_spread_bp"] == 40.0
+                else "ENTER_NOW"
+            )
+        },
+    )
+    frozen = dict(
+        parents=parents,
+        policies=policies,
+        changed_scopes=scopes,
+        frozen_date="2026-09-15",
+        economic_kernel_sha256="kernel",
+    )
+    refinements = {
+        s: {
+            "forward_selection": {
+                "policy": coords,
+                "incumbent_sha256": calibration._canonical_sha256(parent),
+            },
+            "source_contract": {"economic_kernel_sha256": "kernel"},
+            "policy_candidate": {"thresholds": coords},
+        }
+        for s in scopes
+    }
+    proof = calibration._machine_joint_scope_evaluation(
+        rows,
+        parents,
+        refinements,
+        {},
+        {"forward_selection": frozen},
+        "kernel",
+        "2026-09-17",
+    )
+    assert proof["promotion_pass"], proof
+    assert proof["holdout"]["daily_net_profit_delta_krw"] == 600.0
+    report = {
+        "target_date": "2026-09-17",
+        "joint_scope_economics": proof,
+        "mechanistic_refinements_by_scope": refinements,
+    }
+    assert calibration.machine_joint_scope_evidence_valid(report, scopes)
+    assert not calibration.machine_joint_scope_evidence_valid(report, scopes[:1])
+    stale = copy.deepcopy(report)
+    stale["joint_scope_economics"]["forward_selection"]["frozen_date"] = "2026-09-17"
+    p = stale["joint_scope_economics"]
+    p["sha256"] = calibration._canonical_sha256(
+        {k: v for k, v in p.items() if k != "sha256"}
+    )
+    assert not calibration.machine_joint_scope_evidence_valid(stale, scopes)
+    report["joint_scope_economics"]["holdout"]["daily_net_profit_delta_krw"] += 1
+    assert not calibration.machine_joint_scope_evidence_valid(report, scopes)
 
 
 def test_full_population_selection_uses_operating_ev_not_terminal_proxy():
     row = _supported_machine_owner_row()
     paired = calibration._mechanistic_paired_population_metrics([row], [row])
     metrics = {"cost_adjusted_terminal_proxy_ev_pct": -1.0}
-    ev, delta = calibration.machine_selection_economics(metrics, paired, full_population=True)
+    ev, delta = calibration.machine_selection_economics(
+        metrics, paired, full_population=True
+    )
     assert ev == paired["operating_economic_comparison"]["candidate"]["ev_pct"]
     assert ev > 0 and delta == ev
     paired["downstream_operating_evidence_complete"] = False
-    assert calibration.machine_selection_economics(metrics, paired, full_population=True) == (None, None)
-    assert calibration.machine_selection_economics(metrics, paired, full_population=False)[0] == -1.0
+    assert calibration.machine_selection_economics(
+        metrics, paired, full_population=True
+    ) == (None, None)
+    assert (
+        calibration.machine_selection_economics(metrics, paired, full_population=False)[
+            0
+        ]
+        == -1.0
+    )
 
 
 def test_recheck_to_block_is_not_an_unchanged_machine_action(monkeypatch):
     row = _supported_machine_owner_row()
-    row['comparison']['incumbent_machine_action'] = 'RECHECK'
-    row['setup_evidence'] = {}
-    monkeypatch.setattr(calibration, 'mechanistic_entry_policy_decision', lambda *a, **kw: {'action':'BLOCK'})
-    metrics = calibration._mechanistic_paired_population_metrics([row], [], candidate_policy={})
-    assert metrics['changed_decision_count'] == 1
-    assert metrics['baseline_preserved'] is False
-    assert metrics['daily_net_profit_delta_krw'] is None
+    row["comparison"]["incumbent_machine_action"] = "RECHECK"
+    row["setup_evidence"] = {}
+    monkeypatch.setattr(
+        calibration,
+        "mechanistic_entry_policy_decision",
+        lambda *a, **kw: {"action": "BLOCK"},
+    )
+    metrics = calibration._mechanistic_paired_population_metrics(
+        [row], [], candidate_policy={}
+    )
+    assert metrics["changed_decision_count"] == 1
+    assert metrics["baseline_preserved"] is False
+    assert metrics["daily_net_profit_delta_krw"] is None
 
 
-def test_invalid_source_repricing_preserves_census_without_reading_pipeline(monkeypatch, tmp_path):
+def test_invalid_source_repricing_preserves_census_without_reading_pipeline(
+    monkeypatch, tmp_path
+):
     rows, _ = _natural_refinement_fixture()
     row = rows[0]
-    row['source_provenance_verified'] = False
-    row['comparison'].pop('entry_cost_contract', None)
-    monkeypatch.setattr(calibration, '_hierarchy_cost_profiles', lambda *a: (_ for _ in ()).throw(AssertionError('invalid source must not read cost or price')))
+    row["source_provenance_verified"] = False
+    row["comparison"].pop("entry_cost_contract", None)
+    monkeypatch.setattr(
+        calibration,
+        "_hierarchy_cost_profiles",
+        lambda *a: (_ for _ in ()).throw(
+            AssertionError("invalid source must not read cost or price")
+        ),
+    )
     result, counts = calibration.relabel_hierarchy_source_rows([row], tmp_path)
     assert result == [row]
-    assert counts['source_contract_invalid_no_reprice'] == 1
+    assert counts["source_contract_invalid_no_reprice"] == 1
 
 
 def test_common_refinement_exact_ai_trace_alias_uses_natural_machine_boundary():
     import copy
+
     rows, receipt = _natural_refinement_fixture()
     natural = rows[0]
-    natural['ai_decision_trace_id'] = 'analyze_target:exact-alias'
+    natural["ai_decision_trace_id"] = "analyze_target:exact-alias"
     paired = copy.deepcopy(natural)
-    paired['decision_trace_id'] = natural['ai_decision_trace_id']
-    paired['comparison']['entry_path_target_pct'] += .1
+    paired["decision_trace_id"] = natural["ai_decision_trace_id"]
+    paired["comparison"]["entry_path_target_pct"] += 0.1
     normalized, contract = calibration._common_refinement_population(
-        [paired], rows, target_date='2026-09-15', source_receipt=receipt, paired_contract={})
+        [paired],
+        rows,
+        target_date="2026-09-15",
+        source_receipt=receipt,
+        paired_contract={},
+    )
     assert len(normalized) == len(rows)
-    assert all(r['refinement_source_lane'] == 'natural' for r in normalized)
-    assert contract['row_exclusion_reason_counts']['paired_alias_of_natural_machine_attempt'] == 1
-    assert next(r for r in normalized if r['decision_trace_id'] == natural['decision_trace_id'])['comparison'] == natural['comparison']
-    assert contract['input_row_disposition_complete'] is True
+    assert all(r["refinement_source_lane"] == "natural" for r in normalized)
+    assert (
+        contract["row_exclusion_reason_counts"][
+            "paired_alias_of_natural_machine_attempt"
+        ]
+        == 1
+    )
+    assert (
+        next(
+            r
+            for r in normalized
+            if r["decision_trace_id"] == natural["decision_trace_id"]
+        )["comparison"]
+        == natural["comparison"]
+    )
+    assert contract["input_row_disposition_complete"] is True
 
 
 def test_machine_capital_release_is_conserved_and_cannot_precede_exit():
     import copy
     from src.engine.scalping import compact_auxiliary_paired_replay as compact
+
     row = _supported_machine_owner_row()
-    source = row['operating_comparison_input']; replay = source['owner_replay']; seed = replay['seed']
-    key = 'incumbent_qty_x_incumbent_leg'; arm = replay['operating_arms'][key]
-    reserve = sum(l['qty']*l['price'] for l in seed['legs'])
-    path = dict(schema='entry_operating_cash_commitment_v1', seed_sha256=seed['seed_sha256'],
-        initial_reserve_krw=reserve, events=[dict(kind='owner_exit',at=arm['modeled_exit_at'],principal_release_krw=reserve)])
-    path['sha256'] = compact.digest(path)
-    arm['cash_commitment_path'] = path
-    arm['sha256'] = compact.digest({k:v for k,v in arm.items() if k!='sha256'})
-    replay['replay_sha256'] = compact.digest({k:v for k,v in replay.items() if k!='replay_sha256'})
-    result = calibration._machine_sequence_operating_metrics([row], {row['decision_trace_id']})
-    assert result['status'] == 'supported_operating_comparison',result
-    assert next(iter(result['peak_committed_capital_krw_by_day']['candidate'].values())) == reserve
-    path['events'][0]['at'] = seed['observed_at']
-    path['sha256'] = compact.digest({k:v for k,v in path.items() if k!='sha256'})
-    arm['sha256'] = compact.digest({k:v for k,v in arm.items() if k!='sha256'})
-    replay['replay_sha256'] = compact.digest({k:v for k,v in replay.items() if k!='replay_sha256'})
-    rejected = calibration._machine_sequence_operating_metrics([row], {row['decision_trace_id']})
-    assert rejected['blocker'] == 'operating_cash_path_exit_clock_invalid'
-    assert rejected['daily_net_profit_delta_krw'] is None
+    source = row["operating_comparison_input"]
+    replay = source["owner_replay"]
+    seed = replay["seed"]
+    key = "incumbent_qty_x_incumbent_leg"
+    arm = replay["operating_arms"][key]
+    reserve = sum(l["qty"] * l["price"] for l in seed["legs"])
+    path = dict(
+        schema="entry_operating_cash_commitment_v1",
+        seed_sha256=seed["seed_sha256"],
+        initial_reserve_krw=reserve,
+        events=[
+            dict(
+                kind="owner_exit",
+                at=arm["modeled_exit_at"],
+                principal_release_krw=reserve,
+            )
+        ],
+    )
+    path["sha256"] = compact.digest(path)
+    arm["cash_commitment_path"] = path
+    arm["sha256"] = compact.digest({k: v for k, v in arm.items() if k != "sha256"})
+    replay["replay_sha256"] = compact.digest(
+        {k: v for k, v in replay.items() if k != "replay_sha256"}
+    )
+    result = calibration._machine_sequence_operating_metrics(
+        [row], {row["decision_trace_id"]}
+    )
+    assert result["status"] == "supported_operating_comparison", result
+    assert (
+        next(iter(result["peak_committed_capital_krw_by_day"]["candidate"].values()))
+        == reserve
+    )
+    path["events"][0]["at"] = seed["observed_at"]
+    path["sha256"] = compact.digest({k: v for k, v in path.items() if k != "sha256"})
+    arm["sha256"] = compact.digest({k: v for k, v in arm.items() if k != "sha256"})
+    replay["replay_sha256"] = compact.digest(
+        {k: v for k, v in replay.items() if k != "replay_sha256"}
+    )
+    rejected = calibration._machine_sequence_operating_metrics(
+        [row], {row["decision_trace_id"]}
+    )
+    assert rejected["blocker"] == "operating_cash_path_exit_clock_invalid"
+    assert rejected["daily_net_profit_delta_krw"] is None
 
 
 def test_partial_arm_requires_partial_model_holdout_not_full_fill_proof():
-    from datetime import datetime,timedelta
+    from datetime import datetime, timedelta
     from src.engine.scalping import compact_auxiliary_paired_replay as compact
-    from src.engine.scalping.strategy_owner_replay import entry_operating_model_identity, entry_cash_commitment_path
+    from src.engine.scalping.strategy_owner_replay import (
+        entry_operating_model_identity,
+        entry_cash_commitment_path,
+    )
+
     row = _supported_machine_owner_row()
-    source = row['operating_comparison_input']; replay=source['owner_replay']; seed=replay['seed']
-    arm = replay['operating_arms']['incumbent_qty_x_incumbent_leg']
-    qty=seed['total_qty']//2
-    at=(datetime.fromisoformat(seed['observed_at'])+timedelta(seconds=1)).isoformat()
-    cancel=dict(schema='entry_cancel_wait_terminal_v1',seed_sha256=seed['seed_sha256'],filled_qty=qty,
-        model_identity=entry_operating_model_identity(),cancel_ack_and_late_fill_resolved=True,terminal_at=at)
-    cancel['sha256']=compact.digest(cancel)
-    arm.update(modeled_filled_qty=qty,fill_participation_rate=qty/seed['total_qty'],cancel_wait_terminal=cancel)
-    arm['cash_commitment_path']=entry_cash_commitment_path(seed,
-        [dict(at=at,qty=qty,price=seed['legs'][0]['price'])],
-        sum(l['qty']*l['price'] for l in seed['legs']),arm['modeled_exit_at'],cancel_terminal=at)
-    arm['sha256']=compact.digest({k:v for k,v in arm.items() if k!='sha256'})
-    replay['replay_sha256']=compact.digest({k:v for k,v in replay.items() if k!='replay_sha256'})
-    assert compact.owner_operating_arm(replay,source)
-    assert not compact.owner_model_scope_valid(row['operating_model_validation'],source)
-    for proof in row['operating_model_validation']['validated_scopes']:
-        for model_row in proof['calibration_rows']+proof['holdout_rows']: model_row['execution_state']='partial'
-        proof['actual_rows_sha256']=compact.digest(proof['calibration_rows']+proof['holdout_rows'])
-        proof['sha256']=compact.digest({k:v for k,v in proof.items() if k!='sha256'})
-    assert compact.owner_model_scope_valid(row['operating_model_validation'],source)
+    source = row["operating_comparison_input"]
+    replay = source["owner_replay"]
+    seed = replay["seed"]
+    arm = replay["operating_arms"]["incumbent_qty_x_incumbent_leg"]
+    qty = seed["total_qty"] // 2
+    at = (
+        datetime.fromisoformat(seed["observed_at"]) + timedelta(seconds=1)
+    ).isoformat()
+    cancel = dict(
+        schema="entry_cancel_wait_terminal_v1",
+        seed_sha256=seed["seed_sha256"],
+        filled_qty=qty,
+        model_identity=entry_operating_model_identity(),
+        cancel_ack_and_late_fill_resolved=True,
+        terminal_at=at,
+    )
+    cancel["sha256"] = compact.digest(cancel)
+    arm.update(
+        modeled_filled_qty=qty,
+        fill_participation_rate=qty / seed["total_qty"],
+        cancel_wait_terminal=cancel,
+    )
+    arm["cash_commitment_path"] = entry_cash_commitment_path(
+        seed,
+        [dict(at=at, qty=qty, price=seed["legs"][0]["price"])],
+        sum(l["qty"] * l["price"] for l in seed["legs"]),
+        arm["modeled_exit_at"],
+        cancel_terminal=at,
+    )
+    arm["sha256"] = compact.digest({k: v for k, v in arm.items() if k != "sha256"})
+    replay["replay_sha256"] = compact.digest(
+        {k: v for k, v in replay.items() if k != "replay_sha256"}
+    )
+    assert compact.owner_operating_arm(replay, source)
+    assert not compact.owner_model_scope_valid(
+        row["operating_model_validation"], source
+    )
+    for proof in row["operating_model_validation"]["validated_scopes"]:
+        for model_row in proof["calibration_rows"] + proof["holdout_rows"]:
+            model_row["execution_state"] = "partial"
+        proof["actual_rows_sha256"] = compact.digest(
+            proof["calibration_rows"] + proof["holdout_rows"]
+        )
+        proof["sha256"] = compact.digest(
+            {k: v for k, v in proof.items() if k != "sha256"}
+        )
+    assert compact.owner_model_scope_valid(row["operating_model_validation"], source)
 
 
 def test_machine_full_population_retains_missing_outcome_for_entry_protection():
     rows, receipt = _natural_refinement_fixture()
-    rows[0]['entry_quality_contract_valid'] = False
-    rows[0]['comparison'].pop('entry_cost_contract', None)
-    usual, _ = calibration._common_refinement_population([], rows, target_date='2026-09-15',
-        source_receipt=receipt, paired_contract={})
-    protected, _ = calibration._common_refinement_population([], rows, target_date='2026-09-15',
-        source_receipt=receipt, paired_contract={}, retain_unevaluated_machine_rows=True)
+    rows[0]["entry_quality_contract_valid"] = False
+    rows[0]["comparison"].pop("entry_cost_contract", None)
+    usual, _ = calibration._common_refinement_population(
+        [], rows, target_date="2026-09-15", source_receipt=receipt, paired_contract={}
+    )
+    protected, _ = calibration._common_refinement_population(
+        [],
+        rows,
+        target_date="2026-09-15",
+        source_receipt=receipt,
+        paired_contract={},
+        retain_unevaluated_machine_rows=True,
+    )
     assert len(protected) == len(usual) + 1
-    missing = next(r for r in protected if r['decision_trace_id'] == rows[0]['decision_trace_id'])
+    missing = next(
+        r for r in protected if r["decision_trace_id"] == rows[0]["decision_trace_id"]
+    )
     assert calibration._machine_path_value(missing)[0] is None
+
+
 def test_winrate_opportunity_metric_uses_binary_labels_and_unique_opportunities():
-    from src.engine.scalping.ai_action_outcome_calibration import _winrate_opportunity_metrics
+    from src.engine.scalping.ai_action_outcome_calibration import (
+        _winrate_opportunity_metrics,
+    )
+
     rows = [
-        dict(opportunity_id='a', decision_trace_id='a1', source_date='2026-09-22', win=True),
-        dict(opportunity_id='a', decision_trace_id='a2', source_date='2026-09-22', win=False),
-        dict(opportunity_id='b', decision_trace_id='b1', source_date='2026-09-23', win=True),
+        dict(
+            opportunity_id="a",
+            decision_trace_id="a1",
+            source_date="2026-09-22",
+            win=True,
+        ),
+        dict(
+            opportunity_id="a",
+            decision_trace_id="a2",
+            source_date="2026-09-22",
+            win=False,
+        ),
+        dict(
+            opportunity_id="b",
+            decision_trace_id="b1",
+            source_date="2026-09-23",
+            win=True,
+        ),
     ]
     metrics = _winrate_opportunity_metrics(rows)
-    assert metrics['selected_attempt_count'] == 3
-    assert metrics['selected_opportunity_count'] == 2
-    assert metrics['winning_attempt_count'] == 2
-    assert metrics['win_rate_pct'] == pytest.approx(75)
-    assert metrics['net_path_ev_pct'] is None
-    net_metrics = _winrate_opportunity_metrics([
-        {**row, 'net_path_pct': value} for row, value in zip(rows, [1., -2., 3.])])
-    assert net_metrics['net_path_ev_pct'] == pytest.approx(1.25)
-    assert net_metrics['worst_net_path_pct'] == -2.
-    assert _winrate_opportunity_metrics([])['win_rate_pct'] is None
+    assert metrics["selected_attempt_count"] == 3
+    assert metrics["selected_opportunity_count"] == 2
+    assert metrics["winning_attempt_count"] == 2
+    assert metrics["win_rate_pct"] == pytest.approx(75)
+    assert metrics["net_path_ev_pct"] is None
+    net_metrics = _winrate_opportunity_metrics(
+        [{**row, "net_path_pct": value} for row, value in zip(rows, [1.0, -2.0, 3.0])]
+    )
+    assert net_metrics["net_path_ev_pct"] == pytest.approx(1.25)
+    assert net_metrics["worst_net_path_pct"] == -2.0
+    assert _winrate_opportunity_metrics([])["win_rate_pct"] is None
 
 
-def test_winrate_successor_requires_selected_opportunities_on_fresh_holdout_day(monkeypatch, tmp_path):
+def test_winrate_successor_requires_selected_opportunities_on_fresh_holdout_day(
+    monkeypatch, tmp_path
+):
     from src.engine.scalping import entry_strategy_policy as strategy
     from src.engine.scalping import entry_setup_evidence as setup_owner
     from src.engine.scalping import mechanistic_entry_runtime_policy as runtime_policy
 
-    parent = {'strategy': {}, 'entry_situation_veto': calibration._winrate_veto_payload(68.75)}
-    monkeypatch.setattr(runtime_policy, 'load_effective', lambda **_: {'bundle_sha256': 'a' * 64})
-    monkeypatch.setattr(runtime_policy, 'for_cohort', lambda *_: {'machine_policy': parent})
-    monkeypatch.setattr(calibration, '_common_refinement_population',
-        lambda _paired, rows, **_: (rows, {'row_exclusion_reason_counts': {}}))
-    monkeypatch.setattr(calibration, '_machine_path_value', lambda _row: (0, None))
-    monkeypatch.setattr(calibration, '_machine_opportunity_id', lambda row: row['decision_trace_id'])
-    monkeypatch.setattr(strategy, 'completed_bar_rows', lambda *_args, **_kwargs: [])
-    monkeypatch.setattr(setup_owner, 'validate_mechanistic_entry_threshold_policy', lambda _policy: [])
-    monkeypatch.setattr(calibration, 'mechanistic_entry_policy_decision',
-        lambda setup, *, policy: {'action': 'ENTER_NOW' if 'entry_situation_veto' not in policy
-            or setup['strategy_raw_input']['features']['curr_vs_micro_vwap_bp'] < 68.75 else 'BLOCK'})
+    parent = {
+        "strategy": {},
+        "entry_situation_veto": calibration._winrate_veto_payload(68.75),
+    }
+    monkeypatch.setattr(
+        runtime_policy, "load_effective", lambda **_: {"bundle_sha256": "a" * 64}
+    )
+    monkeypatch.setattr(
+        runtime_policy, "for_cohort", lambda *_: {"machine_policy": parent}
+    )
+    monkeypatch.setattr(
+        calibration,
+        "_common_refinement_population",
+        lambda _paired, rows, **_: (rows, {"row_exclusion_reason_counts": {}}),
+    )
+    monkeypatch.setattr(calibration, "_machine_path_value", lambda _row: (0, None))
+    monkeypatch.setattr(
+        calibration, "_machine_opportunity_id", lambda row: row["decision_trace_id"]
+    )
+    monkeypatch.setattr(strategy, "completed_bar_rows", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(
+        setup_owner, "validate_mechanistic_entry_threshold_policy", lambda _policy: []
+    )
+    monkeypatch.setattr(
+        calibration,
+        "mechanistic_entry_policy_decision",
+        lambda setup, *, policy: {
+            "action": (
+                "ENTER_NOW"
+                if "entry_situation_veto" not in policy
+                or setup["strategy_raw_input"]["features"]["curr_vs_micro_vwap_bp"]
+                < 68.75
+                else "BLOCK"
+            )
+        },
+    )
 
     rows = []
-    for day in ('2026-09-22', '2026-09-23', '2026-09-28'):
+    for day in ("2026-09-22", "2026-09-23", "2026-09-28"):
         rows += [(day, 10.0, True, i) for i in range(30)]
         rows += [(day, 60.0, False, i + 30) for i in range(10)]
-    rows += [('2026-09-29', 10.0, True, i) for i in range(40)]
-    rows += [('2026-09-29', 60.0, False, i + 40) for i in range(10)]
-    rows += [('2026-09-30', 100.0, False, i) for i in range(20)]
+    rows += [("2026-09-29", 10.0, True, i) for i in range(40)]
+    rows += [("2026-09-29", 60.0, False, i + 40) for i in range(10)]
+    rows += [("2026-09-30", 100.0, False, i) for i in range(20)]
     population = []
     for day, value, win, index in rows:
-        raw = {'features': {'curr_vs_micro_vwap_bp': value,
-            'micro_vwap_available': True, 'minute_candle_window_fresh': True}}
-        population.append({'source_date': day, 'effective_venue': 'KRX',
-            'session_bucket': 'KRX_REGULAR', 'decision_trace_id': f'{day}:{index}',
-            'setup_evidence': {'strategy_raw_input': raw,
-                'strategy_raw_sha256': strategy.digest(raw)},
-            'entry_quality_path': {'first_hit': 'net_target_first' if win else 'exact_stop_first'}})
+        raw = {
+            "features": {
+                "curr_vs_micro_vwap_bp": value,
+                "micro_vwap_available": True,
+                "minute_candle_window_fresh": True,
+            }
+        }
+        population.append(
+            {
+                "source_date": day,
+                "effective_venue": "KRX",
+                "session_bucket": "KRX_REGULAR",
+                "decision_trace_id": f"{day}:{index}",
+                "setup_evidence": {
+                    "strategy_raw_input": raw,
+                    "strategy_raw_sha256": strategy.digest(raw),
+                },
+                "entry_quality_path": {
+                    "first_hit": "net_target_first" if win else "exact_stop_first"
+                },
+            }
+        )
 
-    report = calibration.build_winrate_policy_report(population,
-        source_receipt={'target_date': '2026-09-30'}, target_date='2026-09-30', data_root=tmp_path)
+    report = calibration.build_winrate_policy_report(
+        population,
+        source_receipt={"target_date": "2026-09-30"},
+        target_date="2026-09-30",
+        data_root=tmp_path,
+    )
 
-    assert report['candidate']['holdout']['source_dates'] == []
-    assert report['candidate_search_count'] == 2
-    assert len(report['candidate_training_diagnostics']) == 2
-    for score in report['candidate_training_diagnostics']:
-        assert score['holdout_used_for_candidate_selection'] is False
-        assert score['eligible_train'] == bool(score['metrics']['selected_opportunity_count']
-            and all(score['successor_hurdles'].values()))
-    assert report['disposition'] == 'incumbent_carried'
-    assert 'successor_holdout_date_coverage_insufficient' in report['hurdle_errors']
-    assert report['market_census']['PREMARKET_KRX_LIKE|PREMARKET_KRX_LIKE']['source_state'] == 'no_rows'
-    assert report['market_census']['KRX_NXT_INTEGRATED|KRX_NXT_AFTERMARKET']['input_attempt_count'] == 0
+    assert report["candidate"]["holdout"]["source_dates"] == []
+    assert report["candidate_search_count"] == 2
+    assert len(report["candidate_training_diagnostics"]) == 2
+    for score in report["candidate_training_diagnostics"]:
+        assert score["holdout_used_for_candidate_selection"] is False
+        assert score["eligible_train"] == bool(
+            score["metrics"]["selected_opportunity_count"]
+            and all(score["successor_hurdles"].values())
+        )
+    assert report["disposition"] == "incumbent_carried"
+    assert "successor_holdout_date_coverage_insufficient" in report["hurdle_errors"]
+    assert (
+        report["market_census"]["PREMARKET_KRX_LIKE|PREMARKET_KRX_LIKE"]["source_state"]
+        == "no_rows"
+    )
+    assert (
+        report["market_census"]["KRX_NXT_INTEGRATED|KRX_NXT_AFTERMARKET"][
+            "input_attempt_count"
+        ]
+        == 0
+    )
 
-    complete = [row for row in population if row['source_date'] != '2026-09-30']
-    complete += [{**row, 'source_date': '2026-09-30',
-        'decision_trace_id': row['decision_trace_id'].replace('2026-09-29', '2026-09-30')}
-        for row in population if row['source_date'] == '2026-09-29']
-    passing = calibration.build_winrate_policy_report(complete,
-        source_receipt={'target_date': '2026-09-30'}, target_date='2026-09-30', data_root=tmp_path)
-    assert passing['disposition'] == 'successor_selected'
-    assert passing['candidate']['holdout']['source_dates'] == ['2026-09-30']
-    assert len(passing['candidate_holdout_opportunity_manifest_sha256']) == 64
+    complete = [row for row in population if row["source_date"] != "2026-09-30"]
+    complete += [
+        {
+            **row,
+            "source_date": "2026-09-30",
+            "decision_trace_id": row["decision_trace_id"].replace(
+                "2026-09-29", "2026-09-30"
+            ),
+        }
+        for row in population
+        if row["source_date"] == "2026-09-29"
+    ]
+    passing = calibration.build_winrate_policy_report(
+        complete,
+        source_receipt={"target_date": "2026-09-30"},
+        target_date="2026-09-30",
+        data_root=tmp_path,
+    )
+    assert passing["disposition"] == "successor_selected"
+    assert passing["candidate"]["holdout"]["source_dates"] == ["2026-09-30"]
+    assert len(passing["candidate_holdout_opportunity_manifest_sha256"]) == 64
     assert runtime_policy.winrate_market_census_valid(passing)
 
 
-def test_winrate_first_forward_day_uses_chronological_opportunity_holdout(monkeypatch, tmp_path):
+def test_winrate_first_forward_day_uses_chronological_opportunity_holdout(
+    monkeypatch, tmp_path
+):
     from copy import deepcopy
     from datetime import datetime, timedelta
     from src.engine.scalping import entry_strategy_policy as strategy
     from src.engine.scalping import entry_setup_evidence as setup_owner
     from src.engine.scalping import mechanistic_entry_runtime_policy as runtime_policy
 
-    parent = {'strategy': {}, 'entry_situation_veto': calibration._winrate_veto_payload(68.75)}
-    monkeypatch.setattr(runtime_policy, 'load_effective', lambda **_: {'bundle_sha256': 'a' * 64})
-    monkeypatch.setattr(runtime_policy, 'for_cohort', lambda *_: {'machine_policy': parent})
-    monkeypatch.setattr(calibration, '_common_refinement_population',
-        lambda _paired, rows, **_: (rows, {'row_exclusion_reason_counts': {}}))
-    monkeypatch.setattr(calibration, '_machine_path_value', lambda _row: (0, None))
-    monkeypatch.setattr(calibration, '_machine_opportunity_id', lambda row: row['decision_trace_id'])
-    monkeypatch.setattr(strategy, 'completed_bar_rows', lambda *_args, **_kwargs: [])
-    monkeypatch.setattr(setup_owner, 'validate_mechanistic_entry_threshold_policy', lambda _policy: [])
-    monkeypatch.setattr(calibration, 'mechanistic_entry_policy_decision',
-        lambda setup, *, policy: {'action': 'ENTER_NOW' if 'entry_situation_veto' not in policy
-            or setup['strategy_raw_input']['features']['curr_vs_micro_vwap_bp'] < 68.75 else 'BLOCK'})
+    parent = {
+        "strategy": {},
+        "entry_situation_veto": calibration._winrate_veto_payload(68.75),
+    }
+    monkeypatch.setattr(
+        runtime_policy, "load_effective", lambda **_: {"bundle_sha256": "a" * 64}
+    )
+    monkeypatch.setattr(
+        runtime_policy, "for_cohort", lambda *_: {"machine_policy": parent}
+    )
+    monkeypatch.setattr(
+        calibration,
+        "_common_refinement_population",
+        lambda _paired, rows, **_: (rows, {"row_exclusion_reason_counts": {}}),
+    )
+    monkeypatch.setattr(calibration, "_machine_path_value", lambda _row: (0, None))
+    monkeypatch.setattr(
+        calibration, "_machine_opportunity_id", lambda row: row["decision_trace_id"]
+    )
+    monkeypatch.setattr(strategy, "completed_bar_rows", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(
+        setup_owner, "validate_mechanistic_entry_threshold_policy", lambda _policy: []
+    )
+    monkeypatch.setattr(
+        calibration,
+        "mechanistic_entry_policy_decision",
+        lambda setup, *, policy: {
+            "action": (
+                "ENTER_NOW"
+                if "entry_situation_veto" not in policy
+                or setup["strategy_raw_input"]["features"]["curr_vs_micro_vwap_bp"]
+                < 68.75
+                else "BLOCK"
+            )
+        },
+    )
     start = datetime(2026, 9, 29, 9, tzinfo=calibration.KST)
     rows = []
     for index in range(100):
         good = index < 40 or 70 <= index < 90
-        raw = {'features': {'curr_vs_micro_vwap_bp': 10.0 if good else 60.0,
-            'micro_vwap_available': True, 'minute_candle_window_fresh': True}}
-        rows.append({'source_date': '2026-09-29', 'decision_ts': (start + timedelta(seconds=index)).isoformat(),
-            'effective_venue': 'KRX', 'session_bucket': 'KRX_REGULAR',
-            'decision_trace_id': f'today:{index:03}',
-            'setup_evidence': {'strategy_raw_input': raw, 'strategy_raw_sha256': strategy.digest(raw)},
-            'entry_quality_path': {'first_hit': 'net_target_first' if good else 'exact_stop_first'}})
-    report = calibration.build_winrate_policy_report(rows,
-        source_receipt={'target_date': '2026-09-29'}, target_date='2026-09-29', data_root=tmp_path)
-    assert report['disposition'] == 'successor_selected'
-    assert report['train_dates'] == report['holdout_dates'] == ['2026-09-29']
-    assert report['chronological_opportunity_split']['accepted_opportunity_count'] == 100
-    assert report['candidate']['train']['selected_opportunity_count'] >= 30
-    assert report['candidate']['holdout']['selected_opportunity_count'] >= 10
+        raw = {
+            "features": {
+                "curr_vs_micro_vwap_bp": 10.0 if good else 60.0,
+                "micro_vwap_available": True,
+                "minute_candle_window_fresh": True,
+            }
+        }
+        rows.append(
+            {
+                "source_date": "2026-09-29",
+                "decision_ts": (start + timedelta(seconds=index)).isoformat(),
+                "effective_venue": "KRX",
+                "session_bucket": "KRX_REGULAR",
+                "decision_trace_id": f"today:{index:03}",
+                "setup_evidence": {
+                    "strategy_raw_input": raw,
+                    "strategy_raw_sha256": strategy.digest(raw),
+                },
+                "entry_quality_path": {
+                    "first_hit": "net_target_first" if good else "exact_stop_first"
+                },
+            }
+        )
+    report = calibration.build_winrate_policy_report(
+        rows,
+        source_receipt={"target_date": "2026-09-29"},
+        target_date="2026-09-29",
+        data_root=tmp_path,
+    )
+    assert report["disposition"] == "successor_selected"
+    assert report["train_dates"] == report["holdout_dates"] == ["2026-09-29"]
+    assert (
+        report["chronological_opportunity_split"]["accepted_opportunity_count"] == 100
+    )
+    assert report["candidate"]["train"]["selected_opportunity_count"] >= 30
+    assert report["candidate"]["holdout"]["selected_opportunity_count"] >= 10
     assert runtime_policy._winrate_successor_hurdles_valid(report)
     reduced = deepcopy(rows)
     for index in [*range(5), *range(70, 75)]:
-        raw = reduced[index]['setup_evidence']['strategy_raw_input']
-        raw['features']['curr_vs_micro_vwap_bp'] = 60.
-        reduced[index]['setup_evidence']['strategy_raw_sha256'] = strategy.digest(raw)
-    losing_winners = calibration.build_winrate_policy_report(reduced,
-        source_receipt={'target_date': '2026-09-29'}, target_date='2026-09-29', data_root=tmp_path)
-    assert losing_winners['disposition'] == 'successor_selected'
-    assert losing_winners['success_retention_diagnostics']['holdout']['excluded_wins'] == 5
-    assert losing_winners['candidate']['holdout']['winning_attempt_count'] == 15
+        raw = reduced[index]["setup_evidence"]["strategy_raw_input"]
+        raw["features"]["curr_vs_micro_vwap_bp"] = 60.0
+        reduced[index]["setup_evidence"]["strategy_raw_sha256"] = strategy.digest(raw)
+    losing_winners = calibration.build_winrate_policy_report(
+        reduced,
+        source_receipt={"target_date": "2026-09-29"},
+        target_date="2026-09-29",
+        data_root=tmp_path,
+    )
+    assert losing_winners["disposition"] == "successor_selected"
+    assert (
+        losing_winners["success_retention_diagnostics"]["holdout"]["excluded_wins"] == 5
+    )
+    assert losing_winners["candidate"]["holdout"]["winning_attempt_count"] == 15
     assert runtime_policy._winrate_successor_hurdles_valid(losing_winners)
     native = deepcopy(rows)
     for index, row in enumerate(native):
-        row.update(source_date='2026-10-02', stock_code=f'{index:06d}', scanner_promotion_id=f'native-{index}')
-        row['decision_ts'] = row['decision_ts'].replace('2026-09-29', '2026-10-02')
+        row.update(
+            source_date="2026-10-02",
+            stock_code=f"{index:06d}",
+            scanner_promotion_id=f"native-{index}",
+        )
+        row["decision_ts"] = row["decision_ts"].replace("2026-09-29", "2026-10-02")
+
     def current_report(population):
-        return calibration.build_winrate_policy_report(population,
-            source_receipt={'target_date': '2026-10-02'}, target_date='2026-10-02', data_root=tmp_path)
+        return calibration.build_winrate_policy_report(
+            population,
+            source_receipt={"target_date": "2026-10-02"},
+            target_date="2026-10-02",
+            data_root=tmp_path,
+        )
+
     native_report = current_report(native)
-    assert native_report['disposition'] == 'successor_selected'
-    assert native_report['opportunity_identity_contract'] == 'native_scanner_or_fixed_watch_v2'
+    assert native_report["disposition"] == "successor_selected"
+    assert (
+        native_report["opportunity_identity_contract"]
+        == "native_scanner_or_fixed_watch_v2"
+    )
     assert runtime_policy._winrate_successor_hurdles_valid(native_report)
-    assert not runtime_policy._winrate_successor_hurdles_valid({**native_report,
-        'selection_objective_version': 'winrate_improvement_without_winner_retention_v2'})
-    missing = current_report([{**row, 'scanner_promotion_id': None} for row in native])
-    assert missing['disposition'] == 'incumbent_carried'
-    assert missing['accepted_attempt_count'] == 0
-    assert missing['excluded_attempt_counts']['native_opportunity_identity_missing'] == 100
-    repeated = current_report([{**row, 'stock_code': '005930', 'scanner_promotion_id': 'one-native'} for row in native])
-    assert repeated['disposition'] == 'incumbent_carried'
-    assert repeated['chronological_opportunity_split']['accepted_opportunity_count'] == 1
+    assert not runtime_policy._winrate_successor_hurdles_valid(
+        {
+            **native_report,
+            "selection_objective_version": "winrate_improvement_without_winner_retention_v2",
+        }
+    )
+    missing = current_report([{**row, "scanner_promotion_id": None} for row in native])
+    assert missing["disposition"] == "incumbent_carried"
+    assert missing["accepted_attempt_count"] == 0
+    assert (
+        missing["excluded_attempt_counts"]["native_opportunity_identity_missing"] == 100
+    )
+    repeated = current_report(
+        [
+            {**row, "stock_code": "005930", "scanner_promotion_id": "one-native"}
+            for row in native
+        ]
+    )
+    assert repeated["disposition"] == "incumbent_carried"
+    assert (
+        repeated["chronological_opportunity_split"]["accepted_opportunity_count"] == 1
+    )
     broken = deepcopy(report)
-    broken['chronological_opportunity_split']['holdout_opportunities'][0] = broken['chronological_opportunity_split']['train_opportunities'][0]
+    broken["chronological_opportunity_split"]["holdout_opportunities"][0] = broken[
+        "chronological_opportunity_split"
+    ]["train_opportunities"][0]
     assert not runtime_policy._winrate_successor_hurdles_valid(broken)
 
 
@@ -5972,116 +7315,239 @@ def test_winrate_pending_initial_does_not_rerun_frozen_census(monkeypatch, tmp_p
     from src.engine.scalping import entry_setup_evidence as setup_owner
     from src.engine.scalping import mechanistic_entry_runtime_policy as runtime_policy
 
-    parent = {'strategy': {}}
-    pending_machine = {'strategy': {}, 'entry_situation_veto': calibration._winrate_veto_payload(68.75)}
-    pending = {'bundle_sha256': 'b' * 64, 'target_date': '2026-09-28',
-        'previous_bundle_sha256': 'a' * 64, 'machine_policy': pending_machine,
-        'winrate_selection': {'disposition': 'initial_adopted',
-            'policy_version': 'winrate_initial_v1', 'parent_bundle_sha256': 'a' * 64,
-            'machine_policy_sha256': strategy.digest(pending_machine)}}
-    monkeypatch.setattr(runtime_policy, 'load_effective', lambda **_: {'bundle_sha256': 'a' * 64})
-    monkeypatch.setattr(runtime_policy, 'for_cohort', lambda *_: {'machine_policy': parent})
-    monkeypatch.setattr(runtime_policy, 'load', lambda **_: pending)
-    monkeypatch.setattr(runtime_policy, 'next_target', lambda _: '2026-09-28')
-    monkeypatch.setattr(calibration, '_common_refinement_population',
-        lambda _paired, rows, **_: (rows, {'row_exclusion_reason_counts': {}}))
-    monkeypatch.setattr(calibration, '_machine_path_value', lambda _row: (0, None))
-    monkeypatch.setattr(calibration, '_machine_opportunity_id', lambda row: row['decision_trace_id'])
-    monkeypatch.setattr(strategy, 'completed_bar_rows', lambda *_args, **_kwargs: [])
-    monkeypatch.setattr(setup_owner, 'validate_mechanistic_entry_threshold_policy', lambda _policy: [])
-    monkeypatch.setattr(calibration, 'mechanistic_entry_policy_decision',
-        lambda _setup, *, policy: {'action': 'ENTER_NOW'})
-    raw = {'features': {'curr_vs_micro_vwap_bp': 12.0,
-        'micro_vwap_available': True, 'minute_candle_window_fresh': True}}
-    row = {'source_date': '2026-09-24', 'effective_venue': 'KRX',
-        'session_bucket': 'KRX_REGULAR', 'decision_trace_id': 'day24:1',
-        'setup_evidence': {'strategy_raw_input': raw, 'strategy_raw_sha256': strategy.digest(raw)},
-        'entry_quality_path': {'first_hit': 'net_target_first'}}
-    report = calibration.build_winrate_policy_report([row],
-        source_receipt={'target_date': '2026-09-24'}, target_date='2026-09-24',
-        data_root=tmp_path, publication_day='2026-09-24')
-    assert report['disposition'] == 'incumbent_carried'
-    assert report['hurdle_errors'] == ['initial_policy_pending_activation']
-    assert report['pending_initial_bundle_sha256'] == pending['bundle_sha256']
-    assert report['accepted_attempt_count'] == 1
-    assert report['candidate_policy'] is None
+    parent = {"strategy": {}}
+    pending_machine = {
+        "strategy": {},
+        "entry_situation_veto": calibration._winrate_veto_payload(68.75),
+    }
+    pending = {
+        "bundle_sha256": "b" * 64,
+        "target_date": "2026-09-28",
+        "previous_bundle_sha256": "a" * 64,
+        "machine_policy": pending_machine,
+        "winrate_selection": {
+            "disposition": "initial_adopted",
+            "policy_version": "winrate_initial_v1",
+            "parent_bundle_sha256": "a" * 64,
+            "machine_policy_sha256": strategy.digest(pending_machine),
+        },
+    }
+    monkeypatch.setattr(
+        runtime_policy, "load_effective", lambda **_: {"bundle_sha256": "a" * 64}
+    )
+    monkeypatch.setattr(
+        runtime_policy, "for_cohort", lambda *_: {"machine_policy": parent}
+    )
+    monkeypatch.setattr(runtime_policy, "load", lambda **_: pending)
+    monkeypatch.setattr(runtime_policy, "next_target", lambda _: "2026-09-28")
+    monkeypatch.setattr(
+        calibration,
+        "_common_refinement_population",
+        lambda _paired, rows, **_: (rows, {"row_exclusion_reason_counts": {}}),
+    )
+    monkeypatch.setattr(calibration, "_machine_path_value", lambda _row: (0, None))
+    monkeypatch.setattr(
+        calibration, "_machine_opportunity_id", lambda row: row["decision_trace_id"]
+    )
+    monkeypatch.setattr(strategy, "completed_bar_rows", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(
+        setup_owner, "validate_mechanistic_entry_threshold_policy", lambda _policy: []
+    )
+    monkeypatch.setattr(
+        calibration,
+        "mechanistic_entry_policy_decision",
+        lambda _setup, *, policy: {"action": "ENTER_NOW"},
+    )
+    raw = {
+        "features": {
+            "curr_vs_micro_vwap_bp": 12.0,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+        }
+    }
+    row = {
+        "source_date": "2026-09-24",
+        "effective_venue": "KRX",
+        "session_bucket": "KRX_REGULAR",
+        "decision_trace_id": "day24:1",
+        "setup_evidence": {
+            "strategy_raw_input": raw,
+            "strategy_raw_sha256": strategy.digest(raw),
+        },
+        "entry_quality_path": {"first_hit": "net_target_first"},
+    }
+    report = calibration.build_winrate_policy_report(
+        [row],
+        source_receipt={"target_date": "2026-09-24"},
+        target_date="2026-09-24",
+        data_root=tmp_path,
+        publication_day="2026-09-24",
+    )
+    assert report["disposition"] == "incumbent_carried"
+    assert report["hurdle_errors"] == ["initial_policy_pending_activation"]
+    assert report["pending_initial_bundle_sha256"] == pending["bundle_sha256"]
+    assert report["accepted_attempt_count"] == 1
+    assert report["candidate_policy"] is None
 
 
 def test_projection_replacement_preserves_exact_research_generation(tmp_path):
     import hashlib
     import gzip
-    path = tmp_path / 'projection.json'
-    calibration._write_machine_projection(path, {'contract':{}, 'rows':[{'trace':'old'}]})
-    old = Path(str(path) + '.gz').read_bytes()
+
+    path = tmp_path / "projection.json"
+    calibration._write_machine_projection(
+        path, {"contract": {}, "rows": [{"trace": "old"}]}
+    )
+    old = Path(str(path) + ".gz").read_bytes()
     sha = hashlib.sha256(old).hexdigest()
-    calibration._write_machine_projection(path, {'contract':{}, 'rows':[{'trace':'new'}]})
-    archive = tmp_path / 'generations' / f'{sha}.json.gz'
+    calibration._write_machine_projection(
+        path, {"contract": {}, "rows": [{"trace": "new"}]}
+    )
+    archive = tmp_path / "generations" / f"{sha}.json.gz"
     assert archive.read_bytes() == old
-    assert json.loads(gzip.decompress(old))['rows'][0]['trace'] == 'old'
-    assert json.loads(gzip.decompress(Path(str(path) + '.gz').read_bytes()))['rows'][0]['trace'] == 'new'
+    assert json.loads(gzip.decompress(old))["rows"][0]["trace"] == "old"
+    assert (
+        json.loads(gzip.decompress(Path(str(path) + ".gz").read_bytes()))["rows"][0][
+            "trace"
+        ]
+        == "new"
+    )
 
 
-@pytest.mark.parametrize('publication', [False, True])
+@pytest.mark.parametrize("publication", [False, True])
 def test_diagnostic_refinement_rebinds_recipe_to_changed_parent(publication):
     from copy import deepcopy
     from src.engine.scalping import entry_admission_recipe as recipe
     from src.engine.scalping import entry_strategy_policy as strategy
-    from src.engine.scalping.entry_setup_evidence import validate_mechanistic_entry_threshold_policy
-    parent = recipe.candidate_policy(strategy.seed(deepcopy(calibration.MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1), ('KRX', 'KRX_REGULAR')))
+    from src.engine.scalping.entry_setup_evidence import (
+        validate_mechanistic_entry_threshold_policy,
+    )
+
+    parent = recipe.candidate_policy(
+        strategy.seed(
+            deepcopy(calibration.MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1),
+            ("KRX", "KRX_REGULAR"),
+        )
+    )
     original = deepcopy(parent)
-    coords = dict(parent['thresholds'], maximum_spread_bp=30)
-    candidate = calibration._mechanistic_threshold_policy(coords, parent, publication=publication)
+    coords = dict(parent["thresholds"], maximum_spread_bp=30)
+    candidate = calibration._mechanistic_threshold_policy(
+        coords, parent, publication=publication
+    )
     assert parent == original
-    assert candidate['entry_admission_recipe']['parent_policy_sha256'] != parent['entry_admission_recipe']['parent_policy_sha256']
-    assert candidate['entry_admission_recipe']['parameters'] == parent['entry_admission_recipe']['parameters']
+    assert (
+        candidate["entry_admission_recipe"]["parent_policy_sha256"]
+        != parent["entry_admission_recipe"]["parent_policy_sha256"]
+    )
+    assert (
+        candidate["entry_admission_recipe"]["parameters"]
+        == parent["entry_admission_recipe"]["parameters"]
+    )
     assert validate_mechanistic_entry_threshold_policy(candidate) == []
 
 
 def test_diagnostic_refinement_rejects_corrupt_original_recipe():
     from copy import deepcopy
     from src.engine.scalping import entry_admission_recipe as recipe
-    parent = recipe.candidate_policy(deepcopy(calibration.MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1))
-    parent['entry_admission_recipe']['parent_policy_sha256'] = '0' * 64
-    with pytest.raises(ValueError, match='mechanistic_refinement_parent_recipe_invalid'):
-        calibration._mechanistic_threshold_policy(parent['thresholds'], parent)
+
+    parent = recipe.candidate_policy(
+        deepcopy(calibration.MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1)
+    )
+    parent["entry_admission_recipe"]["parent_policy_sha256"] = "0" * 64
+    with pytest.raises(
+        ValueError, match="mechanistic_refinement_parent_recipe_invalid"
+    ):
+        calibration._mechanistic_threshold_policy(parent["thresholds"], parent)
 
 
-def test_legacy_report_only_never_publishes_and_full_regeneration_recomputes(monkeypatch, tmp_path):
+def test_legacy_report_only_never_publishes_and_full_regeneration_recomputes(
+    monkeypatch, tmp_path
+):
     from src.engine.scalping import mechanistic_entry_runtime_policy as policy
-    day = '2026-10-06'
+
+    day = "2026-10-06"
     calls = []
-    monkeypatch.setattr(calibration, 'ensure_machine_economic_reference', lambda **kw: {'status':'existing_verified_sources_preserved'})
-    monkeypatch.setattr(calibration, '_main_mechanistic_input_fingerprint', lambda *a, **kw: 'f'*64)
+    monkeypatch.setattr(
+        calibration,
+        "ensure_machine_economic_reference",
+        lambda **kw: {"status": "existing_verified_sources_preserved"},
+    )
+    monkeypatch.setattr(
+        calibration, "_main_mechanistic_input_fingerprint", lambda *a, **kw: "f" * 64
+    )
+
     def build(**kwargs):
         calls.append(kwargs)
-        return calibration._with_artifact_content_sha256(dict(schema=calibration.SCHEMA,
-            target_date=day, report_scope='main_mechanistic_entry', noncompact_sections_refreshed=True,
-            evaluation_contract_version=calibration.MAIN_MECHANISTIC_EVALUATION_CONTRACT_VERSION,
-            evaluation_fingerprint='f'*64, hierarchical_entry_quality={},
-            status='main_mechanistic_entry_full_evaluation_complete'))
-    monkeypatch.setattr(calibration, 'build_main_mechanistic_report', build)
-    monkeypatch.setattr(policy, 'publish', lambda *a, **kw: pytest.fail('diagnostics cannot publish'))
-    args=['--target-date',day,'--data-root',str(tmp_path),'--machine-only','--report-only','--write']
-    monkeypatch.delenv('POSTCLOSE_REGENERATION_SCOPE', raising=False)
-    assert calibration.main(args)==0 and len(calls)==1
-    assert calibration.main(args)==0 and len(calls)==1
-    monkeypatch.setenv('POSTCLOSE_REGENERATION_SCOPE','all_except_eod')
-    assert calibration.main(args)==0 and len(calls)==2
-    assert json.loads(calibration.report_path(day,tmp_path/'report').read_text())['policy_publication_requested'] is False
+        return calibration._with_artifact_content_sha256(
+            dict(
+                schema=calibration.SCHEMA,
+                target_date=day,
+                report_scope="main_mechanistic_entry",
+                noncompact_sections_refreshed=True,
+                evaluation_contract_version=calibration.MAIN_MECHANISTIC_EVALUATION_CONTRACT_VERSION,
+                evaluation_fingerprint="f" * 64,
+                hierarchical_entry_quality={},
+                status="main_mechanistic_entry_full_evaluation_complete",
+            )
+        )
+
+    monkeypatch.setattr(calibration, "build_main_mechanistic_report", build)
+    monkeypatch.setattr(
+        policy, "publish", lambda *a, **kw: pytest.fail("diagnostics cannot publish")
+    )
+    args = [
+        "--target-date",
+        day,
+        "--data-root",
+        str(tmp_path),
+        "--machine-only",
+        "--report-only",
+        "--write",
+    ]
+    monkeypatch.delenv("POSTCLOSE_REGENERATION_SCOPE", raising=False)
+    assert calibration.main(args) == 0 and len(calls) == 1
+    assert calibration.main(args) == 0 and len(calls) == 1
+    monkeypatch.setenv("POSTCLOSE_REGENERATION_SCOPE", "all_except_eod")
+    assert calibration.main(args) == 0 and len(calls) == 2
+    assert (
+        json.loads(calibration.report_path(day, tmp_path / "report").read_text())[
+            "policy_publication_requested"
+        ]
+        is False
+    )
 
 
-@pytest.mark.parametrize('action', ['--activate-now','--require-policy-publication'])
+@pytest.mark.parametrize("action", ["--activate-now", "--require-policy-publication"])
 def test_legacy_report_only_rejects_runtime_authority(action):
     with pytest.raises(SystemExit) as error:
-        calibration.main(['--target-date','2026-10-06','--machine-only','--report-only',action])
-    assert error.value.code==2
+        calibration.main(
+            ["--target-date", "2026-10-06", "--machine-only", "--report-only", action]
+        )
+    assert error.value.code == 2
 
 
-def test_next_day_legacy_diagnostic_uses_retained_exact_scope_not_live_reversal(monkeypatch):
+def test_next_day_legacy_diagnostic_uses_retained_exact_scope_not_live_reversal(
+    monkeypatch,
+):
     from src.engine.scalping import mechanistic_entry_runtime_policy as policy
-    monkeypatch.setattr(policy,'for_cohort',lambda *a: pytest.fail('live reversal projection is not legacy diagnostics'))
-    incumbent={'continuous_reversal':{'schema':'present'},'machine_policy':{'rule':'top-carrier'},
-               'scope_policies':{'NXT|NXT_PREMARKET':{'machine_policy':{'rule':'retained-pre'}}}}
-    result=calibration._legacy_diagnostic_for_cohort(incumbent,('NXT','NXT_PREMARKET'))
-    assert result['machine_policy']=={'rule':'retained-pre'}
-    assert calibration._legacy_diagnostic_for_cohort(incumbent,('NXT','NXT_AFTERMARKET')) is None
+
+    monkeypatch.setattr(
+        policy,
+        "for_cohort",
+        lambda *a: pytest.fail("live reversal projection is not legacy diagnostics"),
+    )
+    incumbent = {
+        "continuous_reversal": {"schema": "present"},
+        "machine_policy": {"rule": "top-carrier"},
+        "scope_policies": {
+            "NXT|NXT_PREMARKET": {"machine_policy": {"rule": "retained-pre"}}
+        },
+    }
+    result = calibration._legacy_diagnostic_for_cohort(
+        incumbent, ("NXT", "NXT_PREMARKET")
+    )
+    assert result["machine_policy"] == {"rule": "retained-pre"}
+    assert (
+        calibration._legacy_diagnostic_for_cohort(incumbent, ("NXT", "NXT_AFTERMARKET"))
+        is None
+    )

@@ -274,8 +274,7 @@ def _explicit_cohort(
     )
     market_data_route = _market_data_route(fields)
     post_effective = bool(
-        event_time is not None
-        and event_time.date() >= DUAL_AFTERMARKET_EFFECTIVE_DATE
+        event_time is not None and event_time.date() >= DUAL_AFTERMARKET_EFFECTIVE_DATE
     )
     if "premarket" in session:
         return "PREMARKET_KRX_LIKE", "explicit_session"
@@ -365,11 +364,15 @@ def _underlying_event_venue(fields: dict[str, Any]) -> str | None:
 
 
 def _actual_execution_venue(fields: dict[str, Any]) -> str | None:
-    value = str(
-        fields.get("ai_market_snapshot_actual_execution_venue")
-        or fields.get("actual_execution_venue")
-        or ""
-    ).strip().upper()
+    value = (
+        str(
+            fields.get("ai_market_snapshot_actual_execution_venue")
+            or fields.get("actual_execution_venue")
+            or ""
+        )
+        .strip()
+        .upper()
+    )
     return value if value in {"KRX", "NXT", "UNKNOWN"} else None
 
 

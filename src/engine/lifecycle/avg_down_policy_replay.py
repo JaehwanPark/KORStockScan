@@ -89,10 +89,11 @@ def implementation_identity() -> dict[str, str]:
 
 
 def snapshot_version(snapshot: dict) -> str:
-    from src.engine.lifecycle.policy_snapshot_reference import is_reference,validate
+    from src.engine.lifecycle.policy_snapshot_reference import is_reference, validate
+
     if is_reference(snapshot):
         validate(snapshot)
-        return 'avg_down_exit_policy:'+snapshot['sha256']
+        return "avg_down_exit_policy:" + snapshot["sha256"]
     return "avg_down_exit_policy:" + canonical_digest(snapshot)
 
 
@@ -193,9 +194,11 @@ def _json_value(value: Any) -> Any:
             values.sort(key=lambda item: json.dumps(item, sort_keys=True))
         return {"__replay_collection__": type(value).__name__, "items": values}
     from src.engine.scalping.main_stop_policy import StopValues
+
     if isinstance(value, StopValues):
         from dataclasses import asdict
-        return {'__replay_main_stop_values__': asdict(value)}
+
+        return {"__replay_main_stop_values__": asdict(value)}
     if isinstance(value, dict):
         if any(not isinstance(key, str) for key in value):
             raise ValueError("non_string_snapshot_key")
@@ -213,9 +216,10 @@ def _json_value(value: Any) -> Any:
 
 def thaw(value: Any) -> Any:
     if isinstance(value, dict):
-        if set(value) == {'__replay_main_stop_values__'}:
+        if set(value) == {"__replay_main_stop_values__"}:
             from src.engine.scalping.main_stop_policy import StopValues
-            return StopValues.parse(value['__replay_main_stop_values__'])
+
+            return StopValues.parse(value["__replay_main_stop_values__"])
         if set(value) == {"__replay_decimal__"}:
             return Decimal(value["__replay_decimal__"])
         if set(value) == {"__replay_deque__", "maxlen"}:
@@ -364,7 +368,9 @@ class FrozenFiles:
         if row is None:
             raise FileNotFoundError(errno.ENOENT, "recorded_absence", os.fspath(path))
         return SimpleNamespace(
-            st_dev=0, st_ino=0, st_ctime_ns=row["mtime_ns"],
+            st_dev=0,
+            st_ino=0,
+            st_ctime_ns=row["mtime_ns"],
             st_mtime=row["mtime"],
             st_mtime_ns=row["mtime_ns"],
             st_size=row.get("size", len(row.get("content", "").encode())),
@@ -528,6 +534,7 @@ def _worker_replay(observation: dict, frames: list[dict]) -> dict:
     # Import before freezing the input filesystem, but prohibit network and
     # writes even during imports. Import-time .pyc writes are disabled by -B.
     from src.engine.lifecycle.policy_snapshot_reference import resolve
+
     snapshot = resolve(observation["policy_snapshot"])
     if any(
         not key.startswith("KORSTOCKSCAN_") for key in snapshot.get("environment", {})
@@ -540,7 +547,9 @@ def _worker_replay(observation: dict, frames: list[dict]) -> dict:
     from src.engine import sniper_execution_receipts as receipts
     from src.engine.lifecycle import neutral_decision_context as ldm
     from src.engine.scalping.avg_down_replay_capture import (
-        AI_CIRCUIT_FIELDS, ai_policy_state, normalize_ai_policy_state,
+        AI_CIRCUIT_FIELDS,
+        ai_policy_state,
+        normalize_ai_policy_state,
     )
     from src.engine.lifecycle.avg_down_replay import replay_exit_paths
     from src.engine.ai.hot_path_ai_symbol_budget import HotPathAISymbolBudget
@@ -596,16 +605,24 @@ def _worker_replay(observation: dict, frames: list[dict]) -> dict:
     entry_cancel = observation.get("entry_residual_cancel_contract")
     if entry_cancel is not None:
         terminal = entry_cancel.get("terminal") or {}
-        from src.engine.scalping.strategy_owner_replay import entry_operating_model_identity
-        if (observation.get('entry_split_initial_only') is not True
-            or terminal.get('schema') != 'entry_cancel_wait_terminal_v1'
-            or terminal.get('sha256') != canonical_digest({k:v for k,v in terminal.items() if k != 'sha256'})
-            or terminal.get('model_identity') != entry_operating_model_identity()
-            or terminal.get('cancel_ack_and_late_fill_resolved') is not True
-            or terminal.get('filled_qty') != initial.get('buy_qty')
-            or type(entry_cancel.get('pending_qty')) is not int or entry_cancel['pending_qty'] <= 0
-            or datetime.fromisoformat(terminal['terminal_at']) < datetime.fromisoformat(entry_cancel['final_fill_at'])):
-            raise ReplayInputGap('entry_residual_cancel_contract_invalid')
+        from src.engine.scalping.strategy_owner_replay import (
+            entry_operating_model_identity,
+        )
+
+        if (
+            observation.get("entry_split_initial_only") is not True
+            or terminal.get("schema") != "entry_cancel_wait_terminal_v1"
+            or terminal.get("sha256")
+            != canonical_digest({k: v for k, v in terminal.items() if k != "sha256"})
+            or terminal.get("model_identity") != entry_operating_model_identity()
+            or terminal.get("cancel_ack_and_late_fill_resolved") is not True
+            or terminal.get("filled_qty") != initial.get("buy_qty")
+            or type(entry_cancel.get("pending_qty")) is not int
+            or entry_cancel["pending_qty"] <= 0
+            or datetime.fromisoformat(terminal["terminal_at"])
+            < datetime.fromisoformat(entry_cancel["final_fill_at"])
+        ):
+            raise ReplayInputGap("entry_residual_cancel_contract_invalid")
     if not isinstance(rules, dict) or not rules:
         raise ReplayInputGap("full_policy_rules_missing")
     # An absent field is not permission to substitute the current code default.
@@ -706,6 +723,7 @@ def _worker_replay(observation: dict, frames: list[dict]) -> dict:
 
     class ReplayPeakLedger(PositionPeakRuntimeLedger):
         """Same native ledger methods, per-arm memory persistence only."""
+
         def __init__(self, rows):
             super().__init__(original_peak_ledger.path)
             self.rows = deepcopy(rows)
@@ -715,6 +733,7 @@ def _worker_replay(observation: dict, frames: list[dict]) -> dict:
 
         def _write(self, rows):
             self.rows = deepcopy(rows)
+
     time.time = lambda: current["epoch"]
     time.monotonic = lambda: current["epoch"]
     time.perf_counter = lambda: current["epoch"]
@@ -758,9 +777,12 @@ def _worker_replay(observation: dict, frames: list[dict]) -> dict:
         context = state["policy_state"]
         # Explicitly recorded absence is valid; an unrecorded file still fails
         # in FrozenFiles. Each arm restores its own saved ledger generation.
-        initial_peak = context.get('position_peak_ledger_state')
-        replay_peak = ReplayPeakLedger(thaw(initial_peak) if initial_peak is not None
-            else original_peak_ledger.load())
+        initial_peak = context.get("position_peak_ledger_state")
+        replay_peak = ReplayPeakLedger(
+            thaw(initial_peak)
+            if initial_peak is not None
+            else original_peak_ledger.load()
+        )
         handlers.POSITION_PEAK_LEDGER = replay_peak
         if context.get("schema") != "avg_down_holding_state_v1":
             raise ReplayInputGap("full_holding_state_schema_invalid")
@@ -787,8 +809,13 @@ def _worker_replay(observation: dict, frames: list[dict]) -> dict:
 
         handlers._log_holding_pipeline = record_stage
         runtime_rules = Rules(**rules)
-        tuning_key = state.get("tuning_env_key", "SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE")
-        if tuning_key not in {"SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE", "SCALPING_PYRAMID_MIN_PROFIT_PCT"}:
+        tuning_key = state.get(
+            "tuning_env_key", "SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE"
+        )
+        if tuning_key not in {
+            "SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE",
+            "SCALPING_PYRAMID_MIN_PROFIT_PCT",
+        }:
             raise ReplayInputGap("unsupported_scale_in_tuning_axis")
         if state["min_buy_pressure"] is not None:
             setattr(runtime_rules, tuning_key, state["min_buy_pressure"])
@@ -800,7 +827,9 @@ def _worker_replay(observation: dict, frames: list[dict]) -> dict:
                     if values is None or canonical_digest(values) != digest:
                         raise ReplayInputGap("module_rules_digest_mismatch")
                     fixed = Rules(**thaw(values))
-                    if state["min_buy_pressure"] is not None and hasattr(fixed, tuning_key):
+                    if state["min_buy_pressure"] is not None and hasattr(
+                        fixed, tuning_key
+                    ):
                         setattr(fixed, tuning_key, state["min_buy_pressure"])
                     module.TRADING_RULES = fixed
         handlers.TRADING_RULES = runtime_rules
@@ -861,14 +890,33 @@ def _worker_replay(observation: dict, frames: list[dict]) -> dict:
         if entry_cancel is not None:
             # Only the verified scheduled terminal clears the residual. Holding
             # decisions still run on every frame with the actual pending state.
-            pending = current['epoch'] < datetime.fromisoformat(entry_cancel['terminal']['terminal_at']).timestamp()
-            stock['pending_entry_orders'] = ([dict(ord_no='offline-entry-residual',
-                qty=entry_cancel['pending_qty'], filled_qty=0, status='OPEN')] if pending else [])
+            pending = (
+                current["epoch"]
+                < datetime.fromisoformat(
+                    entry_cancel["terminal"]["terminal_at"]
+                ).timestamp()
+            )
+            stock["pending_entry_orders"] = (
+                [
+                    dict(
+                        ord_no="offline-entry-residual",
+                        qty=entry_cancel["pending_qty"],
+                        filled_qty=0,
+                        status="OPEN",
+                    )
+                ]
+                if pending
+                else []
+            )
             handlers._reconcile_pending_entry_orders = lambda *a, **kw: None
+
             def cancel_entry_residual(*args, **kwargs):
-                if stock['pending_entry_orders']:
-                    raise ReplayInputGap('entry_early_exit_cancel_requires_independent_ack_model')
-                return 'cleared'
+                if stock["pending_entry_orders"]:
+                    raise ReplayInputGap(
+                        "entry_early_exit_cancel_requires_independent_ack_model"
+                    )
+                return "cleared"
+
             handlers._cancel_pending_entry_orders = cancel_entry_residual
         handlers.DB = VirtualInventoryDB(stock)
         handlers.KIWOOM_TOKEN = "offline_credential_not_valid"
@@ -962,24 +1010,34 @@ def _worker_replay(observation: dict, frames: list[dict]) -> dict:
 
         handlers._get_holding_minute_candles_with_meta = candles
         handlers.DUAL_PERSONA_ENGINE = services.proxy("ai_engine")
-        ai_engine = ReplayAI(["offline_credential_not_valid"], announce_startup=False,
-                             initialize_entry_policy=False)
+        ai_engine = ReplayAI(
+            ["offline_credential_not_valid"],
+            announce_startup=False,
+            initialize_entry_policy=False,
+        )
         ai_engine.services = services
         from src.engine import ai_engine_openai as openai_module
+
         try:
-            ai_state = normalize_ai_policy_state(thaw(context.get("ai_engine_state")),
-                                                openai_module.TRADING_RULES)
+            ai_state = normalize_ai_policy_state(
+                thaw(context.get("ai_engine_state")), openai_module.TRADING_RULES
+            )
         except ValueError:
             ai_state = None
         ai_engine.recorded_state_ready = ai_state is not None
         if ai_state is not None:
             # This worker owns a frozen configuration; live module state is
             # never changed and legacy aliases are never attached to the engine.
-            openai_module.TRADING_RULES = Rules(**{
-                **vars(openai_module.TRADING_RULES),
-                **{key: value for key, value in ai_state["role_models"].items()
-                   if key.startswith("OPENAI_")},
-            })
+            openai_module.TRADING_RULES = Rules(
+                **{
+                    **vars(openai_module.TRADING_RULES),
+                    **{
+                        key: value
+                        for key, value in ai_state["role_models"].items()
+                        if key.startswith("OPENAI_")
+                    },
+                }
+            )
             for name in AI_CIRCUIT_FIELDS:
                 setattr(ai_engine, name, ai_state[name])
         budget = context.get("ai_budget")
@@ -1207,7 +1265,7 @@ def _worker_replay(observation: dict, frames: list[dict]) -> dict:
                 "call_path": gap.call_path,
             }
         after = deepcopy(context)
-        after['position_peak_ledger_state'] = _json_value(replay_peak.load())
+        after["position_peak_ledger_state"] = _json_value(replay_peak.load())
         after["filled_add_qty"] = state["filled_add_qty"]
         after["ldm_promote_counter"] = _json_value(ldm._PROMOTE_COUNTER)
         if ai_engine.recorded_state_ready:
@@ -1319,6 +1377,7 @@ def isolated_replay(
 def _provider_worker(payload: dict) -> dict:
     """Only the existing AI transport, never a holding/broker handler."""
     from src.engine.lifecycle.policy_snapshot_reference import resolve
+
     snapshot, request = resolve(payload["policy_snapshot"]), payload["request"]
     if (
         request.get("call") != "ai_provider.current_prompt"
@@ -1365,7 +1424,9 @@ def _provider_worker(payload: dict) -> dict:
         replay_input_cutoff=request["input_cutoff"],
     )
     kwargs["metadata_extra"] = metadata
-    engine = GPTSniperEngine(keys, announce_startup=False, initialize_entry_policy=False)
+    engine = GPTSniperEngine(
+        keys, announce_startup=False, initialize_entry_policy=False
+    )
     try:
         result = engine._call_openai_safe(*args, **kwargs)
         if not isinstance(result, dict) or result.get("ai_fallback_score_50"):
@@ -1439,6 +1500,7 @@ def replay_with_current_policy_ai(
         else time.monotonic() + 180
     )
     from src.engine.lifecycle.policy_snapshot_reference import resolve
+
     snapshot = resolve(observation["policy_snapshot"])
     records = []
     for row in cached_records or []:

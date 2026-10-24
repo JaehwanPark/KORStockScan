@@ -207,9 +207,7 @@ def _market_axes_for(*, venue: str, timestamp: str) -> dict[str, str] | None:
         integrated = session.startswith("KRX_NXT_AFTERMARKET")
         return {
             "session": session,
-            "decision_market_scope": (
-                "KRX_NXT_INTEGRATED" if integrated else venue
-            ),
+            "decision_market_scope": ("KRX_NXT_INTEGRATED" if integrated else venue),
             "market_data_route": route,
             "market_session_regime": session,
             "actual_execution_venue": "UNKNOWN",
@@ -346,6 +344,7 @@ def _response_json(response: requests.Response, *, api_id: str) -> dict[str, Any
     try:
         payload = response.json()
         from src.utils.kiwoom_transport_telemetry import record_decoded_response
+
         record_decoded_response(response, payload)
     except ValueError as exc:
         raise BackfillError(f"{api_id}_response_not_json") from exc
@@ -404,7 +403,12 @@ def fetch_ka10080_history(
                 request_code=request_code,
             )
         from src.utils.kiwoom_transport_telemetry import measured_http_call
-        response = measured_http_call(post, url, telemetry_owner='pure_market_kiwoom_backfill', telemetry_class='source_only',
+
+        response = measured_http_call(
+            post,
+            url,
+            telemetry_owner="pure_market_kiwoom_backfill",
+            telemetry_class="source_only",
             headers={
                 "Content-Type": "application/json;charset=UTF-8",
                 "authorization": f"Bearer {active_token}",
@@ -492,9 +496,7 @@ def fetch_ka10080_history(
         <= end_date
     ]
     dates = sorted({bar.source_timestamp[:8] for bar in bars})
-    partial_route_row_count = sum(
-        bar.route_source_quality == "PARTIAL" for bar in bars
-    )
+    partial_route_row_count = sum(bar.route_source_quality == "PARTIAL" for bar in bars)
     meta = {
         "venue": normalized_venue,
         "request_code": request_code,
@@ -579,7 +581,12 @@ def fetch_ka20005_history(
                 request_code="001",
             )
         from src.utils.kiwoom_transport_telemetry import measured_http_call
-        response = measured_http_call(post, url, telemetry_owner='pure_market_kiwoom_backfill', telemetry_class='source_only',
+
+        response = measured_http_call(
+            post,
+            url,
+            telemetry_owner="pure_market_kiwoom_backfill",
+            telemetry_class="source_only",
             headers={
                 "Content-Type": "application/json;charset=UTF-8",
                 "authorization": f"Bearer {active_token}",

@@ -12,7 +12,6 @@ import math
 
 from typing import Any
 
-
 PROFIT_GRID_MIN_ELIGIBLE = 20
 
 

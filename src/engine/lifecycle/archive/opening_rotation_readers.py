@@ -21,7 +21,6 @@ from src.engine.sniper_time import (
     is_scalping_prewarm_time_allowed,
 )
 
-
 POSITION_TAG = "OPENING_ROTATION_1PCT"
 
 

@@ -762,22 +762,37 @@ BALANCED_ENTRY_PROMPT_VERSIONS = frozenset(
     }
 )
 CONTINUOUS_REVERSAL_AUXILIARY_PROMPT_VERSIONS = frozenset(
-    'continuous_reversal_auxiliary_production_v1:'+arm for arm in (
-        'existing_wording','reversal_fact_roles_v2','reversal_entry_geometry_v5',
-        'reversal_citation_v6','reversal_complete_source_v7')
-) | frozenset('continuous_reversal_auxiliary_phases_v2:CONFIRMED_UPTICK:'+arm for arm in (
-    'existing_wording','reversal_fact_roles_v2','reversal_entry_geometry_v5',
-    'reversal_citation_v6','reversal_complete_source_v7'))
-MACHINE_AUXILIARY_COMPACT_ENTRY_PROMPT_VERSIONS = frozenset(
-    {
-        ENTRY_MACHINE_AUXILIARY_COMPACT_V1_PROMPT_VERSION,
-        *FROZEN_COMPACT_V2_VARIANTS,
-        ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION,
-        ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION,
-        ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION,
-        ENTRY_MACHINE_AUXILIARY_COMPACT_CONTRACT_PROMPT_VERSION,
-    }
-) | CONTINUOUS_REVERSAL_AUXILIARY_PROMPT_VERSIONS
+    "continuous_reversal_auxiliary_production_v1:" + arm
+    for arm in (
+        "existing_wording",
+        "reversal_fact_roles_v2",
+        "reversal_entry_geometry_v5",
+        "reversal_citation_v6",
+        "reversal_complete_source_v7",
+    )
+) | frozenset(
+    "continuous_reversal_auxiliary_phases_v2:CONFIRMED_UPTICK:" + arm
+    for arm in (
+        "existing_wording",
+        "reversal_fact_roles_v2",
+        "reversal_entry_geometry_v5",
+        "reversal_citation_v6",
+        "reversal_complete_source_v7",
+    )
+)
+MACHINE_AUXILIARY_COMPACT_ENTRY_PROMPT_VERSIONS = (
+    frozenset(
+        {
+            ENTRY_MACHINE_AUXILIARY_COMPACT_V1_PROMPT_VERSION,
+            *FROZEN_COMPACT_V2_VARIANTS,
+            ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION,
+            ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION,
+            ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION,
+            ENTRY_MACHINE_AUXILIARY_COMPACT_CONTRACT_PROMPT_VERSION,
+        }
+    )
+    | CONTINUOUS_REVERSAL_AUXILIARY_PROMPT_VERSIONS
+)
 AUXILIARY_ENTRY_RISK_PROMPT_VERSIONS = (
     BALANCED_ENTRY_PROMPT_VERSIONS | MACHINE_AUXILIARY_COMPACT_ENTRY_PROMPT_VERSIONS
 )
@@ -2311,13 +2326,16 @@ def machine_auxiliary_compact_entry_system_prompt(
 ) -> str:
     """Return a versioned machine-first auxiliary risk-screen prompt."""
     if prompt_version in CONTINUOUS_REVERSAL_AUXILIARY_PROMPT_VERSIONS:
-        if stage!='entry':raise ValueError('continuous_reversal_is_entry_only')
-        if prompt_version.startswith('continuous_reversal_auxiliary_phases_v2:'):
+        if stage != "entry":
+            raise ValueError("continuous_reversal_is_entry_only")
+        if prompt_version.startswith("continuous_reversal_auxiliary_phases_v2:"):
             from src.engine.scalping.reversal_auxiliary_phases import prompt
-            _,phase,arm=prompt_version.split(':')
-            return prompt(phase,arm)
+
+            _, phase, arm = prompt_version.split(":")
+            return prompt(phase, arm)
         from src.engine.scalping.reversal_auxiliary_contract import production_prompt
-        return production_prompt(prompt_version.split(':',1)[1])
+
+        return production_prompt(prompt_version.split(":", 1)[1])
 
     if str(stage or "").strip().lower() != "entry":
         raise ValueError("machine auxiliary compact prompt supports entry only")
@@ -2335,7 +2353,10 @@ def machine_auxiliary_compact_entry_system_prompt(
     if prompt_version == ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION:
         return _MACHINE_AUXILIARY_COMPACT_ENTRY_RULES
     if prompt_version == ENTRY_MACHINE_AUXILIARY_COMPACT_CONTRACT_PROMPT_VERSION:
-        return _MACHINE_AUXILIARY_COMPACT_ENTRY_RULES + _MACHINE_AUXILIARY_COMPACT_CONTRACT_SUFFIX
+        return (
+            _MACHINE_AUXILIARY_COMPACT_ENTRY_RULES
+            + _MACHINE_AUXILIARY_COMPACT_CONTRACT_SUFFIX
+        )
     if prompt_version == ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION:
         return (
             _MACHINE_AUXILIARY_COMPACT_ENTRY_RULES

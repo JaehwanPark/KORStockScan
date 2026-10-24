@@ -162,7 +162,10 @@ def holding_decision_context_enabled(
     now = _now_kst(now_ts)
     if str(decision_kind or "").lower() == "holding_path_vote":
         from .holding_path_vote_policy import runtime_vote_input_enabled
-        if runtime_vote_input_enabled(vote_policy_receipt, active_date=now.date().isoformat()):
+
+        if runtime_vote_input_enabled(
+            vote_policy_receipt, active_date=now.date().isoformat()
+        ):
             return True
     activation = promotion_activation_state(now)
     if activation.get("activation_source") == "atomic_promotion_artifact":
@@ -216,7 +219,11 @@ def _quote_age_ms(
 
     if "last_realtime_type_ts" in ws_data or "last_ws_update_ts" in ws_data:
         age = ws_quote_receive_age_ms(ws_data, now_ts=now_epoch)
-        basis = "canonical_adopted_quote_receive" if "last_realtime_type_ts" in ws_data else "absolute_timestamp:last_ws_update_ts"
+        basis = (
+            "canonical_adopted_quote_receive"
+            if "last_realtime_type_ts" in ws_data
+            else "absolute_timestamp:last_ws_update_ts"
+        )
         return age, basis if age is not None else "invalid_quote_receive_timestamp"
     for key in ("last_ws_update_ts", "received_at", "received_ts", "timestamp", "ts"):
         if key in ws_data:
@@ -289,25 +296,46 @@ def _observed_exit_costs(position, ws, *, levels, fresh, average, quantity, now)
     rate = cost.get("sell_cost_rate")
     known = cost_known_epoch(cost.get("known_at"))
     sha = cost.get("source_sha256")
-    if (type(rate) not in (int, float) or not math.isfinite(rate) or not 0 <= rate < .05
-            or known is None or known > now
-            or type(cost.get("buy_cost_krw")) not in (int, float) or cost["buy_cost_krw"] != 0
-            or cost.get("actual_broker_cost") is not False
-            or cost.get("allocation") != "frozen_configured_round_trip_rate_on_sell_model_only"
-            or type(sha) is not str or len(sha) != 64 or any(c not in "0123456789abcdef" for c in sha)):
+    if (
+        type(rate) not in (int, float)
+        or not math.isfinite(rate)
+        or not 0 <= rate < 0.05
+        or known is None
+        or known > now
+        or type(cost.get("buy_cost_krw")) not in (int, float)
+        or cost["buy_cost_krw"] != 0
+        or cost.get("actual_broker_cost") is not False
+        or cost.get("allocation")
+        != "frozen_configured_round_trip_rate_on_sell_model_only"
+        or type(sha) is not str
+        or len(sha) != 64
+        or any(c not in "0123456789abcdef" for c in sha)
+    ):
         return None
-    bids = (ws.get("orderbook") or {}).get("bids") if type(ws.get("orderbook")) is dict else None
+    bids = (
+        (ws.get("orderbook") or {}).get("bids")
+        if type(ws.get("orderbook")) is dict
+        else None
+    )
     if type(bids) is not list or not bids:
         return None
-    left, proceeds, previous = quantity, 0., None
+    left, proceeds, previous = quantity, 0.0, None
     for index, row in enumerate(bids[:10]):
         if type(row) is not dict:
             return None
         price, volume = row.get("price"), row.get("qty", row.get("volume"))
-        if (type(price) not in (int, float) or not math.isfinite(price) or price <= 0
-                or type(volume) is not int or volume <= 0
-                or (previous is not None and price >= previous)
-                or (index == 0 and (price != levels["best_bid"] or volume != levels["best_bid_qty"]))):
+        if (
+            type(price) not in (int, float)
+            or not math.isfinite(price)
+            or price <= 0
+            or type(volume) is not int
+            or volume <= 0
+            or (previous is not None and price >= previous)
+            or (
+                index == 0
+                and (price != levels["best_bid"] or volume != levels["best_bid_qty"])
+            )
+        ):
             return None
         take = min(left, volume)
         proceeds += take * price
@@ -315,13 +343,22 @@ def _observed_exit_costs(position, ws, *, levels, fresh, average, quantity, now)
         previous = price
         if left == 0:
             basis = quantity * average
-            return dict(fee_tax_pct=proceeds * rate / basis * 100.,
-                slippage_bps=(levels["best_bid"] * quantity - proceeds) / basis * 10000.,
+            return dict(
+                fee_tax_pct=proceeds * rate / basis * 100.0,
+                slippage_bps=(levels["best_bid"] * quantity - proceeds)
+                / basis
+                * 10000.0,
                 source="frozen_configured_cost_and_visible_bid_depth_model",
-                cost_source_sha256=sha, cost_known_at=known, observed_at=now,
-                depth_levels=index + 1, quantity=quantity, modeled_vwap=proceeds / quantity,
-                percent_basis="average_entry_notional", actual_broker_cost=False,
-                actual_fill=False)
+                cost_source_sha256=sha,
+                cost_known_at=known,
+                observed_at=now,
+                depth_levels=index + 1,
+                quantity=quantity,
+                modeled_vwap=proceeds / quantity,
+                percent_basis="average_entry_notional",
+                actual_broker_cost=False,
+                actual_fill=False,
+            )
     return None
 
 
@@ -937,7 +974,9 @@ def build_holding_decision_context(
 
     from src.trading.market.quote_consistency import build_market_data_health
 
-    common_health = build_market_data_health(ws, now_ts=now_epoch, quote_max_age_ms=3000)
+    common_health = build_market_data_health(
+        ws, now_ts=now_epoch, quote_max_age_ms=3000
+    )
     levels = _best_levels(ws)
     quote_age_ms, quote_age_basis = _quote_age_ms(ws, now_epoch)
     best_bid = levels["best_bid"]
@@ -1057,8 +1096,15 @@ def build_holding_decision_context(
         not math.isfinite(estimated_slippage_bps) or estimated_slippage_bps < 0
     ):
         estimated_slippage_bps = None
-    modeled_costs = _observed_exit_costs(position, ws, levels=levels, fresh=bbo_fresh,
-        average=avg_price, quantity=memory_qty, now=now_epoch)
+    modeled_costs = _observed_exit_costs(
+        position,
+        ws,
+        levels=levels,
+        fresh=bbo_fresh,
+        average=avg_price,
+        quantity=memory_qty,
+        now=now_epoch,
+    )
     # Explicit invalid inputs remain gaps. Only absent fields can be supplied
     # by the existing frozen cost source plus full visible-quantity coverage.
     if modeled_costs is not None:
@@ -1069,7 +1115,9 @@ def build_holding_decision_context(
         if "estimated_slippage_bps" not in position:
             estimated_slippage_bps = modeled_costs["slippage_bps"]
             applied.append("estimated_slippage_bps")
-        modeled_costs = dict(modeled_costs, applied_components=applied) if applied else None
+        modeled_costs = (
+            dict(modeled_costs, applied_components=applied) if applied else None
+        )
     estimated_net_executable_pnl_pct = (
         round(
             executable_pnl_pct
@@ -1462,7 +1510,10 @@ def build_holding_decision_context(
     )
     if str(decision_kind or "").lower() == "holding_path_vote":
         from .holding_path_vote_policy import runtime_vote_input_enabled
-        if runtime_vote_input_enabled(vote_policy_receipt, active_date=now.date().isoformat()):
+
+        if runtime_vote_input_enabled(
+            vote_policy_receipt, active_date=now.date().isoformat()
+        ):
             context["vote_input_policy"] = dict(vote_policy_receipt)
             # A mandatory voter input cannot acquire ordinary HOLD deferral.
             context["source_quality"]["hold_defer_allowed"] = False

@@ -28,9 +28,14 @@ from typing import Any, Callable, Iterable, Mapping
 from zoneinfo import ZoneInfo
 
 from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
-from src.engine.automation.source_quality_clean_baseline import policy_refresh_start_date
+from src.engine.automation.source_quality_clean_baseline import (
+    policy_refresh_start_date,
+)
 from src.trading.order.tick_utils import get_tick_size
-from src.trading.market.execution_venue import operational_venue, MARKET_DEFAULT_AUTHORITY
+from src.trading.market.execution_venue import (
+    operational_venue,
+    MARKET_DEFAULT_AUTHORITY,
+)
 from src.engine.scalping.entry_setup_evidence import (
     MECHANISTIC_ENTRY_FLOW_OBSERVATION_SCHEMA,
     MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1,
@@ -320,7 +325,9 @@ def _main_mechanistic_input_fingerprint(
 ) -> str:
     """Cheap retry fingerprint; large immutable JSONL inputs are never reread."""
     from src.engine.scalping.mechanistic_entry_runtime_policy import digest
-    from src.engine.scalping.continuous_reversal_operating_postclose import load_report_parent
+    from src.engine.scalping.continuous_reversal_operating_postclose import (
+        load_report_parent,
+    )
 
     def generation(path: Path) -> dict[str, Any]:
         # Compact finalization rewrites its small sealed projection even when
@@ -371,6 +378,7 @@ def _main_mechanistic_input_fingerprint(
         candidates.add(refresh_policy)
     incumbent = load_report_parent(data_root, incumbent_date or target_date)
     from src.engine.scalping.strategy_owner_replay import entry_operating_model_identity
+
     code_paths = [
         Path(__file__),
         Path(__file__).with_name("ai_decision_quality.py"),
@@ -394,7 +402,9 @@ def _main_mechanistic_input_fingerprint(
         "incumbent_machine_policy_sha256": (
             digest(incumbent["machine_policy"]) if incumbent else None
         ),
-        "incumbent_scope_policies_sha256": digest((incumbent or {}).get("scope_policies")),
+        "incumbent_scope_policies_sha256": digest(
+            (incumbent or {}).get("scope_policies")
+        ),
         "common_grid": MECHANISTIC_COMMON_FEATURE_GRID,
         "refinement_gate": MECHANISTIC_REFINEMENT_GATE,
     }
@@ -708,9 +718,14 @@ def _candidate_source_contract(
         ):
             exclusions["dual_exposure_cost_missing_or_invalid"] += 1
         else:
-            if is_dual_aftermarket and _normalized_venue(row.get("actual_execution_venue")) not in {"KRX", "NXT"}:
-                row = {**row, "operational_execution_venue": "KRX",
-                       "execution_venue_assignment_authority": MARKET_DEFAULT_AUTHORITY}
+            if is_dual_aftermarket and _normalized_venue(
+                row.get("actual_execution_venue")
+            ) not in {"KRX", "NXT"}:
+                row = {
+                    **row,
+                    "operational_execution_venue": "KRX",
+                    "execution_venue_assignment_authority": MARKET_DEFAULT_AUTHORITY,
+                }
             comparisons.append(row)
 
     identity = (
@@ -914,9 +929,14 @@ def _mechanistic_terminal_proxy_pct(row: dict[str, Any]) -> float | None:
 
     if "operating_comparison_input" in row:
         from src.engine.scalping import compact_auxiliary_paired_replay as compact
+
         source = row["operating_comparison_input"]
         arm = compact.owner_operating_arm(source.get("owner_replay") or {}, source)
-        return arm.get("net_return_pct") * int(source.get("incumbent_verdict") == "PASS") if arm else None
+        return (
+            arm.get("net_return_pct") * int(source.get("incumbent_verdict") == "PASS")
+            if arm
+            else None
+        )
     comparison = row["comparison"]
     first_hit = str(comparison.get("entry_path_first_hit") or "")
     execution_cost = _number(comparison.get("conservative_execution_cost_pct"))
@@ -1320,13 +1340,28 @@ def _mechanistic_source_rows(
                     and entry_quality_path.get("runtime_effect") is not True
                     and entry_quality_path.get("allowed_runtime_apply") is not True
                 )
-                raw = request.get('exact_payload')
-                if report_hash_verified and isinstance(raw, dict) and raw and 'strategy_raw_input' not in evidence:
-                    from src.engine.scalping.entry_strategy_policy import digest as strategy_digest
+                raw = request.get("exact_payload")
+                if (
+                    report_hash_verified
+                    and isinstance(raw, dict)
+                    and raw
+                    and "strategy_raw_input" not in evidence
+                ):
+                    from src.engine.scalping.entry_strategy_policy import (
+                        digest as strategy_digest,
+                    )
+
                     evidence = dict(evidence)
-                    evidence['strategy_raw_input'] = {**raw, 'strategy_observed_at': request['decision_ts']}
-                    evidence['strategy_raw_sha256'] = strategy_digest(evidence['strategy_raw_input'])
-                    evidence['evidence_sha256'] = _canonical_sha256({k:v for k,v in evidence.items() if k != 'evidence_sha256'})
+                    evidence["strategy_raw_input"] = {
+                        **raw,
+                        "strategy_observed_at": request["decision_ts"],
+                    }
+                    evidence["strategy_raw_sha256"] = strategy_digest(
+                        evidence["strategy_raw_input"]
+                    )
+                    evidence["evidence_sha256"] = _canonical_sha256(
+                        {k: v for k, v in evidence.items() if k != "evidence_sha256"}
+                    )
                 row = {
                     "decision_trace_id": trace_id,
                     "source_date": source_date,
@@ -2343,22 +2378,34 @@ def _machine_source_contract_valid(row):
     return not (
         row.get("source_provenance_verified") is not True
         or evidence.get("schema") != "entry_setup_evidence_v1"
-        or not (row.get("source_report_hash_verified") is True
-                or row.get("machine_observation_hash_verified") is True)
-        or evidence.get("evidence_sha256") != _canonical_sha256({
-            k: v for k, v in evidence.items() if k != "evidence_sha256"
-        })
+        or not (
+            row.get("source_report_hash_verified") is True
+            or row.get("machine_observation_hash_verified") is True
+        )
+        or evidence.get("evidence_sha256")
+        != _canonical_sha256(
+            {k: v for k, v in evidence.items() if k != "evidence_sha256"}
+        )
         or _as_dict(evidence.get("source_quality")).get("status") != "fresh_consistent"
-        or any(evidence.get(k) is not expected for k, expected in (
-            ("runtime_effect", False), ("allowed_runtime_apply", False),
-            ("actual_order_submitted", False), ("broker_order_forbidden", True),
-        ))
+        or any(
+            evidence.get(k) is not expected
+            for k, expected in (
+                ("runtime_effect", False),
+                ("allowed_runtime_apply", False),
+                ("actual_order_submitted", False),
+                ("broker_order_forbidden", True),
+            )
+        )
     )
 
 
 def _common_refinement_population(
-    paired_rows: list[dict], natural_rows: list[dict], *,
-    target_date: str, source_receipt: dict, paired_contract: dict,
+    paired_rows: list[dict],
+    natural_rows: list[dict],
+    *,
+    target_date: str,
+    source_receipt: dict,
+    paired_contract: dict,
     natural_conflicting_attempt_identity_count: int = 0,
     natural_conflicting_evaluation_keys: list[str] | None = None,
     cohort: tuple[str, str] = ("KRX", "KRX_REGULAR"),
@@ -2381,16 +2428,22 @@ def _common_refinement_population(
     excluded_keys = set(gate.get("excluded_evaluation_keys") or []) | set(
         gate.get("pending_evaluation_keys") or []
     )
+
     def evaluation_key(row):
-        return _machine_evaluation_key(row, allow_attempt_fallback=allow_attempt_identity_fallback)
-    observed_conflict_keys = _machine_conflicting_evaluation_keys(natural_rows, allow_attempt_fallback=allow_attempt_identity_fallback)
-    conflict_manifest_valid = (
-        natural_conflicting_evaluation_keys is None
-        or (
-            isinstance(natural_conflicting_evaluation_keys, list)
-            and all(isinstance(key, str) and key for key in natural_conflicting_evaluation_keys)
-            and len(set(natural_conflicting_evaluation_keys)) == len(natural_conflicting_evaluation_keys)
+        return _machine_evaluation_key(
+            row, allow_attempt_fallback=allow_attempt_identity_fallback
         )
+
+    observed_conflict_keys = _machine_conflicting_evaluation_keys(
+        natural_rows, allow_attempt_fallback=allow_attempt_identity_fallback
+    )
+    conflict_manifest_valid = natural_conflicting_evaluation_keys is None or (
+        isinstance(natural_conflicting_evaluation_keys, list)
+        and all(
+            isinstance(key, str) and key for key in natural_conflicting_evaluation_keys
+        )
+        and len(set(natural_conflicting_evaluation_keys))
+        == len(natural_conflicting_evaluation_keys)
     )
     # The direct caller can omit a manifest when no external conflicts were
     # reported: independently localize its input. A nonzero external count
@@ -2399,8 +2452,11 @@ def _common_refinement_population(
         observed_conflict_keys
         if natural_conflicting_evaluation_keys is None
         and natural_conflicting_attempt_identity_count == 0
-        else set(natural_conflicting_evaluation_keys or [])
-        if conflict_manifest_valid else set()
+        else (
+            set(natural_conflicting_evaluation_keys or [])
+            if conflict_manifest_valid
+            else set()
+        )
     )
     effective_conflict_count = (
         len(observed_conflict_keys)
@@ -2426,6 +2482,7 @@ def _common_refinement_population(
     operating_projection_valid = False
     if operating_projection is not None and natural_rows:
         from src.engine.scalping import compact_auxiliary_paired_replay as compact
+
         operating_projection_valid = compact.valid(operating_projection)
         if operating_projection_valid:
             for operating_row in operating_projection.get("rows") or []:
@@ -2438,7 +2495,11 @@ def _common_refinement_population(
             operating_source = None
             if operating_projection_valid and lane == "natural":
                 attempt_id = row.get("evaluation_attempt_id")
-                matches = operating_rows_by_attempt.get(attempt_id, ()) if isinstance(attempt_id, str) else ()
+                matches = (
+                    operating_rows_by_attempt.get(attempt_id, ())
+                    if isinstance(attempt_id, str)
+                    else ()
+                )
                 # Compact replay is an optional downstream-economic enrichment.
                 # It must never redefine the machine counterfactual population:
                 # BLOCK/RECHECK and paired lanes are valid machine research rows
@@ -2457,23 +2518,39 @@ def _common_refinement_population(
                                 "source_date",
                             )
                         )
-                        and ((candidate_source.get("incumbent_verdict") in {"PASS", "VETO"}
-                              and compact.owner_operating_arm(candidate_source.get("owner_replay") or {}, candidate_source))
-                             or _machine_nonentry_seed(candidate_source))
+                        and (
+                            (
+                                candidate_source.get("incumbent_verdict")
+                                in {"PASS", "VETO"}
+                                and compact.owner_operating_arm(
+                                    candidate_source.get("owner_replay") or {},
+                                    candidate_source,
+                                )
+                            )
+                            or _machine_nonentry_seed(candidate_source)
+                        )
                     ):
                         operating_source = candidate_source
                         row["operating_comparison_input"] = operating_source
                         row["operating_model_validation"] = (
                             candidate_source.get("machine_owner_model_validation")
-                            or operating_projection.get("owner_execution_model_validation") or {}
+                            or operating_projection.get(
+                                "owner_execution_model_validation"
+                            )
+                            or {}
                         )
                         row["operating_runtime_cost_receipt"] = (
                             candidate_source.get("machine_runtime_cost_receipt")
-                            or operating_projection.get("runtime_inference_cost_receipt") or {}
+                            or operating_projection.get(
+                                "runtime_inference_cost_receipt"
+                            )
+                            or {}
                         )
             day = str(row.get("source_date") or "")
             evidence = _as_dict(row.get("setup_evidence"))
-            parts = _as_dict(_as_dict(row.get("entry_group_observation")).get("key_parts"))
+            parts = _as_dict(
+                _as_dict(row.get("entry_group_observation")).get("key_parts")
+            )
             if (parts.get("venue"), parts.get("session_bucket")) != cohort:
                 excluded["different_cohort"] += 1
                 continue
@@ -2490,14 +2567,24 @@ def _common_refinement_population(
                 or (row.get("effective_venue"), row.get("session_bucket")) != cohort
                 or not _is_sha256(row.get("bundle_sha256"))
                 or evaluation_key(row) in excluded_keys
-                or not all(str(row.get(key) or "").strip() for key in (
-                    "evaluation_attempt_id", "stock_code",
-                    "effective_venue", "session_bucket", "bundle_sha256",
-                ))
-                or (not allow_attempt_identity_fallback
+                or not all(
+                    str(row.get(key) or "").strip()
+                    for key in (
+                        "evaluation_attempt_id",
+                        "stock_code",
+                        "effective_venue",
+                        "session_bucket",
+                        "bundle_sha256",
+                    )
+                )
+                or (
+                    not allow_attempt_identity_fallback
                     and not str(row.get("scanner_promotion_id") or "").strip()
-                    and not (row.get("watch_origin") == "MAIN_FIXED_WATCH"
-                             and str(row.get("watch_admission_id") or "").strip()))
+                    and not (
+                        row.get("watch_origin") == "MAIN_FIXED_WATCH"
+                        and str(row.get("watch_admission_id") or "").strip()
+                    )
+                )
             ):
                 excluded["natural_machine_receipt_or_identity_invalid"] += 1
                 continue
@@ -2505,17 +2592,31 @@ def _common_refinement_population(
                 excluded["conflicting_exact_attempt"] += 1
                 continue
             comparison = _as_dict(row.get("comparison"))
-            if not retain_unevaluated_machine_rows and operating_source is None and row.get("entry_quality_contract_valid") is not True:
+            if (
+                not retain_unevaluated_machine_rows
+                and operating_source is None
+                and row.get("entry_quality_contract_valid") is not True
+            ):
                 excluded["outcome_contract_invalid"] += 1
                 continue
             cost = _as_dict(comparison.get("entry_cost_contract"))
             full_cost = _full_entry_cost_pct(cost, source_date=day)
-            if not retain_unevaluated_machine_rows and operating_source is None and (
-                full_cost is None
-                or (cost.get("effective_venue"), cost.get("session_bucket")) != cohort
-                or _number(comparison.get("conservative_execution_cost_pct")) is None
-                or not math.isclose(float(comparison["conservative_execution_cost_pct"]), full_cost,
-                                    rel_tol=0, abs_tol=1e-9)
+            if (
+                not retain_unevaluated_machine_rows
+                and operating_source is None
+                and (
+                    full_cost is None
+                    or (cost.get("effective_venue"), cost.get("session_bucket"))
+                    != cohort
+                    or _number(comparison.get("conservative_execution_cost_pct"))
+                    is None
+                    or not math.isclose(
+                        float(comparison["conservative_execution_cost_pct"]),
+                        full_cost,
+                        rel_tol=0,
+                        abs_tol=1e-9,
+                    )
+                )
             ):
                 excluded["full_cost_missing_or_mismatched"] += 1
                 continue
@@ -2523,16 +2624,27 @@ def _common_refinement_population(
             if not trace or not str(row.get("stock_code") or "").strip():
                 excluded["trace_or_symbol_missing"] += 1
                 continue
-            key = ("natural", evaluation_key(row)) if lane == "natural" else ("paired", trace)
+            key = (
+                ("natural", evaluation_key(row))
+                if lane == "natural"
+                else ("paired", trace)
+            )
             # One trace must not contribute twice merely because both the
             # paired replay and natural machine materialization consumed it.
             # Exact conflicting receipts are quarantined, never time-joined.
             key = trace_keys.setdefault(trace, key)
-            fingerprint = _canonical_sha256({
-                "evidence": evidence, "comparison": comparison,
-                "decision_ts": row["decision_ts"],
-                "operating_source_sha256": _canonical_sha256(operating_source) if operating_source else None,
-            })
+            fingerprint = _canonical_sha256(
+                {
+                    "evidence": evidence,
+                    "comparison": comparison,
+                    "decision_ts": row["decision_ts"],
+                    "operating_source_sha256": (
+                        _canonical_sha256(operating_source)
+                        if operating_source
+                        else None
+                    ),
+                }
+            )
             if key in conflicted:
                 excluded["conflicting_duplicate"] += 1
                 continue
@@ -2548,22 +2660,33 @@ def _common_refinement_population(
             row.update(
                 fingerprint=fingerprint,
                 refinement_source_lane=lane,
-                micro_recovery_observed=isinstance(evidence.get("micro_recovery_observation"), dict),
+                micro_recovery_observed=isinstance(
+                    evidence.get("micro_recovery_observation"), dict
+                ),
             )
             accepted[key] = row
     # The provider trace is an explicit alias of the pre-AI machine attempt,
     # not a second opportunity. Prefer the exact natural machine boundary;
     # never transplant the paired SELL/AI result onto its operating path.
-    natural_aliases = {(r.get("source_date"), r.get("stock_code"), r.get("ai_decision_trace_id"))
-        for r in accepted.values() if r.get("refinement_source_lane") == "natural"
-        and r.get("ai_decision_trace_id")}
+    natural_aliases = {
+        (r.get("source_date"), r.get("stock_code"), r.get("ai_decision_trace_id"))
+        for r in accepted.values()
+        if r.get("refinement_source_lane") == "natural"
+        and r.get("ai_decision_trace_id")
+    }
     for key, row in list(accepted.items()):
-        if (row.get("refinement_source_lane") == "paired"
-            and (row["source_date"], row["stock_code"], row["decision_trace_id"]) in natural_aliases):
+        if (
+            row.get("refinement_source_lane") == "paired"
+            and (row["source_date"], row["stock_code"], row["decision_trace_id"])
+            in natural_aliases
+        ):
             del accepted[key]
             excluded["paired_alias_of_natural_machine_attempt"] += 1
-    result = sorted(accepted.values(), key=lambda r: (r["source_date"], r["decision_trace_id"]))
+    result = sorted(
+        accepted.values(), key=lambda r: (r["source_date"], r["decision_trace_id"])
+    )
     sequence_groups = defaultdict(list)
+
     def generation_identity(row):
         if row.get("watch_origin") == "MAIN_FIXED_WATCH":
             return row.get("watch_admission_id")
@@ -2580,7 +2703,7 @@ def _common_refinement_population(
         original_count = natural_sequence_counts[key]
         if natural_allowed and all(key):
             for row in rows:
-                row['machine_sequence_expected_count'] = original_count
+                row["machine_sequence_expected_count"] = original_count
         if natural_allowed and original_count == len(rows) and all(key):
             members = sorted(r["decision_trace_id"] for r in rows)
             for row in rows:
@@ -2595,15 +2718,24 @@ def _common_refinement_population(
         "natural_conflicting_evaluation_keys": sorted(conflict_keys),
         "natural_conflict_locations_complete": conflict_locations_complete,
         "input_lane_counts": {"paired": len(paired_rows), "natural": len(natural_rows)},
-        "accepted_lane_counts": dict(Counter(r["refinement_source_lane"] for r in result)),
+        "accepted_lane_counts": dict(
+            Counter(r["refinement_source_lane"] for r in result)
+        ),
         "accepted_unique_trace_count": len(result),
         "attempt_identity_fallback_allowed": allow_attempt_identity_fallback,
-        "attempt_identity_fallback_count": sum(not bool(r.get("scanner_promotion_id")) for r in result),
+        "attempt_identity_fallback_count": sum(
+            not bool(r.get("scanner_promotion_id")) for r in result
+        ),
         "accepted_source_dates": sorted({r["source_date"] for r in result}),
-        "accepted_rows_sha256": _canonical_sha256([
-            {"decision_trace_id": r["decision_trace_id"], "fingerprint": r["fingerprint"]}
-            for r in result
-        ]),
+        "accepted_rows_sha256": _canonical_sha256(
+            [
+                {
+                    "decision_trace_id": r["decision_trace_id"],
+                    "fingerprint": r["fingerprint"],
+                }
+                for r in result
+            ]
+        ),
         "row_exclusion_reason_counts": dict(excluded),
         "operating_economic_enrichment_count": sum(
             "operating_comparison_input" in row for row in result
@@ -2622,10 +2754,17 @@ def _current_structure_population(rows, contract):
     """Isolate current producer semantics; retain the original case-table history."""
     from src.engine.scalping.entry_candle_context import LOCAL_BREAKOUT_VERSION
 
-    counts = Counter(r["setup_evidence"].get("structure_contract_version")
-                     or "legacy_session_high_v1" for r in rows)
-    selected = [r for r in rows if r["setup_evidence"].get("structure_contract_version")
-                == LOCAL_BREAKOUT_VERSION]
+    counts = Counter(
+        r["setup_evidence"].get("structure_contract_version")
+        or "legacy_session_high_v1"
+        for r in rows
+    )
+    selected = [
+        r
+        for r in rows
+        if r["setup_evidence"].get("structure_contract_version")
+        == LOCAL_BREAKOUT_VERSION
+    ]
     excluded = dict(contract.get("row_exclusion_reason_counts") or {})
     if len(selected) != len(rows):
         excluded["structure_contract_version_mismatch"] = len(rows) - len(selected)
@@ -2635,23 +2774,36 @@ def _current_structure_population(rows, contract):
         "structure_contract_input_counts": dict(counts),
         "structure_contract_population_count": len(rows),
         "row_exclusion_reason_counts": excluded,
-        "accepted_lane_counts": dict(Counter(r["refinement_source_lane"] for r in selected)),
+        "accepted_lane_counts": dict(
+            Counter(r["refinement_source_lane"] for r in selected)
+        ),
         "accepted_unique_trace_count": len(selected),
         "accepted_source_dates": sorted({r["source_date"] for r in selected}),
-        "accepted_rows_sha256": _canonical_sha256([
-            {"decision_trace_id": r["decision_trace_id"], "fingerprint": r["fingerprint"]}
-            for r in selected]),
-        "operating_economic_enrichment_count": sum("operating_comparison_input" in r for r in selected),
+        "accepted_rows_sha256": _canonical_sha256(
+            [
+                {
+                    "decision_trace_id": r["decision_trace_id"],
+                    "fingerprint": r["fingerprint"],
+                }
+                for r in selected
+            ]
+        ),
+        "operating_economic_enrichment_count": sum(
+            "operating_comparison_input" in r for r in selected
+        ),
     }
 
 
 def _mechanistic_threshold_policy(policy, parent_policy=None, *, publication=False):
-    threshold_policy = json.loads(json.dumps(
-        parent_policy or MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1
-    ))
+    threshold_policy = json.loads(
+        json.dumps(parent_policy or MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1)
+    )
     recipe = threshold_policy.pop("entry_admission_recipe", None)
     if recipe is not None:
-        from src.engine.scalping.entry_admission_recipe import validate as validate_recipe
+        from src.engine.scalping.entry_admission_recipe import (
+            validate as validate_recipe,
+        )
+
         if validate_recipe(recipe, threshold_policy):
             raise ValueError("mechanistic_refinement_parent_recipe_invalid")
     if any(threshold_policy["thresholds"].get(k) != v for k, v in policy.items()):
@@ -2679,18 +2831,23 @@ def _mechanistic_threshold_policy(policy, parent_policy=None, *, publication=Fal
     if publication:
         threshold_policy.pop("hierarchy", None)
         threshold_policy["version"] = MECHANISTIC_FULL_POPULATION_POLICY_VERSION
-        threshold_policy["postclose_selection"]["minimum_cost_adjusted_ev_pct"] = MECHANISTIC_REFINEMENT_GATE["minimum_cost_adjusted_ev_pct"]
+        threshold_policy["postclose_selection"]["minimum_cost_adjusted_ev_pct"] = (
+            MECHANISTIC_REFINEMENT_GATE["minimum_cost_adjusted_ev_pct"]
+        )
     if recipe is not None:
         # The diagnostic candidate has changed the copied parent coordinates.
         # Retain the frozen recipe semantics while binding its new parent hash.
         from src.engine.scalping.entry_admission_recipe import candidate_policy
+
         threshold_policy = candidate_policy(threshold_policy)
     return threshold_policy
 
 
 def _mechanistic_policy_rows(
-    rows: Iterable[dict[str, Any]], policy: dict[str, Any],
-    *, parent_policy: dict[str, Any] | None = None,
+    rows: Iterable[dict[str, Any]],
+    policy: dict[str, Any],
+    *,
+    parent_policy: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     selected = []
     threshold_policy = _mechanistic_threshold_policy(policy, parent_policy)
@@ -2720,9 +2877,11 @@ def _mechanistic_selection_reuse_key(threshold_policy: dict[str, Any]) -> str:
     """
     from src.engine.scalping.entry_strategy_policy import REGISTRY
 
-    if ("strategy" not in threshold_policy
-            or validate_mechanistic_entry_threshold_policy(threshold_policy)
-            or not set(threshold_policy.get("thresholds", {})).issubset(REGISTRY)):
+    if (
+        "strategy" not in threshold_policy
+        or validate_mechanistic_entry_threshold_policy(threshold_policy)
+        or not set(threshold_policy.get("thresholds", {})).issubset(REGISTRY)
+    ):
         return _canonical_sha256(threshold_policy)
     action_policy = dict(threshold_policy)
     action_policy.pop("thresholds")
@@ -2733,7 +2892,8 @@ def _mechanistic_selection_reuse_key(threshold_policy: dict[str, Any]) -> str:
         # Reuse actions only; keep all recipe semantics and original candidate
         # hashes/receipts in the subsequent independent economic evaluation.
         action_policy["entry_admission_recipe"] = {
-            k: v for k, v in action_policy["entry_admission_recipe"].items()
+            k: v
+            for k, v in action_policy["entry_admission_recipe"].items()
             if k != "parent_policy_sha256"
         }
     return "strategy_actions:" + _canonical_sha256(action_policy)
@@ -2800,23 +2960,39 @@ def _mechanistic_policy_metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
 def _machine_nonentry_seed(source):
     """Validate a producer-owned no-AI anchor; it cannot authorize an entry."""
     from src.engine.scalping import strategy_owner_replay as owner
+
     replay = source.get("owner_replay") or {}
     seed = replay.get("seed") or {}
     context = seed.get("operating_contract") or {}
-    if (replay.get("status") == "nonentry_plan_only"
+    if (
+        replay.get("status") == "nonentry_plan_only"
         and replay.get("auxiliary_called") is False
-        and replay.get("replay_sha256") == _canonical_sha256({k:v for k,v in replay.items() if k != "replay_sha256"})
+        and replay.get("replay_sha256")
+        == _canonical_sha256({k: v for k, v in replay.items() if k != "replay_sha256"})
         and owner._entry_seed_valid(seed)
         and seed.get("observed_machine_action") in {"BLOCK", "RECHECK"}
-        and context.get("sha256") == _canonical_sha256({k:v for k,v in context.items() if k != "sha256"})
+        and context.get("sha256")
+        == _canonical_sha256({k: v for k, v in context.items() if k != "sha256"})
         and (_number(context.get("budget_krw")) or 0) > 0
-        and all(source.get(k) == seed.get(k) for k in
-            ("evaluation_attempt_id", "source_date", "stock_code", "scanner_promotion_id", "effective_venue", "session_bucket"))):
+        and all(
+            source.get(k) == seed.get(k)
+            for k in (
+                "evaluation_attempt_id",
+                "source_date",
+                "stock_code",
+                "scanner_promotion_id",
+                "effective_venue",
+                "session_bucket",
+            )
+        )
+    ):
         return seed
     return None
 
 
-def _machine_sequence_operating_metrics(population, selected_ids, candidate_policy=None, *, joint_actions=False):
+def _machine_sequence_operating_metrics(
+    population, selected_ids, candidate_policy=None, *, joint_actions=False
+):
     """Replay exact promotion sequences with frozen quantities and shared cash.
 
     This is a conditional, fixed-capital experiment, not an account backtest.
@@ -2826,10 +3002,18 @@ def _machine_sequence_operating_metrics(population, selected_ids, candidate_poli
     from copy import deepcopy
     from src.engine.scalping import compact_auxiliary_paired_replay as compact
     from src.engine.scalping import entry_split_order_plan as split
-    empty = dict(status="source_gap", blocker=None, incumbent=None, candidate=None,
-        robust_paired_delta_ev_lower_bound_pct=None, daily_net_profit_delta_krw=None,
-        portfolio_daily_net_delta_krw=None, owner="machine_owner_sequence_replay",
-        closure_test="complete_promotion_sequence_exact_plan_prior_model_and_frozen_cash_replay")
+
+    empty = dict(
+        status="source_gap",
+        blocker=None,
+        incumbent=None,
+        candidate=None,
+        robust_paired_delta_ev_lower_bound_pct=None,
+        daily_net_profit_delta_krw=None,
+        portfolio_daily_net_delta_krw=None,
+        owner="machine_owner_sequence_replay",
+        closure_test="complete_promotion_sequence_exact_plan_prior_model_and_frozen_cash_replay",
+    )
     groups, seen = defaultdict(list), {}
     try:
         for row in population:
@@ -2838,32 +3022,82 @@ def _machine_sequence_operating_metrics(population, selected_ids, candidate_poli
             arm = compact.owner_operating_arm(replay, source)
             model = row.get("operating_model_validation") or {}
             plan_only = _machine_nonentry_seed(source)
-            if not plan_only and (not arm or not compact.owner_model_scope_valid(model, source)):
+            if not plan_only and (
+                not arm or not compact.owner_model_scope_valid(model, source)
+            ):
                 raise ValueError("exact_source_date_operating_model_unverified")
-            if arm and any(not compact.finite(arm.get(k)) or arm[k] < 0
-                for k in ('capital_krw_minutes', 'reserve_krw_minutes')):
-                raise ValueError('owner_capital_or_reserve_measurement_invalid')
-            if not plan_only and row.get("operating_runtime_cost_receipt", {}).get("delta_krw") != 0:
+            if arm and any(
+                not compact.finite(arm.get(k)) or arm[k] < 0
+                for k in ("capital_krw_minutes", "reserve_krw_minutes")
+            ):
+                raise ValueError("owner_capital_or_reserve_measurement_invalid")
+            if (
+                not plan_only
+                and row.get("operating_runtime_cost_receipt", {}).get("delta_krw") != 0
+            ):
                 raise ValueError("sequence_nonzero_inference_cost_timeline_unbound")
             seed = replay["seed"]
-            proof = None if plan_only else next(p for p in model["validated_scopes"]
-                if p["scope_sha256"] == split._entry_operating_scope(seed)
-                and compact.owner_model_scope_valid({"validated_scopes": [p]}, source))
-            budget = seed["operating_contract"]["budget_krw"] if plan_only else arm["budget_krw"]
-            group = (seed["source_date"], seed["stock_code"], seed["scanner_promotion_id"])
+            proof = (
+                None
+                if plan_only
+                else next(
+                    p
+                    for p in model["validated_scopes"]
+                    if p["scope_sha256"] == split._entry_operating_scope(seed)
+                    and compact.owner_model_scope_valid(
+                        {"validated_scopes": [p]}, source
+                    )
+                )
+            )
+            budget = (
+                seed["operating_contract"]["budget_krw"]
+                if plan_only
+                else arm["budget_krw"]
+            )
+            group = (
+                seed["source_date"],
+                seed["stock_code"],
+                seed["scanner_promotion_id"],
+            )
             if not all(group):
                 raise ValueError("sequence_episode_identity_missing")
             stamp = datetime.fromisoformat(seed["observed_at"])
-            ended = None if plan_only else datetime.fromisoformat(arm["modeled_exit_at"])
-            if stamp.tzinfo is None or (ended is not None and (ended.tzinfo is None or ended <= stamp)):
+            ended = (
+                None if plan_only else datetime.fromisoformat(arm["modeled_exit_at"])
+            )
+            if stamp.tzinfo is None or (
+                ended is not None and (ended.tzinfo is None or ended <= stamp)
+            ):
                 raise ValueError("sequence_owner_clock_invalid")
             old = row["comparison"].get("incumbent_machine_action") or (
-                "ENTER_NOW" if row["comparison"].get("control_action") == "BUY" else "BLOCK")
-            new = (row['joint_candidate_action'] if joint_actions else mechanistic_entry_policy_decision(row["setup_evidence"], policy=candidate_policy)["action"]
-                if candidate_policy is not None else "ENTER_NOW" if row["decision_trace_id"] in selected_ids else "BLOCK")
-            if old not in {"ENTER_NOW", "BLOCK", "RECHECK"} or new not in {"ENTER_NOW", "BLOCK", "RECHECK"}:
+                "ENTER_NOW"
+                if row["comparison"].get("control_action") == "BUY"
+                else "BLOCK"
+            )
+            new = (
+                row["joint_candidate_action"]
+                if joint_actions
+                else (
+                    mechanistic_entry_policy_decision(
+                        row["setup_evidence"], policy=candidate_policy
+                    )["action"]
+                    if candidate_policy is not None
+                    else (
+                        "ENTER_NOW"
+                        if row["decision_trace_id"] in selected_ids
+                        else "BLOCK"
+                    )
+                )
+            )
+            if old not in {"ENTER_NOW", "BLOCK", "RECHECK"} or new not in {
+                "ENTER_NOW",
+                "BLOCK",
+                "RECHECK",
+            }:
                 raise ValueError("sequence_machine_action_invalid")
-            signature = _canonical_sha256([seed["seed_sha256"], old, new, source.get("incumbent_verdict")])
+            signature = _canonical_sha256(
+                [seed["seed_sha256"], old, new, source.get("incumbent_verdict")]
+            )
             key = (*group, stamp)
             if key in seen:
                 if seen[key] != signature:
@@ -2873,18 +3107,49 @@ def _machine_sequence_operating_metrics(population, selected_ids, candidate_poli
             reserve = sum(leg["qty"] * leg["price"] for leg in seed["legs"])
             if not 0 < reserve <= budget:
                 raise ValueError("sequence_frozen_reserve_missing")
-            groups[group].append(dict(row=row, seed=seed, arm=arm, old=old, new=new, budget=budget,
-                start=stamp, end=ended, reserve=reserve, verdict=source.get("incumbent_verdict"),
-                clock_error=0. if plan_only else proof['tolerance']['receipt_clock_error_sec'],
-                error=0. if plan_only else max(proof["optimistic_net_error_budget_pct"], proof["tolerance"]["net_error_budget_pct"])))
+            groups[group].append(
+                dict(
+                    row=row,
+                    seed=seed,
+                    arm=arm,
+                    old=old,
+                    new=new,
+                    budget=budget,
+                    start=stamp,
+                    end=ended,
+                    reserve=reserve,
+                    verdict=source.get("incumbent_verdict"),
+                    clock_error=(
+                        0.0
+                        if plan_only
+                        else proof["tolerance"]["receipt_clock_error_sec"]
+                    ),
+                    error=(
+                        0.0
+                        if plan_only
+                        else max(
+                            proof["optimistic_net_error_budget_pct"],
+                            proof["tolerance"]["net_error_budget_pct"],
+                        )
+                    ),
+                )
+            )
         if not groups:
             raise ValueError("sequence_population_empty")
-        from src.engine.scalping.strategy_owner_replay import entry_conditional_capital_envelope
+        from src.engine.scalping.strategy_owner_replay import (
+            entry_conditional_capital_envelope,
+        )
+
         day_seeds = defaultdict(list)
         for group, anchors in groups.items():
-            day_seeds[group[0]].extend(a['seed'] for a in anchors)
-        envelopes = {day: entry_conditional_capital_envelope(seeds) for day, seeds in day_seeds.items()}
-        experiments, day_budgets = [], {day: value['initial_budget_krw'] for day, value in envelopes.items()}
+            day_seeds[group[0]].extend(a["seed"] for a in anchors)
+        envelopes = {
+            day: entry_conditional_capital_envelope(seeds)
+            for day, seeds in day_seeds.items()
+        }
+        experiments, day_budgets = [], {
+            day: value["initial_budget_krw"] for day, value in envelopes.items()
+        }
         for group, anchors in sorted(groups.items()):
             anchors.sort(key=lambda a: a["start"])
             budget = day_budgets[group[0]]
@@ -2900,45 +3165,88 @@ def _machine_sequence_operating_metrics(population, selected_ids, candidate_poli
                         # The census is created by the population producer; a
                         # calibration/holdout slice cannot close half an episode.
                         members = anchor["row"].get("machine_sequence_members")
-                        if members != sorted(a["row"]["decision_trace_id"] for a in anchors):
+                        if members != sorted(
+                            a["row"]["decision_trace_id"] for a in anchors
+                        ):
                             raise ValueError("recheck_sequence_capture_incomplete")
                         continue
                     if action == "ENTER_NOW":
-                        if anchor["arm"] is None or anchor["verdict"] not in {"PASS", "VETO"}:
+                        if anchor["arm"] is None or anchor["verdict"] not in {
+                            "PASS",
+                            "VETO",
+                        }:
                             raise ValueError("frozen_auxiliary_verdict_missing")
                         choice = anchor if anchor["verdict"] == "PASS" else None
                     break
                 else:
                     last = anchors[-1]
-                    terminal = (last['row']['operating_comparison_input']['owner_replay'].get('machine_watch_terminal') or {})
-                    lifetime = (last['seed'].get('operating_contract') or {}).get('watch_lifetime_contract') or {}
-                    if not (terminal.get('owner') == lifetime.get('owner') and terminal.get('owner')
-                        and terminal.get('scanner_promotion_id') == group[2]
-                        and terminal.get('deadline_epoch') == lifetime.get('deadline_epoch')
-                        and terminal.get('terminal_epoch', 0) > terminal.get('deadline_epoch', float('inf')) >= last['start'].timestamp()):
+                    terminal = (
+                        last["row"]["operating_comparison_input"]["owner_replay"].get(
+                            "machine_watch_terminal"
+                        )
+                        or {}
+                    )
+                    lifetime = (last["seed"].get("operating_contract") or {}).get(
+                        "watch_lifetime_contract"
+                    ) or {}
+                    if not (
+                        terminal.get("owner") == lifetime.get("owner")
+                        and terminal.get("owner")
+                        and terminal.get("scanner_promotion_id") == group[2]
+                        and terminal.get("deadline_epoch")
+                        == lifetime.get("deadline_epoch")
+                        and terminal.get("terminal_epoch", 0)
+                        > terminal.get("deadline_epoch", float("inf"))
+                        >= last["start"].timestamp()
+                    ):
                         raise ValueError("recheck_terminal_pending")
                 choices.append(choice)
             experiments.append(dict(key=group, budget=budget, choices=choices))
-        outputs = {(scenario, side): {} for scenario in ("base", "stress") for side in (0, 1)}
+        outputs = {
+            (scenario, side): {} for scenario in ("base", "stress") for side in (0, 1)
+        }
         rejected = [0, 0]
-        peak_committed = {name: {} for name in ('incumbent','candidate')}
+        peak_committed = {name: {} for name in ("incumbent", "candidate")}
         for scenario in ("base", "stress"):
             for side in (0, 1):
                 for day, budget in sorted(day_budgets.items()):
-                    pending, cash, uncertainty = [], budget, 0.
+                    pending, cash, uncertainty = [], budget, 0.0
                     capital_events = []
-                    orders = sorted(((e["choices"][side], e) for e in experiments
-                        if e["key"][0] == day and e["choices"][side] is not None),
-                        key=lambda item: (item[0]["start"], item[1]["key"]))
+                    orders = sorted(
+                        (
+                            (e["choices"][side], e)
+                            for e in experiments
+                            if e["key"][0] == day and e["choices"][side] is not None
+                        ),
+                        key=lambda item: (item[0]["start"], item[1]["key"]),
+                    )
                     for anchor, experiment in orders:
                         active = []
-                        timing_uncertainty = 0.
-                        for end, reserved, pnl, error, symbol, releases, clock_error in pending:
-                            if clock_error and abs((end-anchor['start']).total_seconds()) <= clock_error:
+                        timing_uncertainty = 0.0
+                        for (
+                            end,
+                            reserved,
+                            pnl,
+                            error,
+                            symbol,
+                            releases,
+                            clock_error,
+                        ) in pending:
+                            if (
+                                clock_error
+                                and abs((end - anchor["start"]).total_seconds())
+                                <= clock_error
+                            ):
                                 timing_uncertainty += reserved
                             remaining_releases = []
                             for release in releases:
-                                if clock_error and abs((release[0]-anchor['start']).total_seconds()) <= clock_error:
+                                if (
+                                    clock_error
+                                    and abs(
+                                        (release[0] - anchor["start"]).total_seconds()
+                                    )
+                                    <= clock_error
+                                ):
                                     timing_uncertainty += release[1]
                                 if release[0] <= anchor["start"]:
                                     cash += release[1]
@@ -2949,68 +3257,129 @@ def _machine_sequence_operating_metrics(population, selected_ids, candidate_poli
                                 cash += reserved + pnl
                                 uncertainty += error
                             else:
-                                active.append((end, reserved, pnl, error, symbol, remaining_releases, clock_error))
+                                active.append(
+                                    (
+                                        end,
+                                        reserved,
+                                        pnl,
+                                        error,
+                                        symbol,
+                                        remaining_releases,
+                                        clock_error,
+                                    )
+                                )
                         pending = active
                         cash = min(budget - sum(item[1] for item in active), cash)
                         # Existing held-symbol guard; a promotion reset does not
                         # authorize another initial position while custody is open.
                         if any(item[4] == experiment["key"][1] for item in active):
-                            if scenario == "base": rejected[side] += 1
+                            if scenario == "base":
+                                rejected[side] += 1
                             continue
-                        if uncertainty + timing_uncertainty and abs(cash-anchor["reserve"]) <= uncertainty + timing_uncertainty:
+                        if (
+                            uncertainty + timing_uncertainty
+                            and abs(cash - anchor["reserve"])
+                            <= uncertainty + timing_uncertainty
+                        ):
                             raise ValueError("model_error_can_change_capital_admission")
                         if anchor["reserve"] > cash:
-                            if scenario == "base": rejected[side] += 1
+                            if scenario == "base":
+                                rejected[side] += 1
                             continue
                         cash -= anchor["reserve"]
-                        capital_events.append((anchor['start'], anchor['reserve']))
-                        pnl = anchor["arm"]["net_pnl_krw" if scenario == "base" else "stress_net_pnl_krw"]
+                        capital_events.append((anchor["start"], anchor["reserve"]))
+                        pnl = anchor["arm"][
+                            (
+                                "net_pnl_krw"
+                                if scenario == "base"
+                                else "stress_net_pnl_krw"
+                            )
+                        ]
                         releases = []
                         path = anchor["arm"].get("cash_commitment_path")
                         if path is not None:
-                            if (path.get('sha256') != _canonical_sha256({k:v for k,v in path.items() if k != 'sha256'})
-                                or path.get('schema') != 'entry_operating_cash_commitment_v1'
-                                or path.get('seed_sha256') != anchor['seed']['seed_sha256']
-                                or path.get('initial_reserve_krw') != anchor['reserve']):
-                                raise ValueError('operating_cash_path_binding_invalid')
-                            released = 0.
+                            if (
+                                path.get("sha256")
+                                != _canonical_sha256(
+                                    {k: v for k, v in path.items() if k != "sha256"}
+                                )
+                                or path.get("schema")
+                                != "entry_operating_cash_commitment_v1"
+                                or path.get("seed_sha256")
+                                != anchor["seed"]["seed_sha256"]
+                                or path.get("initial_reserve_krw") != anchor["reserve"]
+                            ):
+                                raise ValueError("operating_cash_path_binding_invalid")
+                            released = 0.0
                             owner_exits = 0
-                            previous_clock = anchor['start']
-                            for event in path['events']:
-                                at = datetime.fromisoformat(event['at'])
-                                amount = event['principal_release_krw']
-                                if (not compact.finite(amount) or amount < 0 or at.tzinfo is None
-                                    or not previous_clock <= at <= anchor['end']
-                                    or event['kind'] not in {'fill_transfer','cancel_confirmed','owner_exit'}):
-                                    raise ValueError('operating_cash_path_event_invalid')
+                            previous_clock = anchor["start"]
+                            for event in path["events"]:
+                                at = datetime.fromisoformat(event["at"])
+                                amount = event["principal_release_krw"]
+                                if (
+                                    not compact.finite(amount)
+                                    or amount < 0
+                                    or at.tzinfo is None
+                                    or not previous_clock <= at <= anchor["end"]
+                                    or event["kind"]
+                                    not in {
+                                        "fill_transfer",
+                                        "cancel_confirmed",
+                                        "owner_exit",
+                                    }
+                                ):
+                                    raise ValueError(
+                                        "operating_cash_path_event_invalid"
+                                    )
                                 previous_clock = at
                                 released += amount
                                 capital_events.append((at, -amount))
-                                if event['kind'] != 'owner_exit':
+                                if event["kind"] != "owner_exit":
                                     releases.append((at, amount))
                                 else:
                                     owner_exits += 1
-                                    if at != anchor['end']:
-                                        raise ValueError('operating_cash_path_exit_clock_invalid')
-                            if abs(released-anchor['reserve']) > 1e-8 or owner_exits != 1:
-                                raise ValueError('operating_cash_path_conservation_failed')
+                                    if at != anchor["end"]:
+                                        raise ValueError(
+                                            "operating_cash_path_exit_clock_invalid"
+                                        )
+                            if (
+                                abs(released - anchor["reserve"]) > 1e-8
+                                or owner_exits != 1
+                            ):
+                                raise ValueError(
+                                    "operating_cash_path_conservation_failed"
+                                )
                         else:
-                            capital_events.append((anchor['end'], -anchor['reserve']))
-                        pending.append((anchor["end"], anchor["reserve"], pnl,
-                            2 * anchor["error"] * anchor['budget'] / 100, experiment["key"][1], releases, anchor['clock_error']))
+                            capital_events.append((anchor["end"], -anchor["reserve"]))
+                        pending.append(
+                            (
+                                anchor["end"],
+                                anchor["reserve"],
+                                pnl,
+                                2 * anchor["error"] * anchor["budget"] / 100,
+                                experiment["key"][1],
+                                releases,
+                                anchor["clock_error"],
+                            )
+                        )
                         outputs[scenario, side][experiment["key"]] = anchor
-                    if scenario == 'base':
+                    if scenario == "base":
                         balances = defaultdict(float)
                         for at, amount in capital_events:
                             balances[at] += amount
-                        committed = peak = 0.
+                        committed = peak = 0.0
                         for at in sorted(balances):
                             committed += balances[at]
                             peak = max(peak, committed)
-                        peak_committed[('incumbent','candidate')[side]][day] = peak
-        rows, bounds, daily = [], [], defaultdict(lambda: [0., 0.])
-        zero = dict(net_pnl_krw=0., stress_net_pnl_krw=0., capital_krw_minutes=0.,
-                    reserve_krw_minutes=0., fill_participation_rate=0.)
+                        peak_committed[("incumbent", "candidate")[side]][day] = peak
+        rows, bounds, daily = [], [], defaultdict(lambda: [0.0, 0.0])
+        zero = dict(
+            net_pnl_krw=0.0,
+            stress_net_pnl_krw=0.0,
+            capital_krw_minutes=0.0,
+            reserve_krw_minutes=0.0,
+            fill_participation_rate=0.0,
+        )
         for experiment in experiments:
             arms = {}
             for side, name in enumerate(("incumbent", "candidate")):
@@ -3019,32 +3388,54 @@ def _machine_sequence_operating_metrics(population, selected_ids, candidate_poli
                 if anchor:
                     # Monetary outcomes retain their native cap for provenance;
                     # portfolio return uses the identical INITIAL capital.
-                    arms[name]['attempt_budget_krw'] = anchor['budget']
-                    arms[name]['net_return_pct'] = arms[name]['net_pnl_krw'] / experiment['budget'] * 100
-                    arms[name]['stress_net_return_pct'] = arms[name]['stress_net_pnl_krw'] / experiment['budget'] * 100
+                    arms[name]["attempt_budget_krw"] = anchor["budget"]
+                    arms[name]["net_return_pct"] = (
+                        arms[name]["net_pnl_krw"] / experiment["budget"] * 100
+                    )
+                    arms[name]["stress_net_return_pct"] = (
+                        arms[name]["stress_net_pnl_krw"] / experiment["budget"] * 100
+                    )
                 daily[experiment["key"][0]][side] += arms[name]["net_pnl_krw"]
             rows.append(dict(budget_krw=experiment["budget"], arms=arms))
             scenario_bounds = []
             for scenario in ("base", "stress"):
-                chosen = [outputs[scenario, side].get(experiment["key"]) for side in (0, 1)]
+                chosen = [
+                    outputs[scenario, side].get(experiment["key"]) for side in (0, 1)
+                ]
                 field = "net_pnl_krw" if scenario == "base" else "stress_net_pnl_krw"
-                pnl = [a["arm"][field] if a else 0. for a in chosen]
-                penalty = (0. if chosen[0] is chosen[1] else
-                           sum(2 * a["error"] * a['budget'] / experiment['budget'] for a in chosen if a is not None))
-                scenario_bounds.append((pnl[1]-pnl[0]) / experiment["budget"] * 100 - penalty)
+                pnl = [a["arm"][field] if a else 0.0 for a in chosen]
+                penalty = (
+                    0.0
+                    if chosen[0] is chosen[1]
+                    else sum(
+                        2 * a["error"] * a["budget"] / experiment["budget"]
+                        for a in chosen
+                        if a is not None
+                    )
+                )
+                scenario_bounds.append(
+                    (pnl[1] - pnl[0]) / experiment["budget"] * 100 - penalty
+                )
             bounds.append(min(scenario_bounds))
-        deltas = {day: v[1]-v[0] for day,v in sorted(daily.items())}
-        return dict(status="supported_operating_comparison", blocker=None,
-            incumbent=split._economic_metrics(rows, "incumbent"), candidate=split._economic_metrics(rows, "candidate"),
-            robust_paired_delta_ev_lower_bound_pct=fmean(bounds), pair_lower_bounds_pct=bounds,
+        deltas = {day: v[1] - v[0] for day, v in sorted(daily.items())}
+        return dict(
+            status="supported_operating_comparison",
+            blocker=None,
+            incumbent=split._economic_metrics(rows, "incumbent"),
+            candidate=split._economic_metrics(rows, "candidate"),
+            robust_paired_delta_ev_lower_bound_pct=fmean(bounds),
+            pair_lower_bounds_pct=bounds,
             lower_bound_method="episode_minimum_base_stress_minus_selected_owner_empirical_error",
-            daily_net_profit_delta_krw=fmean(deltas.values()), portfolio_daily_net_delta_krw=deltas,
-            economic_episode_count=len(rows), deduplicated_attempt_count=len(population)-len(seen),
+            daily_net_profit_delta_krw=fmean(deltas.values()),
+            portfolio_daily_net_delta_krw=deltas,
+            economic_episode_count=len(rows),
+            deduplicated_attempt_count=len(population) - len(seen),
             capital_rejection_counts=dict(incumbent=rejected[0], candidate=rejected[1]),
             capital_envelopes=envelopes,
             peak_committed_capital_krw_by_day=peak_committed,
             portfolio_allocation_contract="same_frozen_cash_full_quantity_chronological_no_profit_reinvestment",
-            counterfactual_not_realized_pnl=True)
+            counterfactual_not_realized_pnl=True,
+        )
     except (ValueError, KeyError, TypeError, OverflowError) as exc:
         return {**empty, "blocker": str(exc)}
 
@@ -3056,20 +3447,30 @@ def machine_selection_economics(metrics, paired, *, full_population):
     they cannot replace missing operating costs, exits, or model validation.
     """
     if not full_population:
-        return (_number(metrics.get("cost_adjusted_terminal_proxy_ev_pct")),
-                _number(paired.get("paired_terminal_proxy_delta_pct")))
+        return (
+            _number(metrics.get("cost_adjusted_terminal_proxy_ev_pct")),
+            _number(paired.get("paired_terminal_proxy_delta_pct")),
+        )
     operating = _as_dict(paired.get("operating_economic_comparison"))
-    if (paired.get("downstream_operating_evidence_complete") is not True
-        or operating.get("status") != "supported_operating_comparison"):
+    if (
+        paired.get("downstream_operating_evidence_complete") is not True
+        or operating.get("status") != "supported_operating_comparison"
+    ):
         return None, None
     incumbent = _number(_as_dict(operating.get("incumbent")).get("ev_pct"))
     candidate = _number(_as_dict(operating.get("candidate")).get("ev_pct"))
-    return candidate, (candidate-incumbent if candidate is not None and incumbent is not None else None)
+    return candidate, (
+        candidate - incumbent
+        if candidate is not None and incumbent is not None
+        else None
+    )
 
 
 def _mechanistic_paired_population_metrics(
-    population: list[dict[str, Any]], selected: list[dict[str, Any]],
-    *, candidate_policy: dict | None = None,
+    population: list[dict[str, Any]],
+    selected: list[dict[str, Any]],
+    *,
+    candidate_policy: dict | None = None,
 ) -> dict[str, Any]:
     selected_trace_ids = {row["decision_trace_id"] for row in selected}
     deltas = []
@@ -3092,26 +3493,66 @@ def _mechanistic_paired_population_metrics(
         candidate_values.append(mechanistic_value)
         incumbent_values.append(control_value)
         deltas.append(mechanistic_value - control_value)
-    old_actions = {row["decision_trace_id"]: row["comparison"].get("incumbent_machine_action") or
-        ("ENTER_NOW" if row["comparison"].get("control_action") == "BUY" else "BLOCK") for row in population}
-    new_actions = {row["decision_trace_id"]: (mechanistic_entry_policy_decision(
-        row["setup_evidence"], policy=candidate_policy)["action"] if candidate_policy is not None
-        else "ENTER_NOW" if row["decision_trace_id"] in selected_trace_ids else "BLOCK") for row in population}
-    changed = [row for row in population if old_actions[row["decision_trace_id"]] != new_actions[row["decision_trace_id"]]]
-    recheck_ids = {key for key in old_actions if "RECHECK" in {old_actions[key], new_actions[key]}}
+    old_actions = {
+        row["decision_trace_id"]: row["comparison"].get("incumbent_machine_action")
+        or (
+            "ENTER_NOW" if row["comparison"].get("control_action") == "BUY" else "BLOCK"
+        )
+        for row in population
+    }
+    new_actions = {
+        row["decision_trace_id"]: (
+            mechanistic_entry_policy_decision(
+                row["setup_evidence"], policy=candidate_policy
+            )["action"]
+            if candidate_policy is not None
+            else (
+                "ENTER_NOW"
+                if row["decision_trace_id"] in selected_trace_ids
+                else "BLOCK"
+            )
+        )
+        for row in population
+    }
+    changed = [
+        row
+        for row in population
+        if old_actions[row["decision_trace_id"]]
+        != new_actions[row["decision_trace_id"]]
+    ]
+    recheck_ids = {
+        key for key in old_actions if "RECHECK" in {old_actions[key], new_actions[key]}
+    }
     operating_rows = [row for row in population if "operating_comparison_input" in row]
-    operating = (_machine_sequence_operating_metrics(operating_rows, selected_trace_ids, candidate_policy)
-                 if operating_rows else None)
-    sequence_supported = bool(operating and operating.get("status") == "supported_operating_comparison")
-    operating_ids = {row["decision_trace_id"] for row in operating_rows} if sequence_supported else set()
-    unsupported_changed = [row for row in changed if row["decision_trace_id"] not in operating_ids]
+    operating = (
+        _machine_sequence_operating_metrics(
+            operating_rows, selected_trace_ids, candidate_policy
+        )
+        if operating_rows
+        else None
+    )
+    sequence_supported = bool(
+        operating and operating.get("status") == "supported_operating_comparison"
+    )
+    operating_ids = (
+        {row["decision_trace_id"] for row in operating_rows}
+        if sequence_supported
+        else set()
+    )
+    unsupported_changed = [
+        row for row in changed if row["decision_trace_id"] not in operating_ids
+    ]
     if operating is not None and len(operating_rows) != len(population):
-        operating = {**operating, "daily_net_profit_delta_krw": None,
+        operating = {
+            **operating,
+            "daily_net_profit_delta_krw": None,
             "portfolio_daily_net_delta_krw": None,
-            "daily_net_profit_status": "operating_population_incomplete_or_model_unsupported"}
+            "daily_net_profit_status": "operating_population_incomplete_or_model_unsupported",
+        }
     complete = len(deltas) == terminal_evaluable_count
     downstream_complete = bool(
-        population and len(operating_rows) == len(population)
+        population
+        and len(operating_rows) == len(population)
         and operating is not None
         and operating.get("status") == "supported_operating_comparison"
         and operating.get("daily_net_profit_delta_krw") is not None
@@ -3142,35 +3583,56 @@ def _mechanistic_paired_population_metrics(
         "paired_terminal_contract_complete": complete,
         "changed_decision_count": len(changed),
         "unsupported_changed_decision_count": len(unsupported_changed),
-        "recheck_sequence_unproven_count": 0 if sequence_supported else len(recheck_ids),
+        "recheck_sequence_unproven_count": (
+            0 if sequence_supported else len(recheck_ids)
+        ),
         "operating_population_count": len(operating_rows),
-        "operating_population_complete": len(operating_rows) == len(population) and bool(population),
-        "changed_decision_evidence": [{
-            "evaluation_attempt_id": r.get("evaluation_attempt_id"),
-            "decision_trace_id": r.get("decision_trace_id"),
-            "source_date": r.get("source_date"), "stock_code": r.get("stock_code"),
-            "incumbent_action": r["comparison"].get("control_action"),
-            "candidate_admitted": r["decision_trace_id"] in selected_trace_ids,
-            "owner_replay_status": "bound" if "operating_comparison_input" in r else "missing_or_unbound",
-            "historical_recoverability": "not_established",
-        } for r in changed],
+        "operating_population_complete": len(operating_rows) == len(population)
+        and bool(population),
+        "changed_decision_evidence": [
+            {
+                "evaluation_attempt_id": r.get("evaluation_attempt_id"),
+                "decision_trace_id": r.get("decision_trace_id"),
+                "source_date": r.get("source_date"),
+                "stock_code": r.get("stock_code"),
+                "incumbent_action": r["comparison"].get("control_action"),
+                "candidate_admitted": r["decision_trace_id"] in selected_trace_ids,
+                "owner_replay_status": (
+                    "bound"
+                    if "operating_comparison_input" in r
+                    else "missing_or_unbound"
+                ),
+                "historical_recoverability": "not_established",
+            }
+            for r in changed
+        ],
         "downstream_operating_evidence_complete": downstream_complete,
         "operating_economic_promotion_pass": operating_promotion_pass,
         "independent_policy_comparison": bool(changed),
         "baseline_preserved": baseline_preserved,
-        "daily_net_profit_delta_krw": 0.0 if baseline_preserved and downstream_complete else (
-            operating.get("daily_net_profit_delta_krw")
-            if operating is not None
-            else None
+        "daily_net_profit_delta_krw": (
+            0.0
+            if baseline_preserved and downstream_complete
+            else (
+                operating.get("daily_net_profit_delta_krw")
+                if operating is not None
+                else None
+            )
         ),
         "daily_net_profit_status": (
             "baseline_preserved_no_independent_policy_change"
             if baseline_preserved and downstream_complete
-            else operating.get("daily_net_profit_status")
-            if operating is not None
-            else "not_available_without_exact_changed_decision_owner_replay"
+            else (
+                operating.get("daily_net_profit_status")
+                if operating is not None
+                else "not_available_without_exact_changed_decision_owner_replay"
+            )
         ),
-        **({"operating_economic_comparison": operating} if operating is not None else {}),
+        **(
+            {"operating_economic_comparison": operating}
+            if operating is not None
+            else {}
+        ),
     }
 
 
@@ -3195,17 +3657,25 @@ def build_clean_baseline_mechanistic_refinement(
         )
     else:
         rows = source_rows
-    full_population = source_contract.get("schema") == "machine_common_refinement_population_v1"
+    full_population = (
+        source_contract.get("schema") == "machine_common_refinement_population_v1"
+    )
     cohort = tuple(source_contract.get("cohort", ["KRX", "KRX_REGULAR"]))
     if not mechanistic_scope_supported(*cohort):
         raise ValueError("common_refinement_scope_unsupported")
     if full_population and parent_policy is None:
         raise ValueError("full_population_refinement_incumbent_missing")
-    policy_version = MECHANISTIC_FULL_POPULATION_POLICY_VERSION if full_population else MECHANISTIC_REFINEMENT_POLICY_VERSION
+    policy_version = (
+        MECHANISTIC_FULL_POPULATION_POLICY_VERSION
+        if full_population
+        else MECHANISTIC_REFINEMENT_POLICY_VERSION
+    )
     # The approved live-promotion floor remains the Plan Rebase 10bp gate.
     # Research metrics are still emitted below this floor.
     ev_floor = MECHANISTIC_REFINEMENT_GATE["minimum_cost_adjusted_ev_pct"]
-    parent = json.loads(json.dumps(parent_policy or MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1))
+    parent = json.loads(
+        json.dumps(parent_policy or MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1)
+    )
     if validate_mechanistic_entry_threshold_policy(parent):
         raise ValueError("mechanistic_refinement_parent_invalid")
     if parent_policy is not None:
@@ -3216,22 +3686,34 @@ def build_clean_baseline_mechanistic_refinement(
             incumbent_action = mechanistic_entry_policy_decision(
                 row["setup_evidence"], policy=parent
             ).get("action")
-            controlled_rows.append({**row, "comparison": {
-                **row["comparison"],
-                "historical_control_action": row["comparison"].get("control_action"),
-                "incumbent_machine_action": incumbent_action,
-                "control_action": "BUY" if incumbent_action == "ENTER_NOW" else "WAIT",
-                "control_role": "same_population_current_machine_incumbent",
-            }})
+            controlled_rows.append(
+                {
+                    **row,
+                    "comparison": {
+                        **row["comparison"],
+                        "historical_control_action": row["comparison"].get(
+                            "control_action"
+                        ),
+                        "incumbent_machine_action": incumbent_action,
+                        "control_action": (
+                            "BUY" if incumbent_action == "ENTER_NOW" else "WAIT"
+                        ),
+                        "control_role": "same_population_current_machine_incumbent",
+                    },
+                }
+            )
         rows = controlled_rows
     source_dates = list(source_contract["accepted_source_dates"])
     frozen = source_contract.get("frozen_selection") or {}
-    frozen_valid = bool(frozen.get("incumbent_sha256") == _canonical_sha256(parent)
-                        and isinstance(frozen.get("policy"), dict)
-                        and set(frozen["policy"]) == set(MECHANISTIC_COMMON_FEATURE_GRID)
-                        and all(_number(v) is not None for v in frozen["policy"].values())
-                        and isinstance(frozen.get("frozen_date"), str)
-                        and frozen.get("economic_kernel_sha256") == source_contract.get("economic_kernel_sha256"))
+    frozen_valid = bool(
+        frozen.get("incumbent_sha256") == _canonical_sha256(parent)
+        and isinstance(frozen.get("policy"), dict)
+        and set(frozen["policy"]) == set(MECHANISTIC_COMMON_FEATURE_GRID)
+        and all(_number(v) is not None for v in frozen["policy"].values())
+        and isinstance(frozen.get("frozen_date"), str)
+        and frozen.get("economic_kernel_sha256")
+        == source_contract.get("economic_kernel_sha256")
+    )
     holdout_count = MECHANISTIC_REFINEMENT_GATE["holdout_source_date_count"]
     holdout_dates = (
         source_dates[-holdout_count:] if len(source_dates) > holdout_count else []
@@ -3253,7 +3735,8 @@ def build_clean_baseline_mechanistic_refinement(
     )
     path_boundary_contract_isolated = len(path_boundary_counts) <= 1
     structure_contract_counts = Counter(
-        row["setup_evidence"].get("structure_contract_version") or "legacy_session_high_v1"
+        row["setup_evidence"].get("structure_contract_version")
+        or "legacy_session_high_v1"
         for row in rows
     )
 
@@ -3264,8 +3747,13 @@ def build_clean_baseline_mechanistic_refinement(
     incumbent_coordinates = {k: parent["thresholds"][k] for k in grid}
     if incumbent_coordinates not in choices:
         choices.append(incumbent_coordinates)
+
     def policy_distance(policy):
-        return sum(abs(policy[k] - incumbent_coordinates[k]) / (max(grid[k]) - min(grid[k])) for k in grid)
+        return sum(
+            abs(policy[k] - incumbent_coordinates[k]) / (max(grid[k]) - min(grid[k]))
+            for k in grid
+        )
+
     choices.sort(key=lambda policy: (policy_distance(policy), tuple(policy.values())))
     if frozen_valid:
         choices = [frozen["policy"]]
@@ -3279,11 +3767,18 @@ def build_clean_baseline_mechanistic_refinement(
         reuse_key = _mechanistic_selection_reuse_key(replay_policy)
         cached_selection = selection_reuse.get(reuse_key)
         if cached_selection is None:
-            selected = _mechanistic_policy_rows(calibration_rows, policy, parent_policy=parent)
-            selection_sha256 = _canonical_sha256([
-                {"decision_trace_id": row["decision_trace_id"], "fingerprint": row["fingerprint"]}
-                for row in selected
-            ])
+            selected = _mechanistic_policy_rows(
+                calibration_rows, policy, parent_policy=parent
+            )
+            selection_sha256 = _canonical_sha256(
+                [
+                    {
+                        "decision_trace_id": row["decision_trace_id"],
+                        "fingerprint": row["fingerprint"],
+                    }
+                    for row in selected
+                ]
+            )
             # Only strategy keys can collapse distinct policies. Bound memory
             # for legacy grids, whose full keys cannot save a population scan.
             if reuse_key.startswith("strategy_actions:"):
@@ -3295,27 +3790,20 @@ def build_clean_baseline_mechanistic_refinement(
         seen_selections.add(selection_sha256)
         metrics = _mechanistic_policy_metrics(selected)
         paired_population = _mechanistic_paired_population_metrics(
-            calibration_rows, selected,
-            candidate_policy=_mechanistic_threshold_policy(policy, parent)
+            calibration_rows,
+            selected,
+            candidate_policy=_mechanistic_threshold_policy(policy, parent),
         )
         gate_checks = {
             "minimum_exposure_count": metrics["exposure_count"]
-            >= MECHANISTIC_REFINEMENT_GATE[
-                "minimum_calibration_exposure_count"
-            ],
+            >= MECHANISTIC_REFINEMENT_GATE["minimum_calibration_exposure_count"],
             "minimum_unique_symbol_count": metrics["unique_symbol_count"]
-            >= MECHANISTIC_REFINEMENT_GATE[
-                "minimum_calibration_symbol_count"
-            ],
+            >= MECHANISTIC_REFINEMENT_GATE["minimum_calibration_symbol_count"],
             "minimum_independent_source_date_count": metrics[
                 "independent_source_date_count"
             ]
-            >= MECHANISTIC_REFINEMENT_GATE[
-                "minimum_calibration_source_date_count"
-            ],
-            "minimum_terminal_evaluable_count": metrics[
-                "terminal_evaluable_count"
-            ]
+            >= MECHANISTIC_REFINEMENT_GATE["minimum_calibration_source_date_count"],
+            "minimum_terminal_evaluable_count": metrics["terminal_evaluable_count"]
             >= MECHANISTIC_REFINEMENT_GATE[
                 "minimum_calibration_terminal_evaluable_count"
             ],
@@ -3347,44 +3835,87 @@ def build_clean_baseline_mechanistic_refinement(
     calibration_passers = []
     for row in calibration_gate_candidates:
         metrics, paired = row["calibration"], row["calibration_paired_population"]
-        ev, delta = machine_selection_economics(metrics, paired, full_population=full_population)
-        if (ev is not None and ev >= calibration_floor and delta is not None and delta > 0
+        ev, delta = machine_selection_economics(
+            metrics, paired, full_population=full_population
+        )
+        if (
+            ev is not None
+            and ev >= calibration_floor
+            and delta is not None
+            and delta > 0
             and paired["paired_terminal_contract_complete"] is True
-            and (not full_population or paired["operating_economic_promotion_pass"] is True)
+            and (
+                not full_population
+                or paired["operating_economic_promotion_pass"] is True
+            )
             and metrics["source_provenance_contract_complete"] is True
-            and metrics["catastrophic_terminal_proxy_count"] == 0):
+            and metrics["catastrophic_terminal_proxy_count"] == 0
+        ):
             calibration_passers.append(row)
     economically_evaluable_candidates = [
         row
         for row in candidates
-        if row["calibration_paired_population"][
-            "candidate_opportunity_ev_pct"
-        ]
+        if row["calibration_paired_population"]["candidate_opportunity_ev_pct"]
         is not None
-        and row["calibration_paired_population"][
-            "paired_terminal_proxy_delta_pct"
-        ]
+        and row["calibration_paired_population"]["paired_terminal_proxy_delta_pct"]
         is not None
     ]
-    operating_candidates = [r for r in candidates
-        if r["calibration_paired_population"].get("downstream_operating_evidence_complete")
-        and (r["calibration_paired_population"].get("operating_economic_comparison") or {}).get("status") == "supported_operating_comparison"]
-    ranked = calibration_passers or operating_candidates or calibration_gate_candidates or economically_evaluable_candidates
-    ranked.sort(key=lambda row: (
-        _number(row["calibration_paired_population"].get("daily_net_profit_delta_krw"))
-        if row in operating_candidates else -float("inf"),
-        _number((row["calibration_paired_population"].get("operating_economic_comparison") or {}).get("robust_paired_delta_ev_lower_bound_pct"))
-        if row in operating_candidates else -float("inf"),
-        row["calibration_paired_population"].get("candidate_opportunity_ev_pct") or 0.,
-        -policy_distance(row["policy"]),
-    ), reverse=True)
+    operating_candidates = [
+        r
+        for r in candidates
+        if r["calibration_paired_population"].get(
+            "downstream_operating_evidence_complete"
+        )
+        and (
+            r["calibration_paired_population"].get("operating_economic_comparison")
+            or {}
+        ).get("status")
+        == "supported_operating_comparison"
+    ]
+    ranked = (
+        calibration_passers
+        or operating_candidates
+        or calibration_gate_candidates
+        or economically_evaluable_candidates
+    )
+    ranked.sort(
+        key=lambda row: (
+            (
+                _number(
+                    row["calibration_paired_population"].get(
+                        "daily_net_profit_delta_krw"
+                    )
+                )
+                if row in operating_candidates
+                else -float("inf")
+            ),
+            (
+                _number(
+                    (
+                        row["calibration_paired_population"].get(
+                            "operating_economic_comparison"
+                        )
+                        or {}
+                    ).get("robust_paired_delta_ev_lower_bound_pct")
+                )
+                if row in operating_candidates
+                else -float("inf")
+            ),
+            row["calibration_paired_population"].get("candidate_opportunity_ev_pct")
+            or 0.0,
+            -policy_distance(row["policy"]),
+        ),
+        reverse=True,
+    )
     best = ranked[0] if ranked else None
     holdout_metrics = None
     holdout_paired_population = None
     holdout_selection_sha256 = None
     promotion_checks: dict[str, bool] = {}
     if best is not None:
-        holdout_selected = _mechanistic_policy_rows(holdout_rows, best["policy"], parent_policy=parent)
+        holdout_selected = _mechanistic_policy_rows(
+            holdout_rows, best["policy"], parent_policy=parent
+        )
         holdout_selection_sha256 = _canonical_sha256(
             [
                 {
@@ -3396,27 +3927,32 @@ def build_clean_baseline_mechanistic_refinement(
         )
         holdout_metrics = _mechanistic_policy_metrics(holdout_selected)
         holdout_paired_population = _mechanistic_paired_population_metrics(
-            holdout_rows, holdout_selected,
-            candidate_policy=_mechanistic_threshold_policy(best["policy"], parent)
+            holdout_rows,
+            holdout_selected,
+            candidate_policy=_mechanistic_threshold_policy(best["policy"], parent),
         )
         calibration_ev, calibration_delta = machine_selection_economics(
-            best["calibration"], best["calibration_paired_population"], full_population=full_population)
+            best["calibration"],
+            best["calibration_paired_population"],
+            full_population=full_population,
+        )
         holdout_ev, holdout_delta = machine_selection_economics(
-            holdout_metrics, holdout_paired_population, full_population=full_population)
+            holdout_metrics, holdout_paired_population, full_population=full_population
+        )
         promotion_checks = {
             "calibration_sample_and_comparison_floor": (
                 best["calibration_gate_pass"] is True
             ),
             "calibration_cost_adjusted_ev_at_least_10bp": (
-                calibration_ev is not None
-                and calibration_ev >= ev_floor
+                calibration_ev is not None and calibration_ev >= ev_floor
             ),
             "holdout_cost_adjusted_ev_at_least_10bp": (
-                holdout_ev is not None
-                and holdout_ev >= ev_floor
+                holdout_ev is not None and holdout_ev >= ev_floor
             ),
-            "calibration_positive_paired_terminal_delta": calibration_delta is not None and calibration_delta > 0,
-            "holdout_positive_paired_terminal_delta": holdout_delta is not None and holdout_delta > 0,
+            "calibration_positive_paired_terminal_delta": calibration_delta is not None
+            and calibration_delta > 0,
+            "holdout_positive_paired_terminal_delta": holdout_delta is not None
+            and holdout_delta > 0,
             "holdout_paired_terminal_delta_complete": (
                 holdout_paired_population["paired_terminal_contract_complete"] is True
             ),
@@ -3479,25 +4015,34 @@ def build_clean_baseline_mechanistic_refinement(
                 holdout_metrics["catastrophic_terminal_proxy_count"] == 0
             ),
         }
-    promotion_checks["incumbent_scope_verified"] = source_contract.get("incumbent_scope_verified", True) is True
+    promotion_checks["incumbent_scope_verified"] = (
+        source_contract.get("incumbent_scope_verified", True) is True
+    )
     promotion_checks["path_boundary_contract_isolated"] = (
         path_boundary_contract_isolated
     )
-    promotion_checks["structure_contract_isolated"] = len(structure_contract_counts) <= 1
+    promotion_checks["structure_contract_isolated"] = (
+        len(structure_contract_counts) <= 1
+    )
     promotion_checks["holdout_source_coverage_complete"] = (
         bool(holdout_dates) and holdout_dates_with_accepted_rows == holdout_dates
     )
     forward_selection = frozen if frozen_valid else None
     if source_contract.get("forward_holdout_required") is True:
         promotion_checks["unseen_forward_holdout"] = bool(
-            frozen_valid and holdout_dates and min(holdout_dates) > frozen["frozen_date"])
+            frozen_valid
+            and holdout_dates
+            and min(holdout_dates) > frozen["frozen_date"]
+        )
         if not frozen_valid and calibration_passers:
-            forward_selection = {"policy": best["policy"],
+            forward_selection = {
+                "policy": best["policy"],
                 "incumbent_sha256": _canonical_sha256(parent),
                 "frozen_date": datetime.now(KST).date().isoformat(),
                 "calibration_rows_sha256": source_contract.get("accepted_rows_sha256"),
                 "economic_contract": "machine_operating_daily_net_v1",
-                "economic_kernel_sha256": source_contract.get("economic_kernel_sha256")}
+                "economic_kernel_sha256": source_contract.get("economic_kernel_sha256"),
+            }
     promotion_pass = (
         best is not None and bool(promotion_checks) and all(promotion_checks.values())
     )
@@ -3505,7 +4050,11 @@ def build_clean_baseline_mechanistic_refinement(
         {
             "schema": "mechanistic_entry_common_feature_candidate_v1",
             "policy_version": policy_version,
-            "evaluation_contract": "full_population_cost_adjusted_10bp_paired_delta_v3" if full_population else "legacy_absolute_net_10bp_v1",
+            "evaluation_contract": (
+                "full_population_cost_adjusted_10bp_paired_delta_v3"
+                if full_population
+                else "legacy_absolute_net_10bp_v1"
+            ),
             "thresholds": best["policy"],
             "incumbent_machine_policy": parent,
             "incumbent_machine_policy_sha256": _canonical_sha256(parent),
@@ -3611,15 +4160,11 @@ def build_clean_baseline_mechanistic_refinement(
             economically_evaluable_candidates
         ),
         "independent_policy_comparison_candidate_count": sum(
-            row["calibration_paired_population"][
-                "independent_policy_comparison"
-            ]
+            row["calibration_paired_population"]["independent_policy_comparison"]
             is True
             for row in economically_evaluable_candidates
         ),
-        "calibration_gate_passing_candidate_count": len(
-            calibration_gate_candidates
-        ),
+        "calibration_gate_passing_candidate_count": len(calibration_gate_candidates),
         "calibration_floor_passing_candidate_count": len(calibration_passers),
         "forward_selection": forward_selection,
         "candidate_selection_basis": (
@@ -3644,9 +4189,11 @@ def build_clean_baseline_mechanistic_refinement(
                     else "no_common_feature_candidate_meets_cost_adjusted_10bp_holdout_gate"
                 )
                 if best is not None and calibration_gate_candidates
-                else "insufficient_mature_sample"
-                if best is not None
-                else "insufficient_clean_common_feature_evidence"
+                else (
+                    "insufficient_mature_sample"
+                    if best is not None
+                    else "insufficient_clean_common_feature_evidence"
+                )
             )
         ),
         "runtime_effect": False,
@@ -3669,7 +4216,9 @@ def _entry_quality_population_metrics(rows: list[dict[str, Any]]) -> dict[str, A
             "PROFIT_AFTER_SIDEWAYS",
         )
     )
-    adverse_count = labels["CLEAN_FAST_LOSS_OR_ADVERSE"] + labels["LOSS_AFTER_PRIMARY_WINDOW"]
+    adverse_count = (
+        labels["CLEAN_FAST_LOSS_OR_ADVERSE"] + labels["LOSS_AFTER_PRIMARY_WINDOW"]
+    )
     terminal_values = [
         value
         for row in rows
@@ -4116,7 +4665,9 @@ def relabel_hierarchy_source_rows(
 
     result, counts, by_day = [], Counter(), defaultdict(list)
     for row in source_rows:
-        if row.get("source_provenance_verified") is not None and not _machine_source_contract_valid(row):
+        if row.get(
+            "source_provenance_verified"
+        ) is not None and not _machine_source_contract_valid(row):
             counts["source_contract_invalid_no_reprice"] += 1
             result.append(row)
             continue
@@ -4136,7 +4687,13 @@ def relabel_hierarchy_source_rows(
             counts["executable_reference_missing"] += len(rows)
             result.extend(rows)
             continue
-        if all(_full_entry_cost_pct(r["comparison"].get("entry_cost_contract"), source_date=day) is not None for r in rows):
+        if all(
+            _full_entry_cost_pct(
+                r["comparison"].get("entry_cost_contract"), source_date=day
+            )
+            is not None
+            for r in rows
+        ):
             result.extend(rows)
             continue
         if pipeline_prices_by_day is None:
@@ -4375,18 +4932,23 @@ def _compact_machine_horizon_metrics(metrics: Any) -> dict[str, dict]:
     return result
 
 
-
-def _machine_capture_cost_reference_venue(capture: dict, cohort: tuple[str, str]) -> str | None:
+def _machine_capture_cost_reference_venue(
+    capture: dict, cohort: tuple[str, str]
+) -> str | None:
     """Economic catalog venue is not the integrated market-data scope label."""
     if cohort[0] in {"KRX", "NXT"}:
         return cohort[0]
-    if (cohort == ("PREMARKET_KRX_LIKE", "PREMARKET_KRX_LIKE")
-        and (_machine_outcome_request_code(capture) or "").endswith("_NX")):
+    if cohort == ("PREMARKET_KRX_LIKE", "PREMARKET_KRX_LIKE") and (
+        _machine_outcome_request_code(capture) or ""
+    ).endswith("_NX"):
         return "NXT"
     context = _as_dict(capture.get("label_context"))
     payload = _as_dict(_as_dict(capture.get("source")).get("exact_payload"))
-    snapshot = (payload if payload.get("schema") == "ai_market_snapshot_v1"
-                else _as_dict(payload.get("ai_market_snapshot_v1")))
+    snapshot = (
+        payload
+        if payload.get("schema") == "ai_market_snapshot_v1"
+        else _as_dict(payload.get("ai_market_snapshot_v1"))
+    )
     route = str(context.get("broker_route") or "").upper()
     if (
         route in {"KRX", "NXT", "SOR"}
@@ -4404,48 +4966,71 @@ def _machine_outcome_request_code(capture: dict) -> str | None:
     """Bind an offline chart request to the captured executable market route."""
     context = _as_dict(capture.get("label_context"))
     payload = _as_dict(_as_dict(capture.get("source")).get("exact_payload"))
-    snapshot = (payload if payload.get("schema") == "ai_market_snapshot_v1"
-                else _as_dict(payload.get("ai_market_snapshot_v1")))
+    snapshot = (
+        payload
+        if payload.get("schema") == "ai_market_snapshot_v1"
+        else _as_dict(payload.get("ai_market_snapshot_v1"))
+    )
     code = str(context.get("stock_code") or "")
     venue = _normalized_venue(context.get("effective_venue"))
     session = _normalized_session(context.get("session_bucket"))
     route = str(context.get("market_data_route") or "").lower()
     broker = str(context.get("broker_route") or "").upper()
-    if (not re.fullmatch(r"[0-9]{6}", code)
+    if (
+        not re.fullmatch(r"[0-9]{6}", code)
         or not context.get("snapshot_id")
         or context.get("snapshot_id") != snapshot.get("snapshot_id")
         or code != str(snapshot.get("stock_code") or "")
         or venue != _normalized_venue(snapshot.get("effective_venue"))
         or session != _normalized_session(snapshot.get("session_bucket"))
         or route != str(snapshot.get("market_data_route") or "").lower()
-        or broker != str(snapshot.get("broker_route") or "").upper()):
+        or broker != str(snapshot.get("broker_route") or "").upper()
+    ):
         return None
     # The chart suffix follows the exact market-data route. A probe may carry
     # an NXT broker route in the integrated aftermarket; that is an economic
     # contract gap, but it does not turn its _AL market data into _NX bars.
-    if (route == "krx_nxt_integrated"
-        and ((broker == "SOR" and (venue, session) == ("KRX", "KRX_REGULAR"))
-             or (broker in {"KRX", "NXT", "SOR"}
-                 and (venue, session) == ("KRX_NXT_INTEGRATED", "KRX_NXT_AFTERMARKET")))):
+    if route == "krx_nxt_integrated" and (
+        (broker == "SOR" and (venue, session) == ("KRX", "KRX_REGULAR"))
+        or (
+            broker in {"KRX", "NXT", "SOR"}
+            and (venue, session) == ("KRX_NXT_INTEGRATED", "KRX_NXT_AFTERMARKET")
+        )
+    ):
         return code + "_AL"
-    if (route == "nxt_only" and broker == "NXT"
+    if (
+        route == "nxt_only"
+        and broker == "NXT"
         and venue in {"NXT", "PREMARKET_KRX_LIKE"}
-        and session in {"NXT_PREMARKET", "PREMARKET_KRX_LIKE",
-                        "NXT_REGULAR_OVERLAP", "NXT_AFTERMARKET"}):
+        and session
+        in {
+            "NXT_PREMARKET",
+            "PREMARKET_KRX_LIKE",
+            "NXT_REGULAR_OVERLAP",
+            "NXT_AFTERMARKET",
+        }
+    ):
         return code + "_NX"
-    if route == "krx_only" and broker in {"KRX", "SOR"} and (venue, session) == ("KRX", "KRX_REGULAR"):
+    if (
+        route == "krx_only"
+        and broker in {"KRX", "SOR"}
+        and (venue, session) == ("KRX", "KRX_REGULAR")
+    ):
         return code
     return None
 
 
 def _machine_cost_route_compatible(context: dict, cohort: tuple[str, str]) -> bool:
     """A chart route alone cannot certify integrated SOR order economics."""
-    return (cohort != ("KRX_NXT_INTEGRATED", "KRX_NXT_AFTERMARKET")
-            or str(context.get("broker_route") or "").upper() == "SOR")
+    return (
+        cohort != ("KRX_NXT_INTEGRATED", "KRX_NXT_AFTERMARKET")
+        or str(context.get("broker_route") or "").upper() == "SOR"
+    )
 
 
 def _machine_probe_lineage_counts(
-    observations: list[dict], receipts: list[dict],
+    observations: list[dict],
+    receipts: list[dict],
 ) -> dict[str, int]:
     """Reconcile persisted probe results to verified captures, not clock proximity."""
     counts = Counter()
@@ -4472,9 +5057,12 @@ def _machine_probe_lineage_counts(
             claim_count = int(fields.get("zero_base_claim_count"))
         except (TypeError, ValueError):
             return None
-        if (not re.fullmatch(r"[0-9]{6}", code) or not source_sha
+        if (
+            not re.fullmatch(r"[0-9]{6}", code)
+            or not source_sha
             or route not in {"nxt_only", "krx_nxt_integrated"}
-            or claim_count < 0):
+            or claim_count < 0
+        ):
             return None
         return code, source_sha, route, claim_count
 
@@ -4483,16 +5071,26 @@ def _machine_probe_lineage_counts(
         if not capture:
             return False
         fields = _as_dict(receipt.get("fields"))
-        action = str(_as_dict(_as_dict(capture.get("source")).get("assessment")).get("action") or "").upper()
+        action = str(
+            _as_dict(_as_dict(capture.get("source")).get("assessment")).get("action")
+            or ""
+        ).upper()
         expected_action = (
-            "ENTER_NOW" if receipt.get("stage") == "zero_base_watch_attach"
-            else "RECHECK" if first
-            else str(fields.get("entry_mechanistic_action") or "").upper()
+            "ENTER_NOW"
+            if receipt.get("stage") == "zero_base_watch_attach"
+            else (
+                "RECHECK"
+                if first
+                else str(fields.get("entry_mechanistic_action") or "").upper()
+            )
         )
         return (
-            str(receipt.get("stock_code") or "") == str(_as_dict(capture.get("label_context")).get("stock_code") or "")
-            and str(fields.get("zero_base_source_sha256") or "") == str(capture.get("zero_base_source_sha256") or "")
-            and str(fields.get("zero_base_route") or "") == str(capture.get("zero_base_route") or "")
+            str(receipt.get("stock_code") or "")
+            == str(_as_dict(capture.get("label_context")).get("stock_code") or "")
+            and str(fields.get("zero_base_source_sha256") or "")
+            == str(capture.get("zero_base_source_sha256") or "")
+            and str(fields.get("zero_base_route") or "")
+            == str(capture.get("zero_base_route") or "")
             and action == expected_action
         )
 
@@ -4565,45 +5163,68 @@ def _machine_probe_lineage_counts(
 
 
 def _machine_completed_price_rows(
-    *, data_root: Path, day: str, observations: list[dict],
+    *,
+    data_root: Path,
+    day: str,
+    observations: list[dict],
     fetcher: Callable[[str, str], tuple[list[dict], dict]] | None,
     as_of: datetime | None,
 ) -> tuple[list[dict], dict, set[str]]:
     """Serialize one date's source-only fetch and immutable-generation reuse."""
     if fetcher is None or as_of is None:
         return _machine_completed_price_rows_locked(
-            data_root=data_root, day=day, observations=observations,
-            fetcher=None, as_of=None,
+            data_root=data_root,
+            day=day,
+            observations=observations,
+            fetcher=None,
+            as_of=None,
         )
-    lock_path = (data_root / "report" / "machine_completed_price_source"
-                 / f"machine_completed_price_source_{day}.lock")
+    lock_path = (
+        data_root
+        / "report"
+        / "machine_completed_price_source"
+        / f"machine_completed_price_source_{day}.lock"
+    )
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with lock_path.open("a") as lock_file:
         fcntl.flock(lock_file, fcntl.LOCK_EX)
         return _machine_completed_price_rows_locked(
-            data_root=data_root, day=day, observations=observations,
-            fetcher=fetcher, as_of=as_of,
+            data_root=data_root,
+            day=day,
+            observations=observations,
+            fetcher=fetcher,
+            as_of=as_of,
         )
 
 
 def _machine_completed_price_rows_locked(
-    *, data_root: Path, day: str, observations: list[dict],
+    *,
+    data_root: Path,
+    day: str,
+    observations: list[dict],
     fetcher: Callable[[str, str], tuple[list[dict], dict]] | None,
     as_of: datetime | None,
 ) -> tuple[list[dict], dict, set[str]]:
     """Reuse one hash-bound completed-bar batch across cumulative postclose runs."""
     from src.engine.scalping import ai_decision_quality as quality
 
-    manifest = _canonical_sha256(sorted(
-        str(c.get("machine_observation_sha256") or "") for c in observations
-    ))
-    path = (data_root / "report" / "machine_completed_price_source"
-            / f"machine_completed_price_source_{day}.json")
+    manifest = _canonical_sha256(
+        sorted(str(c.get("machine_observation_sha256") or "") for c in observations)
+    )
+    path = (
+        data_root
+        / "report"
+        / "machine_completed_price_source"
+        / f"machine_completed_price_source_{day}.json"
+    )
     cache = _load_json(path)
     expected_routes = {
-        (str(context.get("stock_code")),
-         _normalized_venue(context.get("effective_venue")),
-         _normalized_session(context.get("session_bucket")), request_code)
+        (
+            str(context.get("stock_code")),
+            _normalized_venue(context.get("effective_venue")),
+            _normalized_session(context.get("session_bucket")),
+            request_code,
+        )
         for capture in observations
         for context in [_as_dict(capture.get("label_context"))]
         for request_code in [_machine_outcome_request_code(capture)]
@@ -4611,7 +5232,8 @@ def _machine_completed_price_rows_locked(
     }
     expected_codes = {route[3] for route in expected_routes}
     cached_as_of = quality._parse_ts(cache.get("as_of"))
-    if (cache.get("schema") == MACHINE_COMPLETED_PRICE_CACHE_SCHEMA
+    if (
+        cache.get("schema") == MACHINE_COMPLETED_PRICE_CACHE_SCHEMA
         and cache.get("source_date") == day
         and cache.get("capture_manifest_sha256") == manifest
         and _artifact_content_sha256_valid(cache)
@@ -4619,46 +5241,80 @@ def _machine_completed_price_rows_locked(
         and cached_as_of.date().isoformat() == day
         and (cached_as_of.hour, cached_as_of.minute) >= (20, 1)
         and isinstance(cache.get("prices"), list)
-        and isinstance(cache.get("provenance"), list)):
+        and isinstance(cache.get("provenance"), list)
+    ):
         route_codes = set(cache.get("request_codes") or [])
-        prices = [p for p in cache["prices"] if
-                  isinstance(p, dict) and p.get("source_request_code") in route_codes
-                  and (str(p.get("stock_code")),
-                       _normalized_venue(p.get("effective_venue")),
-                       _normalized_session(p.get("session_bucket")),
-                       p.get("source_request_code")) in expected_routes
-                  and p.get("completed_bar_only") is True
-                  and p.get("source_api_id") == "ka10080"
-                  and (ts := quality._parse_ts(p.get("timestamp"))) is not None
-                  and ts.date().isoformat() == day and ts < cached_as_of
-                  and quality._price_source_usable(p)]
+        prices = [
+            p
+            for p in cache["prices"]
+            if isinstance(p, dict)
+            and p.get("source_request_code") in route_codes
+            and (
+                str(p.get("stock_code")),
+                _normalized_venue(p.get("effective_venue")),
+                _normalized_session(p.get("session_bucket")),
+                p.get("source_request_code"),
+            )
+            in expected_routes
+            and p.get("completed_bar_only") is True
+            and p.get("source_api_id") == "ka10080"
+            and (ts := quality._parse_ts(p.get("timestamp"))) is not None
+            and ts.date().isoformat() == day
+            and ts < cached_as_of
+            and quality._price_source_usable(p)
+        ]
         provenance_valid = all(
             isinstance(row, dict)
-            and (str(row.get("stock_code")),
-                 _normalized_venue(row.get("effective_venue")),
-                 _normalized_session(row.get("session_bucket")),
-                 row.get("request_code")) in expected_routes
+            and (
+                str(row.get("stock_code")),
+                _normalized_venue(row.get("effective_venue")),
+                _normalized_session(row.get("session_bucket")),
+                row.get("request_code"),
+            )
+            in expected_routes
             for row in cache["provenance"]
         )
-        if (route_codes.issubset(expected_codes)
-            and provenance_valid and len(prices) == len(cache["prices"])):
-            reused_status = ("verified_cache_reused" if cache.get("source_status") == "complete"
-                             else "verified_cache_reused_partial_source_gap")
-            return prices, {"status": reused_status, "path": str(path),
-                            "artifact_content_sha256": cache["artifact_content_sha256"],
-                            "route_count": len(cache["provenance"]),
-                            "deferred_route_count": cache.get("deferred_route_count", 0),
-                            "rejected_route_count": cache.get("rejected_route_count", 0),
-                            "unproven_route_count": cache.get("unproven_route_count", 0),
-                            "price_row_count": len(prices)}, route_codes
+        if (
+            route_codes.issubset(expected_codes)
+            and provenance_valid
+            and len(prices) == len(cache["prices"])
+        ):
+            reused_status = (
+                "verified_cache_reused"
+                if cache.get("source_status") == "complete"
+                else "verified_cache_reused_partial_source_gap"
+            )
+            return (
+                prices,
+                {
+                    "status": reused_status,
+                    "path": str(path),
+                    "artifact_content_sha256": cache["artifact_content_sha256"],
+                    "route_count": len(cache["provenance"]),
+                    "deferred_route_count": cache.get("deferred_route_count", 0),
+                    "rejected_route_count": cache.get("rejected_route_count", 0),
+                    "unproven_route_count": cache.get("unproven_route_count", 0),
+                    "price_row_count": len(prices),
+                },
+                route_codes,
+            )
     if fetcher is None or as_of is None:
-        return [], {"status": "cache_missing_or_invalid" if cache else "cache_missing",
-                    "path": str(path)}, set()
+        return (
+            [],
+            {
+                "status": "cache_missing_or_invalid" if cache else "cache_missing",
+                "path": str(path),
+            },
+            set(),
+        )
 
     route_labels = {}
     unproven_count = 0
     for capture in observations:
-        action = str(_as_dict(_as_dict(capture.get("source")).get("assessment")).get("action") or "").upper()
+        action = str(
+            _as_dict(_as_dict(capture.get("source")).get("assessment")).get("action")
+            or ""
+        ).upper()
         if action not in {"BLOCK", "RECHECK", "ENTER_NOW"}:
             continue
         request_code = _machine_outcome_request_code(capture)
@@ -4666,12 +5322,23 @@ def _machine_completed_price_rows_locked(
             unproven_count += 1
             continue
         context = _as_dict(capture.get("label_context"))
-        key = (str(context["stock_code"]), _normalized_venue(context.get("effective_venue")),
-               _normalized_session(context.get("session_bucket")), request_code)
+        key = (
+            str(context["stock_code"]),
+            _normalized_venue(context.get("effective_venue")),
+            _normalized_session(context.get("session_bucket")),
+            request_code,
+        )
         priority = 0 if action in {"BLOCK", "RECHECK"} else 1
-        value = (priority, str(capture.get("captured_at") or ""),
-                 {"stock_code": key[0], "effective_venue": key[1],
-                  "session_bucket": key[2], "outcome_request_code": request_code})
+        value = (
+            priority,
+            str(capture.get("captured_at") or ""),
+            {
+                "stock_code": key[0],
+                "effective_venue": key[1],
+                "session_bucket": key[2],
+                "outcome_request_code": request_code,
+            },
+        )
         if key not in route_labels or value[:2] < route_labels[key][:2]:
             route_labels[key] = value
     selected = sorted(route_labels.values(), key=lambda row: row[:2])
@@ -4683,31 +5350,42 @@ def _machine_completed_price_rows_locked(
     def verified_fetcher(stock_code: str, request_code: str) -> tuple[list[dict], dict]:
         candles, source_meta = fetcher(stock_code, request_code)
         source_meta = _as_dict(source_meta)
-        if (source_meta.get("api_id") != "ka10080"
+        if (
+            source_meta.get("api_id") != "ka10080"
             or source_meta.get("request_code") != request_code
-            or source_meta.get("request_base_dt") != day.replace("-", "")):
+            or source_meta.get("request_base_dt") != day.replace("-", "")
+        ):
             return [], {**source_meta, "fetch_error": "request_provenance_mismatch"}
         # ka10080 may still advertise an older-history continuation after its
         # returned descending pages have already crossed the target-day start.
         # That continuation cannot truncate today's observation window. Keep
         # the page-limit provenance, but prove this boundary before using it.
         if source_meta.get("continuous_page_limit_reached"):
-            timestamps = [str(row.get("source_timestamp") or "")[:14]
-                          for row in candles or [] if isinstance(row, dict)]
+            timestamps = [
+                str(row.get("source_timestamp") or "")[:14]
+                for row in candles or []
+                if isinstance(row, dict)
+            ]
             target_day_covered[(stock_code, request_code)] = bool(
                 source_meta.get("sort_direction_detected") == "descending"
                 and source_meta.get("last_http_status_code") == 200
                 and source_meta.get("rate_limit_detected") is not True
                 and source_meta.get("continuous_next_key_missing") is not True
                 and not source_meta.get("fetch_error")
-                and any(len(ts) == 14 and ts.isdigit()
-                        and ts < day.replace("-", "") + "000000"
-                        for ts in timestamps)
+                and any(
+                    len(ts) == 14
+                    and ts.isdigit()
+                    and ts < day.replace("-", "") + "000000"
+                    for ts in timestamps
+                )
             )
         return candles, source_meta
 
     prices, provenance = quality.load_kiwoom_completed_minute_price_rows(
-        target_date=day, labels=labels, as_of=as_of, fetcher=verified_fetcher,
+        target_date=day,
+        labels=labels,
+        as_of=as_of,
+        fetcher=verified_fetcher,
         request_code_resolver=lambda row: row.get("outcome_request_code"),
     )
     for row in provenance:
@@ -4715,48 +5393,84 @@ def _machine_completed_price_rows_locked(
             (str(row.get("stock_code")), str(row.get("request_code"))), False
         )
     rejected_routes = {
-        (str(row.get("stock_code")),
-         _normalized_venue(row.get("effective_venue")),
-         _normalized_session(row.get("session_bucket")),
-         row.get("request_code"))
+        (
+            str(row.get("stock_code")),
+            _normalized_venue(row.get("effective_venue")),
+            _normalized_session(row.get("session_bucket")),
+            row.get("request_code"),
+        )
         for row in provenance
-        if (row.get("api_id") != "ka10080"
+        if (
+            row.get("api_id") != "ka10080"
             or row.get("fetch_error")
-            or (row.get("continuation_page_limit_reached")
-                and not row.get("pagination_target_day_covered"))
-            or not row.get("target_completed_bar_count"))
+            or (
+                row.get("continuation_page_limit_reached")
+                and not row.get("pagination_target_day_covered")
+            )
+            or not row.get("target_completed_bar_count")
+        )
     }
-    prices = [row for row in prices if
-              (str(row.get("stock_code")),
-               _normalized_venue(row.get("effective_venue")),
-               _normalized_session(row.get("session_bucket")),
-               row.get("source_request_code")) not in rejected_routes]
+    prices = [
+        row
+        for row in prices
+        if (
+            str(row.get("stock_code")),
+            _normalized_venue(row.get("effective_venue")),
+            _normalized_session(row.get("session_bucket")),
+            row.get("source_request_code"),
+        )
+        not in rejected_routes
+    ]
     request_codes = {row["outcome_request_code"] for row in labels}
-    report = _with_artifact_content_sha256({
-        "schema": MACHINE_COMPLETED_PRICE_CACHE_SCHEMA,
-        "source_status": ("complete" if not rejected_routes and not deferred_count and not unproven_count
-                          else "partial_source_gap"),
-        "source_date": day, "generated_at": datetime.now(KST).isoformat(),
-        "as_of": as_of.isoformat(), "capture_manifest_sha256": manifest,
-        "request_codes": sorted(request_codes),
-        "deferred_route_count": deferred_count,
-        "rejected_route_count": len(rejected_routes),
-        "unproven_route_count": unproven_count,
-        "prices": prices, "provenance": provenance,
-        "runtime_effect": False, "allowed_runtime_apply": False,
-        "actual_order_submitted": False,
-    })
+    report = _with_artifact_content_sha256(
+        {
+            "schema": MACHINE_COMPLETED_PRICE_CACHE_SCHEMA,
+            "source_status": (
+                "complete"
+                if not rejected_routes and not deferred_count and not unproven_count
+                else "partial_source_gap"
+            ),
+            "source_date": day,
+            "generated_at": datetime.now(KST).isoformat(),
+            "as_of": as_of.isoformat(),
+            "capture_manifest_sha256": manifest,
+            "request_codes": sorted(request_codes),
+            "deferred_route_count": deferred_count,
+            "rejected_route_count": len(rejected_routes),
+            "unproven_route_count": unproven_count,
+            "prices": prices,
+            "provenance": provenance,
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "actual_order_submitted": False,
+        }
+    )
     _atomic_write_json(path, report)
-    return prices, {"status": "collected" if not rejected_routes and not deferred_count and not unproven_count else "partial_source_gap",
-                    "path": str(path), "artifact_content_sha256": report["artifact_content_sha256"],
-                    "route_count": len(labels), "deferred_route_count": deferred_count,
-                    "rejected_route_count": len(rejected_routes),
-                    "unproven_route_count": unproven_count,
-                    "price_row_count": len(prices)}, request_codes
+    return (
+        prices,
+        {
+            "status": (
+                "collected"
+                if not rejected_routes and not deferred_count and not unproven_count
+                else "partial_source_gap"
+            ),
+            "path": str(path),
+            "artifact_content_sha256": report["artifact_content_sha256"],
+            "route_count": len(labels),
+            "deferred_route_count": deferred_count,
+            "rejected_route_count": len(rejected_routes),
+            "unproven_route_count": unproven_count,
+            "price_row_count": len(prices),
+        },
+        request_codes,
+    )
 
 
 def _machine_completed_fetch_eligible(
-    target_date: str, *, now: datetime, write: bool,
+    target_date: str,
+    *,
+    now: datetime,
+    write: bool,
 ) -> bool:
     """Allow exact-date source recovery after close, including a past day."""
     if not write or now.utcoffset() is None:
@@ -4768,11 +5482,16 @@ def _machine_completed_fetch_eligible(
     today = now.astimezone(KST).date()
     if target > today:
         return False
-    return target < today or (now.astimezone(KST).hour, now.astimezone(KST).minute) >= (20, 1)
+    return target < today or (now.astimezone(KST).hour, now.astimezone(KST).minute) >= (
+        20,
+        1,
+    )
 
 
 def _postclose_machine_completed_fetcher(
-    target_date: str, *, write: bool,
+    target_date: str,
+    *,
+    write: bool,
 ) -> tuple[Callable[[str, str], tuple[list[dict], dict]] | None, datetime | None]:
     """Use the existing source-only chart client after all market sessions close."""
     now = datetime.now(KST)
@@ -4787,7 +5506,10 @@ def _postclose_machine_completed_fetcher(
 
     def fetcher(_stock_code: str, request_code: str) -> tuple[list[dict], dict]:
         return kiwoom_utils.get_minute_candles_ka10080_with_meta(
-            token, request_code, limit=900, explicit_request_code=True,
+            token,
+            request_code,
+            limit=900,
+            explicit_request_code=True,
             base_dt=target_date.replace("-", ""),
             request_owner="main_machine_policy.completed_outcome",
             request_class=REQUEST_CLASS_SOURCE_ONLY,
@@ -4797,9 +5519,15 @@ def _postclose_machine_completed_fetcher(
 
 
 def _load_machine_observation_rows_uncached(
-    data_root: Path, *, target_date: str, materialized_labels_only: bool = False,
-    independent_machine: bool = False, minimum_source_date: str = '2026-09-13',
-    completed_price_fetcher: Callable[[str, str], tuple[list[dict], dict]] | None = None,
+    data_root: Path,
+    *,
+    target_date: str,
+    materialized_labels_only: bool = False,
+    independent_machine: bool = False,
+    minimum_source_date: str = "2026-09-13",
+    completed_price_fetcher: (
+        Callable[[str, str], tuple[list[dict], dict]] | None
+    ) = None,
     completed_price_as_of: datetime | None = None,
     source_setup_repairs: dict[str, dict] | None = None,
 ) -> tuple[list[dict], dict]:
@@ -4811,10 +5539,16 @@ def _load_machine_observation_rows_uncached(
     from src.engine.scalping import ai_decision_quality as quality
     from src.engine.scalping.entry_setup_evidence import validate_entry_setup_evidence
     from src.engine.scalping.ai_decision_trace import _json_bytes
-    from src.engine.scalping.microstructure_reaction_context import bind_machine_microstructure_source, summarize_machine_capture_population
+    from src.engine.scalping.microstructure_reaction_context import (
+        bind_machine_microstructure_source,
+        summarize_machine_capture_population,
+    )
 
-    if source_setup_repairs and (not independent_machine or completed_price_fetcher is not None
-                                or completed_price_as_of is not None):
+    if source_setup_repairs and (
+        not independent_machine
+        or completed_price_fetcher is not None
+        or completed_price_as_of is not None
+    ):
         raise ValueError("source_setup_repairs_require_offline_independent_no_fetcher")
     result, counts = [], Counter()
     capture_populations = []
@@ -4826,7 +5560,12 @@ def _load_machine_observation_rows_uncached(
         # Machine-only capture started on 9/13. The clean-baseline paired
         # replay loader supplies older evidence; opening every prior payload
         # archive here would add postclose I/O without creating a valid capture.
-        if not match or not max("2026-09-13", minimum_source_date, refresh_floor) <= match[1] <= target_date:
+        if (
+            not match
+            or not max("2026-09-13", minimum_source_date, refresh_floor)
+            <= match[1]
+            <= target_date
+        ):
             continue
         if path.suffix == ".gz" and path.with_suffix("").is_file():
             continue
@@ -4841,8 +5580,11 @@ def _load_machine_observation_rows_uncached(
             continue
         archive_sha = None
         if source_setup_repairs and any(
-                c.get("machine_observation_sha256") in source_setup_repairs for c in captures):
+            c.get("machine_observation_sha256") in source_setup_repairs
+            for c in captures
+        ):
             from src.engine.scalping.entry_setup_source_repair import file_sha256
+
             archive_sha = file_sha256(path)
         by_day = defaultdict(list)
         for capture in captures:
@@ -4878,25 +5620,43 @@ def _load_machine_observation_rows_uncached(
                 counts["invalid_capture"] += 1
                 continue
             evidence_errors = validate_entry_setup_evidence(evidence)
-            if evidence_errors == ['entry_setup_evidence_sha256_invalid']:
-                from src.engine.scalping.entry_setup_source_repair import restore_original_recipe_metadata
+            if evidence_errors == ["entry_setup_evidence_sha256_invalid"]:
+                from src.engine.scalping.entry_setup_source_repair import (
+                    restore_original_recipe_metadata,
+                )
+
                 try:
-                    trace = capture['machine_observation_sha256']
-                    repaired_setups[trace], repair_proofs[trace] = restore_original_recipe_metadata(capture)
+                    trace = capture["machine_observation_sha256"]
+                    repaired_setups[trace], repair_proofs[trace] = (
+                        restore_original_recipe_metadata(capture)
+                    )
                     evidence_errors = []
-                    counts['original_recipe_metadata_restored'] += 1
+                    counts["original_recipe_metadata_restored"] += 1
                 except (ValueError, TypeError, KeyError):
-                    counts['original_recipe_metadata_not_reconstructable'] += 1
+                    counts["original_recipe_metadata_not_reconstructable"] += 1
             if evidence_errors:
                 trace = capture["machine_observation_sha256"]
                 receipt = (source_setup_repairs or {}).get(trace)
                 if receipt is not None:
-                    from src.engine.scalping.entry_setup_source_repair import consume_receipt
+                    from src.engine.scalping.entry_setup_source_repair import (
+                        consume_receipt,
+                    )
+
                     try:
                         repaired_setups[trace], repair_proofs[trace] = consume_receipt(
-                            capture, receipt, source_path=path, source_sha256=archive_sha)
+                            capture,
+                            receipt,
+                            source_path=path,
+                            source_sha256=archive_sha,
+                        )
                         counts["source_setup_repair_accepted"] += 1
-                    except (ValueError, TypeError, KeyError, AttributeError, OSError) as exc:
+                    except (
+                        ValueError,
+                        TypeError,
+                        KeyError,
+                        AttributeError,
+                        OSError,
+                    ) as exc:
                         counts["source_setup_repair_rejected"] += 1
                         reason = re.sub(r"[^a-z0-9_]+", "_", str(exc).lower())[:96]
                         counts["source_setup_repair_rejected_" + reason] += 1
@@ -4906,18 +5666,28 @@ def _load_machine_observation_rows_uncached(
                     counts["invalid_capture"] += 1
                     continue
             by_day[day].append(capture)
-        capture_populations.append(summarize_machine_capture_population([capture for observations in by_day.values() for capture in observations]))
+        capture_populations.append(
+            summarize_machine_capture_population(
+                [
+                    capture
+                    for observations in by_day.values()
+                    for capture in observations
+                ]
+            )
+        )
         for day, observations in by_day.items():
             unique_observations = {
                 capture["machine_observation_sha256"]: capture
                 for capture in observations
             }
-            counts["duplicate_machine_capture_collapsed"] += (
-                len(observations) - len(unique_observations)
+            counts["duplicate_machine_capture_collapsed"] += len(observations) - len(
+                unique_observations
             )
             observations = list(unique_observations.values())
             cost_profiles_by_venue = {}
-            ai_trace_index = {} if independent_machine else _machine_ai_trace_index(data_root, day)
+            ai_trace_index = (
+                {} if independent_machine else _machine_ai_trace_index(data_root, day)
+            )
             materialized_by_trace: dict[str, dict] = {}
             if materialized_labels_only:
                 label_path = (
@@ -4926,9 +5696,7 @@ def _load_machine_observation_rows_uncached(
                     / f"ai_decision_outcome_labels_{day}.json"
                 )
                 control_path = (
-                    data_root
-                    / "runtime"
-                    / f"ai_decision_quality_control_{day}.json"
+                    data_root / "runtime" / f"ai_decision_quality_control_{day}.json"
                 )
                 label_report = _load_json(label_path)
                 control = _load_json(control_path)
@@ -4948,9 +5716,7 @@ def _load_machine_observation_rows_uncached(
                         and label_counts[str(row["decision_trace_id"])] == 1
                     }
                 else:
-                    counts["materialized_label_contract_invalid"] += len(
-                        observations
-                    )
+                    counts["materialized_label_contract_invalid"] += len(observations)
                 prices, lifecycle = [], []
             else:
                 pipeline = existing_or_gzip_path(
@@ -4965,17 +5731,25 @@ def _load_machine_observation_rows_uncached(
                     },
                     probe_receipts=probe_receipts,
                 )
-                counts.update(_machine_probe_lineage_counts(observations, probe_receipts))
+                counts.update(
+                    _machine_probe_lineage_counts(observations, probe_receipts)
+                )
                 completed, completed_source, _completed_codes = (
                     _machine_completed_price_rows(
-                        data_root=data_root, day=day, observations=observations,
-                        fetcher=(completed_price_fetcher if day == target_date else None),
+                        data_root=data_root,
+                        day=day,
+                        observations=observations,
+                        fetcher=(
+                            completed_price_fetcher if day == target_date else None
+                        ),
                         as_of=(completed_price_as_of if day == target_date else None),
                     )
                 )
                 prices.extend(completed)
                 counts["completed_price_source_" + completed_source["status"]] += 1
-                completed_price_receipts.append({"source_date": day, **completed_source})
+                completed_price_receipts.append(
+                    {"source_date": day, **completed_source}
+                )
                 counts["completed_price_rows"] += len(completed)
                 counts["completed_price_deferred_routes"] += int(
                     completed_source.get("deferred_route_count") or 0
@@ -4989,33 +5763,63 @@ def _load_machine_observation_rows_uncached(
             for capture in observations:
                 context = dict(capture.get("label_context") or {})
                 decision_ts = capture["captured_at"]
-                quote_raw = _as_dict(_as_dict(capture.get("source")).get("exact_payload"))
+                quote_raw = _as_dict(
+                    _as_dict(capture.get("source")).get("exact_payload")
+                )
                 if quote_raw.get("entry_source_quote_recovery") is not None:
-                    from src.engine.scalping.entry_machine_source_recovery import quote_label_reference
+                    from src.engine.scalping.entry_machine_source_recovery import (
+                        quote_label_reference,
+                    )
+
                     try:
-                        quote_label = quote_label_reference(quote_raw, _as_dict(capture["source"].get("assessment")))
-                        if (context.get("entry_source_quote_label") != quote_label
-                                or context.get("reference_price") != quote_label["reference_price"]
-                                or context.get("reference_price_type") != "executable_ask"
-                                or quote_label["decision_epoch"] > datetime.fromisoformat(capture["captured_at"]).timestamp()):
+                        quote_label = quote_label_reference(
+                            quote_raw, _as_dict(capture["source"].get("assessment"))
+                        )
+                        if (
+                            context.get("entry_source_quote_label") != quote_label
+                            or context.get("reference_price")
+                            != quote_label["reference_price"]
+                            or context.get("reference_price_type") != "executable_ask"
+                            or quote_label["decision_epoch"]
+                            > datetime.fromisoformat(capture["captured_at"]).timestamp()
+                        ):
                             raise ValueError("quote_recovery_label_reference_mismatch")
-                        decision_ts = datetime.fromtimestamp(quote_label["decision_epoch"], timezone.utc).isoformat()
+                        decision_ts = datetime.fromtimestamp(
+                            quote_label["decision_epoch"], timezone.utc
+                        ).isoformat()
                     except (KeyError, TypeError, ValueError, IndexError):
                         counts["quote_recovery_label_source_gap"] += 1
                         continue
-                captured_action = str(_as_dict(_as_dict(capture.get("source")).get("assessment")).get("action") or "").upper()
-                if captured_action in {"BLOCK", "RECHECK", "ENTER_NOW", "SOURCE_INVALID"}:
+                captured_action = str(
+                    _as_dict(_as_dict(capture.get("source")).get("assessment")).get(
+                        "action"
+                    )
+                    or ""
+                ).upper()
+                if captured_action in {
+                    "BLOCK",
+                    "RECHECK",
+                    "ENTER_NOW",
+                    "SOURCE_INVALID",
+                }:
                     counts["machine_capture_action_" + captured_action.lower()] += 1
-                    if capture.get("source_event_stage") == "zero_base_probe_machine_only_v1":
-                        counts["zero_base_capture_action_" + captured_action.lower()] += 1
+                    if (
+                        capture.get("source_event_stage")
+                        == "zero_base_probe_machine_only_v1"
+                    ):
+                        counts[
+                            "zero_base_capture_action_" + captured_action.lower()
+                        ] += 1
                 exact_outcome_code = _machine_outcome_request_code(capture)
                 if not materialized_labels_only and exact_outcome_code:
                     # A completed-price cohort cannot silently consume a plain
                     # KRX pipeline price for an integrated _AL observation,
                     # even when the completed-price source itself is absent.
                     context["outcome_request_code"] = exact_outcome_code
-                ai_trace, ai_trace_join_status = ({}, 'independent_machine_no_ai_join') if independent_machine else _match_machine_ai_trace(
-                    capture, context, ai_trace_index
+                ai_trace, ai_trace_join_status = (
+                    ({}, "independent_machine_no_ai_join")
+                    if independent_machine
+                    else _match_machine_ai_trace(capture, context, ai_trace_index)
                 )
                 counts[ai_trace_join_status] += 1
                 if ai_trace_join_status == "machine_action_mismatch_for_exact_snapshot":
@@ -5033,11 +5837,14 @@ def _load_machine_observation_rows_uncached(
                 if not mechanistic_scope_supported(*cohort):
                     counts["unsupported_cohort"] += 1
                     continue
-                cost_reference_venue = _machine_capture_cost_reference_venue(capture, cohort)
+                cost_reference_venue = _machine_capture_cost_reference_venue(
+                    capture, cohort
+                )
                 if cost_reference_venue not in cost_profiles_by_venue:
                     cost_profiles_by_venue[cost_reference_venue] = (
                         _hierarchy_cost_profiles(data_root, day, cost_reference_venue)
-                        if cost_reference_venue else {}
+                        if cost_reference_venue
+                        else {}
                     )
                 cost_profiles = cost_profiles_by_venue[cost_reference_venue]
                 cost_contract = capture["source"]["exact_payload"].get(
@@ -5097,7 +5904,9 @@ def _load_machine_observation_rows_uncached(
                     "decision_stage": "entry",
                     # No exact chart route means even a plausible same-symbol
                     # pipeline price cannot establish this decision's outcome.
-                    "invalid_reasons": ([] if exact_outcome_code else ["outcome_route_unproven"]),
+                    "invalid_reasons": (
+                        [] if exact_outcome_code else ["outcome_route_unproven"]
+                    ),
                 }
                 if materialized_labels_only:
                     labeled = materialized_by_trace.get(
@@ -5117,9 +5926,7 @@ def _load_machine_observation_rows_uncached(
                         pending_labels=[pending],
                         price_rows=prices_by_symbol[context.get("stock_code")],
                         lifecycle_rows=lifecycle_by_symbol[context.get("stock_code")],
-                        as_of=datetime.fromisoformat(
-                            target_date + "T23:59:59+09:00"
-                        ),
+                        as_of=datetime.fromisoformat(target_date + "T23:59:59+09:00"),
                     )[0]
                 horizon_metrics = labeled.get("horizon_metrics", {})
                 metric = horizon_metrics.get("10m", {})
@@ -5130,21 +5937,36 @@ def _load_machine_observation_rows_uncached(
                     counts["outcome_route_unproven"] += 1
                 elif context.get("outcome_request_code"):
                     decision_time = quality._parse_ts(decision_ts)
-                    first_observation = (min((timestamp for price in
-                        prices_by_symbol[context.get("stock_code")] if
-                        quality._same_route(pending, price)
-                        and (timestamp := quality._parse_ts(price.get("timestamp")))
-                        and timestamp > decision_time), default=None)
-                        if decision_time is not None else None)
-                    if (first_observation is None or
-                        (first_observation - decision_time).total_seconds() >
-                            quality.HORIZON_END_MAX_LAG_SEC):
+                    first_observation = (
+                        min(
+                            (
+                                timestamp
+                                for price in prices_by_symbol[context.get("stock_code")]
+                                if quality._same_route(pending, price)
+                                and (
+                                    timestamp := quality._parse_ts(
+                                        price.get("timestamp")
+                                    )
+                                )
+                                and timestamp > decision_time
+                            ),
+                            default=None,
+                        )
+                        if decision_time is not None
+                        else None
+                    )
+                    if (
+                        first_observation is None
+                        or (first_observation - decision_time).total_seconds()
+                        > quality.HORIZON_END_MAX_LAG_SEC
+                    ):
                         outcome_price_gap = "initial_postdecision_price_gap"
                         counts["initial_postdecision_price_gap"] += 1
                 if outcome_price_gap:
                     for horizon_metric in horizon_metrics.values():
-                        if (isinstance(horizon_metric, dict)
-                            and isinstance(horizon_metric.get("entry_quality_path"), dict)):
+                        if isinstance(horizon_metric, dict) and isinstance(
+                            horizon_metric.get("entry_quality_path"), dict
+                        ):
                             horizon_metric["entry_quality_path"] = {
                                 "schema": "entry_quality_path_v1",
                                 "status": "source_gap",
@@ -5159,45 +5981,86 @@ def _load_machine_observation_rows_uncached(
                     counts["path_or_cost_missing"] += 1
                     if not independent_machine:
                         continue
-                evidence = dict(repaired_setups.get(capture["machine_observation_sha256"],
-                                                    capture["source"]["setup_evidence"]))
+                evidence = dict(
+                    repaired_setups.get(
+                        capture["machine_observation_sha256"],
+                        capture["source"]["setup_evidence"],
+                    )
+                )
                 if "strategy_raw_input" not in evidence:
-                    from src.engine.scalping.entry_strategy_policy import digest as strategy_digest
+                    from src.engine.scalping.entry_strategy_policy import (
+                        digest as strategy_digest,
+                    )
+
                     raw = capture["source"].get("exact_payload")
                     if isinstance(raw, dict) and raw:
-                        raw = {**raw, 'strategy_observed_at': capture['captured_at']}
+                        raw = {**raw, "strategy_observed_at": capture["captured_at"]}
                         evidence["strategy_raw_input"] = raw
                         evidence["strategy_raw_sha256"] = strategy_digest(raw)
-                        evidence["evidence_sha256"] = _canonical_sha256({k: v for k, v in evidence.items() if k != "evidence_sha256"})
+                        evidence["evidence_sha256"] = _canonical_sha256(
+                            {
+                                k: v
+                                for k, v in evidence.items()
+                                if k != "evidence_sha256"
+                            }
+                        )
                 assessment = _as_dict(capture["source"].get("assessment"))
                 machine_action = str(assessment.get("action") or "").upper()
                 if machine_action not in {"BLOCK", "RECHECK", "ENTER_NOW"}:
                     counts["machine_action_invalid"] += 1
                     continue
                 action_key = "machine_" + machine_action.lower()
-                counts[action_key + (
-                    "_full_cost_valid" if full_cost is not None else "_full_cost_gap"
-                )] += 1
-                if isinstance(entry_path, dict) and entry_path.get("status") == "evaluable":
+                counts[
+                    action_key
+                    + (
+                        "_full_cost_valid"
+                        if full_cost is not None
+                        else "_full_cost_gap"
+                    )
+                ] += 1
+                if (
+                    isinstance(entry_path, dict)
+                    and entry_path.get("status") == "evaluable"
+                ):
                     first_hit = str(entry_path.get("first_hit") or "")
                     if first_hit in {"net_target_first", "exact_stop_first"}:
                         counts[action_key + "_first_hit_" + first_hit] += 1
                 else:
                     path_reason = re.sub(
-                        r"[^a-z0-9_]+", "_",
-                        str(_as_dict(entry_path).get("label_reason") or
-                            _as_dict(entry_path).get("status") or "missing").lower(),
+                        r"[^a-z0-9_]+",
+                        "_",
+                        str(
+                            _as_dict(entry_path).get("label_reason")
+                            or _as_dict(entry_path).get("status")
+                            or "missing"
+                        ).lower(),
                     )[:64]
                     counts[action_key + "_path_reason_" + path_reason] += 1
-                counts["machine_path_" + machine_action.lower() + "_" + (
-                    "evaluable" if isinstance(entry_path, dict) and entry_path.get("status") == "evaluable"
-                    else "source_gap_or_censored")] += 1
+                counts[
+                    "machine_path_"
+                    + machine_action.lower()
+                    + "_"
+                    + (
+                        "evaluable"
+                        if isinstance(entry_path, dict)
+                        and entry_path.get("status") == "evaluable"
+                        else "source_gap_or_censored"
+                    )
+                ] += 1
                 # Scalping readiness is visible at 3/5/10 minutes. Longer
                 # horizons describe late outcomes and may end past a session.
                 for horizon in (3, 5, 10, 30, 60):
-                    counts["machine_" + machine_action.lower() + f"_{horizon}m_" + (
-                    "price_covered" if horizon_metrics.get(f"{horizon}m") and not outcome_price_gap
-                        else "price_gap_or_pending")] += 1
+                    counts[
+                        "machine_"
+                        + machine_action.lower()
+                        + f"_{horizon}m_"
+                        + (
+                            "price_covered"
+                            if horizon_metrics.get(f"{horizon}m")
+                            and not outcome_price_gap
+                            else "price_gap_or_pending"
+                        )
+                    ] += 1
                 mc = evidence.get("mechanistic_context") or {}
                 cost = context.get("entry_conservative_execution_cost_pct")
                 correlation = _as_dict(labeled.get("correlation"))
@@ -5210,13 +6073,19 @@ def _load_machine_observation_rows_uncached(
                     )
                 ] += 1
                 from src.engine.scalping.postclose_entry_validation import (
-                    source_identifier, source_identifiers,
+                    source_identifier,
+                    source_identifiers,
                 )
-                scanner_promotion_ids = source_identifiers([
-                    *source_identifiers(correlation.get("scanner_promotion_ids")),
-                    context.get("scanner_promotion_id"),
-                ])
-                scanner_promotion_id = source_identifier(context.get("scanner_promotion_id")) or ""
+
+                scanner_promotion_ids = source_identifiers(
+                    [
+                        *source_identifiers(correlation.get("scanner_promotion_ids")),
+                        context.get("scanner_promotion_id"),
+                    ]
+                )
+                scanner_promotion_id = (
+                    source_identifier(context.get("scanner_promotion_id")) or ""
+                )
                 scanner_promotion_identity_source = (
                     "machine_capture"
                     if scanner_promotion_id
@@ -5262,7 +6131,9 @@ def _load_machine_observation_rows_uncached(
                         "stock_code": context.get("stock_code"),
                         "decision_snapshot_id": context.get("snapshot_id"),
                         "source_event_stage": capture.get("source_event_stage"),
-                        "zero_base_source_sha256": capture.get("zero_base_source_sha256"),
+                        "zero_base_source_sha256": capture.get(
+                            "zero_base_source_sha256"
+                        ),
                         "zero_base_route": capture.get("zero_base_route"),
                         "outcome_request_code": context.get("outcome_request_code"),
                         "outcome_stop_owner": context.get("outcome_stop_owner"),
@@ -5289,16 +6160,26 @@ def _load_machine_observation_rows_uncached(
                         "outcome_horizon_metrics": (
                             _compact_machine_horizon_metrics(horizon_metrics)
                         ),
-                        "entry_quality_contract_valid": bool(isinstance(entry_path, dict) and entry_path.get('status') == 'evaluable'
-                            and full_cost is not None and context.get('reference_price_type') == 'executable_ask'),
+                        "entry_quality_contract_valid": bool(
+                            isinstance(entry_path, dict)
+                            and entry_path.get("status") == "evaluable"
+                            and full_cost is not None
+                            and context.get("reference_price_type") == "executable_ask"
+                        ),
                         "source_report_hash_verified": False,
-                        "microstructure_evaluation_binding": bind_machine_microstructure_source(capture),
+                        "microstructure_evaluation_binding": bind_machine_microstructure_source(
+                            capture
+                        ),
                         "machine_observation_hash_verified": True,
                         "source_provenance_verified": True,
                         "comparison": {
                             "entry_cost_contract": cost_contract,
                             "cost_reference_venue": cost_reference_venue,
-                            "cost_reference_identity_source": ("exact_market_venue" if cohort[0] in {"KRX", "NXT"} else "hash_verified_exact_snapshot_broker_route"),
+                            "cost_reference_identity_source": (
+                                "exact_market_venue"
+                                if cohort[0] in {"KRX", "NXT"}
+                                else "hash_verified_exact_snapshot_broker_route"
+                            ),
                             "cost_evidence": _entry_cost_evidence(
                                 cost_contract, source_date=day
                             ),
@@ -5364,21 +6245,39 @@ def _load_machine_observation_rows_uncached(
                         "exit_cohort": "existing_fixed_boundary_counterfactual",
                     }
                 )
-                counts["evaluable" if result[-1]["entry_quality_contract_valid"] else "retained_without_economic_outcome"] += 1
+                counts[
+                    (
+                        "evaluable"
+                        if result[-1]["entry_quality_contract_valid"]
+                        else "retained_without_economic_outcome"
+                    )
+                ] += 1
                 proof = repair_proofs.get(capture["machine_observation_sha256"])
                 if proof is not None:
-                    proof_key = ('original_recipe_metadata_restoration'
-                        if proof.get('schema') == 'entry_recipe_original_metadata_restoration_v1'
-                        else 'source_setup_repair')
+                    proof_key = (
+                        "original_recipe_metadata_restoration"
+                        if proof.get("schema")
+                        == "entry_recipe_original_metadata_restoration_v1"
+                        else "source_setup_repair"
+                    )
                     result[-1][proof_key] = proof
     population = {
         key: sum(part[key] for part in capture_populations)
-        for key in ("verified_capture_count", "unique_verified_capture_count", "duplicate_capture_collapsed_count")
+        for key in (
+            "verified_capture_count",
+            "unique_verified_capture_count",
+            "duplicate_capture_collapsed_count",
+        )
     }
-    population["partitions"] = [partition for part in capture_populations for partition in part["partitions"]]
+    population["partitions"] = [
+        partition for part in capture_populations for partition in part["partitions"]
+    ]
     population["economic_exclusions_do_not_erase_capture_population"] = True
-    return result, {**dict(counts), "microstructure_capture_population": population,
-                    "completed_price_cache_receipts": completed_price_receipts}
+    return result, {
+        **dict(counts),
+        "microstructure_capture_population": population,
+        "completed_price_cache_receipts": completed_price_receipts,
+    }
 
 
 MACHINE_PROJECTION_MAX_BYTES = 1024 * 1024 * 1024
@@ -5387,43 +6286,57 @@ MACHINE_PROJECTION_MAX_BYTES = 1024 * 1024 * 1024
 def _read_machine_projection(path: Path, *, kernels: dict) -> dict:
     """Read one bounded frozen partition; reject stale kernels before large reads."""
     from src.engine.scalping import compact_auxiliary_paired_replay as compact
-    compressed = Path(str(path) + '.gz')
+
+    compressed = Path(str(path) + ".gz")
     actual = compressed if compressed.is_file() else path
     if not actual.is_file() or actual.is_symlink():
         return {}
-    limit = 128 * 1024 * 1024 if actual.suffix == '.gz' else MACHINE_PROJECTION_MAX_BYTES
+    limit = (
+        128 * 1024 * 1024 if actual.suffix == ".gz" else MACHINE_PROJECTION_MAX_BYTES
+    )
     if actual.stat().st_size > limit:
         return {}
     before = actual.stat()
-    opener = gzip.open if actual.suffix == '.gz' else open
+    opener = gzip.open if actual.suffix == ".gz" else open
     try:
-        with opener(actual, 'rt', encoding='utf-8', newline='') as handle:
+        with opener(actual, "rt", encoding="utf-8", newline="") as handle:
             prefix = handle.read(64 * 1024)
             match = re.match(r'\s*\{\s*"contract"\s*:\s*', prefix)
             if match:
-                contract, _ = json.JSONDecoder().raw_decode(prefix[match.end():])
-                if not isinstance(contract, dict) or contract.get('kernels') != kernels:
+                contract, _ = json.JSONDecoder().raw_decode(prefix[match.end() :])
+                if not isinstance(contract, dict) or contract.get("kernels") != kernels:
                     return {}
         from src.engine.lifecycle.research_json_stream import Reader
         from src.engine.scalping.postclose_entry_validation import FrozenRows
-        with opener(actual, 'rt', encoding='utf-8', newline='') as handle:
-            reader = Reader(handle, max_bytes=MACHINE_PROJECTION_MAX_BYTES, budgeted=False)
+
+        with opener(actual, "rt", encoding="utf-8", newline="") as handle:
+            reader = Reader(
+                handle, max_bytes=MACHINE_PROJECTION_MAX_BYTES, budgeted=False
+            )
             value = {}
+
             def field(key, source):
-                if key == 'rows':
+                if key == "rows":
                     rows = FrozenRows()
-                    rows.extend(source.array(lambda r: r.value(MACHINE_PROJECTION_MAX_BYTES)))
+                    rows.extend(
+                        source.array(lambda r: r.value(MACHINE_PROJECTION_MAX_BYTES))
+                    )
                     value[key] = rows
                 else:
                     value[key] = source.value(MACHINE_PROJECTION_MAX_BYTES)
                 return ()
+
             for _ in reader.fields(field, max_fields=None):
                 pass
             reader.finish()
         after = actual.stat()
         if (before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (
-                after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns):
-            raise ValueError('machine_projection_changed_during_read')
+            after.st_ino,
+            after.st_size,
+            after.st_mtime_ns,
+            after.st_ctime_ns,
+        ):
+            raise ValueError("machine_projection_changed_during_read")
         return value if isinstance(value, dict) and compact.valid(value) else {}
     except ValueError as exc:
         if str(exc) == "machine_projection_changed_during_read":
@@ -5436,137 +6349,270 @@ def _read_machine_projection(path: Path, *, kernels: dict) -> dict:
 def _write_machine_projection(path: Path, value: dict) -> None:
     """Publish lossless compact gzip; semantic row/content hashes are unchanged."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    previous = Path(str(path) + '.gz')
+    previous = Path(str(path) + ".gz")
     if previous.is_symlink():
-        raise ValueError('machine_projection_previous_symlink_invalid')
+        raise ValueError("machine_projection_previous_symlink_invalid")
     if previous.is_file():
         # Frozen research can reference the previous physical generation.
         # Preserve its exact compressed bytes before replacing the cache.
-        with previous.open('rb') as stream:
-            prior_sha = hashlib.file_digest(stream, 'sha256').hexdigest()
-        archive = path.parent / 'generations' / f'{prior_sha}.json.gz'
+        with previous.open("rb") as stream:
+            prior_sha = hashlib.file_digest(stream, "sha256").hexdigest()
+        archive = path.parent / "generations" / f"{prior_sha}.json.gz"
         archive.parent.mkdir(parents=True, exist_ok=True)
         if not archive.exists():
-            fd, temporary = tempfile.mkstemp(prefix='.projection-archive-', dir=archive.parent)
+            fd, temporary = tempfile.mkstemp(
+                prefix=".projection-archive-", dir=archive.parent
+            )
             try:
-                with previous.open('rb') as source, os.fdopen(fd, 'wb') as target:
-                    for chunk in iter(lambda: source.read(1024 * 1024), b''):
+                with previous.open("rb") as source, os.fdopen(fd, "wb") as target:
+                    for chunk in iter(lambda: source.read(1024 * 1024), b""):
                         target.write(chunk)
                     target.flush()
                     os.fsync(target.fileno())
-                with Path(temporary).open('rb') as source:
-                    if hashlib.file_digest(source, 'sha256').hexdigest() != prior_sha:
-                        raise ValueError('machine_projection_changed_before_archive')
+                with Path(temporary).open("rb") as source:
+                    if hashlib.file_digest(source, "sha256").hexdigest() != prior_sha:
+                        raise ValueError("machine_projection_changed_before_archive")
                 try:
                     os.link(temporary, archive)
                 except FileExistsError:
                     pass
             finally:
                 Path(temporary).unlink(missing_ok=True)
-        with archive.open('rb') as stream:
-            if hashlib.file_digest(stream, 'sha256').hexdigest() != prior_sha:
-                raise ValueError('machine_projection_archive_hash_invalid')
-    descriptor, name = tempfile.mkstemp(prefix='.machine-projection-', dir=path.parent)
+        with archive.open("rb") as stream:
+            if hashlib.file_digest(stream, "sha256").hexdigest() != prior_sha:
+                raise ValueError("machine_projection_archive_hash_invalid")
+    descriptor, name = tempfile.mkstemp(prefix=".machine-projection-", dir=path.parent)
     try:
-        with os.fdopen(descriptor, 'wb') as physical:
-            with gzip.GzipFile(filename='', fileobj=physical, mode='wb', compresslevel=1, mtime=0) as compressed:
-                with io.TextIOWrapper(compressed, encoding='utf-8') as handle:
-                    json.dump(value, handle, ensure_ascii=False, allow_nan=False, separators=(',', ':'))
+        with os.fdopen(descriptor, "wb") as physical:
+            with gzip.GzipFile(
+                filename="", fileobj=physical, mode="wb", compresslevel=1, mtime=0
+            ) as compressed:
+                with io.TextIOWrapper(compressed, encoding="utf-8") as handle:
+                    json.dump(
+                        value,
+                        handle,
+                        ensure_ascii=False,
+                        allow_nan=False,
+                        separators=(",", ":"),
+                    )
             physical.flush()
             os.fsync(physical.fileno())
-        Path(name).replace(Path(str(path) + '.gz'))
+        Path(name).replace(Path(str(path) + ".gz"))
     finally:
         Path(name).unlink(missing_ok=True)
 
 
-def load_machine_observation_rows(data_root: Path, *, target_date: str,
-    materialized_labels_only: bool = False, independent_machine: bool = False,
-    minimum_source_date: str = '2026-09-13', completed_price_fetcher=None,
-    completed_price_as_of=None):
+def load_machine_observation_rows(
+    data_root: Path,
+    *,
+    target_date: str,
+    materialized_labels_only: bool = False,
+    independent_machine: bool = False,
+    minimum_source_date: str = "2026-09-13",
+    completed_price_fetcher=None,
+    completed_price_as_of=None,
+):
     """Incremental sealed daily projections; unchanged history does not scan raw."""
-    options = dict(materialized_labels_only=materialized_labels_only,
-        independent_machine=independent_machine, minimum_source_date=minimum_source_date,
-        completed_price_fetcher=completed_price_fetcher, completed_price_as_of=completed_price_as_of)
-    if target_date < '2026-10-02':
-        return _load_machine_observation_rows_uncached(data_root, target_date=target_date, **options)
+    options = dict(
+        materialized_labels_only=materialized_labels_only,
+        independent_machine=independent_machine,
+        minimum_source_date=minimum_source_date,
+        completed_price_fetcher=completed_price_fetcher,
+        completed_price_as_of=completed_price_as_of,
+    )
+    if target_date < "2026-10-02":
+        return _load_machine_observation_rows_uncached(
+            data_root, target_date=target_date, **options
+        )
     from src.engine.scalping import compact_auxiliary_paired_replay as compact
     import fcntl
+
     data_root = Path(data_root)
     paths = {}
-    for path in (data_root / 'ai_decision_payloads').glob('*.jsonl*'):
-        match = re.search(r'(\d{4}-\d{2}-\d{2})\.jsonl', path.name)
-        if match and max('2026-09-29', minimum_source_date) <= match[1] <= target_date:
+    for path in (data_root / "ai_decision_payloads").glob("*.jsonl*"):
+        match = re.search(r"(\d{4}-\d{2}-\d{2})\.jsonl", path.name)
+        if match and max("2026-09-29", minimum_source_date) <= match[1] <= target_date:
             paths[match[1]] = path
     from src.engine.scalping.postclose_entry_validation import FrozenRows
+
     rows, counts, partitions, prices, receipts = FrozenRows(), Counter(), [], [], []
     capture_totals = Counter()
-    kernels = {name: hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
-               for name in ('ai_action_outcome_calibration.py', 'ai_decision_quality.py',
-                            'entry_strategy_policy.py', 'entry_setup_evidence.py',
-                            'entry_candle_context.py', 'ai_decision_trace.py',
-                            'microstructure_reaction_context.py', 'postclose_entry_validation.py',
-                            'entry_setup_source_repair.py', 'entry_admission_recipe.py')}
+    kernels = {
+        name: hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
+        for name in (
+            "ai_action_outcome_calibration.py",
+            "ai_decision_quality.py",
+            "entry_strategy_policy.py",
+            "entry_setup_evidence.py",
+            "entry_candle_context.py",
+            "ai_decision_trace.py",
+            "microstructure_reaction_context.py",
+            "postclose_entry_validation.py",
+            "entry_setup_source_repair.py",
+            "entry_admission_recipe.py",
+        )
+    }
     for day in sorted(paths):
+
         def dependencies():
             result = {}
-            names = [('ai_decision_payloads', f'ai_decision_payloads_{day}.jsonl'),
-                     ('ai_decision_trace', f'ai_decision_trace_{day}.jsonl'),
-                     ('pipeline_events', f'pipeline_events_{day}.jsonl'),
-                     ('report/observation_source_quality_audit', f'observation_source_quality_audit_{day}.json'),
-                     ('report/ai_decision_outcome_labels', f'ai_decision_outcome_labels_{day}.json'),
-                     ('runtime', f'ai_decision_quality_control_{day}.json'),
-                     ('report/micro_reversion_economic_reference', f'micro_reversion_economic_reference_{day}.json'),
-                     ('report/machine_completed_price_source', f'machine_completed_price_source_{day}.json')]
+            names = [
+                ("ai_decision_payloads", f"ai_decision_payloads_{day}.jsonl"),
+                ("ai_decision_trace", f"ai_decision_trace_{day}.jsonl"),
+                ("pipeline_events", f"pipeline_events_{day}.jsonl"),
+                (
+                    "report/observation_source_quality_audit",
+                    f"observation_source_quality_audit_{day}.json",
+                ),
+                (
+                    "report/ai_decision_outcome_labels",
+                    f"ai_decision_outcome_labels_{day}.json",
+                ),
+                ("runtime", f"ai_decision_quality_control_{day}.json"),
+                (
+                    "report/micro_reversion_economic_reference",
+                    f"micro_reversion_economic_reference_{day}.json",
+                ),
+                (
+                    "report/machine_completed_price_source",
+                    f"machine_completed_price_source_{day}.json",
+                ),
+            ]
             for directory, name in names:
                 p = existing_or_gzip_path(data_root / directory / name)
-                result[directory] = (list((p.stat().st_size, p.stat().st_mtime_ns, p.stat().st_ino, p.stat().st_ctime_ns)) if p and p.is_file() else None)
-            economic = _load_json(data_root / 'report/micro_reversion_economic_reference' / f'micro_reversion_economic_reference_{day}.json')
-            for source in economic.get('source_artifacts') or []:
-                p = Path(str(source.get('resolved_path') or ''))
-                result[str(p)] = [p.stat().st_size, p.stat().st_mtime_ns, p.stat().st_ctime_ns] if p.is_file() else None
+                result[directory] = (
+                    list(
+                        (
+                            p.stat().st_size,
+                            p.stat().st_mtime_ns,
+                            p.stat().st_ino,
+                            p.stat().st_ctime_ns,
+                        )
+                    )
+                    if p and p.is_file()
+                    else None
+                )
+            economic = _load_json(
+                data_root
+                / "report/micro_reversion_economic_reference"
+                / f"micro_reversion_economic_reference_{day}.json"
+            )
+            for source in economic.get("source_artifacts") or []:
+                p = Path(str(source.get("resolved_path") or ""))
+                result[str(p)] = (
+                    [p.stat().st_size, p.stat().st_mtime_ns, p.stat().st_ctime_ns]
+                    if p.is_file()
+                    else None
+                )
             return result
-        cache = data_root / 'report/machine_observation_projection' / f'machine_observation_projection_{day}_{int(materialized_labels_only)}_{int(independent_machine)}.json'
+
+        cache = (
+            data_root
+            / "report/machine_observation_projection"
+            / f"machine_observation_projection_{day}_{int(materialized_labels_only)}_{int(independent_machine)}.json"
+        )
         cache.parent.mkdir(parents=True, exist_ok=True)
-        with cache.with_suffix('.lock').open('a') as lock:
+        with cache.with_suffix(".lock").open("a") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
             before = dependencies()
             value = _read_machine_projection(cache, kernels=kernels)
-            price_as_of = (completed_price_as_of.isoformat() if completed_price_as_of else None) if day == target_date else None
+            price_as_of = (
+                (completed_price_as_of.isoformat() if completed_price_as_of else None)
+                if day == target_date
+                else None
+            )
             if day < target_date and value:
-                price_as_of = (value.get('contract') or {}).get('completed_price_as_of')
-            contract = dict(schema='machine_observation_projection_v1', source_date=day,
-                dependencies=before, kernels=kernels,
-                completed_price_as_of=price_as_of)
-            reused = bool(value) and value.get('contract') == contract
+                price_as_of = (value.get("contract") or {}).get("completed_price_as_of")
+            contract = dict(
+                schema="machine_observation_projection_v1",
+                source_date=day,
+                dependencies=before,
+                kernels=kernels,
+                completed_price_as_of=price_as_of,
+            )
+            reused = bool(value) and value.get("contract") == contract
             if not reused:
-                daily_rows, census = _load_machine_observation_rows_uncached(data_root,
-                    target_date=day, **{**options, 'minimum_source_date': day,
-                        'completed_price_fetcher': completed_price_fetcher if day == target_date else None,
-                        'completed_price_as_of': completed_price_as_of if day == target_date else None})
+                daily_rows, census = _load_machine_observation_rows_uncached(
+                    data_root,
+                    target_date=day,
+                    **{
+                        **options,
+                        "minimum_source_date": day,
+                        "completed_price_fetcher": (
+                            completed_price_fetcher if day == target_date else None
+                        ),
+                        "completed_price_as_of": (
+                            completed_price_as_of if day == target_date else None
+                        ),
+                    },
+                )
                 after = dependencies()
-                if any(before[key] != after[key] for key in before if key != 'report/machine_completed_price_source'):
-                    raise ValueError('machine_projection_source_changed:' + day)
-                contract['dependencies'] = after
-                value = compact.sealed(dict(contract=contract, rows=daily_rows, census=census,
-                    runtime_effect=False, actual_order_submitted=False, allowed_runtime_apply=False))
+                if any(
+                    before[key] != after[key]
+                    for key in before
+                    if key != "report/machine_completed_price_source"
+                ):
+                    raise ValueError("machine_projection_source_changed:" + day)
+                contract["dependencies"] = after
+                value = compact.sealed(
+                    dict(
+                        contract=contract,
+                        rows=daily_rows,
+                        census=census,
+                        runtime_effect=False,
+                        actual_order_submitted=False,
+                        allowed_runtime_apply=False,
+                    )
+                )
                 _write_machine_projection(cache, value)
-            rows.extend(value['rows'])
-            census = value['census']
-            counts.update({k:v for k,v in census.items() if isinstance(v, int)})
-            capture_totals.update({k:v for k,v in (census.get('microstructure_capture_population') or {}).items() if isinstance(v, int)})
-            partitions.extend((census.get('microstructure_capture_population') or {}).get('partitions') or [])
-            prices.extend(census.get('completed_price_cache_receipts') or [])
-            receipts.append(dict(source_date=day, artifact_content_sha256=value['artifact_content_sha256'],
-                cache_reused=reused, raw_reloaded=not reused))
+            rows.extend(value["rows"])
+            census = value["census"]
+            counts.update({k: v for k, v in census.items() if isinstance(v, int)})
+            capture_totals.update(
+                {
+                    k: v
+                    for k, v in (
+                        census.get("microstructure_capture_population") or {}
+                    ).items()
+                    if isinstance(v, int)
+                }
+            )
+            partitions.extend(
+                (census.get("microstructure_capture_population") or {}).get(
+                    "partitions"
+                )
+                or []
+            )
+            prices.extend(census.get("completed_price_cache_receipts") or [])
+            receipts.append(
+                dict(
+                    source_date=day,
+                    artifact_content_sha256=value["artifact_content_sha256"],
+                    cache_reused=reused,
+                    raw_reloaded=not reused,
+                )
+            )
             # Cumulative rows live in the existing disk-backed sequence. Release
             # the daily rich payload before opening the next source partition.
             del value
             daily_rows = None
-    population = {key: capture_totals[key] for key in
-                  ('verified_capture_count', 'unique_verified_capture_count', 'duplicate_capture_collapsed_count')}
-    population.update(partitions=partitions, economic_exclusions_do_not_erase_capture_population=True)
-    return rows, {**dict(counts), 'microstructure_capture_population': population,
-                  'completed_price_cache_receipts': prices, 'frozen_projection_receipts': receipts}
+    population = {
+        key: capture_totals[key]
+        for key in (
+            "verified_capture_count",
+            "unique_verified_capture_count",
+            "duplicate_capture_collapsed_count",
+        )
+    }
+    population.update(
+        partitions=partitions, economic_exclusions_do_not_erase_capture_population=True
+    )
+    return rows, {
+        **dict(counts),
+        "microstructure_capture_population": population,
+        "completed_price_cache_receipts": prices,
+        "frozen_projection_receipts": receipts,
+    }
 
 
 def _machine_ai_natural_source_receipt(data_root: Path, target_date: str) -> dict:
@@ -5614,14 +6660,20 @@ def _machine_ai_natural_source_receipt(data_root: Path, target_date: str) -> dic
 
 
 def _await_machine_ai_natural_source_receipt(
-    data_root: Path, target_date: str, *, max_wait_sec: float = 300,
+    data_root: Path,
+    target_date: str,
+    *,
+    max_wait_sec: float = 300,
     now: datetime | None = None,
 ) -> dict:
     """Bind the current-day machine report after the parallel preflight writes."""
     receipt = _machine_ai_natural_source_receipt(data_root, target_date)
     now = now or datetime.now(KST)
-    if (receipt.get("status") != "missing" or target_date != now.date().isoformat()
-        or (now.hour, now.minute) < (20, 1)):
+    if (
+        receipt.get("status") != "missing"
+        or target_date != now.date().isoformat()
+        or (now.hour, now.minute) < (20, 1)
+    ):
         return receipt
     deadline = time.monotonic() + max(0.0, max_wait_sec)
     while receipt.get("status") == "missing" and time.monotonic() < deadline:
@@ -5630,16 +6682,22 @@ def _await_machine_ai_natural_source_receipt(
     return receipt
 
 
-def _machine_evaluation_key(row: Mapping[str, Any], *, allow_attempt_fallback: bool = False) -> str:
+def _machine_evaluation_key(
+    row: Mapping[str, Any], *, allow_attempt_fallback: bool = False
+) -> str:
     if row.get("watch_origin") == "MAIN_FIXED_WATCH":
         fixed_values = (
             row.get("watch_admission_id"),
             row.get("evaluation_attempt_id") or row.get("decision_trace_id"),
-            row.get("stock_code"), row.get("effective_venue"),
-            row.get("session_bucket"), row.get("bundle_sha256"),
+            row.get("stock_code"),
+            row.get("effective_venue"),
+            row.get("session_bucket"),
+            row.get("bundle_sha256"),
         )
         if all(str(value or "").strip() for value in fixed_values):
-            return "machine-fixed:" + "|".join(str(value).strip() for value in fixed_values)
+            return "machine-fixed:" + "|".join(
+                str(value).strip() for value in fixed_values
+            )
         return ""
     values = (
         row.get("scanner_promotion_id"),
@@ -5649,8 +6707,13 @@ def _machine_evaluation_key(row: Mapping[str, Any], *, allow_attempt_fallback: b
         row.get("session_bucket"),
         row.get("bundle_sha256"),
     )
-    if allow_attempt_fallback and not str(values[0] or '').strip() and all(str(v or '').strip() for v in values[1:]) and row.get('source_date'):
-        return 'machine-attempt:' + _canonical_sha256([row['source_date'], *values[1:]])
+    if (
+        allow_attempt_fallback
+        and not str(values[0] or "").strip()
+        and all(str(v or "").strip() for v in values[1:])
+        and row.get("source_date")
+    ):
+        return "machine-attempt:" + _canonical_sha256([row["source_date"], *values[1:]])
     if not all(str(value or "").strip() for value in values):
         return ""
     return "machine:" + "|".join(str(value).strip() for value in values)
@@ -5658,20 +6721,38 @@ def _machine_evaluation_key(row: Mapping[str, Any], *, allow_attempt_fallback: b
 
 def _machine_learning_fingerprint(row: Mapping[str, Any]) -> str:
     """Compare decision/outcome bodies, not duplicate arrival metadata."""
-    return _canonical_sha256({key: row.get(key) for key in (
-        "decision_trace_id", "source_date", "machine_action", "machine_reason",
-        "setup_evidence", "comparison", "entry_quality_path",
-        "machine_applied_thresholds", "machine_core_comparison",
-        "machine_hierarchy_selection", "machine_liquidity_inputs",
-        "ai_and_final_guard", "outcome_horizon_metrics", "microstructure_evaluation_binding",
-    )})
+    return _canonical_sha256(
+        {
+            key: row.get(key)
+            for key in (
+                "decision_trace_id",
+                "source_date",
+                "machine_action",
+                "machine_reason",
+                "setup_evidence",
+                "comparison",
+                "entry_quality_path",
+                "machine_applied_thresholds",
+                "machine_core_comparison",
+                "machine_hierarchy_selection",
+                "machine_liquidity_inputs",
+                "ai_and_final_guard",
+                "outcome_horizon_metrics",
+                "microstructure_evaluation_binding",
+            )
+        }
+    )
 
 
-def _machine_conflicting_evaluation_keys(rows: list[dict], *, allow_attempt_fallback: bool = False) -> set[str]:
+def _machine_conflicting_evaluation_keys(
+    rows: list[dict], *, allow_attempt_fallback: bool = False
+) -> set[str]:
     """Locate whole conflicting attempts before either arm contributes EV."""
     seen, conflicts = {}, set()
     for row in rows:
-        key = _machine_evaluation_key(row, allow_attempt_fallback=allow_attempt_fallback)
+        key = _machine_evaluation_key(
+            row, allow_attempt_fallback=allow_attempt_fallback
+        )
         if not key:
             continue
         fingerprint = _machine_learning_fingerprint(row)
@@ -5736,7 +6817,9 @@ def _compact_history_receipt(
         {
             str(row.get("source_date") or "")
             for row in rows
-            if _refresh_floor(target_date) <= str(row.get("source_date") or "") < target_date
+            if _refresh_floor(target_date)
+            <= str(row.get("source_date") or "")
+            < target_date
         }
     )[-19:]
     for day in dates:
@@ -5998,14 +7081,23 @@ def build_machine_decision_case_table(
                     )
                     if policy_learning_excluded:
                         compact_screen_outcomes[
-                            "|".join((
-                                "CONFLICTING_EXACT_ATTEMPT" if conflict_excluded
-                                else "TERMINAL_LINEAGE_EXCLUDED", label
-                            ))
+                            "|".join(
+                                (
+                                    (
+                                        "CONFLICTING_EXACT_ATTEMPT"
+                                        if conflict_excluded
+                                        else "TERMINAL_LINEAGE_EXCLUDED"
+                                    ),
+                                    label,
+                                )
+                            )
                         ] += 1
                         compact_exclusions[
-                            "conflicting_exact_attempt" if conflict_excluded
-                            else "terminal_lineage_unresolved"
+                            (
+                                "conflicting_exact_attempt"
+                                if conflict_excluded
+                                else "terminal_lineage_unresolved"
+                            )
                         ] += 1
                     elif not partition_allowed:
                         compact_screen_outcomes[
@@ -6050,10 +7142,14 @@ def build_machine_decision_case_table(
                         elif compact_verdict == "INSUFFICIENT":
                             compact_exclusions["source_gap_router_verdict"] += 1
                         elif compact_verdict == "CAUTION" and (
-                            ai_guard.get("followup_disposition") != "ai_caution_bounded_recheck"
-                            or ai_guard.get("observed_actual_order_submitted") is not False
+                            ai_guard.get("followup_disposition")
+                            != "ai_caution_bounded_recheck"
+                            or ai_guard.get("observed_actual_order_submitted")
+                            is not False
                         ):
-                            compact_exclusions["bounded_recheck_nonexposure_unproven"] += 1
+                            compact_exclusions[
+                                "bounded_recheck_nonexposure_unproven"
+                            ] += 1
                         elif path.get("status") != "evaluable":
                             compact_exclusions["outcome_not_evaluable"] += 1
                         elif label == "CENSORED_OR_SOURCE_GAP":
@@ -6101,7 +7197,10 @@ def build_machine_decision_case_table(
                 "machine_core_comparison": row.get("machine_core_comparison"),
                 "machine_applied_thresholds": row.get("machine_applied_thresholds"),
                 "machine_liquidity_inputs": row.get("machine_liquidity_inputs"),
-                "microstructure_evaluation_binding": row.get("microstructure_evaluation_binding") or {},
+                "microstructure_evaluation_binding": row.get(
+                    "microstructure_evaluation_binding"
+                )
+                or {},
                 "hierarchy_selection": row.get("machine_hierarchy_selection"),
                 "entry_quality_label": label,
                 "entry_quality_path": path,
@@ -6140,9 +7239,13 @@ def build_machine_decision_case_table(
                 ),
                 "policy_learning_excluded": policy_learning_excluded,
                 "policy_learning_exclusion_reason": (
-                    "conflicting_exact_attempt" if conflict_excluded
-                    else "terminal_lineage_unresolved" if policy_learning_excluded
-                    else None
+                    "conflicting_exact_attempt"
+                    if conflict_excluded
+                    else (
+                        "terminal_lineage_unresolved"
+                        if policy_learning_excluded
+                        else None
+                    )
                 ),
                 "runtime_effect": False,
                 "allowed_runtime_apply": False,
@@ -6156,7 +7259,9 @@ def build_machine_decision_case_table(
     )
     receipt_target_date = str(source_receipt.get("target_date") or "")
     terminal_gate_required = receipt_target_date >= "2026-09-15"
-    from src.engine.scalping.mechanistic_entry_runtime_policy import compact_terminal_gate_allowed
+    from src.engine.scalping.mechanistic_entry_runtime_policy import (
+        compact_terminal_gate_allowed,
+    )
 
     terminal_gate_allowed = compact_terminal_gate_allowed(source_receipt)
     compact_tuning_input_allowed = bool(
@@ -6208,10 +7313,13 @@ def build_machine_decision_case_table(
             or row.get("compact_partition_eligible") is not True
             or not semantic_valid
             or verdict not in {"PASS", "VETO", "CAUTION"}
-            or (verdict == "CAUTION" and (
-                ai_guard.get("followup_disposition") != "ai_caution_bounded_recheck"
-                or ai_guard.get("observed_actual_order_submitted") is not False
-            ))
+            or (
+                verdict == "CAUTION"
+                and (
+                    ai_guard.get("followup_disposition") != "ai_caution_bounded_recheck"
+                    or ai_guard.get("observed_actual_order_submitted") is not False
+                )
+            )
             or path.get("status") != "evaluable"
             or _number(path.get("conservative_execution_cost_pct")) is None
             or path.get("first_hit") not in {"net_target_first", "exact_stop_first"}
@@ -6247,7 +7355,11 @@ def build_machine_decision_case_table(
             and row.get("entry_quality_label") == "CLEAN_FAST_PROFIT"
         ):
             missed_profit_values.append(value)
-        if verdict == "CAUTION" and value > 0 and row.get("entry_quality_label") == "CLEAN_FAST_PROFIT":
+        if (
+            verdict == "CAUTION"
+            and value > 0
+            and row.get("entry_quality_label") == "CLEAN_FAST_PROFIT"
+        ):
             missed_caution_values.append(value)
     economic_eligible_count = sum(economic_outcomes.values())
     evaluable_veto_count = sum(
@@ -6346,7 +7458,9 @@ def build_machine_decision_case_table(
             "select_opportunity_preservation_variant": ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION,
             "select_material_risk_specificity_variant": ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION,
         }.get(compact_tuning_direction, incumbent_compact_version)
-    from src.engine.scalping.microstructure_reaction_context import summarize_machine_microstructure_evaluation
+    from src.engine.scalping.microstructure_reaction_context import (
+        summarize_machine_microstructure_evaluation,
+    )
 
     return {
         "schema": MACHINE_DECISION_CASE_TABLE_SCHEMA,
@@ -6354,7 +7468,9 @@ def build_machine_decision_case_table(
             cases,
             source_receipt={
                 **source_receipt,
-                "machine_threshold_tuning_input_allowed": machine_tuning_allowed and conflicting_attempt_identity_count == len(conflicting_evaluation_keys),
+                "machine_threshold_tuning_input_allowed": machine_tuning_allowed
+                and conflicting_attempt_identity_count
+                == len(conflicting_evaluation_keys),
                 "tuning_input_allowed": compact_tuning_input_allowed,
             },
             capture_census=capture_census,
@@ -6576,7 +7692,8 @@ def validate_hierarchy_candidate(
         "hierarchy_full_population_cost_adjusted_10bp_paired_v3"
     )
     if (
-        _as_dict(candidate.get("threshold_policy")).get("version") == MECHANISTIC_FULL_POPULATION_POLICY_VERSION
+        _as_dict(candidate.get("threshold_policy")).get("version")
+        == MECHANISTIC_FULL_POPULATION_POLICY_VERSION
         and not full_population
     ):
         return ["candidate_full_population_evaluation_contract_missing"]
@@ -6587,12 +7704,16 @@ def validate_hierarchy_candidate(
             not mechanistic_scope_supported(*cohort)
             or contract.get("cohort", ["KRX", "KRX_REGULAR"]) != list(cohort)
             or validate_mechanistic_entry_threshold_policy(parent)
-            or candidate.get("incumbent_machine_policy_sha256") != _canonical_sha256(parent)
+            or candidate.get("incumbent_machine_policy_sha256")
+            != _canonical_sha256(parent)
             or contract.get("schema") != "machine_common_refinement_population_v1"
             or contract.get("input_row_disposition_complete") is not True
-            or candidate.get("population_source_contract_sha256") != _canonical_sha256(contract)
-            or _as_dict(candidate.get("threshold_policy")).get("version") != MECHANISTIC_FULL_POPULATION_POLICY_VERSION
-            or _as_dict(candidate.get("threshold_policy")).get("thresholds") != parent.get("thresholds")
+            or candidate.get("population_source_contract_sha256")
+            != _canonical_sha256(contract)
+            or _as_dict(candidate.get("threshold_policy")).get("version")
+            != MECHANISTIC_FULL_POPULATION_POLICY_VERSION
+            or _as_dict(candidate.get("threshold_policy")).get("thresholds")
+            != parent.get("thresholds")
         ):
             return ["candidate_full_population_source_or_parent_invalid"]
     errors = validate_mechanistic_entry_threshold_policy(
@@ -6667,11 +7788,17 @@ def validate_hierarchy_candidate(
     ]
     for metrics in reviewed_metrics:
         m = _as_dict(metrics)
-        ev, _ = machine_selection_economics(m, _as_dict(m.get("paired_population")), full_population=full_population)
+        ev, _ = machine_selection_economics(
+            m, _as_dict(m.get("paired_population")), full_population=full_population
+        )
         if (
             ev is None
-            or (ev <= 0 if full_population else ev
-                < HIERARCHICAL_ENTRY_QUALITY_GATE["minimum_cost_adjusted_ev_pct"] - 1e-9)
+            or (
+                ev <= 0
+                if full_population
+                else ev
+                < HIERARCHICAL_ENTRY_QUALITY_GATE["minimum_cost_adjusted_ev_pct"] - 1e-9
+            )
             or (_number(m.get("row_count")) or 0) < 3
             or (_number(m.get("independent_source_date_count")) or 0) < 2
             or m.get("terminal_proxy_evaluable_count") != m.get("row_count")
@@ -6684,27 +7811,40 @@ def validate_hierarchy_candidate(
     if full_population:
         for phase, metrics_list in (
             ("holdout", reviewed_metrics),
-            ("calibration", [candidate.get("calibration")] + [
-                e.get("calibration") for e in extension["evaluations"]
-                if isinstance(e, dict) and e.get("status") == "qualified"
-            ]),
+            (
+                "calibration",
+                [candidate.get("calibration")]
+                + [
+                    e.get("calibration")
+                    for e in extension["evaluations"]
+                    if isinstance(e, dict) and e.get("status") == "qualified"
+                ],
+            ),
         ):
             for raw in metrics_list:
                 m = _as_dict(raw)
                 paired = _as_dict(m.get("paired_population"))
                 ev, delta = machine_selection_economics(m, paired, full_population=True)
-                minimum_rows, minimum_dates = (5, 3) if phase == "calibration" else (3, 2)
+                minimum_rows, minimum_dates = (
+                    (5, 3) if phase == "calibration" else (3, 2)
+                )
                 if (
-                    ev is None or ev <= 0 or delta is None or delta <= 0
+                    ev is None
+                    or ev <= 0
+                    or delta is None
+                    or delta <= 0
                     or (_number(m.get("row_count")) or 0) < minimum_rows
-                    or (_number(m.get("independent_source_date_count")) or 0) < minimum_dates
+                    or (_number(m.get("independent_source_date_count")) or 0)
+                    < minimum_dates
                     or m.get("terminal_proxy_evaluable_count") != m.get("row_count")
                     or m.get("unusable_label_count") != 0
                     or type(m.get("catastrophic_terminal_proxy_count")) is not int
                     or m.get("catastrophic_terminal_proxy_count") != 0
                     or paired.get("paired_terminal_contract_complete") is not True
-                    or paired.get("terminal_evaluable_count") != paired.get("population_count")
-                    or paired.get("paired_comparable_count") != paired.get("population_count")
+                    or paired.get("terminal_evaluable_count")
+                    != paired.get("population_count")
+                    or paired.get("paired_comparable_count")
+                    != paired.get("population_count")
                     or paired.get("operating_economic_promotion_pass") is not True
                     or paired.get("downstream_operating_evidence_complete") is not True
                     or (_number(paired.get("daily_net_profit_delta_krw")) or 0) <= 0
@@ -6734,9 +7874,13 @@ def build_mechanistic_hierarchy_candidate(
     )
     full_population = population_source_contract is not None
     frozen = (population_source_contract or {}).get("frozen_hierarchy") or {}
-    frozen_valid = bool(frozen.get("incumbent_sha256") == _canonical_sha256(parent)
-                        and frozen.get("rules") and isinstance(frozen.get("frozen_date"), str)
-                        and frozen.get("economic_kernel_sha256") == (population_source_contract or {}).get("economic_kernel_sha256"))
+    frozen_valid = bool(
+        frozen.get("incumbent_sha256") == _canonical_sha256(parent)
+        and frozen.get("rules")
+        and isinstance(frozen.get("frozen_date"), str)
+        and frozen.get("economic_kernel_sha256")
+        == (population_source_contract or {}).get("economic_kernel_sha256")
+    )
     frozen_rules = {r["id"]: r for r in frozen.get("rules", [])} if frozen_valid else {}
     if not full_population:
         parent.pop("hierarchy", None)
@@ -6752,13 +7896,21 @@ def build_mechanistic_hierarchy_candidate(
         raise ValueError("hierarchy_parent_invalid")
     if full_population and (
         not mechanistic_scope_supported(*cohort)
-        or population_source_contract.get("cohort", ["KRX", "KRX_REGULAR"]) != list(cohort)
-        or population_source_contract.get("schema") != "machine_common_refinement_population_v1"
+        or population_source_contract.get("cohort", ["KRX", "KRX_REGULAR"])
+        != list(cohort)
+        or population_source_contract.get("schema")
+        != "machine_common_refinement_population_v1"
         or population_source_contract.get("input_row_disposition_complete") is not True
-        or population_source_contract.get("accepted_rows_sha256") != _canonical_sha256([
-            {"decision_trace_id": r["decision_trace_id"], "fingerprint": r["fingerprint"]}
-            for r in source_rows
-        ])
+        or population_source_contract.get("accepted_rows_sha256")
+        != _canonical_sha256(
+            [
+                {
+                    "decision_trace_id": r["decision_trace_id"],
+                    "fingerprint": r["fingerprint"],
+                }
+                for r in source_rows
+            ]
+        )
     ):
         raise ValueError("hierarchy_full_population_source_contract_invalid")
     rows, excluded, seen, last_anchor = [], Counter(), set(), {}
@@ -6771,9 +7923,7 @@ def build_mechanistic_hierarchy_candidate(
             excluded["different_cohort"] += 1
             continue
         if (
-            not refresh_floor
-            <= str(original.get("source_date") or "")
-            <= target_date
+            not refresh_floor <= str(original.get("source_date") or "") <= target_date
             or original.get("entry_group_contract_valid") is not True
             or original.get("mechanistic_flow_observation_contract_valid") is not True
             or original.get("entry_quality_contract_valid") is not True
@@ -6854,10 +8004,17 @@ def build_mechanistic_hierarchy_candidate(
             # receive it, creating a synthetic opportunity recovery.
             row["comparison"] = {
                 **original["comparison"],
-                "incumbent_machine_action": mechanistic_entry_policy_decision(row["setup_evidence"], policy=parent).get("action"),
-                "control_action": "BUY" if mechanistic_entry_policy_decision(
+                "incumbent_machine_action": mechanistic_entry_policy_decision(
                     row["setup_evidence"], policy=parent
-                )["action"] == "ENTER_NOW" else "WAIT",
+                ).get("action"),
+                "control_action": (
+                    "BUY"
+                    if mechanistic_entry_policy_decision(
+                        row["setup_evidence"], policy=parent
+                    )["action"]
+                    == "ENTER_NOW"
+                    else "WAIT"
+                ),
                 "control_role": "same_population_current_machine_incumbent",
             }
         rows.append(row)
@@ -6911,12 +8068,17 @@ def build_mechanistic_hierarchy_candidate(
         )
         if full_population and population is not None:
             result["paired_population"] = _mechanistic_paired_population_metrics(
-                population, selected_rows, candidate_policy=policy_for(rules or []))
-            result["catastrophic_terminal_proxy_count"] = _mechanistic_policy_metrics(selected_rows)["catastrophic_terminal_proxy_count"]
+                population, selected_rows, candidate_policy=policy_for(rules or [])
+            )
+            result["catastrophic_terminal_proxy_count"] = _mechanistic_policy_metrics(
+                selected_rows
+            )["catastrophic_terminal_proxy_count"]
         return result
 
     def qualifies(m, *, validation=False):
-        ev, delta = machine_selection_economics(m, _as_dict(m.get("paired_population")), full_population=full_population)
+        ev, delta = machine_selection_economics(
+            m, _as_dict(m.get("paired_population")), full_population=full_population
+        )
         return (
             m["row_count"]
             >= (
@@ -6934,28 +8096,54 @@ def build_mechanistic_hierarchy_candidate(
             and m["terminal_proxy_evaluable_count"] == m["row_count"]
             and ev is not None
             and ev
-            >= HIERARCHICAL_ENTRY_QUALITY_GATE[
-                "minimum_cost_adjusted_ev_pct"
-            ]
-            - 1e-9
+            >= HIERARCHICAL_ENTRY_QUALITY_GATE["minimum_cost_adjusted_ev_pct"] - 1e-9
             and m["clean_fast_count"] > m["dirty_profit_count"] + m["adverse_count"]
-            and (not full_population or (
-                delta is not None and delta > 0
-                and _as_dict(m.get("paired_population")).get("paired_terminal_contract_complete") is True
-                and _as_dict(m.get("paired_population")).get("terminal_evaluable_count") == _as_dict(m.get("paired_population")).get("population_count")
-                and m.get("catastrophic_terminal_proxy_count") == 0
-                and _as_dict(m.get("paired_population")).get("operating_economic_promotion_pass") is True
-                and _as_dict(m.get("paired_population")).get("downstream_operating_evidence_complete") is True
-            ))
+            and (
+                not full_population
+                or (
+                    delta is not None
+                    and delta > 0
+                    and _as_dict(m.get("paired_population")).get(
+                        "paired_terminal_contract_complete"
+                    )
+                    is True
+                    and _as_dict(m.get("paired_population")).get(
+                        "terminal_evaluable_count"
+                    )
+                    == _as_dict(m.get("paired_population")).get("population_count")
+                    and m.get("catastrophic_terminal_proxy_count") == 0
+                    and _as_dict(m.get("paired_population")).get(
+                        "operating_economic_promotion_pass"
+                    )
+                    is True
+                    and _as_dict(m.get("paired_population")).get(
+                        "downstream_operating_evidence_complete"
+                    )
+                    is True
+                )
+            )
         )
 
     def rank(m):
         # Predeclared ranking; holdout is never used for parameter selection.
         if full_population:
             return (
-                _number(_as_dict(m.get("paired_population")).get("daily_net_profit_delta_krw")) or -float("inf"),
-                _number(_as_dict(_as_dict(m.get("paired_population")).get("operating_economic_comparison")).get("robust_paired_delta_ev_lower_bound_pct")) or -float("inf"),
-                m["cost_adjusted_terminal_proxy_ev_pct"] or -float("inf"), m["row_count"],
+                _number(
+                    _as_dict(m.get("paired_population")).get(
+                        "daily_net_profit_delta_krw"
+                    )
+                )
+                or -float("inf"),
+                _number(
+                    _as_dict(
+                        _as_dict(m.get("paired_population")).get(
+                            "operating_economic_comparison"
+                        )
+                    ).get("robust_paired_delta_ev_lower_bound_pct")
+                )
+                or -float("inf"),
+                m["cost_adjusted_terminal_proxy_ev_pct"] or -float("inf"),
+                m["row_count"],
             )
         return (
             m["clean_fast_count"] - m["dirty_profit_count"] - m["adverse_count"],
@@ -7043,7 +8231,9 @@ def build_mechanistic_hierarchy_candidate(
         best, train_metrics = max(passing, key=lambda pair: rank(pair[1]))
         best = json.loads(json.dumps(best))
         # Fit symbol residuals on train only, then validate the entire policy.
-        for symbol in ([] if frozen_valid else sorted({r["stock_code"] for r in scoped})):
+        for symbol in (
+            [] if frozen_valid else sorted({r["stock_code"] for r in scoped})
+        ):
             symbol_rows = [r for r in scoped if r["stock_code"] == symbol]
             n = len(symbol_rows)
             if (
@@ -7057,7 +8247,9 @@ def build_mechanistic_hierarchy_candidate(
                 ]
             ):
                 continue
-            best_metric = metrics(selected(symbol_rows, [best]), population=symbol_rows, rules=[best])
+            best_metric = metrics(
+                selected(symbol_rows, [best]), population=symbol_rows, rules=[best]
+            )
             fitted = None
             for key, values in MECHANISTIC_COMMON_FEATURE_GRID.items():
                 for v in values:
@@ -7067,7 +8259,11 @@ def build_mechanistic_hierarchy_candidate(
                     rule = {**best, "symbols": {**best["symbols"], symbol: residual}}
                     if validate_mechanistic_entry_threshold_policy(policy_for([rule])):
                         continue
-                    m = metrics(selected(symbol_rows, [rule]), population=symbol_rows, rules=[rule])
+                    m = metrics(
+                        selected(symbol_rows, [rule]),
+                        population=symbol_rows,
+                        rules=[rule],
+                    )
                     if qualifies(m) and rank(m) > rank(best_metric):
                         fitted, best_metric = residual, m
             if fitted is not None:
@@ -7081,7 +8277,9 @@ def build_mechanistic_hierarchy_candidate(
             )
             and family in r["mechanistic_flow_observation"].get("matched_families", [])
         ]
-        validation = metrics(selected(validation_rows, [best]), population=validation_rows, rules=[best])
+        validation = metrics(
+            selected(validation_rows, [best]), population=validation_rows, rules=[best]
+        )
         baseline = metrics(
             [
                 r
@@ -7094,28 +8292,41 @@ def build_mechanistic_hierarchy_candidate(
         )
         # No per-group fallback after a failed holdout. Rejected rule remains
         # evidence only; the existing live parent is retained by the publisher.
-        passed = qualifies(validation, validation=True) and (full_population or (
-            validation["clean_fast_count"]
-            - validation["dirty_profit_count"]
-            - validation["adverse_count"]
-            > baseline["clean_fast_count"]
-            - baseline["dirty_profit_count"]
-            - baseline["adverse_count"]
-        ))
+        passed = qualifies(validation, validation=True) and (
+            full_population
+            or (
+                validation["clean_fast_count"]
+                - validation["dirty_profit_count"]
+                - validation["adverse_count"]
+                > baseline["clean_fast_count"]
+                - baseline["dirty_profit_count"]
+                - baseline["adverse_count"]
+            )
+        )
         residual_checks = {}
         for symbol in best["symbols"]:
             symbol_holdout = [r for r in validation_rows if r["stock_code"] == symbol]
-            m = metrics(selected(symbol_holdout, [best]), population=symbol_holdout, rules=[best])
+            m = metrics(
+                selected(symbol_holdout, [best]),
+                population=symbol_holdout,
+                rules=[best],
+            )
             without = {
                 **best,
                 "symbols": {k: v for k, v in best["symbols"].items() if k != symbol},
             }
-            baseline_symbol = metrics(selected(symbol_holdout, [without]), population=symbol_holdout, rules=[without])
+            baseline_symbol = metrics(
+                selected(symbol_holdout, [without]),
+                population=symbol_holdout,
+                rules=[without],
+            )
             residual_checks[symbol] = qualifies(m, validation=True) and rank(m) > rank(
                 baseline_symbol
             )
         passed = passed and all(residual_checks.values())
-        train_metrics = metrics(selected(scoped, [best]), population=scoped, rules=[best])
+        train_metrics = metrics(
+            selected(scoped, [best]), population=scoped, rules=[best]
+        )
         passed = passed and (not full_population or qualifies(train_metrics))
         # Same complete-window population and exit/cost contract in all arms.
         # This is a diagnostic, never a holdout-driven alternative selector.
@@ -7170,24 +8381,53 @@ def build_mechanistic_hierarchy_candidate(
         )
         if full_population or passed:
             accepted.append(best)
-    combined = metrics(selected(holdout, accepted), population=holdout, rules=accepted) if accepted else metrics([])
-    combined_train = metrics(selected(train, accepted), population=train, rules=accepted) if accepted else metrics([])
-    passes = (population_source_contract or {}).get("incumbent_scope_verified", True) is True and bool(accepted) and qualifies(combined, validation=True) and (
-        not full_population or (qualifies(combined_train) and all(e.get("status") == "qualified" for e in evaluations if "rule" in e))
+    combined = (
+        metrics(selected(holdout, accepted), population=holdout, rules=accepted)
+        if accepted
+        else metrics([])
+    )
+    combined_train = (
+        metrics(selected(train, accepted), population=train, rules=accepted)
+        if accepted
+        else metrics([])
+    )
+    passes = (
+        (population_source_contract or {}).get("incumbent_scope_verified", True) is True
+        and bool(accepted)
+        and qualifies(combined, validation=True)
+        and (
+            not full_population
+            or (
+                qualifies(combined_train)
+                and all(
+                    e.get("status") == "qualified" for e in evaluations if "rule" in e
+                )
+            )
+        )
     )
     forward_selection = frozen if frozen_valid else None
     if (population_source_contract or {}).get("forward_holdout_required") is True:
         if not frozen_valid and accepted and qualifies(combined_train):
-            forward_selection = {"incumbent_sha256": _canonical_sha256(parent),
-                "rules": accepted, "frozen_date": datetime.now(KST).date().isoformat(),
+            forward_selection = {
+                "incumbent_sha256": _canonical_sha256(parent),
+                "rules": accepted,
+                "frozen_date": datetime.now(KST).date().isoformat(),
                 "economic_contract": "machine_operating_daily_net_v1",
-                "economic_kernel_sha256": population_source_contract.get("economic_kernel_sha256")}
-        passes = passes and bool(frozen_valid and holdout_dates
-                                  and min(holdout_dates) > frozen["frozen_date"])
+                "economic_kernel_sha256": population_source_contract.get(
+                    "economic_kernel_sha256"
+                ),
+            }
+        passes = passes and bool(
+            frozen_valid
+            and holdout_dates
+            and min(holdout_dates) > frozen["frozen_date"]
+        )
     candidate = (
         {
             "threshold_policy": policy_for(accepted),
-            "operating_contract_version": "machine_operating_daily_net_v1" if full_population else None,
+            "operating_contract_version": (
+                "machine_operating_daily_net_v1" if full_population else None
+            ),
             "source_date": target_date,
             "cohort": list(cohort),
             "calibration_dates": sorted({r["source_date"] for r in train}),
@@ -7196,15 +8436,21 @@ def build_mechanistic_hierarchy_candidate(
             "evaluations_sha256": _canonical_sha256(evaluations),
             "holdout": combined,
             "calibration": combined_train,
-            **({
-                "evaluation_contract": (
-                    "hierarchy_full_population_cost_adjusted_10bp_paired_v3"
-                ),
-                "population_source_contract": population_source_contract,
-                "population_source_contract_sha256": _canonical_sha256(population_source_contract),
-                "incumbent_machine_policy": parent,
-                "incumbent_machine_policy_sha256": _canonical_sha256(parent),
-            } if full_population else {}),
+            **(
+                {
+                    "evaluation_contract": (
+                        "hierarchy_full_population_cost_adjusted_10bp_paired_v3"
+                    ),
+                    "population_source_contract": population_source_contract,
+                    "population_source_contract_sha256": _canonical_sha256(
+                        population_source_contract
+                    ),
+                    "incumbent_machine_policy": parent,
+                    "incumbent_machine_policy_sha256": _canonical_sha256(parent),
+                }
+                if full_population
+                else {}
+            ),
             "runtime_effect": False,
             "allowed_runtime_apply": False,
             "actual_order_submitted": False,
@@ -7237,13 +8483,30 @@ def build_mechanistic_hierarchy_candidate(
             ],
             "rows_whose_gross_target_cannot_clear_net_ev_floor": sum(
                 (
-                    (_number(r["comparison"].get("entry_path_target_pct")) or 0)
-                    - (_number(r["comparison"].get("conservative_execution_cost_pct")) or 0)
-                    <= 0.0
-                ) if full_population else (
-                    (_number(r["comparison"].get("entry_path_target_pct")) or 0)
-                    - (_number(r["comparison"].get("conservative_execution_cost_pct")) or 0)
-                    < HIERARCHICAL_ENTRY_QUALITY_GATE["minimum_cost_adjusted_ev_pct"] - 1e-9
+                    (
+                        (_number(r["comparison"].get("entry_path_target_pct")) or 0)
+                        - (
+                            _number(
+                                r["comparison"].get("conservative_execution_cost_pct")
+                            )
+                            or 0
+                        )
+                        <= 0.0
+                    )
+                    if full_population
+                    else (
+                        (_number(r["comparison"].get("entry_path_target_pct")) or 0)
+                        - (
+                            _number(
+                                r["comparison"].get("conservative_execution_cost_pct")
+                            )
+                            or 0
+                        )
+                        < HIERARCHICAL_ENTRY_QUALITY_GATE[
+                            "minimum_cost_adjusted_ev_pct"
+                        ]
+                        - 1e-9
+                    )
                 )
                 for r in rows
             ),
@@ -8601,48 +9864,96 @@ def _machine_full_evaluation_projection(
     accepted_count = int(refinement_contract.get("accepted_unique_trace_count") or 0)
     input_counts = refinement_contract.get("input_lane_counts") or {}
     refinement_status = str(mechanistic_refinement.get("status") or "")
-    operating = holdout_paired.get('operating_economic_comparison') or best_paired.get('operating_economic_comparison') or {}
-    operating_blocker = operating.get('blocker')
-    unsupported = {'frozen_auxiliary_verdict_missing', 'sequence_nonzero_inference_cost_timeline_unbound',
-        'shared_cash_envelope_changed_without_cashflow_witness', 'sequence_frozen_quantity_or_budget_changed',
-        'model_error_can_change_capital_admission', 'capital_external_flow_or_settlement_basis_unreconciled'}
+    operating = (
+        holdout_paired.get("operating_economic_comparison")
+        or best_paired.get("operating_economic_comparison")
+        or {}
+    )
+    operating_blocker = operating.get("blocker")
+    unsupported = {
+        "frozen_auxiliary_verdict_missing",
+        "sequence_nonzero_inference_cost_timeline_unbound",
+        "shared_cash_envelope_changed_without_cashflow_witness",
+        "sequence_frozen_quantity_or_budget_changed",
+        "model_error_can_change_capital_admission",
+        "capital_external_flow_or_settlement_basis_unreconciled",
+    }
     full_state = (
         "validated_edge"
         if mechanistic_refinement.get("promotion_pass") is True
-        else "pending_maturity"
-        if operating_blocker == 'recheck_terminal_pending'
-        else "unsupported_scope"
-        if operating_blocker in unsupported
-        else "source_gap"
-        if (operating_blocker or holdout_paired.get("unsupported_changed_decision_count", 0) > 0
-            or (accepted_count and holdout_paired.get("operating_population_complete") is not True))
-        else "insufficient_mature_sample"
-        if refinement_status == "insufficient_mature_sample"
-        else "evaluated_no_edge"
-        if best
-        else "source_gap"
-        if not accepted_count and sum(int(v or 0) for v in input_counts.values()) > 0
-        else "insufficient_mature_sample"
+        else (
+            "pending_maturity"
+            if operating_blocker == "recheck_terminal_pending"
+            else (
+                "unsupported_scope"
+                if operating_blocker in unsupported
+                else (
+                    "source_gap"
+                    if (
+                        operating_blocker
+                        or holdout_paired.get("unsupported_changed_decision_count", 0)
+                        > 0
+                        or (
+                            accepted_count
+                            and holdout_paired.get("operating_population_complete")
+                            is not True
+                        )
+                    )
+                    else (
+                        "insufficient_mature_sample"
+                        if refinement_status == "insufficient_mature_sample"
+                        else (
+                            "evaluated_no_edge"
+                            if best
+                            else (
+                                "source_gap"
+                                if not accepted_count
+                                and sum(int(v or 0) for v in input_counts.values()) > 0
+                                else "insufficient_mature_sample"
+                            )
+                        )
+                    )
+                )
+            )
+        )
     )
     return {
         "schema": "main_mechanistic_entry_full_evaluation_v1",
         "source_date": mechanistic_refinement.get("target_date"),
-        "structural_blocker": (operating_blocker or ("machine_operating_population_unbound"
-            if accepted_count and refinement_contract.get("operating_economic_enrichment_count", 0) == 0 else None)),
-        "operating_comparison_status": operating.get('status'),
-        "operating_economics": operating if holdout_paired.get('downstream_operating_evidence_complete') is True else None,
-        "operating_blocker_owner": operating.get('owner'),
-        "operating_closure_test": operating.get('closure_test'),
+        "structural_blocker": (
+            operating_blocker
+            or (
+                "machine_operating_population_unbound"
+                if accepted_count
+                and refinement_contract.get("operating_economic_enrichment_count", 0)
+                == 0
+                else None
+            )
+        ),
+        "operating_comparison_status": operating.get("status"),
+        "operating_economics": (
+            operating
+            if holdout_paired.get("downstream_operating_evidence_complete") is True
+            else None
+        ),
+        "operating_blocker_owner": operating.get("owner"),
+        "operating_closure_test": operating.get("closure_test"),
         "state": full_state,
-        "full_population_count": refinement_contract.get("structure_contract_population_count", accepted_count),
+        "full_population_count": refinement_contract.get(
+            "structure_contract_population_count", accepted_count
+        ),
         "current_structure_eligible_count": accepted_count,
-        "structure_contract_input_counts": refinement_contract.get("structure_contract_input_counts"),
+        "structure_contract_input_counts": refinement_contract.get(
+            "structure_contract_input_counts"
+        ),
         "population_unit": "exact_machine_attempt",
         "metric_role": "sim_probe_ev",
         "economic_basis": "terminal_path_proxy_unless_operating_proof_present",
         "holdout_incumbent_ev_pct": holdout_paired.get("incumbent_opportunity_ev_pct"),
         "paired_comparable_count": holdout_paired.get("paired_comparable_count"),
-        "unsupported_changed_decision_count": holdout_paired.get("unsupported_changed_decision_count"),
+        "unsupported_changed_decision_count": holdout_paired.get(
+            "unsupported_changed_decision_count"
+        ),
         "input_lane_counts": refinement_contract.get("input_lane_counts"),
         "accepted_lane_counts": refinement_contract.get("accepted_lane_counts"),
         "row_exclusion_reason_counts": refinement_contract.get(
@@ -8658,15 +9969,26 @@ def _machine_full_evaluation_projection(
             "calibration_gate_passing_candidate_count"
         ),
         "promotion_pass": mechanistic_refinement.get("promotion_pass") is True,
-        "calibration_cost_adjusted_ev_pct": best_paired.get("candidate_opportunity_ev_pct"),
-        "calibration_paired_delta_ev_pct": best_paired.get("paired_terminal_proxy_delta_pct"),
-        "holdout_cost_adjusted_ev_pct": holdout_paired.get("candidate_opportunity_ev_pct"),
-        "selected_trade_terminal_proxy_ev_pct": (mechanistic_refinement.get("best_observed_holdout") or {}).get("cost_adjusted_terminal_proxy_ev_pct"),
+        "calibration_cost_adjusted_ev_pct": best_paired.get(
+            "candidate_opportunity_ev_pct"
+        ),
+        "calibration_paired_delta_ev_pct": best_paired.get(
+            "paired_terminal_proxy_delta_pct"
+        ),
+        "holdout_cost_adjusted_ev_pct": holdout_paired.get(
+            "candidate_opportunity_ev_pct"
+        ),
+        "selected_trade_terminal_proxy_ev_pct": (
+            mechanistic_refinement.get("best_observed_holdout") or {}
+        ).get("cost_adjusted_terminal_proxy_ev_pct"),
         "holdout_paired_delta_ev_pct": holdout_paired.get(
             "paired_terminal_proxy_delta_pct"
         ),
-        "daily_net_profit_delta_krw": (holdout_paired.get("daily_net_profit_delta_krw")
-            if holdout_paired.get("operating_population_complete") is True else None),
+        "daily_net_profit_delta_krw": (
+            holdout_paired.get("daily_net_profit_delta_krw")
+            if holdout_paired.get("operating_population_complete") is True
+            else None
+        ),
         "daily_net_profit_status": holdout_paired.get(
             "daily_net_profit_status",
             "not_available_without_exact_changed_decision_owner_replay",
@@ -8688,207 +10010,375 @@ def _machine_operating_projection(data_root: Path, days: list[str]) -> dict:
     The day-specific model and pricing proofs remain attached to their rows.
     """
     from src.engine.scalping import compact_auxiliary_paired_replay as compact
+
     rows, sources, missing = [], [], []
     for day in sorted(set(days)):
         path = compact.report_path(data_root, day).with_suffix(".source.json")
         source = compact.read(path)
         cost = compact.runtime_inference_cost_receipt(data_root, day)
         if compact.valid(source) and source.get("target_date") == day:
-            sources.append({"source_date": day, "artifact_content_sha256": source["artifact_content_sha256"]})
+            sources.append(
+                {
+                    "source_date": day,
+                    "artifact_content_sha256": source["artifact_content_sha256"],
+                }
+            )
             for row in source.get("rows") or []:
                 if row.get("source_date") == day:
-                    rows.append({**row,
-                        "machine_owner_model_validation": source.get("owner_execution_model_validation") or {},
-                        "machine_runtime_cost_receipt": cost})
+                    rows.append(
+                        {
+                            **row,
+                            "machine_owner_model_validation": source.get(
+                                "owner_execution_model_validation"
+                            )
+                            or {},
+                            "machine_runtime_cost_receipt": cost,
+                        }
+                    )
         else:
             missing.append(day)
         # The existing split producer owns pre-AI plans as well as executable
         # owner paths. No compact trace or synthetic auxiliary call is needed.
-        split = compact.read(data_root / "report/entry_split_order_plan" / f"entry_split_order_plan_{day}.json")
-        replay = (split.get("input_summary") or {}).get("compact_pre_ai_execution_replay") or {}
-        if (replay.get("source_date") == day and replay.get("sha256") == compact.digest(
-                {k:v for k,v in replay.items() if k != "sha256"})):
-            sources.append({"source_date": day, "nonentry_replay_sha256": replay["sha256"]})
+        split = compact.read(
+            data_root
+            / "report/entry_split_order_plan"
+            / f"entry_split_order_plan_{day}.json"
+        )
+        replay = (split.get("input_summary") or {}).get(
+            "compact_pre_ai_execution_replay"
+        ) or {}
+        if replay.get("source_date") == day and replay.get("sha256") == compact.digest(
+            {k: v for k, v in replay.items() if k != "sha256"}
+        ):
+            sources.append(
+                {"source_date": day, "nonentry_replay_sha256": replay["sha256"]}
+            )
             for owner_row in replay.get("rows") or []:
                 seed = owner_row.get("seed") or {}
-                row = {k: seed.get(k) for k in ("evaluation_attempt_id", "source_date", "stock_code",
-                    "scanner_promotion_id", "effective_venue", "session_bucket")}
+                row = {
+                    k: seed.get(k)
+                    for k in (
+                        "evaluation_attempt_id",
+                        "source_date",
+                        "stock_code",
+                        "scanner_promotion_id",
+                        "effective_venue",
+                        "session_bucket",
+                    )
+                }
                 row.update(owner_replay=owner_row, incumbent_verdict=None)
                 if _machine_nonentry_seed(row) and row["source_date"] == day:
                     rows.append(row)
-    return compact.sealed({"rows": rows, "sources": sources, "missing_source_dates": missing})
+    return compact.sealed(
+        {"rows": rows, "sources": sources, "missing_source_dates": missing}
+    )
 
 
 def _machine_joint_scope_metrics(population, policies, parents):
     """Apply a frozen whole bundle over one capital timeline, including carry scopes."""
     rows, selected = [], set()
     for row in population:
-        parts = (row.get('entry_group_observation') or {}).get('key_parts') or {}
-        scope = str(parts.get('venue')) + '|' + str(parts.get('session_bucket'))
+        parts = (row.get("entry_group_observation") or {}).get("key_parts") or {}
+        scope = str(parts.get("venue")) + "|" + str(parts.get("session_bucket"))
         if scope not in parents or scope not in policies:
-            return {'status': 'source_gap', 'blocker': 'joint_scope_policy_missing'}
-        old = mechanistic_entry_policy_decision(row['setup_evidence'], policy=parents[scope])['action']
-        new = mechanistic_entry_policy_decision(row['setup_evidence'], policy=policies[scope])['action']
-        rows.append({**row, 'comparison': {**row['comparison'], 'incumbent_machine_action': old},
-                     'joint_candidate_action': new})
-        if new == 'ENTER_NOW': selected.add(row['decision_trace_id'])
+            return {"status": "source_gap", "blocker": "joint_scope_policy_missing"}
+        old = mechanistic_entry_policy_decision(
+            row["setup_evidence"], policy=parents[scope]
+        )["action"]
+        new = mechanistic_entry_policy_decision(
+            row["setup_evidence"], policy=policies[scope]
+        )["action"]
+        rows.append(
+            {
+                **row,
+                "comparison": {**row["comparison"], "incumbent_machine_action": old},
+                "joint_candidate_action": new,
+            }
+        )
+        if new == "ENTER_NOW":
+            selected.add(row["decision_trace_id"])
     groups = defaultdict(list)
     for row in rows:
-        groups[(row.get('source_date'), row.get('stock_code'), row.get('scanner_promotion_id'))].append(row)
+        groups[
+            (
+                row.get("source_date"),
+                row.get("stock_code"),
+                row.get("scanner_promotion_id"),
+            )
+        ].append(row)
     for group in groups.values():
-        if all(r.get('machine_sequence_expected_count') == len(group) for r in group):
+        if all(r.get("machine_sequence_expected_count") == len(group) for r in group):
             for row in group:
-                row['machine_sequence_members'] = sorted(r['decision_trace_id'] for r in group)
+                row["machine_sequence_members"] = sorted(
+                    r["decision_trace_id"] for r in group
+                )
     return _machine_sequence_operating_metrics(rows, selected, joint_actions=True)
 
 
 def _machine_joint_scope_gate(metrics):
-    candidate, incumbent = metrics.get('candidate') or {}, metrics.get('incumbent') or {}
-    return bool(metrics.get('status') == 'supported_operating_comparison'
-        and (_number(metrics.get('robust_paired_delta_ev_lower_bound_pct')) or 0) > 0
-        and (_number(metrics.get('daily_net_profit_delta_krw')) or 0) > 0
-        and (_number(candidate.get('ev_pct')) or 0) >= MECHANISTIC_REFINEMENT_GATE['minimum_cost_adjusted_ev_pct']
-        and candidate.get('es10', -float('inf')) >= incumbent.get('es10', float('inf'))
-        and candidate.get('worst', -float('inf')) >= incumbent.get('worst', float('inf')))
+    candidate, incumbent = (
+        metrics.get("candidate") or {},
+        metrics.get("incumbent") or {},
+    )
+    return bool(
+        metrics.get("status") == "supported_operating_comparison"
+        and (_number(metrics.get("robust_paired_delta_ev_lower_bound_pct")) or 0) > 0
+        and (_number(metrics.get("daily_net_profit_delta_krw")) or 0) > 0
+        and (_number(candidate.get("ev_pct")) or 0)
+        >= MECHANISTIC_REFINEMENT_GATE["minimum_cost_adjusted_ev_pct"]
+        and candidate.get("es10", -float("inf")) >= incumbent.get("es10", float("inf"))
+        and candidate.get("worst", -float("inf"))
+        >= incumbent.get("worst", float("inf"))
+    )
 
 
-def _machine_joint_scope_evaluation(population, parents, refinements, extensions, previous, kernel, target_date):
+def _machine_joint_scope_evaluation(
+    population, parents, refinements, extensions, previous, kernel, target_date
+):
     import copy
+
     proposals = copy.deepcopy(parents)
     for scope, parent in parents.items():
-        common = (refinements.get(scope) or {}).get('forward_selection') or {}
-        hierarchy = (extensions.get(scope) or {}).get('forward_selection') or {}
-        if common.get('incumbent_sha256') == _canonical_sha256(parent) and common.get('policy'):
-            proposals[scope] = _mechanistic_threshold_policy(common['policy'], parent, publication=True)
-        elif hierarchy.get('incumbent_sha256') == _canonical_sha256(parent) and hierarchy.get('rules'):
-            proposals[scope] = {**parent, 'version': MECHANISTIC_FULL_POPULATION_POLICY_VERSION,
-                'hierarchy': {'schema': MECHANISTIC_HIERARCHY_SCHEMA,
-                    'parent_sha256': _canonical_sha256(parent['thresholds']), 'rules': hierarchy['rules']},
-                'postclose_selection': {**parent['postclose_selection'],
-                    'minimum_cost_adjusted_ev_pct': MECHANISTIC_REFINEMENT_GATE['minimum_cost_adjusted_ev_pct']}}
+        common = (refinements.get(scope) or {}).get("forward_selection") or {}
+        hierarchy = (extensions.get(scope) or {}).get("forward_selection") or {}
+        if common.get("incumbent_sha256") == _canonical_sha256(parent) and common.get(
+            "policy"
+        ):
+            proposals[scope] = _mechanistic_threshold_policy(
+                common["policy"], parent, publication=True
+            )
+        elif hierarchy.get("incumbent_sha256") == _canonical_sha256(
+            parent
+        ) and hierarchy.get("rules"):
+            proposals[scope] = {
+                **parent,
+                "version": MECHANISTIC_FULL_POPULATION_POLICY_VERSION,
+                "hierarchy": {
+                    "schema": MECHANISTIC_HIERARCHY_SCHEMA,
+                    "parent_sha256": _canonical_sha256(parent["thresholds"]),
+                    "rules": hierarchy["rules"],
+                },
+                "postclose_selection": {
+                    **parent["postclose_selection"],
+                    "minimum_cost_adjusted_ev_pct": MECHANISTIC_REFINEMENT_GATE[
+                        "minimum_cost_adjusted_ev_pct"
+                    ],
+                },
+            }
     changed = sorted(s for s in parents if proposals[s] != parents[s])
-    result = dict(status='not_applicable_single_or_no_scope_change', promotion_pass=False,
-                  changed_scopes=changed, forward_selection=None)
+    result = dict(
+        status="not_applicable_single_or_no_scope_change",
+        promotion_pass=False,
+        changed_scopes=changed,
+        forward_selection=None,
+    )
     if len(changed) < 2:
         return result
-    frozen = (previous or {}).get('forward_selection') or {}
-    valid = (frozen.get('parents') == parents and frozen.get('policies') == proposals
-             and frozen.get('economic_kernel_sha256') == kernel
-             and isinstance(frozen.get('frozen_date'), str))
+    frozen = (previous or {}).get("forward_selection") or {}
+    valid = (
+        frozen.get("parents") == parents
+        and frozen.get("policies") == proposals
+        and frozen.get("economic_kernel_sha256") == kernel
+        and isinstance(frozen.get("frozen_date"), str)
+    )
     # The bundle is chosen from calibration freezes. It is never assembled from
     # the subset that happened to pass a candidate holdout.
     if not valid:
         metrics = _machine_joint_scope_metrics(population, proposals, parents)
-        result.update(status='joint_calibration_not_qualified', calibration=metrics)
+        result.update(status="joint_calibration_not_qualified", calibration=metrics)
         if _machine_joint_scope_gate(metrics):
-            result.update(status='joint_forward_holdout_pending', forward_selection=dict(
-                parents=parents, policies=proposals, changed_scopes=changed,
-                frozen_date=datetime.now(KST).date().isoformat(), economic_kernel_sha256=kernel,
-                calibration_rows_sha256=_canonical_sha256(population)))
+            result.update(
+                status="joint_forward_holdout_pending",
+                forward_selection=dict(
+                    parents=parents,
+                    policies=proposals,
+                    changed_scopes=changed,
+                    frozen_date=datetime.now(KST).date().isoformat(),
+                    economic_kernel_sha256=kernel,
+                    calibration_rows_sha256=_canonical_sha256(population),
+                ),
+            )
         return result
-    held = [r for r in population if frozen['frozen_date'] < r['source_date'] <= target_date]
+    held = [
+        r for r in population if frozen["frozen_date"] < r["source_date"] <= target_date
+    ]
     metrics = _machine_joint_scope_metrics(held, proposals, parents)
-    dates = sorted({r['source_date'] for r in held})
-    qualified = sorted(s for s in changed if (refinements.get(s) or {}).get('policy_candidate')
-                       or (extensions.get(s) or {}).get('policy_candidate'))
-    checks = dict(entire_frozen_bundle_qualified=qualified == changed,
-        independent_dates=len(dates) >= MECHANISTIC_REFINEMENT_GATE['minimum_holdout_source_date_count'],
-        independent_samples=len(held) >= MECHANISTIC_REFINEMENT_GATE['minimum_holdout_terminal_evaluable_count'],
-        joint_economics=_machine_joint_scope_gate(metrics))
-    result.update(status='joint_holdout_evaluated', forward_selection=frozen,
-        holdout_rows=held, holdout_source_dates=dates, holdout=metrics,
-        promotion_checks=checks, promotion_pass=all(checks.values()))
-    result['sha256'] = _canonical_sha256(result)
+    dates = sorted({r["source_date"] for r in held})
+    qualified = sorted(
+        s
+        for s in changed
+        if (refinements.get(s) or {}).get("policy_candidate")
+        or (extensions.get(s) or {}).get("policy_candidate")
+    )
+    checks = dict(
+        entire_frozen_bundle_qualified=qualified == changed,
+        independent_dates=len(dates)
+        >= MECHANISTIC_REFINEMENT_GATE["minimum_holdout_source_date_count"],
+        independent_samples=len(held)
+        >= MECHANISTIC_REFINEMENT_GATE["minimum_holdout_terminal_evaluable_count"],
+        joint_economics=_machine_joint_scope_gate(metrics),
+    )
+    result.update(
+        status="joint_holdout_evaluated",
+        forward_selection=frozen,
+        holdout_rows=held,
+        holdout_source_dates=dates,
+        holdout=metrics,
+        promotion_checks=checks,
+        promotion_pass=all(checks.values()),
+    )
+    result["sha256"] = _canonical_sha256(result)
     return result
 
 
 def machine_joint_scope_evidence_valid(report, scopes):
     """Publisher recomputes allocation; summary flags do not grant authority."""
-    proof = report.get('joint_scope_economics') or {}
-    frozen = proof.get('forward_selection') or {}
+    proof = report.get("joint_scope_economics") or {}
+    frozen = proof.get("forward_selection") or {}
     try:
-        rows = proof['holdout_rows']
-        if (proof.get('sha256') != _canonical_sha256({k:v for k,v in proof.items() if k != 'sha256'})
-            or proof.get('promotion_pass') is not True
-            or not proof.get('promotion_checks') or not all(v is True for v in proof['promotion_checks'].values())
-            or len(rows) < MECHANISTIC_REFINEMENT_GATE['minimum_holdout_terminal_evaluable_count']
-            or len({r['source_date'] for r in rows}) < MECHANISTIC_REFINEMENT_GATE['minimum_holdout_source_date_count']
-            or sorted(scopes) != frozen['changed_scopes']
-            or proof['holdout_source_dates'] != sorted({r['source_date'] for r in rows})
-            or not all(frozen['frozen_date'] < r['source_date'] <= report['target_date'] for r in rows)):
+        rows = proof["holdout_rows"]
+        if (
+            proof.get("sha256")
+            != _canonical_sha256({k: v for k, v in proof.items() if k != "sha256"})
+            or proof.get("promotion_pass") is not True
+            or not proof.get("promotion_checks")
+            or not all(v is True for v in proof["promotion_checks"].values())
+            or len(rows)
+            < MECHANISTIC_REFINEMENT_GATE["minimum_holdout_terminal_evaluable_count"]
+            or len({r["source_date"] for r in rows})
+            < MECHANISTIC_REFINEMENT_GATE["minimum_holdout_source_date_count"]
+            or sorted(scopes) != frozen["changed_scopes"]
+            or proof["holdout_source_dates"] != sorted({r["source_date"] for r in rows})
+            or not all(
+                frozen["frozen_date"] < r["source_date"] <= report["target_date"]
+                for r in rows
+            )
+        ):
             return False
-        expected = _machine_joint_scope_metrics(rows, frozen['policies'], frozen['parents'])
-        if expected != proof['holdout'] or not _machine_joint_scope_gate(expected):
+        expected = _machine_joint_scope_metrics(
+            rows, frozen["policies"], frozen["parents"]
+        )
+        if expected != proof["holdout"] or not _machine_joint_scope_gate(expected):
             return False
         for scope in scopes:
-            common = (report.get('mechanistic_refinements_by_scope') or {}).get(scope) or {}
-            hierarchy = ((report.get('hierarchical_entry_quality') or {}).get('runtime_extensions_by_scope') or {}).get(scope) or {}
-            candidate = common.get('policy_candidate') or hierarchy.get('policy_candidate') or {}
-            if (common.get('source_contract') or {}).get('economic_kernel_sha256') != frozen.get('economic_kernel_sha256'):
+            common = (report.get("mechanistic_refinements_by_scope") or {}).get(
+                scope
+            ) or {}
+            hierarchy = (
+                (report.get("hierarchical_entry_quality") or {}).get(
+                    "runtime_extensions_by_scope"
+                )
+                or {}
+            ).get(scope) or {}
+            candidate = (
+                common.get("policy_candidate")
+                or hierarchy.get("policy_candidate")
+                or {}
+            )
+            if (common.get("source_contract") or {}).get(
+                "economic_kernel_sha256"
+            ) != frozen.get("economic_kernel_sha256"):
                 return False
-            proposed = (candidate.get('threshold_policy') or
-                _mechanistic_threshold_policy(candidate['thresholds'], frozen['parents'][scope], publication=True))
-            if proposed != frozen['policies'][scope]: return False
+            proposed = candidate.get(
+                "threshold_policy"
+            ) or _mechanistic_threshold_policy(
+                candidate["thresholds"], frozen["parents"][scope], publication=True
+            )
+            if proposed != frozen["policies"][scope]:
+                return False
         return True
     except (ValueError, KeyError, TypeError):
         return False
 
 
 def _machine_opportunity_id(row):
-    return _canonical_sha256([row['source_date'], row.get('stock_code'),
-                              row.get('scanner_promotion_id') or row['decision_trace_id']])
+    return _canonical_sha256(
+        [
+            row["source_date"],
+            row.get("stock_code"),
+            row.get("scanner_promotion_id") or row["decision_trace_id"],
+        ]
+    )
 
 
 def _machine_admission_rank(economy, *, node_count=1, complexity=0):
     from src.engine.scalping.entry_strategy_policy import machine_admission_rank
+
     return machine_admission_rank(economy, node_count=node_count, complexity=complexity)
 
 
 def _machine_path_value(row):
     """Resolve the policy-independent cost-bound path once per frozen row."""
-    comparison = row.get('comparison') or {}
-    cost = _full_entry_cost_pct(comparison.get('entry_cost_contract'), source_date=row['source_date'])
-    contract = comparison.get('entry_cost_contract') or {}
-    if (contract.get('effective_venue'), contract.get('session_bucket')) != (row.get('effective_venue'), row.get('session_bucket')):
-        return None, 'full_cost_scope_mismatch'
-    charged = _number(comparison.get('conservative_execution_cost_pct'))
+    comparison = row.get("comparison") or {}
+    cost = _full_entry_cost_pct(
+        comparison.get("entry_cost_contract"), source_date=row["source_date"]
+    )
+    contract = comparison.get("entry_cost_contract") or {}
+    if (contract.get("effective_venue"), contract.get("session_bucket")) != (
+        row.get("effective_venue"),
+        row.get("session_bucket"),
+    ):
+        return None, "full_cost_scope_mismatch"
+    charged = _number(comparison.get("conservative_execution_cost_pct"))
     if cost is None or charged is None or not math.isclose(cost, charged, abs_tol=1e-9):
-        return None, 'full_cost_missing_or_mismatched'
+        return None, "full_cost_missing_or_mismatched"
     # The existing quality path binds its gross target to full round-trip
     # cost. The legacy gross 0.3% target can be below that cost and cannot
     # measure a profitable missed opportunity. Never infer an AI verdict.
-    path = row.get('entry_quality_path') or {}
-    path_cost = _number(path.get('conservative_execution_cost_pct'))
-    if (path.get('schema') != 'entry_quality_path_v1'
-        or path_cost is None or not math.isclose(path_cost, cost, rel_tol=0, abs_tol=1e-9)):
-        return None, 'quality_path_cost_missing_or_mismatched'
+    path = row.get("entry_quality_path") or {}
+    path_cost = _number(path.get("conservative_execution_cost_pct"))
+    if (
+        path.get("schema") != "entry_quality_path_v1"
+        or path_cost is None
+        or not math.isclose(path_cost, cost, rel_tol=0, abs_tol=1e-9)
+    ):
+        return None, "quality_path_cost_missing_or_mismatched"
     # Retained v1 paths censored late stops while accepting equally late
     # targets. Interpret that exact documented producer reason symmetrically;
     # preserve the sealed source row and never infer a boundary for neither.
-    legacy_late_stop = (path.get('status') == 'censored_or_source_gap'
-        and path.get('label_reason') == 'exact_stop_first_outside_primary_window'
-        and path.get('first_hit') == 'exact_stop_first'
-        and (delay := _number(path.get('time_to_exact_stop_sec'))) is not None
-        and 180 < delay <= 600)
-    if row.get('entry_quality_contract_valid') is not True and not legacy_late_stop:
-        return None, 'terminal_path_censored'
-    hit = path.get('first_hit')
-    boundary = _number(path.get('gross_net_target_pct' if hit == 'net_target_first' else 'exact_stop_distance_pct'))
-    if ((path.get('status') != 'evaluable' and not legacy_late_stop) or hit not in {'net_target_first', 'exact_stop_first'}
-        or boundary is None or (hit == 'net_target_first' and boundary < 0)
-        or (hit == 'exact_stop_first' and boundary >= 0)):
-        return None, 'terminal_path_censored'
+    legacy_late_stop = (
+        path.get("status") == "censored_or_source_gap"
+        and path.get("label_reason") == "exact_stop_first_outside_primary_window"
+        and path.get("first_hit") == "exact_stop_first"
+        and (delay := _number(path.get("time_to_exact_stop_sec"))) is not None
+        and 180 < delay <= 600
+    )
+    if row.get("entry_quality_contract_valid") is not True and not legacy_late_stop:
+        return None, "terminal_path_censored"
+    hit = path.get("first_hit")
+    boundary = _number(
+        path.get(
+            "gross_net_target_pct"
+            if hit == "net_target_first"
+            else "exact_stop_distance_pct"
+        )
+    )
+    if (
+        (path.get("status") != "evaluable" and not legacy_late_stop)
+        or hit not in {"net_target_first", "exact_stop_first"}
+        or boundary is None
+        or (hit == "net_target_first" and boundary < 0)
+        or (hit == "exact_stop_first" and boundary >= 0)
+    ):
+        return None, "terminal_path_censored"
     return round(boundary - cost, 12), None
 
 
-def _machine_admission_metrics(rows, actions, *, prepared_paths=None, full_population=True, recovery=False):
+def _machine_admission_metrics(
+    rows, actions, *, prepared_paths=None, full_population=True, recovery=False
+):
     """Equal-opportunity immediate exposure study; no AI or realized PnL."""
     from src.engine.scalping import entry_strategy_policy as strategy
+
     if len(rows) != len(actions):
-        raise ValueError('machine_action_population_mismatch')
-    paths = prepared_paths if prepared_paths is not None else [_machine_path_value(row) for row in rows]
+        raise ValueError("machine_action_population_mismatch")
+    paths = (
+        prepared_paths
+        if prepared_paths is not None
+        else [_machine_path_value(row) for row in rows]
+    )
     if len(paths) != len(rows):
-        raise ValueError('machine_path_population_mismatch')
+        raise ValueError("machine_path_population_mismatch")
     groups, transitions, excluded = defaultdict(list), Counter(), Counter()
     transition_ids = defaultdict(set)
     selected, manifest, success, lost, avoided = [], [], [], [], []
@@ -8900,52 +10390,86 @@ def _machine_admission_metrics(rows, actions, *, prepared_paths=None, full_popul
     recovery_failure_ids = defaultdict(set)
     stress_groups = defaultdict(list)
     for row, action, (value, reason) in zip(rows, actions, paths):
-        baseline = (row.get('comparison') or {}).get('incumbent_machine_action')
-        old, new = baseline == 'ENTER_NOW', action == 'ENTER_NOW'
-        if baseline not in {'ENTER_NOW', 'BLOCK', 'RECHECK'}:
-            reason = 'incumbent_action_unsupported'
+        baseline = (row.get("comparison") or {}).get("incumbent_machine_action")
+        old, new = baseline == "ENTER_NOW", action == "ENTER_NOW"
+        if baseline not in {"ENTER_NOW", "BLOCK", "RECHECK"}:
+            reason = "incumbent_action_unsupported"
         if recovery:
-            from src.engine.scalping.postclose_entry_validation import opportunity_identity
+            from src.engine.scalping.postclose_entry_validation import (
+                opportunity_identity,
+            )
+
             key = strategy.digest(opportunity_identity(row))
             # A later machine ENTER is still observed even when its cost/path
             # cannot enter the economic comparison denominator.
-            episode_timeline[key].append((str(row.get('decision_ts') or ''), old, new))
+            episode_timeline[key].append((str(row.get("decision_ts") or ""), old, new))
         if not full_population and old:
-            excluded['outside_nonentry_population'] += 1
+            excluded["outside_nonentry_population"] += 1
             continue
         if reason:
             excluded[reason] += 1
             if old and not new:
-                unknown_changes.append(row.get('decision_trace_id'))
+                unknown_changes.append(row.get("decision_trace_id"))
             continue
         key = key if recovery else _machine_opportunity_id(row)
         if recovery and not old and new:
             recovered_groups[key].append(value > 0)
         if recovery:
             for dimension, label in (
-                ('parent_action', baseline), ('symbol', row.get('stock_code')),
-                ('hour', str(row.get('decision_ts') or '')[11:13]),
-                ('liquidity', _as_dict(_as_dict(_as_dict((row.get('setup_evidence') or {}).get('mechanistic_context')).get('group')).get('key_parts')).get('liquidity_band') or 'UNKNOWN'),
-                ('parent_blocker', (row.get('comparison') or {}).get('incumbent_machine_reason') or 'UNKNOWN')):
-                bucket = strata[dimension + ':' + str(label)]
-                bucket['eligible'].add(key)
+                ("parent_action", baseline),
+                ("symbol", row.get("stock_code")),
+                ("hour", str(row.get("decision_ts") or "")[11:13]),
+                (
+                    "liquidity",
+                    _as_dict(
+                        _as_dict(
+                            _as_dict(
+                                (row.get("setup_evidence") or {}).get(
+                                    "mechanistic_context"
+                                )
+                            ).get("group")
+                        ).get("key_parts")
+                    ).get("liquidity_band")
+                    or "UNKNOWN",
+                ),
+                (
+                    "parent_blocker",
+                    (row.get("comparison") or {}).get("incumbent_machine_reason")
+                    or "UNKNOWN",
+                ),
+            ):
+                bucket = strata[dimension + ":" + str(label)]
+                bucket["eligible"].add(key)
                 if not old and value > 0:
-                    bucket['missed_success'].add(key)
+                    bucket["missed_success"].add(key)
                     if new:
-                        bucket['recovered_success'].add(key)
+                        bucket["recovered_success"].add(key)
                 if not old and new:
-                    bucket['recovered'].add(key)
+                    bucket["recovered"].add(key)
                     if value < 0:
-                        recovery_failure_ids[dimension + ':' + str(label)].add(key)
-        groups[key].append((value if old else 0., value if new else 0., new))
+                        recovery_failure_ids[dimension + ":" + str(label)].add(key)
+        groups[key].append((value if old else 0.0, value if new else 0.0, new))
         if recovery:
-            stress_value = value - _number(row['comparison']['conservative_execution_cost_pct'])
-            stress_groups[key].append((stress_value if old else 0., stress_value if new else 0., new))
-        manifest.append([key, row.get('decision_trace_id'), value, baseline])
-        outcome = 'success' if value > 0 else 'failure' if value < 0 else 'neutral'
-        historical[(row.get('comparison') or {}).get('historical_machine_action', baseline) + ':' + outcome] += 1
-        category = ('existing_' + outcome + ('_retained' if new else '_avoided' if value < 0 else '_missed')
-                    if old else 'nonentry_' + outcome + ('_recovered' if new else '_unselected'))
+            stress_value = value - _number(
+                row["comparison"]["conservative_execution_cost_pct"]
+            )
+            stress_groups[key].append(
+                (stress_value if old else 0.0, stress_value if new else 0.0, new)
+            )
+        manifest.append([key, row.get("decision_trace_id"), value, baseline])
+        outcome = "success" if value > 0 else "failure" if value < 0 else "neutral"
+        historical[
+            (row.get("comparison") or {}).get("historical_machine_action", baseline)
+            + ":"
+            + outcome
+        ] += 1
+        category = (
+            "existing_"
+            + outcome
+            + ("_retained" if new else "_avoided" if value < 0 else "_missed")
+            if old
+            else "nonentry_" + outcome + ("_recovered" if new else "_unselected")
+        )
         transitions[category] += 1
         transition_ids[category].add(key)
         if old and value > 0:
@@ -8960,249 +10484,567 @@ def _machine_admission_metrics(rows, actions, *, prepared_paths=None, full_popul
     new_values = [fmean(v[1] for v in values) for values in groups.values()]
     selected_episodes = [[v[1] for v in values if v[2]] for values in groups.values()]
     selected_episodes = [values for values in selected_episodes if values]
-    result = dict(status='supported_machine_admission' if groups else 'machine_path_unavailable',
-        basis='full_population_cost_bound_quality_path' if full_population else 'nonentry_to_enter_now_cost_bound_quality_path',
-        evaluation_basis=strategy.MACHINE_EVALUATION_BASIS if full_population else 'machine_nonentry_opportunity_v1',
-        comparison_unit='equal_episode_weighted_immediate_attempts',
+    result = dict(
+        status="supported_machine_admission" if groups else "machine_path_unavailable",
+        basis=(
+            "full_population_cost_bound_quality_path"
+            if full_population
+            else "nonentry_to_enter_now_cost_bound_quality_path"
+        ),
+        evaluation_basis=(
+            strategy.MACHINE_EVALUATION_BASIS
+            if full_population
+            else "machine_nonentry_opportunity_v1"
+        ),
+        comparison_unit="equal_episode_weighted_immediate_attempts",
         comparable_population_sha256=strategy.digest(sorted(manifest)),
-        comparable_opportunity_count=len(groups), comparable_attempt_count=sum(map(len, groups.values())),
-        excluded_attempt_counts=dict(excluded), selected_attempt_count=len(selected),
+        comparable_opportunity_count=len(groups),
+        comparable_attempt_count=sum(map(len, groups.values())),
+        excluded_attempt_counts=dict(excluded),
+        selected_attempt_count=len(selected),
         unevaluated_existing_entry_changes=unknown_changes,
-        evaluated_existing_entry_changed_count=sum(v for k,v in transitions.items() if k.startswith('existing_') and not k.endswith('_retained')),
+        evaluated_existing_entry_changed_count=sum(
+            v
+            for k, v in transitions.items()
+            if k.startswith("existing_") and not k.endswith("_retained")
+        ),
         transition_attempt_counts=dict(transitions),
-        transition_opportunity_counts={k: len(v) for k,v in transition_ids.items()},
+        transition_opportunity_counts={k: len(v) for k, v in transition_ids.items()},
         historical_action_outcome_counts=dict(historical),
         existing_success_retention_rate_pct=100 * fmean(success) if success else None,
-        missed_success_simple_sum_path_pct=sum(lost), avoided_loss_simple_sum_path_pct=sum(avoided),
+        missed_success_simple_sum_path_pct=sum(lost),
+        avoided_loss_simple_sum_path_pct=sum(avoided),
         incumbent_admission_value_pct=fmean(old_values) if old_values else None,
         candidate_admission_value_pct=fmean(new_values) if new_values else None,
-        paired_admission_delta_pct=fmean(b-a for a,b in zip(old_values,new_values)) if old_values else None,
-        selected_path_ev_pct=fmean(fmean(values) for values in selected_episodes) if selected_episodes else None,
+        paired_admission_delta_pct=(
+            fmean(b - a for a, b in zip(old_values, new_values)) if old_values else None
+        ),
+        selected_path_ev_pct=(
+            fmean(fmean(values) for values in selected_episodes)
+            if selected_episodes
+            else None
+        ),
         selected_opportunity_count=len(selected_episodes),
-        win_rate_pct=100 * fmean(fmean(value > 0 for value in values) for values in selected_episodes) if selected_episodes else None,
-        episode_positive_mean_rate_pct=100 * fmean(fmean(values) > 0 for values in selected_episodes) if selected_episodes else None,
+        win_rate_pct=(
+            100
+            * fmean(
+                fmean(value > 0 for value in values) for values in selected_episodes
+            )
+            if selected_episodes
+            else None
+        ),
+        episode_positive_mean_rate_pct=(
+            100 * fmean(fmean(values) > 0 for values in selected_episodes)
+            if selected_episodes
+            else None
+        ),
         worst_selected_path_pct=min(selected) if selected else None,
-        auxiliary_ai_required=False, realized_pnl=False, portfolio_pnl=False)
-    result.update(support_adjusted_win_rate_pct=strategy.machine_support_adjusted_win_rate(result),
-        selection_score_version=strategy.MACHINE_SELECTION_VERSION if full_population else 'support_adjusted_win_rate_preserve_entries_v3')
+        auxiliary_ai_required=False,
+        realized_pnl=False,
+        portfolio_pnl=False,
+    )
+    result.update(
+        support_adjusted_win_rate_pct=strategy.machine_support_adjusted_win_rate(
+            result
+        ),
+        selection_score_version=(
+            strategy.MACHINE_SELECTION_VERSION
+            if full_population
+            else "support_adjusted_win_rate_preserve_entries_v3"
+        ),
+    )
     if recovery:
         fractions = [fmean(v) for v in recovered_groups.values()]
-        result.update(selection_score_version=strategy.RECOVERY_SELECTION_VERSION,
-            recovery_metrics=dict(selected_opportunity_count=len(fractions),
-                opportunity_ids=sorted(recovered_groups), successful_opportunity_weight=sum(fractions),
+        result.update(
+            selection_score_version=strategy.RECOVERY_SELECTION_VERSION,
+            recovery_metrics=dict(
+                selected_opportunity_count=len(fractions),
+                opportunity_ids=sorted(recovered_groups),
+                successful_opportunity_weight=sum(fractions),
                 win_rate_pct=100 * fmean(fractions) if fractions else None,
-                comparison_unit='equal_opportunity_mean_binary_attempt_outcome'),
-            recovery_semantics='immediate_machine_admission_cf_later_entry_and_fill_unverified')
-        delayed = sum(any(old and stamp > min(t[0] for t in events if not t[1] and t[2])
-                          for stamp,old,_ in events)
-                      for key,events in episode_timeline.items() if key in recovered_groups)
-        prior = sum(any(old and stamp < min(t[0] for t in events if not t[1] and t[2])
-                        for stamp,old,_ in events)
-                    for key,events in episode_timeline.items() if key in recovered_groups)
-        paired_by_id = {key: fmean(v[1]-v[0] for v in values) for key,values in groups.items()}
-        selected_by_id = {key: [v[1] for v in values if v[2]] for key,values in groups.items()}
+                comparison_unit="equal_opportunity_mean_binary_attempt_outcome",
+            ),
+            recovery_semantics="immediate_machine_admission_cf_later_entry_and_fill_unverified",
+        )
+        delayed = sum(
+            any(
+                old and stamp > min(t[0] for t in events if not t[1] and t[2])
+                for stamp, old, _ in events
+            )
+            for key, events in episode_timeline.items()
+            if key in recovered_groups
+        )
+        prior = sum(
+            any(
+                old and stamp < min(t[0] for t in events if not t[1] and t[2])
+                for stamp, old, _ in events
+            )
+            for key, events in episode_timeline.items()
+            if key in recovered_groups
+        )
+        paired_by_id = {
+            key: fmean(v[1] - v[0] for v in values) for key, values in groups.items()
+        }
+        selected_by_id = {
+            key: [v[1] for v in values if v[2]] for key, values in groups.items()
+        }
         total_delta = sum(paired_by_id.values())
-        total_weight = sum(fmean(v > 0 for v in values) for values in selected_by_id.values() if values)
+        total_weight = sum(
+            fmean(v > 0 for v in values) for values in selected_by_id.values() if values
+        )
         selected_n = sum(bool(values) for values in selected_by_id.values())
-        result['recovery_diagnostics'] = dict(
+        result["recovery_diagnostics"] = dict(
             later_parent_enter_observed_opportunity_count=delayed,
             earlier_parent_enter_observed_opportunity_count=prior,
-            parent_enter_not_observed_opportunity_count=sum(not any(old for _,old,_ in events)
-                for key,events in episode_timeline.items() if key in recovered_groups),
+            parent_enter_not_observed_opportunity_count=sum(
+                not any(old for _, old, _ in events)
+                for key, events in episode_timeline.items()
+                if key in recovered_groups
+            ),
             terminal_nonentry_proven=False,
-            cost_stress=dict(basis='same_checkpoint_double_recorded_round_trip_cost_not_path_replay',
-                paired_admission_delta_pct=fmean(fmean(v[1]-v[0] for v in values) for values in stress_groups.values()) if stress_groups else None,
-                worst_selected_path_pct=min((v[1] for values in stress_groups.values() for v in values if v[2]), default=None),
-                metric_role='diagnostic_not_selection_or_realized_pnl'),
-            strata={label: {**{name:len(ids) for name,ids in bucket.items()},
-                'recovered_failure': len(recovery_failure_ids[label]),
-                'recovered_failure_rate': len(recovery_failure_ids[label]) / len(bucket['recovered']) if bucket['recovered'] else None,
-                'missed_success_recall': len(bucket['recovered_success']) / len(bucket['missed_success']) if bucket['missed_success'] else None}
-                for label,bucket in strata.items()},
-            leave_one_block_out={label: dict(
-                remaining_opportunity_count=len(groups)-len(bucket['eligible']),
-                paired_admission_delta_pct=(total_delta-sum(paired_by_id[k] for k in bucket['eligible']))/(len(groups)-len(bucket['eligible'])) if len(groups)>len(bucket['eligible']) else None,
-                selected_win_rate_pct=100*(total_weight-sum(fmean(v > 0 for v in selected_by_id[k]) for k in bucket['eligible'] if selected_by_id[k]))/(selected_n-sum(bool(selected_by_id[k]) for k in bucket['eligible'])) if selected_n>sum(bool(selected_by_id[k]) for k in bucket['eligible']) else None)
-                for label,bucket in strata.items() if label.startswith(('symbol:', 'hour:'))},
-            sensitivity_role='diagnostic_only_no_candidate_reselection')
+            cost_stress=dict(
+                basis="same_checkpoint_double_recorded_round_trip_cost_not_path_replay",
+                paired_admission_delta_pct=(
+                    fmean(
+                        fmean(v[1] - v[0] for v in values)
+                        for values in stress_groups.values()
+                    )
+                    if stress_groups
+                    else None
+                ),
+                worst_selected_path_pct=min(
+                    (v[1] for values in stress_groups.values() for v in values if v[2]),
+                    default=None,
+                ),
+                metric_role="diagnostic_not_selection_or_realized_pnl",
+            ),
+            strata={
+                label: {
+                    **{name: len(ids) for name, ids in bucket.items()},
+                    "recovered_failure": len(recovery_failure_ids[label]),
+                    "recovered_failure_rate": (
+                        len(recovery_failure_ids[label]) / len(bucket["recovered"])
+                        if bucket["recovered"]
+                        else None
+                    ),
+                    "missed_success_recall": (
+                        len(bucket["recovered_success"]) / len(bucket["missed_success"])
+                        if bucket["missed_success"]
+                        else None
+                    ),
+                }
+                for label, bucket in strata.items()
+            },
+            leave_one_block_out={
+                label: dict(
+                    remaining_opportunity_count=len(groups) - len(bucket["eligible"]),
+                    paired_admission_delta_pct=(
+                        (total_delta - sum(paired_by_id[k] for k in bucket["eligible"]))
+                        / (len(groups) - len(bucket["eligible"]))
+                        if len(groups) > len(bucket["eligible"])
+                        else None
+                    ),
+                    selected_win_rate_pct=(
+                        100
+                        * (
+                            total_weight
+                            - sum(
+                                fmean(v > 0 for v in selected_by_id[k])
+                                for k in bucket["eligible"]
+                                if selected_by_id[k]
+                            )
+                        )
+                        / (
+                            selected_n
+                            - sum(bool(selected_by_id[k]) for k in bucket["eligible"])
+                        )
+                        if selected_n
+                        > sum(bool(selected_by_id[k]) for k in bucket["eligible"])
+                        else None
+                    ),
+                )
+                for label, bucket in strata.items()
+                if label.startswith(("symbol:", "hour:"))
+            },
+            sensitivity_role="diagnostic_only_no_candidate_reselection",
+        )
     return result
 
 
-def build_main_strategy_refinement(population, *, parent, scope, source_contract, previous=None, limit=96, machine_policy_only=False, checkpoint=None, training_through_date=None):
+def build_main_strategy_refinement(
+    population,
+    *,
+    parent,
+    scope,
+    source_contract,
+    previous=None,
+    limit=96,
+    machine_policy_only=False,
+    checkpoint=None,
+    training_through_date=None,
+):
     """Select on train only, then evaluate one frozen joint policy on holdout."""
     from copy import deepcopy
     from src.engine.scalping import entry_strategy_policy as strategy
     from src.engine.scalping.postclose_entry_validation import (
-        chronological_split, NEW_LOGIC_SOURCE_DATE, OPPORTUNITY_IDENTITY_VERSION,
+        chronological_split,
+        NEW_LOGIC_SOURCE_DATE,
+        OPPORTUNITY_IDENTITY_VERSION,
     )
-    calculation_date = (_as_dict(source_contract.get('natural_machine_source_receipt')).get('target_date')
-                        or max((r.get('source_date', '') for r in population), default=''))
-    recovery = (machine_policy_only and tuple(scope) == ('KRX', 'KRX_REGULAR')
-                and calculation_date >= NEW_LOGIC_SOURCE_DATE)
-    selection_version = strategy.RECOVERY_SELECTION_VERSION if recovery else strategy.MACHINE_SELECTION_VERSION
-    result = dict(schema="main_entry_strategy_refinement_v2", scope=list(scope),
-        status="source_gap", promotion_pass=False, candidate=None,
+
+    calculation_date = _as_dict(
+        source_contract.get("natural_machine_source_receipt")
+    ).get("target_date") or max(
+        (r.get("source_date", "") for r in population), default=""
+    )
+    recovery = (
+        machine_policy_only
+        and tuple(scope) == ("KRX", "KRX_REGULAR")
+        and calculation_date >= NEW_LOGIC_SOURCE_DATE
+    )
+    selection_version = (
+        strategy.RECOVERY_SELECTION_VERSION
+        if recovery
+        else strategy.MACHINE_SELECTION_VERSION
+    )
+    result = dict(
+        schema="main_entry_strategy_refinement_v2",
+        scope=list(scope),
+        status="source_gap",
+        promotion_pass=False,
+        candidate=None,
         incumbent_machine_policy_sha256=strategy.digest(parent),
-        source_contract_sha256=_canonical_sha256(source_contract), population_count=len(population),
-        evaluated_candidate_count=0, search_complete=False)
+        source_contract_sha256=_canonical_sha256(source_contract),
+        population_count=len(population),
+        evaluated_candidate_count=0,
+        search_complete=False,
+    )
     if machine_policy_only:
-        result['selection_basis'] = selection_version
-        if previous and previous.get('selection_basis') != selection_version:
-            result['superseded_selection_basis'] = previous.get('selection_basis')
+        result["selection_basis"] = selection_version
+        if previous and previous.get("selection_basis") != selection_version:
+            result["superseded_selection_basis"] = previous.get("selection_basis")
             # Old ranking/checkpoint state cannot select or skip candidates for
             # the current machine objective. The new candidate still faces the
             # ordinary train/chronological holdout and economic promotion gates.
             previous = None
     if machine_policy_only:
         contract_by_name = strategy.registry_contract()
-        result['coordinate_coverage'] = {name: dict(exact_scope='|'.join(scope),
-            source=contract['source'], source_status='source_gap', evaluation_status='source_gap',
-            support_count=0, single_attempt_count=0, single_evaluated_count=0,
-            parent_value=strategy.default_profile(parent)[name],
-            parent_sha256=strategy.digest(parent), next_cursor=None)
-            for name, contract in contract_by_name.items()}
-        common = ('minimum_micro_net_aggressive_delta_10t', 'minimum_micro_price_change_10t_pct',
-            'maximum_spread_bp', 'minimum_fillability_score', 'maximum_top3_ask_to_bid_ratio')
-        parent_nodes = ((parent.get('strategy') or {}).get('nodes') or
-            {'root': {'profile': strategy.default_profile(parent)}})
-        result['common_threshold_coverage'] = {name: dict(
-            registry_coordinate=name, source=contract_by_name[name]['source'],
-            effective_parent_value=strategy.default_profile(parent)[name],
-            parent_node_values={node_id: dict(
-                profile=(node.get('profile') or {}).get(name),
-                fallback=(node.get('fallback_profile') or {}).get(name))
-                for node_id, node in parent_nodes.items()},
-            consumer='entry_setup_evidence.mechanistic_entry_policy_decision',
-            research_only=True, parent_sha256=strategy.digest(parent)) for name in common}
+        result["coordinate_coverage"] = {
+            name: dict(
+                exact_scope="|".join(scope),
+                source=contract["source"],
+                source_status="source_gap",
+                evaluation_status="source_gap",
+                support_count=0,
+                single_attempt_count=0,
+                single_evaluated_count=0,
+                parent_value=strategy.default_profile(parent)[name],
+                parent_sha256=strategy.digest(parent),
+                next_cursor=None,
+            )
+            for name, contract in contract_by_name.items()
+        }
+        common = (
+            "minimum_micro_net_aggressive_delta_10t",
+            "minimum_micro_price_change_10t_pct",
+            "maximum_spread_bp",
+            "minimum_fillability_score",
+            "maximum_top3_ask_to_bid_ratio",
+        )
+        parent_nodes = (parent.get("strategy") or {}).get("nodes") or {
+            "root": {"profile": strategy.default_profile(parent)}
+        }
+        result["common_threshold_coverage"] = {
+            name: dict(
+                registry_coordinate=name,
+                source=contract_by_name[name]["source"],
+                effective_parent_value=strategy.default_profile(parent)[name],
+                parent_node_values={
+                    node_id: dict(
+                        profile=(node.get("profile") or {}).get(name),
+                        fallback=(node.get("fallback_profile") or {}).get(name),
+                    )
+                    for node_id, node in parent_nodes.items()
+                },
+                consumer="entry_setup_evidence.mechanistic_entry_policy_decision",
+                research_only=True,
+                parent_sha256=strategy.digest(parent),
+            )
+            for name in common
+        }
     if not population:
         return {**result, "blocker": "strategy_population_empty"}
     original_population = population
     supported, exclusions = [], []
     for row in population:
-        setup = row.get('setup_evidence') or {}
-        if recovery and row.get('source_date', '') < '2026-09-29':
-            exclusions.append(dict(decision_trace_id=row.get('decision_trace_id'), reason='before_policy_refresh_start'))
+        setup = row.get("setup_evidence") or {}
+        if recovery and row.get("source_date", "") < "2026-09-29":
+            exclusions.append(
+                dict(
+                    decision_trace_id=row.get("decision_trace_id"),
+                    reason="before_policy_refresh_start",
+                )
+            )
             continue
-        raw = setup.get('strategy_raw_input')
+        raw = setup.get("strategy_raw_input")
         try:
-            reason = ('strategy_predecision_primitives_missing' if not isinstance(raw, dict) or not raw
-                else 'strategy_predecision_hash_invalid' if setup.get('strategy_raw_sha256') != strategy.digest(raw) else None)
+            reason = (
+                "strategy_predecision_primitives_missing"
+                if not isinstance(raw, dict) or not raw
+                else (
+                    "strategy_predecision_hash_invalid"
+                    if setup.get("strategy_raw_sha256") != strategy.digest(raw)
+                    else None
+                )
+            )
             if not reason:
                 strategy.features(raw, setup)
-                if (raw.get('entry_candle_context') or {}).get('strategy_completed_bars'):
-                    strategy.completed_bar_rows(raw, observed_at=row.get('decision_ts'))
+                if (raw.get("entry_candle_context") or {}).get(
+                    "strategy_completed_bars"
+                ):
+                    strategy.completed_bar_rows(raw, observed_at=row.get("decision_ts"))
         except (ValueError, TypeError, KeyError, OverflowError) as exc:
-            reason = 'strategy_invalid_primitive:' + str(exc)
+            reason = "strategy_invalid_primitive:" + str(exc)
         if reason:
-            exclusions.append(dict(decision_trace_id=row.get('decision_trace_id'), reason=reason))
+            exclusions.append(
+                dict(decision_trace_id=row.get("decision_trace_id"), reason=reason)
+            )
         else:
             supported.append(row)
-    result.update(source_exclusions=exclusions, supported_population_count=len(supported))
+    result.update(
+        source_exclusions=exclusions, supported_population_count=len(supported)
+    )
     population = supported
     if not population:
-        return {**result, 'blocker': 'strategy_no_supported_predecision_rows'}
-    input_sha256 = strategy.digest([source_contract, parent, population, strategy.SEARCH_VERSION,
-        selection_version, training_through_date, list(scope), OPPORTUNITY_IDENTITY_VERSION]
-        if machine_policy_only else [source_contract, parent, population])
-    result['input_sha256'] = input_sha256
+        return {**result, "blocker": "strategy_no_supported_predecision_rows"}
+    input_sha256 = strategy.digest(
+        [
+            source_contract,
+            parent,
+            population,
+            strategy.SEARCH_VERSION,
+            selection_version,
+            training_through_date,
+            list(scope),
+            OPPORTUNITY_IDENTITY_VERSION,
+        ]
+        if machine_policy_only
+        else [source_contract, parent, population]
+    )
+    result["input_sha256"] = input_sha256
     # Same input/selection is immutable; retries do not optimize on used holdout.
-    if (previous and previous.get('input_sha256') == input_sha256 and previous.get('candidate')
-        and previous.get('selection_state') in {'holdout_evaluated', 'published'}
-        and not (machine_policy_only and previous.get('holdout_status') == 'unsupported')
-        and (not machine_policy_only or previous.get('selection_basis') == selection_version)):
+    if (
+        previous
+        and previous.get("input_sha256") == input_sha256
+        and previous.get("candidate")
+        and previous.get("selection_state") in {"holdout_evaluated", "published"}
+        and not (
+            machine_policy_only and previous.get("holdout_status") == "unsupported"
+        )
+        and (
+            not machine_policy_only
+            or previous.get("selection_basis") == selection_version
+        )
+    ):
         return previous
     dates = sorted({r["source_date"] for r in population})
     if training_through_date and training_through_date < dates[0]:
         raise ValueError("strategy_training_boundary_outside_sources")
+
     # Machine replay replaces comparison only; kernels copy nested evidence
     # before changes. Isolate the top-level setup without duplicating raw bars.
     def working_row(row):
-        return ({**row, 'setup_evidence': dict(row['setup_evidence'])}
-                if machine_policy_only else deepcopy(row))
-    train = [working_row(r) for r in population if len(dates) == 1 or r["source_date"] < dates[-1]]
-    holdout = [working_row(r) for r in population if len(dates) > 1 and r["source_date"] == dates[-1]]
+        return (
+            {**row, "setup_evidence": dict(row["setup_evidence"])}
+            if machine_policy_only
+            else deepcopy(row)
+        )
+
+    train = [
+        working_row(r)
+        for r in population
+        if len(dates) == 1 or r["source_date"] < dates[-1]
+    ]
+    holdout = [
+        working_row(r)
+        for r in population
+        if len(dates) > 1 and r["source_date"] == dates[-1]
+    ]
     if training_through_date:
-        train = [working_row(r) for r in population if r['source_date'] <= training_through_date]
-        holdout = [working_row(r) for r in population if r['source_date'] > training_through_date]
+        train = [
+            working_row(r)
+            for r in population
+            if r["source_date"] <= training_through_date
+        ]
+        holdout = [
+            working_row(r)
+            for r in population
+            if r["source_date"] > training_through_date
+        ]
     split_manifest = None
     if recovery:
-        train_rows, held_rows, split_manifest = chronological_split(population, training_through_date=training_through_date)
-        train, holdout = [working_row(r) for r in train_rows], [working_row(r) for r in held_rows]
-        result['split_manifest'] = split_manifest
-        result['source_exclusions'].extend(split_manifest['exclusions'])
-    result['training_through_date'] = training_through_date or max((r['source_date'] for r in train), default=None)
-    result['holdout_boundary_basis'] = 'explicit_forward_boundary' if training_through_date else 'last_source_date'
+        train_rows, held_rows, split_manifest = chronological_split(
+            population, training_through_date=training_through_date
+        )
+        train, holdout = [working_row(r) for r in train_rows], [
+            working_row(r) for r in held_rows
+        ]
+        result["split_manifest"] = split_manifest
+        result["source_exclusions"].extend(split_manifest["exclusions"])
+    result["training_through_date"] = training_through_date or max(
+        (r["source_date"] for r in train), default=None
+    )
+    result["holdout_boundary_basis"] = (
+        "explicit_forward_boundary" if training_through_date else "last_source_date"
+    )
     if recovery:
         from src.engine.scalping.postclose_entry_validation import opportunity_identity
+
         identity = lambda row: strategy.digest(opportunity_identity(row))
     else:
         identity = _machine_opportunity_id
     # Floors govern publication only; one valid raw opportunity can be researched.
-    baseline_policy = parent if 'strategy' in parent else strategy.seed(parent, scope)
+    baseline_policy = parent if "strategy" in parent else strategy.seed(parent, scope)
     baseline_exclusions = []
-    setup_hashes = {id(row): strategy.digest(row['setup_evidence']) for row in train + holdout} if recovery else {}
+    setup_hashes = (
+        {id(row): strategy.digest(row["setup_evidence"]) for row in train + holdout}
+        if recovery
+        else {}
+    )
     baseline_cache = {}
     for row in train + holdout:
         try:
             incumbent_setup = row["setup_evidence"]
-            if 'strategy' not in parent:
-                incumbent_setup, _, _ = strategy.rebuild(incumbent_setup, baseline_policy)
+            if "strategy" not in parent:
+                incumbent_setup, _, _ = strategy.rebuild(
+                    incumbent_setup, baseline_policy
+                )
             # Rebuild facts while retaining every actual incumbent hierarchy rule.
             cache_key = setup_hashes.get(id(row))
             baseline = baseline_cache.get(cache_key) if recovery else None
             if baseline is None:
-                baseline = mechanistic_entry_policy_decision(incumbent_setup, policy=parent)
+                baseline = mechanistic_entry_policy_decision(
+                    incumbent_setup, policy=parent
+                )
                 if recovery:
                     if len(baseline_cache) >= 64:
                         baseline_cache.clear()
                     baseline_cache[cache_key] = baseline
-            action = baseline['action']
+            action = baseline["action"]
         except (ValueError, TypeError, KeyError) as exc:
-            baseline_exclusions.append(dict(decision_trace_id=row['decision_trace_id'], reason=str(exc)))
+            baseline_exclusions.append(
+                dict(decision_trace_id=row["decision_trace_id"], reason=str(exc))
+            )
             continue
-        row["comparison"] = {**(row.get("comparison") or {}), "historical_machine_action": row.get("machine_action") or (row.get("comparison") or {}).get("incumbent_machine_action") or action, "incumbent_machine_action": action,
-                             "control_action": "BUY" if action == "ENTER_NOW" else "WAIT", "incumbent_machine_reason": baseline.get("reason")}
-    excluded_ids = {item['decision_trace_id'] for item in baseline_exclusions}
-    train = [r for r in train if r['decision_trace_id'] not in excluded_ids]
-    holdout = [r for r in holdout if r['decision_trace_id'] not in excluded_ids]
+        row["comparison"] = {
+            **(row.get("comparison") or {}),
+            "historical_machine_action": row.get("machine_action")
+            or (row.get("comparison") or {}).get("incumbent_machine_action")
+            or action,
+            "incumbent_machine_action": action,
+            "control_action": "BUY" if action == "ENTER_NOW" else "WAIT",
+            "incumbent_machine_reason": baseline.get("reason"),
+        }
+    excluded_ids = {item["decision_trace_id"] for item in baseline_exclusions}
+    train = [r for r in train if r["decision_trace_id"] not in excluded_ids]
+    holdout = [r for r in holdout if r["decision_trace_id"] not in excluded_ids]
     if recovery:
-        split_manifest['train_opportunity_ids'] = [list(key) for key in sorted({opportunity_identity(r) for r in train})]
-        split_manifest['holdout_opportunity_ids'] = [list(key) for key in sorted({opportunity_identity(r) for r in holdout})]
-    result['source_exclusions'].extend(baseline_exclusions)
-    result['supported_population_count'] = len(train) + len(holdout)
+        split_manifest["train_opportunity_ids"] = [
+            list(key) for key in sorted({opportunity_identity(r) for r in train})
+        ]
+        split_manifest["holdout_opportunity_ids"] = [
+            list(key) for key in sorted({opportunity_identity(r) for r in holdout})
+        ]
+    result["source_exclusions"].extend(baseline_exclusions)
+    result["supported_population_count"] = len(train) + len(holdout)
     if not train:
-        return {**result, 'blocker': 'strategy_no_replayable_training_rows'}
-    support_blocker = ('strategy_chronological_holdout_missing' if len(dates) < 2 else
-        'strategy_supported_opportunity_floor' if len({identity(r) for r in train}) < 10 or len({identity(r) for r in holdout}) < 3 else None)
-    operating_count = sum('operating_comparison_input' in r for r in train + holdout)
-    result['operating_population_count'] = operating_count
+        return {**result, "blocker": "strategy_no_replayable_training_rows"}
+    support_blocker = (
+        "strategy_chronological_holdout_missing"
+        if len(dates) < 2
+        else (
+            "strategy_supported_opportunity_floor"
+            if len({identity(r) for r in train}) < 10
+            or len({identity(r) for r in holdout}) < 3
+            else None
+        )
+    )
+    operating_count = sum("operating_comparison_input" in r for r in train + holdout)
+    result["operating_population_count"] = operating_count
     operating_complete = operating_count == len(train) + len(holdout)
     if not operating_complete and not machine_policy_only:
-        result.update(blocker_owner='entry_setup_paired_replay_batch/strategy_owner_replay',
-            closure_test='same_opportunities_candidate_auxiliary_exact_setup_and_complete_owner_cost_capital_replay')
-    prepared_paths = {id(row): _machine_path_value(row) for row in train + holdout} if machine_policy_only else {}
+        result.update(
+            blocker_owner="entry_setup_paired_replay_batch/strategy_owner_replay",
+            closure_test="same_opportunities_candidate_auxiliary_exact_setup_and_complete_owner_cost_capital_replay",
+        )
+    prepared_paths = (
+        {id(row): _machine_path_value(row) for row in train + holdout}
+        if machine_policy_only
+        else {}
+    )
     if recovery:
-        adopted = {row['decision_trace_id']: prepared_paths[id(row)][1] for row in train + holdout}
-        excluded_reasons = {item.get('decision_trace_id') or item.get('attempt_id'): item['reason']
-                            for item in result['source_exclusions']}
+        adopted = {
+            row["decision_trace_id"]: prepared_paths[id(row)][1]
+            for row in train + holdout
+        }
+        excluded_reasons = {
+            item.get("decision_trace_id") or item.get("attempt_id"): item["reason"]
+            for item in result["source_exclusions"]
+        }
         coverage_strata = defaultdict(Counter)
         for row in original_population:
-            trace = row.get('decision_trace_id')
-            reason = (adopted[trace] if trace in adopted else
-                      excluded_reasons.get(trace, 'chronology_purged_or_duplicate_attempt'))
-            context = _as_dict(_as_dict(_as_dict((row.get('setup_evidence') or {}).get('mechanistic_context')).get('group')).get('key_parts'))
-            for name, label in (('date', row.get('source_date')), ('symbol', row.get('stock_code')),
-                                ('hour', str(row.get('decision_ts') or '')[11:13]),
-                                ('liquidity', context.get('liquidity_band') or 'UNKNOWN'),
-                                ('cost_basis', _as_dict(_as_dict(row.get('comparison')).get('entry_cost_contract')).get('basis') or 'MISSING')):
-                bucket = coverage_strata[name + ':' + str(label)]
-                bucket['observed_attempts'] += 1
-                bucket['cost_path_adopted_attempts' if reason is None else 'excluded:' + reason] += 1
-        result['source_coverage'] = dict(comparison_unit='attempt_not_independent_opportunity',
-            strata={label: {**dict(counts), 'cost_path_adoption_rate': counts['cost_path_adopted_attempts']/counts['observed_attempts']}
-                    for label,counts in coverage_strata.items()},
-            market_undetected_recall_proven=False, actual_fill_recovery_proven=False)
+            trace = row.get("decision_trace_id")
+            reason = (
+                adopted[trace]
+                if trace in adopted
+                else excluded_reasons.get(
+                    trace, "chronology_purged_or_duplicate_attempt"
+                )
+            )
+            context = _as_dict(
+                _as_dict(
+                    _as_dict(
+                        (row.get("setup_evidence") or {}).get("mechanistic_context")
+                    ).get("group")
+                ).get("key_parts")
+            )
+            for name, label in (
+                ("date", row.get("source_date")),
+                ("symbol", row.get("stock_code")),
+                ("hour", str(row.get("decision_ts") or "")[11:13]),
+                ("liquidity", context.get("liquidity_band") or "UNKNOWN"),
+                (
+                    "cost_basis",
+                    _as_dict(
+                        _as_dict(row.get("comparison")).get("entry_cost_contract")
+                    ).get("basis")
+                    or "MISSING",
+                ),
+            ):
+                bucket = coverage_strata[name + ":" + str(label)]
+                bucket["observed_attempts"] += 1
+                bucket[
+                    (
+                        "cost_path_adopted_attempts"
+                        if reason is None
+                        else "excluded:" + reason
+                    )
+                ] += 1
+        result["source_coverage"] = dict(
+            comparison_unit="attempt_not_independent_opportunity",
+            strata={
+                label: {
+                    **dict(counts),
+                    "cost_path_adoption_rate": counts["cost_path_adopted_attempts"]
+                    / counts["observed_attempts"],
+                }
+                for label, counts in coverage_strata.items()
+            },
+            market_undetected_recall_proven=False,
+            actual_fill_recovery_proven=False,
+        )
     evaluation_cache = {}
+
     def evaluate(rows, candidate):
         cache_key = (tuple(id(r) for r in rows), strategy.digest(candidate))
         if machine_policy_only and cache_key in evaluation_cache:
@@ -9226,1010 +11068,2029 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
                 skipped[reason] += 1
                 continue
             if machine_policy_only and candidate == parent:
-                decision = dict(action=row['comparison']['incumbent_machine_action'])
+                decision = dict(action=row["comparison"]["incumbent_machine_action"])
             elif recovery and setup_hashes[id(row)] in decision_cache:
                 decision = decision_cache[setup_hashes[id(row)]]
                 decision_hits += 1
             else:
-                decision = mechanistic_entry_policy_decision(row['setup_evidence'], policy=candidate)
+                decision = mechanistic_entry_policy_decision(
+                    row["setup_evidence"], policy=candidate
+                )
                 decision_misses += 1
                 if recovery:
                     if len(decision_cache) >= 64:
                         decision_cache.clear()
                     decision_cache[setup_hashes[id(row)]] = decision
-            actions.append(decision['action'])
-            fallback_counts[(decision.get('strategy_selection') or {}).get('fallback_reason', 'legacy')] += 1
+            actions.append(decision["action"])
+            fallback_counts[
+                (decision.get("strategy_selection") or {}).get(
+                    "fallback_reason", "legacy"
+                )
+            ] += 1
             old = row["comparison"]["incumbent_machine_action"]
-            transitions[old + '->' + decision['action']] += 1
+            transitions[old + "->" + decision["action"]] += 1
             if decision["action"] != old:
                 changed.add(identity(row))
-                changed_attempts.append(dict(decision_trace_id=row['decision_trace_id'],
-                    raw_sha256=row['setup_evidence']['strategy_raw_sha256'],
-                    incumbent_action=old, candidate_action=decision['action'],
-                    candidate_setup_sha256=(decision.get('effective_setup_evidence') or row['setup_evidence'])['evidence_sha256']))
+                changed_attempts.append(
+                    dict(
+                        decision_trace_id=row["decision_trace_id"],
+                        raw_sha256=row["setup_evidence"]["strategy_raw_sha256"],
+                        incumbent_action=old,
+                        candidate_action=decision["action"],
+                        candidate_setup_sha256=(
+                            decision.get("effective_setup_evidence")
+                            or row["setup_evidence"]
+                        )["evidence_sha256"],
+                    )
+                )
             if decision["action"] == "ENTER_NOW" and not machine_policy_only:
                 selected.append(row)
                 # The auxiliary screen consumes strategy-dependent facts. An
                 # incumbent verdict must never be relabeled as candidate PASS.
                 operating = row.get("operating_comparison_input") or {}
-                frozen_setup = (operating.get("input") or {}).get("entry_setup_evidence_v1") or {}
-                rebuilt = decision.get("effective_setup_evidence") or row["setup_evidence"]
+                frozen_setup = (operating.get("input") or {}).get(
+                    "entry_setup_evidence_v1"
+                ) or {}
+                rebuilt = (
+                    decision.get("effective_setup_evidence") or row["setup_evidence"]
+                )
+
                 def fact_hash(value):
-                    return strategy.digest({k:v for k,v in value.items() if k not in {
-                        'evidence_sha256', 'strategy_raw_input', 'strategy_raw_sha256', 'strategy_selection'}})
+                    return strategy.digest(
+                        {
+                            k: v
+                            for k, v in value.items()
+                            if k
+                            not in {
+                                "evidence_sha256",
+                                "strategy_raw_input",
+                                "strategy_raw_sha256",
+                                "strategy_selection",
+                            }
+                        }
+                    )
+
                 # Exact unchanged AI facts can reuse the frozen actual screen.
                 # Changed facts require the downstream owner's paired replay.
-                frozen_assessment = (operating.get('input') or {}).get('mechanistic_entry_assessment')
-                provider_assessment = {k:v for k,v in decision.items() if k not in {'strategy_selection', 'effective_setup_evidence'}}
-                downstream = (downstream and bool(frozen_setup) and fact_hash(frozen_setup) == fact_hash(rebuilt)
-                    and isinstance(frozen_assessment, dict) and frozen_assessment == provider_assessment)
-        economics = (_machine_admission_metrics(rows, actions, prepared_paths=[prepared_paths[id(r)] for r in rows], recovery=recovery) if machine_policy_only else
-            _machine_sequence_operating_metrics(rows, {r["decision_trace_id"] for r in selected}, candidate))
-        arm = dict(source_dates=sorted({r["source_date"] for r in rows}),
-            opportunity_ids=sorted({identity(r) for r in rows}), changed_opportunity_ids=sorted(changed),
+                frozen_assessment = (operating.get("input") or {}).get(
+                    "mechanistic_entry_assessment"
+                )
+                provider_assessment = {
+                    k: v
+                    for k, v in decision.items()
+                    if k not in {"strategy_selection", "effective_setup_evidence"}
+                }
+                downstream = (
+                    downstream
+                    and bool(frozen_setup)
+                    and fact_hash(frozen_setup) == fact_hash(rebuilt)
+                    and isinstance(frozen_assessment, dict)
+                    and frozen_assessment == provider_assessment
+                )
+        economics = (
+            _machine_admission_metrics(
+                rows,
+                actions,
+                prepared_paths=[prepared_paths[id(r)] for r in rows],
+                recovery=recovery,
+            )
+            if machine_policy_only
+            else _machine_sequence_operating_metrics(
+                rows, {r["decision_trace_id"] for r in selected}, candidate
+            )
+        )
+        arm = dict(
+            source_dates=sorted({r["source_date"] for r in rows}),
+            opportunity_ids=sorted({identity(r) for r in rows}),
+            changed_opportunity_ids=sorted(changed),
             source_complete=all("operating_comparison_input" in r for r in rows),
-            downstream_context_bound=downstream, economics=economics,
-            action_transition_counts=dict(transitions), changed_attempts=changed_attempts,
+            downstream_context_bound=downstream,
+            economics=economics,
+            action_transition_counts=dict(transitions),
+            changed_attempts=changed_attempts,
             fallback_counts=dict(fallback_counts),
-            incumbent_enter_now_changed_count=sum(v for k,v in transitions.items() if k.startswith('ENTER_NOW->') and k != 'ENTER_NOW->ENTER_NOW'))
+            incumbent_enter_now_changed_count=sum(
+                v
+                for k, v in transitions.items()
+                if k.startswith("ENTER_NOW->") and k != "ENTER_NOW->ENTER_NOW"
+            ),
+        )
         if machine_policy_only:
-            arm['replay_coverage'] = dict(
-                version='machine_economic_replay_v1', population_count=len(rows),
+            arm["replay_coverage"] = dict(
+                version="machine_economic_replay_v1",
+                population_count=len(rows),
                 replayed_count=len(rows) - sum(skipped.values()),
                 excluded_nonentry_count=sum(skipped.values()),
                 excluded_nonentry_reason_counts=dict(skipped),
                 all_existing_entries_replayed=True,
-                transition_scope='replayed_rows_only')
+                transition_scope="replayed_rows_only",
+            )
             if recovery:
-                arm['replay_coverage'].update(exact_setup_cache_hits=decision_hits,
-                    exact_setup_cache_misses=decision_misses, cache_scope='one_candidate_exact_complete_setup_hash')
-                arm['train_search_sha256'] = search_seed
+                arm["replay_coverage"].update(
+                    exact_setup_cache_hits=decision_hits,
+                    exact_setup_cache_misses=decision_misses,
+                    cache_scope="one_candidate_exact_complete_setup_hash",
+                )
+                arm["train_search_sha256"] = search_seed
             # Candidates are unique; retaining all detailed arms provides no
             # reuse and grows memory with candidate_count * population_count.
             evaluation_cache.clear()
             evaluation_cache[cache_key] = arm
         return arm
+
     selectors = [None]
     # Boundaries are derived only from predecision training features, never outcomes.
     values = defaultdict(list)
     for row in train:
         setup = row["setup_evidence"]
-        for name, value in strategy.features(setup["strategy_raw_input"], setup).items():
+        for name, value in strategy.features(
+            setup["strategy_raw_input"], setup
+        ).items():
             if value is not None:
                 values[name].append(value)
     for name, observations in sorted(values.items()):
         unique = sorted(set(observations))
         if len(unique) > 1:
-            for boundary in sorted({unique[len(unique)//3], unique[2*len(unique)//3]}):
+            for boundary in sorted(
+                {unique[len(unique) // 3], unique[2 * len(unique) // 3]}
+            ):
                 selectors.extend((name, boundary, side) for side in ("lt", "ge"))
-    domains = {k: sorted(set(v[1]) | {strategy.default_profile(parent)[k]}) for k,v in strategy.REGISTRY.items()}
-    support = {name: sum(strategy.coordinate_supported(name, r['setup_evidence']['strategy_raw_input'], r['setup_evidence']) for r in train)
-               for name in domains}
+    domains = {
+        k: sorted(set(v[1]) | {strategy.default_profile(parent)[k]})
+        for k, v in strategy.REGISTRY.items()
+    }
+    support = {
+        name: sum(
+            strategy.coordinate_supported(
+                name, r["setup_evidence"]["strategy_raw_input"], r["setup_evidence"]
+            )
+            for r in train
+        )
+        for name in domains
+    }
     unsupported_coordinates = [name for name, count in support.items() if not count]
     for name in unsupported_coordinates:
         domains[name] = [strategy.default_profile(parent)[name]]
-    result.update(unsupported_coordinates=unsupported_coordinates, coordinate_support_counts=support,
-                  registry_contract=strategy.registry_contract(), domain_source='train_only',
-                  unsupported_source_contracts=['ordered_large_sell_event_and_recovery_ticks_not_captured'])
+    result.update(
+        unsupported_coordinates=unsupported_coordinates,
+        coordinate_support_counts=support,
+        registry_contract=strategy.registry_contract(),
+        domain_source="train_only",
+        unsupported_source_contracts=[
+            "ordered_large_sell_event_and_recovery_ticks_not_captured"
+        ],
+    )
     # Expand the initial seed by one bounded step on both edges. This domain is
     # frozen before inspecting holdout outcomes; the grid is not a permanent cap.
     for name, grid in domains.items():
         if len(grid) > 1:
             low, high = strategy.coordinate_bounds(name)
-            step = max(1, (max(grid)-min(grid)) // 2) if isinstance(strategy.REGISTRY[name][0], int) else (max(grid)-min(grid))/2
-            domains[name] = sorted(set(grid) | {max(low,min(grid)-step), min(high,max(grid)+step)})
+            step = (
+                max(1, (max(grid) - min(grid)) // 2)
+                if isinstance(strategy.REGISTRY[name][0], int)
+                else (max(grid) - min(grid)) / 2
+            )
+            domains[name] = sorted(
+                set(grid) | {max(low, min(grid) - step), min(high, max(grid) + step)}
+            )
     # Priority uses only predecision blockers/source support, never path labels.
-    search_seed = strategy.digest([train, parent, strategy.registry_contract(), strategy.SEARCH_VERSION, selection_version]) if recovery else input_sha256
-    result['train_search_sha256'] = search_seed
-    blocker_text = ' '.join(str(r['comparison'].get('incumbent_machine_reason') or '') + ' ' +
-        json.dumps(r['setup_evidence'].get('hard_blockers') or []) for r in train).lower()
-    prior_single = set() if recovery else set((((previous or {}).get('train_checkpoint') or {}).get('group_counts') or {}).get('single', {}).get('coordinates') or [])
-    priority_coordinates = sorted((k for k in domains if len(domains[k]) > 1), key=lambda k: (
-        -int(any(token in blocker_text for token in k.split('_') if len(token) > 4)),
-        k in prior_single, -support[k], strategy.digest([search_seed, k])))
-    result['search_domain'] = dict(domains=domains, selectors=selectors, priority_coordinates=priority_coordinates,
-        budget=({'control': 4, 'single': len(strategy.REGISTRY), 'recovery_neighborhood': 6, 'independent_joint': 4} if recovery else strategy.SEARCH_BUDGET), version=strategy.SEARCH_VERSION, search_seed=search_seed,
-        priority_basis='predecision_blockers_unvisited_source_support')
-    prior_search = (previous or {}).get('search') or {}
-    if machine_policy_only and previous and previous.get('input_sha256') == input_sha256:
+    search_seed = (
+        strategy.digest(
+            [
+                train,
+                parent,
+                strategy.registry_contract(),
+                strategy.SEARCH_VERSION,
+                selection_version,
+            ]
+        )
+        if recovery
+        else input_sha256
+    )
+    result["train_search_sha256"] = search_seed
+    blocker_text = " ".join(
+        str(r["comparison"].get("incumbent_machine_reason") or "")
+        + " "
+        + json.dumps(r["setup_evidence"].get("hard_blockers") or [])
+        for r in train
+    ).lower()
+    prior_single = (
+        set()
+        if recovery
+        else set(
+            (((previous or {}).get("train_checkpoint") or {}).get("group_counts") or {})
+            .get("single", {})
+            .get("coordinates")
+            or []
+        )
+    )
+    priority_coordinates = sorted(
+        (k for k in domains if len(domains[k]) > 1),
+        key=lambda k: (
+            -int(
+                any(token in blocker_text for token in k.split("_") if len(token) > 4)
+            ),
+            k in prior_single,
+            -support[k],
+            strategy.digest([search_seed, k]),
+        ),
+    )
+    result["search_domain"] = dict(
+        domains=domains,
+        selectors=selectors,
+        priority_coordinates=priority_coordinates,
+        budget=(
+            {
+                "control": 4,
+                "single": len(strategy.REGISTRY),
+                "recovery_neighborhood": 6,
+                "independent_joint": 4,
+            }
+            if recovery
+            else strategy.SEARCH_BUDGET
+        ),
+        version=strategy.SEARCH_VERSION,
+        search_seed=search_seed,
+        priority_basis="predecision_blockers_unvisited_source_support",
+    )
+    prior_search = (previous or {}).get("search") or {}
+    if (
+        machine_policy_only
+        and previous
+        and previous.get("input_sha256") == input_sha256
+    ):
         if not recovery:
             # Legacy search freezes its ordering before the first chunk;
             # revisiting coordinates must not derive a new retry order.
-            frozen_priority = (previous.get('search_domain') or {}).get('priority_coordinates')
-            if isinstance(frozen_priority, list) and sorted(frozen_priority) == sorted(priority_coordinates):
-                result['search_domain']['priority_coordinates'] = frozen_priority
-        cursor, size = prior_search.get('cursor'), prior_search.get('domain_size')
-        resume_valid = (previous.get('scope') == list(scope)
-            and strategy.digest(previous.get('search_domain')) == strategy.digest(result['search_domain'])
-            and type(cursor) is int and type(size) is int and 0 <= cursor <= size and size > 0
-            and isinstance(prior_search.get('domain_sha256'), str)
-            and re.fullmatch(r'[0-9a-f]{64}', prior_search['domain_sha256']) is not None
-            and type(prior_search.get('search_complete')) is bool
-            and prior_search['search_complete'] == (cursor == size))
+            frozen_priority = (previous.get("search_domain") or {}).get(
+                "priority_coordinates"
+            )
+            if isinstance(frozen_priority, list) and sorted(frozen_priority) == sorted(
+                priority_coordinates
+            ):
+                result["search_domain"]["priority_coordinates"] = frozen_priority
+        cursor, size = prior_search.get("cursor"), prior_search.get("domain_size")
+        resume_valid = (
+            previous.get("scope") == list(scope)
+            and strategy.digest(previous.get("search_domain"))
+            == strategy.digest(result["search_domain"])
+            and type(cursor) is int
+            and type(size) is int
+            and 0 <= cursor <= size
+            and size > 0
+            and isinstance(prior_search.get("domain_sha256"), str)
+            and re.fullmatch(r"[0-9a-f]{64}", prior_search["domain_sha256"]) is not None
+            and type(prior_search.get("search_complete")) is bool
+            and prior_search["search_complete"] == (cursor == size)
+        )
         if not resume_valid:
             previous = None
             prior_search = {}
     if machine_policy_only:
-        prior_coverage = ((previous or {}).get('coordinate_coverage') or {}) if (previous or {}).get('input_sha256') == input_sha256 else {}
+        prior_coverage = (
+            ((previous or {}).get("coordinate_coverage") or {})
+            if (previous or {}).get("input_sha256") == input_sha256
+            else {}
+        )
         contract_by_name = strategy.registry_contract()
-        coverage = {name: dict(exact_scope='|'.join(scope),
-            source=contract_by_name[name]['source'], support_count=support[name],
-            parent_value=strategy.default_profile(parent)[name], domain=domains[name],
-            parent_sha256=strategy.digest(parent), input_sha256=input_sha256,
-            single_attempt_count=(prior_coverage.get(name) or {}).get('single_attempt_count', 0),
-            single_evaluated_count=(prior_coverage.get(name) or {}).get('single_evaluated_count', 0),
-            single_invalid_count=(prior_coverage.get(name) or {}).get('single_invalid_count', 0),
-            single_deduplicated_count=(prior_coverage.get(name) or {}).get('single_deduplicated_count', 0),
-            single_candidate_sha256=(prior_coverage.get(name) or {}).get('single_candidate_sha256'),
-            changed_attempt_count=(prior_coverage.get(name) or {}).get('changed_attempt_count', 0))
-            for name in strategy.REGISTRY}
-        result['coordinate_coverage'] = coverage
+        coverage = {
+            name: dict(
+                exact_scope="|".join(scope),
+                source=contract_by_name[name]["source"],
+                support_count=support[name],
+                parent_value=strategy.default_profile(parent)[name],
+                domain=domains[name],
+                parent_sha256=strategy.digest(parent),
+                input_sha256=input_sha256,
+                single_attempt_count=(prior_coverage.get(name) or {}).get(
+                    "single_attempt_count", 0
+                ),
+                single_evaluated_count=(prior_coverage.get(name) or {}).get(
+                    "single_evaluated_count", 0
+                ),
+                single_invalid_count=(prior_coverage.get(name) or {}).get(
+                    "single_invalid_count", 0
+                ),
+                single_deduplicated_count=(prior_coverage.get(name) or {}).get(
+                    "single_deduplicated_count", 0
+                ),
+                single_candidate_sha256=(prior_coverage.get(name) or {}).get(
+                    "single_candidate_sha256"
+                ),
+                changed_attempt_count=(prior_coverage.get(name) or {}).get(
+                    "changed_attempt_count", 0
+                ),
+            )
+            for name in strategy.REGISTRY
+        }
+        result["coordinate_coverage"] = coverage
+
         def finalize_coverage(cursor):
             for item in coverage.values():
-                item['source_status'] = 'supported' if item['support_count'] else 'source_gap'
-                item['evaluation_status'] = ('source_gap' if not item['support_count'] else
-                    'fixed_domain' if len(item['domain']) == 1 else
-                    'evaluated' if item['single_evaluated_count'] else
-                    'deduplicated_candidate' if item['single_deduplicated_count'] else
-                    'invalid_candidate' if item['single_invalid_count'] else 'not_reached_budget')
-                item['next_cursor'] = (cursor if item['evaluation_status'] == 'not_reached_budget' else None)
-    start = ((previous or {}).get('search') or {}).get('cursor', 0) if (previous or {}).get('input_sha256') == input_sha256 else 0
+                item["source_status"] = (
+                    "supported" if item["support_count"] else "source_gap"
+                )
+                item["evaluation_status"] = (
+                    "source_gap"
+                    if not item["support_count"]
+                    else (
+                        "fixed_domain"
+                        if len(item["domain"]) == 1
+                        else (
+                            "evaluated"
+                            if item["single_evaluated_count"]
+                            else (
+                                "deduplicated_candidate"
+                                if item["single_deduplicated_count"]
+                                else (
+                                    "invalid_candidate"
+                                    if item["single_invalid_count"]
+                                    else "not_reached_budget"
+                                )
+                            )
+                        )
+                    )
+                )
+                item["next_cursor"] = (
+                    cursor
+                    if item["evaluation_status"] == "not_reached_budget"
+                    else None
+                )
+
+    start = (
+        ((previous or {}).get("search") or {}).get("cursor", 0)
+        if (previous or {}).get("input_sha256") == input_sha256
+        else 0
+    )
     if machine_policy_only and start:
-        frozen_domain = previous.get('search_domain') or {}
-        priority_coordinates = frozen_domain.get('priority_coordinates', priority_coordinates)
-        result['search_domain']['priority_coordinates'] = priority_coordinates
-        result['evaluated_candidate_count'] = previous.get('evaluated_candidate_count', 0)
+        frozen_domain = previous.get("search_domain") or {}
+        priority_coordinates = frozen_domain.get(
+            "priority_coordinates", priority_coordinates
+        )
+        result["search_domain"]["priority_coordinates"] = priority_coordinates
+        result["evaluated_candidate_count"] = previous.get(
+            "evaluated_candidate_count", 0
+        )
         # A completed no-candidate search emits no further iterator rows. Keep
         # its exact progress so a retry cannot lose completion or restart it.
-        result['search'] = deepcopy(prior_search)
-    frozen = (previous or {}).get('candidate') or {}
-    same_input_unsupported_holdout = (machine_policy_only and previous
-        and previous.get('input_sha256') == input_sha256
-        and previous.get('selection_basis') == selection_version
-        and previous.get('selection_state') == 'holdout_evaluated'
-        and previous.get('search_complete') is True
-        and previous.get('holdout_status') == 'unsupported'
-        and previous.get('training_through_date') == result['training_through_date'])
-    frozen_holdout_revision = (not training_through_date
-        and frozen.get('evidence', {}).get('holdout', {}).get('source_dates')
-        and max(frozen['evidence']['holdout']['source_dates']) >= dates[-1])
-    if (frozen.get('parent_sha256') == strategy.digest(parent)
-        and (same_input_unsupported_holdout or frozen_holdout_revision)):
+        result["search"] = deepcopy(prior_search)
+    frozen = (previous or {}).get("candidate") or {}
+    same_input_unsupported_holdout = (
+        machine_policy_only
+        and previous
+        and previous.get("input_sha256") == input_sha256
+        and previous.get("selection_basis") == selection_version
+        and previous.get("selection_state") == "holdout_evaluated"
+        and previous.get("search_complete") is True
+        and previous.get("holdout_status") == "unsupported"
+        and previous.get("training_through_date") == result["training_through_date"]
+    )
+    frozen_holdout_revision = (
+        not training_through_date
+        and frozen.get("evidence", {}).get("holdout", {}).get("source_dates")
+        and max(frozen["evidence"]["holdout"]["source_dates"]) >= dates[-1]
+    )
+    if frozen.get("parent_sha256") == strategy.digest(parent) and (
+        same_input_unsupported_holdout or frozen_holdout_revision
+    ):
         frozen = deepcopy(frozen)
         try:
-            frozen['evidence'] = {**frozen['evidence'], 'train': evaluate(train, frozen['policy']), 'holdout': evaluate(holdout, frozen['policy'])}
+            frozen["evidence"] = {
+                **frozen["evidence"],
+                "train": evaluate(train, frozen["policy"]),
+                "holdout": evaluate(holdout, frozen["policy"]),
+            }
             if machine_policy_only:
-                frozen['evidence']['incumbent_train'] = evaluate(train, parent)
-                frozen['evidence']['incumbent_holdout'] = evaluate(holdout, parent)
+                frozen["evidence"]["incumbent_train"] = evaluate(train, parent)
+                frozen["evidence"]["incumbent_holdout"] = evaluate(holdout, parent)
         except (ValueError, TypeError, KeyError) as exc:
             if machine_policy_only:
                 finalize_coverage(start)
-            return {**result, 'status': 'unsupported_strategy_replay', 'blocker': str(exc),
-                'selection_status': 'frozen_candidate_replay_failed'}
-        frozen['evidence_sha256'] = strategy.digest(frozen['evidence'])
+            return {
+                **result,
+                "status": "unsupported_strategy_replay",
+                "blocker": str(exc),
+                "selection_status": "frozen_candidate_replay_failed",
+            }
+        frozen["evidence_sha256"] = strategy.digest(frozen["evidence"])
         errors = strategy.promotion_errors(frozen, parent, scope)
-        if machine_policy_only and (previous or {}).get('selection_basis') != selection_version:
-            errors.append('frozen_selection_version_superseded')
-        if machine_policy_only and frozen['policy'] == parent:
-            errors.append('candidate_equals_incumbent')
-        if recovery and previous.get('train_search_sha256') != search_seed:
-            errors.append('frozen_selection_training_source_changed')
+        if (
+            machine_policy_only
+            and (previous or {}).get("selection_basis") != selection_version
+        ):
+            errors.append("frozen_selection_version_superseded")
+        if machine_policy_only and frozen["policy"] == parent:
+            errors.append("candidate_equals_incumbent")
+        if recovery and previous.get("train_search_sha256") != search_seed:
+            errors.append("frozen_selection_training_source_changed")
         if machine_policy_only:
             finalize_coverage(start)
             for item in coverage.values():
-                if item['evaluation_status'] == 'not_reached_budget':
-                    item['evaluation_reason'] = 'frozen_holdout_reuse_forbidden'
-            result.update(schema='main_entry_machine_policy_selection_v1',
-                machine_policy=frozen['policy'], machine_policy_sha256=frozen['policy_sha256'],
-                machine_evidence=frozen['evidence'], auxiliary_ai_required=False,
-                selection_basis=(previous or {}).get('selection_basis'),
-                holdout_status='evaluated_after_selection',
-                search_complete=bool((previous or {}).get('search_complete')),
-                search=(previous or {}).get('search'),
-                evaluated_candidate_count=(previous or {}).get('evaluated_candidate_count', 0),
-                selection_state='holdout_evaluated',
-                incumbent_evidence=dict(train=frozen['evidence']['incumbent_train'],
-                                        holdout=frozen['evidence']['incumbent_holdout']),
-                train_checkpoint=(previous or {}).get('train_checkpoint'),
-                machine_candidate_scores=(previous or {}).get('machine_candidate_scores'),
-                candidate_blockers=(previous or {}).get('candidate_blockers'),
-                research_candidates=(previous or {}).get('research_candidates'),
-                runtime_effect=False, allowed_runtime_apply=False)
-        return {**result, 'candidate': frozen, 'promotion_pass': not errors,
-            'promotion_errors': errors, 'status': 'eligible' if not errors else 'hold_candidate',
-            'selection_status': ('frozen_before_same_holdout_revision' if not machine_policy_only or
-                (previous or {}).get('selection_basis') == selection_version
-                else 'frozen_prior_selection_version')}
-    saved = (previous or {}).get('train_checkpoint') or {} if start else {}
-    best, best_evidence, best_score = saved.get('best'), saved.get('best_evidence'), saved.get('best_score')
-    best_score = tuple(best_score) if isinstance(best_score, (tuple, list)) else best_score
+                if item["evaluation_status"] == "not_reached_budget":
+                    item["evaluation_reason"] = "frozen_holdout_reuse_forbidden"
+            result.update(
+                schema="main_entry_machine_policy_selection_v1",
+                machine_policy=frozen["policy"],
+                machine_policy_sha256=frozen["policy_sha256"],
+                machine_evidence=frozen["evidence"],
+                auxiliary_ai_required=False,
+                selection_basis=(previous or {}).get("selection_basis"),
+                holdout_status="evaluated_after_selection",
+                search_complete=bool((previous or {}).get("search_complete")),
+                search=(previous or {}).get("search"),
+                evaluated_candidate_count=(previous or {}).get(
+                    "evaluated_candidate_count", 0
+                ),
+                selection_state="holdout_evaluated",
+                incumbent_evidence=dict(
+                    train=frozen["evidence"]["incumbent_train"],
+                    holdout=frozen["evidence"]["incumbent_holdout"],
+                ),
+                train_checkpoint=(previous or {}).get("train_checkpoint"),
+                machine_candidate_scores=(previous or {}).get(
+                    "machine_candidate_scores"
+                ),
+                candidate_blockers=(previous or {}).get("candidate_blockers"),
+                research_candidates=(previous or {}).get("research_candidates"),
+                runtime_effect=False,
+                allowed_runtime_apply=False,
+            )
+        return {
+            **result,
+            "candidate": frozen,
+            "promotion_pass": not errors,
+            "promotion_errors": errors,
+            "status": "eligible" if not errors else "hold_candidate",
+            "selection_status": (
+                "frozen_before_same_holdout_revision"
+                if not machine_policy_only
+                or (previous or {}).get("selection_basis") == selection_version
+                else "frozen_prior_selection_version"
+            ),
+        }
+    saved = (previous or {}).get("train_checkpoint") or {} if start else {}
+    best, best_evidence, best_score = (
+        saved.get("best"),
+        saved.get("best_evidence"),
+        saved.get("best_score"),
+    )
+    best_score = (
+        tuple(best_score) if isinstance(best_score, (tuple, list)) else best_score
+    )
     if machine_policy_only:
         incumbent_evidence = evaluate(train, parent)
-        result['incumbent_evidence'] = dict(train=incumbent_evidence)
-        incumbent_score = _machine_admission_rank(incumbent_evidence['economics'],
-            node_count=len(parent.get('strategy', {}).get('nodes') or {'root': {}}))
-        if not recovery and all(v is not None for v in incumbent_score[:3]) and (best_score is None or incumbent_score >= best_score):
-            best, best_evidence, best_score = deepcopy(parent), incumbent_evidence, incumbent_score
-    blockers = Counter((previous or {}).get('candidate_blockers') or {}) if start else Counter()
-    visited = set(saved.get('visited_hashes') or [])
-    group_counts = deepcopy(saved.get('group_counts') or {})
-    result['selection_state'] = 'searching_train'
-    machine_scores = list((previous or {}).get('machine_candidate_scores') or []) if machine_policy_only and start else []
-    research_candidates = deepcopy((previous or {}).get('research_candidates') or []) if (previous or {}).get('input_sha256') == input_sha256 else []
-    recovery_anchor = saved.get('recovery_anchor')
-    anchor_frozen = 'recovery_anchor' in saved
+        result["incumbent_evidence"] = dict(train=incumbent_evidence)
+        incumbent_score = _machine_admission_rank(
+            incumbent_evidence["economics"],
+            node_count=len(parent.get("strategy", {}).get("nodes") or {"root": {}}),
+        )
+        if (
+            not recovery
+            and all(v is not None for v in incumbent_score[:3])
+            and (best_score is None or incumbent_score >= best_score)
+        ):
+            best, best_evidence, best_score = (
+                deepcopy(parent),
+                incumbent_evidence,
+                incumbent_score,
+            )
+    blockers = (
+        Counter((previous or {}).get("candidate_blockers") or {})
+        if start
+        else Counter()
+    )
+    visited = set(saved.get("visited_hashes") or [])
+    group_counts = deepcopy(saved.get("group_counts") or {})
+    result["selection_state"] = "searching_train"
+    machine_scores = (
+        list((previous or {}).get("machine_candidate_scores") or [])
+        if machine_policy_only and start
+        else []
+    )
+    research_candidates = (
+        deepcopy((previous or {}).get("research_candidates") or [])
+        if (previous or {}).get("input_sha256") == input_sha256
+        else []
+    )
+    recovery_anchor = saved.get("recovery_anchor")
+    anchor_frozen = "recovery_anchor" in saved
+
     def freeze_anchor():
         nonlocal recovery_anchor, anchor_frozen
         if not anchor_frozen:
             recovery_anchor, anchor_frozen = deepcopy(best), True
         return recovery_anchor
-    for candidate, progress in strategy.joint_candidates(parent, scope, domains=domains, selectors=selectors, start=start, limit=limit,
-            **({'local_first': True, 'priority_coordinates': priority_coordinates,
-                'search_seed': search_seed, 'admission_expansion': True,
-                **({'recovery_anchor': freeze_anchor} if recovery else {})} if machine_policy_only else {})):
+
+    for candidate, progress in strategy.joint_candidates(
+        parent,
+        scope,
+        domains=domains,
+        selectors=selectors,
+        start=start,
+        limit=limit,
+        **(
+            {
+                "local_first": True,
+                "priority_coordinates": priority_coordinates,
+                "search_seed": search_seed,
+                "admission_expansion": True,
+                **({"recovery_anchor": freeze_anchor} if recovery else {}),
+            }
+            if machine_policy_only
+            else {}
+        ),
+    ):
         result["search"] = progress
-        counts = group_counts.setdefault(progress.get('group', 'legacy'), dict(attempted=0, invalid=0, evaluated=0, deduplicated=0, coordinates=[]))
-        counts['attempted'] += 1
-        counts['coordinates'] = sorted(set(counts['coordinates']) | set(progress.get('changed_coordinates') or []))
-        single_name = (progress.get('changed_coordinates') or [None])[0] if machine_policy_only and progress.get('allocated_group') == 'single' else None
+        counts = group_counts.setdefault(
+            progress.get("group", "legacy"),
+            dict(attempted=0, invalid=0, evaluated=0, deduplicated=0, coordinates=[]),
+        )
+        counts["attempted"] += 1
+        counts["coordinates"] = sorted(
+            set(counts["coordinates"]) | set(progress.get("changed_coordinates") or [])
+        )
+        single_name = (
+            (progress.get("changed_coordinates") or [None])[0]
+            if machine_policy_only and progress.get("allocated_group") == "single"
+            else None
+        )
         if single_name is not None:
-            coverage[single_name]['single_attempt_count'] += 1
+            coverage[single_name]["single_attempt_count"] += 1
         if candidate is None:
-            counts['invalid'] += 1
+            counts["invalid"] += 1
             if single_name is not None:
-                coverage[single_name]['single_invalid_count'] += 1
+                coverage[single_name]["single_invalid_count"] += 1
             continue
         candidate_hash = strategy.digest(candidate)
         if candidate_hash in visited:
-            counts['deduplicated'] += 1
+            counts["deduplicated"] += 1
             if single_name is not None:
-                coverage[single_name]['single_deduplicated_count'] += 1
-                coverage[single_name]['single_candidate_sha256'] = candidate_hash
+                coverage[single_name]["single_deduplicated_count"] += 1
+                coverage[single_name]["single_candidate_sha256"] = candidate_hash
             continue
         visited.add(candidate_hash)
         try:
             evidence = evaluate(train, candidate)
         except (ValueError, TypeError, KeyError) as exc:
             blockers[str(exc)] += 1
-            counts['replay_failed'] = counts.get('replay_failed', 0) + 1
+            counts["replay_failed"] = counts.get("replay_failed", 0) + 1
             if single_name is not None:
-                coverage[single_name]['single_invalid_count'] += 1
+                coverage[single_name]["single_invalid_count"] += 1
             continue
         result["evaluated_candidate_count"] += 1
         counts["evaluated"] += 1
         if single_name is not None:
-            coverage[single_name]['single_evaluated_count'] += 1
-            coverage[single_name]['single_candidate_sha256'] = candidate_hash
-            coverage[single_name]['changed_attempt_count'] += len(evidence['changed_attempts'])
-        if evidence['changed_attempts']:
-            research_candidates.append(dict(policy=candidate, policy_sha256=strategy.digest(candidate),
-                action_transition_counts=evidence['action_transition_counts'], changed_attempts=evidence['changed_attempts'],
-                changed_opportunity_count=len(evidence['changed_opportunity_ids']),
-                downstream_context_bound=evidence['downstream_context_bound'],
-                runtime_effect=False, allowed_runtime_apply=False, metric_role='funnel_count'))
-            research_candidates.sort(key=lambda item: (-item['changed_opportunity_count'], item['policy_sha256']))
+            coverage[single_name]["single_evaluated_count"] += 1
+            coverage[single_name]["single_candidate_sha256"] = candidate_hash
+            coverage[single_name]["changed_attempt_count"] += len(
+                evidence["changed_attempts"]
+            )
+        if evidence["changed_attempts"]:
+            research_candidates.append(
+                dict(
+                    policy=candidate,
+                    policy_sha256=strategy.digest(candidate),
+                    action_transition_counts=evidence["action_transition_counts"],
+                    changed_attempts=evidence["changed_attempts"],
+                    changed_opportunity_count=len(evidence["changed_opportunity_ids"]),
+                    downstream_context_bound=evidence["downstream_context_bound"],
+                    runtime_effect=False,
+                    allowed_runtime_apply=False,
+                    metric_role="funnel_count",
+                )
+            )
+            research_candidates.sort(
+                key=lambda item: (
+                    -item["changed_opportunity_count"],
+                    item["policy_sha256"],
+                )
+            )
             del research_candidates[3:]
         economy = evidence["economics"]
         if machine_policy_only:
-            delta = economy.get('paired_admission_delta_pct')
-            selected_ev = economy.get('selected_path_ev_pct')
-            worst = economy.get('worst_selected_path_pct')
-            win_rate = economy.get('win_rate_pct')
-            complexity = sum(sum(v != node.get('fallback_profile', strategy.default_profile(parent))[k] for k,v in node['profile'].items()) for node in candidate['strategy']['nodes'].values())
-            score = _machine_admission_rank(economy, node_count=len(candidate['strategy']['nodes']), complexity=complexity)
-            qualified_recovery = (not recovery or
-                strategy.machine_winrate_improves(economy, incumbent_evidence['economics']))
-            machine_scores.append(dict(policy_sha256=strategy.digest(candidate),
-                search_group=progress.get('group'), node_count=len(candidate['strategy']['nodes']),
-                fallback_counts=evidence['fallback_counts'],
-                replay_coverage=evidence['replay_coverage'],
-                profile_changes={k:v for k,v in strategy.default_profile(candidate).items()
-                                 if v != strategy.default_profile(parent)[k]},
-                economics=economy, action_transition_counts=evidence['action_transition_counts']))
-            if (delta is not None and selected_ev is not None
-                and win_rate is not None and worst is not None
-                and worst > CATASTROPHIC_LOSS_PCT and score[0] is not None
+            delta = economy.get("paired_admission_delta_pct")
+            selected_ev = economy.get("selected_path_ev_pct")
+            worst = economy.get("worst_selected_path_pct")
+            win_rate = economy.get("win_rate_pct")
+            complexity = sum(
+                sum(
+                    v
+                    != node.get("fallback_profile", strategy.default_profile(parent))[k]
+                    for k, v in node["profile"].items()
+                )
+                for node in candidate["strategy"]["nodes"].values()
+            )
+            score = _machine_admission_rank(
+                economy,
+                node_count=len(candidate["strategy"]["nodes"]),
+                complexity=complexity,
+            )
+            qualified_recovery = not recovery or strategy.machine_winrate_improves(
+                economy, incumbent_evidence["economics"]
+            )
+            machine_scores.append(
+                dict(
+                    policy_sha256=strategy.digest(candidate),
+                    search_group=progress.get("group"),
+                    node_count=len(candidate["strategy"]["nodes"]),
+                    fallback_counts=evidence["fallback_counts"],
+                    replay_coverage=evidence["replay_coverage"],
+                    profile_changes={
+                        k: v
+                        for k, v in strategy.default_profile(candidate).items()
+                        if v != strategy.default_profile(parent)[k]
+                    },
+                    economics=economy,
+                    action_transition_counts=evidence["action_transition_counts"],
+                )
+            )
+            if (
+                delta is not None
+                and selected_ev is not None
+                and win_rate is not None
+                and worst is not None
+                and worst > CATASTROPHIC_LOSS_PCT
+                and score[0] is not None
                 and qualified_recovery
-                and (best_score is None or score > best_score)):
+                and (best_score is None or score > best_score)
+            ):
                 best, best_evidence, best_score = candidate, evidence, score
-            result['train_checkpoint'] = dict(best=best, best_evidence=best_evidence, best_score=best_score,
-                visited_hashes=sorted(visited), group_counts=group_counts)
+            result["train_checkpoint"] = dict(
+                best=best,
+                best_evidence=best_evidence,
+                best_score=best_score,
+                visited_hashes=sorted(visited),
+                group_counts=group_counts,
+            )
             if recovery and anchor_frozen:
-                result['train_checkpoint']['recovery_anchor'] = recovery_anchor
-            result['machine_candidate_scores'] = machine_scores
-            finalize_coverage(progress['cursor'])
-            if checkpoint and (progress['cursor'] % 8 == 0 or progress['search_complete']):
+                result["train_checkpoint"]["recovery_anchor"] = recovery_anchor
+            result["machine_candidate_scores"] = machine_scores
+            finalize_coverage(progress["cursor"])
+            if checkpoint and (
+                progress["cursor"] % 8 == 0 or progress["search_complete"]
+            ):
                 checkpoint(result)
             continue
-        if (economy.get("status") != "supported_operating_comparison"
-            or not evidence["source_complete"] or not evidence["downstream_context_bound"]):
-            blockers[economy.get("blocker") or "strategy_candidate_auxiliary_context_unbound"] += 1
+        if (
+            economy.get("status") != "supported_operating_comparison"
+            or not evidence["source_complete"]
+            or not evidence["downstream_context_bound"]
+        ):
+            blockers[
+                economy.get("blocker") or "strategy_candidate_auxiliary_context_unbound"
+            ] += 1
             continue
         score = economy.get("daily_net_profit_delta_krw")
-        if score is not None and score > 0 and (best_score is None or score > best_score):
+        if (
+            score is not None
+            and score > 0
+            and (best_score is None or score > best_score)
+        ):
             best, best_evidence, best_score = candidate, evidence, score
-    result['train_checkpoint'] = dict(best=best, best_evidence=best_evidence, best_score=best_score,
-        visited_hashes=sorted(visited), group_counts=group_counts)
+    result["train_checkpoint"] = dict(
+        best=best,
+        best_evidence=best_evidence,
+        best_score=best_score,
+        visited_hashes=sorted(visited),
+        group_counts=group_counts,
+    )
     if recovery and anchor_frozen:
-        result['train_checkpoint']['recovery_anchor'] = recovery_anchor
+        result["train_checkpoint"]["recovery_anchor"] = recovery_anchor
     if machine_policy_only:
-        finalize_coverage((result.get('search') or {}).get('cursor', start))
+        finalize_coverage((result.get("search") or {}).get("cursor", start))
     result["search_complete"] = result.get("search", {}).get("search_complete", False)
-    result['selection_state'] = 'selection_frozen' if result['search_complete'] else 'searching_train'
-    if machine_policy_only and not result['search_complete']:
+    result["selection_state"] = (
+        "selection_frozen" if result["search_complete"] else "searching_train"
+    )
+    if machine_policy_only and not result["search_complete"]:
         # Persist a promising train candidate without consuming the holdout.
-        result.update(machine_candidate_scores=machine_scores, candidate_blockers=dict(blockers),
-                      research_candidates=research_candidates, status='searching_train')
+        result.update(
+            machine_candidate_scores=machine_scores,
+            candidate_blockers=dict(blockers),
+            research_candidates=research_candidates,
+            status="searching_train",
+        )
         if checkpoint:
             checkpoint(result)
         return result
     result["candidate_blockers"] = dict(blockers)
-    result['research_candidates'] = research_candidates
-    result['research_only'] = True
-    result['research_status'] = ('action_changes_found' if research_candidates else
-        'no_action_change_in_search_space' if result['search_complete'] else 'search_incomplete')
+    result["research_candidates"] = research_candidates
+    result["research_only"] = True
+    result["research_status"] = (
+        "action_changes_found"
+        if research_candidates
+        else (
+            "no_action_change_in_search_space"
+            if result["search_complete"]
+            else "search_incomplete"
+        )
+    )
     if machine_policy_only:
-        machine_evidence = dict(train=best_evidence, incumbent_train=incumbent_evidence,
-            evaluation_contract=dict(selection_version=selection_version,
-                evaluation_basis=strategy.MACHINE_EVALUATION_BASIS, input_sha256=input_sha256,
-                source_contract_sha256=result['source_contract_sha256'], parent_sha256=strategy.digest(parent),
-                scope=list(scope), training_through_date=result['training_through_date']))
+        machine_evidence = dict(
+            train=best_evidence,
+            incumbent_train=incumbent_evidence,
+            evaluation_contract=dict(
+                selection_version=selection_version,
+                evaluation_basis=strategy.MACHINE_EVALUATION_BASIS,
+                input_sha256=input_sha256,
+                source_contract_sha256=result["source_contract_sha256"],
+                parent_sha256=strategy.digest(parent),
+                scope=list(scope),
+                training_through_date=result["training_through_date"],
+            ),
+        )
         if recovery:
-            machine_evidence['split_manifest'] = split_manifest
-            machine_evidence['evaluation_contract']['train_search_sha256'] = search_seed
-        holdout_status = 'unavailable_or_no_candidate'
+            machine_evidence["split_manifest"] = split_manifest
+            machine_evidence["evaluation_contract"]["train_search_sha256"] = search_seed
+        holdout_status = "unavailable_or_no_candidate"
         if best is not None and holdout:
             try:
-                machine_evidence['holdout'] = evaluate(holdout, best)
-                machine_evidence['incumbent_holdout'] = evaluate(holdout, parent)
-                holdout_status = 'evaluated_after_selection'
+                machine_evidence["holdout"] = evaluate(holdout, best)
+                machine_evidence["incumbent_holdout"] = evaluate(holdout, parent)
+                holdout_status = "evaluated_after_selection"
             except (ValueError, TypeError, KeyError) as exc:
-                holdout_status = 'unsupported'
-                machine_evidence['holdout'] = {'blocker': str(exc)}
-        candidate = (dict(schema='main_entry_strategy_candidate_v2',
-            evaluation_basis=strategy.MACHINE_EVALUATION_BASIS, selection_score_version=selection_version, scope=list(scope),
-            parent_policy=deepcopy(parent), parent_sha256=strategy.digest(parent),
-            policy=best, policy_sha256=strategy.digest(best), evidence=machine_evidence,
-            evidence_sha256=strategy.digest(machine_evidence), selected_without_holdout=True)
-            if best is not None else None)
-        if 'incumbent_holdout' in machine_evidence:
-            result['incumbent_evidence']['holdout'] = machine_evidence['incumbent_holdout']
-        missing_candidate_reason = ('no_winrate_qualified_candidate' if recovery and result['evaluated_candidate_count']
-                                    else 'no_evaluable_machine_candidate')
-        errors = strategy.promotion_errors(candidate, parent, scope) if candidate else [missing_candidate_reason]
+                holdout_status = "unsupported"
+                machine_evidence["holdout"] = {"blocker": str(exc)}
+        candidate = (
+            dict(
+                schema="main_entry_strategy_candidate_v2",
+                evaluation_basis=strategy.MACHINE_EVALUATION_BASIS,
+                selection_score_version=selection_version,
+                scope=list(scope),
+                parent_policy=deepcopy(parent),
+                parent_sha256=strategy.digest(parent),
+                policy=best,
+                policy_sha256=strategy.digest(best),
+                evidence=machine_evidence,
+                evidence_sha256=strategy.digest(machine_evidence),
+                selected_without_holdout=True,
+            )
+            if best is not None
+            else None
+        )
+        if "incumbent_holdout" in machine_evidence:
+            result["incumbent_evidence"]["holdout"] = machine_evidence[
+                "incumbent_holdout"
+            ]
+        missing_candidate_reason = (
+            "no_winrate_qualified_candidate"
+            if recovery and result["evaluated_candidate_count"]
+            else "no_evaluable_machine_candidate"
+        )
+        errors = (
+            strategy.promotion_errors(candidate, parent, scope)
+            if candidate
+            else [missing_candidate_reason]
+        )
         if best == parent:
-            errors.append('candidate_equals_incumbent')
-        return {**result, 'schema': 'main_entry_machine_policy_selection_v1',
-            'status': 'selected_machine_policy' if best is not None else missing_candidate_reason,
-            'machine_policy': best, 'machine_policy_sha256': strategy.digest(best) if best is not None else None,
-            'machine_evidence': machine_evidence, 'auxiliary_ai_required': False,
-            'machine_candidate_scores': machine_scores,
-            'candidate': candidate, 'promotion_pass': not errors, 'promotion_errors': errors,
-            'selection_basis': selection_version,
-            'holdout_status': holdout_status, 'selection_state': 'holdout_evaluated',
-            'runtime_effect': False, 'allowed_runtime_apply': False}
+            errors.append("candidate_equals_incumbent")
+        return {
+            **result,
+            "schema": "main_entry_machine_policy_selection_v1",
+            "status": (
+                "selected_machine_policy"
+                if best is not None
+                else missing_candidate_reason
+            ),
+            "machine_policy": best,
+            "machine_policy_sha256": (
+                strategy.digest(best) if best is not None else None
+            ),
+            "machine_evidence": machine_evidence,
+            "auxiliary_ai_required": False,
+            "machine_candidate_scores": machine_scores,
+            "candidate": candidate,
+            "promotion_pass": not errors,
+            "promotion_errors": errors,
+            "selection_basis": selection_version,
+            "holdout_status": holdout_status,
+            "selection_state": "holdout_evaluated",
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        }
     if support_blocker:
-        return {**result, 'status': 'hold_sample', 'blocker': support_blocker}
-    if result['evaluated_candidate_count'] == 0 and blockers:
-        return {**result, 'status': 'unsupported_strategy_replay', 'blocker': 'strategy_candidates_not_replayable'}
+        return {**result, "status": "hold_sample", "blocker": support_blocker}
+    if result["evaluated_candidate_count"] == 0 and blockers:
+        return {
+            **result,
+            "status": "unsupported_strategy_replay",
+            "blocker": "strategy_candidates_not_replayable",
+        }
     if best is None:
-        status = ('unsupported_downstream' if blockers or not operating_complete else
-                  'search_incomplete' if not result['search_complete'] else 'evaluated_no_edge')
-        return {**result, 'status': status,
-                'blocker': 'strategy_candidate_economic_support_missing' if blockers else 'no_train_improvement'}
+        status = (
+            "unsupported_downstream"
+            if blockers or not operating_complete
+            else (
+                "search_incomplete"
+                if not result["search_complete"]
+                else "evaluated_no_edge"
+            )
+        )
+        return {
+            **result,
+            "status": status,
+            "blocker": (
+                "strategy_candidate_economic_support_missing"
+                if blockers
+                else "no_train_improvement"
+            ),
+        }
     # Exactly one selected vector reaches the independent chronological holdout.
     try:
         evidence = dict(train=best_evidence, holdout=evaluate(holdout, best))
     except (ValueError, TypeError, KeyError) as exc:
-        return {**result, 'status': 'unsupported_strategy_replay', 'blocker': str(exc)}
-    candidate = dict(schema="main_entry_strategy_candidate_v2", scope=list(scope),
-        parent_policy=deepcopy(parent), parent_sha256=strategy.digest(parent), policy=best, policy_sha256=strategy.digest(best),
-        evidence=evidence, evidence_sha256=strategy.digest(evidence), selected_without_holdout=True)
+        return {**result, "status": "unsupported_strategy_replay", "blocker": str(exc)}
+    candidate = dict(
+        schema="main_entry_strategy_candidate_v2",
+        scope=list(scope),
+        parent_policy=deepcopy(parent),
+        parent_sha256=strategy.digest(parent),
+        policy=best,
+        policy_sha256=strategy.digest(best),
+        evidence=evidence,
+        evidence_sha256=strategy.digest(evidence),
+        selected_without_holdout=True,
+    )
     errors = strategy.promotion_errors(candidate, parent, scope)
-    return {**result, "candidate": candidate, "promotion_pass": not errors,
-            "research_only": bool(errors),
-            "promotion_errors": errors, "status": "eligible" if not errors else "hold_candidate"}
+    return {
+        **result,
+        "candidate": candidate,
+        "promotion_pass": not errors,
+        "research_only": bool(errors),
+        "promotion_errors": errors,
+        "status": "eligible" if not errors else "hold_candidate",
+    }
 
 
 def _winrate_opportunity_metrics(rows):
     """Score a frozen selected population using only cost-bound first-hit bits."""
-    from src.engine.scalping.entry_strategy_policy import machine_support_adjusted_win_rate
+    from src.engine.scalping.entry_strategy_policy import (
+        machine_support_adjusted_win_rate,
+    )
+
     groups = defaultdict(list)
     for row in rows:
-        groups[row['opportunity_id']].append(row['win'])
+        groups[row["opportunity_id"]].append(row["win"])
     rate = 100 * fmean(fmean(values) for values in groups.values()) if groups else None
     net_paths = defaultdict(list)
     for row in rows:
-        value = row.get('net_path_pct')
+        value = row.get("net_path_pct")
         if value is not None:
-            net_paths[row['opportunity_id']].append(value)
+            net_paths[row["opportunity_id"]].append(value)
     complete_net_paths = bool(groups) and all(
-        len(net_paths[key]) == len(values) for key, values in groups.items())
-    return dict(selected_attempt_count=len(rows), selected_opportunity_count=len(groups),
-        winning_attempt_count=sum(row['win'] for row in rows),
-        source_dates=sorted({row['source_date'] for row in rows}),
+        len(net_paths[key]) == len(values) for key, values in groups.items()
+    )
+    return dict(
+        selected_attempt_count=len(rows),
+        selected_opportunity_count=len(groups),
+        winning_attempt_count=sum(row["win"] for row in rows),
+        source_dates=sorted({row["source_date"] for row in rows}),
         win_rate_pct=rate,
-        net_path_ev_pct=(fmean(fmean(net_paths[key]) for key in groups) if complete_net_paths else None),
-        worst_net_path_pct=(min(value for values in net_paths.values() for value in values)
-            if complete_net_paths else None),
+        net_path_ev_pct=(
+            fmean(fmean(net_paths[key]) for key in groups)
+            if complete_net_paths
+            else None
+        ),
+        worst_net_path_pct=(
+            min(value for values in net_paths.values() for value in values)
+            if complete_net_paths
+            else None
+        ),
         support_adjusted_win_rate_pct=machine_support_adjusted_win_rate(
-            dict(win_rate_pct=rate, selected_opportunity_count=len(groups))))
+            dict(win_rate_pct=rate, selected_opportunity_count=len(groups))
+        ),
+    )
 
 
 def _winrate_veto_payload(threshold):
-    return dict(schema='entry_situation_veto_v1', selection_basis='win_rate_only',
-        market='REGULAR', exact_scope='KRX|KRX_REGULAR',
-        feature='curr_vs_micro_vwap_bp', threshold_bp=float(threshold),
-        condition='parent_ENTER_NOW_and_fresh_available',
-        selected_action='BLOCK', unknown_action='parent')
+    return dict(
+        schema="entry_situation_veto_v1",
+        selection_basis="win_rate_only",
+        market="REGULAR",
+        exact_scope="KRX|KRX_REGULAR",
+        feature="curr_vs_micro_vwap_bp",
+        threshold_bp=float(threshold),
+        condition="parent_ENTER_NOW_and_fresh_available",
+        selected_action="BLOCK",
+        unknown_action="parent",
+    )
 
 
-def build_winrate_policy_report(rows, *, source_receipt, target_date, data_root=Path('data'), publication_day=None, admission_recipe_id=None, admission_analysis=None):
+def build_winrate_policy_report(
+    rows,
+    *,
+    source_receipt,
+    target_date,
+    data_root=Path("data"),
+    publication_day=None,
+    admission_recipe_id=None,
+    admission_analysis=None,
+):
     """Evaluate the registered one-feature veto without replaying fact kernels per threshold."""
     from copy import deepcopy
     from src.engine.scalping import entry_strategy_policy as strategy
-    from src.engine.scalping.mechanistic_entry_runtime_policy import load_effective, for_cohort, load, next_target
-    publication_day = publication_day or datetime.now(KST).date().isoformat()
-    current = load_effective(data_root=data_root, target_date=datetime.now(KST).date().isoformat())
-    scoped = for_cohort(current, ('KRX', 'KRX_REGULAR')) if current else None
-    if scoped is None:
-        raise ValueError('winrate_incumbent_scope_missing')
-    parent = scoped['machine_policy']
-    if 'strategy' not in parent:
-        raise ValueError('winrate_parent_raw_strategy_missing')
-    from src.engine.scalping.postclose_entry_validation import (
-        NEW_LOGIC_SOURCE_DATE, OPPORTUNITY_IDENTITY_VERSION, opportunity_identity,
+    from src.engine.scalping.mechanistic_entry_runtime_policy import (
+        load_effective,
+        for_cohort,
+        load,
+        next_target,
     )
-    from src.engine.scalping.entry_admission_recipe import RECIPE_ID, candidate_policy as admission_candidate
+
+    publication_day = publication_day or datetime.now(KST).date().isoformat()
+    current = load_effective(
+        data_root=data_root, target_date=datetime.now(KST).date().isoformat()
+    )
+    scoped = for_cohort(current, ("KRX", "KRX_REGULAR")) if current else None
+    if scoped is None:
+        raise ValueError("winrate_incumbent_scope_missing")
+    parent = scoped["machine_policy"]
+    if "strategy" not in parent:
+        raise ValueError("winrate_parent_raw_strategy_missing")
+    from src.engine.scalping.postclose_entry_validation import (
+        NEW_LOGIC_SOURCE_DATE,
+        OPPORTUNITY_IDENTITY_VERSION,
+        opportunity_identity,
+    )
+    from src.engine.scalping.entry_admission_recipe import (
+        RECIPE_ID,
+        candidate_policy as admission_candidate,
+    )
+
     if admission_recipe_id not in (None, RECIPE_ID):
-        raise ValueError('winrate_admission_recipe_unregistered')
+        raise ValueError("winrate_admission_recipe_unregistered")
     recipe_mode = admission_recipe_id == RECIPE_ID
     recipe_candidate = admission_candidate(parent) if recipe_mode else None
     analysis_rows = {}
     if recipe_mode and admission_analysis is not None:
         from src.engine.scalping.entry_admission_analysis import validate_report
-        validate_report(admission_analysis, parent=parent, target_date=target_date, require_files=True)
-        analysis_rows = {row['trace']: row for row in admission_analysis['observations']}
+
+        validate_report(
+            admission_analysis,
+            parent=parent,
+            target_date=target_date,
+            require_files=True,
+        )
+        analysis_rows = {
+            row["trace"]: row for row in admission_analysis["observations"]
+        }
     elif recipe_mode:
-        raise ValueError('winrate_admission_analysis_missing')
-    native_identity_required = recipe_mode or (target_date >= NEW_LOGIC_SOURCE_DATE and 'entry_situation_veto' in parent)
+        raise ValueError("winrate_admission_analysis_missing")
+    native_identity_required = recipe_mode or (
+        target_date >= NEW_LOGIC_SOURCE_DATE and "entry_situation_veto" in parent
+    )
     base_policy = deepcopy(parent)
     if not recipe_mode:
-        base_policy.pop('entry_situation_veto', None)
-    scope_rows = [row for row in rows if (row.get('effective_venue'), row.get('session_bucket')) == ('KRX', 'KRX_REGULAR')]
-    population, contract = _common_refinement_population([], scope_rows,
-        target_date=target_date, source_receipt=source_receipt, paired_contract={},
-        cohort=('KRX', 'KRX_REGULAR'), allow_attempt_identity_fallback=True,
-        retain_unevaluated_machine_rows=True)
+        base_policy.pop("entry_situation_veto", None)
+    scope_rows = [
+        row
+        for row in rows
+        if (row.get("effective_venue"), row.get("session_bucket"))
+        == ("KRX", "KRX_REGULAR")
+    ]
+    population, contract = _common_refinement_population(
+        [],
+        scope_rows,
+        target_date=target_date,
+        source_receipt=source_receipt,
+        paired_contract={},
+        cohort=("KRX", "KRX_REGULAR"),
+        allow_attempt_identity_fallback=True,
+        retain_unevaluated_machine_rows=True,
+    )
     excluded = Counter()
     prepared, seen = [], set()
     for row in population:
-        if recipe_mode and row.get('stock_code') == '005930':
-            excluded['outside_recipe_symbol'] += 1
+        if recipe_mode and row.get("stock_code") == "005930":
+            excluded["outside_recipe_symbol"] += 1
             continue
-        if row.get('source_date', '') < _refresh_floor(target_date):
-            excluded['before_policy_refresh_start'] += 1
+        if row.get("source_date", "") < _refresh_floor(target_date):
+            excluded["before_policy_refresh_start"] += 1
             continue
-        trace = row.get('decision_trace_id')
+        trace = row.get("decision_trace_id")
         if not trace or trace in seen:
-            excluded['attempt_identity_missing_or_duplicate'] += 1
+            excluded["attempt_identity_missing_or_duplicate"] += 1
             continue
         seen.add(trace)
-        setup = row.get('setup_evidence') or {}
-        raw = setup.get('strategy_raw_input') or {}
-        if not raw or setup.get('strategy_raw_sha256') != strategy.digest(raw):
-            excluded['raw_capture_hash_invalid'] += 1
+        setup = row.get("setup_evidence") or {}
+        raw = setup.get("strategy_raw_input") or {}
+        if not raw or setup.get("strategy_raw_sha256") != strategy.digest(raw):
+            excluded["raw_capture_hash_invalid"] += 1
             continue
         try:
-            strategy.completed_bar_rows(raw, observed_at=row.get('decision_ts'))
+            strategy.completed_bar_rows(raw, observed_at=row.get("decision_ts"))
         except (ValueError, TypeError, KeyError, OverflowError):
-            excluded['completed_bar_structure_invalid'] += 1
+            excluded["completed_bar_structure_invalid"] += 1
             continue
         if recipe_mode:
             from src.engine.scalping.entry_admission_analysis import native_path_value
-            net_path_pct, first_hit, reason = native_path_value(row, analysis_rows.get(trace))
+
+            net_path_pct, first_hit, reason = native_path_value(
+                row, analysis_rows.get(trace)
+            )
         else:
             net_path_pct, reason = _machine_path_value(row)
-            first_hit = (row.get('entry_quality_path') or {}).get('first_hit')
+            first_hit = (row.get("entry_quality_path") or {}).get("first_hit")
         if reason:
             excluded[reason] += 1
             continue
-        if first_hit not in {'net_target_first', 'exact_stop_first'}:
-            excluded['binary_terminal_missing'] += 1
+        if first_hit not in {"net_target_first", "exact_stop_first"}:
+            excluded["binary_terminal_missing"] += 1
             continue
         opportunity_id = _machine_opportunity_id(row)
         if native_identity_required:
             try:
                 opportunity_id = strategy.digest(opportunity_identity(row))
             except (ValueError, TypeError, KeyError):
-                excluded['native_opportunity_identity_missing'] += 1
+                excluded["native_opportunity_identity_missing"] += 1
                 continue
         try:
             decision = mechanistic_entry_policy_decision(setup, policy=parent)
-            base_decision = (decision if base_policy == parent else
-                mechanistic_entry_policy_decision(setup, policy=base_policy))
-            recipe_decision = mechanistic_entry_policy_decision(setup, policy=recipe_candidate) if recipe_mode else None
+            base_decision = (
+                decision
+                if base_policy == parent
+                else mechanistic_entry_policy_decision(setup, policy=base_policy)
+            )
+            recipe_decision = (
+                mechanistic_entry_policy_decision(setup, policy=recipe_candidate)
+                if recipe_mode
+                else None
+            )
         except (ValueError, TypeError, KeyError):
-            excluded['parent_replay_invalid'] += 1
+            excluded["parent_replay_invalid"] += 1
             continue
-        feat = raw.get('features') or {}
-        value = strategy._number(feat.get('curr_vs_micro_vwap_bp'))
-        available = feat.get('micro_vwap_available') is True
-        fresh = feat.get('minute_candle_window_fresh') is True
-        prepared.append(dict(source_date=row['source_date'], decision_ts=row.get('decision_ts'), decision_trace_id=trace,
-            opportunity_id=opportunity_id, parent_action=decision['action'],
-            base_action=base_decision['action'],
-            recipe_action=recipe_decision['action'] if recipe_mode else None,
-            net_path_pct=net_path_pct,
-            win=first_hit == 'net_target_first',
-            gross_first_hit=(row.get('comparison') or {}).get('entry_path_first_hit'),
-            value_bp=value if available and fresh else None,
-            situation='VWAP_UNKNOWN' if not (available and fresh and value is not None) else
-                'VWAP_EXTENDED' if value >= 68.75 else 'VWAP_NOT_EXTENDED'))
-    dates = sorted({row['source_date'] for row in prepared})
-    initial = not recipe_mode and 'entry_situation_veto' not in parent
-    pending_initial = initial and target_date > '2026-09-23'
+        feat = raw.get("features") or {}
+        value = strategy._number(feat.get("curr_vs_micro_vwap_bp"))
+        available = feat.get("micro_vwap_available") is True
+        fresh = feat.get("minute_candle_window_fresh") is True
+        prepared.append(
+            dict(
+                source_date=row["source_date"],
+                decision_ts=row.get("decision_ts"),
+                decision_trace_id=trace,
+                opportunity_id=opportunity_id,
+                parent_action=decision["action"],
+                base_action=base_decision["action"],
+                recipe_action=recipe_decision["action"] if recipe_mode else None,
+                net_path_pct=net_path_pct,
+                win=first_hit == "net_target_first",
+                gross_first_hit=(row.get("comparison") or {}).get(
+                    "entry_path_first_hit"
+                ),
+                value_bp=value if available and fresh else None,
+                situation=(
+                    "VWAP_UNKNOWN"
+                    if not (available and fresh and value is not None)
+                    else "VWAP_EXTENDED" if value >= 68.75 else "VWAP_NOT_EXTENDED"
+                ),
+            )
+        )
+    dates = sorted({row["source_date"] for row in prepared})
+    initial = not recipe_mode and "entry_situation_veto" not in parent
+    pending_initial = initial and target_date > "2026-09-23"
     pending_bundle = None
     first_day_split = False
     split_keys = None
     if pending_initial:
-        pending_bundle = load(data_root=data_root, target_date=next_target(publication_day))
-        selection = (pending_bundle or {}).get('winrate_selection') or {}
-        if (selection.get('disposition') != 'initial_adopted'
-            or selection.get('policy_version') != 'winrate_initial_v1'
-            or selection.get('parent_bundle_sha256') != current['bundle_sha256']
-            or pending_bundle.get('previous_bundle_sha256') != current['bundle_sha256']
-            or selection.get('machine_policy_sha256') != strategy.digest(pending_bundle.get('machine_policy'))
-            or ((pending_bundle.get('machine_policy') or {}).get('entry_situation_veto') or {}).get('threshold_bp') != 68.75):
-            raise ValueError('winrate_pending_initial_generation_missing_or_mismatched')
+        pending_bundle = load(
+            data_root=data_root, target_date=next_target(publication_day)
+        )
+        selection = (pending_bundle or {}).get("winrate_selection") or {}
+        if (
+            selection.get("disposition") != "initial_adopted"
+            or selection.get("policy_version") != "winrate_initial_v1"
+            or selection.get("parent_bundle_sha256") != current["bundle_sha256"]
+            or pending_bundle.get("previous_bundle_sha256") != current["bundle_sha256"]
+            or selection.get("machine_policy_sha256")
+            != strategy.digest(pending_bundle.get("machine_policy"))
+            or (
+                (pending_bundle.get("machine_policy") or {}).get("entry_situation_veto")
+                or {}
+            ).get("threshold_bp")
+            != 68.75
+        ):
+            raise ValueError("winrate_pending_initial_generation_missing_or_mismatched")
     if initial and not pending_initial:
-        train_dates, holdout_dates = [day for day in dates if day <= '2026-09-22'], ['2026-09-23']
+        train_dates, holdout_dates = [day for day in dates if day <= "2026-09-22"], [
+            "2026-09-23"
+        ]
         thresholds = [68.75]
     elif pending_initial:
         train_dates, holdout_dates, thresholds = dates, [], []
     else:
         consumed = set()
-        for receipt_path in (data_root / 'runtime' / 'mechanistic_entry_policy' / 'winrate_holdouts').glob('*.json'):
+        for receipt_path in (
+            data_root / "runtime" / "mechanistic_entry_policy" / "winrate_holdouts"
+        ).glob("*.json"):
             receipt = _load_json(receipt_path)
-            if (receipt.get('schema') != 'main_entry_winrate_holdout_consumption_v1'
+            if (
+                receipt.get("schema") != "main_entry_winrate_holdout_consumption_v1"
                 or not _artifact_content_sha256_valid(receipt)
-                or not isinstance(receipt.get('holdout_dates'), list)
-                or any(not isinstance(day, str) or day <= '2026-09-23' for day in receipt['holdout_dates'])):
-                raise ValueError('winrate_holdout_consumption_invalid')
-            consumed.update(receipt.get('holdout_dates') or [])
-        fresh_dates = [day for day in dates if day >= _refresh_floor(target_date) and day not in consumed
-                       and (not recipe_mode or day > '2026-10-02')]
+                or not isinstance(receipt.get("holdout_dates"), list)
+                or any(
+                    not isinstance(day, str) or day <= "2026-09-23"
+                    for day in receipt["holdout_dates"]
+                )
+            ):
+                raise ValueError("winrate_holdout_consumption_invalid")
+            consumed.update(receipt.get("holdout_dates") or [])
+        fresh_dates = [
+            day
+            for day in dates
+            if day >= _refresh_floor(target_date)
+            and day not in consumed
+            and (not recipe_mode or day > "2026-10-02")
+        ]
         holdout_dates = fresh_dates[-1:] if fresh_dates else []
         train_dates = [day for day in dates if day not in holdout_dates]
         # On the first forward day, freeze a chronological opportunity split.
         # Every attempt of one opportunity stays in the same half. A later day
         # uses all earlier forward days for learning and its fresh day for test.
-        first_day_split = bool(len(dates) == 1 and dates == [target_date]
-                               and holdout_dates == [target_date])
+        first_day_split = bool(
+            len(dates) == 1
+            and dates == [target_date]
+            and holdout_dates == [target_date]
+        )
         split_keys = None
         if first_day_split:
             clocks = defaultdict(list)
             for row in prepared:
                 try:
-                    stamp = datetime.fromisoformat(row['decision_ts'])
-                    if stamp.tzinfo is None or stamp.astimezone(KST).date().isoformat() != target_date:
-                        raise ValueError('wrong_day')
-                    clocks[row['opportunity_id']].append(stamp.isoformat())
+                    stamp = datetime.fromisoformat(row["decision_ts"])
+                    if (
+                        stamp.tzinfo is None
+                        or stamp.astimezone(KST).date().isoformat() != target_date
+                    ):
+                        raise ValueError("wrong_day")
+                    clocks[row["opportunity_id"]].append(stamp.isoformat())
                 except (TypeError, ValueError):
                     clocks = {}
                     break
             ordered = sorted((min(times), key) for key, times in clocks.items())
-            cutoff = max(1, int(len(ordered) * .7))
-            split_keys = ({key for _, key in ordered[:cutoff]},
-                          {key for _, key in ordered[cutoff:]}) if len(ordered) >= 2 else (set(), set())
+            cutoff = max(1, int(len(ordered) * 0.7))
+            split_keys = (
+                (
+                    {key for _, key in ordered[:cutoff]},
+                    {key for _, key in ordered[cutoff:]},
+                )
+                if len(ordered) >= 2
+                else (set(), set())
+            )
             train_dates = [target_date]
-        train_values = sorted({row['value_bp'] for row in prepared if row['source_date'] in train_dates
-                               and (not first_day_split or row['opportunity_id'] in split_keys[0])
-                               and row['base_action'] == 'ENTER_NOW' and row['value_bp'] is not None})
-        thresholds = (train_values if len(train_values) <= 9 else sorted({
-            train_values[min(len(train_values) - 1, int((len(train_values) - 1) * q / 10))]
-            for q in range(1, 10)}))
-        thresholds = ([RECIPE_ID] if recipe_mode else [value for value in thresholds
-            if value <= parent['entry_situation_veto']['threshold_bp']])
+        train_values = sorted(
+            {
+                row["value_bp"]
+                for row in prepared
+                if row["source_date"] in train_dates
+                and (not first_day_split or row["opportunity_id"] in split_keys[0])
+                and row["base_action"] == "ENTER_NOW"
+                and row["value_bp"] is not None
+            }
+        )
+        thresholds = (
+            train_values
+            if len(train_values) <= 9
+            else sorted(
+                {
+                    train_values[
+                        min(
+                            len(train_values) - 1, int((len(train_values) - 1) * q / 10)
+                        )
+                    ]
+                    for q in range(1, 10)
+                }
+            )
+        )
+        thresholds = (
+            [RECIPE_ID]
+            if recipe_mode
+            else [
+                value
+                for value in thresholds
+                if value <= parent["entry_situation_veto"]["threshold_bp"]
+            ]
+        )
+
     def selected(source, threshold):
-        return [row for row in source if
-            (row['parent_action'] == 'ENTER_NOW' if threshold is None else
-             row['recipe_action'] == 'ENTER_NOW' if recipe_mode else
-             row['base_action'] == 'ENTER_NOW' and (row['value_bp'] is None or row['value_bp'] < threshold))]
-    train = [row for row in prepared if row['source_date'] in train_dates
-             and (not first_day_split or row['opportunity_id'] in split_keys[0])]
-    holdout = [row for row in prepared if row['source_date'] in holdout_dates
-               and (not first_day_split or row['opportunity_id'] in split_keys[1])]
-    split_receipt = (dict(schema='chronological_opportunity_split_v1',
-        train_opportunities=sorted(split_keys[0]), holdout_opportunities=sorted(split_keys[1]),
-        accepted_opportunity_count=len({row['opportunity_id'] for row in prepared}),
-        train_last_ts=max((row['decision_ts'] for row in train), default=None),
-        holdout_first_ts=min((row['decision_ts'] for row in holdout), default=None))
-        if first_day_split else None)
-    baseline_train, baseline_holdout = (_winrate_opportunity_metrics(selected(part, None))
-                                       for part in (train, holdout))
+        return [
+            row
+            for row in source
+            if (
+                row["parent_action"] == "ENTER_NOW"
+                if threshold is None
+                else (
+                    row["recipe_action"] == "ENTER_NOW"
+                    if recipe_mode
+                    else row["base_action"] == "ENTER_NOW"
+                    and (row["value_bp"] is None or row["value_bp"] < threshold)
+                )
+            )
+        ]
+
+    train = [
+        row
+        for row in prepared
+        if row["source_date"] in train_dates
+        and (not first_day_split or row["opportunity_id"] in split_keys[0])
+    ]
+    holdout = [
+        row
+        for row in prepared
+        if row["source_date"] in holdout_dates
+        and (not first_day_split or row["opportunity_id"] in split_keys[1])
+    ]
+    split_receipt = (
+        dict(
+            schema="chronological_opportunity_split_v1",
+            train_opportunities=sorted(split_keys[0]),
+            holdout_opportunities=sorted(split_keys[1]),
+            accepted_opportunity_count=len({row["opportunity_id"] for row in prepared}),
+            train_last_ts=max((row["decision_ts"] for row in train), default=None),
+            holdout_first_ts=min((row["decision_ts"] for row in holdout), default=None),
+        )
+        if first_day_split
+        else None
+    )
+    baseline_train, baseline_holdout = (
+        _winrate_opportunity_metrics(selected(part, None)) for part in (train, holdout)
+    )
+
     def paired_net_delta(part, candidate_rows):
-        if not part or candidate_rows is None or any(row['net_path_pct'] is None for row in part):
+        if (
+            not part
+            or candidate_rows is None
+            or any(row["net_path_pct"] is None for row in part)
+        ):
             return None
-        chosen_ids = {row['decision_trace_id'] for row in candidate_rows}
+        chosen_ids = {row["decision_trace_id"] for row in candidate_rows}
         groups = defaultdict(list)
         for row in part:
-            value = row['net_path_pct']
-            groups[row['opportunity_id']].append((
-                value if row['parent_action'] == 'ENTER_NOW' else 0.,
-                value if row['decision_trace_id'] in chosen_ids else 0.))
-        return fmean(fmean(new - old for old, new in values) for values in groups.values())
+            value = row["net_path_pct"]
+            groups[row["opportunity_id"]].append(
+                (
+                    value if row["parent_action"] == "ENTER_NOW" else 0.0,
+                    value if row["decision_trace_id"] in chosen_ids else 0.0,
+                )
+            )
+        return fmean(
+            fmean(new - old for old, new in values) for values in groups.values()
+        )
+
     frozen = []
     training_diagnostics = []
-    baseline_train_winners = {row['decision_trace_id'] for row in selected(train, None) if row['win']}
+    baseline_train_winners = {
+        row["decision_trace_id"] for row in selected(train, None) if row["win"]
+    }
     for threshold in thresholds:
         train_selected = selected(train, threshold)
         metrics = _winrate_opportunity_metrics(train_selected)
-        kept_winners = {row['decision_trace_id'] for row in train_selected if row['win']} & baseline_train_winners
+        kept_winners = {
+            row["decision_trace_id"] for row in train_selected if row["win"]
+        } & baseline_train_winners
         checks = {
-            'independent_train_source_date': len(metrics['source_dates']) >= 1,
-            'selected_train_source_dates_complete': metrics['source_dates'] == train_dates,
-            'selected_opportunities_minimum_30': metrics['selected_opportunity_count'] >= 30,
-            'baseline_population_present': baseline_train['selected_opportunity_count'] > 0,
-            'baseline_coverage_minimum_50pct': metrics['selected_opportunity_count'] >= .5 * baseline_train['selected_opportunity_count'],
-            'raw_win_rate_improves': (metrics['win_rate_pct'] is not None
-                and baseline_train['win_rate_pct'] is not None
-                and metrics['win_rate_pct'] > baseline_train['win_rate_pct']),
-            'support_adjusted_win_rate_improves_5pp': (metrics['support_adjusted_win_rate_pct'] is not None
-                and baseline_train['support_adjusted_win_rate_pct'] is not None
-                and metrics['support_adjusted_win_rate_pct'] - baseline_train['support_adjusted_win_rate_pct'] >= 5),
+            "independent_train_source_date": len(metrics["source_dates"]) >= 1,
+            "selected_train_source_dates_complete": metrics["source_dates"]
+            == train_dates,
+            "selected_opportunities_minimum_30": metrics["selected_opportunity_count"]
+            >= 30,
+            "baseline_population_present": baseline_train["selected_opportunity_count"]
+            > 0,
+            "baseline_coverage_minimum_50pct": metrics["selected_opportunity_count"]
+            >= 0.5 * baseline_train["selected_opportunity_count"],
+            "raw_win_rate_improves": (
+                metrics["win_rate_pct"] is not None
+                and baseline_train["win_rate_pct"] is not None
+                and metrics["win_rate_pct"] > baseline_train["win_rate_pct"]
+            ),
+            "support_adjusted_win_rate_improves_5pp": (
+                metrics["support_adjusted_win_rate_pct"] is not None
+                and baseline_train["support_adjusted_win_rate_pct"] is not None
+                and metrics["support_adjusted_win_rate_pct"]
+                - baseline_train["support_adjusted_win_rate_pct"]
+                >= 5
+            ),
         }
         eligible_train = initial or all(checks.values())
-        training_diagnostics.append(dict(threshold_bp=None if recipe_mode else threshold,
-            recipe_id=RECIPE_ID if recipe_mode else None, metrics=metrics,
-            retained_baseline_winning_attempt_count=len(kept_winners),
-            baseline_winning_attempt_count=len(baseline_train_winners),
-            successor_hurdles=checks, failed_successor_hurdles=[key for key, passed in checks.items() if not passed],
-            eligible_train=bool(metrics['selected_opportunity_count'] and eligible_train),
-            selection_mode='initial' if initial else 'successor',
-            holdout_used_for_candidate_selection=False, metric_role='main_entry_win_rate_selection'))
-        if metrics['selected_opportunity_count'] and eligible_train:
-            frozen.append((metrics['support_adjusted_win_rate_pct'], metrics['win_rate_pct'],
-                           metrics['selected_opportunity_count'], threshold, metrics))
+        training_diagnostics.append(
+            dict(
+                threshold_bp=None if recipe_mode else threshold,
+                recipe_id=RECIPE_ID if recipe_mode else None,
+                metrics=metrics,
+                retained_baseline_winning_attempt_count=len(kept_winners),
+                baseline_winning_attempt_count=len(baseline_train_winners),
+                successor_hurdles=checks,
+                failed_successor_hurdles=[
+                    key for key, passed in checks.items() if not passed
+                ],
+                eligible_train=bool(
+                    metrics["selected_opportunity_count"] and eligible_train
+                ),
+                selection_mode="initial" if initial else "successor",
+                holdout_used_for_candidate_selection=False,
+                metric_role="main_entry_win_rate_selection",
+            )
+        )
+        if metrics["selected_opportunity_count"] and eligible_train:
+            frozen.append(
+                (
+                    metrics["support_adjusted_win_rate_pct"],
+                    metrics["win_rate_pct"],
+                    metrics["selected_opportunity_count"],
+                    threshold,
+                    metrics,
+                )
+            )
     frozen.sort(reverse=True)
     chosen = frozen[0] if frozen else None
     threshold = chosen[3] if chosen else None
     candidate_train = chosen[4] if chosen else _winrate_opportunity_metrics([])
     selected_holdout = selected(holdout, threshold) if chosen else []
     candidate_holdout = _winrate_opportunity_metrics(selected_holdout)
-    holdout_opportunity_manifest_sha256 = (strategy.digest(sorted(
-        [row['source_date'], row['opportunity_id'], row['decision_trace_id'], row['win']]
-        for row in selected_holdout)) if chosen else None)
+    holdout_opportunity_manifest_sha256 = (
+        strategy.digest(
+            sorted(
+                [
+                    row["source_date"],
+                    row["opportunity_id"],
+                    row["decision_trace_id"],
+                    row["win"],
+                ]
+                for row in selected_holdout
+            )
+        )
+        if chosen
+        else None
+    )
     candidate_policy = deepcopy(recipe_candidate if recipe_mode else parent)
     if threshold is not None and not recipe_mode:
-        candidate_policy['entry_situation_veto'] = _winrate_veto_payload(threshold)
-    from src.engine.scalping.entry_setup_evidence import validate_mechanistic_entry_threshold_policy
+        candidate_policy["entry_situation_veto"] = _winrate_veto_payload(threshold)
+    from src.engine.scalping.entry_setup_evidence import (
+        validate_mechanistic_entry_threshold_policy,
+    )
+
     if validate_mechanistic_entry_threshold_policy(candidate_policy):
-        raise ValueError('winrate_candidate_policy_invalid')
+        raise ValueError("winrate_candidate_policy_invalid")
     errors = []
     if recipe_mode:
         if parent == recipe_candidate:
-            errors.append('admission_recipe_already_incumbent')
+            errors.append("admission_recipe_already_incumbent")
         if not holdout_dates:
-            errors.append('admission_recipe_forward_date_after_2026_10_02_required')
+            errors.append("admission_recipe_forward_date_after_2026_10_02_required")
     if initial and not pending_initial:
-        if (dates != ['2026-09-22', '2026-09-23']
+        if (
+            dates != ["2026-09-22", "2026-09-23"]
             or len(prepared) != 351
-            or Counter(row['source_date'] for row in prepared) != {'2026-09-22': 222, '2026-09-23': 129}
-            or Counter(row['situation'] for row in prepared) != {'VWAP_NOT_EXTENDED': 291, 'VWAP_EXTENDED': 60}
-            or baseline_train['selected_attempt_count'] != 21
-            or baseline_train['winning_attempt_count'] != 13
-            or baseline_holdout['selected_attempt_count'] != 8
-            or baseline_holdout['winning_attempt_count'] != 4
-            or candidate_train['selected_attempt_count'] != 11
-            or candidate_train['selected_opportunity_count'] != 11
-            or candidate_train['winning_attempt_count'] != 10
-            or candidate_holdout['selected_attempt_count'] != 4
-            or candidate_holdout['selected_opportunity_count'] != 4
-            or candidate_holdout['winning_attempt_count'] != 3):
-            errors.append('initial_frozen_reproduction_mismatch')
+            or Counter(row["source_date"] for row in prepared)
+            != {"2026-09-22": 222, "2026-09-23": 129}
+            or Counter(row["situation"] for row in prepared)
+            != {"VWAP_NOT_EXTENDED": 291, "VWAP_EXTENDED": 60}
+            or baseline_train["selected_attempt_count"] != 21
+            or baseline_train["winning_attempt_count"] != 13
+            or baseline_holdout["selected_attempt_count"] != 8
+            or baseline_holdout["winning_attempt_count"] != 4
+            or candidate_train["selected_attempt_count"] != 11
+            or candidate_train["selected_opportunity_count"] != 11
+            or candidate_train["winning_attempt_count"] != 10
+            or candidate_holdout["selected_attempt_count"] != 4
+            or candidate_holdout["selected_opportunity_count"] != 4
+            or candidate_holdout["winning_attempt_count"] != 3
+        ):
+            errors.append("initial_frozen_reproduction_mismatch")
     elif not pending_initial:
-        if not train_dates or not holdout_dates or holdout_dates[0] < _refresh_floor(target_date):
-            errors.append('successor_independent_dates_insufficient')
-        if first_day_split and (not split_keys[0] or not split_keys[1]
-            or not split_receipt['train_last_ts'] < split_receipt['holdout_first_ts']):
-            errors.append('successor_chronological_opportunity_split_invalid')
-        if candidate_holdout['source_dates'] != holdout_dates:
-            errors.append('successor_holdout_date_coverage_insufficient')
+        if (
+            not train_dates
+            or not holdout_dates
+            or holdout_dates[0] < _refresh_floor(target_date)
+        ):
+            errors.append("successor_independent_dates_insufficient")
+        if first_day_split and (
+            not split_keys[0]
+            or not split_keys[1]
+            or not split_receipt["train_last_ts"] < split_receipt["holdout_first_ts"]
+        ):
+            errors.append("successor_chronological_opportunity_split_invalid")
+        if candidate_holdout["source_dates"] != holdout_dates:
+            errors.append("successor_holdout_date_coverage_insufficient")
         if not chosen:
-            errors.append('successor_no_train_qualified_candidate')
-        if candidate_train['selected_opportunity_count'] < 30 or candidate_holdout['selected_opportunity_count'] < 10:
-            errors.append('successor_selected_sample_insufficient')
-        for part, baseline, candidate in (('train', baseline_train, candidate_train), ('holdout', baseline_holdout, candidate_holdout)):
-            if baseline['selected_opportunity_count'] == 0 or candidate['selected_opportunity_count'] == 0:
-                errors.append(part + '_baseline_or_candidate_empty')
+            errors.append("successor_no_train_qualified_candidate")
+        if (
+            candidate_train["selected_opportunity_count"] < 30
+            or candidate_holdout["selected_opportunity_count"] < 10
+        ):
+            errors.append("successor_selected_sample_insufficient")
+        for part, baseline, candidate in (
+            ("train", baseline_train, candidate_train),
+            ("holdout", baseline_holdout, candidate_holdout),
+        ):
+            if (
+                baseline["selected_opportunity_count"] == 0
+                or candidate["selected_opportunity_count"] == 0
+            ):
+                errors.append(part + "_baseline_or_candidate_empty")
                 continue
-            if (candidate['win_rate_pct'] <= baseline['win_rate_pct']
-                or candidate['support_adjusted_win_rate_pct'] - baseline['support_adjusted_win_rate_pct'] < 5):
-                errors.append(part + '_winrate_hurdle_failed')
-            if candidate['selected_opportunity_count'] < .5 * baseline['selected_opportunity_count']:
-                errors.append(part + '_coverage_hurdle_failed')
+            if (
+                candidate["win_rate_pct"] <= baseline["win_rate_pct"]
+                or candidate["support_adjusted_win_rate_pct"]
+                - baseline["support_adjusted_win_rate_pct"]
+                < 5
+            ):
+                errors.append(part + "_winrate_hurdle_failed")
+            if (
+                candidate["selected_opportunity_count"]
+                < 0.5 * baseline["selected_opportunity_count"]
+            ):
+                errors.append(part + "_coverage_hurdle_failed")
     candidate_hash = strategy.digest(candidate_policy)
     market_census = {}
-    for cohort in sorted({(row.get('effective_venue'), row.get('session_bucket')) for row in rows}):
+    for cohort in sorted(
+        {(row.get("effective_venue"), row.get("session_bucket")) for row in rows}
+    ):
         if not all(cohort) or not mechanistic_scope_supported(*cohort):
             continue
-        key = '|'.join(cohort)
-        market = ('PREMARKET' if 'PREMARKET' in cohort[1] else
-                  'AFTERMARKET' if 'AFTERMARKET' in cohort[1] else 'REGULAR')
-        if cohort == ('KRX', 'KRX_REGULAR'):
-            market_census[key] = dict(market=market, input_attempt_count=len(scope_rows),
+        key = "|".join(cohort)
+        market = (
+            "PREMARKET"
+            if "PREMARKET" in cohort[1]
+            else "AFTERMARKET" if "AFTERMARKET" in cohort[1] else "REGULAR"
+        )
+        if cohort == ("KRX", "KRX_REGULAR"):
+            market_census[key] = dict(
+                market=market,
+                input_attempt_count=len(scope_rows),
                 accepted_attempt_count=len(prepared),
-                source_contract_excluded_count=len(scope_rows)-len(population),
-                source_contract_exclusion_reasons=contract.get('row_exclusion_reason_counts') or {},
+                source_contract_excluded_count=len(scope_rows) - len(population),
+                source_contract_exclusion_reasons=contract.get(
+                    "row_exclusion_reason_counts"
+                )
+                or {},
                 excluded_attempt_counts=dict(excluded),
-                winning_attempt_count=sum(row['win'] for row in prepared),
-                gross_label_difference_count=sum(row['gross_first_hit'] in {'target_first', 'adverse_first'}
-                    and (row['gross_first_hit'] == 'target_first') != row['win'] for row in prepared))
+                winning_attempt_count=sum(row["win"] for row in prepared),
+                gross_label_difference_count=sum(
+                    row["gross_first_hit"] in {"target_first", "adverse_first"}
+                    and (row["gross_first_hit"] == "target_first") != row["win"]
+                    for row in prepared
+                ),
+            )
             continue
-        exact_rows = [row for row in rows if (row.get('effective_venue'), row.get('session_bucket')) == cohort]
-        admitted, source_contract = _common_refinement_population([], exact_rows,
-            target_date=target_date, source_receipt=source_receipt, paired_contract={},
-            cohort=cohort, allow_attempt_identity_fallback=True, retain_unevaluated_machine_rows=True)
+        exact_rows = [
+            row
+            for row in rows
+            if (row.get("effective_venue"), row.get("session_bucket")) == cohort
+        ]
+        admitted, source_contract = _common_refinement_population(
+            [],
+            exact_rows,
+            target_date=target_date,
+            source_receipt=source_receipt,
+            paired_contract={},
+            cohort=cohort,
+            allow_attempt_identity_fallback=True,
+            retain_unevaluated_machine_rows=True,
+        )
         rejection = Counter()
         accepted, wins, gross_differences = 0, 0, 0
         for row in admitted:
-            setup = row.get('setup_evidence') or {}
-            raw = setup.get('strategy_raw_input') or {}
-            if not raw or setup.get('strategy_raw_sha256') != strategy.digest(raw):
-                rejection['raw_capture_hash_invalid'] += 1
+            setup = row.get("setup_evidence") or {}
+            raw = setup.get("strategy_raw_input") or {}
+            if not raw or setup.get("strategy_raw_sha256") != strategy.digest(raw):
+                rejection["raw_capture_hash_invalid"] += 1
                 continue
             try:
-                strategy.completed_bar_rows(raw, observed_at=row.get('decision_ts'))
+                strategy.completed_bar_rows(raw, observed_at=row.get("decision_ts"))
             except (ValueError, TypeError, KeyError, OverflowError):
-                rejection['completed_bar_structure_invalid'] += 1
+                rejection["completed_bar_structure_invalid"] += 1
                 continue
             _, reason = _machine_path_value(row)
             if reason:
                 rejection[reason] += 1
                 continue
-            hit = (row.get('entry_quality_path') or {}).get('first_hit')
-            if hit not in {'net_target_first', 'exact_stop_first'}:
-                rejection['binary_terminal_missing'] += 1
+            hit = (row.get("entry_quality_path") or {}).get("first_hit")
+            if hit not in {"net_target_first", "exact_stop_first"}:
+                rejection["binary_terminal_missing"] += 1
                 continue
             accepted += 1
-            win = hit == 'net_target_first'
+            win = hit == "net_target_first"
             wins += win
-            gross = (row.get('comparison') or {}).get('entry_path_first_hit')
-            gross_differences += gross in {'target_first', 'adverse_first'} and (gross == 'target_first') != win
-        market_census[key] = dict(market=market, input_attempt_count=len(exact_rows),
+            gross = (row.get("comparison") or {}).get("entry_path_first_hit")
+            gross_differences += (
+                gross in {"target_first", "adverse_first"}
+                and (gross == "target_first") != win
+            )
+        market_census[key] = dict(
+            market=market,
+            input_attempt_count=len(exact_rows),
             accepted_attempt_count=accepted,
-            source_contract_excluded_count=len(exact_rows)-len(admitted),
-            source_contract_exclusion_reasons=source_contract.get('row_exclusion_reason_counts') or {},
-            excluded_attempt_counts=dict(rejection), winning_attempt_count=wins,
-            gross_label_difference_count=gross_differences)
+            source_contract_excluded_count=len(exact_rows) - len(admitted),
+            source_contract_exclusion_reasons=source_contract.get(
+                "row_exclusion_reason_counts"
+            )
+            or {},
+            excluded_attempt_counts=dict(rejection),
+            winning_attempt_count=wins,
+            gross_label_difference_count=gross_differences,
+        )
     for scope, market in (
-        ('KRX|KRX_REGULAR', 'REGULAR'),
-        ('PREMARKET_KRX_LIKE|PREMARKET_KRX_LIKE', 'PREMARKET'),
-        ('KRX_NXT_INTEGRATED|KRX_NXT_AFTERMARKET', 'AFTERMARKET'),
+        ("KRX|KRX_REGULAR", "REGULAR"),
+        ("PREMARKET_KRX_LIKE|PREMARKET_KRX_LIKE", "PREMARKET"),
+        ("KRX_NXT_INTEGRATED|KRX_NXT_AFTERMARKET", "AFTERMARKET"),
     ):
-        market_census.setdefault(scope, dict(market=market, input_attempt_count=0,
-            accepted_attempt_count=0, source_contract_excluded_count=0,
-            source_contract_exclusion_reasons={}, excluded_attempt_counts={},
-            winning_attempt_count=0, gross_label_difference_count=0,
-            source_state='no_rows'))
+        market_census.setdefault(
+            scope,
+            dict(
+                market=market,
+                input_attempt_count=0,
+                accepted_attempt_count=0,
+                source_contract_excluded_count=0,
+                source_contract_exclusion_reasons={},
+                excluded_attempt_counts={},
+                winning_attempt_count=0,
+                gross_label_difference_count=0,
+                source_state="no_rows",
+            ),
+        )
     historical_full_evaluation_reference = None
     if initial and not pending_initial:
-        frozen_report = _load_json(data_root / 'report' / 'ai_decision_action_outcome_calibration'
-            / 'ai_decision_action_outcome_calibration_2026-09-23.json')
-        frozen_scopes = (frozen_report.get('machine_full_evaluation') or {}).get('scope_evaluations') or {}
-        expected = {'KRX|KRX_REGULAR': 351,
-            'PREMARKET_KRX_LIKE|PREMARKET_KRX_LIKE': 25,
-            'KRX_NXT_INTEGRATED|KRX_NXT_AFTERMARKET': 100}
-        observed = {scope: (frozen_scopes.get(scope) or {}).get('current_structure_eligible_count')
-            for scope in expected}
-        if (not _artifact_content_sha256_valid(frozen_report)
-            or frozen_report.get('artifact_content_sha256') != '10b29ced3cf6e61bee35e84de5e456db3dd78b562378cd0aef9db605fdc85564'
-            or observed != expected):
-            errors.append('initial_whole_market_reference_invalid')
+        frozen_report = _load_json(
+            data_root
+            / "report"
+            / "ai_decision_action_outcome_calibration"
+            / "ai_decision_action_outcome_calibration_2026-09-23.json"
+        )
+        frozen_scopes = (frozen_report.get("machine_full_evaluation") or {}).get(
+            "scope_evaluations"
+        ) or {}
+        expected = {
+            "KRX|KRX_REGULAR": 351,
+            "PREMARKET_KRX_LIKE|PREMARKET_KRX_LIKE": 25,
+            "KRX_NXT_INTEGRATED|KRX_NXT_AFTERMARKET": 100,
+        }
+        observed = {
+            scope: (frozen_scopes.get(scope) or {}).get(
+                "current_structure_eligible_count"
+            )
+            for scope in expected
+        }
+        if (
+            not _artifact_content_sha256_valid(frozen_report)
+            or frozen_report.get("artifact_content_sha256")
+            != "10b29ced3cf6e61bee35e84de5e456db3dd78b562378cd0aef9db605fdc85564"
+            or observed != expected
+        ):
+            errors.append("initial_whole_market_reference_invalid")
         historical_full_evaluation_reference = dict(
-            artifact_content_sha256=frozen_report.get('artifact_content_sha256'),
-            source_date='2026-09-23', exact_scope_eligible_counts=observed,
+            artifact_content_sha256=frozen_report.get("artifact_content_sha256"),
+            source_date="2026-09-23",
+            exact_scope_eligible_counts=observed,
             total_eligible_count=sum(v for v in observed.values() if type(v) is int),
-            role='frozen_full_evaluation_reference_not_daily_machine_capture_denominator')
+            role="frozen_full_evaluation_reference_not_daily_machine_capture_denominator",
+        )
     if pending_initial:
-        errors.append('initial_policy_pending_activation')
+        errors.append("initial_policy_pending_activation")
     if errors and candidate_policy is not None:
         # Source/reference failures cannot leave an adoptable candidate body.
         candidate_policy = None
-        disposition = 'incumbent_carried'
+        disposition = "incumbent_carried"
     else:
-        disposition = 'initial_adopted' if initial else 'successor_selected'
-    result = _with_artifact_content_sha256(dict(schema='main_entry_winrate_policy_report_v1',
-        target_date=target_date, generated_at=datetime.now(KST).isoformat(),
-        report_scope='main_entry_winrate', noncompact_sections_refreshed=True,
-        policy_version='winrate_initial_v1' if initial else 'winrate_successor_v1',
-        selection_objective_version=('winrate_native_improvement_without_winner_retention_v3'
-            if native_identity_required else 'winrate_improvement_without_winner_retention_v2'),
-        opportunity_identity_contract=(OPPORTUNITY_IDENTITY_VERSION if native_identity_required
-            else 'legacy_scanner_or_exact_attempt_v1'),
-        success_retention_role='diagnostic_only',
-        selection_basis='win_rate_only', disposition=disposition,
-        source_contract_sha256=strategy.digest(contract), source_receipt=source_receipt,
-        parent_bundle_sha256=current['bundle_sha256'], parent_machine_policy_sha256=strategy.digest(parent),
-        candidate_machine_policy_sha256=candidate_hash, candidate_policy=candidate_policy,
-        policy_by_scope={'KRX|KRX_REGULAR': candidate_policy} if not errors else {},
-        policy_sha256=strategy.digest({'KRX|KRX_REGULAR': candidate_policy} if not errors else {}),
-        candidate_threshold_bp=None if recipe_mode else threshold, candidate_search_count=len(thresholds),
-        candidate_kind='admission_recipe' if recipe_mode else 'vwap_veto',
-        candidate_recipe_id=RECIPE_ID if recipe_mode else None,
-        candidate_evaluated=bool(chosen),
-        recipe_discovery_through_date='2026-10-02' if recipe_mode else None,
-        admission_analysis_sha256=(admission_analysis or {}).get('artifact_content_sha256') if recipe_mode else None,
-        admission_analysis=admission_analysis if recipe_mode else None,
-        candidate_training_diagnostics=training_diagnostics,
-        candidate_holdout_opportunity_manifest_sha256=holdout_opportunity_manifest_sha256,
-        train_dates=train_dates, holdout_dates=holdout_dates,
-        chronological_opportunity_split=split_receipt,
-        consumed_holdout_dates=sorted(consumed) if not initial else [],
-        input_attempt_count=len(scope_rows), accepted_attempt_count=len(prepared),
-        source_contract_excluded_count=len(scope_rows)-len(population),
-        source_contract_exclusion_reasons=contract.get('row_exclusion_reason_counts') or {},
-        excluded_attempt_counts=dict(excluded), situation_attempt_counts=dict(Counter(row['situation'] for row in prepared)),
-        gross_label_difference_count=sum(row['gross_first_hit'] in {'target_first', 'adverse_first'}
-            and (row['gross_first_hit'] == 'target_first') != row['win'] for row in prepared),
-        market_census=market_census,
-        historical_full_evaluation_reference=historical_full_evaluation_reference,
-        pending_initial_bundle_sha256=pending_bundle['bundle_sha256'] if pending_bundle else None,
-        pending_initial_target_date=pending_bundle['target_date'] if pending_bundle else None,
-        baseline=dict(train=baseline_train, holdout=baseline_holdout),
-        candidate=dict(train=candidate_train, holdout=candidate_holdout),
-        success_retention_diagnostics={part: {
-            'baseline_wins': sum(row['win'] for row in selected(pop, None)),
-            'excluded_wins': sum(row['win'] for row in selected(pop, None)
-                if row['decision_trace_id'] not in {r['decision_trace_id'] for r in selected(pop, threshold)}),
-            'avoided_losses': sum(not row['win'] for row in selected(pop, None)
-                if row['decision_trace_id'] not in {r['decision_trace_id'] for r in selected(pop, threshold)}),
-            'role': 'diagnostic_only',
-        } for part, pop in (('train', train), ('holdout', holdout))} if chosen else None,
-        paired_admission_delta_pct=dict(
-            train=paired_net_delta(train, selected(train, threshold) if chosen else None),
-            holdout=paired_net_delta(holdout, selected_holdout if chosen else None)),
-        hurdle_errors=errors, evaluated_attempt_manifest_sha256=strategy.digest(sorted(
-            [row['decision_trace_id'], row['opportunity_id'], row['source_date'], row['win'],
-             row['net_path_pct'], row['value_bp'], row['parent_action'], row['base_action']]
-            for row in prepared)),
-        runtime_effect=False, allowed_runtime_apply=False, actual_order_submitted=False,
-        broker_order_forbidden=True))
-
+        disposition = "initial_adopted" if initial else "successor_selected"
+    result = _with_artifact_content_sha256(
+        dict(
+            schema="main_entry_winrate_policy_report_v1",
+            target_date=target_date,
+            generated_at=datetime.now(KST).isoformat(),
+            report_scope="main_entry_winrate",
+            noncompact_sections_refreshed=True,
+            policy_version="winrate_initial_v1" if initial else "winrate_successor_v1",
+            selection_objective_version=(
+                "winrate_native_improvement_without_winner_retention_v3"
+                if native_identity_required
+                else "winrate_improvement_without_winner_retention_v2"
+            ),
+            opportunity_identity_contract=(
+                OPPORTUNITY_IDENTITY_VERSION
+                if native_identity_required
+                else "legacy_scanner_or_exact_attempt_v1"
+            ),
+            success_retention_role="diagnostic_only",
+            selection_basis="win_rate_only",
+            disposition=disposition,
+            source_contract_sha256=strategy.digest(contract),
+            source_receipt=source_receipt,
+            parent_bundle_sha256=current["bundle_sha256"],
+            parent_machine_policy_sha256=strategy.digest(parent),
+            candidate_machine_policy_sha256=candidate_hash,
+            candidate_policy=candidate_policy,
+            policy_by_scope={"KRX|KRX_REGULAR": candidate_policy} if not errors else {},
+            policy_sha256=strategy.digest(
+                {"KRX|KRX_REGULAR": candidate_policy} if not errors else {}
+            ),
+            candidate_threshold_bp=None if recipe_mode else threshold,
+            candidate_search_count=len(thresholds),
+            candidate_kind="admission_recipe" if recipe_mode else "vwap_veto",
+            candidate_recipe_id=RECIPE_ID if recipe_mode else None,
+            candidate_evaluated=bool(chosen),
+            recipe_discovery_through_date="2026-10-02" if recipe_mode else None,
+            admission_analysis_sha256=(
+                (admission_analysis or {}).get("artifact_content_sha256")
+                if recipe_mode
+                else None
+            ),
+            admission_analysis=admission_analysis if recipe_mode else None,
+            candidate_training_diagnostics=training_diagnostics,
+            candidate_holdout_opportunity_manifest_sha256=holdout_opportunity_manifest_sha256,
+            train_dates=train_dates,
+            holdout_dates=holdout_dates,
+            chronological_opportunity_split=split_receipt,
+            consumed_holdout_dates=sorted(consumed) if not initial else [],
+            input_attempt_count=len(scope_rows),
+            accepted_attempt_count=len(prepared),
+            source_contract_excluded_count=len(scope_rows) - len(population),
+            source_contract_exclusion_reasons=contract.get(
+                "row_exclusion_reason_counts"
+            )
+            or {},
+            excluded_attempt_counts=dict(excluded),
+            situation_attempt_counts=dict(
+                Counter(row["situation"] for row in prepared)
+            ),
+            gross_label_difference_count=sum(
+                row["gross_first_hit"] in {"target_first", "adverse_first"}
+                and (row["gross_first_hit"] == "target_first") != row["win"]
+                for row in prepared
+            ),
+            market_census=market_census,
+            historical_full_evaluation_reference=historical_full_evaluation_reference,
+            pending_initial_bundle_sha256=(
+                pending_bundle["bundle_sha256"] if pending_bundle else None
+            ),
+            pending_initial_target_date=(
+                pending_bundle["target_date"] if pending_bundle else None
+            ),
+            baseline=dict(train=baseline_train, holdout=baseline_holdout),
+            candidate=dict(train=candidate_train, holdout=candidate_holdout),
+            success_retention_diagnostics=(
+                {
+                    part: {
+                        "baseline_wins": sum(row["win"] for row in selected(pop, None)),
+                        "excluded_wins": sum(
+                            row["win"]
+                            for row in selected(pop, None)
+                            if row["decision_trace_id"]
+                            not in {
+                                r["decision_trace_id"] for r in selected(pop, threshold)
+                            }
+                        ),
+                        "avoided_losses": sum(
+                            not row["win"]
+                            for row in selected(pop, None)
+                            if row["decision_trace_id"]
+                            not in {
+                                r["decision_trace_id"] for r in selected(pop, threshold)
+                            }
+                        ),
+                        "role": "diagnostic_only",
+                    }
+                    for part, pop in (("train", train), ("holdout", holdout))
+                }
+                if chosen
+                else None
+            ),
+            paired_admission_delta_pct=dict(
+                train=paired_net_delta(
+                    train, selected(train, threshold) if chosen else None
+                ),
+                holdout=paired_net_delta(holdout, selected_holdout if chosen else None),
+            ),
+            hurdle_errors=errors,
+            evaluated_attempt_manifest_sha256=strategy.digest(
+                sorted(
+                    [
+                        row["decision_trace_id"],
+                        row["opportunity_id"],
+                        row["source_date"],
+                        row["win"],
+                        row["net_path_pct"],
+                        row["value_bp"],
+                        row["parent_action"],
+                        row["base_action"],
+                    ]
+                    for row in prepared
+                )
+            ),
+            runtime_effect=False,
+            allowed_runtime_apply=False,
+            actual_order_submitted=False,
+            broker_order_forbidden=True,
+        )
+    )
 
     if recipe_mode:
-        if current.get('designated_pair'):
-            from src.engine.scalping.entry_designated_policy import apply as apply_fixed_pair
-            return apply_fixed_pair(result, admission_analysis, parent, current['designated_pair'])
-        from src.engine.scalping.entry_admission_acceptance import apply as apply_acceptance
+        if current.get("designated_pair"):
+            from src.engine.scalping.entry_designated_policy import (
+                apply as apply_fixed_pair,
+            )
+
+            return apply_fixed_pair(
+                result, admission_analysis, parent, current["designated_pair"]
+            )
+        from src.engine.scalping.entry_admission_acceptance import (
+            apply as apply_acceptance,
+        )
+
         return apply_acceptance(result, admission_analysis, parent)
     return result
 
 
-def build_machine_policy_report(rows, *, source_receipt, target_date, data_root=Path('data'), limit=96, write_checkpoints=False, training_through_date=None, observation_recipe_request=None):
+def build_machine_policy_report(
+    rows,
+    *,
+    source_receipt,
+    target_date,
+    data_root=Path("data"),
+    limit=96,
+    write_checkpoints=False,
+    training_through_date=None,
+    observation_recipe_request=None,
+):
     """Generate a machine policy artifact only; no downstream or publication loop."""
     if observation_recipe_request is not None:
         # Explicit offline source contract. Never mix observational clusters with
         # native opportunity identities or write the production train checkpoint.
-        if rows or source_receipt or write_checkpoints or training_through_date is not None:
-            raise ValueError('observation_recipe_request_must_be_isolated')
+        if (
+            rows
+            or source_receipt
+            or write_checkpoints
+            or training_through_date is not None
+        ):
+            raise ValueError("observation_recipe_request_must_be_isolated")
         from src.engine.scalping.entry_observation_recipe_policy import build_report
+
         return build_report(observation_recipe_request, target_date=target_date)
     import resource
     import time
+
     started_wall = time.monotonic()
     started_cpu = time.process_time()
     from src.engine.scalping import entry_strategy_policy as strategy
-    from src.engine.scalping.mechanistic_entry_runtime_policy import load_effective, for_cohort
-    incumbent = load_effective(data_root=data_root, target_date=datetime.now(KST).date().isoformat())
-    prior = _load_json(data_root / 'report' / 'ai_decision_action_outcome_calibration' / f'machine_policy_{target_date}.json')
-    prior = prior.get('selections', {}) if _artifact_content_sha256_valid(prior) else {}
-    published_hash = (incumbent or {}).get('source_file_sha256')
-    published = (_load_json(data_root / 'runtime' / 'mechanistic_entry_policy' / 'sources' / f'{published_hash}.json')
-                 if _is_sha256(published_hash) else {})
-    published_scopes = published.get('selections') or published.get('strategy_refinements_by_scope') or {}
+    from src.engine.scalping.mechanistic_entry_runtime_policy import (
+        load_effective,
+        for_cohort,
+    )
 
-    if training_through_date and not _refresh_floor(target_date) <= training_through_date <= target_date:
-        raise ValueError('strategy_training_boundary_invalid')
-    scopes = sorted({(r['effective_venue'], r['session_bucket']) for r in rows})
-    expected_scopes = {'KRX|KRX_REGULAR', 'PREMARKET_KRX_LIKE|PREMARKET_KRX_LIKE',
-        'KRX_NXT_INTEGRATED|KRX_NXT_AFTERMARKET'}
-    missing_scope_coordinates = {scope: {name: dict(source=contract['source'],
-        source_status='source_gap', evaluation_status='source_gap', reason='no_exact_scope_rows')
-        for name, contract in strategy.registry_contract().items()}
-        for scope in sorted(expected_scopes - {'|'.join(scope) for scope in scopes})}
+    incumbent = load_effective(
+        data_root=data_root, target_date=datetime.now(KST).date().isoformat()
+    )
+    prior = _load_json(
+        data_root
+        / "report"
+        / "ai_decision_action_outcome_calibration"
+        / f"machine_policy_{target_date}.json"
+    )
+    prior = prior.get("selections", {}) if _artifact_content_sha256_valid(prior) else {}
+    published_hash = (incumbent or {}).get("source_file_sha256")
+    published = (
+        _load_json(
+            data_root
+            / "runtime"
+            / "mechanistic_entry_policy"
+            / "sources"
+            / f"{published_hash}.json"
+        )
+        if _is_sha256(published_hash)
+        else {}
+    )
+    published_scopes = (
+        published.get("selections")
+        or published.get("strategy_refinements_by_scope")
+        or {}
+    )
+
+    if (
+        training_through_date
+        and not _refresh_floor(target_date) <= training_through_date <= target_date
+    ):
+        raise ValueError("strategy_training_boundary_invalid")
+    scopes = sorted({(r["effective_venue"], r["session_bucket"]) for r in rows})
+    expected_scopes = {
+        "KRX|KRX_REGULAR",
+        "PREMARKET_KRX_LIKE|PREMARKET_KRX_LIKE",
+        "KRX_NXT_INTEGRATED|KRX_NXT_AFTERMARKET",
+    }
+    missing_scope_coordinates = {
+        scope: {
+            name: dict(
+                source=contract["source"],
+                source_status="source_gap",
+                evaluation_status="source_gap",
+                reason="no_exact_scope_rows",
+            )
+            for name, contract in strategy.registry_contract().items()
+        }
+        for scope in sorted(expected_scopes - {"|".join(scope) for scope in scopes})
+    }
     selections = {}
     for cohort in scopes:
         if not mechanistic_scope_supported(*cohort):
             continue
         scoped = for_cohort(incumbent, cohort) if incumbent else None
-        parent = (scoped or {}).get('machine_policy') or MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1
-        scoped_rows = [r for r in rows if (r['effective_venue'], r['session_bucket']) == cohort]
-        population, contract = _common_refinement_population([], scoped_rows,
-            target_date=target_date, source_receipt=source_receipt, paired_contract={}, cohort=cohort, allow_attempt_identity_fallback=True, retain_unevaluated_machine_rows=True)
-        contract['economic_kernel_sha256'] = _canonical_sha256({
-            name: hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
-            for name in ('ai_action_outcome_calibration.py', 'entry_strategy_policy.py',
-                         'ai_decision_quality.py', 'entry_setup_evidence.py', 'entry_candle_context.py',
-                         'postclose_entry_validation.py')})
-        checkpoint_path = data_root / 'report' / 'ai_decision_action_outcome_calibration' / f"machine_train_checkpoint_{target_date}_{'_'.join(cohort)}.json"
+        parent = (scoped or {}).get(
+            "machine_policy"
+        ) or MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1
+        scoped_rows = [
+            r for r in rows if (r["effective_venue"], r["session_bucket"]) == cohort
+        ]
+        population, contract = _common_refinement_population(
+            [],
+            scoped_rows,
+            target_date=target_date,
+            source_receipt=source_receipt,
+            paired_contract={},
+            cohort=cohort,
+            allow_attempt_identity_fallback=True,
+            retain_unevaluated_machine_rows=True,
+        )
+        contract["economic_kernel_sha256"] = _canonical_sha256(
+            {
+                name: hashlib.sha256(
+                    Path(__file__).with_name(name).read_bytes()
+                ).hexdigest()
+                for name in (
+                    "ai_action_outcome_calibration.py",
+                    "entry_strategy_policy.py",
+                    "ai_decision_quality.py",
+                    "entry_setup_evidence.py",
+                    "entry_candle_context.py",
+                    "postclose_entry_validation.py",
+                )
+            }
+        )
+        checkpoint_path = (
+            data_root
+            / "report"
+            / "ai_decision_action_outcome_calibration"
+            / f"machine_train_checkpoint_{target_date}_{'_'.join(cohort)}.json"
+        )
         saved = _load_json(checkpoint_path)
-        prior_selection = prior.get('|'.join(cohort))
+        prior_selection = prior.get("|".join(cohort))
         # A source day used for training cannot later become a fresh holdout
         # merely because the scheduled CLI omitted an operator's boundary.
-        published_selection = published_scopes.get('|'.join(cohort)) or {}
-        consumed_days = (((published_selection.get('candidate') or {}).get('evidence') or {}).get('train') or {}).get('source_dates') or []
-        prior_boundary = (prior_selection or {}).get('training_through_date') if (prior_selection or {}).get('holdout_boundary_basis') == 'explicit_forward_boundary' else None
-        consumed_through = max([*consumed_days, *([prior_boundary] if prior_boundary else [])], default=None)
+        published_selection = published_scopes.get("|".join(cohort)) or {}
+        consumed_days = (
+            ((published_selection.get("candidate") or {}).get("evidence") or {}).get(
+                "train"
+            )
+            or {}
+        ).get("source_dates") or []
+        prior_boundary = (
+            (prior_selection or {}).get("training_through_date")
+            if (prior_selection or {}).get("holdout_boundary_basis")
+            == "explicit_forward_boundary"
+            else None
+        )
+        consumed_through = max(
+            [*consumed_days, *([prior_boundary] if prior_boundary else [])],
+            default=None,
+        )
         effective_boundary = training_through_date
         if consumed_through:
-            if training_through_date and training_through_date < min(consumed_through, target_date):
-                raise ValueError('strategy_training_boundary_reuses_consumed_holdout')
-            if effective_boundary is None and scoped_rows and consumed_through >= max(r['source_date'] for r in scoped_rows):
+            if training_through_date and training_through_date < min(
+                consumed_through, target_date
+            ):
+                raise ValueError("strategy_training_boundary_reuses_consumed_holdout")
+            if (
+                effective_boundary is None
+                and scoped_rows
+                and consumed_through >= max(r["source_date"] for r in scoped_rows)
+            ):
                 effective_boundary = min(consumed_through, target_date)
 
-        if _artifact_content_sha256_valid(saved) and saved.get('selection_state') == 'searching_train':
+        if (
+            _artifact_content_sha256_valid(saved)
+            and saved.get("selection_state") == "searching_train"
+        ):
             prior_selection = saved
+
         def save_progress(value):
             if write_checkpoints:
-                _atomic_write_json(checkpoint_path, _with_artifact_content_sha256(value))
-        selections['|'.join(cohort)] = build_main_strategy_refinement(population,
-            parent=parent, scope=cohort, source_contract=contract, previous=prior_selection, limit=limit, machine_policy_only=True, checkpoint=save_progress, training_through_date=effective_boundary)
-        selections['|'.join(cohort)]['source_acceptance'] = {k:v for k,v in contract.items() if k not in {'natural_machine_source_receipt', 'paired_source_contract'}}
-        save_progress(selections['|'.join(cohort)])
-    policy = {scope: selection['machine_policy'] for scope, selection in selections.items()
-              if selection.get('machine_policy') is not None and selection.get('promotion_pass') is True}
+                _atomic_write_json(
+                    checkpoint_path, _with_artifact_content_sha256(value)
+                )
+
+        selections["|".join(cohort)] = build_main_strategy_refinement(
+            population,
+            parent=parent,
+            scope=cohort,
+            source_contract=contract,
+            previous=prior_selection,
+            limit=limit,
+            machine_policy_only=True,
+            checkpoint=save_progress,
+            training_through_date=effective_boundary,
+        )
+        selections["|".join(cohort)]["source_acceptance"] = {
+            k: v
+            for k, v in contract.items()
+            if k not in {"natural_machine_source_receipt", "paired_source_contract"}
+        }
+        save_progress(selections["|".join(cohort)])
+    policy = {
+        scope: selection["machine_policy"]
+        for scope, selection in selections.items()
+        if selection.get("machine_policy") is not None
+        and selection.get("promotion_pass") is True
+    }
     try:
-        swap_kib = int(next(line.split()[1] for line in Path('/proc/self/status').read_text().splitlines()
-            if line.startswith('VmSwap:')))
+        swap_kib = int(
+            next(
+                line.split()[1]
+                for line in Path("/proc/self/status").read_text().splitlines()
+                if line.startswith("VmSwap:")
+            )
+        )
     except (OSError, StopIteration, ValueError, IndexError):
         swap_kib = None
-    selection_version = ((selections.get('KRX|KRX_REGULAR') or {}).get('selection_basis') or strategy.MACHINE_SELECTION_VERSION)
-    return _with_artifact_content_sha256(dict(schema='main_machine_policy_report_v1',
-        target_date=target_date, generated_at=datetime.now(KST).isoformat(),
-        search_resource_usage=dict(wall_sec=round(time.monotonic() - started_wall, 3),
-            cpu_sec=round(time.process_time() - started_cpu, 3),
-            max_rss_kib=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
-            current_swap_kib=swap_kib,
-            evaluated_candidate_count=sum(row.get('evaluated_candidate_count', 0) for row in selections.values()),
-            replay_population_count=sum(row.get('supported_population_count', 0) for row in selections.values())),
-        evaluation_basis=strategy.MACHINE_EVALUATION_BASIS, selection_score_version=selection_version,
-        policy_by_scope=policy, policy_sha256=strategy.digest(policy), selections=selections,
-        missing_scope_coordinates=missing_scope_coordinates,
-        report_scope='main_mechanistic_entry', noncompact_sections_refreshed=True,
-        strategy_refinements_by_scope=selections,
-        status='machine_policy_generated' if policy else 'no_evaluable_machine_candidate',
-        metric_role='sim_probe_ev', decision_authority='machine_policy_selection_only',
-        window_policy='chronological_train_then_holdout_diagnostic', sample_floor='one_valid_episode_for_selection',
-        primary_decision_metric=selection_version, source_quality_gate='verified_raw_full_cost_terminal_path',
-        auxiliary_ai_required=False, runtime_effect=False, allowed_runtime_apply=False,
-        forbidden_uses=['realized_pnl', 'portfolio_pnl', 'auxiliary_ai_pass']))
+    selection_version = (selections.get("KRX|KRX_REGULAR") or {}).get(
+        "selection_basis"
+    ) or strategy.MACHINE_SELECTION_VERSION
+    return _with_artifact_content_sha256(
+        dict(
+            schema="main_machine_policy_report_v1",
+            target_date=target_date,
+            generated_at=datetime.now(KST).isoformat(),
+            search_resource_usage=dict(
+                wall_sec=round(time.monotonic() - started_wall, 3),
+                cpu_sec=round(time.process_time() - started_cpu, 3),
+                max_rss_kib=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
+                current_swap_kib=swap_kib,
+                evaluated_candidate_count=sum(
+                    row.get("evaluated_candidate_count", 0)
+                    for row in selections.values()
+                ),
+                replay_population_count=sum(
+                    row.get("supported_population_count", 0)
+                    for row in selections.values()
+                ),
+            ),
+            evaluation_basis=strategy.MACHINE_EVALUATION_BASIS,
+            selection_score_version=selection_version,
+            policy_by_scope=policy,
+            policy_sha256=strategy.digest(policy),
+            selections=selections,
+            missing_scope_coordinates=missing_scope_coordinates,
+            report_scope="main_mechanistic_entry",
+            noncompact_sections_refreshed=True,
+            strategy_refinements_by_scope=selections,
+            status=(
+                "machine_policy_generated"
+                if policy
+                else "no_evaluable_machine_candidate"
+            ),
+            metric_role="sim_probe_ev",
+            decision_authority="machine_policy_selection_only",
+            window_policy="chronological_train_then_holdout_diagnostic",
+            sample_floor="one_valid_episode_for_selection",
+            primary_decision_metric=selection_version,
+            source_quality_gate="verified_raw_full_cost_terminal_path",
+            auxiliary_ai_required=False,
+            runtime_effect=False,
+            allowed_runtime_apply=False,
+            forbidden_uses=["realized_pnl", "portfolio_pnl", "auxiliary_ai_pass"],
+        )
+    )
 
 
 def _legacy_diagnostic_for_cohort(incumbent, cohort):
     from src.engine.scalping.mechanistic_entry_runtime_policy import for_cohort
-    if incumbent and incumbent.get('continuous_reversal'):
+
+    if incumbent and incumbent.get("continuous_reversal"):
         # The new live resolver deliberately ignores these old scope rules.
         # Historical diagnostics use only their retained compatibility copy.
-        scoped = incumbent.get('scope_policies', {}).get('|'.join(cohort))
-        return {**incumbent, **scoped, 'selected_scope': list(cohort)} if scoped else None
+        scoped = incumbent.get("scope_policies", {}).get("|".join(cohort))
+        return (
+            {**incumbent, **scoped, "selected_scope": list(cohort)} if scoped else None
+        )
     return for_cohort(incumbent, cohort) if incumbent else None
 
 
 def build_main_mechanistic_report(
-    *, target_date: str, data_root: Path = Path("data"), incumbent_date: str | None = None
+    *,
+    target_date: str,
+    data_root: Path = Path("data"),
+    incumbent_date: str | None = None,
 ) -> dict[str, Any]:
     """Build only the active main-machine evaluation and publisher source."""
     report_root = data_root / "report"
     paired_rows, paired_contract = _mechanistic_source_rows(
         report_root / PAIRED_SUBDIR,
-        target_date=target_date, all_supported_cohorts=True,
+        target_date=target_date,
+        all_supported_cohorts=True,
     )
-    from src.engine.scalping.continuous_reversal_operating_postclose import load_report_parent
+    from src.engine.scalping.continuous_reversal_operating_postclose import (
+        load_report_parent,
+    )
 
     incumbent = load_report_parent(data_root, incumbent_date or target_date)
-    parent = (incumbent or {}).get("machine_policy") or MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1
+    parent = (incumbent or {}).get(
+        "machine_policy"
+    ) or MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1
     # The compact materialization contains only the provider-screened subset.
     # Main-machine tuning also needs BLOCK/RECHECK outcomes, so reuse the
     # existing bounded path labeler over the verified machine captures rather
@@ -10252,62 +13113,138 @@ def build_main_mechanistic_report(
     from src.engine.scalping import compact_auxiliary_paired_replay as compact
 
     operating_projection = _machine_operating_projection(
-        data_root, [r["source_date"] for r in machine_rows] + [target_date])
+        data_root, [r["source_date"] for r in machine_rows] + [target_date]
+    )
     from src.engine.scalping.entry_setup_scalping_rollout import AUTO_PROMOTION_SCOPES
+
     previous_selections, previous_hierarchy, previous_joint = {}, {}, {}
     previous_strategy = {}
     joint_population, joint_parents = [], {}
-    for prior_path in sorted((report_root / "ai_decision_action_outcome_calibration").glob("ai_decision_action_outcome_calibration_*.json")):
+    for prior_path in sorted(
+        (report_root / "ai_decision_action_outcome_calibration").glob(
+            "ai_decision_action_outcome_calibration_*.json"
+        )
+    ):
         if not _refresh_path_allowed(prior_path, target_date):
             continue
         prior = compact.read(prior_path)
-        if (_artifact_content_sha256_valid(prior) and prior.get("target_date", "9999") <= target_date):
+        if (
+            _artifact_content_sha256_valid(prior)
+            and prior.get("target_date", "9999") <= target_date
+        ):
             previous_strategy.update(prior.get("strategy_refinements_by_scope") or {})
-            if (prior.get('joint_scope_economics') or {}).get('forward_selection'):
-                previous_joint = prior['joint_scope_economics']
-            for scope, evaluated in (prior.get("mechanistic_refinements_by_scope") or {}).items():
+            if (prior.get("joint_scope_economics") or {}).get("forward_selection"):
+                previous_joint = prior["joint_scope_economics"]
+            for scope, evaluated in (
+                prior.get("mechanistic_refinements_by_scope") or {}
+            ).items():
                 frozen = evaluated.get("forward_selection")
-                if frozen and frozen.get("economic_contract") == "machine_operating_daily_net_v1":
+                if (
+                    frozen
+                    and frozen.get("economic_contract")
+                    == "machine_operating_daily_net_v1"
+                ):
                     previous_selections[scope] = frozen
-            for scope, extension in ((prior.get("hierarchical_entry_quality") or {}).get("runtime_extensions_by_scope") or {}).items():
+            for scope, extension in (
+                (prior.get("hierarchical_entry_quality") or {}).get(
+                    "runtime_extensions_by_scope"
+                )
+                or {}
+            ).items():
                 frozen = extension.get("forward_selection")
-                if frozen and frozen.get("economic_contract") == "machine_operating_daily_net_v1":
+                if (
+                    frozen
+                    and frozen.get("economic_contract")
+                    == "machine_operating_daily_net_v1"
+                ):
                     previous_hierarchy[scope] = frozen
     scope_evaluations, extensions = {}, {}
     # Reuse the existing cross-scope cache, only for paths that actually need
     # cost relabeling. Already priced or unsupported historical rows need no
     # second full pipeline scan.
-    repricing_rows = [r for r in paired_rows if _machine_source_contract_valid(r)
-        and _full_entry_cost_pct(r["comparison"].get("entry_cost_contract"), source_date=r["source_date"]) is None
-        and (r.get("label_context") or {}).get("reference_price_type") == "executable_ask"]
-    repricing_profiles = {(day, venue): _hierarchy_cost_profiles(data_root, day, venue)
-        for day, venue in {(r["source_date"], r["entry_group_observation"]["key_parts"]["venue"]) for r in repricing_rows}}
-    repricing_rows = [r for r in repricing_rows
-        if r["stock_code"] in repricing_profiles[(r["source_date"], r["entry_group_observation"]["key_parts"]["venue"])]]
-    price_cache = _hierarchy_pipeline_price_cache(repricing_rows, data_root) if repricing_rows else {}
+    repricing_rows = [
+        r
+        for r in paired_rows
+        if _machine_source_contract_valid(r)
+        and _full_entry_cost_pct(
+            r["comparison"].get("entry_cost_contract"), source_date=r["source_date"]
+        )
+        is None
+        and (r.get("label_context") or {}).get("reference_price_type")
+        == "executable_ask"
+    ]
+    repricing_profiles = {
+        (day, venue): _hierarchy_cost_profiles(data_root, day, venue)
+        for day, venue in {
+            (r["source_date"], r["entry_group_observation"]["key_parts"]["venue"])
+            for r in repricing_rows
+        }
+    }
+    repricing_rows = [
+        r
+        for r in repricing_rows
+        if r["stock_code"]
+        in repricing_profiles[
+            (r["source_date"], r["entry_group_observation"]["key_parts"]["venue"])
+        ]
+    ]
+    price_cache = (
+        _hierarchy_pipeline_price_cache(repricing_rows, data_root)
+        if repricing_rows
+        else {}
+    )
     strategy_evaluations = {}
     for scope in AUTO_PROMOTION_SCOPES:
         cohort = tuple(scope.split("|"))
         scoped_incumbent = _legacy_diagnostic_for_cohort(incumbent, cohort)
         scope_parent = (scoped_incumbent or {}).get("machine_policy") or parent
-        scoped_paired = [r for r in paired_rows if tuple(
-            _as_dict(_as_dict(r.get("entry_group_observation")).get("key_parts")).get(k)
-            for k in ("venue", "session_bucket")) == cohort]
+        scoped_paired = [
+            r
+            for r in paired_rows
+            if tuple(
+                _as_dict(
+                    _as_dict(r.get("entry_group_observation")).get("key_parts")
+                ).get(k)
+                for k in ("venue", "session_bucket")
+            )
+            == cohort
+        ]
         repriced, cost_census = relabel_hierarchy_source_rows(
-            scoped_paired, data_root, cohort=cohort, pipeline_prices_by_day=price_cache)
+            scoped_paired, data_root, cohort=cohort, pipeline_prices_by_day=price_cache
+        )
         population, contract = _common_refinement_population(
-            repriced, machine_rows, target_date=target_date,
-            source_receipt=source_receipt, paired_contract=paired_contract,
-            natural_conflicting_attempt_identity_count=case_table["conflicting_attempt_identity_count"],
-            natural_conflicting_evaluation_keys=case_table["conflicting_evaluation_keys"],
-            cohort=cohort, operating_projection=operating_projection,
-            allow_attempt_identity_fallback=True)
+            repriced,
+            machine_rows,
+            target_date=target_date,
+            source_receipt=source_receipt,
+            paired_contract=paired_contract,
+            natural_conflicting_attempt_identity_count=case_table[
+                "conflicting_attempt_identity_count"
+            ],
+            natural_conflicting_evaluation_keys=case_table[
+                "conflicting_evaluation_keys"
+            ],
+            cohort=cohort,
+            operating_projection=operating_projection,
+            allow_attempt_identity_fallback=True,
+        )
         strategy_population, strategy_contract = population, contract
         population, contract = _current_structure_population(population, contract)
-        contract["economic_kernel_sha256"] = _canonical_sha256({
-            name: hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
-            for name in ("ai_action_outcome_calibration.py", "entry_setup_evidence.py", "entry_candle_context.py",
-                         "compact_auxiliary_paired_replay.py", "strategy_owner_replay.py", "entry_strategy_policy.py")})
+        contract["economic_kernel_sha256"] = _canonical_sha256(
+            {
+                name: hashlib.sha256(
+                    Path(__file__).with_name(name).read_bytes()
+                ).hexdigest()
+                for name in (
+                    "ai_action_outcome_calibration.py",
+                    "entry_setup_evidence.py",
+                    "entry_candle_context.py",
+                    "compact_auxiliary_paired_replay.py",
+                    "strategy_owner_replay.py",
+                    "entry_strategy_policy.py",
+                )
+            }
+        )
         joint_population.extend(population)
         joint_parents[scope] = scope_parent
         contract["incumbent_scope_verified"] = scoped_incumbent is not None
@@ -10315,17 +13252,35 @@ def build_main_mechanistic_report(
         contract["frozen_selection"] = previous_selections.get(scope)
         contract["frozen_hierarchy"] = previous_hierarchy.get(scope)
         strategy_evaluations[scope] = build_main_strategy_refinement(
-            strategy_population, parent=scope_parent, scope=cohort, source_contract={**strategy_contract, "economic_kernel_sha256": contract["economic_kernel_sha256"]}, previous=previous_strategy.get(scope), machine_policy_only=True)
+            strategy_population,
+            parent=scope_parent,
+            scope=cohort,
+            source_contract={
+                **strategy_contract,
+                "economic_kernel_sha256": contract["economic_kernel_sha256"],
+            },
+            previous=previous_strategy.get(scope),
+            machine_policy_only=True,
+        )
         strategy_evaluations[scope]["source_acceptance"] = {
-            key: value for key, value in strategy_contract.items()
+            key: value
+            for key, value in strategy_contract.items()
             if key not in {"natural_machine_source_receipt", "paired_source_contract"}
         }
         evaluated = build_clean_baseline_mechanistic_refinement(
-            report_root / PAIRED_SUBDIR, target_date=target_date,
-            source_rows=population, source_contract=contract, parent_policy=scope_parent)
+            report_root / PAIRED_SUBDIR,
+            target_date=target_date,
+            source_rows=population,
+            source_contract=contract,
+            parent_policy=scope_parent,
+        )
         extension = build_mechanistic_hierarchy_candidate(
-            population, target_date=target_date, parent_policy=scope_parent,
-            cohort=cohort, population_source_contract=contract)
+            population,
+            target_date=target_date,
+            parent_policy=scope_parent,
+            cohort=cohort,
+            population_source_contract=contract,
+        )
         extension["full_cost_relabel_census"] = cost_census
         extension["machine_capture_census"] = machine_capture_census
         extensions[scope] = extension
@@ -10352,9 +13307,7 @@ def build_main_mechanistic_report(
         "clean_tuning_baseline_date": CLEAN_BASELINE_DATE,
         "report_scope": "main_mechanistic_entry",
         "noncompact_sections_refreshed": True,
-        "evaluation_contract_version": (
-            MAIN_MECHANISTIC_EVALUATION_CONTRACT_VERSION
-        ),
+        "evaluation_contract_version": (MAIN_MECHANISTIC_EVALUATION_CONTRACT_VERSION),
         "evaluation_fingerprint": _main_mechanistic_input_fingerprint(
             data_root, target_date, incumbent_date=incumbent_date
         ),
@@ -10365,18 +13318,38 @@ def build_main_mechanistic_report(
         "machine_full_evaluation": {
             **_machine_full_evaluation_projection(refinement, refinement_contract),
             "summary_scope": "KRX|KRX_REGULAR",
-            "scope_evaluations": {key: _machine_full_evaluation_projection(value, value["source_contract"])
-                                  for key, value in scope_evaluations.items()},
+            "scope_evaluations": {
+                key: _machine_full_evaluation_projection(
+                    value, value["source_contract"]
+                )
+                for key, value in scope_evaluations.items()
+            },
             "registered_scope_count": len(AUTO_PROMOTION_SCOPES),
-            "scope_disposition_complete": len(scope_evaluations) == len(AUTO_PROMOTION_SCOPES),
+            "scope_disposition_complete": len(scope_evaluations)
+            == len(AUTO_PROMOTION_SCOPES),
         },
         "mechanistic_refinements_by_scope": scope_evaluations,
         "strategy_refinements_by_scope": strategy_evaluations,
-        "operating_source_handoff": {k: v for k, v in operating_projection.items() if k != "rows"},
+        "operating_source_handoff": {
+            k: v for k, v in operating_projection.items() if k != "rows"
+        },
         "post_apply_decision_version_performance": compact.applied_decision_version_performance(
-            compact.read(data_root / "report/entry_split_order_plan" / f"entry_split_order_plan_{target_date}.json"), day=target_date),
-        "joint_scope_economics": _machine_joint_scope_evaluation(joint_population, joint_parents,
-            scope_evaluations, extensions, previous_joint, contract['economic_kernel_sha256'], target_date),
+            compact.read(
+                data_root
+                / "report/entry_split_order_plan"
+                / f"entry_split_order_plan_{target_date}.json"
+            ),
+            day=target_date,
+        ),
+        "joint_scope_economics": _machine_joint_scope_evaluation(
+            joint_population,
+            joint_parents,
+            scope_evaluations,
+            extensions,
+            previous_joint,
+            contract["economic_kernel_sha256"],
+            target_date,
+        ),
         "mechanistic_flow_groups": {
             "status": "not_recomputed_machine_only",
             "source_population": {
@@ -10391,9 +13364,14 @@ def build_main_mechanistic_report(
     # The continuous-reversal family owns its native comparison in the
     # mandatory main_machine_policy stage. Its captures have no legacy raw
     # setup recipe; do not feed them to the older KRX recipe comparator.
-    if not (incumbent or {}).get('continuous_reversal'):
-        from src.engine.scalping.main_submit_drought_research import refresh_daily_projection
-        report['submission_drought_price_comparison'] = refresh_daily_projection(data_root, target_date, incumbent)
+    if not (incumbent or {}).get("continuous_reversal"):
+        from src.engine.scalping.main_submit_drought_research import (
+            refresh_daily_projection,
+        )
+
+        report["submission_drought_price_comparison"] = refresh_daily_projection(
+            data_root, target_date, incumbent
+        )
     return _with_artifact_content_sha256(report)
 
 
@@ -10515,7 +13493,9 @@ def build_report(
         source_contract=mechanistic_source_contract,
     )
     hierarchy_parent = json.loads(json.dumps(MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1))
-    from src.engine.scalping.continuous_reversal_operating_postclose import load_report_parent
+    from src.engine.scalping.continuous_reversal_operating_postclose import (
+        load_report_parent,
+    )
 
     incumbent = load_report_parent(data_root, target_date)
     if incumbent is not None:
@@ -10532,11 +13512,18 @@ def build_report(
         capture_census=machine_capture_census,
         source_receipt=machine_source_receipt,
     )
-    machine_decision_case_table["ai_quality_diagnostics"] = materialized_quality_diagnostics(data_root, target_date)
+    machine_decision_case_table["ai_quality_diagnostics"] = (
+        materialized_quality_diagnostics(data_root, target_date)
+    )
     from src.engine.scalping import compact_auxiliary_paired_replay as compact
+
     paired = compact.read(compact.report_path(data_root, target_date))
-    if compact.valid(paired) and paired.get("source_manifest_sha256") == machine_source_receipt.get("source_manifest_sha256"):
-        machine_decision_case_table["compact_auxiliary_screen_outcomes"]["paired_economic_evaluation"] = paired
+    if compact.valid(paired) and paired.get(
+        "source_manifest_sha256"
+    ) == machine_source_receipt.get("source_manifest_sha256"):
+        machine_decision_case_table["compact_auxiliary_screen_outcomes"][
+            "paired_economic_evaluation"
+        ] = paired
     all_scope_rows, all_scope_contract = _mechanistic_source_rows(
         report_root / PAIRED_SUBDIR, target_date=target_date, all_supported_cohorts=True
     )
@@ -10548,26 +13535,45 @@ def build_report(
         data_root,
         pipeline_prices_by_day=pipeline_prices_by_day,
     )
-    operating_projection = compact.read(compact.report_path(data_root, target_date).with_suffix(".source.json"))
+    operating_projection = compact.read(
+        compact.report_path(data_root, target_date).with_suffix(".source.json")
+    )
     if compact.valid(operating_projection):
-        operating_projection = compact.sealed({**operating_projection,
-            "runtime_inference_cost_receipt": compact.runtime_inference_cost_receipt(data_root, target_date)})
+        operating_projection = compact.sealed(
+            {
+                **operating_projection,
+                "runtime_inference_cost_receipt": compact.runtime_inference_cost_receipt(
+                    data_root, target_date
+                ),
+            }
+        )
     refinement_rows, refinement_contract = _common_refinement_population(
-        hierarchy_rows, machine_observations,
-        target_date=target_date, source_receipt=machine_source_receipt,
+        hierarchy_rows,
+        machine_observations,
+        target_date=target_date,
+        source_receipt=machine_source_receipt,
         paired_contract=mechanistic_source_contract,
-        natural_conflicting_attempt_identity_count=machine_decision_case_table["conflicting_attempt_identity_count"],
-        natural_conflicting_evaluation_keys=machine_decision_case_table["conflicting_evaluation_keys"],
+        natural_conflicting_attempt_identity_count=machine_decision_case_table[
+            "conflicting_attempt_identity_count"
+        ],
+        natural_conflicting_evaluation_keys=machine_decision_case_table[
+            "conflicting_evaluation_keys"
+        ],
         operating_projection=operating_projection,
     )
     mechanistic_refinement = build_clean_baseline_mechanistic_refinement(
-        report_root / PAIRED_SUBDIR, target_date=target_date,
-        source_rows=refinement_rows, source_contract=refinement_contract,
-        parent_policy=(incumbent or {}).get("machine_policy") or MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1,
+        report_root / PAIRED_SUBDIR,
+        target_date=target_date,
+        source_rows=refinement_rows,
+        source_contract=refinement_contract,
+        parent_policy=(incumbent or {}).get("machine_policy")
+        or MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1,
     )
     if mechanistic_refinement.get("policy_candidate"):
         hierarchy_parent.pop("hierarchy", None)
-        hierarchy_parent["thresholds"].update(mechanistic_refinement["policy_candidate"]["thresholds"])
+        hierarchy_parent["thresholds"].update(
+            mechanistic_refinement["policy_candidate"]["thresholds"]
+        )
         hierarchy_parent["version"] = MECHANISTIC_FULL_POPULATION_POLICY_VERSION
         hierarchy_parent["postclose_selection"]["minimum_cost_adjusted_ev_pct"] = (
             MECHANISTIC_REFINEMENT_GATE["minimum_cost_adjusted_ev_pct"]
@@ -10583,9 +13589,9 @@ def build_report(
     if mechanistic_refinement.get("promotion_pass") is not True:
         hierarchical_entry_quality["runtime_extension"]["policy_candidate"] = None
         hierarchical_entry_quality["runtime_extension"]["promotion_pass"] = False
-        hierarchical_entry_quality["runtime_extension"]["status"] = (
-            "diagnostic_only_parent_economic_gate_not_passed"
-        )
+        hierarchical_entry_quality["runtime_extension"][
+            "status"
+        ] = "diagnostic_only_parent_economic_gate_not_passed"
     hierarchical_entry_quality["runtime_extension"][
         "machine_capture_census"
     ] = machine_capture_census
@@ -10620,10 +13626,17 @@ def build_report(
             _as_dict((incumbent or {}).get("scope_policies")).get(scope)
         )
         scoped_population, scoped_contract = _common_refinement_population(
-            repriced, machine_observations, target_date=target_date,
-            source_receipt=machine_source_receipt, paired_contract=all_scope_contract,
-            natural_conflicting_attempt_identity_count=machine_decision_case_table["conflicting_attempt_identity_count"],
-            natural_conflicting_evaluation_keys=machine_decision_case_table["conflicting_evaluation_keys"],
+            repriced,
+            machine_observations,
+            target_date=target_date,
+            source_receipt=machine_source_receipt,
+            paired_contract=all_scope_contract,
+            natural_conflicting_attempt_identity_count=machine_decision_case_table[
+                "conflicting_attempt_identity_count"
+            ],
+            natural_conflicting_evaluation_keys=machine_decision_case_table[
+                "conflicting_evaluation_keys"
+            ],
             cohort=cohort,
         )
         extension = build_mechanistic_hierarchy_candidate(
@@ -10820,7 +13833,7 @@ def _runtime_policy_publication_errors(
         errors.append("mechanistic_entry_runtime_policy_target_date_mismatch")
     machine_source = published_policy.get("machine_evaluation_source") or {
         "source_date": published_policy.get("source_date"),
-        "artifact_content_sha256": published_policy.get("source_artifact_sha256")
+        "artifact_content_sha256": published_policy.get("source_artifact_sha256"),
     }
     if machine_source.get("source_date") != source_report.get("target_date"):
         errors.append("mechanistic_entry_runtime_policy_source_date_mismatch")
@@ -10837,14 +13850,17 @@ def _runtime_policy_publication_errors(
     return errors
 
 
-
 def ensure_machine_economic_reference(*, data_root: Path, target_date: str) -> dict:
     """Decouple the full-cost source prerequisite from provider replay gates."""
     from zoneinfo import ZoneInfo
     from src.engine.scalping.micro_reversion.economic_reference import (
-        build_daily_resolution, atomic_write_json, publish_canonical_symbol_master,
+        build_daily_resolution,
+        atomic_write_json,
+        publish_canonical_symbol_master,
     )
-    from src.engine.scalping.micro_reversion.economic_reference_owner import build_daily_sources
+    from src.engine.scalping.micro_reversion.economic_reference_owner import (
+        build_daily_sources,
+    )
 
     # Source manifests resolve relative entries against their own directory.
     # Keep generated source paths absolute even when the CLI uses ./data.
@@ -10855,49 +13871,99 @@ def ensure_machine_economic_reference(*, data_root: Path, target_date: str) -> d
     if existing and _hierarchy_cost_profiles(data_root, target_date):
         try:
             publication = publish_canonical_symbol_master(
-                _load_json(existing), target_date=target_date, directory=root)
+                _load_json(existing), target_date=target_date, directory=root
+            )
         except (OSError, ValueError, KeyError, TypeError) as exc:
-            return {"status": "source_gap_symbol_master_publication_failed",
-                    "reason": str(exc), "path": str(existing)}
-        return {"status": "existing_verified_sources_preserved", "path": str(existing),
-                "symbol_master_publication": publication}
+            return {
+                "status": "source_gap_symbol_master_publication_failed",
+                "reason": str(exc),
+                "path": str(existing),
+            }
+        return {
+            "status": "existing_verified_sources_preserved",
+            "path": str(existing),
+            "symbol_master_publication": publication,
+        }
     if datetime.now(ZoneInfo("Asia/Seoul")).date().isoformat() != target_date:
-        return {"status": "source_gap_historical_official_master_unavailable", "target_date": target_date, "path": str(path)}
+        return {
+            "status": "source_gap_historical_official_master_unavailable",
+            "target_date": target_date,
+            "path": str(path),
+        }
     try:
         private = root / "machine_source_inputs" / target_date
-        build_daily_sources(target_date=target_date, policy_path=data_root / "config" / "micro_reversion_economic_policy.json", output_root=private)
-        report = build_daily_resolution(target_date=target_date, source_manifest_path=private / "economic_reference_sources.json")
+        build_daily_sources(
+            target_date=target_date,
+            policy_path=data_root / "config" / "micro_reversion_economic_policy.json",
+            output_root=private,
+        )
+        report = build_daily_resolution(
+            target_date=target_date,
+            source_manifest_path=private / "economic_reference_sources.json",
+        )
         atomic_write_json(path, report)
-        publication = (publish_canonical_symbol_master(
-            report, target_date=target_date, directory=root)
-            if report.get("verified") is True else None)
-        return {"status": report.get("status"), "verified": report.get("verified"),
-                "path": str(path), "symbol_master_publication": publication}
+        publication = (
+            publish_canonical_symbol_master(
+                report, target_date=target_date, directory=root
+            )
+            if report.get("verified") is True
+            else None
+        )
+        return {
+            "status": report.get("status"),
+            "verified": report.get("verified"),
+            "path": str(path),
+            "symbol_master_publication": publication,
+        }
     except (OSError, ValueError, RuntimeError) as exc:
-        return {"status": "source_gap_cost_prerequisite_failed", "reason": str(exc), "path": str(path)}
+        return {
+            "status": "source_gap_cost_prerequisite_failed",
+            "reason": str(exc),
+            "path": str(path),
+        }
 
 
 def materialized_quality_diagnostics(data_root: Path, source_day: str) -> dict:
     from src.engine.scalping import ai_decision_quality as quality
     from src.engine.scalping.compact_auxiliary_paired_replay import digest
-    path = Path(data_root) / "report/ai_decision_outcome_labels" / f"ai_decision_outcome_labels_{source_day}.json"
-    control_path = Path(data_root) / "runtime" / f"ai_decision_quality_control_{source_day}.json"
+
+    path = (
+        Path(data_root)
+        / "report/ai_decision_outcome_labels"
+        / f"ai_decision_outcome_labels_{source_day}.json"
+    )
+    control_path = (
+        Path(data_root) / "runtime" / f"ai_decision_quality_control_{source_day}.json"
+    )
     labels, control = _load_json(path), _load_json(control_path)
     errors = quality.validate_daily_materialization_reports(
-        target_date=source_day, reports={"control": control, "mature": labels})
+        target_date=source_day, reports={"control": control, "mature": labels}
+    )
     return {
-        "schema": "ai_quality_materialized_diagnostics_v1", "source_date": source_day,
+        "schema": "ai_quality_materialized_diagnostics_v1",
+        "source_date": source_day,
         "status": "source_gap" if errors else "diagnostic_available",
-        "source_label_report_path": str(path), "source_label_report_sha256": digest(labels) if labels else None,
-        "source_label_quality_contract_sha256": quality._sha256(labels) if labels else None,
+        "source_label_report_path": str(path),
+        "source_label_report_sha256": digest(labels) if labels else None,
+        "source_label_quality_contract_sha256": (
+            quality._sha256(labels) if labels else None
+        ),
         "original_label_report_sha256": labels.get("original_label_report_sha256"),
-        "source_manifest_sha256": (control.get("materialization_inputs") or {}).get("source_manifest_sha256"),
-        "diagnostic_price_path_summary": labels.get("diagnostic_price_path_summary") if not errors else None,
-        "label_contract_status_counts": labels.get("label_contract_status_counts") if not errors else None,
+        "source_manifest_sha256": (control.get("materialization_inputs") or {}).get(
+            "source_manifest_sha256"
+        ),
+        "diagnostic_price_path_summary": (
+            labels.get("diagnostic_price_path_summary") if not errors else None
+        ),
+        "label_contract_status_counts": (
+            labels.get("label_contract_status_counts") if not errors else None
+        ),
         "source_label_migration": control.get("source_label_migration"),
-        "reasons": errors, "owner": "ai_decision_quality_source_label_materialization",
+        "reasons": errors,
+        "owner": "ai_decision_quality_source_label_materialization",
         "closure_test": "current_source_label_contract_and_exact_content_hash_pass",
-        "economic_acceptance_eligible": False, "diagnostic_net_is_realized_profit": False,
+        "economic_acceptance_eligible": False,
+        "diagnostic_net_is_realized_profit": False,
     }
 
 
@@ -10908,213 +13974,520 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--target-date", required=True)
     parser.add_argument("--data-root", type=Path, default=Path("data"))
     parser.add_argument("--write", action="store_true")
-    parser.add_argument('--machine-policy-only', action='store_true', help='Generate only the pre-AI machine threshold policy artifact')
-    parser.add_argument('--winrate-policy-only', action='store_true', help='Evaluate a registered machine win-rate candidate and stage a next-day policy')
-    parser.add_argument('--admission-recipe', choices=['pullback_p60_v0'], help='Evaluate the frozen non-Samsung admission successor')
-    parser.add_argument('--submit-drought-research-only', action='store_true',
-                        help='One-day source-bound price comparison; never publishes policies')
-    parser.add_argument('--research-external-dir', type=Path,
-                        help='Already collected exact-date price files with source manifest')
-    parser.add_argument('--research-source-bytes', type=int,
-                        help='Freeze a complete decompressed capture prefix')
-    parser.add_argument('--research-source-sha256', help='Expected frozen source prefix hash')
-    parser.add_argument('--research-cutoff-kst', help='Last included aware decision timestamp')
-    parser.add_argument('--research-incumbent-date', help='Explicit current policy date for historical comparison')
-    parser.add_argument('--training-through-date', help='Explicit train cutoff; later sources only are diagnostic holdout')
-    parser.add_argument('--search-limit', type=int, default=96, help='Machine policy candidate traversal budget')
+    parser.add_argument(
+        "--machine-policy-only",
+        action="store_true",
+        help="Generate only the pre-AI machine threshold policy artifact",
+    )
+    parser.add_argument(
+        "--winrate-policy-only",
+        action="store_true",
+        help="Evaluate a registered machine win-rate candidate and stage a next-day policy",
+    )
+    parser.add_argument(
+        "--admission-recipe",
+        choices=["pullback_p60_v0"],
+        help="Evaluate the frozen non-Samsung admission successor",
+    )
+    parser.add_argument(
+        "--submit-drought-research-only",
+        action="store_true",
+        help="One-day source-bound price comparison; never publishes policies",
+    )
+    parser.add_argument(
+        "--research-external-dir",
+        type=Path,
+        help="Already collected exact-date price files with source manifest",
+    )
+    parser.add_argument(
+        "--research-source-bytes",
+        type=int,
+        help="Freeze a complete decompressed capture prefix",
+    )
+    parser.add_argument(
+        "--research-source-sha256", help="Expected frozen source prefix hash"
+    )
+    parser.add_argument(
+        "--research-cutoff-kst", help="Last included aware decision timestamp"
+    )
+    parser.add_argument(
+        "--research-incumbent-date",
+        help="Explicit current policy date for historical comparison",
+    )
+    parser.add_argument(
+        "--training-through-date",
+        help="Explicit train cutoff; later sources only are diagnostic holdout",
+    )
+    parser.add_argument(
+        "--search-limit",
+        type=int,
+        default=96,
+        help="Machine policy candidate traversal budget",
+    )
     parser.add_argument(
         "--machine-only",
         action="store_true",
         help="Refresh only the active main mechanistic evaluator and publisher source",
     )
-    parser.add_argument('--report-only', action='store_true',
-                        help='Write historical machine diagnostics without policy publication or activation')
+    parser.add_argument(
+        "--report-only",
+        action="store_true",
+        help="Write historical machine diagnostics without policy publication or activation",
+    )
     parser.add_argument(
         "--publication-date",
         help="KST publication day; effective date is its next KRX trading day",
     )
-    parser.add_argument("--ensure-economic-reference-only", action="store_true", help="Prepare only the existing full-cost source before lengthy research; no policy publication")
+    parser.add_argument(
+        "--ensure-economic-reference-only",
+        action="store_true",
+        help="Prepare only the existing full-cost source before lengthy research; no policy publication",
+    )
     parser.add_argument(
         "--require-policy-publication",
         action="store_true",
         help="Fail unless the canonical next-trading-date policy is hash-bound",
     )
-    parser.add_argument("--activate-now", action="store_true", help="Activate an eligible strategy generation immediately and carry until superseded")
+    parser.add_argument(
+        "--activate-now",
+        action="store_true",
+        help="Activate an eligible strategy generation immediately and carry until superseded",
+    )
     parser.add_argument("--print-summary", action="store_true")
     args = parser.parse_args(argv)
-    if args.report_only and (not args.machine_only or args.activate_now or args.require_policy_publication
-                            or args.machine_policy_only or args.winrate_policy_only
-                            or args.ensure_economic_reference_only or args.submit_drought_research_only):
-        parser.error('--report-only requires --machine-only and forbids policy-generation or activation actions')
+    if args.report_only and (
+        not args.machine_only
+        or args.activate_now
+        or args.require_policy_publication
+        or args.machine_policy_only
+        or args.winrate_policy_only
+        or args.ensure_economic_reference_only
+        or args.submit_drought_research_only
+    ):
+        parser.error(
+            "--report-only requires --machine-only and forbids policy-generation or activation actions"
+        )
     if args.submit_drought_research_only:
-        if (args.machine_policy_only or args.machine_only or args.winrate_policy_only
-            or args.admission_recipe or args.activate_now or args.require_policy_publication
-            or args.ensure_economic_reference_only or args.training_through_date or args.publication_date):
-            parser.error('--submit-drought-research-only is a non-publishing standalone comparison')
-        from src.engine.scalping.main_submit_drought_research import build_daily, cumulative_projection, seal
-        from src.engine.scalping.mechanistic_entry_runtime_policy import load_effective
-        bundle = load_effective(data_root=args.data_root,
-            target_date=args.research_incumbent_date or args.target_date)
-        if bundle is None:
-            raise ValueError('submit_drought_incumbent_missing')
-        result = build_daily(data_root=args.data_root, target_date=args.target_date, bundle=bundle,
-            external_dir=args.research_external_dir, source_bytes=args.research_source_bytes,
-            source_sha256=args.research_source_sha256, cutoff=args.research_cutoff_kst)
-        result = seal({k: v for k, v in {**result,
-            'compatible_cumulative_comparison': cumulative_projection(args.data_root, result)}.items()
-            if k != 'artifact_content_sha256'})
-        if args.write:
-            output = args.data_root/'report/ai_decision_action_outcome_calibration'/f'main_submit_drought_research_{args.target_date}.json'
-            _atomic_write_json(output, result)
-        print(json.dumps({k: v for k, v in result.items()
-                          if k not in {'observations', 'price_source_receipts'}}, ensure_ascii=True, sort_keys=True))
-        return 0
-    if (args.research_external_dir or args.research_source_bytes is not None
-        or args.research_source_sha256 or args.research_incumbent_date or args.research_cutoff_kst):
-        parser.error('research source options require --submit-drought-research-only')
-    if args.admission_recipe and not args.winrate_policy_only:
-        parser.error('--admission-recipe requires --winrate-policy-only')
-    if args.winrate_policy_only:
-        if (args.machine_policy_only or args.machine_only or args.activate_now
+        if (
+            args.machine_policy_only
+            or args.machine_only
+            or args.winrate_policy_only
+            or args.admission_recipe
+            or args.activate_now
             or args.require_policy_publication
-            or args.ensure_economic_reference_only or args.training_through_date):
-            parser.error('--winrate-policy-only is a standalone policy-generation action')
-        output = args.data_root / 'report' / 'ai_decision_action_outcome_calibration' / f'winrate_policy_{args.target_date}.json'
+            or args.ensure_economic_reference_only
+            or args.training_through_date
+            or args.publication_date
+        ):
+            parser.error(
+                "--submit-drought-research-only is a non-publishing standalone comparison"
+            )
+        from src.engine.scalping.main_submit_drought_research import (
+            build_daily,
+            cumulative_projection,
+            seal,
+        )
+        from src.engine.scalping.mechanistic_entry_runtime_policy import load_effective
+
+        bundle = load_effective(
+            data_root=args.data_root,
+            target_date=args.research_incumbent_date or args.target_date,
+        )
+        if bundle is None:
+            raise ValueError("submit_drought_incumbent_missing")
+        result = build_daily(
+            data_root=args.data_root,
+            target_date=args.target_date,
+            bundle=bundle,
+            external_dir=args.research_external_dir,
+            source_bytes=args.research_source_bytes,
+            source_sha256=args.research_source_sha256,
+            cutoff=args.research_cutoff_kst,
+        )
+        result = seal(
+            {
+                k: v
+                for k, v in {
+                    **result,
+                    "compatible_cumulative_comparison": cumulative_projection(
+                        args.data_root, result
+                    ),
+                }.items()
+                if k != "artifact_content_sha256"
+            }
+        )
+        if args.write:
+            output = (
+                args.data_root
+                / "report/ai_decision_action_outcome_calibration"
+                / f"main_submit_drought_research_{args.target_date}.json"
+            )
+            _atomic_write_json(output, result)
+        print(
+            json.dumps(
+                {
+                    k: v
+                    for k, v in result.items()
+                    if k not in {"observations", "price_source_receipts"}
+                },
+                ensure_ascii=True,
+                sort_keys=True,
+            )
+        )
+        return 0
+    if (
+        args.research_external_dir
+        or args.research_source_bytes is not None
+        or args.research_source_sha256
+        or args.research_incumbent_date
+        or args.research_cutoff_kst
+    ):
+        parser.error("research source options require --submit-drought-research-only")
+    if args.admission_recipe and not args.winrate_policy_only:
+        parser.error("--admission-recipe requires --winrate-policy-only")
+    if args.winrate_policy_only:
+        if (
+            args.machine_policy_only
+            or args.machine_only
+            or args.activate_now
+            or args.require_policy_publication
+            or args.ensure_economic_reference_only
+            or args.training_through_date
+        ):
+            parser.error(
+                "--winrate-policy-only is a standalone policy-generation action"
+            )
+        output = (
+            args.data_root
+            / "report"
+            / "ai_decision_action_outcome_calibration"
+            / f"winrate_policy_{args.target_date}.json"
+        )
         output.parent.mkdir(parents=True, exist_ok=True)
-        with (output.parent / f'winrate_policy_{args.target_date}.lock').open('a') as stage_lock:
+        with (output.parent / f"winrate_policy_{args.target_date}.lock").open(
+            "a"
+        ) as stage_lock:
             fcntl.flock(stage_lock, fcntl.LOCK_EX)
-            source_receipt = _machine_ai_natural_source_receipt(args.data_root, args.target_date)
-            if source_receipt.get('machine_threshold_tuning_input_allowed') is False:
+            source_receipt = _machine_ai_natural_source_receipt(
+                args.data_root, args.target_date
+            )
+            if source_receipt.get("machine_threshold_tuning_input_allowed") is False:
                 # A missing exact-day producer cannot be repaired by replaying
                 # older cumulative rows under today's failed source receipt.
-                cost_source = {'status': 'not_run_source_gap'}
-                rows, counts = [], {'source_gap': source_receipt.get('status')}
+                cost_source = {"status": "not_run_source_gap"}
+                rows, counts = [], {"source_gap": source_receipt.get("status")}
             else:
-                cost_source = ensure_machine_economic_reference(data_root=args.data_root, target_date=args.target_date) if args.write else {}
+                cost_source = (
+                    ensure_machine_economic_reference(
+                        data_root=args.data_root, target_date=args.target_date
+                    )
+                    if args.write
+                    else {}
+                )
                 price_fetcher, price_as_of = _postclose_machine_completed_fetcher(
-                    args.target_date, write=args.write)
-                rows, counts = load_machine_observation_rows(args.data_root, target_date=args.target_date,
-                    independent_machine=True, minimum_source_date='2026-09-22',
+                    args.target_date, write=args.write
+                )
+                rows, counts = load_machine_observation_rows(
+                    args.data_root,
+                    target_date=args.target_date,
+                    independent_machine=True,
+                    minimum_source_date="2026-09-22",
                     completed_price_fetcher=price_fetcher,
-                    completed_price_as_of=price_as_of)
+                    completed_price_as_of=price_as_of,
+                )
                 if args.write:
                     source_receipt = _await_machine_ai_natural_source_receipt(
-                        args.data_root, args.target_date)
+                        args.data_root, args.target_date
+                    )
             admission_analysis = None
             if args.admission_recipe:
-                from src.engine.scalping.entry_admission_analysis import build_report as admission_report
-                from src.engine.scalping.mechanistic_entry_runtime_policy import load_effective, for_cohort
-                current = load_effective(data_root=args.data_root, target_date=datetime.now(KST).date().isoformat())
-                parent = for_cohort(current, ('KRX', 'KRX_REGULAR'))['machine_policy']
-                admission_analysis = admission_report(rows, parent=parent,
-                    target_date=args.target_date, data_root=args.data_root, designated_pair=current.get('designated_pair'))
-            result = build_winrate_policy_report(rows,
+                from src.engine.scalping.entry_admission_analysis import (
+                    build_report as admission_report,
+                )
+                from src.engine.scalping.mechanistic_entry_runtime_policy import (
+                    load_effective,
+                    for_cohort,
+                )
+
+                current = load_effective(
+                    data_root=args.data_root,
+                    target_date=datetime.now(KST).date().isoformat(),
+                )
+                parent = for_cohort(current, ("KRX", "KRX_REGULAR"))["machine_policy"]
+                admission_analysis = admission_report(
+                    rows,
+                    parent=parent,
+                    target_date=args.target_date,
+                    data_root=args.data_root,
+                    designated_pair=current.get("designated_pair"),
+                )
+            result = build_winrate_policy_report(
+                rows,
                 source_receipt=source_receipt,
-                target_date=args.target_date, data_root=args.data_root,
-                publication_day=args.publication_date or datetime.now(KST).date().isoformat(),
-                admission_recipe_id=args.admission_recipe, admission_analysis=admission_analysis)
-            result = _with_artifact_content_sha256({**result, 'observation_source_counts': counts,
-                'cost_source': cost_source,
-                'observation_status': ('observed' if result.get('candidate_computed') else 'source_gap')
-                    if (result.get('acceptance_contract') or result.get('fixed_pair_contract')) else ('source_gap' if not result['accepted_attempt_count'] else 'observed'),
-                'publication_date': args.publication_date or datetime.now(KST).date().isoformat()})
-            if (result['policy_version'] == 'winrate_initial_v1' and result['target_date'] <= '2026-09-23'
-                and result['hurdle_errors']):
-                raise ValueError('winrate_initial_frozen_reproduction_mismatch:' + ','.join(result['hurdle_errors']))
+                target_date=args.target_date,
+                data_root=args.data_root,
+                publication_day=args.publication_date
+                or datetime.now(KST).date().isoformat(),
+                admission_recipe_id=args.admission_recipe,
+                admission_analysis=admission_analysis,
+            )
+            result = _with_artifact_content_sha256(
+                {
+                    **result,
+                    "observation_source_counts": counts,
+                    "cost_source": cost_source,
+                    "observation_status": (
+                        (
+                            "observed"
+                            if result.get("candidate_computed")
+                            else "source_gap"
+                        )
+                        if (
+                            result.get("acceptance_contract")
+                            or result.get("fixed_pair_contract")
+                        )
+                        else (
+                            "source_gap"
+                            if not result["accepted_attempt_count"]
+                            else "observed"
+                        )
+                    ),
+                    "publication_date": args.publication_date
+                    or datetime.now(KST).date().isoformat(),
+                }
+            )
+            if (
+                result["policy_version"] == "winrate_initial_v1"
+                and result["target_date"] <= "2026-09-23"
+                and result["hurdle_errors"]
+            ):
+                raise ValueError(
+                    "winrate_initial_frozen_reproduction_mismatch:"
+                    + ",".join(result["hurdle_errors"])
+                )
             staged = None
             if args.write:
                 _atomic_write_json(output, result)
-                from src.engine.scalping.mechanistic_entry_runtime_policy import stage_winrate_policy
-                staged = stage_winrate_policy(output, data_root=args.data_root,
-                    publication_day=args.publication_date)
-            terminal = _with_artifact_content_sha256(dict(schema='main_machine_policy_terminal_v1',
-                target_date=args.target_date, completed_at=datetime.now(KST).isoformat(),
-                status='source_gap' if result['observation_status'] == 'source_gap' else 'completed',
-                report_sha256=result['artifact_content_sha256'],
-                policy_sha256=result['policy_sha256'], selection_basis='win_rate_only',
-                disposition=result['disposition'], staged=staged, actual_pid_consumed=False))
+                from src.engine.scalping.mechanistic_entry_runtime_policy import (
+                    stage_winrate_policy,
+                )
+
+                staged = stage_winrate_policy(
+                    output,
+                    data_root=args.data_root,
+                    publication_day=args.publication_date,
+                )
+            terminal = _with_artifact_content_sha256(
+                dict(
+                    schema="main_machine_policy_terminal_v1",
+                    target_date=args.target_date,
+                    completed_at=datetime.now(KST).isoformat(),
+                    status=(
+                        "source_gap"
+                        if result["observation_status"] == "source_gap"
+                        else "completed"
+                    ),
+                    report_sha256=result["artifact_content_sha256"],
+                    policy_sha256=result["policy_sha256"],
+                    selection_basis="win_rate_only",
+                    disposition=result["disposition"],
+                    staged=staged,
+                    actual_pid_consumed=False,
+                )
+            )
             if args.write:
-                _atomic_write_json(output.with_name(f'winrate_policy_terminal_{args.target_date}.json'), terminal)
-            print(json.dumps(dict(disposition=result['disposition'], staged=staged,
-                                  path=str(output) if args.write else None)))
+                _atomic_write_json(
+                    output.with_name(
+                        f"winrate_policy_terminal_{args.target_date}.json"
+                    ),
+                    terminal,
+                )
+            print(
+                json.dumps(
+                    dict(
+                        disposition=result["disposition"],
+                        staged=staged,
+                        path=str(output) if args.write else None,
+                    )
+                )
+            )
         return 0
     if args.machine_policy_only:
-        if (args.machine_only or args.activate_now or args.require_policy_publication
-            or args.ensure_economic_reference_only or args.publication_date or args.search_limit < 1):
-            parser.error('--machine-policy-only is a standalone policy-generation action')
-        output = args.data_root / 'report' / 'ai_decision_action_outcome_calibration' / f'machine_policy_{args.target_date}.json'
+        if (
+            args.machine_only
+            or args.activate_now
+            or args.require_policy_publication
+            or args.ensure_economic_reference_only
+            or args.publication_date
+            or args.search_limit < 1
+        ):
+            parser.error(
+                "--machine-policy-only is a standalone policy-generation action"
+            )
+        output = (
+            args.data_root
+            / "report"
+            / "ai_decision_action_outcome_calibration"
+            / f"machine_policy_{args.target_date}.json"
+        )
         output.parent.mkdir(parents=True, exist_ok=True)
-        with (output.parent / f'machine_policy_{args.target_date}.lock').open('a') as stage_lock:
+        with (output.parent / f"machine_policy_{args.target_date}.lock").open(
+            "a"
+        ) as stage_lock:
             fcntl.flock(stage_lock, fcntl.LOCK_EX)
             # Validate current policy before expensive source loading.
-            from src.engine.scalping.mechanistic_entry_runtime_policy import load_effective
-            load_effective(data_root=args.data_root, target_date=datetime.now(KST).date().isoformat())
-            cost_source = ensure_machine_economic_reference(data_root=args.data_root, target_date=args.target_date) if args.write else {}
+            from src.engine.scalping.mechanistic_entry_runtime_policy import (
+                load_effective,
+            )
+
+            load_effective(
+                data_root=args.data_root,
+                target_date=datetime.now(KST).date().isoformat(),
+            )
+            cost_source = (
+                ensure_machine_economic_reference(
+                    data_root=args.data_root, target_date=args.target_date
+                )
+                if args.write
+                else {}
+            )
             price_fetcher, price_as_of = _postclose_machine_completed_fetcher(
-                args.target_date, write=args.write)
+                args.target_date, write=args.write
+            )
             rows, source_counts = load_machine_observation_rows(
-                args.data_root, target_date=args.target_date, independent_machine=True,
+                args.data_root,
+                target_date=args.target_date,
+                independent_machine=True,
                 completed_price_fetcher=price_fetcher,
-                completed_price_as_of=price_as_of)
-            result = build_machine_policy_report(rows,
-                source_receipt=_machine_ai_natural_source_receipt(args.data_root, args.target_date),
-                target_date=args.target_date, data_root=args.data_root, limit=args.search_limit,
-                write_checkpoints=args.write, training_through_date=args.training_through_date)
-            result = _with_artifact_content_sha256({**result, 'observation_source_counts': source_counts, 'cost_source': cost_source})
+                completed_price_as_of=price_as_of,
+            )
+            result = build_machine_policy_report(
+                rows,
+                source_receipt=_machine_ai_natural_source_receipt(
+                    args.data_root, args.target_date
+                ),
+                target_date=args.target_date,
+                data_root=args.data_root,
+                limit=args.search_limit,
+                write_checkpoints=args.write,
+                training_through_date=args.training_through_date,
+            )
+            result = _with_artifact_content_sha256(
+                {
+                    **result,
+                    "observation_source_counts": source_counts,
+                    "cost_source": cost_source,
+                }
+            )
             if args.write:
                 _atomic_write_json(output, result)
-            terminal = _with_artifact_content_sha256(dict(schema='main_machine_policy_terminal_v1',
-                target_date=args.target_date, completed_at=datetime.now(KST).isoformat(),
-                status='searching_train' if any(r.get('selection_state') == 'searching_train' for r in result['selections'].values()) else 'completed',
-                report_sha256=result['artifact_content_sha256'], policy_sha256=result['policy_sha256'],
-                evaluation_basis=result.get('evaluation_basis'), selection_score_version=result.get('selection_score_version'),
-                selected_scopes=list(result['policy_by_scope']), activation=None,
-                independent_of=['auxiliary_ai', 'widget', 'episode', 'holding', 'exit'], actual_pid_consumed=False))
+            terminal = _with_artifact_content_sha256(
+                dict(
+                    schema="main_machine_policy_terminal_v1",
+                    target_date=args.target_date,
+                    completed_at=datetime.now(KST).isoformat(),
+                    status=(
+                        "searching_train"
+                        if any(
+                            r.get("selection_state") == "searching_train"
+                            for r in result["selections"].values()
+                        )
+                        else "completed"
+                    ),
+                    report_sha256=result["artifact_content_sha256"],
+                    policy_sha256=result["policy_sha256"],
+                    evaluation_basis=result.get("evaluation_basis"),
+                    selection_score_version=result.get("selection_score_version"),
+                    selected_scopes=list(result["policy_by_scope"]),
+                    activation=None,
+                    independent_of=[
+                        "auxiliary_ai",
+                        "widget",
+                        "episode",
+                        "holding",
+                        "exit",
+                    ],
+                    actual_pid_consumed=False,
+                )
+            )
             if args.write:
-                _atomic_write_json(output.with_name(f'machine_policy_terminal_{args.target_date}.json'), terminal)
-            print(json.dumps(dict(status=result['status'], policy_sha256=result['policy_sha256'],
-                selected_scopes=list(result['policy_by_scope']), strategy_activation=None,
-                path=str(output) if args.write else None)))
+                _atomic_write_json(
+                    output.with_name(
+                        f"machine_policy_terminal_{args.target_date}.json"
+                    ),
+                    terminal,
+                )
+            print(
+                json.dumps(
+                    dict(
+                        status=result["status"],
+                        policy_sha256=result["policy_sha256"],
+                        selected_scopes=list(result["policy_by_scope"]),
+                        strategy_activation=None,
+                        path=str(output) if args.write else None,
+                    )
+                )
+            )
         return 0
 
     if args.ensure_economic_reference_only:
         if not args.write or args.require_policy_publication or args.publication_date:
-            parser.error("--ensure-economic-reference-only requires --write and forbids policy publication")
-        receipt = ensure_machine_economic_reference(data_root=args.data_root, target_date=args.target_date)
+            parser.error(
+                "--ensure-economic-reference-only requires --write and forbids policy publication"
+            )
+        receipt = ensure_machine_economic_reference(
+            data_root=args.data_root, target_date=args.target_date
+        )
         print(json.dumps(receipt))
-        return 0 if receipt.get("verified") is True or receipt.get("status") == "existing_verified_sources_preserved" else 2
+        return (
+            0
+            if receipt.get("verified") is True
+            or receipt.get("status") == "existing_verified_sources_preserved"
+            else 2
+        )
     if args.activate_now and not (args.machine_only and args.write):
         parser.error("--activate-now requires --machine-only --write")
     economic_reference_prerequisite = (
-        ensure_machine_economic_reference(data_root=args.data_root, target_date=args.target_date)
-        if args.write else {"status": "not_requested_read_only"}
+        ensure_machine_economic_reference(
+            data_root=args.data_root, target_date=args.target_date
+        )
+        if args.write
+        else {"status": "not_requested_read_only"}
     )
     incumbent_date = datetime.now(KST).date().isoformat() if args.activate_now else None
     path = report_path(args.target_date, args.data_root / "report")
+
     def prepare_report() -> tuple[dict[str, Any], bool]:
         existing = _load_json(path) if args.machine_only and args.write else {}
         current_fingerprint = (
-            _main_mechanistic_input_fingerprint(args.data_root, args.target_date, **({"incumbent_date": incumbent_date} if incumbent_date else {}))
+            _main_mechanistic_input_fingerprint(
+                args.data_root,
+                args.target_date,
+                **({"incumbent_date": incumbent_date} if incumbent_date else {}),
+            )
             if args.machine_only
             else None
         )
         reused = bool(
             args.machine_only
             and args.write
-            and os.environ.get('POSTCLOSE_REGENERATION_SCOPE') != 'all_except_eod'
+            and os.environ.get("POSTCLOSE_REGENERATION_SCOPE") != "all_except_eod"
             and _artifact_content_sha256_valid(existing)
             and existing.get("report_scope") == "main_mechanistic_entry"
             and existing.get("noncompact_sections_refreshed") is True
             and existing.get("evaluation_contract_version")
             == MAIN_MECHANISTIC_EVALUATION_CONTRACT_VERSION
             and existing.get("evaluation_fingerprint") == current_fingerprint
-            and existing.get('policy_publication_requested', True) == (not args.report_only)
+            and existing.get("policy_publication_requested", True)
+            == (not args.report_only)
         )
         if reused:
             return existing, True
         prepared = (
             build_main_mechanistic_report(
-                target_date=args.target_date, data_root=args.data_root, **({"incumbent_date": incumbent_date} if incumbent_date else {})
+                target_date=args.target_date,
+                data_root=args.data_root,
+                **({"incumbent_date": incumbent_date} if incumbent_date else {}),
             )
             if args.machine_only
             else build_report(target_date=args.target_date, data_root=args.data_root)
@@ -11122,7 +14495,7 @@ def main(argv: list[str] | None = None) -> int:
         prepared["machine_economic_reference_prerequisite"] = (
             economic_reference_prerequisite
         )
-        prepared['policy_publication_requested'] = not args.report_only
+        prepared["policy_publication_requested"] = not args.report_only
         prepared = _with_artifact_content_sha256(prepared)
         if args.write:
             _atomic_write_json(path, prepared)
@@ -11137,9 +14510,15 @@ def main(argv: list[str] | None = None) -> int:
         report, evaluation_reused = prepare_report()
     published_policy = None
     if args.write:
-        from src.engine.scalping.microstructure_reaction_context import refresh_machine_evaluation_link
+        from src.engine.scalping.microstructure_reaction_context import (
+            refresh_machine_evaluation_link,
+        )
 
-        machine_table = _as_dict(_as_dict(report.get("hierarchical_entry_quality")).get("machine_decision_case_table"))
+        machine_table = _as_dict(
+            _as_dict(report.get("hierarchical_entry_quality")).get(
+                "machine_decision_case_table"
+            )
+        )
         if machine_table.get("microstructure_evaluation") is not None:
             refresh_machine_evaluation_link(path, report_root=args.data_root / "report")
         from src.engine.scalping.mechanistic_entry_runtime_policy import publish
@@ -11151,21 +14530,35 @@ def main(argv: list[str] | None = None) -> int:
                 publication_day=args.publication_date,
             )
     if args.activate_now:
-        from src.engine.scalping.mechanistic_entry_runtime_policy import activate_strategy_report
+        from src.engine.scalping.mechanistic_entry_runtime_policy import (
+            activate_strategy_report,
+        )
+
         activation_receipt = activate_strategy_report(path, data_root=args.data_root)
         if args.write:
-            from src.engine.scalping.mechanistic_entry_runtime_policy import root as machine_policy_root
-            current_path = machine_policy_root(args.data_root) / 'current.json'
+            from src.engine.scalping.mechanistic_entry_runtime_policy import (
+                root as machine_policy_root,
+            )
+
+            current_path = machine_policy_root(args.data_root) / "current.json"
             current_receipt = _load_json(current_path)
-            activation_path = path.with_name(f'machine_strategy_activation_{args.target_date}.json')
-            activation_artifact = _with_artifact_content_sha256(dict(
-                schema='main_machine_strategy_activation_v1', target_date=args.target_date,
-                generated_at=datetime.now(KST).isoformat(),
-                source_report_sha256=report.get('artifact_content_sha256'),
-                activation=activation_receipt,
-                current_receipt_sha256=hashlib.sha256(current_path.read_bytes()).hexdigest(),
-                current_bundle_sha256=current_receipt.get('bundle_sha256'),
-                actual_pid_consumed=False))
+            activation_path = path.with_name(
+                f"machine_strategy_activation_{args.target_date}.json"
+            )
+            activation_artifact = _with_artifact_content_sha256(
+                dict(
+                    schema="main_machine_strategy_activation_v1",
+                    target_date=args.target_date,
+                    generated_at=datetime.now(KST).isoformat(),
+                    source_report_sha256=report.get("artifact_content_sha256"),
+                    activation=activation_receipt,
+                    current_receipt_sha256=hashlib.sha256(
+                        current_path.read_bytes()
+                    ).hexdigest(),
+                    current_bundle_sha256=current_receipt.get("bundle_sha256"),
+                    actual_pid_consumed=False,
+                )
+            )
             _atomic_write_json(activation_path, activation_artifact)
         print(json.dumps({"strategy_activation": activation_receipt}))
     if args.require_policy_publication:
@@ -11186,9 +14579,7 @@ def main(argv: list[str] | None = None) -> int:
                     "candidate_count": report["candidate_count"],
                     "selected_review_candidate": report["selected_review_candidate"],
                     "ofi_smoothing_audit": report["ofi_smoothing_audit"],
-                    "machine_full_evaluation": report.get(
-                        "machine_full_evaluation"
-                    ),
+                    "machine_full_evaluation": report.get("machine_full_evaluation"),
                     "evaluation_reused": evaluation_reused,
                     "runtime_policy_publication": (
                         {

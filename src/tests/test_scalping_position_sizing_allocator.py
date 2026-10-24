@@ -12,16 +12,17 @@ KST = ZoneInfo("Asia/Seoul")
 
 def test_initial_quantity_type_receipt_does_not_expand_sizing_authority():
     parent = allocator.resolve_scalping_allocation(
-        _context("2026-07-21T10:00:00", market_session_bucket="krx_regular",
-                 price=1900)
+        _context("2026-07-21T10:00:00", market_session_bucket="krx_regular", price=1900)
     )
     thin = allocator.resolve_scalping_allocation(
-        _context("2026-07-21T10:00:00", market_session_bucket="krx_regular",
-                 price=100)
+        _context("2026-07-21T10:00:00", market_session_bucket="krx_regular", price=100)
     )
     assert parent.quantity_type == "KRX_PARENT"
     assert thin.quantity_type == "KRX_THIN_HIGH_TICK"
-    assert thin.event_fields()["quantity_type_classifier_version"] == "initial_quantity_type_v1"
+    assert (
+        thin.event_fields()["quantity_type_classifier_version"]
+        == "initial_quantity_type_v1"
+    )
     assert parent.ratio == thin.ratio
 
 
@@ -492,9 +493,7 @@ def test_dated_initial_entry_policy_does_not_change_scale_in_formula(
     }.items():
         monkeypatch.setenv(key, value)
 
-    initial = allocator.resolve_scalping_allocation(
-        _context("2026-09-14T14:00:00")
-    )
+    initial = allocator.resolve_scalping_allocation(_context("2026-09-14T14:00:00"))
     scale_in = allocator.resolve_scalping_allocation(
         _context(
             "2026-09-14T14:00:00",

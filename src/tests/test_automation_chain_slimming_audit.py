@@ -6,8 +6,6 @@ import subprocess
 from src.engine.automation import automation_chain_slimming_audit as mod
 
 
-
-
 def test_slimming_candidates_and_workorders_are_report_only():
     report = mod.build_report("2026-06-02")
 
@@ -54,8 +52,6 @@ def test_aggressive_profile_deep_audit_candidates_move_to_manual_or_weekly():
     assert all(
         item["recommended_mode"] == "manual_or_weekly" for item in deep_candidates
     )
-
-
 
 
 def test_nested_guard_defaults_are_not_flattened_as_or_conditions():

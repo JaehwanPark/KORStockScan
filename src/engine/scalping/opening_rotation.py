@@ -353,11 +353,22 @@ def is_watch_candidate(
 
 
 def evaluate_entry(**kwargs):
-    return {"decision":"WATCH", "action":"WATCH", "reason":"opening_rotation_permanently_retired", "next_state":dict(kwargs.get("previous_state") or {}), "allowed_runtime_apply":False}
+    return {
+        "decision": "WATCH",
+        "action": "WATCH",
+        "reason": "opening_rotation_permanently_retired",
+        "next_state": dict(kwargs.get("previous_state") or {}),
+        "allowed_runtime_apply": False,
+    }
 
 
 def evaluate_exit(**kwargs):
-    return {"decision":"HOLD", "action":"HOLD", "reason":"opening_rotation_permanently_retired", "allowed_runtime_apply":False}
+    return {
+        "decision": "HOLD",
+        "action": "HOLD",
+        "reason": "opening_rotation_permanently_retired",
+        "allowed_runtime_apply": False,
+    }
 
 
 def make_episode_id(stock_code: str, promotion_id: str, now_dt: datetime) -> str:

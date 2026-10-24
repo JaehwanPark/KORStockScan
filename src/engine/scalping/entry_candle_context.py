@@ -156,9 +156,7 @@ def resolve_entry_candle_session(now_ts: Any = None, session: str | None = None)
     context = session_contract.resolve_market_session(_now_kst(now_ts))
     regime = str(context.session_regime or "").strip()
     return {
-        session_contract.MARKET_SESSION_REGIME_LEGACY_PREMARKET: (
-            "premarket_krx_like"
-        ),
+        session_contract.MARKET_SESSION_REGIME_LEGACY_PREMARKET: ("premarket_krx_like"),
         session_contract.MARKET_SESSION_REGIME_LEGACY_KRX_ONLY: "krx_regular",
         session_contract.MARKET_SESSION_REGIME_KRX_REGULAR: "krx_regular",
         session_contract.MARKET_SESSION_REGIME_LEGACY_NXT_ONLY: "nxt_aftermarket",
@@ -312,29 +310,46 @@ def resolve_session_candle_request_code(
 
 def entry_history_requirement(*, now, session, requested_limit):
     """Describe real feature windows; raw fetch size is not an entry veto."""
-    start_hour = 8 if 'premarket' in session else 16 if 'aftermarket' in session else 9
+    start_hour = 8 if "premarket" in session else 16 if "aftermarket" in session else 9
     anchor = now.replace(hour=start_hour, minute=0, second=0, microsecond=0)
-    elapsed = max(0, int((now-anchor).total_seconds()//60))
-    return dict(schema='main_entry_history_requirement_v1', consumer='entry_probe_mtf',
-        feature_version=LOCAL_BREAKOUT_VERSION, session=session,
-        session_anchor=anchor.isoformat(), requested_completed_cutoff=now.replace(second=0,microsecond=0).isoformat(),
+    elapsed = max(0, int((now - anchor).total_seconds() // 60))
+    return dict(
+        schema="main_entry_history_requirement_v1",
+        consumer="entry_probe_mtf",
+        feature_version=LOCAL_BREAKOUT_VERSION,
+        session=session,
+        session_anchor=anchor.isoformat(),
+        requested_completed_cutoff=now.replace(second=0, microsecond=0).isoformat(),
         legacy_raw_limit=max(int(requested_limit), SOURCE_BAR_LIMIT),
         decision_continuity_minutes=DECISION_CONTINUITY_HORIZON_MINUTES,
-        minimum_completed_for_full_recent_window=min(elapsed, DECISION_CONTINUITY_HORIZON_MINUTES+1),
-        mtf_max_bars_per_interval=20, mtf_intervals_minutes=[3,5,15],
-        session_anchor_required_for=['vwap', 'opening_range', 'session_extrema'],
-        forming='fresh_separate_partial_optional_observation',
-        shortage_policy='existing_field_level_quality_and_opening_sample_mode',
-        adjustment='ka10080:upd_stkpc_tp=1', ws_equivalence='unproven')
+        minimum_completed_for_full_recent_window=min(
+            elapsed, DECISION_CONTINUITY_HORIZON_MINUTES + 1
+        ),
+        mtf_max_bars_per_interval=20,
+        mtf_intervals_minutes=[3, 5, 15],
+        session_anchor_required_for=["vwap", "opening_range", "session_extrema"],
+        forming="fresh_separate_partial_optional_observation",
+        shortage_policy="existing_field_level_quality_and_opening_sample_mode",
+        adjustment="ka10080:upd_stkpc_tp=1",
+        ws_equivalence="unproven",
+    )
 
 
 def _completed_ws_rows(selected, *, limit, observed):
-    return [{'체결시간': row['cntr_tm'], 'source_timestamp': row['cntr_tm'],
-             **({'_history_basis': 'observed_valid_rows'} if observed else {}),
-             'source_time_basis': 'provider_trade_time', '시가': int(row['open_pric']),
-             '고가': int(row['high_pric']), '저가': int(row['low_pric']),
-             '현재가': int(row['cur_prc']), '거래량': int(row['trde_qty'])}
-            for row in selected['stk_min_pole_chart_qry'][-limit:]]
+    return [
+        {
+            "체결시간": row["cntr_tm"],
+            "source_timestamp": row["cntr_tm"],
+            **({"_history_basis": "observed_valid_rows"} if observed else {}),
+            "source_time_basis": "provider_trade_time",
+            "시가": int(row["open_pric"]),
+            "고가": int(row["high_pric"]),
+            "저가": int(row["low_pric"]),
+            "현재가": int(row["cur_prc"]),
+            "거래량": int(row["trde_qty"]),
+        }
+        for row in selected["stk_min_pole_chart_qry"][-limit:]
+    ]
 
 
 def fetch_entry_candles_with_meta(
@@ -390,38 +405,66 @@ def fetch_entry_candles_with_meta(
         request_purpose["request_class"] = request_class
     from src.trading.market.shared_ws_snapshot import selected_completed_bar_payload
     from src.utils.kiwoom_transport_telemetry import demand
-    requirement = entry_history_requirement(now=now, session=session_value, requested_limit=limit)
+
+    requirement = entry_history_requirement(
+        now=now, session=session_value, requested_limit=limit
+    )
     if reduced_inputs:
-        requirement.update(input_profile='reduced_completed_v1',
+        requirement.update(
+            input_profile="reduced_completed_v1",
             fetch_limit=DECISION_CONTINUITY_HORIZON_MINUTES + 1,
-            forming='excluded', adjustment='raw_same_day_ws_or_homogeneous_rest_adjusted',
-            shortage_policy='optional_fields_unavailable_no_synthetic_fill')
-    required_bars = requirement['legacy_raw_limit']
+            forming="excluded",
+            adjustment="raw_same_day_ws_or_homogeneous_rest_adjusted",
+            shortage_policy="optional_fields_unavailable_no_synthetic_fill",
+        )
+    required_bars = requirement["legacy_raw_limit"]
     if reduced_inputs:
-        required_bars = requirement['fetch_limit']
-    selection = {'consumer_requirement': requirement}
-    demand('ka10080','entry_logical_demand')
-    selected = selected_completed_bar_payload(request_code,now=now,consumer='main',
-        minimum_bars=1 if reduced_inputs else max(1, requirement['minimum_completed_for_full_recent_window']),
-        history_scope='rolling' if reduced_inputs else 'session', selection_receipt=selection,
-        required_adjustment='raw_same_day' if reduced_inputs else 'adjusted_1',
-        **({'allow_partial_history': True} if reduced_inputs else {}))
+        required_bars = requirement["fetch_limit"]
+    selection = {"consumer_requirement": requirement}
+    demand("ka10080", "entry_logical_demand")
+    selected = selected_completed_bar_payload(
+        request_code,
+        now=now,
+        consumer="main",
+        minimum_bars=(
+            1
+            if reduced_inputs
+            else max(1, requirement["minimum_completed_for_full_recent_window"])
+        ),
+        history_scope="rolling" if reduced_inputs else "session",
+        selection_receipt=selection,
+        required_adjustment="raw_same_day" if reduced_inputs else "adjusted_1",
+        **({"allow_partial_history": True} if reduced_inputs else {}),
+    )
     if selected is None:
         candles, source_meta = kiwoom_utils.get_minute_candles_ka10080_with_meta(
-            token, request_code, limit=required_bars, explicit_request_code=True,
-            **({'include_forming': False} if reduced_inputs else {}), **request_purpose)
+            token,
+            request_code,
+            limit=required_bars,
+            explicit_request_code=True,
+            **({"include_forming": False} if reduced_inputs else {}),
+            **request_purpose,
+        )
         source_meta = dict(source_meta or {}, completed_bar_selection=selection)
-        demand('ka10080','rest_retained')
+        demand("ka10080", "rest_retained")
     else:
-        selected_epoch = selected['_completed_bar_source'].get('transport_epoch')
-        if reduced_inputs and (type(transport_epoch) is not int or transport_epoch <= 0):
-            raise ValueError('completed_bar_input_transport_epoch_missing')
+        selected_epoch = selected["_completed_bar_source"].get("transport_epoch")
+        if reduced_inputs and (
+            type(transport_epoch) is not int or transport_epoch <= 0
+        ):
+            raise ValueError("completed_bar_input_transport_epoch_missing")
         if transport_epoch is not None and selected_epoch != transport_epoch:
-            raise ValueError('completed_bar_transport_changed_during_selection')
-        candles = _completed_ws_rows(selected, limit=required_bars, observed=reduced_inputs)
-        source_meta = dict(api_id='WS_0B_completed_1m', source_quality='valid',
-            completed_bar_source=selected['_completed_bar_source'], request_code=request_code)
-        demand('ka10080','ws_selected_http0')
+            raise ValueError("completed_bar_transport_changed_during_selection")
+        candles = _completed_ws_rows(
+            selected, limit=required_bars, observed=reduced_inputs
+        )
+        source_meta = dict(
+            api_id="WS_0B_completed_1m",
+            source_quality="valid",
+            completed_bar_source=selected["_completed_bar_source"],
+            request_code=request_code,
+        )
+        demand("ka10080", "ws_selected_http0")
     metadata = dict(source_meta or {})
     metadata.update(
         {
@@ -432,23 +475,40 @@ def fetch_entry_candles_with_meta(
             "entry_candle_request_session": session_value,
             "entry_candle_request_broker_route": planned_broker_route,
             "multi_timeframe_auxiliary_fetch": not reduced_inputs,
-            "decision_input_profile": 'reduced_completed_v1' if reduced_inputs else 'strict_adjusted',
+            "decision_input_profile": (
+                "reduced_completed_v1" if reduced_inputs else "strict_adjusted"
+            ),
             "completed_only": reduced_inputs,
             "complete_session_prefix": (
-                bool(selected is not None
-                     and selected['_completed_bar_source'].get('complete_session_prefix')
-                     and len(selected['stk_min_pole_chart_qry']) <= required_bars)
-                if reduced_inputs else None),
+                bool(
+                    selected is not None
+                    and selected["_completed_bar_source"].get("complete_session_prefix")
+                    and len(selected["stk_min_pole_chart_qry"]) <= required_bars
+                )
+                if reduced_inputs
+                else None
+            ),
             "history_consumer_requirement": requirement,
             "history_consumer_receipt": {
-                'schema': 'main_entry_history_consumption_v1',
-                'request_code': request_code, 'consumer': requirement['consumer'],
-                'required_window': requirement,
-                'selected_revision': (source_meta or {}).get('shared_history_revision_sha256'),
-                'source_method': (source_meta or {}).get('shared_history_source_method', 'native_rest_or_ws'),
-                'original_rest_received_ts_ms': (source_meta or {}).get('rest_received_ts_ms'),
-                'selected_at': now.timestamp(), 'returned_raw_count': len(candles or []),
-                'forming_count': sum(str(row.get('source_timestamp', '')) == now.strftime('%Y%m%d%H%M00') for row in candles or []),
+                "schema": "main_entry_history_consumption_v1",
+                "request_code": request_code,
+                "consumer": requirement["consumer"],
+                "required_window": requirement,
+                "selected_revision": (source_meta or {}).get(
+                    "shared_history_revision_sha256"
+                ),
+                "source_method": (source_meta or {}).get(
+                    "shared_history_source_method", "native_rest_or_ws"
+                ),
+                "original_rest_received_ts_ms": (source_meta or {}).get(
+                    "rest_received_ts_ms"
+                ),
+                "selected_at": now.timestamp(),
+                "returned_raw_count": len(candles or []),
+                "forming_count": sum(
+                    str(row.get("source_timestamp", "")) == now.strftime("%Y%m%d%H%M00")
+                    for row in candles or []
+                ),
             },
         }
     )
@@ -464,15 +524,25 @@ def fetch_entry_candles_with_meta(
 
 
 def _bind_entry_candle_request_route(
-    ws, source_meta, *, code, venue, session, broker_route,
+    ws,
+    source_meta,
+    *,
+    code,
+    venue,
+    session,
+    broker_route,
     allow_integrated_sor_execution_view,
 ):
     """Bind existing exact WS rows to a fetched chart; never fetch or re-label."""
     binding = source_meta.get("entry_candle_route_binding")
     receipt = {"status": "not_applicable"}
-    if (binding is None or not allow_integrated_sor_execution_view
-            or venue != "KRX" or session != "krx_regular"
-            or "zero_base_probe_registered_epoch" in ws):
+    if (
+        binding is None
+        or not allow_integrated_sor_execution_view
+        or venue != "KRX"
+        or session != "krx_regular"
+        or "zero_base_probe_registered_epoch" in ws
+    ):
         # Exact probes own their registration-bound tick filtering. Do not
         # replace that narrower view with the entire route's shared buffer.
         return ws, receipt
@@ -483,7 +553,10 @@ def _bind_entry_candle_request_route(
     base, suffix = _split_code(request_code)
     expected_base, _ = _split_code(code)
     expected = resolve_entry_candle_request_code(
-        code, venue=venue, session=session, broker_route=broker_route,
+        code,
+        venue=venue,
+        session=session,
+        broker_route=broker_route,
     )
     allowed = {expected}
     if venue == "KRX" and session == "krx_regular" and broker_route == "SOR":
@@ -491,13 +564,15 @@ def _bind_entry_candle_request_route(
     epoch = binding.get("transport_epoch")
     if (
         binding.get("schema") != CANDLE_ROUTE_BINDING_SCHEMA
-        or base != expected_base or request_code not in allowed
+        or base != expected_base
+        or request_code not in allowed
         or source_meta.get("entry_candle_request_code") != request_code
         or source_meta.get("request_code") != request_code
         or source_meta.get("explicit_request_code") is not True
         or binding.get("session") != session
         or binding.get("broker_route") != broker_route
-        or type(epoch) is not int or epoch <= 0
+        or type(epoch) is not int
+        or epoch <= 0
         or type(ws.get("market_data_transport_epoch")) is not int
         or epoch != ws.get("market_data_transport_epoch")
     ):
@@ -506,7 +581,9 @@ def _bind_entry_candle_request_route(
     route_key = f"{suffix or 'KRX'}|{route}"
     partitions = ws.get("realtime_type_snapshots_by_route")
     rows = partitions.get(route_key) if isinstance(partitions, dict) else None
-    receipt.update(request_code=request_code, route_key=route_key, transport_epoch=epoch)
+    receipt.update(
+        request_code=request_code, route_key=route_key, transport_epoch=epoch
+    )
     if not isinstance(rows, dict) or any(
         not isinstance(rows.get(kind), dict)
         or type(rows[kind].get("transport_epoch")) is not int
@@ -519,7 +596,8 @@ def _bind_entry_candle_request_route(
         receipt["reason"] = "exact_route_rows_missing_or_conflicting"
         return ws, receipt
     selected, partition = route_partitioned_ws_view(
-        ws, {"ws_suffix": suffix, "ws_route": route},
+        ws,
+        {"ws_suffix": suffix, "ws_route": route},
     )
     if not partition.get("used"):
         receipt["reason"] = partition.get("reason")
@@ -588,7 +666,11 @@ def _normalized_bar(candle: dict[str, Any], moment: datetime) -> dict[str, Any]:
 
 
 def completed_ws_candle_source_issue(
-    source: Any, *, request_code: str, transport_epoch: Any, now_epoch: float,
+    source: Any,
+    *,
+    request_code: str,
+    transport_epoch: Any,
+    now_epoch: float,
 ) -> str:
     """Check sealed completion and live transport clocks as separate evidence."""
     if not isinstance(source, dict):
@@ -601,31 +683,54 @@ def completed_ws_candle_source_issue(
         source.get("source") != "kiwoom_ws_AL_completed_1m"
         or source.get("request_code") != request_code
         or source.get("adjustment") != "raw_same_day"
-        or type(transport_epoch) is not int or transport_epoch <= 0
+        or type(transport_epoch) is not int
+        or transport_epoch <= 0
         or type(source.get("transport_epoch")) is not int
         or source.get("transport_epoch") != transport_epoch
         or type(integrity.get("transport_epoch")) is not int
         or integrity.get("transport_epoch") != transport_epoch
-        or type(source.get("source_epoch")) is not int or source["source_epoch"] <= 0
+        or type(source.get("source_epoch")) is not int
+        or source["source_epoch"] <= 0
         or integrity.get("observer_epoch") != source["source_epoch"]
         or type(integrity.get("observer_epoch")) is not int
         or type(latest.get("source_epoch")) is not int
         or latest.get("source_epoch") != source["source_epoch"]
-        or type(source.get("revision")) is not int or source["revision"] <= 0
+        or type(source.get("revision")) is not int
+        or source["revision"] <= 0
         or len(str(source.get("content_sha256", ""))) != 64
-        or any(char not in "0123456789abcdef" for char in str(source.get("content_sha256", "")))
-        or latest.get("status") != "complete" or latest.get("issues") != []
+        or any(
+            char not in "0123456789abcdef"
+            for char in str(source.get("content_sha256", ""))
+        )
+        or latest.get("status") != "complete"
+        or latest.get("issues") != []
     ):
         return "candle_ws_provenance_invalid"
     minute = latest.get("minute_epoch")
-    generated, available, watermark, transport_stamp = [source.get(key) for key in (
-        "generated_at_epoch", "available_at_epoch", "watermark_epoch",
-        "transport_snapshot_generated_at_epoch")]
+    generated, available, watermark, transport_stamp = [
+        source.get(key)
+        for key in (
+            "generated_at_epoch",
+            "available_at_epoch",
+            "watermark_epoch",
+            "transport_snapshot_generated_at_epoch",
+        )
+    ]
     latest_available = latest.get("available_at_epoch")
     if (
-        type(minute) is not int or minute % 60
-        or any(type(value) not in (int, float) or not math.isfinite(value)
-               for value in (now_epoch, generated, available, watermark, transport_stamp, latest_available))
+        type(minute) is not int
+        or minute % 60
+        or any(
+            type(value) not in (int, float) or not math.isfinite(value)
+            for value in (
+                now_epoch,
+                generated,
+                available,
+                watermark,
+                transport_stamp,
+                latest_available,
+            )
+        )
         or not 0 <= now_epoch - transport_stamp <= 20
         or not minute + 60 <= latest_available <= available <= generated <= now_epoch
         or not minute + 61 <= watermark <= generated
@@ -634,15 +739,22 @@ def completed_ws_candle_source_issue(
         return "candle_ws_clock_invalid"
     if minute + 60 != int(now_epoch // 60) * 60:
         return "candle_latest_completed_missing"
-    if latest.get("source_time") != datetime.fromtimestamp(minute, KST).strftime("%Y%m%d%H%M%S"):
+    if latest.get("source_time") != datetime.fromtimestamp(minute, KST).strftime(
+        "%Y%m%d%H%M%S"
+    ):
         return "candle_ws_clock_invalid"
     return ""
 
 
 def _completed_candle_timing(
-    bars: list[dict[str, Any]], candles: list[dict[str, Any]],
-    source_meta: dict[str, Any], ws: dict[str, Any], *, now: datetime,
-    request_code: str, session: str,
+    bars: list[dict[str, Any]],
+    candles: list[dict[str, Any]],
+    source_meta: dict[str, Any],
+    ws: dict[str, Any],
+    *,
+    now: datetime,
+    request_code: str,
+    session: str,
 ) -> dict[str, Any]:
     """Bind bar close semantics to validated, unchanged producer evidence."""
     cutoff = now.replace(second=0, microsecond=0)
@@ -668,14 +780,21 @@ def _completed_candle_timing(
     if closed != cutoff:
         blockers.append("candle_latest_completed_missing")
     if any(
-        (moment := _parse_bar_dt(row, now)) is None or moment > now
-        or moment.second != 0 or moment.microsecond != 0
+        (moment := _parse_bar_dt(row, now)) is None
+        or moment > now
+        or moment.second != 0
+        or moment.microsecond != 0
         for row in candles
     ):
         blockers.append("candle_completed_row_clock_invalid")
     if any(
-        not (0 < bar["l"] <= min(bar["o"], bar["c"])
-             <= max(bar["o"], bar["c"]) <= bar["h"])
+        not (
+            0
+            < bar["l"]
+            <= min(bar["o"], bar["c"])
+            <= max(bar["o"], bar["c"])
+            <= bar["h"]
+        )
         for bar in bars
     ):
         blockers.append("candle_completed_ohlc_invalid")
@@ -686,20 +805,36 @@ def _completed_candle_timing(
     proof = {}
     if api_id == "WS_0B_completed_1m":
         from src.trading.market.shared_ws_snapshot import _bar_session
+
         try:
             completed_session = _bar_session(now)
         except ValueError:
             completed_session = None
         accepted = source.get("latest_completed_bar")
         accepted = accepted if isinstance(accepted, dict) else {}
-        proof = {key: source.get(key) for key in (
-            "source", "adjustment", "source_epoch", "transport_epoch",
-            "revision", "content_sha256", "generated_at_epoch", "session",
-            "watermark_epoch", "latest_completed_bar",
-            "integrity", "transport_snapshot_generated_at_epoch",
-        )}
-        ws_issue = completed_ws_candle_source_issue(source, request_code=request_code,
-            transport_epoch=ws.get("market_data_transport_epoch"), now_epoch=now.timestamp())
+        proof = {
+            key: source.get(key)
+            for key in (
+                "source",
+                "adjustment",
+                "source_epoch",
+                "transport_epoch",
+                "revision",
+                "content_sha256",
+                "generated_at_epoch",
+                "session",
+                "watermark_epoch",
+                "latest_completed_bar",
+                "integrity",
+                "transport_snapshot_generated_at_epoch",
+            )
+        }
+        ws_issue = completed_ws_candle_source_issue(
+            source,
+            request_code=request_code,
+            transport_epoch=ws.get("market_data_transport_epoch"),
+            now_epoch=now.timestamp(),
+        )
         if ws_issue:
             blockers.append(ws_issue.replace("candle_ws_", "candle_completed_ws_"))
         if (
@@ -707,52 +842,81 @@ def _completed_candle_timing(
             or not opened
             or accepted.get("source_time") != opened.strftime("%Y%m%d%H%M%S")
             or accepted.get("minute_epoch") != opened.timestamp()
-            or any(row.get("source_time_basis") != "provider_trade_time"
-                   or row.get("_history_basis") != "observed_valid_rows" for row in candles)
+            or any(
+                row.get("source_time_basis") != "provider_trade_time"
+                or row.get("_history_basis") != "observed_valid_rows"
+                for row in candles
+            )
         ):
             blockers.append("candle_completed_ws_provenance_invalid")
         verified = accepted.get("available_at_epoch")
     elif api_id == "ka10080":
         received = source_meta.get("rest_received_ts_ms")
         verified = received / 1000 if type(received) is int and received > 0 else None
-        proof = {key: source_meta.get(key) for key in (
-            "rest_received_ts_ms", "shared_history_revision_sha256",
-            "shared_history_completed_cutoff", "shared_history_source_method",
-        )}
-        if any(row.get("source_time_basis") != "ka10080_cntr_tm_bar_timestamp"
-               or row.get("_history_basis") is not None for row in candles):
+        proof = {
+            key: source_meta.get(key)
+            for key in (
+                "rest_received_ts_ms",
+                "shared_history_revision_sha256",
+                "shared_history_completed_cutoff",
+                "shared_history_source_method",
+            )
+        }
+        if any(
+            row.get("source_time_basis") != "ka10080_cntr_tm_bar_timestamp"
+            or row.get("_history_basis") is not None
+            for row in candles
+        ):
             blockers.append("candle_completed_rest_time_basis_invalid")
-        if (source_meta.get("continuous_next_key_missing")
-                or source_meta.get("rate_limit_detected")
-                or source_meta.get("read_rate_control_status") == "deferred"):
+        if (
+            source_meta.get("continuous_next_key_missing")
+            or source_meta.get("rate_limit_detected")
+            or source_meta.get("read_rate_control_status") == "deferred"
+        ):
             blockers.append("candle_completed_rest_source_invalid")
     else:
         blockers.append("candle_completed_source_unknown")
-    if (type(verified) not in (int, float) or not math.isfinite(verified)
-            or not closed or not closed.timestamp() <= verified <= now.timestamp()):
+    if (
+        type(verified) not in (int, float)
+        or not math.isfinite(verified)
+        or not closed
+        or not closed.timestamp() <= verified <= now.timestamp()
+    ):
         blockers.append("candle_completed_clock_invalid")
     elif now.timestamp() - verified > 90:
         blockers.append("candle_completed_source_stale")
     body = {
         "schema": COMPLETED_CANDLE_TIMING_SCHEMA,
         "status": "blocked" if blockers else "validated",
-        "blockers": sorted(set(blockers)), "time_basis": "provider_bar_open_kst",
+        "blockers": sorted(set(blockers)),
+        "time_basis": "provider_bar_open_kst",
         "interval_seconds": 60,
         "bar_open_epoch": opened.timestamp() if opened else None,
         "bar_close_epoch": closed.timestamp() if closed else None,
         "completed_cutoff_epoch": cutoff.timestamp(),
         "original_source_verified_epoch": verified,
         "prepared_at_epoch": now.timestamp(),
-        "route_binding": copy.deepcopy(binding), "source_proof": copy.deepcopy(proof),
-        "input_rows_sha256": hashlib.sha256(json.dumps(
-            candles, sort_keys=True, ensure_ascii=True, separators=(",", ":"),
-            default=str,
-        ).encode()).hexdigest(),
+        "route_binding": copy.deepcopy(binding),
+        "source_proof": copy.deepcopy(proof),
+        "input_rows_sha256": hashlib.sha256(
+            json.dumps(
+                candles,
+                sort_keys=True,
+                ensure_ascii=True,
+                separators=(",", ":"),
+                default=str,
+            ).encode()
+        ).hexdigest(),
     }
-    body["sha256"] = hashlib.sha256(json.dumps(
-        body, sort_keys=True, ensure_ascii=True, separators=(",", ":"),
-        default=str,
-    ).encode()).hexdigest()
+    body["sha256"] = hashlib.sha256(
+        json.dumps(
+            body,
+            sort_keys=True,
+            ensure_ascii=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode()
+    ).hexdigest()
     return body
 
 
@@ -982,13 +1146,18 @@ def _local_breakout(bars: list[dict[str, Any]]) -> dict[str, Any]:
     window = knob("breakout_event_window", 3)
     failure_closes = knob("breakout_failure_closes", 2)
     tolerance = knob("breakout_tolerance_ticks", 0)
-    result = {"version": LOCAL_BREAKOUT_VERSION, "status": "insufficient",
-              "bar_time_precision": "1m", "lookback_bars": lookback, "event_window_bars": window,
-              "episode_scope": "last_three_completed_bars_only"}
+    result = {
+        "version": LOCAL_BREAKOUT_VERSION,
+        "status": "insufficient",
+        "bar_time_precision": "1m",
+        "lookback_bars": lookback,
+        "event_window_bars": window,
+        "episode_scope": "last_three_completed_bars_only",
+    }
     active = [bar for bar in bars if not bar.get("forming")]
     if len(active) < lookback + 1:
         return result
-    tail = active[-(lookback + window):]
+    tail = active[-(lookback + window) :]
     if any(not isinstance(b.get("dt"), datetime) for b in tail):
         return result
     if any(b["dt"].date() != tail[-1]["dt"].date() for b in tail) or any(
@@ -996,47 +1165,64 @@ def _local_breakout(bars: list[dict[str, Any]]) -> dict[str, Any]:
         for left, right in zip(tail, tail[1:])
     ):
         return result
-    if any(not (0 < b["l"] <= min(b["o"], b["c"]) <= max(b["o"], b["c"]) <= b["h"])
-           for b in tail):
+    if any(
+        not (0 < b["l"] <= min(b["o"], b["c"]) <= max(b["o"], b["c"]) <= b["h"])
+        for b in tail
+    ):
         return result
     result["status"] = "no_confirmed_breakout"
     for index in range(max(lookback, len(active) - window), len(active)):
-        prior, event = active[index - lookback:index], active[index]
+        prior, event = active[index - lookback : index], active[index]
         resistance = max(b["h"] for b in prior)
         if event["c"] <= resistance:
             continue
         support = min(b["l"] for b in prior)
-        after = active[index + 1:]
+        after = active[index + 1 :]
         from src.trading.order.tick_utils import get_tick_size
+
         resistance_floor = resistance - tolerance * get_tick_size(resistance)
         support_floor = support - tolerance * get_tick_size(support)
         below = [b for b in after if b["c"] < resistance_floor]
         failed = any(b["c"] < support_floor for b in after)
         # The first return is unresolved; two consecutive completed closes
         # below the SAME line corroborate failure without a session-high proxy.
-        failed = failed or any(all(b["c"] < resistance_floor for b in after[i:i + failure_closes])
-                               for i in range(len(after) - failure_closes + 1))
-        source = [[b["dt"].isoformat(), b["o"], b["h"], b["l"], b["c"], b["v"]]
-                  for b in prior + [event]]
-        source_hash = hashlib.sha256(json.dumps(source, separators=(",", ":")).encode()).hexdigest()
+        failed = failed or any(
+            all(b["c"] < resistance_floor for b in after[i : i + failure_closes])
+            for i in range(len(after) - failure_closes + 1)
+        )
+        source = [
+            [b["dt"].isoformat(), b["o"], b["h"], b["l"], b["c"], b["v"]]
+            for b in prior + [event]
+        ]
+        source_hash = hashlib.sha256(
+            json.dumps(source, separators=(",", ":")).encode()
+        ).hexdigest()
         result.update(
-            status="failed_breakout" if failed else (
-                "retest_pending" if below else "breakout_holding"),
-            resistance_price=resistance, support_price=support,
-            resistance_anchor_bar_at=next(b["dt"].isoformat() for b in reversed(prior)
-                                          if b["h"] == resistance),
+            status=(
+                "failed_breakout"
+                if failed
+                else ("retest_pending" if below else "breakout_holding")
+            ),
+            resistance_price=resistance,
+            support_price=support,
+            resistance_anchor_bar_at=next(
+                b["dt"].isoformat() for b in reversed(prior) if b["h"] == resistance
+            ),
             resistance_window_start=prior[0]["dt"].isoformat(),
             resistance_window_end=prior[-1]["dt"].isoformat(),
             breakout_confirmed_bar_at=event["dt"].isoformat(),
             available_at=(event["dt"].timestamp() + 60),
-            source_sha256=source_hash, episode_id=source_hash,
+            source_sha256=source_hash,
+            episode_id=source_hash,
             last_evaluated_bar_at=active[-1]["dt"].isoformat(),
         )
         break
     return result
 
 
-def _structure(bars: list[dict[str, Any]], *, local_breakout: bool = False) -> dict[str, Any]:
+def _structure(
+    bars: list[dict[str, Any]], *, local_breakout: bool = False
+) -> dict[str, Any]:
     completed = [bar for bar in bars if not bar.get("forming")]
     active = completed
     highs = [bar["h"] for bar in active if bar["h"] > 0]
@@ -1173,7 +1359,9 @@ def _structure(bars: list[dict[str, Any]], *, local_breakout: bool = False) -> d
         volume_direction_alignment = "bullish_confirmed"
     elif volume_ratio >= knob("structure_volume_confirm", 1.1) and short_return < 0:
         volume_direction_alignment = "bearish_confirmed"
-    elif volume_ratio < knob("structure_volume_divergence", 0.8) and abs(short_return) >= knob("structure_divergence_return_pct", 0.1):
+    elif volume_ratio < knob("structure_volume_divergence", 0.8) and abs(
+        short_return
+    ) >= knob("structure_divergence_return_pct", 0.1):
         volume_direction_alignment = "price_volume_divergence"
     else:
         volume_direction_alignment = "neutral"
@@ -1185,13 +1373,18 @@ def _structure(bars: list[dict[str, Any]], *, local_breakout: bool = False) -> d
         and prior_high > 0
         and max((bar["h"] for bar in active[-3:]), default=0) >= prior_high
         and latest_close < prior_high
-        and (upper_wick_ratio >= knob("structure_failure_wick", 0.35) or (peak_drawdown or 0.0) <= knob("structure_failure_drawdown_pct", -0.25))
+        and (
+            upper_wick_ratio >= knob("structure_failure_wick", 0.35)
+            or (peak_drawdown or 0.0) <= knob("structure_failure_drawdown_pct", -0.25)
+        )
     ):
         regime = "failed_breakout"
     elif len(active) >= 10 and lower_highs and (long_slope or 0.0) < 0:
         regime = "lower_high_distribution"
     elif (
-        len(active) >= 10 and (long_slope or 0.0) < knob("structure_bounce_slope", -0.03) and (short_return or 0.0) > 0
+        len(active) >= 10
+        and (long_slope or 0.0) < knob("structure_bounce_slope", -0.03)
+        and (short_return or 0.0) > 0
     ):
         regime = "downtrend_bounce"
     elif prior_high > 0 and latest_close > prior_high and (short_return or 0.0) > 0:
@@ -1199,7 +1392,9 @@ def _structure(bars: list[dict[str, Any]], *, local_breakout: bool = False) -> d
     elif (
         len(active) >= 5
         and (long_slope or slopes["5"] or 0.0) > 0
-        and knob("structure_pullback_return_min", -0.6) <= (short_return or 0.0) <= knob("structure_pullback_return_max", 0.25)
+        and knob("structure_pullback_return_min", -0.6)
+        <= (short_return or 0.0)
+        <= knob("structure_pullback_return_max", 0.25)
         and (peak_drawdown or 0.0) > knob("structure_pullback_drawdown_pct", -1.2)
     ):
         regime = "healthy_pullback"
@@ -1223,8 +1418,14 @@ def _structure(bars: list[dict[str, Any]], *, local_breakout: bool = False) -> d
         else ("positive" if regime in {"breakout", "healthy_pullback"} else "neutral")
     )
     return {
-        **({"local_breakout": local, "structure_contract_version": LOCAL_BREAKOUT_VERSION}
-           if local is not None else {}),
+        **(
+            {
+                "local_breakout": local,
+                "structure_contract_version": LOCAL_BREAKOUT_VERSION,
+            }
+            if local is not None
+            else {}
+        ),
         "returns_pct": returns,
         "slopes_pct_per_bar": slopes,
         "ranges_pct": ranges,
@@ -1338,24 +1539,35 @@ def build_session_candle_source(
                 allow_integrated_sor_execution_view=(
                     allow_integrated_sor_execution_view
                 ),
-                **({'reduced_inputs': True} if reduced_inputs else {}),
+                **({"reduced_inputs": True} if reduced_inputs else {}),
             )
         except Exception as exc:
             recent_candles, source_meta = [], {}
             fetch_error = f"{type(exc).__name__}:{str(exc)[:120]}"
         fetch_ms = int((time.perf_counter() - fetch_started) * 1000)
-        if reduced_inputs and (source_meta or {}).get("decision_input_profile") == "reduced_completed_v1":
+        if (
+            reduced_inputs
+            and (source_meta or {}).get("decision_input_profile")
+            == "reduced_completed_v1"
+        ):
             # The supplied clock is the start of this preparation. Compare
             # original receipts with its measured completion, without deriving
             # a new clock from the source timestamps or renewing an entry lease.
             now += timedelta(seconds=max(0.0, time.perf_counter() - started))
     source_meta = dict(source_meta or {})
-    reduced_inputs = reduced_inputs and source_meta.get('decision_input_profile') == 'reduced_completed_v1'
+    reduced_inputs = (
+        reduced_inputs
+        and source_meta.get("decision_input_profile") == "reduced_completed_v1"
+    )
     if reduced_inputs:
         source_limit = DECISION_CONTINUITY_HORIZON_MINUTES + 1
         fetch_auxiliary_sources = False
     ws, request_route_binding = _bind_entry_candle_request_route(
-        ws, source_meta, code=code, venue=venue_value, session=session_value,
+        ws,
+        source_meta,
+        code=code,
+        venue=venue_value,
+        session=session_value,
         broker_route=str(broker_route or resolve_order_dmst_stex_tp(now=now)).upper(),
         allow_integrated_sor_execution_view=allow_integrated_sor_execution_view,
     )
@@ -1363,9 +1575,14 @@ def build_session_candle_source(
         # A newer concurrent route must not replace the chart's request owner.
         request_code = request_route_binding["request_code"]
         _, request_suffix = _split_code(request_code)
-        ws_suffix, ws_route = _split_code(request_code)[1], {
-            "": "krx_only", "_NX": "nxt_only", "_AL": "krx_nxt_integrated",
-        }[request_suffix]
+        ws_suffix, ws_route = (
+            _split_code(request_code)[1],
+            {
+                "": "krx_only",
+                "_NX": "nxt_only",
+                "_AL": "krx_nxt_integrated",
+            }[request_suffix],
+        )
     supplied_request_code = str(
         source_meta.get("entry_candle_request_code")
         or source_meta.get("request_code")
@@ -1422,7 +1639,7 @@ def build_session_candle_source(
     route_conflict_count = 0
     current_minute = now.replace(second=0, microsecond=0)
     if reduced_inputs:
-        current_session = [bar for bar in current_session if bar['dt'] < current_minute]
+        current_session = [bar for bar in current_session if bar["dt"] < current_minute]
     if current_session and current_session[-1]["dt"] == current_minute:
         current_session[-1]["forming"] = True
         current_session[-1]["partial_volume"] = True
@@ -1564,19 +1781,30 @@ def build_session_candle_source(
         quality_blockers.append("duplicate_bar")
     if duplicate_price_conflict:
         quality_blockers.append("duplicate_price_conflict")
-    completed_timing = (_completed_candle_timing(
-        completed_session, candles, source_meta, ws, now=now,
-        request_code=request_code, session=session_value,
-    ) if reduced_inputs else None)
+    completed_timing = (
+        _completed_candle_timing(
+            completed_session,
+            candles,
+            source_meta,
+            ws,
+            now=now,
+            request_code=request_code,
+            session=session_value,
+        )
+        if reduced_inputs
+        else None
+    )
     if completed_timing is not None:
         quality_blockers.extend(completed_timing["blockers"])
     source_api_id = str((source_meta or {}).get("api_id") or "").lower()
     ka10080_observed_bars = source_api_id == "ka10080" or (
-        reduced_inputs and source_api_id == 'ws_0b_completed_1m'
+        reduced_inputs and source_api_id == "ws_0b_completed_1m"
     )
-    minute_bar_policy = ('ws_observed_rows_missing_minutes_unknown'
-        if reduced_inputs and source_api_id == 'ws_0b_completed_1m'
-        else 'ka10080_observed_rows_no_synthetic_fill')
+    minute_bar_policy = (
+        "ws_observed_rows_missing_minutes_unknown"
+        if reduced_inputs and source_api_id == "ws_0b_completed_1m"
+        else "ka10080_observed_rows_no_synthetic_fill"
+    )
     decision_window_blockers = []
     session_integrity_blockers = []
     decision_window_sparse_observed_minutes = (
@@ -1609,19 +1837,30 @@ def build_session_candle_source(
     structure = _structure(current_session, local_breakout=local_breakout)
     complete_session_prefix = None
     if reduced_inputs:
-        complete_session_prefix = source_meta.get('complete_session_prefix') is True
-        structure['history_scope'] = 'recent_completed_v1'
+        complete_session_prefix = source_meta.get("complete_session_prefix") is True
+        structure["history_scope"] = "recent_completed_v1"
         if not complete_session_prefix:
-            for field in ('session_peak_drawdown_pct', 'session_low_rebound_pct',
-                          'session_high_at', 'session_low_at',
-                          'bars_since_session_high', 'bars_since_session_low'):
+            for field in (
+                "session_peak_drawdown_pct",
+                "session_low_rebound_pct",
+                "session_high_at",
+                "session_low_at",
+                "bars_since_session_high",
+                "bars_since_session_low",
+            ):
                 structure[field] = None
-            structure['anchor_window_policy'] = 'observed_recent_extrema_no_full_session_claim'
+            structure["anchor_window_policy"] = (
+                "observed_recent_extrema_no_full_session_claim"
+            )
     local = structure.get("local_breakout")
     if isinstance(local, dict) and local.get("source_sha256"):
-        local["episode_id"] = hashlib.sha256(json.dumps(
-            [request_code, venue_value, session_value, local["source_sha256"]],
-            separators=(",", ":"), ensure_ascii=True).encode()).hexdigest()
+        local["episode_id"] = hashlib.sha256(
+            json.dumps(
+                [request_code, venue_value, session_value, local["source_sha256"]],
+                separators=(",", ":"),
+                ensure_ascii=True,
+            ).encode()
+        ).hexdigest()
     completed_count = sum(not bar.get("forming") for bar in current_session)
     sample_mode = (
         "opening_flow_only"
@@ -1666,21 +1905,41 @@ def build_session_candle_source(
         captured_at=now,
         fetch_external_sources=fetch_auxiliary_sources,
         minute_bar_source_api_id=source_api_id,
-        **({'complete_session_prefix': complete_session_prefix} if reduced_inputs else {}),
+        **(
+            {"complete_session_prefix": complete_session_prefix}
+            if reduced_inputs
+            else {}
+        ),
     )
     build_ms = int((time.perf_counter() - started) * 1000)
     strategy_source = {}
     if completed_session:
         from src.engine.scalping.entry_strategy_policy import digest as strategy_digest
-        body = dict(observed_at=now.isoformat(), bars=[
-            {k: (v.isoformat() if isinstance(v, datetime) else v)
-             for k, v in bar.items() if k in {"dt", "o", "h", "l", "c", "v", "forming", "partial_volume"}}
-            for bar in completed_session])
-        strategy_source["strategy_completed_bars"] = dict(body=body, sha256=strategy_digest(body))
+
+        body = dict(
+            observed_at=now.isoformat(),
+            bars=[
+                {
+                    k: (v.isoformat() if isinstance(v, datetime) else v)
+                    for k, v in bar.items()
+                    if k in {"dt", "o", "h", "l", "c", "v", "forming", "partial_volume"}
+                }
+                for bar in completed_session
+            ],
+        )
+        strategy_source["strategy_completed_bars"] = dict(
+            body=body, sha256=strategy_digest(body)
+        )
     return {
         **strategy_source,
-        **({"decision_input_profile": "reduced_completed_v1",
-            "completed_candle_timing": completed_timing} if reduced_inputs else {}),
+        **(
+            {
+                "decision_input_profile": "reduced_completed_v1",
+                "completed_candle_timing": completed_timing,
+            }
+            if reduced_inputs
+            else {}
+        ),
         "schema": SOURCE_SCHEMA,
         "venue": venue_value,
         "session": session_value,
@@ -1856,8 +2115,12 @@ def build_entry_candle_context(
         broker_route=planned_broker_route,
         allow_integrated_sor_execution_view=True,
         local_breakout=True,
-        **({'reduced_inputs': True} if (source_meta or {}).get('decision_input_profile')
-            == 'reduced_completed_v1' else {}),
+        **(
+            {"reduced_inputs": True}
+            if (source_meta or {}).get("decision_input_profile")
+            == "reduced_completed_v1"
+            else {}
+        ),
     )
     context.update(
         {
@@ -1905,88 +2168,169 @@ def wait_for_completed_entry_candle(context, ws, *, budget, fields):
     Reads local sealed source bytes only. A ready publication still needs the
     caller's fresh WS, canonical preflight, native claim and provider guards.
     """
-    timing = context.get('completed_candle_timing') or {}
-    proof = timing.get('source_proof') or {}
-    meta = (context.get('source_quality') or {}).get('source_meta') or {}
-    preflight = (context.get('ai_market_snapshot_v1') or {}).get('ai_input_preflight_v1') or {}
-    derived = {'candle_completed_timing_invalid', 'candle_source_quality',
-               'candle_unknown_age', 'krx_integrated_event_venue_unproven',
-               'candle_latest_completed_missing'}
-    pending = (timing.get('blockers') == ['candle_latest_completed_missing']
-               or timing.get('status') == 'validated'
-               and 'candle_latest_completed_missing' in (preflight.get('source_blockers') or []))
-    if (budget is None or context.get('decision_input_profile') != 'reduced_completed_v1'
-            or not pending
-            or set((context.get('source_quality') or {}).get('blockers') or []) - {'candle_latest_completed_missing'}
-            or proof.get('source') != 'kiwoom_ws_AL_completed_1m'
-            or set(preflight.get('source_blockers') or []) - derived):
+    timing = context.get("completed_candle_timing") or {}
+    proof = timing.get("source_proof") or {}
+    meta = (context.get("source_quality") or {}).get("source_meta") or {}
+    preflight = (context.get("ai_market_snapshot_v1") or {}).get(
+        "ai_input_preflight_v1"
+    ) or {}
+    derived = {
+        "candle_completed_timing_invalid",
+        "candle_source_quality",
+        "candle_unknown_age",
+        "krx_integrated_event_venue_unproven",
+        "candle_latest_completed_missing",
+    }
+    pending = (
+        timing.get("blockers") == ["candle_latest_completed_missing"]
+        or timing.get("status") == "validated"
+        and "candle_latest_completed_missing"
+        in (preflight.get("source_blockers") or [])
+    )
+    if (
+        budget is None
+        or context.get("decision_input_profile") != "reduced_completed_v1"
+        or not pending
+        or set((context.get("source_quality") or {}).get("blockers") or [])
+        - {"candle_latest_completed_missing"}
+        or proof.get("source") != "kiwoom_ws_AL_completed_1m"
+        or set(preflight.get("source_blockers") or []) - derived
+    ):
         return context
     # Eligibility cannot repair a corrupted prepared receipt by replacing it.
-    original_body = {key: value for key, value in timing.items() if key != 'sha256'}
-    if timing.get('sha256') != hashlib.sha256(json.dumps(original_body, sort_keys=True,
-            ensure_ascii=True, separators=(',', ':'), allow_nan=False).encode()).hexdigest():
+    original_body = {key: value for key, value in timing.items() if key != "sha256"}
+    if (
+        timing.get("sha256")
+        != hashlib.sha256(
+            json.dumps(
+                original_body,
+                sort_keys=True,
+                ensure_ascii=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            ).encode()
+        ).hexdigest()
+    ):
         return context
     from src.trading.market import shared_ws_snapshot as shared
-    request = context.get('request_code', '')
-    if (len(request) != 9 or not request[:6].isdigit() or request[6:] != '_AL'
-            or proof.get('session') not in {'SOR_PREMARKET', 'SOR_REGULAR', 'SOR_AFTERMARKET'}):
-        raise ValueError('candle_ws_provenance_invalid')
+
+    request = context.get("request_code", "")
+    if (
+        len(request) != 9
+        or not request[:6].isdigit()
+        or request[6:] != "_AL"
+        or proof.get("session")
+        not in {"SOR_PREMARKET", "SOR_REGULAR", "SOR_AFTERMARKET"}
+    ):
+        raise ValueError("candle_ws_provenance_invalid")
     started = time.perf_counter()
-    fields.update(entry_machine_input_candle_wait_state='waiting',
-                  entry_machine_input_candle_wait_deadline_epoch=budget.epoch)
+    fields.update(
+        entry_machine_input_candle_wait_state="waiting",
+        entry_machine_input_candle_wait_deadline_epoch=budget.epoch,
+    )
     generation = None
     try:
         while True:
             budget.require()
             now = _now_kst(time.time())
-            path = shared.COMPLETED_BARS_ROOT / now.date().isoformat() / request / (proof['session'] + '.json')
+            path = (
+                shared.COMPLETED_BARS_ROOT
+                / now.date().isoformat()
+                / request
+                / (proof["session"] + ".json")
+            )
             stamp = path.stat()
-            current = (stamp.st_dev, stamp.st_ino, stamp.st_size, stamp.st_mtime_ns, stamp.st_ctime_ns)
+            current = (
+                stamp.st_dev,
+                stamp.st_ino,
+                stamp.st_size,
+                stamp.st_mtime_ns,
+                stamp.st_ctime_ns,
+            )
             if current != generation:
-                selected = shared.read_shared_completed_bars(request, now=now,
-                    allow_partial_history=True, require_fresh_snapshot=True)
-                source = selected['_completed_bar_source']
-                if (source['source_epoch'] != proof['source_epoch']
-                        or source['transport_epoch'] != proof['transport_epoch']
-                        or source['session'] != proof['session']):
-                    raise ValueError('candle_ws_publication_generation_changed')
-                issue = completed_ws_candle_source_issue(source, request_code=request,
-                    transport_epoch=ws.get('market_data_transport_epoch'), now_epoch=now.timestamp())
-                if issue and issue != 'candle_latest_completed_missing':
+                selected = shared.read_shared_completed_bars(
+                    request,
+                    now=now,
+                    allow_partial_history=True,
+                    require_fresh_snapshot=True,
+                )
+                source = selected["_completed_bar_source"]
+                if (
+                    source["source_epoch"] != proof["source_epoch"]
+                    or source["transport_epoch"] != proof["transport_epoch"]
+                    or source["session"] != proof["session"]
+                ):
+                    raise ValueError("candle_ws_publication_generation_changed")
+                issue = completed_ws_candle_source_issue(
+                    source,
+                    request_code=request,
+                    transport_epoch=ws.get("market_data_transport_epoch"),
+                    now_epoch=now.timestamp(),
+                )
+                if issue and issue != "candle_latest_completed_missing":
                     raise ValueError(issue)
                 if not issue:
                     budget.require()
-                    rows = _completed_ws_rows(selected, limit=DECISION_CONTINUITY_HORIZON_MINUTES+1,
-                                              observed=True)
-                    metadata = dict(meta, api_id='WS_0B_completed_1m',
-                        completed_bar_source=source, completed_only=True,
-                        complete_session_prefix=source.get('complete_session_prefix') is True,
-                        multi_timeframe_auxiliary_fetch=False)
-                    result = build_entry_candle_context(None, request[:6], ws,
-                        context['venue'], context['session'], now_ts=now,
-                        recent_candles=rows, source_meta=metadata,
-                        broker_route=(context['ai_market_snapshot_v1'])['broker_route'])
+                    rows = _completed_ws_rows(
+                        selected,
+                        limit=DECISION_CONTINUITY_HORIZON_MINUTES + 1,
+                        observed=True,
+                    )
+                    metadata = dict(
+                        meta,
+                        api_id="WS_0B_completed_1m",
+                        completed_bar_source=source,
+                        completed_only=True,
+                        complete_session_prefix=source.get("complete_session_prefix")
+                        is True,
+                        multi_timeframe_auxiliary_fetch=False,
+                    )
+                    result = build_entry_candle_context(
+                        None,
+                        request[:6],
+                        ws,
+                        context["venue"],
+                        context["session"],
+                        now_ts=now,
+                        recent_candles=rows,
+                        source_meta=metadata,
+                        broker_route=(context["ai_market_snapshot_v1"])["broker_route"],
+                    )
                     # Optional sources keep their original clocks, not the publication clock.
-                    for name in ('investor', 'program'):
-                        previous = context['ai_market_snapshot_v1'].get('sources', {}).get(name)
+                    for name in ("investor", "program"):
+                        previous = (
+                            context["ai_market_snapshot_v1"]
+                            .get("sources", {})
+                            .get(name)
+                        )
                         if previous is not None:
-                            result['ai_market_snapshot_v1']['sources'][name] = copy.deepcopy(previous)
+                            result["ai_market_snapshot_v1"]["sources"][name] = (
+                                copy.deepcopy(previous)
+                            )
                     budget.require()
-                    fields.update(entry_machine_input_candle_wait_state='ready',
-                        entry_machine_input_candle_publication_sha256=source['content_sha256'])
+                    fields.update(
+                        entry_machine_input_candle_wait_state="ready",
+                        entry_machine_input_candle_publication_sha256=source[
+                            "content_sha256"
+                        ],
+                    )
                     return result
                 generation = current
-            time.sleep(min(.05, budget.remaining()))
+            time.sleep(min(0.05, budget.remaining()))
     except (OSError, ValueError, KeyError, TypeError):
-        fields['entry_machine_input_candle_wait_state'] = 'failed'
+        fields["entry_machine_input_candle_wait_state"] = "failed"
         raise
     finally:
-        fields['entry_machine_input_candle_wait_ms'] = round((time.perf_counter()-started)*1000, 3)
-
+        fields["entry_machine_input_candle_wait_ms"] = round(
+            (time.perf_counter() - started) * 1000, 3
+        )
 
 
 def revalidate_entry_candle_snapshot(
-    context: dict[str, Any], ws_data: dict[str, Any], *, now_ts: float,
+    context: dict[str, Any],
+    ws_data: dict[str, Any],
+    *,
+    now_ts: float,
     _owned_inputs: bool = False,
 ) -> dict[str, Any]:
     """Rebind market inputs after preparation without fetching or restamping bars.

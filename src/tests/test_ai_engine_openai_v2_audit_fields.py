@@ -29,12 +29,20 @@ def test_machine_only_without_selected_policy_never_calls_provider(monkeypatch):
     monkeypatch.delenv(PATH_ENV, raising=False)
     monkeypatch.delenv(SHA_ENV, raising=False)
     monkeypatch.setattr(
-        engine, "_call_openai_safe",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("provider called")),
+        engine,
+        "_call_openai_safe",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("provider called")
+        ),
     )
     result = engine.analyze_target(
-        "TEST", _sample_ws_data(), _sample_ticks(), _sample_candles(),
-        strategy="SCALPING", prompt_profile="watching", machine_only=True,
+        "TEST",
+        _sample_ws_data(),
+        _sample_ticks(),
+        _sample_candles(),
+        strategy="SCALPING",
+        prompt_profile="watching",
+        machine_only=True,
     )
     assert result["action"] == "WAIT"
     assert result["machine_evaluation_status"] == "machine_policy_not_selected"
@@ -75,7 +83,7 @@ def test_micro_cache_hit_never_recounts_prior_computation_or_delivery(monkeypatc
     assert cached["microstructure_reaction_context_consumed"] is False
     assert cached["microstructure_reaction_context_reused"] is True
     assert cached["ai_decision_parent_trace_id"] == "trace-1"
-    assert 'entry_local_stage_clocks' not in cached
+    assert "entry_local_stage_clocks" not in cached
     assert cached["microstructure_reaction_parent_context_id"] == "context-1"
 
 
@@ -322,10 +330,17 @@ def test_openai_parse_json_response_text_extracts_json_from_wrapped_text():
 
 def test_machine_candle_projection_retains_closed_bar_primitives_without_ai_promotion():
     engine = _build_engine()
-    frozen = {'body': {'observed_at': '2026-09-22T09:10:00+09:00', 'bars': []}, 'sha256': 'a'*64}
-    context = dict(enabled=False, completed_bar_count=0, strategy_completed_bars=frozen,
-                   multi_timeframe_ai_input_enabled=True)
+    frozen = {
+        "body": {"observed_at": "2026-09-22T09:10:00+09:00", "bars": []},
+        "sha256": "a" * 64,
+    }
+    context = dict(
+        enabled=False,
+        completed_bar_count=0,
+        strategy_completed_bars=frozen,
+        multi_timeframe_ai_input_enabled=True,
+    )
     assert engine._entry_candle_model_payload(context) is None
     projected = engine._entry_candle_model_payload(context, machine_base_only=True)
-    assert projected['strategy_completed_bars'] == frozen
-    assert projected['multi_timeframe_ai_input_enabled'] is False
+    assert projected["strategy_completed_bars"] == frozen
+    assert projected["multi_timeframe_ai_input_enabled"] is False

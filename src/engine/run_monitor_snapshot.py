@@ -30,9 +30,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Snapshot build profile. default=full",
     )
     parser.add_argument(
-        '--postclose-phase',choices=('all','completion_prefix','holding_suffix'),
-        default=os.getenv('MONITOR_SNAPSHOT_POSTCLOSE_PHASE','all'),
-        help='Build the completion prefix or the final holding suffix of postclose_exit.',
+        "--postclose-phase",
+        choices=("all", "completion_prefix", "holding_suffix"),
+        default=os.getenv("MONITOR_SNAPSHOT_POSTCLOSE_PHASE", "all"),
+        help="Build the completion prefix or the final holding suffix of postclose_exit.",
     )
     parser.add_argument(
         "--io-delay-sec",
@@ -124,9 +125,16 @@ def main() -> int:
             lock_handle.close()
             return 0
     try:
-        from src.engine.infrastructure.validation_digest_session import postclose_session
+        from src.engine.infrastructure.validation_digest_session import (
+            postclose_session,
+        )
         from src.utils.constants import DATA_DIR
-        session = postclose_session(DATA_DIR,target_date) if args.profile == 'postclose_exit' else nullcontext()
+
+        session = (
+            postclose_session(DATA_DIR, target_date)
+            if args.profile == "postclose_exit"
+            else nullcontext()
+        )
         with session as validation:
             result = save_monitor_snapshots_for_date_with_profile(
                 target_date,
@@ -149,7 +157,7 @@ def main() -> int:
                 "target_date": target_date,
                 "status": status,
                 "profile": args.profile,
-                "postclose_phase":args.postclose_phase,
+                "postclose_phase": args.postclose_phase,
                 "io_delay_sec": max(0.0, float(args.io_delay_sec)),
                 "skip_lock": bool(args.skip_lock),
                 "started_at": started_at_display,

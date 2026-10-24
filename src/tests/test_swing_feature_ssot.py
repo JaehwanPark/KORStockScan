@@ -133,7 +133,9 @@ def test_update_kospi_prepares_title_case_input_for_feature_ssot():
     assert "return_1d" in features.columns
 
 
-def test_update_kospi_status_payload_records_required_producer_failure(monkeypatch, tmp_path):
+def test_update_kospi_status_payload_records_required_producer_failure(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(
         update_kospi,
         "_load_latest_quote_state",
@@ -360,7 +362,9 @@ def test_feature_import_does_not_initialize_notification_runtime(monkeypatch):
 
 
 @pytest.mark.parametrize("status,exit_code", [("completed", None), ("failed", 1)])
-def test_eod_cli_binds_notifier_before_chain_and_preserves_failure(monkeypatch, status, exit_code):
+def test_eod_cli_binds_notifier_before_chain_and_preserves_failure(
+    monkeypatch, status, exit_code
+):
     import builtins
 
     calls = []
@@ -373,8 +377,11 @@ def test_eod_cli_binds_notifier_before_chain_and_preserves_failure(monkeypatch, 
         return original_import(name, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "__import__", bind_runtime)
-    monkeypatch.setattr(update_kospi, "run_update_kospi_chain",
-                        lambda: calls.append("chain") or {"status": status})
+    monkeypatch.setattr(
+        update_kospi,
+        "run_update_kospi_chain",
+        lambda: calls.append("chain") or {"status": status},
+    )
     if exit_code is None:
         update_kospi.main()
     else:

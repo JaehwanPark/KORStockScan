@@ -295,7 +295,9 @@ def replay_exit_paths(
         if not isinstance(route_replay, dict) or not route_replay:
             raise ValueError("route_replay_missing")
         entry_only = observation.get("entry_split_initial_only") is True
-        if entry_only and route_replay != {"ENTRY": {"should_add": False, "route_evaluation_complete": True}}:
+        if entry_only and route_replay != {
+            "ENTRY": {"should_add": False, "route_evaluation_complete": True}
+        }:
             raise ValueError("entry_only_route_contract_invalid")
         if "NO_ADD" in route_replay:
             raise ValueError("reserved_no_add_arm_in_route_replay")
@@ -304,7 +306,9 @@ def replay_exit_paths(
             if component
             else f"{_positive(observation.get('effective_min_buy_pressure')):g}"
         )
-        if not entry_only and (current_key not in route_replay or len(route_replay) < 2):
+        if not entry_only and (
+            current_key not in route_replay or len(route_replay) < 2
+        ):
             raise ValueError("current_and_candidate_route_required")
         if not isinstance(frames, list) or any(
             not isinstance(frame, dict) for frame in frames
@@ -412,10 +416,14 @@ def replay_exit_paths(
         replay_arms = (
             route_replay
             if component
-            else route_replay if entry_only else {
-                **route_replay,
-                "NO_ADD": {"should_add": False, "route_evaluation_complete": True},
-            }
+            else (
+                route_replay
+                if entry_only
+                else {
+                    **route_replay,
+                    "NO_ADD": {"should_add": False, "route_evaluation_complete": True},
+                }
+            )
         )
         for key, arm in replay_arms.items():
             try:
@@ -431,9 +439,14 @@ def replay_exit_paths(
                 if not isinstance(arm.get("should_add"), bool):
                     raise ValueError("route_add_action_missing")
                 state = initial_state(observation, arm)
-                state["tuning_env_key"] = observation.get("tuning_env_key") or "SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE"
+                state["tuning_env_key"] = (
+                    observation.get("tuning_env_key")
+                    or "SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE"
+                )
                 state["min_buy_pressure"] = (
-                    None if component or entry_only or key == "NO_ADD" else _positive(key)
+                    None
+                    if component or entry_only or key == "NO_ADD"
+                    else _positive(key)
                 )
                 # Component replay does not suppress another owner's ADD gate.
                 # Its unmodelled broker boundary becomes an explicit source gap.
@@ -443,18 +456,35 @@ def replay_exit_paths(
                 state["source_observation_id"] = observation["source_event_id"]
                 trace = []
                 capital_clock, capital_seconds = decision_epoch, 0.0
-                peak_reserved = (state["pending_add"]["price"] * state["pending_add"]["qty"] if state["pending_add"] else 0)
+                peak_reserved = (
+                    state["pending_add"]["price"] * state["pending_add"]["qty"]
+                    if state["pending_add"]
+                    else 0
+                )
                 completed = False
                 for frame in checked_frames:
                     # A fill/cancel model is part of the evidence contract,
                     # never an assumption that an unfilled order stays open forever.
                     pending = state["pending_add"]
                     frame_epoch = _epoch(frame["emitted_at"])
-                    held_add_notional = sum(leg["qty"] * leg["price"] for leg in state["legs"][1:])
+                    held_add_notional = sum(
+                        leg["qty"] * leg["price"] for leg in state["legs"][1:]
+                    )
                     capital_seconds += held_add_notional * (frame_epoch - capital_clock)
                     if pending:
-                        capital_seconds += pending["qty"] * pending["price"] * max(0, min(frame_epoch, pending["expires_at"]) - capital_clock)
-                    peak_reserved = max(peak_reserved, held_add_notional + (pending["qty"] * pending["price"] if pending else 0))
+                        capital_seconds += (
+                            pending["qty"]
+                            * pending["price"]
+                            * max(
+                                0,
+                                min(frame_epoch, pending["expires_at"]) - capital_clock,
+                            )
+                        )
+                    peak_reserved = max(
+                        peak_reserved,
+                        held_add_notional
+                        + (pending["qty"] * pending["price"] if pending else 0),
+                    )
                     capital_clock = frame_epoch
                     if (
                         pending is not None
@@ -589,8 +619,14 @@ def replay_exit_paths(
                             "expired_add_requires_state_bound_cancel_evaluation"
                         )
                     if record["action"] == "ADD":
-                        if entry_only or state["no_add_control"] or state["pending_add"] is not None:
-                            raise ValueError("add_violates_initial_only_scope_control_or_pending_order")
+                        if (
+                            entry_only
+                            or state["no_add_control"]
+                            or state["pending_add"] is not None
+                        ):
+                            raise ValueError(
+                                "add_violates_initial_only_scope_control_or_pending_order"
+                            )
                         proposal = record.get("add_order") or {}
                         if (
                             proposal.get("existing_sizing_price_and_safety_evaluated")
@@ -614,7 +650,12 @@ def replay_exit_paths(
                             frame["emitted_at"]
                         ):
                             raise ValueError("add_order_expiry_not_after_decision")
-                        peak_reserved = max(peak_reserved, held_add_notional + state["pending_add"]["qty"] * state["pending_add"]["price"])
+                        peak_reserved = max(
+                            peak_reserved,
+                            held_add_notional
+                            + state["pending_add"]["qty"]
+                            * state["pending_add"]["price"],
+                        )
                         continue
                     if record["action"] == "HOLD":
                         continue
@@ -629,7 +670,11 @@ def replay_exit_paths(
                     # Match the existing cumulative sell receipt: weighted
                     # position basis, one fee calculation and one KRW rounding.
                     total_pnl = calculate_net_realized_pnl(
-                        round(state["buy_price"], 4), bid, state["qty"], cost_rate=cost_rate)
+                        round(state["buy_price"], 4),
+                        bid,
+                        state["qty"],
+                        cost_rate=cost_rate,
+                    )
                     result["outcomes"][key] = {
                         "status": "COMPLETED",
                         "exit_price": bid,
@@ -673,10 +718,12 @@ def replay_exit_paths(
         denominator = _positive(observation["pre_add_buy_price"]) * _positive(
             observation["pre_add_buy_qty"]
         )
-        control = result["outcomes"]["ENTRY" if entry_only else "baseline" if component else "NO_ADD"][
+        control = result["outcomes"][
+            "ENTRY" if entry_only else "baseline" if component else "NO_ADD"
+        ]["net_pnl_krw"]
+        baseline = result["outcomes"]["ENTRY" if entry_only else current_key][
             "net_pnl_krw"
         ]
-        baseline = result["outcomes"]["ENTRY" if entry_only else current_key]["net_pnl_krw"]
         result["economics"] = {
             key: {
                 "incremental_net_pnl_krw": value["net_pnl_krw"] - control,
@@ -795,12 +842,19 @@ def build_replay_evidence(
             episodes[episode] = replayed
         else:
             episodes[episode] = replay_exit_paths(observation, frames)
-        spreads = [finite_number(frame.get("market", {}).get("best_ask")) - finite_number(frame.get("market", {}).get("best_bid"))
-                   for frame in frames
-                   if finite_number(frame.get("market", {}).get("best_ask")) is not None
-                   and finite_number(frame.get("market", {}).get("best_bid")) is not None]
-        episodes[episode]["observed_max_spread_krw"] = max(spreads) if spreads and all(value >= 0 for value in spreads) else None
-        episodes[episode]["fill_evidence_class"] = "modeled_executable_quote_full_or_no_fill"
+        spreads = [
+            finite_number(frame.get("market", {}).get("best_ask"))
+            - finite_number(frame.get("market", {}).get("best_bid"))
+            for frame in frames
+            if finite_number(frame.get("market", {}).get("best_ask")) is not None
+            and finite_number(frame.get("market", {}).get("best_bid")) is not None
+        ]
+        episodes[episode]["observed_max_spread_krw"] = (
+            max(spreads) if spreads and all(value >= 0 for value in spreads) else None
+        )
+        episodes[episode][
+            "fill_evidence_class"
+        ] = "modeled_executable_quote_full_or_no_fill"
         episodes[episode]["replay_observation_digest"] = observation_digest
         episodes[episode]["replay_source_date"] = str(
             observation.get("emitted_at", "")
@@ -919,14 +973,23 @@ def replay_evidence_contract_errors(report: Any) -> list[str]:
 
 def _modeled_incumbent_matches_receipt(actual, modeled):
     try:
-        return bool(actual.get("actual_order_submitted") in (True, "True", "true")
-            and actual.get("sell_execution_receipt_economics_complete") in (True, "True", "true")
-            and actual.get("sell_execution_receipt_quantity_contract_complete") in (True, "True", "true")
+        return bool(
+            actual.get("actual_order_submitted") in (True, "True", "true")
+            and actual.get("sell_execution_receipt_economics_complete")
+            in (True, "True", "true")
+            and actual.get("sell_execution_receipt_quantity_contract_complete")
+            in (True, "True", "true")
             and str(actual.get("status") or "COMPLETED").upper() == "COMPLETED"
             and finite_number(actual.get("profit_rate")) is not None
-            and finite_number(actual.get("sell_execution_cumulative_net_pnl_krw")) == modeled.get("net_pnl_krw")
-            and finite_number(actual.get("position_weighted_sell_price") or actual.get("sell_price")) == modeled.get("exit_price")
-            and finite_number(actual.get("sell_execution_cumulative_qty")) == modeled.get("exit_qty"))
+            and finite_number(actual.get("sell_execution_cumulative_net_pnl_krw"))
+            == modeled.get("net_pnl_krw")
+            and finite_number(
+                actual.get("position_weighted_sell_price") or actual.get("sell_price")
+            )
+            == modeled.get("exit_price")
+            and finite_number(actual.get("sell_execution_cumulative_qty"))
+            == modeled.get("exit_qty")
+        )
     except (TypeError, ValueError, OverflowError):
         return False
 
@@ -938,17 +1001,41 @@ def replay_policy_cohort_digest(snapshot):
     publication receipts are inputs to those evaluations, not an exit rule
     revision. No current workspace rule is substituted for a historical one.
     """
-    rules = {key: value for key, value in snapshot.get("rules", {}).items()
-             if not key.endswith(("_POLICY_FILE", "_EXCLUDED_CODES_FILE"))}
-    environment = {key: value for key, value in snapshot.get("environment", {}).items()
-                   if not key.startswith(("KORSTOCKSCAN_AVG_DOWN_RUNTIME_", "KORSTOCKSCAN_SCALPING_PYRAMID_RUNTIME_")) and not key.endswith(("_POLICY_FILE", "_EXCLUDED_CODES_FILE"))}
-    normalized_blobs = {digest: canonical_digest({key: value for key, value in values.items()
-                        if not key.endswith(("_POLICY_FILE", "_EXCLUDED_CODES_FILE"))})
-                        for digest, values in snapshot.get("rule_blobs", {}).items()}
-    module_rules = {module: normalized_blobs.get(digest, "missing:" + digest)
-                    for module, digest in snapshot.get("module_rules", {}).items()}
-    return "paired-exit-cohort:" + canonical_digest({"implementation": snapshot.get("implementation"),
-        "rules": rules, "module_rules": module_rules, "environment": environment})
+    rules = {
+        key: value
+        for key, value in snapshot.get("rules", {}).items()
+        if not key.endswith(("_POLICY_FILE", "_EXCLUDED_CODES_FILE"))
+    }
+    environment = {
+        key: value
+        for key, value in snapshot.get("environment", {}).items()
+        if not key.startswith(
+            ("KORSTOCKSCAN_AVG_DOWN_RUNTIME_", "KORSTOCKSCAN_SCALPING_PYRAMID_RUNTIME_")
+        )
+        and not key.endswith(("_POLICY_FILE", "_EXCLUDED_CODES_FILE"))
+    }
+    normalized_blobs = {
+        digest: canonical_digest(
+            {
+                key: value
+                for key, value in values.items()
+                if not key.endswith(("_POLICY_FILE", "_EXCLUDED_CODES_FILE"))
+            }
+        )
+        for digest, values in snapshot.get("rule_blobs", {}).items()
+    }
+    module_rules = {
+        module: normalized_blobs.get(digest, "missing:" + digest)
+        for module, digest in snapshot.get("module_rules", {}).items()
+    }
+    return "paired-exit-cohort:" + canonical_digest(
+        {
+            "implementation": snapshot.get("implementation"),
+            "rules": rules,
+            "module_rules": module_rules,
+            "environment": environment,
+        }
+    )
 
 
 def bind_report_paired_terminals(decisions, replay):
@@ -957,7 +1044,12 @@ def bind_report_paired_terminals(decisions, replay):
     from datetime import datetime
     from src.engine.trade_profit import calculate_net_realized_pnl
 
-    from src.engine.lifecycle.avg_down_policy_replay import SNAPSHOT_SCHEMA, implementation_identity, snapshot_version
+    from src.engine.lifecycle.avg_down_policy_replay import (
+        SNAPSHOT_SCHEMA,
+        implementation_identity,
+        snapshot_version,
+    )
+
     current_implementation = implementation_identity()
     errors = replay_evidence_contract_errors(replay)
     result = copy.deepcopy(decisions)
@@ -967,35 +1059,54 @@ def bind_report_paired_terminals(decisions, replay):
         episode = replay["episodes"].get(row["position_episode_id"])
         if not episode or episode.get("state") != "paired_exit_complete_source_only":
             continue
-        if (episode.get("source_observation_id") != row["source_event_id"]
-                or episode.get("scale_in_decision_id") != row["scale_in_decision_id"]):
+        if (
+            episode.get("source_observation_id") != row["source_event_id"]
+            or episode.get("scale_in_decision_id") != row["scale_in_decision_id"]
+        ):
             continue
         outcomes = episode["outcomes"]
         source = row["independent_replay_input"]
         snapshot = source.get("policy_snapshot") or {}
-        snapshot_valid = (snapshot.get("schema") == SNAPSHOT_SCHEMA
+        snapshot_valid = (
+            snapshot.get("schema") == SNAPSHOT_SCHEMA
             and snapshot.get("implementation") == current_implementation
             and bool(snapshot.get("loaded_code"))
-            and snapshot_version(snapshot) == source.get("exit_policy_version"))
-        valid = snapshot_valid and source.get("replay_actual_entry_anchor_valid") in (True, "True", "true") and cost_rate_from_version(row.get("cost_policy_version")) == finite_number(source.get("cost_rate"))
+            and snapshot_version(snapshot) == source.get("exit_policy_version")
+        )
+        valid = (
+            snapshot_valid
+            and source.get("replay_actual_entry_anchor_valid") in (True, "True", "true")
+            and cost_rate_from_version(row.get("cost_policy_version"))
+            == finite_number(source.get("cost_rate"))
+        )
         for arm, outcome in outcomes.items():
             legs = outcome.get("legs")
-            if (not isinstance(legs, list) or not legs
-                    or outcome.get("full_policy_evaluation") is not True
-                    or not outcome.get("trace_digest")
-                    or outcome.get("exit_policy_version") != source.get("exit_policy_version")
-                    or outcome.get("evaluation_method") != METHOD):
+            if (
+                not isinstance(legs, list)
+                or not legs
+                or outcome.get("full_policy_evaluation") is not True
+                or not outcome.get("trace_digest")
+                or outcome.get("exit_policy_version")
+                != source.get("exit_policy_version")
+                or outcome.get("evaluation_method") != METHOD
+            ):
                 valid = False
                 break
             try:
                 qty = sum(int(leg["qty"]) for leg in legs)
                 basis = round(sum(leg["price"] * leg["qty"] for leg in legs) / qty, 4)
-                net = calculate_net_realized_pnl(basis, outcome["exit_price"], qty, cost_rate=source["cost_rate"])
+                net = calculate_net_realized_pnl(
+                    basis, outcome["exit_price"], qty, cost_rate=source["cost_rate"]
+                )
                 filled = int(outcome["filled_add_qty"])
                 expected_qty = int(row["pre_add_buy_qty"]) + filled
-                if (qty != expected_qty or qty != outcome["exit_qty"]
-                        or net != outcome["net_pnl_krw"] or filled < 0
-                        or (arm == "NO_ADD" and filled != 0)):
+                if (
+                    qty != expected_qty
+                    or qty != outcome["exit_qty"]
+                    or net != outcome["net_pnl_krw"]
+                    or filled < 0
+                    or (arm == "NO_ADD" and filled != 0)
+                ):
                     valid = False
             except (KeyError, ValueError, TypeError, OverflowError):
                 valid = False
@@ -1003,43 +1114,86 @@ def bind_report_paired_terminals(decisions, replay):
         if not valid or not all(ids) or len(set(ids)) != len(ids):
             continue
         terminal = {
-            "stage": "report_paired_lifecycle_terminal", "origin": "modeled_policy_delta",
+            "stage": "report_paired_lifecycle_terminal",
+            "origin": "modeled_policy_delta",
             "evidence_authority": "source_only_paired_exit_replay",
             "source_observation_id": row["source_event_id"],
             "position_episode_id": row["position_episode_id"],
             "scale_in_decision_id": row["scale_in_decision_id"],
             "paired_exit_replay": copy.deepcopy(outcomes),
             "replay_evidence_digest": episode["evidence_digest"],
-            "exit_policy_cohort": replay_policy_cohort_digest(source.get("policy_snapshot") or {}),
-            "terminal_time": max(datetime.fromisoformat(value["exit_time"]) for value in outcomes.values()),
-            "runtime_effect": False, "allowed_runtime_apply": False,
-            "actual_order_submitted": False, "broker_order_forbidden": True,
-            **{key: row[key] for key in ("stock_code", "venue", "policy_version",
-                                      "sizing_policy_version", "cost_policy_version")},
+            "exit_policy_cohort": replay_policy_cohort_digest(
+                source.get("policy_snapshot") or {}
+            ),
+            "terminal_time": max(
+                datetime.fromisoformat(value["exit_time"])
+                for value in outcomes.values()
+            ),
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            **{
+                key: row[key]
+                for key in (
+                    "stock_code",
+                    "venue",
+                    "policy_version",
+                    "sizing_policy_version",
+                    "cost_policy_version",
+                )
+            },
         }
         row["actual_terminal"] = row.get("terminal")
         actual = (row.get("terminal") or {}).get("actual_receipt") or {}
         current_key = f"{row['effective_min_buy_pressure']:g}"
         modeled_current = outcomes.get(current_key, {})
-        row["execution_quality_validated"] = _modeled_incumbent_matches_receipt(actual, modeled_current)
+        row["execution_quality_validated"] = _modeled_incumbent_matches_receipt(
+            actual, modeled_current
+        )
         fills = row.get("actual_add_receipts") or []
         if modeled_current.get("filled_add_qty", 0):
             virtual = modeled_current.get("add_fill_evidence") or {}
-            unique = {(fill.get("order_no"), fill.get("execution_no")): fill for fill in fills}
-            conflicts = any(canonical_digest(fill) != canonical_digest(unique[(fill.get("order_no"), fill.get("execution_no"))]) for fill in fills)
-            row["execution_quality_validated"] = row["execution_quality_validated"] and len(unique) == 1 and not conflicts
+            unique = {
+                (fill.get("order_no"), fill.get("execution_no")): fill for fill in fills
+            }
+            conflicts = any(
+                canonical_digest(fill)
+                != canonical_digest(
+                    unique[(fill.get("order_no"), fill.get("execution_no"))]
+                )
+                for fill in fills
+            )
+            row["execution_quality_validated"] = (
+                row["execution_quality_validated"]
+                and len(unique) == 1
+                and not conflicts
+            )
             for fill in unique.values():
                 try:
                     row["execution_quality_validated"] &= bool(
-                        fill.get("order_no") not in (None, "", "-", "unknown") and fill.get("execution_no") not in (None, "", "-", "unknown")
-                        and (not virtual.get("add_type") or fill.get("add_type") == virtual["add_type"])
-                        and fill.get("position_episode_id") == row["position_episode_id"]
-                        and finite_number(fill.get("fill_qty")) == modeled_current["filled_add_qty"]
-                        and finite_number(fill.get("fill_price")) == finite_number(virtual.get("price"))
-                        and fill.get("receipt_economics_complete") in (True, "True", "true")
-                        and fill.get("receipt_quantity_contract_complete") in (True, "True", "true")
+                        fill.get("order_no") not in (None, "", "-", "unknown")
+                        and fill.get("execution_no") not in (None, "", "-", "unknown")
+                        and (
+                            not virtual.get("add_type")
+                            or fill.get("add_type") == virtual["add_type"]
+                        )
+                        and fill.get("position_episode_id")
+                        == row["position_episode_id"]
+                        and finite_number(fill.get("fill_qty"))
+                        == modeled_current["filled_add_qty"]
+                        and finite_number(fill.get("fill_price"))
+                        == finite_number(virtual.get("price"))
+                        and fill.get("receipt_economics_complete")
+                        in (True, "True", "true")
+                        and fill.get("receipt_quantity_contract_complete")
+                        in (True, "True", "true")
                         and finite_number(fill.get("remaining_qty")) == 0
-                        and abs(_epoch(fill["emitted_at"]) - _epoch(virtual["filled_at"])) <= float(source.get("replay_max_frame_gap_sec") or 5))
+                        and abs(
+                            _epoch(fill["emitted_at"]) - _epoch(virtual["filled_at"])
+                        )
+                        <= float(source.get("replay_max_frame_gap_sec") or 5)
+                    )
                 except (KeyError, ValueError, TypeError):
                     row["execution_quality_validated"] = False
         elif fills:
@@ -1047,7 +1201,9 @@ def bind_report_paired_terminals(decisions, replay):
 
         spread = finite_number(episode.get("observed_max_spread_krw"))
         if spread is not None and spread >= 0:
-            row["execution_stress_cost_krw"] = spread * max(value.get("filled_add_qty", 0) for value in outcomes.values())
+            row["execution_stress_cost_krw"] = spread * max(
+                value.get("filled_add_qty", 0) for value in outcomes.values()
+            )
 
         row["terminal"] = terminal
         row["outcome_state"] = "completed_modeled_paired_exit"
@@ -1056,8 +1212,10 @@ def bind_report_paired_terminals(decisions, replay):
         first.setdefault(row["position_episode_id"], row)
     coverage_ready = bool(first) and all(
         row.get("terminal", {}).get("stage") == "report_paired_lifecycle_terminal"
-        and row["independent_replay_input"].get("replay_capture_state") == "armed_source_only"
-        for row in first.values())
+        and row["independent_replay_input"].get("replay_capture_state")
+        == "armed_source_only"
+        for row in first.values()
+    )
     for row in result:
         row["capture_coverage_validated"] = coverage_ready
     return result, []
@@ -1070,90 +1228,217 @@ def chronological_economic_selection(economics, *, current, sample_floor, minimu
     and positive delta after one observed spread of extra execution cost.
     Missing executable/model-validation facts never imply PASS.
     """
-    days = sorted({row["source_date"] for item in economics for row in item.get("episode_economics", [])})
-    proof = {"schema": "scale_in_chronological_economics_v1", "holdout_source_date": days[-1] if days else None,
-             "calibration_source_dates": days[:-1], "winner_fixed_before_holdout": False,
-             "guard_policy": "baseline_tail_capital_nonworsening_observed_spread_stress_v1",
-             "passed": False, "blocker": "chronological_source_days_missing"}
+    days = sorted(
+        {
+            row["source_date"]
+            for item in economics
+            for row in item.get("episode_economics", [])
+        }
+    )
+    proof = {
+        "schema": "scale_in_chronological_economics_v1",
+        "holdout_source_date": days[-1] if days else None,
+        "calibration_source_dates": days[:-1],
+        "winner_fixed_before_holdout": False,
+        "guard_policy": "baseline_tail_capital_nonworsening_observed_spread_stress_v1",
+        "passed": False,
+        "blocker": "chronological_source_days_missing",
+    }
     if len(days) < 2:
         return None, proof
     for item in economics:
-        identities = [row["position_episode_id"] for row in item.get("episode_economics", [])]
+        identities = [
+            row["position_episode_id"] for row in item.get("episode_economics", [])
+        ]
         if len(identities) != len(set(identities)):
             proof["blocker"] = "duplicate_episode_in_comparison_universe"
             return None, proof
     holdout_day = days[-1]
-    universes = [set(row["position_episode_id"] for row in item.get("episode_economics", [])) for item in economics]
+    universes = [
+        set(row["position_episode_id"] for row in item.get("episode_economics", []))
+        for item in economics
+    ]
     if not universes or any(universe != universes[0] for universe in universes):
         proof["blocker"] = "candidate_dependent_comparison_universe"
         return None, proof
 
     def summary(rows):
         n = len(rows)
-        return {"count": n,
-                "delta_net_krw": sum(row["candidate_minus_current_pnl_krw"] for row in rows),
-                "delta_ev_pct": sum(100 * row["candidate_minus_current_pnl_krw"] / row["reference_notional"] for row in rows) / n if n else None,
-                "candidate_ev_pct": sum(100 * row["candidate_incremental_pnl_krw"] / row["reference_notional"] for row in rows) / n if n else None,
-                "behavior_change_count": sum(row["behavior_changed"] for row in rows)}
+        return {
+            "count": n,
+            "delta_net_krw": sum(
+                row["candidate_minus_current_pnl_krw"] for row in rows
+            ),
+            "delta_ev_pct": (
+                sum(
+                    100
+                    * row["candidate_minus_current_pnl_krw"]
+                    / row["reference_notional"]
+                    for row in rows
+                )
+                / n
+                if n
+                else None
+            ),
+            "candidate_ev_pct": (
+                sum(
+                    100
+                    * row["candidate_incremental_pnl_krw"]
+                    / row["reference_notional"]
+                    for row in rows
+                )
+                / n
+                if n
+                else None
+            ),
+            "behavior_change_count": sum(row["behavior_changed"] for row in rows),
+        }
 
     choices = []
     for item in economics:
         rows = item.get("episode_economics", [])
-        calibration = [row for row in rows if row["source_date"] < holdout_day
-                       and row.get("terminal_source_date", holdout_day) < holdout_day]
+        calibration = [
+            row
+            for row in rows
+            if row["source_date"] < holdout_day
+            and row.get("terminal_source_date", holdout_day) < holdout_day
+        ]
         holdout = [row for row in rows if row["source_date"] == holdout_day]
         # Boundary-crossing labels are embargoed rather than backfilled.
         eligible = calibration + holdout
         c = summary(calibration)
-        removal = (item["candidate_value"] > current
-                   and any(row.get("current_should_add") is True and row.get("candidate_should_add") is False for row in calibration)
-                   and all("current_should_add" in row and "candidate_should_add" in row
-                           and not (row["candidate_should_add"] and not row["current_should_add"]) for row in calibration))
+        removal = (
+            item["candidate_value"] > current
+            and any(
+                row.get("current_should_add") is True
+                and row.get("candidate_should_add") is False
+                for row in calibration
+            )
+            and all(
+                "current_should_add" in row
+                and "candidate_should_add" in row
+                and not (row["candidate_should_add"] and not row["current_should_add"])
+                for row in calibration
+            )
+        )
         absolute = 0.0 if removal else minimum_ev
-        if (len(eligible) >= sample_floor and c["count"] and c["behavior_change_count"]
-                and c["delta_net_krw"] > 0 and c["delta_ev_pct"] > 0
-                and (c["candidate_ev_pct"] >= absolute if removal else c["candidate_ev_pct"] >= absolute and c["candidate_ev_pct"] > 0)):
+        if (
+            len(eligible) >= sample_floor
+            and c["count"]
+            and c["behavior_change_count"]
+            and c["delta_net_krw"] > 0
+            and c["delta_ev_pct"] > 0
+            and (
+                c["candidate_ev_pct"] >= absolute
+                if removal
+                else c["candidate_ev_pct"] >= absolute and c["candidate_ev_pct"] > 0
+            )
+        ):
             choices.append((item, calibration, holdout, c, removal))
     if not choices:
         proof["blocker"] = "calibration_sample_or_net_edge_missing"
         return None, proof
-    winner, calibration, holdout, c, removal = max(choices, key=lambda v: (
-        v[3]["delta_ev_pct"], v[3]["delta_net_krw"], -abs(v[0]["candidate_value"] - current), -v[0]["candidate_value"]))
+    winner, calibration, holdout, c, removal = max(
+        choices,
+        key=lambda v: (
+            v[3]["delta_ev_pct"],
+            v[3]["delta_net_krw"],
+            -abs(v[0]["candidate_value"] - current),
+            -v[0]["candidate_value"],
+        ),
+    )
     h = summary(holdout)
     all_rows = calibration + holdout
-    proof.update({"candidate_value": winner["candidate_value"], "winner_fixed_before_holdout": True,
-                  "calibration": c, "holdout": h, "comparison_universe_hash": canonical_digest(
-                      sorted(row["position_episode_id"] for row in all_rows)),
-                  "risk_reduction_only": removal})
+    proof.update(
+        {
+            "candidate_value": winner["candidate_value"],
+            "winner_fixed_before_holdout": True,
+            "calibration": c,
+            "holdout": h,
+            "comparison_universe_hash": canonical_digest(
+                sorted(row["position_episode_id"] for row in all_rows)
+            ),
+            "risk_reduction_only": removal,
+        }
+    )
     guards = {
         "holdout_delta_ev_positive": bool(h["count"] and h["delta_ev_pct"] > 0),
         "holdout_delta_net_positive": h["delta_net_krw"] > 0,
         "holdout_behavior_changed": h["behavior_change_count"] > 0,
-        "holdout_absolute_edge": bool(h["count"] and (h["candidate_ev_pct"] >= 0 if removal else h["candidate_ev_pct"] >= minimum_ev and h["candidate_ev_pct"] > 0)),
+        "holdout_absolute_edge": bool(
+            h["count"]
+            and (
+                h["candidate_ev_pct"] >= 0
+                if removal
+                else h["candidate_ev_pct"] >= minimum_ev and h["candidate_ev_pct"] > 0
+            )
+        ),
         "tail_capital_guards_passed": all(
             isinstance(row.get("candidate_peak_exposure_krw"), (int, float))
             and isinstance(row.get("current_peak_exposure_krw"), (int, float))
-            and row["candidate_peak_exposure_krw"] <= (finite_number(row.get("capital_limit_krw"))
-                                                       or row["current_peak_exposure_krw"])
-            for row in all_rows) and all(finite_number(row.get("candidate_total_pnl_krw")) is not None
-                                        and finite_number(row.get("current_total_pnl_krw")) is not None for row in all_rows)
-            and all(min(row["candidate_total_pnl_krw"] for row in partition) >= min(row["current_total_pnl_krw"] for row in partition)
-                    for partition in (calibration, holdout)),
-        "cost_stress_passed": all(isinstance(row.get("execution_stress_cost_krw"), (int, float))
-                                   for row in all_rows) and all(
-            sum(row["candidate_minus_current_pnl_krw"] - row.get("execution_stress_cost_krw", float("inf")) for row in partition) > 0
-            for partition in (calibration, holdout)) and all(
-                sum((row["candidate_minus_current_pnl_krw"] - row["execution_stress_cost_krw"]) / row["reference_notional"] for row in partition) > 0
-                for partition in (calibration, holdout)),
+            and row["candidate_peak_exposure_krw"]
+            <= (
+                finite_number(row.get("capital_limit_krw"))
+                or row["current_peak_exposure_krw"]
+            )
+            for row in all_rows
+        )
+        and all(
+            finite_number(row.get("candidate_total_pnl_krw")) is not None
+            and finite_number(row.get("current_total_pnl_krw")) is not None
+            for row in all_rows
+        )
+        and all(
+            min(row["candidate_total_pnl_krw"] for row in partition)
+            >= min(row["current_total_pnl_krw"] for row in partition)
+            for partition in (calibration, holdout)
+        ),
+        "cost_stress_passed": all(
+            isinstance(row.get("execution_stress_cost_krw"), (int, float))
+            for row in all_rows
+        )
+        and all(
+            sum(
+                row["candidate_minus_current_pnl_krw"]
+                - row.get("execution_stress_cost_krw", float("inf"))
+                for row in partition
+            )
+            > 0
+            for partition in (calibration, holdout)
+        )
+        and all(
+            sum(
+                (
+                    row["candidate_minus_current_pnl_krw"]
+                    - row["execution_stress_cost_krw"]
+                )
+                / row["reference_notional"]
+                for row in partition
+            )
+            > 0
+            for partition in (calibration, holdout)
+        ),
         "venue_scope_holdout_passed": all(
             (scope := [row for row in holdout if row["venue"] == venue])
             and sum(row["candidate_minus_current_pnl_krw"] for row in scope) > 0
-            and sum(row["candidate_minus_current_pnl_krw"] / row["reference_notional"] for row in scope) > 0
-            for venue in {"KRX", "NXT"}),
-        "execution_quality_guard_passed": all(row.get("execution_quality_validated") is True for row in all_rows),
-        "capture_coverage_guard_passed": all(row.get("capture_coverage_validated") is True for row in all_rows),
-        "frozen_policy_cohort_passed": len({row.get("paired_exit_policy_version") for row in all_rows}) == 1
-            and all(row.get("paired_exit_policy_version") for row in all_rows),
+            and sum(
+                row["candidate_minus_current_pnl_krw"] / row["reference_notional"]
+                for row in scope
+            )
+            > 0
+            for venue in {"KRX", "NXT"}
+        ),
+        "execution_quality_guard_passed": all(
+            row.get("execution_quality_validated") is True for row in all_rows
+        ),
+        "capture_coverage_guard_passed": all(
+            row.get("capture_coverage_validated") is True for row in all_rows
+        ),
+        "frozen_policy_cohort_passed": len(
+            {row.get("paired_exit_policy_version") for row in all_rows}
+        )
+        == 1
+        and all(row.get("paired_exit_policy_version") for row in all_rows),
     }
     proof["guards"] = guards
     proof["passed"] = all(guards.values())
@@ -1164,50 +1449,85 @@ def chronological_economic_selection(economics, *, current, sample_floor, minimu
 def economic_candidate_contract_errors(candidate):
     """Cheap deterministic handoff check, shared by Daily and direct PREOPEN."""
     family = candidate.get("family")
-    if family not in {"scalping_pyramid_quality_gate", "scalping_avg_down_recovery_quality_gate"}:
+    if family not in {
+        "scalping_pyramid_quality_gate",
+        "scalping_avg_down_recovery_quality_gate",
+    }:
         return []
     if candidate.get("allowed_runtime_apply") is not True:
         return []
-    expected_version = "pyramid_paired_economics_v2" if family == "scalping_pyramid_quality_gate" else "avg_down_paired_economics_v3"
+    expected_version = (
+        "pyramid_paired_economics_v2"
+        if family == "scalping_pyramid_quality_gate"
+        else "avg_down_paired_economics_v3"
+    )
     if candidate.get("evidence_contract_version") != expected_version:
         return ["scale_in_economic_evidence_contract_version_invalid"]
     if family == "scalping_pyramid_quality_gate":
-        if (candidate.get("target_env_keys") != ["SCALPING_PYRAMID_MIN_PROFIT_PCT"]
-                or candidate.get("changed_target_env_keys") != ["SCALPING_PYRAMID_MIN_PROFIT_PCT"]
-                or type(candidate.get("current_value")) not in (int, float)
-                or type(candidate.get("recommended_value")) not in (int, float)
-                or finite_number(candidate.get("current_value")) is None
-                or finite_number(candidate.get("recommended_value")) is None
-                or not 0.2 <= candidate["recommended_value"] <= 2.5
-                or abs(candidate["recommended_value"] - candidate["current_value"]) > 0.100000001
-                or candidate.get("current_values", {}).get("min_profit_pct") != candidate["current_value"]
-                or candidate.get("recommended_values", {}).get("min_profit_pct") != candidate["recommended_value"]
-                or any(value != candidate.get("current_values", {}).get(key) for key, value in candidate.get("recommended_values", {}).items() if key != "min_profit_pct")):
+        if (
+            candidate.get("target_env_keys") != ["SCALPING_PYRAMID_MIN_PROFIT_PCT"]
+            or candidate.get("changed_target_env_keys")
+            != ["SCALPING_PYRAMID_MIN_PROFIT_PCT"]
+            or type(candidate.get("current_value")) not in (int, float)
+            or type(candidate.get("recommended_value")) not in (int, float)
+            or finite_number(candidate.get("current_value")) is None
+            or finite_number(candidate.get("recommended_value")) is None
+            or not 0.2 <= candidate["recommended_value"] <= 2.5
+            or abs(candidate["recommended_value"] - candidate["current_value"])
+            > 0.100000001
+            or candidate.get("current_values", {}).get("min_profit_pct")
+            != candidate["current_value"]
+            or candidate.get("recommended_values", {}).get("min_profit_pct")
+            != candidate["recommended_value"]
+            or any(
+                value != candidate.get("current_values", {}).get(key)
+                for key, value in candidate.get("recommended_values", {}).items()
+                if key != "min_profit_pct"
+            )
+        ):
             return ["pyramid_single_profit_axis_or_step_contract_invalid"]
     proof = candidate.get("economic_validation")
     if not isinstance(proof, dict):
         return ["scale_in_chronological_economic_evidence_missing"]
     metrics = candidate.get("source_metrics")
-    economics = metrics.get("paired_runtime_candidate_economics") if isinstance(metrics, dict) else None
-    if (not isinstance(economics, list) or not economics
-            or any(not isinstance(item, dict) or not isinstance(item.get("episode_economics"), list)
-                   or any(not isinstance(row, dict) for row in item["episode_economics"])
-                   for item in economics)):
+    economics = (
+        metrics.get("paired_runtime_candidate_economics")
+        if isinstance(metrics, dict)
+        else None
+    )
+    if (
+        not isinstance(economics, list)
+        or not economics
+        or any(
+            not isinstance(item, dict)
+            or not isinstance(item.get("episode_economics"), list)
+            or any(not isinstance(row, dict) for row in item["episode_economics"])
+            for item in economics
+        )
+    ):
         return ["scale_in_paired_episode_economics_missing"]
     try:
-        winner, recomputed = chronological_economic_selection(economics,
+        winner, recomputed = chronological_economic_selection(
+            economics,
             current=float(candidate["current_value"]),
             sample_floor=20 if family == "scalping_pyramid_quality_gate" else 10,
-            minimum_ev=0.0 if family == "scalping_pyramid_quality_gate" else 0.1)
-        if (winner is None or recomputed != proof
-                or winner["candidate_value"] != candidate.get("recommended_value")
-                or proof["holdout_source_date"] > candidate["source_date"]):
+            minimum_ev=0.0 if family == "scalping_pyramid_quality_gate" else 0.1,
+        )
+        if (
+            winner is None
+            or recomputed != proof
+            or winner["candidate_value"] != candidate.get("recommended_value")
+            or proof["holdout_source_date"] > candidate["source_date"]
+        ):
             return ["scale_in_chronological_economic_evidence_invalid"]
     except (ValueError, TypeError, KeyError, ZeroDivisionError):
         return ["scale_in_chronological_economic_evidence_invalid"]
     from src.engine.build_next_stage2_checklist import _next_krx_trading_day
+
     try:
-        if candidate.get("apply_date") != _next_krx_trading_day(candidate["source_date"]):
+        if candidate.get("apply_date") != _next_krx_trading_day(
+            candidate["source_date"]
+        ):
             return ["scale_in_next_trading_date_contract_invalid"]
     except (TypeError, KeyError, ValueError):
         return ["scale_in_next_trading_date_contract_invalid"]
@@ -1218,8 +1538,15 @@ def economic_report_contract_errors(payload):
     """A ready arithmetic proof must also bind its independent arm evidence."""
     ready = []
     for row in payload.get("calibration_candidates", []):
-        if (not isinstance(row, dict) or row.get("allowed_runtime_apply") is not True
-                or row.get("family") not in {"scalping_pyramid_quality_gate", "scalping_avg_down_recovery_quality_gate"}):
+        if (
+            not isinstance(row, dict)
+            or row.get("allowed_runtime_apply") is not True
+            or row.get("family")
+            not in {
+                "scalping_pyramid_quality_gate",
+                "scalping_avg_down_recovery_quality_gate",
+            }
+        ):
             continue
         proof = row.get("economic_validation")
         if not isinstance(proof, dict):
@@ -1235,36 +1562,73 @@ def economic_report_contract_errors(payload):
         return errors
     try:
         for candidate in ready:
-            for item in candidate["source_metrics"]["paired_runtime_candidate_economics"]:
+            for item in candidate["source_metrics"][
+                "paired_runtime_candidate_economics"
+            ]:
                 for row in item["episode_economics"]:
                     episode = replay["episodes"][row["position_episode_id"]]
                     outcomes = episode["outcomes"]
-                    arms = ("NO_ADD", f"{candidate['current_value']:g}", f"{item['candidate_value']:g}")
+                    arms = (
+                        "NO_ADD",
+                        f"{candidate['current_value']:g}",
+                        f"{item['candidate_value']:g}",
+                    )
                     control, current, challenger = (outcomes[arm] for arm in arms)
-                    if any(outcome.get("full_policy_evaluation") is not True
-                           or not outcome.get("trace_digest")
-                           or outcome.get("exit_policy_version") != episode["exit_policy_version"]
-                           for outcome in (control, current, challenger)):
+                    if any(
+                        outcome.get("full_policy_evaluation") is not True
+                        or not outcome.get("trace_digest")
+                        or outcome.get("exit_policy_version")
+                        != episode["exit_policy_version"]
+                        for outcome in (control, current, challenger)
+                    ):
                         return ["scale_in_paired_economic_arm_binding_invalid"]
-                    reference = sum(leg["price"] * leg["qty"] for leg in control["legs"])
-                    if finite_number(reference) is None or reference <= 0 or control["filled_add_qty"] != 0:
+                    reference = sum(
+                        leg["price"] * leg["qty"] for leg in control["legs"]
+                    )
+                    if (
+                        finite_number(reference) is None
+                        or reference <= 0
+                        or control["filled_add_qty"] != 0
+                    ):
                         return ["scale_in_paired_economic_arm_binding_invalid"]
+
                     def behavior(outcome):
-                        return canonical_digest({key: outcome.get(key) for key in
-                            ("filled_add_qty", "exit_qty", "exit_price", "exit_time", "peak_add_reserved_notional_krw")})
+                        return canonical_digest(
+                            {
+                                key: outcome.get(key)
+                                for key in (
+                                    "filled_add_qty",
+                                    "exit_qty",
+                                    "exit_price",
+                                    "exit_time",
+                                    "peak_add_reserved_notional_krw",
+                                )
+                            }
+                        )
+
                     expected = {
                         "source_date": episode["replay_source_date"],
-                        "terminal_source_date": max(str(value["exit_time"])[:10] for value in outcomes.values()),
+                        "terminal_source_date": max(
+                            str(value["exit_time"])[:10] for value in outcomes.values()
+                        ),
                         "reference_notional": reference,
                         "no_add_total_pnl_krw": control["net_pnl_krw"],
                         "current_total_pnl_krw": current["net_pnl_krw"],
                         "candidate_total_pnl_krw": challenger["net_pnl_krw"],
-                        "current_incremental_pnl_krw": current["net_pnl_krw"] - control["net_pnl_krw"],
-                        "candidate_incremental_pnl_krw": challenger["net_pnl_krw"] - control["net_pnl_krw"],
-                        "current_peak_exposure_krw": reference + current["peak_add_reserved_notional_krw"],
-                        "candidate_peak_exposure_krw": reference + challenger["peak_add_reserved_notional_krw"],
-                        "current_capital_occupancy_krw_seconds": current["add_capital_occupancy_krw_seconds"],
-                        "candidate_capital_occupancy_krw_seconds": challenger["add_capital_occupancy_krw_seconds"],
+                        "current_incremental_pnl_krw": current["net_pnl_krw"]
+                        - control["net_pnl_krw"],
+                        "candidate_incremental_pnl_krw": challenger["net_pnl_krw"]
+                        - control["net_pnl_krw"],
+                        "current_peak_exposure_krw": reference
+                        + current["peak_add_reserved_notional_krw"],
+                        "candidate_peak_exposure_krw": reference
+                        + challenger["peak_add_reserved_notional_krw"],
+                        "current_capital_occupancy_krw_seconds": current[
+                            "add_capital_occupancy_krw_seconds"
+                        ],
+                        "candidate_capital_occupancy_krw_seconds": challenger[
+                            "add_capital_occupancy_krw_seconds"
+                        ],
                         "current_behavior_signature": behavior(current),
                         "candidate_behavior_signature": behavior(challenger),
                         "behavior_changed": behavior(current) != behavior(challenger),
@@ -1273,17 +1637,27 @@ def economic_report_contract_errors(payload):
                         "current_exit_price": current["exit_price"],
                         "candidate_exit_price": challenger["exit_price"],
                         "no_add_exit_price": control["exit_price"],
-                        "exact_episode_exit_policy_version": episode["exit_policy_version"],
+                        "exact_episode_exit_policy_version": episode[
+                            "exit_policy_version"
+                        ],
                     }
                     spread = finite_number(episode.get("observed_max_spread_krw"))
                     if spread is None or spread < 0:
                         return ["scale_in_paired_economic_arm_binding_invalid"]
-                    expected["execution_stress_cost_krw"] = spread * max(value["filled_add_qty"] for value in outcomes.values())
-                    if (row.get("origin") != "modeled_policy_delta"
-                            or episode["scale_in_decision_id"] != row["scale_in_decision_id"]
-                            or any(row.get(key) != value for key, value in expected.items())
-                            or set(row["paired_terminal_source_event_ids"]) != {outcomes[arm]["terminal_source_event_id"] for arm in arms}
-                            or row["candidate_minus_current_pnl_krw"] != outcomes[arms[2]]["net_pnl_krw"] - outcomes[arms[1]]["net_pnl_krw"]):
+                    expected["execution_stress_cost_krw"] = spread * max(
+                        value["filled_add_qty"] for value in outcomes.values()
+                    )
+                    if (
+                        row.get("origin") != "modeled_policy_delta"
+                        or episode["scale_in_decision_id"]
+                        != row["scale_in_decision_id"]
+                        or any(row.get(key) != value for key, value in expected.items())
+                        or set(row["paired_terminal_source_event_ids"])
+                        != {outcomes[arm]["terminal_source_event_id"] for arm in arms}
+                        or row["candidate_minus_current_pnl_krw"]
+                        != outcomes[arms[2]]["net_pnl_krw"]
+                        - outcomes[arms[1]]["net_pnl_krw"]
+                    ):
                         return ["scale_in_paired_economic_arm_binding_invalid"]
     except (KeyError, TypeError, ValueError):
         return ["scale_in_paired_economic_arm_binding_invalid"]
@@ -1299,34 +1673,59 @@ def actual_policy_outcomes(decisions):
         identity = row["position_episode_id"]
         if identity in seen:
             continue
-        if (receipt.get("scale_in_applied_source_observation_id") != row["source_event_id"]
-                or receipt.get("scale_in_applied_decision_id") != row["scale_in_decision_id"]
-                or receipt.get("scale_in_applied_quality_update_id") != row.get("runtime_candidate_quality_update_id")
-                or receipt.get("scale_in_applied_evidence_digest") != row.get("runtime_candidate_evidence_digest")
-                or receipt.get("scale_in_applied_lineage_conflict") in (True, "True", "true")
-                or row.get("runtime_candidate_selected") is not True
-                or row.get("runtime_pid_value_verified") is not True
-                or not row.get("runtime_candidate_quality_update_id")
-                or len(str(row.get("runtime_candidate_evidence_digest") or "")) != 64
-                or receipt.get("actual_order_submitted") not in (True, "True", "true")
-                or receipt.get("sell_execution_receipt_economics_complete") not in (True, "True", "true")
-                or receipt.get("sell_execution_receipt_quantity_contract_complete") not in (True, "True", "true")
-                or row.get("venue") not in {"KRX", "NXT"}
-                or row.get("session") in (None, "", "unknown")):
+        if (
+            receipt.get("scale_in_applied_source_observation_id")
+            != row["source_event_id"]
+            or receipt.get("scale_in_applied_decision_id")
+            != row["scale_in_decision_id"]
+            or receipt.get("scale_in_applied_quality_update_id")
+            != row.get("runtime_candidate_quality_update_id")
+            or receipt.get("scale_in_applied_evidence_digest")
+            != row.get("runtime_candidate_evidence_digest")
+            or receipt.get("scale_in_applied_lineage_conflict")
+            in (True, "True", "true")
+            or row.get("runtime_candidate_selected") is not True
+            or row.get("runtime_pid_value_verified") is not True
+            or not row.get("runtime_candidate_quality_update_id")
+            or len(str(row.get("runtime_candidate_evidence_digest") or "")) != 64
+            or receipt.get("actual_order_submitted") not in (True, "True", "true")
+            or receipt.get("sell_execution_receipt_economics_complete")
+            not in (True, "True", "true")
+            or receipt.get("sell_execution_receipt_quantity_contract_complete")
+            not in (True, "True", "true")
+            or row.get("venue") not in {"KRX", "NXT"}
+            or row.get("session") in (None, "", "unknown")
+        ):
             continue
         pnl = finite_number(receipt.get("sell_execution_cumulative_net_pnl_krw"))
         profit = finite_number(receipt.get("profit_rate"))
         qty = finite_number(receipt.get("sell_execution_cumulative_qty"))
-        if (pnl is None or profit is None or qty is None or qty <= 0 or not qty.is_integer()
-                or cost_rate_from_version(row.get("cost_policy_version")) is None):
+        if (
+            pnl is None
+            or profit is None
+            or qty is None
+            or qty <= 0
+            or not qty.is_integer()
+            or cost_rate_from_version(row.get("cost_policy_version")) is None
+        ):
             continue
         seen.add(identity)
-        outcomes.append({"origin": "actual_policy_outcome", "status": "COMPLETED",
-            "position_episode_id": identity, "scale_in_decision_id": row["scale_in_decision_id"],
-            "quality_update_id": row["runtime_candidate_quality_update_id"],
-            "evidence_digest": row["runtime_candidate_evidence_digest"],
-            "stock_code": row["stock_code"], "venue": row["venue"], "session": row["session"],
-            "cost_policy_version": row["cost_policy_version"], "quantity": int(qty),
-            "net_pnl_krw": pnl, "profit_rate": profit,
-            "new_incremental_profit_claimed": False})
+        outcomes.append(
+            {
+                "origin": "actual_policy_outcome",
+                "status": "COMPLETED",
+                "position_episode_id": identity,
+                "scale_in_decision_id": row["scale_in_decision_id"],
+                "quality_update_id": row["runtime_candidate_quality_update_id"],
+                "evidence_digest": row["runtime_candidate_evidence_digest"],
+                "stock_code": row["stock_code"],
+                "venue": row["venue"],
+                "session": row["session"],
+                "cost_policy_version": row["cost_policy_version"],
+                "quantity": int(qty),
+                "net_pnl_krw": pnl,
+                "profit_rate": profit,
+                "new_incremental_profit_claimed": False,
+            }
+        )
     return outcomes

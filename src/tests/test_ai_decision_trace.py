@@ -28,256 +28,521 @@ def _enable(monkeypatch, tmp_path):
     trace._SEEN_CONTEXT_CANDIDATE_HASHES.clear()
 
 
-@pytest.mark.parametrize('cache_hit', [False, True])
-def test_transport_capture_clocks_and_original_budget_survive_trace(monkeypatch, tmp_path, cache_hit):
+@pytest.mark.parametrize("cache_hit", [False, True])
+def test_transport_capture_clocks_and_original_budget_survive_trace(
+    monkeypatch, tmp_path, cache_hit
+):
     _enable(monkeypatch, tmp_path)
-    clocks = dict(adapter_entered=100., request_built_before_capture=100.1,
-                  capture_started=100.2, capture_finished=100.8,
-                  http_prepare_completed=100.9, sdk_started=101.)
-    remaining = dict(capture_started=800., capture_finished=200., sdk_started=0.)
-    budget = dict(budget_before_transport_ms=1000., response_reserve_ms=0.,
-                  configured_transport_limit_ms=5000., timeout_override_ms=-1,
-                  original_deadline_epoch=1792114488., original_deadline_perf=101.)
-    trace.record_ai_decision_trace(dict(ai_decision_trace_id='capture-clock', action='WAIT',
-        evaluation_attempt_id='capture-attempt', cache_hit=cache_hit,
-        provider_stage_monotonic=dict(clocks, token='do-not-store', future_settled=float('nan')),
-        provider_stage_remaining_ms=dict(remaining, token=100., executor_started=-1.),
-        provider_deadline_budget=dict(budget, token='do-not-store', unexpected=100.)),
-        prompt_type='scalping_entry', prompt_version='fixture',
-        result_source='cache' if cache_hit else 'timeout', provider_called=not cache_hit)
+    clocks = dict(
+        adapter_entered=100.0,
+        request_built_before_capture=100.1,
+        capture_started=100.2,
+        capture_finished=100.8,
+        http_prepare_completed=100.9,
+        sdk_started=101.0,
+    )
+    remaining = dict(capture_started=800.0, capture_finished=200.0, sdk_started=0.0)
+    budget = dict(
+        budget_before_transport_ms=1000.0,
+        response_reserve_ms=0.0,
+        configured_transport_limit_ms=5000.0,
+        timeout_override_ms=-1,
+        original_deadline_epoch=1792114488.0,
+        original_deadline_perf=101.0,
+    )
+    trace.record_ai_decision_trace(
+        dict(
+            ai_decision_trace_id="capture-clock",
+            action="WAIT",
+            evaluation_attempt_id="capture-attempt",
+            cache_hit=cache_hit,
+            provider_stage_monotonic=dict(
+                clocks, token="do-not-store", future_settled=float("nan")
+            ),
+            provider_stage_remaining_ms=dict(
+                remaining, token=100.0, executor_started=-1.0
+            ),
+            provider_deadline_budget=dict(
+                budget, token="do-not-store", unexpected=100.0
+            ),
+        ),
+        prompt_type="scalping_entry",
+        prompt_version="fixture",
+        result_source="cache" if cache_hit else "timeout",
+        provider_called=not cache_hit,
+    )
     row = _rows(trace._trace_path(trace._date_text()))[0]
-    assert row['provider_stage_monotonic'] == ({} if cache_hit else clocks)
-    assert row['provider_stage_remaining_ms'] == ({} if cache_hit else remaining)
-    assert row['provider_deadline_budget'] == ({} if cache_hit else budget)
-    assert row['actual_order_submitted'] is False
+    assert row["provider_stage_monotonic"] == ({} if cache_hit else clocks)
+    assert row["provider_stage_remaining_ms"] == ({} if cache_hit else remaining)
+    assert row["provider_deadline_budget"] == ({} if cache_hit else budget)
+    assert row["actual_order_submitted"] is False
 
 
-def test_async_request_binding_survives_capture_return_and_actual_trace(monkeypatch,tmp_path):
-    _enable(monkeypatch,tmp_path)
-    binding=dict(async_request_id='generation:key',async_producer_pid=123,
-        async_producer_start_ticks='456',async_origin_deadline_epoch=1791412205.,
-        async_order_venue='SOR',scanner_generation_id='generation')
-    captured=trace.capture_ai_request(prompt='fixture',user_input={'stock_code':'005930','evaluation_attempt_id':'eval'},
-        endpoint_name='analyze_target',symbol='005930',request_id='provider-request',metadata=binding,
-        model='fixture',schema_name='fixture',require_json=True)
-    for key,value in binding.items():
+def test_async_request_binding_survives_capture_return_and_actual_trace(
+    monkeypatch, tmp_path
+):
+    _enable(monkeypatch, tmp_path)
+    binding = dict(
+        async_request_id="generation:key",
+        async_producer_pid=123,
+        async_producer_start_ticks="456",
+        async_origin_deadline_epoch=1791412205.0,
+        async_order_venue="SOR",
+        scanner_generation_id="generation",
+    )
+    captured = trace.capture_ai_request(
+        prompt="fixture",
+        user_input={"stock_code": "005930", "evaluation_attempt_id": "eval"},
+        endpoint_name="analyze_target",
+        symbol="005930",
+        request_id="provider-request",
+        metadata=binding,
+        model="fixture",
+        schema_name="fixture",
+        require_json=True,
+    )
+    for key, value in binding.items():
         assert captured[key] == value
         assert _rows(trace._request_path(trace._date_text()))[0][key] == value
-    trace.record_ai_decision_trace(dict(action='BUY',score=90,evaluation_attempt_id='eval',
-        entry_mechanistic_action='ENTER_NOW',entry_ai_screen_status='pass',entry_ai_risk_verdict='PASS',
-        machine_bundle_sha256='b'*64,entry_ai_component_sha256='c'*64),
-        prompt_type='scalping_entry',prompt_version='continuous_reversal_auxiliary_production_v2',
-        result_source='live',input_contract_fields=captured,provider_called=True)
-    row=_rows(trace._trace_path(trace._date_text()))[0]
-    for key,value in binding.items(): assert row[key]==value
-    assert row['entry_machine_bundle_sha256']=='b'*64
-    assert row['entry_auxiliary_policy_sha256']=='c'*64
+    trace.record_ai_decision_trace(
+        dict(
+            action="BUY",
+            score=90,
+            evaluation_attempt_id="eval",
+            entry_mechanistic_action="ENTER_NOW",
+            entry_ai_screen_status="pass",
+            entry_ai_risk_verdict="PASS",
+            machine_bundle_sha256="b" * 64,
+            entry_ai_component_sha256="c" * 64,
+        ),
+        prompt_type="scalping_entry",
+        prompt_version="continuous_reversal_auxiliary_production_v2",
+        result_source="live",
+        input_contract_fields=captured,
+        provider_called=True,
+    )
+    row = _rows(trace._trace_path(trace._date_text()))[0]
+    for key, value in binding.items():
+        assert row[key] == value
+    assert row["entry_machine_bundle_sha256"] == "b" * 64
+    assert row["entry_auxiliary_policy_sha256"] == "c" * 64
 
 
-@pytest.mark.parametrize('fault', ['none','identity','prompt','clock','body','native','replay_type'])
-def test_compact_binding_supplement_proves_original_archive_without_changing_primary_gate(monkeypatch,tmp_path,fault):
+@pytest.mark.parametrize(
+    "fault", ["none", "identity", "prompt", "clock", "body", "native", "replay_type"]
+)
+def test_compact_binding_supplement_proves_original_archive_without_changing_primary_gate(
+    monkeypatch, tmp_path, fault
+):
     import hashlib
     from datetime import timedelta
     from copy import deepcopy
     from src.engine.scalping import ai_decision_quality as quality
-    _enable(monkeypatch,tmp_path)
-    prompt='fixture compact prompt'
-    logical=dict(schema='continuous_reversal_union_auxiliary_v3',common_context=dict(
-        symbol='005930',venue='KRX',market='REGULAR',source_item='005930',opportunity_key='opportunity'))
-    native=dict(input_sha256=hashlib.sha256(trace._json_bytes(logical)).hexdigest(),
-        prompt_sha256=hashlib.sha256(prompt.encode()).hexdigest())
-    capture=trace.capture_ai_request(prompt=prompt,
-        user_input=json.dumps(logical,ensure_ascii=True,sort_keys=True,separators=(',',':')),
-        replay_context=logical,endpoint_name='analyze_target',symbol='005930',request_id='fixture-request',
-        model='gpt-5.4-nano',schema_name='auxiliary_compact_citations_v1',require_json=True,
-        metadata=dict(effective_venue='KRX',session_bucket='krx_regular',broker_route='KRX',
-            continuous_reversal_consumption=native,machine_observation_sha256='a'*64))
-    payload=_rows(trace._payload_path(trace._date_text()))[0]
-    request=_rows(trace._request_path(trace._date_text()))[0]
-    before=deepcopy(payload)
-    decision=quality._parse_ts(payload['captured_at'])+timedelta(seconds=1)
-    row=dict(decision_trace_id='fixture-request',endpoint='analyze_target',model='gpt-5.4-nano',
-        stock_code='005930',effective_venue='KRX',session_bucket='krx_regular',broker_route='KRX',
-        payload_sha256='c'*64,payload_replay_exact=True,request_capture_status='captured',
-        request_envelope_sha256=capture['ai_request_envelope_sha256'],prompt_sha256=capture['ai_prompt_sha256'],
-        decision_ts=decision.isoformat(),venue_consistent=True,
-        continuous_reversal_consumption=native,machine_observation_sha256='a'*64)
-    if fault=='identity':request['request_id']='other-request'
-    if fault=='prompt':row['prompt_sha256']='d'*64
-    if fault=='clock':row['decision_ts']=(decision-timedelta(seconds=5)).isoformat()
-    if fault=='body':payload['sanitized_user_input']['common_context']['source_item']='foreign-item'
-    if fault=='native':row['machine_observation_sha256']='f'*64
-    if fault=='replay_type':payload['sanitized_replay_context']=[]
-    result=quality.reconcile_compact_request_binding(row,payload,request)
-    assert result['status']==('archive_identity_verified_trace_hash_mismatch' if fault=='none' else 'source_gap')
-    assert row['payload_sha256']=='c'*64
-    if fault=='none':
-        labels=quality.annotate_primary_cohort_eligibility(labels=[dict(decision_trace_id='fixture-request',
-            effective_venue='KRX',session_bucket='krx_regular')],traces=[row],payloads=[payload],requests=[request],
-            promotion={'promoted_at':payload['captured_at']})
-        assert labels[0]['primary_cohort_eligible'] is False
-        assert labels[0]['compact_request_binding']['findings']==[]
-        assert labels[0]['compact_request_binding']['allowed_runtime_apply'] is False
-        assert payload==before
 
-
-@pytest.mark.parametrize('provider_called,result_source', [(True, 'live'), (True, 'timeout'), (False, 'mechanistic_pre_adjudication_rejected')])
-def test_decision_trace_keeps_existing_input_stage_timing_with_exact_attempt(monkeypatch, tmp_path, provider_called, result_source):
     _enable(monkeypatch, tmp_path)
-    timing = dict(entry_machine_input_preparation_ms=300.,
-        entry_machine_input_preparation_stages_ms={'policy_resolve_ms': 120., 'runtime_context_ms': 30., 'other_preparation_ms': 150.},
-        entry_machine_input_local_refresh_ms=2., entry_machine_input_canonical_revalidation_ms=3.,
-        entry_machine_input_initial_copy_ms=1.2, entry_machine_input_refreshed_copy_ms=1.4,
-        entry_machine_input_feature_build_ms=12.0, entry_machine_input_budget_at_freeze_ms=70.,
-        entry_machine_input_budget_after_freeze_ms=-3.0, entry_machine_input_failure_phase='canonical_revalidation')
-    trace.record_ai_decision_trace(dict(ai_decision_trace_id='timed-request', action='WAIT', score=50,
-        evaluation_attempt_id='timed-attempt', async_origin_deadline_epoch=1791761701.675653, **timing),
-        prompt_type='scalping_entry', prompt_version='continuous_reversal_auxiliary_production_v2',
-        result_source=result_source, provider_called=provider_called)
-    row = _rows(trace._trace_path(trace._date_text()))[0]
-    assert row['transport_timing'] == timing
-    assert row['evaluation_attempt_id'] == 'timed-attempt'
-    assert row['async_origin_deadline_epoch'] == 1791761701.675653
-    assert row['provider_called'] is provider_called
-    assert row['actual_order_submitted'] is False
+    prompt = "fixture compact prompt"
+    logical = dict(
+        schema="continuous_reversal_union_auxiliary_v3",
+        common_context=dict(
+            symbol="005930",
+            venue="KRX",
+            market="REGULAR",
+            source_item="005930",
+            opportunity_key="opportunity",
+        ),
+    )
+    native = dict(
+        input_sha256=hashlib.sha256(trace._json_bytes(logical)).hexdigest(),
+        prompt_sha256=hashlib.sha256(prompt.encode()).hexdigest(),
+    )
+    capture = trace.capture_ai_request(
+        prompt=prompt,
+        user_input=json.dumps(
+            logical, ensure_ascii=True, sort_keys=True, separators=(",", ":")
+        ),
+        replay_context=logical,
+        endpoint_name="analyze_target",
+        symbol="005930",
+        request_id="fixture-request",
+        model="gpt-5.4-nano",
+        schema_name="auxiliary_compact_citations_v1",
+        require_json=True,
+        metadata=dict(
+            effective_venue="KRX",
+            session_bucket="krx_regular",
+            broker_route="KRX",
+            continuous_reversal_consumption=native,
+            machine_observation_sha256="a" * 64,
+        ),
+    )
+    payload = _rows(trace._payload_path(trace._date_text()))[0]
+    request = _rows(trace._request_path(trace._date_text()))[0]
+    before = deepcopy(payload)
+    decision = quality._parse_ts(payload["captured_at"]) + timedelta(seconds=1)
+    row = dict(
+        decision_trace_id="fixture-request",
+        endpoint="analyze_target",
+        model="gpt-5.4-nano",
+        stock_code="005930",
+        effective_venue="KRX",
+        session_bucket="krx_regular",
+        broker_route="KRX",
+        payload_sha256="c" * 64,
+        payload_replay_exact=True,
+        request_capture_status="captured",
+        request_envelope_sha256=capture["ai_request_envelope_sha256"],
+        prompt_sha256=capture["ai_prompt_sha256"],
+        decision_ts=decision.isoformat(),
+        venue_consistent=True,
+        continuous_reversal_consumption=native,
+        machine_observation_sha256="a" * 64,
+    )
+    if fault == "identity":
+        request["request_id"] = "other-request"
+    if fault == "prompt":
+        row["prompt_sha256"] = "d" * 64
+    if fault == "clock":
+        row["decision_ts"] = (decision - timedelta(seconds=5)).isoformat()
+    if fault == "body":
+        payload["sanitized_user_input"]["common_context"][
+            "source_item"
+        ] = "foreign-item"
+    if fault == "native":
+        row["machine_observation_sha256"] = "f" * 64
+    if fault == "replay_type":
+        payload["sanitized_replay_context"] = []
+    result = quality.reconcile_compact_request_binding(row, payload, request)
+    assert result["status"] == (
+        "archive_identity_verified_trace_hash_mismatch"
+        if fault == "none"
+        else "source_gap"
+    )
+    assert row["payload_sha256"] == "c" * 64
+    if fault == "none":
+        labels = quality.annotate_primary_cohort_eligibility(
+            labels=[
+                dict(
+                    decision_trace_id="fixture-request",
+                    effective_venue="KRX",
+                    session_bucket="krx_regular",
+                )
+            ],
+            traces=[row],
+            payloads=[payload],
+            requests=[request],
+            promotion={"promoted_at": payload["captured_at"]},
+        )
+        assert labels[0]["primary_cohort_eligible"] is False
+        assert labels[0]["compact_request_binding"]["findings"] == []
+        assert labels[0]["compact_request_binding"]["allowed_runtime_apply"] is False
+        assert payload == before
 
 
-@pytest.mark.parametrize('source,cache_hit', [('live',False),('timeout',False),('exception',False),('cache',True)])
-def test_local_stage_clocks_keep_exact_failure_identity_and_reject_untrusted_fields(monkeypatch,tmp_path,source,cache_hit):
-    _enable(monkeypatch,tmp_path)
-    trace.record_ai_decision_trace(dict(ai_decision_trace_id='failure-clock',action='WAIT',score=50,
-        evaluation_attempt_id='attempt-clock',cache_hit=cache_hit,
-        entry_local_stage_clocks={'analysis_started_perf':100.,'provider_started_perf':101.,
-            'provider_call_seconds':2.7,'failure_observed_perf':103.7,'token':'must-not-be-stored',
-            'response_processing_seconds':float('nan'),'pre_provider_seconds':True}),
-        prompt_type='scalping_entry',prompt_version='fixture',result_source=source,provider_called=True)
-    row=_rows(trace._trace_path(trace._date_text()))[0]
-    assert row['evaluation_attempt_id']=='attempt-clock'
-    assert row['entry_local_stage_clocks']==({} if cache_hit else
-        {'analysis_started_perf':100.,'provider_started_perf':101.,'provider_call_seconds':2.7,'failure_observed_perf':103.7})
-    assert 'must-not-be-stored' not in json.dumps(row)
-
-
-@pytest.mark.parametrize('schema', ['continuous_reversal_claim_source_receipt_v1',
-                                   'continuous_reversal_claim_source_receipt_v2',
-                                   'continuous_reversal_claim_source_receipt_v3',
-                                   'continuous_reversal_claim_source_receipt_v4'])
-def test_rejected_reversal_keeps_source_receipt_without_provider_or_outcome(monkeypatch, tmp_path, schema):
+@pytest.mark.parametrize(
+    "provider_called,result_source",
+    [
+        (True, "live"),
+        (True, "timeout"),
+        (False, "mechanistic_pre_adjudication_rejected"),
+    ],
+)
+def test_decision_trace_keeps_existing_input_stage_timing_with_exact_attempt(
+    monkeypatch, tmp_path, provider_called, result_source
+):
     _enable(monkeypatch, tmp_path)
-    receipt = dict(schema=schema,
-        evaluation_attempt_id='exact-rejected-attempt', machine_bundle_sha256='b'*64,
-        signal_id='native-first-turn', signal_age_seconds=5.2,
-        validation_error='reversal_signal_expired_or_changed',
-        failure_cause='reversal_signal_expired', runtime_effect=False)
-    if not schema.endswith('_v1'):
-        receipt['state_observed_epoch'] = 1791347251.3
-    if schema.endswith('_v3'):
-        receipt.update(registered_claim_present=False, supplied_snapshot=['original'],
-                       source_registration_receipt={'sha256': 'registration-proof'}, active_generation='f'*64)
-    if schema.endswith('_v4'):
-        receipt.update(claim_backend='operating_v6', registered_claim_present=True,
-            stored_envelope_family_sha256='f'*64, state_generation='a'*64,
-            active_scope_execution_hash='a'*64, registered_signal_ready=False)
-    trace.record_ai_decision_trace(dict(ai_decision_trace_id='exact-rejected-trace',
-        action='DROP', score=0, evaluation_attempt_id='exact-rejected-attempt',
-        machine_bundle_sha256='b'*64, machine_evaluation_status='assessment_contract_invalid',
-        machine_contract_error='reversal_signal_expired_or_changed',
-        continuous_reversal_rejected_claim_receipt=receipt),
-        prompt_type='scalping_entry', prompt_version='continuous_reversal_auxiliary_production_v2',
-        result_source='mechanistic_pre_adjudication_rejected', provider_called=False)
+    timing = dict(
+        entry_machine_input_preparation_ms=300.0,
+        entry_machine_input_preparation_stages_ms={
+            "policy_resolve_ms": 120.0,
+            "runtime_context_ms": 30.0,
+            "other_preparation_ms": 150.0,
+        },
+        entry_machine_input_local_refresh_ms=2.0,
+        entry_machine_input_canonical_revalidation_ms=3.0,
+        entry_machine_input_initial_copy_ms=1.2,
+        entry_machine_input_refreshed_copy_ms=1.4,
+        entry_machine_input_feature_build_ms=12.0,
+        entry_machine_input_budget_at_freeze_ms=70.0,
+        entry_machine_input_budget_after_freeze_ms=-3.0,
+        entry_machine_input_failure_phase="canonical_revalidation",
+    )
+    trace.record_ai_decision_trace(
+        dict(
+            ai_decision_trace_id="timed-request",
+            action="WAIT",
+            score=50,
+            evaluation_attempt_id="timed-attempt",
+            async_origin_deadline_epoch=1791761701.675653,
+            **timing,
+        ),
+        prompt_type="scalping_entry",
+        prompt_version="continuous_reversal_auxiliary_production_v2",
+        result_source=result_source,
+        provider_called=provider_called,
+    )
     row = _rows(trace._trace_path(trace._date_text()))[0]
-    assert row['continuous_reversal_rejected_claim_receipt'] == receipt
-    assert row['evaluation_attempt_id'] == receipt['evaluation_attempt_id']
-    assert row['provider_called'] is False and row['actual_order_submitted'] is False
-    assert row['outcome_label_eligible'] is False
+    assert row["transport_timing"] == timing
+    assert row["evaluation_attempt_id"] == "timed-attempt"
+    assert row["async_origin_deadline_epoch"] == 1791761701.675653
+    assert row["provider_called"] is provider_called
+    assert row["actual_order_submitted"] is False
 
 
-@pytest.mark.parametrize('damage', [None, 'wrong_hash', 'credential', 'foreign_path',
-                                  'unknown_schema', 'changed_snapshot'])
-def test_native_claim_digest_survives_only_exact_public_content_binding(monkeypatch, tmp_path, damage):
+@pytest.mark.parametrize(
+    "source,cache_hit",
+    [("live", False), ("timeout", False), ("exception", False), ("cache", True)],
+)
+def test_local_stage_clocks_keep_exact_failure_identity_and_reject_untrusted_fields(
+    monkeypatch, tmp_path, source, cache_hit
+):
+    _enable(monkeypatch, tmp_path)
+    trace.record_ai_decision_trace(
+        dict(
+            ai_decision_trace_id="failure-clock",
+            action="WAIT",
+            score=50,
+            evaluation_attempt_id="attempt-clock",
+            cache_hit=cache_hit,
+            entry_local_stage_clocks={
+                "analysis_started_perf": 100.0,
+                "provider_started_perf": 101.0,
+                "provider_call_seconds": 2.7,
+                "failure_observed_perf": 103.7,
+                "token": "must-not-be-stored",
+                "response_processing_seconds": float("nan"),
+                "pre_provider_seconds": True,
+            },
+        ),
+        prompt_type="scalping_entry",
+        prompt_version="fixture",
+        result_source=source,
+        provider_called=True,
+    )
+    row = _rows(trace._trace_path(trace._date_text()))[0]
+    assert row["evaluation_attempt_id"] == "attempt-clock"
+    assert row["entry_local_stage_clocks"] == (
+        {}
+        if cache_hit
+        else {
+            "analysis_started_perf": 100.0,
+            "provider_started_perf": 101.0,
+            "provider_call_seconds": 2.7,
+            "failure_observed_perf": 103.7,
+        }
+    )
+    assert "must-not-be-stored" not in json.dumps(row)
+
+
+@pytest.mark.parametrize(
+    "schema",
+    [
+        "continuous_reversal_claim_source_receipt_v1",
+        "continuous_reversal_claim_source_receipt_v2",
+        "continuous_reversal_claim_source_receipt_v3",
+        "continuous_reversal_claim_source_receipt_v4",
+    ],
+)
+def test_rejected_reversal_keeps_source_receipt_without_provider_or_outcome(
+    monkeypatch, tmp_path, schema
+):
+    _enable(monkeypatch, tmp_path)
+    receipt = dict(
+        schema=schema,
+        evaluation_attempt_id="exact-rejected-attempt",
+        machine_bundle_sha256="b" * 64,
+        signal_id="native-first-turn",
+        signal_age_seconds=5.2,
+        validation_error="reversal_signal_expired_or_changed",
+        failure_cause="reversal_signal_expired",
+        runtime_effect=False,
+    )
+    if not schema.endswith("_v1"):
+        receipt["state_observed_epoch"] = 1791347251.3
+    if schema.endswith("_v3"):
+        receipt.update(
+            registered_claim_present=False,
+            supplied_snapshot=["original"],
+            source_registration_receipt={"sha256": "registration-proof"},
+            active_generation="f" * 64,
+        )
+    if schema.endswith("_v4"):
+        receipt.update(
+            claim_backend="operating_v6",
+            registered_claim_present=True,
+            stored_envelope_family_sha256="f" * 64,
+            state_generation="a" * 64,
+            active_scope_execution_hash="a" * 64,
+            registered_signal_ready=False,
+        )
+    trace.record_ai_decision_trace(
+        dict(
+            ai_decision_trace_id="exact-rejected-trace",
+            action="DROP",
+            score=0,
+            evaluation_attempt_id="exact-rejected-attempt",
+            machine_bundle_sha256="b" * 64,
+            machine_evaluation_status="assessment_contract_invalid",
+            machine_contract_error="reversal_signal_expired_or_changed",
+            continuous_reversal_rejected_claim_receipt=receipt,
+        ),
+        prompt_type="scalping_entry",
+        prompt_version="continuous_reversal_auxiliary_production_v2",
+        result_source="mechanistic_pre_adjudication_rejected",
+        provider_called=False,
+    )
+    row = _rows(trace._trace_path(trace._date_text()))[0]
+    assert row["continuous_reversal_rejected_claim_receipt"] == receipt
+    assert row["evaluation_attempt_id"] == receipt["evaluation_attempt_id"]
+    assert row["provider_called"] is False and row["actual_order_submitted"] is False
+    assert row["outcome_label_eligible"] is False
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [
+        None,
+        "wrong_hash",
+        "credential",
+        "foreign_path",
+        "unknown_schema",
+        "changed_snapshot",
+    ],
+)
+def test_native_claim_digest_survives_only_exact_public_content_binding(
+    monkeypatch, tmp_path, damage
+):
     import hashlib
     from copy import deepcopy
+
     _enable(monkeypatch, tmp_path)
-    snapshot = [{'signal_id': 'public-native-event'}, {'price': 100}]
-    generation = 'a'*64
-    token = hashlib.sha256(json.dumps([generation, 'public-native-event', snapshot],
-        sort_keys=True, separators=(',', ':'), ensure_ascii=True).encode()).hexdigest()
-    registration = dict(schema='continuous_reversal_claim_registration_v1',
-        generation=generation, snapshot=deepcopy(snapshot), claim_token=token)
-    receipt = dict(schema='continuous_reversal_claim_source_receipt_v4',
-        claim_generation=generation, snapshot=deepcopy(snapshot), claim_token=token,
-        source_registration_receipt=registration)
-    if damage in {'wrong_hash', 'credential'}:
-        receipt['claim_token'] = registration['claim_token'] = (
-            'c'*64 if damage == 'wrong_hash' else 'sk-test-secret-not-a-native-digest')
-    elif damage == 'unknown_schema':
-        receipt['schema'] = registration['schema'] = 'unknown'
-    elif damage == 'changed_snapshot':
-        receipt['snapshot'][1]['price'] = registration['snapshot'][1]['price'] = 101
+    snapshot = [{"signal_id": "public-native-event"}, {"price": 100}]
+    generation = "a" * 64
+    token = hashlib.sha256(
+        json.dumps(
+            [generation, "public-native-event", snapshot],
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        ).encode()
+    ).hexdigest()
+    registration = dict(
+        schema="continuous_reversal_claim_registration_v1",
+        generation=generation,
+        snapshot=deepcopy(snapshot),
+        claim_token=token,
+    )
+    receipt = dict(
+        schema="continuous_reversal_claim_source_receipt_v4",
+        claim_generation=generation,
+        snapshot=deepcopy(snapshot),
+        claim_token=token,
+        source_registration_receipt=registration,
+    )
+    if damage in {"wrong_hash", "credential"}:
+        receipt["claim_token"] = registration["claim_token"] = (
+            "c" * 64 if damage == "wrong_hash" else "sk-test-secret-not-a-native-digest"
+        )
+    elif damage == "unknown_schema":
+        receipt["schema"] = registration["schema"] = "unknown"
+    elif damage == "changed_snapshot":
+        receipt["snapshot"][1]["price"] = registration["snapshot"][1]["price"] = 101
     source = dict(continuous_reversal_rejected_claim_receipt=receipt)
-    if damage == 'foreign_path':
+    if damage == "foreign_path":
         source = dict(unrelated=source)
     original = deepcopy(source)
     safe, redacted = trace.sanitize_ai_trace_value(source)
-    target = safe.get('unrelated', safe)['continuous_reversal_rejected_claim_receipt']
-    expected = token if damage is None else '[REDACTED]'
-    assert target['claim_token'] == target['source_registration_receipt']['claim_token'] == expected
+    target = safe.get("unrelated", safe)["continuous_reversal_rejected_claim_receipt"]
+    expected = token if damage is None else "[REDACTED]"
+    assert (
+        target["claim_token"]
+        == target["source_registration_receipt"]["claim_token"]
+        == expected
+    )
     assert redacted is (damage is not None)
     assert source == original
     if damage is None:
-        trace.record_ai_decision_trace(dict(ai_decision_trace_id='public-claim',
-            action='DROP', score=0, **source), prompt_type='scalping_entry',
-            prompt_version='test', result_source='mechanistic_pre_adjudication_rejected',
-            provider_called=False)
+        trace.record_ai_decision_trace(
+            dict(ai_decision_trace_id="public-claim", action="DROP", score=0, **source),
+            prompt_type="scalping_entry",
+            prompt_version="test",
+            result_source="mechanistic_pre_adjudication_rejected",
+            provider_called=False,
+        )
         stored = _rows(trace._trace_path(trace._date_text()))[0]
-        assert stored['continuous_reversal_rejected_claim_receipt'] == receipt
+        assert stored["continuous_reversal_rejected_claim_receipt"] == receipt
 
 
-def test_sanitizer_reuses_labels_without_reusing_values_or_path_permissions(monkeypatch):
+def test_sanitizer_reuses_labels_without_reusing_values_or_path_permissions(
+    monkeypatch,
+):
     calls = []
     original = trace._sanitize_text
+
     def measured(value):
         calls.append(value)
         return original(value)
-    monkeypatch.setattr(trace, '_sanitize_text', measured)
-    rows = [{'price': number, 'api_token': 'secret-' + str(number)} for number in range(100)]
-    safe, redacted = trace.sanitize_ai_trace_value({'rows': rows})
-    assert redacted and safe['rows'] == [{'price': n, 'api_token': '[REDACTED]'} for n in range(100)]
-    assert calls.count('price') == calls.count('api_token') == 1
+
+    monkeypatch.setattr(trace, "_sanitize_text", measured)
+    rows = [
+        {"price": number, "api_token": "secret-" + str(number)} for number in range(100)
+    ]
+    safe, redacted = trace.sanitize_ai_trace_value({"rows": rows})
+    assert redacted and safe["rows"] == [
+        {"price": n, "api_token": "[REDACTED]"} for n in range(100)
+    ]
+    assert calls.count("price") == calls.count("api_token") == 1
     # The next invocation must use its own labels and fresh values.
-    assert trace.sanitize_ai_trace_value({'price': 7}) == ({'price': 7}, False)
-    assert calls.count('price') == 2
+    assert trace.sanitize_ai_trace_value({"price": 7}) == ({"price": 7}, False)
+    assert calls.count("price") == 2
 
 
-def test_request_capture_preparation_reuses_indexes_and_rolls_date(monkeypatch, tmp_path):
+def test_request_capture_preparation_reuses_indexes_and_rolls_date(
+    monkeypatch, tmp_path
+):
     _enable(monkeypatch, tmp_path)
     calls = []
     original = trace._load_seen
+
     def load(path, field):
         calls.append((str(path), field))
         return original(path, field)
+
     monkeypatch.setattr(trace, "_load_seen", load)
     day = trace._date_text()
     assert trace.prepare_ai_request_capture(day)["ai_trace_dedup_init_ms"] >= 0
     assert len(calls) == 0
     assert trace.prepare_ai_request_capture(day)["ai_trace_dedup_init_ms"] >= 0
-    kwargs = dict(prompt="JSON only", user_input={"stock_code": "005930"},
-                  endpoint_name="analyze_target", symbol="005930", request_id="warm",
-                  model="test", schema_name="entry_v1", require_json=True)
+    kwargs = dict(
+        prompt="JSON only",
+        user_input={"stock_code": "005930"},
+        endpoint_name="analyze_target",
+        symbol="005930",
+        request_id="warm",
+        model="test",
+        schema_name="entry_v1",
+        require_json=True,
+    )
     first = trace.capture_ai_request(**kwargs)
     trace.capture_ai_request(**kwargs)
     assert len(calls) == 0  # The exclusive append lease owns dedup validation.
     assert len(_rows(trace._payload_path(day))) == 1
     assert len(_rows(trace._request_path(day))) == 1
     assert first["ai_trace_dedup_init_ms"] == 0
-    for key in ("ai_trace_prepare_ms", "ai_trace_lock_wait_ms", "ai_trace_file_lock_wait_ms",
-                "ai_trace_write_ms", "ai_trace_capture_ms"):
+    for key in (
+        "ai_trace_prepare_ms",
+        "ai_trace_lock_wait_ms",
+        "ai_trace_file_lock_wait_ms",
+        "ai_trace_write_ms",
+        "ai_trace_capture_ms",
+    ):
         assert first[key] >= 0
     assert trace.prepare_ai_request_capture("2026-09-23")
     assert len(calls) == 0
 
 
-def test_request_preparation_defers_wrapped_generation_lock_contention(monkeypatch, tmp_path):
+def test_request_preparation_defers_wrapped_generation_lock_contention(
+    monkeypatch, tmp_path
+):
     _enable(monkeypatch, tmp_path)
     day = trace._date_text()
     path = trace._payload_path(day)
@@ -285,65 +550,105 @@ def test_request_preparation_defers_wrapped_generation_lock_contention(monkeypat
     # BlockingIOError, rather than raising BlockingIOError directly.
     with trace.jsonl_artifact_generation_lock(path, exclusive=True):
         result = trace.prepare_ai_request_capture(day)
-        assert result == {'ai_trace_dedup_preparation_pending': True}
+        assert result == {"ai_trace_dedup_preparation_pending": True}
         assert day not in trace._SEEN_PAYLOAD_HASHES
         assert day in trace._SEEN_PROMPT_HASHES  # Other indexes still progress.
-    assert 'ai_trace_dedup_init_ms' in trace.prepare_ai_request_capture(day)
+    assert "ai_trace_dedup_init_ms" in trace.prepare_ai_request_capture(day)
 
 
 def test_request_preparation_does_not_hide_other_os_errors(monkeypatch, tmp_path):
     _enable(monkeypatch, tmp_path)
+
     def broken(*args, **kwargs):
-        raise OSError('jsonl_generation_parent_changed:fixture')
-    monkeypatch.setattr(trace, 'jsonl_artifact_generation_lock', broken)
-    with pytest.raises(OSError, match='parent_changed'):
+        raise OSError("jsonl_generation_parent_changed:fixture")
+
+    monkeypatch.setattr(trace, "jsonl_artifact_generation_lock", broken)
+    with pytest.raises(OSError, match="parent_changed"):
         trace.prepare_ai_request_capture(trace._date_text())
 
 
-@pytest.mark.parametrize('mismatch', [False, True])
-def test_native_reversal_request_capture_binds_actual_bytes_without_claiming_execution(monkeypatch, tmp_path, mismatch):
+@pytest.mark.parametrize("mismatch", [False, True])
+def test_native_reversal_request_capture_binds_actual_bytes_without_claiming_execution(
+    monkeypatch, tmp_path, mismatch
+):
     import hashlib
+
     _enable(monkeypatch, tmp_path)
-    inp = dict(context='observed first uptick', stock_code='005930')
-    prompt = 'Assess the confirmed uptick.'
-    native = dict(input_sha256=hashlib.sha256(trace._json_bytes(inp)).hexdigest(),
-                  prompt_sha256=hashlib.sha256(trace._json_bytes(prompt)).hexdigest())
-    result = trace.capture_ai_request(prompt=prompt+'changed' if mismatch else prompt, user_input=json.dumps(inp),
-        replay_context=inp, endpoint_name='analyze_target', symbol='005930', request_id='native-1',
-        model='fixture', schema_name='entry_v1', require_json=True,
-        metadata=dict(machine_observation_sha256='a'*64, continuous_reversal_consumption=native))
-    assert result['ai_decision_trace_id'] == 'native-1'
+    inp = dict(context="observed first uptick", stock_code="005930")
+    prompt = "Assess the confirmed uptick."
+    native = dict(
+        input_sha256=hashlib.sha256(trace._json_bytes(inp)).hexdigest(),
+        prompt_sha256=hashlib.sha256(trace._json_bytes(prompt)).hexdigest(),
+    )
+    result = trace.capture_ai_request(
+        prompt=prompt + "changed" if mismatch else prompt,
+        user_input=json.dumps(inp),
+        replay_context=inp,
+        endpoint_name="analyze_target",
+        symbol="005930",
+        request_id="native-1",
+        model="fixture",
+        schema_name="entry_v1",
+        require_json=True,
+        metadata=dict(
+            machine_observation_sha256="a" * 64, continuous_reversal_consumption=native
+        ),
+    )
+    assert result["ai_decision_trace_id"] == "native-1"
     row = _rows(trace._request_path(trace._date_text()))[0]
-    binding = row['continuous_reversal_request_binding']
-    assert binding['binding_status'] == ('mismatch' if mismatch else 'matched')
-    assert binding['provider_fact'] == 'request_prepared_not_execution'
+    binding = row["continuous_reversal_request_binding"]
+    assert binding["binding_status"] == ("mismatch" if mismatch else "matched")
+    assert binding["provider_fact"] == "request_prepared_not_execution"
 
 
-@pytest.mark.parametrize('source_invalid', [False, True])
+@pytest.mark.parametrize("source_invalid", [False, True])
 def test_machine_observation_keeps_exact_input_without_provider_request(
     monkeypatch, tmp_path, source_invalid
 ):
     _enable(monkeypatch, tmp_path)
-    timing = {"entry_machine_input_as_of": 1789970400.0,
-              "entry_machine_input_preparation_ms": 58000.0,
-              "entry_machine_input_preparation_stages_ms": {"policy_resolve_ms": 57000, "other_preparation_ms": 1000},
-              "entry_machine_input_quote_clock_comparison": {"canonical_age_ms": 800, "feature_age_ms": 100,
-                                                            "feature_receipt": {"source_type": "0B", "item": "005930"}},
-              "entry_machine_input_parent_snapshot_id": "aims-original"}
+    timing = {
+        "entry_machine_input_as_of": 1789970400.0,
+        "entry_machine_input_preparation_ms": 58000.0,
+        "entry_machine_input_preparation_stages_ms": {
+            "policy_resolve_ms": 57000,
+            "other_preparation_ms": 1000,
+        },
+        "entry_machine_input_quote_clock_comparison": {
+            "canonical_age_ms": 800,
+            "feature_age_ms": 100,
+            "feature_receipt": {"source_type": "0B", "item": "005930"},
+        },
+        "entry_machine_input_parent_snapshot_id": "aims-original",
+    }
     result = trace.capture_machine_observation(
-        exact_payload={"stock_code": "005930", "name": "삼성전자", "best_ask": 10000,
-                       "entry_machine_input_trace": timing,
-                       **({'entry_source_quote_recovery': {'sha256': 'd'*64}}
-                          if source_invalid else {}),
-                       "features": {"large_sell_print_detected": True}},
+        exact_payload={
+            "stock_code": "005930",
+            "name": "삼성전자",
+            "best_ask": 10000,
+            "entry_machine_input_trace": timing,
+            **(
+                {"entry_source_quote_recovery": {"sha256": "d" * 64}}
+                if source_invalid
+                else {}
+            ),
+            "features": {"large_sell_print_detected": True},
+        },
         setup_evidence={"setup_state": "WAIT_CONFIRMATION"},
-        assessment=({'schema': 'mechanistic_entry_source_invalid_v1',
-                     'action': 'source_invalid', 'reason': 'rejected_before_assessment'}
-                    if source_invalid else {"action": "RECHECK"}),
+        assessment=(
+            {
+                "schema": "mechanistic_entry_source_invalid_v1",
+                "action": "source_invalid",
+                "reason": "rejected_before_assessment",
+            }
+            if source_invalid
+            else {"action": "RECHECK"}
+        ),
         bundle_sha256="b" * 64,
-        metadata={"record_id": 123,
-                  "machine_source_recovery_parent_sha256": "c" * 64,
-                  "machine_source_recovery_parent_attempt_id": "aims-parent"},
+        metadata={
+            "record_id": 123,
+            "machine_source_recovery_parent_sha256": "c" * 64,
+            "machine_source_recovery_parent_attempt_id": "aims-parent",
+        },
     )
     assert result["machine_capture_status"] == "captured"
     assert result["entry_decision_large_sell_print_detected"] is True
@@ -354,10 +659,15 @@ def test_machine_observation_keeps_exact_input_without_provider_request(
     assert row["source"]["exact_payload"]["name"] == "삼성전자"
     assert row["source"]["exact_payload"]["entry_machine_input_trace"] == timing
     if source_invalid:
-        assert row['source']['exact_payload']['entry_source_quote_recovery'] == {'sha256': 'd'*64}
-        assert 'entry_source_quote_label' not in row['label_context']
+        assert row["source"]["exact_payload"]["entry_source_quote_recovery"] == {
+            "sha256": "d" * 64
+        }
+        assert "entry_source_quote_label" not in row["label_context"]
     assert row["label_context"]["record_id"] == 123
-    assert row["label_context"]["machine_source_recovery_parent_attempt_id"] == "aims-parent"
+    assert (
+        row["label_context"]["machine_source_recovery_parent_attempt_id"]
+        == "aims-parent"
+    )
     assert row["label_context"]["evaluation_attempt_id"] is None
     assert result["evaluation_attempt_id"] is None
     assert result["evaluation_attempt_identity_source"] == "missing"
@@ -368,14 +678,21 @@ def test_machine_observation_keeps_exact_input_without_provider_request(
 def test_machine_capture_preserves_zero_base_source_lineage(monkeypatch, tmp_path):
     _enable(monkeypatch, tmp_path)
     result = trace.capture_machine_observation(
-        exact_payload={"stock_code": "005930", "best_ask": 10000,
-                       "effective_venue": "KRX", "session_bucket": "KRX_REGULAR",
-                       "snapshot_id": "snapshot-1"},
+        exact_payload={
+            "stock_code": "005930",
+            "best_ask": 10000,
+            "effective_venue": "KRX",
+            "session_bucket": "KRX_REGULAR",
+            "snapshot_id": "snapshot-1",
+        },
         setup_evidence={"setup_state": "WAIT_CONFIRMATION"},
-        assessment={"action": "RECHECK"}, bundle_sha256="b" * 64,
-        metadata={"source_event_stage": "zero_base_probe_machine_only_v1",
-                  "zero_base_source_sha256": "a" * 64,
-                  "zero_base_route": "krx_nxt_integrated"},
+        assessment={"action": "RECHECK"},
+        bundle_sha256="b" * 64,
+        metadata={
+            "source_event_stage": "zero_base_probe_machine_only_v1",
+            "zero_base_source_sha256": "a" * 64,
+            "zero_base_route": "krx_nxt_integrated",
+        },
     )
     row = _rows(trace._payload_path(trace._date_text()))[0]
     assert result["machine_observation_sha256"] == row["machine_observation_sha256"]
@@ -386,22 +703,37 @@ def test_machine_capture_preserves_zero_base_source_lineage(monkeypatch, tmp_pat
 
 def test_revision_receipt_is_bounded_exact_attempt_and_capture_only():
     state = {}
-    first = {"machine_capture_status": "captured", "machine_observation_sha256": "a" * 64,
-        "evaluation_attempt_id": "attempt", "scanner_promotion_id": "promotion",
-        "effective_venue": "KRX", "market_session_bucket": "KRX_REGULAR"}
-    trace.bind_machine_observation_revision(state, first, symbol="005930", bundle_sha256="b" * 64)
+    first = {
+        "machine_capture_status": "captured",
+        "machine_observation_sha256": "a" * 64,
+        "evaluation_attempt_id": "attempt",
+        "scanner_promotion_id": "promotion",
+        "effective_venue": "KRX",
+        "market_session_bucket": "KRX_REGULAR",
+    }
+    trace.bind_machine_observation_revision(
+        state, first, symbol="005930", bundle_sha256="b" * 64
+    )
     assert first["machine_revision_parent_sha256"] == ""
     second = {**first, "machine_observation_sha256": "c" * 64}
-    trace.bind_machine_observation_revision(state, second, symbol="005930", bundle_sha256="b" * 64)
+    trace.bind_machine_observation_revision(
+        state, second, symbol="005930", bundle_sha256="b" * 64
+    )
     assert second["machine_revision_parent_sha256"] == "a" * 64
-    trace.bind_machine_observation_revision(state, second, symbol="005930", bundle_sha256="b" * 64)
+    trace.bind_machine_observation_revision(
+        state, second, symbol="005930", bundle_sha256="b" * 64
+    )
     assert second["machine_revision_parent_sha256"] == "a" * 64
     third = {**first, "machine_observation_sha256": "d" * 64}
-    trace.bind_machine_observation_revision(state, third, symbol="005930", bundle_sha256="e" * 64)
+    trace.bind_machine_observation_revision(
+        state, third, symbol="005930", bundle_sha256="e" * 64
+    )
     assert third["machine_revision_parent_sha256"] == ""
     assert len(state) == 1
     failed = {"machine_capture_status": "write_failed"}
-    trace.bind_machine_observation_revision(state, failed, symbol="005930", bundle_sha256="e" * 64)
+    trace.bind_machine_observation_revision(
+        state, failed, symbol="005930", bundle_sha256="e" * 64
+    )
     assert "machine_revision_schema" not in failed
 
 
@@ -434,9 +766,7 @@ def test_machine_observation_returns_exact_snapshot_evaluation_identity(
     )
     row = _rows(trace._payload_path(trace._date_text()))[0]
     assert row["scanner_promotion_id"] == "SCANPROM-005930-test"
-    assert row["label_context"]["scanner_promotion_id"] == (
-        "SCANPROM-005930-test"
-    )
+    assert row["label_context"]["scanner_promotion_id"] == ("SCANPROM-005930-test")
 
 
 def test_scanner_promotion_identity_reaches_request_trace_and_pending_outcome(
@@ -2435,8 +2765,12 @@ def test_machine_screen_retained_in_trace_and_pending_outcome(
         "machine_observation_sha256": "c" * 64,
         "machine_source_recovery_parent_sha256": "a" * 64,
         "machine_source_recovery_parent_attempt_id": "aims-parent",
-        "ai_input_preflight_source_timing": {"tape": {"freshness_limit_ms": 3000, "age_ms": 200}},
-        "ai_input_preflight_realtime_type_provenance": {"0B": {"item": "005930_AL", "observed_epoch": 1791248400}},
+        "ai_input_preflight_source_timing": {
+            "tape": {"freshness_limit_ms": 3000, "age_ms": 200}
+        },
+        "ai_input_preflight_realtime_type_provenance": {
+            "0B": {"item": "005930_AL", "observed_epoch": 1791248400}
+        },
         "evaluation_attempt_id": "attempt-1",
         "evaluation_attempt_identity_source": "caller_evaluation_attempt_id",
         "entry_primary_decision_owner": "mechanistic_entry_adjudicator",
@@ -2448,9 +2782,11 @@ def test_machine_screen_retained_in_trace_and_pending_outcome(
         "entry_ai_followup_disposition": (
             "ai_pass_existing_submit_guard"
             if status == "pass"
-            else "ai_veto_point_drop"
-            if status == "veto"
-            else "ai_screen_invalid_fail_closed_wait"
+            else (
+                "ai_veto_point_drop"
+                if status == "veto"
+                else "ai_screen_invalid_fail_closed_wait"
+            )
         ),
         "entry_ai_followup_authority": (
             "existing_runtime_submit_and_order_guards"
@@ -2477,21 +2813,24 @@ def test_machine_screen_retained_in_trace_and_pending_outcome(
     )
     row = _rows(trace._trace_path(trace._date_text()))[0]
     pending = _rows(trace._outcome_path(trace._date_text()))[0]
-    assert len(
-        trace.record_ai_decision_trace(
-            {
-                "ai_decision_trace_id": "machine-screen-hash",
-                "action": "WAIT",
-                "decision_quality_live_adapter": (
-                    "entry_setup_v2_15_2_krx_bounded_probe_v1"
-                ),
-            },
-            prompt_type="scalping_entry",
-            prompt_version="decision_quality_v2_15_2",
-            result_source="mechanistic_pre_adjudication",
-            provider_called=False,
-        )["ai_decision_result_sha256"]
-    ) == 64
+    assert (
+        len(
+            trace.record_ai_decision_trace(
+                {
+                    "ai_decision_trace_id": "machine-screen-hash",
+                    "action": "WAIT",
+                    "decision_quality_live_adapter": (
+                        "entry_setup_v2_15_2_krx_bounded_probe_v1"
+                    ),
+                },
+                prompt_type="scalping_entry",
+                prompt_version="decision_quality_v2_15_2",
+                result_source="mechanistic_pre_adjudication",
+                provider_called=False,
+            )["ai_decision_result_sha256"]
+        )
+        == 64
+    )
     assert quality._final_decision_response_findings(row) == []
     for key, value in fields.items():
         assert (
@@ -2978,21 +3317,36 @@ def test_fallback_policy_nonapplication_survives_trace_and_pending_label(
         assert row["entry_setup_live_policy_runtime_effect"] is False
 
 
-def test_feature_blocked_trace_preserves_health_without_creating_forward_label(monkeypatch, tmp_path):
+def test_feature_blocked_trace_preserves_health_without_creating_forward_label(
+    monkeypatch, tmp_path
+):
     _enable(monkeypatch, tmp_path)
-    health = {"schema": "kiwoom_market_data_health_v1", "routes": {
-        "integrated": {"trade_receive_age_ms": 6000, "quote_receive_age_ms": 100,
-                       "quote_state": "fresh"}},
-        "decision_authority": "market_data_input_only_no_order_authority"}
+    health = {
+        "schema": "kiwoom_market_data_health_v1",
+        "routes": {
+            "integrated": {
+                "trade_receive_age_ms": 6000,
+                "quote_receive_age_ms": 100,
+                "quote_state": "fresh",
+            }
+        },
+        "decision_authority": "market_data_input_only_no_order_authority",
+    }
     activity = {"trade_activity_state": "RECENT_TRADE", "quiet_episode_count": 0}
-    fields = {"ai_input_preflight_market_data_health": health,
-              "ai_input_preflight_trade_activity": activity,
-              "ai_input_preflight_feature_allowed": False,
-              "ai_input_preflight_feature_blockers": ["required_feature_tape_stale"]}
+    fields = {
+        "ai_input_preflight_market_data_health": health,
+        "ai_input_preflight_trade_activity": activity,
+        "ai_input_preflight_feature_allowed": False,
+        "ai_input_preflight_feature_blockers": ["required_feature_tape_stale"],
+    }
     trace.record_ai_decision_trace(
-        {"action": "WAIT", "score": 0}, prompt_type="scalping_entry",
-        prompt_version="compact", result_source="preflight_blocked",
-        stock_code="005930", provider_called=False, input_contract_fields=fields,
+        {"action": "WAIT", "score": 0},
+        prompt_type="scalping_entry",
+        prompt_version="compact",
+        result_source="preflight_blocked",
+        stock_code="005930",
+        provider_called=False,
+        input_contract_fields=fields,
     )
     for path in (trace._trace_path(trace._date_text()),):
         row = _rows(path)[0]
@@ -3004,25 +3358,44 @@ def test_feature_blocked_trace_preserves_health_without_creating_forward_label(m
     assert not trace._outcome_path(trace._date_text()).exists()
 
 
-def test_actual_screen_trace_and_forward_label_preserve_same_common_health(monkeypatch, tmp_path):
+def test_actual_screen_trace_and_forward_label_preserve_same_common_health(
+    monkeypatch, tmp_path
+):
     _enable(monkeypatch, tmp_path)
-    health = {"schema": "kiwoom_market_data_health_v1", "routes": {
-        "integrated": {"trade_receive_age_ms": 100, "quote_receive_age_ms": 100}},
-        "decision_authority": "market_data_input_only_no_order_authority"}
+    health = {
+        "schema": "kiwoom_market_data_health_v1",
+        "routes": {
+            "integrated": {"trade_receive_age_ms": 100, "quote_receive_age_ms": 100}
+        },
+        "decision_authority": "market_data_input_only_no_order_authority",
+    }
     request_fields = trace.capture_ai_request(
-        prompt="risk screen", user_input={"stock_code": "005930"},
-        endpoint_name="analyze_target", symbol="005930", request_id="health-screen",
-        model="gpt-test", schema_name="entry_setup_risk_adjudication_v1", require_json=True,
+        prompt="risk screen",
+        user_input={"stock_code": "005930"},
+        endpoint_name="analyze_target",
+        symbol="005930",
+        request_id="health-screen",
+        model="gpt-test",
+        schema_name="entry_setup_risk_adjudication_v1",
+        require_json=True,
     )
     trace.record_ai_decision_trace(
         {**request_fields, "action": "WAIT", "score": 50},
-        prompt_type="scalping_entry", prompt_version="entry_machine_auxiliary_compact_v3",
-        result_source="live", stock_code="005930", provider_called=True,
-        input_contract_fields={"ai_input_preflight_market_data_health": health,
-                               "ai_input_preflight_feature_allowed": True,
-                               "ai_input_preflight_feature_blockers": []},
+        prompt_type="scalping_entry",
+        prompt_version="entry_machine_auxiliary_compact_v3",
+        result_source="live",
+        stock_code="005930",
+        provider_called=True,
+        input_contract_fields={
+            "ai_input_preflight_market_data_health": health,
+            "ai_input_preflight_feature_allowed": True,
+            "ai_input_preflight_feature_blockers": [],
+        },
     )
-    for path in (trace._trace_path(trace._date_text()), trace._outcome_path(trace._date_text())):
+    for path in (
+        trace._trace_path(trace._date_text()),
+        trace._outcome_path(trace._date_text()),
+    ):
         row = _rows(path)[0]
         assert row["market_data_health"] == health
         assert row["input_feature_allowed"] is True
@@ -3030,56 +3403,105 @@ def test_actual_screen_trace_and_forward_label_preserve_same_common_health(monke
         assert row["actual_order_submitted"] is False
 
 
-def test_economic_observation_availability_binds_final_trace_clock(monkeypatch, tmp_path):
-    _enable(monkeypatch,tmp_path)
+def test_economic_observation_availability_binds_final_trace_clock(
+    monkeypatch, tmp_path
+):
+    _enable(monkeypatch, tmp_path)
     from src.utils import pipeline_event_logger as pipeline
-    events=[]
-    monkeypatch.setattr(pipeline,'emit_pipeline_event',lambda *args,**kw: events.append((args,kw)) or {'structured_append_succeeded':True})
-    result=trace.record_ai_decision_trace(dict(action='BUY',score=80,provider_actual='openai',
-        model='gpt-5.4-nano',evaluation_attempt_id='source-attempt',
-        entry_economic_plan_sha256='b'*64,entry_economic_writer_plan_sha256='b'*64,
-        entry_economic_source_status='recorded_source_only',
-        entry_economic_observation_probe_contract='conditional-source-only'),
-        prompt_type='scalping_entry',prompt_version='test-compact',result_source='live',
-        stock_code='005930',provider_called=True)
+
+    events = []
+    monkeypatch.setattr(
+        pipeline,
+        "emit_pipeline_event",
+        lambda *args, **kw: events.append((args, kw))
+        or {"structured_append_succeeded": True},
+    )
+    result = trace.record_ai_decision_trace(
+        dict(
+            action="BUY",
+            score=80,
+            provider_actual="openai",
+            model="gpt-5.4-nano",
+            evaluation_attempt_id="source-attempt",
+            entry_economic_plan_sha256="b" * 64,
+            entry_economic_writer_plan_sha256="b" * 64,
+            entry_economic_source_status="recorded_source_only",
+            entry_economic_observation_probe_contract="conditional-source-only",
+        ),
+        prompt_type="scalping_entry",
+        prompt_version="test-compact",
+        result_source="live",
+        stock_code="005930",
+        provider_called=True,
+    )
     assert result
-    rows=_rows(trace._trace_path(trace._date_text()))
-    assert len(events)==1
-    args,kw=events[0]
-    assert args[3]=='entry_ai_economic_decision_available'
-    assert kw['fields']['evaluation_attempt_id']=='source-attempt'
-    assert kw['fields']['entry_economic_decision_available_at']==rows[0]['decision_ts']
-    assert kw['fields']['entry_economic_plan_sha256']=='b'*64
-    assert rows[0]['entry_economic_writer_plan_sha256']=='b'*64
-    assert rows[0]['entry_economic_observation_probe_contract']=='conditional-source-only'
-    assert kw['fields']['actual_order_submitted'] is False
+    rows = _rows(trace._trace_path(trace._date_text()))
+    assert len(events) == 1
+    args, kw = events[0]
+    assert args[3] == "entry_ai_economic_decision_available"
+    assert kw["fields"]["evaluation_attempt_id"] == "source-attempt"
+    assert (
+        kw["fields"]["entry_economic_decision_available_at"] == rows[0]["decision_ts"]
+    )
+    assert kw["fields"]["entry_economic_plan_sha256"] == "b" * 64
+    assert rows[0]["entry_economic_writer_plan_sha256"] == "b" * 64
+    assert (
+        rows[0]["entry_economic_observation_probe_contract"]
+        == "conditional-source-only"
+    )
+    assert kw["fields"]["actual_order_submitted"] is False
 
 
-def test_machine_strategy_capture_preserves_public_identifiers_and_hash(monkeypatch, tmp_path):
+def test_machine_strategy_capture_preserves_public_identifiers_and_hash(
+    monkeypatch, tmp_path
+):
     from src.engine.scalping.entry_strategy_policy import digest
+
     _enable(monkeypatch, tmp_path)
     token = "score_70_74|risk_neutral|market_regime_neutral|fresh|price_valid|liquidity_normal|not_overbought|midday"
-    raw = {"stock_code": "005930", "runtime_context": {
-        "entry_adm": {"cache_token": f"entry_adm:v1:{token}",
-                      "entry_adm_cache_token": f"entry_adm:v1:{token}", "entry_adm_bucket_token": token},
-        "holding_exit_matrix": {"cache_token": trace.RETIREMENT_ID},
-        "lifecycle_ai": {"cache_token": trace.RETIREMENT_ID}}}
+    raw = {
+        "stock_code": "005930",
+        "runtime_context": {
+            "entry_adm": {
+                "cache_token": f"entry_adm:v1:{token}",
+                "entry_adm_cache_token": f"entry_adm:v1:{token}",
+                "entry_adm_bucket_token": token,
+            },
+            "holding_exit_matrix": {"cache_token": trace.RETIREMENT_ID},
+            "lifecycle_ai": {"cache_token": trace.RETIREMENT_ID},
+        },
+    }
     setup = {"strategy_raw_input": raw, "strategy_raw_sha256": digest(raw)}
-    result = trace.capture_machine_observation(exact_payload=raw, setup_evidence=setup,
-        assessment={"action": "RECHECK"}, bundle_sha256="b" * 64)
+    result = trace.capture_machine_observation(
+        exact_payload=raw,
+        setup_evidence=setup,
+        assessment={"action": "RECHECK"},
+        bundle_sha256="b" * 64,
+    )
     assert result["machine_capture_status"] == "captured"
     stored = _rows(trace._payload_path(trace._date_text()))[0]
     assert stored["redacted"] is False
     assert stored["source"]["setup_evidence"] == setup
-    assert digest(stored["source"]["setup_evidence"]["strategy_raw_input"]) == setup["strategy_raw_sha256"]
+    assert (
+        digest(stored["source"]["setup_evidence"]["strategy_raw_input"])
+        == setup["strategy_raw_sha256"]
+    )
     assert stored["provider_called"] is False
 
 
 @pytest.mark.parametrize("wrapper", ["setup_evidence", "unapproved_evidence"])
 def test_strategy_capture_exemption_does_not_allow_credentials(wrapper):
-    value = {wrapper: {"strategy_raw_input": {"runtime_context": {
-        "entry_adm": {"cache_token": "Bearer fake-secret"},
-        "other_owner": {"cache_token": trace.RETIREMENT_ID}}, "access_token": "fake-secret"}}}
+    value = {
+        wrapper: {
+            "strategy_raw_input": {
+                "runtime_context": {
+                    "entry_adm": {"cache_token": "Bearer fake-secret"},
+                    "other_owner": {"cache_token": trace.RETIREMENT_ID},
+                },
+                "access_token": "fake-secret",
+            }
+        }
+    }
     safe, redacted = trace.sanitize_ai_trace_value(value)
     assert redacted is True
     raw = safe[wrapper]["strategy_raw_input"]
@@ -3087,190 +3509,334 @@ def test_strategy_capture_exemption_does_not_allow_credentials(wrapper):
     assert raw["runtime_context"]["other_owner"]["cache_token"] == "[REDACTED]"
     assert raw["access_token"] == "[REDACTED]"
     if wrapper != "setup_evidence":
-        safe, redacted = trace.sanitize_ai_trace_value({wrapper: {"strategy_raw_input": {
-            "runtime_context": {"entry_adm": {"cache_token": "entry_adm:v1:public"}}}}})
+        safe, redacted = trace.sanitize_ai_trace_value(
+            {
+                wrapper: {
+                    "strategy_raw_input": {
+                        "runtime_context": {
+                            "entry_adm": {"cache_token": "entry_adm:v1:public"}
+                        }
+                    }
+                }
+            }
+        )
         assert redacted is True
 
 
-@pytest.mark.parametrize('errors', [['union_pass_support_invalid'], ['reversal_all_requested_signals_invalidated']])
-def test_native_auxiliary_rejection_retains_exact_errors_without_legacy_adapter(monkeypatch, tmp_path, errors):
+@pytest.mark.parametrize(
+    "errors",
+    [["union_pass_support_invalid"], ["reversal_all_requested_signals_invalidated"]],
+)
+def test_native_auxiliary_rejection_retains_exact_errors_without_legacy_adapter(
+    monkeypatch, tmp_path, errors
+):
     _enable(monkeypatch, tmp_path)
-    fields = dict(entry_ai_contract_valid=False, entry_ai_contract_errors=errors,
-                  entry_ai_advisory_contract_valid=False, entry_ai_advisory_contract_errors=errors)
-    trace.record_ai_decision_trace(dict(ai_decision_trace_id='native-rejection', action='WAIT',
-        provider_called=True, entry_ai_raw_risk_verdict='PASS',
-        entry_ai_screen_status='response_invalid', continuous_reversal_applied=True,
-        semantic_validation_status='rejected', **fields),
-        prompt_type='scalping_entry', prompt_version='continuous_reversal_union_auxiliary_v3',
-        result_source='live', provider_called=True)
+    fields = dict(
+        entry_ai_contract_valid=False,
+        entry_ai_contract_errors=errors,
+        entry_ai_advisory_contract_valid=False,
+        entry_ai_advisory_contract_errors=errors,
+    )
+    trace.record_ai_decision_trace(
+        dict(
+            ai_decision_trace_id="native-rejection",
+            action="WAIT",
+            provider_called=True,
+            entry_ai_raw_risk_verdict="PASS",
+            entry_ai_screen_status="response_invalid",
+            continuous_reversal_applied=True,
+            semantic_validation_status="rejected",
+            **fields,
+        ),
+        prompt_type="scalping_entry",
+        prompt_version="continuous_reversal_union_auxiliary_v3",
+        result_source="live",
+        provider_called=True,
+    )
     row = _rows(trace._trace_path(trace._date_text()))[0]
     pending = _rows(trace._outcome_path(trace._date_text()))[0]
     for key, value in fields.items():
         assert row[key] == pending[key] == value
-    assert row['action'] == 'WAIT'
-    assert row['entry_ai_screen_status'] == 'response_invalid'
+    assert row["action"] == "WAIT"
+    assert row["entry_ai_screen_status"] == "response_invalid"
 
 
-def test_native_rejection_errors_are_redacted_before_trace_and_pending(monkeypatch, tmp_path):
+def test_native_rejection_errors_are_redacted_before_trace_and_pending(
+    monkeypatch, tmp_path
+):
     _enable(monkeypatch, tmp_path)
-    secret='sk-proj-abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ'
-    trace.record_ai_decision_trace(dict(ai_decision_trace_id='native-rejection-redacted', action='WAIT',
-        provider_called=True, entry_ai_contract_errors=['provider echo '+secret],
-        entry_ai_screen_status='response_invalid', continuous_reversal_applied=True),
-        prompt_type='scalping_entry', prompt_version='continuous_reversal_union_auxiliary_v3',
-        result_source='live', provider_called=True)
-    row=_rows(trace._trace_path(trace._date_text()))[0]
-    pending=_rows(trace._outcome_path(trace._date_text()))[0]
+    secret = "sk-proj-abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    trace.record_ai_decision_trace(
+        dict(
+            ai_decision_trace_id="native-rejection-redacted",
+            action="WAIT",
+            provider_called=True,
+            entry_ai_contract_errors=["provider echo " + secret],
+            entry_ai_screen_status="response_invalid",
+            continuous_reversal_applied=True,
+        ),
+        prompt_type="scalping_entry",
+        prompt_version="continuous_reversal_union_auxiliary_v3",
+        result_source="live",
+        provider_called=True,
+    )
+    row = _rows(trace._trace_path(trace._date_text()))[0]
+    pending = _rows(trace._outcome_path(trace._date_text()))[0]
     assert secret not in json.dumps(row) and secret not in json.dumps(pending)
-    assert row['trace_storage_redacted'] is True
+    assert row["trace_storage_redacted"] is True
 
 
-def test_valid_provider_reply_and_invalid_execution_remain_separate_in_trace(monkeypatch, tmp_path):
+def test_valid_provider_reply_and_invalid_execution_remain_separate_in_trace(
+    monkeypatch, tmp_path
+):
     _enable(monkeypatch, tmp_path)
-    fields = dict(entry_auxiliary_response_contract_valid=True,
-                  entry_auxiliary_response_contract_errors=[],
-                  entry_post_response_execution_valid=False)
-    trace.record_ai_decision_trace(dict(ai_decision_trace_id='native-changed-after-reply',
-        action='WAIT', provider_called=True, entry_ai_raw_risk_verdict='PASS',
-        entry_ai_screen_status='response_invalid', entry_ai_screen_pass=False,
-        entry_ai_contract_errors=['reversal_signal_path_changed'],
-        continuous_reversal_applied=True, **fields), prompt_type='scalping_entry',
-        prompt_version='continuous_reversal_union_auxiliary_v3',
-        result_source='live', provider_called=True)
+    fields = dict(
+        entry_auxiliary_response_contract_valid=True,
+        entry_auxiliary_response_contract_errors=[],
+        entry_post_response_execution_valid=False,
+    )
+    trace.record_ai_decision_trace(
+        dict(
+            ai_decision_trace_id="native-changed-after-reply",
+            action="WAIT",
+            provider_called=True,
+            entry_ai_raw_risk_verdict="PASS",
+            entry_ai_screen_status="response_invalid",
+            entry_ai_screen_pass=False,
+            entry_ai_contract_errors=["reversal_signal_path_changed"],
+            continuous_reversal_applied=True,
+            **fields,
+        ),
+        prompt_type="scalping_entry",
+        prompt_version="continuous_reversal_union_auxiliary_v3",
+        result_source="live",
+        provider_called=True,
+    )
     stored = _rows(trace._trace_path(trace._date_text()))[0]
     pending = _rows(trace._outcome_path(trace._date_text()))[0]
     for key, value in fields.items():
         assert stored[key] == pending[key] == value
-    assert stored['action'] == 'WAIT' and stored['entry_ai_screen_pass'] is False
+    assert stored["action"] == "WAIT" and stored["entry_ai_screen_pass"] is False
 
 
-def test_raw_union_projection_keeps_all_provided_fact_refs_without_validated_fallback(monkeypatch, tmp_path):
+def test_raw_union_projection_keeps_all_provided_fact_refs_without_validated_fallback(
+    monkeypatch, tmp_path
+):
     _enable(monkeypatch, tmp_path)
-    raw_support=[f'branch-{index}/observed_machine_signal' for index in range(24)]
-    present={k:True for k in ('risk_verdict','risk_codes','supporting_fact_ids','contradicting_fact_ids','confidence')}
-    trace.record_ai_decision_trace(dict(ai_decision_trace_id='union-full-raw',action='WAIT',score=0,
-        entry_ai_screen_status='response_invalid',entry_ai_risk_codes=[],
-        entry_ai_raw_risk_verdict='PASS',entry_ai_raw_risk_codes=['NO_BLOCKING_RISK'],
-        entry_ai_raw_supporting_fact_ids=raw_support,entry_ai_raw_contradicting_fact_ids=[],
-        entry_ai_raw_confidence=72,entry_ai_raw_fields_present=present,
-        entry_ai_raw_fields_source='decoded_provider_response',entry_ai_raw_fields_truncated=False,
-        entry_ai_raw_response_sha256='a'*64,entry_auxiliary_response_contract_valid=False,
-        entry_auxiliary_response_contract_errors=['union_pass_support_invalid'],entry_post_response_execution_valid=False),
-        prompt_type='scalping_entry',prompt_version='continuous_reversal_union_auxiliary_v3',
-        result_source='live',provider_called=True)
-    stored=_rows(trace._trace_path(trace._date_text()))[0]
-    assert stored['entry_ai_raw_supporting_fact_ids']==raw_support
-    assert stored['entry_ai_raw_risk_codes']==['NO_BLOCKING_RISK']
-    assert stored['entry_ai_risk_codes']==[]
-    assert stored['entry_ai_raw_fields_present']==present
-    assert stored['entry_ai_raw_fields_truncated'] is False
-    assert stored['entry_ai_raw_response_sha256']=='a'*64
-    assert _rows(trace._outcome_path(trace._date_text()))[0]['entry_ai_raw_fields_present']==present
+    raw_support = [f"branch-{index}/observed_machine_signal" for index in range(24)]
+    present = {
+        k: True
+        for k in (
+            "risk_verdict",
+            "risk_codes",
+            "supporting_fact_ids",
+            "contradicting_fact_ids",
+            "confidence",
+        )
+    }
+    trace.record_ai_decision_trace(
+        dict(
+            ai_decision_trace_id="union-full-raw",
+            action="WAIT",
+            score=0,
+            entry_ai_screen_status="response_invalid",
+            entry_ai_risk_codes=[],
+            entry_ai_raw_risk_verdict="PASS",
+            entry_ai_raw_risk_codes=["NO_BLOCKING_RISK"],
+            entry_ai_raw_supporting_fact_ids=raw_support,
+            entry_ai_raw_contradicting_fact_ids=[],
+            entry_ai_raw_confidence=72,
+            entry_ai_raw_fields_present=present,
+            entry_ai_raw_fields_source="decoded_provider_response",
+            entry_ai_raw_fields_truncated=False,
+            entry_ai_raw_response_sha256="a" * 64,
+            entry_auxiliary_response_contract_valid=False,
+            entry_auxiliary_response_contract_errors=["union_pass_support_invalid"],
+            entry_post_response_execution_valid=False,
+        ),
+        prompt_type="scalping_entry",
+        prompt_version="continuous_reversal_union_auxiliary_v3",
+        result_source="live",
+        provider_called=True,
+    )
+    stored = _rows(trace._trace_path(trace._date_text()))[0]
+    assert stored["entry_ai_raw_supporting_fact_ids"] == raw_support
+    assert stored["entry_ai_raw_risk_codes"] == ["NO_BLOCKING_RISK"]
+    assert stored["entry_ai_risk_codes"] == []
+    assert stored["entry_ai_raw_fields_present"] == present
+    assert stored["entry_ai_raw_fields_truncated"] is False
+    assert stored["entry_ai_raw_response_sha256"] == "a" * 64
+    assert (
+        _rows(trace._outcome_path(trace._date_text()))[0]["entry_ai_raw_fields_present"]
+        == present
+    )
 
 
-def test_raw_union_projection_marks_missing_truncated_and_redacted_fields(monkeypatch,tmp_path):
-    _enable(monkeypatch,tmp_path)
-    secret='sk-proj-abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ'
-    trace.record_ai_decision_trace(dict(ai_decision_trace_id='union-raw-bounded',action='WAIT',score=0,
-        entry_ai_raw_supporting_fact_ids=[secret]+['x'*600]*70,
-        entry_ai_risk_codes=['validated-must-not-be-reconstructed']),
-        prompt_type='scalping_entry',prompt_version='continuous_reversal_union_auxiliary_v3',
-        result_source='live',provider_called=True)
-    stored=_rows(trace._trace_path(trace._date_text()))[0]
-    assert len(stored['entry_ai_raw_supporting_fact_ids'])==64
-    assert max(map(len,stored['entry_ai_raw_supporting_fact_ids']))==512
+def test_raw_union_projection_marks_missing_truncated_and_redacted_fields(
+    monkeypatch, tmp_path
+):
+    _enable(monkeypatch, tmp_path)
+    secret = "sk-proj-abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    trace.record_ai_decision_trace(
+        dict(
+            ai_decision_trace_id="union-raw-bounded",
+            action="WAIT",
+            score=0,
+            entry_ai_raw_supporting_fact_ids=[secret] + ["x" * 600] * 70,
+            entry_ai_risk_codes=["validated-must-not-be-reconstructed"],
+        ),
+        prompt_type="scalping_entry",
+        prompt_version="continuous_reversal_union_auxiliary_v3",
+        result_source="live",
+        provider_called=True,
+    )
+    stored = _rows(trace._trace_path(trace._date_text()))[0]
+    assert len(stored["entry_ai_raw_supporting_fact_ids"]) == 64
+    assert max(map(len, stored["entry_ai_raw_supporting_fact_ids"])) == 512
     assert secret not in json.dumps(stored)
-    assert stored['entry_ai_raw_fields_truncated'] is True
-    assert stored['entry_ai_raw_fields_present']['risk_codes'] is False
-    assert stored['entry_ai_raw_risk_codes']==[]
-    assert stored['entry_ai_raw_response_sha256'] is None
-    assert stored['trace_storage_redacted'] is True
+    assert stored["entry_ai_raw_fields_truncated"] is True
+    assert stored["entry_ai_raw_fields_present"]["risk_codes"] is False
+    assert stored["entry_ai_raw_risk_codes"] == []
+    assert stored["entry_ai_raw_response_sha256"] is None
+    assert stored["trace_storage_redacted"] is True
 
 
-@pytest.mark.parametrize('blocked_stage', ['payload', 'prompt', 'request', 'trace', 'outcome'])
+@pytest.mark.parametrize(
+    "blocked_stage", ["payload", "prompt", "request", "trace", "outcome"]
+)
 def test_actual_generation_contention_preserves_request_trace_and_pending_binding(
     monkeypatch, tmp_path, blocked_stage
 ):
     from concurrent.futures import ThreadPoolExecutor
     import threading
+
     _enable(monkeypatch, tmp_path)
     day = trace._date_text()
     trace.prepare_ai_request_capture(day)
-    paths = {name: getattr(trace, '_' + name + '_path')(day)
-             for name in ('payload', 'prompt', 'request', 'trace', 'outcome')}
+    paths = {
+        name: getattr(trace, "_" + name + "_path")(day)
+        for name in ("payload", "prompt", "request", "trace", "outcome")
+    }
     blocked = paths[blocked_stage]
-    binding = dict(async_request_id='fixed-watch:original', async_producer_pid=123,
-        async_producer_start_ticks='456', async_origin_deadline_epoch=1792025905.,
-        async_order_venue='SOR', scanner_generation_id='fixed-watch:generation')
-    kwargs = dict(prompt='fixture risk screen',
-        user_input=dict(stock_code='403870', best_ask=50600, effective_venue='KRX',
-            session_bucket='krx_regular', market_data_route='krx_nxt_integrated',
-            snapshot_id='aims-original'), endpoint_name='analyze_target', symbol='403870',
-        request_id='exact-provider-request', metadata=binding,
-        model='fixture', schema_name='fixture', require_json=True)
+    binding = dict(
+        async_request_id="fixed-watch:original",
+        async_producer_pid=123,
+        async_producer_start_ticks="456",
+        async_origin_deadline_epoch=1792025905.0,
+        async_order_venue="SOR",
+        scanner_generation_id="fixed-watch:generation",
+    )
+    kwargs = dict(
+        prompt="fixture risk screen",
+        user_input=dict(
+            stock_code="403870",
+            best_ask=50600,
+            effective_venue="KRX",
+            session_bucket="krx_regular",
+            market_data_route="krx_nxt_integrated",
+            snapshot_id="aims-original",
+        ),
+        endpoint_name="analyze_target",
+        symbol="403870",
+        request_id="exact-provider-request",
+        metadata=binding,
+        model="fixture",
+        schema_name="fixture",
+        require_json=True,
+    )
     reached = threading.Event()
     real_lease = trace.jsonl_artifact_generation_lock
+
     @contextmanager
     def observed_lease(path, **options):
-        if path == blocked and options.get('exclusive') is True:
+        if path == blocked and options.get("exclusive") is True:
             reached.set()
         with real_lease(path, **options) as lease:
             yield lease
-    monkeypatch.setattr(trace, 'jsonl_artifact_generation_lock', observed_lease)
+
+    monkeypatch.setattr(trace, "jsonl_artifact_generation_lock", observed_lease)
     # Maintenance may evict its hints while another writer owns the file.
     # No hint is an authority to skip the append's prepared-index verification.
     for cache in (trace._SEEN_TRACE_IDS, trace._SEEN_OUTCOME_LABEL_IDS):
         cache.clear()
+
     def capture_and_trace():
         captured = trace.capture_ai_request(**kwargs)
-        assert captured['ai_trace_reference_price'] == 50600
-        result = trace.record_ai_decision_trace(dict(action='BUY', score=90,
-            evaluation_attempt_id='aims-original', entry_mechanistic_action='ENTER_NOW',
-            entry_ai_screen_status='pass', entry_ai_risk_verdict='PASS'),
-            prompt_type='scalping_entry', prompt_version='fixture', result_source='live',
-            input_contract_fields=captured, provider_called=True)
+        assert captured["ai_trace_reference_price"] == 50600
+        result = trace.record_ai_decision_trace(
+            dict(
+                action="BUY",
+                score=90,
+                evaluation_attempt_id="aims-original",
+                entry_mechanistic_action="ENTER_NOW",
+                entry_ai_screen_status="pass",
+                entry_ai_risk_verdict="PASS",
+            ),
+            prompt_type="scalping_entry",
+            prompt_version="fixture",
+            result_source="live",
+            input_contract_fields=captured,
+            provider_called=True,
+        )
         return captured, result
+
     with ThreadPoolExecutor(max_workers=1) as pool:
         with real_lease(blocked, exclusive=True):
             future = pool.submit(capture_and_trace)
-            assert reached.wait(2), 'writer must reach its existing exclusive lease'
-            assert not future.done(), 'contention must not discard the observation'
+            assert reached.wait(2), "writer must reach its existing exclusive lease"
+            assert not future.done(), "contention must not discard the observation"
         captured, result = future.result(timeout=3)
-    assert result['ai_decision_trace_id'] == 'exact-provider-request'
-    assert trace.capture_ai_request(**kwargs)['ai_decision_trace_id'] == 'exact-provider-request'
-    request = _rows(paths['request'])[0]
-    decision = _rows(paths['trace'])[0]
-    pending = _rows(paths['outcome'])[0]
+    assert result["ai_decision_trace_id"] == "exact-provider-request"
+    assert (
+        trace.capture_ai_request(**kwargs)["ai_decision_trace_id"]
+        == "exact-provider-request"
+    )
+    request = _rows(paths["request"])[0]
+    decision = _rows(paths["trace"])[0]
+    pending = _rows(paths["outcome"])[0]
     for path in paths.values():
         assert len(_rows(path)) == 1
     for key, value in binding.items():
         assert captured[key] == request[key] == decision[key] == value
-    assert decision['request_capture_status'] == 'captured'
-    assert decision['reference_price'] == pending['reference_price'] == 50600
-    assert decision['evaluation_attempt_id'] == pending['evaluation_attempt_id'] == 'aims-original'
-    assert decision['request_envelope_sha256'] == request['request_envelope_sha256']
-    assert decision['actual_order_submitted'] is False
+    assert decision["request_capture_status"] == "captured"
+    assert decision["reference_price"] == pending["reference_price"] == 50600
+    assert (
+        decision["evaluation_attempt_id"]
+        == pending["evaluation_attempt_id"]
+        == "aims-original"
+    )
+    assert decision["request_envelope_sha256"] == request["request_envelope_sha256"]
+    assert decision["actual_order_submitted"] is False
 
 
-@pytest.mark.parametrize('failure', ['conflict', 'partial_tail', 'cold_replacement'])
-def test_capture_append_owner_still_rejects_unverified_generation(monkeypatch, tmp_path, failure):
+@pytest.mark.parametrize("failure", ["conflict", "partial_tail", "cold_replacement"])
+def test_capture_append_owner_still_rejects_unverified_generation(
+    monkeypatch, tmp_path, failure
+):
     _enable(monkeypatch, tmp_path)
-    kwargs = dict(prompt='fixture', user_input=dict(stock_code='403870', best_ask=50600),
-        endpoint_name='analyze_target', symbol='403870', request_id='original',
-        model='fixture', schema_name='fixture', require_json=True)
+    kwargs = dict(
+        prompt="fixture",
+        user_input=dict(stock_code="403870", best_ask=50600),
+        endpoint_name="analyze_target",
+        symbol="403870",
+        request_id="original",
+        model="fixture",
+        schema_name="fixture",
+        require_json=True,
+    )
     assert trace.capture_ai_request(**kwargs)
     path = trace._request_path(trace._date_text())
-    if failure == 'conflict':
-        kwargs['user_input'] = dict(stock_code='403870', best_ask=50700)
-    elif failure == 'partial_tail':
-        with path.open('ab') as stream:
+    if failure == "conflict":
+        kwargs["user_input"] = dict(stock_code="403870", best_ask=50700)
+    elif failure == "partial_tail":
+        with path.open("ab") as stream:
             stream.write(b'{"request_id":"unfinished"')
-        kwargs['request_id'] = 'next'
+        kwargs["request_id"] = "next"
     else:
-        replacement = path.with_suffix('.replacement')
+        replacement = path.with_suffix(".replacement")
         replacement.write_bytes(path.read_bytes())
         replacement.replace(path)
-        kwargs['request_id'] = 'next'
+        kwargs["request_id"] = "next"
     before = path.read_bytes()
     assert trace.capture_ai_request(**kwargs) == {}
     assert path.read_bytes() == before

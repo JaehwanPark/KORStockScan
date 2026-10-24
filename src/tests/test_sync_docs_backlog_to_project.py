@@ -82,7 +82,9 @@ def test_parse_checklist_uses_env_override(monkeypatch, tmp_path):
     assert all("2026-04-14-stage2-todo-checklist.md" not in t.source for t in tasks)
 
 
-def test_missing_current_checklist_does_not_use_archived_fallback(monkeypatch, tmp_path, capsys):
+def test_missing_current_checklist_does_not_use_archived_fallback(
+    monkeypatch, tmp_path, capsys
+):
     monkeypatch.setattr(parser, "PROJECT_ROOT", tmp_path)
     monkeypatch.setenv("DOC_BACKLOG_TODAY", "2026-10-07")
     monkeypatch.delenv("DOC_CHECKLIST_PATH", raising=False)
@@ -167,19 +169,28 @@ def test_parse_checklist_skips_past_due_stage2_files_by_default(monkeypatch):
 
 
 def test_due_date_from_checklist_path():
-    assert _due_date_from_checklist_path(DOC_CHECKLIST_DIR / "2026-10-07-stage2-todo-checklist.md") == "2026-10-07"
+    assert (
+        _due_date_from_checklist_path(
+            DOC_CHECKLIST_DIR / "2026-10-07-stage2-todo-checklist.md"
+        )
+        == "2026-10-07"
+    )
     assert _due_date_from_checklist_path(DOC_CHECKLIST_DIR / "misc.md") == ""
 
 
 @pytest.mark.parametrize("cwd_name", [".", "src", "unrelated"])
-def test_collect_backlog_and_exact_semantic_owners_ignore_daemon_cwd(monkeypatch, tmp_path, capsys, cwd_name):
+def test_collect_backlog_and_exact_semantic_owners_ignore_daemon_cwd(
+    monkeypatch, tmp_path, capsys, cwd_name
+):
     from src.engine.error_detectors.artifact_freshness import _current_semantic_owners
 
     root = tmp_path / "release"
     checklist = root / DOC_CHECKLIST_DIR / "2026-10-07-stage2-todo-checklist.md"
     checklist.parent.mkdir(parents=True)
-    checklist.write_text("## Open\n- [ ] [CurrentOwner] current\n- [x] [DoneOwner] done\n"
-                         "- [ ] [DuplicateOwner] first\n- [ ] [DuplicateOwner] second\n")
+    checklist.write_text(
+        "## Open\n- [ ] [CurrentOwner] current\n- [x] [DoneOwner] done\n"
+        "- [ ] [DuplicateOwner] first\n- [ ] [DuplicateOwner] second\n"
+    )
     (root / DOC_PLAN).write_text("## 아직 남아있는 일\n- [ ] [PlanOwner] plan\n")
     (root / DOC_SCALPING).parent.mkdir(parents=True)
     (root / DOC_SCALPING).write_text("# Empty\n")
@@ -201,7 +212,9 @@ def test_collect_backlog_and_exact_semantic_owners_ignore_daemon_cwd(monkeypatch
     assert not capsys.readouterr().err
 
 
-def test_relative_explicit_override_is_anchored_but_cannot_redirect_semantic_owner(monkeypatch, tmp_path):
+def test_relative_explicit_override_is_anchored_but_cannot_redirect_semantic_owner(
+    monkeypatch, tmp_path
+):
     from src.engine.error_detectors.artifact_freshness import _current_semantic_owners
 
     monkeypatch.setattr(parser, "PROJECT_ROOT", tmp_path)
@@ -232,7 +245,9 @@ def test_current_checklist_candidates_refresh_at_day_rollover(monkeypatch, tmp_p
     monkeypatch.setenv("DOC_BACKLOG_TODAY", "2026-10-07")
     assert _checklist_doc_candidates()[0].name.startswith("2026-10-07")
     monkeypatch.setenv("DOC_BACKLOG_TODAY", "2026-10-08")
-    assert _checklist_doc_candidates() == [DOC_CHECKLIST_DIR / "2026-10-08-stage2-todo-checklist.md"]
+    assert _checklist_doc_candidates() == [
+        DOC_CHECKLIST_DIR / "2026-10-08-stage2-todo-checklist.md"
+    ]
     assert all("2026-10-07" not in task.source for task in parse_checklist_tasks())
 
 

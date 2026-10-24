@@ -700,7 +700,11 @@ def _build_wait6579_candidates(target_date: str) -> list[dict]:
                     "attempt_status": "ENTERED" if has_submitted else "MISSED",
                     "ai_score": (
                         round(value, 1)
-                        if (value := _diagnostic_ai_score(candidate_event.fields.get("ai_score")))
+                        if (
+                            value := _diagnostic_ai_score(
+                                candidate_event.fields.get("ai_score")
+                            )
+                        )
                         is not None
                         else None
                     ),

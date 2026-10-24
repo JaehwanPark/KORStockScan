@@ -27,8 +27,8 @@ MONITOR_SNAPSHOT_MANIFEST_DIR = MONITOR_SNAPSHOT_DIR / "manifests"
 ANALYTICS_PARQUET_DIR = DATA_DIR / "analytics" / "parquet"
 THRESHOLD_CYCLE_DIR = DATA_DIR / "threshold_cycle"
 THRESHOLD_SNAPSHOT_DIR = THRESHOLD_CYCLE_DIR / "snapshots"
-POSTCLOSE_STATUS_DIR = DATA_DIR / 'report' / 'threshold_cycle_postclose_status'
-POSTCLOSE_CONTROLLER_DIR = DATA_DIR / 'report' / 'postclose_done_controller'
+POSTCLOSE_STATUS_DIR = DATA_DIR / "report" / "threshold_cycle_postclose_status"
+POSTCLOSE_CONTROLLER_DIR = DATA_DIR / "report" / "postclose_done_controller"
 CANONICAL_CONTEXT_MIN_AGE_DAYS = 1
 PIPELINE_SUMMARY_MIN_AGE_DAYS = 1
 THRESHOLD_PARTITION_MIN_AGE_DAYS = 30
@@ -200,7 +200,9 @@ def _gzip_file(path: Path, *, dry_run: bool, custody=None) -> tuple[bool, int]:
     """Retain failed owned archive bytes outside the canonical alias namespace."""
     attempt = {}
     try:
-        return _gzip_file_unchecked(path,dry_run=dry_run,custody=custody,_attempt=attempt)
+        return _gzip_file_unchecked(
+            path, dry_run=dry_run, custody=custody, _attempt=attempt
+        )
     except Exception:
         if not path.is_file() or path.is_symlink():
             # Once the plain source is gone, never move its sole archive out
@@ -209,114 +211,176 @@ def _gzip_file(path: Path, *, dry_run: bool, custody=None) -> tuple[bool, int]:
         # The existing JSONL generation owner excludes cooperative writers.
         # A foreign replacement inode is never moved or removed here.
         from src.engine.lifecycle.snapshot_archive import file_identity
-        archived = Path(str(path)+'.gz')
-        expected = attempt.get('archive_identity')
+
+        archived = Path(str(path) + ".gz")
+        expected = attempt.get("archive_identity")
         if expected is not None and archived.is_file() and not archived.is_symlink():
             current = file_identity(archived.stat())
-            if (current['device'],current['inode']) == (expected['device'],expected['inode']):
-                failed = Path(str(archived)+'.failed.'+uuid.uuid4().hex)
-                os.replace(archived,failed)
-        receipt = Path(str(archived)+'.archive_receipt.json')
-        expected_receipt = attempt.get('receipt_content_sha256')
+            if (current["device"], current["inode"]) == (
+                expected["device"],
+                expected["inode"],
+            ):
+                failed = Path(str(archived) + ".failed." + uuid.uuid4().hex)
+                os.replace(archived, failed)
+        receipt = Path(str(archived) + ".archive_receipt.json")
+        expected_receipt = attempt.get("receipt_content_sha256")
         if expected_receipt and receipt.is_file() and not receipt.is_symlink():
             before = file_identity(receipt.stat())
-            if before != attempt.get('previous_receipt_identity') and before['size'] <= 1024*1024:
-                descriptor=os.open(receipt,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK|os.O_CLOEXEC)
-                with os.fdopen(descriptor,'rb') as stream:
-                    opened=os.fstat(stream.fileno())
-                    if not stat_module.S_ISREG(opened.st_mode) or file_identity(opened)!=before:
-                        raise ValueError('archive_failure_receipt_changed_before_read')
-                    raw=stream.read(1024*1024+1)
-                    if file_identity(os.fstat(stream.fileno()))!=before:
-                        raise ValueError('archive_failure_receipt_changed_during_read')
+            if (
+                before != attempt.get("previous_receipt_identity")
+                and before["size"] <= 1024 * 1024
+            ):
+                descriptor = os.open(
+                    receipt, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
+                )
+                with os.fdopen(descriptor, "rb") as stream:
+                    opened = os.fstat(stream.fileno())
+                    if (
+                        not stat_module.S_ISREG(opened.st_mode)
+                        or file_identity(opened) != before
+                    ):
+                        raise ValueError("archive_failure_receipt_changed_before_read")
+                    raw = stream.read(1024 * 1024 + 1)
+                    if file_identity(os.fstat(stream.fileno())) != before:
+                        raise ValueError("archive_failure_receipt_changed_during_read")
                 try:
-                    from src.engine.scalping.micro_reversion.economic_reference import content_sha256
-                    body=json.loads(raw)
-                    owned=(isinstance(body,dict) and content_sha256(body)==expected_receipt
-                           and file_identity(receipt.stat())==before)
-                except (ValueError,TypeError):owned=False
+                    from src.engine.scalping.micro_reversion.economic_reference import (
+                        content_sha256,
+                    )
+
+                    body = json.loads(raw)
+                    owned = (
+                        isinstance(body, dict)
+                        and content_sha256(body) == expected_receipt
+                        and file_identity(receipt.stat()) == before
+                    )
+                except (ValueError, TypeError):
+                    owned = False
                 if owned:
-                    os.replace(receipt,Path(str(receipt)+'.failed.'+uuid.uuid4().hex))
+                    os.replace(
+                        receipt, Path(str(receipt) + ".failed." + uuid.uuid4().hex)
+                    )
         raise
 
 
-def native_raw_archive_receipt(path, *, logical_sha256, logical_size,
-                               source_identity, archive_identity, indexed=None, custody=None):
+def native_raw_archive_receipt(
+    path,
+    *,
+    logical_sha256,
+    logical_size,
+    source_identity,
+    archive_identity,
+    indexed=None,
+    custody=None,
+):
     """Shared receipt schema for verified compression owners, with no I/O.
 
     Callers own the locked source, full decoded SHA/CRC verification and final
     physical archive identity. A receipt never substitutes for those checks.
     """
     from src.engine.scalping.micro_reversion.economic_reference import content_sha256
-    if (type(logical_size) is not int or logical_size < 0
-            or re.fullmatch('[0-9a-f]{64}', logical_sha256) is None):
-        raise ValueError('raw_archive_logical_binding_invalid')
-    source_stat=[source_identity[key] for key in ('device','inode','size','mtime_ns','ctime_ns')]
-    if indexed is not None and (indexed.get('source_stat') != source_stat
-            or indexed.get('size') != logical_size or indexed.get('path') != Path(path).name):
-        raise ValueError('raw_archive_index_source_changed')
-    value=dict(schema='pipeline_raw_archive_identity_v1' if Path(path).parent.name=='pipeline_events'
-               else 'native_raw_archive_identity_v1', logical_path=str(path),
-        logical_content_sha256=logical_sha256, logical_size_bytes=logical_size,
+
+    if (
+        type(logical_size) is not int
+        or logical_size < 0
+        or re.fullmatch("[0-9a-f]{64}", logical_sha256) is None
+    ):
+        raise ValueError("raw_archive_logical_binding_invalid")
+    source_stat = [
+        source_identity[key]
+        for key in ("device", "inode", "size", "mtime_ns", "ctime_ns")
+    ]
+    if indexed is not None and (
+        indexed.get("source_stat") != source_stat
+        or indexed.get("size") != logical_size
+        or indexed.get("path") != Path(path).name
+    ):
+        raise ValueError("raw_archive_index_source_changed")
+    value = dict(
+        schema=(
+            "pipeline_raw_archive_identity_v1"
+            if Path(path).parent.name == "pipeline_events"
+            else "native_raw_archive_identity_v1"
+        ),
+        logical_path=str(path),
+        logical_content_sha256=logical_sha256,
+        logical_size_bytes=logical_size,
         storage_custody=custody or [],
-        storage_disposition='verified_gzip_representation_original_receipts_preserved',
-        archive_generation={('size_bytes' if k=='size' else k):archive_identity[k]
-                            for k in ('device','inode','size','mtime_ns','ctime_ns')},
-        verification_contract='logical_sha256_size_crc_to_eof_v1',
-        runtime_effect=False, allowed_runtime_apply=False)
+        storage_disposition="verified_gzip_representation_original_receipts_preserved",
+        archive_generation={
+            ("size_bytes" if k == "size" else k): archive_identity[k]
+            for k in ("device", "inode", "size", "mtime_ns", "ctime_ns")
+        },
+        verification_contract="logical_sha256_size_crc_to_eof_v1",
+        runtime_effect=False,
+        allowed_runtime_apply=False,
+    )
     if indexed is not None:
-        value.update(trailing_source_identity=source_stat, trailing_source_index=indexed)
-    value['artifact_content_sha256']=content_sha256(value)
+        value.update(
+            trailing_source_identity=source_stat, trailing_source_index=indexed
+        )
+    value["artifact_content_sha256"] = content_sha256(value)
     return value
 
 
-def _gzip_file_unchecked(path: Path, *, dry_run: bool, custody=None, _attempt=None) -> tuple[bool, int]:
+def _gzip_file_unchecked(
+    path: Path, *, dry_run: bool, custody=None, _attempt=None
+) -> tuple[bool, int]:
     """Return (compressed, saved_bytes_estimate)."""
     if not path.exists() or not path.is_file():
         return False, 0
     gz_path = Path(f"{path}.gz")
-    snapshot = path.parent == MONITOR_SNAPSHOT_DIR and path.suffix == '.json'
+    snapshot = path.parent == MONITOR_SNAPSHOT_DIR and path.suffix == ".json"
     existing_archive = gz_path.exists()
     if existing_archive and not snapshot:
         return False, 0
     from src.engine.lifecycle.snapshot_archive import file_identity
-    if path.is_symlink() or gz_path.is_symlink() or any(p.is_symlink() for p in path.parents):
-        raise ValueError('archive_source_path_invalid')
+
+    if (
+        path.is_symlink()
+        or gz_path.is_symlink()
+        or any(p.is_symlink() for p in path.parents)
+    ):
+        raise ValueError("archive_source_path_invalid")
     original_identity = file_identity(path.stat())
     archive_identity = file_identity(gz_path.stat()) if existing_archive else None
-    receipt_path = Path(str(gz_path)+'.archive_receipt.json')
+    receipt_path = Path(str(gz_path) + ".archive_receipt.json")
     if not existing_archive and (receipt_path.exists() or receipt_path.is_symlink()):
-        raise ValueError('archive_orphan_receipt_preserved')
+        raise ValueError("archive_orphan_receipt_preserved")
     if _attempt is not None:
-        _attempt['previous_receipt_identity'] = file_identity(receipt_path.stat()) if receipt_path.is_file() else None
-    original_size = original_identity['size']
+        _attempt["previous_receipt_identity"] = (
+            file_identity(receipt_path.stat()) if receipt_path.is_file() else None
+        )
+    original_size = original_identity["size"]
     if dry_run:
         return True, original_size
     tmp_path = Path(f"{gz_path}.tmp")
     logical_digest = hashlib.sha256()
     if existing_archive:
-        with path.open('rb') as src:
-            logical_digest = hashlib.file_digest(src, 'sha256')
+        with path.open("rb") as src:
+            logical_digest = hashlib.file_digest(src, "sha256")
     else:
         with open(path, "rb") as src, gzip.open(tmp_path, "wb", compresslevel=9) as dst:
             while chunk := src.read(1024 * 1024):
                 dst.write(chunk)
                 logical_digest.update(chunk)
-        with tmp_path.open('rb') as handle:
+        with tmp_path.open("rb") as handle:
             os.fsync(handle.fileno())
     custody_identities = {}
     for reference in custody or []:
-        custody_path = Path(reference['path'])
+        custody_path = Path(reference["path"])
         before = file_identity(custody_path.stat())
-        if (hashlib.sha256(custody_path.read_bytes()).hexdigest() != reference['sha256']
-                or file_identity(custody_path.stat()) != before):
+        if (
+            hashlib.sha256(custody_path.read_bytes()).hexdigest() != reference["sha256"]
+            or file_identity(custody_path.stat()) != before
+        ):
             tmp_path.unlink(missing_ok=True)
-            raise ValueError('storage_custody_changed_during_compression')
+            raise ValueError("storage_custody_changed_during_compression")
         custody_identities[custody_path] = before
     if not existing_archive:
-        owned_identity=file_identity(tmp_path.stat())
+        owned_identity = file_identity(tmp_path.stat())
         if _attempt is not None:
-            _attempt['archive_identity']=owned_identity
+            _attempt["archive_identity"] = owned_identity
         os.replace(tmp_path, gz_path)
     restored_size = 0
     restored_digest = hashlib.sha256()
@@ -324,20 +388,29 @@ def _gzip_file_unchecked(path: Path, *, dry_run: bool, custody=None, _attempt=No
     # a temporary then sealing a later ctime could bind an intervening rewrite.
     checked_archive = gz_path
     checked_identity = file_identity(checked_archive.stat())
-    if not existing_archive and any(checked_identity[key]!=owned_identity[key] for key in ('device','inode')):
-        raise ValueError('archive_foreign_generation_after_rename')
-    descriptor=os.open(checked_archive,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK|os.O_CLOEXEC)
-    with os.fdopen(descriptor,'rb') as raw_archive,gzip.GzipFile(fileobj=raw_archive,mode='rb') as archived:
-        if (not stat_module.S_ISREG(os.fstat(raw_archive.fileno()).st_mode)
-                or file_identity(os.fstat(raw_archive.fileno())) != checked_identity):
-            raise ValueError('archive_generation_changed_before_crc')
+    if not existing_archive and any(
+        checked_identity[key] != owned_identity[key] for key in ("device", "inode")
+    ):
+        raise ValueError("archive_foreign_generation_after_rename")
+    descriptor = os.open(
+        checked_archive, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
+    )
+    with (
+        os.fdopen(descriptor, "rb") as raw_archive,
+        gzip.GzipFile(fileobj=raw_archive, mode="rb") as archived,
+    ):
+        if (
+            not stat_module.S_ISREG(os.fstat(raw_archive.fileno()).st_mode)
+            or file_identity(os.fstat(raw_archive.fileno())) != checked_identity
+        ):
+            raise ValueError("archive_generation_changed_before_crc")
         while chunk := archived.read(1024 * 1024):
             restored_size += len(chunk)
             if restored_size > original_size:
-                raise ValueError('archive_decoded_size_mismatch')
+                raise ValueError("archive_decoded_size_mismatch")
             restored_digest.update(chunk)
         if file_identity(os.fstat(archived.fileno())) != checked_identity:
-            raise ValueError('archive_generation_changed_during_crc')
+            raise ValueError("archive_generation_changed_during_crc")
     if (
         restored_size != original_size
         or restored_digest.digest() != logical_digest.digest()
@@ -347,60 +420,98 @@ def _gzip_file_unchecked(path: Path, *, dry_run: bool, custody=None, _attempt=No
     ):
         tmp_path.unlink(missing_ok=True)
         raise OSError(f"gzip_size_mismatch:{path.name}:{restored_size}/{original_size}")
-    for custody_path,before in custody_identities.items():
+    for custody_path, before in custody_identities.items():
         if file_identity(custody_path.stat()) != before:
-            raise ValueError('storage_custody_changed_during_compression')
+            raise ValueError("storage_custody_changed_during_compression")
     published_identity = file_identity(gz_path.stat())
     if published_identity != checked_identity:
-        raise ValueError('archive_generation_changed_before_receipt')
+        raise ValueError("archive_generation_changed_before_receipt")
     if snapshot:
         from src.engine.lifecycle.snapshot_archive import SCHEMA
-        from src.engine.scalping.micro_reversion.economic_reference import content_sha256
-        with gz_path.open('rb') as handle:
-            archive_sha = hashlib.file_digest(handle, 'sha256').hexdigest()
-        archive_receipt=dict(
-            schema=SCHEMA, logical_path=str(path),
+        from src.engine.scalping.micro_reversion.economic_reference import (
+            content_sha256,
+        )
+
+        with gz_path.open("rb") as handle:
+            archive_sha = hashlib.file_digest(handle, "sha256").hexdigest()
+        archive_receipt = dict(
+            schema=SCHEMA,
+            logical_path=str(path),
             logical_content_sha256=logical_digest.hexdigest(),
-            logical_size_bytes=original_size, original_identity=original_identity,
-            archive_generation=file_identity(gz_path.stat()), archive_sha256=archive_sha,
-            runtime_effect=False, allowed_runtime_apply=False)
-        archive_receipt['artifact_content_sha256']=content_sha256(archive_receipt)
+            logical_size_bytes=original_size,
+            original_identity=original_identity,
+            archive_generation=file_identity(gz_path.stat()),
+            archive_sha256=archive_sha,
+            runtime_effect=False,
+            allowed_runtime_apply=False,
+        )
+        archive_receipt["artifact_content_sha256"] = content_sha256(archive_receipt)
         if _attempt is not None:
-            _attempt['receipt_content_sha256']=content_sha256(archive_receipt)
+            _attempt["receipt_content_sha256"] = content_sha256(archive_receipt)
         write_json_object_generation_safe(
-            Path(f'{gz_path}.archive_receipt.json'),archive_receipt)
-    pipeline_raw=path.name.startswith('pipeline_events_') and path.suffix=='.jsonl'
-    if pipeline_raw or (path.parent.name in {'ai_decision_trace','ai_decision_payloads',
-            'ai_decision_prompts','ai_decision_requests'} and path.suffix=='.jsonl'):
-        from src.engine.scalping.micro_reversion.economic_reference import content_sha256
+            Path(f"{gz_path}.archive_receipt.json"), archive_receipt
+        )
+    pipeline_raw = path.name.startswith("pipeline_events_") and path.suffix == ".jsonl"
+    if pipeline_raw or (
+        path.parent.name
+        in {
+            "ai_decision_trace",
+            "ai_decision_payloads",
+            "ai_decision_prompts",
+            "ai_decision_requests",
+        }
+        and path.suffix == ".jsonl"
+    ):
+        from src.engine.scalping.micro_reversion.economic_reference import (
+            content_sha256,
+        )
+
         stat = gz_path.stat()
         if file_identity(stat) != published_identity:
-            raise ValueError('archive_generation_changed_before_receipt')
+            raise ValueError("archive_generation_changed_before_receipt")
         # Bind the writer-owned index to the exact native compression attempt.
         # Missing legacy coverage is preserved; archive does not rebuild it.
-        from src.engine.automation.main_trailing_source_store import generation as indexed_generation,InputPending
+        from src.engine.automation.main_trailing_source_store import (
+            generation as indexed_generation,
+            InputPending,
+        )
+
         try:
-            indexed=(indexed_generation(path.parent.parent,path) if path.parent.name in {
-                'pipeline_events','ai_decision_trace','ai_decision_payloads',
-                'ai_decision_prompts','ai_decision_requests'} else None)
-        except (InputPending,OSError):
-            indexed=None
-        archive_receipt = native_raw_archive_receipt(path,
-            logical_sha256=logical_digest.hexdigest(), logical_size=original_size,
-            source_identity=original_identity, archive_identity=file_identity(stat),
-            indexed=indexed, custody=custody)
+            indexed = (
+                indexed_generation(path.parent.parent, path)
+                if path.parent.name
+                in {
+                    "pipeline_events",
+                    "ai_decision_trace",
+                    "ai_decision_payloads",
+                    "ai_decision_prompts",
+                    "ai_decision_requests",
+                }
+                else None
+            )
+        except (InputPending, OSError):
+            indexed = None
+        archive_receipt = native_raw_archive_receipt(
+            path,
+            logical_sha256=logical_digest.hexdigest(),
+            logical_size=original_size,
+            source_identity=original_identity,
+            archive_identity=file_identity(stat),
+            indexed=indexed,
+            custody=custody,
+        )
         if _attempt is not None:
-            _attempt['receipt_content_sha256'] = content_sha256(archive_receipt)
+            _attempt["receipt_content_sha256"] = content_sha256(archive_receipt)
         write_json_object_generation_safe(
             Path(f"{gz_path}.archive_receipt.json"),
             archive_receipt,
         )
     if file_identity(gz_path.stat()) != published_identity:
-        raise ValueError('archive_generation_changed_before_removal')
+        raise ValueError("archive_generation_changed_before_removal")
     if file_identity(path.stat()) != original_identity:
-        raise ValueError('archive_source_changed_before_removal')
+        raise ValueError("archive_source_changed_before_removal")
     path.unlink()
-    return True, original_size - published_identity['size']
+    return True, original_size - published_identity["size"]
 
 
 def _gzip_file_with_jsonl_generation_lock(
@@ -488,86 +599,128 @@ def _gzip_jsonl_file(
         )
 
 
-
 def _postclose_source_protection(target_date: date, today: date) -> str | None:
     """Keep native source representations until handoff and policy-day expiry."""
     if target_date >= today:
-        return 'current_or_future_source_date'
+        return "current_or_future_source_date"
     day = target_date.isoformat()
     status_path = POSTCLOSE_STATUS_DIR / f"threshold_cycle_postclose_{day}.status.json"
     if not status_path.exists() and not status_path.is_symlink():
-        return None  # Legacy files without a native postclose owner retain their contract.
+        return (
+            None  # Legacy files without a native postclose owner retain their contract.
+        )
     try:
         if status_path.is_symlink() or status_path.stat().st_size > 1024 * 1024:
-            return 'postclose_status_untrusted'
-        status = json.loads(status_path.read_text(encoding='utf-8'))
-        if not isinstance(status, dict) or status.get('target_date') != day:
-            return 'postclose_status_invalid'
-        if (status.get('status') != 'succeeded'
-                or type(status.get('exit_code')) is not int
-                or status.get('exit_code') != 0):
-            return 'postclose_native_not_closed'
+            return "postclose_status_untrusted"
+        status = json.loads(status_path.read_text(encoding="utf-8"))
+        if not isinstance(status, dict) or status.get("target_date") != day:
+            return "postclose_status_invalid"
+        if (
+            status.get("status") != "succeeded"
+            or type(status.get("exit_code")) is not int
+            or status.get("exit_code") != 0
+        ):
+            return "postclose_native_not_closed"
         from src.utils.market_day import is_krx_trading_day
+
         candidate = target_date
         for _ in range(14):
             candidate += timedelta(days=1)
             if is_krx_trading_day(candidate):
                 break
         else:
-            return 'postclose_next_policy_day_unresolved'
+            return "postclose_next_policy_day_unresolved"
         if today <= candidate:
-            return f'postclose_policy_day_not_elapsed:{candidate.isoformat()}'
-        controller_path = POSTCLOSE_CONTROLLER_DIR / f'postclose_done_controller_{day}.json'
+            return f"postclose_policy_day_not_elapsed:{candidate.isoformat()}"
+        controller_path = (
+            POSTCLOSE_CONTROLLER_DIR / f"postclose_done_controller_{day}.json"
+        )
         if controller_path.is_symlink() or controller_path.stat().st_size > 1024 * 1024:
-            return 'postclose_controller_untrusted'
-        controller = json.loads(controller_path.read_text(encoding='utf-8'))
-        if (not isinstance(controller, dict) or controller.get('date') != day
-                or controller.get('status') != 'done'
-                or controller.get('whole_native_chain_done_claimed') is not True):
-            return 'postclose_controller_not_closed'
-        from src.engine.automation.postclose_done_controller import done_terminal_receipt_issues
-        issues = done_terminal_receipt_issues(controller_path, day, started_after_ns=0,
-                                             generation_only=True)
-        if ('strict_checklist_generation_stale' in issues and set(issues) <= {
-                'strict_checklist_generation_stale', 'strict_generation_changed_during_recheck'}):
+            return "postclose_controller_untrusted"
+        controller = json.loads(controller_path.read_text(encoding="utf-8"))
+        if (
+            not isinstance(controller, dict)
+            or controller.get("date") != day
+            or controller.get("status") != "done"
+            or controller.get("whole_native_chain_done_claimed") is not True
+        ):
+            return "postclose_controller_not_closed"
+        from src.engine.automation.postclose_done_controller import (
+            done_terminal_receipt_issues,
+        )
+
+        issues = done_terminal_receipt_issues(
+            controller_path, day, started_after_ns=0, generation_only=True
+        )
+        if "strict_checklist_generation_stale" in issues and set(issues) <= {
+            "strict_checklist_generation_stale",
+            "strict_generation_changed_during_recheck",
+        }:
             # Archival custody may bind the original bytes after the policy
             # day. Never reseal a historical PASS against today's checklist.
-            strict_path = Path(str(controller.get('verification_attempt_path') or ''))
-            if strict_path.is_symlink() or strict_path.stat().st_size > 8*1024*1024:
-                return 'postclose_historical_strict_untrusted'
+            strict_path = Path(str(controller.get("verification_attempt_path") or ""))
+            if strict_path.is_symlink() or strict_path.stat().st_size > 8 * 1024 * 1024:
+                return "postclose_historical_strict_untrusted"
             raw = strict_path.read_bytes()
-            if hashlib.sha256(raw).hexdigest() != controller.get('verification_attempt_sha256'):
-                return 'postclose_historical_strict_changed'
-            sha = (json.loads(raw).get('generation_binding') or {}).get('checklist_sha256')
-            if not isinstance(sha, str) or not re.fullmatch('[0-9a-f]{64}', sha):
-                return 'postclose_historical_checklist_identity_missing'
-            snapshot = DATA_DIR / 'runtime/policy_bootstrap/historical_checklists' / (sha + '.md')
-            if (snapshot.is_symlink() or snapshot.stat().st_size > 8*1024*1024
-                    or hashlib.sha256(snapshot.read_bytes()).hexdigest() != sha):
-                return 'postclose_historical_checklist_unverified'
-            issues = done_terminal_receipt_issues(controller_path, day, started_after_ns=0,
-                                                  generation_only=True, checklist_snapshot=snapshot)
+            if hashlib.sha256(raw).hexdigest() != controller.get(
+                "verification_attempt_sha256"
+            ):
+                return "postclose_historical_strict_changed"
+            sha = (json.loads(raw).get("generation_binding") or {}).get(
+                "checklist_sha256"
+            )
+            if not isinstance(sha, str) or not re.fullmatch("[0-9a-f]{64}", sha):
+                return "postclose_historical_checklist_identity_missing"
+            snapshot = (
+                DATA_DIR
+                / "runtime/policy_bootstrap/historical_checklists"
+                / (sha + ".md")
+            )
+            if (
+                snapshot.is_symlink()
+                or snapshot.stat().st_size > 8 * 1024 * 1024
+                or hashlib.sha256(snapshot.read_bytes()).hexdigest() != sha
+            ):
+                return "postclose_historical_checklist_unverified"
+            issues = done_terminal_receipt_issues(
+                controller_path,
+                day,
+                started_after_ns=0,
+                generation_only=True,
+                checklist_snapshot=snapshot,
+            )
         if issues:
-            return 'postclose_controller_receipt_invalid'
+            return "postclose_controller_receipt_invalid"
     except (OSError, ValueError, TypeError):
-        return 'postclose_custody_receipt_missing_or_invalid'
+        return "postclose_custody_receipt_missing_or_invalid"
     return None
+
 
 def _storage_custody(target_date):
     """References only; the preceding native gate owns their validity."""
-    path = POSTCLOSE_CONTROLLER_DIR / f'postclose_done_controller_{target_date}.json'
-    if not path.exists(): return []
-    raw = path.read_bytes(); controller = json.loads(raw)
-    strict = Path(controller['verification_attempt_path']); strict_raw = strict.read_bytes()
-    sha = json.loads(strict_raw)['generation_binding']['checklist_sha256']
-    snapshot = DATA_DIR / 'runtime/policy_bootstrap/historical_checklists' / (sha + '.md')
-    refs = [dict(path=str(path), sha256=hashlib.sha256(raw).hexdigest()),
-            dict(path=str(strict), sha256=hashlib.sha256(strict_raw).hexdigest())]
-    if snapshot.exists(): refs.append(dict(path=str(snapshot),sha256=sha))
+    path = POSTCLOSE_CONTROLLER_DIR / f"postclose_done_controller_{target_date}.json"
+    if not path.exists():
+        return []
+    raw = path.read_bytes()
+    controller = json.loads(raw)
+    strict = Path(controller["verification_attempt_path"])
+    strict_raw = strict.read_bytes()
+    sha = json.loads(strict_raw)["generation_binding"]["checklist_sha256"]
+    snapshot = (
+        DATA_DIR / "runtime/policy_bootstrap/historical_checklists" / (sha + ".md")
+    )
+    refs = [
+        dict(path=str(path), sha256=hashlib.sha256(raw).hexdigest()),
+        dict(path=str(strict), sha256=hashlib.sha256(strict_raw).hexdigest()),
+    ]
+    if snapshot.exists():
+        refs.append(dict(path=str(snapshot), sha256=sha))
     return refs
 
 
-def run(*, retention_days: int, today: date, dry_run: bool, pipeline_dates=None) -> dict:
+def run(
+    *, retention_days: int, today: date, dry_run: bool, pipeline_dates=None
+) -> dict:
     cutoff = today - timedelta(days=retention_days)
     stats = {
         "cutoff": cutoff.isoformat(),
@@ -609,13 +762,16 @@ def run(*, retention_days: int, today: date, dry_run: bool, pipeline_dates=None)
     }
 
     protection_cache = {}
+
     def protected(target_date):
         if target_date not in protection_cache:
-            protection_cache[target_date] = _postclose_source_protection(target_date, today)
+            protection_cache[target_date] = _postclose_source_protection(
+                target_date, today
+            )
         reason = protection_cache[target_date]
         if reason:
-            stats['skipped_postclose_protected'] += 1
-            stats['postclose_protection_reasons'][target_date.isoformat()] = reason
+            stats["skipped_postclose_protected"] += 1
+            stats["postclose_protection_reasons"][target_date.isoformat()] = reason
         return bool(reason)
 
     # pipeline_events_*.jsonl only (already compressed .gz excluded)
@@ -673,15 +829,15 @@ def run(*, retention_days: int, today: date, dry_run: bool, pipeline_dates=None)
             if compressed:
                 stats["snapshots"]["compressed"] += 1
                 stats["snapshots"]["saved_bytes"] += saved
-            if kind == 'trade_review':
-                sidecar = path.with_suffix('.completed_projection.json')
+            if kind == "trade_review":
+                sidecar = path.with_suffix(".completed_projection.json")
                 if sidecar.is_file():
                     # Keep the small producer dependency receipt plain; its
                     # projection bytes retain the same logical generation.
                     compressed, saved = _gzip_file(sidecar, dry_run=dry_run)
                     if compressed:
-                        stats['snapshots']['compressed'] += 1
-                        stats['snapshots']['saved_bytes'] += saved
+                        stats["snapshots"]["compressed"] += 1
+                        stats["snapshots"]["saved_bytes"] += saved
         except Exception as exc:
             stats["errors"].append(f"snapshot:{path.name}:{exc}")
 
@@ -839,8 +995,12 @@ def main() -> int:
     parser.add_argument(
         "--dry-run", action="store_true", help="Scan and verify only; do not compress"
     )
-    parser.add_argument('--pipeline-date', action='append', type=date.fromisoformat,
-                        help='Limit storage repair to these pipeline dates; preserve other families')
+    parser.add_argument(
+        "--pipeline-date",
+        action="append",
+        type=date.fromisoformat,
+        help="Limit storage repair to these pipeline dates; preserve other families",
+    )
     args = parser.parse_args()
 
     if args.days < 0:
@@ -852,15 +1012,25 @@ def main() -> int:
         print(f"[DASHBOARD_ARCHIVE_ERROR] invalid --date: {args.today}")
         return 2
 
-    stats = run(retention_days=args.days, today=today, dry_run=args.dry_run,
-                pipeline_dates=set(args.pipeline_date) if args.pipeline_date else None)
+    stats = run(
+        retention_days=args.days,
+        today=today,
+        dry_run=args.dry_run,
+        pipeline_dates=set(args.pipeline_date) if args.pipeline_date else None,
+    )
     mode = "DRY_RUN" if args.dry_run else "RUN"
     print(f"[DASHBOARD_ARCHIVE_{mode}] cutoff={stats['cutoff']}")
-    if stats.get('skipped_postclose_protected'):
-        print('[DASHBOARD_ARCHIVE_POSTCLOSE_PROTECTED] ' + json.dumps({
-            'count': stats['skipped_postclose_protected'],
-            'reasons': stats['postclose_protection_reasons'],
-        }, sort_keys=True))
+    if stats.get("skipped_postclose_protected"):
+        print(
+            "[DASHBOARD_ARCHIVE_POSTCLOSE_PROTECTED] "
+            + json.dumps(
+                {
+                    "count": stats["skipped_postclose_protected"],
+                    "reasons": stats["postclose_protection_reasons"],
+                },
+                sort_keys=True,
+            )
+        )
     print(
         "[DASHBOARD_ARCHIVE_PIPELINE] "
         f"scanned={stats['pipeline']['scanned']} "

@@ -57,8 +57,11 @@ def test_overnight_gatekeeper_ignores_runtime_true_override(
     monkeypatch.setattr(
         overnight,
         "TRADING_RULES",
-        SimpleNamespace(SCALPING_OVERNIGHT_GATEKEEPER_ENABLED=True)
-        if true_config else SimpleNamespace(),
+        (
+            SimpleNamespace(SCALPING_OVERNIGHT_GATEKEEPER_ENABLED=True)
+            if true_config
+            else SimpleNamespace()
+        ),
     )
     env_key = "KORSTOCKSCAN_SCALPING_OVERNIGHT_GATEKEEPER_ENABLED"
     if true_env:
@@ -73,8 +76,9 @@ def test_overnight_gatekeeper_ignores_runtime_true_override(
         "ACTIVE_TARGETS": [{"id": 1, "code": "005930", "status": "HOLDING"}],
         "event_bus": SimpleNamespace(publish=external),
         "DUAL_PERSONA_ENGINE": SimpleNamespace(submit=external),
-        "kiwoom_utils": SimpleNamespace(get_tick_history_ka10003=external,
-                                        get_minute_candles_ka10080=external),
+        "kiwoom_utils": SimpleNamespace(
+            get_tick_history_ka10003=external, get_minute_candles_ka10080=external
+        ),
         "send_telegram": external,
         "_confirm_cancel_or_reload_remaining": external,
         "_send_market_exit_now": external,
@@ -83,8 +87,10 @@ def test_overnight_gatekeeper_ignores_runtime_true_override(
         monkeypatch.setattr(overnight, name, value, raising=False)
     messages = []
     monkeypatch.setattr(overnight, "log_info", messages.append)
-    ai = SimpleNamespace(evaluate_scalping_overnight_decision=external,
-                         evaluate_scalping_holding_flow=external)
+    ai = SimpleNamespace(
+        evaluate_scalping_overnight_decision=external,
+        evaluate_scalping_holding_flow=external,
+    )
 
     assert _overnight_gatekeeper_enabled() is False
     assert run_scalping_overnight_gatekeeper(ai_engine=ai) is False
@@ -247,91 +253,181 @@ def test_terminal_census_excludes_proven_manual_hold_without_changing_custody(
     original = f"196170 # {marker} source=test\n"
     path.write_text(original)
     monkeypatch.setenv("KORSTOCKSCAN_MANUAL_CONTROL_EXCLUDED_CODES_FILE", str(path))
-    stock = {"id": 1, "code": "196170", "strategy": "SCALPING",
-             "status": "HOLDING", "buy_qty": 1}
+    stock = {
+        "id": 1,
+        "code": "196170",
+        "strategy": "SCALPING",
+        "status": "HOLDING",
+        "buy_qty": 1,
+    }
     before = dict(stock)
     assert sniper_state_handlers.unresolved_scalping_terminal_positions([stock]) == []
     assert stock == before and path.read_text() == original
 
 
-@pytest.mark.parametrize("override", [
-    {"status": "BUY_ORDERED"},
-    {"status": "SELL_ORDERED"},
-    {"exit_token": "in-flight"},
-    {"simulation_book": "scalp_ai_buy_all"},
-    {"aftermarket_close_reconciliation": {
-        "side": "SELL", "symbol": "196170", "state": "OPEN", "terminal": False,
-        "intent_sha256": "a" * 64, "source_sha256s": ["b" * 64]}},
-])
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"status": "BUY_ORDERED"},
+        {"status": "SELL_ORDERED"},
+        {"exit_token": "in-flight"},
+        {"simulation_book": "scalp_ai_buy_all"},
+        {
+            "aftermarket_close_reconciliation": {
+                "side": "SELL",
+                "symbol": "196170",
+                "state": "OPEN",
+                "terminal": False,
+                "intent_sha256": "a" * 64,
+                "source_sha256s": ["b" * 64],
+            }
+        },
+    ],
+)
 def test_terminal_census_keeps_manual_symbol_unresolved_orders_and_simulation(
     monkeypatch, tmp_path, override
 ):
     path = tmp_path / "manual.txt"
     path.write_text("196170 # auto_hard_stop_handoff source=test\n")
     monkeypatch.setenv("KORSTOCKSCAN_MANUAL_CONTROL_EXCLUDED_CODES_FILE", str(path))
-    stock = {"id": 1, "code": "196170", "strategy": "SCALPING",
-             "status": "HOLDING", "buy_qty": 1, **override}
+    stock = {
+        "id": 1,
+        "code": "196170",
+        "strategy": "SCALPING",
+        "status": "HOLDING",
+        "buy_qty": 1,
+        **override,
+    }
     rows = sniper_state_handlers.unresolved_scalping_terminal_positions([stock])
     assert [row["id"] for row in rows] == [1]
 
 
-@pytest.mark.parametrize("reason", ["manual_control_exclusion_file_fail_closed:OSError",
-    "symbol_owner_policy_fail_closed:ValueError", "exact_date_owner_policy_blocks_main_bot_custody"])
-def test_terminal_census_does_not_infer_manual_handoff_from_policy_failure(monkeypatch, reason):
-    monkeypatch.setattr(sniper_state_handlers, "evaluate_main_bot_control_exclusion",
-        lambda *a, **kw: SimpleNamespace(excluded=True, reason=reason))
-    stock = {"id": 1, "code": "196170", "strategy": "SCALPING",
-             "status": "HOLDING", "buy_qty": 1, "manual_control_exclusion_blocked": True}
-    assert len(sniper_state_handlers.unresolved_scalping_terminal_positions([stock])) == 1
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "manual_control_exclusion_file_fail_closed:OSError",
+        "symbol_owner_policy_fail_closed:ValueError",
+        "exact_date_owner_policy_blocks_main_bot_custody",
+    ],
+)
+def test_terminal_census_does_not_infer_manual_handoff_from_policy_failure(
+    monkeypatch, reason
+):
+    monkeypatch.setattr(
+        sniper_state_handlers,
+        "evaluate_main_bot_control_exclusion",
+        lambda *a, **kw: SimpleNamespace(excluded=True, reason=reason),
+    )
+    stock = {
+        "id": 1,
+        "code": "196170",
+        "strategy": "SCALPING",
+        "status": "HOLDING",
+        "buy_qty": 1,
+        "manual_control_exclusion_blocked": True,
+    }
+    assert (
+        len(sniper_state_handlers.unresolved_scalping_terminal_positions([stock])) == 1
+    )
 
 
 @pytest.mark.parametrize("naive", [True, False])
 @pytest.mark.parametrize("bid_price", [209500, 210500, 0])
-def test_live_holding_clock_produces_consumer_valid_terminal_hold(monkeypatch, naive, bid_price):
+def test_live_holding_clock_produces_consumer_valid_terminal_hold(
+    monkeypatch, naive, bid_price
+):
     h = sniper_state_handlers
     observed = datetime.fromisoformat("2026-10-15T19:59:45+09:00")
-    stock = {"id": 1, "code": "196170", "name": "TEST", "strategy": "SCALPING",
-             "status": "HOLDING", "buy_qty": 1, "buy_price": 210000,
-             "entry_execution_broker_route": "NXT"}
-    for name in ("_observe_initial_quantity_cap_following_tick", "_observe_avg_down_runtime_config",
-                 "_maybe_release_auto_manual_control_at_average_price", "_retry_pending_hard_stop_manual_handoff",
-                 "_manual_control_exclusion_blocked", "_sell_cancel_reconciliation_blocks_holding",
-                 "_maybe_auto_exclude_open_loss_holding", "_observe_entry_cancel_wait_counterfactuals",
-                 "_reconcile_pending_entry_orders", "_finalize_entry_split_probe_partial_position",
-                 "_maybe_submit_entry_split_probe_residual", "_persist_scalping_position_peak",
-                 "_observe_smoothing_source_only_paths"):
+    stock = {
+        "id": 1,
+        "code": "196170",
+        "name": "TEST",
+        "strategy": "SCALPING",
+        "status": "HOLDING",
+        "buy_qty": 1,
+        "buy_price": 210000,
+        "entry_execution_broker_route": "NXT",
+    }
+    for name in (
+        "_observe_initial_quantity_cap_following_tick",
+        "_observe_avg_down_runtime_config",
+        "_maybe_release_auto_manual_control_at_average_price",
+        "_retry_pending_hard_stop_manual_handoff",
+        "_manual_control_exclusion_blocked",
+        "_sell_cancel_reconciliation_blocks_holding",
+        "_maybe_auto_exclude_open_loss_holding",
+        "_observe_entry_cancel_wait_counterfactuals",
+        "_reconcile_pending_entry_orders",
+        "_finalize_entry_split_probe_partial_position",
+        "_maybe_submit_entry_split_probe_residual",
+        "_persist_scalping_position_peak",
+        "_observe_smoothing_source_only_paths",
+    ):
         monkeypatch.setattr(h, name, lambda *a, **kw: False)
-    for name, value in (("HIGHEST_PRICES", {}), ("COOLDOWNS", {}),
-                        ("LAST_AI_CALL_TIMES", {}), ("ALERTED_STOCKS", set())):
+    for name, value in (
+        ("HIGHEST_PRICES", {}),
+        ("COOLDOWNS", {}),
+        ("LAST_AI_CALL_TIMES", {}),
+        ("ALERTED_STOCKS", set()),
+    ):
         monkeypatch.setattr(h, name, value)
-    monkeypatch.setattr(h, "_holding_ws_freshness_recover_or_block",
-        lambda stock, code, ws, **kw: (ws, False, {}))
-    monkeypatch.setattr(h, "_build_quote_consistency_fields",
-        lambda *a, **kw: ({}, 209500, 209600, bid_price))
+    monkeypatch.setattr(
+        h,
+        "_holding_ws_freshness_recover_or_block",
+        lambda stock, code, ws, **kw: (ws, False, {}),
+    )
+    monkeypatch.setattr(
+        h,
+        "_build_quote_consistency_fields",
+        lambda *a, **kw: ({}, 209500, 209600, bid_price),
+    )
     monkeypatch.setattr(h, "get_trade_cost_rate", lambda: 0.0023)
     events = []
-    monkeypatch.setattr(h, "_log_holding_pipeline",
-        lambda stock, code, stage, **kw: events.append((stage, kw)))
+    monkeypatch.setattr(
+        h,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **kw: events.append((stage, kw)),
+    )
+
     class AfterTerminalDecision(Exception):
         pass
+
     def stop_before_other_holding_actions(**kwargs):
         raise AfterTerminalDecision
-    monkeypatch.setattr(h, "_holding_context_prohibited_exit_candidate", stop_before_other_holding_actions)
+
+    monkeypatch.setattr(
+        h,
+        "_holding_context_prohibited_exit_candidate",
+        stop_before_other_holding_actions,
+    )
     with pytest.raises(AfterTerminalDecision):
-        h.handle_holding_state(stock, "196170", {"curr": 209500}, 1, "BULL",
-            now_ts=observed.timestamp(), now_dt=observed.replace(tzinfo=None) if naive else observed)
+        h.handle_holding_state(
+            stock,
+            "196170",
+            {"curr": 209500},
+            1,
+            "BULL",
+            now_ts=observed.timestamp(),
+            now_dt=observed.replace(tzinfo=None) if naive else observed,
+        )
     valid_hold = bid_price == 209500
     if valid_hold:
         assert stock["terminal_exit_hold_authorized"] is True
         assert stock["terminal_exit_hold_observed_at"] == observed.isoformat()
-        assert any(stage == "same_session_terminal_exit_continues_holding" for stage, _ in events)
+        assert any(
+            stage == "same_session_terminal_exit_continues_holding"
+            for stage, _ in events
+        )
     elif bid_price == 0:
         assert stock["terminal_exit_hold_source_valid"] is False
     else:
         assert stock["terminal_exit_hold_authorized"] is False
-        assert any(stage == "same_session_terminal_exit_selected" for stage, _ in events)
-    rows = h.unresolved_scalping_terminal_positions([stock],
-        observed_at=datetime.fromisoformat("2026-10-15T20:00:00+09:00"))
+        assert any(
+            stage == "same_session_terminal_exit_selected" for stage, _ in events
+        )
+    rows = h.unresolved_scalping_terminal_positions(
+        [stock], observed_at=datetime.fromisoformat("2026-10-15T20:00:00+09:00")
+    )
     assert len(rows) == (0 if valid_hold else 1)
     assert stock["status"] == "HOLDING" and stock["buy_qty"] == 1
 

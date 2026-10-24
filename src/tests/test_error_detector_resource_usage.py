@@ -56,45 +56,82 @@ def test_system_metric_append_writes_complete_json_records(tmp_path):
 
 def test_disk_inventory_excludes_partitions_and_virtual_layers(tmp_path, monkeypatch):
     from src.engine.monitoring import system_metric_sampler as sampler
+
     real_read = Path.read_text
     real_exists = Path.exists
+
     def read(path, *a, **kw):
-        if str(path) == '/proc/diskstats':
-            return '\n'.join(f'1 0 {name} 2 0 100 3 4 0 200 5 0 8 9' for name in
-                             ('nvme0n1', 'nvme0n1p1', 'sda', 'sda1', 'dm-0', 'loop0'))
+        if str(path) == "/proc/diskstats":
+            return "\n".join(
+                f"1 0 {name} 2 0 100 3 4 0 200 5 0 8 9"
+                for name in ("nvme0n1", "nvme0n1p1", "sda", "sda1", "dm-0", "loop0")
+            )
         return real_read(path, *a, **kw)
+
     def exists(path):
-        if str(path).startswith('/sys/class/block/'):
-            return path.name != 'partition' or path.parent.name in {'nvme0n1p1', 'sda1'}
+        if str(path).startswith("/sys/class/block/"):
+            return path.name != "partition" or path.parent.name in {"nvme0n1p1", "sda1"}
         return real_exists(path)
-    monkeypatch.setattr(Path, 'read_text', read)
-    monkeypatch.setattr(Path, 'exists', exists)
+
+    monkeypatch.setattr(Path, "read_text", read)
+    monkeypatch.setattr(Path, "exists", exists)
     disk = sampler._read_diskstats()
-    assert set(disk['devices']) == {'nvme0n1', 'sda'}
-    assert disk['read_sectors'] == 200
-    assert sampler._disk_delta(disk, {})['disk_read_mb_delta'] is None
+    assert set(disk["devices"]) == {"nvme0n1", "sda"}
+    assert disk["read_sectors"] == 200
+    assert sampler._disk_delta(disk, {})["disk_read_mb_delta"] is None
 
 
 def test_process_birth_reuse_and_missing_io_are_not_zero():
     from src.engine.monitoring.system_metric_sampler import _process_io_deltas
-    old = [dict(pid=12, start_ticks=1, status='observed', io={'read_bytes': 100})]
-    for row in [dict(pid=12, start_ticks=2, status='observed', io={'read_bytes': 200}),
-                dict(pid=12, start_ticks=1, status='unobserved')]:
-        assert _process_io_deltas([row], old)[0]['io_delta'] is None
-    row = dict(pid=12, start_ticks=1, status='observed', io={'read_bytes': 150})
-    assert _process_io_deltas([row], old)[0]['io_delta']['read_bytes'] == 50
+
+    old = [dict(pid=12, start_ticks=1, status="observed", io={"read_bytes": 100})]
+    for row in [
+        dict(pid=12, start_ticks=2, status="observed", io={"read_bytes": 200}),
+        dict(pid=12, start_ticks=1, status="unobserved"),
+    ]:
+        assert _process_io_deltas([row], old)[0]["io_delta"] is None
+    row = dict(pid=12, start_ticks=1, status="observed", io={"read_bytes": 150})
+    assert _process_io_deltas([row], old)[0]["io_delta"]["read_bytes"] == 50
 
 
 def test_device_interval_uses_completed_io_and_separate_queue():
     from src.engine.monitoring.system_metric_sampler import _device_intervals
-    before = dict(schema='v2', devices={'sda': dict(read_ios=10, write_ios=5,
-        read_ms=100, write_ms=50, io_ms=200, weighted_ms=300, inflight=0)})
-    after = dict(schema='v2', devices={'sda': dict(read_ios=12, write_ios=6,
-        read_ms=106, write_ms=53, io_ms=250, weighted_ms=500, inflight=2)})
-    value = _device_intervals(after, before, 10)['sda']
-    assert value['await_ms'] == 3 and value['average_queue_depth'] == .02
-    assert value['inflight'] == 2
-    assert _device_intervals(before, after, 10)['sda']['status'] == 'baseline_or_counter_reset'
+
+    before = dict(
+        schema="v2",
+        devices={
+            "sda": dict(
+                read_ios=10,
+                write_ios=5,
+                read_ms=100,
+                write_ms=50,
+                io_ms=200,
+                weighted_ms=300,
+                inflight=0,
+            )
+        },
+    )
+    after = dict(
+        schema="v2",
+        devices={
+            "sda": dict(
+                read_ios=12,
+                write_ios=6,
+                read_ms=106,
+                write_ms=53,
+                io_ms=250,
+                weighted_ms=500,
+                inflight=2,
+            )
+        },
+    )
+    value = _device_intervals(after, before, 10)["sda"]
+    assert value["await_ms"] == 3 and value["average_queue_depth"] == 0.02
+    assert value["inflight"] == 2
+    assert (
+        _device_intervals(before, after, 10)["sda"]["status"]
+        == "baseline_or_counter_reset"
+    )
 
 
 class TestResourceUsageDetector:
@@ -448,11 +485,21 @@ class TestResourceUsageDetector:
         def fake_run(*args, **kwargs):
             import json
             from pathlib import Path
+
             calls.append((args, kwargs))
             cmd = args[0]
-            terminal = Path(cmd[cmd.index('--terminal')+1]); terminal.parent.mkdir(parents=True, exist_ok=True)
-            terminal.write_text(json.dumps(dict(status='complete', apply=True, lane='closed_operational_logs',
-                run_id=cmd[cmd.index('--run-id')+1])))
+            terminal = Path(cmd[cmd.index("--terminal") + 1])
+            terminal.parent.mkdir(parents=True, exist_ok=True)
+            terminal.write_text(
+                json.dumps(
+                    dict(
+                        status="complete",
+                        apply=True,
+                        lane="closed_operational_logs",
+                        run_id=cmd[cmd.index("--run-id") + 1],
+                    )
+                )
+            )
 
             class Result:
                 stdout = "rotated\n"
@@ -532,23 +579,43 @@ class TestResourceUsageDetector:
         assert not cooldown_state.exists()
 
 
-@pytest.mark.parametrize('defect', ['nonzero','missing','wrong_run','wrong_lane','not_applied','symlink'])
+@pytest.mark.parametrize(
+    "defect",
+    ["nonzero", "missing", "wrong_run", "wrong_lane", "not_applied", "symlink"],
+)
 def test_cleanup_failure_never_receives_success_cooldown(tmp_path, monkeypatch, defect):
     from types import SimpleNamespace
     from pathlib import Path
     from src.engine.error_detectors import resource_usage as mod
-    monkeypatch.setattr(mod, 'PROJECT_ROOT', tmp_path)
-    cooldown = tmp_path/'cooldown'; monkeypatch.setattr(ResourceUsageDetector, '_ROTATE_COOLDOWN_STATE', cooldown)
+
+    monkeypatch.setattr(mod, "PROJECT_ROOT", tmp_path)
+    cooldown = tmp_path / "cooldown"
+    monkeypatch.setattr(ResourceUsageDetector, "_ROTATE_COOLDOWN_STATE", cooldown)
+
     def run(cmd, **kwargs):
-        terminal = Path(cmd[cmd.index('--terminal')+1]); terminal.parent.mkdir(parents=True,exist_ok=True)
-        receipt = dict(status='complete', run_id=cmd[cmd.index('--run-id')+1], apply=True, lane='closed_operational_logs')
-        if defect == 'wrong_run': receipt['run_id'] = 'previous'
-        if defect == 'wrong_lane': receipt['lane'] = 'full_compaction'
-        if defect == 'not_applied': receipt['apply'] = False
-        if defect != 'missing': terminal.write_text(json.dumps(receipt))
-        if defect == 'symlink':
-            target = terminal.with_suffix('.source'); terminal.rename(target); terminal.symlink_to(target)
-        return SimpleNamespace(returncode=7 if defect == 'nonzero' else 0, stdout='ok')
-    monkeypatch.setattr(mod.subprocess, 'run', run)
-    details = {}; ResourceUsageDetector(dry_run=False)._auto_rotate_logs(details)
-    assert details['log_rotate_trigger'] != 'ok' and not cooldown.exists()
+        terminal = Path(cmd[cmd.index("--terminal") + 1])
+        terminal.parent.mkdir(parents=True, exist_ok=True)
+        receipt = dict(
+            status="complete",
+            run_id=cmd[cmd.index("--run-id") + 1],
+            apply=True,
+            lane="closed_operational_logs",
+        )
+        if defect == "wrong_run":
+            receipt["run_id"] = "previous"
+        if defect == "wrong_lane":
+            receipt["lane"] = "full_compaction"
+        if defect == "not_applied":
+            receipt["apply"] = False
+        if defect != "missing":
+            terminal.write_text(json.dumps(receipt))
+        if defect == "symlink":
+            target = terminal.with_suffix(".source")
+            terminal.rename(target)
+            terminal.symlink_to(target)
+        return SimpleNamespace(returncode=7 if defect == "nonzero" else 0, stdout="ok")
+
+    monkeypatch.setattr(mod.subprocess, "run", run)
+    details = {}
+    ResourceUsageDetector(dry_run=False)._auto_rotate_logs(details)
+    assert details["log_rotate_trigger"] != "ok" and not cooldown.exists()

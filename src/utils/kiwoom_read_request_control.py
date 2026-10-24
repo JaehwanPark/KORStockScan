@@ -62,7 +62,9 @@ class WidgetMarketResponseCache:
     """
 
     def __init__(self, directory=None):
-        self.directory = Path(directory or DATA_DIR / "runtime" / "widget_market_response_cache")
+        self.directory = Path(
+            directory or DATA_DIR / "runtime" / "widget_market_response_cache"
+        )
 
     @staticmethod
     def _complete(data, api_id):
@@ -70,27 +72,60 @@ class WidgetMarketResponseCache:
             return False
         if api_id == "ka10080":
             rows = data.get("stk_min_pole_chart_qry")
-            return bool(isinstance(rows, list) and rows and all(isinstance(row, dict)
-                and len(str(row.get("cntr_tm", ""))) == 14 and str(row.get("cntr_tm", "")).isdigit()
-                and all(str(row.get(k, "")).strip() for k in ("cur_prc", "open_pric", "high_pric", "low_pric", "trde_qty"))
-                for row in rows))
-        fields = ("cur_prc",) if api_id == "ka10001" else ("buy_fpr_bid", "sel_fpr_bid", "buy_fpr_req", "sel_fpr_req")
+            return bool(
+                isinstance(rows, list)
+                and rows
+                and all(
+                    isinstance(row, dict)
+                    and len(str(row.get("cntr_tm", ""))) == 14
+                    and str(row.get("cntr_tm", "")).isdigit()
+                    and all(
+                        str(row.get(k, "")).strip()
+                        for k in (
+                            "cur_prc",
+                            "open_pric",
+                            "high_pric",
+                            "low_pric",
+                            "trde_qty",
+                        )
+                    )
+                    for row in rows
+                )
+            )
+        fields = (
+            ("cur_prc",)
+            if api_id == "ka10001"
+            else ("buy_fpr_bid", "sel_fpr_bid", "buy_fpr_req", "sel_fpr_req")
+        )
         try:
             values = [abs(int(str(data[k]).replace(",", ""))) for k in fields]
-            return all(v > 0 for v in values) and (api_id != "ka10004" or values[0] <= values[1])
+            return all(v > 0 for v in values) and (
+                api_id != "ka10004" or values[0] <= values[1]
+            )
         except (KeyError, TypeError, ValueError):
             return False
 
     def run(self, *, token, endpoint, api_id, payload, fetch):
-        allowed = {"ka10001": "/api/dostk/stkinfo", "ka10004": "/api/dostk/mrkcond",
-                   "ka10080": "/api/dostk/chart"}
+        allowed = {
+            "ka10001": "/api/dostk/stkinfo",
+            "ka10004": "/api/dostk/mrkcond",
+            "ka10080": "/api/dostk/chart",
+        }
         if not token or allowed.get(api_id) != urlsplit(endpoint).path:
             return fetch(), False
         started = time.time()
         token_digest = hashlib.sha256(token.encode()).hexdigest()
-        scope = ["widget_market_response_v1", endpoint, token_digest,
-                 api_id, payload, int(started // 60)]
-        key = hashlib.sha256(json.dumps(scope, sort_keys=True, allow_nan=False).encode()).hexdigest()
+        scope = [
+            "widget_market_response_v1",
+            endpoint,
+            token_digest,
+            api_id,
+            payload,
+            int(started // 60),
+        ]
+        key = hashlib.sha256(
+            json.dumps(scope, sort_keys=True, allow_nan=False).encode()
+        ).hexdigest()
         path = self.directory / f"{int(key[:8], 16) % 256:03d}.json"
         try:
             with path.open("rb") as handle:
@@ -99,22 +134,40 @@ class WidgetMarketResponseCache:
             data, receipt = entry["value"]
             stamp = receipt["rest_received_ts_ms"] / 1000
             now = time.time()
-            if (entry["key"] == key and 0 <= now - entry["started"] < 3
-                    and entry["started"] <= stamp + .001 and stamp <= now
-                    and int(now // 60) == int(started // 60)
-                    and receipt.get("request_succeeded") is True
-                    and receipt.get("request_token_digest") == token_digest
-                    and receipt.get("api_id") == api_id
-                    and receipt.get("request_code") == payload.get("stk_cd")
-                    and data.get("_kiwoom_source_meta", {}).get("rest_received_ts_ms") == receipt["rest_received_ts_ms"]
-                    and data.get("_kiwoom_source_meta", {}).get("api_id") == api_id
-                    and data.get("_kiwoom_source_meta", {}).get("request_code") == payload.get("stk_cd")
-                    and self._complete(data, api_id)):
-                receipt.update(admission_status="reused_success", request_attempt_count=0,
-                               response_cache_status="hit", response_cache_source_pid=entry["pid"])
+            if (
+                entry["key"] == key
+                and 0 <= now - entry["started"] < 3
+                and entry["started"] <= stamp + 0.001
+                and stamp <= now
+                and int(now // 60) == int(started // 60)
+                and receipt.get("request_succeeded") is True
+                and receipt.get("request_token_digest") == token_digest
+                and receipt.get("api_id") == api_id
+                and receipt.get("request_code") == payload.get("stk_cd")
+                and data.get("_kiwoom_source_meta", {}).get("rest_received_ts_ms")
+                == receipt["rest_received_ts_ms"]
+                and data.get("_kiwoom_source_meta", {}).get("api_id") == api_id
+                and data.get("_kiwoom_source_meta", {}).get("request_code")
+                == payload.get("stk_cd")
+                and self._complete(data, api_id)
+            ):
+                receipt.update(
+                    admission_status="reused_success",
+                    request_attempt_count=0,
+                    response_cache_status="hit",
+                    response_cache_source_pid=entry["pid"],
+                )
                 data["_kiwoom_source_meta"]["response_cache_status"] = "hit"
                 return (data, receipt), True
-        except (OSError, ValueError, KeyError, TypeError, AttributeError, OverflowError, RecursionError):
+        except (
+            OSError,
+            ValueError,
+            KeyError,
+            TypeError,
+            AttributeError,
+            OverflowError,
+            RecursionError,
+        ):
             pass
         value = fetch()
         data, receipt = value
@@ -122,18 +175,27 @@ class WidgetMarketResponseCache:
         # incomplete clock contracts. Never renew an inherited cached receipt.
         stamp = receipt.get("rest_received_ts_ms")
         finished = time.time()
-        if (receipt.get("request_succeeded") is not True or not self._complete(data, api_id)
-                or receipt.get("request_token_digest") != token_digest
-                or type(stamp) is not int or not started <= stamp / 1000 + .001 <= finished + .001
-                or not 0 <= finished - started < 3 or int(finished // 60) != int(started // 60)):
+        if (
+            receipt.get("request_succeeded") is not True
+            or not self._complete(data, api_id)
+            or receipt.get("request_token_digest") != token_digest
+            or type(stamp) is not int
+            or not started <= stamp / 1000 + 0.001 <= finished + 0.001
+            or not 0 <= finished - started < 3
+            or int(finished // 60) != int(started // 60)
+        ):
             return value, False
         temporary = None
         try:
-            raw = json.dumps({"key": key, "started": started, "pid": os.getpid(), "value": value},
-                             allow_nan=False).encode()
+            raw = json.dumps(
+                {"key": key, "started": started, "pid": os.getpid(), "value": value},
+                allow_nan=False,
+            ).encode()
             if len(raw) <= 2 * 1024 * 1024:
                 self.directory.mkdir(parents=True, exist_ok=True)
-                with tempfile.NamedTemporaryFile(dir=self.directory, delete=False) as handle:
+                with tempfile.NamedTemporaryFile(
+                    dir=self.directory, delete=False
+                ) as handle:
                     temporary = Path(handle.name)
                     handle.write(raw)
                 os.replace(temporary, path)
@@ -199,8 +261,12 @@ class SharedCandleRead:
         try:
             rows, meta = value
             stamp = meta["rest_received_ts_ms"] / 1000
-            return (type(meta["rest_received_ts_ms"]) is int
-                and bool(rows) and all(WidgetMarketResponseCache._complete(row, "ka10080") for row in rows)
+            return (
+                type(meta["rest_received_ts_ms"]) is int
+                and bool(rows)
+                and all(
+                    WidgetMarketResponseCache._complete(row, "ka10080") for row in rows
+                )
                 and meta.get("api_id") == "ka10080"
                 and str(meta.get("last_http_status_code")) == "200"
                 and meta.get("read_rate_control_status") == "admitted"
@@ -208,16 +274,19 @@ class SharedCandleRead:
                 and not meta.get("continuous_page_limit_reached")
                 and not meta.get("rate_limit_detected")
                 and not meta.get("read_shared_cache_scope_changed")
-                and 0 <= now - started < 3 and started <= stamp <= now
+                and 0 <= now - started < 3
+                and started <= stamp <= now
                 and int(started // 60) == int(now // 60)
-                and now < meta.get("read_response_cache_expires_at", started + 3))
+                and now < meta.get("read_response_cache_expires_at", started + 3)
+            )
         except (ValueError, TypeError, KeyError, AttributeError):
             return False
 
     def run(self, key, fetch, *, wait_sec):
         slot = f"{int(key[:8], 16) % 512:03d}"
-        cache_path, lock_path = (self.directory / (slot + suffix)
-                                 for suffix in (".json", ".lock"))
+        cache_path, lock_path = (
+            self.directory / (slot + suffix) for suffix in (".json", ".lock")
+        )
         lock_fd = None
         try:
             self._prepare_directory()
@@ -247,23 +316,35 @@ class SharedCandleRead:
                     if occupant and occupant != key:
                         return fetch()
                     if time.monotonic() >= deadline:
-                        raise MarketReadJoinDeferred("shared_candle_join_wait_budget_exhausted")
-                    time.sleep(min(.01, max(0, deadline - time.monotonic())))
+                        raise MarketReadJoinDeferred(
+                            "shared_candle_join_wait_budget_exhausted"
+                        )
+                    time.sleep(min(0.01, max(0, deadline - time.monotonic())))
                 except OSError:
                     return fetch()
             try:
                 with cache_path.open("rb") as handle:
                     raw = handle.read(2 * 1024 * 1024 + 1)
                 entry = json.loads(raw) if len(raw) <= 2 * 1024 * 1024 else {}
-                if (entry.get("key") == key
-                        and self._valid(entry["value"], now=time.time(), started=entry["started"])):
+                if entry.get("key") == key and self._valid(
+                    entry["value"], now=time.time(), started=entry["started"]
+                ):
                     rows, meta = entry["value"]
-                    meta.update(read_response_cache_status="hit",
-                                read_shared_response_cache_status="hit",
-                                read_response_cache_caller_http_attempt_count=0,
-                                read_response_cache_source_pid=entry["pid"])
+                    meta.update(
+                        read_response_cache_status="hit",
+                        read_shared_response_cache_status="hit",
+                        read_response_cache_caller_http_attempt_count=0,
+                        read_response_cache_source_pid=entry["pid"],
+                    )
                     return rows, meta
-            except (OSError, ValueError, KeyError, TypeError, AttributeError, RecursionError):
+            except (
+                OSError,
+                ValueError,
+                KeyError,
+                TypeError,
+                AttributeError,
+                RecursionError,
+            ):
                 pass
             if waited_for_owner:
                 # The owner's source failed/expired. Preserve this follower's
@@ -281,10 +362,19 @@ class SharedCandleRead:
             if self._valid(value, now=time.time(), started=started):
                 temporary = None
                 try:
-                    raw = json.dumps({"key": key, "started": started,
-                                      "pid": os.getpid(), "value": value}, allow_nan=False).encode()
+                    raw = json.dumps(
+                        {
+                            "key": key,
+                            "started": started,
+                            "pid": os.getpid(),
+                            "value": value,
+                        },
+                        allow_nan=False,
+                    ).encode()
                     if len(raw) <= 2 * 1024 * 1024:
-                        with tempfile.NamedTemporaryFile(dir=self.directory, delete=False) as handle:
+                        with tempfile.NamedTemporaryFile(
+                            dir=self.directory, delete=False
+                        ) as handle:
                             temporary = Path(handle.name)
                             self._bind_custody(handle.fileno())
                             handle.write(raw)
@@ -614,7 +704,9 @@ class KiwoomReadRequestCoordinator:
         last_requests_before = 0
         last_cooldown_remaining = 0.0
         waited_once = False
-        ticket = uuid.uuid4().hex if normalized_class == REQUEST_CLASS_SOURCE_ONLY else None
+        ticket = (
+            uuid.uuid4().hex if normalized_class == REQUEST_CLASS_SOURCE_ONLY else None
+        )
 
         def discard_ticket():
             if ticket is None:
@@ -624,8 +716,11 @@ class KiwoomReadRequestCoordinator:
                 cleanup_state, error = self._read_state(cleanup_handle)
                 pending = cleanup_state.get("source_waiters", [])
                 if not error and isinstance(pending, list):
-                    cleanup_state["source_waiters"] = [row for row in pending
-                        if isinstance(row, dict) and row.get("ticket") != ticket]
+                    cleanup_state["source_waiters"] = [
+                        row
+                        for row in pending
+                        if isinstance(row, dict) and row.get("ticket") != ticket
+                    ]
                     self._write_state(cleanup_handle, cleanup_state)
             finally:
                 fcntl.flock(cleanup_handle.fileno(), fcntl.LOCK_UN)
@@ -748,47 +843,78 @@ class KiwoomReadRequestCoordinator:
                 turn = True
                 if ticket is not None:
                     pending = state.get("source_waiters", [])
-                    valid = isinstance(pending, list) and len(pending) <= 128 and all(
-                        isinstance(row, dict) and isinstance(row.get("ticket"), str)
-                        and len(row["ticket"]) == 32
-                        and type(row.get("deadline")) in (int, float)
-                        and math.isfinite(row["deadline"])
-                        for row in pending)
+                    valid = (
+                        isinstance(pending, list)
+                        and len(pending) <= 128
+                        and all(
+                            isinstance(row, dict)
+                            and isinstance(row.get("ticket"), str)
+                            and len(row["ticket"]) == 32
+                            and type(row.get("deadline")) in (int, float)
+                            and math.isfinite(row["deadline"])
+                            for row in pending
+                        )
+                    )
                     if not valid:
-                        return self._admission(admitted=False,
+                        return self._admission(
+                            admitted=False,
                             reason="shared_read_rate_waiters_invalid",
-                            request_class=normalized_class, request_owner=owner,
-                            api_id=api_label, request_code=code_label, waited_sec=now-started,
-                            requests_before=len(request_epochs), effective_limit=effective_limit,
-                            max_limit=max_limit, cooldown_remaining=cooldown_remaining,
-                            scope_digest=digest)
+                            request_class=normalized_class,
+                            request_owner=owner,
+                            api_id=api_label,
+                            request_code=code_label,
+                            waited_sec=now - started,
+                            requests_before=len(request_epochs),
+                            effective_limit=effective_limit,
+                            max_limit=max_limit,
+                            cooldown_remaining=cooldown_remaining,
+                            scope_digest=digest,
+                        )
                     pending = [row for row in pending if row["deadline"] >= now]
                     if waited_once and now > deadline:
-                        state["source_waiters"] = [row for row in pending if row["ticket"] != ticket]
+                        state["source_waiters"] = [
+                            row for row in pending if row["ticket"] != ticket
+                        ]
                         self._write_state(handle, state)
-                        return self._admission(admitted=False,
+                        return self._admission(
+                            admitted=False,
                             reason="shared_read_rate_wait_budget_exhausted",
-                            request_class=normalized_class, request_owner=owner,
-                            api_id=api_label, request_code=code_label, waited_sec=now-started,
-                            requests_before=len(request_epochs), effective_limit=effective_limit,
-                            max_limit=max_limit, cooldown_remaining=cooldown_remaining,
-                            scope_digest=digest)
+                            request_class=normalized_class,
+                            request_owner=owner,
+                            api_id=api_label,
+                            request_code=code_label,
+                            waited_sec=now - started,
+                            requests_before=len(request_epochs),
+                            effective_limit=effective_limit,
+                            max_limit=max_limit,
+                            cooldown_remaining=cooldown_remaining,
+                            scope_digest=digest,
+                        )
                     if not any(row["ticket"] == ticket for row in pending):
                         if len(pending) >= 128:
-                            return self._admission(admitted=False,
+                            return self._admission(
+                                admitted=False,
                                 reason="shared_read_rate_queue_capacity",
-                                request_class=normalized_class, request_owner=owner,
-                                api_id=api_label, request_code=code_label, waited_sec=now-started,
-                                requests_before=len(request_epochs), effective_limit=effective_limit,
-                                max_limit=max_limit, cooldown_remaining=cooldown_remaining,
-                                scope_digest=digest)
+                                request_class=normalized_class,
+                                request_owner=owner,
+                                api_id=api_label,
+                                request_code=code_label,
+                                waited_sec=now - started,
+                                requests_before=len(request_epochs),
+                                effective_limit=effective_limit,
+                                max_limit=max_limit,
+                                cooldown_remaining=cooldown_remaining,
+                                scope_digest=digest,
+                            )
                         pending.append({"ticket": ticket, "deadline": deadline})
                     turn = pending[0]["ticket"] == ticket
                     state["source_waiters"] = pending
                     self._write_state(handle, state)
                 if cooldown_remaining > 0:
                     if normalized_class == REQUEST_CLASS_SOURCE_ONLY:
-                        state["source_waiters"] = [row for row in pending if row["ticket"] != ticket]
+                        state["source_waiters"] = [
+                            row for row in pending if row["ticket"] != ticket
+                        ]
                         self._write_state(handle, state)
                         return self._admission(
                             admitted=False,
@@ -811,7 +937,9 @@ class KiwoomReadRequestCoordinator:
                     and turn
                 ):
                     if ticket is not None:
-                        state["source_waiters"] = [row for row in pending if row["ticket"] != ticket]
+                        state["source_waiters"] = [
+                            row for row in pending if row["ticket"] != ticket
+                        ]
                     request_epochs.append(now)
                     state.update(
                         {
@@ -859,8 +987,13 @@ class KiwoomReadRequestCoordinator:
                     else:
                         relevant_count = min(len(request_epochs), effective_limit)
                         release_index = max(0, len(request_epochs) - relevant_count)
-                        delay = max(0.001,
-                            request_epochs[release_index] + self.window_sec - now + 0.001)
+                        delay = max(
+                            0.001,
+                            request_epochs[release_index]
+                            + self.window_sec
+                            - now
+                            + 0.001,
+                        )
             finally:
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
                 handle.close()

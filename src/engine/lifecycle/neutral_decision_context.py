@@ -21,7 +21,6 @@ from typing import Any
 
 from src.utils.constants import DATA_DIR, TRADING_RULES
 
-
 PANIC_SELL_DEFENSE_DIR = DATA_DIR / "report" / "panic_sell_defense"
 
 

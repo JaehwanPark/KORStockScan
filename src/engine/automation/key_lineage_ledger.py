@@ -219,7 +219,9 @@ def entry_replay_observe_only_status(
         identity(row): row for row in batch.get("cohorts") or [] if identity(row)
     }
     request_paths = consumer.get("request_paths") if isinstance(consumer, dict) else {}
-    entry_base = request_paths.get("entry_base") if isinstance(request_paths, dict) else {}
+    entry_base = (
+        request_paths.get("entry_base") if isinstance(request_paths, dict) else {}
+    )
     consumer_rows = {
         identity(row): row
         for row in (entry_base.get("cohorts") if isinstance(entry_base, dict) else [])

@@ -54,20 +54,28 @@ class TestKiwoomAuth8005RestartDetector:
         state = json.loads(self._scan_state_path.read_text(encoding="utf-8"))
         assert state["files"]["bot_history.log"]["position"] == initial_size
 
-    def test_unread_preboot_error_without_main_does_not_request_restart(self, monkeypatch):
+    def test_unread_preboot_error_without_main_does_not_request_restart(
+        self, monkeypatch
+    ):
         import src.engine.error_detectors.kiwoom_auth_8005_restart as module
 
         invalidations = []
         cutoff = datetime.fromisoformat("2026-10-12T05:30:52+09:00").timestamp()
         monkeypatch.setattr(module, "_historical_auth_cutoff", lambda: cutoff)
         monkeypatch.setattr(module, "_current_runtime_identity", lambda: None)
-        monkeypatch.setattr(module.kiwoom_utils, "invalidate_kiwoom_token_cache",
-                            lambda reason="": invalidations.append(reason) or True)
+        monkeypatch.setattr(
+            module.kiwoom_utils,
+            "invalidate_kiwoom_token_cache",
+            lambda reason="": invalidations.append(reason) or True,
+        )
         with tempfile.TemporaryDirectory() as tmpdir:
             log = Path(tmpdir) / "kiwoom_utils_info.log"
             log.write_text("old ok\n")
             self._write_state(log, restart_count=0, last_restart_ts=0)
-            _append(log, "[2026-10-09 22:36:36] [ka10080] API auth failure 8005 Token invalid\n")
+            _append(
+                log,
+                "[2026-10-09 22:36:36] [ka10080] API auth failure 8005 Token invalid\n",
+            )
             with _mock_logs_dir(Path(tmpdir)):
                 result = KiwoomAuth8005RestartDetector().check()
         assert result.severity == "pass"
@@ -78,12 +86,16 @@ class TestKiwoomAuth8005RestartDetector:
         state = json.loads(self._scan_state_path.read_text())
         assert state["restart_count"] == 0
 
-    def test_mixed_history_and_current_error_preserves_current_recovery(self, monkeypatch):
+    def test_mixed_history_and_current_error_preserves_current_recovery(
+        self, monkeypatch
+    ):
         import src.engine.error_detectors.kiwoom_auth_8005_restart as module
 
         cutoff = datetime.fromisoformat("2026-10-12T05:30:52+09:00").timestamp()
         monkeypatch.setattr(module, "_historical_auth_cutoff", lambda: cutoff)
-        monkeypatch.setattr(module.kiwoom_utils, "invalidate_kiwoom_token_cache", lambda reason="": True)
+        monkeypatch.setattr(
+            module.kiwoom_utils, "invalidate_kiwoom_token_cache", lambda reason="": True
+        )
         with tempfile.TemporaryDirectory() as tmpdir:
             log = Path(tmpdir) / "kiwoom_utils_info.log"
             log.write_text("old ok\n")
@@ -96,7 +108,9 @@ class TestKiwoomAuth8005RestartDetector:
         assert result.details["fresh_auth_8005_count"] == 1
         assert result.details["restart_requested"] is True
 
-    def test_history_cutoff_uses_kst_day_and_preserves_boot_second(self, monkeypatch, tmp_path):
+    def test_history_cutoff_uses_kst_day_and_preserves_boot_second(
+        self, monkeypatch, tmp_path
+    ):
         import src.engine.error_detectors.kiwoom_auth_8005_restart as module
 
         now = datetime.fromisoformat("2026-10-12T07:00:00+09:00").timestamp()
@@ -106,7 +120,10 @@ class TestKiwoomAuth8005RestartDetector:
         monkeypatch.setattr(module, "_now_ts", lambda: now)
         assert module._historical_auth_cutoff() == boot - 1
         (tmp_path / "stat").write_text("btime invalid\n")
-        assert module._historical_auth_cutoff() == datetime.fromisoformat("2026-10-12T00:00:00+09:00").timestamp()
+        assert (
+            module._historical_auth_cutoff()
+            == datetime.fromisoformat("2026-10-12T00:00:00+09:00").timestamp()
+        )
 
     def test_fresh_8005_touches_restart_flag(self, monkeypatch):
         import src.engine.error_detectors.kiwoom_auth_8005_restart as detector_module
@@ -563,89 +580,136 @@ def _mock_logs_dir(tmpdir_path: Path):
 
 def test_atomic_state_replace_keeps_prior_generation_on_failure(monkeypatch, tmp_path):
     from src.engine.error_detectors import kiwoom_auth_8005_restart as module
-    state_path = tmp_path/'state.json'
-    monkeypatch.setattr(module, 'SCAN_STATE_PATH', state_path)
-    old = dict(files={'bot_history.log': dict(position=17)}, restart_count=2)
+
+    state_path = tmp_path / "state.json"
+    monkeypatch.setattr(module, "SCAN_STATE_PATH", state_path)
+    old = dict(files={"bot_history.log": dict(position=17)}, restart_count=2)
     module.KiwoomAuth8005RestartDetector._save_state(old)
+
     def fail_replace(source, target):
         assert module.KiwoomAuth8005RestartDetector._load_state() == old
-        assert json.loads(Path(source).read_text())['restart_count'] == 3
-        raise OSError('injected publication failure')
-    monkeypatch.setattr(module.os, 'replace', fail_replace)
-    with pytest.raises(OSError, match='publication failure'):
+        assert json.loads(Path(source).read_text())["restart_count"] == 3
+        raise OSError("injected publication failure")
+
+    monkeypatch.setattr(module.os, "replace", fail_replace)
+    with pytest.raises(OSError, match="publication failure"):
         module.KiwoomAuth8005RestartDetector._save_state(dict(old, restart_count=3))
     assert json.loads(state_path.read_text()) == old
-    assert list(tmp_path.glob('.*.tmp')) == []
+    assert list(tmp_path.glob(".*.tmp")) == []
 
 
 def test_atomic_state_preserves_existing_access_mode(monkeypatch, tmp_path):
     from src.engine.error_detectors import kiwoom_auth_8005_restart as module
-    state = tmp_path/'state.json'; state.write_text('{}'); state.chmod(0o664)
-    monkeypatch.setattr(module, 'SCAN_STATE_PATH', state)
-    value = dict(files={'bot_history.log': dict(position=39)}, restart_count=2, last_restart_ts=123)
+
+    state = tmp_path / "state.json"
+    state.write_text("{}")
+    state.chmod(0o664)
+    monkeypatch.setattr(module, "SCAN_STATE_PATH", state)
+    value = dict(
+        files={"bot_history.log": dict(position=39)},
+        restart_count=2,
+        last_restart_ts=123,
+    )
     module.KiwoomAuth8005RestartDetector._save_state(value)
     assert state.stat().st_mode & 0o777 == 0o664
     assert module.KiwoomAuth8005RestartDetector._load_state() == value
-    assert list(tmp_path.glob('.*.tmp')) == []
+    assert list(tmp_path.glob(".*.tmp")) == []
 
 
-@pytest.mark.parametrize('payload', [b'[]', b'{"files": []}', b'{"files":{"x":{"position":null}}}',
-    b'{"files":{},"restart_count":true}', b'{"files":{},"last_restart_ts":NaN}', b'\xff'])
-def test_invalid_state_shape_and_encoding_never_scan_history(monkeypatch, tmp_path, payload):
+@pytest.mark.parametrize(
+    "payload",
+    [
+        b"[]",
+        b'{"files": []}',
+        b'{"files":{"x":{"position":null}}}',
+        b'{"files":{},"restart_count":true}',
+        b'{"files":{},"last_restart_ts":NaN}',
+        b"\xff",
+    ],
+)
+def test_invalid_state_shape_and_encoding_never_scan_history(
+    monkeypatch, tmp_path, payload
+):
     from src.engine.error_detectors import kiwoom_auth_8005_restart as module
-    state = tmp_path/'state.json'; state.write_bytes(payload)
-    log = tmp_path/'bot_history.log'; log.write_text('8005 Token invalid\n')
-    monkeypatch.setattr(module, 'SCAN_STATE_PATH', state)
-    monkeypatch.setattr(module, 'RESTART_FLAG_PATH', tmp_path/'restart.flag')
-    monkeypatch.setattr(module, '_get_target_log_files', lambda: [log])
-    monkeypatch.setattr(module.kiwoom_utils, 'invalidate_kiwoom_token_cache', lambda **k: pytest.fail('historical restart'))
+
+    state = tmp_path / "state.json"
+    state.write_bytes(payload)
+    log = tmp_path / "bot_history.log"
+    log.write_text("8005 Token invalid\n")
+    monkeypatch.setattr(module, "SCAN_STATE_PATH", state)
+    monkeypatch.setattr(module, "RESTART_FLAG_PATH", tmp_path / "restart.flag")
+    monkeypatch.setattr(module, "_get_target_log_files", lambda: [log])
+    monkeypatch.setattr(
+        module.kiwoom_utils,
+        "invalidate_kiwoom_token_cache",
+        lambda **k: pytest.fail("historical restart"),
+    )
     first = module.KiwoomAuth8005RestartDetector().check()
-    assert first.severity == 'warning' and first.details['state_load_error_kind']['error_type']
-    assert first.details['restart_requested'] is False
-    assert module.KiwoomAuth8005RestartDetector().check().severity == 'pass'
+    assert (
+        first.severity == "warning"
+        and first.details["state_load_error_kind"]["error_type"]
+    )
+    assert first.details["restart_requested"] is False
+    assert module.KiwoomAuth8005RestartDetector().check().severity == "pass"
     assert not module.RESTART_FLAG_PATH.exists()
 
 
 def test_daemon_and_cron_share_one_recovery_transaction(monkeypatch, tmp_path):
     from src.engine.error_detectors import kiwoom_auth_8005_restart as module
-    state = tmp_path/'state.json'
-    log = tmp_path/'bot_history.log'; log.write_text('old ok\n')
-    monkeypatch.setattr(module, 'SCAN_STATE_PATH', state)
-    monkeypatch.setattr(module, 'RESTART_FLAG_PATH', tmp_path/'restart.flag')
-    monkeypatch.setattr(module, '_get_target_log_files', lambda: [log])
-    monkeypatch.setattr(module, '_current_runtime_identity', lambda: None)
+
+    state = tmp_path / "state.json"
+    log = tmp_path / "bot_history.log"
+    log.write_text("old ok\n")
+    monkeypatch.setattr(module, "SCAN_STATE_PATH", state)
+    monkeypatch.setattr(module, "RESTART_FLAG_PATH", tmp_path / "restart.flag")
+    monkeypatch.setattr(module, "_get_target_log_files", lambda: [log])
+    monkeypatch.setattr(module, "_current_runtime_identity", lambda: None)
     detector = module.KiwoomAuth8005RestartDetector
     detector().check()
-    _append(log, '8005 Token invalid\n')
-    calls=[]; entered=threading.Event(); release=threading.Event()
+    _append(log, "8005 Token invalid\n")
+    calls = []
+    entered = threading.Event()
+    release = threading.Event()
+
     def invalidate(reason):
-        calls.append(reason); entered.set()
+        calls.append(reason)
+        entered.set()
         assert release.wait(timeout=3)
         return True
-    monkeypatch.setattr(module.kiwoom_utils, 'invalidate_kiwoom_token_cache', invalidate)
+
+    monkeypatch.setattr(
+        module.kiwoom_utils, "invalidate_kiwoom_token_cache", invalidate
+    )
     with ThreadPoolExecutor(max_workers=2) as pool:
-        first=pool.submit(detector().check)
+        first = pool.submit(detector().check)
         assert entered.wait(timeout=3)
-        second=pool.submit(detector().check)
+        second = pool.submit(detector().check)
         release.set()
-        answers=[first.result(timeout=4), second.result(timeout=4)]
-    assert len(calls)==1
-    assert sum(r.details.get('restart_requested') is True for r in answers)==1
-    assert json.loads(state.read_text())['restart_count']==1
-    assert answers[1].severity=='pass'
+        answers = [first.result(timeout=4), second.result(timeout=4)]
+    assert len(calls) == 1
+    assert sum(r.details.get("restart_requested") is True for r in answers) == 1
+    assert json.loads(state.read_text())["restart_count"] == 1
+    assert answers[1].severity == "pass"
 
 
-def test_busy_state_lock_defers_without_mutation_and_dry_run_does_not_create_lock(monkeypatch, tmp_path):
+def test_busy_state_lock_defers_without_mutation_and_dry_run_does_not_create_lock(
+    monkeypatch, tmp_path
+):
     from src.engine.error_detectors import kiwoom_auth_8005_restart as module
-    state = tmp_path/'state.json'
-    monkeypatch.setattr(module, 'SCAN_STATE_PATH', state)
-    monkeypatch.setattr(module, '_get_target_log_files', lambda: [])
+
+    state = tmp_path / "state.json"
+    monkeypatch.setattr(module, "SCAN_STATE_PATH", state)
+    monkeypatch.setattr(module, "_get_target_log_files", lambda: [])
     module.KiwoomAuth8005RestartDetector(dry_run=True).check()
     assert list(tmp_path.iterdir()) == []
-    monkeypatch.setattr(module, '_STATE_LOCK_WAIT_SEC', 0)
-    with state.with_name(state.name+'.lock').open('a') as handle:
+    monkeypatch.setattr(module, "_STATE_LOCK_WAIT_SEC", 0)
+    with state.with_name(state.name + ".lock").open("a") as handle:
         fcntl.flock(handle, fcntl.LOCK_EX)
-        result=module.KiwoomAuth8005RestartDetector().check()
-    assert result.severity=='warning' and result.details['state_lock_busy'] is True
-    assert result.details['restart_requested'] is result.details['token_cache_invalidated'] is False
+        result = module.KiwoomAuth8005RestartDetector().check()
+    assert result.severity == "warning" and result.details["state_lock_busy"] is True
+    assert (
+        result.details["restart_requested"]
+        is result.details["token_cache_invalidated"]
+        is False
+    )
     assert not state.exists()

@@ -6,7 +6,10 @@ can manage them manually.
 
 from __future__ import annotations
 
-from src.trading.config.owner_retirement import RETIRED_MACHINE_SCOPE_LABELS, new_entry_retired
+from src.trading.config.owner_retirement import (
+    RETIRED_MACHINE_SCOPE_LABELS,
+    new_entry_retired,
+)
 
 import hashlib
 import os
@@ -51,7 +54,14 @@ LEGACY_MACHINE_OWNER_SCOPE_LABELS = {
     "475150": "sk_eternix_low_price_two_leg_owner",
 }
 from src.engine.scalping.main_fixed_watch import SPECS
-LEGACY_MACHINE_OWNER_SCOPE_LABELS.update({spec.symbol: "main_fixed_watch_owner" for spec in SPECS if spec.episode_entry_forbidden})
+
+LEGACY_MACHINE_OWNER_SCOPE_LABELS.update(
+    {
+        spec.symbol: "main_fixed_watch_owner"
+        for spec in SPECS
+        if spec.episode_entry_forbidden
+    }
+)
 
 _FILE_CACHE = {
     "path": None,
@@ -187,22 +197,42 @@ def _current_machine_owner_scope_source_from_row(code: object, comment: object) 
     """Recognize only the exact reviewed current machine-scope marker."""
 
     norm_code = normalize_manual_control_exclusion_code(code)
-    label = LEGACY_MACHINE_OWNER_SCOPE_LABELS.get(norm_code) or RETIRED_MACHINE_SCOPE_LABELS.get(norm_code)
+    label = LEGACY_MACHINE_OWNER_SCOPE_LABELS.get(
+        norm_code
+    ) or RETIRED_MACHINE_SCOPE_LABELS.get(norm_code)
     if not label:
         return ""
     body = str(comment or "").lstrip("#/ ").strip()
-    return "machine_owner_scope" if body in {f"machine_owner_scope {label}", f"machine_owner_scope {RETIRED_MACHINE_SCOPE_LABELS.get(norm_code, label)}"} else ""
+    return (
+        "machine_owner_scope"
+        if body
+        in {
+            f"machine_owner_scope {label}",
+            f"machine_owner_scope {RETIRED_MACHINE_SCOPE_LABELS.get(norm_code, label)}",
+        }
+        else ""
+    )
 
 
 def _legacy_machine_owner_scope_source_from_row(code: object, comment: object) -> str:
     """Recognize only the exact reviewed pre-migration machine marker."""
 
     norm_code = normalize_manual_control_exclusion_code(code)
-    label = LEGACY_MACHINE_OWNER_SCOPE_LABELS.get(norm_code) or RETIRED_MACHINE_SCOPE_LABELS.get(norm_code)
+    label = LEGACY_MACHINE_OWNER_SCOPE_LABELS.get(
+        norm_code
+    ) or RETIRED_MACHINE_SCOPE_LABELS.get(norm_code)
     if not label:
         return ""
     body = str(comment or "").lstrip("#/ ").strip()
-    return "legacy_machine_owner_scope" if body in {f"manual_operator {label}", f"manual_operator {RETIRED_MACHINE_SCOPE_LABELS.get(norm_code, label)}"} else ""
+    return (
+        "legacy_machine_owner_scope"
+        if body
+        in {
+            f"manual_operator {label}",
+            f"manual_operator {RETIRED_MACHINE_SCOPE_LABELS.get(norm_code, label)}",
+        }
+        else ""
+    )
 
 
 def _load_file_codes(path: Path) -> frozenset[str]:
@@ -438,11 +468,17 @@ def migrate_legacy_machine_owner_scope_markers(
             label = expected[code]
             body = str(comment or "").lstrip("#/ ").strip()
             retired_label = RETIRED_MACHINE_SCOPE_LABELS.get(code)
-            retired_marker = bool(retired_label and (
-                body == f"machine_owner_scope {retired_label}"
-                or body == f"manual_operator {retired_label}" and code not in current_markers
-            ))
-            if retired_marker or (body == f"manual_operator {label}" and code not in current_markers):
+            retired_marker = bool(
+                retired_label
+                and (
+                    body == f"machine_owner_scope {retired_label}"
+                    or body == f"manual_operator {retired_label}"
+                    and code not in current_markers
+                )
+            )
+            if retired_marker or (
+                body == f"manual_operator {label}" and code not in current_markers
+            ):
                 output_lines.append(f"{code} # machine_owner_scope {label}")
                 migrated.append(code)
                 continue
@@ -570,9 +606,17 @@ def evaluate_main_bot_control_exclusion(
             f"symbol_owner_policy_fail_closed:{type(exc).__name__}",
             decision.source,
         )
-    if owner_policy.migration_completed and machine_scope_source and not owner_policy.symbol_selected:
-        return ManualControlExclusionDecision(False, decision.code,
-            "native_main_manual_contract_replaces_retired_machine_scope", owner_policy.source_path)
+    if (
+        owner_policy.migration_completed
+        and machine_scope_source
+        and not owner_policy.symbol_selected
+    ):
+        return ManualControlExclusionDecision(
+            False,
+            decision.code,
+            "native_main_manual_contract_replaces_retired_machine_scope",
+            owner_policy.source_path,
+        )
     if owner_policy.symbol_selected:
         if owner_policy.owner_allowed("main_scalping", new_entry=new_entry):
             try:

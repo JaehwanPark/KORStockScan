@@ -354,7 +354,9 @@ def test_disabled_schedule_reads_no_sources(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("position", ["first", "middle", "last"])
-def test_installed_calendar_accepts_reordered_owner_line(tmp_path, monkeypatch, position):
+def test_installed_calendar_accepts_reordered_owner_line(
+    tmp_path, monkeypatch, position
+):
     from types import SimpleNamespace
     import os
 
@@ -364,36 +366,54 @@ def test_installed_calendar_accepts_reordered_owner_line(tmp_path, monkeypatch, 
     others = base.splitlines()
     others.insert({"first": 0, "middle": 1, "last": 2}[position], line)
     installed = "\n".join(others) + "\n"
-    config = dict(uid=os.geteuid(), installation_code_sha256=A.code_hash(),
-                  cron_zone="Asia/Seoul", workspace=str(tmp_path),
-                  **A.calendar_signature(base, "Asia/Seoul"))
+    config = dict(
+        uid=os.geteuid(),
+        installation_code_sha256=A.code_hash(),
+        cron_zone="Asia/Seoul",
+        workspace=str(tmp_path),
+        **A.calendar_signature(base, "Asia/Seoul"),
+    )
     monkeypatch.setattr(A, "host_cron_zone", lambda: "Asia/Seoul")
-    monkeypatch.setattr(A.subprocess, "run", lambda *a, **k: SimpleNamespace(stdout=installed))
+    monkeypatch.setattr(
+        A.subprocess, "run", lambda *a, **k: SimpleNamespace(stdout=installed)
+    )
     assert A.verify_installed_calendar(config)
 
 
-@pytest.mark.parametrize("change", ["duplicate", "time", "command", "main_time", "code"])
-def test_installed_calendar_rejects_actual_owner_or_binding_drift(tmp_path, monkeypatch, change):
+@pytest.mark.parametrize(
+    "change", ["duplicate", "time", "command", "main_time", "code"]
+)
+def test_installed_calendar_rejects_actual_owner_or_binding_drift(
+    tmp_path, monkeypatch, change
+):
     from types import SimpleNamespace
     import os
 
     base = "35 7 * * 1-5 bash /preopen # THRESHOLD_CYCLE_PREOPEN\n"
     installed = A.render_optional_cron(base, tmp_path, "Asia/Seoul")
-    config = dict(uid=os.geteuid(), installation_code_sha256=A.code_hash(),
-                  cron_zone="Asia/Seoul", workspace=str(tmp_path),
-                  **A.calendar_signature(base, "Asia/Seoul"))
+    config = dict(
+        uid=os.geteuid(),
+        installation_code_sha256=A.code_hash(),
+        cron_zone="Asia/Seoul",
+        workspace=str(tmp_path),
+        **A.calendar_signature(base, "Asia/Seoul"),
+    )
     if change == "duplicate":
         installed += installed.splitlines()[-1] + "\n"
     elif change == "time":
         installed = installed.replace("40 0-5", "41 0-5")
     elif change == "command":
-        installed = installed.replace("run_main_market_weakness_research_postclose.sh", "unexpected.sh")
+        installed = installed.replace(
+            "run_main_market_weakness_research_postclose.sh", "unexpected.sh"
+        )
     elif change == "main_time":
         installed = installed.replace("35 7", "30 7")
     else:
         config["installation_code_sha256"] = "changed"
     monkeypatch.setattr(A, "host_cron_zone", lambda: "Asia/Seoul")
-    monkeypatch.setattr(A.subprocess, "run", lambda *a, **k: SimpleNamespace(stdout=installed))
+    monkeypatch.setattr(
+        A.subprocess, "run", lambda *a, **k: SimpleNamespace(stdout=installed)
+    )
     assert not A.verify_installed_calendar(config)
 
 
@@ -406,7 +426,9 @@ def test_worker_cli_cannot_bypass_supervisor(tmp_path, capsys):
     assert "supervisor_reservation_required" in capsys.readouterr().out
 
 
-def test_supervisor_terminates_group_on_wall_or_memory(monkeypatch, bounded_supervisor_memory):
+def test_supervisor_terminates_group_on_wall_or_memory(
+    monkeypatch, bounded_supervisor_memory
+):
     result = A.supervise(
         [sys.executable, "-c", "import time;time.sleep(30)"],
         seconds=0.05,
@@ -425,7 +447,9 @@ def test_supervisor_terminates_group_on_wall_or_memory(monkeypatch, bounded_supe
     monkeypatch.setattr(A, "supervisor_rss", lambda: A.MEMORY_BYTES + 1)
     result = A.supervise(
         [sys.executable, "-c", "import time;time.sleep(30)"],
-        seconds=1, gate=lambda: True, rss=lambda _: 0,
+        seconds=1,
+        gate=lambda: True,
+        rss=lambda _: 0,
     )
     assert result["reason"] == "worker_process_group_memory_limit"
     assert result["exit_code"] != 0
@@ -501,19 +525,26 @@ def test_night_reservations_survive_failures_and_do_not_reset_at_midnight(
     )
     A.atomic(A.namespace(tmp_path) / "installation.json", cfg)
     if requested not in {None, DAY}:
-        with pytest.raises(ValueError, match="repair_source_date_outside_retained_night_scope"):
+        with pytest.raises(
+            ValueError, match="repair_source_date_outside_retained_night_scope"
+        ):
             A.scheduled(tmp_path, source_date=requested)
         assert not list((A.namespace(tmp_path) / "attempts").glob("*.json"))
         return
     calls = []
+
     def supervised(command, **kwargs):
         calls.append(command)
         return dict(exit_code=1, reason=None, wall_seconds=0.01)
+
     monkeypatch.setattr(A, "supervise", supervised)
     assert A.scheduled(tmp_path, source_date=requested)["status"] == "failed_contract"
     assert calls[0][calls[0].index("--worker-date") + 1] == DAY
     ticket = A.read_json(next((A.namespace(tmp_path) / "attempts").glob("*.json")))
-    assert ticket["source_date"] == DAY and ticket["configuration_sha256"] == cfg["artifact_content_sha256"]
+    assert (
+        ticket["source_date"] == DAY
+        and ticket["configuration_sha256"] == cfg["artifact_content_sha256"]
+    )
     Clock.current = datetime.fromisoformat("2026-10-09T00:40:00+09:00")
     assert A.scheduled(tmp_path)["night_id"] == "2026-10-08"
     state = A.read_json(A.namespace(tmp_path) / "nights/2026-10-08.json")
@@ -527,7 +558,9 @@ def test_night_reservations_survive_failures_and_do_not_reset_at_midnight(
     assert state["reserved_seconds"] == 540
 
 
-def test_deferred_worker_exit_zero_is_not_completed(tmp_path, monkeypatch, bounded_supervisor_memory):
+def test_deferred_worker_exit_zero_is_not_completed(
+    tmp_path, monkeypatch, bounded_supervisor_memory
+):
     class Clock(datetime):
         @classmethod
         def now(cls, tz=None):
@@ -612,9 +645,11 @@ def test_source_selection_limits_defer_without_starting_child(
 
     monkeypatch.setattr(A, "cursor_current", source_changed)
     if requested:
+
         def discovered(*a, **kw):
             source_changed()
             return dict(source_dates=[DAY])
+
         monkeypatch.setattr(A, "research_source_scope", discovered)
     monkeypatch.setattr(
         A,
@@ -692,7 +727,9 @@ def test_candidate_manifest_does_not_freeze_empty_first_day_forever(
     assert not (A.namespace(data) / "fixed_candidates.json").exists()
 
 
-def test_supervisor_reaps_spawned_descendant_even_if_leader_exits(tmp_path, bounded_supervisor_memory):
+def test_supervisor_reaps_spawned_descendant_even_if_leader_exits(
+    tmp_path, bounded_supervisor_memory
+):
     marker = tmp_path / "descendant.pid"
     code = 'import subprocess,sys; p=subprocess.Popen([sys.executable,"-c","import time;time.sleep(30)"]);open(sys.argv[1],"w").write(str(p.pid))'
     result = A.supervise(
@@ -1020,6 +1057,7 @@ def test_wrapper_routes_to_selected_immutable_root_without_main_start(tmp_path):
     assert A.MODULE in output
     assert "--scheduled" in output
     assert "bot" not in output
-    assert "scheduled-disposition" in (
-        release / "logs/main_market_weakness_research_cron.log"
-    ).read_text()
+    assert (
+        "scheduled-disposition"
+        in (release / "logs/main_market_weakness_research_cron.log").read_text()
+    )

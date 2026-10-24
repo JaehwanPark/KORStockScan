@@ -25,7 +25,9 @@ def _rules(**overrides):
 @pytest.fixture(autouse=True)
 def _state(monkeypatch, tmp_path):
     monkeypatch.setattr(state_handlers, "TRADING_RULES", _rules())
-    monkeypatch.setattr(state_handlers, "_is_scalp_live_simulator_enabled", lambda: True)
+    monkeypatch.setattr(
+        state_handlers, "_is_scalp_live_simulator_enabled", lambda: True
+    )
     monkeypatch.setattr(state_handlers, "ACTIVE_TARGETS", [])
     monkeypatch.setattr(state_handlers, "HIGHEST_PRICES", {})
     monkeypatch.setattr(
@@ -424,7 +426,9 @@ def test_lifecycle_matrix_ingests_panic_sim_rows_without_real_mix(
     )
 
 
-def test_panic_entry_block_and_sim_scale_in_has_no_shared_main_owner(monkeypatch, _state):
+def test_panic_entry_block_and_sim_scale_in_has_no_shared_main_owner(
+    monkeypatch, _state
+):
     panic_context = {
         "panic_context_status": "OK",
         "panic_level": 2,

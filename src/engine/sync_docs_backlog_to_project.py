@@ -146,7 +146,10 @@ def _document_path(path: Path) -> Path:
 def _document_glob(directory: Path, pattern: str) -> list[Path]:
     # Preserve the relative Source labels consumed by backlog/calendar tools.
     return sorted(
-        (path.relative_to(PROJECT_ROOT) for path in _document_path(directory).glob(pattern)),
+        (
+            path.relative_to(PROJECT_ROOT)
+            for path in _document_path(directory).glob(pattern)
+        ),
         reverse=True,
     )
 
@@ -237,7 +240,8 @@ def _checklist_doc_candidates() -> list[Path]:
     # archived checklists as a substitute for the current executable owner.
     for directory in (DOC_CHECKLIST_DIR, Path("docs")):
         candidates.extend(
-            path for path in _document_glob(directory, "*-stage2-todo-checklist.md")
+            path
+            for path in _document_glob(directory, "*-stage2-todo-checklist.md")
             if _due_date_from_checklist_path(path) >= today
         )
 
@@ -321,21 +325,30 @@ def parse_plan_tasks() -> list[BacklogTask]:
 def parse_checklist_tasks(*, current_path: Path | None = None) -> list[BacklogTask]:
     # Native semantic consumers specify their exact root/date. Explicit mode
     # cannot be redirected by an offline DOC_CHECKLIST_PATH or another day.
-    candidates = [current_path] if current_path is not None else _checklist_doc_candidates()
+    candidates = (
+        [current_path] if current_path is not None else _checklist_doc_candidates()
+    )
     tasks: list[BacklogTask] = []
     checked: list[str] = []
     loaded_any = False
     today_iso = (
         _due_date_from_checklist_path(current_path)
-        if current_path is not None else _local_today_iso()
+        if current_path is not None
+        else _local_today_iso()
     )
     forced_path_raw = os.getenv("DOC_CHECKLIST_PATH", "").strip()
     forced_path = Path(forced_path_raw) if forced_path_raw else None
     for source_path in candidates:
         checked.append(str(source_path))
         due_date = _due_date_from_checklist_path(source_path)
-        if (due_date and due_date < today_iso
-                and (forced_path is None or _document_path(source_path) != _document_path(forced_path))):
+        if (
+            due_date
+            and due_date < today_iso
+            and (
+                forced_path is None
+                or _document_path(source_path) != _document_path(forced_path)
+            )
+        ):
             continue
         text = _read_optional(source_path)
         if text is None:

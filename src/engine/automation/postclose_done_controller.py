@@ -35,7 +35,12 @@ def _load(path: Path) -> dict[str, Any]:
 
 
 def _status_path(target_date: str) -> Path:
-    return DATA_DIR / "report" / "threshold_cycle_postclose_status" / f"threshold_cycle_postclose_{target_date}.status.json"
+    return (
+        DATA_DIR
+        / "report"
+        / "threshold_cycle_postclose_status"
+        / f"threshold_cycle_postclose_{target_date}.status.json"
+    )
 
 
 def _control_paths(target_date: str) -> tuple[Path, Path]:
@@ -46,8 +51,12 @@ def _control_paths(target_date: str) -> tuple[Path, Path]:
 
 
 def done_terminal_receipt_issues(
-    report_path: Path, target_date: str, *, started_after_ns: int,
-    generation_only: bool = False, checklist_snapshot: Path | None = None,
+    report_path: Path,
+    target_date: str,
+    *,
+    started_after_ns: int,
+    generation_only: bool = False,
+    checklist_snapshot: Path | None = None,
 ) -> list[str]:
     """Require a fresh, exact-date whole-chain DONE receipt before final cleanup."""
     report_path = Path(report_path)
@@ -67,7 +76,10 @@ def done_terminal_receipt_issues(
         issues.append("controller_final_verifier_not_pass")
     try:
         generated = datetime.fromisoformat(str(report.get("generated_at")))
-        if generated.tzinfo is None or report_path.stat().st_mtime_ns < started_after_ns:
+        if (
+            generated.tzinfo is None
+            or report_path.stat().st_mtime_ns < started_after_ns
+        ):
             issues.append("controller_report_not_fresh_for_finalization")
     except (TypeError, ValueError, OverflowError):
         issues.append("controller_report_generation_time_invalid")
@@ -76,33 +88,50 @@ def done_terminal_receipt_issues(
         attempt_path = Path(str(report.get("attempt_path") or "")).resolve(strict=True)
         if attempt_path.parent != attempts_dir:
             raise ValueError("attempt_path_outside_owner")
-        if hashlib.sha256(attempt_path.read_bytes()).digest() != hashlib.sha256(
-            report_path.read_bytes()
-        ).digest():
+        if (
+            hashlib.sha256(attempt_path.read_bytes()).digest()
+            != hashlib.sha256(report_path.read_bytes()).digest()
+        ):
             issues.append("controller_attempt_receipt_mismatch")
     except (OSError, ValueError):
         issues.append("controller_attempt_receipt_missing_or_invalid")
     verifier_path = Path(str(report.get("verification_attempt_path") or ""))
     expected_verifier_dir = (
-        DATA_DIR / "report" / "threshold_cycle_postclose_verification"
-        / "attempts" / target_date
+        DATA_DIR
+        / "report"
+        / "threshold_cycle_postclose_verification"
+        / "attempts"
+        / target_date
     ).resolve()
     try:
-        verifier_owner_valid = verifier_path.resolve(strict=True).parent == expected_verifier_dir
+        verifier_owner_valid = (
+            verifier_path.resolve(strict=True).parent == expected_verifier_dir
+        )
     except OSError:
         verifier_owner_valid = False
-    if (not verifier_owner_valid or not report.get("verification_attempt_sha256")
-            or _sha(verifier_path) != report.get("verification_attempt_sha256")):
+    if (
+        not verifier_owner_valid
+        or not report.get("verification_attempt_sha256")
+        or _sha(verifier_path) != report.get("verification_attempt_sha256")
+    ):
         issues.append("controller_verification_attempt_missing_or_invalid")
     else:
         verifier = _load(verifier_path)
         if verifier.get("run_id") != report.get("main_run_id"):
             issues.append("controller_verification_main_run_mismatch")
-        issues.extend(current_strict_receipt_issues(
-            verifier_path, target_date, require_whole_native_chain=True,
-            **({"generation_only": True} if generation_only else {}),
-            **({"checklist_snapshot": checklist_snapshot} if checklist_snapshot is not None else {}),
-        ))
+        issues.extend(
+            current_strict_receipt_issues(
+                verifier_path,
+                target_date,
+                require_whole_native_chain=True,
+                **({"generation_only": True} if generation_only else {}),
+                **(
+                    {"checklist_snapshot": checklist_snapshot}
+                    if checklist_snapshot is not None
+                    else {}
+                ),
+            )
+        )
     return issues
 
 
@@ -138,24 +167,38 @@ def build_postclose_done_controller(
     actions: list[str] = []
     independent_issues = []
     if require_independent_producers:
-        from src.engine.automation.postclose_summary_handoff import producer_receipt_issues
+        from src.engine.automation.postclose_summary_handoff import (
+            producer_receipt_issues,
+        )
+
         for owner in ("machine",):
-            independent_issues.extend(producer_receipt_issues(DATA_DIR / "report", target_date, owner))
+            independent_issues.extend(
+                producer_receipt_issues(DATA_DIR / "report", target_date, owner)
+            )
     if dry_run:
         status = "dry_run_planned"
         verifier = {"status": "not_run", "issues": []}
     elif predecessor.get("status") != "succeeded" and not summary_handoff_only:
         status = "blocked_predecessor_not_succeeded"
-        verifier = {"status": "not_run", "issues": ["postclose_terminal_status_missing"]}
+        verifier = {
+            "status": "not_run",
+            "issues": ["postclose_terminal_status_missing"],
+        }
     elif independent_issues:
         status = "blocked_independent_producer"
         verifier = {"status": "not_run", "issues": independent_issues}
     else:
         summary = build_runtime_approval_summary(target_date)
         actions.append("runtime_approval_summary_refreshed")
-        from src.engine.automation.postclose_summary_handoff import direct_tower_required
+        from src.engine.automation.postclose_summary_handoff import (
+            direct_tower_required,
+        )
+
         if direct_tower_required(target_date, summary):
-            from src.engine.automation.tuning_performance_control_tower import build_tuning_performance_control_tower
+            from src.engine.automation.tuning_performance_control_tower import (
+                build_tuning_performance_control_tower,
+            )
+
             build_tuning_performance_control_tower(target_date)
             actions.append("direct_control_tower_refreshed")
         build_next_stage2_checklist(target_date)
@@ -164,7 +207,8 @@ def build_postclose_done_controller(
             target_date,
             require_done_marker=not summary_handoff_only,
             require_summary_handoff=True,
-            require_whole_native_chain=require_independent_producers and not summary_handoff_only,
+            require_whole_native_chain=require_independent_producers
+            and not summary_handoff_only,
         )
         verifier, *_ = _write_verification_receipts(
             target_date,
@@ -176,29 +220,56 @@ def build_postclose_done_controller(
             },
         )
         actions.append("direct_postclose_verification_refreshed")
-        whole_pass = (verifier.get("status") == "pass"
+        whole_pass = (
+            verifier.get("status") == "pass"
             and verifier.get("verification_scope") == "whole_native_chain"
             and verifier.get("whole_native_chain_done_claimed") is True
-            and require_independent_producers and not summary_handoff_only)
+            and require_independent_producers
+            and not summary_handoff_only
+        )
         if whole_pass:
             strict_path = (verifier.get("verification_attempt") or {}).get("path")
             freshness_issues = (
                 current_strict_receipt_issues(
                     Path(strict_path), target_date, require_whole_native_chain=True
-                ) if strict_path else ["strict_attempt_missing"]
+                )
+                if strict_path
+                else ["strict_attempt_missing"]
             )
             if freshness_issues:
-                verifier = {**verifier, "status": "fail",
-                    "issues": [*verifier.get("issues", []), *freshness_issues]}
+                verifier = {
+                    **verifier,
+                    "status": "fail",
+                    "issues": [*verifier.get("issues", []), *freshness_issues],
+                }
                 whole_pass = False
-        status = "done" if whole_pass else (
-            "summary_verified" if verifier.get("status") == "pass" else "blocked_direct_evidence_gap"
+        status = (
+            "done"
+            if whole_pass
+            else (
+                "summary_verified"
+                if verifier.get("status") == "pass"
+                else "blocked_direct_evidence_gap"
+            )
         )
-    from src.engine.automation.postclose_summary_handoff import STAGE_REGISTRY, stage_path, stage_overview
+    from src.engine.automation.postclose_summary_handoff import (
+        STAGE_REGISTRY,
+        stage_path,
+        stage_overview,
+    )
+
     stage_state = None
-    if any(stage_path(DATA_DIR / 'report', target_date, stage).exists() for stage in STAGE_REGISTRY):
-        stage_state = stage_overview(DATA_DIR / 'report', target_date)
-        stage_state['postclose_all_active_stages_complete'] = require_independent_producers and not independent_issues and verifier.get('status') == 'pass' and status == 'done'
+    if any(
+        stage_path(DATA_DIR / "report", target_date, stage).exists()
+        for stage in STAGE_REGISTRY
+    ):
+        stage_state = stage_overview(DATA_DIR / "report", target_date)
+        stage_state["postclose_all_active_stages_complete"] = (
+            require_independent_producers
+            and not independent_issues
+            and verifier.get("status") == "pass"
+            and status == "done"
+        )
     report = {
         "postclose_stage_status": stage_state,
         "schema_version": 2,
@@ -208,7 +279,8 @@ def build_postclose_done_controller(
         "status": status,
         "dry_run": dry_run,
         "summary_handoff_only": summary_handoff_only,
-        "whole_native_chain_done_claimed": status == "done" and require_independent_producers,
+        "whole_native_chain_done_claimed": status == "done"
+        and require_independent_producers,
         "require_independent_producers": require_independent_producers,
         "wait_owner": "calling_wrapper",
         "allow_wrapper_rerun": allow_wrapper_rerun,
@@ -230,10 +302,13 @@ def build_postclose_done_controller(
     attempt = json_path.parent / "attempts" / f"{target_date}_{uuid.uuid4().hex}.json"
     report["attempt_path"] = str(attempt)
     report["main_run_id"] = predecessor.get("run_id")
-    report["verification_attempt_path"] = (verifier.get("verification_attempt") or {}).get("path")
+    report["verification_attempt_path"] = (
+        verifier.get("verification_attempt") or {}
+    ).get("path")
     report["verification_attempt_sha256"] = (
         _sha(Path(report["verification_attempt_path"]))
-        if report["verification_attempt_path"] else None
+        if report["verification_attempt_path"]
+        else None
     )
     serialized = json.dumps(report, ensure_ascii=False, indent=2) + "\n"
     _atomic_write(attempt, serialized)
@@ -242,15 +317,20 @@ def build_postclose_done_controller(
         from src.engine.automation.postclose_summary_handoff import (
             reseal_summary_handoff_for_final_controller,
         )
+
         try:
             reseal_summary_handoff_for_final_controller(
-                DATA_DIR / "report", target_date, json_path,
+                DATA_DIR / "report",
+                target_date,
+                json_path,
             )
         except (OSError, ValueError, BlockingIOError) as exc:
             report["status"] = "blocked_direct_evidence_gap"
             report["whole_native_chain_done_claimed"] = False
             if isinstance(report.get("postclose_stage_status"), dict):
-                report["postclose_stage_status"]["postclose_all_active_stages_complete"] = False
+                report["postclose_stage_status"][
+                    "postclose_all_active_stages_complete"
+                ] = False
             report["blocked_reasons"] = [
                 *report["blocked_reasons"],
                 f"summary_handoff_final_controller_reseal_failed:{type(exc).__name__}:{exc}",
@@ -259,15 +339,20 @@ def build_postclose_done_controller(
             serialized = json.dumps(report, ensure_ascii=False, indent=2) + "\n"
             _atomic_write(attempt, serialized)
             _atomic_write(json_path, serialized)
-    _atomic_write(md_path,
-        "\n".join([
-            f"# Postclose done controller - {target_date}", "",
-            f"- status: `{status}`",
-            f"- verifier: `{verifier.get('status')}`",
-            "- recovery owner: direct family evidence and summary only",
-            "- common Daily/EV rerun: `retired`",
-            f"- blockers: `{report['blocked_reasons']}`", "",
-        ]),
+    _atomic_write(
+        md_path,
+        "\n".join(
+            [
+                f"# Postclose done controller - {target_date}",
+                "",
+                f"- status: `{status}`",
+                f"- verifier: `{verifier.get('status')}`",
+                "- recovery owner: direct family evidence and summary only",
+                "- common Daily/EV rerun: `retired`",
+                f"- blockers: `{report['blocked_reasons']}`",
+                "",
+            ]
+        ),
     )
     return report
 
@@ -276,8 +361,20 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--date", default=date.today().isoformat())
     parser.add_argument("--max-attempts", type=int, default=3)
-    parser.add_argument("--predecessor-wait-sec", type=float, default=float(os.environ.get("POSTCLOSE_DONE_CONTROLLER_PREDECESSOR_WAIT_SEC", "60")))
-    parser.add_argument("--predecessor-timeout-sec", type=float, default=float(os.environ.get("POSTCLOSE_DONE_CONTROLLER_PREDECESSOR_TIMEOUT_SEC", "43200")))
+    parser.add_argument(
+        "--predecessor-wait-sec",
+        type=float,
+        default=float(
+            os.environ.get("POSTCLOSE_DONE_CONTROLLER_PREDECESSOR_WAIT_SEC", "60")
+        ),
+    )
+    parser.add_argument(
+        "--predecessor-timeout-sec",
+        type=float,
+        default=float(
+            os.environ.get("POSTCLOSE_DONE_CONTROLLER_PREDECESSOR_TIMEOUT_SEC", "43200")
+        ),
+    )
     parser.add_argument("--allow-wrapper-rerun", action="store_true")
     parser.add_argument("--summary-handoff-only", action="store_true")
     parser.add_argument("--require-independent-producers", action="store_true")
@@ -285,14 +382,28 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
     from src.utils.market_day import is_krx_trading_day
+
     source_day = date.fromisoformat(args.date)
     if source_day.isoformat() != args.date:
-        raise ValueError('postclose_source_date_not_canonical')
+        raise ValueError("postclose_source_date_not_canonical")
     if not is_krx_trading_day(source_day):
-        print(json.dumps(dict(status='skipped_non_trading_day', date=args.date,
-                              policy_publication=False, preparation=False)))
+        print(
+            json.dumps(
+                dict(
+                    status="skipped_non_trading_day",
+                    date=args.date,
+                    policy_publication=False,
+                    preparation=False,
+                )
+            )
+        )
         return 0
-    from src.engine.automation.postclose_summary_handoff import STAGE_REGISTRY, stage_path, _stage_main
+    from src.engine.automation.postclose_summary_handoff import (
+        STAGE_REGISTRY,
+        stage_path,
+        _stage_main,
+    )
+
     predecessor_ready = True
     if not args.dry_run and not args.summary_handoff_only:
         predecessor_ready = _wait_for_predecessor_succeeded(
@@ -302,11 +413,19 @@ def main(argv: list[str] | None = None) -> int:
         )
     # Existing receipts may belong to the failed run being recovered. Wait for
     # Main to refresh them before dispatching the independent summary worker.
-    if (not args.dry_run and not args.summary_handoff_only and predecessor_ready
-            and os.environ.get('POSTCLOSE_STAGE_WORKER') != '1'
-            and any(stage_path(DATA_DIR / 'report', args.date, s).exists() for s in STAGE_REGISTRY)):
-        return _stage_main(['--stage', 'summary_handoff', '--date', args.date])
+    if (
+        not args.dry_run
+        and not args.summary_handoff_only
+        and predecessor_ready
+        and os.environ.get("POSTCLOSE_STAGE_WORKER") != "1"
+        and any(
+            stage_path(DATA_DIR / "report", args.date, s).exists()
+            for s in STAGE_REGISTRY
+        )
+    ):
+        return _stage_main(["--stage", "summary_handoff", "--date", args.date])
     from src.engine.infrastructure.validation_digest_session import postclose_session
+
     with postclose_session(DATA_DIR, args.date) as session:
         report = build_postclose_done_controller(
             args.date,
@@ -319,9 +438,19 @@ def main(argv: list[str] | None = None) -> int:
             summary_handoff_only=args.summary_handoff_only,
             require_independent_producers=args.require_independent_producers,
         )
-    print(json.dumps({"status": report["status"], "date": report["date"],
-                      "validation_io": session.stats}, ensure_ascii=False))
-    return 0 if report["status"] in {"done", "summary_verified", "dry_run_planned"} else 1
+    print(
+        json.dumps(
+            {
+                "status": report["status"],
+                "date": report["date"],
+                "validation_io": session.stats,
+            },
+            ensure_ascii=False,
+        )
+    )
+    return (
+        0 if report["status"] in {"done", "summary_verified", "dry_run_planned"} else 1
+    )
 
 
 if __name__ == "__main__":

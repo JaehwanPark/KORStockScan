@@ -1,9 +1,11 @@
 """Canonical digest and bounded evidence reader shared by Main reports."""
+
 import hashlib
 import json
 import os
 import stat
 from pathlib import Path
+
 
 def digest(value):
     return hashlib.sha256(
@@ -15,6 +17,7 @@ def digest(value):
             allow_nan=False,
         ).encode()
     ).hexdigest()
+
 
 def read_object(path, limit=4 * 1024 * 1024):
     """Read a stable bounded regular file without following its final symlink."""

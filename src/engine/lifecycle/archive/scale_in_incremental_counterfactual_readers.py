@@ -40,7 +40,6 @@ from src.utils.constants import DATA_DIR
 
 from src.utils.jsonl_io import existing_or_gzip_path
 
-
 REPORT_DIR = DATA_DIR / "report" / "scale_in_incremental_counterfactual"
 
 

@@ -1,4 +1,5 @@
 """Deadline, native async ownership and bounded physical transport contracts."""
+
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from concurrent.futures import ThreadPoolExecutor
@@ -14,199 +15,376 @@ from src.trading.market.index_regime import index_regime
 from src.utils import kiwoom_transport_telemetry as T
 
 
-@pytest.mark.parametrize('compressed', [False, True])
-def test_pipeline_stage_reader_preserves_boundary_rows_order_and_partial_tail(tmp_path, compressed):
+@pytest.mark.parametrize("compressed", [False, True])
+def test_pipeline_stage_reader_preserves_boundary_rows_order_and_partial_tail(
+    tmp_path, compressed
+):
     """Cooldown history cannot lose rows at block/append or gzip boundaries."""
     import gzip
     import json
     from src.engine import sniper_state_handlers as H
-    first = {'stage': 'sell_completed', 'padding': 'x' * (4 * 1024 * 1024),
-             'other': 'same_symbol_loss_reentry_cooldown'}
-    second = {'stage': 'same_symbol_loss_reentry_cooldown', 'stock_code': '005930'}
-    third = {'stage': 'sell_completed', 'stock_code': '036930'}
-    irrelevant = {'stage': 'unrelated', 'padding': 'z' * 100}
-    prefix = json.dumps(irrelevant).encode() + b'\n'
-    completed = json.dumps(first).encode() + b'\n' + b'not-json sell_completed\n' + json.dumps(second).encode() + b'\n'
+
+    first = {
+        "stage": "sell_completed",
+        "padding": "x" * (4 * 1024 * 1024),
+        "other": "same_symbol_loss_reentry_cooldown",
+    }
+    second = {"stage": "same_symbol_loss_reentry_cooldown", "stock_code": "005930"}
+    third = {"stage": "sell_completed", "stock_code": "036930"}
+    irrelevant = {"stage": "unrelated", "padding": "z" * 100}
+    prefix = json.dumps(irrelevant).encode() + b"\n"
+    completed = (
+        json.dumps(first).encode()
+        + b"\n"
+        + b"not-json sell_completed\n"
+        + json.dumps(second).encode()
+        + b"\n"
+    )
     tail = json.dumps(third).encode()
     raw = prefix + completed + tail
-    path = tmp_path / ('history.jsonl.gz' if compressed else 'history.jsonl')
+    path = tmp_path / ("history.jsonl.gz" if compressed else "history.jsonl")
     path.write_bytes(gzip.compress(raw) if compressed else raw)
-    rows, offset = H._read_pipeline_events_for_stages(path,
-        {'sell_completed', 'same_symbol_loss_reentry_cooldown'},
-        start_offset=0 if compressed else len(prefix))
+    rows, offset = H._read_pipeline_events_for_stages(
+        path,
+        {"sell_completed", "same_symbol_loss_reentry_cooldown"},
+        start_offset=0 if compressed else len(prefix),
+    )
     assert rows == [first, second]  # Two matching tokens in one row are one receipt.
     assert offset == len(prefix + completed)
     if not compressed:
-        with path.open('ab') as handle:
-            handle.write(b'\n')
+        with path.open("ab") as handle:
+            handle.write(b"\n")
         incremental, final_offset = H._read_pipeline_events_for_stages(
-            path, {'sell_completed', 'same_symbol_loss_reentry_cooldown'}, start_offset=offset)
+            path,
+            {"sell_completed", "same_symbol_loss_reentry_cooldown"},
+            start_offset=offset,
+        )
         assert incremental == [third]
         assert final_offset == path.stat().st_size
 
 
-@pytest.mark.parametrize('raw,expected', [
-    (b'{"st\\u0061ge":"sell\\u005fcompleted","stock_code":"005930"}', True),
-    (b'{"stage":"other","stage":"sell_completed","stock_code":"005930"}', True),
-    (b'{"stage":"sell_completed","stage":"other"}', False),
-    (b'{"stage":"other","nested":{"stage":"sell_completed"}}', False),
-    (b'{"stage":["sell_completed"]}', False),
-    (b'{"stage":\n"sell_completed"}', False),
-])
-def test_pipeline_stage_selection_uses_top_level_json_semantics(tmp_path, raw, expected):
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        (b'{"st\\u0061ge":"sell\\u005fcompleted","stock_code":"005930"}', True),
+        (b'{"stage":"other","stage":"sell_completed","stock_code":"005930"}', True),
+        (b'{"stage":"sell_completed","stage":"other"}', False),
+        (b'{"stage":"other","nested":{"stage":"sell_completed"}}', False),
+        (b'{"stage":["sell_completed"]}', False),
+        (b'{"stage":\n"sell_completed"}', False),
+    ],
+)
+def test_pipeline_stage_selection_uses_top_level_json_semantics(
+    tmp_path, raw, expected
+):
     import json
     from src.engine import sniper_state_handlers as H
-    path = tmp_path / 'history.jsonl'
-    path.write_bytes(raw + b'\n')
-    rows, offset = H._read_pipeline_events_for_stages(path, {'sell_completed'})
+
+    path = tmp_path / "history.jsonl"
+    path.write_bytes(raw + b"\n")
+    rows, offset = H._read_pipeline_events_for_stages(path, {"sell_completed"})
     assert rows == ([json.loads(raw)] if expected else [])
     assert offset == path.stat().st_size
 
 
-def test_pipeline_body_stage_mentions_do_not_decode_large_unrelated_evidence(tmp_path, monkeypatch):
+def test_pipeline_body_stage_mentions_do_not_decode_large_unrelated_evidence(
+    tmp_path, monkeypatch
+):
     import json
     from src.engine import sniper_state_handlers as H
-    path = tmp_path / 'history.jsonl'
-    path.write_bytes(json.dumps({'stage': 'entry_ai_economic_plan_observed',
-        'evidence': 'sell_completed / same_symbol_loss_reentry_cooldown ' * 50000}).encode() + b'\n')
+
+    path = tmp_path / "history.jsonl"
+    path.write_bytes(
+        json.dumps(
+            {
+                "stage": "entry_ai_economic_plan_observed",
+                "evidence": "sell_completed / same_symbol_loss_reentry_cooldown "
+                * 50000,
+            }
+        ).encode()
+        + b"\n"
+    )
+
     def no_full_decode(*args, **kwargs):
-        pytest.fail('Unrelated AI evidence must not be decoded into the guard cache')
-    monkeypatch.setattr(H.json, 'loads', no_full_decode)
-    rows, offset = H._read_pipeline_events_for_stages(path, {'sell_completed', 'same_symbol_loss_reentry_cooldown'})
+        pytest.fail("Unrelated AI evidence must not be decoded into the guard cache")
+
+    monkeypatch.setattr(H.json, "loads", no_full_decode)
+    rows, offset = H._read_pipeline_events_for_stages(
+        path, {"sell_completed", "same_symbol_loss_reentry_cooldown"}
+    )
     assert rows == [] and offset == path.stat().st_size
 
 
-@pytest.mark.parametrize('code',['005930','034020','036930','196170','403870'])
-def test_actual_main_watching_statement_forwards_created_coordinator(monkeypatch,code):
+@pytest.mark.parametrize("code", ["005930", "034020", "036930", "196170", "403870"])
+def test_actual_main_watching_statement_forwards_created_coordinator(monkeypatch, code):
     """Run the real Main call expression and wrapper, without a broker loop."""
     from src.engine import kiwoom_sniper_v2 as M, sniper_state_handlers as H
     from src.engine.scalping.scanner_async_eval import ScannerAsyncEvalCoordinator
     from src.engine.ai.hot_path_ai_dispatcher import HotPathAIDispatcher
-    tree=ast.parse(inspect.getsource(M._run_sniper_iterations))
-    calls=[n for n in ast.walk(tree) if isinstance(n,ast.Call)
-        and isinstance(n.func,ast.Name) and n.func.id=='handle_watching_state'
-        and not any(k.arg=='scanner_async_generation' for k in n.keywords)]
-    assert len(calls)==1
-    coordinator=ScannerAsyncEvalCoordinator(ai_dispatcher=HotPathAIDispatcher(loaded_key_count=1))
-    monkeypatch.setattr(M.run_sniper,'scanner_async_eval_coordinator',coordinator,raising=False)
-    seen=[]
-    def handler(stock,code,ws,admin,**kw):
+
+    tree = ast.parse(inspect.getsource(M._run_sniper_iterations))
+    calls = [
+        n
+        for n in ast.walk(tree)
+        if isinstance(n, ast.Call)
+        and isinstance(n.func, ast.Name)
+        and n.func.id == "handle_watching_state"
+        and not any(k.arg == "scanner_async_generation" for k in n.keywords)
+    ]
+    assert len(calls) == 1
+    coordinator = ScannerAsyncEvalCoordinator(
+        ai_dispatcher=HotPathAIDispatcher(loaded_key_count=1)
+    )
+    monkeypatch.setattr(
+        M.run_sniper, "scanner_async_eval_coordinator", coordinator, raising=False
+    )
+    seen = []
+
+    def handler(stock, code, ws, admin, **kw):
         seen.append(kw)
         # No native claim must keep the current safe no-dispatch behavior.
-        return H._resolve_scanner_async_entry_ai(stock,code,ws,None,kw,
-            trigger_reason='test',last_ai_time=0,current_ai_score=0)
-    monkeypatch.setattr(H,'handle_watching_state',handler)
-    monkeypatch.setattr(H,'_request_entry_capacity_preparation',lambda *a,**kw:None)
-    monkeypatch.setattr(H,'_fixed_watch_entry_source_route',lambda *a:None)
+        return H._resolve_scanner_async_entry_ai(
+            stock,
+            code,
+            ws,
+            None,
+            kw,
+            trigger_reason="test",
+            last_ai_time=0,
+            current_ai_score=0,
+        )
+
+    monkeypatch.setattr(H, "handle_watching_state", handler)
+    monkeypatch.setattr(H, "_request_entry_capacity_preparation", lambda *a, **kw: None)
+    monkeypatch.setattr(H, "_fixed_watch_entry_source_route", lambda *a: None)
     try:
-        result=eval(compile(ast.Expression(calls[0]),'<actual-main-call>','eval'),{
-            'handle_watching_state':M.handle_watching_state,'run_sniper':M.run_sniper,
-            'stock':{'code':code,'status':'WATCHING'},'code':code,'ws_data':{},'admin_id':None,
-            'now_ts':time.time(),'now':datetime.now(),'radar':None,'ai_engine':None})
-        assert seen[0]['scanner_async_eval_coordinator'] is coordinator
-        assert seen[0]['scanner_async_generation'] is None
-        assert result['status']=='not_enabled'
-    finally:coordinator.shutdown()
+        result = eval(
+            compile(ast.Expression(calls[0]), "<actual-main-call>", "eval"),
+            {
+                "handle_watching_state": M.handle_watching_state,
+                "run_sniper": M.run_sniper,
+                "stock": {"code": code, "status": "WATCHING"},
+                "code": code,
+                "ws_data": {},
+                "admin_id": None,
+                "now_ts": time.time(),
+                "now": datetime.now(),
+                "radar": None,
+                "ai_engine": None,
+            },
+        )
+        assert seen[0]["scanner_async_eval_coordinator"] is coordinator
+        assert seen[0]["scanner_async_generation"] is None
+        assert result["status"] == "not_enabled"
+    finally:
+        coordinator.shutdown()
 
 
-@pytest.mark.parametrize('role,enabled', [('main', True), ('main', False), ('other', True)])
-def test_actual_main_restores_entry_guard_history_after_exit_monitor_before_loop(monkeypatch, role, enabled):
+@pytest.mark.parametrize(
+    "role,enabled", [("main", True), ("main", False), ("other", True)]
+)
+def test_actual_main_restores_entry_guard_history_after_exit_monitor_before_loop(
+    monkeypatch, role, enabled
+):
     from src.engine import kiwoom_sniper_v2 as M, sniper_state_handlers as H
+
     tree = ast.parse(inspect.getsource(M.run_sniper))
-    parent = next(n for n in ast.walk(tree) if isinstance(n, ast.Try)
-                  and any(isinstance(s, ast.For) and isinstance(s.iter, ast.Call)
-                          and isinstance(s.iter.func, ast.Name)
-                          and s.iter.func.id == '_run_sniper_iterations' for s in n.body)
-                  and 'ENTRY_GUARD_SOURCE_PREPARED' in ast.unparse(n))
-    iteration_index = next(i for i, n in enumerate(parent.body)
-                           if isinstance(n, ast.For) and isinstance(n.iter, ast.Call)
-                           and isinstance(n.iter.func, ast.Name)
-                           and n.iter.func.id == '_run_sniper_iterations')
+    parent = next(
+        n
+        for n in ast.walk(tree)
+        if isinstance(n, ast.Try)
+        and any(
+            isinstance(s, ast.For)
+            and isinstance(s.iter, ast.Call)
+            and isinstance(s.iter.func, ast.Name)
+            and s.iter.func.id == "_run_sniper_iterations"
+            for s in n.body
+        )
+        and "ENTRY_GUARD_SOURCE_PREPARED" in ast.unparse(n)
+    )
+    iteration_index = next(
+        i
+        for i, n in enumerate(parent.body)
+        if isinstance(n, ast.For)
+        and isinstance(n.iter, ast.Call)
+        and isinstance(n.iter.func, ast.Name)
+        and n.iter.func.id == "_run_sniper_iterations"
+    )
     preparation = parent.body[:iteration_index]
     assert len(preparation) == 1
     calls = []
-    monkeypatch.setattr(H, '_rule_bool', lambda *a: enabled)
-    monkeypatch.setattr(H, '_load_scalp_loss_reentry_cooldown_events', calls.append)
+    monkeypatch.setattr(H, "_rule_bool", lambda *a: enabled)
+    monkeypatch.setattr(H, "_load_scalp_loss_reentry_cooldown_events", calls.append)
     logs = []
-    exec(compile(ast.Module(body=preparation, type_ignores=[]), '<actual-guard-bootstrap>', 'exec'),
-         dict(runtime_role=role, sniper_state_handlers=H, datetime=datetime, time=time, log_info=logs.append))
-    assert len(calls) == int(role == 'main' and enabled)
+    exec(
+        compile(
+            ast.Module(body=preparation, type_ignores=[]),
+            "<actual-guard-bootstrap>",
+            "exec",
+        ),
+        dict(
+            runtime_role=role,
+            sniper_state_handlers=H,
+            datetime=datetime,
+            time=time,
+            log_info=logs.append,
+        ),
+    )
+    assert len(calls) == int(role == "main" and enabled)
     assert len(logs) == len(calls)
     # The guard replay does not hold ENTRY_LOCK or delay starting the fast exit owner.
     body = tree.body[0].body
     parent_index = body.index(parent)
-    assert any(isinstance(n, ast.Expr) and isinstance(n.value, ast.Call)
-               and ast.unparse(n.value) == 'fast_exit_monitor.start()' for n in body[:parent_index])
+    assert any(
+        isinstance(n, ast.Expr)
+        and isinstance(n.value, ast.Call)
+        and ast.unparse(n.value) == "fast_exit_monitor.start()"
+        for n in body[:parent_index]
+    )
     assert not any(isinstance(n, ast.With) for n in ast.walk(preparation[0]))
 
 
-@pytest.mark.parametrize('role,failed',[('main',False),('main',True),('non_main',False)])
-def test_actual_startup_policy_read_is_independent_of_entry_cutoff(monkeypatch,role,failed):
+@pytest.mark.parametrize(
+    "role,failed", [("main", False), ("main", True), ("non_main", False)]
+)
+def test_actual_startup_policy_read_is_independent_of_entry_cutoff(
+    monkeypatch, role, failed
+):
     from src.engine import kiwoom_sniper_v2 as M
     from src.engine.scalping import reversal_evaluation_context as C
-    tree=ast.parse(inspect.getsource(M.run_sniper))
-    node=next(n for n in ast.walk(tree) if isinstance(n,ast.If)
-        and ast.unparse(n.test)=="runtime_role == 'main'"
-        and 'MAIN_POLICY_STARTUP' in ast.unparse(n))
-    calls=[];errors=[]
+
+    tree = ast.parse(inspect.getsource(M.run_sniper))
+    node = next(
+        n
+        for n in ast.walk(tree)
+        if isinstance(n, ast.If)
+        and ast.unparse(n.test) == "runtime_role == 'main'"
+        and "MAIN_POLICY_STARTUP" in ast.unparse(n)
+    )
+    calls = []
+    errors = []
+
     def prepare(**kw):
         calls.append(kw)
-        if failed:raise ValueError('invalid_policy')
-    monkeypatch.setattr(C,'prepare',prepare)
-    exec(compile(ast.Module(body=[node],type_ignores=[]),'<actual-startup-reader>','exec'),
-        dict(runtime_role=role,datetime=datetime,time=time,log_info=lambda *a:None,log_error=errors.append))
-    assert len(calls)==(role=='main')
-    assert bool(errors)==failed
+        if failed:
+            raise ValueError("invalid_policy")
+
+    monkeypatch.setattr(C, "prepare", prepare)
+    exec(
+        compile(
+            ast.Module(body=[node], type_ignores=[]), "<actual-startup-reader>", "exec"
+        ),
+        dict(
+            runtime_role=role,
+            datetime=datetime,
+            time=time,
+            log_info=lambda *a: None,
+            log_error=errors.append,
+        ),
+    )
+    assert len(calls) == (role == "main")
+    assert bool(errors) == failed
 
 
 def test_original_claim_budget_survives_wall_clock_backwards(monkeypatch):
-    monkeypatch.setattr(time,'time',lambda:100.)
-    monkeypatch.setattr(time,'perf_counter',lambda:10.)
-    claim={'snapshot':[{'epoch':98.}]}
-    budget=EntryDeadline.create(claim,110.)
-    assert budget.epoch == 103.
+    monkeypatch.setattr(time, "time", lambda: 100.0)
+    monkeypatch.setattr(time, "perf_counter", lambda: 10.0)
+    claim = {"snapshot": [{"epoch": 98.0}]}
+    budget = EntryDeadline.create(claim, 110.0)
+    assert budget.epoch == 103.0
     assert budget.transport_ms(5000) == 3000
-    monkeypatch.setattr(time,'time',lambda:99.)
-    monkeypatch.setattr(time,'perf_counter',lambda:12.9)
+    monkeypatch.setattr(time, "time", lambda: 99.0)
+    monkeypatch.setattr(time, "perf_counter", lambda: 12.9)
     assert 0 < budget.transport_ms(5000) <= 100
-    monkeypatch.setattr(time,'perf_counter',lambda:13.1)
-    with pytest.raises(ValueError,match='deadline_expired'):
+    monkeypatch.setattr(time, "perf_counter", lambda: 13.1)
+    with pytest.raises(ValueError, match="deadline_expired"):
         budget.transport_ms(5000)
 
 
-@pytest.mark.parametrize('claim',[{}, {'snapshot':[]}, {'snapshot':[{'epoch':float('nan')}]}, {'snapshot':[{'epoch':True}]}])
+@pytest.mark.parametrize(
+    "claim",
+    [
+        {},
+        {"snapshot": []},
+        {"snapshot": [{"epoch": float("nan")}]},
+        {"snapshot": [{"epoch": True}]},
+    ],
+)
 def test_malformed_claim_cannot_renew_deadline(claim):
     assert claim_deadline_epoch(claim) == 0
-    with pytest.raises(ValueError,match='deadline_expired'):
-        EntryDeadline.create(claim,time.time()+5).require()
+    with pytest.raises(ValueError, match="deadline_expired"):
+        EntryDeadline.create(claim, time.time() + 5).require()
 
 
 def test_sub_fifty_ms_transport_has_no_budget_enlargement():
     from src.engine.ai_engine_openai import GPTSniperEngine, OpenAIResponseRequest
-    engine=GPTSniperEngine.__new__(GPTSniperEngine)
-    observed=[]
-    engine.client=SimpleNamespace(responses=SimpleNamespace(create=lambda **kw: observed.append(kw['timeout']) or 'ok'))
-    engine._http_deadline_executor=ThreadPoolExecutor(max_workers=1)
-    request=OpenAIResponseRequest(None,'{}',True,'test','gpt-5.4-nano',None,None,'analyze_target','test','005930','key',time.perf_counter(),40)
+
+    engine = GPTSniperEngine.__new__(GPTSniperEngine)
+    observed = []
+    engine.client = SimpleNamespace(
+        responses=SimpleNamespace(
+            create=lambda **kw: observed.append(kw["timeout"]) or "ok"
+        )
+    )
+    engine._http_deadline_executor = ThreadPoolExecutor(max_workers=1)
+    request = OpenAIResponseRequest(
+        None,
+        "{}",
+        True,
+        "test",
+        "gpt-5.4-nano",
+        None,
+        None,
+        "analyze_target",
+        "test",
+        "005930",
+        "key",
+        time.perf_counter(),
+        40,
+    )
     try:
-        assert engine._create_openai_response_with_deadline(request,provider_payload={}) == 'ok'
-        assert 0 < observed[0] <= .04
+        assert (
+            engine._create_openai_response_with_deadline(request, provider_payload={})
+            == "ok"
+        )
+        assert 0 < observed[0] <= 0.04
     finally:
         engine._http_deadline_executor.shutdown()
 
 
 def test_queued_transport_expiry_never_sends_or_restarts_deadline():
-    from src.engine.ai_engine_openai import GPTSniperEngine, OpenAIResponseRequest, OpenAIHTTPWallClockDeadlineError
-    engine=GPTSniperEngine.__new__(GPTSniperEngine)
-    calls=[]
-    engine.client=SimpleNamespace(responses=SimpleNamespace(create=lambda **kw: calls.append(kw)))
-    engine._http_deadline_executor=ThreadPoolExecutor(max_workers=1)
-    release=threading.Event()
-    engine._http_deadline_executor.submit(release.wait, .2)
-    request=OpenAIResponseRequest(None,'{}',True,'test','gpt-5.4-nano',None,None,'analyze_target','test','005930','key',time.perf_counter(),20)
+    from src.engine.ai_engine_openai import (
+        GPTSniperEngine,
+        OpenAIResponseRequest,
+        OpenAIHTTPWallClockDeadlineError,
+    )
+
+    engine = GPTSniperEngine.__new__(GPTSniperEngine)
+    calls = []
+    engine.client = SimpleNamespace(
+        responses=SimpleNamespace(create=lambda **kw: calls.append(kw))
+    )
+    engine._http_deadline_executor = ThreadPoolExecutor(max_workers=1)
+    release = threading.Event()
+    engine._http_deadline_executor.submit(release.wait, 0.2)
+    request = OpenAIResponseRequest(
+        None,
+        "{}",
+        True,
+        "test",
+        "gpt-5.4-nano",
+        None,
+        None,
+        "analyze_target",
+        "test",
+        "005930",
+        "key",
+        time.perf_counter(),
+        20,
+    )
     try:
         with pytest.raises(OpenAIHTTPWallClockDeadlineError):
-            engine._create_openai_response_with_deadline(request,provider_payload={})
+            engine._create_openai_response_with_deadline(request, provider_payload={})
         release.set()
     finally:
         engine._http_deadline_executor.shutdown()
@@ -216,537 +394,1074 @@ def test_queued_transport_expiry_never_sends_or_restarts_deadline():
 def valid_ws():
     # Use protocol millisecond precision. A multiply/divide float round trip
     # can otherwise fabricate a future receipt in the valid fixture.
-    now=int(time.time()*1000)/1000.
-    rows=[dict(item='005930_AL', transport_epoch=2, received_at_ms=(now-i*.1)*1000,
-        provider_trade_epoch=now-i*.1-.2, route_sequence=20-i, market_suffix='_AL',
-        market_route='krx_nxt_integrated',price=1000+i,volume=10,volume_source='15_abs') for i in range(10)]
-    return now,dict(market_data_transport_epoch=2,last_realtime_type_item={'0B':'005930_AL'},
-        last_realtime_type_ts={'0B':now},recent_trade_ticks_by_route={'_AL|krx_nxt_integrated':rows})
+    now = int(time.time() * 1000) / 1000.0
+    rows = [
+        dict(
+            item="005930_AL",
+            transport_epoch=2,
+            received_at_ms=(now - i * 0.1) * 1000,
+            provider_trade_epoch=now - i * 0.1 - 0.2,
+            route_sequence=20 - i,
+            market_suffix="_AL",
+            market_route="krx_nxt_integrated",
+            price=1000 + i,
+            volume=10,
+            volume_source="15_abs",
+        )
+        for i in range(10)
+    ]
+    return now, dict(
+        market_data_transport_epoch=2,
+        last_realtime_type_item={"0B": "005930_AL"},
+        last_realtime_type_ts={"0B": now},
+        recent_trade_ticks_by_route={"_AL|krx_nxt_integrated": rows},
+    )
 
 
-@pytest.mark.parametrize('defect',['none','short','epoch','sequence','future','route','item','delay'])
+@pytest.mark.parametrize(
+    "defect", ["none", "short", "epoch", "sequence", "future", "route", "item", "delay"]
+)
 def test_ws_tape_reuse_preserves_original_clock_and_rejects_partial(defect):
-    now,ws=valid_ws();rows=ws['recent_trade_ticks_by_route']['_AL|krx_nxt_integrated']
-    if defect=='short':rows.pop()
-    elif defect=='epoch':rows[-1]['transport_epoch']=1
-    elif defect=='sequence':rows[-1]['route_sequence']-=1
-    elif defect=='future':rows[-1]['received_at_ms']=(now+1)*1000
-    elif defect=='route':rows[-1]['market_route']='nxt_only'
-    elif defect=='item':ws['last_realtime_type_item']['0B']='005930'
-    elif defect=='delay':rows[-1]['provider_trade_epoch']-=10
-    result=select_trade_history(ws,'005930_AL',now=now)
-    if defect=='none':
-        assert result[0]['received_at_ms'] == rows[0]['received_at_ms']
-        result[0]['volume']=999
-        assert rows[0]['volume']==10
-        assert select_trade_history(ws,'005930',now=now) is None
-    else:assert result is None
-
-
-@pytest.mark.parametrize('defect',['none','duplicate','nan','short','base_date','order'])
-def test_index_twenty_dates_are_not_silently_dropped(defect):
-    base=datetime(2026,10,8)
-    days=[]
-    while len(days)<20:
-        if base.weekday()<5:days.append(base.strftime('%Y%m%d'))
-        base-=timedelta(days=1)
-    rows=[{'dt':day,'cur_prc':str(250000-i*100)} for i,day in enumerate(days)]
-    if defect=='duplicate':rows[-1]['dt']=rows[-2]['dt']
-    elif defect=='nan':rows[10]['cur_prc']='NaN'
-    elif defect=='short':rows.pop()
-    elif defect=='base_date':rows=rows[1:]+[{'dt':'20260901','cur_prc':'250000'}]
-    elif defect=='order':rows.reverse()
-    if defect=='none':assert index_regime(rows,base_date='20261008',scale=100)['current_close']==2500
+    now, ws = valid_ws()
+    rows = ws["recent_trade_ticks_by_route"]["_AL|krx_nxt_integrated"]
+    if defect == "short":
+        rows.pop()
+    elif defect == "epoch":
+        rows[-1]["transport_epoch"] = 1
+    elif defect == "sequence":
+        rows[-1]["route_sequence"] -= 1
+    elif defect == "future":
+        rows[-1]["received_at_ms"] = (now + 1) * 1000
+    elif defect == "route":
+        rows[-1]["market_route"] = "nxt_only"
+    elif defect == "item":
+        ws["last_realtime_type_item"]["0B"] = "005930"
+    elif defect == "delay":
+        rows[-1]["provider_trade_epoch"] -= 10
+    result = select_trade_history(ws, "005930_AL", now=now)
+    if defect == "none":
+        assert result[0]["received_at_ms"] == rows[0]["received_at_ms"]
+        result[0]["volume"] = 999
+        assert rows[0]["volume"] == 10
+        assert select_trade_history(ws, "005930", now=now) is None
     else:
-        with pytest.raises(ValueError):index_regime(rows,base_date='20261008',scale=100)
+        assert result is None
+
+
+@pytest.mark.parametrize(
+    "defect", ["none", "duplicate", "nan", "short", "base_date", "order"]
+)
+def test_index_twenty_dates_are_not_silently_dropped(defect):
+    base = datetime(2026, 10, 8)
+    days = []
+    while len(days) < 20:
+        if base.weekday() < 5:
+            days.append(base.strftime("%Y%m%d"))
+        base -= timedelta(days=1)
+    rows = [{"dt": day, "cur_prc": str(250000 - i * 100)} for i, day in enumerate(days)]
+    if defect == "duplicate":
+        rows[-1]["dt"] = rows[-2]["dt"]
+    elif defect == "nan":
+        rows[10]["cur_prc"] = "NaN"
+    elif defect == "short":
+        rows.pop()
+    elif defect == "base_date":
+        rows = rows[1:] + [{"dt": "20260901", "cur_prc": "250000"}]
+    elif defect == "order":
+        rows.reverse()
+    if defect == "none":
+        assert (
+            index_regime(rows, base_date="20261008", scale=100)["current_close"] == 2500
+        )
+    else:
+        with pytest.raises(ValueError):
+            index_regime(rows, base_date="20261008", scale=100)
 
 
 def test_physical_timeout_count_and_inflight_equation_without_secret():
-    class ReadTimeout(Exception):pass
+    class ReadTimeout(Exception):
+        pass
+
     with pytest.raises(ReadTimeout):
-        T.measured_http_call(lambda *a,**kw:(_ for _ in ()).throw(ReadTimeout()),
-            'https://api.kiwoom.com/api/dostk/chart',telemetry_owner='test-timeout',
-            headers={'api-id':'ka10080','authorization':'Bearer SECRET'})
-    snapshot=T.snapshot()
-    bucket=next(b for b in snapshot['buckets'] if b['owner']=='test-timeout')
-    assert bucket['started']==bucket['terminal']+bucket['inflight_unknown']
-    assert bucket['timeout']==1
-    assert 'SECRET' not in str(snapshot)
+        T.measured_http_call(
+            lambda *a, **kw: (_ for _ in ()).throw(ReadTimeout()),
+            "https://api.kiwoom.com/api/dostk/chart",
+            telemetry_owner="test-timeout",
+            headers={"api-id": "ka10080", "authorization": "Bearer SECRET"},
+        )
+    snapshot = T.snapshot()
+    bucket = next(b for b in snapshot["buckets"] if b["owner"] == "test-timeout")
+    assert bucket["started"] == bucket["terminal"] + bucket["inflight_unknown"]
+    assert bucket["timeout"] == 1
+    assert "SECRET" not in str(snapshot)
 
 
 def test_fixed_watch_context_uses_native_identity_not_scanner_promotion():
-    from src.engine.scalping.scanner_async_eval import FixedWatchGeneration, ScannerAsyncEvalContext
+    from src.engine.scalping.scanner_async_eval import (
+        FixedWatchGeneration,
+        ScannerAsyncEvalContext,
+    )
     from src.engine.scalping.scanner_runtime_scheduler import ScannerGeneration
-    now=time.time()
-    claim={'token':'native','snapshot':[{'epoch':now,'symbol':'005930','venue':'SOR'}],
-        'source_registration_receipt':{'sha256':'proof'}}
-    native=FixedWatchGeneration.from_claim('005930',claim)
-    assert not isinstance(native,ScannerGeneration)
-    context=ScannerAsyncEvalContext.create(generation=native,cache_key='native',
-        submitted_epoch=now,deadline_epoch=now+5,stock_snapshot={'claim':claim},ws_snapshot={},state_version='watch')
-    claim['snapshot'][0]['epoch']=0
-    assert context.stock_snapshot['claim']['snapshot'][0]['epoch']==now
-    assert 'scanner_generation_id' not in native.timing_fields(now_epoch=now)
+
+    now = time.time()
+    claim = {
+        "token": "native",
+        "snapshot": [{"epoch": now, "symbol": "005930", "venue": "SOR"}],
+        "source_registration_receipt": {"sha256": "proof"},
+    }
+    native = FixedWatchGeneration.from_claim("005930", claim)
+    assert not isinstance(native, ScannerGeneration)
+    context = ScannerAsyncEvalContext.create(
+        generation=native,
+        cache_key="native",
+        submitted_epoch=now,
+        deadline_epoch=now + 5,
+        stock_snapshot={"claim": claim},
+        ws_snapshot={},
+        state_version="watch",
+    )
+    claim["snapshot"][0]["epoch"] = 0
+    assert context.stock_snapshot["claim"]["snapshot"][0]["epoch"] == now
+    assert "scanner_generation_id" not in native.timing_fields(now_epoch=now)
 
 
 def test_counter_histogram_survives_deque_eviction():
     from src.engine.monitoring import runtime_performance as P
-    P.observe('loop_work',6.,generation='cumulative-test')
-    for _ in range(5000):P.observe('loop_work',.1)
-    metric=P.snapshot()['metrics']['loop_work']
-    assert metric['n']==4096 and metric['over_five_seconds']==0
-    assert metric['cumulative_over_five_seconds']==1
-    assert sum(metric['cumulative_histogram'].values())==5001
+
+    P.observe("loop_work", 6.0, generation="cumulative-test")
+    for _ in range(5000):
+        P.observe("loop_work", 0.1)
+    metric = P.snapshot()["metrics"]["loop_work"]
+    assert metric["n"] == 4096 and metric["over_five_seconds"] == 0
+    assert metric["cumulative_over_five_seconds"] == 1
+    assert sum(metric["cumulative_histogram"].values()) == 5001
 
 
-@pytest.mark.parametrize('decision,expected', [
-    ('source_invalid',None), ('RECHECK',None), (None,None),
-    ({'signal_id':'s'},'s'), ({'continuous_reversal_assessment':{'event_id':'e'}},'e'),
-    ({'continuous_reversal_assessment':'source_invalid'},None),
-    ({'signal_id':{}},None),
-])
-def test_diagnostic_signal_join_handles_native_decision_variants(decision,expected):
+@pytest.mark.parametrize(
+    "decision,expected",
+    [
+        ("source_invalid", None),
+        ("RECHECK", None),
+        (None, None),
+        ({"signal_id": "s"}, "s"),
+        ({"continuous_reversal_assessment": {"event_id": "e"}}, "e"),
+        ({"continuous_reversal_assessment": "source_invalid"}, None),
+        ({"signal_id": {}}, None),
+    ],
+)
+def test_diagnostic_signal_join_handles_native_decision_variants(decision, expected):
     from src.engine.monitoring.runtime_performance import machine_signal_id
-    assert machine_signal_id({'entry_mechanistic_policy_decision':decision})==expected
+
+    assert (
+        machine_signal_id({"entry_mechanistic_policy_decision": decision}) == expected
+    )
 
 
-@pytest.mark.parametrize('outer_drain',[False,True])
-@pytest.mark.parametrize('commit_change',[None,'route','watch_generation'])
-@pytest.mark.parametrize('ai_action',['WAIT','BUY'])
-def test_fixed_watch_dispatch_keeps_claim_and_worker_state_private(monkeypatch,commit_change,outer_drain,ai_action):
+@pytest.mark.parametrize("outer_drain", [False, True])
+@pytest.mark.parametrize("commit_change", [None, "route", "watch_generation"])
+@pytest.mark.parametrize("ai_action", ["WAIT", "BUY"])
+def test_fixed_watch_dispatch_keeps_claim_and_worker_state_private(
+    monkeypatch, commit_change, outer_drain, ai_action
+):
     from src.engine import sniper_state_handlers as H
-    from src.engine.scalping import reversal_current_backend as B, reversal_source_diagnostics as D
+    from src.engine.scalping import (
+        reversal_current_backend as B,
+        reversal_source_diagnostics as D,
+    )
     from src.engine.scalping.scanner_async_eval import ScannerAsyncEvalCoordinator
     from src.engine.ai.hot_path_ai_dispatcher import HotPathAIDispatcher
-    now,ws=valid_ws()
-    ws['orderbook']={'bids':[[999,10]],'asks':[[1000,10]]}
-    ws['curr']=1000
-    claim={'token':'native-test','generation':'family','snapshot':[dict(epoch=now,symbol='005930',
-        venue='SOR',source_item='005930_AL',event_id='event',signal_id='signal')],
-        'source_registration_receipt':{'sha256':'proof'}}
-    stock=dict(code='005930',name='Samsung',status='WATCHING',effective_venue='SOR',buy_qty=0,
-               _continuous_reversal_pending_claim=claim)
-    monkeypatch.setattr(H,'_fixed_watch_entry_source_route',lambda *a:{'item':'005930_AL','broker_route':'SOR'})
+
+    now, ws = valid_ws()
+    ws["orderbook"] = {"bids": [[999, 10]], "asks": [[1000, 10]]}
+    ws["curr"] = 1000
+    claim = {
+        "token": "native-test",
+        "generation": "family",
+        "snapshot": [
+            dict(
+                epoch=now,
+                symbol="005930",
+                venue="SOR",
+                source_item="005930_AL",
+                event_id="event",
+                signal_id="signal",
+            )
+        ],
+        "source_registration_receipt": {"sha256": "proof"},
+    }
+    stock = dict(
+        code="005930",
+        name="Samsung",
+        status="WATCHING",
+        effective_venue="SOR",
+        buy_qty=0,
+        _continuous_reversal_pending_claim=claim,
+    )
+    monkeypatch.setattr(
+        H,
+        "_fixed_watch_entry_source_route",
+        lambda *a: {"item": "005930_AL", "broker_route": "SOR"},
+    )
+
     def candles(*args, **kwargs):
-        assert kwargs['reduced_inputs'] is True
+        assert kwargs["reduced_inputs"] is True
         return [], {}
+
     def candle_context(*args, **kwargs):
-        assert kwargs['include_investor_source'] is False
+        assert kwargs["include_investor_source"] is False
         return {}
-    monkeypatch.setattr(H,'fetch_entry_candles_with_meta',candles)
-    monkeypatch.setattr(H,'build_entry_candle_context',candle_context)
-    monkeypatch.setattr(H,'_extract_ai_overlap_snapshot',lambda **kw:{})
-    monkeypatch.setattr(H,'_refresh_prepared_entry_inputs',lambda code,ws,ticks,ctx:(ws,ticks,ctx,{}))
-    monkeypatch.setattr(H,'_prefetch_entry_capacity_for_async_evaluation',
-        lambda *a, **kw: pytest.fail('No capacity HTTP before machine verdict'))
-    monkeypatch.setattr(H,'_scanner_async_quote_is_fresh',lambda *a,**kw:True)
-    monkeypatch.setattr(H,'_log_entry_pipeline',lambda *a,**kw:None)
-    monkeypatch.setattr(H,'_manual_control_exclusion_blocked',lambda *a,**kw:False)
-    monkeypatch.setattr(B,'backend',lambda *a:SimpleNamespace(_GENERATION='family'))
-    monkeypatch.setattr(B,'acknowledge_any',lambda *a,**kw:None)
-    monkeypatch.setattr(D,'validate_claim_with_receipt',lambda *a,**kw:claim['snapshot'])
-    def observe(private,code,ws,**kw):
+
+    monkeypatch.setattr(H, "fetch_entry_candles_with_meta", candles)
+    monkeypatch.setattr(H, "build_entry_candle_context", candle_context)
+    monkeypatch.setattr(H, "_extract_ai_overlap_snapshot", lambda **kw: {})
+    monkeypatch.setattr(
+        H,
+        "_refresh_prepared_entry_inputs",
+        lambda code, ws, ticks, ctx: (ws, ticks, ctx, {}),
+    )
+    monkeypatch.setattr(
+        H,
+        "_prefetch_entry_capacity_for_async_evaluation",
+        lambda *a, **kw: pytest.fail("No capacity HTTP before machine verdict"),
+    )
+    monkeypatch.setattr(H, "_scanner_async_quote_is_fresh", lambda *a, **kw: True)
+    monkeypatch.setattr(H, "_log_entry_pipeline", lambda *a, **kw: None)
+    monkeypatch.setattr(H, "_manual_control_exclusion_blocked", lambda *a, **kw: False)
+    monkeypatch.setattr(B, "backend", lambda *a: SimpleNamespace(_GENERATION="family"))
+    monkeypatch.setattr(B, "acknowledge_any", lambda *a, **kw: None)
+    monkeypatch.setattr(
+        D, "validate_claim_with_receipt", lambda *a, **kw: claim["snapshot"]
+    )
+
+    def observe(private, code, ws, **kw):
         budget = H.kiwoom_utils._ENTRY_SOURCE_BUDGET.get()
-        assert budget is not None and budget.epoch == claim['snapshot'][0]['epoch'] + 5
-        context = kw['evaluation_context']
+        assert budget is not None and budget.epoch == claim["snapshot"][0]["epoch"] + 5
+        context = kw["evaluation_context"]
         assert isinstance(context, H.ScannerAsyncEvalContext)
         assert context.generation.code == code
         assert context.deadline_epoch == budget.epoch
         assert context.deadline_perf == budget.perf
-        assert context.request_id == provider_calls[-1]['metadata_extra']['async_request_id']
-        private['_machine_observation_revision']={'test_receipt':'captured'}
+        assert (
+            context.request_id
+            == provider_calls[-1]["metadata_extra"]["async_request_id"]
+        )
+        private["_machine_observation_revision"] = {"test_receipt": "captured"}
         return {}
-    monkeypatch.setattr(H,'_observe_entry_economics_before_ai',observe)
-    invoked=threading.Event();provider_calls=[]
-    def analyze(*args,**kw):
+
+    monkeypatch.setattr(H, "_observe_entry_economics_before_ai", observe)
+    invoked = threading.Event()
+    provider_calls = []
+
+    def analyze(*args, **kw):
         provider_calls.append(kw)
-        assert kw['reversal_signal_claim']['token']=='native-test'
-        assert kw['entry_input_deadline_epoch']==now+5
-        kw['entry_economics_observer'](exact_payload={},assessment={},capture={},bundle_sha256='b')
-        assert '_machine_observation_revision' not in stock
+        assert kw["reversal_signal_claim"]["token"] == "native-test"
+        assert kw["entry_input_deadline_epoch"] == now + 5
+        kw["entry_economics_observer"](
+            exact_payload={}, assessment={}, capture={}, bundle_sha256="b"
+        )
+        assert "_machine_observation_revision" not in stock
         invoked.set()
-        return dict(action=ai_action,entry_ai_risk_verdict='PASS' if ai_action=='BUY' else 'not_evaluated',
-            entry_mechanistic_policy_decision={'action':'ENTER_NOW'} if ai_action=='BUY' else 'source_invalid')
-    coordinator=ScannerAsyncEvalCoordinator(ai_dispatcher=HotPathAIDispatcher(loaded_key_count=1))
-    runtime={'scanner_async_eval_coordinator':coordinator}
+        return dict(
+            action=ai_action,
+            entry_ai_risk_verdict="PASS" if ai_action == "BUY" else "not_evaluated",
+            entry_mechanistic_policy_decision=(
+                {"action": "ENTER_NOW"} if ai_action == "BUY" else "source_invalid"
+            ),
+        )
+
+    coordinator = ScannerAsyncEvalCoordinator(
+        ai_dispatcher=HotPathAIDispatcher(loaded_key_count=1)
+    )
+    runtime = {"scanner_async_eval_coordinator": coordinator}
     from src.engine import kiwoom_sniper_v2 as M
-    tree=ast.parse(inspect.getsource(M._run_sniper_iterations))
-    main_call=next(n for n in ast.walk(tree) if isinstance(n,ast.Call)
-        and isinstance(n.func,ast.Name) and n.func.id=='handle_watching_state'
-        and not any(k.arg=='scanner_async_generation' for k in n.keywords))
-    monkeypatch.setattr(M.run_sniper,'scanner_async_eval_coordinator',coordinator,raising=False)
-    def watching(s,c,w,admin,**kw):
+
+    tree = ast.parse(inspect.getsource(M._run_sniper_iterations))
+    main_call = next(
+        n
+        for n in ast.walk(tree)
+        if isinstance(n, ast.Call)
+        and isinstance(n.func, ast.Name)
+        and n.func.id == "handle_watching_state"
+        and not any(k.arg == "scanner_async_generation" for k in n.keywords)
+    )
+    monkeypatch.setattr(
+        M.run_sniper, "scanner_async_eval_coordinator", coordinator, raising=False
+    )
+
+    def watching(s, c, w, admin, **kw):
         # The real Main statement supplies the coordinator, not this fixture.
-        return H._resolve_scanner_async_entry_ai(s,c,w,kw['ai_engine'],kw,
-            trigger_reason='continuous_reversal_first_uptick',last_ai_time=now,current_ai_score=50)
-    monkeypatch.setattr(H,'handle_watching_state',watching)
-    frame=dict(handle_watching_state=M.handle_watching_state,run_sniper=M.run_sniper,
-        stock=stock,code='005930',ws_data=ws,admin_id=None,now_ts=now,now=datetime.now(),radar=None,
-        ai_engine=SimpleNamespace(analyze_target=analyze))
+        return H._resolve_scanner_async_entry_ai(
+            s,
+            c,
+            w,
+            kw["ai_engine"],
+            kw,
+            trigger_reason="continuous_reversal_first_uptick",
+            last_ai_time=now,
+            current_ai_score=50,
+        )
+
+    monkeypatch.setattr(H, "handle_watching_state", watching)
+    frame = dict(
+        handle_watching_state=M.handle_watching_state,
+        run_sniper=M.run_sniper,
+        stock=stock,
+        code="005930",
+        ws_data=ws,
+        admin_id=None,
+        now_ts=now,
+        now=datetime.now(),
+        radar=None,
+        ai_engine=SimpleNamespace(analyze_target=analyze),
+    )
     try:
-        result=eval(compile(ast.Expression(main_call),'<main-first-iteration>','eval'),frame)
-        assert result['status']=='dispatched'
+        result = eval(
+            compile(ast.Expression(main_call), "<main-first-iteration>", "eval"), frame
+        )
+        assert result["status"] == "dispatched"
         assert invoked.wait(1)
-        refresh=H._resolve_watching_state_change_refresh(stock,ws,now_ts=now,
-            last_ai_time=now,cooldown_sec=100)
-        assert refresh['allowed'] and refresh['reason']=='fixed_watch_async_pending'
+        refresh = H._resolve_watching_state_change_refresh(
+            stock, ws, now_ts=now, last_ai_time=now, cooldown_sec=100
+        )
+        assert refresh["allowed"] and refresh["reason"] == "fixed_watch_async_pending"
         if outer_drain:
             from src.engine import kiwoom_sniper_v2 as M
-            tree=ast.parse(inspect.getsource(M._run_sniper_iterations))
-            node=next(n for n in ast.walk(tree) if isinstance(n,ast.For)
-                and ast.unparse(n.target)=='async_result'
-                and 'drain_completed' in ast.unparse(n.iter))
-            deadline=time.time()+1
-            while not coordinator.has_undrained_result() and time.time()<deadline:time.sleep(.005)
-            exec(compile(ast.Module(body=[node],type_ignores=[]),'<actual-main-outer-drain>','exec'),
-                {'async_coordinator':coordinator,'sniper_state_handlers':H,'targets':[stock]})
+
+            tree = ast.parse(inspect.getsource(M._run_sniper_iterations))
+            node = next(
+                n
+                for n in ast.walk(tree)
+                if isinstance(n, ast.For)
+                and ast.unparse(n.target) == "async_result"
+                and "drain_completed" in ast.unparse(n.iter)
+            )
+            deadline = time.time() + 1
+            while not coordinator.has_undrained_result() and time.time() < deadline:
+                time.sleep(0.005)
+            exec(
+                compile(
+                    ast.Module(body=[node], type_ignores=[]),
+                    "<actual-main-outer-drain>",
+                    "exec",
+                ),
+                {
+                    "async_coordinator": coordinator,
+                    "sniper_state_handlers": H,
+                    "targets": [stock],
+                },
+            )
             assert coordinator.has_completed_result()
-        if commit_change=='route':
-            monkeypatch.setattr(H,'_fixed_watch_entry_source_route',lambda *a:{'item':'005930_NX','broker_route':'NXT'})
-        elif commit_change=='watch_generation':
-            stock['watch_generation_id']='replacement'
-        deadline=time.time()+1
-        while time.time()<deadline:
-            result=eval(compile(ast.Expression(main_call),'<main-second-iteration>','eval'),frame)
-            if result['status']!='pending':break
-            time.sleep(.005)
+        if commit_change == "route":
+            monkeypatch.setattr(
+                H,
+                "_fixed_watch_entry_source_route",
+                lambda *a: {"item": "005930_NX", "broker_route": "NXT"},
+            )
+        elif commit_change == "watch_generation":
+            stock["watch_generation_id"] = "replacement"
+        deadline = time.time() + 1
+        while time.time() < deadline:
+            result = eval(
+                compile(ast.Expression(main_call), "<main-second-iteration>", "eval"),
+                frame,
+            )
+            if result["status"] != "pending":
+                break
+            time.sleep(0.005)
         if commit_change:
-            assert result['status']=='commit_rejected'
-            assert '_machine_observation_revision' not in stock
+            assert result["status"] == "commit_rejected"
+            assert "_machine_observation_revision" not in stock
         else:
-            assert result['status']=='completed'
-            assert result['ai_decision']['action']==ai_action
-            assert result['reversal_signal_claim']==claim
-            assert result['reversal_signal_claim'] is not claim
-            assert stock['_machine_observation_revision']=={'test_receipt':'captured'}
-        assert '_fixed_watch_async_claim' not in stock
+            assert result["status"] == "completed"
+            assert result["ai_decision"]["action"] == ai_action
+            assert result["reversal_signal_claim"] == claim
+            assert result["reversal_signal_claim"] is not claim
+            assert stock["_machine_observation_revision"] == {
+                "test_receipt": "captured"
+            }
+        assert "_fixed_watch_async_claim" not in stock
         assert not coordinator.has_completed_result()
-        assert len(provider_calls)==1
-        assert coordinator.drain_completed()==[]
-        assert coordinator.drain_completed()==[]
-    finally:coordinator.shutdown()
+        assert len(provider_calls) == 1
+        assert coordinator.drain_completed() == []
+        assert coordinator.drain_completed() == []
+    finally:
+        coordinator.shutdown()
 
 
-@pytest.mark.parametrize('quote_age,transport_age,allowed',[(2.5,9.,True),(3.5,0.,False),(-1.,0.,False),(None,0.,False)])
-def test_fixed_watch_quote_commit_uses_canonical_receipt(monkeypatch,quote_age,transport_age,allowed):
+@pytest.mark.parametrize(
+    "quote_age,transport_age,allowed",
+    [(2.5, 9.0, True), (3.5, 0.0, False), (-1.0, 0.0, False), (None, 0.0, False)],
+)
+def test_fixed_watch_quote_commit_uses_canonical_receipt(
+    monkeypatch, quote_age, transport_age, allowed
+):
     from src.engine import sniper_state_handlers as H
     from src.trading.market import quote_consistency as Q
-    monkeypatch.setattr(Q,'ws_quote_receive_age_ms',lambda *a,**kw:None if quote_age is None else quote_age*1000)
-    monkeypatch.setattr(Q,'build_market_data_health',lambda *a,**kw:{})
-    monkeypatch.setattr(H,'_rule',lambda key,default=None:3. if key=='SCALP_PRE_AI_MAX_WS_AGE_SEC' else default)
-    monkeypatch.setattr(H,'_get_ws_snapshot_age_sec',lambda *a:transport_age)
-    assert H._scanner_async_quote_is_fresh({'curr':1000},now_ts=time.time(),native_fixed_watch=True)==allowed
-    if allowed:assert not H._scanner_async_quote_is_fresh({'curr':1000},now_ts=time.time())
+
+    monkeypatch.setattr(
+        Q,
+        "ws_quote_receive_age_ms",
+        lambda *a, **kw: None if quote_age is None else quote_age * 1000,
+    )
+    monkeypatch.setattr(Q, "build_market_data_health", lambda *a, **kw: {})
+    monkeypatch.setattr(
+        H,
+        "_rule",
+        lambda key, default=None: (
+            3.0 if key == "SCALP_PRE_AI_MAX_WS_AGE_SEC" else default
+        ),
+    )
+    monkeypatch.setattr(H, "_get_ws_snapshot_age_sec", lambda *a: transport_age)
+    assert (
+        H._scanner_async_quote_is_fresh(
+            {"curr": 1000}, now_ts=time.time(), native_fixed_watch=True
+        )
+        == allowed
+    )
+    if allowed:
+        assert not H._scanner_async_quote_is_fresh({"curr": 1000}, now_ts=time.time())
 
 
 def test_priority_queue_moves_confirmed_before_fresh_background_without_preemption():
-    from src.engine.scalping.scanner_async_eval import ScannerAsyncEvalContext, ScannerAsyncEvalRequest, ScannerAsyncEvalCoordinator
+    from src.engine.scalping.scanner_async_eval import (
+        ScannerAsyncEvalContext,
+        ScannerAsyncEvalRequest,
+        ScannerAsyncEvalCoordinator,
+    )
     from src.engine.scalping.scanner_runtime_scheduler import ScannerGeneration
     from src.engine.ai.hot_path_ai_dispatcher import HotPathAIDispatcher
-    now=time.time();entered=threading.Event();release=threading.Event();order=[]
-    coordinator=ScannerAsyncEvalCoordinator(ai_dispatcher=HotPathAIDispatcher(loaded_key_count=1))
-    def request(name,confirmed=False):
-        generation=ScannerGeneration(code='005930',promotion_id=name,revision=1,record_id=1,
-            venue='KRX',promotion_epoch=now,attach_epoch=now,observed_price=1000,source_signature='test')
-        context=ScannerAsyncEvalContext.create(generation=generation,cache_key=name,submitted_epoch=now,
-            deadline_epoch=now+2,stock_snapshot={'_continuous_reversal_pending_claim':
-                {'snapshot':[{'decision_phase':'CONFIRMED_UPTICK' if confirmed else 'FIRST_UPTICK'}]}},
-            ws_snapshot={},state_version='watch')
+
+    now = time.time()
+    entered = threading.Event()
+    release = threading.Event()
+    order = []
+    coordinator = ScannerAsyncEvalCoordinator(
+        ai_dispatcher=HotPathAIDispatcher(loaded_key_count=1)
+    )
+
+    def request(name, confirmed=False):
+        generation = ScannerGeneration(
+            code="005930",
+            promotion_id=name,
+            revision=1,
+            record_id=1,
+            venue="KRX",
+            promotion_epoch=now,
+            attach_epoch=now,
+            observed_price=1000,
+            source_signature="test",
+        )
+        context = ScannerAsyncEvalContext.create(
+            generation=generation,
+            cache_key=name,
+            submitted_epoch=now,
+            deadline_epoch=now + 2,
+            stock_snapshot={
+                "_continuous_reversal_pending_claim": {
+                    "snapshot": [
+                        {
+                            "decision_phase": (
+                                "CONFIRMED_UPTICK" if confirmed else "FIRST_UPTICK"
+                            )
+                        }
+                    ]
+                }
+            },
+            ws_snapshot={},
+            state_version="watch",
+        )
+
         def prepare(_):
-            if name=='active':entered.set();release.wait(1)
-            order.append(name);return {}
-        return ScannerAsyncEvalRequest(context,prepare,lambda *a:{'action':'WAIT'},requires_ai_dispatch=False)
+            if name == "active":
+                entered.set()
+                release.wait(1)
+            order.append(name)
+            return {}
+
+        return ScannerAsyncEvalRequest(
+            context, prepare, lambda *a: {"action": "WAIT"}, requires_ai_dispatch=False
+        )
+
     try:
-        coordinator.submit(request('active'));assert entered.wait(1)
-        coordinator.submit(request('background'));coordinator.submit(request('confirmed',True))
+        coordinator.submit(request("active"))
+        assert entered.wait(1)
+        coordinator.submit(request("background"))
+        coordinator.submit(request("confirmed", True))
         release.set()
-        deadline=time.time()+1
-        while len(order)<3 and time.time()<deadline:time.sleep(.005)
-        assert order==['active','confirmed','background']
-    finally:release.set();coordinator.shutdown()
+        deadline = time.time() + 1
+        while len(order) < 3 and time.time() < deadline:
+            time.sleep(0.005)
+        assert order == ["active", "confirmed", "background"]
+    finally:
+        release.set()
+        coordinator.shutdown()
 
 
 def test_official_twenty_day_index_request_keeps_two_value_helper_separate(monkeypatch):
     from src.utils import kiwoom_utils as U
-    rows=[{'dt':(datetime(2026,10,8)-timedelta(days=i)).strftime('%Y%m%d'),'cur_prc':'250000'} for i in range(20)]
-    calls=[]
+
+    rows = [
+        {
+            "dt": (datetime(2026, 10, 8) - timedelta(days=i)).strftime("%Y%m%d"),
+            "cur_prc": "250000",
+        }
+        for i in range(20)
+    ]
+    calls = []
+
     def fetch(**kw):
         calls.append(kw)
-        return [{'return_code':0,'inds_dt_pole_qry':rows}]
-    monkeypatch.setattr(U,'fetch_kiwoom_api_continuous',fetch)
-    result=U.get_index_twenty_day_regime_ka20006('not-a-real-token',base_date='20261008')
-    assert result['current_close']==2500 and result['valid_dates']==20
-    assert calls[0]['url'].endswith('/api/dostk/chart')
-    assert calls[0]['payload']=={'inds_cd':'001','base_dt':'20261008'}
-    assert calls[0]['use_continuous'] is False
-    monkeypatch.setattr(U,'fetch_kiwoom_api_continuous',lambda **kw:[{'inds_dt_pole_qry':rows}])
-    with pytest.raises(ValueError,match='missing_or_failed'):
-        U.get_index_twenty_day_regime_ka20006('not-a-real-token',base_date='20261008')
+        return [{"return_code": 0, "inds_dt_pole_qry": rows}]
+
+    monkeypatch.setattr(U, "fetch_kiwoom_api_continuous", fetch)
+    result = U.get_index_twenty_day_regime_ka20006(
+        "not-a-real-token", base_date="20261008"
+    )
+    assert result["current_close"] == 2500 and result["valid_dates"] == 20
+    assert calls[0]["url"].endswith("/api/dostk/chart")
+    assert calls[0]["payload"] == {"inds_cd": "001", "base_dt": "20261008"}
+    assert calls[0]["use_continuous"] is False
+    monkeypatch.setattr(
+        U, "fetch_kiwoom_api_continuous", lambda **kw: [{"inds_dt_pole_qry": rows}]
+    )
+    with pytest.raises(ValueError, match="missing_or_failed"):
+        U.get_index_twenty_day_regime_ka20006("not-a-real-token", base_date="20261008")
 
 
-def test_radar_worker_does_not_freshen_slow_query_or_fall_back_after_expiry(monkeypatch):
+def test_radar_worker_does_not_freshen_slow_query_or_fall_back_after_expiry(
+    monkeypatch,
+):
     from src.engine import signal_radar as R
-    radar=R.SniperRadar.__new__(R.SniperRadar)
-    radar._regime_age_sec=30
-    clock=[100.]
-    monkeypatch.setattr(R.time,'time',lambda:clock[0])
-    monkeypatch.setattr(R.time,'perf_counter',lambda:clock[0])
+
+    radar = R.SniperRadar.__new__(R.SniperRadar)
+    radar._regime_age_sec = 30
+    clock = [100.0]
+    monkeypatch.setattr(R.time, "time", lambda: clock[0])
+    monkeypatch.setattr(R.time, "perf_counter", lambda: clock[0])
+
     def slow(_):
-        clock[0]=131.
-        raise ValueError('incomplete')
-    monkeypatch.setattr(R.fdr,'DataReader',slow)
-    monkeypatch.setattr(R.kiwoom_utils,'get_index_twenty_day_regime_ka20006',lambda *a,**kw:pytest.fail('expired fallback request'))
-    value=radar._fetch_market_regime('not-a-real-token')
-    assert value['regime']=='BEAR' and value['source_quality']=='invalid'
-    assert value['fetched_epoch']==100 and value['completed_epoch']==131
+        clock[0] = 131.0
+        raise ValueError("incomplete")
+
+    monkeypatch.setattr(R.fdr, "DataReader", slow)
+    monkeypatch.setattr(
+        R.kiwoom_utils,
+        "get_index_twenty_day_regime_ka20006",
+        lambda *a, **kw: pytest.fail("expired fallback request"),
+    )
+    value = radar._fetch_market_regime("not-a-real-token")
+    assert value["regime"] == "BEAR" and value["source_quality"] == "invalid"
+    assert value["fetched_epoch"] == 100 and value["completed_epoch"] == 131
 
 
 def test_transport_decoded_metadata_keeps_only_counts_and_exact_attempt(monkeypatch):
-    response=SimpleNamespace(status_code=200,content=b'1234')
-    result=T.measured_http_call(lambda *a,**kw:response,'https://api.kiwoom.com/api/dostk/chart',
-        telemetry_owner='metadata-test',telemetry_code='005930_AL',headers={'api-id':'ka10080','authorization':'secret'})
-    T.record_decoded_response(result,{'return_code':0,'acct_no':'PRIVATE'})
-    rec=T.snapshot()['recent_attempts'][-1]
-    assert rec['body_return_code']=='0' and rec['response_bytes']==4
-    assert rec['route']=='SOR' and rec['started_kst_date']
-    assert 'PRIVATE' not in str(T.snapshot())
-    T.record_decoded_response(SimpleNamespace(),{'return_code':1})
-    assert T.snapshot()['recent_attempts'][-1]['body_return_code']=='0'
+    response = SimpleNamespace(status_code=200, content=b"1234")
+    result = T.measured_http_call(
+        lambda *a, **kw: response,
+        "https://api.kiwoom.com/api/dostk/chart",
+        telemetry_owner="metadata-test",
+        telemetry_code="005930_AL",
+        headers={"api-id": "ka10080", "authorization": "secret"},
+    )
+    T.record_decoded_response(result, {"return_code": 0, "acct_no": "PRIVATE"})
+    rec = T.snapshot()["recent_attempts"][-1]
+    assert rec["body_return_code"] == "0" and rec["response_bytes"] == 4
+    assert rec["route"] == "SOR" and rec["started_kst_date"]
+    assert "PRIVATE" not in str(T.snapshot())
+    T.record_decoded_response(SimpleNamespace(), {"return_code": 1})
+    assert T.snapshot()["recent_attempts"][-1]["body_return_code"] == "0"
 
 
-@pytest.mark.parametrize('api,body,route', [
-    ('kt00011', {}, 'unknown'), ('kt10000', {'dmst_stex_tp':'SOR'}, 'SOR'),
-    ('kt10001', {'dmst_stex_tp':'NXT'}, 'NXT'),
-    ('kt10000', {'dmst_stex_tp':{}}, 'unknown'), ('ka10080', {}, 'KRX'),
-])
+@pytest.mark.parametrize(
+    "api,body,route",
+    [
+        ("kt00011", {}, "unknown"),
+        ("kt10000", {"dmst_stex_tp": "SOR"}, "SOR"),
+        ("kt10001", {"dmst_stex_tp": "NXT"}, "NXT"),
+        ("kt10000", {"dmst_stex_tp": {}}, "unknown"),
+        ("ka10080", {}, "KRX"),
+    ],
+)
 def test_account_symbol_does_not_invent_a_transport_venue(api, body, route):
-    calls=[]
+    calls = []
+
     def transport(url, **kwargs):
         calls.append(kwargs)
         return SimpleNamespace(status_code=200)
-    T.measured_http_call(transport, 'https://api.kiwoom.com/api/dostk/acnt',
-        telemetry_owner='route-test', telemetry_code='196170',
-        headers={'api-id':api}, json=body)
-    assert T.snapshot()['recent_attempts'][-1]['route']==route
-    assert calls[0]['json'] is body
+
+    T.measured_http_call(
+        transport,
+        "https://api.kiwoom.com/api/dostk/acnt",
+        telemetry_owner="route-test",
+        telemetry_code="196170",
+        headers={"api-id": api},
+        json=body,
+    )
+    assert T.snapshot()["recent_attempts"][-1]["route"] == route
+    assert calls[0]["json"] is body
 
 
-@pytest.mark.parametrize('hour,capacity', [(8,50),(14,390),(17,240)])
-def test_main_full_history_retains_rest_before_dead_projection_binding(monkeypatch, hour, capacity):
+@pytest.mark.parametrize("hour,capacity", [(8, 50), (14, 390), (17, 240)])
+def test_main_full_history_retains_rest_before_dead_projection_binding(
+    monkeypatch, hour, capacity
+):
     from zoneinfo import ZoneInfo
     from src.trading.market import shared_ws_snapshot as S
     from src.engine.scalping.entry_candle_context import fetch_entry_candles_with_meta
-    monkeypatch.setenv('KORSTOCKSCAN_MAIN_BAR_SOURCE','ws_when_ready')
-    monkeypatch.setenv('KORSTOCKSCAN_MAIN_BAR_WS_SYMBOLS','005930')
-    monkeypatch.setattr(S,'read_shared_completed_bars',lambda *a,**kw:pytest.fail('unsupported history must not consult a retired writer'))
-    calls=[]
+
+    monkeypatch.setenv("KORSTOCKSCAN_MAIN_BAR_SOURCE", "ws_when_ready")
+    monkeypatch.setenv("KORSTOCKSCAN_MAIN_BAR_WS_SYMBOLS", "005930")
+    monkeypatch.setattr(
+        S,
+        "read_shared_completed_bars",
+        lambda *a, **kw: pytest.fail(
+            "unsupported history must not consult a retired writer"
+        ),
+    )
+    calls = []
+
     def rest(token, code, **kwargs):
-        calls.append((code,kwargs))
-        return [], {'api_id':'ka10080'}
-    monkeypatch.setattr('src.utils.kiwoom_utils.get_minute_candles_ka10080_with_meta',rest)
-    now=datetime(2026,10,8,hour,10,tzinfo=ZoneInfo('Asia/Seoul'))
-    receipt={}
-    assert S.selected_completed_bar_payload('005930_AL',now=now,minimum_bars=430,
-        history_scope='session',selection_receipt=receipt) is None
-    assert receipt['maximum_session_bars']==capacity
-    if hour==14:
-        ws={'last_realtime_type_ts':{'0B':now.timestamp()-.1},
-            'last_realtime_type_market_suffix':{'0B':'_AL'},
-            'last_realtime_type_market_route':{'0B':'krx_nxt_integrated'}}
-        _, meta=fetch_entry_candles_with_meta('token','005930_AL',ws,
-            venue='KRX_NXT_INTEGRATED',session='krx_regular',limit=40,now_ts=now,
-            broker_route='SOR',allow_integrated_sor_execution_view=True)
-        assert calls==[('005930_AL',{'limit':430,'explicit_request_code':True})]
-        assert meta['completed_bar_selection']['reason']=='price_basis_equivalence_unproven'
-        assert meta['history_consumer_requirement']['minimum_completed_for_full_recent_window'] == 61
+        calls.append((code, kwargs))
+        return [], {"api_id": "ka10080"}
+
+    monkeypatch.setattr(
+        "src.utils.kiwoom_utils.get_minute_candles_ka10080_with_meta", rest
+    )
+    now = datetime(2026, 10, 8, hour, 10, tzinfo=ZoneInfo("Asia/Seoul"))
+    receipt = {}
+    assert (
+        S.selected_completed_bar_payload(
+            "005930_AL",
+            now=now,
+            minimum_bars=430,
+            history_scope="session",
+            selection_receipt=receipt,
+        )
+        is None
+    )
+    assert receipt["maximum_session_bars"] == capacity
+    if hour == 14:
+        ws = {
+            "last_realtime_type_ts": {"0B": now.timestamp() - 0.1},
+            "last_realtime_type_market_suffix": {"0B": "_AL"},
+            "last_realtime_type_market_route": {"0B": "krx_nxt_integrated"},
+        }
+        _, meta = fetch_entry_candles_with_meta(
+            "token",
+            "005930_AL",
+            ws,
+            venue="KRX_NXT_INTEGRATED",
+            session="krx_regular",
+            limit=40,
+            now_ts=now,
+            broker_route="SOR",
+            allow_integrated_sor_execution_view=True,
+        )
+        assert calls == [("005930_AL", {"limit": 430, "explicit_request_code": True})]
+        assert (
+            meta["completed_bar_selection"]["reason"]
+            == "price_basis_equivalence_unproven"
+        )
+        assert (
+            meta["history_consumer_requirement"][
+                "minimum_completed_for_full_recent_window"
+            ]
+            == 61
+        )
 
 
-@pytest.mark.parametrize('mode,floor',[('ws_when_ready',10),('ws',430)])
-def test_supported_or_strict_ws_history_keeps_invalid_writer_fail_closed(monkeypatch,mode,floor):
+@pytest.mark.parametrize("mode,floor", [("ws_when_ready", 10), ("ws", 430)])
+def test_supported_or_strict_ws_history_keeps_invalid_writer_fail_closed(
+    monkeypatch, mode, floor
+):
     from zoneinfo import ZoneInfo
     from src.trading.market import shared_ws_snapshot as S
-    monkeypatch.setenv('KORSTOCKSCAN_MAIN_BAR_SOURCE',mode)
-    monkeypatch.setenv('KORSTOCKSCAN_MAIN_BAR_WS_SYMBOLS','005930')
-    def invalid(*a,**kw):raise ValueError('completed_bar_live_binding_invalid')
-    monkeypatch.setattr(S,'read_shared_completed_bars',invalid)
-    with pytest.raises(RuntimeError,match='completed_bar_live_binding_invalid'):
-        S.selected_completed_bar_payload('005930_AL',
-            now=datetime(2026,10,8,14,10,tzinfo=ZoneInfo('Asia/Seoul')),minimum_bars=floor)
+
+    monkeypatch.setenv("KORSTOCKSCAN_MAIN_BAR_SOURCE", mode)
+    monkeypatch.setenv("KORSTOCKSCAN_MAIN_BAR_WS_SYMBOLS", "005930")
+
+    def invalid(*a, **kw):
+        raise ValueError("completed_bar_live_binding_invalid")
+
+    monkeypatch.setattr(S, "read_shared_completed_bars", invalid)
+    with pytest.raises(RuntimeError, match="completed_bar_live_binding_invalid"):
+        S.selected_completed_bar_payload(
+            "005930_AL",
+            now=datetime(2026, 10, 8, 14, 10, tzinfo=ZoneInfo("Asia/Seoul")),
+            minimum_bars=floor,
+        )
 
 
-def test_carried_registered_scope_diagnostics_use_native_cell_and_original_rows(monkeypatch):
+def test_carried_registered_scope_diagnostics_use_native_cell_and_original_rows(
+    monkeypatch,
+):
     from copy import deepcopy
-    from src.engine.scalping import continuous_reversal as K, reversal_current_backend as D
+    from src.engine.scalping import (
+        continuous_reversal as K,
+        reversal_current_backend as D,
+    )
     from src.engine.scalping.reversal_source_diagnostics import project
     from src.engine.scalping.reversal_path_catalog import cell_key
     from src.tests.test_continuous_reversal import rows
-    state=K.ReversalState()
-    seq=rows([100]*120+[99,100])
-    for r in seq:state.observe(r,symbol='036930',venue='SOR',session='SOR_REGULAR')
-    snapshot=deepcopy(state.snapshot())
-    event=snapshot[0]
-    event.update(native_epoch=seq[-1][1],native_sequence=seq[-1][2])
-    at=seq[-1][0];day=datetime.fromtimestamp(at,K.KST).date().isoformat()
-    cell=cell_key('036930','REGULAR',100)
-    key=('036930','SOR','036930_AL','REGULAR',day,cell)
-    carried=SimpleNamespace(_LOCK=threading.RLock(),_STATES={key:SimpleNamespace(legacy=state)})
-    native=SimpleNamespace(_LOCK=threading.RLock(),_STATES={},R=carried,
-        _FAMILY={'schema':'continuous_reversal_policy_v6','machine_cells':{cell:{'routes':{'SOR':{'backend':'registered_v4'}}}}})
-    monkeypatch.setattr(D,'backend',lambda *a:native)
-    result=project(snapshot,symbol='036930',venue='SOR',session='SOR_REGULAR',now=at,item='036930_AL')
-    assert result['status']=='observed' and result['volume_ratio_source_status']=='ready'
-    assert result['volume_ratio_observed_seconds']==121
+
+    state = K.ReversalState()
+    seq = rows([100] * 120 + [99, 100])
+    for r in seq:
+        state.observe(r, symbol="036930", venue="SOR", session="SOR_REGULAR")
+    snapshot = deepcopy(state.snapshot())
+    event = snapshot[0]
+    event.update(native_epoch=seq[-1][1], native_sequence=seq[-1][2])
+    at = seq[-1][0]
+    day = datetime.fromtimestamp(at, K.KST).date().isoformat()
+    cell = cell_key("036930", "REGULAR", 100)
+    key = ("036930", "SOR", "036930_AL", "REGULAR", day, cell)
+    carried = SimpleNamespace(
+        _LOCK=threading.RLock(), _STATES={key: SimpleNamespace(legacy=state)}
+    )
+    native = SimpleNamespace(
+        _LOCK=threading.RLock(),
+        _STATES={},
+        R=carried,
+        _FAMILY={
+            "schema": "continuous_reversal_policy_v6",
+            "machine_cells": {cell: {"routes": {"SOR": {"backend": "registered_v4"}}}},
+        },
+    )
+    monkeypatch.setattr(D, "backend", lambda *a: native)
+    result = project(
+        snapshot,
+        symbol="036930",
+        venue="SOR",
+        session="SOR_REGULAR",
+        now=at,
+        item="036930_AL",
+    )
+    assert (
+        result["status"] == "observed"
+        and result["volume_ratio_source_status"] == "ready"
+    )
+    assert result["volume_ratio_observed_seconds"] == 121
 
 
-def test_async_original_monotonic_budget_cannot_be_renewed_after_wall_clock_jump(monkeypatch):
-    from src.engine.scalping.scanner_async_eval import ScannerAsyncEvalContext, FixedWatchGeneration
-    monkeypatch.setattr(time,'time',lambda:100.)
-    monkeypatch.setattr(time,'perf_counter',lambda:10.)
-    ctx=ScannerAsyncEvalContext.create(generation=FixedWatchGeneration('005930','SOR','fixed-watch:x','sha',100.),
-        cache_key='x',submitted_epoch=100,deadline_epoch=105,stock_snapshot={},ws_snapshot={},state_version='watch')
-    monkeypatch.setattr(time,'time',lambda:101.)
-    monkeypatch.setattr(time,'perf_counter',lambda:15.1)
+def test_async_original_monotonic_budget_cannot_be_renewed_after_wall_clock_jump(
+    monkeypatch,
+):
+    from src.engine.scalping.scanner_async_eval import (
+        ScannerAsyncEvalContext,
+        FixedWatchGeneration,
+    )
+
+    monkeypatch.setattr(time, "time", lambda: 100.0)
+    monkeypatch.setattr(time, "perf_counter", lambda: 10.0)
+    ctx = ScannerAsyncEvalContext.create(
+        generation=FixedWatchGeneration("005930", "SOR", "fixed-watch:x", "sha", 100.0),
+        cache_key="x",
+        submitted_epoch=100,
+        deadline_epoch=105,
+        stock_snapshot={},
+        ws_snapshot={},
+        state_version="watch",
+    )
+    monkeypatch.setattr(time, "time", lambda: 101.0)
+    monkeypatch.setattr(time, "perf_counter", lambda: 15.1)
     assert ctx.expired()
-    with pytest.raises(ValueError,match='deadline_expired'):
-        EntryDeadline.create({'snapshot':[{'epoch':100.}]},105,ctx.deadline_perf).require()
+    with pytest.raises(ValueError, match="deadline_expired"):
+        EntryDeadline.create(
+            {"snapshot": [{"epoch": 100.0}]}, 105, ctx.deadline_perf
+        ).require()
 
 
 def test_strict_cdf_boundary_survives_retention(monkeypatch):
     from src.engine.monitoring import runtime_performance as P
-    P.observe('loop_work', 5.0, generation='strict-boundary-test')
-    for _ in range(4100): P.observe('loop_work', 4.999)
-    P.observe('loop_work', 5.001)
-    v=P.snapshot()['metrics']['loop_work']
-    assert v['total_observed']==4102 and v['n']==4096
-    assert v['cumulative_under_five_seconds']==4100
-    assert v['cumulative_over_five_seconds']==1
+
+    P.observe("loop_work", 5.0, generation="strict-boundary-test")
+    for _ in range(4100):
+        P.observe("loop_work", 4.999)
+    P.observe("loop_work", 5.001)
+    v = P.snapshot()["metrics"]["loop_work"]
+    assert v["total_observed"] == 4102 and v["n"] == 4096
+    assert v["cumulative_under_five_seconds"] == 4100
+    assert v["cumulative_over_five_seconds"] == 1
 
 
-@pytest.mark.parametrize('backend,expected',[('union_v6','waiting_native_signal'),('union_v5','waiting_native_signal'),('registered_v4','not_enabled'),(None,'not_enabled')])
-@pytest.mark.parametrize('code',['005930','034020','036930','196170','403870'])
-@pytest.mark.parametrize('bucket,market,route,item_suffix',[
-    ('krx_like_premarket','PRE','NXT','_NX'),
-    ('krx_regular','REGULAR','SOR','_AL'),
-    ('krx_nxt_aftermarket','AFTER','SOR','_AL'),
-])
-def test_native_fixed_scope_without_signal_cannot_fall_back_inline(monkeypatch,backend,expected,code,bucket,market,route,item_suffix):
+@pytest.mark.parametrize(
+    "backend,expected",
+    [
+        ("union_v6", "waiting_native_signal"),
+        ("union_v5", "waiting_native_signal"),
+        ("registered_v4", "not_enabled"),
+        (None, "not_enabled"),
+    ],
+)
+@pytest.mark.parametrize("code", ["005930", "034020", "036930", "196170", "403870"])
+@pytest.mark.parametrize(
+    "bucket,market,route,item_suffix",
+    [
+        ("krx_like_premarket", "PRE", "NXT", "_NX"),
+        ("krx_regular", "REGULAR", "SOR", "_AL"),
+        ("krx_nxt_aftermarket", "AFTER", "SOR", "_AL"),
+    ],
+)
+def test_native_fixed_scope_without_signal_cannot_fall_back_inline(
+    monkeypatch, backend, expected, code, bucket, market, route, item_suffix
+):
     from src.engine import sniper_state_handlers as H
     from src.engine.scalping import reversal_evaluation_context as E
     from src.engine.scalping import reversal_extended_catalog as catalog
     from src.engine.scalping.scanner_async_eval import ScannerAsyncEvalCoordinator
     from src.engine.ai.hot_path_ai_dispatcher import HotPathAIDispatcher
-    key=catalog.cell_key(code,market,110000)
-    family=dict(schema='continuous_reversal_policy_v6',machine_cells={key:{'routes':{route:{'backend':backend}}}})
-    monkeypatch.setattr(E,'prepare',lambda **kw:{'continuous_reversal':family})
-    monkeypatch.setattr(H,'_fixed_watch_entry_source_route',lambda *a:dict(item=code+item_suffix,broker_route=route,market_session_bucket=bucket))
-    monkeypatch.setattr(H,'_request_entry_capacity_preparation',lambda *a,**kw:None)
-    monkeypatch.setattr(H.kiwoom_utils,'get_tick_history_ka10003',lambda *a,**kw:pytest.fail('inline source before native signal'))
-    coordinator=ScannerAsyncEvalCoordinator(ai_dispatcher=HotPathAIDispatcher(loaded_key_count=1))
+
+    key = catalog.cell_key(code, market, 110000)
+    family = dict(
+        schema="continuous_reversal_policy_v6",
+        machine_cells={key: {"routes": {route: {"backend": backend}}}},
+    )
+    monkeypatch.setattr(E, "prepare", lambda **kw: {"continuous_reversal": family})
+    monkeypatch.setattr(
+        H,
+        "_fixed_watch_entry_source_route",
+        lambda *a: dict(
+            item=code + item_suffix, broker_route=route, market_session_bucket=bucket
+        ),
+    )
+    monkeypatch.setattr(H, "_request_entry_capacity_preparation", lambda *a, **kw: None)
+    monkeypatch.setattr(
+        H.kiwoom_utils,
+        "get_tick_history_ka10003",
+        lambda *a, **kw: pytest.fail("inline source before native signal"),
+    )
+    coordinator = ScannerAsyncEvalCoordinator(
+        ai_dispatcher=HotPathAIDispatcher(loaded_key_count=1)
+    )
     try:
-        stock=dict(code=code,status='WATCHING')
-        result=H._resolve_scanner_async_entry_ai(stock,code,{'curr':110000},None,
-            {'scanner_async_eval_coordinator':coordinator},trigger_reason='normal',last_ai_time=0,current_ai_score=0)
-        assert result['status']==expected
-        assert not coordinator.is_pending(generation_id='none',cache_key='none')
-        assert '_scanner_async_generation_id' not in stock
+        stock = dict(code=code, status="WATCHING")
+        result = H._resolve_scanner_async_entry_ai(
+            stock,
+            code,
+            {"curr": 110000},
+            None,
+            {"scanner_async_eval_coordinator": coordinator},
+            trigger_reason="normal",
+            last_ai_time=0,
+            current_ai_score=0,
+        )
+        assert result["status"] == expected
+        assert not coordinator.is_pending(generation_id="none", cache_key="none")
+        assert "_scanner_async_generation_id" not in stock
         # Execute the real consumer branch: waiting native work returns before
         # the legacy inline source path, while unsupported scopes retain it.
-        if expected=='waiting_native_signal':
-            tree=ast.parse(inspect.getsource(H._handle_watching_strategy_branch))
-            node=next(n for n in ast.walk(tree) if isinstance(n,ast.If)
-                      and ast.unparse(n.test)=='scanner_async_enabled')
-            function=ast.FunctionDef(name='consume',args=ast.arguments(posonlyargs=[],args=[],
-                kwonlyargs=[],kw_defaults=[],defaults=[]),decorator_list=[],body=[node])
-            namespace=dict(scanner_async_enabled=True,async_resolution=result,stock=stock,
-                           _set_async_terminal=H._set_async_terminal)
-            exec(compile(ast.fix_missing_locations(ast.Module(body=[function],type_ignores=[])),
-                         '<actual-native-wait-consumer>','exec'),namespace)
-            assert namespace['consume']() is False
-    finally:coordinator.shutdown()
+        if expected == "waiting_native_signal":
+            tree = ast.parse(inspect.getsource(H._handle_watching_strategy_branch))
+            node = next(
+                n
+                for n in ast.walk(tree)
+                if isinstance(n, ast.If)
+                and ast.unparse(n.test) == "scanner_async_enabled"
+            )
+            function = ast.FunctionDef(
+                name="consume",
+                args=ast.arguments(
+                    posonlyargs=[], args=[], kwonlyargs=[], kw_defaults=[], defaults=[]
+                ),
+                decorator_list=[],
+                body=[node],
+            )
+            namespace = dict(
+                scanner_async_enabled=True,
+                async_resolution=result,
+                stock=stock,
+                _set_async_terminal=H._set_async_terminal,
+            )
+            exec(
+                compile(
+                    ast.fix_missing_locations(
+                        ast.Module(body=[function], type_ignores=[])
+                    ),
+                    "<actual-native-wait-consumer>",
+                    "exec",
+                ),
+                namespace,
+            )
+            assert namespace["consume"]() is False
+    finally:
+        coordinator.shutdown()
 
 
 def test_http_late_terminal_remains_accounted_after_minute_eviction(monkeypatch):
     import importlib
-    T0=importlib.reload(T)
-    clock=[1000.0]
-    monkeypatch.setattr(T0.time,'time',lambda:clock[0])
-    def late(*args,**kw):
+
+    T0 = importlib.reload(T)
+    clock = [1000.0]
+    monkeypatch.setattr(T0.time, "time", lambda: clock[0])
+
+    def late(*args, **kw):
         for i in range(600):
-            clock[0]=1060.+i*60
-            T0.measured_http_call(lambda *a,**k:SimpleNamespace(status_code=200),
-                'https://api.kiwoom.com/api/dostk/chart',telemetry_owner='bounded',
-                headers={'api-id':'ka10080'})
+            clock[0] = 1060.0 + i * 60
+            T0.measured_http_call(
+                lambda *a, **k: SimpleNamespace(status_code=200),
+                "https://api.kiwoom.com/api/dostk/chart",
+                telemetry_owner="bounded",
+                headers={"api-id": "ka10080"},
+            )
         return SimpleNamespace(status_code=200)
-    T0.measured_http_call(late,'https://api.kiwoom.com/api/dostk/chart',
-        telemetry_owner='late',headers={'api-id':'ka10080'})
-    s=T0.snapshot()
-    assert s['cumulative_totals']['started']==s['cumulative_totals']['terminal']==601
-    assert s['cumulative_totals']['inflight_unknown']==0
-    assert s['detail_loss']['late_terminal_after_minute_eviction']==1
-    assert sum(b.get('terminal',0) for b in s['minute_buckets'])+s['evicted_minute_totals']['terminal']==601
-    assert s['minute_coverage']=='lower_bound_with_evictions'
+
+    T0.measured_http_call(
+        late,
+        "https://api.kiwoom.com/api/dostk/chart",
+        telemetry_owner="late",
+        headers={"api-id": "ka10080"},
+    )
+    s = T0.snapshot()
+    assert (
+        s["cumulative_totals"]["started"] == s["cumulative_totals"]["terminal"] == 601
+    )
+    assert s["cumulative_totals"]["inflight_unknown"] == 0
+    assert s["detail_loss"]["late_terminal_after_minute_eviction"] == 1
+    assert (
+        sum(b.get("terminal", 0) for b in s["minute_buckets"])
+        + s["evicted_minute_totals"]["terminal"]
+        == 601
+    )
+    assert s["minute_coverage"] == "lower_bound_with_evictions"
 
 
 def test_transport_counter_overflow_retains_totals_and_bounded_keys(monkeypatch):
     import importlib
-    t=importlib.reload(T)
+
+    t = importlib.reload(T)
     for i in range(700):
-        t.demand(str(i),'logical')
-        t.measured_http_call(lambda *a,**k:SimpleNamespace(status_code=200),
-            'https://api.test/chart',telemetry_owner=str(i),headers={'api-id':str(i)})
-    value=t.snapshot()
-    assert len(value['buckets'])<=256 and len(value['demands'])<=256
-    assert value['cumulative_totals']['started']==value['cumulative_totals']['terminal']==700
-    assert sum(b['started'] for b in value['buckets'])==700
-    assert value['detail_loss']['coarse_key_overflow_attempts']>0
+        t.demand(str(i), "logical")
+        t.measured_http_call(
+            lambda *a, **k: SimpleNamespace(status_code=200),
+            "https://api.test/chart",
+            telemetry_owner=str(i),
+            headers={"api-id": str(i)},
+        )
+    value = t.snapshot()
+    assert len(value["buckets"]) <= 256 and len(value["demands"]) <= 256
+    assert (
+        value["cumulative_totals"]["started"]
+        == value["cumulative_totals"]["terminal"]
+        == 700
+    )
+    assert sum(b["started"] for b in value["buckets"]) == 700
+    assert value["detail_loss"]["coarse_key_overflow_attempts"] > 0
 
 
-@pytest.mark.parametrize('change',['removed','holding','replacement','manual'])
-def test_orphaned_native_result_drains_only_its_request(monkeypatch,change):
+@pytest.mark.parametrize("change", ["removed", "holding", "replacement", "manual"])
+def test_orphaned_native_result_drains_only_its_request(monkeypatch, change):
     from src.engine import sniper_state_handlers as H
     from src.engine.scalping import reversal_current_backend as B
-    ack=[];discard=[]
-    monkeypatch.setattr(B,'acknowledge_any',lambda c,**kw:ack.append((c,kw)))
-    monkeypatch.setattr(H,'_manual_control_exclusion_blocked',lambda *a,**kw:change=='manual')
-    result=SimpleNamespace(generation_id='fixed-watch:old',cache_key='old',code='005930',native_claim={'token':'old'})
-    target={'code':'005930','status':'HOLDING' if change=='holding' else 'WATCHING',
-        '_scanner_async_generation_id':'fixed-watch:new' if change=='replacement' else 'fixed-watch:old',
-        '_scanner_async_cache_key':'new' if change=='replacement' else 'old',
-        '_fixed_watch_async_claim':{'token':'new' if change=='replacement' else 'old'}}
-    assert H._discard_orphaned_fixed_watch_result(SimpleNamespace(discard_completed=lambda **kw:(discard.append(kw) or result)),
-        result,[] if change=='removed' else [target])
-    assert len(ack)==len(discard)==1
-    if change=='replacement':assert target['_fixed_watch_async_claim']['token']=='new'
-    if change=='holding':assert '_scanner_async_generation_id' not in target
+
+    ack = []
+    discard = []
+    monkeypatch.setattr(B, "acknowledge_any", lambda c, **kw: ack.append((c, kw)))
+    monkeypatch.setattr(
+        H, "_manual_control_exclusion_blocked", lambda *a, **kw: change == "manual"
+    )
+    result = SimpleNamespace(
+        generation_id="fixed-watch:old",
+        cache_key="old",
+        code="005930",
+        native_claim={"token": "old"},
+    )
+    target = {
+        "code": "005930",
+        "status": "HOLDING" if change == "holding" else "WATCHING",
+        "_scanner_async_generation_id": (
+            "fixed-watch:new" if change == "replacement" else "fixed-watch:old"
+        ),
+        "_scanner_async_cache_key": "new" if change == "replacement" else "old",
+        "_fixed_watch_async_claim": {
+            "token": "new" if change == "replacement" else "old"
+        },
+    }
+    assert H._discard_orphaned_fixed_watch_result(
+        SimpleNamespace(discard_completed=lambda **kw: (discard.append(kw) or result)),
+        result,
+        [] if change == "removed" else [target],
+    )
+    assert len(ack) == len(discard) == 1
+    if change == "replacement":
+        assert target["_fixed_watch_async_claim"]["token"] == "new"
+    if change == "holding":
+        assert "_scanner_async_generation_id" not in target
 
 
 def test_expired_first_source_cannot_launch_candles_or_provider(monkeypatch):
     from src.engine import sniper_state_handlers as H
     from src.engine.scalping.scanner_async_eval import ScannerAsyncEvalCoordinator
     from src.engine.ai.hot_path_ai_dispatcher import HotPathAIDispatcher
-    now=time.time();claim={'token':'expired-source','snapshot':[{'epoch':now,'symbol':'005930',
-        'venue':'SOR','source_item':'005930_AL','event_id':'first'}],'source_registration_receipt':{'sha256':'proof'}}
-    stock={'code':'005930','status':'WATCHING','effective_venue':'SOR','_continuous_reversal_pending_claim':claim}
-    monkeypatch.setattr(H,'_fixed_watch_entry_source_route',lambda *a:{'item':'005930_AL','broker_route':'SOR'})
-    monkeypatch.setattr(H,'_log_entry_pipeline',lambda *a,**kw:None)
-    first=threading.Event();finish=threading.Event()
-    expired=[False];remaining=EntryDeadline.remaining
-    monkeypatch.setattr(EntryDeadline,'remaining',lambda self:0. if expired[0] else remaining(self))
-    def tick(*a,**kw):
-        first.set();finish.wait(1)
-        expired[0]=True
-        return [{'price':1000}]
-    monkeypatch.setattr(H.kiwoom_utils,'get_tick_history_ka10003',tick)
-    monkeypatch.setattr(H,'fetch_entry_candles_with_meta',lambda *a,**k:pytest.fail('late second source'))
-    coordinator=ScannerAsyncEvalCoordinator(ai_dispatcher=HotPathAIDispatcher(loaded_key_count=1))
+
+    now = time.time()
+    claim = {
+        "token": "expired-source",
+        "snapshot": [
+            {
+                "epoch": now,
+                "symbol": "005930",
+                "venue": "SOR",
+                "source_item": "005930_AL",
+                "event_id": "first",
+            }
+        ],
+        "source_registration_receipt": {"sha256": "proof"},
+    }
+    stock = {
+        "code": "005930",
+        "status": "WATCHING",
+        "effective_venue": "SOR",
+        "_continuous_reversal_pending_claim": claim,
+    }
+    monkeypatch.setattr(
+        H,
+        "_fixed_watch_entry_source_route",
+        lambda *a: {"item": "005930_AL", "broker_route": "SOR"},
+    )
+    monkeypatch.setattr(H, "_log_entry_pipeline", lambda *a, **kw: None)
+    first = threading.Event()
+    finish = threading.Event()
+    expired = [False]
+    remaining = EntryDeadline.remaining
+    monkeypatch.setattr(
+        EntryDeadline, "remaining", lambda self: 0.0 if expired[0] else remaining(self)
+    )
+
+    def tick(*a, **kw):
+        first.set()
+        finish.wait(1)
+        expired[0] = True
+        return [{"price": 1000}]
+
+    monkeypatch.setattr(H.kiwoom_utils, "get_tick_history_ka10003", tick)
+    monkeypatch.setattr(
+        H,
+        "fetch_entry_candles_with_meta",
+        lambda *a, **k: pytest.fail("late second source"),
+    )
+    coordinator = ScannerAsyncEvalCoordinator(
+        ai_dispatcher=HotPathAIDispatcher(loaded_key_count=1)
+    )
     try:
-        r=H._resolve_scanner_async_entry_ai(stock,'005930',{'curr':1000},SimpleNamespace(
-            analyze_target=lambda *a,**kw:pytest.fail('late provider')),{'scanner_async_eval_coordinator':coordinator},
-            trigger_reason='first',last_ai_time=0,current_ai_score=50)
-        assert r['status']=='dispatched' and first.wait(1)
-        assert coordinator.pending_count()==1 # Blocking source remains owned.
+        r = H._resolve_scanner_async_entry_ai(
+            stock,
+            "005930",
+            {"curr": 1000},
+            SimpleNamespace(
+                analyze_target=lambda *a, **kw: pytest.fail("late provider")
+            ),
+            {"scanner_async_eval_coordinator": coordinator},
+            trigger_reason="first",
+            last_ai_time=0,
+            current_ai_score=50,
+        )
+        assert r["status"] == "dispatched" and first.wait(1)
+        assert coordinator.pending_count() == 1  # Blocking source remains owned.
         finish.set()
-        until=time.time()+1
-        while coordinator.pending_count() and time.time()<until:time.sleep(.005)
-        assert coordinator.drain_completed()[0].status=='preparation_error'
-    finally:finish.set();coordinator.shutdown()
+        until = time.time() + 1
+        while coordinator.pending_count() and time.time() < until:
+            time.sleep(0.005)
+        assert coordinator.drain_completed()[0].status == "preparation_error"
+    finally:
+        finish.set()
+        coordinator.shutdown()

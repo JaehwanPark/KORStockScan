@@ -6,7 +6,6 @@ import pytest
 
 from src.trading.market import aftermarket_eligibility as contract
 
-
 TRADE_DATE = date(2026, 9, 14)
 
 
@@ -146,48 +145,78 @@ def test_unknown_krx_aftermarket_field_remains_nullable_without_reusing_nxt():
 
 
 def _official_item(**changes):
-    return dict(dict(auditInfo='정상', state='증거금30%|담보대출|신용가능',
-                     orderWarning='0', marketCode='10'), **changes)
+    return dict(
+        dict(
+            auditInfo="정상",
+            state="증거금30%|담보대출|신용가능",
+            orderWarning="0",
+            marketCode="10",
+        ),
+        **changes,
+    )
 
 
-@pytest.mark.parametrize('nxt', [True, False, None])
+@pytest.mark.parametrize("nxt", [True, False, None])
 def test_official_krx_listing_is_independent_of_nxt_membership(nxt):
     result = contract.official_listing_venue_fields(
-        _official_item(), trade_date='2026-10-23', nxt_eligible=nxt)
-    assert result['krx_aftermarket_eligible'] is True
-    assert result['nxt_eligible'] is nxt
-    assert result['eligible'] is True
-    assert result['broker_dynamic_restrictions_verified'] is False
-    assert result['quality_state'] == ('PARTIAL' if nxt is None else 'VALID')
-    assert result['blocked_reasons'] == (['nxt_enable_unknown'] if nxt is None else [])
+        _official_item(), trade_date="2026-10-23", nxt_eligible=nxt
+    )
+    assert result["krx_aftermarket_eligible"] is True
+    assert result["nxt_eligible"] is nxt
+    assert result["eligible"] is True
+    assert result["broker_dynamic_restrictions_verified"] is False
+    assert result["quality_state"] == ("PARTIAL" if nxt is None else "VALID")
+    assert result["blocked_reasons"] == (["nxt_enable_unknown"] if nxt is None else [])
 
 
-@pytest.mark.parametrize('changes', [
-    {'marketCode': '8'}, {'marketCode': '60'}, {'auditInfo': '관리종목'},
-    {'auditInfo': '투자주의환기'}, *[{'orderWarning': str(i)} for i in range(1, 6)],
-    *[{'state': value} for value in (
-        '거래정지', '정리매매', '단기과열', '30분 단위', '투자경고',
-        '투자위험', '이상급등', '관리종목', '초저유동', '투자주의환기',
-        '투자유의', '당일 미거래')],
-])
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"marketCode": "8"},
+        {"marketCode": "60"},
+        {"auditInfo": "관리종목"},
+        {"auditInfo": "투자주의환기"},
+        *[{"orderWarning": str(i)} for i in range(1, 6)],
+        *[
+            {"state": value}
+            for value in (
+                "거래정지",
+                "정리매매",
+                "단기과열",
+                "30분 단위",
+                "투자경고",
+                "투자위험",
+                "이상급등",
+                "관리종목",
+                "초저유동",
+                "투자주의환기",
+                "투자유의",
+                "당일 미거래",
+            )
+        ],
+    ],
+)
 def test_official_reported_exclusion_never_becomes_krx_permission(changes):
     result = contract.official_listing_venue_fields(
-        _official_item(**changes), trade_date='2026-10-23', nxt_eligible=True)
-    assert result['krx_aftermarket_eligible'] is False
-    assert result['eligible'] is False
-    assert result['blocked_reasons']
+        _official_item(**changes), trade_date="2026-10-23", nxt_eligible=True
+    )
+    assert result["krx_aftermarket_eligible"] is False
+    assert result["eligible"] is False
+    assert result["blocked_reasons"]
 
 
-@pytest.mark.parametrize('field', ['auditInfo', 'state', 'orderWarning', 'marketCode'])
+@pytest.mark.parametrize("field", ["auditInfo", "state", "orderWarning", "marketCode"])
 def test_official_required_source_missing_is_unknown(field):
     result = contract.official_listing_venue_fields(
-        _official_item(**{field: ''}), trade_date='2026-10-23', nxt_eligible=False)
-    assert result['krx_aftermarket_eligible'] is None
-    assert result['eligible'] is False
+        _official_item(**{field: ""}), trade_date="2026-10-23", nxt_eligible=False
+    )
+    assert result["krx_aftermarket_eligible"] is None
+    assert result["eligible"] is False
 
 
 def test_official_krx_rule_does_not_rewrite_historical_listing_contract():
     result = contract.official_listing_venue_fields(
-        _official_item(), trade_date='2026-09-11', nxt_eligible=True)
-    assert result['krx_aftermarket_eligible'] is None
-    assert result['krx_aftermarket_ruleset'] is None
+        _official_item(), trade_date="2026-09-11", nxt_eligible=True
+    )
+    assert result["krx_aftermarket_eligible"] is None
+    assert result["krx_aftermarket_ruleset"] is None

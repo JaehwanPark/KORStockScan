@@ -42,8 +42,12 @@ class _PathRule(ctypes.Structure):
 
 
 class _Filter(ctypes.Structure):
-    _fields_ = [("code", ctypes.c_ushort), ("jt", ctypes.c_ubyte),
-                ("jf", ctypes.c_ubyte), ("k", ctypes.c_uint32)]
+    _fields_ = [
+        ("code", ctypes.c_ushort),
+        ("jt", ctypes.c_ubyte),
+        ("jf", ctypes.c_ubyte),
+        ("k", ctypes.c_uint32),
+    ]
 
 
 class _Program(ctypes.Structure):
@@ -57,13 +61,17 @@ def _record(event: str, reason: str) -> None:
     finding = {"event": event, "reason": reason}
     state["violations"].append(finding)
     # No arguments are logged: paths/URLs may carry tokens or other secrets.
-    os.write(state["audit_fd"], (json.dumps(finding, sort_keys=True) + "\n").encode("ascii"))
+    os.write(
+        state["audit_fd"], (json.dumps(finding, sort_keys=True) + "\n").encode("ascii")
+    )
     os.fsync(state["audit_fd"])
 
 
 def _forbid(event: str, reason: str) -> None:
     _record(event, reason)
-    raise IsolationViolation(errno.EPERM, f"validation_side_effect_forbidden:{event}:{reason}")
+    raise IsolationViolation(
+        errno.EPERM, f"validation_side_effect_forbidden:{event}:{reason}"
+    )
 
 
 def _inside_private(path: object, *, dir_fd: object = None) -> bool:
@@ -96,17 +104,36 @@ def _audit(event: str, args: tuple) -> None:
     if event == "sys.settrace" and _STATE.get("permission_trace_installed"):
         _forbid(event, "permission_monitor_replacement")
     if event in {"fcntl.flock", "fcntl.lockf"} or (
-            event == "fcntl.fcntl" and args[1] in {6, 7, 37, 38, 1024}):
+        event == "fcntl.fcntl" and args[1] in {6, 7, 37, 38, 1024}
+    ):
         _forbid(event, "operational_file_lock")
-    if event in {"subprocess.Popen", "os.system", "os.fork", "os.forkpty",
-                 "os.exec", "os.posix_spawn", "pty.spawn"}:
+    if event in {
+        "subprocess.Popen",
+        "os.system",
+        "os.fork",
+        "os.forkpty",
+        "os.exec",
+        "os.posix_spawn",
+        "pty.spawn",
+    }:
         _forbid(event, "process_creation")
-    if event in {"os.kill", "os.killpg", "os.chmod", "os.chown", "os.utime",
-                 "os.setxattr", "os.removexattr", "os.symlink", "os.link"}:
+    if event in {
+        "os.kill",
+        "os.killpg",
+        "os.chmod",
+        "os.chown",
+        "os.utime",
+        "os.setxattr",
+        "os.removexattr",
+        "os.symlink",
+        "os.link",
+    }:
         _forbid(event, "metadata_or_process_control")
     if event == "open":
         path, mode, flags = args
-        writes = bool(flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND))
+        writes = bool(
+            flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND)
+        )
         if writes and not _inside_private(path):
             _forbid(event, "write_outside_private_run")
     elif event in {"os.remove", "os.rmdir", "os.mkdir", "os.truncate"}:
@@ -115,8 +142,10 @@ def _audit(event: str, args: tuple) -> None:
             _forbid(event, "mutation_outside_private_run")
     elif event == "os.rename":
         source, destination, source_fd, destination_fd = args
-        if not (_inside_private(source, dir_fd=source_fd)
-                and _inside_private(destination, dir_fd=destination_fd)):
+        if not (
+            _inside_private(source, dir_fd=source_fd)
+            and _inside_private(destination, dir_fd=destination_fd)
+        ):
             _forbid(event, "rename_outside_private_run")
 
 
@@ -126,7 +155,9 @@ def _permission_trace(frame, event, argument):
     # it and substitutes a fallback. Never suppress an operating-system denial.
     if event == "exception":
         _, error, _ = argument
-        if isinstance(error, PermissionError) and not isinstance(error, IsolationViolation):
+        if isinstance(error, PermissionError) and not isinstance(
+            error, IsolationViolation
+        ):
             _record("python.PermissionError", "permission_denial_observed")
     return _permission_trace
 
@@ -139,7 +170,9 @@ def _syscall(libc: ctypes.CDLL, number: int, *args) -> int:
     return int(result)
 
 
-def _landlock(libc: ctypes.CDLL, root: Path, *, test_roots: tuple[Path, ...] = ()) -> int:
+def _landlock(
+    libc: ctypes.CDLL, root: Path, *, test_roots: tuple[Path, ...] = ()
+) -> int:
     abi = _syscall(libc, 444, ctypes.c_void_p(), ctypes.c_size_t(0), ctypes.c_uint(1))
     if abi < 3:
         raise IsolationUnavailable("landlock_abi_requires_truncate_protection")
@@ -149,7 +182,9 @@ def _landlock(libc: ctypes.CDLL, root: Path, *, test_roots: tuple[Path, ...] = (
         handled |= 1 << 15  # IOCTL_DEV: no device-control permission granted.
     allowed = sum(1 << bit for bit in (1, 4, 5, 7, 8, 13, 14))
     attributes = _Ruleset(handled)
-    ruleset_fd = _syscall(libc, 444, ctypes.byref(attributes), ctypes.sizeof(attributes), 0)
+    ruleset_fd = _syscall(
+        libc, 444, ctypes.byref(attributes), ctypes.sizeof(attributes), 0
+    )
     try:
         # Validation retains its exact single-directory rights. Unit tests use
         # private scratch/cache roots, inherited by every subprocess as well.
@@ -176,30 +211,147 @@ def _seccomp(libc: ctypes.CDLL) -> str:
     machine = platform.machine().lower()
     # Include newer *at metadata/mount calls: distro headers may predate the
     # running kernel. Numbers are shared by supported 64-bit architectures.
-    common = {424, 425, 426, 427, 428, 429, 430, 431, 432, 433, 435, 442,
-              440, 452, 460, 463, 466, 467, 469, 472}
+    common = {
+        424,
+        425,
+        426,
+        427,
+        428,
+        429,
+        430,
+        431,
+        432,
+        433,
+        435,
+        442,
+        440,
+        452,
+        460,
+        463,
+        466,
+        467,
+        469,
+        472,
+    }
     if machine in {"aarch64", "arm64"}:
-        architecture, seccomp_number, ioctl_number, fcntl_number = 0xC00000B7, 277, 29, 25
-        denied = common | set(range(198, 213)) | {
-            5, 6, 7, 14, 15, 16, 32, 33, 39, 40, 41, 52, 53, 54, 55, 88, 97,
-            117, 118, 119, 122, 129, 130, 131, 140,
-            220, 221, 241, 242, 243, 261, 265, 268, 269, 271, 280, 281,
-        }
+        architecture, seccomp_number, ioctl_number, fcntl_number = (
+            0xC00000B7,
+            277,
+            29,
+            25,
+        )
+        denied = (
+            common
+            | set(range(198, 213))
+            | {
+                5,
+                6,
+                7,
+                14,
+                15,
+                16,
+                32,
+                33,
+                39,
+                40,
+                41,
+                52,
+                53,
+                54,
+                55,
+                88,
+                97,
+                117,
+                118,
+                119,
+                122,
+                129,
+                130,
+                131,
+                140,
+                220,
+                221,
+                241,
+                242,
+                243,
+                261,
+                265,
+                268,
+                269,
+                271,
+                280,
+                281,
+            }
+        )
     elif machine in {"x86_64", "amd64"}:
-        architecture, seccomp_number, ioctl_number, fcntl_number = 0xC000003E, 317, 16, 72
-        denied = common | set(range(41, 60)) | {
-            62, 73, 90, 91, 92, 93, 94, 101, 132, 133, 141, 142, 144, 155, 165, 166, 200, 203,
-            188, 189, 190, 197, 198, 199, 234, 235, 259, 260, 261, 268, 272, 280, 288, 298, 299,
-            302, 304, 307, 308, 311, 321, 322,
-        }
+        architecture, seccomp_number, ioctl_number, fcntl_number = (
+            0xC000003E,
+            317,
+            16,
+            72,
+        )
+        denied = (
+            common
+            | set(range(41, 60))
+            | {
+                62,
+                73,
+                90,
+                91,
+                92,
+                93,
+                94,
+                101,
+                132,
+                133,
+                141,
+                142,
+                144,
+                155,
+                165,
+                166,
+                200,
+                203,
+                188,
+                189,
+                190,
+                197,
+                198,
+                199,
+                234,
+                235,
+                259,
+                260,
+                261,
+                268,
+                272,
+                280,
+                288,
+                298,
+                299,
+                302,
+                304,
+                307,
+                308,
+                311,
+                321,
+                322,
+            }
+        )
     else:
         raise IsolationUnavailable(f"unsupported_seccomp_architecture:{machine}")
     # Refuse another ABI; trap all forbidden calls without executing them.
-    instructions = [_Filter(0x20, 0, 0, 4), _Filter(0x15, 1, 0, architecture),
-                    _Filter(0x06, 0, 0, 0x80000000), _Filter(0x20, 0, 0, 0)]
+    instructions = [
+        _Filter(0x20, 0, 0, 4),
+        _Filter(0x15, 1, 0, architecture),
+        _Filter(0x06, 0, 0, 0x80000000),
+        _Filter(0x20, 0, 0, 0),
+    ]
     if architecture == 0xC000003E:
-        instructions += [_Filter(0x35, 0, 1, 0x40000000),
-                         _Filter(0x06, 0, 0, 0x00030000)]
+        instructions += [
+            _Filter(0x35, 0, 1, 0x40000000),
+            _Filter(0x06, 0, 0, 0x00030000),
+        ]
     # Text IO checks terminal status even for a regular file. Permit only known
     # read queries (TCGETS, TIOCGWINSZ, FIONREAD); mutating regular-file ioctls
     # such as FS_IOC_SETFLAGS remain trapped, including on read-only FDs.
@@ -260,7 +412,9 @@ def _close_and_validate_fds(root: Path, close_inherited_fds: bool) -> int:
         if stat.S_ISFIFO(info.st_mode):
             continue
         target = Path(os.readlink(f"/proc/self/fd/{fd}")).resolve()
-        if (stat.S_ISREG(info.st_mode) and target.is_relative_to(root)) or target == Path(os.devnull):
+        if (
+            stat.S_ISREG(info.st_mode) and target.is_relative_to(root)
+        ) or target == Path(os.devnull):
             continue
         raise IsolationUnavailable(f"unsafe_standard_descriptor:{fd}")
     return len(extra)
@@ -278,7 +432,10 @@ def _process_capabilities() -> dict[str, int]:
 
 
 def install_validation_isolation(
-    run_dir: str | Path, audit_path: str | Path, *, close_inherited_fds: bool = True,
+    run_dir: str | Path,
+    audit_path: str | Path,
+    *,
+    close_inherited_fds: bool = True,
 ) -> dict:
     """Install irreversible isolation; call only inside a dedicated child.
 
@@ -292,16 +449,25 @@ def install_validation_isolation(
         raise IsolationUnavailable("validation_isolation_already_installed")
     if sys.platform != "linux":
         raise IsolationUnavailable("validation_isolation_requires_linux")
-    if (os.getuid() == 0 or os.getuid() != os.geteuid() or os.getgid() != os.getegid()
-            or any(_process_capabilities().values())):
+    if (
+        os.getuid() == 0
+        or os.getuid() != os.geteuid()
+        or os.getgid() != os.getegid()
+        or any(_process_capabilities().values())
+    ):
         # no_new_privs prevents acquiring privilege; it does not remove any
         # privilege already held when this fresh child starts.
         raise IsolationUnavailable("validation_requires_unprivileged_identity")
     root_input = Path(run_dir).absolute()
     root = root_input.resolve(strict=True)
     info = root_input.lstat()
-    if (root_input != root or not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid()
-            or stat.S_IMODE(info.st_mode) != 0o700 or root == Path("/")):
+    if (
+        root_input != root
+        or not stat.S_ISDIR(info.st_mode)
+        or info.st_uid != os.getuid()
+        or stat.S_IMODE(info.st_mode) != 0o700
+        or root == Path("/")
+    ):
         raise IsolationUnavailable("validation_run_directory_not_private")
     audit = Path(audit_path).absolute()
     if audit.resolve(strict=False) != audit or not audit.is_relative_to(root):
@@ -311,7 +477,11 @@ def install_validation_isolation(
     if os.getsid(0) != os.getpid() or os.getpgrp() != os.getpid():
         raise IsolationUnavailable("validation_requires_private_process_session")
     closed_fds = _close_and_validate_fds(root, close_inherited_fds)
-    audit_fd = os.open(audit, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW, 0o600)
+    audit_fd = os.open(
+        audit,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW,
+        0o600,
+    )
     _STATE = {"run_dir": root, "audit_fd": audit_fd, "violations": []}
     sys.dont_write_bytecode = True
     sys.addaudithook(_audit)
@@ -330,8 +500,16 @@ def install_validation_isolation(
         "process_creation": False,
         "metadata_changes": False,
         "operational_file_locks": False,
-        "blocked_process_controls": ["signals", "ptrace", "process_vm_writev", "affinity",
-                                     "scheduler", "priority", "resource_limits", "process_madvise"],
+        "blocked_process_controls": [
+            "signals",
+            "ptrace",
+            "process_vm_writev",
+            "affinity",
+            "scheduler",
+            "priority",
+            "resource_limits",
+            "process_madvise",
+        ],
         "readonly_ioctl_requests": [0x5401, 0x5413, 0x541B],
         "no_new_privileges": True,
         "caught_permission_denials_fail": True,
@@ -351,5 +529,8 @@ def assert_no_forbidden_attempts() -> dict:
         raise IsolationUnavailable("validation_isolation_not_complete")
     if _STATE["violations"]:
         raise IsolationViolation("validation_forbidden_attempts_observed")
-    return {"passed": True, "forbidden_attempt_count": 0,
-            "capabilities": dict(_STATE["capabilities"])}
+    return {
+        "passed": True,
+        "forbidden_attempt_count": 0,
+        "capabilities": dict(_STATE["capabilities"]),
+    }

@@ -297,9 +297,12 @@ def test_entry_hurdle_backtest_classifies_overblocking_from_existing_artifacts(
     assert policy_backtest["ai_score_60_74_strong_bundle_recheck"]["state"] == (
         "retired_uncalibrated_ai_score_cohort"
     )
-    assert policy_backtest["ai_score_60_74_strong_bundle_recheck"][
-        "eligible_recheck_attempts"
-    ] is None
+    assert (
+        policy_backtest["ai_score_60_74_strong_bundle_recheck"][
+            "eligible_recheck_attempts"
+        ]
+        is None
+    )
     assert policy_backtest["total"]["eligible_attempts"] == 1
     assert policy_backtest["total"]["conservative_estimated_order_submit_success"] == 0
     overbought = report["summary"]["overbought_gate_counterfactual"]

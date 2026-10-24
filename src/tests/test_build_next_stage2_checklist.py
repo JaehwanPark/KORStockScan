@@ -13,8 +13,6 @@ from src.engine import build_next_stage2_checklist as mod
 from src.engine.sync_docs_backlog_to_project import parse_checklist_tasks
 
 
-
-
 def _write_json(path: Path, payload: dict):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -62,14 +60,20 @@ def _direct_source(
 
 def test_initial_delay_v2_summary_retains_checklist_closure_contract():
     from src.engine.runtime_approval_summary import _economic_projection
+
     row = _direct_source("pre_submit_delay")
-    row["economic_evidence"] = _economic_projection("pre_submit_delay", {
-        "schema": "pre_submit_delay_tuning_v2",
-        "status": "initial_baseline_immediate", "price_ready_pair_n": 21,
-    })
+    row["economic_evidence"] = _economic_projection(
+        "pre_submit_delay",
+        {
+            "schema": "pre_submit_delay_tuning_v2",
+            "status": "initial_baseline_immediate",
+            "price_ready_pair_n": 21,
+        },
+    )
     row["initial_timing_policy"] = {"schema": "pre_submit_delay_tuning_v2"}
     summary = _direct_summary("2026-10-08", sources={"pre_submit_delay": row})
     from src.engine.runtime_approval_summary import PRIMARY_DIRECT_OWNERS
+
     summary["sources"] = {
         owner: row if owner == "pre_submit_delay" else _direct_source(owner)
         for owner in PRIMARY_DIRECT_OWNERS
@@ -78,7 +82,9 @@ def test_initial_delay_v2_summary_retains_checklist_closure_contract():
     summary["required_source_count"] = len(required)
     summary["available_required_source_count"] = len(required)
     mod._validate_direct_summary(summary, "2026-10-08")
-    row["economic_evidence"]["policy_handoff_state"] = "initial_quote_timing_policy_published"
+    row["economic_evidence"][
+        "policy_handoff_state"
+    ] = "initial_quote_timing_policy_published"
     with pytest.raises(RuntimeError, match="initial timing handoff contract invalid"):
         mod._validate_direct_summary(summary, "2026-10-08")
     row["initial_timing_policy"]["runtime_contract_validated"] = True
@@ -86,7 +92,9 @@ def test_initial_delay_v2_summary_retains_checklist_closure_contract():
     mod._validate_direct_summary(summary, "2026-10-08")
     evidence = row["economic_evidence"]
     assert evidence["closure_owner"] == "pre_submit_delay_tuning"
-    assert evidence["closure_test"] == "bound_initial_quote_pairs_policy_loader_and_guard"
+    assert (
+        evidence["closure_test"] == "bound_initial_quote_pairs_policy_loader_and_guard"
+    )
     assert evidence["policy_apply_allowed"] is False
     assert evidence["actual_net_profit_improvement"] is None
 
@@ -95,8 +103,10 @@ def test_direct_summary_preserves_native_handoff_blocker_with_all_sources():
     summary = _direct_summary("2026-10-12")
     summary["blocking_reasons"] = ["main_stop_confirmation:native_handoff_invalid"]
     summary["main_stop_confirmation"] = {
-        "status": "source_gap", "reason": "stop_code_generation_changed",
-        "allowed_runtime_apply": False, "actual_pid_consumed": False,
+        "status": "source_gap",
+        "reason": "stop_code_generation_changed",
+        "allowed_runtime_apply": False,
+        "actual_pid_consumed": False,
     }
     summary["direct_evidence_state"] = "incomplete"
     summary["status"] = "direct_evidence_incomplete"
@@ -211,12 +221,6 @@ def _direct_summary(
             "actual_pid_consumed": actual_pid_consumed,
         },
     }
-
-
-
-
-
-
 
 
 def test_build_next_stage2_checklist_generates_next_trading_day_and_tasks(
@@ -584,38 +588,6 @@ def test_runtime_apply_gap_pending_is_surfaced_in_preopen_task(monkeypatch, tmp_
     assert "runtime_gap_pending_not_consumed" in text
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 def test_completed_machine_source_date_mode_is_safe_for_persistent_holiday_catchup(
     monkeypatch, capsys
 ):
@@ -907,32 +879,38 @@ def test_build_next_stage2_checklist_preserves_unknown_tasks_inside_auto_block(
     assert text.index("[CustomPostclose0526]") > text.index("## 장후 체크리스트")
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-def test_retired_ai_cycle_reports_and_prior_workorders_do_not_reopen(monkeypatch, tmp_path):
+def test_retired_ai_cycle_reports_and_prior_workorders_do_not_reopen(
+    monkeypatch, tmp_path
+):
     docs, ev_dir, *_ = _patch_dirs(monkeypatch, tmp_path)
     monkeypatch.setattr(mod, "PROJECT_ROOT", tmp_path)
     day = "2026-09-17"
-    _write_json(ev_dir / f"threshold_cycle_ev_{day}.json", {"runtime_apply": {"runtime_change": False}})
-    legacy = tmp_path / "data/report/main_ai_quality_r0_r3" / f"main_ai_quality_r0_r3_cycle_{day}.json"
-    _write_json(legacy, {"schema": "main_ai_quality_postclose_r0_r3_cycle_v1", "source_only_gap_workorders": [{"owner": "MicroReversionForwardCollectorContinuity"}]})
+    _write_json(
+        ev_dir / f"threshold_cycle_ev_{day}.json",
+        {"runtime_apply": {"runtime_change": False}},
+    )
+    legacy = (
+        tmp_path
+        / "data/report/main_ai_quality_r0_r3"
+        / f"main_ai_quality_r0_r3_cycle_{day}.json"
+    )
+    _write_json(
+        legacy,
+        {
+            "schema": "main_ai_quality_postclose_r0_r3_cycle_v1",
+            "source_only_gap_workorders": [
+                {"owner": "MicroReversionForwardCollectorContinuity"}
+            ],
+        },
+    )
     result = mod.build_next_stage2_checklist(day)
     path = Path(result["path"])
     text = path.read_text()
     # A previously generated OPEN workorder must also disappear on the next build.
-    text = text.replace("## 장후 체크리스트", "## 장후 체크리스트\n\n- [ ] `[MainAIQualitySourceGapOld0918] retired repair` (Due: 2026-09-18, Slot: POSTCLOSE, TimeWindow: 21:40~21:50, Track: RuntimeStability)\n")
+    text = text.replace(
+        "## 장후 체크리스트",
+        "## 장후 체크리스트\n\n- [ ] `[MainAIQualitySourceGapOld0918] retired repair` (Due: 2026-09-18, Slot: POSTCLOSE, TimeWindow: 21:40~21:50, Track: RuntimeStability)\n",
+    )
     path.write_text(text)
     mod.build_next_stage2_checklist(day)
     text = path.read_text()
@@ -992,42 +970,69 @@ def test_direct_summary_accepts_current_main_only_census():
     assert mod._validate_direct_summary(payload, "2026-10-08") == payload
 
 
-@pytest.mark.parametrize('owner', ['main_mechanistic_entry','compact_auxiliary'])
-@pytest.mark.parametrize('complete', [True, False])
+@pytest.mark.parametrize("owner", ["main_mechanistic_entry", "compact_auxiliary"])
+@pytest.mark.parametrize("complete", [True, False])
 def test_actual_registered_carry_projection_matches_checklist_contract(owner, complete):
     from src.engine import runtime_approval_summary as producer
+
     payload = _main_only_summary()
-    row = _direct_source(owner, comparison_status='cumulative_winrate_selected',
-                         policy_handoff_state='verified', policy_valid=True)
-    row['economic_evidence']['selection_metric']='cumulative_raw_win_fraction'
-    component=dict(status='completed',adoption_basis='carried',comparison_complete=complete)
-    row['economic_evidence'].update(producer._reversal_comparison_disposition(
-        dict(comparison_complete=complete),component=component))
-    payload['sources'][owner]=row
-    assert row['economic_evidence']['policy_handoff_state']=='incumbent_preserved'
-    assert row['policy_receipt']['valid'] is True
-    assert row['economic_evidence']['policy_apply_allowed'] is False
-    assert mod._validate_direct_summary(payload,'2026-10-08')==payload
+    row = _direct_source(
+        owner,
+        comparison_status="cumulative_winrate_selected",
+        policy_handoff_state="verified",
+        policy_valid=True,
+    )
+    row["economic_evidence"]["selection_metric"] = "cumulative_raw_win_fraction"
+    component = dict(
+        status="completed", adoption_basis="carried", comparison_complete=complete
+    )
+    row["economic_evidence"].update(
+        producer._reversal_comparison_disposition(
+            dict(comparison_complete=complete), component=component
+        )
+    )
+    payload["sources"][owner] = row
+    assert row["economic_evidence"]["policy_handoff_state"] == "incumbent_preserved"
+    assert row["policy_receipt"]["valid"] is True
+    assert row["economic_evidence"]["policy_apply_allowed"] is False
+    assert mod._validate_direct_summary(payload, "2026-10-08") == payload
 
 
-@pytest.mark.parametrize("owner", [
-    "source_quality", "entry_cancel_wait", "entry_split", "pre_submit_delay",
-    "scale_in_split", "ws_freshness", "main_mechanistic_entry",
-    "compact_auxiliary", "rising_missed",
-])
+@pytest.mark.parametrize(
+    "owner",
+    [
+        "source_quality",
+        "entry_cancel_wait",
+        "entry_split",
+        "pre_submit_delay",
+        "scale_in_split",
+        "ws_freshness",
+        "main_mechanistic_entry",
+        "compact_auxiliary",
+        "rising_missed",
+    ],
+)
 def test_main_only_summary_still_rejects_missing_active_owner(owner):
     payload = _main_only_summary()
     payload["sources"].pop(owner)
     payload["required_source_count"] = payload["available_required_source_count"] = 8
-    with pytest.raises(RuntimeError, match="primary source census incomplete: " + owner):
+    with pytest.raises(
+        RuntimeError, match="primary source census incomplete: " + owner
+    ):
         mod._validate_direct_summary(payload, "2026-10-08")
 
 
-@pytest.mark.parametrize("defect", [None, "receipt", "authority", "metric", "owner", "status"])
+@pytest.mark.parametrize(
+    "defect", [None, "receipt", "authority", "metric", "owner", "status"]
+)
 def test_winrate_handoff_is_verified_without_economic_or_runtime_authority(defect):
     owner = "entry_split" if defect == "owner" else "compact_auxiliary"
-    row = _direct_source(owner, comparison_status="cumulative_winrate_selected",
-                         policy_handoff_state="verified", policy_valid=True)
+    row = _direct_source(
+        owner,
+        comparison_status="cumulative_winrate_selected",
+        policy_handoff_state="verified",
+        policy_valid=True,
+    )
     row["economic_evidence"]["selection_metric"] = "cumulative_raw_win_fraction"
     if defect == "receipt":
         row["policy_receipt"]["valid"] = False
@@ -1047,11 +1052,21 @@ def test_winrate_handoff_is_verified_without_economic_or_runtime_authority(defec
 
 
 def test_direct_family_refresh_drops_stale_generated_task_but_keeps_manual_auto_task():
-    existing = "\n".join((mod.AUTO_START,
-        "- [ ] `[DirectFamilySourceRepairLowPriceExpansion] stale generated task`",
-        "- [ ] `[ManualOtherOwner] retained manual task`", mod.AUTO_END))
-    current = "\n".join((mod.AUTO_START,
-        "- [ ] `[DirectFamilySourceRepairPreSubmitDelay] current generated task`", mod.AUTO_END))
+    existing = "\n".join(
+        (
+            mod.AUTO_START,
+            "- [ ] `[DirectFamilySourceRepairLowPriceExpansion] stale generated task`",
+            "- [ ] `[ManualOtherOwner] retained manual task`",
+            mod.AUTO_END,
+        )
+    )
+    current = "\n".join(
+        (
+            mod.AUTO_START,
+            "- [ ] `[DirectFamilySourceRepairPreSubmitDelay] current generated task`",
+            mod.AUTO_END,
+        )
+    )
 
     merged = mod._merge_preserved_auto_tasks(existing, current)
 
@@ -1060,15 +1075,19 @@ def test_direct_family_refresh_drops_stale_generated_task_but_keeps_manual_auto_
     assert "ManualOtherOwner" in merged
 
 
-def test_direct_family_refresh_preserves_unrelated_manual_open_task(monkeypatch, tmp_path):
+def test_direct_family_refresh_preserves_unrelated_manual_open_task(
+    monkeypatch, tmp_path
+):
     _patch_dirs(monkeypatch, tmp_path)
     monkeypatch.setattr(mod, "PROJECT_ROOT", tmp_path)
     day = "2026-09-19"
     _write_json(mod._direct_summary_path(day), _direct_summary(day))
     path = Path(mod.build_next_stage2_checklist(day)["path"])
-    manual = ("- [ ] `[PostcloseWidgetEodSlotAdmission] widget source wait` "
+    manual = (
+        "- [ ] `[PostcloseWidgetEodSlotAdmission] widget source wait` "
         "(`Due: 2026-09-21`, `Slot: POSTCLOSE`, `TimeWindow: 20:10~21:40`, `Track: RuntimeStability`)\n"
-        "  - 완료 기준: unchanged source and native receipt.\n")
+        "  - 완료 기준: unchanged source and native receipt.\n"
+    )
     path.write_text(path.read_text().replace(mod.AUTO_END, manual + mod.AUTO_END))
     mod.build_next_stage2_checklist(day)
     assert path.read_text().count("[PostcloseWidgetEodSlotAdmission]") == 1
@@ -1223,13 +1242,9 @@ def test_direct_family_historical_gap_keeps_verified_prospective_natural_task(
         "main_mechanistic_entry",
         comparison_status="insufficient_sample",
         resolution_mode="historical_unrecoverable",
-        first_blocker=(
-            "not_available_without_exact_changed_decision_owner_replay"
-        ),
+        first_blocker=("not_available_without_exact_changed_decision_owner_replay"),
     )
-    source["economic_evidence"]["prospective_resolution_mode"] = (
-        "natural_maturity"
-    )
+    source["economic_evidence"]["prospective_resolution_mode"] = "natural_maturity"
     _write_json(
         mod._direct_summary_path(day),
         _direct_summary(day, sources={"ai_outcome": source}),
@@ -1238,9 +1253,7 @@ def test_direct_family_historical_gap_keeps_verified_prospective_natural_task(
     result = mod.build_next_stage2_checklist(day)
     text = Path(result["path"]).read_text(encoding="utf-8")
 
-    assert result["tasks"] == [
-        "DirectFamilyNaturalEvidenceMainMechanisticEntry"
-    ]
+    assert result["tasks"] == ["DirectFamilyNaturalEvidenceMainMechanisticEntry"]
     assert "resolution_mode=`historical_unrecoverable`" in text
     assert "prospective_resolution_mode=`natural_maturity`" in text
     assert "DirectFamilySourceRepairMainMechanisticEntry" not in text
@@ -1256,9 +1269,7 @@ def test_compact_historical_gap_projects_future_natural_task(monkeypatch, tmp_pa
         resolution_mode="historical_unrecoverable",
         first_blocker="exact_stop_distance_missing_or_invalid",
     )
-    source["economic_evidence"]["prospective_resolution_mode"] = (
-        "natural_maturity"
-    )
+    source["economic_evidence"]["prospective_resolution_mode"] = "natural_maturity"
     _write_json(
         mod._direct_summary_path(day),
         _direct_summary(day, sources={"compact_auxiliary": source}),
@@ -1267,9 +1278,7 @@ def test_compact_historical_gap_projects_future_natural_task(monkeypatch, tmp_pa
     result = mod.build_next_stage2_checklist(day)
     text = Path(result["path"]).read_text(encoding="utf-8")
 
-    assert result["tasks"] == [
-        "DirectFamilyNaturalEvidenceCompactAuxiliary"
-    ]
+    assert result["tasks"] == ["DirectFamilyNaturalEvidenceCompactAuxiliary"]
     assert "prospective_resolution_mode=`natural_maturity`" in text
     assert "DirectFamilySourceRepairCompactAuxiliary" not in text
 
@@ -1316,66 +1325,107 @@ def _generation_warning_summary(*, family="auxiliary", status="unverified"):
     summary = _main_only_summary()
     summary["date"] = "2026-10-14"
     summary["preopen_consumption_receipt"].update(
-        source_date="2026-10-14", apply_date="2026-10-15",
+        source_date="2026-10-14",
+        apply_date="2026-10-15",
         effective_dates=["2026-10-15"],
         manifest_path="/runtime/runtime_policy_bootstrap_2026-10-15.json",
         verification_path="/runtime/runtime_policy_bootstrap_verify_2026-10-15.json",
     )
-    summary["policy_generation_capabilities"] = [{
-        "family": family, "source_date": "2026-10-14", "status": status,
-        "findings": [] if status == "verified" else ["policy_generation_unverified"],
-        "repair_owner": OWNERS[family], "closure_test": "source_to_publisher_native_reader",
-        "artifact": f"/evidence/{family}/evaluation.json", "report_sha256": "r" * 64,
-        "source_generation": "s" * 64, "code_sha256": "c" * 64,
-        "contract_sha256": "g" * 64, "runtime_effect": False,
-        "allowed_runtime_apply": False,
-    }]
+    summary["policy_generation_capabilities"] = [
+        {
+            "family": family,
+            "source_date": "2026-10-14",
+            "status": status,
+            "findings": (
+                [] if status == "verified" else ["policy_generation_unverified"]
+            ),
+            "repair_owner": OWNERS[family],
+            "closure_test": "source_to_publisher_native_reader",
+            "artifact": f"/evidence/{family}/evaluation.json",
+            "report_sha256": "r" * 64,
+            "source_generation": "s" * 64,
+            "code_sha256": "c" * 64,
+            "contract_sha256": "g" * 64,
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        }
+    ]
     return summary
 
 
 def _project_generation_warning(summary):
     return mod._project_direct_tasks(
-        summary=summary, source_date="2026-10-14", target_date="2026-10-15",
+        summary=summary,
+        source_date="2026-10-14",
+        target_date="2026-10-15",
         summary_path=Path("/evidence/runtime_approval_summary_2026-10-14.json"),
         summary_sha256="a" * 64,
     )
 
 
-@pytest.mark.parametrize('economic_gap', [False, True])
-def test_verified_code_successor_does_not_reopen_completed_research(monkeypatch,economic_gap):
+@pytest.mark.parametrize("economic_gap", [False, True])
+def test_verified_code_successor_does_not_reopen_completed_research(
+    monkeypatch, economic_gap
+):
     from src.engine.monitoring import policy_generation_code_handoff as H
-    summary=_generation_warning_summary()
+
+    summary = _generation_warning_summary()
     if economic_gap:
-        summary['sources']['compact_auxiliary']=_direct_source('compact_auxiliary',comparison_status='source_gap',first_blocker='real_source_gap')
-    original=json.dumps(summary,sort_keys=True)
-    monkeypatch.setattr(H,'current_fixture_observation',lambda observed,data:dict(observed,status='verified',findings=[],current_code_capability_verified=True))
-    tasks,actions=_project_generation_warning(summary)
-    assert bool(tasks)==economic_gap
+        summary["sources"]["compact_auxiliary"] = _direct_source(
+            "compact_auxiliary",
+            comparison_status="source_gap",
+            first_blocker="real_source_gap",
+        )
+    original = json.dumps(summary, sort_keys=True)
+    monkeypatch.setattr(
+        H,
+        "current_fixture_observation",
+        lambda observed, data: dict(
+            observed,
+            status="verified",
+            findings=[],
+            current_code_capability_verified=True,
+        ),
+    )
+    tasks, actions = _project_generation_warning(summary)
+    assert bool(tasks) == economic_gap
     if economic_gap:
-        assert tasks[0].task_id=='DirectFamilySourceRepairCompactAuxiliary'
-        assert 'real_source_gap' in '\n'.join(tasks[0].lines)
-        assert 'POLICY_GENERATION_CAPABILITY_TASK' not in '\n'.join(tasks[0].lines)
-    assert json.dumps(summary,sort_keys=True)==original
+        assert tasks[0].task_id == "DirectFamilySourceRepairCompactAuxiliary"
+        assert "real_source_gap" in "\n".join(tasks[0].lines)
+        assert "POLICY_GENERATION_CAPABILITY_TASK" not in "\n".join(tasks[0].lines)
+    assert json.dumps(summary, sort_keys=True) == original
 
 
-def test_verified_code_successor_resolves_trusted_release_data_mount(monkeypatch,tmp_path):
+def test_verified_code_successor_resolves_trusted_release_data_mount(
+    monkeypatch, tmp_path
+):
     from src.engine.monitoring import policy_generation_code_handoff as H
-    data=tmp_path/'data';data.mkdir();release=tmp_path/'release';release.mkdir()
-    (release/'data').symlink_to(data,target_is_directory=True)
-    monkeypatch.setattr(mod,'EV_REPORT_DIR',release/'data/report/threshold_cycle_ev')
-    def projection(observed,root):
-        assert root==data.resolve()
-        return dict(observed,status='verified',findings=[])
-    monkeypatch.setattr(H,'current_fixture_observation',projection)
-    tasks,_=_project_generation_warning(_generation_warning_summary())
-    assert tasks==[]
+
+    data = tmp_path / "data"
+    data.mkdir()
+    release = tmp_path / "release"
+    release.mkdir()
+    (release / "data").symlink_to(data, target_is_directory=True)
+    monkeypatch.setattr(
+        mod, "EV_REPORT_DIR", release / "data/report/threshold_cycle_ev"
+    )
+
+    def projection(observed, root):
+        assert root == data.resolve()
+        return dict(observed, status="verified", findings=[])
+
+    monkeypatch.setattr(H, "current_fixture_observation", projection)
+    tasks, _ = _project_generation_warning(_generation_warning_summary())
+    assert tasks == []
 
 
 def test_generation_warning_keeps_repair_owner_and_valid_preopen_independent():
     summary = _generation_warning_summary()
     summary["sources"]["compact_auxiliary"] = _direct_source(
-        "compact_auxiliary", comparison_status="cumulative_winrate_selected",
-        policy_handoff_state="verified", policy_valid=True,
+        "compact_auxiliary",
+        comparison_status="cumulative_winrate_selected",
+        policy_handoff_state="verified",
+        policy_valid=True,
     )
     summary["preopen_consumption_state"] = "pending"
     original = json.dumps(summary, sort_keys=True)
@@ -1383,31 +1433,50 @@ def test_generation_warning_keeps_repair_owner_and_valid_preopen_independent():
     tasks, actions = _project_generation_warning(summary)
 
     assert [t.task_id for t in tasks] == [
-        "DirectFamilyPreopenPolicyHandoff", "DirectFamilySourceRepairCompactAuxiliary",
+        "DirectFamilyPreopenPolicyHandoff",
+        "DirectFamilySourceRepairCompactAuxiliary",
     ]
     assert actions["compact_auxiliary"] == "preopen_policy_handoff"
     assert actions["policy_generation:auxiliary"] == "producer_contract_repair"
     text = "\n".join(tasks[1].lines)
-    for value in ("/evidence/auxiliary/evaluation.json", "r" * 64, "s" * 64,
-                  "c" * 64, "g" * 64, "source_to_publisher_native_reader",
-                  "report_only", "runtime_effect=false", "allowed_runtime_apply=false"):
+    for value in (
+        "/evidence/auxiliary/evaluation.json",
+        "r" * 64,
+        "s" * 64,
+        "c" * 64,
+        "g" * 64,
+        "source_to_publisher_native_reader",
+        "report_only",
+        "runtime_effect=false",
+        "allowed_runtime_apply=false",
+    ):
         assert value in text
     assert json.dumps(summary, sort_keys=True) == original
 
 
-@pytest.mark.parametrize("family", ["auxiliary", "entry_cancel_wait", "rising_missed", "holding_vote"])
-@pytest.mark.parametrize("status", ["unverified", "structurally_blocked", "unobservable", "verified"])
+@pytest.mark.parametrize(
+    "family", ["auxiliary", "entry_cancel_wait", "rising_missed", "holding_vote"]
+)
+@pytest.mark.parametrize(
+    "status", ["unverified", "structurally_blocked", "unobservable", "verified"]
+)
 def test_generation_warning_projects_native_owner_only_when_actionable(family, status):
     from src.engine.monitoring.policy_generation_contract import OWNERS
 
-    tasks, _ = _project_generation_warning(_generation_warning_summary(family=family, status=status))
-    assert [t.task_id for t in tasks] == ([] if status == "verified" else [OWNERS[family]])
+    tasks, _ = _project_generation_warning(
+        _generation_warning_summary(family=family, status=status)
+    )
+    assert [t.task_id for t in tasks] == (
+        [] if status == "verified" else [OWNERS[family]]
+    )
 
 
 def test_generation_warning_merges_with_existing_economic_repair_and_duplicate_capability():
     summary = _generation_warning_summary()
     summary["sources"]["compact_auxiliary"] = _direct_source(
-        "compact_auxiliary", comparison_status="source_gap", first_blocker="real_source_gap",
+        "compact_auxiliary",
+        comparison_status="source_gap",
+        first_blocker="real_source_gap",
     )
     summary["policy_generation_capabilities"] *= 2
     tasks, actions = _project_generation_warning(summary)
@@ -1421,16 +1490,20 @@ def test_generation_warning_merges_with_existing_economic_repair_and_duplicate_c
 
 @pytest.mark.parametrize("manual_on_target", [False, True])
 def test_generation_warning_has_one_current_owner_without_borrowing_prior_day(
-    monkeypatch, tmp_path, manual_on_target,
+    monkeypatch,
+    tmp_path,
+    manual_on_target,
 ):
     docs, *_ = _patch_dirs(monkeypatch, tmp_path)
     monkeypatch.setattr(mod, "PROJECT_ROOT", tmp_path)
     source_day, target_day = "2026-10-14", "2026-10-15"
     manual_day = target_day if manual_on_target else source_day
     task_id = "DirectFamilySourceRepairCompactAuxiliary"
-    manual = (f"# Manual\n\n- [ ] `[{task_id}] existing owner` "
-              f"(`Due: {manual_day}`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~21:40`, "
-              "`Track: RuntimeStability`)\n  - 기존 원본 이력과 Acceptance 보존.\n")
+    manual = (
+        f"# Manual\n\n- [ ] `[{task_id}] existing owner` "
+        f"(`Due: {manual_day}`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~21:40`, "
+        "`Track: RuntimeStability`)\n  - 기존 원본 이력과 Acceptance 보존.\n"
+    )
     manual_path = docs / "checklists" / f"{manual_day}-stage2-todo-checklist.md"
     manual_path.parent.mkdir(parents=True, exist_ok=True)
     manual_path.write_text(manual, encoding="utf-8")
@@ -1440,8 +1513,12 @@ def test_generation_warning_has_one_current_owner_without_borrowing_prior_day(
     target = Path(result["path"])
     text = target.read_text(encoding="utf-8")
     assert text.count(f"[{task_id}]") == 1
-    parsed = [task for task in parse_checklist_tasks(current_path=target)
-              if Path(task.source).resolve() == target.resolve() and task.title.startswith(f"[{task_id}]")]
+    parsed = [
+        task
+        for task in parse_checklist_tasks(current_path=target)
+        if Path(task.source).resolve() == target.resolve()
+        and task.title.startswith(f"[{task_id}]")
+    ]
     assert len(parsed) == 1
     assert result["manual_task_reuse_count"] == int(manual_on_target)
     if manual_on_target:
@@ -1452,10 +1529,14 @@ def test_generation_warning_has_one_current_owner_without_borrowing_prior_day(
     assert target.read_text(encoding="utf-8").count(f"[{task_id}]") == 1
 
 
-@pytest.mark.parametrize("field,value", [
-    ("source_date", "2026-10-13"), ("family", "unknown_family"),
-    ("repair_owner", "UnrelatedManualOwner"),
-])
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("source_date", "2026-10-13"),
+        ("family", "unknown_family"),
+        ("repair_owner", "UnrelatedManualOwner"),
+    ],
+)
 def test_generation_warning_rejects_wrong_source_or_owner(field, value):
     summary = _generation_warning_summary()
     summary["policy_generation_capabilities"][0][field] = value
@@ -1463,8 +1544,12 @@ def test_generation_warning_rejects_wrong_source_or_owner(field, value):
         _project_generation_warning(summary)
 
 
-@pytest.mark.parametrize("family", ["auxiliary", "entry_cancel_wait", "rising_missed", "holding_vote"])
-def test_generation_warning_verified_successor_removes_only_generated_task(monkeypatch, tmp_path, family):
+@pytest.mark.parametrize(
+    "family", ["auxiliary", "entry_cancel_wait", "rising_missed", "holding_vote"]
+)
+def test_generation_warning_verified_successor_removes_only_generated_task(
+    monkeypatch, tmp_path, family
+):
     from src.engine.monitoring.policy_generation_contract import OWNERS
 
     _patch_dirs(monkeypatch, tmp_path)
@@ -1474,11 +1559,15 @@ def test_generation_warning_verified_successor_removes_only_generated_task(monke
     _write_json(mod._direct_summary_path(day), summary)
     target = Path(mod.build_next_stage2_checklist(day)["path"])
     assert f"[{OWNERS[family]}]" in target.read_text(encoding="utf-8")
-    manual = ("- [ ] `[UnrelatedCurrentOwner] retain original task` "
-              "(`Due: 2026-10-15`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~21:40`, "
-              "`Track: RuntimeStability`)\n")
+    manual = (
+        "- [ ] `[UnrelatedCurrentOwner] retain original task` "
+        "(`Due: 2026-10-15`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~21:40`, "
+        "`Track: RuntimeStability`)\n"
+    )
     text = target.read_text(encoding="utf-8")
-    target.write_text(text.replace(mod.AUTO_END, manual + mod.AUTO_END), encoding="utf-8")
+    target.write_text(
+        text.replace(mod.AUTO_END, manual + mod.AUTO_END), encoding="utf-8"
+    )
     summary["policy_generation_capabilities"][0].update(status="verified", findings=[])
     _write_json(mod._direct_summary_path(day), summary)
 
@@ -1498,7 +1587,7 @@ def test_direct_family_removes_stale_generation_marker_outside_auto_block(
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(
         "# Existing\n\n"
-        "<!-- POSTCLOSE_SUMMARY_SOURCES {\"schema\": \"stale\"} -->\n\n"
+        '<!-- POSTCLOSE_SUMMARY_SOURCES {"schema": "stale"} -->\n\n'
         "manual content\n",
         encoding="utf-8",
     )
@@ -1553,9 +1642,7 @@ def test_direct_family_natural_acceptance_requires_actual_pid_receipt(
     )
     _write_json(mod._direct_summary_path(day), missing_pid)
 
-    with pytest.raises(
-        RuntimeError, match="natural acceptance lacks PID receipt"
-    ):
+    with pytest.raises(RuntimeError, match="natural acceptance lacks PID receipt"):
         mod.build_next_stage2_checklist(day)
 
     _write_json(
@@ -1592,9 +1679,7 @@ def test_direct_family_rejects_contradictory_non_edge_apply_authority(
         mod.build_next_stage2_checklist(day)
 
 
-def test_direct_family_source_change_keeps_existing_checklist(
-    monkeypatch, tmp_path
-):
+def test_direct_family_source_change_keeps_existing_checklist(monkeypatch, tmp_path):
     docs, *_ = _patch_dirs(monkeypatch, tmp_path)
     monkeypatch.setattr(mod, "PROJECT_ROOT", tmp_path)
     day = "2026-09-19"
@@ -1615,33 +1700,48 @@ def test_direct_family_source_change_keeps_existing_checklist(
     assert target.read_text(encoding="utf-8") == "original\n"
 
 
-def test_actual_cancel_wait_tower_checklist_and_scoped_strict_chain(monkeypatch, tmp_path):
+def test_actual_cancel_wait_tower_checklist_and_scoped_strict_chain(
+    monkeypatch, tmp_path
+):
     from src.tests.test_entry_cancel_wait_tuning import _reconciliation_fixture
-    from src.tests.test_tuning_performance_control_tower import _patch_dirs as patch_tower
+    from src.tests.test_tuning_performance_control_tower import (
+        _patch_dirs as patch_tower,
+    )
     from src.engine.automation import entry_cancel_wait_tuning as cancel
     from src.engine.automation import tuning_performance_control_tower as tower
     from src.engine.automation import postclose_summary_handoff as handoff
-    report, policy, _, policy_path = _reconciliation_fixture(tmp_path, monkeypatch, unknown_history=True)
+
+    report, policy, _, policy_path = _reconciliation_fixture(
+        tmp_path, monkeypatch, unknown_history=True
+    )
     _patch_dirs(monkeypatch, tmp_path)
-    monkeypatch.setattr(mod, 'PROJECT_ROOT', tmp_path)
+    monkeypatch.setattr(mod, "PROJECT_ROOT", tmp_path)
     patch_tower(monkeypatch, tmp_path)
-    day = '2026-10-02'
-    summary = _direct_summary(day, apply_date='2026-10-06')
-    summary['sources']['entry_cancel_wait']['economic_evidence']['cancel_wait_reconciliation'] = cancel.validated_reconciliation_view(report)
+    day = "2026-10-02"
+    summary = _direct_summary(day, apply_date="2026-10-06")
+    summary["sources"]["entry_cancel_wait"]["economic_evidence"][
+        "cancel_wait_reconciliation"
+    ] = cancel.validated_reconciliation_view(report)
     _write_json(mod._direct_summary_path(day), summary)
     tower.build_tuning_performance_control_tower(day)
     result = mod.build_next_stage2_checklist(day)
-    path = Path(result['path'])
-    expected = cancel.checklist_handoff(cancel.handoff_view(report, policy, policy_path))
+    path = Path(result["path"])
+    expected = cancel.checklist_handoff(
+        cancel.handoff_view(report, policy, policy_path)
+    )
     assert path.read_text().count(expected) == 1
     assert '"unresolved_prior_custody_count": null' in path.read_text()
     # Other families' prepared/PID gates are outside this isolated contract test.
-    monkeypatch.setattr(handoff, 'verify_summary_handoff', lambda *_a, **_k: {'issues':[]})
-    assert cancel.verify_handoff(day)['status'] == 'PASS'
-    path.write_text(path.read_text()+'\n'+expected)
+    monkeypatch.setattr(
+        handoff, "verify_summary_handoff", lambda *_a, **_k: {"issues": []}
+    )
+    assert cancel.verify_handoff(day)["status"] == "PASS"
+    path.write_text(path.read_text() + "\n" + expected)
     checked = cancel.verify_handoff(day)
-    assert checked['status'] == 'FAIL'
-    assert 'cancel_wait_last_consumer_semantics_or_generation_invalid' in checked['issues']
+    assert checked["status"] == "FAIL"
+    assert (
+        "cancel_wait_last_consumer_semantics_or_generation_invalid" in checked["issues"]
+    )
 
 
 def _patch_dirs(monkeypatch, tmp_path):
@@ -1702,6 +1802,7 @@ def _patch_dirs(monkeypatch, tmp_path):
     )
     return docs, ev, openai, swing, code
 
+
 def _write_machine_micro_approval_report(path: Path, payload: dict) -> None:
     source_date = str(payload.get("target_date") or "")
     attribution_path = (
@@ -1740,6 +1841,7 @@ def _write_machine_micro_approval_report(path: Path, payload: dict) -> None:
         "size_bytes": source_stat.st_size,
     }
     _write_json(path, enriched)
+
 
 def _machine_micro_approval_report(
     source_date: str,
@@ -1799,48 +1901,75 @@ def _machine_micro_approval_report(
 
 
 @pytest.mark.parametrize("defect", [False, True])
-def test_holding_repair_uses_one_stable_owner_without_reopening_natural_cost_wait(tmp_path, monkeypatch, defect):
+def test_holding_repair_uses_one_stable_owner_without_reopening_natural_cost_wait(
+    tmp_path, monkeypatch, defect
+):
     _patch_dirs(monkeypatch, tmp_path)
     monkeypatch.setattr(mod, "PROJECT_ROOT", tmp_path)
     day = "2026-10-08"
     summary = _direct_summary(day)
-    summary["holding_exit_threshold_lineage"] = {"source_contract_repair": {
-        "owner": "HoldingProfitExitSourceContractRepair", "repair_required": defect,
-        "identified_defects": ["selection_forward_window_invalid"] if defect else [],
-        "actual_cost_status_counts": {"cost_source_unavailable": 10}}}
+    summary["holding_exit_threshold_lineage"] = {
+        "source_contract_repair": {
+            "owner": "HoldingProfitExitSourceContractRepair",
+            "repair_required": defect,
+            "identified_defects": (
+                ["selection_forward_window_invalid"] if defect else []
+            ),
+            "actual_cost_status_counts": {"cost_source_unavailable": 10},
+        }
+    }
     _write_json(mod._direct_summary_path(day), summary)
     result = mod.build_next_stage2_checklist(day)
     text = Path(result["path"]).read_text()
     assert text.count("[HoldingProfitExitSourceContractRepair]") == int(defect)
     second = mod.build_next_stage2_checklist(day)
-    assert Path(second["path"]).read_text().count("[HoldingProfitExitSourceContractRepair]") == int(defect)
+    assert Path(second["path"]).read_text().count(
+        "[HoldingProfitExitSourceContractRepair]"
+    ) == int(defect)
 
 
-@pytest.mark.parametrize("source_state,target_state", [(" ", None), ("x", None), (" ", " "), (" ", "x")])
+@pytest.mark.parametrize(
+    "source_state,target_state", [(" ", None), ("x", None), (" ", " "), (" ", "x")]
+)
 def test_semantic_owners_survive_rollover_without_reopening_completed_work(
-    tmp_path, monkeypatch, source_state, target_state,
+    tmp_path,
+    monkeypatch,
+    source_state,
+    target_state,
 ):
-    from src.engine.error_detectors.artifact_freshness import _current_semantic_owners, _project_semantic_owner
+    from src.engine.error_detectors.artifact_freshness import (
+        _current_semantic_owners,
+        _project_semantic_owner,
+    )
 
     _patch_dirs(monkeypatch, tmp_path)
     monkeypatch.setattr(mod, "PROJECT_ROOT", tmp_path)
     day, target = "2026-10-20", "2026-10-21"
     _write_json(mod._direct_summary_path(day), _direct_summary(day))
-    owners = {"holding_profit_exit": "HoldingProfitExitSourceContractRepair",
-              "initial_quantity": "InitialQuantityProducerConsumerRepair1010",
-              "market_weakness": "MainMarketWeaknessPostcloseObservation1008"}
+    owners = {
+        "holding_profit_exit": "HoldingProfitExitSourceContractRepair",
+        "initial_quantity": "InitialQuantityProducerConsumerRepair1010",
+        "market_weakness": "MainMarketWeaknessPostcloseObservation1008",
+    }
     source = mod.stage2_checklist_path(day)
     source.parent.mkdir(parents=True, exist_ok=True)
-    source.write_text("\n".join(
-        f"- [{source_state}] `[{owner}] original acceptance` (`Due: {day}`, `Slot: POSTCLOSE`, "
-        "`TimeWindow: 16:30~23:59`, `Track: RuntimeStability`)\n"
-        "  - Acceptance: exact IDs, source hashes and native consumer; missing cost stays null.\n"
-        "  - History: original failure and authority remain unchanged.\n"
-        for owner in owners.values()), encoding="utf-8")
+    source.write_text(
+        "\n".join(
+            f"- [{source_state}] `[{owner}] original acceptance` (`Due: {day}`, `Slot: POSTCLOSE`, "
+            "`TimeWindow: 16:30~23:59`, `Track: RuntimeStability`)\n"
+            "  - Acceptance: exact IDs, source hashes and native consumer; missing cost stays null.\n"
+            "  - History: original failure and authority remain unchanged.\n"
+            for owner in owners.values()
+        ),
+        encoding="utf-8",
+    )
     original = source.read_bytes()
     if target_state is not None:
         mod.stage2_checklist_path(target).write_text(
-            source.read_text().replace(f"[{source_state}]", f"[{target_state}]").replace(day, target))
+            source.read_text()
+            .replace(f"[{source_state}]", f"[{target_state}]")
+            .replace(day, target)
+        )
     result = mod.build_next_stage2_checklist(day)
     first = Path(result["path"]).read_text()
     mod.build_next_stage2_checklist(day)
@@ -1852,37 +1981,57 @@ def test_semantic_owners_survive_rollover_without_reopening_completed_work(
     current = _current_semantic_owners(tmp_path, target)
     for stage, owner in owners.items():
         assert (owner in current) == expected_open
-        assert first.count(f"[{owner}]") == int(source_state == " " or target_state is not None)
+        assert first.count(f"[{owner}]") == int(
+            source_state == " " or target_state is not None
+        )
         if expected_open:
             assert "missing cost stays null" in first and "original failure" in first
             if stage != "market_weakness":
                 alert = dict(stage=stage, owner=stage)
                 _project_semantic_owner(alert, current, target)
-                assert alert["owner"] == owner and alert["owner_status"] == "current_open"
+                assert (
+                    alert["owner"] == owner and alert["owner_status"] == "current_open"
+                )
 
 
-@pytest.mark.parametrize("defect", ["duplicate", "schedule_missing", "source_changed", "target_duplicate"])
-def test_semantic_owner_rollover_refuses_ambiguous_or_changing_source(tmp_path, monkeypatch, defect):
+@pytest.mark.parametrize(
+    "defect", ["duplicate", "schedule_missing", "source_changed", "target_duplicate"]
+)
+def test_semantic_owner_rollover_refuses_ambiguous_or_changing_source(
+    tmp_path, monkeypatch, defect
+):
     _patch_dirs(monkeypatch, tmp_path)
     monkeypatch.setattr(mod, "PROJECT_ROOT", tmp_path)
     day, target = "2026-10-20", "2026-10-21"
     _write_json(mod._direct_summary_path(day), _direct_summary(day))
     source = mod.stage2_checklist_path(day)
     source.parent.mkdir(parents=True, exist_ok=True)
-    row = (f"- [ ] `[InitialQuantityProducerConsumerRepair1010] acceptance` (`Due: {day}`, "
-           "`Slot: POSTCLOSE`, `TimeWindow: 16:30~23:59`, `Track: RuntimeStability`)\n"
-           "  - Preserve original source loss and acceptance.\n")
-    source.write_text(row * 2 if defect == "duplicate" else
-                      row.replace(f"`Due: {day}`", "") if defect == "schedule_missing" else row)
+    row = (
+        f"- [ ] `[InitialQuantityProducerConsumerRepair1010] acceptance` (`Due: {day}`, "
+        "`Slot: POSTCLOSE`, `TimeWindow: 16:30~23:59`, `Track: RuntimeStability`)\n"
+        "  - Preserve original source loss and acceptance.\n"
+    )
+    source.write_text(
+        row * 2
+        if defect == "duplicate"
+        else row.replace(f"`Due: {day}`", "") if defect == "schedule_missing" else row
+    )
     target_path = mod.stage2_checklist_path(target)
-    target_before = row.replace(day, target) * 2 if defect == "target_duplicate" else "# Existing target preserved\n"
+    target_before = (
+        row.replace(day, target) * 2
+        if defect == "target_duplicate"
+        else "# Existing target preserved\n"
+    )
     target_path.write_text(target_before)
     if defect == "source_changed":
         from src.engine.automation import postclose_summary_handoff as handoff
+
         original = handoff.assert_sources_unchanged
+
         def mutate(*args, **kwargs):
             original(*args, **kwargs)
             source.write_text(row + "\nConcurrent source edit\n")
+
         monkeypatch.setattr(handoff, "assert_sources_unchanged", mutate)
     with pytest.raises(RuntimeError, match="(source|target) semantic owner"):
         mod.build_next_stage2_checklist(day)

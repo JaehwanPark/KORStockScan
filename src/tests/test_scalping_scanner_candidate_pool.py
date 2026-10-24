@@ -474,9 +474,10 @@ def test_integrated_market_gainer_dedupes_without_losing_route_observations():
     assert targets[0]["MarketGainerVenue"] == "UNKNOWN"
     assert targets[0]["MarketGainerMarketDataRoute"] == "krx_nxt_integrated"
     assert targets[0]["Price"] == 70000
-    assert [
-        row["price"] for row in targets[0]["MarketGainerSourceObservations"]
-    ] == [70000, 70010]
+    assert [row["price"] for row in targets[0]["MarketGainerSourceObservations"]] == [
+        70000,
+        70010,
+    ]
 
 
 def test_ranked_prewarm_registers_ws_without_promotion_or_order_authority(
@@ -634,13 +635,26 @@ def test_is_valid_stock_blocks_fund_prefix_products():
         )
 
 
-@pytest.mark.parametrize('name,expected', [('KoAct AI인프라액티브',False),
-    ('TIME 글로벌바이오액티브',False),(' time 글로벌바이오액티브 ',False),
-    ('SOMETIME TECH',True),('TIMEWORKS',True)])
-def test_product_name_filter_agrees_with_prefetch_without_partial_time_match(name,expected):
-    assert kiwoom_utils.is_valid_stock('485810', name, current_price=10000) is expected
-    assert scalping_scanner._is_low_rebound_prefetch_product_allowed(
-        {'Code': '485810', 'Name': name, 'Price': 10000}) is expected
+@pytest.mark.parametrize(
+    "name,expected",
+    [
+        ("KoAct AI인프라액티브", False),
+        ("TIME 글로벌바이오액티브", False),
+        (" time 글로벌바이오액티브 ", False),
+        ("SOMETIME TECH", True),
+        ("TIMEWORKS", True),
+    ],
+)
+def test_product_name_filter_agrees_with_prefetch_without_partial_time_match(
+    name, expected
+):
+    assert kiwoom_utils.is_valid_stock("485810", name, current_price=10000) is expected
+    assert (
+        scalping_scanner._is_low_rebound_prefetch_product_allowed(
+            {"Code": "485810", "Name": name, "Price": 10000}
+        )
+        is expected
+    )
 
 
 def test_is_valid_stock_allows_low_price_common_stock():
@@ -7322,11 +7336,16 @@ def test_new_kiwoom_source_helpers_return_empty_list_on_fetch_failure(monkeypatc
 
 def test_retired_limit_down_payload_cannot_enter_normal_scanner():
     target = {
-        "Code": "005930", "Price": 60000, "Source": "LIMIT_DOWN_LIVE_UNLOCK",
+        "Code": "005930",
+        "Price": 60000,
+        "Source": "LIMIT_DOWN_LIVE_UNLOCK",
         "SourceSet": {"PRICE_JUMP_START", "LIMIT_DOWN_LIVE_UNLOCK"},
         "LimitDownLivePolicyMatched": True,
     }
-    assert scalping_scanner._scanner_candidate_pre_filter_reason(target) == "retired_entry_source"
+    assert (
+        scalping_scanner._scanner_candidate_pre_filter_reason(target)
+        == "retired_entry_source"
+    )
     decision = scalping_scanner._scanner_real_source_guard_decision(target, {}, 1000)
     assert decision["blocked"] is True
     assert decision["reason"] == "retired_entry_source"

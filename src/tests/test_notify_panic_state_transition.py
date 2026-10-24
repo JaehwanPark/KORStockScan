@@ -151,17 +151,28 @@ def test_observer_latch_and_healthy_source_freshness_at_ttl_boundary(tmp_path):
 
     report_path = tmp_path / "report.json"
     state_path = tmp_path / "state.json"
-    expected_active = {0: False, 1: False, 2: False, 4: True,
-                       15: True, 17: True, 19: False}
+    expected_active = {
+        0: False,
+        1: False,
+        2: False,
+        4: True,
+        15: True,
+        17: True,
+        19: False,
+    }
     for minute, active in expected_active.items():
-        classification = "SINGLE_MARKET_WEAKNESS" if minute < 15 else "RECOVERY_EVIDENCE"
+        classification = (
+            "SINGLE_MARKET_WEAKNESS" if minute < 15 else "RECOVERY_EVIDENCE"
+        )
         report = _weakness_report(classification, minute)
         if minute == 1:
             report["market_weakness_observation"]["source_quality_ready"] = False
             _refresh_weakness_identity(report)
         report_path.write_text(json.dumps(report))
         mod.notify_from_report(
-            report_path, kind="market_weakness", state_file=state_path,
+            report_path,
+            kind="market_weakness",
+            state_file=state_path,
             send_enabled=False,
         )
         saved = json.loads(state_path.read_text())
@@ -172,9 +183,17 @@ def test_observer_latch_and_healthy_source_freshness_at_ttl_boundary(tmp_path):
         healthy_at = datetime.fromisoformat(
             f"2026-08-28T10:{healthy_minute:02d}:00+09:00"
         )
-        assert datetime.fromisoformat(health["last_healthy_observation_as_of"]) == healthy_at
-        for elapsed, expected_fresh in ((-31, False), (-30, True),
-                                         (0, True), (300, True), (301, False)):
+        assert (
+            datetime.fromisoformat(health["last_healthy_observation_as_of"])
+            == healthy_at
+        )
+        for elapsed, expected_fresh in (
+            (-31, False),
+            (-30, True),
+            (0, True),
+            (300, True),
+            (301, False),
+        ):
             fresh, age = observation_freshness(
                 healthy_at, healthy_at + timedelta(seconds=elapsed)
             )
@@ -1681,32 +1700,60 @@ def test_missing_config_does_not_send(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("prior_count", [1, 2])
 @pytest.mark.parametrize("carry_forward", [True, False])
-def test_identical_carry_source_handoff_preserves_live_latch(tmp_path, prior_count, carry_forward):
+def test_identical_carry_source_handoff_preserves_live_latch(
+    tmp_path, prior_count, carry_forward
+):
     report_path, state_path = tmp_path / "report.json", tmp_path / "state.json"
     baseline = {
-        "schema": SCHEMA, "target_date": "2026-08-28", "source_date": None,
-        "source": "bounded_baseline_fallback", "status": "source_missing",
-        "policy_path": "/tmp/policy.json", "policy_hash": threshold_hash(activation=2, release=3),
-        "review_status": "not_applicable_baseline", "activation_unique_observations": 2,
-        "release_unique_observations": 3, "minimum_observation_spacing_sec": 60,
-        "runtime_effect": False, "axis": "market_weakness_hysteresis_consecutive_observation_counts",
+        "schema": SCHEMA,
+        "target_date": "2026-08-28",
+        "source_date": None,
+        "source": "bounded_baseline_fallback",
+        "status": "source_missing",
+        "policy_path": "/tmp/policy.json",
+        "policy_hash": threshold_hash(activation=2, release=3),
+        "review_status": "not_applicable_baseline",
+        "activation_unique_observations": 2,
+        "release_unique_observations": 3,
+        "minimum_observation_spacing_sec": 60,
+        "runtime_effect": False,
+        "axis": "market_weakness_hysteresis_consecutive_observation_counts",
     }
     for sequence in range(1, prior_count + 1):
         report = _weakness_report("SINGLE_MARKET_WEAKNESS", sequence)
         report["market_weakness_observation"]["hysteresis_policy"] = baseline
         _refresh_weakness_identity(report)
         report_path.write_text(json.dumps(report))
-        mod.notify_from_report(report_path, kind="market_weakness", state_file=state_path, send_enabled=False)
+        mod.notify_from_report(
+            report_path,
+            kind="market_weakness",
+            state_file=state_path,
+            send_enabled=False,
+        )
     before = json.loads(state_path.read_text())["market_weakness"]
     assert before["market_states"]["KOSPI"]["weak_streak"] == prior_count
-    report = _weakness_report("SINGLE_MARKET_WEAKNESS" if prior_count == 1 else "RECOVERY_EVIDENCE", prior_count + 1)
-    carry = {**baseline, "source_date": "2026-08-27", "source": "exact_date_applied_policy",
-             "status": "applied", "runtime_effect": True,
-             "review_status": "current_policy_carry_forward_no_approved_candidate" if carry_forward else "passed_out_of_sample_review"}
+    report = _weakness_report(
+        "SINGLE_MARKET_WEAKNESS" if prior_count == 1 else "RECOVERY_EVIDENCE",
+        prior_count + 1,
+    )
+    carry = {
+        **baseline,
+        "source_date": "2026-08-27",
+        "source": "exact_date_applied_policy",
+        "status": "applied",
+        "runtime_effect": True,
+        "review_status": (
+            "current_policy_carry_forward_no_approved_candidate"
+            if carry_forward
+            else "passed_out_of_sample_review"
+        ),
+    }
     report["market_weakness_observation"]["hysteresis_policy"] = carry
     _refresh_weakness_identity(report)
     report_path.write_text(json.dumps(report))
-    result = mod.notify_from_report(report_path, kind="market_weakness", state_file=state_path, send_enabled=False)
+    result = mod.notify_from_report(
+        report_path, kind="market_weakness", state_file=state_path, send_enabled=False
+    )
     after = json.loads(state_path.read_text())
     if not carry_forward:
         assert result == "intraday_hysteresis_policy_mismatch"
@@ -1717,24 +1764,36 @@ def test_identical_carry_source_handoff_preserves_live_latch(tmp_path, prior_cou
     current = after["market_weakness"]
     assert current["phase"] == ("active" if prior_count == 1 else "release_pending")
     assert current["market_states"]["KOSPI"]["active"] is True
-    assert current["market_states"]["KOSPI"]["weak_streak"] == (2 if prior_count == 1 else 0)
-    assert current["market_states"]["KOSPI"]["recovery_streak"] == (1 if prior_count == 2 else 0)
+    assert current["market_states"]["KOSPI"]["weak_streak"] == (
+        2 if prior_count == 1 else 0
+    )
+    assert current["market_states"]["KOSPI"]["recovery_streak"] == (
+        1 if prior_count == 2 else 0
+    )
     assert current["hysteresis_policy"] == carry
     assert after["market_weakness_observer_health"]["ready"] is True
 
 
-@pytest.mark.parametrize("branch", ["duplicate", "too_close", "invalid_source", "inconsistent_transition"])
-def test_legacy_pending_never_replays_retired_execution_claims(tmp_path, monkeypatch, branch):
+@pytest.mark.parametrize(
+    "branch", ["duplicate", "too_close", "invalid_source", "inconsistent_transition"]
+)
+def test_legacy_pending_never_replays_retired_execution_claims(
+    tmp_path, monkeypatch, branch
+):
     report_path, state_path = tmp_path / "report.json", tmp_path / "state.json"
     monkeypatch.setattr(mod, "_load_telegram_config", lambda: ("", ""))
     for minute in (1, 2):
         report = _weakness_report("SINGLE_MARKET_WEAKNESS", minute)
         report_path.write_text(json.dumps(report))
-        mod.notify_from_report(report_path, kind="market_weakness", state_file=state_path)
+        mod.notify_from_report(
+            report_path, kind="market_weakness", state_file=state_path
+        )
     saved = json.loads(state_path.read_text())
     before = saved["market_weakness"]["market_states"]
     saved["market_weakness"]["execution_bridge_runtime_effect"] = True
-    saved["market_weakness"]["pending_notification"]["message"] = "실행 bridge: 위젯·에피소드 신규 매수 차단 및 잔량 취소"
+    saved["market_weakness"]["pending_notification"][
+        "message"
+    ] = "실행 bridge: 위젯·에피소드 신규 매수 차단 및 잔량 취소"
     if branch == "inconsistent_transition":
         saved["market_weakness"]["pending_notification"]["transition"] = "release"
     state_path.write_text(json.dumps(saved))
@@ -1749,7 +1808,9 @@ def test_legacy_pending_never_replays_retired_execution_claims(tmp_path, monkeyp
     sent = []
     monkeypatch.setattr(mod, "_load_telegram_config", lambda: ("fake-token", "admin"))
     monkeypatch.setattr(mod, "_target_chat_ids", lambda *_args: ["admin"])
-    monkeypatch.setattr(mod, "_send_telegram", lambda _token, _chat, message: sent.append(message))
+    monkeypatch.setattr(
+        mod, "_send_telegram", lambda _token, _chat, message: sent.append(message)
+    )
     mod.notify_from_report(report_path, kind="market_weakness", state_file=state_path)
     current = json.loads(state_path.read_text())["market_weakness"]
     assert current["execution_bridge_runtime_effect"] is False
@@ -1758,7 +1819,9 @@ def test_legacy_pending_never_replays_retired_execution_claims(tmp_path, monkeyp
         assert len(sent) == 1
         assert "매매 영향 없음" in sent[0]
         assert "장후 연구 대상" in sent[0]
-        assert not any(word in sent[0] for word in ("실행 bridge", "위젯", "에피소드", "잔량 취소"))
+        assert not any(
+            word in sent[0] for word in ("실행 bridge", "위젯", "에피소드", "잔량 취소")
+        )
         assert current["market_states"] == before
     else:
         assert sent == []
@@ -1766,55 +1829,90 @@ def test_legacy_pending_never_replays_retired_execution_claims(tmp_path, monkeyp
 
 def test_naive_panic_report_clock_is_kst_independent_of_host_timezone(monkeypatch):
     import time
+
     try:
         with monkeypatch.context() as clock:
             clock.setenv("TZ", "UTC")
             time.tzset()
-            assert mod._parse_iso_timestamp("2026-08-28T10:02:00") == mod._parse_iso_timestamp("2026-08-28T10:02:00+09:00")
+            assert mod._parse_iso_timestamp(
+                "2026-08-28T10:02:00"
+            ) == mod._parse_iso_timestamp("2026-08-28T10:02:00+09:00")
     finally:
         time.tzset()
 
 
 @pytest.mark.parametrize("status", sorted(mod.MARKET_WEAKNESS_UNHEALTHY_STATUSES))
-def test_failed_health_check_discards_pending_on_existing_single_write(tmp_path, monkeypatch, status):
+def test_failed_health_check_discards_pending_on_existing_single_write(
+    tmp_path, monkeypatch, status
+):
     report_path, state_path = tmp_path / "report.json", tmp_path / "state.json"
     monkeypatch.setattr(mod, "_load_telegram_config", lambda: ("", ""))
     for minute in (1, 2):
         report = _weakness_report("SINGLE_MARKET_WEAKNESS", minute)
         report_path.write_text(json.dumps(report))
-        mod.notify_from_report(report_path, kind="market_weakness", state_file=state_path)
+        mod.notify_from_report(
+            report_path, kind="market_weakness", state_file=state_path
+        )
     before = json.loads(state_path.read_text())
     before["market_weakness"]["execution_bridge_runtime_effect"] = True
-    before["market_weakness"]["last_notification"] = {"sent_count": 1, "sent_at_ts": 123}
+    before["market_weakness"]["last_notification"] = {
+        "sent_count": 1,
+        "sent_at_ts": 123,
+    }
     state_path.write_text(json.dumps(before))
     writes = []
     write = mod._write_state
-    monkeypatch.setattr(mod, "_write_state", lambda path, value: (writes.append(path), write(path, value)))
+    monkeypatch.setattr(
+        mod,
+        "_write_state",
+        lambda path, value: (writes.append(path), write(path, value)),
+    )
     mod._record_market_weakness_health(
-        state_file=state_path, report_file=report_path, report=report,
-        status=status, now_ts=1000,
+        state_file=state_path,
+        report_file=report_path,
+        report=report,
+        status=status,
+        now_ts=1000,
     )
     after = json.loads(state_path.read_text())
     assert writes == [state_path]
     assert "pending_notification" not in after["market_weakness"]
     assert after["market_weakness"]["execution_bridge_runtime_effect"] is False
-    assert after["market_weakness"]["market_states"] == before["market_weakness"]["market_states"]
-    assert after["market_weakness"]["last_notification"] == before["market_weakness"]["last_notification"]
+    assert (
+        after["market_weakness"]["market_states"]
+        == before["market_weakness"]["market_states"]
+    )
+    assert (
+        after["market_weakness"]["last_notification"]
+        == before["market_weakness"]["last_notification"]
+    )
     assert after["market_weakness_observer_health"]["ready"] is False
-    assert after["market_weakness_observer_health"]["last_healthy_observation_id"] == before["market_weakness_observer_health"]["last_healthy_observation_id"]
+    assert (
+        after["market_weakness_observer_health"]["last_healthy_observation_id"]
+        == before["market_weakness_observer_health"]["last_healthy_observation_id"]
+    )
 
 
-@pytest.mark.parametrize("field,value", [
-    ("last_source_gate", "broken"), ("phase", ["active"]),
-    ("transition", ["start"]), ("pending_notification", "old execution bridge"),
-])
-def test_malformed_pending_is_discarded_before_transport(tmp_path, monkeypatch, field, value):
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("last_source_gate", "broken"),
+        ("phase", ["active"]),
+        ("transition", ["start"]),
+        ("pending_notification", "old execution bridge"),
+    ],
+)
+def test_malformed_pending_is_discarded_before_transport(
+    tmp_path, monkeypatch, field, value
+):
     report_path, state_path = tmp_path / "report.json", tmp_path / "state.json"
     monkeypatch.setattr(mod, "_load_telegram_config", lambda: ("", ""))
     for minute in (1, 2):
         report = _weakness_report("SINGLE_MARKET_WEAKNESS", minute)
         report_path.write_text(json.dumps(report))
-        mod.notify_from_report(report_path, kind="market_weakness", state_file=state_path)
+        mod.notify_from_report(
+            report_path, kind="market_weakness", state_file=state_path
+        )
     state = json.loads(state_path.read_text())
     current = state["market_weakness"]
     if field == "transition":
@@ -1826,17 +1924,24 @@ def test_malformed_pending_is_discarded_before_transport(tmp_path, monkeypatch, 
     monkeypatch.setattr(mod, "_load_telegram_config", lambda: config_reads.append(True))
     mod.notify_from_report(report_path, kind="market_weakness", state_file=state_path)
     assert config_reads == []
-    assert "pending_notification" not in json.loads(state_path.read_text())["market_weakness"]
+    assert (
+        "pending_notification"
+        not in json.loads(state_path.read_text())["market_weakness"]
+    )
 
 
-def test_too_close_weak_snapshot_does_not_replay_pending_recovery(tmp_path, monkeypatch):
+def test_too_close_weak_snapshot_does_not_replay_pending_recovery(
+    tmp_path, monkeypatch
+):
     report_path, state_path = tmp_path / "report.json", tmp_path / "state.json"
     monkeypatch.setattr(mod, "_load_telegram_config", lambda: ("", ""))
     for minute in (1, 2, 3, 4, 5):
         raw = "SINGLE_MARKET_WEAKNESS" if minute <= 2 else "RECOVERY_EVIDENCE"
         report = _weakness_report(raw, minute)
         report_path.write_text(json.dumps(report))
-        mod.notify_from_report(report_path, kind="market_weakness", state_file=state_path)
+        mod.notify_from_report(
+            report_path, kind="market_weakness", state_file=state_path
+        )
     before = json.loads(state_path.read_text())
     assert before["market_weakness"]["pending_notification"]["transition"] == "release"
     report = _weakness_report("SINGLE_MARKET_WEAKNESS", 5)
@@ -1847,23 +1952,38 @@ def test_too_close_weak_snapshot_does_not_replay_pending_recovery(tmp_path, monk
     sent, writes = [], []
     monkeypatch.setattr(mod, "_load_telegram_config", lambda: ("fake-token", "admin"))
     monkeypatch.setattr(mod, "_target_chat_ids", lambda *_args: ["admin"])
-    monkeypatch.setattr(mod, "_send_telegram", lambda _token, _chat, message: sent.append(message))
+    monkeypatch.setattr(
+        mod, "_send_telegram", lambda _token, _chat, message: sent.append(message)
+    )
     write = mod._write_state
-    monkeypatch.setattr(mod, "_write_state", lambda path, value: (writes.append(path), write(path, value)))
-    assert mod.notify_from_report(report_path, kind="market_weakness", state_file=state_path) == "sent"
+    monkeypatch.setattr(
+        mod,
+        "_write_state",
+        lambda path, value: (writes.append(path), write(path, value)),
+    )
+    assert (
+        mod.notify_from_report(
+            report_path, kind="market_weakness", state_file=state_path
+        )
+        == "sent"
+    )
     after = json.loads(state_path.read_text())
     assert len(sent) == 1
     assert "시장 약세 관찰 상태" in sent[0]
     assert "회복 근거가" not in sent[0]
     assert after["market_weakness"]["last_notification"]["transition"] == "status"
-    assert after["market_weakness"]["market_states"] == before["market_weakness"]["market_states"]
+    assert (
+        after["market_weakness"]["market_states"]
+        == before["market_weakness"]["market_states"]
+    )
     assert writes == [state_path, state_path]  # Existing send + health writes only.
 
 
 def test_notice_scope_ignores_corrupt_or_unsupported_market_values():
     message = mod._market_weakness_message(
         _weakness_report("BROAD_WEAKNESS", 2)["market_weakness_observation"],
-        "status", {"active_markets": ["KOSPI", "KOSPI", None, 123, "OTHER"]},
+        "status",
+        {"active_markets": ["KOSPI", "KOSPI", None, 123, "OTHER"]},
     )
     assert "- 관찰 시장: KOSPI\n" in message
     assert "OTHER" not in message

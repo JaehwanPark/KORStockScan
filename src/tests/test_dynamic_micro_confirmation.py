@@ -234,7 +234,9 @@ def test_samsung_selected_confirmation_cannot_fallback_to_unconfirmed_entry(
         == DEFAULT_DYNAMIC_CONFIRMATION_POLICY
     )
     assert (
-        dynamic_policy_for_scope(owner="main_scalping", scope_id="midday", symbol="005930")
+        dynamic_policy_for_scope(
+            owner="main_scalping", scope_id="midday", symbol="005930"
+        )
         == DEFAULT_DYNAMIC_CONFIRMATION_POLICY
     )
 

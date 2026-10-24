@@ -21,7 +21,6 @@ from typing import Any
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
-
 SCHEMA = "holding_exit_vote_v1"
 PURPOSE = "EXIT_PERMISSION"
 VERDICTS = frozenset({"PASS", "VETO"})
@@ -78,8 +77,10 @@ def normalize_vote_response(
         return base
     if not base["input_snapshot_id"]:
         return {**base, "excluded_reason": "snapshot_missing"}
-    if response.get("ai_parse_fail") or response.get("error") or response.get(
-        "ai_fallback_score_50"
+    if (
+        response.get("ai_parse_fail")
+        or response.get("error")
+        or response.get("ai_fallback_score_50")
     ):
         return {**base, "excluded_reason": "provider_or_parse_failure"}
     forbidden = {"score", "confidence", "action", "quantity", "order_price"}
@@ -92,13 +93,19 @@ def normalize_vote_response(
         return {**base, "excluded_reason": "invalid_verdict_or_conviction"}
     if response.get("input_snapshot_id") != expected_snapshot_id:
         return {**base, "excluded_reason": "snapshot_mismatch"}
-    if not isinstance(reasons, list) or not 1 <= len(reasons) <= 6 or any(
-        not isinstance(value, str)
-        or not value
-        or len(value) > 48
-        or not value.isascii()
-        or not all(char.islower() or char.isdigit() or char == "_" for char in value)
-        for value in reasons
+    if (
+        not isinstance(reasons, list)
+        or not 1 <= len(reasons) <= 6
+        or any(
+            not isinstance(value, str)
+            or not value
+            or len(value) > 48
+            or not value.isascii()
+            or not all(
+                char.islower() or char.isdigit() or char == "_" for char in value
+            )
+            for value in reasons
+        )
     ):
         return {**base, "excluded_reason": "invalid_reason_codes"}
     if (
@@ -136,16 +143,34 @@ def append_vote(ledger: Any, vote: dict[str, Any]) -> tuple[list[dict[str, Any]]
     existing = [item for item in (ledger or []) if isinstance(item, dict)]
     if vote.get("status") != "VALID" or vote.get("purpose") != PURPOSE:
         return existing[-MAX_VOTES:], "insufficient_not_appended"
-    generation = tuple(vote.get(key) for key in (
-        "position_key", "market", "session_key", "model", "prompt_version"
-    ))
-    current = [item for item in existing if tuple(item.get(key) for key in (
-        "position_key", "market", "session_key", "model", "prompt_version"
-    )) == generation]
-    identity = (vote.get("route"), vote.get("transport_epoch"), vote.get("source_generation"))
+    generation = tuple(
+        vote.get(key)
+        for key in ("position_key", "market", "session_key", "model", "prompt_version")
+    )
+    current = [
+        item
+        for item in existing
+        if tuple(
+            item.get(key)
+            for key in (
+                "position_key",
+                "market",
+                "session_key",
+                "model",
+                "prompt_version",
+            )
+        )
+        == generation
+    ]
+    identity = (
+        vote.get("route"),
+        vote.get("transport_epoch"),
+        vote.get("source_generation"),
+    )
     if any(
         (item.get("route"), item.get("transport_epoch"), item.get("source_generation"))
-        == identity for item in current
+        == identity
+        for item in current
     ):
         return current[-MAX_VOTES:], "duplicate_snapshot"
     if current and float(vote["requested_at"]) < max(
@@ -235,7 +260,8 @@ def signal_snapshot(
 ) -> dict[str, Any]:
     """Freeze counts available before an exit signal; never decide an order."""
     eligible = [
-        item for item in (ledger or [])
+        item
+        for item in (ledger or [])
         if isinstance(item, dict)
         and item.get("status") == "VALID"
         and item.get("purpose") == PURPOSE
@@ -250,7 +276,8 @@ def signal_snapshot(
     independent = {}
     for item in eligible:
         identity = (
-            item.get("route"), item.get("transport_epoch"),
+            item.get("route"),
+            item.get("transport_epoch"),
             item.get("source_generation"),
         )
         if all(identity):
@@ -277,15 +304,21 @@ def signal_snapshot(
         ),
         "latest_vote_age_sec": (
             signal_at - max(item["received_at"] for item in eligible)
-            if eligible else None
+            if eligible
+            else None
         ),
         "decision_authority": "observation_only",
     }
 
 
 def research_decision(
-    snapshot: dict[str, Any], *, min_votes: int, pass_votes: int,
-    veto_votes: int, firm_veto_votes: int, max_latest_age_sec: float,
+    snapshot: dict[str, Any],
+    *,
+    min_votes: int,
+    pass_votes: int,
+    veto_votes: int,
+    firm_veto_votes: int,
+    max_latest_age_sec: float,
 ) -> dict[str, Any]:
     """Compare an explicit candidate counting rule; never grant runtime authority."""
     result = {
@@ -298,19 +331,24 @@ def research_decision(
         not isinstance(snapshot, dict)
         or snapshot.get("schema") != "holding_exit_vote_signal_snapshot_v1"
         or snapshot.get("purpose") != PURPOSE
-        or any(isinstance(value, bool) or not isinstance(value, int) or value < 1
-               for value in (min_votes, pass_votes, veto_votes, firm_veto_votes))
+        or any(
+            isinstance(value, bool) or not isinstance(value, int) or value < 1
+            for value in (min_votes, pass_votes, veto_votes, firm_veto_votes)
+        )
         or not isinstance(max_latest_age_sec, (int, float))
         or isinstance(max_latest_age_sec, bool)
         or not math.isfinite(max_latest_age_sec)
         or max_latest_age_sec <= 0
     ):
         return result
-    counts = tuple(snapshot.get(key) for key in (
-        "vote_count", "pass_count", "veto_count", "firm_veto_count"
-    ))
-    if any(isinstance(value, bool) or not isinstance(value, int) or value < 0
-           for value in counts):
+    counts = tuple(
+        snapshot.get(key)
+        for key in ("vote_count", "pass_count", "veto_count", "firm_veto_count")
+    )
+    if any(
+        isinstance(value, bool) or not isinstance(value, int) or value < 0
+        for value in counts
+    ):
         return result
     total, passes, vetoes, firm_vetoes = counts
     age = snapshot.get("latest_vote_age_sec")
@@ -335,10 +373,14 @@ def research_decision(
 # decisions use a separate ledger so old exit-only votes cannot gain authority.
 PATH_SCHEMA = "holding_path_vote_v10"
 PATH_SNAPSHOT_SCHEMA = "holding_path_vote_signal_v10"
-PATH_IDS = frozenset({
-    "EXIT_TRAILING_TP", "EXIT_SOFT_STOP", "EXIT_POST_ADD_FAIL",
-    "ADD_REBOUND",
-})
+PATH_IDS = frozenset(
+    {
+        "EXIT_TRAILING_TP",
+        "EXIT_SOFT_STOP",
+        "EXIT_POST_ADD_FAIL",
+        "ADD_REBOUND",
+    }
+)
 PATH_REASON_PREFIX = {
     "EXIT_TRAILING_TP": "exit_tp_",
     "EXIT_SOFT_STOP": "exit_soft_",
@@ -351,12 +393,22 @@ PATH_MAX_STORE_BYTES = 16 * 1024 * 1024
 
 
 def build_path_vote_input(
-    *, stock_code: str, ws_data: dict[str, Any], recent_ticks: list,
-    recent_candles: list, position_ctx: dict[str, Any],
-    requested_paths: tuple[str, ...], market: str, session_key: str,
-    position_key: str, buy_fill_identity: str, route: str,
-    transport_epoch: str, source_generation: str,
-    quote_observed_at: float, holding_context: dict[str, Any] | None,
+    *,
+    stock_code: str,
+    ws_data: dict[str, Any],
+    recent_ticks: list,
+    recent_candles: list,
+    position_ctx: dict[str, Any],
+    requested_paths: tuple[str, ...],
+    market: str,
+    session_key: str,
+    position_key: str,
+    buy_fill_identity: str,
+    route: str,
+    transport_epoch: str,
+    source_generation: str,
+    quote_observed_at: float,
+    holding_context: dict[str, Any] | None,
 ) -> dict[str, Any]:
     """Project exactly the point-in-time fields sent to the path voter."""
     from src.engine.scalping.ai_market_snapshot import ai_input_preflight
@@ -382,49 +434,87 @@ def build_path_vote_input(
         except (TypeError, ValueError, OverflowError):
             return None
 
-    runtime_context = (holding_context if isinstance(holding_context, dict)
-                       and holding_context.get("enabled") is True
-                       and not holding_context.get("forensic_context_only") else None)
+    runtime_context = (
+        holding_context
+        if isinstance(holding_context, dict)
+        and holding_context.get("enabled") is True
+        and not holding_context.get("forensic_context_only")
+        else None
+    )
     preflight = ai_input_preflight(runtime_context)
-    context_quality = runtime_context.get("source_quality") if runtime_context is not None else None
-    if context_quality is not None and (not isinstance(context_quality, dict)
-            or context_quality.get("status") in {"blocked", "disabled"}):
-        preflight = {**preflight, "allowed": False, "status": "blocked",
-                     "blockers": list(preflight.get("blockers") or []) + ["holding_context_source_quality_blocked"]}
+    context_quality = (
+        runtime_context.get("source_quality") if runtime_context is not None else None
+    )
+    if context_quality is not None and (
+        not isinstance(context_quality, dict)
+        or context_quality.get("status") in {"blocked", "disabled"}
+    ):
+        preflight = {
+            **preflight,
+            "allowed": False,
+            "status": "blocked",
+            "blockers": list(preflight.get("blockers") or [])
+            + ["holding_context_source_quality_blocked"],
+        }
     return {
         "input_schema": PATH_PROMPT_VERSION,
         "requested_paths": list(paths),
-        "stock_code": str(stock_code or ""), "market": str(market or ""),
+        "stock_code": str(stock_code or ""),
+        "market": str(market or ""),
         "session_key": str(session_key or ""),
         "position_key": str(position_key or ""),
         "buy_fill_identity": str(buy_fill_identity or ""),
-        "position": {key: position.get(key) for key in (
-            "buy_price", "curr_price", "profit_rate", "peak_profit",
-            "drawdown_from_peak_pct", "held_sec", "reversal_add_state",
-            "reversal_add_executed_at")},
+        "position": {
+            key: position.get(key)
+            for key in (
+                "buy_price",
+                "curr_price",
+                "profit_rate",
+                "peak_profit",
+                "drawdown_from_peak_pct",
+                "held_sec",
+                "reversal_add_state",
+                "reversal_add_executed_at",
+            )
+        },
         "quote": {
-            "best_bid": top_price(bids), "best_ask": top_price(asks),
+            "best_bid": top_price(bids),
+            "best_ask": top_price(asks),
             "bid_total_depth": ws.get("bid_tot"),
             "ask_total_depth": ws.get("ask_tot"),
         },
-        "last_ticks": [dict(tick) for tick in list(recent_ticks or [])[-10:]
-                       if isinstance(tick, dict)],
-        "last_candles": [dict(candle) for candle in list(recent_candles or [])[-20:]
-                         if isinstance(candle, dict)],
-        "flow": holding_decision_context_model_payload(runtime_context)
-                if runtime_context is not None else {},
-        "source_quality": {"allowed": preflight.get("allowed") is True,
-                           "status": preflight.get("status"),
-                           "blockers": preflight.get("blockers")},
-        "source": {"route": str(route or ""),
-                   "transport_epoch": str(transport_epoch or ""),
-                   "source_generation": str(source_generation or ""),
-                   "quote_observed_at": quote_observed_at},
+        "last_ticks": [
+            dict(tick)
+            for tick in list(recent_ticks or [])[-10:]
+            if isinstance(tick, dict)
+        ],
+        "last_candles": [
+            dict(candle)
+            for candle in list(recent_candles or [])[-20:]
+            if isinstance(candle, dict)
+        ],
+        "flow": (
+            holding_decision_context_model_payload(runtime_context)
+            if runtime_context is not None
+            else {}
+        ),
+        "source_quality": {
+            "allowed": preflight.get("allowed") is True,
+            "status": preflight.get("status"),
+            "blockers": preflight.get("blockers"),
+        },
+        "source": {
+            "route": str(route or ""),
+            "transport_epoch": str(transport_epoch or ""),
+            "source_generation": str(source_generation or ""),
+            "quote_observed_at": quote_observed_at,
+        },
     }
 
 
 def path_vote_gap_source(payload, hashes, *, context_source=None):
     """Bounded evidence for a rejected input; never a provider request or vote."""
+
     def blockers(value):
         if value is None:
             return []
@@ -432,31 +522,65 @@ def path_vote_gap_source(payload, hashes, *, context_source=None):
             value = [value]
         return [str(item)[:160] for item in value[:32]]
 
-    source=context_source if isinstance(context_source,dict) else {}
-    vote_policy=source.get('vote_input_policy') if isinstance(source.get('vote_input_policy'),dict) else {}
-    quality=source.get('source_quality') if isinstance(source.get('source_quality'),dict) else {}
-    preflight=payload.get('source_quality') or {}
-    body=dict(schema='holding_path_input_gap_source_v1',
-        position_key=payload.get('position_key'),buy_fill_identity=payload.get('buy_fill_identity'),
-        market=payload.get('market'),session_key=payload.get('session_key'),
-        decision_input_sha256=hashes.get('decision_input_sha256'),
-        context_present=bool(source),context_schema=source.get('schema'),
-        context_enabled=source.get('enabled'),forensic_context_only=source.get('forensic_context_only'),
-        vote_input_policy={k:vote_policy.get(k)
-            for k in ('status','source_date','target_date','bundle_sha256')},
-        context_quality_status=quality.get('status'),
-        context_blockers=blockers(quality.get('blockers')),
-        input_preflight_status=preflight.get('status'),
-        input_preflight_blockers=blockers(preflight.get('blockers')),
-        flow_present=bool(payload.get('flow')),source={k:(payload.get('source') or {}).get(k)
-            for k in ('route','transport_epoch','source_generation','quote_observed_at')},
-        missing_paths={k:list(v) for k,v in path_vote_input_gaps(payload).items()},
-        metric_role='source_quality_gate',decision_authority='rejected_input_observation_only',
-        window_policy='same_native_due_review_input',sample_floor=1,
-        primary_decision_metric='typed_input_gap',source_quality_gate='original_input_hash_and_field_dispositions',
-        forbidden_uses=['provider_request_inference','vote_or_order_authority','historical_coverage_backfill'],
-        provider_called=False,actual_order_submitted=False,runtime_effect=False,allowed_runtime_apply=False)
-    return {**body,'sha256':input_snapshot_id(body)}
+    source = context_source if isinstance(context_source, dict) else {}
+    vote_policy = (
+        source.get("vote_input_policy")
+        if isinstance(source.get("vote_input_policy"), dict)
+        else {}
+    )
+    quality = (
+        source.get("source_quality")
+        if isinstance(source.get("source_quality"), dict)
+        else {}
+    )
+    preflight = payload.get("source_quality") or {}
+    body = dict(
+        schema="holding_path_input_gap_source_v1",
+        position_key=payload.get("position_key"),
+        buy_fill_identity=payload.get("buy_fill_identity"),
+        market=payload.get("market"),
+        session_key=payload.get("session_key"),
+        decision_input_sha256=hashes.get("decision_input_sha256"),
+        context_present=bool(source),
+        context_schema=source.get("schema"),
+        context_enabled=source.get("enabled"),
+        forensic_context_only=source.get("forensic_context_only"),
+        vote_input_policy={
+            k: vote_policy.get(k)
+            for k in ("status", "source_date", "target_date", "bundle_sha256")
+        },
+        context_quality_status=quality.get("status"),
+        context_blockers=blockers(quality.get("blockers")),
+        input_preflight_status=preflight.get("status"),
+        input_preflight_blockers=blockers(preflight.get("blockers")),
+        flow_present=bool(payload.get("flow")),
+        source={
+            k: (payload.get("source") or {}).get(k)
+            for k in (
+                "route",
+                "transport_epoch",
+                "source_generation",
+                "quote_observed_at",
+            )
+        },
+        missing_paths={k: list(v) for k, v in path_vote_input_gaps(payload).items()},
+        metric_role="source_quality_gate",
+        decision_authority="rejected_input_observation_only",
+        window_policy="same_native_due_review_input",
+        sample_floor=1,
+        primary_decision_metric="typed_input_gap",
+        source_quality_gate="original_input_hash_and_field_dispositions",
+        forbidden_uses=[
+            "provider_request_inference",
+            "vote_or_order_authority",
+            "historical_coverage_backfill",
+        ],
+        provider_called=False,
+        actual_order_submitted=False,
+        runtime_effect=False,
+        allowed_runtime_apply=False,
+    )
+    return {**body, "sha256": input_snapshot_id(body)}
 
 
 def path_vote_input_gaps(payload: dict[str, Any]) -> dict[str, tuple[str, ...]]:
@@ -467,7 +591,11 @@ def path_vote_input_gaps(payload: dict[str, Any]) -> dict[str, tuple[str, ...]]:
 
     def positive(value: Any) -> bool:
         try:
-            return not isinstance(value, bool) and math.isfinite(float(value)) and float(value) > 0
+            return (
+                not isinstance(value, bool)
+                and math.isfinite(float(value))
+                and float(value) > 0
+            )
         except (TypeError, ValueError, OverflowError):
             return False
 
@@ -480,26 +608,35 @@ def path_vote_input_gaps(payload: dict[str, Any]) -> dict[str, tuple[str, ...]]:
     common = []
     if (payload.get("source_quality") or {}).get("allowed") is not True:
         common.append("source_preflight_blocked")
-    if not positive(position.get("buy_price")) or not positive(position.get("curr_price")):
+    if not positive(position.get("buy_price")) or not positive(
+        position.get("curr_price")
+    ):
         common.append("position_price_missing")
-    if not all(finite(position.get(key)) for key in ("profit_rate", "peak_profit", "held_sec")):
+    if not all(
+        finite(position.get(key)) for key in ("profit_rate", "peak_profit", "held_sec")
+    ):
         common.append("position_pnl_or_age_missing")
-    elif (float(position["held_sec"]) < 0
-          or float(position["peak_profit"]) < float(position["profit_rate"])):
+    elif float(position["held_sec"]) < 0 or float(position["peak_profit"]) < float(
+        position["profit_rate"]
+    ):
         common.append("position_pnl_or_age_inconsistent")
     bid, ask = quote.get("best_bid"), quote.get("best_ask")
     if not positive(bid) or not positive(ask) or float(ask) < float(bid):
         common.append("executable_quote_missing_or_crossed")
-    if (not positive(quote.get("bid_total_depth"))
-            or not positive(quote.get("ask_total_depth"))):
+    if not positive(quote.get("bid_total_depth")) or not positive(
+        quote.get("ask_total_depth")
+    ):
         common.append("orderbook_depth_missing")
     flow_micro = flow.get("microstructure") if isinstance(flow, dict) else None
     if isinstance(flow_micro, dict):
         for key in ("best_bid", "best_ask"):
             feature_value = flow_micro.get(key)
-            if (feature_value is not None and finite(feature_value)
-                    and finite(quote.get(key))
-                    and float(feature_value) != float(quote[key])):
+            if (
+                feature_value is not None
+                and finite(feature_value)
+                and finite(quote.get(key))
+                and float(feature_value) != float(quote[key])
+            ):
                 common.append("quote_flow_price_conflict")
                 break
     if not payload.get("last_ticks"):
@@ -511,18 +648,20 @@ def path_vote_input_gaps(payload: dict[str, Any]) -> dict[str, tuple[str, ...]]:
     for path in payload.get("requested_paths") or []:
         reasons = list(common)
         if path.startswith("EXIT_") and (
-            not positive((flow.get("execution_pnl") or {}).get(
-                "executable_sell_price"
-            ))
-            or not finite((flow.get("execution_pnl") or {}).get(
-                "estimated_net_executable_pnl_pct"
-            ))
+            not positive((flow.get("execution_pnl") or {}).get("executable_sell_price"))
+            or not finite(
+                (flow.get("execution_pnl") or {}).get(
+                    "estimated_net_executable_pnl_pct"
+                )
+            )
         ):
             reasons.append("executable_exit_pnl_missing")
-        elif (path.startswith("EXIT_") and positive(bid)
-              and float((flow.get("execution_pnl") or {})[
-                  "executable_sell_price"
-              ]) != float(bid)):
+        elif (
+            path.startswith("EXIT_")
+            and positive(bid)
+            and float((flow.get("execution_pnl") or {})["executable_sell_price"])
+            != float(bid)
+        ):
             reasons.append("executable_exit_bid_conflict")
         if path == "EXIT_TRAILING_TP" and (
             not finite(position.get("drawdown_from_peak_pct"))
@@ -532,34 +671,43 @@ def path_vote_input_gaps(payload: dict[str, Any]) -> dict[str, tuple[str, ...]]:
         if path == "EXIT_POST_ADD_FAIL" and (
             position.get("reversal_add_state") != "POST_ADD_EVAL"
             or not positive(position.get("reversal_add_executed_at"))
-            or not positive((flow.get("position_lifecycle") or {}).get(
-                "scale_in_filled_qty"
-            ))
+            or not positive(
+                (flow.get("position_lifecycle") or {}).get("scale_in_filled_qty")
+            )
         ):
             reasons.append("post_add_fill_evidence_missing")
         if path == "ADD_REBOUND":
             if not payload.get("last_candles"):
                 reasons.append("rebound_candle_evidence_missing")
-            if (not isinstance(flow.get("signed_tape"), dict)
-                    or not isinstance(flow.get("microstructure"), dict)):
+            if not isinstance(flow.get("signed_tape"), dict) or not isinstance(
+                flow.get("microstructure"), dict
+            ):
                 reasons.append("rebound_tape_or_quote_flow_missing")
         gaps[path] = tuple(reasons)
     return gaps
 
 
-def path_vote_input_hashes(payload: dict[str, Any], *,
-                           model: str, prompt_sha256: str | None = None,
-                           path_policy_hashes: dict[str, str] | None = None) -> dict[str, Any]:
+def path_vote_input_hashes(
+    payload: dict[str, Any],
+    *,
+    model: str,
+    prompt_sha256: str | None = None,
+    path_policy_hashes: dict[str, str] | None = None,
+) -> dict[str, Any]:
     """Keep volatile receipt clocks out of the decision-content hash."""
     if prompt_sha256 is None:
         from src.engine.ai_prompt_contracts import (
             SCALPING_HOLDING_PATH_VOTE_SYSTEM_PROMPT,
         )
+
         prompt_sha256 = hashlib.sha256(
             SCALPING_HOLDING_PATH_VOTE_SYSTEM_PROMPT.encode("ascii")
         ).hexdigest()
-    material = {key: value for key, value in payload.items()
-                if key not in {"input_snapshot_id", "source", "requested_paths"}}
+    material = {
+        key: value
+        for key, value in payload.items()
+        if key not in {"input_snapshot_id", "source", "requested_paths"}
+    }
     # The model receives full provenance, but capture clocks and source ages
     # cannot manufacture a new market observation for vote independence.
     flow = material.get("flow")
@@ -571,8 +719,11 @@ def path_vote_input_hashes(payload: dict[str, Any], *,
             ("microstructure", ("quote_age_ms", "ofi_snapshot_age_ms")),
         ):
             if isinstance(flow.get(group), dict):
-                flow[group] = {key: value for key, value in flow[group].items()
-                               if key not in volatile_fields}
+                flow[group] = {
+                    key: value
+                    for key, value in flow[group].items()
+                    if key not in volatile_fields
+                }
         material["flow"] = flow
     source = payload.get("source") or {}
     material["source_route"] = source.get("route")
@@ -581,30 +732,51 @@ def path_vote_input_hashes(payload: dict[str, Any], *,
     material["prompt_sha256"] = str(prompt_sha256 or "")
     paths = tuple(payload.get("requested_paths") or ())
     if path_policy_hashes is not None and (
-            set(path_policy_hashes) != set(paths)
-            or any(not isinstance(value, str) or len(value) != 64
-                   or any(char not in "0123456789abcdef" for char in value)
-                   for value in path_policy_hashes.values())):
+        set(path_policy_hashes) != set(paths)
+        or any(
+            not isinstance(value, str)
+            or len(value) != 64
+            or any(char not in "0123456789abcdef" for char in value)
+            for value in path_policy_hashes.values()
+        )
+    ):
         raise ValueError("path_policy_hashes_invalid")
-    snapshot_id = input_snapshot_id({
-        key: value for key, value in payload.items()
-        if key != "input_snapshot_id"
-    })
+    snapshot_id = input_snapshot_id(
+        {key: value for key, value in payload.items() if key != "input_snapshot_id"}
+    )
     return {
         "input_snapshot_id": snapshot_id,
-        "request_payload_sha256": hashlib.sha256(json.dumps(
-            {**payload, "input_snapshot_id": snapshot_id},
-            ensure_ascii=True, separators=(",", ":"), default=str,
-        ).encode("ascii")).hexdigest(),
-        "decision_input_sha256": input_snapshot_id({
-            **material, "requested_paths": paths,
-            **({"path_policy_hashes": path_policy_hashes}
-               if path_policy_hashes is not None else {}),
-        }),
+        "request_payload_sha256": hashlib.sha256(
+            json.dumps(
+                {**payload, "input_snapshot_id": snapshot_id},
+                ensure_ascii=True,
+                separators=(",", ":"),
+                default=str,
+            ).encode("ascii")
+        ).hexdigest(),
+        "decision_input_sha256": input_snapshot_id(
+            {
+                **material,
+                "requested_paths": paths,
+                **(
+                    {"path_policy_hashes": path_policy_hashes}
+                    if path_policy_hashes is not None
+                    else {}
+                ),
+            }
+        ),
         "path_decision_input_sha256": {
-            path: input_snapshot_id({**material, "path_id": path,
-                                     **({"path_policy_sha256": path_policy_hashes[path]}
-                                        if path_policy_hashes is not None else {})})
+            path: input_snapshot_id(
+                {
+                    **material,
+                    "path_id": path,
+                    **(
+                        {"path_policy_sha256": path_policy_hashes[path]}
+                        if path_policy_hashes is not None
+                        else {}
+                    ),
+                }
+            )
             for path in paths
         },
     }
@@ -612,11 +784,14 @@ def path_vote_input_hashes(payload: dict[str, Any], *,
 
 def path_vote_claims_path(data_dir: str | Path, position_key: str) -> Path:
     identity = hashlib.sha256(str(position_key or "").encode("utf-8")).hexdigest()
-    return Path(data_dir) / "runtime" / "holding_path_votes" / f"{identity}.claims.jsonl"
+    return (
+        Path(data_dir) / "runtime" / "holding_path_votes" / f"{identity}.claims.jsonl"
+    )
 
 
 def _read_path_vote_claim_state(
-    handle, position_key: str,
+    handle,
+    position_key: str,
 ) -> tuple[dict[str, str], dict[str, set[str]]]:
     if os.fstat(handle.fileno()).st_size > PATH_MAX_STORE_BYTES:
         raise ValueError("path_vote_claims_oversize")
@@ -627,12 +802,14 @@ def _read_path_vote_claim_state(
             item = json.loads(line)
         except (json.JSONDecodeError, TypeError) as exc:
             raise ValueError("path_vote_claims_corrupt") from exc
-        if (not isinstance(item, dict)
-                or item.get("position_key") != position_key
-                or item.get("path_id") not in PATH_IDS
-                or item.get("status", "CLAIM") not in {"CLAIM", "RELEASE"}
-                or not isinstance(item.get("path_hash"), str)
-                or len(item["path_hash"]) != 64):
+        if (
+            not isinstance(item, dict)
+            or item.get("position_key") != position_key
+            or item.get("path_id") not in PATH_IDS
+            or item.get("status", "CLAIM") not in {"CLAIM", "RELEASE"}
+            or not isinstance(item.get("path_hash"), str)
+            or len(item["path_hash"]) != 64
+        ):
             raise ValueError("path_vote_claims_invalid")
         if item.get("status", "CLAIM") == "RELEASE":
             stack = active.get(item["path_id"], [])
@@ -664,7 +841,8 @@ def read_path_vote_input_claims(path: Path, position_key: str) -> dict[str, str]
 
 
 def read_path_vote_input_claim_history(
-    path: Path, position_key: str,
+    path: Path,
+    position_key: str,
 ) -> dict[str, set[str]]:
     """Return every input claimed for a possible provider call and not released."""
     if not path.exists():
@@ -678,12 +856,18 @@ def read_path_vote_input_claim_history(
             fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
-def claim_path_vote_inputs(path: Path, position_key: str,
-                           path_hashes: dict[str, str]) -> bool:
+def claim_path_vote_inputs(
+    path: Path, position_key: str, path_hashes: dict[str, str]
+) -> bool:
     """Durably claim changed inputs before a provider request, including crashes."""
-    if (not path_hashes or set(path_hashes) - PATH_IDS
-            or any(not isinstance(value, str) or len(value) != 64
-                   for value in path_hashes.values())):
+    if (
+        not path_hashes
+        or set(path_hashes) - PATH_IDS
+        or any(
+            not isinstance(value, str) or len(value) != 64
+            for value in path_hashes.values()
+        )
+    ):
         raise ValueError("invalid_path_vote_claim")
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     fd = os.open(path, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
@@ -691,17 +875,24 @@ def claim_path_vote_inputs(path: Path, position_key: str,
         fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
         try:
             _, claimed_history = _read_path_vote_claim_state(handle, position_key)
-            if any(value in claimed_history.get(path_id, set())
-                   for path_id, value in path_hashes.items()):
+            if any(
+                value in claimed_history.get(path_id, set())
+                for path_id, value in path_hashes.items()
+            ):
                 return False
             records = [
-                {"position_key": position_key, "path_id": path_id,
-                 "path_hash": value, "status": "CLAIM"}
+                {
+                    "position_key": position_key,
+                    "path_id": path_id,
+                    "path_hash": value,
+                    "status": "CLAIM",
+                }
                 for path_id, value in sorted(path_hashes.items())
             ]
             handle.seek(0, os.SEEK_END)
-            handle.write("".join(json.dumps(item, sort_keys=True) + "\n"
-                                 for item in records))
+            handle.write(
+                "".join(json.dumps(item, sort_keys=True) + "\n" for item in records)
+            )
             handle.flush()
             os.fsync(handle.fileno())
             parent_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
@@ -714,41 +905,54 @@ def claim_path_vote_inputs(path: Path, position_key: str,
             fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
-def release_path_vote_inputs(path: Path, position_key: str,
-                             path_hashes: dict[str, str]) -> bool:
+def release_path_vote_inputs(
+    path: Path, position_key: str, path_hashes: dict[str, str]
+) -> bool:
     """Release an exact claim only when no provider call was submitted."""
     fd = os.open(path, os.O_RDWR | getattr(os, "O_NOFOLLOW", 0))
     with os.fdopen(fd, "r+", encoding="utf-8") as handle:
         fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
         try:
             latest = _read_path_vote_claims(handle, position_key)
-            if any(latest.get(path_id) != value
-                   for path_id, value in path_hashes.items()):
+            if any(
+                latest.get(path_id) != value for path_id, value in path_hashes.items()
+            ):
                 return False
             records = [
-                {"position_key": position_key, "path_id": path_id,
-                 "path_hash": value, "status": "RELEASE"}
+                {
+                    "position_key": position_key,
+                    "path_id": path_id,
+                    "path_hash": value,
+                    "status": "RELEASE",
+                }
                 for path_id, value in sorted(path_hashes.items())
             ]
             handle.seek(0, os.SEEK_END)
-            handle.write("".join(json.dumps(item, sort_keys=True) + "\n"
-                                 for item in records))
+            handle.write(
+                "".join(json.dumps(item, sort_keys=True) + "\n" for item in records)
+            )
             handle.flush()
             os.fsync(handle.fileno())
             return True
         finally:
             fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
 PATH_POLICY_BY_MARKET = {
     (path, market): {
-        "min_votes": 2, "pass_votes": 2, "veto_votes": 2,
+        "min_votes": 2,
+        "pass_votes": 2,
+        "veto_votes": 2,
         "firm_pass_votes": 1 if path == "ADD_REBOUND" else 0,
         "firm_veto_votes": 1,
-        "window_sec": 180.0, "max_latest_age_sec": 40.0,
-        "max_gap_sec": 100.0, "min_duration_sec": 8.0,
+        "window_sec": 180.0,
+        "max_latest_age_sec": 40.0,
+        "max_gap_sec": 100.0,
+        "min_duration_sec": 8.0,
         "max_defer_sec": (
-            45.0 if path == "EXIT_TRAILING_TP" else
-            10.0 if path == "EXIT_POST_ADD_FAIL" else
-            90.0
+            45.0
+            if path == "EXIT_TRAILING_TP"
+            else 10.0 if path == "EXIT_POST_ADD_FAIL" else 90.0
         ),
     }
     for path in sorted(PATH_IDS)
@@ -768,9 +972,15 @@ def buy_fill_identity_from_legs(legs: Any) -> str | None:
         order = str(leg.get("order_no") or "").strip()
         execution = str(leg.get("execution_no") or "").strip()
         qty = leg.get("qty")
-        if (not order or order.startswith("__") or not execution
-                or isinstance(qty, bool) or not isinstance(qty, int) or qty <= 0
-                or (order, execution) in seen):
+        if (
+            not order
+            or order.startswith("__")
+            or not execution
+            or isinstance(qty, bool)
+            or not isinstance(qty, int)
+            or qty <= 0
+            or (order, execution) in seen
+        ):
             return None
         seen.add((order, execution))
         normalized.append((order, execution, qty))
@@ -794,8 +1004,11 @@ def buy_fill_legs_from_runtime(stock: dict[str, Any]) -> list[dict[str, Any]] | 
         if set(fills) != set(executions):
             return None
         for order, filled_qty in fills.items():
-            if (not isinstance(filled_qty, int) or isinstance(filled_qty, bool)
-                    or filled_qty <= 0):
+            if (
+                not isinstance(filled_qty, int)
+                or isinstance(filled_qty, bool)
+                or filled_qty <= 0
+            ):
                 return None
             order_executions = executions.get(order)
             if not isinstance(order_executions, dict) or not order_executions:
@@ -805,16 +1018,22 @@ def buy_fill_legs_from_runtime(stock: dict[str, Any]) -> list[dict[str, Any]] | 
                 if not isinstance(signature, dict):
                     return None
                 cumulative = signature.get("cumulative_qty")
-                if (not isinstance(cumulative, int) or isinstance(cumulative, bool)
-                        or cumulative <= 0):
+                if (
+                    not isinstance(cumulative, int)
+                    or isinstance(cumulative, bool)
+                    or cumulative <= 0
+                ):
                     return None
                 ordered.append((cumulative, str(execution)))
             prior = 0
             for cumulative, execution in sorted(ordered):
                 if cumulative <= prior:
                     return None
-                leg = {"order_no": order, "execution_no": execution,
-                       "qty": cumulative - prior}
+                leg = {
+                    "order_no": order,
+                    "execution_no": execution,
+                    "qty": cumulative - prior,
+                }
                 existing = by_execution.get((order, execution))
                 if existing is not None and existing != leg:
                     return None
@@ -826,8 +1045,10 @@ def buy_fill_legs_from_runtime(stock: dict[str, Any]) -> list[dict[str, Any]] | 
                 return None
         declared = stock.get(f"{prefix}_filled_qty")
         if declared is not None and (
-                isinstance(declared, bool) or not isinstance(declared, int)
-                or declared != sum(fills.values())):
+            isinstance(declared, bool)
+            or not isinstance(declared, int)
+            or declared != sum(fills.values())
+        ):
             return None
     return legs if buy_fill_identity_from_legs(legs) else None
 
@@ -871,12 +1092,16 @@ def _buy_fill_receipt_path(data_dir: str | Path, stock: dict[str, Any]) -> Path 
         return None
     if record_id <= 0:
         return None
-    return Path(data_dir) / "runtime" / "holding_buy_fill_receipts" / f"{record_id}.json"
+    return (
+        Path(data_dir) / "runtime" / "holding_buy_fill_receipts" / f"{record_id}.json"
+    )
 
 
 def persist_buy_fill_receipt(
-    stock: dict[str, Any], data_dir: str | Path,
-    *, source: str = "accepted_broker_execution",
+    stock: dict[str, Any],
+    data_dir: str | Path,
+    *,
+    source: str = "accepted_broker_execution",
 ) -> str:
     """Atomically index exact accepted broker BUY legs for one real position."""
     path = _buy_fill_receipt_path(data_dir, stock)
@@ -889,12 +1114,20 @@ def persist_buy_fill_receipt(
         buy_price = float(stock.get("buy_price"))
     except (TypeError, ValueError):
         buy_price = float("nan")
-    if (path is None or not re.fullmatch(r"[0-9]{6}", code)
-            or not buy_time or not identity or not math.isfinite(buy_price)
-            or buy_price <= 0
-            or stock.get("simulation_book") or stock.get("simulation_owner")
-            or not isinstance(qty, int) or isinstance(qty, bool)
-            or qty <= 0 or sum(leg["qty"] for leg in legs) != qty):
+    if (
+        path is None
+        or not re.fullmatch(r"[0-9]{6}", code)
+        or not buy_time
+        or not identity
+        or not math.isfinite(buy_price)
+        or buy_price <= 0
+        or stock.get("simulation_book")
+        or stock.get("simulation_owner")
+        or not isinstance(qty, int)
+        or isinstance(qty, bool)
+        or qty <= 0
+        or sum(leg["qty"] for leg in legs) != qty
+    ):
         raise ValueError("exact_buy_fill_receipt_incomplete")
     # Position-lifetime identity survives cancellation/full-fill cleanup and
     # the next ADD bundle's empty pending receipt maps.
@@ -911,8 +1144,10 @@ def persist_buy_fill_receipt(
         "source": source,
         "receipt_fields": fields,
     }
-    encoded = (json.dumps(payload, sort_keys=True, separators=(",", ":"),
-                          ensure_ascii=True) + "\n").encode("ascii")
+    encoded = (
+        json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+        + "\n"
+    ).encode("ascii")
     if len(encoded) > _BUY_FILL_RECEIPT_MAX_BYTES:
         raise ValueError("exact_buy_fill_receipt_capacity_exceeded")
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -935,14 +1170,26 @@ def persist_buy_fill_receipt(
 
 
 def _restore_buy_fill_from_legacy_vote(
-    stock: dict[str, Any], data_dir: str | Path,
+    stock: dict[str, Any],
+    data_dir: str | Path,
 ) -> str:
     """One-time bounded recovery for a pre-journal initial BUY position."""
-    if any(stock.get(key) for key in ("add_count", "avg_down_count", "pyramid_count",
-                                      "scale_in_filled_qty", "last_add_type")):
+    if any(
+        stock.get(key)
+        for key in (
+            "add_count",
+            "avg_down_count",
+            "pyramid_count",
+            "scale_in_filled_qty",
+            "last_add_type",
+        )
+    ):
         return "legacy_vote_add_legs_unclassified"
-    if (stock.get("pending_entry_orders") or stock.get("pending_add_order")
-            or stock.get("entry_partial_fill_pending")):
+    if (
+        stock.get("pending_entry_orders")
+        or stock.get("pending_add_order")
+        or stock.get("entry_partial_fill_pending")
+    ):
         return "legacy_vote_pending_buy_unreconciled"
     record_id = int(stock["id"])
     position_key = f"record:{record_id}"
@@ -966,14 +1213,19 @@ def _restore_buy_fill_from_legacy_vote(
         identity = buy_fill_identity_from_legs(legs)
         requested_at = row.get("requested_at")
         persisted_at = row.get("persisted_at")
-        if (not identity or identity != row.get("buy_fill_identity")
-                or not isinstance(requested_at, (int, float))
-                or not isinstance(persisted_at, (int, float))
-                or not buy_epoch <= requested_at <= persisted_at <= now_epoch
-                or sum(leg["qty"] for leg in legs) != stock["buy_qty"]
-                or any(not re.fullmatch(r"[0-9]{1,20}", leg["order_no"])
-                       or not re.fullmatch(r"[0-9]{1,20}", leg["execution_no"])
-                       for leg in legs)):
+        if (
+            not identity
+            or identity != row.get("buy_fill_identity")
+            or not isinstance(requested_at, (int, float))
+            or not isinstance(persisted_at, (int, float))
+            or not buy_epoch <= requested_at <= persisted_at <= now_epoch
+            or sum(leg["qty"] for leg in legs) != stock["buy_qty"]
+            or any(
+                not re.fullmatch(r"[0-9]{1,20}", leg["order_no"])
+                or not re.fullmatch(r"[0-9]{1,20}", leg["execution_no"])
+                for leg in legs
+            )
+        ):
             continue
         candidates.append((persisted_at, identity, legs))
     if not candidates:
@@ -987,15 +1239,20 @@ def _restore_buy_fill_from_legacy_vote(
         order, execution, qty = leg["order_no"], leg["execution_no"], leg["qty"]
         fills[order] = fills.get(order, 0) + qty
         executions.setdefault(order, {})[execution] = {"cumulative_qty": fills[order]}
-    candidate = {**stock, "entry_filled_qty": stock["buy_qty"],
-                 "_entry_receipt_filled_by_order_no": fills,
-                 "_entry_receipt_executions_by_order_no": executions,
-                 "_add_receipt_filled_by_order_no": {},
-                 "_add_receipt_executions_by_order_no": {}}
+    candidate = {
+        **stock,
+        "entry_filled_qty": stock["buy_qty"],
+        "_entry_receipt_filled_by_order_no": fills,
+        "_entry_receipt_executions_by_order_no": executions,
+        "_add_receipt_filled_by_order_no": {},
+        "_add_receipt_executions_by_order_no": {},
+    }
     if buy_fill_identity_from_runtime(candidate) != identity:
         return "legacy_vote_reconstructed_identity_conflict"
     try:
-        persist_buy_fill_receipt(candidate, data_dir, source="legacy_path_vote_exact_buy_legs")
+        persist_buy_fill_receipt(
+            candidate, data_dir, source="legacy_path_vote_exact_buy_legs"
+        )
     except (OSError, TypeError, ValueError):
         return "legacy_vote_receipt_persist_failed"
     stock.update({key: copy.deepcopy(candidate[key]) for key in _BUY_FILL_RECEIPT_KEYS})
@@ -1024,25 +1281,35 @@ def restore_buy_fill_receipt(stock: dict[str, Any], data_dir: str | Path) -> str
     except (OSError, UnicodeError, json.JSONDecodeError):
         return "receipt_unreadable"
     if not isinstance(payload, dict) or payload.get("schema") not in {
-            "holding_buy_fill_receipt_v1", _BUY_FILL_RECEIPT_SCHEMA}:
+        "holding_buy_fill_receipt_v1",
+        _BUY_FILL_RECEIPT_SCHEMA,
+    }:
         return "receipt_schema_invalid"
     if payload.get("source") not in {
-        "accepted_broker_execution", "legacy_path_vote_exact_buy_legs",
+        "accepted_broker_execution",
+        "legacy_path_vote_exact_buy_legs",
     }:
         return "receipt_source_invalid"
     position_buy_time = _buy_fill_receipt_time(stock.get("buy_time"))
     receipt_buy_time = _buy_fill_receipt_time(payload.get("buy_time"))
-    if (not position_buy_time or not receipt_buy_time
-            or payload.get("record_id") != int(stock["id"])
-            or payload.get("code") != str(stock.get("code") or "").strip()[:6]
-            or receipt_buy_time != position_buy_time
-            or payload.get("buy_qty") != stock.get("buy_qty")):
+    if (
+        not position_buy_time
+        or not receipt_buy_time
+        or payload.get("record_id") != int(stock["id"])
+        or payload.get("code") != str(stock.get("code") or "").strip()[:6]
+        or receipt_buy_time != position_buy_time
+        or payload.get("buy_qty") != stock.get("buy_qty")
+    ):
         return "position_generation_mismatch"
     try:
         receipt_price = float(payload.get("buy_price"))
         position_price = float(stock.get("buy_price"))
-        if (not math.isfinite(receipt_price) or not math.isfinite(position_price)
-                or receipt_price <= 0 or position_price <= 0):
+        if (
+            not math.isfinite(receipt_price)
+            or not math.isfinite(position_price)
+            or receipt_price <= 0
+            or position_price <= 0
+        ):
             return "position_price_mismatch"
     except (TypeError, ValueError):
         return "position_price_missing"
@@ -1054,8 +1321,11 @@ def restore_buy_fill_receipt(stock: dict[str, Any], data_dir: str | Path) -> str
         return "receipt_fields_invalid"
     candidate = {**stock, "holding_buy_fill_legs": None, **fields}
     legs = buy_fill_legs_from_runtime(candidate)
-    if (legs is None or sum(leg["qty"] for leg in legs) != stock["buy_qty"]
-            or buy_fill_identity_from_legs(legs) != payload.get("buy_fill_identity")):
+    if (
+        legs is None
+        or sum(leg["qty"] for leg in legs) != stock["buy_qty"]
+        or buy_fill_identity_from_legs(legs) != payload.get("buy_fill_identity")
+    ):
         return "receipt_identity_conflict"
     if abs(receipt_price - position_price) > 0.01:
         # Inventory synchronization stores the broker's integer display price.
@@ -1066,21 +1336,34 @@ def restore_buy_fill_receipt(stock: dict[str, Any], data_dir: str | Path) -> str
         for leg in legs:
             signatures = [
                 (fields.get(f"_{prefix}_receipt_executions_by_order_no") or {})
-                .get(leg["order_no"], {}).get(leg["execution_no"])
-                for prefix in ("entry", "add")]
+                .get(leg["order_no"], {})
+                .get(leg["execution_no"])
+                for prefix in ("entry", "add")
+            ]
             signatures = [value for value in signatures if value is not None]
             if len(signatures) != 1:
                 return "position_price_mismatch"
             signature = signatures[0]
-            qty, price = signature.get("unit_exec_qty"), signature.get("unit_exec_price")
-            if (type(qty) is not int or qty != leg["qty"]
-                    or type(price) is not int or price <= 0):
+            qty, price = signature.get("unit_exec_qty"), signature.get(
+                "unit_exec_price"
+            )
+            if (
+                type(qty) is not int
+                or qty != leg["qty"]
+                or type(price) is not int
+                or price <= 0
+            ):
                 return "position_price_mismatch"
             amount += qty * price
-        if (not position_price.is_integer() or int(receipt_price) != position_price
-                or abs(amount / stock["buy_qty"] - receipt_price) > 0.0001):
+        if (
+            not position_price.is_integer()
+            or int(receipt_price) != position_price
+            or abs(amount / stock["buy_qty"] - receipt_price) > 0.0001
+        ):
             return "position_price_mismatch"
-        stock["buy_fill_identity_price_binding"] = "exact_fills_with_integer_inventory_display"
+        stock["buy_fill_identity_price_binding"] = (
+            "exact_fills_with_integer_inventory_display"
+        )
     stock.update(copy.deepcopy(fields))
     stock["holding_buy_fill_legs"] = copy.deepcopy(legs)
     stock.pop("buy_fill_identity_store_gap", None)
@@ -1111,10 +1394,19 @@ def path_vote_store_path(data_dir: str | Path, position_key: str) -> Path:
 
 
 def normalize_path_vote_bundle(
-    response: Any, *, requested_paths: tuple[str, ...],
-    expected_snapshot_id: str, position_key: str, market: str,
-    session_key: str, model: str, route: str, transport_epoch: str,
-    source_generation: str, requested_at: float, received_at: float,
+    response: Any,
+    *,
+    requested_paths: tuple[str, ...],
+    expected_snapshot_id: str,
+    position_key: str,
+    market: str,
+    session_key: str,
+    model: str,
+    route: str,
+    transport_epoch: str,
+    source_generation: str,
+    requested_at: float,
+    received_at: float,
     buy_fill_identity: str | None = None,
     buy_fill_legs: list[dict[str, Any]] | None = None,
     quote_observed_at: float | None = None,
@@ -1125,32 +1417,48 @@ def normalize_path_vote_bundle(
     if not paths or len(set(paths)) != len(paths) or set(paths) - PATH_IDS:
         raise ValueError("invalid_requested_paths")
     if path_policy_hashes is not None and (
-            set(path_policy_hashes) != set(paths)
-            or any(not isinstance(value, str) or len(value) != 64
-                   for value in path_policy_hashes.values())):
+        set(path_policy_hashes) != set(paths)
+        or any(
+            not isinstance(value, str) or len(value) != 64
+            for value in path_policy_hashes.values()
+        )
+    ):
         raise ValueError("invalid_path_policy_hashes")
     common = {
-        "schema": PATH_SCHEMA, "position_key": str(position_key or ""),
-        "market": market, "session_key": str(session_key or ""),
-        "model": str(model or ""), "prompt_version": PATH_PROMPT_VERSION,
-        "route": str(route or ""), "transport_epoch": str(transport_epoch or ""),
+        "schema": PATH_SCHEMA,
+        "position_key": str(position_key or ""),
+        "market": market,
+        "session_key": str(session_key or ""),
+        "model": str(model or ""),
+        "prompt_version": PATH_PROMPT_VERSION,
+        "route": str(route or ""),
+        "transport_epoch": str(transport_epoch or ""),
         "source_generation": str(source_generation or ""),
         "buy_fill_identity": str(buy_fill_identity or ""),
         "buy_fill_legs": list(buy_fill_legs or []),
         "quote_observed_at": quote_observed_at,
         "input_snapshot_id": str(expected_snapshot_id or ""),
-        "requested_at": requested_at, "received_at": received_at,
+        "requested_at": requested_at,
+        "received_at": received_at,
     }
     provenance_ok = (
-        bool(common["position_key"] and common["session_key"] and common["model"]
-             and common["route"] and common["transport_epoch"]
-             and common["source_generation"] and common["input_snapshot_id"]
-             and len(common["buy_fill_identity"]) == 64
-             and buy_fill_identity_from_legs(common["buy_fill_legs"])
-             == common["buy_fill_identity"])
+        bool(
+            common["position_key"]
+            and common["session_key"]
+            and common["model"]
+            and common["route"]
+            and common["transport_epoch"]
+            and common["source_generation"]
+            and common["input_snapshot_id"]
+            and len(common["buy_fill_identity"]) == 64
+            and buy_fill_identity_from_legs(common["buy_fill_legs"])
+            == common["buy_fill_identity"]
+        )
         and market in MARKETS
-        and all(isinstance(t, (float, int)) and not isinstance(t, bool)
-                and math.isfinite(t) for t in (requested_at, received_at))
+        and all(
+            isinstance(t, (float, int)) and not isinstance(t, bool) and math.isfinite(t)
+            for t in (requested_at, received_at)
+        )
         and received_at >= requested_at
         and isinstance(quote_observed_at, (int, float))
         and not isinstance(quote_observed_at, bool)
@@ -1159,24 +1467,34 @@ def normalize_path_vote_bundle(
     )
     items = response.get("votes") if isinstance(response, dict) else None
     response_ok = (
-        isinstance(items, list)
-        and response.get("input_snapshot_id") == expected_snapshot_id
-        and not response.get("ai_parse_fail")
-        and not response.get("error")
-        and not response.get("cache_hit")
-        and response.get("provider_called") is not False
-        and not ({"score", "confidence", "action", "quantity", "order_price"}
-                 & response.keys())
-    ) if isinstance(response, dict) else False
+        (
+            isinstance(items, list)
+            and response.get("input_snapshot_id") == expected_snapshot_id
+            and not response.get("ai_parse_fail")
+            and not response.get("error")
+            and not response.get("cache_hit")
+            and response.get("provider_called") is not False
+            and not (
+                {"score", "confidence", "action", "quantity", "order_price"}
+                & response.keys()
+            )
+        )
+        if isinstance(response, dict)
+        else False
+    )
     grouped: dict[str, list[dict[str, Any]]] = {path: [] for path in paths}
     if response_ok:
         for item in items:
             if isinstance(item, dict) and item.get("path_id") in grouped:
                 grouped[item["path_id"]].append(item)
-        if any(not isinstance(item, dict) or item.get("path_id") not in grouped
-               for item in items):
+        if any(
+            not isinstance(item, dict) or item.get("path_id") not in grouped
+            for item in items
+        ):
             response_ok = False
-        if [item.get("path_id") for item in items if isinstance(item, dict)] != list(paths):
+        if [item.get("path_id") for item in items if isinstance(item, dict)] != list(
+            paths
+        ):
             response_ok = False
     events = []
     for path in paths:
@@ -1184,147 +1502,244 @@ def normalize_path_vote_bundle(
         reason_codes = vote.get("reason_codes")
         prefix = PATH_REASON_PREFIX[path]
         vote_ok = (
-            provenance_ok and response_ok and len(grouped[path]) == 1
+            provenance_ok
+            and response_ok
+            and len(grouped[path]) == 1
             and set(vote) == {"path_id", "verdict", "conviction", "reason_codes"}
             and vote.get("verdict") in VERDICTS
             and vote.get("conviction") in CONVICTIONS
-            and isinstance(reason_codes, list) and 1 <= len(reason_codes) <= 6
-            and all(isinstance(code, str) and code.startswith(prefix)
-                    and 5 <= len(code) <= 64 and code.isascii()
-                    and all(ch.islower() or ch.isdigit() or ch == "_" for ch in code)
-                    for code in reason_codes)
+            and isinstance(reason_codes, list)
+            and 1 <= len(reason_codes) <= 6
+            and all(
+                isinstance(code, str)
+                and code.startswith(prefix)
+                and 5 <= len(code) <= 64
+                and code.isascii()
+                and all(ch.islower() or ch.isdigit() or ch == "_" for ch in code)
+                for code in reason_codes
+            )
         )
         model_input_insufficient = bool(
-            vote_ok and any(code == prefix + "input_insufficient"
-                            for code in reason_codes)
+            vote_ok
+            and any(code == prefix + "input_insufficient" for code in reason_codes)
         )
         if model_input_insufficient:
             vote_ok = False
-        events.append({
-            **common, "path_id": path,
-            "path_policy_sha256": input_snapshot_id(
-                PATH_POLICY_BY_MARKET[(path, market)]
-            ) if path_policy_hashes is None and market in MARKETS else (
-                path_policy_hashes or {}).get(path),
-            "purpose": "ADD_PERMISSION" if path == "ADD_REBOUND" else "EXIT_PERMISSION",
-            "verdict": vote.get("verdict") if vote_ok else None,
-            "conviction": vote.get("conviction") if vote_ok else None,
-            "reason_codes": reason_codes if vote_ok else [],
-            "status": "VALID" if vote_ok else "INSUFFICIENT",
-            "excluded_reason": None if vote_ok else (
-                "missing_or_invalid_provenance" if not provenance_ok else
-                "invalid_bundle" if not response_ok else
-                "missing_or_duplicate_path" if len(grouped[path]) != 1 else
-                "model_input_insufficient" if model_input_insufficient else
-                "invalid_path_vote"
-            ),
-        })
+        events.append(
+            {
+                **common,
+                "path_id": path,
+                "path_policy_sha256": (
+                    input_snapshot_id(PATH_POLICY_BY_MARKET[(path, market)])
+                    if path_policy_hashes is None and market in MARKETS
+                    else (path_policy_hashes or {}).get(path)
+                ),
+                "purpose": (
+                    "ADD_PERMISSION" if path == "ADD_REBOUND" else "EXIT_PERMISSION"
+                ),
+                "verdict": vote.get("verdict") if vote_ok else None,
+                "conviction": vote.get("conviction") if vote_ok else None,
+                "reason_codes": reason_codes if vote_ok else [],
+                "status": "VALID" if vote_ok else "INSUFFICIENT",
+                "excluded_reason": (
+                    None
+                    if vote_ok
+                    else (
+                        "missing_or_invalid_provenance"
+                        if not provenance_ok
+                        else (
+                            "invalid_bundle"
+                            if not response_ok
+                            else (
+                                "missing_or_duplicate_path"
+                                if len(grouped[path]) != 1
+                                else (
+                                    "model_input_insufficient"
+                                    if model_input_insufficient
+                                    else "invalid_path_vote"
+                                )
+                            )
+                        )
+                    )
+                ),
+            }
+        )
     return events
 
 
 def _path_event_identity(event: dict[str, Any]) -> tuple[Any, ...]:
-    return tuple(event.get(key) for key in (
-        "position_key", "market", "session_key", "path_id", "model",
-        "prompt_version", "route", "transport_epoch", "source_generation",
-    ))
+    return tuple(
+        event.get(key)
+        for key in (
+            "position_key",
+            "market",
+            "session_key",
+            "path_id",
+            "model",
+            "prompt_version",
+            "route",
+            "transport_epoch",
+            "source_generation",
+        )
+    )
 
 
 def append_path_events_file(
-    path: Path, position_key: str, events: list[dict[str, Any]],
+    path: Path,
+    position_key: str,
+    events: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], str]:
     """Append one review cycle atomically, including missing votes as gaps."""
     if not events or any(
         event.get("schema") != PATH_SCHEMA
         or event.get("position_key") != position_key
         or event.get("path_id") not in PATH_IDS
-        or (event.get("status") == "VALID" and (
-            event.get("provider_called") is not True
-            or buy_fill_identity_from_legs(event.get("buy_fill_legs"))
-            != event.get("buy_fill_identity")
-            or not isinstance(event.get("quote_observed_at"), (int, float))
-            or isinstance(event.get("quote_observed_at"), bool)
-            or not math.isfinite(event["quote_observed_at"])
-            or not 0 <= event["requested_at"] - event["quote_observed_at"] <= 3.0))
+        or (
+            event.get("status") == "VALID"
+            and (
+                event.get("provider_called") is not True
+                or buy_fill_identity_from_legs(event.get("buy_fill_legs"))
+                != event.get("buy_fill_identity")
+                or not isinstance(event.get("quote_observed_at"), (int, float))
+                or isinstance(event.get("quote_observed_at"), bool)
+                or not math.isfinite(event["quote_observed_at"])
+                or not 0 <= event["requested_at"] - event["quote_observed_at"] <= 3.0
+            )
+        )
         for event in events
     ):
         return [], "invalid_events"
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    lock_fd = os.open(str(path)+'.lock', os.O_RDWR | os.O_CREAT | getattr(os,'O_NOFOLLOW',0), 0o600)
-    with os.fdopen(lock_fd,'r+') as lock:
-        fcntl.flock(lock.fileno(),fcntl.LOCK_EX)
+    lock_fd = os.open(
+        str(path) + ".lock",
+        os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0),
+        0o600,
+    )
+    with os.fdopen(lock_fd, "r+") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         prior = _load_path_events_unlocked(path, position_key, tail=True)
         identities = {_path_event_identity(item) for item in prior}
-        if any(_path_event_identity(item) in identities for item in events):return prior,'duplicate_generation'
-        if len({_path_event_identity(item) for item in events})!=len(events):return prior,'duplicate_path'
-        if prior and min(float(i['requested_at']) for i in events)<max(float(i['requested_at']) for i in prior):
-            return prior,'out_of_order'
-        persisted_at=time.time()
-        if any(float(i['received_at'])>persisted_at for i in events):return prior,'future_response'
-        to_write=[{**item,'persisted_at':persisted_at} for item in events]
-        raw=(''.join(json.dumps(item,sort_keys=True,ensure_ascii=True)+'\n' for item in to_write)).encode()
-        if len(raw)>PATH_MAX_STORE_BYTES:raise ValueError('path_vote_batch_oversize')
-        size=path.stat().st_size if path.exists() else 0
-        if size+len(raw)>PATH_MAX_STORE_BYTES:
+        if any(_path_event_identity(item) in identities for item in events):
+            return prior, "duplicate_generation"
+        if len({_path_event_identity(item) for item in events}) != len(events):
+            return prior, "duplicate_path"
+        if prior and min(float(i["requested_at"]) for i in events) < max(
+            float(i["requested_at"]) for i in prior
+        ):
+            return prior, "out_of_order"
+        persisted_at = time.time()
+        if any(float(i["received_at"]) > persisted_at for i in events):
+            return prior, "future_response"
+        to_write = [{**item, "persisted_at": persisted_at} for item in events]
+        raw = (
+            "".join(
+                json.dumps(item, sort_keys=True, ensure_ascii=True) + "\n"
+                for item in to_write
+            )
+        ).encode()
+        if len(raw) > PATH_MAX_STORE_BYTES:
+            raise ValueError("path_vote_batch_oversize")
+        size = path.stat().st_size if path.exists() else 0
+        if size + len(raw) > PATH_MAX_STORE_BYTES:
             # Prior sealed segments are immutable evidence, never discarded.
-            segment=Path(str(path)+'.segment-'+str(time.time_ns()))
-            index_before=path.stat()
-            os.replace(path,segment)
-            from src.engine.automation.main_trailing_source_store import capture_native_rotation
-            capture_native_rotation(path,segment,before=index_before,after=segment.stat())
-            directory=os.open(path.parent,os.O_RDONLY)
-            try:os.fsync(directory)
-            finally:os.close(directory)
-        fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_APPEND|getattr(os,'O_NOFOLLOW',0),0o600)
-        with os.fdopen(fd,'ab') as handle:
-            index_before=os.fstat(handle.fileno())
-            handle.write(raw);handle.flush();os.fsync(handle.fileno())
-            from src.engine.automation.main_trailing_source_store import capture_native_append
-            capture_native_append(path,before=index_before,after=os.fstat(handle.fileno()),raw=raw,row=to_write)
-        if size==0 or size+len(raw)>PATH_MAX_STORE_BYTES:
-            directory=os.open(path.parent,os.O_RDONLY)
-            try:os.fsync(directory)
-            finally:os.close(directory)
-        return (prior+to_write)[-PATH_MAX_EVENTS:],'appended'
+            segment = Path(str(path) + ".segment-" + str(time.time_ns()))
+            index_before = path.stat()
+            os.replace(path, segment)
+            from src.engine.automation.main_trailing_source_store import (
+                capture_native_rotation,
+            )
+
+            capture_native_rotation(
+                path, segment, before=index_before, after=segment.stat()
+            )
+            directory = os.open(path.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+        fd = os.open(
+            path,
+            os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+        )
+        with os.fdopen(fd, "ab") as handle:
+            index_before = os.fstat(handle.fileno())
+            handle.write(raw)
+            handle.flush()
+            os.fsync(handle.fileno())
+            from src.engine.automation.main_trailing_source_store import (
+                capture_native_append,
+            )
+
+            capture_native_append(
+                path,
+                before=index_before,
+                after=os.fstat(handle.fileno()),
+                raw=raw,
+                row=to_write,
+            )
+        if size == 0 or size + len(raw) > PATH_MAX_STORE_BYTES:
+            directory = os.open(path.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+        return (prior + to_write)[-PATH_MAX_EVENTS:], "appended"
 
 
 def validate_path_event(item, position_key):
-    if (isinstance(item, dict) and item.get('path_id') == 'EXIT_BAD_ENTRY_REFINED'
-            and item.get('prompt_version') == 'holding_path_vote_v10'):
+    if (
+        isinstance(item, dict)
+        and item.get("path_id") == "EXIT_BAD_ENTRY_REFINED"
+        and item.get("prompt_version") == "holding_path_vote_v10"
+    ):
         return None  # Original retired path has no consumer.
-    if (not isinstance(item, dict) or item.get("schema") != PATH_SCHEMA
-            or item.get("position_key") != position_key
-            or item.get("path_id") not in PATH_IDS
-            or item.get("status") not in {"VALID", "INSUFFICIENT"}
-            or not isinstance(item.get("path_policy_sha256"), str)
-            or len(item["path_policy_sha256"]) != 64
-            or item.get("purpose") != (
-                "ADD_PERMISSION" if item.get("path_id") == "ADD_REBOUND"
-                else "EXIT_PERMISSION"
-            )
-            or not isinstance(item.get("buy_fill_identity"), str)
-            or any(not isinstance(item.get(key), (int, float))
-                   or isinstance(item[key], bool)
-                   or not math.isfinite(item[key])
-                   for key in ("requested_at", "received_at"))
-            or item.get("status") == "VALID" and (
-                len(item["buy_fill_identity"]) != 64
-                or buy_fill_identity_from_legs(item.get("buy_fill_legs"))
-                != item["buy_fill_identity"]
-                or not isinstance(item.get("quote_observed_at"), (int, float))
-                or isinstance(item.get("quote_observed_at"), bool)
-                or not math.isfinite(item["quote_observed_at"])
-                or not 0 <= item["requested_at"] - item["quote_observed_at"] <= 3.0)
-            or not isinstance(item.get("persisted_at"), (int, float))
-            or isinstance(item.get("persisted_at"), bool)
-            or not math.isfinite(item["persisted_at"])
-            or item["requested_at"] > item["received_at"]
-            or item["received_at"] > item["persisted_at"]
-            or (item.get("status") == "VALID" and (
+    if (
+        not isinstance(item, dict)
+        or item.get("schema") != PATH_SCHEMA
+        or item.get("position_key") != position_key
+        or item.get("path_id") not in PATH_IDS
+        or item.get("status") not in {"VALID", "INSUFFICIENT"}
+        or not isinstance(item.get("path_policy_sha256"), str)
+        or len(item["path_policy_sha256"]) != 64
+        or item.get("purpose")
+        != (
+            "ADD_PERMISSION"
+            if item.get("path_id") == "ADD_REBOUND"
+            else "EXIT_PERMISSION"
+        )
+        or not isinstance(item.get("buy_fill_identity"), str)
+        or any(
+            not isinstance(item.get(key), (int, float))
+            or isinstance(item[key], bool)
+            or not math.isfinite(item[key])
+            for key in ("requested_at", "received_at")
+        )
+        or item.get("status") == "VALID"
+        and (
+            len(item["buy_fill_identity"]) != 64
+            or buy_fill_identity_from_legs(item.get("buy_fill_legs"))
+            != item["buy_fill_identity"]
+            or not isinstance(item.get("quote_observed_at"), (int, float))
+            or isinstance(item.get("quote_observed_at"), bool)
+            or not math.isfinite(item["quote_observed_at"])
+            or not 0 <= item["requested_at"] - item["quote_observed_at"] <= 3.0
+        )
+        or not isinstance(item.get("persisted_at"), (int, float))
+        or isinstance(item.get("persisted_at"), bool)
+        or not math.isfinite(item["persisted_at"])
+        or item["requested_at"] > item["received_at"]
+        or item["received_at"] > item["persisted_at"]
+        or (
+            item.get("status") == "VALID"
+            and (
                 item.get("provider_called") is not True
                 or not item.get("input_snapshot_id")
                 or item.get("verdict") not in VERDICTS
                 or item.get("conviction") not in CONVICTIONS
-            ))):
+            )
+        )
+    ):
         raise ValueError("path_vote_store_contract_corrupt")
     return item
 
@@ -1335,16 +1750,17 @@ def _iter_path_events(handle, position_key: str):
     handle.seek(0)
     while True:
         line = handle.readline(PATH_MAX_STORE_BYTES + 1)
-        if not line: break
-        if len(line.encode('utf-8')) > PATH_MAX_STORE_BYTES:
-            raise ValueError('path_vote_record_oversize')
+        if not line:
+            break
+        if len(line.encode("utf-8")) > PATH_MAX_STORE_BYTES:
+            raise ValueError("path_vote_record_oversize")
         try:
             item = json.loads(line)
         except (json.JSONDecodeError, TypeError) as exc:
             raise ValueError("path_vote_store_json_corrupt") from exc
-        item=validate_path_event(item,position_key)
-        if item is not None:yield item
-
+        item = validate_path_event(item, position_key)
+        if item is not None:
+            yield item
 
 
 def _read_path_events(handle, position_key):
@@ -1354,187 +1770,307 @@ def _read_path_events(handle, position_key):
 def iter_path_events_file(path, position_key):
     # Native indexes are optional evidence acceleration. Coverage is proven
     # before yielding, so a pending index cannot duplicate a returned prefix.
-    from src.engine.automation.main_trailing_source_store import generation, vote_rows, InputPending
-    path=Path(path)
-    if path.parent.name=='holding_path_votes':
+    from src.engine.automation.main_trailing_source_store import (
+        generation,
+        vote_rows,
+        InputPending,
+    )
+
+    path = Path(path)
+    if path.parent.name == "holding_path_votes":
         try:
-            generation(path.parent.parent.parent,path)
+            generation(path.parent.parent.parent, path)
         except InputPending:
             pass
         else:
-            yield from vote_rows(path.parent.parent.parent,path,position_key,segments=False)
+            yield from vote_rows(
+                path.parent.parent.parent, path, position_key, segments=False
+            )
             return
-    fd = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))
-    with os.fdopen(fd, 'r', encoding='utf-8') as handle:
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    with os.fdopen(fd, "r", encoding="utf-8") as handle:
         fcntl.flock(handle.fileno(), fcntl.LOCK_SH)
         try:
             yield from _iter_path_events(handle, position_key)
         finally:
             fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
-def _load_path_events_unlocked(path: Path, position_key: str, *, tail=False, since=None) -> list[dict[str, Any]]:
+
+def _load_path_events_unlocked(
+    path: Path, position_key: str, *, tail=False, since=None
+) -> list[dict[str, Any]]:
     """Default preserves the full research ledger; runtime may request a tail."""
     from collections import deque
-    events=deque(maxlen=PATH_MAX_EVENTS) if tail else []
-    segments=sorted(path.parent.glob(path.name+'.segment-*'))
-    if tail:segments=segments[-1:]
-    for source in segments+([path] if path.exists() else []):
-        for event in iter_path_events_file(source,position_key):
-            if since is None or event['requested_at']>=since:events.append(event)
+
+    events = deque(maxlen=PATH_MAX_EVENTS) if tail else []
+    segments = sorted(path.parent.glob(path.name + ".segment-*"))
+    if tail:
+        segments = segments[-1:]
+    for source in segments + ([path] if path.exists() else []):
+        for event in iter_path_events_file(source, position_key):
+            if since is None or event["requested_at"] >= since:
+                events.append(event)
     return list(events)
 
 
 def load_path_events_file(path: Path, position_key: str, *, tail=False, since=None):
-    if not path.parent.exists():return []
-    fd=os.open(str(path)+'.lock',os.O_RDWR|os.O_CREAT|getattr(os,'O_NOFOLLOW',0),0o600)
-    with os.fdopen(fd,'r+') as lock:
-        fcntl.flock(lock.fileno(),fcntl.LOCK_SH)
-        return _load_path_events_unlocked(path,position_key,tail=tail,since=since)
+    if not path.parent.exists():
+        return []
+    fd = os.open(
+        str(path) + ".lock",
+        os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0),
+        0o600,
+    )
+    with os.fdopen(fd, "r+") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_SH)
+        return _load_path_events_unlocked(path, position_key, tail=tail, since=since)
 
 
 def validate_path_policy(policy: Any, *, path_id: str | None = None) -> bool:
     if not isinstance(policy, dict):
         return False
-    counts = ("min_votes", "pass_votes", "veto_votes", "firm_pass_votes",
-              "firm_veto_votes")
-    times = ("window_sec", "max_latest_age_sec", "max_gap_sec",
-             "min_duration_sec", "max_defer_sec")
+    counts = (
+        "min_votes",
+        "pass_votes",
+        "veto_votes",
+        "firm_pass_votes",
+        "firm_veto_votes",
+    )
+    times = (
+        "window_sec",
+        "max_latest_age_sec",
+        "max_gap_sec",
+        "min_duration_sec",
+        "max_defer_sec",
+    )
     if set(policy) != set(counts) | set(times):
         return False
-    if any(not isinstance(policy.get(key), int) or isinstance(policy[key], bool)
-           or policy[key] < (2 if key == "min_votes" else 0) for key in counts):
+    if any(
+        not isinstance(policy.get(key), int)
+        or isinstance(policy[key], bool)
+        or policy[key] < (2 if key == "min_votes" else 0)
+        for key in counts
+    ):
         return False
-    if any(not isinstance(policy.get(key), (int, float))
-           or isinstance(policy[key], bool) or not math.isfinite(policy[key])
-           or policy[key] < 0 for key in times):
+    if any(
+        not isinstance(policy.get(key), (int, float))
+        or isinstance(policy[key], bool)
+        or not math.isfinite(policy[key])
+        or policy[key] < 0
+        for key in times
+    ):
         return False
     defer_limit = 90.0
     if path_id is not None:
         if path_id not in PATH_IDS:
             return False
         defer_limit = PATH_POLICY_BY_MARKET[(path_id, "REGULAR")]["max_defer_sec"]
-    return (policy["pass_votes"] >= 2 and policy["veto_votes"] >= 2
-            and policy["window_sec"] > 0 and policy["max_latest_age_sec"] > 0
-            and policy["max_gap_sec"] > 0
-            and 0 < policy["max_defer_sec"] <= defer_limit
-            and policy["max_latest_age_sec"] <= policy["window_sec"]
-            and policy["min_duration_sec"] <= policy["window_sec"])
+    return (
+        policy["pass_votes"] >= 2
+        and policy["veto_votes"] >= 2
+        and policy["window_sec"] > 0
+        and policy["max_latest_age_sec"] > 0
+        and policy["max_gap_sec"] > 0
+        and 0 < policy["max_defer_sec"] <= defer_limit
+        and policy["max_latest_age_sec"] <= policy["window_sec"]
+        and policy["min_duration_sec"] <= policy["window_sec"]
+    )
 
 
 def path_signal_snapshot(
-    ledger: Any, *, position_key: str, market: str, session_key: str,
-    path_id: str, model: str, signal_at: float, policy: dict[str, Any],
+    ledger: Any,
+    *,
+    position_key: str,
+    market: str,
+    session_key: str,
+    path_id: str,
+    model: str,
+    signal_at: float,
+    policy: dict[str, Any],
     source_policy_sha256: str | None = None,
     buy_fill_identity: str | None = None,
 ) -> dict[str, Any]:
     """Freeze the last contiguous pre-signal sequence for exactly one path."""
     base = {
-        "schema": PATH_SNAPSHOT_SCHEMA, "path_id": path_id,
-        "position_key": position_key, "market": market,
+        "schema": PATH_SNAPSHOT_SCHEMA,
+        "path_id": path_id,
+        "position_key": position_key,
+        "market": market,
         "buy_fill_identity": buy_fill_identity,
-        "session_key": session_key, "signal_at": signal_at,
-        "vote_count": 0, "pass_count": 0, "veto_count": 0,
-        "firm_pass_count": 0, "firm_veto_count": 0,
-        "missing_cycle_count": 0, "first_vote_at": None,
-        "last_vote_at": None, "latest_vote_age_sec": None,
-        "max_observed_gap_sec": None, "duration_sec": 0.0,
-        "decision": "INSUFFICIENT", "reason": "invalid_policy_or_identity",
+        "session_key": session_key,
+        "signal_at": signal_at,
+        "vote_count": 0,
+        "pass_count": 0,
+        "veto_count": 0,
+        "firm_pass_count": 0,
+        "firm_veto_count": 0,
+        "missing_cycle_count": 0,
+        "first_vote_at": None,
+        "last_vote_at": None,
+        "latest_vote_age_sec": None,
+        "max_observed_gap_sec": None,
+        "duration_sec": 0.0,
+        "decision": "INSUFFICIENT",
+        "reason": "invalid_policy_or_identity",
     }
-    if (path_id not in PATH_IDS or market not in MARKETS
-            or not isinstance(buy_fill_identity, str)
-            or len(buy_fill_identity) != 64
-            or not validate_path_policy(policy, path_id=path_id)
-            or not isinstance(signal_at, (int, float)) or isinstance(signal_at, bool)
-            or not math.isfinite(signal_at)):
+    if (
+        path_id not in PATH_IDS
+        or market not in MARKETS
+        or not isinstance(buy_fill_identity, str)
+        or len(buy_fill_identity) != 64
+        or not validate_path_policy(policy, path_id=path_id)
+        or not isinstance(signal_at, (int, float))
+        or isinstance(signal_at, bool)
+        or not math.isfinite(signal_at)
+    ):
         return base
     source_hash = source_policy_sha256 or input_snapshot_id(policy)
-    if (len(source_hash) != 64
-            or any(ch not in "0123456789abcdef" for ch in source_hash)):
+    if len(source_hash) != 64 or any(
+        ch not in "0123456789abcdef" for ch in source_hash
+    ):
         return base
-    rows = sorted((item for item in (ledger or [])
-        if isinstance(item, dict) and item.get("schema") == PATH_SCHEMA
-        and item.get("position_key") == position_key
-        and item.get("buy_fill_identity") == buy_fill_identity
-        and item.get("market") == market and item.get("session_key") == session_key
-        and item.get("path_id") == path_id and item.get("model") == model
-        and item.get("purpose") == (
-            "ADD_PERMISSION" if path_id == "ADD_REBOUND" else "EXIT_PERMISSION"
-        )
-        and item.get("prompt_version") == PATH_PROMPT_VERSION
-        and item.get("path_policy_sha256") == source_hash
-        and isinstance(item.get("requested_at"), (float, int))
-        and not isinstance(item.get("requested_at"), bool)
-        and math.isfinite(item["requested_at"])
-        and isinstance(item.get("persisted_at"), (float, int))
-        and not isinstance(item.get("persisted_at"), bool)
-        and math.isfinite(item["persisted_at"])
-        and item["persisted_at"] < signal_at
-        and isinstance(item.get("received_at"), (float, int))
-        and not isinstance(item.get("received_at"), bool)
-        and math.isfinite(item["received_at"])
-        and item["requested_at"] <= item["received_at"] <= item["persisted_at"]
-        and signal_at - policy["window_sec"] <= item["requested_at"] < signal_at
-        and item["received_at"] < signal_at),
-        key=lambda item: (item["requested_at"], item["received_at"]))
+    rows = sorted(
+        (
+            item
+            for item in (ledger or [])
+            if isinstance(item, dict)
+            and item.get("schema") == PATH_SCHEMA
+            and item.get("position_key") == position_key
+            and item.get("buy_fill_identity") == buy_fill_identity
+            and item.get("market") == market
+            and item.get("session_key") == session_key
+            and item.get("path_id") == path_id
+            and item.get("model") == model
+            and item.get("purpose")
+            == ("ADD_PERMISSION" if path_id == "ADD_REBOUND" else "EXIT_PERMISSION")
+            and item.get("prompt_version") == PATH_PROMPT_VERSION
+            and item.get("path_policy_sha256") == source_hash
+            and isinstance(item.get("requested_at"), (float, int))
+            and not isinstance(item.get("requested_at"), bool)
+            and math.isfinite(item["requested_at"])
+            and isinstance(item.get("persisted_at"), (float, int))
+            and not isinstance(item.get("persisted_at"), bool)
+            and math.isfinite(item["persisted_at"])
+            and item["persisted_at"] < signal_at
+            and isinstance(item.get("received_at"), (float, int))
+            and not isinstance(item.get("received_at"), bool)
+            and math.isfinite(item["received_at"])
+            and item["requested_at"] <= item["received_at"] <= item["persisted_at"]
+            and signal_at - policy["window_sec"] <= item["requested_at"] < signal_at
+            and item["received_at"] < signal_at
+        ),
+        key=lambda item: (item["requested_at"], item["received_at"]),
+    )
     segment = []
     missing = 0
     identities = set()
     for item in rows:
-        identity = (item.get("route"), item.get("transport_epoch"),
-                    item.get("source_generation"))
+        identity = (
+            item.get("route"),
+            item.get("transport_epoch"),
+            item.get("source_generation"),
+        )
         if not all(identity) or identity in identities:
             segment, missing = [], missing + 1
             continue
         identities.add(identity)
-        if (item.get("status") != "VALID"
-                or item.get("provider_called") is not True
-                or not item.get("input_snapshot_id")):
+        if (
+            item.get("status") != "VALID"
+            or item.get("provider_called") is not True
+            or not item.get("input_snapshot_id")
+        ):
             segment, missing = [], missing + 1
             continue
-        if segment and item["requested_at"] - segment[-1]["requested_at"] > policy["max_gap_sec"]:
+        if (
+            segment
+            and item["requested_at"] - segment[-1]["requested_at"]
+            > policy["max_gap_sec"]
+        ):
             segment = []
         segment.append(item)
     if segment:
         first, last = segment[0]["requested_at"], segment[-1]["requested_at"]
-        base.update({
-            "vote_count": len(segment),
-            "pass_count": sum(item["verdict"] == "PASS" for item in segment),
-            "veto_count": sum(item["verdict"] == "VETO" for item in segment),
-            "firm_pass_count": sum(item["verdict"] == "PASS" and item["conviction"] == "FIRM" for item in segment),
-            "firm_veto_count": sum(item["verdict"] == "VETO" and item["conviction"] == "FIRM" for item in segment),
-            "first_vote_at": first, "last_vote_at": last,
-            "latest_vote_age_sec": signal_at - last,
-            "max_observed_gap_sec": max((segment[i]["requested_at"] - segment[i-1]["requested_at"] for i in range(1, len(segment))), default=0.0),
-            "duration_sec": last - first,
-        })
+        base.update(
+            {
+                "vote_count": len(segment),
+                "pass_count": sum(item["verdict"] == "PASS" for item in segment),
+                "veto_count": sum(item["verdict"] == "VETO" for item in segment),
+                "firm_pass_count": sum(
+                    item["verdict"] == "PASS" and item["conviction"] == "FIRM"
+                    for item in segment
+                ),
+                "firm_veto_count": sum(
+                    item["verdict"] == "VETO" and item["conviction"] == "FIRM"
+                    for item in segment
+                ),
+                "first_vote_at": first,
+                "last_vote_at": last,
+                "latest_vote_age_sec": signal_at - last,
+                "max_observed_gap_sec": max(
+                    (
+                        segment[i]["requested_at"] - segment[i - 1]["requested_at"]
+                        for i in range(1, len(segment))
+                    ),
+                    default=0.0,
+                ),
+                "duration_sec": last - first,
+            }
+        )
     base["missing_cycle_count"] = missing
     return decide_path_snapshot(base, policy)
 
 
-def decide_path_snapshot(snapshot: dict[str, Any], policy: dict[str, Any]) -> dict[str, Any]:
-    result = {**snapshot, "decision": "INSUFFICIENT", "reason": "quorum_or_freshness_missing"}
+def decide_path_snapshot(
+    snapshot: dict[str, Any], policy: dict[str, Any]
+) -> dict[str, Any]:
+    result = {
+        **snapshot,
+        "decision": "INSUFFICIENT",
+        "reason": "quorum_or_freshness_missing",
+    }
     if not validate_path_policy(policy, path_id=snapshot.get("path_id")):
         return {**result, "reason": "invalid_policy"}
-    count_keys = ("vote_count", "pass_count", "veto_count",
-                  "firm_pass_count", "firm_veto_count")
-    if (any(not isinstance(snapshot.get(key), int)
-            or isinstance(snapshot[key], bool) or snapshot[key] < 0
-            for key in count_keys)
-            or snapshot["vote_count"] != snapshot["pass_count"] + snapshot["veto_count"]
-            or snapshot["firm_pass_count"] > snapshot["pass_count"]
-            or snapshot["firm_veto_count"] > snapshot["veto_count"]):
+    count_keys = (
+        "vote_count",
+        "pass_count",
+        "veto_count",
+        "firm_pass_count",
+        "firm_veto_count",
+    )
+    if (
+        any(
+            not isinstance(snapshot.get(key), int)
+            or isinstance(snapshot[key], bool)
+            or snapshot[key] < 0
+            for key in count_keys
+        )
+        or snapshot["vote_count"] != snapshot["pass_count"] + snapshot["veto_count"]
+        or snapshot["firm_pass_count"] > snapshot["pass_count"]
+        or snapshot["firm_veto_count"] > snapshot["veto_count"]
+    ):
         return {**result, "reason": "invalid_count_contract"}
-    if (snapshot.get("vote_count", 0) < policy["min_votes"]
-            or snapshot.get("duration_sec", 0) < policy["min_duration_sec"]
-            or snapshot.get("latest_vote_age_sec") is None
-            or snapshot["latest_vote_age_sec"] > policy["max_latest_age_sec"]):
+    if (
+        snapshot.get("vote_count", 0) < policy["min_votes"]
+        or snapshot.get("duration_sec", 0) < policy["min_duration_sec"]
+        or snapshot.get("latest_vote_age_sec") is None
+        or snapshot["latest_vote_age_sec"] > policy["max_latest_age_sec"]
+    ):
         return result
     passes, vetoes = snapshot["pass_count"], snapshot["veto_count"]
-    pass_ok = (passes >= policy["pass_votes"] and passes > vetoes
-               and snapshot["firm_pass_count"] >= policy["firm_pass_votes"])
-    veto_ok = (vetoes >= policy["veto_votes"] and vetoes > passes
-               and snapshot["firm_veto_count"] >= policy["firm_veto_votes"])
+    pass_ok = (
+        passes >= policy["pass_votes"]
+        and passes > vetoes
+        and snapshot["firm_pass_count"] >= policy["firm_pass_votes"]
+    )
+    veto_ok = (
+        vetoes >= policy["veto_votes"]
+        and vetoes > passes
+        and snapshot["firm_veto_count"] >= policy["firm_veto_votes"]
+    )
     if pass_ok == veto_ok:
         return {**result, "reason": "conflict_or_no_majority"}
-    return {**result, "decision": "PASS" if pass_ok else "VETO",
-            "reason": "sequence_majority_and_strength"}
+    return {
+        **result,
+        "decision": "PASS" if pass_ok else "VETO",
+        "reason": "sequence_majority_and_strength",
+    }

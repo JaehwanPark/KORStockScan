@@ -212,8 +212,6 @@ def test_rollout_never_uses_invalid_pin_or_bypasses_guard(
     assert result["enabled"] is False
 
 
-
-
 def test_scope_change_never_resets_existing_accepted_order_ledger(
     monkeypatch, tmp_path
 ):

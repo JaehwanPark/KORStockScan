@@ -56,10 +56,16 @@ POLICY_KEYS = {
 POLICY_STAGES = {SCORE: "entry", PYRAMID: "scale_in", AVG_DOWN: "scale_in"}
 # Stop selection owns these exact seven keys. Emergency, hard stop, manual
 # custody, enable flags and provider settings never acquire this authority.
-STOP_CONFIRMATION = 'main_stop_confirmation'
-from src.engine.scalping.main_stop_policy import KEYS as STOP_KEYS, TUNABLE as STOP_TUNABLE
-POLICY_KEYS[STOP_CONFIRMATION] = frozenset('KORSTOCKSCAN_' + STOP_KEYS[k] for k in STOP_TUNABLE)
-POLICY_STAGES[STOP_CONFIRMATION] = 'holding_exit'
+STOP_CONFIRMATION = "main_stop_confirmation"
+from src.engine.scalping.main_stop_policy import (
+    KEYS as STOP_KEYS,
+    TUNABLE as STOP_TUNABLE,
+)
+
+POLICY_KEYS[STOP_CONFIRMATION] = frozenset(
+    "KORSTOCKSCAN_" + STOP_KEYS[k] for k in STOP_TUNABLE
+)
+POLICY_STAGES[STOP_CONFIRMATION] = "holding_exit"
 STRATEGY_FAMILIES = frozenset(
     {
         SCORE,
@@ -277,16 +283,29 @@ def source_snapshot(runtime_dir, lock_dir, keys, target_date):
 def stop_key_authority(data_root, target_date, fields):
     """Bind the exact stop subset without rewriting any operator source."""
     if not fields or not set(fields) <= STOP_TUNABLE:
-        raise ValueError('stop_operator_key_subset_invalid')
-    keys = {'KORSTOCKSCAN_' + STOP_KEYS[k] for k in fields}
-    sources = source_snapshot(Path(data_root) / 'runtime',
-        Path(data_root) / 'threshold_cycle/operator_runtime_env_locks', keys, target_date)
+        raise ValueError("stop_operator_key_subset_invalid")
+    keys = {"KORSTOCKSCAN_" + STOP_KEYS[k] for k in fields}
+    sources = source_snapshot(
+        Path(data_root) / "runtime",
+        Path(data_root) / "threshold_cycle/operator_runtime_env_locks",
+        keys,
+        target_date,
+    )
     # Unknown safety owners and explicit vetoes are not an economic override.
     for row in sources:
-        if row.get('classification') not in {None, 'inactive_archive',
-                'mixed_key_scoped_overlay', 'strategy_auto_successor'}:
-            raise ValueError('stop_operator_veto_or_unclassified_lock')
-    return dict(keys=sorted(keys), sources=sources, sha256=digest(sources), target_date=target_date)
+        if row.get("classification") not in {
+            None,
+            "inactive_archive",
+            "mixed_key_scoped_overlay",
+            "strategy_auto_successor",
+        }:
+            raise ValueError("stop_operator_veto_or_unclassified_lock")
+    return dict(
+        keys=sorted(keys),
+        sources=sources,
+        sha256=digest(sources),
+        target_date=target_date,
+    )
 
 
 def current_locked_values(lock, runtime_dir, target_date):

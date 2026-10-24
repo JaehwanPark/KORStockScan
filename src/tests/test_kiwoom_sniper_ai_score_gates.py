@@ -124,13 +124,32 @@ def _patch_holding_rules(monkeypatch):
 
 def test_holding_exit_diagnostic_is_score_independent_and_read_only(monkeypatch):
     _patch_holding_rules(monkeypatch)
-    for score, quality in ((0., 'fresh'), (50., 'unknown'), (100., 'stale')):
-        stock = _holding_stock(holding_score_effective=score,holding_score_data_quality=quality)
+    for score, quality in ((0.0, "fresh"), (50.0, "unknown"), (100.0, "stale")):
+        stock = _holding_stock(
+            holding_score_effective=score, holding_score_data_quality=quality
+        )
         before = dict(stock)
-        assert kiwoom_sniper_v2.evaluate_scalping_exit(stock, '005930', {'v_pw':110},
-            curr_p=10080,buy_p=9960,profit_rate=1.2,peak_profit=1.4) is None
+        assert (
+            kiwoom_sniper_v2.evaluate_scalping_exit(
+                stock,
+                "005930",
+                {"v_pw": 110},
+                curr_p=10080,
+                buy_p=9960,
+                profit_rate=1.2,
+                peak_profit=1.4,
+            )
+            is None
+        )
         assert stock == before
-        reason = kiwoom_sniper_v2.evaluate_scalping_exit(stock, '005930', {'v_pw':110},
-            curr_p=9400,buy_p=10000,profit_rate=-6.,peak_profit=1.4)
-        assert reason is not None and 'hard_stop' in reason
+        reason = kiwoom_sniper_v2.evaluate_scalping_exit(
+            stock,
+            "005930",
+            {"v_pw": 110},
+            curr_p=9400,
+            buy_p=10000,
+            profit_rate=-6.0,
+            peak_profit=1.4,
+        )
+        assert reason is not None and "hard_stop" in reason
         assert stock == before

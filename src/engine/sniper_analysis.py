@@ -375,7 +375,11 @@ def get_detailed_reason(code):
                 recent_ticks,
                 recent_candles,
                 strategy=target.get("strategy") or "SCALPING",
-                prompt_profile="holding" if target.get("status") in {"HOLDING", "SELLING"} else "watching",
+                prompt_profile=(
+                    "holding"
+                    if target.get("status") in {"HOLDING", "SELLING"}
+                    else "watching"
+                ),
                 metadata_extra={"position_tag": target.get("position_tag")},
                 candle_context=candle_context,
             )
@@ -518,7 +522,11 @@ def get_realtime_ai_scores(codes):
                     ticks,
                     candles,
                     strategy=(target or {}).get("strategy") or "SCALPING",
-                    prompt_profile="holding" if (target or {}).get("status") in {"HOLDING", "SELLING"} else "watching",
+                    prompt_profile=(
+                        "holding"
+                        if (target or {}).get("status") in {"HOLDING", "SELLING"}
+                        else "watching"
+                    ),
                     metadata_extra={
                         "position_tag": (target.get("position_tag") if target else None)
                     },

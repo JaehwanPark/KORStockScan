@@ -757,8 +757,6 @@ def test_pipeline_event_verbosity_report_separates_partial_day_coverage(
     assert report["parity"]["suppress_eligibility"] is False
 
 
-
-
 def _declare_managed_raw(tmp_path, day):
     logical = report_mod._pipeline_events_path(day)
     logical.with_name(f".{logical.name}.partition.lock").touch()
@@ -766,10 +764,13 @@ def _declare_managed_raw(tmp_path, day):
 
 def test_partial_tail_late_append_matches_full_rebuild(monkeypatch, tmp_path):
     from pathlib import Path
+
     monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
     day = "2026-09-18"
-    rows = [_event(day, "10:01:00", "scalping_scanner_fast_precheck", record_id=1),
-            _event(day, "10:00:00", "scalping_scanner_fast_precheck", record_id=2)]
+    rows = [
+        _event(day, "10:01:00", "scalping_scanner_fast_precheck", record_id=1),
+        _event(day, "10:00:00", "scalping_scanner_fast_precheck", record_id=2),
+    ]
     _write_raw(tmp_path, day, rows[:1])
     _declare_managed_raw(tmp_path, day)
     _write_producer_summary(tmp_path, day, rows[:1])
@@ -793,15 +794,33 @@ def test_partial_tail_late_append_matches_full_rebuild(monkeypatch, tmp_path):
     incremental_identity = report_mod._identity_counts(data["identity_rollup"])
     # Explicit bounded fixture rebuild; never a production lookback scan.
     manifest.unlink()
-    full = report_mod.build_pipeline_event_verbosity_report(day, as_of=datetime(2026, 9, 18, 11))
+    full = report_mod.build_pipeline_event_verbosity_report(
+        day, as_of=datetime(2026, 9, 18, 11)
+    )
     assert full["raw_stream"] == appended["raw_stream"]
-    assert report_mod._identity_counts(json.loads(manifest.read_text())["identity_rollup"]) == incremental_identity
+    assert (
+        report_mod._identity_counts(json.loads(manifest.read_text())["identity_rollup"])
+        == incremental_identity
+    )
 
 
-@pytest.mark.parametrize("changed", ["same_size_mtime", "replacement", "truncate", "report_digest", "markdown", "checkpoint_digest"])
-def test_generation_correction_or_corruption_never_reuses_pass(monkeypatch, tmp_path, changed):
+@pytest.mark.parametrize(
+    "changed",
+    [
+        "same_size_mtime",
+        "replacement",
+        "truncate",
+        "report_digest",
+        "markdown",
+        "checkpoint_digest",
+    ],
+)
+def test_generation_correction_or_corruption_never_reuses_pass(
+    monkeypatch, tmp_path, changed
+):
     import os
     from pathlib import Path
+
     monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
     day = "2026-09-18"
     rows = [_event(day, "10:00:00", "scalping_scanner_fast_precheck", record_id=1)]
@@ -825,16 +844,20 @@ def test_generation_correction_or_corruption_never_reuses_pass(monkeypatch, tmp_
         report_mod.report_paths(day)[1].write_text("incomplete old generation")
     elif changed == "report_digest":
         path = report_mod.report_paths(day)[0]
-        data = json.loads(path.read_text()); data["parity"]["raw_derived_event_count"] = 999
+        data = json.loads(path.read_text())
+        data["parity"]["raw_derived_event_count"] = 999
         path.write_text(json.dumps(data))
     else:
         path = Path(first["raw_derived_summary"]["manifest"])
-        data = json.loads(path.read_text()); data["raw_volume"]["high_volume_line_count"] = 999
+        data = json.loads(path.read_text())
+        data["raw_volume"]["high_volume_line_count"] = 999
         path.write_text(json.dumps(data))
     assert not report_mod.report_is_reusable(day)
     result = report_mod.build_pipeline_event_verbosity_report(day)
     if changed in {"report_digest", "markdown"}:
-        assert result["parity"]["ok"] is True  # Valid source recomputes, broken PASS is not reused.
+        assert (
+            result["parity"]["ok"] is True
+        )  # Valid source recomputes, broken PASS is not reused.
     else:
         assert result["parity"]["ok"] is not True
         if changed == "checkpoint_digest":
@@ -842,7 +865,9 @@ def test_generation_correction_or_corruption_never_reuses_pass(monkeypatch, tmp_
             assert result["parity"]["ok"] is None
 
 
-def test_unmanaged_mutable_source_supports_streaming_but_not_zero_read_receipt(monkeypatch, tmp_path):
+def test_unmanaged_mutable_source_supports_streaming_but_not_zero_read_receipt(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
     day = "2026-09-18"
     rows = [_event(day, "10:00:00", "scalping_scanner_fast_precheck", record_id=1)]
@@ -854,7 +879,9 @@ def test_unmanaged_mutable_source_supports_streaming_but_not_zero_read_receipt(m
     assert not report_mod.report_is_reusable(day)
 
 
-def test_kst_partition_normalizes_utc_emission_without_route_exclusions(monkeypatch, tmp_path):
+def test_kst_partition_normalizes_utc_emission_without_route_exclusions(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
     day = "2026-09-18"
     event = _event(day, "00:01:00", "scalping_scanner_fast_precheck", record_id=1)
@@ -867,8 +894,11 @@ def test_kst_partition_normalizes_utc_emission_without_route_exclusions(monkeypa
     assert result["parity"]["raw_derived_event_count"] == 1
 
 
-def test_archived_generation_requires_scoped_repair_then_supports_reuse(monkeypatch, tmp_path):
+def test_archived_generation_requires_scoped_repair_then_supports_reuse(
+    monkeypatch, tmp_path
+):
     from pathlib import Path
+
     monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
     day = "2026-09-18"
     rows = [_event(day, "10:00:00", "scalping_scanner_fast_precheck", record_id=1)]
@@ -876,19 +906,30 @@ def test_archived_generation_requires_scoped_repair_then_supports_reuse(monkeypa
     _declare_managed_raw(tmp_path, day)
     _write_producer_summary(tmp_path, day, rows)
     first = report_mod.build_pipeline_event_verbosity_report(day)
-    for path in (report_mod._pipeline_events_path(day), Path(first["raw_derived_summary"]["path"]), Path(first["producer_summary"]["path"])):
+    for path in (
+        report_mod._pipeline_events_path(day),
+        Path(first["raw_derived_summary"]["path"]),
+        Path(first["producer_summary"]["path"]),
+    ):
         with gzip.open(str(path) + ".gz", "wb") as handle:
             handle.write(path.read_bytes())
         path.unlink()
     blocked = report_mod.build_pipeline_event_verbosity_report(day)
     assert blocked["state"] == "raw_summary_invalid" and blocked["parity"]["ok"] is None
-    repaired = report_mod.build_pipeline_event_verbosity_report(day, allow_bootstrap=True)
+    repaired = report_mod.build_pipeline_event_verbosity_report(
+        day, allow_bootstrap=True
+    )
     assert repaired["parity"]["ok"] is True
-    assert repaired["raw_stream"]["raw_size_bytes"] > repaired["raw_stream"]["raw_storage_size_bytes"]
+    assert (
+        repaired["raw_stream"]["raw_size_bytes"]
+        > repaired["raw_stream"]["raw_storage_size_bytes"]
+    )
     assert report_mod.report_is_reusable(day)
+
 
 def test_corrupt_checkpoint_has_executable_scoped_repair(monkeypatch, tmp_path):
     from pathlib import Path
+
     monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
     day = "2026-09-18"
     rows = [_event(day, "10:00:00", "scalping_scanner_fast_precheck", record_id=1)]
@@ -901,13 +942,17 @@ def test_corrupt_checkpoint_has_executable_scoped_repair(monkeypatch, tmp_path):
     blocked = report_mod.build_pipeline_event_verbosity_report(day)
     assert blocked["state"] == "raw_summary_invalid"
     assert blocked["parity"]["ok"] is None
-    repaired = report_mod.build_pipeline_event_verbosity_report(day, allow_bootstrap=True)
+    repaired = report_mod.build_pipeline_event_verbosity_report(
+        day, allow_bootstrap=True
+    )
     assert repaired["parity"]["ok"] is True
     assert report_mod.report_is_reusable(day)
 
 
 @pytest.mark.parametrize("policy", [["invalid"], 1, "invalid"])
-def test_malformed_policy_receipt_falls_back_without_crashing(monkeypatch, tmp_path, policy):
+def test_malformed_policy_receipt_falls_back_without_crashing(
+    monkeypatch, tmp_path, policy
+):
     monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
     day = "2026-09-18"
     rows = [_event(day, "10:00:00", "scalping_scanner_fast_precheck", record_id=1)]
@@ -926,7 +971,9 @@ def test_malformed_policy_receipt_falls_back_without_crashing(monkeypatch, tmp_p
     assert rebuilt["evaluation"]["raw_bytes_processed"] == 0
 
 
-def test_malformed_producer_rollup_returns_explicit_source_blocker(monkeypatch, tmp_path):
+def test_malformed_producer_rollup_returns_explicit_source_blocker(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
     day = "2026-09-18"
     rows = [_event(day, "10:00:00", "scalping_scanner_fast_precheck", record_id=1)]
@@ -941,14 +988,23 @@ def test_malformed_producer_rollup_returns_explicit_source_blocker(monkeypatch, 
     checkpoint.write_text(json.dumps(payload))
     blocked = report_mod.build_pipeline_event_verbosity_report(day)
     assert blocked["state"] == "producer_summary_invalid"
-    assert "producer_rollup_contract_invalid" in blocked["producer_summary"]["decode_error"]
+    assert (
+        "producer_rollup_contract_invalid"
+        in blocked["producer_summary"]["decode_error"]
+    )
     assert blocked["parity"]["ok"] is False
     assert blocked["policy"]["allowed_runtime_apply"] is False
     import sys
-    monkeypatch.setattr(sys, "argv", ["pipeline_report", "--date", day, "--allow-bootstrap"])
+
+    monkeypatch.setattr(
+        sys, "argv", ["pipeline_report", "--date", day, "--allow-bootstrap"]
+    )
     assert report_mod.main() == 0
     repaired = json.loads(report_mod.report_paths(day)[0].read_text())
     assert repaired["parity"]["ok"] is True
     assert repaired["evaluation"]["raw_bytes_processed"] == 0
-    assert repaired["evaluation"]["producer_bytes_processed"] == report_mod.Path(repaired["producer_summary"]["path"]).stat().st_size
+    assert (
+        repaired["evaluation"]["producer_bytes_processed"]
+        == report_mod.Path(repaired["producer_summary"]["path"]).stat().st_size
+    )
     assert report_mod.report_is_reusable(day)

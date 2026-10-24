@@ -5,8 +5,6 @@ from src.engine.lifecycle.archive import lifecycle_decision_matrix_readers as ld
 from src.engine.lifecycle.bucket_taxonomy import normalize_lifecycle_bucket
 
 
-
-
 def _ai_keep_response():
     return {
         "schema_version": 1,
@@ -1759,8 +1757,6 @@ def test_scale_in_source_dimension_unknowns_are_observation_rollups():
     assert summary["actionable_unknown_gap_count"] == 0
 
 
-
-
 def test_wait6579_enriched_entry_dimension_remains_source_only() -> None:
     state, family, grade = mod._classify_bucket(
         "entry",
@@ -1782,12 +1778,6 @@ def test_wait6579_enriched_entry_dimension_remains_source_only() -> None:
     assert state == "entry_only_source_candidate"
     assert family is None
     assert grade["transition_target"] == "entry_dimension_provenance_only"
-
-
-
-
-
-
 
 
 def test_score_family_without_separator_rolls_up_to_parent_group():
@@ -2135,16 +2125,6 @@ def test_lifecycle_flow_source_only_blocker_overrides_live_runtime_metadata():
     assert item["auto_promotion_contract"]["deterministic_contract_components"] == []
 
 
-
-
-
-
-
-
-
-
-
-
 def test_lifecycle_bucket_discovery_rejects_real_preapply_primary_ev_claim():
     bucket_id = "scale_in:blocker_reason:pnl_out_of_range_0_32"
     payload = _ai_hybrid_taxonomy_response(bucket_id)
@@ -2156,12 +2136,6 @@ def test_lifecycle_bucket_discovery_rejects_real_preapply_primary_ev_claim():
 
     assert status == "parse_rejected"
     assert f"ai_review_selected_evidence_authority_violation:{bucket_id}" in warnings
-
-
-
-
-
-
 
 
 def test_previous_report_uses_canonical_daily_not_rolling_variant(
@@ -2186,8 +2160,6 @@ def test_previous_report_uses_canonical_daily_not_rolling_variant(
     )
 
     assert mod._previous_report("2026-05-22") == daily
-
-
 
 
 def test_lifecycle_bucket_discovery_accepts_legacy_daily_source_split_alias():
@@ -2251,8 +2223,6 @@ def test_submit_bucket_rows_emit_ev_and_diagnostic_fields():
     assert report["buckets"]
     assert "equal_weight_avg_profit_pct" in report["buckets"][0]
     assert "diagnostic_win_rate" in report["buckets"][0]
-
-
 
 
 def test_lifecycle_bucket_discovery_ai_context_is_bounded():
@@ -2758,12 +2728,19 @@ def test_entry_bucket_nonpositive_ev_cannot_enter_sim_auto_handoff():
     assert grade["grade_reason"] == "sim_policy_nonpositive_ev_not_approved"
 
 
-def test_retired_current_producer_preserves_prior_and_has_no_authority(tmp_path,monkeypatch):
+def test_retired_current_producer_preserves_prior_and_has_no_authority(
+    tmp_path, monkeypatch
+):
     import importlib
-    current=importlib.import_module('src.engine.lifecycle_bucket_discovery')
-    prior=tmp_path/"prior.json";prior.write_text("original")
-    def forbidden(*a,**kw):raise AssertionError("retired producer accessed storage")
-    monkeypatch.setattr(type(prior),"write_text",forbidden)
-    monkeypatch.setattr(type(prior),"read_text",forbidden)
-    result=current.build_lifecycle_bucket_discovery_report("2026-10-12")
-    assert result["status"]=="retired" and result["allowed_runtime_apply"] is False
+
+    current = importlib.import_module("src.engine.lifecycle_bucket_discovery")
+    prior = tmp_path / "prior.json"
+    prior.write_text("original")
+
+    def forbidden(*a, **kw):
+        raise AssertionError("retired producer accessed storage")
+
+    monkeypatch.setattr(type(prior), "write_text", forbidden)
+    monkeypatch.setattr(type(prior), "read_text", forbidden)
+    result = current.build_lifecycle_bucket_discovery_report("2026-10-12")
+    assert result["status"] == "retired" and result["allowed_runtime_apply"] is False

@@ -5,6 +5,8 @@ from pathlib import Path
 from src.engine.automation import conversion_lane as lane
 from src.engine.automation import key_lineage_ledger as ledger
 from src.engine.scalping.micro_reversion import main_ai_prompt_optimizer as optimizer
+
+
 def _write(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload), encoding="utf-8")
@@ -36,11 +38,16 @@ def _dual_replay_payload(target_date="2026-09-12"):
         "cohort_contract": contract,
         "cohort_contract_sha256": digest,
         "candidate_prompt_selection_source": {"cohort_contract_sha256": digest},
-        "cohorts": [{
-            **dual, "status": "completed_observe_only", "runtime_effect": False,
-            "allowed_runtime_apply": False, "actual_order_submitted": False,
-            "candidate_contract_sha256": None,
-        }],
+        "cohorts": [
+            {
+                **dual,
+                "status": "completed_observe_only",
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "actual_order_submitted": False,
+                "candidate_contract_sha256": None,
+            }
+        ],
     }
     consumer = {
         "target_date": target_date,
@@ -49,11 +56,17 @@ def _dual_replay_payload(target_date="2026-09-12"):
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
         "source_bindings": {"entry_cohort_contract_sha256": digest},
-        "request_paths": {"entry_base": {"cohorts": [{
-            **dual,
-            "path_status": "intentionally_blocked_with_owner_and_acceptance_test",
-            "terminality": "terminal_source_observation",
-        }]}},
+        "request_paths": {
+            "entry_base": {
+                "cohorts": [
+                    {
+                        **dual,
+                        "path_status": "intentionally_blocked_with_owner_and_acceptance_test",
+                        "terminality": "terminal_source_observation",
+                    }
+                ]
+            }
+        },
     }
     return batch, consumer
 
@@ -73,7 +86,6 @@ def test_dual_replay_lineage_is_hash_bound_and_observe_only():
     )
 
 
-
 def _patch_dirs(monkeypatch, tmp_path):
     monkeypatch.setattr(ledger, "DATA_DIR", tmp_path)
     monkeypatch.setattr(
@@ -83,11 +95,13 @@ def _patch_dirs(monkeypatch, tmp_path):
         ledger, "APPLY_PLAN_DIR", tmp_path / "threshold_cycle" / "apply_plans"
     )
     monkeypatch.setattr(
-        ledger, "HYPOTHESIS_PLAN_DIR",
+        ledger,
+        "HYPOTHESIS_PLAN_DIR",
         tmp_path / "threshold_cycle" / "ldm_hypothesis_observation_plans",
     )
     monkeypatch.setattr(lane, "DATA_DIR", tmp_path)
     monkeypatch.setattr(lane, "REPORT_DIR", tmp_path / "report" / "conversion_lane")
+
 
 def test_conversion_lane_merges_lineage_match_into_existing_lifecycle_candidate(
     monkeypatch, tmp_path
@@ -1024,7 +1038,7 @@ def test_key_lineage_event_io_guard_streams_and_truncates_untracked_ids(
                     "actual_order_submitted": False,
                     "broker_order_forbidden": True,
                 }
-            ]
+            ],
         },
     )
     _write(

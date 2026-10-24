@@ -7577,7 +7577,10 @@ def rebuild_future_outcome_from_source(
 ) -> dict[str, Any]:
     """Validate compact refs against the bound pool and rebuild one outcome."""
 
-    if "entry_terminal_exit_policy" in rebuild_source and type(rebuild_source["entry_terminal_exit_policy"]) is not bool:
+    if (
+        "entry_terminal_exit_policy" in rebuild_source
+        and type(rebuild_source["entry_terminal_exit_policy"]) is not bool
+    ):
         raise ValueError("future_outcome_rebuild_source_terminal_policy_invalid")
 
     content = {

@@ -18,59 +18,60 @@ def _shared_widget_fixture(tmp_path, monkeypatch):
     from types import SimpleNamespace
     from zoneinfo import ZoneInfo
     from src.engine import bd_fbuy_accum_pre_scanner as publisher
+
     now = datetime(2026, 9, 21, 10, 0, tzinfo=ZoneInfo("Asia/Seoul")).timestamp()
     path = tmp_path / "latest.json"
     monkeypatch.setenv("KORSTOCKSCAN_RUNTIME_GIT_COMMIT", "a" * 40)
     monkeypatch.setattr(publisher, "WS_SNAPSHOT_PATH", path)
-    common = dict(item="005930", market_suffix="", market_route="krx_only", effective_venue="KRX",
-                  transport_epoch=1, route_sequence=2, observed_epoch=now - 0.2)
-    row = {"market_data_transport_epoch": 1, "realtime_type_snapshots_by_route": {
-        "KRX|krx_only": {"0B": {**common, "trade_price": 10000, "widget_quote_fields": {"low_price": "-9800", "change_pct": "-1.25"}},
-            "0D": {**common, "orderbook": {"asks": [{"price": 10010, "volume": 3}],
-                                           "bids": [{"price": 9990, "volume": 5}]}}}}}
-    publisher.write_ws_snapshot({"005930": row}, now_ts=now,
-        shared_transport_producer={"transport_epoch": 1, "registered_items": ["005930"],
-            "connection_available": True, "registration_basis": "local_sent_registry_not_broker_ack"})
-    context = SimpleNamespace(request_code="005930", name="KRX_REGULAR", start=time(9), end=time(15, 30), active=True)
+    common = dict(
+        item="005930",
+        market_suffix="",
+        market_route="krx_only",
+        effective_venue="KRX",
+        transport_epoch=1,
+        route_sequence=2,
+        observed_epoch=now - 0.2,
+    )
+    row = {
+        "market_data_transport_epoch": 1,
+        "realtime_type_snapshots_by_route": {
+            "KRX|krx_only": {
+                "0B": {
+                    **common,
+                    "trade_price": 10000,
+                    "widget_quote_fields": {
+                        "low_price": "-9800",
+                        "change_pct": "-1.25",
+                    },
+                },
+                "0D": {
+                    **common,
+                    "orderbook": {
+                        "asks": [{"price": 10010, "volume": 3}],
+                        "bids": [{"price": 9990, "volume": 5}],
+                    },
+                },
+            }
+        },
+    }
+    publisher.write_ws_snapshot(
+        {"005930": row},
+        now_ts=now,
+        shared_transport_producer={
+            "transport_epoch": 1,
+            "registered_items": ["005930"],
+            "connection_available": True,
+            "registration_basis": "local_sent_registry_not_broker_ack",
+        },
+    )
+    context = SimpleNamespace(
+        request_code="005930",
+        name="KRX_REGULAR",
+        start=time(9),
+        end=time(15, 30),
+        active=True,
+    )
     return path, context, now, json.loads(path.read_text())
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 @pytest.mark.parametrize(
@@ -531,45 +532,59 @@ def test_safety_exit_does_not_block_on_divergence_or_late_rest(monkeypatch):
 def _adoptable_widget_transport(now, symbol="005930", price=98500, low=98000):
     import os
     from src.trading.market.shared_ws_snapshot import process_generation
+
     epoch = now.timestamp()
-    return dict(status="valid_ws_comparison_input", request_code=symbol,
-        ws_request_code=symbol + "_AL", session="KRX_REGULAR", runtime_effect=False,
-        comparison_status="rest_not_observed", source_sha256="b" * 64,
-        producer=dict(process=process_generation(os.getpid()), transport_epoch=1, source_commit="a" * 40),
-        source_clocks={"0B": epoch - .2, "0D": epoch - .1},
+    return dict(
+        status="valid_ws_comparison_input",
+        request_code=symbol,
+        ws_request_code=symbol + "_AL",
+        session="KRX_REGULAR",
+        runtime_effect=False,
+        comparison_status="rest_not_observed",
+        source_sha256="b" * 64,
+        producer=dict(
+            process=process_generation(os.getpid()),
+            transport_epoch=1,
+            source_commit="a" * 40,
+        ),
+        source_clocks={"0B": epoch - 0.2, "0D": epoch - 0.1},
         source_sequences={"0B": 3, "0D": 5},
-        values=dict(current_price=price, best_bid=price-100, best_ask=price,
-                    best_bid_qty=1000, best_ask_qty=1200),
+        values=dict(
+            current_price=price,
+            best_bid=price - 100,
+            best_ask=price,
+            best_bid_qty=1000,
+            best_ask_qty=1200,
+        ),
         widget_quote_fields=dict(low_price=str(low), change_pct="-1.25"),
-        recent_trades=[dict(item=symbol+"_AL", transport_epoch=1, route_sequence=3-i,
-            received_at_ms=int((epoch-.2-i)*1000), price=price+i*100) for i in range(3)])
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+        recent_trades=[
+            dict(
+                item=symbol + "_AL",
+                transport_epoch=1,
+                route_sequence=3 - i,
+                received_at_ms=int((epoch - 0.2 - i) * 1000),
+                price=price + i * 100,
+            )
+            for i in range(3)
+        ],
+    )
 
 
 def test_shared_frame_lock_is_reset_in_forked_reader(tmp_path):
     import multiprocessing
     from src.trading.market import shared_ws_snapshot as shared
+
     if "fork" not in multiprocessing.get_all_start_methods():
         pytest.skip("fork unavailable")
-    path = tmp_path / "frame.json"; path.write_text("{}")
+    path = tmp_path / "frame.json"
+    path.write_text("{}")
     context = multiprocessing.get_context("fork")
     reader, writer = context.Pipe(duplex=False)
+
     def child():
         shared._read_shared_frame(path)
         writer.send("read")
+
     process = context.Process(target=child)
     with shared._FRAME_CACHE_LOCK:
         process.start()
@@ -577,6 +592,9 @@ def test_shared_frame_lock_is_reset_in_forked_reader(tmp_path):
             assert reader.poll(3), "child inherited a locked shared frame mutex"
             assert reader.recv() == "read"
         finally:
-            process.join(.2)
-            if process.is_alive(): process.terminate(); process.join(2)
-            reader.close(); writer.close()
+            process.join(0.2)
+            if process.is_alive():
+                process.terminate()
+                process.join(2)
+            reader.close()
+            writer.close()

@@ -28,14 +28,21 @@ from src.engine.error_detectors.schedule_contract import (
 def _finalization_self_audit(day: str) -> bool:
     """Only the live finalizer ancestor may defer its own terminal audit."""
     try:
-        expected = int(os.environ.get("POSTCLOSE_FINALIZATION_DETECTOR_PARENT_PID", "0"))
-        if expected <= 1 or os.environ.get("POSTCLOSE_FINALIZATION_DETECTOR_DATE") != day:
+        expected = int(
+            os.environ.get("POSTCLOSE_FINALIZATION_DETECTOR_PARENT_PID", "0")
+        )
+        if (
+            expected <= 1
+            or os.environ.get("POSTCLOSE_FINALIZATION_DETECTOR_DATE") != day
+        ):
             return False
         pid = os.getppid()
         for _ in range(12):
             if pid == expected:
                 argv = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
-                return any(arg.endswith(b"/run_postclose_finalization.sh") for arg in argv)
+                return any(
+                    arg.endswith(b"/run_postclose_finalization.sh") for arg in argv
+                )
             if pid <= 1:
                 break
             state = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
@@ -352,7 +359,9 @@ class CronCompletionDetector(BaseDetector):
                 details[f"{jid}_effective_date"] = effective_day.isoformat()
             if jid == "postclose_finalization" and _finalization_self_audit(today_str):
                 details[f"{jid}_status"] = "pending_self_audit"
-                warnings.append("postclose_finalization: live ancestor awaits this detector; no terminal PASS claimed")
+                warnings.append(
+                    "postclose_finalization: live ancestor awaits this detector; no terminal PASS claimed"
+                )
                 continue
             artifact_status = self._status_artifact_terminal(job, today_str)
             if jid in _disabled_job_ids():
@@ -486,7 +495,9 @@ class CronCompletionDetector(BaseDetector):
                     issues.append(f"{jid}: finished with error after window end")
                     details[f"{jid}_status"] = "fail"
                 elif self._bounded_postclose_running(job, today_str):
-                    warnings.append(f"{jid}: exact-date owner running before source-date 23:20")
+                    warnings.append(
+                        f"{jid}: exact-date owner running before source-date 23:20"
+                    )
                     details[f"{jid}_status"] = "in_progress"
                     details[f"{jid}_running_deadline"] = "23:20 source date"
                 elif past_window_end:
@@ -500,9 +511,15 @@ class CronCompletionDetector(BaseDetector):
             else:
                 if not has_matching_date:
                     details[f"{jid}_status"] = "unknown"
-                elif job.get("owner_terminal_recovery") and (recovery_state := self._recurring_owner_recovery(today_lines, job.get("owner_log_labels", (jid,)))):
+                elif job.get("owner_terminal_recovery") and (
+                    recovery_state := self._recurring_owner_recovery(
+                        today_lines, job.get("owner_log_labels", (jid,))
+                    )
+                ):
                     details[f"{jid}_status"] = recovery_state
-                    details[f"{jid}_recovery_note"] = "latest owner DONE supersedes earlier failures; newer START remains in progress"
+                    details[f"{jid}_recovery_note"] = (
+                        "latest owner DONE supersedes earlier failures; newer START remains in progress"
+                    )
                     details[f"{jid}_historical_errors_preserved"] = has_error
                 elif has_error:
                     warnings.append(f"{jid}: recent errors detected")
@@ -512,8 +529,10 @@ class CronCompletionDetector(BaseDetector):
                 else:
                     details[f"{jid}_status"] = "unknown"
 
-            if (job.get("source_date_role") == "previous_krx_trading_day"
-                    and details.get(f"{jid}_status") == "pass"):
+            if (
+                job.get("source_date_role") == "previous_krx_trading_day"
+                and details.get(f"{jid}_status") == "pass"
+            ):
                 owner_done = self._last_owner_done_line(today_lines, jid)
                 completed_at = self._marker_finished_at(owner_done)
                 cutoff = datetime_module.datetime.combine(
@@ -529,14 +548,18 @@ class CronCompletionDetector(BaseDetector):
                         f"{jid}: recovered after effective-date {we_h:02d}:{we_m:02d} cutoff"
                     )
 
-            if (jid == "postclose_finalization" and today_str >= "2026-09-28"
-                    and details.get(f"{jid}_status") in {"pass", "recovered_late"}):
+            if (
+                jid == "postclose_finalization"
+                and today_str >= "2026-09-28"
+                and details.get(f"{jid}_status") in {"pass", "recovered_late"}
+            ):
                 from src.engine.automation.postclose_finalization_generation import (
                     finalization_marker_issues,
                 )
 
                 done_lines = [
-                    line for line in today_lines.splitlines()
+                    line
+                    for line in today_lines.splitlines()
                     if re.search(r"\[DONE\]\s+postclose_finalization\b", line)
                 ]
                 marker = done_lines[-1] if done_lines else ""
@@ -544,11 +567,16 @@ class CronCompletionDetector(BaseDetector):
                 snapshot = re.search(
                     r"\bsnapshot_generation_sha256=([0-9a-f]{64})\b", marker
                 )
-                detector_run = re.search(r"\bdetector_run_id=(cron-[A-Za-z0-9-]+)\b", marker)
-                detector_sha = re.search(r"\bdetector_report_sha256=([0-9a-f]{64})\b", marker)
+                detector_run = re.search(
+                    r"\bdetector_run_id=(cron-[A-Za-z0-9-]+)\b", marker
+                )
+                detector_sha = re.search(
+                    r"\bdetector_report_sha256=([0-9a-f]{64})\b", marker
+                )
                 generation_validation = {}
                 generation_issues = finalization_marker_issues(
-                    PROJECT_ROOT, today_str,
+                    PROJECT_ROOT,
+                    today_str,
                     chain.group(1) if chain else "",
                     snapshot.group(1) if snapshot else "",
                     validation_details=generation_validation,
@@ -564,7 +592,8 @@ class CronCompletionDetector(BaseDetector):
                     historical_unbound = (
                         today_str == "2026-09-28"
                         and not any((chain, snapshot, detector_run, detector_sha))
-                        and set(generation_issues) <= {
+                        and set(generation_issues)
+                        <= {
                             "finalization_generation_unbound",
                             "final_detector_attempt_unbound",
                         }
@@ -631,11 +660,19 @@ class CronCompletionDetector(BaseDetector):
         return "".join(lines[-n:])
 
     @classmethod
-    def _cleanup_predecessor_failure(cls, cleanup_path: Path, source_date: str) -> dict | None:
+    def _cleanup_predecessor_failure(
+        cls, cleanup_path: Path, source_date: str
+    ) -> dict | None:
         def generation(path: Path) -> tuple | None:
             try:
                 stat = path.stat()
-                return (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+                return (
+                    stat.st_dev,
+                    stat.st_ino,
+                    stat.st_size,
+                    stat.st_mtime_ns,
+                    stat.st_ctime_ns,
+                )
             except FileNotFoundError:
                 return ()
             except OSError:
@@ -654,7 +691,11 @@ class CronCompletionDetector(BaseDetector):
         if cls._last_terminal_marker(markers) != "error":
             return None
         latest = next(
-            (line for line in reversed(markers.splitlines()) if _ERROR_MARKER.search(line)),
+            (
+                line
+                for line in reversed(markers.splitlines())
+                if _ERROR_MARKER.search(line)
+            ),
             "",
         )
         # Only explicit pre-cleanup terminal failures prove cleanup was withheld.
@@ -733,9 +774,13 @@ class CronCompletionDetector(BaseDetector):
                     stream.seek(position)
                     chunk = stream.read(size)
                     chunks.append(chunk)
-                    newlines += chunk.count(b'\n')
+                    newlines += chunk.count(b"\n")
                 # Decode after joining: UTF-8 code points can cross block edges.
-                return b''.join(reversed(chunks)).decode('utf-8', errors='replace').splitlines(keepends=True)[-n:]
+                return (
+                    b"".join(reversed(chunks))
+                    .decode("utf-8", errors="replace")
+                    .splitlines(keepends=True)[-n:]
+                )
         except OSError:
             return []
 
@@ -817,19 +862,32 @@ class CronCompletionDetector(BaseDetector):
         )
 
     @staticmethod
-    def _recurring_owner_recovery(today_lines: str, owner: str | tuple[str, ...]) -> str | None:
+    def _recurring_owner_recovery(
+        today_lines: str, owner: str | tuple[str, ...]
+    ) -> str | None:
         """Only a real owner DONE closes earlier failures; SKIP never does."""
         labels = (owner,) if isinstance(owner, str) else owner
         owner_pattern = "(?:" + "|".join(re.escape(label) for label in labels) + ")"
-        pattern = re.compile(rf"^\[(DONE|OK|SUCCESS|COMPLETED|FAIL|ERROR|CRITICAL|START|BEGIN)\]\s+{owner_pattern}\b", re.IGNORECASE)
+        pattern = re.compile(
+            rf"^\[(DONE|OK|SUCCESS|COMPLETED|FAIL|ERROR|CRITICAL|START|BEGIN)\]\s+{owner_pattern}\b",
+            re.IGNORECASE,
+        )
         lines = today_lines.splitlines()
-        markers = [(i, match.group(1).upper()) for i, line in enumerate(lines)
-                   if (match := pattern.search(line))]
+        markers = [
+            (i, match.group(1).upper())
+            for i, line in enumerate(lines)
+            if (match := pattern.search(line))
+        ]
         terminals = [(i, kind) for i, kind in markers if kind not in {"START", "BEGIN"}]
-        if not terminals or terminals[-1][1] not in {"DONE", "OK", "SUCCESS", "COMPLETED"}:
+        if not terminals or terminals[-1][1] not in {
+            "DONE",
+            "OK",
+            "SUCCESS",
+            "COMPLETED",
+        }:
             return None
         done_index = terminals[-1][0]
-        if any(_ERROR_MARKER.search(line) for line in lines[done_index + 1:]):
+        if any(_ERROR_MARKER.search(line) for line in lines[done_index + 1 :]):
             return None
         return "in_progress" if markers[-1][1] in {"START", "BEGIN"} else "pass"
 
@@ -846,7 +904,11 @@ class CronCompletionDetector(BaseDetector):
     def _last_owner_done_line(today_lines: str, owner: str) -> str:
         pattern = re.compile(rf"^\[DONE\]\s+{re.escape(owner)}\b")
         return next(
-            (line for line in reversed(today_lines.splitlines()) if pattern.search(line)),
+            (
+                line
+                for line in reversed(today_lines.splitlines())
+                if pattern.search(line)
+            ),
             "",
         )
 

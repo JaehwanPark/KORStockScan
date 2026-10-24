@@ -47,12 +47,14 @@ ENTRY_PRICE_POLICY_SHA256 = hashlib.sha256(
 ).hexdigest()
 SCALE_IN_PRICE_OWNER = "existing_scale_in_price_resolver"
 QUANTITY_OWNER = "position_sizing_dynamic_formula"
-PRICE_POLICY_ENV_KEYS = frozenset({
-    "KORSTOCKSCAN_SCALPING_NORMAL_DEFENSIVE_BPS",
-    "KORSTOCKSCAN_SCALPING_CONDITIONAL_STRONG_DEFENSIVE_BPS",
-    "KORSTOCKSCAN_SCALPING_NORMAL_FAVORABLE_DEFENSIVE_BPS",
-    "KORSTOCKSCAN_SCALPING_NORMAL_WEAK_DEFENSIVE_BPS",
-})
+PRICE_POLICY_ENV_KEYS = frozenset(
+    {
+        "KORSTOCKSCAN_SCALPING_NORMAL_DEFENSIVE_BPS",
+        "KORSTOCKSCAN_SCALPING_CONDITIONAL_STRONG_DEFENSIVE_BPS",
+        "KORSTOCKSCAN_SCALPING_NORMAL_FAVORABLE_DEFENSIVE_BPS",
+        "KORSTOCKSCAN_SCALPING_NORMAL_WEAK_DEFENSIVE_BPS",
+    }
+)
 
 _ENTRY_EXECUTION_POLICY_PREFIX = "KORSTOCKSCAN_ENTRY_EXECUTION_SIZING_POLICY_"
 _ENTRY_PRICE_POLICY_PREFIX = "KORSTOCKSCAN_MECHANISTIC_ENTRY_PRICE_POLICY_"
@@ -79,9 +81,13 @@ def _runtime_policy(
     expected_source_date = str(os.getenv(f"{prefix}SOURCE_DATE") or "").strip()
     expected_active_date = str(os.getenv(f"{prefix}ACTIVE_DATE") or "").strip()
     expected_sha256 = str(os.getenv(f"{prefix}SHA256") or "").strip().lower()
-    if not all(
-        (str(policy_path), expected_version, expected_source_date, expected_sha256)
-    ) or (not persistent and not expected_active_date) or not policy_path.is_file():
+    if (
+        not all(
+            (str(policy_path), expected_version, expected_source_date, expected_sha256)
+        )
+        or (not persistent and not expected_active_date)
+        or not policy_path.is_file()
+    ):
         return None, "policy_identity_missing"
     try:
         encoded = policy_path.read_bytes()
@@ -96,8 +102,13 @@ def _runtime_policy(
         payload.get("policy_version") == expected_version,
         payload.get("source_date") == expected_source_date,
         (not persistent and payload.get("active_date") == expected_active_date)
-        or (persistent and (not expected_active_date
-                            or payload.get("active_date") == expected_active_date)),
+        or (
+            persistent
+            and (
+                not expected_active_date
+                or payload.get("active_date") == expected_active_date
+            )
+        ),
         hashlib.sha256(encoded).hexdigest() == expected_sha256,
         payload.get("runtime_apply_allowed") is True,
     )
@@ -107,8 +118,9 @@ def _runtime_policy(
     if persistent:
         try:
             source = date.fromisoformat(expected_source_date)
-            effective = date.fromisoformat(str(
-                payload.get("effective_from") or payload.get("active_date") or ""))
+            effective = date.fromisoformat(
+                str(payload.get("effective_from") or payload.get("active_date") or "")
+            )
             runtime = date.fromisoformat(runtime_date)
         except ValueError:
             return None, "policy_effective_date_invalid"
@@ -121,8 +133,10 @@ def _runtime_policy(
 
 # Existing approved numeric BPS envelope; replay cannot broaden this surface.
 PRICE_POLICY_BPS_BOUNDS = {
-    'normal_defensive_bps': (20, 50), 'conditional_strong_defensive_bps': (5, 20),
-    'normal_favorable_defensive_bps': (10, 35), 'normal_weak_defensive_bps': (35, 65),
+    "normal_defensive_bps": (20, 50),
+    "conditional_strong_defensive_bps": (5, 20),
+    "normal_favorable_defensive_bps": (10, 35),
+    "normal_weak_defensive_bps": (35, 65),
 }
 
 
@@ -133,17 +147,29 @@ def mechanistic_entry_price_authority_valid(policy: Any) -> bool:
     runtime_env = policy.get("runtime_env")
     evidence = policy.get("price_selection_evidence")
     if evidence is not None:
-        from src.engine.scalping.strategy_owner_replay import entry_price_selection_evidence_valid
-        if (not entry_price_selection_evidence_valid(evidence)
-            or policy.get("cost_adjusted_ev_pct") != evidence["metrics"]["source_quality_adjusted_ev_pct"]
-            or policy.get("exact_terminal_sample_count") != evidence["metrics"]["paired_sample_count"]
+        from src.engine.scalping.strategy_owner_replay import (
+            entry_price_selection_evidence_valid,
+        )
+
+        if (
+            not entry_price_selection_evidence_valid(evidence)
+            or policy.get("cost_adjusted_ev_pct")
+            != evidence["metrics"]["source_quality_adjusted_ev_pct"]
+            or policy.get("exact_terminal_sample_count")
+            != evidence["metrics"]["paired_sample_count"]
             or evidence["holdout_dates"][-1] > str(policy.get("source_date") or "")
             or policy.get("minimum_cost_adjusted_ev_pct") != 0.0
-            or runtime_env != {"KORSTOCKSCAN_SCALPING_" + evidence["target_value_key"].upper():
-                               str(evidence["selected_bps"])}):
+            or runtime_env
+            != {
+                "KORSTOCKSCAN_SCALPING_"
+                + evidence["target_value_key"].upper(): str(evidence["selected_bps"])
+            }
+        ):
             return False
-    elif (policy.get("minimum_cost_adjusted_ev_pct") == 0.0
-          or str(policy.get("source_date") or "") >= "2026-09-17"):
+    elif (
+        policy.get("minimum_cost_adjusted_ev_pct") == 0.0
+        or str(policy.get("source_date") or "") >= "2026-09-17"
+    ):
         return False
     return bool(
         policy.get("policy_owner") == PRICE_OWNER
@@ -195,18 +221,24 @@ def runtime_mechanistic_entry_price_policy(
     }, status
 
 
-def scoped_entry_price_bps(profile, configured_bps, *, venue, session, policy_bundle_sha256=None):
+def scoped_entry_price_bps(
+    profile, configured_bps, *, venue, session, policy_bundle_sha256=None
+):
     """A global env surface carries a scoped policy, never a cross-venue trial."""
     policy, status = runtime_mechanistic_entry_price_policy()
-    proof = policy.get('price_selection_evidence')
-    if not proof or status != 'loaded':
+    proof = policy.get("price_selection_evidence")
+    if not proof or status != "loaded":
         return configured_bps
     from src.engine.scalping.strategy_owner_replay import ENTRY_REPLAY_PROFILES
-    if ENTRY_REPLAY_PROFILES.get(profile) != proof['target_value_key']:
+
+    if ENTRY_REPLAY_PROFILES.get(profile) != proof["target_value_key"]:
         return configured_bps
-    return (proof['selected_bps'] if profile == proof['profile']
-            and [venue, session, policy_bundle_sha256] == proof['scope_parent'][:3]
-            else proof['incumbent_bps'])
+    return (
+        proof["selected_bps"]
+        if profile == proof["profile"]
+        and [venue, session, policy_bundle_sha256] == proof["scope_parent"][:3]
+        else proof["incumbent_bps"]
+    )
 
 
 def runtime_entry_execution_sizing_policy(
@@ -228,7 +260,9 @@ def runtime_entry_execution_sizing_policy(
         or policy.get("quantity_conservation_required") is not True
     ):
         return None, "policy_authority_invalid"
-    from src.engine.scalping.entry_split_order_plan import quantity_leg_policy_selection_evidence_valid
+    from src.engine.scalping.entry_split_order_plan import (
+        quantity_leg_policy_selection_evidence_valid,
+    )
 
     if not quantity_leg_policy_selection_evidence_valid(policy):
         return None, "selection_evidence_invalid"
@@ -251,7 +285,9 @@ def _positive_int(value: Any) -> int:
     if isinstance(value, bool) or type(value) not in (str, int, float):
         return 0
     try:
-        if isinstance(value, float) and (not math.isfinite(value) or not value.is_integer()):
+        if isinstance(value, float) and (
+            not math.isfinite(value) or not value.is_integer()
+        ):
             return 0
         return max(0, int(value))
     except (TypeError, ValueError, OverflowError):
@@ -330,9 +366,7 @@ def compose_entry_execution_sizing_plan(
     action_owner = str(receipt.get("entry_primary_decision_owner") or "").strip()
     machine_action = str(receipt.get("entry_mechanistic_action") or "").strip().upper()
     ai_screen_pass = receipt.get("entry_ai_screen_pass") is True
-    execution_policy, execution_policy_status = (
-        runtime_entry_execution_sizing_policy()
-    )
+    execution_policy, execution_policy_status = runtime_entry_execution_sizing_policy()
     price_policy, price_policy_status = runtime_mechanistic_entry_price_policy()
 
     blockers: list[str] = []
@@ -375,7 +409,8 @@ def compose_entry_execution_sizing_plan(
         orders[0].get("initial_quantity_sequential_continuation"), dict
     ):
         sequential_continuation = dict(
-            orders[0]["initial_quantity_sequential_continuation"])
+            orders[0]["initial_quantity_sequential_continuation"]
+        )
     if continuation is not None and sequential_continuation is not None:
         blockers.append("competing_deferred_entry_owners")
     deferred_source = sequential_continuation or continuation
@@ -395,15 +430,17 @@ def compose_entry_execution_sizing_plan(
         blockers.append("leg_count_exceeds_immediate_qty")
     if deferred_qty and any(value <= 0 for value in residual_quantities):
         blockers.append("nonpositive_residual_leg_qty")
-    if (deferred_source is not None
-            and _positive_int(deferred_source.get("requested_qty"))
-            != expected_total_qty):
+    if (
+        deferred_source is not None
+        and _positive_int(deferred_source.get("requested_qty")) != expected_total_qty
+    ):
         blockers.append("probe_continuation_requested_qty_mismatch")
     if sequential_continuation is not None:
         shape = str(sequential_continuation.get("selected_shape") or "")
         from src.engine.scalping.entry_split_order_plan import (
             build_initial_quantity_type_legs,
         )
+
         try:
             exact = build_initial_quantity_type_legs(
                 total_qty=expected_total_qty,
@@ -411,9 +448,10 @@ def compose_entry_execution_sizing_plan(
                 probe_first=sequential_continuation.get("probe_first"),
                 route=sequential_continuation.get("route"),
             )
-            if ([item["qty"] for item in exact] !=
-                    [_positive_int(orders[0].get("qty")), *residual_quantities]
-                    or len(exact) != 1 + len(residual_quantities)):
+            if [item["qty"] for item in exact] != [
+                _positive_int(orders[0].get("qty")),
+                *residual_quantities,
+            ] or len(exact) != 1 + len(residual_quantities):
                 blockers.append("sequential_leg_quantity_mismatch")
         except ValueError:
             blockers.append("sequential_leg_contract_invalid")
@@ -432,8 +470,7 @@ def compose_entry_execution_sizing_plan(
     }
     price_policy_sha256s.discard("")
     price_source_receipt_sha256s = {
-        str(order.get("entry_price_receipt_sha256") or "").strip()
-        for order in orders
+        str(order.get("entry_price_receipt_sha256") or "").strip() for order in orders
     }
     price_source_receipt_sha256s.discard("")
     price_owners = {
@@ -571,10 +608,19 @@ def compose_entry_execution_sizing_plan(
         "action_receipt_id": action_receipt_id,
         "action_owner": action_owner,
         "scanner_promotion_id": str(receipt.get("scanner_promotion_id") or ""),
-        **({key: receipt.get(key) for key in (
-            "watch_origin", "watch_admission_id", "watch_generation_id",
-            "machine_observation_sha256")}
-           if receipt.get("watch_origin") == "MAIN_FIXED_WATCH" else {}),
+        **(
+            {
+                key: receipt.get(key)
+                for key in (
+                    "watch_origin",
+                    "watch_admission_id",
+                    "watch_generation_id",
+                    "machine_observation_sha256",
+                )
+            }
+            if receipt.get("watch_origin") == "MAIN_FIXED_WATCH"
+            else {}
+        ),
         "policy_bundle_hash": str(
             receipt.get("policy_bundle_hash")
             or receipt.get("machine_bundle_sha256")
@@ -610,8 +656,11 @@ def compose_entry_execution_sizing_plan(
         "immediate_qty": immediate_qty,
         "deferred_probe_residual_qty": deferred_qty,
         "leg_count": len(legs),
-        **({"initial_quantity_sequential_continuation": sequential_continuation}
-           if sequential_continuation is not None else {}),
+        **(
+            {"initial_quantity_sequential_continuation": sequential_continuation}
+            if sequential_continuation is not None
+            else {}
+        ),
         "legs": legs,
         "price_candidates": price_plan,
         "quantity_conservation_holds": conserved_total == expected_total_qty,
@@ -660,9 +709,7 @@ def compose_entry_execution_sizing_plan(
         "entry_price_plan_id": price_receipt["price_plan_id"],
         "entry_price_plan_owner": PRICE_OWNER,
         "entry_price_plan_sha256": price_receipt["price_plan_sha256"],
-        "entry_price_source_receipt_sha256": plan_core[
-            "price_source_receipt_sha256"
-        ],
+        "entry_price_source_receipt_sha256": plan_core["price_source_receipt_sha256"],
     }
     decorated_orders = [{**item, **common_fields} for item in decorated_orders]
     if continuation is not None and decorated_orders:
@@ -671,26 +718,42 @@ def compose_entry_execution_sizing_plan(
         decorated_orders[0]["entry_split_order_probe_continuation"] = continuation
     # Observation failure must never alter an already validated broker plan.
     replay_seed = None
-    replay_seed_diagnostic = {"status": "not_requested", "blocker": "replay_context_absent"}
+    replay_seed_diagnostic = {
+        "status": "not_requested",
+        "blocker": "replay_context_absent",
+    }
     if isinstance(replay_context, dict) and replay_context and not blockers:
         from src.engine.scalping.strategy_owner_replay import freeze_entry_opportunity
+
         freeze = freeze_entry_opportunity
-        if (plan_core.get('deferred_probe_residual_qty', 0) > 0
-                and all(leg.get('execution_phase') in {'immediate', 'after_verified_probe_fill'}
-                        for leg in plan_core['legs'])):
-            from src.engine.scalping.entry_probe_conditional_replay import freeze_conditional_plan
+        if plan_core.get("deferred_probe_residual_qty", 0) > 0 and all(
+            leg.get("execution_phase") in {"immediate", "after_verified_probe_fill"}
+            for leg in plan_core["legs"]
+        ):
+            from src.engine.scalping.entry_probe_conditional_replay import (
+                freeze_conditional_plan,
+            )
+
             freeze = freeze_conditional_plan
         replay_seed = freeze(
-            plan_core, stock_code=str(replay_context.get("stock_code") or ""),
-            observed_at=replay_context.get("observed_at", datetime.now(KST).timestamp()),
+            plan_core,
+            stock_code=str(replay_context.get("stock_code") or ""),
+            observed_at=replay_context.get(
+                "observed_at", datetime.now(KST).timestamp()
+            ),
             profile=replay_context.get("profile"),
             profile_bps=replay_context.get("profile_bps"),
-            sizing_context=replay_context.get('sizing_context'),
-            candidate_leg_plan=replay_context.get('candidate_leg_plan'),
-            operating_context=replay_context.get('operating_context'),
-            anchor_price=(orders[0].get("entry_price_current_price") if orders else None),
-            **({'probe_order': orders[0], 'source_identity': receipt}
-               if freeze is not freeze_entry_opportunity else {}),
+            sizing_context=replay_context.get("sizing_context"),
+            candidate_leg_plan=replay_context.get("candidate_leg_plan"),
+            operating_context=replay_context.get("operating_context"),
+            anchor_price=(
+                orders[0].get("entry_price_current_price") if orders else None
+            ),
+            **(
+                {"probe_order": orders[0], "source_identity": receipt}
+                if freeze is not freeze_entry_opportunity
+                else {}
+            ),
             diagnostic=replay_seed_diagnostic,
         )
     return decorated_orders, {

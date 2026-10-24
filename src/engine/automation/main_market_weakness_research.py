@@ -755,7 +755,11 @@ def rebind_compressed_sources(root, prior, descriptor, *, stop_at):
     Legacy inputs without complete read hashes must use the normal reader once.
     """
     old = prior.get("source_descriptor", {})
-    if prior.get("status") not in {"completed", "valid_empty", "completed_with_source_gaps"}:
+    if prior.get("status") not in {
+        "completed",
+        "valid_empty",
+        "completed_with_source_gaps",
+    }:
         return None
     if {k: v for k, v in old.items() if k not in {"sources", "listing"}} != {
         k: v for k, v in descriptor.items() if k not in {"sources", "listing"}
@@ -763,8 +767,10 @@ def rebind_compressed_sources(root, prior, descriptor, *, stop_at):
         return None
     before, after = old.get("listing"), descriptor.get("listing")
     if before != after and not (
-        isinstance(before, dict) and isinstance(after, dict)
-        and before.get("semantic_sha256") and not after.get("status")
+        isinstance(before, dict)
+        and isinstance(after, dict)
+        and before.get("semantic_sha256")
+        and not after.get("status")
         and before.get("logical_path") == after.get("logical_path")
         and before["semantic_sha256"] == after.get("semantic_sha256")
     ):
@@ -775,40 +781,69 @@ def rebind_compressed_sources(root, prior, descriptor, *, stop_at):
     manifest = check_seal(read_json(prior["manifest_path"]))
     terminal = check_seal(read_json(prior["terminal_path"]))
     daily = check_seal(read_json(prior["daily_path"]))
-    if (prior.get("generation") != R.digest(old)
+    if (
+        prior.get("generation") != R.digest(old)
         or terminal.get("generation") != prior.get("generation")
         or terminal.get("status") != prior.get("status")
         or terminal.get("gaps") != prior.get("gaps")
-        or any(daily.get(k) != prior.get(k, {}) for k in (
-            "source_census", "source_projection_census"))
+        or any(
+            daily.get(k) != prior.get(k, {})
+            for k in ("source_census", "source_projection_census")
+        )
         or daily.get("native_indexed_rows") != prior.get("native_indexed_rows", 0)
         or terminal.get("source_manifest_sha256") != manifest["artifact_content_sha256"]
         or terminal.get("daily_sha256") != daily["artifact_content_sha256"]
         or any(manifest.get(k) != v for k, v in old.items())
-        or any(manifest.get(k, []) != prior.get(k, []) for k in (
-            "partitions", "source_ranges", "stream_receipts",
-            "shared_object_receipts", "source_dependency_receipts"))
-        or not receipts_current(prior.get("shared_object_receipts", [])
+        or any(
+            manifest.get(k, []) != prior.get(k, [])
+            for k in (
+                "partitions",
+                "source_ranges",
+                "stream_receipts",
+                "shared_object_receipts",
+                "source_dependency_receipts",
+            )
+        )
+        or not receipts_current(
+            prior.get("shared_object_receipts", [])
             + prior.get("source_dependency_receipts", [])
-            + [p["stat"] for p in prior.get("partitions", []) if p.get("stat")])):
+            + [p["stat"] for p in prior.get("partitions", []) if p.get("stat")]
+        )
+    ):
         return None
     proofs = []
     for source, replacement in zip(sources, replacements):
         if source == replacement:
             continue
-        if (source.get("kind") not in {"native_observations", "natural_trace"}
+        if (
+            source.get("kind") not in {"native_observations", "natural_trace"}
             or source.get("kind") != replacement.get("kind")
             or not source.get("logical_path")
             or source["logical_path"] != replacement.get("logical_path")
-            or not replacement.get("compressed")):
+            or not replacement.get("compressed")
+        ):
             return None
-        whole = next((r for r in prior.get("stream_receipts", [])
-                      if r["path"] == source["path"]), None)
-        ranges = ([dict(start=0, end=whole["decoded_bytes"], sha256=whole["decoded_sha256"])]
-                  if whole else [r for r in prior.get("source_ranges", []) if r["path"] == source["path"]])
-        if not ranges or ranges[0]["start"] != 0 or any(
-            a["end"] != b["start"] for a, b in zip(ranges, ranges[1:])
-        ) or (not source.get("compressed") and ranges[-1]["end"] != source["size"]):
+        whole = next(
+            (
+                r
+                for r in prior.get("stream_receipts", [])
+                if r["path"] == source["path"]
+            ),
+            None,
+        )
+        ranges = (
+            [dict(start=0, end=whole["decoded_bytes"], sha256=whole["decoded_sha256"])]
+            if whole
+            else [
+                r for r in prior.get("source_ranges", []) if r["path"] == source["path"]
+            ]
+        )
+        if (
+            not ranges
+            or ranges[0]["start"] != 0
+            or any(a["end"] != b["start"] for a, b in zip(ranges, ranges[1:]))
+            or (not source.get("compressed") and ranges[-1]["end"] != source["size"])
+        ):
             return None
         verify_stream_aliases(root, replacement, stop_at=stop_at)
         key = R.digest(dict(source=replacement, ranges=ranges))
@@ -838,22 +873,44 @@ def rebind_compressed_sources(root, prior, descriptor, *, stop_at):
                         return None
                 if handle.read(1):  # Also verifies gzip EOF/CRC, not a prefix.
                     return None
-                proof = R.seal(dict(source=replacement, ranges=ranges,
-                    decoded_sha256=decoded.hexdigest(), decoded_bytes=handle.tell(),
-                    physical_sha256=physical.digest.hexdigest(), **R.AUTH))
+                proof = R.seal(
+                    dict(
+                        source=replacement,
+                        ranges=ranges,
+                        decoded_sha256=decoded.hexdigest(),
+                        decoded_bytes=handle.tell(),
+                        physical_sha256=physical.digest.hexdigest(),
+                        **R.AUTH,
+                    )
+                )
             if not receipts_current([replacement]):
                 raise Deferred("compressed_rebind_source_changed")
             atomic(cache, proof, immutable=True)
         if not receipts_current([replacement]):
             raise Deferred("compressed_rebind_source_changed")
-        proofs.append(dict(path=replacement["path"], **{k: proof[k] for k in (
-            "decoded_sha256", "decoded_bytes", "physical_sha256")}))
-    return dict(prior, source_descriptor=descriptor, generation=R.digest(descriptor),
-        status="in_progress", source_index=len(replacements), offset=0,
+        proofs.append(
+            dict(
+                path=replacement["path"],
+                **{
+                    k: proof[k]
+                    for k in ("decoded_sha256", "decoded_bytes", "physical_sha256")
+                },
+            )
+        )
+    return dict(
+        prior,
+        source_descriptor=descriptor,
+        generation=R.digest(descriptor),
+        status="in_progress",
+        source_index=len(replacements),
+        offset=0,
         stream_receipts=prior.get("stream_receipts", []) + proofs,
-        representation_parent=dict(generation=prior["generation"],
+        representation_parent=dict(
+            generation=prior["generation"],
             manifest_sha256=manifest["artifact_content_sha256"],
-            manifest_path=prior["manifest_path"]))
+            manifest_path=prior["manifest_path"],
+        ),
+    )
 
 
 def verify_file(root, path, expected, *, stop_at):
@@ -1502,20 +1559,28 @@ def historical_auxiliary_sources(data_root, bundle, source, old_hashes):
             raise ValueError("historical_auxiliary_source_conflict")
     for ident in set(bindings.values()):
         value = G.load(data_root, ident)
-        if (value != original["values"].get(ident)
-                or G.binding(value) != original["bindings"].get(ident)):
+        if value != original["values"].get(ident) or G.binding(value) != original[
+            "bindings"
+        ].get(ident):
             raise ValueError("historical_auxiliary_registry_changed")
     refs = []
     for name, expected in sources.items():
         path = Path(name)
         before = stat_receipt(path)
-        if (N._source_hash(str(path), N._signature(path)) != expected
-                or before != stat_receipt(path)):
+        if N._source_hash(
+            str(path), N._signature(path)
+        ) != expected or before != stat_receipt(path):
             raise ValueError("historical_auxiliary_source_changed")
         refs.append(before)
-    refs.extend(stat_receipt(path) for path in [
-        C.path(data_root, bundle, source, I.code_hashes()), proof["evidence_path"],
-        original_path, inventory_path])
+    refs.extend(
+        stat_receipt(path)
+        for path in [
+            C.path(data_root, bundle, source, I.code_hashes()),
+            proof["evidence_path"],
+            original_path,
+            inventory_path,
+        ]
+    )
     return bindings, refs
 
 
@@ -1577,9 +1642,14 @@ def effective_auxiliary_contract(data_root, record, row, *, cache):
             value = G.load(data_root, ident)
             overlay = I.read(path) if overlay_id else None
             original = overlay if overlay else I.read(path)
-            old_hashes = original.get("code_hashes", original.get("auxiliary_reader_code_hashes"))
-            historical = (historical_auxiliary_sources(data_root, bundle, path, old_hashes)
-                          if old_hashes != I.code_hashes() else None)
+            old_hashes = original.get(
+                "code_hashes", original.get("auxiliary_reader_code_hashes")
+            )
+            historical = (
+                historical_auxiliary_sources(data_root, bundle, path, old_hashes)
+                if old_hashes != I.code_hashes()
+                else None
+            )
             if historical:
                 bindings, historical_refs = historical
                 sources = []
@@ -1704,7 +1774,11 @@ def native_records(source, source_date, data_root, start=0, *, stop_at):
                     dict(
                         decoded_sha256=decoded_digest.hexdigest(),
                         decoded_bytes=handle.tell(),
-                        physical_sha256=physical.digest.hexdigest() if physical else decoded_digest.hexdigest(),
+                        physical_sha256=(
+                            physical.digest.hexdigest()
+                            if physical
+                            else decoded_digest.hexdigest()
+                        ),
                     )
                     if compressed or start == 0
                     else None
@@ -2235,7 +2309,9 @@ def process_date(data_root, source_date, *, stop_at, clock=time.monotonic):
     generation = R.digest(descriptor)
     cursor = prior
     if cursor.get("generation") != generation:
-        cursor = rebind_compressed_sources(root, prior, descriptor, stop_at=stop_at) or dict(
+        cursor = rebind_compressed_sources(
+            root, prior, descriptor, stop_at=stop_at
+        ) or dict(
             schema=R.VERSION + ":cursor",
             source_date=source_date,
             generation=generation,
@@ -2305,7 +2381,9 @@ def process_date(data_root, source_date, *, stop_at, clock=time.monotonic):
     if cursor.get("compressed_in_progress"):
         abandon_compressed(
             "compressed_resume_unavailable",
-            advance=not cursor["compressed_in_progress"].get("label_dependency_pending"),
+            advance=not cursor["compressed_in_progress"].get(
+                "label_dependency_pending"
+            ),
         )
     while cursor["source_index"] < len(sources):
         if clock() >= stop_at:
@@ -2360,7 +2438,9 @@ def process_date(data_root, source_date, *, stop_at, clock=time.monotonic):
                     atomic(path, cursor)
                 labels = label_index(root, cursor, data_root=data_root, stop_at=stop_at)
                 if cursor.get("compressed_in_progress"):
-                    cursor["compressed_in_progress"].pop("label_dependency_pending", None)
+                    cursor["compressed_in_progress"].pop(
+                        "label_dependency_pending", None
+                    )
                 natives = native_index(root, cursor)
                 try:
                     for row in rows:
@@ -3293,9 +3373,11 @@ def selected_optional_code(workspace):
     try:
         # Canonical workspace owns shared data and cron, not deployed code.
         # Bind all existing research dependencies and the actual launch wrapper.
-        matches = (code_hash(selected) == code_hash()
-                   and (selected / wrapper).read_bytes()
-                   == (executing_root / wrapper).read_bytes())
+        matches = (
+            code_hash(selected) == code_hash()
+            and (selected / wrapper).read_bytes()
+            == (executing_root / wrapper).read_bytes()
+        )
     except (OSError, ValueError):
         matches = False
     if not matches:
@@ -3477,10 +3559,12 @@ def select_source_date(data_root, dates, *, night, check_preflight):
     def checkpoint():
         # Read committed progress only. Never open the writer or scan labels.
         generation = cursor.get("generation", "")
-        if (cursor.get("status") != "in_progress"
-                or not isinstance(generation, str)
-                or not re.fullmatch("[0-9a-f]{64}", generation)
-                or not cursor_current(data_root, cursor)):
+        if (
+            cursor.get("status") != "in_progress"
+            or not isinstance(generation, str)
+            or not re.fullmatch("[0-9a-f]{64}", generation)
+            or not cursor_current(data_root, cursor)
+        ):
             return None
         offset = cursor.get("offset", 0)
         # Native byte offsets and replay [partition, row] offsets are distinct
@@ -3488,8 +3572,12 @@ def select_source_date(data_root, dates, *, night, check_preflight):
         offset = [0, offset] if type(offset) is int else offset
         if not isinstance(offset, list) or len(offset) != 2:
             return None
-        position = [cursor.get("source_index", 0), *offset,
-                    len(cursor.get("partitions", [])), cursor.get("native_indexed_rows", 0)]
+        position = [
+            cursor.get("source_index", 0),
+            *offset,
+            len(cursor.get("partitions", [])),
+            cursor.get("native_indexed_rows", 0),
+        ]
         if any(type(value) is not int or value < 0 for value in position):
             return None
         index = root.resolve() / latest / generation / "label_bindings.sqlite"
@@ -3498,7 +3586,9 @@ def select_source_date(data_root, dates, *, night, check_preflight):
         loaded = 0
         if index.exists():
             try:
-                with contextlib.closing(sqlite3.connect(index.as_uri() + "?mode=ro", uri=True, timeout=0)) as db:
+                with contextlib.closing(
+                    sqlite3.connect(index.as_uri() + "?mode=ro", uri=True, timeout=0)
+                ) as db:
                     loaded = db.execute("SELECT count(*) FROM loaded").fetchone()[0]
             except sqlite3.Error:
                 return None
@@ -3507,12 +3597,14 @@ def select_source_date(data_root, dates, *, night, check_preflight):
     progress = checkpoint() if latest in repairs else None
     check_preflight()
     before = rotation.get("latest_checkpoint_before")
-    if before is not None and (not isinstance(before, dict)
-            or not isinstance(before.get("generation"), str)
-            or not re.fullmatch("[0-9a-f]{64}", before["generation"])
-            or not isinstance(before.get("position"), list)
-            or len(before["position"]) != 6
-            or any(type(value) is not int or value < 0 for value in before["position"])):
+    if before is not None and (
+        not isinstance(before, dict)
+        or not isinstance(before.get("generation"), str)
+        or not re.fullmatch("[0-9a-f]{64}", before["generation"])
+        or not isinstance(before.get("position"), list)
+        or len(before["position"]) != 6
+        or any(type(value) is not int or value < 0 for value in before["position"])
+    ):
         raise ValueError("source_rotation_checkpoint_invalid")
     advanced = False
     if progress is not None and "latest_checkpoint_before" in rotation:
@@ -3520,15 +3612,23 @@ def select_source_date(data_root, dates, *, night, check_preflight):
             advanced = any(progress["position"])
         else:
             advanced = progress["position"] > before["position"]
-    resume_latest = (advanced and rotation.get("latest_priority_night") == night
-                     and rotation.get("latest_priority_date") == latest
-                     and rotation.get("last_selected_date") != latest)
-    if latest in repairs and (rotation.get("latest_priority_night") != night or resume_latest):
+    resume_latest = (
+        advanced
+        and rotation.get("latest_priority_night") == night
+        and rotation.get("latest_priority_date") == latest
+        and rotation.get("last_selected_date") != latest
+    )
+    if latest in repairs and (
+        rotation.get("latest_priority_night") != night or resume_latest
+    ):
         # Keep the first opportunity, then alternate proven progress with
         # backlog. No-progress/crashed reservations do not gain priority.
         day = latest
-        rotation.update(latest_priority_night=night, latest_priority_date=day,
-                        latest_checkpoint_before=progress)
+        rotation.update(
+            latest_priority_night=night,
+            latest_priority_date=day,
+            latest_checkpoint_before=progress,
+        )
     else:
         if lane == "source" and len(candidates) > 1:
             candidates = [d for d in candidates if d != dates[-1]]
@@ -3647,8 +3747,11 @@ def scheduled(data_root, *, source_date=None):
             else:
                 # An explicit report repair uses the same night reservation,
                 # supervisor and child guards as automatic backlog rotation.
-                if (date.fromisoformat(source_date).isoformat() != source_date
-                        or source_date not in dates or source_date > night):
+                if (
+                    date.fromisoformat(source_date).isoformat() != source_date
+                    or source_date not in dates
+                    or source_date > night
+                ):
                     raise ValueError("repair_source_date_outside_retained_night_scope")
                 day = source_date
                 check_preflight()
@@ -3782,14 +3885,19 @@ def main(argv=None):
     parser.add_argument("--worker-date")
     parser.add_argument("--worker-seconds", type=float, default=55)
     parser.add_argument("--scheduled", action="store_true")
-    parser.add_argument("--source-date", help="Repair one retained source date under the night supervisor")
+    parser.add_argument(
+        "--source-date",
+        help="Repair one retained source date under the night supervisor",
+    )
     parser.add_argument("--reservation-id")
     parser.add_argument("--configure-optional-cron", action="store_true")
     parser.add_argument("--workspace", type=Path)
     parser.add_argument("--notify-enabled", action="store_true", default=None)
     parser.add_argument("--cron-user")
     args = parser.parse_args(argv)
-    if args.source_date and (not args.scheduled or args.worker_date or args.configure_optional_cron):
+    if args.source_date and (
+        not args.scheduled or args.worker_date or args.configure_optional_cron
+    ):
         parser.error("--source-date requires only --scheduled")
     try:
         if args.worker_date:

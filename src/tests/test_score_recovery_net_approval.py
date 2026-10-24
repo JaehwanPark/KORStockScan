@@ -130,8 +130,6 @@ def historical_approval_version(metrics):
     )
 
 
-
-
 @pytest.mark.parametrize("net", [0, -1])
 def test_nonpositive_net_is_not_approved(net):
     assert not econ._evaluate(real_metrics(net))["ready"]
@@ -200,8 +198,6 @@ def test_duplicate_retry_and_conflicting_generation_do_not_inflate_sample():
     assert not econ.merge_books([book, other])["observations"]
 
 
-
-
 def test_profile_venue_dates_and_runtime_scope_are_separate():
     metrics = real_metrics()
     observations = metrics["score_recovery_real_economics"]["observations"]
@@ -228,8 +224,6 @@ def test_profile_venue_dates_and_runtime_scope_are_separate():
     assert econ.runtime_scope_allowed(
         "score69_74:operator_override:2026-07-04", PROFILE, {}
     )
-
-
 
 
 def test_real_producer_preserves_profile_and_reconciles_actual_price_pnl(tmp_path):
@@ -370,8 +364,6 @@ def frequent_small_net_metrics(*, capital_multiplier=0.5, holdout_net=70):
     }
 
 
-
-
 def test_more_profit_from_disproportionate_capital_is_not_selected():
     d = econ._evaluate_policy(frequent_small_net_metrics(capital_multiplier=2))
     assert d["policy_search"]["selected_profile"] is None
@@ -406,8 +398,6 @@ def test_frequency_cannot_hide_negative_holdout_net():
     d = econ._evaluate_policy(frequent_small_net_metrics(holdout_net=-1))
     assert d["policy_search"]["selected_profile"] is None
     assert d["policy_search"]["status"] == "holdout_not_improved"
-
-
 
 
 def test_failed_holdout_keeps_baseline_without_searching_a_runner_up():
@@ -486,10 +476,6 @@ def test_legacy_raw_micro_zero_is_normalized_before_profile_comparison():
     assert econ._bounded_profile_change(current, {**current, "min_tick_accel": 1.3})
 
 
-
-
-
-
 @pytest.mark.parametrize("value", [None, [], {"score_recovery_real_economics": []}])
 def test_malformed_policy_search_fails_closed(value):
     assert not econ.evaluate_policy(value)["ready"]
@@ -542,18 +528,6 @@ def test_new_pipeline_stage_preserves_scalar_profile_and_old_stage_is_not_remapp
     assert ("ENTRY_PIPELINE", "score65_74_recovery_probe") not in PIPELINE_STAGE_MAP
 
 
-
-
-
-
-
-
-
-
-
-
-
-
 def test_sub_won_reconciliation_tolerance_cannot_invent_positive_net():
     report = signed_report(count=1, net=0)
     report["rows"][0]["realized_net_pnl_krw"] = 0.005
@@ -569,8 +543,8 @@ def test_live_decision_rejects_unapproved_scope_before_other_entry_checks(monkey
         "AI_SCORE65_74_RECOVERY_PROBE_" + key.upper(): value
         for key, value in PROFILE.items()
     }
-    values["AI_SCORE65_74_RECOVERY_PROBE_THRESHOLD_VERSION"] = historical_approval_version(
-        metrics
+    values["AI_SCORE65_74_RECOVERY_PROBE_THRESHOLD_VERSION"] = (
+        historical_approval_version(metrics)
     )
     monkeypatch.setattr(
         runtime, "_rule", lambda key, default=None: values.get(key, default)

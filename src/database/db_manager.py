@@ -92,9 +92,11 @@ class DBManager:
                     ("completion_census_projection_sha256", "TEXT"),
                     ("broker_actual_fees_taxes_krw", "DOUBLE PRECISION"),
                 ):
-                    conn.execute(text(
-                        f"ALTER TABLE trade_performance_facts ADD COLUMN IF NOT EXISTS {name} {sql_type}"
-                    ))
+                    conn.execute(
+                        text(
+                            f"ALTER TABLE trade_performance_facts ADD COLUMN IF NOT EXISTS {name} {sql_type}"
+                        )
+                    )
 
         # 💡 [자동 마이그레이션] users 테이블에 신규 컬럼이 없으면 자동 추가 (PostgreSQL)
         try:
@@ -200,9 +202,21 @@ class DBManager:
                         "ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS market_session_bucket TEXT;"
                     )
                 )
-                conn.execute(text("ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS watch_origin TEXT;"))
-                conn.execute(text("ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS watch_admission_id TEXT;"))
-                conn.execute(text("ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS watch_generation_id TEXT;"))
+                conn.execute(
+                    text(
+                        "ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS watch_origin TEXT;"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS watch_admission_id TEXT;"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS watch_generation_id TEXT;"
+                    )
+                )
                 conn.execute(
                     text(
                         "ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS scanner_promotion_id TEXT;"
@@ -1016,8 +1030,8 @@ class DBManager:
             df = df[~retired_vcp_watch]
             # A zero-base machine pass is provisional until Main attaches the
             # same generation. A crash must not boot it as an entry target.
-            zero_base_provisional = df["status"].astype(str).str.upper().eq(
-                "PROBE_READY"
+            zero_base_provisional = (
+                df["status"].astype(str).str.upper().eq("PROBE_READY")
             )
             df = df[~zero_base_provisional]
             if df.empty:
@@ -1064,7 +1078,9 @@ class DBManager:
             # 엔진에 넘기기 전에 임시 컬럼 삭제
             df = df.drop(columns=["priority"])
 
-            targets = [_canonical_target_datetimes(row) for row in df.to_dict("records")]
+            targets = [
+                _canonical_target_datetimes(row) for row in df.to_dict("records")
+            ]
 
             # 기본값 보정 (스나이퍼 엔진의 부담을 DB 매니저가 덜어줍니다)
             default_prob = getattr(TRADING_RULES, "SNIPER_AGGRESSIVE_PROB", 0.8)
@@ -1144,9 +1160,13 @@ class DBManager:
                 # Keep absent scanner/fixed-watch lineage absent, including in
                 # the strict machine snapshot and the pipeline identity receipt.
                 for key in (
-                    "watch_origin", "watch_admission_id", "watch_generation_id",
-                    "scanner_promotion_id", "scanner_promotion_reason",
-                    "source_signature", "scanner_watch_budget_owner",
+                    "watch_origin",
+                    "watch_admission_id",
+                    "watch_generation_id",
+                    "scanner_promotion_id",
+                    "scanner_promotion_reason",
+                    "source_signature",
+                    "scanner_watch_budget_owner",
                 ):
                     t[key] = _safe_optional_text(t.get(key))
                 t["scanner_promotion_emitted_epoch"] = _safe_optional_float(

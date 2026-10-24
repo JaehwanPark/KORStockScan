@@ -19,7 +19,9 @@ import tempfile
 from typing import Any, Iterable
 from zoneinfo import ZoneInfo
 
-from src.engine.automation.source_quality_clean_baseline import policy_refresh_start_date
+from src.engine.automation.source_quality_clean_baseline import (
+    policy_refresh_start_date,
+)
 from src.engine.scalping.scanner_lookup_attention_policy import (
     ACTIVATION_MODE,
     LEGACY_ACTIVATION_MODE,
@@ -321,7 +323,9 @@ def _previous_krx_trading_date(value: date) -> date:
     raise ValueError("previous_krx_trading_date_unresolved")
 
 
-def _runtime_policy_expectation(observation_date: date, *, receipt_only=False) -> dict[str, Any]:
+def _runtime_policy_expectation(
+    observation_date: date, *, receipt_only=False
+) -> dict[str, Any]:
     """Resolve whether the exact previous trading-day artifact required live use."""
 
     receipt_path = (
@@ -345,7 +349,10 @@ def _runtime_policy_expectation(observation_date: date, *, receipt_only=False) -
         }
 
     if receipt_only:
-        return {"state": "inactive", "reason": "immutable_preopen_missing_runtime_bonus_zero"}
+        return {
+            "state": "inactive",
+            "reason": "immutable_preopen_missing_runtime_bonus_zero",
+        }
 
     try:
         source_date = _previous_krx_trading_date(observation_date)
@@ -416,11 +423,16 @@ def _conversion_markers_after_attach(markers, observed_at):
     }
 
 
-def collect_lineage(target: date, *, events_by_date=None) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+def collect_lineage(
+    target: date, *, events_by_date=None
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Collect exact lookup observations and full-fill receipt classifications."""
 
-    start = max(ROLLOUT_DATE, date.fromisoformat(policy_refresh_start_date(target.isoformat())),
-                target - timedelta(days=ROLLING_CALENDAR_DAYS - 1))
+    start = max(
+        ROLLOUT_DATE,
+        date.fromisoformat(policy_refresh_start_date(target.isoformat())),
+        target - timedelta(days=ROLLING_CALENDAR_DAYS - 1),
+    )
     observations: dict[tuple[int, str, str], dict[str, Any]] = {}
     conflicted_observation_keys: set[tuple[int, str, str]] = set()
     fill_receipts: defaultdict[tuple[int, str, str], list[dict[str, Any]]] = (
@@ -445,7 +457,11 @@ def collect_lineage(target: date, *, events_by_date=None) -> tuple[list[dict[str
     cursor = start
     while cursor <= target:
         event_file_date = cursor
-        path = _event_path(event_file_date) if events_by_date is None else event_file_date.isoformat()
+        path = (
+            _event_path(event_file_date)
+            if events_by_date is None
+            else event_file_date.isoformat()
+        )
         cursor += timedelta(days=1)
         if path is None or (events_by_date is not None and path not in events_by_date):
             continue
@@ -453,7 +469,11 @@ def collect_lineage(target: date, *, events_by_date=None) -> tuple[list[dict[str
         conflicted_resource_keys = set()
         event_file_count += 1
         observed_event_dates.append(event_file_date.isoformat())
-        for event in (_iter_events(path, parse_stats=parse_stats) if events_by_date is None else events_by_date[path]):
+        for event in (
+            _iter_events(path, parse_stats=parse_stats)
+            if events_by_date is None
+            else events_by_date[path]
+        ):
             fields = (
                 event.get("fields") if isinstance(event.get("fields"), dict) else {}
             )
@@ -608,7 +628,9 @@ def collect_lineage(target: date, *, events_by_date=None) -> tuple[list[dict[str
                 runtime_policy_provenance_invalid = False
                 expectation = runtime_policy_expectation_cache.get(event_date)
                 if expectation is None:
-                    expectation = _runtime_policy_expectation(event_date, receipt_only=events_by_date is not None)
+                    expectation = _runtime_policy_expectation(
+                        event_date, receipt_only=events_by_date is not None
+                    )
                     runtime_policy_expectation_cache[event_date] = expectation
                 if expectation.get("state") == "invalid" and event_in_policy_scope:
                     runtime_policy_provenance_invalid = True
@@ -684,8 +706,7 @@ def collect_lineage(target: date, *, events_by_date=None) -> tuple[list[dict[str
                         if experiment_mode is True:
                             expected_bonus = (
                                 formula_bonus
-                                if experiment_arm == "candidate"
-                                and selection_pair_id
+                                if experiment_arm == "candidate" and selection_pair_id
                                 else 0.0
                             )
                             expected_policy_state = f"experiment_{experiment_arm}_arm"
@@ -818,9 +839,7 @@ def collect_lineage(target: date, *, events_by_date=None) -> tuple[list[dict[str
                             runtime_policy_contract_valid
                             and (
                                 experiment_mode is not True
-                                or re.fullmatch(
-                                    r"[0-9a-f]{64}", selection_pair_id
-                                )
+                                or re.fullmatch(r"[0-9a-f]{64}", selection_pair_id)
                                 is not None
                             )
                         )
@@ -1285,7 +1304,8 @@ def _source_quality(
                 "target_date": audit_date.isoformat(),
                 "path": str(path),
                 "status": "pass" if valid else "source_quality_blocked",
-                "audit_status": audit_status, "audit_phase": payload.get("audit_phase"),
+                "audit_status": audit_status,
+                "audit_phase": payload.get("audit_phase"),
                 "source_report_sha256": canonical_sha256(payload),
                 "tuning_input_allowed": summary.get("tuning_input_allowed"),
                 "hard_blocking_contract_gap_count": hard_gap_count,
@@ -1657,7 +1677,11 @@ def _resource_window_start(target: date) -> date:
     while dates < 20:
         start -= timedelta(days=1)
         dates += int(is_krx_trading_day(start))
-    return max(ROLLOUT_DATE, date.fromisoformat(policy_refresh_start_date(target.isoformat())), start)
+    return max(
+        ROLLOUT_DATE,
+        date.fromisoformat(policy_refresh_start_date(target.isoformat())),
+        start,
+    )
 
 
 def _book_passes(book: dict[str, Any]) -> tuple[bool, list[str]]:
@@ -1944,9 +1968,11 @@ def evaluate_post_apply(
                         "cohort": (
                             "control"
                             if assignment == "baseline"
-                            else "candidate"
-                            if assignment == "candidate"
-                            else row["cohort"]
+                            else (
+                                "candidate"
+                                if assignment == "candidate"
+                                else row["cohort"]
+                            )
                         ),
                     }
                 )

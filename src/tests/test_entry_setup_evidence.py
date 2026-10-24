@@ -63,7 +63,8 @@ def test_local_breakout_recheck_survives_supportive_setup_and_hard_block_wins():
         "local_breakout": {"status": "breakout_holding", "recheck_required": True},
     }
     evidence = build_entry_setup_evidence(
-        exact_payload={"current": {"price": 10000}}, exact_analysis=analysis,
+        exact_payload={"current": {"price": 10000}},
+        exact_analysis=analysis,
         recovery_analysis=_recovery_analysis(clean=True),
     )
     assert evidence["setup_state"] == "WAIT_CONFIRMATION"
@@ -89,37 +90,63 @@ def _recovery_analysis(*, clean=False, recovery=False, source_mode="fresh_dual")
 
 @pytest.mark.parametrize("micro_price", [0.0, 0.05])
 def test_local_breakout_preserves_discovery_and_micro_confirmation_grammar(micro_price):
-    exact = _exact_analysis(structural_edge_floor=False, trusted_supportive_trigger=False)
+    exact = _exact_analysis(
+        structural_edge_floor=False, trusted_supportive_trigger=False
+    )
     exact["completed_structure"] = {
         "phase": "range_or_no_setup",
         "structure_contract_version": "entry_local_breakout_completed_v1",
         "local_breakout": {"status": "no_confirmed_breakout", "recheck_required": True},
     }
-    exact["executable_liquidity"] = {"state": "supportive", "execution_cost_state": "low"}
+    exact["executable_liquidity"] = {
+        "state": "supportive",
+        "execution_cost_state": "low",
+    }
     evidence = build_entry_setup_evidence(
-        exact_payload={"current": {"price": 15790},
-                       "features": _micro_features(price_change_10t_pct=micro_price)},
-        exact_analysis=exact, recovery_analysis=_recovery_analysis(),
+        exact_payload={
+            "current": {"price": 15790},
+            "features": _micro_features(price_change_10t_pct=micro_price),
+        },
+        exact_analysis=exact,
+        recovery_analysis=_recovery_analysis(),
     )
-    assert evidence["setup_family"] == ("MICRO_RECOVERY" if micro_price else "NO_VALID_SETUP")
-    assert evidence["setup_state"] == ("WAIT_CONFIRMATION" if micro_price else "UNCONFIRMED")
+    assert evidence["setup_family"] == (
+        "MICRO_RECOVERY" if micro_price else "NO_VALID_SETUP"
+    )
+    assert evidence["setup_state"] == (
+        "WAIT_CONFIRMATION" if micro_price else "UNCONFIRMED"
+    )
     assert evidence["recheck_reasons"] == [
-        "MICRO_PRICE_RESPONSE_RECHECK" if micro_price else "SETUP_DISCOVERY_RECHECK"]
+        "MICRO_PRICE_RESPONSE_RECHECK" if micro_price else "SETUP_DISCOVERY_RECHECK"
+    ]
     assert evidence["local_breakout"]["recheck_required"] is True
     assert validate_entry_setup_evidence(evidence) == []
     decision = mechanistic_entry_policy_decision(evidence)
-    assert (decision["action"], decision["reason"]) == ("RECHECK", "local_breakout_confirmation_required")
+    assert (decision["action"], decision["reason"]) == (
+        "RECHECK",
+        "local_breakout_confirmation_required",
+    )
 
 
-@pytest.mark.parametrize("source_status,adverse,expected", [
-    ("stale", False, "INSUFFICIENT"), ("pass", True, "INVALID")])
-def test_local_breakout_never_replaces_invalid_or_insufficient_source(source_status, adverse, expected):
-    exact = _exact_analysis(structural_edge_floor=False, trusted_supportive_trigger=False,
-                            adverse_distribution_no_edge=adverse)
+@pytest.mark.parametrize(
+    "source_status,adverse,expected",
+    [("stale", False, "INSUFFICIENT"), ("pass", True, "INVALID")],
+)
+def test_local_breakout_never_replaces_invalid_or_insufficient_source(
+    source_status, adverse, expected
+):
+    exact = _exact_analysis(
+        structural_edge_floor=False,
+        trusted_supportive_trigger=False,
+        adverse_distribution_no_edge=adverse,
+    )
     exact["source_quality"]["status"] = source_status
     exact["completed_structure"] = {"local_breakout": {"recheck_required": True}}
-    evidence = build_entry_setup_evidence(exact_payload={"current": {"price": 10000}},
-        exact_analysis=exact, recovery_analysis=_recovery_analysis())
+    evidence = build_entry_setup_evidence(
+        exact_payload={"current": {"price": 10000}},
+        exact_analysis=exact,
+        recovery_analysis=_recovery_analysis(),
+    )
     assert evidence["setup_state"] == expected
     assert "TRIGGER_CONFIRMATION_RECHECK" not in evidence["recheck_reasons"]
     assert validate_entry_setup_evidence(evidence) == []
@@ -808,15 +835,18 @@ def test_mechanistic_primary_rejects_unsubstantiated_ai_veto_without_exposure():
     assert result["entry_probe_intent"] is False
     assert result["entry_primary_decision_owner"] == "mechanistic_entry_adjudicator"
     assert result["entry_ai_role"] == "auxiliary_risk_screen_pass_veto_no_promotion"
-    assert result["entry_mechanistic_policy_sha256"] == hashlib.sha256(
-        json.dumps(
-            MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1,
-            sort_keys=True,
-            ensure_ascii=False,
-            separators=(",", ":"),
-            allow_nan=False,
-        ).encode()
-    ).hexdigest()
+    assert (
+        result["entry_mechanistic_policy_sha256"]
+        == hashlib.sha256(
+            json.dumps(
+                MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1,
+                sort_keys=True,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                allow_nan=False,
+            ).encode()
+        ).hexdigest()
+    )
 
 
 def _machine_screen_case(verdict):
@@ -865,14 +895,19 @@ def test_auxiliary_soft_policy_preserves_raw_facts_and_machine_authority():
         "pass_min_positive_evidence_count": 3,
     }
     setup, veto = _machine_screen_case("VETO")
-    extra = next(f for f in setup["positive_facts"] if f not in veto["supporting_fact_ids"])
+    extra = next(
+        f for f in setup["positive_facts"] if f not in veto["supporting_fact_ids"]
+    )
     veto["supporting_fact_ids"].append(extra)
-    assessment = evaluate_auxiliary_policy(veto, setup_evidence=setup, soft_policy=policy)
+    assessment = evaluate_auxiliary_policy(
+        veto, setup_evidence=setup, soft_policy=policy
+    )
     assert assessment["raw_verdict"] == "VETO"
     assert assessment["effective_verdict"] == "PASS"
     assert veto["risk_verdict"] == "VETO"
     composed = compose_mechanistic_primary_decision(
-        setup_evidence=setup, ai_risk_adjudication=veto,
+        setup_evidence=setup,
+        ai_risk_adjudication=veto,
         auxiliary_soft_policy=policy,
     )
     assert composed["entry_mechanistic_action"] == "ENTER_NOW"
@@ -881,70 +916,110 @@ def test_auxiliary_soft_policy_preserves_raw_facts_and_machine_authority():
     assert composed["entry_ai_screen_pass"] is True
 
     invalid = {**veto, "contradicting_fact_ids": ["invented_fact"]}
-    assert evaluate_auxiliary_policy(
-        invalid, setup_evidence=setup, soft_policy=policy
-    )["effective_verdict"] == "INVALID"
+    assert (
+        evaluate_auxiliary_policy(invalid, setup_evidence=setup, soft_policy=policy)[
+            "effective_verdict"
+        ]
+        == "INVALID"
+    )
     blocked_setup, passed = _machine_screen_case("PASS")
     passed["supporting_fact_ids"] = passed["supporting_fact_ids"][:2]
-    assert evaluate_auxiliary_policy(
-        passed, setup_evidence=blocked_setup, soft_policy=policy
-    )["effective_verdict"] == "CAUTION"
+    assert (
+        evaluate_auxiliary_policy(
+            passed, setup_evidence=blocked_setup, soft_policy=policy
+        )["effective_verdict"]
+        == "CAUTION"
+    )
 
 
 def test_auxiliary_v2_uses_bound_predecision_materiality_and_leaf():
     from src.engine.scalping import entry_setup_evidence as module
-    from src.engine.ai_prompt_contracts import ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION
+    from src.engine.ai_prompt_contracts import (
+        ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION,
+    )
 
     setup, veto = _machine_screen_case("VETO")
     context = setup["mechanistic_context"]
     context["source_cutoff"] = 1790000000.0
     context["flow"]["source_analysis_sha256"] = "a" * 64
     context["flow"]["execution_context"]["spread_bp"] = 80.0
-    context["context_sha256"] = module._canonical_sha256({
-        key: value for key, value in context.items() if key != "context_sha256"
-    })
+    context["context_sha256"] = module._canonical_sha256(
+        {key: value for key, value in context.items() if key != "context_sha256"}
+    )
     setup.pop("auxiliary_predecision_type_v1", None)
     setup["auxiliary_materiality_v1"] = module.build_auxiliary_materiality(
         exact_payload={"entry_machine_input_as_of": 1790000000.0},
         exact_analysis={"source_quality": {"status": "fresh_consistent"}},
         context=context,
     )
-    setup["evidence_sha256"] = module._canonical_sha256({
-        key: value for key, value in setup.items() if key != "evidence_sha256"
-    })
+    setup["evidence_sha256"] = module._canonical_sha256(
+        {key: value for key, value in setup.items() if key != "evidence_sha256"}
+    )
     parent = {
         "veto_min_independent_evidence_count": 2,
         "pass_min_positive_evidence_count": 2,
-        "materiality_max": {"LIQUIDITY_FRAGILE": 20.0,
-                            "ADVERSE_TAPE": 0.0, "REWARD_RISK_WEAK": 0.0},
+        "materiality_max": {
+            "LIQUIDITY_FRAGILE": 20.0,
+            "ADVERSE_TAPE": 0.0,
+            "REWARD_RISK_WEAK": 0.0,
+        },
         "prompt_version": ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION,
     }
     policy = {"schema": "auxiliary_soft_policy_v2", "parent": parent, "leaves": []}
     assert module.validate_auxiliary_soft_policy(policy)
-    from src.engine.ai_prompt_contracts import ENTRY_MACHINE_AUXILIARY_COMPACT_V1_PROMPT_VERSION
-    assert not module.validate_auxiliary_soft_policy({
-        **policy, "leaves": [{"match": {"price_tick_band": "GE_10BP"},
-                             "profile": {**parent,
-                                         "prompt_version": ENTRY_MACHINE_AUXILIARY_COMPACT_V1_PROMPT_VERSION}}],
-    })
+    from src.engine.ai_prompt_contracts import (
+        ENTRY_MACHINE_AUXILIARY_COMPACT_V1_PROMPT_VERSION,
+    )
+
+    assert not module.validate_auxiliary_soft_policy(
+        {
+            **policy,
+            "leaves": [
+                {
+                    "match": {"price_tick_band": "GE_10BP"},
+                    "profile": {
+                        **parent,
+                        "prompt_version": ENTRY_MACHINE_AUXILIARY_COMPACT_V1_PROMPT_VERSION,
+                    },
+                }
+            ],
+        }
+    )
     assert module.auxiliary_materiality_values(setup)["LIQUIDITY_FRAGILE"] == 40.0
     assert module.auxiliary_materiality_values(setup)["REWARD_RISK_WEAK"] is None
-    assert module.evaluate_auxiliary_policy(
+    assert (
+        module.evaluate_auxiliary_policy(
+            veto, setup_evidence=setup, soft_policy=policy
+        )["effective_verdict"]
+        == "VETO"
+    )
+    policy["leaves"] = [
+        {
+            "match": {"price_tick_band": "GE_10BP"},
+            "profile": {
+                **parent,
+                "materiality_max": {
+                    **parent["materiality_max"],
+                    "LIQUIDITY_FRAGILE": 50.0,
+                },
+            },
+        }
+    ]
+    leaf = module.evaluate_auxiliary_policy(
         veto, setup_evidence=setup, soft_policy=policy
-    )["effective_verdict"] == "VETO"
-    policy["leaves"] = [{"match": {"price_tick_band": "GE_10BP"},
-                          "profile": {**parent, "materiality_max": {
-                              **parent["materiality_max"], "LIQUIDITY_FRAGILE": 50.0}}}]
-    leaf = module.evaluate_auxiliary_policy(veto, setup_evidence=setup, soft_policy=policy)
+    )
     assert (leaf["selected_profile"], leaf["effective_verdict"]) == ("leaf_0", "PASS")
     missing = dict(setup)
     missing.pop("auxiliary_materiality_v1")
-    missing["evidence_sha256"] = module._canonical_sha256({
-        key: value for key, value in missing.items() if key != "evidence_sha256"
-    })
-    assert module.evaluate_auxiliary_policy(
-        veto, setup_evidence=missing, soft_policy=policy
-    )["effective_verdict"] == "VETO"
+    missing["evidence_sha256"] = module._canonical_sha256(
+        {key: value for key, value in missing.items() if key != "evidence_sha256"}
+    )
+    assert (
+        module.evaluate_auxiliary_policy(
+            veto, setup_evidence=missing, soft_policy=policy
+        )["effective_verdict"]
+        == "VETO"
+    )
     stale = dict(setup)
     stale["auxiliary_materiality_v1"] = {
         **setup["auxiliary_materiality_v1"],
@@ -953,10 +1028,13 @@ def test_auxiliary_v2_uses_bound_predecision_materiality_and_leaf():
             "as_of": 1790000001.0,
         },
     }
-    stale["auxiliary_materiality_v1"]["registry_sha256"] = module._canonical_sha256({
-        key: value for key, value in stale["auxiliary_materiality_v1"].items()
-        if key != "registry_sha256"
-    })
+    stale["auxiliary_materiality_v1"]["registry_sha256"] = module._canonical_sha256(
+        {
+            key: value
+            for key, value in stale["auxiliary_materiality_v1"].items()
+            if key != "registry_sha256"
+        }
+    )
     assert module.auxiliary_materiality_values(stale)["LIQUIDITY_FRAGILE"] is None
     plan_body = {
         "schema": "entry_predecision_reward_risk_plan_v1",
@@ -968,19 +1046,27 @@ def test_auxiliary_v2_uses_bound_predecision_materiality_and_leaf():
     plan = {**plan_body, "plan_sha256": module._canonical_sha256(plan_body)}
     with_plan = dict(setup)
     with_plan["mechanistic_context"] = {
-        **context, "auxiliary_reward_risk_input": plan,
+        **context,
+        "auxiliary_reward_risk_input": plan,
     }
-    with_plan["mechanistic_context"]["context_sha256"] = module._canonical_sha256({
-        key: value for key, value in with_plan["mechanistic_context"].items()
-        if key != "context_sha256"
-    })
+    with_plan["mechanistic_context"]["context_sha256"] = module._canonical_sha256(
+        {
+            key: value
+            for key, value in with_plan["mechanistic_context"].items()
+            if key != "context_sha256"
+        }
+    )
     with_plan["auxiliary_materiality_v1"] = module.build_auxiliary_materiality(
         exact_payload={"entry_machine_input_as_of": 1790000000.0},
         exact_analysis={"source_quality": {"status": "fresh_consistent"}},
         context=with_plan["mechanistic_context"],
     )
-    assert module.auxiliary_materiality_values(with_plan)["REWARD_RISK_WEAK"] == pytest.approx(3 / 7)
-    with_plan["mechanistic_context"]["auxiliary_reward_risk_input"]["round_trip_cost_pct"] = 0.3
+    assert module.auxiliary_materiality_values(with_plan)[
+        "REWARD_RISK_WEAK"
+    ] == pytest.approx(3 / 7)
+    with_plan["mechanistic_context"]["auxiliary_reward_risk_input"][
+        "round_trip_cost_pct"
+    ] = 0.3
     assert module.auxiliary_materiality_values(with_plan)["REWARD_RISK_WEAK"] is None
 
 
@@ -1544,9 +1630,7 @@ def test_ready_risk_schema_excludes_unbound_risk_codes_and_requires_pass():
 
     assert evidence["risk_fact_bindings"] == {}
     assert schema["properties"]["risk_verdict"]["enum"] == ["PASS"]
-    assert schema["properties"]["risk_codes"]["items"]["enum"] == [
-        "NO_BLOCKING_RISK"
-    ]
+    assert schema["properties"]["risk_codes"]["items"]["enum"] == ["NO_BLOCKING_RISK"]
 
 
 def test_adverse_liquidity_has_an_exact_bounded_risk_binding():
@@ -2081,16 +2165,21 @@ def test_large_sell_wait_survives_actual_machine_policy_without_entry():
     recovery["hard_blockers"] = ["large_sell_print_present"]
     evidence = build_entry_setup_evidence(
         exact_payload={"current": {"price": 10000}},
-        exact_analysis=analysis, recovery_analysis=recovery,
+        exact_analysis=analysis,
+        recovery_analysis=recovery,
     )
     comparison = mechanistic_entry_action_comparison(evidence)
     assert comparison["preferred_action"] == "RECHECK"
     assert mechanistic_entry_policy_decision(evidence)["action"] == "RECHECK"
-    decision = compose_mechanistic_primary_decision(setup_evidence=evidence, ai_risk_adjudication=None)
+    decision = compose_mechanistic_primary_decision(
+        setup_evidence=evidence, ai_risk_adjudication=None
+    )
     assert decision["entry_mechanistic_action"] == "RECHECK"
     assert decision["action"] == "WAIT"
     assert decision["entry_probe_intent"] is False
-    assert decision["entry_ai_followup_disposition"] == "machine_recheck_next_scanner_loop"
+    assert (
+        decision["entry_ai_followup_disposition"] == "machine_recheck_next_scanner_loop"
+    )
     for fault in ("failed_structure", "source_unusable", "spread_extreme_or_unusable"):
         invalid = deepcopy(evidence)
         invalid["invalidation_facts"].append("hard_blocker:" + fault)
@@ -3365,16 +3454,28 @@ def test_wait_probe_is_attributed_as_arm_not_unsubmitted_exposure():
     assert report["candidate_probe_arm_risk_budget"]["pass"] is True
 
 
-@pytest.mark.parametrize('state', ['READY', 'UNCONFIRMED'])
+@pytest.mark.parametrize("state", ["READY", "UNCONFIRMED"])
 def test_risk_schema_excludes_unfounded_insufficient_for_adverse_tape(state):
-    evidence = {'setup_state': state, 'positive_facts': ['tape_supportive'],
-                'contradicting_facts': ['program_flow_net_and_delta_sell'],
-                'corroborated_risk_codes': ['ADVERSE_TAPE'],
-                'risk_fact_bindings': {'ADVERSE_TAPE': ['program_flow_net_and_delta_sell']}}
+    evidence = {
+        "setup_state": state,
+        "positive_facts": ["tape_supportive"],
+        "contradicting_facts": ["program_flow_net_and_delta_sell"],
+        "corroborated_risk_codes": ["ADVERSE_TAPE"],
+        "risk_fact_bindings": {"ADVERSE_TAPE": ["program_flow_net_and_delta_sell"]},
+    }
     schema = entry_risk_adjudication_openai_schema(evidence)
-    assert set(schema['properties']['risk_verdict']['enum']) == {'PASS', 'CAUTION'}
-    response = _risk('INSUFFICIENT', ['ADVERSE_TAPE'], contradict=['program_flow_net_and_delta_sell'])
-    assert 'entry_risk_unfounded_insufficient' in validate_entry_risk_adjudication(response, setup_evidence=evidence)
-    evidence.update(setup_state='INSUFFICIENT', corroborated_risk_codes=['SOURCE_QUALITY_GAP'],
-                    risk_fact_bindings={'SOURCE_QUALITY_GAP': ['required_source_missing']})
-    assert entry_risk_adjudication_openai_schema(evidence)['properties']['risk_verdict']['enum'] == ['INSUFFICIENT']
+    assert set(schema["properties"]["risk_verdict"]["enum"]) == {"PASS", "CAUTION"}
+    response = _risk(
+        "INSUFFICIENT", ["ADVERSE_TAPE"], contradict=["program_flow_net_and_delta_sell"]
+    )
+    assert "entry_risk_unfounded_insufficient" in validate_entry_risk_adjudication(
+        response, setup_evidence=evidence
+    )
+    evidence.update(
+        setup_state="INSUFFICIENT",
+        corroborated_risk_codes=["SOURCE_QUALITY_GAP"],
+        risk_fact_bindings={"SOURCE_QUALITY_GAP": ["required_source_missing"]},
+    )
+    assert entry_risk_adjudication_openai_schema(evidence)["properties"][
+        "risk_verdict"
+    ]["enum"] == ["INSUFFICIENT"]

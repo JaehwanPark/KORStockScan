@@ -471,18 +471,26 @@ def _build_implemented_policy_backtest(
                 if str(merged_fields.get("latency_state") or "").upper() == "DANGER":
                     liquidity_excluded["latency_danger"] += 1
                     continue
-                ai_action = str(
-                    merged_fields.get("entry_ai_submit_authority_action")
-                    or merged_fields.get("ai_action")
-                    or ""
-                ).strip().upper()
+                ai_action = (
+                    str(
+                        merged_fields.get("entry_ai_submit_authority_action")
+                        or merged_fields.get("ai_action")
+                        or ""
+                    )
+                    .strip()
+                    .upper()
+                )
                 if ai_action != "BUY":
                     liquidity_excluded["ai_buy_action_missing_or_not_buy"] += 1
                     continue
-                ai_source = str(
-                    merged_fields.get("entry_ai_submit_authority_result_source")
-                    or ""
-                ).strip().lower()
+                ai_source = (
+                    str(
+                        merged_fields.get("entry_ai_submit_authority_result_source")
+                        or ""
+                    )
+                    .strip()
+                    .lower()
+                )
                 if ai_source not in {"live", "prior_valid"} or not _truthy(
                     merged_fields.get("entry_ai_submit_authority_fresh_prior")
                 ):

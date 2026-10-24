@@ -438,8 +438,10 @@ def _preflight_cohort(fields: dict[str, Any], point: str) -> str | None:
         if market_data_route == "krx_nxt_integrated":
             return "KRX_NXT_AFTERMARKET"
         return None
-    if post_effective and venue == "NXT" and (
-        "aftermarket" in session or "nxt_entry_window" in session
+    if (
+        post_effective
+        and venue == "NXT"
+        and ("aftermarket" in session or "nxt_entry_window" in session)
     ):
         return None
     if venue == "NXT" and ("aftermarket" in session or "nxt_entry_window" in session):
@@ -2073,16 +2075,18 @@ def _run_endpoint_provider_compare(
     from src.engine import ai_engine_openai as openai_module
 
     retired_entry_price = {
-        "entry_price": {
-            "results": [],
-            "summary": {
-                **_endpoint_summary([]),
-                "status": "retired_mechanistic_entry_price_owner",
-                "provider_calls": 0,
-            },
-        }
-        if "entry_price" in points
-        else {}
+        "entry_price": (
+            {
+                "results": [],
+                "summary": {
+                    **_endpoint_summary([]),
+                    "status": "retired_mechanistic_entry_price_owner",
+                    "provider_calls": 0,
+                },
+            }
+            if "entry_price" in points
+            else {}
+        )
     }
     points = tuple(point for point in points if point != "entry_price")
     if not points:
@@ -2102,7 +2106,7 @@ def _run_endpoint_provider_compare(
                     "summary": _endpoint_summary([{"status": "skipped"}]),
                 }
                 for point in points
-            }
+            },
         }
 
     point_results: dict[str, list[dict[str, Any]]] = {point: [] for point in points}
@@ -2241,7 +2245,7 @@ def _run_endpoint_provider_compare(
                     "summary": _endpoint_summary(point_results[point]),
                 }
                 for point in points
-            }
+            },
         }
 
     original_rules = openai_module.TRADING_RULES
@@ -2552,7 +2556,7 @@ def _run_endpoint_provider_compare(
                     "summary": _endpoint_summary(point_results[point]),
                 }
                 for point in points
-            }
+            },
         }
     finally:
         openai_module.TRADING_RULES = original_rules

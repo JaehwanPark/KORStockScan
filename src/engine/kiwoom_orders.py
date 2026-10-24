@@ -48,6 +48,8 @@ _DEPOSIT_API_FETCH_LOCKS = {}
 _LAST_SUCCESSFUL_DEPOSIT_BY_KEY = {}
 _ORDERABLE_AMOUNT_CACHE = {}
 _LOCAL_SELL_NO_CALL_TOKEN = object()
+
+
 class _LocalBuyNoCallToken(str):
     """JSON-safe marker whose object identity is lost on serialization."""
 
@@ -112,8 +114,13 @@ def _reserve_owner_registry_intent(
     effective_order_date = order_date or datetime.now(KST).date()
     context = _owner_registry_context(owner_context)
     from src.trading.config.owner_retirement import automatic_owner_retired
+
     if context is not None and automatic_owner_retired(context.owner_type):
-        return None, None, _owner_registry_block_response("automatic_owner_permanently_retired")
+        return (
+            None,
+            None,
+            _owner_registry_block_response("automatic_owner_permanently_retired"),
+        )
     is_new_entry = str(side).upper() == "BUY" and str(action).upper() == "NEW"
     if context is None or context.owner_type == "main_scalping":
         exclusion = evaluate_main_bot_control_exclusion(
@@ -166,7 +173,11 @@ def _reserve_owner_registry_intent(
                     "registered_coexistence_symbol_requires_exact_date_policy"
                 ),
             )
-        if context is None or context.owner_type != "main_scalping" or not policy.migration_completed:
+        if (
+            context is None
+            or context.owner_type != "main_scalping"
+            or not policy.migration_completed
+        ):
             return None, None, None
     if context is None:
         return (
@@ -260,20 +271,25 @@ def _finish_owner_registry_intent(
 def _local_buy_no_call_response(response, *, reserved_intent_id=None):
     """Tag only a local branch reached before any physical BUY attempt."""
     result = dict(response)
-    result.update(_local_buy_reserved_intent_id=reserved_intent_id,
-                  _local_buy_no_call_token=_LOCAL_BUY_NO_CALL_TOKEN,
-                  broker_order_attempted=False, physical_send_attempt_count=0)
+    result.update(
+        _local_buy_reserved_intent_id=reserved_intent_id,
+        _local_buy_no_call_token=_LOCAL_BUY_NO_CALL_TOKEN,
+        broker_order_attempted=False,
+        physical_send_attempt_count=0,
+    )
     return result
 
 
 def is_verified_local_buy_no_call_response(response):
     # Decoded remote flags are not evidence that the adapter never sent.
-    return bool(isinstance(response, dict)
+    return bool(
+        isinstance(response, dict)
         and response.get("_local_buy_no_call_token") is _LOCAL_BUY_NO_CALL_TOKEN
         and response.get("broker_order_attempted") is False
         and type(response.get("physical_send_attempt_count")) is int
         and response["physical_send_attempt_count"] == 0
-        and not str(response.get("ord_no") or response.get("odno") or "").strip())
+        and not str(response.get("ord_no") or response.get("odno") or "").strip()
+    )
 
 
 def is_verified_local_sell_no_call_response(response):
@@ -357,24 +373,30 @@ def entry_capacity_deposit_identity(token):
     meta = get_last_deposit_meta()
     receipt = meta.get("deposit_source_receipt")
     expected_scope = hashlib.sha256(_deposit_cache_key(token).encode()).hexdigest()
-    if (meta.get("source") not in {"api_fresh", "loop_cache"}
-            or meta.get("fallback_used") is not False
-            or not isinstance(receipt, dict)
-            or receipt.get("scope_sha256") != expected_scope
-            or not re.fullmatch(r"[0-9a-f]{64}", str(receipt.get("generation") or ""))
-            or type(receipt.get("observed_epoch")) not in (int, float)
-            or not 0 < receipt["observed_epoch"] <= time.time()
-            or receipt.get("raw_amount") != meta.get("raw_amount")):
+    if (
+        meta.get("source") not in {"api_fresh", "loop_cache"}
+        or meta.get("fallback_used") is not False
+        or not isinstance(receipt, dict)
+        or receipt.get("scope_sha256") != expected_scope
+        or not re.fullmatch(r"[0-9a-f]{64}", str(receipt.get("generation") or ""))
+        or type(receipt.get("observed_epoch")) not in (int, float)
+        or not 0 < receipt["observed_epoch"] <= time.time()
+        or receipt.get("raw_amount") != meta.get("raw_amount")
+    ):
         return meta  # Unknown/fallback provenance retains conservative invalidation.
-    return {key: value for key, value in meta.items()
-            if key not in {"age_sec", "cache_hit", "source"}}
+    return {
+        key: value
+        for key, value in meta.items()
+        if key not in {"age_sec", "cache_hit", "source"}
+    }
 
 
 def _deposit_source_receipt(cache_key, *, loop_cached=False):
     with _ORDERABLE_AMOUNT_CACHE_LOCK:
-        records = _ORDERABLE_AMOUNT_CACHE if loop_cached else _LAST_SUCCESSFUL_DEPOSIT_BY_KEY
-        return dict((records.get(cache_key) or {}).get(
-            "source_receipt") or {})
+        records = (
+            _ORDERABLE_AMOUNT_CACHE if loop_cached else _LAST_SUCCESSFUL_DEPOSIT_BY_KEY
+        )
+        return dict((records.get(cache_key) or {}).get("source_receipt") or {})
 
 
 def _apply_kt00001_orderable_amount_floor(
@@ -418,7 +440,11 @@ def _apply_kt00001_orderable_amount_floor(
             "minimum_floor_applied": floor_applied,
             "minimum_floor_authority": "operator_approved_2026_07_22",
             "minimum_floor_rollback_krw": 0,
-            **({"deposit_source_receipt": dict(source_receipt)} if source_receipt else {}),
+            **(
+                {"deposit_source_receipt": dict(source_receipt)}
+                if source_receipt
+                else {}
+            ),
         },
     )
     marker = (raw_amount, floor_amount)
@@ -478,8 +504,16 @@ def _parse_kiwoom_amount(value, *, field_name):
     return int(float(normalized))
 
 
-def _post_kiwoom_with_auth_retry(url, headers, payload, api_id, *, timeout=5,
-                                entry_send_context=None, entry_owner_context=None):
+def _post_kiwoom_with_auth_retry(
+    url,
+    headers,
+    payload,
+    api_id,
+    *,
+    timeout=5,
+    entry_send_context=None,
+    entry_owner_context=None,
+):
     """POST once, then refresh token and retry once only for Kiwoom auth/token failures."""
     active_headers = dict(headers or {})
     provided_token = (
@@ -501,18 +535,42 @@ def _post_kiwoom_with_auth_retry(url, headers, payload, api_id, *, timeout=5,
         )
         if not admission.admitted:
             raise RuntimeError(f"account_read_shared_rate_deferred:{admission.reason}")
-    from src.utils.kiwoom_transport_telemetry import measured_http_call, record_decoded_response
+    from src.utils.kiwoom_transport_telemetry import (
+        measured_http_call,
+        record_decoded_response,
+    )
+
     send_receipts = []
     send_hooks = {}
     if entry_send_context is not None:
         from src.trading.entry.physical_send_guard import check_entry_send_context
+
         def before_first_call():
-            send_receipts.append(check_entry_send_context(
-                entry_send_context,
-                api_id=api_label if active_headers.get("api-id") == api_label else "header_api_mismatch",
-                owner_context=entry_owner_context, payload=payload))
+            send_receipts.append(
+                check_entry_send_context(
+                    entry_send_context,
+                    api_id=(
+                        api_label
+                        if active_headers.get("api-id") == api_label
+                        else "header_api_mismatch"
+                    ),
+                    owner_context=entry_owner_context,
+                    payload=payload,
+                )
+            )
+
         send_hooks["before_call"] = before_first_call
-    response = measured_http_call(requests.post, url, telemetry_owner=f"kiwoom_orders.{api_label}", telemetry_class="execution_critical", telemetry_code=payload.get("stk_cd"), headers=active_headers, json=payload, timeout=timeout, **send_hooks)
+    response = measured_http_call(
+        requests.post,
+        url,
+        telemetry_owner=f"kiwoom_orders.{api_label}",
+        telemetry_class="execution_critical",
+        telemetry_code=payload.get("stk_cd"),
+        headers=active_headers,
+        json=payload,
+        timeout=timeout,
+        **send_hooks,
+    )
     http_rate_limit_recorded = False
     if read_api and response.status_code == 429:
         kiwoom_utils.record_kiwoom_read_rate_limit(
@@ -596,21 +654,39 @@ def _post_kiwoom_with_auth_retry(url, headers, payload, api_id, *, timeout=5,
                 f"account_read_shared_rate_deferred:{retry_admission.reason}"
             )
     if entry_send_context is not None:
+
         def before_retry_call():
             try:
-                send_receipts.append(check_entry_send_context(
-                    entry_send_context,
-                    api_id=api_label if retry_headers.get("api-id") == api_label else "header_api_mismatch",
-                    owner_context=entry_owner_context, payload=payload))
+                send_receipts.append(
+                    check_entry_send_context(
+                        entry_send_context,
+                        api_id=(
+                            api_label
+                            if retry_headers.get("api-id") == api_label
+                            else "header_api_mismatch"
+                        ),
+                        owner_context=entry_owner_context,
+                        payload=payload,
+                    )
+                )
             except EntrySendGuardBlocked as exc:
                 # The first POST was a decoded auth rejection. No uncertain
                 # transport response is ever admitted to this retry branch.
                 exc.attempts = 1
                 exc.auth_response = data
                 raise
+
         send_hooks["before_call"] = before_retry_call
     retry_response = measured_http_call(
-        requests.post, url, telemetry_owner=f"kiwoom_orders.{api_label}.auth_retry", telemetry_class="execution_critical", telemetry_code=payload.get("stk_cd"), headers=retry_headers, json=payload, timeout=timeout, **send_hooks
+        requests.post,
+        url,
+        telemetry_owner=f"kiwoom_orders.{api_label}.auth_retry",
+        telemetry_class="execution_critical",
+        telemetry_code=payload.get("stk_cd"),
+        headers=retry_headers,
+        json=payload,
+        timeout=timeout,
+        **send_hooks,
     )
     retry_http_rate_limit_recorded = False
     if read_api and retry_response.status_code == 429:
@@ -846,13 +922,18 @@ def _remember_successful_deposit(amount, *, cache_key=None, loop_cache_source=No
     _LAST_SUCCESSFUL_DEPOSIT_AT = observed_epoch
     if cache_key:
         scope = hashlib.sha256(str(cache_key).encode()).hexdigest()
-        receipt = {"scope_sha256": scope, "raw_amount": normalized,
-                   "observed_epoch": observed_epoch,
-                   "generation": hashlib.sha256(
-                       f"{os.getpid()}:{time.monotonic_ns()}:{scope}".encode()).hexdigest()}
+        receipt = {
+            "scope_sha256": scope,
+            "raw_amount": normalized,
+            "observed_epoch": observed_epoch,
+            "generation": hashlib.sha256(
+                f"{os.getpid()}:{time.monotonic_ns()}:{scope}".encode()
+            ).hexdigest(),
+        }
         with _ORDERABLE_AMOUNT_CACHE_LOCK:
             _LAST_SUCCESSFUL_DEPOSIT_BY_KEY[cache_key] = {
-                "amount": normalized, "updated_at": observed_epoch,
+                "amount": normalized,
+                "updated_at": observed_epoch,
                 "source_receipt": receipt,
             }
     _DEPOSIT_API_COOLDOWN_UNTIL = 0.0
@@ -1032,7 +1113,9 @@ def _get_deposit_real(token, cache_key):
                 return _apply_kt00001_orderable_amount_floor(
                     amount,
                     source="api_fresh",
-                    source_receipt=_deposit_source_receipt(cache_key) if amount > 0 else None,
+                    source_receipt=(
+                        _deposit_source_receipt(cache_key) if amount > 0 else None
+                    ),
                 )
 
             err_msg = data.get("return_msg") or data.get("err_msg") or "상세 사유 없음"
@@ -1481,12 +1564,18 @@ def resolve_order_dmst_stex_tp(dmst_stex_tp=None, *, now=None) -> str:
     explicit = str(dmst_stex_tp or "").strip().upper()
     if explicit in {"KRX", "NXT", "SOR"}:
         return explicit
-    from src.trading.market.execution_venue import broker_route_fields, market_defaults_active
+    from src.trading.market.execution_venue import (
+        broker_route_fields,
+        market_defaults_active,
+    )
+
     observed_at = now if now is not None else datetime.now(KST)
     if isinstance(observed_at, datetime) and observed_at.tzinfo is None:
         observed_at = observed_at.replace(tzinfo=KST)
     if market_defaults_active(observed_at):
-        return broker_route_fields(explicit, observed_at=observed_at)["broker_route_requested"]
+        return broker_route_fields(explicit, observed_at=observed_at)[
+            "broker_route_requested"
+        ]
     return "SOR" if is_krx_regular_order_session(now) else "NXT"
 
 
@@ -1504,6 +1593,7 @@ def describe_order_route_resolution(dmst_stex_tp=None, *, now=None) -> dict:
         else resolve_order_dmst_stex_tp(dmst_stex_tp, now=now)
     )
     from src.trading.market.execution_venue import broker_route_fields
+
     at = now if now is not None else datetime.now(KST)
     if isinstance(at, datetime) and at.tzinfo is None:
         at = at.replace(tzinfo=KST)
@@ -1513,6 +1603,7 @@ def describe_order_route_resolution(dmst_stex_tp=None, *, now=None) -> dict:
         requested = explicit
     elif default_route["broker_route_override"]:
         from src.trading.market.execution_venue import MARKET_DEFAULT_AUTHORITY
+
         resolution = MARKET_DEFAULT_AUTHORITY
         requested = explicit or "AUTO"
     elif effective not in {"KRX", "NXT", "SOR"}:
@@ -1827,10 +1918,12 @@ def send_buy_order_market(
     if qty <= 0:
         return None
     from src.trading.config.owner_retirement import new_entry_retired
+
     context = _owner_registry_context(owner_context)
     if context is not None and new_entry_retired(code, context.owner_type):
         return _local_buy_no_call_response(
-            _owner_registry_block_response("symbol_owner_permanently_retired"))
+            _owner_registry_block_response("symbol_owner_permanently_retired")
+        )
     time_block_override_reason = str(time_block_override_reason or "").strip()
     allow_time_block_override = (
         bool(allow_time_block_override)
@@ -1842,12 +1935,14 @@ def send_buy_order_market(
         msg = f"[TRADING_PAUSED_BLOCK] buy order blocked 종목:{clean_code}, 상태:{get_pause_state_label()}"
         log_info(msg)
         EventBus().publish("TELEGRAM_ADMIN_NOTIFY", {"text": msg})
-        return _local_buy_no_call_response({
-            "rt_cd": "PAUSED",
-            "return_code": "PAUSED",
-            "return_msg": get_pause_state_label(),
-            "ord_no": "",
-        })
+        return _local_buy_no_call_response(
+            {
+                "rt_cd": "PAUSED",
+                "return_code": "PAUSED",
+                "return_msg": get_pause_state_label(),
+                "ord_no": "",
+            }
+        )
 
     order_now = now if now is not None else datetime.now(KST)
     buy_window_blocked = is_scalping_buy_window_blocked(order_now)
@@ -1859,12 +1954,14 @@ def send_buy_order_market(
         label = get_buy_side_time_block_label()
         msg = f"[BUY_TIME_BLOCK] buy order blocked 종목:{clean_code}, 상태:{label}"
         log_info(msg)
-        return _local_buy_no_call_response({
-            "rt_cd": "BUY_TIME_BLOCKED",
-            "return_code": "BUY_TIME_BLOCKED",
-            "return_msg": label,
-            "ord_no": "",
-        })
+        return _local_buy_no_call_response(
+            {
+                "rt_cd": "BUY_TIME_BLOCKED",
+                "return_code": "BUY_TIME_BLOCKED",
+                "return_msg": label,
+                "ord_no": "",
+            }
+        )
     if buy_time_blocked and allow_time_block_override:
         clean_code = str(code)[:6]
         log_info(
@@ -1894,8 +1991,10 @@ def send_buy_order_market(
     normalized_type = order_resolution["effective_order_type"]
     normalized_price = order_resolution["effective_order_price"]
     effective_venue_eligibility = venue_eligibility
-    if (effective_venue_eligibility is not None
-            and effective_venue_eligibility.stock_code != clean_code):
+    if (
+        effective_venue_eligibility is not None
+        and effective_venue_eligibility.stock_code != clean_code
+    ):
         effective_venue_eligibility = None
     market_session, order_preflight = _resolve_submit_order_type_preflight(
         now=order_now,
@@ -1954,25 +2053,33 @@ def send_buy_order_market(
         return _local_buy_no_call_response(owner_block)
 
     try:
-        send_kwargs = ({"entry_send_context": entry_send_context,
-                        "entry_owner_context": context}
-                       if entry_send_context is not None else {})
+        send_kwargs = (
+            {"entry_send_context": entry_send_context, "entry_owner_context": context}
+            if entry_send_context is not None
+            else {}
+        )
         try:
             res, data = _post_kiwoom_with_auth_retry(
-                url, headers, payload, "kt10000", timeout=5, **send_kwargs)
+                url, headers, payload, "kt10000", timeout=5, **send_kwargs
+            )
         except EntrySendGuardBlocked as exc:
             blocked = exc.response()
             registry_block = _finish_owner_registry_intent(
-                owner_registry, owner_intent_id, response=blocked)
+                owner_registry, owner_intent_id, response=blocked
+            )
             if registry_block is not None:
                 blocked["owner_registry_finalize_gap"] = registry_block
             if owner_intent_id:
                 blocked["owner_registry_intent_id"] = owner_intent_id
             if exc.attempts == 0:
-                blocked = _local_buy_no_call_response(blocked, reserved_intent_id=owner_intent_id)
+                blocked = _local_buy_no_call_response(
+                    blocked, reserved_intent_id=owner_intent_id
+                )
             return _with_order_route_provenance(
-                blocked, route_resolution=submit_provenance,
-                broker_route_attempted=exc.attempts > 0)
+                blocked,
+                route_resolution=submit_provenance,
+                broker_route_attempted=exc.attempts > 0,
+            )
 
         is_success = (
             str(data.get("rt_cd", "")) == "0" or str(data.get("return_code", "")) == "0"
@@ -2060,8 +2167,11 @@ def send_buy_order(
         owner_context=owner_context,
         now=now,
         venue_eligibility=venue_eligibility,
-        **({"entry_send_context": entry_send_context}
-           if entry_send_context is not None else {}),
+        **(
+            {"entry_send_context": entry_send_context}
+            if entry_send_context is not None
+            else {}
+        ),
     )
 
 

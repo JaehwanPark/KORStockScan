@@ -208,8 +208,14 @@ class OrderbookStabilityObserver:
             )
             self._mark_reversions(state, now)
 
-    def record_trade(self, code: str, *, price: int, ts: float | None = None,
-                     transport_epoch: int | None = None) -> None:
+    def record_trade(
+        self,
+        code: str,
+        *,
+        price: int,
+        ts: float | None = None,
+        transport_epoch: int | None = None,
+    ) -> None:
         safe_code = str(code or "").strip()
         if not safe_code:
             return

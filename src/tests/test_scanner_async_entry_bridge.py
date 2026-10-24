@@ -28,7 +28,9 @@ def capacity_prefetch_calls(monkeypatch):
         calls.append((code, dict(frame), deadline))
         return {"status": "source_gap", "reason": "fixture_no_account_io"}
 
-    monkeypatch.setattr(handlers, "_prefetch_entry_capacity_for_async_evaluation", prefetch)
+    monkeypatch.setattr(
+        handlers, "_prefetch_entry_capacity_for_async_evaluation", prefetch
+    )
     return calls
 
 
@@ -45,560 +47,1250 @@ class _FakeAI:
 def _retained_fixture(stock):
     generation = _generation()
     now = time.time()
-    result = ScannerAsyncEvalResult(request_id=generation.generation_id+':key',
-        generation_id=generation.generation_id, code='005930', venue='KRX', cache_key='key',
-        state_version=handlers._scanner_async_entry_state_version(stock), status='completed',
-        submitted_epoch=now, preparation_started_epoch=now, preparation_completed_epoch=now,
-        ai_started_epoch=now, completed_epoch=now, preparation_wait_sec=0, preparation_service_sec=0,
-        ai_dispatch_wait_sec=0, ai_response_sec=0, observation_only=False,
-        original_generation=generation, deadline_epoch=now+5, deadline_perf=time.perf_counter()+5)
-    stock.update(_scanner_async_generation_id=generation.generation_id, _scanner_async_cache_key='key')
-    coordinator = ScannerAsyncEvalCoordinator(ai_dispatcher=HotPathAIDispatcher(loaded_key_count=1))
+    result = ScannerAsyncEvalResult(
+        request_id=generation.generation_id + ":key",
+        generation_id=generation.generation_id,
+        code="005930",
+        venue="KRX",
+        cache_key="key",
+        state_version=handlers._scanner_async_entry_state_version(stock),
+        status="completed",
+        submitted_epoch=now,
+        preparation_started_epoch=now,
+        preparation_completed_epoch=now,
+        ai_started_epoch=now,
+        completed_epoch=now,
+        preparation_wait_sec=0,
+        preparation_service_sec=0,
+        ai_dispatch_wait_sec=0,
+        ai_response_sec=0,
+        observation_only=False,
+        original_generation=generation,
+        deadline_epoch=now + 5,
+        deadline_perf=time.perf_counter() + 5,
+    )
+    stock.update(
+        _scanner_async_generation_id=generation.generation_id,
+        _scanner_async_cache_key="key",
+    )
+    coordinator = ScannerAsyncEvalCoordinator(
+        ai_dispatcher=HotPathAIDispatcher(loaded_key_count=1)
+    )
     coordinator._ready[result.request_id] = result
     return coordinator, generation, result
 
 
-@pytest.mark.parametrize('boundary', ['close', 'session_change', 'generation_conflict'])
-@pytest.mark.parametrize('status', ['completed', 'expired_after_response'])
+@pytest.mark.parametrize("boundary", ["close", "session_change", "generation_conflict"])
+@pytest.mark.parametrize("status", ["completed", "expired_after_response"])
 def test_fixed_watch_completion_crossing_route_boundary_is_consumed_without_execution(
     monkeypatch, boundary, status
 ):
     from zoneinfo import ZoneInfo
     from src.engine.scalping import main_fixed_watch as fixed, scanner_async_eval as A
     from src.engine.scalping import reversal_current_backend as native
-    before = datetime(2026, 10, 15, 19, 39, 59, tzinfo=ZoneInfo('Asia/Seoul')).timestamp()
-    if boundary == 'session_change':
-        before = datetime(2026, 10, 15, 8, 49, 59, tzinfo=ZoneInfo('Asia/Seoul')).timestamp()
-    now = before + (602 if boundary == 'session_change' else 2)
-    if boundary == 'generation_conflict':
+
+    before = datetime(
+        2026, 10, 15, 19, 39, 59, tzinfo=ZoneInfo("Asia/Seoul")
+    ).timestamp()
+    if boundary == "session_change":
+        before = datetime(
+            2026, 10, 15, 8, 49, 59, tzinfo=ZoneInfo("Asia/Seoul")
+        ).timestamp()
+    now = before + (602 if boundary == "session_change" else 2)
+    if boundary == "generation_conflict":
         now = before
-    monkeypatch.setattr(time, 'time', lambda: now)
-    route = fixed.session_route(before, '005930')
-    stock = dict(code='005930', status='WATCHING', position_tag='SCALP_BASE',
-        watch_origin=fixed.WATCH_ORIGIN, watch_admission_id=fixed.new_admission_id(before, route),
+    monkeypatch.setattr(time, "time", lambda: now)
+    route = fixed.session_route(before, "005930")
+    stock = dict(
+        code="005930",
+        status="WATCHING",
+        position_tag="SCALP_BASE",
+        watch_origin=fixed.WATCH_ORIGIN,
+        watch_admission_id=fixed.new_admission_id(before, route),
         watch_generation_id=fixed.generation_id(before, route),
-        broker_route='NXT' if route['route']=='nxt_only' else 'SOR')
-    if boundary == 'generation_conflict': stock['watch_generation_id'] = 'obsolete'
+        broker_route="NXT" if route["route"] == "nxt_only" else "SOR",
+    )
+    if boundary == "generation_conflict":
+        stock["watch_generation_id"] = "obsolete"
     coordinator, _, original = _retained_fixture(stock)
-    claim = {'token':'original', 'snapshot':[{'event_id':'event', 'epoch':before,
-        'symbol':'005930', 'venue':stock['broker_route'], 'source_item':route['item']}]}
-    generation = A.FixedWatchGeneration('005930', stock['broker_route'], 'fixed-watch:original', 'a'*64, before)
-    result = replace(original, generation_id=generation.generation_id,
-        request_id=generation.generation_id+':key', original_generation=generation,
-        generation_kind='fixed_watch', venue=generation.venue, native_claim=claim, status=status)
-    coordinator._ready.clear(); coordinator._ready[result.request_id] = result
-    stock.update(_scanner_async_generation_id=generation.generation_id,
-        _fixed_watch_async_claim=claim, _continuous_reversal_pending_claim=claim)
-    events=[];acks=[]
-    monkeypatch.setattr(A, 'record_async_disposition', lambda r, kind, reason, **kw: events.append((r,kind,reason)))
-    monkeypatch.setattr(native, 'acknowledge_any', lambda c, **kw: acks.append((c['token'],kw['status'])))
-    monkeypatch.setattr(handlers, '_log_entry_pipeline', lambda *a, **kw: None)
-    monkeypatch.setattr(handlers, '_handle_watching_state_impl', lambda *a, **kw: pytest.fail('route conflict executed'))
+    claim = {
+        "token": "original",
+        "snapshot": [
+            {
+                "event_id": "event",
+                "epoch": before,
+                "symbol": "005930",
+                "venue": stock["broker_route"],
+                "source_item": route["item"],
+            }
+        ],
+    }
+    generation = A.FixedWatchGeneration(
+        "005930", stock["broker_route"], "fixed-watch:original", "a" * 64, before
+    )
+    result = replace(
+        original,
+        generation_id=generation.generation_id,
+        request_id=generation.generation_id + ":key",
+        original_generation=generation,
+        generation_kind="fixed_watch",
+        venue=generation.venue,
+        native_claim=claim,
+        status=status,
+    )
+    coordinator._ready.clear()
+    coordinator._ready[result.request_id] = result
+    stock.update(
+        _scanner_async_generation_id=generation.generation_id,
+        _fixed_watch_async_claim=claim,
+        _continuous_reversal_pending_claim=claim,
+    )
+    events = []
+    acks = []
+    monkeypatch.setattr(
+        A,
+        "record_async_disposition",
+        lambda r, kind, reason, **kw: events.append((r, kind, reason)),
+    )
+    monkeypatch.setattr(
+        native,
+        "acknowledge_any",
+        lambda c, **kw: acks.append((c["token"], kw["status"])),
+    )
+    monkeypatch.setattr(handlers, "_log_entry_pipeline", lambda *a, **kw: None)
+    monkeypatch.setattr(
+        handlers,
+        "_handle_watching_state_impl",
+        lambda *a, **kw: pytest.fail("route conflict executed"),
+    )
     try:
-        handlers.handle_watching_state(stock, '005930', {}, 1,
-            scanner_async_eval_coordinator=coordinator)
-        expected = 'fixed_watch_entry_session_route_conflict' if status=='completed' else 'result_not_commit_eligible'
-        assert events == [(result, 'rejected', expected)]
-        assert acks == [('original', 'async_commit_rejected')]
-        assert not coordinator.has_completed(generation_id=result.generation_id, cache_key='key')
-        assert '_scanner_async_generation_id' not in stock
-        assert '_fixed_watch_async_claim' not in stock
-        assert stock['status'] == 'WATCHING'
+        handlers.handle_watching_state(
+            stock, "005930", {}, 1, scanner_async_eval_coordinator=coordinator
+        )
+        expected = (
+            "fixed_watch_entry_session_route_conflict"
+            if status == "completed"
+            else "result_not_commit_eligible"
+        )
+        assert events == [(result, "rejected", expected)]
+        assert acks == [("original", "async_commit_rejected")]
+        assert not coordinator.has_completed(
+            generation_id=result.generation_id, cache_key="key"
+        )
+        assert "_scanner_async_generation_id" not in stock
+        assert "_fixed_watch_async_claim" not in stock
+        assert stock["status"] == "WATCHING"
     finally:
         coordinator.shutdown()
 
 
-@pytest.mark.parametrize('pending', [False, True])
-def test_fixed_watch_invalid_route_cannot_start_or_replace_pending_work(monkeypatch, pending):
-    stock = dict(code='005930', status='WATCHING', watch_origin='MAIN_FIXED_WATCH',
-        watch_generation_id='obsolete', broker_route='SOR')
+@pytest.mark.parametrize("pending", [False, True])
+def test_fixed_watch_invalid_route_cannot_start_or_replace_pending_work(
+    monkeypatch, pending
+):
+    stock = dict(
+        code="005930",
+        status="WATCHING",
+        watch_origin="MAIN_FIXED_WATCH",
+        watch_generation_id="obsolete",
+        broker_route="SOR",
+    )
     coordinator, generation, result = _retained_fixture(stock)
     coordinator._ready.clear()
-    claim = {'token':'original'}
-    if pending: stock['_fixed_watch_async_claim'] = claim
-    monkeypatch.setattr(coordinator, 'is_pending', lambda **kw: pending)
-    monkeypatch.setattr(coordinator, 'submit', lambda *a: pytest.fail('route conflict dispatched'))
+    claim = {"token": "original"}
+    if pending:
+        stock["_fixed_watch_async_claim"] = claim
+    monkeypatch.setattr(coordinator, "is_pending", lambda **kw: pending)
+    monkeypatch.setattr(
+        coordinator, "submit", lambda *a: pytest.fail("route conflict dispatched")
+    )
     try:
-        outcome = handlers._resolve_scanner_async_entry_ai(stock, '005930', {}, _FakeAI(),
+        outcome = handlers._resolve_scanner_async_entry_ai(
+            stock,
+            "005930",
+            {},
+            _FakeAI(),
             dict(scanner_async_eval_coordinator=coordinator),
-            trigger_reason='fixture', last_ai_time=0, current_ai_score=0)
-        assert outcome['status'] == ('pending' if pending else 'commit_rejected')
+            trigger_reason="fixture",
+            last_ai_time=0,
+            current_ai_score=0,
+        )
+        assert outcome["status"] == ("pending" if pending else "commit_rejected")
         if pending:
-            assert stock['_fixed_watch_async_claim'] == claim
-            assert stock['_scanner_async_generation_id'] == generation.generation_id
+            assert stock["_fixed_watch_async_claim"] == claim
+            assert stock["_scanner_async_generation_id"] == generation.generation_id
     finally:
         coordinator.shutdown()
 
 
-@pytest.mark.parametrize('operation,reason', [('discard','target_removed'),
-    ('invalidate','generation_invalidated'), ('shutdown','coordinator_shutdown')])
-def test_coordinator_removal_records_original_terminal_once(monkeypatch, operation, reason):
+@pytest.mark.parametrize(
+    "operation,reason",
+    [
+        ("discard", "target_removed"),
+        ("invalidate", "generation_invalidated"),
+        ("shutdown", "coordinator_shutdown"),
+    ],
+)
+def test_coordinator_removal_records_original_terminal_once(
+    monkeypatch, operation, reason
+):
     coordinator, generation, result = _retained_fixture({})
     from src.engine.scalping import scanner_async_eval as A
-    events=[]
-    monkeypatch.setattr(A,'record_async_disposition',lambda *a,**k:events.append(a))
+
+    events = []
+    monkeypatch.setattr(A, "record_async_disposition", lambda *a, **k: events.append(a))
     try:
         for _ in range(2):
-            if operation=='discard':
-                coordinator.discard_completed(generation_id=result.generation_id, cache_key=result.cache_key, reason=reason)
-            elif operation=='invalidate':
+            if operation == "discard":
+                coordinator.discard_completed(
+                    generation_id=result.generation_id,
+                    cache_key=result.cache_key,
+                    reason=reason,
+                )
+            elif operation == "invalidate":
                 coordinator.invalidate_generation(result.generation_id)
             else:
                 coordinator.shutdown()
-        assert events==[(result,'terminal_nonexecution',reason)]
-        assert coordinator.take_completed(generation_id=result.generation_id,cache_key=result.cache_key) is None
+        assert events == [(result, "terminal_nonexecution", reason)]
+        assert (
+            coordinator.take_completed(
+                generation_id=result.generation_id, cache_key=result.cache_key
+            )
+            is None
+        )
     finally:
         coordinator.shutdown()
 
 
 def test_take_exception_terminalizes_original_and_preserves_successor(monkeypatch):
-    stock = dict(code='005930', status='WATCHING', effective_venue='KRX',
-                 venue_resolution='explicit', source_signature='VALUE_TOP')
+    stock = dict(
+        code="005930",
+        status="WATCHING",
+        effective_venue="KRX",
+        venue_resolution="explicit",
+        source_signature="VALUE_TOP",
+    )
     coordinator, generation, result = _retained_fixture(stock)
     events = []
     from src.engine.scalping import scanner_async_eval as module
-    monkeypatch.setattr(module, 'record_async_disposition', lambda *a, **k: events.append((a[0], a[1], a[2])))
+
+    monkeypatch.setattr(
+        module,
+        "record_async_disposition",
+        lambda *a, **k: events.append((a[0], a[1], a[2])),
+    )
+
     def broken(*a, **k):
-        stock.update(_scanner_async_generation_id='successor', _scanner_async_cache_key='next',
-                     _fixed_watch_async_claim={'token': 'new'},
-                     _continuous_reversal_pending_claim={'token': 'new'})
-        raise RuntimeError('commit_validator_failed')
-    monkeypatch.setattr(handlers, 'validate_scanner_async_commit', broken)
+        stock.update(
+            _scanner_async_generation_id="successor",
+            _scanner_async_cache_key="next",
+            _fixed_watch_async_claim={"token": "new"},
+            _continuous_reversal_pending_claim={"token": "new"},
+        )
+        raise RuntimeError("commit_validator_failed")
+
+    monkeypatch.setattr(handlers, "validate_scanner_async_commit", broken)
     try:
-        with pytest.raises(RuntimeError, match='commit_validator_failed'):
-            handlers.handle_watching_state(stock, '005930', {}, 1,
-                scanner_async_eval_coordinator=coordinator, scanner_async_generation=generation)
-        assert events == [(result, 'terminal_nonexecution', 'entry_execution_exception_or_uncertain')]
-        assert stock['_scanner_async_generation_id'] == 'successor'
-        assert stock['_continuous_reversal_pending_claim']['token'] == 'new'
-        assert not coordinator.has_completed(generation_id=result.generation_id, cache_key='key')
+        with pytest.raises(RuntimeError, match="commit_validator_failed"):
+            handlers.handle_watching_state(
+                stock,
+                "005930",
+                {},
+                1,
+                scanner_async_eval_coordinator=coordinator,
+                scanner_async_generation=generation,
+            )
+        assert events == [
+            (result, "terminal_nonexecution", "entry_execution_exception_or_uncertain")
+        ]
+        assert stock["_scanner_async_generation_id"] == "successor"
+        assert stock["_continuous_reversal_pending_claim"]["token"] == "new"
+        assert not coordinator.has_completed(
+            generation_id=result.generation_id, cache_key="key"
+        )
     finally:
         coordinator.shutdown()
 
 
 def test_original_result_owner_never_leaks_into_stock_snapshot(monkeypatch):
-    stock=dict(code='005930', status='WATCHING', effective_venue='KRX',
-               venue_resolution='explicit', source_signature='VALUE_TOP')
-    coordinator,generation,result=_retained_fixture(stock)
+    stock = dict(
+        code="005930",
+        status="WATCHING",
+        effective_venue="KRX",
+        venue_resolution="explicit",
+        source_signature="VALUE_TOP",
+    )
+    coordinator, generation, result = _retained_fixture(stock)
     from src.engine.scalping import scanner_async_eval as A
     from copy import deepcopy
-    monkeypatch.setattr(A,'record_async_disposition',lambda *a,**k:True)
-    monkeypatch.setattr(handlers,'_resolve_scanner_async_entry_ai',lambda *a,**k:dict(status='completed',
-        original_result=coordinator.take_completed(generation_id=result.generation_id,cache_key=result.cache_key)))
-    def apply(*a,**k):
-        assert A.ASYNC_CONSUMPTION.get()['original_result'] is result
-        assert stock['_async_consumption_guard']=={}
-        assert deepcopy(stock)==stock
-        snapshot=A.ScannerAsyncEvalContext.create(generation=generation,cache_key='next',
-            submitted_epoch=result.submitted_epoch,deadline_epoch=result.deadline_epoch,
-            stock_snapshot=stock,ws_snapshot={},state_version='v')
-        assert '_async_consumption_guard' not in snapshot.stock_snapshot
-    monkeypatch.setattr(handlers,'_handle_watching_state_impl',apply)
+
+    monkeypatch.setattr(A, "record_async_disposition", lambda *a, **k: True)
+    monkeypatch.setattr(
+        handlers,
+        "_resolve_scanner_async_entry_ai",
+        lambda *a, **k: dict(
+            status="completed",
+            original_result=coordinator.take_completed(
+                generation_id=result.generation_id, cache_key=result.cache_key
+            ),
+        ),
+    )
+
+    def apply(*a, **k):
+        assert A.ASYNC_CONSUMPTION.get()["original_result"] is result
+        assert stock["_async_consumption_guard"] == {}
+        assert deepcopy(stock) == stock
+        snapshot = A.ScannerAsyncEvalContext.create(
+            generation=generation,
+            cache_key="next",
+            submitted_epoch=result.submitted_epoch,
+            deadline_epoch=result.deadline_epoch,
+            stock_snapshot=stock,
+            ws_snapshot={},
+            state_version="v",
+        )
+        assert "_async_consumption_guard" not in snapshot.stock_snapshot
+
+    monkeypatch.setattr(handlers, "_handle_watching_state_impl", apply)
     try:
-        handlers.handle_watching_state(stock,'005930',{},1,
-            scanner_async_eval_coordinator=coordinator,scanner_async_generation=generation)
-        assert '_async_consumption_guard' not in stock and A.ASYNC_CONSUMPTION.get() is None
+        handlers.handle_watching_state(
+            stock,
+            "005930",
+            {},
+            1,
+            scanner_async_eval_coordinator=coordinator,
+            scanner_async_generation=generation,
+        )
+        assert (
+            "_async_consumption_guard" not in stock
+            and A.ASYNC_CONSUMPTION.get() is None
+        )
     finally:
         coordinator.shutdown()
 
 
 def test_accepted_zero_base_pending_has_direct_reason_not_last_log(monkeypatch):
-    stock = dict(code='005930', status='WATCHING', effective_venue='KRX',
-        venue_resolution='explicit', source_signature='VALUE_TOP', zero_base_pending_db=True)
+    stock = dict(
+        code="005930",
+        status="WATCHING",
+        effective_venue="KRX",
+        venue_resolution="explicit",
+        source_signature="VALUE_TOP",
+        zero_base_pending_db=True,
+    )
     coordinator, generation, result = _retained_fixture(stock)
     from src.engine.scalping import scanner_async_eval as module
-    events=[]
-    monkeypatch.setattr(module, 'record_async_disposition', lambda *a, **k: events.append(a[1:]))
-    monkeypatch.setattr(handlers, '_fixed_watch_entry_source_route', lambda *a:None)
-    monkeypatch.setattr(handlers, '_scanner_async_quote_is_fresh', lambda *a, **k:True)
-    monkeypatch.setattr(handlers, '_log_entry_pipeline', lambda *a, **k:None)
+
+    events = []
+    monkeypatch.setattr(
+        module, "record_async_disposition", lambda *a, **k: events.append(a[1:])
+    )
+    monkeypatch.setattr(handlers, "_fixed_watch_entry_source_route", lambda *a: None)
+    monkeypatch.setattr(handlers, "_scanner_async_quote_is_fresh", lambda *a, **k: True)
+    monkeypatch.setattr(handlers, "_log_entry_pipeline", lambda *a, **k: None)
     try:
-        handlers.handle_watching_state(stock, '005930', {}, 1,
-            scanner_async_eval_coordinator=coordinator, scanner_async_generation=generation)
-        assert events == [('accepted_to_entry_path', 'commit_allowed'),
-                          ('entry_path_returned', 'zero_base_pending_db')]
+        handlers.handle_watching_state(
+            stock,
+            "005930",
+            {},
+            1,
+            scanner_async_eval_coordinator=coordinator,
+            scanner_async_generation=generation,
+        )
+        assert events == [
+            ("accepted_to_entry_path", "commit_allowed"),
+            ("entry_path_returned", "zero_base_pending_db"),
+        ]
     finally:
         coordinator.shutdown()
 
 
-def test_native_ack_exception_is_before_acceptance_and_cleans_only_original(monkeypatch):
-    stock=dict(code='005930',status='WATCHING',effective_venue='KRX',
-        venue_resolution='explicit',source_signature='VALUE_TOP')
-    coordinator,generation,result=_retained_fixture(stock)
-    result=replace(result,native_claim={'token':'old','snapshot':[{'event_id':'original'}]})
-    coordinator._ready[result.request_id]=result
-    stock.update(_fixed_watch_async_claim={'token':'old'},_continuous_reversal_pending_claim={'token':'old'})
-    from src.engine.scalping import scanner_async_eval as A,reversal_current_backend as N,reversal_source_diagnostics as D
-    events=[];ack=[]
-    monkeypatch.setattr(A,'record_async_disposition',lambda r,kind,reason,**k:events.append((kind,reason)))
-    monkeypatch.setattr(N,'backend',lambda:SimpleNamespace(_GENERATION='fixture'))
-    monkeypatch.setattr(D,'validate_claim_with_receipt',lambda *a,**k:None)
-    monkeypatch.setattr(handlers,'_fixed_watch_entry_source_route',lambda *a:None)
-    monkeypatch.setattr(handlers,'_scanner_async_quote_is_fresh',lambda *a,**k:True)
-    monkeypatch.setattr(handlers,'_log_entry_pipeline',lambda *a,**k:None)
-    def broken(claim,**kw):
-        ack.append(claim['token'])
-        stock['_continuous_reversal_pending_claim']={'token':'successor'}
-        raise RuntimeError('native_ack_failed')
-    monkeypatch.setattr(N,'acknowledge_any',broken)
+def test_native_ack_exception_is_before_acceptance_and_cleans_only_original(
+    monkeypatch,
+):
+    stock = dict(
+        code="005930",
+        status="WATCHING",
+        effective_venue="KRX",
+        venue_resolution="explicit",
+        source_signature="VALUE_TOP",
+    )
+    coordinator, generation, result = _retained_fixture(stock)
+    result = replace(
+        result, native_claim={"token": "old", "snapshot": [{"event_id": "original"}]}
+    )
+    coordinator._ready[result.request_id] = result
+    stock.update(
+        _fixed_watch_async_claim={"token": "old"},
+        _continuous_reversal_pending_claim={"token": "old"},
+    )
+    from src.engine.scalping import (
+        scanner_async_eval as A,
+        reversal_current_backend as N,
+        reversal_source_diagnostics as D,
+    )
+
+    events = []
+    ack = []
+    monkeypatch.setattr(
+        A,
+        "record_async_disposition",
+        lambda r, kind, reason, **k: events.append((kind, reason)),
+    )
+    monkeypatch.setattr(N, "backend", lambda: SimpleNamespace(_GENERATION="fixture"))
+    monkeypatch.setattr(D, "validate_claim_with_receipt", lambda *a, **k: None)
+    monkeypatch.setattr(handlers, "_fixed_watch_entry_source_route", lambda *a: None)
+    monkeypatch.setattr(handlers, "_scanner_async_quote_is_fresh", lambda *a, **k: True)
+    monkeypatch.setattr(handlers, "_log_entry_pipeline", lambda *a, **k: None)
+
+    def broken(claim, **kw):
+        ack.append(claim["token"])
+        stock["_continuous_reversal_pending_claim"] = {"token": "successor"}
+        raise RuntimeError("native_ack_failed")
+
+    monkeypatch.setattr(N, "acknowledge_any", broken)
     try:
-        with pytest.raises(RuntimeError,match='native_ack_failed'):
-            handlers.handle_watching_state(stock,'005930',{},1,
-                scanner_async_eval_coordinator=coordinator,scanner_async_generation=generation)
-        assert events==[('terminal_nonexecution','entry_execution_exception_or_uncertain')]
-        assert ack==['old'] and '_fixed_watch_async_claim' not in stock
-        assert stock['_continuous_reversal_pending_claim']['token']=='successor'
-        assert not coordinator.has_completed(generation_id=result.generation_id,cache_key='key')
+        with pytest.raises(RuntimeError, match="native_ack_failed"):
+            handlers.handle_watching_state(
+                stock,
+                "005930",
+                {},
+                1,
+                scanner_async_eval_coordinator=coordinator,
+                scanner_async_generation=generation,
+            )
+        assert events == [
+            ("terminal_nonexecution", "entry_execution_exception_or_uncertain")
+        ]
+        assert ack == ["old"] and "_fixed_watch_async_claim" not in stock
+        assert stock["_continuous_reversal_pending_claim"]["token"] == "successor"
+        assert not coordinator.has_completed(
+            generation_id=result.generation_id, cache_key="key"
+        )
     finally:
         coordinator.shutdown()
 
 
-@pytest.mark.parametrize('origin', ['scanner', 'fixed_watch'])
-@pytest.mark.parametrize('compact', ['v1', 'v2'])
-@pytest.mark.parametrize('outcome', ['accepted', 'no_response', 'exception', 'final_deadline', 'delay_capacity', 'delay_armed',
-                                     'context_block', 'local_guard_block', 'auth_guard_block', 'local_preflight_block', 'forged_local_guard', 'prepare_first_outbox_error', 'prepare_second_outbox_error'])
-def test_retained_pass_reaches_real_submit_body_and_adapter_once(tmp_path, monkeypatch, origin, compact, outcome):
+@pytest.mark.parametrize("origin", ["scanner", "fixed_watch"])
+@pytest.mark.parametrize("compact", ["v1", "v2"])
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        "accepted",
+        "no_response",
+        "exception",
+        "final_deadline",
+        "delay_capacity",
+        "delay_armed",
+        "context_block",
+        "local_guard_block",
+        "auth_guard_block",
+        "local_preflight_block",
+        "forged_local_guard",
+        "prepare_first_outbox_error",
+        "prepare_second_outbox_error",
+    ],
+)
+def test_retained_pass_reaches_real_submit_body_and_adapter_once(
+    tmp_path, monkeypatch, origin, compact, outcome
+):
     """Real resolver, WATCHING, receipt/sizing/price/final guards; no network."""
     from src.tests.test_mechanistic_entry_runtime_policy import initial
-    from src.tests.test_sniper_scale_in import _DummyDB, _fresh_submit_micro_fields, _trusted_orderbook_touch_ticks, _micro_vwap_candles
+    from src.tests.test_sniper_scale_in import (
+        _DummyDB,
+        _fresh_submit_micro_fields,
+        _trusted_orderbook_touch_ticks,
+        _micro_vwap_candles,
+    )
     from src.engine.scalping import mechanistic_entry_runtime_policy as policy
     from src.utils.constants import TRADING_RULES
     from types import SimpleNamespace
+
     clock = datetime(2026, 9, 14, 13, 55, tzinfo=policy.KST).timestamp()
     bundle = initial(tmp_path)
-    if compact == 'v1':
+    if compact == "v1":
         from src.engine.scalping import ai_action_outcome_calibration as calibration
-        bundle['ai_policy'].update(prompt_version=policy.LEGACY_COMPACT_AI_VERSION,
-            variant=policy.LEGACY_COMPACT_AI_VARIANT, system_prompt=policy.compact_auxiliary_prompt(
-                prompt_version=policy.LEGACY_COMPACT_AI_VERSION))
-        bundle['ai_policy']['system_prompt_sha256'] = policy.digest(bundle['ai_policy']['system_prompt'])
-        bundle['bundle_sha256'] = policy.digest({k:v for k,v in bundle.items() if k!='bundle_sha256'})
-        calibration._atomic_write_json(policy.root(tmp_path)/'policy_2026-09-14.json', bundle)
+
+        bundle["ai_policy"].update(
+            prompt_version=policy.LEGACY_COMPACT_AI_VERSION,
+            variant=policy.LEGACY_COMPACT_AI_VARIANT,
+            system_prompt=policy.compact_auxiliary_prompt(
+                prompt_version=policy.LEGACY_COMPACT_AI_VERSION
+            ),
+        )
+        bundle["ai_policy"]["system_prompt_sha256"] = policy.digest(
+            bundle["ai_policy"]["system_prompt"]
+        )
+        bundle["bundle_sha256"] = policy.digest(
+            {k: v for k, v in bundle.items() if k != "bundle_sha256"}
+        )
+        calibration._atomic_write_json(
+            policy.root(tmp_path) / "policy_2026-09-14.json", bundle
+        )
+
     class Clock(datetime):
         @classmethod
         def now(cls, tz=None):
             value = datetime.fromtimestamp(clock, policy.KST)
             return value.astimezone(tz) if tz else value.replace(tzinfo=None)
-    monkeypatch.setattr(handlers, 'datetime', Clock)
-    monkeypatch.setattr(policy, 'datetime', Clock)
-    monkeypatch.setattr(time, 'time', lambda:clock)
-    monkeypatch.setattr(handlers, 'TRADING_RULES', replace(TRADING_RULES, SCALP_SIM_PANIC_FORCE_NOOP=True))
-    for key, value in dict(COOLDOWNS={}, ALERTED_STOCKS=set(), ACTIVE_TARGETS=[], HIGHEST_PRICES={},
-                           LAST_AI_CALL_TIMES={}, LAST_LOG_TIMES={}, DB=_DummyDB(), KIWOOM_TOKEN='fixture-token').items():
+
+    monkeypatch.setattr(handlers, "datetime", Clock)
+    monkeypatch.setattr(policy, "datetime", Clock)
+    monkeypatch.setattr(time, "time", lambda: clock)
+    monkeypatch.setattr(
+        handlers,
+        "TRADING_RULES",
+        replace(TRADING_RULES, SCALP_SIM_PANIC_FORCE_NOOP=True),
+    )
+    for key, value in dict(
+        COOLDOWNS={},
+        ALERTED_STOCKS=set(),
+        ACTIVE_TARGETS=[],
+        HIGHEST_PRICES={},
+        LAST_AI_CALL_TIMES={},
+        LAST_LOG_TIMES={},
+        DB=_DummyDB(),
+        KIWOOM_TOKEN="fixture-token",
+    ).items():
         monkeypatch.setattr(handlers, key, value)
-    monkeypatch.setenv('KORSTOCKSCAN_ORDER_OWNER_REGISTRY_PATH', str(tmp_path/'owners.jsonl'))
-    monkeypatch.setenv('KORSTOCKSCAN_SYMBOL_OWNER_POLICY_FILE', str(tmp_path/'no-owner-policy.json'))
-    excluded = tmp_path/'excluded.txt'; excluded.write_text('')
-    monkeypatch.setenv('KORSTOCKSCAN_MANUAL_CONTROL_EXCLUDED_CODES_FILE', str(excluded))
-    monkeypatch.delenv('KORSTOCKSCAN_MANUAL_CONTROL_EXCLUDED_CODES', raising=False)
-    monkeypatch.setattr(handlers, 'EVENT_BUS', SimpleNamespace(publish=lambda *a, **k:None))
-    monkeypatch.setattr(handlers, '_publish_buy_signal_submission_notice', lambda *a, **k:None)
-    stages=[]
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_ORDER_OWNER_REGISTRY_PATH", str(tmp_path / "owners.jsonl")
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SYMBOL_OWNER_POLICY_FILE", str(tmp_path / "no-owner-policy.json")
+    )
+    excluded = tmp_path / "excluded.txt"
+    excluded.write_text("")
+    monkeypatch.setenv("KORSTOCKSCAN_MANUAL_CONTROL_EXCLUDED_CODES_FILE", str(excluded))
+    monkeypatch.delenv("KORSTOCKSCAN_MANUAL_CONTROL_EXCLUDED_CODES", raising=False)
+    monkeypatch.setattr(
+        handlers, "EVENT_BUS", SimpleNamespace(publish=lambda *a, **k: None)
+    )
+    monkeypatch.setattr(
+        handlers, "_publish_buy_signal_submission_notice", lambda *a, **k: None
+    )
+    stages = []
     dispositions = []
     from src.engine.scalping import scanner_async_eval as async_owner
-    monkeypatch.setattr(async_owner, 'record_async_disposition',
-        lambda result, disposition, reason, **facts: dispositions.append((disposition, reason, facts)))
-    monkeypatch.setattr(handlers, '_log_entry_pipeline', lambda s, c, stage, **k:stages.append((stage,k)))
-    if outcome.startswith('delay_'):
+
+    monkeypatch.setattr(
+        async_owner,
+        "record_async_disposition",
+        lambda result, disposition, reason, **facts: dispositions.append(
+            (disposition, reason, facts)
+        ),
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_log_entry_pipeline",
+        lambda s, c, stage, **k: stages.append((stage, k)),
+    )
+    if outcome.startswith("delay_"):
         from collections import OrderedDict, Counter
-        from src.engine.scalping import pre_submit_delay_tuning as delay, pre_submit_delay_observation as observation
-        for key,value in {'_ACTIVE':{},'_HEAPS':{},'_EXPIRIES':[], '_RECENT':OrderedDict(), '_COUNTERS':Counter()}.items():
-            monkeypatch.setattr(observation,key,value)
-        def sink(fn,pipeline,name,code,stage,*,fields,**kwargs):
-            stages.append((stage,fields))
-            return {'status':'queued'}
-        monkeypatch.setattr(observation,'_SINK',sink)
-        if outcome=='delay_capacity':
-            monkeypatch.setattr(observation,'register',lambda *a,**k:False)
-        monkeypatch.setattr(delay,'load_runtime_policy',lambda **k:{'status':'loaded','delay_sec':30,
-            'schema':'pre_submit_delay_policy_v2','policy_sha256':'f'*64})
+        from src.engine.scalping import (
+            pre_submit_delay_tuning as delay,
+            pre_submit_delay_observation as observation,
+        )
+
+        for key, value in {
+            "_ACTIVE": {},
+            "_HEAPS": {},
+            "_EXPIRIES": [],
+            "_RECENT": OrderedDict(),
+            "_COUNTERS": Counter(),
+        }.items():
+            monkeypatch.setattr(observation, key, value)
+
+        def sink(fn, pipeline, name, code, stage, *, fields, **kwargs):
+            stages.append((stage, fields))
+            return {"status": "queued"}
+
+        monkeypatch.setattr(observation, "_SINK", sink)
+        if outcome == "delay_capacity":
+            monkeypatch.setattr(observation, "register", lambda *a, **k: False)
+        monkeypatch.setattr(
+            delay,
+            "load_runtime_policy",
+            lambda **k: {
+                "status": "loaded",
+                "delay_sec": 30,
+                "schema": "pre_submit_delay_policy_v2",
+                "policy_sha256": "f" * 64,
+            },
+        )
     # External account/source facts are fixed; execution validators stay real.
-    monkeypatch.setattr(handlers, 'default_order_owner_registry',
-        lambda:SimpleNamespace(intent_for_client=lambda **_:None))
-    monkeypatch.setattr(handlers.kiwoom_orders, 'get_deposit', lambda *a, **k:1000000)
-    monkeypatch.setattr(handlers.kiwoom_orders, 'get_last_deposit_meta', lambda:dict(source='fixture',account_deposit=1000000))
-    monkeypatch.setattr(handlers.kiwoom_orders, 'get_last_deposit_errors', lambda:[])
-    monkeypatch.setattr(handlers.kiwoom_orders, 'describe_buy_capacity', lambda *a, **k:(100000,100000,10,1.0))
-    monkeypatch.setattr(handlers, '_read_entry_capacity_snapshot', lambda *a, **k:dict(
-        deposit=1000000, cash_only_orderable_amount=1000000, cash_only_orderable_qty=100,
-        applied_orderable_amount=1000000, applied_orderable_qty=100, applied_margin_rate=100))
-    monkeypatch.setattr(handlers.kiwoom_utils, 'get_tick_history_ka10003', lambda *a, **k:_trusted_orderbook_touch_ticks(price=10000,hhmm='13:55'))
-    monkeypatch.setattr(handlers.kiwoom_utils, 'get_minute_candles_ka10080', lambda *a, **k:_micro_vwap_candles(price=10000))
-    stock=dict(id=7, code='005930', name='fixture', status='WATCHING', strategy='SCALPING',
-        position_tag='SCANNER', scanner_promotion_id='PROMO-ASYNC', prob=.9, rt_ai_prob=.9,
-        effective_venue='KRX', venue_resolution='explicit', source_signature='VALUE_TOP')
+    monkeypatch.setattr(
+        handlers,
+        "default_order_owner_registry",
+        lambda: SimpleNamespace(intent_for_client=lambda **_: None),
+    )
+    monkeypatch.setattr(handlers.kiwoom_orders, "get_deposit", lambda *a, **k: 1000000)
+    monkeypatch.setattr(
+        handlers.kiwoom_orders,
+        "get_last_deposit_meta",
+        lambda: dict(source="fixture", account_deposit=1000000),
+    )
+    monkeypatch.setattr(handlers.kiwoom_orders, "get_last_deposit_errors", lambda: [])
+    monkeypatch.setattr(
+        handlers.kiwoom_orders,
+        "describe_buy_capacity",
+        lambda *a, **k: (100000, 100000, 10, 1.0),
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_read_entry_capacity_snapshot",
+        lambda *a, **k: dict(
+            deposit=1000000,
+            cash_only_orderable_amount=1000000,
+            cash_only_orderable_qty=100,
+            applied_orderable_amount=1000000,
+            applied_orderable_qty=100,
+            applied_margin_rate=100,
+        ),
+    )
+    monkeypatch.setattr(
+        handlers.kiwoom_utils,
+        "get_tick_history_ka10003",
+        lambda *a, **k: _trusted_orderbook_touch_ticks(price=10000, hhmm="13:55"),
+    )
+    monkeypatch.setattr(
+        handlers.kiwoom_utils,
+        "get_minute_candles_ka10080",
+        lambda *a, **k: _micro_vwap_candles(price=10000),
+    )
+    stock = dict(
+        id=7,
+        code="005930",
+        name="fixture",
+        status="WATCHING",
+        strategy="SCALPING",
+        position_tag="SCANNER",
+        scanner_promotion_id="PROMO-ASYNC",
+        prob=0.9,
+        rt_ai_prob=0.9,
+        effective_venue="KRX",
+        venue_resolution="explicit",
+        source_signature="VALUE_TOP",
+    )
     coordinator, generation, original = _retained_fixture(stock)
-    if origin == 'fixed_watch':
+    if origin == "fixed_watch":
         from src.engine.scalping import continuous_reversal_branches as native
         from src.engine.scalping import reversal_current_backend
         from src.engine.scalping.scanner_async_eval import FixedWatchGeneration
-        monkeypatch.setattr(native, '_STATES', {})
-        monkeypatch.setattr(native, '_CLAIMS', {})
-        monkeypatch.setattr(native, '_GENERATION', None)
-        monkeypatch.setattr(native, '_V2', True)
-        native.configure(bundle['bundle_sha256'], v2=True)
-        state=native.BranchState(generation=bundle['bundle_sha256'])
-        for i, price in enumerate([10000]*120+[9900,10000]):
-            state.legacy.observe([clock-121+i,1,i+1,price,price-10,price+10,10,1,1,'005930_AL',0],
-                symbol='005930',venue='SOR',session='KRX_REGULAR')
-        native._STATES[('005930','SOR','005930_AL','REGULAR','2026-09-14')]=state
-        claim=native.claim_snapshot('005930','SOR','KRX_REGULAR',now=clock,item='005930_AL',
-                                    family_sha256=bundle['bundle_sha256'])
+
+        monkeypatch.setattr(native, "_STATES", {})
+        monkeypatch.setattr(native, "_CLAIMS", {})
+        monkeypatch.setattr(native, "_GENERATION", None)
+        monkeypatch.setattr(native, "_V2", True)
+        native.configure(bundle["bundle_sha256"], v2=True)
+        state = native.BranchState(generation=bundle["bundle_sha256"])
+        for i, price in enumerate([10000] * 120 + [9900, 10000]):
+            state.legacy.observe(
+                [
+                    clock - 121 + i,
+                    1,
+                    i + 1,
+                    price,
+                    price - 10,
+                    price + 10,
+                    10,
+                    1,
+                    1,
+                    "005930_AL",
+                    0,
+                ],
+                symbol="005930",
+                venue="SOR",
+                session="KRX_REGULAR",
+            )
+        native._STATES[("005930", "SOR", "005930_AL", "REGULAR", "2026-09-14")] = state
+        claim = native.claim_snapshot(
+            "005930",
+            "SOR",
+            "KRX_REGULAR",
+            now=clock,
+            item="005930_AL",
+            family_sha256=bundle["bundle_sha256"],
+        )
         assert claim
-        claim['source_registration_receipt']={'sha256':'a'*64}
-        monkeypatch.setattr(reversal_current_backend, 'backend', lambda *a:native)
-        generation=FixedWatchGeneration.from_claim('005930',claim)
+        claim["source_registration_receipt"] = {"sha256": "a" * 64}
+        monkeypatch.setattr(reversal_current_backend, "backend", lambda *a: native)
+        generation = FixedWatchGeneration.from_claim("005930", claim)
         coordinator._ready.clear()
-        stock.pop('scanner_promotion_id')
+        stock.pop("scanner_promotion_id")
         from src.engine.scalping import main_fixed_watch
-        route = main_fixed_watch.session_route(clock, '005930')
-        stock.update(watch_origin='MAIN_FIXED_WATCH', watch_admission_id=main_fixed_watch.new_admission_id(clock, route),
+
+        route = main_fixed_watch.session_route(clock, "005930")
+        stock.update(
+            watch_origin="MAIN_FIXED_WATCH",
+            watch_admission_id=main_fixed_watch.new_admission_id(clock, route),
             watch_generation_id=main_fixed_watch.generation_id(clock, route),
-            market_data_route=route['route'], broker_route='SOR', position_tag='SCALP_BASE', market_session_bucket='KRX_REGULAR',
-            _scanner_async_generation_id=generation.generation_id)
-        original=replace(original, request_id=generation.generation_id+':key',
-            generation_id=generation.generation_id, original_generation=generation,
-            generation_kind='fixed_watch', venue='SOR', native_claim=claim)
-    payload=dict(action='BUY',score=90,reason='fixture', ai_result_source='live',ai_parse_ok=True,
-        entry_primary_decision_owner='mechanistic_entry_adjudicator', entry_mechanistic_action='ENTER_NOW',
-        entry_mechanistic_policy_version=bundle['machine_policy'].get('version', 'mechanistic_entry_threshold_policy_v1'),
-        entry_mechanistic_policy_sha256=policy.digest(bundle['machine_policy']),
-        entry_ai_screen_status='pass', entry_ai_screen_pass=True, entry_ai_risk_verdict='PASS',provider_called=True,
-        ai_prompt_version=bundle['ai_policy']['prompt_version'], ai_prompt_sha256='d'*64,
-        evaluation_attempt_id='eval-original', ai_decision_trace_id='trace-original',
-        scanner_promotion_id='PROMO-ASYNC', machine_bundle_sha256=bundle['bundle_sha256'],
-        policy_bundle_hash=bundle['bundle_sha256'], effective_venue='KRX', market_session_bucket='KRX_REGULAR',
-        **_fresh_submit_micro_fields())
-    if outcome.startswith('delay_'):
-        payload['entry_ai_effective_assessment']={'effective_verdict':'PASS'}
-        payload['entry_ai_soft_policy_sha256']=policy.digest(bundle['ai_policy'])
-    if origin == 'fixed_watch':
-        payload.pop('scanner_promotion_id')
-        payload.update(watch_origin=stock['watch_origin'],watch_admission_id=stock['watch_admission_id'],
-            watch_generation_id=stock['watch_generation_id'])
-    if origin == 'fixed_watch' or outcome.startswith('delay_'):
+            market_data_route=route["route"],
+            broker_route="SOR",
+            position_tag="SCALP_BASE",
+            market_session_bucket="KRX_REGULAR",
+            _scanner_async_generation_id=generation.generation_id,
+        )
+        original = replace(
+            original,
+            request_id=generation.generation_id + ":key",
+            generation_id=generation.generation_id,
+            original_generation=generation,
+            generation_kind="fixed_watch",
+            venue="SOR",
+            native_claim=claim,
+        )
+    payload = dict(
+        action="BUY",
+        score=90,
+        reason="fixture",
+        ai_result_source="live",
+        ai_parse_ok=True,
+        entry_primary_decision_owner="mechanistic_entry_adjudicator",
+        entry_mechanistic_action="ENTER_NOW",
+        entry_mechanistic_policy_version=bundle["machine_policy"].get(
+            "version", "mechanistic_entry_threshold_policy_v1"
+        ),
+        entry_mechanistic_policy_sha256=policy.digest(bundle["machine_policy"]),
+        entry_ai_screen_status="pass",
+        entry_ai_screen_pass=True,
+        entry_ai_risk_verdict="PASS",
+        provider_called=True,
+        ai_prompt_version=bundle["ai_policy"]["prompt_version"],
+        ai_prompt_sha256="d" * 64,
+        evaluation_attempt_id="eval-original",
+        ai_decision_trace_id="trace-original",
+        scanner_promotion_id="PROMO-ASYNC",
+        machine_bundle_sha256=bundle["bundle_sha256"],
+        policy_bundle_hash=bundle["bundle_sha256"],
+        effective_venue="KRX",
+        market_session_bucket="KRX_REGULAR",
+        **_fresh_submit_micro_fields(),
+    )
+    if outcome.startswith("delay_"):
+        payload["entry_ai_effective_assessment"] = {"effective_verdict": "PASS"}
+        payload["entry_ai_soft_policy_sha256"] = policy.digest(bundle["ai_policy"])
+    if origin == "fixed_watch":
+        payload.pop("scanner_promotion_id")
+        payload.update(
+            watch_origin=stock["watch_origin"],
+            watch_admission_id=stock["watch_admission_id"],
+            watch_generation_id=stock["watch_generation_id"],
+        )
+    if origin == "fixed_watch" or outcome.startswith("delay_"):
         from src.engine.scalping import ai_decision_trace as trace
-        monkeypatch.setenv('KORSTOCKSCAN_AI_DECISION_TRACE_ENABLED', '1')
-        monkeypatch.setattr(trace, 'DATA_DIR', tmp_path)
-        monkeypatch.setattr(trace, '_now', lambda:Clock.now(policy.KST))
-        capture=trace.capture_machine_observation(exact_payload=payload,
-            setup_evidence={}, assessment={'action':'ENTER_NOW'}, bundle_sha256=bundle['bundle_sha256'])
-        assert capture['machine_capture_status'] == 'captured'
-        trace.bind_machine_observation_revision(stock, capture, symbol='005930',bundle_sha256=bundle['bundle_sha256'])
+
+        monkeypatch.setenv("KORSTOCKSCAN_AI_DECISION_TRACE_ENABLED", "1")
+        monkeypatch.setattr(trace, "DATA_DIR", tmp_path)
+        monkeypatch.setattr(trace, "_now", lambda: Clock.now(policy.KST))
+        capture = trace.capture_machine_observation(
+            exact_payload=payload,
+            setup_evidence={},
+            assessment={"action": "ENTER_NOW"},
+            bundle_sha256=bundle["bundle_sha256"],
+        )
+        assert capture["machine_capture_status"] == "captured"
+        trace.bind_machine_observation_revision(
+            stock, capture, symbol="005930", bundle_sha256=bundle["bundle_sha256"]
+        )
         payload.update(capture)
-    if outcome.startswith('delay_'):
-        stock['market_session_bucket']='KRX_REGULAR'
-    original=replace(original,state_version=handlers._scanner_async_entry_state_version(stock))
+    if outcome.startswith("delay_"):
+        stock["market_session_bucket"] = "KRX_REGULAR"
+    original = replace(
+        original, state_version=handlers._scanner_async_entry_state_version(stock)
+    )
     time_policy_receipt = handlers._entry_quote_time_policy().to_dict()
-    payload['entry_ai_quote_time_policy_receipt'] = time_policy_receipt
-    original=replace(original, ai_payload=payload, prepared_context=dict(
-        final_entry_refresh_fields={'entry_ai_quote_time_policy_receipt': time_policy_receipt},
-        recent_ticks=_trusted_orderbook_touch_ticks(price=10000,hhmm='13:55'),
-        recent_candles=_micro_vwap_candles(price=10000), candle_context={}))
-    coordinator._ready[original.request_id]=original
-    coordinator._completed[original.request_id]=original
+    payload["entry_ai_quote_time_policy_receipt"] = time_policy_receipt
+    original = replace(
+        original,
+        ai_payload=payload,
+        prepared_context=dict(
+            final_entry_refresh_fields={
+                "entry_ai_quote_time_policy_receipt": time_policy_receipt
+            },
+            recent_ticks=_trusted_orderbook_touch_ticks(price=10000, hhmm="13:55"),
+            recent_candles=_micro_vwap_candles(price=10000),
+            candle_context={},
+        ),
+    )
+    coordinator._ready[original.request_id] = original
+    coordinator._completed[original.request_id] = original
     coordinator._undrained_request_ids.add(original.request_id)
-    ws=dict(curr=10000, v_pw=120, ask_tot=100000,bid_tot=100000,open=9950,fluctuation=1,
-        last_ws_update_ts=clock, tick_acceleration_ratio=1.25, curr_vs_micro_vwap_bp=5,
-        buy_pressure_10t=72, **_fresh_submit_micro_fields(),
-        orderbook=dict(asks=[dict(price=10010,volume=100)],bids=[dict(price=10000,volume=100)]))
-    if outcome.startswith('delay_'):
-        ws.update(market_data_transport_epoch=1, realtime_type_snapshots_by_route={
-            '_AL|KRX_NXT_INTEGRATED':{'0D':{'market_route':'KRX_NXT_INTEGRATED',
-                'item':'005930_AL','transport_epoch':1,'received_at_ms':int(clock*1000),'observed_epoch':clock,
-                'orderbook':ws['orderbook']}}})
-    calls=[]
+    ws = dict(
+        curr=10000,
+        v_pw=120,
+        ask_tot=100000,
+        bid_tot=100000,
+        open=9950,
+        fluctuation=1,
+        last_ws_update_ts=clock,
+        tick_acceleration_ratio=1.25,
+        curr_vs_micro_vwap_bp=5,
+        buy_pressure_10t=72,
+        **_fresh_submit_micro_fields(),
+        orderbook=dict(
+            asks=[dict(price=10010, volume=100)], bids=[dict(price=10000, volume=100)]
+        ),
+    )
+    if outcome.startswith("delay_"):
+        ws.update(
+            market_data_transport_epoch=1,
+            realtime_type_snapshots_by_route={
+                "_AL|KRX_NXT_INTEGRATED": {
+                    "0D": {
+                        "market_route": "KRX_NXT_INTEGRATED",
+                        "item": "005930_AL",
+                        "transport_epoch": 1,
+                        "received_at_ms": int(clock * 1000),
+                        "observed_epoch": clock,
+                        "orderbook": ws["orderbook"],
+                    }
+                }
+            },
+        )
+    calls = []
+
     def adapter(*args, **kwargs):
         calls.append((args, kwargs))
-        assert kwargs['owner_context'].owner_type == 'main_scalping'
-        if outcome == 'no_response':
+        assert kwargs["owner_context"].owner_type == "main_scalping"
+        if outcome == "no_response":
             return None
-        if outcome == 'exception':
-            raise RuntimeError('controlled broker transport uncertainty')
-        if outcome == 'local_preflight_block':
-            return handlers.kiwoom_orders._local_buy_no_call_response(dict(
-                return_code='ORDER_TYPE_PREFLIGHT_BLOCKED', return_msg='nxt_market_to_best_limit'))
-        if outcome in {'local_guard_block', 'auth_guard_block', 'forged_local_guard'}:
-            attempted = outcome == 'auth_guard_block'
-            response = dict(return_code='ENTRY_SEND_GUARD_BLOCKED', entry_send_guard_blocked=True,
-                return_msg='original_entry_deadline_expired', broker_order_attempted=attempted,
+        if outcome == "exception":
+            raise RuntimeError("controlled broker transport uncertainty")
+        if outcome == "local_preflight_block":
+            return handlers.kiwoom_orders._local_buy_no_call_response(
+                dict(
+                    return_code="ORDER_TYPE_PREFLIGHT_BLOCKED",
+                    return_msg="nxt_market_to_best_limit",
+                )
+            )
+        if outcome in {"local_guard_block", "auth_guard_block", "forged_local_guard"}:
+            attempted = outcome == "auth_guard_block"
+            response = dict(
+                return_code="ENTRY_SEND_GUARD_BLOCKED",
+                entry_send_guard_blocked=True,
+                return_msg="original_entry_deadline_expired",
+                broker_order_attempted=attempted,
                 physical_send_attempt_count=int(attempted),
-                entry_send_guard_receipt={'allowed': False, 'reason': 'original_entry_deadline_expired'},
-                rejected_auth_response={'return_code': '8005'} if attempted else None)
-            return response if attempted or outcome == 'forged_local_guard' else handlers.kiwoom_orders._local_buy_no_call_response(response)
-        return dict(return_code='0', ord_no='0000001', broker_route='SOR')
-    monkeypatch.setattr(handlers.kiwoom_orders, 'send_buy_order', adapter)
-    if outcome.startswith('prepare_'):
-        original_request=handlers._resolve_live_entry_order_request
+                entry_send_guard_receipt={
+                    "allowed": False,
+                    "reason": "original_entry_deadline_expired",
+                },
+                rejected_auth_response={"return_code": "8005"} if attempted else None,
+            )
+            return (
+                response
+                if attempted or outcome == "forged_local_guard"
+                else handlers.kiwoom_orders._local_buy_no_call_response(response)
+            )
+        return dict(return_code="0", ord_no="0000001", broker_route="SOR")
+
+    monkeypatch.setattr(handlers.kiwoom_orders, "send_buy_order", adapter)
+    if outcome.startswith("prepare_"):
+        original_request = handlers._resolve_live_entry_order_request
+
         def sequential_request(**kwargs):
-            result=original_request(**kwargs)
-            kwargs['planned_order']['initial_quantity_sequential_continuation']={}
+            result = original_request(**kwargs)
+            kwargs["planned_order"]["initial_quantity_sequential_continuation"] = {}
             return result
-        monkeypatch.setattr(handlers,'_resolve_live_entry_order_request',sequential_request)
-        original_prepare=handlers._initial_quantity_prepare_first_submit
+
+        monkeypatch.setattr(
+            handlers, "_resolve_live_entry_order_request", sequential_request
+        )
+        original_prepare = handlers._initial_quantity_prepare_first_submit
+
         def failing_prepare(target, code, planned_order, **kwargs):
-            target['last_watching_ai_machine_primary_fields']['continuous_reversal_opportunity_key']='a'*64
-            planned_order['initial_quantity_sequential_continuation']={
-                'planned_legs':[dict(leg_index=0,qty=kwargs['qty'],price=0,
-                    route=kwargs['route'],tag=planned_order['tag'])],
-                'requested_qty':kwargs['qty'],'quantity_type':'KRX_PARENT',
-                'policy_file_sha256':'a'*64,'total_wait_sec':60,
-                'decision_at':datetime.fromtimestamp(clock-1,policy.KST).isoformat()}
-            return original_prepare(target,code,planned_order,**kwargs)
-        monkeypatch.setattr(handlers,'_initial_quantity_prepare_first_submit',failing_prepare)
+            target["last_watching_ai_machine_primary_fields"][
+                "continuous_reversal_opportunity_key"
+            ] = ("a" * 64)
+            planned_order["initial_quantity_sequential_continuation"] = {
+                "planned_legs": [
+                    dict(
+                        leg_index=0,
+                        qty=kwargs["qty"],
+                        price=0,
+                        route=kwargs["route"],
+                        tag=planned_order["tag"],
+                    )
+                ],
+                "requested_qty": kwargs["qty"],
+                "quantity_type": "KRX_PARENT",
+                "policy_file_sha256": "a" * 64,
+                "total_wait_sec": 60,
+                "decision_at": datetime.fromtimestamp(
+                    clock - 1, policy.KST
+                ).isoformat(),
+            }
+            return original_prepare(target, code, planned_order, **kwargs)
+
+        monkeypatch.setattr(
+            handlers, "_initial_quantity_prepare_first_submit", failing_prepare
+        )
         from src.engine.scalping import reversal_operating_outbox
-        def failing_outbox(data_root,key,state,**kwargs):
-            if state == ('intent_assigned' if outcome=='prepare_first_outbox_error' else 'submission_reconciliation'):
-                raise ValueError('controlled_outbox_failure')
+
+        def failing_outbox(data_root, key, state, **kwargs):
+            if state == (
+                "intent_assigned"
+                if outcome == "prepare_first_outbox_error"
+                else "submission_reconciliation"
+            ):
+                raise ValueError("controlled_outbox_failure")
             return {}
-        monkeypatch.setattr(reversal_operating_outbox,'advance',failing_outbox)
-    if outcome == 'context_block':
+
+        monkeypatch.setattr(reversal_operating_outbox, "advance", failing_outbox)
+    if outcome == "context_block":
+
         def invalid_context(*args, **kwargs):
-            raise ValueError('controlled_initial_context_invalid')
-        monkeypatch.setattr(handlers, '_main_initial_physical_send_context', invalid_context)
-    if outcome == 'final_deadline':
+            raise ValueError("controlled_initial_context_invalid")
+
+        monkeypatch.setattr(
+            handlers, "_main_initial_physical_send_context", invalid_context
+        )
+    if outcome == "final_deadline":
         real_owner_context = handlers.main_owner_context
+
         def late_owner(*args, **kwargs):
             nonlocal clock
             result = real_owner_context(*args, **kwargs)
             clock = original.deadline_epoch
             return result
-        monkeypatch.setattr(handlers, 'main_owner_context', late_owner)
+
+        monkeypatch.setattr(handlers, "main_owner_context", late_owner)
+
     class NoNewAI:
         def analyze_target(self, *a, **k):
-            pytest.fail('retained PASS must not request another AI evaluation')
+            pytest.fail("retained PASS must not request another AI evaluation")
+
     try:
-        assert coordinator.drain_completed() == [original] # actual outer notification drain retains executable result
+        assert coordinator.drain_completed() == [
+            original
+        ]  # actual outer notification drain retains executable result
+
         def consume():
-            handlers.handle_watching_state(stock,'005930',ws,1, radar=SimpleNamespace(
-                get_smart_target_price=lambda price, **k:(price,0)), ai_engine=NoNewAI(),
-                scanner_async_eval_coordinator=coordinator, scanner_async_generation=generation)
-        if outcome == 'exception':
-            with pytest.raises(RuntimeError, match='controlled broker'):
+            handlers.handle_watching_state(
+                stock,
+                "005930",
+                ws,
+                1,
+                radar=SimpleNamespace(
+                    get_smart_target_price=lambda price, **k: (price, 0)
+                ),
+                ai_engine=NoNewAI(),
+                scanner_async_eval_coordinator=coordinator,
+                scanner_async_generation=generation,
+            )
+
+        if outcome == "exception":
+            with pytest.raises(RuntimeError, match="controlled broker"):
                 consume()
         else:
             consume()
-        expected = 0 if outcome in {'final_deadline', 'context_block'} or outcome.startswith(('delay_','prepare_')) else 1
+        expected = (
+            0
+            if outcome in {"final_deadline", "context_block"}
+            or outcome.startswith(("delay_", "prepare_"))
+            else 1
+        )
         if len(calls) != expected:
-            pytest.fail(json.dumps([(s,{k:v for k,v in f.items() if k in ('reason','skip_reason','block_reason','submit_call_outcome','sizing_block_reason')}) for s,f in stages[-12:]]))
+            pytest.fail(
+                json.dumps(
+                    [
+                        (
+                            s,
+                            {
+                                k: v
+                                for k, v in f.items()
+                                if k
+                                in (
+                                    "reason",
+                                    "skip_reason",
+                                    "block_reason",
+                                    "submit_call_outcome",
+                                    "sizing_block_reason",
+                                )
+                            },
+                        )
+                        for s, f in stages[-12:]
+                    ]
+                )
+            )
         if calls:
-            assert calls[0][0][0] == '005930' and calls[0][0][1] > 0
-        if outcome == 'accepted':
-            assert any(stage=='order_bundle_submitted' for stage,_ in stages)
-        if outcome in {'context_block', 'local_guard_block', 'auth_guard_block', 'local_preflight_block', 'forged_local_guard'}:
-            failed = next(fields for stage, fields in stages if stage == 'order_bundle_failed')
-            attempted = outcome in {'auth_guard_block', 'forged_local_guard'}
-            terminal_reason = ('entry_physical_send_context_block' if outcome == 'context_block'
-                               else 'entry_local_not_sent' if outcome == 'local_preflight_block'
-                               else 'entry_physical_send_guard_block')
-            assert failed['broker_submit_attempt_count'] == int(attempted)
-            assert failed['order_bundle_failure_mode'] == (
-                'broker_submit_failed_or_unacknowledged' if attempted else 'pre_broker_blocked')
-            assert failed['broker_order_forbidden'] is (not attempted)
-            assert failed['entry_send_guard_terminal_reason'] == terminal_reason
-            assert failed['physical_send_attempt_count'] == (None if outcome == 'forged_local_guard' else int(attempted))
-            assert failed['known_local_not_sent'] is (not attempted)
+            assert calls[0][0][0] == "005930" and calls[0][0][1] > 0
+        if outcome == "accepted":
+            assert any(stage == "order_bundle_submitted" for stage, _ in stages)
+        if outcome in {
+            "context_block",
+            "local_guard_block",
+            "auth_guard_block",
+            "local_preflight_block",
+            "forged_local_guard",
+        }:
+            failed = next(
+                fields for stage, fields in stages if stage == "order_bundle_failed"
+            )
+            attempted = outcome in {"auth_guard_block", "forged_local_guard"}
+            terminal_reason = (
+                "entry_physical_send_context_block"
+                if outcome == "context_block"
+                else (
+                    "entry_local_not_sent"
+                    if outcome == "local_preflight_block"
+                    else "entry_physical_send_guard_block"
+                )
+            )
+            assert failed["broker_submit_attempt_count"] == int(attempted)
+            assert failed["order_bundle_failure_mode"] == (
+                "broker_submit_failed_or_unacknowledged"
+                if attempted
+                else "pre_broker_blocked"
+            )
+            assert failed["broker_order_forbidden"] is (not attempted)
+            assert failed["entry_send_guard_terminal_reason"] == terminal_reason
+            assert failed["physical_send_attempt_count"] == (
+                None if outcome == "forged_local_guard" else int(attempted)
+            )
+            assert failed["known_local_not_sent"] is (not attempted)
             if not attempted:
-                assert '_async_entry_submission_identity' not in stock
-                assert stock['_async_entry_nonexecution_identity']['evaluation_attempt_id'] == 'eval-original'
+                assert "_async_entry_submission_identity" not in stock
+                assert (
+                    stock["_async_entry_nonexecution_identity"]["evaluation_attempt_id"]
+                    == "eval-original"
+                )
             else:
-                assert stock['_async_entry_submission_identity']['evaluation_attempt_id'] == 'eval-original'
-            returned = [event for event in dispositions if event[0] == 'entry_path_returned']
+                assert (
+                    stock["_async_entry_submission_identity"]["evaluation_attempt_id"]
+                    == "eval-original"
+                )
+            returned = [
+                event for event in dispositions if event[0] == "entry_path_returned"
+            ]
             assert returned[-1][1] == terminal_reason
-            assert returned[-1][2]['async_entry_broker_attempts'] == int(attempted)
-        if outcome.startswith('prepare_'):
-            failed=next(fields for stage,fields in stages if stage=='order_bundle_failed')
-            assert failed['broker_submit_attempt_count']==0
-            assert failed['order_bundle_failure_mode']=='pre_broker_blocked'
-            assert failed['known_local_not_sent'] is True
-            assert failed['physical_send_attempt_count']==0
-            assert 'initial_quantity_bundle' not in stock
-            if outcome=='prepare_second_outbox_error':
-                assert stock['initial_quantity_last_terminal_bundle']['leg_states'][0]['state']=='TERMINAL_NOT_SENT'
-                assert stock['status']=='WATCHING'
+            assert returned[-1][2]["async_entry_broker_attempts"] == int(attempted)
+        if outcome.startswith("prepare_"):
+            failed = next(
+                fields for stage, fields in stages if stage == "order_bundle_failed"
+            )
+            assert failed["broker_submit_attempt_count"] == 0
+            assert failed["order_bundle_failure_mode"] == "pre_broker_blocked"
+            assert failed["known_local_not_sent"] is True
+            assert failed["physical_send_attempt_count"] == 0
+            assert "initial_quantity_bundle" not in stock
+            if outcome == "prepare_second_outbox_error":
+                assert (
+                    stock["initial_quantity_last_terminal_bundle"]["leg_states"][0][
+                        "state"
+                    ]
+                    == "TERMINAL_NOT_SENT"
+                )
+                assert stock["status"] == "WATCHING"
             else:
-                assert not list((tmp_path/'runtime/initial_quantity/bundles/target_index').glob('*.json'))
-        if outcome=='delay_armed':
-            if '_pre_submit_delay_pending' not in stock:
-                pytest.fail(json.dumps([(s,{k:v for k,v in f.items() if k in (
-                    'reason','scanner_async_commit_reason','skip_reason')}) for s,f in stages[-8:]]))
-            assert stock['_pre_submit_delay_pending']['schema']=='pre_submit_delay_policy_v2'
-            assert stock['_pre_submit_delay_pending']['planned_qty']>0
-            assert any(stage=='pre_submit_delay_intent_armed' for stage,_ in stages)
-        if outcome=='delay_capacity':
-            assert '_pre_submit_delay_pending' not in stock
-            assert observation.health()['active']==0
-        if not outcome.startswith('delay_'):
-            assert stock['last_watching_ai_machine_primary_fields']['evaluation_attempt_id'] == 'eval-original'
-        assert not coordinator.has_completed(generation_id=original.generation_id, cache_key='key')
-        handlers.handle_watching_state(stock,'005930',ws,1,ai_engine=NoNewAI(),
-            scanner_async_eval_coordinator=coordinator, scanner_async_generation=generation)
+                assert not list(
+                    (tmp_path / "runtime/initial_quantity/bundles/target_index").glob(
+                        "*.json"
+                    )
+                )
+        if outcome == "delay_armed":
+            if "_pre_submit_delay_pending" not in stock:
+                pytest.fail(
+                    json.dumps(
+                        [
+                            (
+                                s,
+                                {
+                                    k: v
+                                    for k, v in f.items()
+                                    if k
+                                    in (
+                                        "reason",
+                                        "scanner_async_commit_reason",
+                                        "skip_reason",
+                                    )
+                                },
+                            )
+                            for s, f in stages[-8:]
+                        ]
+                    )
+                )
+            assert (
+                stock["_pre_submit_delay_pending"]["schema"]
+                == "pre_submit_delay_policy_v2"
+            )
+            assert stock["_pre_submit_delay_pending"]["planned_qty"] > 0
+            assert any(stage == "pre_submit_delay_intent_armed" for stage, _ in stages)
+        if outcome == "delay_capacity":
+            assert "_pre_submit_delay_pending" not in stock
+            assert observation.health()["active"] == 0
+        if not outcome.startswith("delay_"):
+            assert (
+                stock["last_watching_ai_machine_primary_fields"][
+                    "evaluation_attempt_id"
+                ]
+                == "eval-original"
+            )
+        assert not coordinator.has_completed(
+            generation_id=original.generation_id, cache_key="key"
+        )
+        handlers.handle_watching_state(
+            stock,
+            "005930",
+            ws,
+            1,
+            ai_engine=NoNewAI(),
+            scanner_async_eval_coordinator=coordinator,
+            scanner_async_generation=generation,
+        )
         assert len(calls) == expected
     finally:
         coordinator.shutdown()
 
 
-def test_completed_output_reaches_common_decision_consumer_without_fresh_preparation(monkeypatch):
+def test_completed_output_reaches_common_decision_consumer_without_fresh_preparation(
+    monkeypatch,
+):
     from collections import defaultdict
+
     class ReachedConsumer(BaseException):
         pass
+
     def no_new(*a, **k):
-        raise AssertionError('completed output must not prepare or call again')
-    monkeypatch.setattr(handlers, '_pre_ai_refresh_quote_ws_snapshot', no_new)
-    monkeypatch.setattr(handlers, '_resolve_scanner_async_entry_ai', no_new)
-    monkeypatch.setattr(handlers, '_handle_watching_opening_rotation', no_new)
-    monkeypatch.setattr(handlers, '_resolve_stock_marcap', lambda *a: 1000000000000)
-    monkeypatch.setattr(handlers, '_resolve_early_accel_recheck', lambda *a, **k: {})
-    monkeypatch.setattr(handlers, '_extract_ai_overlap_snapshot', lambda **k: {})
-    monkeypatch.setattr(handlers, '_update_ai_quote_freshness_fields', lambda *a: None)
-    monkeypatch.setattr(handlers, 'LAST_AI_CALL_TIMES', {})
+        raise AssertionError("completed output must not prepare or call again")
+
+    monkeypatch.setattr(handlers, "_pre_ai_refresh_quote_ws_snapshot", no_new)
+    monkeypatch.setattr(handlers, "_resolve_scanner_async_entry_ai", no_new)
+    monkeypatch.setattr(handlers, "_handle_watching_opening_rotation", no_new)
+    monkeypatch.setattr(handlers, "_resolve_stock_marcap", lambda *a: 1000000000000)
+    monkeypatch.setattr(handlers, "_resolve_early_accel_recheck", lambda *a, **k: {})
+    monkeypatch.setattr(handlers, "_extract_ai_overlap_snapshot", lambda **k: {})
+    monkeypatch.setattr(handlers, "_update_ai_quote_freshness_fields", lambda *a: None)
+    monkeypatch.setattr(handlers, "LAST_AI_CALL_TIMES", {})
+
     def consumed(payload):
-        assert payload['ai_decision_trace_id'] == 'original-trace'
+        assert payload["ai_decision_trace_id"] == "original-trace"
         raise ReachedConsumer()
-    monkeypatch.setattr(handlers, '_entry_ai_contract_status', consumed)
-    stock=dict(code='123456', name='TEST', strategy='SCALPING', status='WATCHING', position_tag='SCANNER')
-    resolution=dict(status='completed',prepared_context=dict(recent_ticks=[{'price':10000}],
-        recent_candles=[{'close':10000}],candle_context={}),
-        ai_decision=dict(action='BUY',score=77,ai_decision_trace_id='original-trace'))
-    runtime=dict(strategy='SCALPING',pos_tag='SCANNER',now_ts=time.time(),curr_price=10000,
-        current_vpw=100,fluctuation=0,cooldowns={},event_bus=None,is_trigger=False,msg='',
-        ratio=.1,liquidity_value=10000000,current_ai_score=50,ai_prob=.5,buy_threshold=75,strong_vpw=100,
-        completed_async_resolution=resolution)
-    config=defaultdict(lambda:1, BIG_BITE_HARD_GATE_ENABLED=False, BIG_BITE_HARD_GATE_TAGS_SCALPING=())
+
+    monkeypatch.setattr(handlers, "_entry_ai_contract_status", consumed)
+    stock = dict(
+        code="123456",
+        name="TEST",
+        strategy="SCALPING",
+        status="WATCHING",
+        position_tag="SCANNER",
+    )
+    resolution = dict(
+        status="completed",
+        prepared_context=dict(
+            recent_ticks=[{"price": 10000}],
+            recent_candles=[{"close": 10000}],
+            candle_context={},
+        ),
+        ai_decision=dict(action="BUY", score=77, ai_decision_trace_id="original-trace"),
+    )
+    runtime = dict(
+        strategy="SCALPING",
+        pos_tag="SCANNER",
+        now_ts=time.time(),
+        curr_price=10000,
+        current_vpw=100,
+        fluctuation=0,
+        cooldowns={},
+        event_bus=None,
+        is_trigger=False,
+        msg="",
+        ratio=0.1,
+        liquidity_value=10000000,
+        current_ai_score=50,
+        ai_prob=0.5,
+        buy_threshold=75,
+        strong_vpw=100,
+        completed_async_resolution=resolution,
+    )
+    config = defaultdict(
+        lambda: 1, BIG_BITE_HARD_GATE_ENABLED=False, BIG_BITE_HARD_GATE_TAGS_SCALPING=()
+    )
     with pytest.raises(ReachedConsumer):
-        handlers._handle_watching_strategy_branch(stock,'123456',
-            dict(curr=10000,ask_tot=100000,bid_tot=100000,orderbook={'ask':10001,'bid':9999}),
-            object(), object(), runtime, config)
+        handlers._handle_watching_strategy_branch(
+            stock,
+            "123456",
+            dict(
+                curr=10000,
+                ask_tot=100000,
+                bid_tot=100000,
+                orderbook={"ask": 10001, "bid": 9999},
+            ),
+            object(),
+            object(),
+            runtime,
+            config,
+        )
 
 
 def test_completed_result_common_wrapper_still_applies_operator_veto(monkeypatch):
-    coordinator=ScannerAsyncEvalCoordinator(ai_dispatcher=HotPathAIDispatcher(loaded_key_count=1))
-    consumed=[];guards=[]
-    monkeypatch.setattr(coordinator,'has_completed',lambda **k: True)
-    monkeypatch.setattr(handlers,'_resolve_scanner_async_entry_ai',lambda *a,**k:
-        (consumed.append('consumed') or dict(status='completed',original_result=object())))
-    for name in ('_observe_post_sell_smoothing_source_only_paths','_observe_entry_cancel_wait_counterfactuals',
-                 '_maybe_emit_entry_ai_price_skip_followup','_log_watching_state_debug'):
-        monkeypatch.setattr(handlers,name,lambda *a,**k:None)
-    monkeypatch.setattr(handlers,'_manual_control_exclusion_blocked',lambda *a,**k: (guards.append('manual') or True))
-    monkeypatch.setattr(handlers,'emit_scanner_watching_runtime_skip',lambda *a,**k:None)
-    monkeypatch.setattr(handlers,'_record_async_disposition',lambda *a:guards.append(a[1]))
+    coordinator = ScannerAsyncEvalCoordinator(
+        ai_dispatcher=HotPathAIDispatcher(loaded_key_count=1)
+    )
+    consumed = []
+    guards = []
+    monkeypatch.setattr(coordinator, "has_completed", lambda **k: True)
+    monkeypatch.setattr(
+        handlers,
+        "_resolve_scanner_async_entry_ai",
+        lambda *a, **k: (
+            consumed.append("consumed")
+            or dict(status="completed", original_result=object())
+        ),
+    )
+    for name in (
+        "_observe_post_sell_smoothing_source_only_paths",
+        "_observe_entry_cancel_wait_counterfactuals",
+        "_maybe_emit_entry_ai_price_skip_followup",
+        "_log_watching_state_debug",
+    ):
+        monkeypatch.setattr(handlers, name, lambda *a, **k: None)
+    monkeypatch.setattr(
+        handlers,
+        "_manual_control_exclusion_blocked",
+        lambda *a, **k: (guards.append("manual") or True),
+    )
+    monkeypatch.setattr(
+        handlers, "emit_scanner_watching_runtime_skip", lambda *a, **k: None
+    )
+    monkeypatch.setattr(
+        handlers, "_record_async_disposition", lambda *a: guards.append(a[1])
+    )
     try:
-        handlers.handle_watching_state(dict(code='123456',status='WATCHING'),'123456',dict(curr=10000),1,
-            scanner_async_eval_coordinator=coordinator)
+        handlers.handle_watching_state(
+            dict(code="123456", status="WATCHING"),
+            "123456",
+            dict(curr=10000),
+            1,
+            scanner_async_eval_coordinator=coordinator,
+        )
     finally:
         coordinator.shutdown()
-    assert consumed == ['consumed']
-    assert guards == ['manual','entry_path_returned']
+    assert consumed == ["consumed"]
+    assert guards == ["manual", "entry_path_returned"]
 
 
-def test_legacy_entry_bridge_does_not_create_capacity_demand_without_evaluation(monkeypatch):
+def test_legacy_entry_bridge_does_not_create_capacity_demand_without_evaluation(
+    monkeypatch,
+):
     calls = []
-    monkeypatch.setattr(handlers, "_request_entry_capacity_preparation",
-                        lambda *args: calls.append(args))
+    monkeypatch.setattr(
+        handlers,
+        "_request_entry_capacity_preparation",
+        lambda *args: calls.append(args),
+    )
     stock, ws = {"code": "005930"}, {"curr": 10000}
-    result = handlers._resolve_scanner_async_entry_ai(stock, "005930", ws, _FakeAI(), {},
-        trigger_reason="first_call", last_ai_time=0, current_ai_score=50)
+    result = handlers._resolve_scanner_async_entry_ai(
+        stock,
+        "005930",
+        ws,
+        _FakeAI(),
+        {},
+        trigger_reason="first_call",
+        last_ai_time=0,
+        current_ai_score=50,
+    )
     assert result == {"status": "not_enabled"}
     assert calls == []
 
@@ -617,36 +1309,90 @@ def _generation(venue="KRX"):
     )
 
 
-@pytest.mark.parametrize('replacement', ['missing','new_generation'])
-def test_retained_scanner_result_is_rejected_once_after_generation_disappears(monkeypatch,replacement):
-    generation=_generation()
-    coordinator=ScannerAsyncEvalCoordinator(ai_dispatcher=HotPathAIDispatcher(loaded_key_count=1))
-    now=time.time()
-    stock=dict(code='005930',status='WATCHING',effective_venue='KRX',venue_resolution='explicit',
-        source_signature='VALUE_TOP',_scanner_async_generation_id=generation.generation_id,
-        _scanner_async_cache_key='key')
-    result=ScannerAsyncEvalResult(request_id=generation.generation_id+':key',generation_id=generation.generation_id,
-        code='005930',venue='KRX',cache_key='key',state_version=handlers._scanner_async_entry_state_version(stock),
-        status='completed',submitted_epoch=now,preparation_started_epoch=now,preparation_completed_epoch=now,
-        ai_started_epoch=now,completed_epoch=now,preparation_wait_sec=0,preparation_service_sec=0,
-        ai_dispatch_wait_sec=0,ai_response_sec=0,observation_only=False,original_generation=generation,
-        deadline_epoch=now+5,deadline_perf=time.perf_counter()+5)
-    coordinator._ready[result.request_id]=result
-    monkeypatch.setattr(handlers,'_fixed_watch_entry_source_route',lambda *a:None)
-    monkeypatch.setattr(handlers,'_scanner_async_quote_is_fresh',lambda *a,**k:True)
-    monkeypatch.setattr(handlers,'_has_open_pending_entry_orders',lambda *a:False)
-    monkeypatch.setattr(handlers,'_log_entry_pipeline',lambda *a,**k:None)
-    events=[]
-    monkeypatch.setattr(handlers,'_record_async_disposition',lambda *a:events.append(a[1:]))
+@pytest.mark.parametrize("replacement", ["missing", "new_generation"])
+def test_retained_scanner_result_is_rejected_once_after_generation_disappears(
+    monkeypatch, replacement
+):
+    generation = _generation()
+    coordinator = ScannerAsyncEvalCoordinator(
+        ai_dispatcher=HotPathAIDispatcher(loaded_key_count=1)
+    )
+    now = time.time()
+    stock = dict(
+        code="005930",
+        status="WATCHING",
+        effective_venue="KRX",
+        venue_resolution="explicit",
+        source_signature="VALUE_TOP",
+        _scanner_async_generation_id=generation.generation_id,
+        _scanner_async_cache_key="key",
+    )
+    result = ScannerAsyncEvalResult(
+        request_id=generation.generation_id + ":key",
+        generation_id=generation.generation_id,
+        code="005930",
+        venue="KRX",
+        cache_key="key",
+        state_version=handlers._scanner_async_entry_state_version(stock),
+        status="completed",
+        submitted_epoch=now,
+        preparation_started_epoch=now,
+        preparation_completed_epoch=now,
+        ai_started_epoch=now,
+        completed_epoch=now,
+        preparation_wait_sec=0,
+        preparation_service_sec=0,
+        ai_dispatch_wait_sec=0,
+        ai_response_sec=0,
+        observation_only=False,
+        original_generation=generation,
+        deadline_epoch=now + 5,
+        deadline_perf=time.perf_counter() + 5,
+    )
+    coordinator._ready[result.request_id] = result
+    monkeypatch.setattr(handlers, "_fixed_watch_entry_source_route", lambda *a: None)
+    monkeypatch.setattr(handlers, "_scanner_async_quote_is_fresh", lambda *a, **k: True)
+    monkeypatch.setattr(handlers, "_has_open_pending_entry_orders", lambda *a: False)
+    monkeypatch.setattr(handlers, "_log_entry_pipeline", lambda *a, **k: None)
+    events = []
+    monkeypatch.setattr(
+        handlers, "_record_async_disposition", lambda *a: events.append(a[1:])
+    )
     try:
-        outcome=handlers._resolve_scanner_async_entry_ai(stock,'005930',{},_FakeAI(),
-            dict(scanner_async_eval_coordinator=coordinator,scanner_async_commit_phase=True,
-                scanner_async_generation=None if replacement=='missing' else replace(generation,revision=2)),
-            trigger_reason='completed_result',last_ai_time=0,current_ai_score=0)
-        assert outcome['status']=='commit_rejected'
-        assert events == [('rejected','current_generation_missing' if replacement=='missing' else 'generation_superseded')]
-        assert not coordinator.has_completed(generation_id=generation.generation_id,cache_key='key')
-    finally:coordinator.shutdown()
+        outcome = handlers._resolve_scanner_async_entry_ai(
+            stock,
+            "005930",
+            {},
+            _FakeAI(),
+            dict(
+                scanner_async_eval_coordinator=coordinator,
+                scanner_async_commit_phase=True,
+                scanner_async_generation=(
+                    None
+                    if replacement == "missing"
+                    else replace(generation, revision=2)
+                ),
+            ),
+            trigger_reason="completed_result",
+            last_ai_time=0,
+            current_ai_score=0,
+        )
+        assert outcome["status"] == "commit_rejected"
+        assert events == [
+            (
+                "rejected",
+                (
+                    "current_generation_missing"
+                    if replacement == "missing"
+                    else "generation_superseded"
+                ),
+            )
+        ]
+        assert not coordinator.has_completed(
+            generation_id=generation.generation_id, cache_key="key"
+        )
+    finally:
+        coordinator.shutdown()
 
 
 def test_clean_profit_rising_missed_exit_records_short_confirmation_window(
@@ -1501,12 +2247,15 @@ def test_async_entry_bridge_prepares_off_thread_then_commits_on_current_state(
         ),
     )
     prepared_routes = []
+
     def fetch(*args, **kwargs):
-        prepared_routes.append(('candles', kwargs.get('broker_route')))
-        return [{"close":1000}], {"source":"test"}
+        prepared_routes.append(("candles", kwargs.get("broker_route")))
+        return [{"close": 1000}], {"source": "test"}
+
     def context(*args, **kwargs):
-        prepared_routes.append(('context', kwargs.get('broker_route')))
-        return {"schema":"test", "broker_route":kwargs.get('broker_route')}
+        prepared_routes.append(("context", kwargs.get("broker_route")))
+        return {"schema": "test", "broker_route": kwargs.get("broker_route")}
+
     monkeypatch.setattr(handlers, "fetch_entry_candles_with_meta", fetch)
     monkeypatch.setattr(handlers, "build_entry_candle_context", context)
     monkeypatch.setattr(
@@ -1547,7 +2296,7 @@ def test_async_entry_bridge_prepares_off_thread_then_commits_on_current_state(
         "source_signature": "VALUE_TOP",
     }
     if explicit_route is not None:
-        stock['broker_route'] = explicit_route
+        stock["broker_route"] = explicit_route
     ws_data = {
         "curr": 1001,
         "orderbook": {"ask": 1002, "bid": 1000},
@@ -1614,7 +2363,9 @@ def test_async_entry_bridge_prepares_off_thread_then_commits_on_current_state(
     assert committed["status"] == "completed"
     assert not capacity_prefetch_calls
     assert committed["prepared_context"]["entry_capacity_prefetch"] == {
-        "status": "skipped", "reason": "awaiting_machine_enter_now"}
+        "status": "skipped",
+        "reason": "awaiting_machine_enter_now",
+    }
     assert committed["ai_decision"]["action"] == "BUY"
     assert [dict(item) for item in committed["prepared_context"]["recent_ticks"]] == [
         {"price": 1003 if execution_refresh else 1000}
@@ -1633,7 +2384,7 @@ def test_async_entry_bridge_prepares_off_thread_then_commits_on_current_state(
         assert evaluated[0][0]["curr"] == 1003
         assert ws_data["curr"] == 1001
     assert requested_codes == [expected_request_code]
-    assert prepared_routes == [('candles', explicit_route), ('context', explicit_route)]
+    assert prepared_routes == [("candles", explicit_route), ("context", explicit_route)]
     assert "_scanner_async_cache_key" not in stock
 
 
@@ -1791,20 +2542,6 @@ def test_opening_rotation_context_prepares_off_thread_and_commits_once(monkeypat
     assert committed["status"] == "completed"
     assert committed["feature_packet"]["curr"] == 1001
     assert "_scanner_opening_rotation_async_cache_key" not in stock
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 def test_opening_rotation_async_commit_avoids_generic_watching_reentry(monkeypatch):
@@ -2149,107 +2886,185 @@ def test_scanner_entry_events_inherit_registered_canonical_venue(monkeypatch):
 
 
 def _expired_bound_pass():
-    return dict(code='036930', status='WATCHING',
-        last_watching_ai_decision_trace_id='old-pass',
-        last_watching_ai_machine_primary_fields={'evaluation_attempt_id': 'old-attempt',
-            'entry_mechanistic_policy_version': 'continuous_reversal_policy_v6'},
-        _async_entry_decision_deadline=dict(evaluation_attempt_id='old-attempt',
-            ai_decision_trace_id='old-pass', deadline_epoch=time.time()-1,
-            deadline_perf=time.perf_counter()-1))
+    return dict(
+        code="036930",
+        status="WATCHING",
+        last_watching_ai_decision_trace_id="old-pass",
+        last_watching_ai_machine_primary_fields={
+            "evaluation_attempt_id": "old-attempt",
+            "entry_mechanistic_policy_version": "continuous_reversal_policy_v6",
+        },
+        _async_entry_decision_deadline=dict(
+            evaluation_attempt_id="old-attempt",
+            ai_decision_trace_id="old-pass",
+            deadline_epoch=time.time() - 1,
+            deadline_perf=time.perf_counter() - 1,
+        ),
+    )
 
 
 def test_expired_pass_waits_for_native_signal_without_reusing_buy(monkeypatch):
     from src.engine.scalping import reversal_evaluation_context as context
     from src.engine.scalping import continuous_reversal as reversal
-    monkeypatch.setattr(context, 'prepare', lambda **kw: None)
-    monkeypatch.setattr(reversal, 'current_snapshot', lambda *a, **kw: None)
+
+    monkeypatch.setattr(context, "prepare", lambda **kw: None)
+    monkeypatch.setattr(reversal, "current_snapshot", lambda *a, **kw: None)
     stock = _expired_bound_pass()
-    stock['last_watching_ai_action'] = 'BUY'
+    stock["last_watching_ai_action"] = "BUY"
     result = handlers._resolve_watching_state_change_refresh(
-        stock, {}, now_ts=time.time(), last_ai_time=0, cooldown_sec=60)
-    assert result['suppress_normal_refresh'] is True
-    assert result['reason'] == 'expired_entry_decision_wait_native_signal'
-    assert stock['last_watching_ai_action'] == 'BUY'  # Original evidence retained.
-    stock['last_watching_ai_machine_primary_fields'] = {'evaluation_attempt_id': 'successor'}
+        stock, {}, now_ts=time.time(), last_ai_time=0, cooldown_sec=60
+    )
+    assert result["suppress_normal_refresh"] is True
+    assert result["reason"] == "expired_entry_decision_wait_native_signal"
+    assert stock["last_watching_ai_action"] == "BUY"  # Original evidence retained.
+    stock["last_watching_ai_machine_primary_fields"] = {
+        "evaluation_attempt_id": "successor"
+    }
     assert not handlers._async_entry_deadline_expired(stock)
 
 
 def test_expired_pass_does_not_suppress_fresh_native_signal(monkeypatch):
     from src.engine.scalping import reversal_evaluation_context as context
     from src.engine.scalping import continuous_reversal as reversal
-    monkeypatch.setattr(context, 'prepare', lambda **kw: {'continuous_reversal': {'schema': 'continuous_reversal_policy_v1'}})
-    monkeypatch.setattr(reversal, 'current_snapshot', lambda *a, **kw: ({'event_id':'new'}, {}))
+
+    monkeypatch.setattr(
+        context,
+        "prepare",
+        lambda **kw: {
+            "continuous_reversal": {"schema": "continuous_reversal_policy_v1"}
+        },
+    )
+    monkeypatch.setattr(
+        reversal, "current_snapshot", lambda *a, **kw: ({"event_id": "new"}, {})
+    )
     result = handlers._resolve_watching_state_change_refresh(
-        _expired_bound_pass(), {'last_realtime_type_item': {'0B': '036930_AL'}},
-        now_ts=time.time(), last_ai_time=0, cooldown_sec=60)
-    assert result['allowed'] and result['event_id'] == 'new'
-    assert not result.get('suppress_normal_refresh')
+        _expired_bound_pass(),
+        {"last_realtime_type_item": {"0B": "036930_AL"}},
+        now_ts=time.time(),
+        last_ai_time=0,
+        cooldown_sec=60,
+    )
+    assert result["allowed"] and result["event_id"] == "new"
+    assert not result.get("suppress_normal_refresh")
 
 
 def test_entry_arm_cannot_outlive_bound_machine_pass(monkeypatch):
     from src.engine.scalping import scanner_async_eval as A
+
     stock = _expired_bound_pass()
-    stock['_async_entry_decision_deadline']['request_id'] = 'original'
-    stock['_entry_arm_native_owner'] = dict(request_id='original', evaluation_attempt_id='old-attempt',
-        ai_decision_trace_id='old-pass', native_signal_id='native',
-        producer_pid=handlers.os.getpid(), producer_start_ticks=A._PROCESS_START)
-    stock.update(entry_armed=True, entry_armed_until=time.time()+20,
-                 entry_armed_at=time.time()-1, historical_custody='preserved')
-    events=[]
-    monkeypatch.setattr(handlers, '_log_entry_pipeline', lambda *a, **kw: events.append((a,kw)))
-    assert handlers._get_live_entry_arm(stock, '036930') is None
-    assert not stock.get('entry_armed')
-    assert stock['historical_custody'] == 'preserved'
-    assert stock['last_watching_ai_decision_trace_id'] == 'old-pass'
+    stock["_async_entry_decision_deadline"]["request_id"] = "original"
+    stock["_entry_arm_native_owner"] = dict(
+        request_id="original",
+        evaluation_attempt_id="old-attempt",
+        ai_decision_trace_id="old-pass",
+        native_signal_id="native",
+        producer_pid=handlers.os.getpid(),
+        producer_start_ticks=A._PROCESS_START,
+    )
+    stock.update(
+        entry_armed=True,
+        entry_armed_until=time.time() + 20,
+        entry_armed_at=time.time() - 1,
+        historical_custody="preserved",
+    )
+    events = []
+    monkeypatch.setattr(
+        handlers, "_log_entry_pipeline", lambda *a, **kw: events.append((a, kw))
+    )
+    assert handlers._get_live_entry_arm(stock, "036930") is None
+    assert not stock.get("entry_armed")
+    assert stock["historical_custody"] == "preserved"
+    assert stock["last_watching_ai_decision_trace_id"] == "old-pass"
     assert len(events) == 1
 
 
 def test_expired_pass_allows_new_v6_claim_without_changing_deadline(monkeypatch):
     from src.engine.scalping import reversal_evaluation_context as context
     from src.engine.scalping import reversal_source_diagnostics as diagnostics
-    monkeypatch.setattr(context, 'prepare', lambda **kw: {
-        'continuous_reversal': {'schema': 'continuous_reversal_policy_v6', 'family_sha256': 'f'*64}})
-    claim = {'token':'new', 'snapshot': ({'event_id':'new-v6'}, {})}
-    monkeypatch.setattr(diagnostics, 'claim_snapshot_with_receipt', lambda *a, **kw: claim)
-    stock=_expired_bound_pass()
-    bound=dict(stock['_async_entry_decision_deadline'])
-    r=handlers._resolve_watching_state_change_refresh(stock,
-        {'last_realtime_type_item': {'0B': '036930_AL'}}, now_ts=time.time(), last_ai_time=0, cooldown_sec=60)
-    assert r['allowed'] and stock['_continuous_reversal_pending_claim'] is claim
-    assert stock['_async_entry_decision_deadline'] == bound
+
+    monkeypatch.setattr(
+        context,
+        "prepare",
+        lambda **kw: {
+            "continuous_reversal": {
+                "schema": "continuous_reversal_policy_v6",
+                "family_sha256": "f" * 64,
+            }
+        },
+    )
+    claim = {"token": "new", "snapshot": ({"event_id": "new-v6"}, {})}
+    monkeypatch.setattr(
+        diagnostics, "claim_snapshot_with_receipt", lambda *a, **kw: claim
+    )
+    stock = _expired_bound_pass()
+    bound = dict(stock["_async_entry_decision_deadline"])
+    r = handlers._resolve_watching_state_change_refresh(
+        stock,
+        {"last_realtime_type_item": {"0B": "036930_AL"}},
+        now_ts=time.time(),
+        last_ai_time=0,
+        cooldown_sec=60,
+    )
+    assert r["allowed"] and stock["_continuous_reversal_pending_claim"] is claim
+    assert stock["_async_entry_decision_deadline"] == bound
 
 
 def test_expired_non_native_decision_keeps_legacy_refresh(monkeypatch):
     from src.engine.scalping import reversal_evaluation_context as context
     from src.engine.scalping import continuous_reversal as reversal
-    monkeypatch.setattr(context, 'prepare', lambda **kw: None)
-    monkeypatch.setattr(reversal, 'current_snapshot', lambda *a, **kw: None)
-    stock=_expired_bound_pass()
-    stock['last_watching_ai_machine_primary_fields'].pop('entry_mechanistic_policy_version')
-    r=handlers._resolve_watching_state_change_refresh(stock, {}, now_ts=time.time(), last_ai_time=0, cooldown_sec=60)
-    assert not r.get('suppress_normal_refresh')
+
+    monkeypatch.setattr(context, "prepare", lambda **kw: None)
+    monkeypatch.setattr(reversal, "current_snapshot", lambda *a, **kw: None)
+    stock = _expired_bound_pass()
+    stock["last_watching_ai_machine_primary_fields"].pop(
+        "entry_mechanistic_policy_version"
+    )
+    r = handlers._resolve_watching_state_change_refresh(
+        stock, {}, now_ts=time.time(), last_ai_time=0, cooldown_sec=60
+    )
+    assert not r.get("suppress_normal_refresh")
 
 
 def test_live_bound_pass_keeps_original_arm(monkeypatch):
     from src.engine.scalping import scanner_async_eval as A
-    stock=_expired_bound_pass()
-    stock['_async_entry_decision_deadline'].update(request_id='original', deadline_epoch=time.time()+5, deadline_perf=time.perf_counter()+5)
-    stock.update(entry_armed=True, entry_armed_until=time.time()+20, entry_armed_ai_score=75)
-    stock['_entry_arm_native_owner'] = dict(request_id='original', evaluation_attempt_id='old-attempt',
-        ai_decision_trace_id='old-pass', native_signal_id='native',
-        producer_pid=handlers.os.getpid(), producer_start_ticks=A._PROCESS_START)
-    assert handlers._get_live_entry_arm(stock,'036930')['ai_score']==75
-    assert stock['entry_armed']
+
+    stock = _expired_bound_pass()
+    stock["_async_entry_decision_deadline"].update(
+        request_id="original",
+        deadline_epoch=time.time() + 5,
+        deadline_perf=time.perf_counter() + 5,
+    )
+    stock.update(
+        entry_armed=True, entry_armed_until=time.time() + 20, entry_armed_ai_score=75
+    )
+    stock["_entry_arm_native_owner"] = dict(
+        request_id="original",
+        evaluation_attempt_id="old-attempt",
+        ai_decision_trace_id="old-pass",
+        native_signal_id="native",
+        producer_pid=handlers.os.getpid(),
+        producer_start_ticks=A._PROCESS_START,
+    )
+    assert handlers._get_live_entry_arm(stock, "036930")["ai_score"] == 75
+    assert stock["entry_armed"]
 
 
 def test_invalid_native_arm_rechecks_successor_under_entry_mutex(monkeypatch):
     from src.engine.scalping import scanner_async_eval as A
+
     stock = _expired_bound_pass()
-    stock.update(entry_armed=True, entry_armed_until=time.time()+20, entry_armed_ai_score=75)
-    stock['_entry_arm_native_owner'] = {'producer_pid': -1}
-    successor = dict(request_id='successor-request', evaluation_attempt_id='successor-evaluation',
-        ai_decision_trace_id='successor-trace', native_signal_id='successor-signal',
-        producer_pid=handlers.os.getpid(), producer_start_ticks=A._PROCESS_START)
+    stock.update(
+        entry_armed=True, entry_armed_until=time.time() + 20, entry_armed_ai_score=75
+    )
+    stock["_entry_arm_native_owner"] = {"producer_pid": -1}
+    successor = dict(
+        request_id="successor-request",
+        evaluation_attempt_id="successor-evaluation",
+        ai_decision_trace_id="successor-trace",
+        native_signal_id="successor-signal",
+        producer_pid=handlers.os.getpid(),
+        producer_start_ticks=A._PROCESS_START,
+    )
     native_lock = handlers.ENTRY_LOCK
 
     class SuccessorWriterFirst:
@@ -2260,89 +3075,173 @@ def test_invalid_native_arm_rechecks_successor_under_entry_mutex(monkeypatch):
             if not self.installed:
                 self.installed = True
                 # A writer holding the same mutex won before the reader.
-                stock['_entry_arm_native_owner'] = successor
-                stock['last_watching_ai_machine_primary_fields']['evaluation_attempt_id'] = 'successor-evaluation'
-                stock['last_watching_ai_decision_trace_id'] = 'successor-trace'
-                stock['_async_entry_decision_deadline'] = dict(request_id='successor-request',
-                    evaluation_attempt_id='successor-evaluation', ai_decision_trace_id='successor-trace',
-                    deadline_epoch=time.time()+5, deadline_perf=time.perf_counter()+5)
+                stock["_entry_arm_native_owner"] = successor
+                stock["last_watching_ai_machine_primary_fields"][
+                    "evaluation_attempt_id"
+                ] = "successor-evaluation"
+                stock["last_watching_ai_decision_trace_id"] = "successor-trace"
+                stock["_async_entry_decision_deadline"] = dict(
+                    request_id="successor-request",
+                    evaluation_attempt_id="successor-evaluation",
+                    ai_decision_trace_id="successor-trace",
+                    deadline_epoch=time.time() + 5,
+                    deadline_perf=time.perf_counter() + 5,
+                )
 
         def __exit__(self, *args):
             native_lock.release()
 
-    monkeypatch.setattr(handlers, 'ENTRY_LOCK', SuccessorWriterFirst())
-    live = handlers._get_live_entry_arm(stock, '036930')
-    assert live is not None and live['ai_score'] == 75
-    assert stock['entry_armed'] and stock['_entry_arm_native_owner'] == successor
-    assert '_native_entry_terminal_decision' not in stock
+    monkeypatch.setattr(handlers, "ENTRY_LOCK", SuccessorWriterFirst())
+    live = handlers._get_live_entry_arm(stock, "036930")
+    assert live is not None and live["ai_score"] == 75
+    assert stock["entry_armed"] and stock["_entry_arm_native_owner"] == successor
+    assert "_native_entry_terminal_decision" not in stock
 
 
-@pytest.mark.parametrize('defect', ['missing', 'pid', 'ticks', 'request', 'evaluation', 'trace', 'signal',
-    'bound_evaluation', 'bound_trace', 'missing_bound', 'missing_deadline', 'zero_deadline', 'nan_deadline'])
+@pytest.mark.parametrize(
+    "defect",
+    [
+        "missing",
+        "pid",
+        "ticks",
+        "request",
+        "evaluation",
+        "trace",
+        "signal",
+        "bound_evaluation",
+        "bound_trace",
+        "missing_bound",
+        "missing_deadline",
+        "zero_deadline",
+        "nan_deadline",
+    ],
+)
 def test_restored_or_unbound_native_arm_cannot_reuse_pass(monkeypatch, defect):
     from src.engine.scalping import scanner_async_eval as A
+
     stock = _expired_bound_pass()
-    stock['_async_entry_decision_deadline'].update(request_id='original',
-        deadline_epoch=time.time()+5, deadline_perf=time.perf_counter()+5)
-    stock.update(entry_armed=True, entry_armed_until=time.time()+20)
-    owner = dict(request_id='original', evaluation_attempt_id='old-attempt',
-        ai_decision_trace_id='old-pass', native_signal_id='native',
-        producer_pid=handlers.os.getpid(), producer_start_ticks=A._PROCESS_START)
-    keys = dict(pid='producer_pid', ticks='producer_start_ticks', request='request_id',
-                evaluation='evaluation_attempt_id', trace='ai_decision_trace_id', signal='native_signal_id')
-    if defect.startswith('bound_'):
-        stock['_async_entry_decision_deadline'][keys[defect.split('_')[1]]] = 'mismatch'
-    elif defect == 'missing_bound':
-        stock.pop('_async_entry_decision_deadline')
-    elif defect == 'missing_deadline':
-        stock['_async_entry_decision_deadline'].pop('deadline_epoch')
-    elif defect in ('zero_deadline', 'nan_deadline'):
-        stock['_async_entry_decision_deadline']['deadline_perf'] = 0 if defect == 'zero_deadline' else float('nan')
-    elif defect != 'missing':
-        owner[keys[defect]] = '' if defect == 'signal' else 'different'
-    if defect != 'missing':
-        stock['_entry_arm_native_owner'] = owner
+    stock["_async_entry_decision_deadline"].update(
+        request_id="original",
+        deadline_epoch=time.time() + 5,
+        deadline_perf=time.perf_counter() + 5,
+    )
+    stock.update(entry_armed=True, entry_armed_until=time.time() + 20)
+    owner = dict(
+        request_id="original",
+        evaluation_attempt_id="old-attempt",
+        ai_decision_trace_id="old-pass",
+        native_signal_id="native",
+        producer_pid=handlers.os.getpid(),
+        producer_start_ticks=A._PROCESS_START,
+    )
+    keys = dict(
+        pid="producer_pid",
+        ticks="producer_start_ticks",
+        request="request_id",
+        evaluation="evaluation_attempt_id",
+        trace="ai_decision_trace_id",
+        signal="native_signal_id",
+    )
+    if defect.startswith("bound_"):
+        stock["_async_entry_decision_deadline"][keys[defect.split("_")[1]]] = "mismatch"
+    elif defect == "missing_bound":
+        stock.pop("_async_entry_decision_deadline")
+    elif defect == "missing_deadline":
+        stock["_async_entry_decision_deadline"].pop("deadline_epoch")
+    elif defect in ("zero_deadline", "nan_deadline"):
+        stock["_async_entry_decision_deadline"]["deadline_perf"] = (
+            0 if defect == "zero_deadline" else float("nan")
+        )
+    elif defect != "missing":
+        owner[keys[defect]] = "" if defect == "signal" else "different"
+    if defect != "missing":
+        stock["_entry_arm_native_owner"] = owner
     # Retain the supplied corrupt/missing source as evidence, never repair its deadline.
-    preserved = {k: v for k, v in stock.items() if k not in
-                 ('entry_armed', 'entry_armed_until', '_entry_arm_native_owner')}
-    assert handlers._get_live_entry_arm(stock, '036930') is None
-    assert stock.pop('_native_entry_terminal_decision') == dict(
-        evaluation_attempt_id='old-attempt', ai_decision_trace_id='old-pass')
+    preserved = {
+        k: v
+        for k, v in stock.items()
+        if k not in ("entry_armed", "entry_armed_until", "_entry_arm_native_owner")
+    }
+    assert handlers._get_live_entry_arm(stock, "036930") is None
+    assert stock.pop("_native_entry_terminal_decision") == dict(
+        evaluation_attempt_id="old-attempt", ai_decision_trace_id="old-pass"
+    )
     assert stock == preserved  # Source, policy, PASS and original deadline survive.
 
 
 def test_main_native_rejection_keeps_compact_source_even_if_ack_fails(monkeypatch):
-    stock = dict(code='005930', status='WATCHING', effective_venue='KRX',
-                 venue_resolution='explicit', source_signature='VALUE_TOP')
+    stock = dict(
+        code="005930",
+        status="WATCHING",
+        effective_venue="KRX",
+        venue_resolution="explicit",
+        source_signature="VALUE_TOP",
+    )
     coordinator, generation, result = _retained_fixture(stock)
-    claim = {'token': 'old', 'snapshot': [{'event_id': 'original'}]}
+    claim = {"token": "old", "snapshot": [{"event_id": "original"}]}
     result = replace(result, native_claim=claim)
     coordinator._ready[result.request_id] = result
-    from src.engine.scalping import scanner_async_eval as A, reversal_current_backend as N, reversal_source_diagnostics as D
+    from src.engine.scalping import (
+        scanner_async_eval as A,
+        reversal_current_backend as N,
+        reversal_source_diagnostics as D,
+    )
+
     events = []
-    monkeypatch.setattr(A, 'record_async_disposition', lambda r,kind,reason,**facts: events.append((kind,reason,facts)))
-    monkeypatch.setattr(N, 'backend', lambda: SimpleNamespace(_GENERATION='family'))
-    monkeypatch.setattr(handlers, '_fixed_watch_entry_source_route', lambda *a: None)
-    monkeypatch.setattr(handlers, '_scanner_async_quote_is_fresh', lambda *a,**k: True)
-    monkeypatch.setattr(handlers, '_log_entry_pipeline', lambda *a,**k: None)
+    monkeypatch.setattr(
+        A,
+        "record_async_disposition",
+        lambda r, kind, reason, **facts: events.append((kind, reason, facts)),
+    )
+    monkeypatch.setattr(N, "backend", lambda: SimpleNamespace(_GENERATION="family"))
+    monkeypatch.setattr(handlers, "_fixed_watch_entry_source_route", lambda *a: None)
+    monkeypatch.setattr(handlers, "_scanner_async_quote_is_fresh", lambda *a, **k: True)
+    monkeypatch.setattr(handlers, "_log_entry_pipeline", lambda *a, **k: None)
+
     def invalid(*args, receipt_out, **kwargs):
-        receipt_out.update(status='observed', failed_predicates=['ready_membership_present'],
-                           registration_sha256='original-registration', stage='commit_revalidation')
-        raise ValueError('reversal_signal_path_changed')
-    monkeypatch.setattr(D, 'validate_claim_with_receipt', invalid)
+        receipt_out.update(
+            status="observed",
+            failed_predicates=["ready_membership_present"],
+            registration_sha256="original-registration",
+            stage="commit_revalidation",
+        )
+        raise ValueError("reversal_signal_path_changed")
+
+    monkeypatch.setattr(D, "validate_claim_with_receipt", invalid)
+
     def broken(*args, **kwargs):
-        stock['_continuous_reversal_pending_claim'] = {'token': 'successor'}
-        raise RuntimeError('ack_failed')
-    monkeypatch.setattr(N, 'acknowledge_any', broken)
+        stock["_continuous_reversal_pending_claim"] = {"token": "successor"}
+        raise RuntimeError("ack_failed")
+
+    monkeypatch.setattr(N, "acknowledge_any", broken)
     try:
-        response = handlers._resolve_scanner_async_entry_ai(stock, '005930', {}, None,
-            {'scanner_async_eval_coordinator': coordinator, 'scanner_async_generation': generation,
-             'scanner_async_commit_phase': True}, trigger_reason='fixture', last_ai_time=0, current_ai_score=0)
-        assert response == {'status': 'commit_rejected', 'reason': 'reversal_signal_path_changed'}
-        assert events[0][:2] == ('rejected', 'reversal_signal_path_changed')
-        capsule = json.loads(events[0][2]['native_commit_revalidation'])
-        assert capsule['failed_predicates'] == ['ready_membership_present']
-        assert stock['_continuous_reversal_pending_claim']['token'] == 'successor'
-        assert coordinator.take_completed(generation_id=result.generation_id, cache_key=result.cache_key) is None
+        response = handlers._resolve_scanner_async_entry_ai(
+            stock,
+            "005930",
+            {},
+            None,
+            {
+                "scanner_async_eval_coordinator": coordinator,
+                "scanner_async_generation": generation,
+                "scanner_async_commit_phase": True,
+            },
+            trigger_reason="fixture",
+            last_ai_time=0,
+            current_ai_score=0,
+        )
+        assert response == {
+            "status": "commit_rejected",
+            "reason": "reversal_signal_path_changed",
+        }
+        assert events[0][:2] == ("rejected", "reversal_signal_path_changed")
+        capsule = json.loads(events[0][2]["native_commit_revalidation"])
+        assert capsule["failed_predicates"] == ["ready_membership_present"]
+        assert stock["_continuous_reversal_pending_claim"]["token"] == "successor"
+        assert (
+            coordinator.take_completed(
+                generation_id=result.generation_id, cache_key=result.cache_key
+            )
+            is None
+        )
     finally:
         coordinator.shutdown()

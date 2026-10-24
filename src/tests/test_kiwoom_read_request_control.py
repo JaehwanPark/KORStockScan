@@ -8,32 +8,60 @@ import pytest
 
 def _widget_cache_fixture(tmp_path, monkeypatch):
     from src.utils import kiwoom_read_request_control as control
+
     clock = [601.0]
     monkeypatch.setattr(control.time, "time", lambda: clock[0])
     calls = []
+
     def fetch():
         calls.append(True)
         stamp = int(clock[0] * 1000)
-        meta = {"api_id": "ka10004", "request_code": "005930", "rest_received_ts_ms": stamp}
-        return {"return_code": 0, "buy_fpr_bid": "100", "sel_fpr_bid": "101",
-                "buy_fpr_req": "10", "sel_fpr_req": "12", "_kiwoom_source_meta": meta}, {
-            **meta, "request_succeeded": True, "request_attempt_count": 1,
-            "request_token_digest": control.hashlib.sha256(b"PRIVATE-TOKEN").hexdigest()}
+        meta = {
+            "api_id": "ka10004",
+            "request_code": "005930",
+            "rest_received_ts_ms": stamp,
+        }
+        return {
+            "return_code": 0,
+            "buy_fpr_bid": "100",
+            "sel_fpr_bid": "101",
+            "buy_fpr_req": "10",
+            "sel_fpr_req": "12",
+            "_kiwoom_source_meta": meta,
+        }, {
+            **meta,
+            "request_succeeded": True,
+            "request_attempt_count": 1,
+            "request_token_digest": control.hashlib.sha256(
+                b"PRIVATE-TOKEN"
+            ).hexdigest(),
+        }
+
     cache = control.WidgetMarketResponseCache(tmp_path)
-    kwargs = dict(token="PRIVATE-TOKEN", endpoint="https://api.kiwoom.com/api/dostk/mrkcond",
-                  api_id="ka10004", payload={"stk_cd": "005930"}, fetch=fetch)
+    kwargs = dict(
+        token="PRIVATE-TOKEN",
+        endpoint="https://api.kiwoom.com/api/dostk/mrkcond",
+        api_id="ka10004",
+        payload={"stk_cd": "005930"},
+        fetch=fetch,
+    )
     return cache, kwargs, clock, calls
 
 
-def test_widget_response_cache_cross_instance_preserves_original_clock(tmp_path, monkeypatch):
+def test_widget_response_cache_cross_instance_preserves_original_clock(
+    tmp_path, monkeypatch
+):
     from src.utils.kiwoom_read_request_control import WidgetMarketResponseCache
+
     cache, kwargs, clock, calls = _widget_cache_fixture(tmp_path, monkeypatch)
     original, hit = cache.run(**kwargs)
     assert not hit
     clock[0] += 1
     reused, hit = WidgetMarketResponseCache(tmp_path).run(**kwargs)
     assert hit and len(calls) == 1
-    assert reused[1]["rest_received_ts_ms"] == original[1]["rest_received_ts_ms"] == 601000
+    assert (
+        reused[1]["rest_received_ts_ms"] == original[1]["rest_received_ts_ms"] == 601000
+    )
     assert reused[1]["request_attempt_count"] == 0
     reused[0]["buy_fpr_bid"] = "999"
     assert cache.run(**kwargs)[0][0]["buy_fpr_bid"] == "100"
@@ -42,88 +70,149 @@ def test_widget_response_cache_cross_instance_preserves_original_clock(tmp_path,
 
 def test_widget_response_cache_independent_process_read(tmp_path, monkeypatch):
     import subprocess, sys
+
     cache, kwargs, clock, calls = _widget_cache_fixture(tmp_path, monkeypatch)
     cache.run(**kwargs)
-    script = '''import sys,json
+    script = """import sys,json
 from src.utils import kiwoom_read_request_control as c
 c.time.time=lambda:602.0
 def forbidden(): raise AssertionError("unexpected transport")
 value,hit=c.WidgetMarketResponseCache(sys.argv[1]).run(token="PRIVATE-TOKEN",endpoint="https://api.kiwoom.com/api/dostk/mrkcond",api_id="ka10004",payload={"stk_cd":"005930"},fetch=forbidden)
 print(json.dumps([hit,value[1]["rest_received_ts_ms"],value[1]["request_attempt_count"]]))
-'''
-    result = subprocess.run([sys.executable, "-c", script, str(tmp_path)], check=True,
-                            capture_output=True, text=True, timeout=10)
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script, str(tmp_path)],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
     assert json.loads(result.stdout.splitlines()[-1]) == [True, 601000, 0]
 
 
-@pytest.mark.parametrize("change", ["token", "origin", "route", "body", "expired", "future", "minute", "corrupt", "deep_json", "receipt_conflict"])
-def test_widget_response_cache_isolation_and_invalid_receipt(tmp_path, monkeypatch, change):
+@pytest.mark.parametrize(
+    "change",
+    [
+        "token",
+        "origin",
+        "route",
+        "body",
+        "expired",
+        "future",
+        "minute",
+        "corrupt",
+        "deep_json",
+        "receipt_conflict",
+    ],
+)
+def test_widget_response_cache_isolation_and_invalid_receipt(
+    tmp_path, monkeypatch, change
+):
     cache, kwargs, clock, calls = _widget_cache_fixture(tmp_path, monkeypatch)
-    if change == "minute": clock[0] = 659.5
+    if change == "minute":
+        clock[0] = 659.5
     cache.run(**kwargs)
-    if change == "token": kwargs["token"] = "OTHER"
-    elif change == "origin": kwargs["endpoint"] = kwargs["endpoint"].replace("api.kiwoom", "mockapi.kiwoom")
-    elif change == "route": kwargs["payload"] = {"stk_cd": "005930_AL"}
-    elif change == "body": kwargs["payload"] = {"stk_cd": "005930", "extra": "1"}
-    elif change == "expired": clock[0] += 3
-    elif change == "future": clock[0] -= .1
-    elif change == "minute": clock[0] += 1
-    elif change == "corrupt": next(tmp_path.glob("*.json")).write_text("{")
+    if change == "token":
+        kwargs["token"] = "OTHER"
+    elif change == "origin":
+        kwargs["endpoint"] = kwargs["endpoint"].replace("api.kiwoom", "mockapi.kiwoom")
+    elif change == "route":
+        kwargs["payload"] = {"stk_cd": "005930_AL"}
+    elif change == "body":
+        kwargs["payload"] = {"stk_cd": "005930", "extra": "1"}
+    elif change == "expired":
+        clock[0] += 3
+    elif change == "future":
+        clock[0] -= 0.1
+    elif change == "minute":
+        clock[0] += 1
+    elif change == "corrupt":
+        next(tmp_path.glob("*.json")).write_text("{")
     elif change == "deep_json":
         next(tmp_path.glob("*.json")).write_text("[" * 2000 + "0" + "]" * 2000)
+
         def decode(_raw):
             raise RecursionError("optional cache decoding")
+
         monkeypatch.setattr(json, "loads", decode)
     elif change == "receipt_conflict":
-        p = next(tmp_path.glob("*.json")); d = json.loads(p.read_text())
+        p = next(tmp_path.glob("*.json"))
+        d = json.loads(p.read_text())
         d["value"][0]["_kiwoom_source_meta"]["rest_received_ts_ms"] -= 1
         p.write_text(json.dumps(d))
     assert cache.run(**kwargs)[1] is False
     assert len(calls) == 2
 
 
-@pytest.mark.parametrize("api,path", [("kt00011", "/api/dostk/acnt"), ("kt10000", "/api/dostk/ordr"), ("ka10004", "/wrong")])
-def test_widget_response_cache_never_reuses_accounts_orders_or_wrong_path(tmp_path, monkeypatch, api, path):
+@pytest.mark.parametrize(
+    "api,path",
+    [
+        ("kt00011", "/api/dostk/acnt"),
+        ("kt10000", "/api/dostk/ordr"),
+        ("ka10004", "/wrong"),
+    ],
+)
+def test_widget_response_cache_never_reuses_accounts_orders_or_wrong_path(
+    tmp_path, monkeypatch, api, path
+):
     cache, kwargs, clock, calls = _widget_cache_fixture(tmp_path, monkeypatch)
     kwargs.update(api_id=api, endpoint="https://api.kiwoom.com" + path)
-    cache.run(**kwargs); cache.run(**kwargs)
+    cache.run(**kwargs)
+    cache.run(**kwargs)
     assert len(calls) == 2 and not list(tmp_path.glob("*.json"))
 
 
-def test_widget_response_cache_failure_and_io_fault_are_not_success(tmp_path, monkeypatch):
+def test_widget_response_cache_failure_and_io_fault_are_not_success(
+    tmp_path, monkeypatch
+):
     cache, kwargs, clock, calls = _widget_cache_fixture(tmp_path, monkeypatch)
+
     def failed():
         raise RuntimeError("deferred")
+
     kwargs["fetch"] = failed
     with pytest.raises(RuntimeError, match="deferred"):
         cache.run(**kwargs)
     assert not list(tmp_path.glob("*.json"))
 
 
-@pytest.mark.parametrize("defect", ["empty", "crossed", "token_changed", "io", "serialization_error"])
-def test_widget_response_cache_does_not_retain_partial_or_wrong_token(tmp_path, monkeypatch, defect):
+@pytest.mark.parametrize(
+    "defect", ["empty", "crossed", "token_changed", "io", "serialization_error"]
+)
+def test_widget_response_cache_does_not_retain_partial_or_wrong_token(
+    tmp_path, monkeypatch, defect
+):
     cache, kwargs, clock, calls = _widget_cache_fixture(tmp_path, monkeypatch)
     original = kwargs["fetch"]
+
     def fetch():
         data, receipt = original()
-        if defect == "empty": data.pop("sel_fpr_req")
-        elif defect == "crossed": data["sel_fpr_bid"] = "99"
-        elif defect == "token_changed": receipt["request_token_digest"] = "changed"
+        if defect == "empty":
+            data.pop("sel_fpr_req")
+        elif defect == "crossed":
+            data["sel_fpr_bid"] = "99"
+        elif defect == "token_changed":
+            receipt["request_token_digest"] = "changed"
         return data, receipt
+
     kwargs["fetch"] = fetch
     if defect == "serialization_error":
         original_dumps = json.dumps
+
         def dumps(value, **options):
             if isinstance(value, dict) and "value" in value:
                 raise RecursionError("optional cache serialization")
             return original_dumps(value, **options)
+
         monkeypatch.setattr(json, "dumps", dumps)
     if defect == "io":
-        p = tmp_path / "not_a_directory"; p.write_text("preserve")
+        p = tmp_path / "not_a_directory"
+        p.write_text("preserve")
         cache.directory = p
     assert cache.run(**kwargs)[1] is False
     assert cache.run(**kwargs)[1] is False
     assert len(calls) == 2
+
 
 from src.utils.kiwoom_read_request_control import (
     KiwoomReadRequestCoordinator,
@@ -199,10 +288,10 @@ def test_source_fifo_prevents_panel_barging_without_blocking_required_read(tmp_p
     assert _acquire(coordinator).admitted
     path = next(tmp_path.glob("*.json"))
     state = json.loads(path.read_text())
-    older = {"ticket": "a"*32, "deadline": clock.value + 1}
+    older = {"ticket": "a" * 32, "deadline": clock.value + 1}
     state["source_waiters"] = [older]
     path.write_text(json.dumps(state))
-    later = _acquire(_coordinator(tmp_path, clock), max_wait_sec=.025)
+    later = _acquire(_coordinator(tmp_path, clock), max_wait_sec=0.025)
     assert not later.admitted
     state = json.loads(path.read_text())
     assert len(state["request_epochs"]) == 1
@@ -214,229 +303,337 @@ def test_source_fifo_prevents_panel_barging_without_blocking_required_read(tmp_p
 
 
 def test_overslept_source_wait_cannot_rejoin_after_its_deadline(tmp_path):
-    clock=MutableClock();coordinator=_coordinator(tmp_path,clock)
-    for _ in range(4):assert _acquire(coordinator).admitted
-    coordinator.sleep=lambda seconds:setattr(clock,'value',clock.value+seconds+1)
-    result=_acquire(coordinator,max_wait_sec=1.1)
-    assert result.reason=='shared_read_rate_wait_budget_exhausted'
+    clock = MutableClock()
+    coordinator = _coordinator(tmp_path, clock)
+    for _ in range(4):
+        assert _acquire(coordinator).admitted
+    coordinator.sleep = lambda seconds: setattr(
+        clock, "value", clock.value + seconds + 1
+    )
+    result = _acquire(coordinator, max_wait_sec=1.1)
+    assert result.reason == "shared_read_rate_wait_budget_exhausted"
     assert not result.admitted
-    state=json.loads(next(tmp_path.glob('*.json')).read_text())
-    assert state['source_waiters']==[]
-    assert len(state['request_epochs'])==4
+    state = json.loads(next(tmp_path.glob("*.json")).read_text())
+    assert state["source_waiters"] == []
+    assert len(state["request_epochs"]) == 4
 
 
-@pytest.mark.parametrize("pending", ["bad", [{"ticket": "x", "deadline": 1000}],
-                                     [{"ticket": "a"*32, "deadline": float("nan")}]] )
-def test_malformed_source_queue_fails_closed_without_disabling_required(tmp_path, pending):
+@pytest.mark.parametrize(
+    "pending",
+    [
+        "bad",
+        [{"ticket": "x", "deadline": 1000}],
+        [{"ticket": "a" * 32, "deadline": float("nan")}],
+    ],
+)
+def test_malformed_source_queue_fails_closed_without_disabling_required(
+    tmp_path, pending
+):
     clock = MutableClock()
     coordinator = _coordinator(tmp_path, clock)
     assert _acquire(coordinator).admitted
-    path = next(tmp_path.glob("*.json")); state = json.loads(path.read_text())
-    state["source_waiters"] = pending; path.write_text(json.dumps(state))
+    path = next(tmp_path.glob("*.json"))
+    state = json.loads(path.read_text())
+    state["source_waiters"] = pending
+    path.write_text(json.dumps(state))
     assert _acquire(coordinator).reason == "shared_read_rate_waiters_invalid"
     assert _acquire(coordinator, request_class="execution_critical").admitted
 
 
 def _shared_candle_fixture(tmp_path, monkeypatch):
     from src.utils import kiwoom_read_request_control as c
+
     clock = [601.0]
     monkeypatch.setattr(c.time, "time", lambda: clock[0])
-    calls=[]
+    calls = []
+
     def fetch():
         calls.append(True)
-        return [{"return_code": 0, "stk_min_pole_chart_qry": [{
-            "cntr_tm": "20261002120000", "cur_prc": "101", "open_pric": "100",
-            "high_pric": "102", "low_pric": "99", "trde_qty": "10"}]}], {
-            "rest_received_ts_ms": int(clock[0]*1000), "api_id": "ka10080", "last_http_status_code": 200,
-            "read_rate_control_status": "admitted", "request_attempt_count": 1}
-    return c.SharedCandleRead(tmp_path), "a"*64, fetch, clock, calls
+        return [
+            {
+                "return_code": 0,
+                "stk_min_pole_chart_qry": [
+                    {
+                        "cntr_tm": "20261002120000",
+                        "cur_prc": "101",
+                        "open_pric": "100",
+                        "high_pric": "102",
+                        "low_pric": "99",
+                        "trde_qty": "10",
+                    }
+                ],
+            }
+        ], {
+            "rest_received_ts_ms": int(clock[0] * 1000),
+            "api_id": "ka10080",
+            "last_http_status_code": 200,
+            "read_rate_control_status": "admitted",
+            "request_attempt_count": 1,
+        }
+
+    return c.SharedCandleRead(tmp_path), "a" * 64, fetch, clock, calls
 
 
-def test_shared_candle_reuse_retains_original_receipt_and_does_not_renew_ttl(tmp_path, monkeypatch):
+def test_shared_candle_reuse_retains_original_receipt_and_does_not_renew_ttl(
+    tmp_path, monkeypatch
+):
     from src.utils.kiwoom_read_request_control import SharedCandleRead
-    cache,key,fetch,clock,calls = _shared_candle_fixture(tmp_path, monkeypatch)
+
+    cache, key, fetch, clock, calls = _shared_candle_fixture(tmp_path, monkeypatch)
     original = cache.run(key, fetch, wait_sec=0)
-    clock[0]+=1
+    clock[0] += 1
     reused = SharedCandleRead(tmp_path).run(key, fetch, wait_sec=0)
-    assert len(calls)==1
-    assert reused[1]["rest_received_ts_ms"]==original[1]["rest_received_ts_ms"]==601000
-    assert reused[1]["read_response_cache_caller_http_attempt_count"]==0
-    clock[0]=604
+    assert len(calls) == 1
+    assert (
+        reused[1]["rest_received_ts_ms"] == original[1]["rest_received_ts_ms"] == 601000
+    )
+    assert reused[1]["read_response_cache_caller_http_attempt_count"] == 0
+    clock[0] = 604
     cache.run(key, fetch, wait_sec=0)
-    assert len(calls)==2
+    assert len(calls) == 2
 
 
 def test_shared_candle_private_custody_keeps_existing_lock_inode(tmp_path, monkeypatch):
-    cache,key,fetch,clock,calls = _shared_candle_fixture(tmp_path, monkeypatch)
-    lock_path=tmp_path/f"{int(key[:8],16)%512:03d}.lock"
+    cache, key, fetch, clock, calls = _shared_candle_fixture(tmp_path, monkeypatch)
+    lock_path = tmp_path / f"{int(key[:8],16)%512:03d}.lock"
     lock_path.write_text("")
     lock_path.chmod(0o666)
-    before=lock_path.stat()
-    cache.run(key,fetch,wait_sec=0)
-    assert lock_path.stat().st_ino==before.st_ino
-    for path in (lock_path,next(tmp_path.glob('*.json'))):
-        actual,owner=path.stat(),tmp_path.stat()
-        assert (actual.st_uid,actual.st_gid)==(owner.st_uid,owner.st_gid)
-        assert actual.st_mode & 0o777==0o600
+    before = lock_path.stat()
+    cache.run(key, fetch, wait_sec=0)
+    assert lock_path.stat().st_ino == before.st_ino
+    for path in (lock_path, next(tmp_path.glob("*.json"))):
+        actual, owner = path.stat(), tmp_path.stat()
+        assert (actual.st_uid, actual.st_gid) == (owner.st_uid, owner.st_gid)
+        assert actual.st_mode & 0o777 == 0o600
 
 
-@pytest.mark.parametrize('publication_failure',[False,True])
-def test_shared_candle_privileged_custody_before_publication(tmp_path, monkeypatch,publication_failure):
+@pytest.mark.parametrize("publication_failure", [False, True])
+def test_shared_candle_privileged_custody_before_publication(
+    tmp_path, monkeypatch, publication_failure
+):
     from src.utils import kiwoom_read_request_control as c
-    cache,key,fetch,clock,calls=_shared_candle_fixture(tmp_path,monkeypatch)
-    real_fstat=c.os.fstat
-    transfers=[]
+
+    cache, key, fetch, clock, calls = _shared_candle_fixture(tmp_path, monkeypatch)
+    real_fstat = c.os.fstat
+    transfers = []
+
     def privileged_stat(fd):
-        state=list(real_fstat(fd))
-        state[4:6]=[40001,40002]
+        state = list(real_fstat(fd))
+        state[4:6] = [40001, 40002]
         return c.os.stat_result(state)
-    def transfer(fd,uid,gid):
-        transfers.append((uid,gid))
-        assert not list(tmp_path.glob('*.json'))
-        if publication_failure and len(transfers)==2:
-            raise PermissionError('custody_denied')
-    monkeypatch.setattr(c.os,'fstat',privileged_stat)
-    monkeypatch.setattr(c.os,'fchown',transfer)
-    value=cache.run(key,fetch,wait_sec=0)
-    assert len(calls)==1
-    assert value[1]['rest_received_ts_ms']==601000
-    assert transfers==[(tmp_path.stat().st_uid,tmp_path.stat().st_gid)]*2
-    assert len(list(tmp_path.glob('*.json')))==(0 if publication_failure else 1)
-    assert not list(tmp_path.glob('tmp*'))
+
+    def transfer(fd, uid, gid):
+        transfers.append((uid, gid))
+        assert not list(tmp_path.glob("*.json"))
+        if publication_failure and len(transfers) == 2:
+            raise PermissionError("custody_denied")
+
+    monkeypatch.setattr(c.os, "fstat", privileged_stat)
+    monkeypatch.setattr(c.os, "fchown", transfer)
+    value = cache.run(key, fetch, wait_sec=0)
+    assert len(calls) == 1
+    assert value[1]["rest_received_ts_ms"] == 601000
+    assert transfers == [(tmp_path.stat().st_uid, tmp_path.stat().st_gid)] * 2
+    assert len(list(tmp_path.glob("*.json"))) == (0 if publication_failure else 1)
+    assert not list(tmp_path.glob("tmp*"))
 
 
-def test_shared_candle_lock_custody_failure_closes_fd_and_uses_normal_read(tmp_path,monkeypatch):
+def test_shared_candle_lock_custody_failure_closes_fd_and_uses_normal_read(
+    tmp_path, monkeypatch
+):
     from src.utils import kiwoom_read_request_control as c
-    cache,key,fetch,clock,calls=_shared_candle_fixture(tmp_path,monkeypatch)
-    captured=[]
+
+    cache, key, fetch, clock, calls = _shared_candle_fixture(tmp_path, monkeypatch)
+    captured = []
+
     def denied(fd):
         captured.append(fd)
-        raise PermissionError('custody_denied')
-    monkeypatch.setattr(cache,'_bind_custody',denied)
-    value=cache.run(key,fetch,wait_sec=0)
-    assert len(calls)==1 and value[1]['rest_received_ts_ms']==601000
-    with pytest.raises(OSError):c.os.fstat(captured[0])
-    assert not list(tmp_path.glob('*.json'))
+        raise PermissionError("custody_denied")
+
+    monkeypatch.setattr(cache, "_bind_custody", denied)
+    value = cache.run(key, fetch, wait_sec=0)
+    assert len(calls) == 1 and value[1]["rest_received_ts_ms"] == 601000
+    with pytest.raises(OSError):
+        c.os.fstat(captured[0])
+    assert not list(tmp_path.glob("*.json"))
 
 
-def test_shared_candle_never_chowns_symlink_lock_target(tmp_path,monkeypatch):
-    cache,key,fetch,clock,calls=_shared_candle_fixture(tmp_path,monkeypatch)
-    unrelated=tmp_path/'unrelated'
-    unrelated.write_text('preserve')
+def test_shared_candle_never_chowns_symlink_lock_target(tmp_path, monkeypatch):
+    cache, key, fetch, clock, calls = _shared_candle_fixture(tmp_path, monkeypatch)
+    unrelated = tmp_path / "unrelated"
+    unrelated.write_text("preserve")
     unrelated.chmod(0o644)
-    lock_path=tmp_path/f"{int(key[:8],16)%512:03d}.lock"
+    lock_path = tmp_path / f"{int(key[:8],16)%512:03d}.lock"
     lock_path.symlink_to(unrelated)
-    cache.run(key,fetch,wait_sec=0)
-    assert len(calls)==1
-    assert unrelated.read_text()=='preserve'
-    assert unrelated.stat().st_mode & 0o777==0o644
-    assert not list(tmp_path.glob('*.json'))
+    cache.run(key, fetch, wait_sec=0)
+    assert len(calls) == 1
+    assert unrelated.read_text() == "preserve"
+    assert unrelated.stat().st_mode & 0o777 == 0o644
+    assert not list(tmp_path.glob("*.json"))
 
 
-def test_shared_candle_first_privileged_writer_inherits_runtime_parent(tmp_path,monkeypatch):
+def test_shared_candle_first_privileged_writer_inherits_runtime_parent(
+    tmp_path, monkeypatch
+):
     from src.utils import kiwoom_read_request_control as c
-    root=tmp_path/'fresh'
-    cache,key,fetch,clock,calls=_shared_candle_fixture(root,monkeypatch)
-    original_fstat=c.os.fstat
-    transfers=[]
+
+    root = tmp_path / "fresh"
+    cache, key, fetch, clock, calls = _shared_candle_fixture(root, monkeypatch)
+    original_fstat = c.os.fstat
+    transfers = []
+
     def root_owned(fd):
-        state=list(original_fstat(fd));state[4:6]=[0,0]
+        state = list(original_fstat(fd))
+        state[4:6] = [0, 0]
         return c.os.stat_result(state)
-    monkeypatch.setattr(c.os,'fstat',root_owned)
-    monkeypatch.setattr(c.os,'fchown',lambda fd,uid,gid:transfers.append((uid,gid)))
-    cache.run(key,fetch,wait_sec=0)
-    assert transfers==[(tmp_path.stat().st_uid,tmp_path.stat().st_gid)]*3
-    assert root.stat().st_mode & 0o777==0o700
-    assert len(calls)==1
+
+    monkeypatch.setattr(c.os, "fstat", root_owned)
+    monkeypatch.setattr(
+        c.os, "fchown", lambda fd, uid, gid: transfers.append((uid, gid))
+    )
+    cache.run(key, fetch, wait_sec=0)
+    assert transfers == [(tmp_path.stat().st_uid, tmp_path.stat().st_gid)] * 3
+    assert root.stat().st_mode & 0o777 == 0o700
+    assert len(calls) == 1
 
 
-def test_shared_candle_rejects_directory_symlink_without_mutation(tmp_path,monkeypatch):
+def test_shared_candle_rejects_directory_symlink_without_mutation(
+    tmp_path, monkeypatch
+):
     from src.utils.kiwoom_read_request_control import SharedCandleRead
-    cache,key,fetch,clock,calls=_shared_candle_fixture(tmp_path,monkeypatch)
-    target=tmp_path/'foreign';target.mkdir(mode=0o755)
-    link=tmp_path/'alias';link.symlink_to(target,target_is_directory=True)
-    SharedCandleRead(link).run(key,fetch,wait_sec=0)
-    assert len(calls)==1
-    assert target.stat().st_mode & 0o777==0o755
+
+    cache, key, fetch, clock, calls = _shared_candle_fixture(tmp_path, monkeypatch)
+    target = tmp_path / "foreign"
+    target.mkdir(mode=0o755)
+    link = tmp_path / "alias"
+    link.symlink_to(target, target_is_directory=True)
+    SharedCandleRead(link).run(key, fetch, wait_sec=0)
+    assert len(calls) == 1
+    assert target.stat().st_mode & 0o777 == 0o755
     assert not list(target.iterdir())
 
 
-def test_shared_candle_directory_custody_failure_closes_descriptor(tmp_path,monkeypatch):
+def test_shared_candle_directory_custody_failure_closes_descriptor(
+    tmp_path, monkeypatch
+):
     from src.utils import kiwoom_read_request_control as c
-    cache,key,fetch,clock,calls=_shared_candle_fixture(tmp_path/'fresh',monkeypatch)
-    original_fstat=c.os.fstat
-    captured=[]
+
+    cache, key, fetch, clock, calls = _shared_candle_fixture(
+        tmp_path / "fresh", monkeypatch
+    )
+    original_fstat = c.os.fstat
+    captured = []
+
     def root_owned(fd):
-        state=list(original_fstat(fd));state[4:6]=[0,0]
+        state = list(original_fstat(fd))
+        state[4:6] = [0, 0]
         return c.os.stat_result(state)
-    def denied(fd,uid,gid):
+
+    def denied(fd, uid, gid):
         captured.append(fd)
-        raise PermissionError('directory_custody_denied')
-    monkeypatch.setattr(c.os,'fstat',root_owned)
-    monkeypatch.setattr(c.os,'fchown',denied)
-    cache.run(key,fetch,wait_sec=0)
-    assert len(calls)==1 and len(captured)==1
-    with pytest.raises(OSError):original_fstat(captured[0])
-    assert not list((tmp_path/'fresh').iterdir())
+        raise PermissionError("directory_custody_denied")
+
+    monkeypatch.setattr(c.os, "fstat", root_owned)
+    monkeypatch.setattr(c.os, "fchown", denied)
+    cache.run(key, fetch, wait_sec=0)
+    assert len(calls) == 1 and len(captured) == 1
+    with pytest.raises(OSError):
+        original_fstat(captured[0])
+    assert not list((tmp_path / "fresh").iterdir())
 
 
-def test_shared_candle_directory_failure_uses_one_normal_admission(tmp_path,monkeypatch):
-    cache,key,fetch,clock,calls=_shared_candle_fixture(tmp_path/'missing-parent'/'cache',monkeypatch)
-    result=cache.run(key,fetch,wait_sec=0)
-    assert len(calls)==1 and result[1]['rest_received_ts_ms']==601000
-    assert not (tmp_path/'missing-parent').exists()
+def test_shared_candle_directory_failure_uses_one_normal_admission(
+    tmp_path, monkeypatch
+):
+    cache, key, fetch, clock, calls = _shared_candle_fixture(
+        tmp_path / "missing-parent" / "cache", monkeypatch
+    )
+    result = cache.run(key, fetch, wait_sec=0)
+    assert len(calls) == 1 and result[1]["rest_received_ts_ms"] == 601000
+    assert not (tmp_path / "missing-parent").exists()
 
 
-@pytest.mark.parametrize("fault", ["key", "minute", "future", "business", "gap", "corrupt", "token_changed"])
+@pytest.mark.parametrize(
+    "fault", ["key", "minute", "future", "business", "gap", "corrupt", "token_changed"]
+)
 def test_shared_candle_cache_isolation_and_rejection(tmp_path, monkeypatch, fault):
-    cache,key,fetch,clock,calls = _shared_candle_fixture(tmp_path, monkeypatch)
-    if fault=="minute":clock[0]=659.5
-    cache.run(key,fetch,wait_sec=0)
-    path=next(tmp_path.glob("*.json"))
-    if fault=="key":key="a"*63+"b" # Same slot, different wire scope.
-    elif fault=="minute":clock[0]+=1
-    elif fault=="future":clock[0]-=.1
-    elif fault=="corrupt":path.write_text("{")
+    cache, key, fetch, clock, calls = _shared_candle_fixture(tmp_path, monkeypatch)
+    if fault == "minute":
+        clock[0] = 659.5
+    cache.run(key, fetch, wait_sec=0)
+    path = next(tmp_path.glob("*.json"))
+    if fault == "key":
+        key = "a" * 63 + "b"  # Same slot, different wire scope.
+    elif fault == "minute":
+        clock[0] += 1
+    elif fault == "future":
+        clock[0] -= 0.1
+    elif fault == "corrupt":
+        path.write_text("{")
     else:
-        state=json.loads(path.read_text())
-        if fault=="business":state["value"][0][0]["return_code"]=1
-        if fault=="gap":state["value"][1]["continuous_next_key_missing"]=True
-        if fault=="token_changed":state["value"][1]["read_shared_cache_scope_changed"]=True
+        state = json.loads(path.read_text())
+        if fault == "business":
+            state["value"][0][0]["return_code"] = 1
+        if fault == "gap":
+            state["value"][1]["continuous_next_key_missing"] = True
+        if fault == "token_changed":
+            state["value"][1]["read_shared_cache_scope_changed"] = True
         path.write_text(json.dumps(state))
-    cache.run(key,fetch,wait_sec=0)
-    assert len(calls)==2
+    cache.run(key, fetch, wait_sec=0)
+    assert len(calls) == 2
 
 
-def test_shared_candle_can_join_another_process_without_transport(tmp_path, monkeypatch):
-    import subprocess,sys
-    cache,key,fetch,clock,calls = _shared_candle_fixture(tmp_path, monkeypatch)
-    cache.run(key,fetch,wait_sec=0)
-    script='''import sys,json
+def test_shared_candle_can_join_another_process_without_transport(
+    tmp_path, monkeypatch
+):
+    import subprocess, sys
+
+    cache, key, fetch, clock, calls = _shared_candle_fixture(tmp_path, monkeypatch)
+    cache.run(key, fetch, wait_sec=0)
+    script = """import sys,json
 from src.utils import kiwoom_read_request_control as c
 c.time.time=lambda:602.0
 def forbidden():raise AssertionError("duplicate HTTP")
 value=c.SharedCandleRead(sys.argv[1]).run("a"*64,forbidden,wait_sec=.2)
 print(json.dumps([value[1]["rest_received_ts_ms"],value[1]["read_response_cache_caller_http_attempt_count"]]))
-'''
-    r=subprocess.run([sys.executable,"-c",script,str(tmp_path)],check=True,capture_output=True,text=True,timeout=10)
-    assert json.loads(r.stdout.splitlines()[-1])==[601000,0]
+"""
+    r = subprocess.run(
+        [sys.executable, "-c", script, str(tmp_path)],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert json.loads(r.stdout.splitlines()[-1]) == [601000, 0]
 
 
 def test_shared_candle_busy_owner_timeout_never_starts_duplicate(tmp_path):
     import fcntl
-    from src.utils.kiwoom_read_request_control import SharedCandleRead,MarketReadJoinDeferred
-    cache=SharedCandleRead(tmp_path);key="a"*64
-    path=tmp_path/f"{int(key[:8],16)%512:03d}.lock"
+    from src.utils.kiwoom_read_request_control import (
+        SharedCandleRead,
+        MarketReadJoinDeferred,
+    )
+
+    cache = SharedCandleRead(tmp_path)
+    key = "a" * 64
+    path = tmp_path / f"{int(key[:8],16)%512:03d}.lock"
     with path.open("w+") as owner:
-        owner.write(key);owner.flush();fcntl.flock(owner.fileno(),fcntl.LOCK_EX)
+        owner.write(key)
+        owner.flush()
+        fcntl.flock(owner.fileno(), fcntl.LOCK_EX)
         with pytest.raises(MarketReadJoinDeferred):
-            cache.run(key,lambda:pytest.fail("timed out follower must not duplicate"),wait_sec=.02)
+            cache.run(
+                key,
+                lambda: pytest.fail("timed out follower must not duplicate"),
+                wait_sec=0.02,
+            )
 
 
 def test_shared_candle_inflight_processes_make_one_physical_read(tmp_path, monkeypatch):
-    import subprocess,sys,time
-    cache,key,fetch,clock,calls = _shared_candle_fixture(tmp_path, monkeypatch)
-    script='''import sys,json,time,pathlib
+    import subprocess, sys, time
+
+    cache, key, fetch, clock, calls = _shared_candle_fixture(tmp_path, monkeypatch)
+    script = """import sys,json,time,pathlib
 from src.utils import kiwoom_read_request_control as c
 c.time.time=lambda:601.0
 root=pathlib.Path(sys.argv[1])
@@ -445,41 +642,63 @@ def fetch():
  time.sleep(.6)
  return [{"return_code":0,"stk_min_pole_chart_qry":[{"cntr_tm":"20261002120000","cur_prc":"101","open_pric":"100","high_pric":"102","low_pric":"99","trde_qty":"10"}]}],{"api_id":"ka10080","last_http_status_code":200,"rest_received_ts_ms":601000,"read_rate_control_status":"admitted","request_attempt_count":1}
 c.SharedCandleRead(root).run("a"*64,fetch,wait_sec=1.25)
-'''
-    owner=subprocess.Popen([sys.executable,"-c",script,str(tmp_path)],stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+"""
+    owner = subprocess.Popen(
+        [sys.executable, "-c", script, str(tmp_path)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
     try:
-        deadline=time.monotonic()+5
-        while not (tmp_path/'owner-ready').exists():
-            assert time.monotonic()<deadline
-            time.sleep(.01)
-        value=cache.run(key,lambda:pytest.fail("inflight follower must not make second HTTP"),wait_sec=1.25)
-        assert value[1]['rest_received_ts_ms']==601000
-        assert value[1]['read_response_cache_caller_http_attempt_count']==0
+        deadline = time.monotonic() + 5
+        while not (tmp_path / "owner-ready").exists():
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
+        value = cache.run(
+            key,
+            lambda: pytest.fail("inflight follower must not make second HTTP"),
+            wait_sec=1.25,
+        )
+        assert value[1]["rest_received_ts_ms"] == 601000
+        assert value[1]["read_response_cache_caller_http_attempt_count"] == 0
         owner.communicate(timeout=5)
-        assert owner.returncode==0
+        assert owner.returncode == 0
     finally:
-        if owner.poll() is None:owner.kill();owner.communicate()
+        if owner.poll() is None:
+            owner.kill()
+            owner.communicate()
 
 
-def test_native_chart_transport_uses_shared_cache_only_for_source_scope(tmp_path, monkeypatch):
+def test_native_chart_transport_uses_shared_cache_only_for_source_scope(
+    tmp_path, monkeypatch
+):
     from src.utils import kiwoom_utils as ku
     from src.utils.kiwoom_read_request_control import SharedCandleRead
-    cache,key,fetch,clock,calls=_shared_candle_fixture(tmp_path,monkeypatch)
-    monkeypatch.setattr(ku,'_SHARED_CANDLE_READ',cache)
-    monkeypatch.setattr(ku,'_MARKET_DATA_CACHE',{})
-    monkeypatch.setattr(ku,'_fetch_kiwoom_api_continuous_transport',lambda **kw:fetch())
-    kwargs=dict(url='https://api.kiwoom.com/api/dostk/chart',token='TEST-TOKEN',
-        api_id='ka10080',payload={'stk_cd':'005930_AL'},return_meta=True,
-        request_code='005930_AL',request_class='source_only')
-    first=ku.fetch_kiwoom_api_continuous(**kwargs)
-    ku._MARKET_DATA_CACHE.clear() # A different process has no local cache.
-    second=ku.fetch_kiwoom_api_continuous(**kwargs)
-    assert len(calls)==1
-    assert second[1]['read_shared_response_cache_status']=='hit'
-    assert first[1]['rest_received_ts_ms']==second[1]['rest_received_ts_ms']
-    kwargs['request_class']='runtime_required'
+
+    cache, key, fetch, clock, calls = _shared_candle_fixture(tmp_path, monkeypatch)
+    monkeypatch.setattr(ku, "_SHARED_CANDLE_READ", cache)
+    monkeypatch.setattr(ku, "_MARKET_DATA_CACHE", {})
+    monkeypatch.setattr(
+        ku, "_fetch_kiwoom_api_continuous_transport", lambda **kw: fetch()
+    )
+    kwargs = dict(
+        url="https://api.kiwoom.com/api/dostk/chart",
+        token="TEST-TOKEN",
+        api_id="ka10080",
+        payload={"stk_cd": "005930_AL"},
+        return_meta=True,
+        request_code="005930_AL",
+        request_class="source_only",
+    )
+    first = ku.fetch_kiwoom_api_continuous(**kwargs)
+    ku._MARKET_DATA_CACHE.clear()  # A different process has no local cache.
+    second = ku.fetch_kiwoom_api_continuous(**kwargs)
+    assert len(calls) == 1
+    assert second[1]["read_shared_response_cache_status"] == "hit"
+    assert first[1]["rest_received_ts_ms"] == second[1]["rest_received_ts_ms"]
+    kwargs["request_class"] = "runtime_required"
     ku.fetch_kiwoom_api_continuous(**kwargs)
-    assert len(calls)==2
+    assert len(calls) == 2
 
 
 def test_same_token_and_origin_share_window_across_paths(tmp_path: Path) -> None:

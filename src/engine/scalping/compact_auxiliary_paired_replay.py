@@ -18,7 +18,9 @@ from pathlib import Path
 import tempfile
 import time
 from zoneinfo import ZoneInfo
-from src.engine.automation.source_quality_clean_baseline import policy_refresh_start_date
+from src.engine.automation.source_quality_clean_baseline import (
+    policy_refresh_start_date,
+)
 from src.engine.scalping import auxiliary_source_contract as source_contract
 
 KST = ZoneInfo("Asia/Seoul")
@@ -54,30 +56,41 @@ NATIVE_WATCH_METADATA_CONTRACT = "exact_native_watch_metadata_v1"
 STAGE_SELECTION_VERSION = "train_top1_frozen_winrate_improvement_v5"
 NATIVE_WATCH_METADATA_MAX_SCAN_BYTES = 64 * 1024 * 1024
 CANDIDATE_SELECTION_SCHEMA = "compact_auxiliary_candidate_direction_v1"
-PROSPECTIVE_SOURCE_CONTRACT_SCHEMA = (
-    "compact_auxiliary_prospective_source_contract_v1"
-)
+PROSPECTIVE_SOURCE_CONTRACT_SCHEMA = "compact_auxiliary_prospective_source_contract_v1"
 PROMPT_PROVIDER = "openai"
 PROMPT_MODEL = "gpt-5.4-nano"
 
 
 def digest(value):
     from src.engine.scalping.postclose_entry_validation import FrozenRows
-    if isinstance(value, dict) and isinstance(value.get('rows'), FrozenRows):
+
+    if isinstance(value, dict) and isinstance(value.get("rows"), FrozenRows):
         # Identical canonical JSON to a list, without materializing cumulative rows.
         output = hashlib.sha256()
-        output.update(b'{')
+        output.update(b"{")
         for index, key in enumerate(sorted(value)):
-            output.update(((',' if index else '') + json.dumps(key, ensure_ascii=False) + ':').encode())
-            if key == 'rows':
-                output.update(b'[')
+            output.update(
+                (
+                    ("," if index else "") + json.dumps(key, ensure_ascii=False) + ":"
+                ).encode()
+            )
+            if key == "rows":
+                output.update(b"[")
                 for ordinal, raw in enumerate(value[key].canonical_rows()):
-                    output.update((',' if ordinal else '').encode())
+                    output.update(("," if ordinal else "").encode())
                     output.update(raw)
-                output.update(b']')
+                output.update(b"]")
             else:
-                output.update(json.dumps(value[key], sort_keys=True, ensure_ascii=False, separators=(',', ':'), allow_nan=False).encode())
-        output.update(b'}')
+                output.update(
+                    json.dumps(
+                        value[key],
+                        sort_keys=True,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                        allow_nan=False,
+                    ).encode()
+                )
+        output.update(b"}")
         return output.hexdigest()
     return hashlib.sha256(
         json.dumps(
@@ -140,45 +153,96 @@ def prospective_source_contract(projection):
     """Describe the forward writer/reader contract without repairing old rows."""
     implementation_verified = bool(
         projection.get("schema") == "compact_auxiliary_frozen_projection_v1"
-        and projection.get("source_projection_contract")
-        == SOURCE_PROJECTION_CONTRACT
+        and projection.get("source_projection_contract") == SOURCE_PROJECTION_CONTRACT
         and projection.get("projection_contract_sha256") == digest(CONTRACT)
         and projection.get("source_tuning_allowed") in {True, False}
     )
     rows = projection.get("rows") or []
-    writer_rows = [row for row in rows if sha256_hex(row.get("entry_economic_writer_plan_sha256"))]
-    writer_recorded_rows = [row for row in writer_rows
-                            if row.get("entry_economic_source_status") == "recorded_source_only"]
-    trace_plan_rows = [row for row in rows if sha256_hex(row.get("entry_economic_plan_sha256"))]
-    writer_trace_rows = [row for row in rows
-                         if sha256_hex(row.get("entry_economic_writer_plan_sha256"))
-                         and row.get("entry_economic_writer_plan_sha256") == row.get("entry_economic_plan_sha256")]
-    prompt_input_rows = [row for row in rows if isinstance(row.get("input"), dict)
-                         and isinstance(row.get("raw_response"), dict)
-                         and sha256_hex(row.get("issued_prompt_sha256"))]
-    owner_seed_rows = [row for row in rows if isinstance((row.get("owner_replay") or {}).get("seed"), dict)]
+    writer_rows = [
+        row for row in rows if sha256_hex(row.get("entry_economic_writer_plan_sha256"))
+    ]
+    writer_recorded_rows = [
+        row
+        for row in writer_rows
+        if row.get("entry_economic_source_status") == "recorded_source_only"
+    ]
+    trace_plan_rows = [
+        row for row in rows if sha256_hex(row.get("entry_economic_plan_sha256"))
+    ]
+    writer_trace_rows = [
+        row
+        for row in rows
+        if sha256_hex(row.get("entry_economic_writer_plan_sha256"))
+        and row.get("entry_economic_writer_plan_sha256")
+        == row.get("entry_economic_plan_sha256")
+    ]
+    prompt_input_rows = [
+        row
+        for row in rows
+        if isinstance(row.get("input"), dict)
+        and isinstance(row.get("raw_response"), dict)
+        and sha256_hex(row.get("issued_prompt_sha256"))
+    ]
+    owner_seed_rows = [
+        row
+        for row in rows
+        if isinstance((row.get("owner_replay") or {}).get("seed"), dict)
+    ]
     exact_rows = [
         row
         for row in rows
         if row.get("entry_economic_source_status") == "recorded_source_only"
         and sha256_hex(row.get("entry_economic_writer_plan_sha256"))
-        and row.get("entry_economic_writer_plan_sha256") == row.get("entry_economic_plan_sha256")
+        and row.get("entry_economic_writer_plan_sha256")
+        == row.get("entry_economic_plan_sha256")
         and owner_replay_valid(row.get("owner_replay") or {}, row)
     ]
-    conditional_rows = [row for row in rows
-                        if source_contract.plan_state(row).get('state') == 'conditional_plan_preserved']
-    stop_rows = [row for row in rows if isinstance(row.get('entry_economic_original_stop_receipt'), dict)
-        and row['entry_economic_original_stop_receipt'].get('sha256') == digest({
-            k:v for k,v in row['entry_economic_original_stop_receipt'].items() if k != 'sha256'})
-        and row['entry_economic_original_stop_receipt'].get('evaluation_attempt_id') == row.get('evaluation_attempt_id')
-        and row['entry_economic_original_stop_receipt'].get('stock_code') == row.get('stock_code')]
+    conditional_rows = [
+        row
+        for row in rows
+        if source_contract.plan_state(row).get("state") == "conditional_plan_preserved"
+    ]
+    stop_rows = [
+        row
+        for row in rows
+        if isinstance(row.get("entry_economic_original_stop_receipt"), dict)
+        and row["entry_economic_original_stop_receipt"].get("sha256")
+        == digest(
+            {
+                k: v
+                for k, v in row["entry_economic_original_stop_receipt"].items()
+                if k != "sha256"
+            }
+        )
+        and row["entry_economic_original_stop_receipt"].get("evaluation_attempt_id")
+        == row.get("evaluation_attempt_id")
+        and row["entry_economic_original_stop_receipt"].get("stock_code")
+        == row.get("stock_code")
+    ]
     first_gap = (
-        "writer_plan_hash_missing" if not writer_rows else
-        "writer_event_not_recorded" if not writer_recorded_rows else
-        "trace_plan_hash_missing" if not trace_plan_rows else
-        "writer_trace_plan_hash_mismatch" if not writer_trace_rows else
-        "owner_seed_missing" if not owner_seed_rows else
-        "owner_attempt_or_plan_identity_mismatch" if not exact_rows else None
+        "writer_plan_hash_missing"
+        if not writer_rows
+        else (
+            "writer_event_not_recorded"
+            if not writer_recorded_rows
+            else (
+                "trace_plan_hash_missing"
+                if not trace_plan_rows
+                else (
+                    "writer_trace_plan_hash_mismatch"
+                    if not writer_trace_rows
+                    else (
+                        "owner_seed_missing"
+                        if not owner_seed_rows
+                        else (
+                            "owner_attempt_or_plan_identity_mismatch"
+                            if not exact_rows
+                            else None
+                        )
+                    )
+                )
+            )
+        )
     )
     return {
         "schema": PROSPECTIVE_SOURCE_CONTRACT_SCHEMA,
@@ -188,9 +252,7 @@ def prospective_source_contract(projection):
             else "implementation_unverified"
         ),
         "implementation_verified": implementation_verified,
-        "source_projection_contract": projection.get(
-            "source_projection_contract"
-        ),
+        "source_projection_contract": projection.get("source_projection_contract"),
         "exact_plan_hash_required": True,
         "writer_field": "entry_execution_sizing_plan_sha256",
         "trace_field": "entry_economic_plan_sha256",
@@ -200,25 +262,38 @@ def prospective_source_contract(projection):
         "natural_prompt_exact_input_count": len(prompt_input_rows),
         "prompt_input_requires_owner_plan": False,
         "source_lineage_counts": {
-            "projection_rows": len(rows), "writer_plan_hash_present": len(writer_rows),
+            "projection_rows": len(rows),
+            "writer_plan_hash_present": len(writer_rows),
             "writer_event_recorded": len(writer_recorded_rows),
             "trace_plan_hash_present": len(trace_plan_rows),
             "writer_trace_plan_joined": len(writer_trace_rows),
             "writer_trace_plan_conflicted": sum(
                 sha256_hex(row.get("entry_economic_writer_plan_sha256"))
                 and sha256_hex(row.get("entry_economic_plan_sha256"))
-                and row["entry_economic_writer_plan_sha256"] != row["entry_economic_plan_sha256"]
-                for row in rows),
+                and row["entry_economic_writer_plan_sha256"]
+                != row["entry_economic_plan_sha256"]
+                for row in rows
+            ),
             "owner_seed_present": len(owner_seed_rows),
             "owner_exact_joined": len(exact_rows),
             "conditional_original_plan_preserved": len(conditional_rows),
             "original_stop_receipt_preserved": len(stop_rows),
-            "independent_price_path_net_evaluable": sum(auxiliary_stage_net(row) is not None for row in rows),
+            "independent_price_path_net_evaluable": sum(
+                auxiliary_stage_net(row) is not None for row in rows
+            ),
             "prompt_exact_input_present": len(prompt_input_rows),
-            "economic_source_status_counts": dict(Counter(
-                str(row.get("entry_economic_source_status") or "unknown") for row in rows)),
-            "economic_source_first_blocker_counts": dict(Counter(
-                str(row.get("entry_economic_source_blocker") or "none") for row in rows)),
+            "economic_source_status_counts": dict(
+                Counter(
+                    str(row.get("entry_economic_source_status") or "unknown")
+                    for row in rows
+                )
+            ),
+            "economic_source_first_blocker_counts": dict(
+                Counter(
+                    str(row.get("entry_economic_source_blocker") or "none")
+                    for row in rows
+                )
+            ),
         },
         "first_source_gap": first_gap,
         "natural_first_use_status": "observed" if exact_rows else "pending",
@@ -285,52 +360,84 @@ def owner_operating_arm(replay, row):
     """Use the independently closed holding outcome, never the research arm."""
     from src.engine.scalping import entry_split_order_plan as split
     from src.engine.scalping.strategy_owner_replay import (
-        ENTRY_OPERATING_SCHEMA, entry_operating_model_identity, entry_operating_route_supported,
+        ENTRY_OPERATING_SCHEMA,
+        entry_operating_model_identity,
+        entry_operating_route_supported,
     )
     from src.utils.evidence_digest import digest as owner_digest
+
     if not owner_replay_valid(replay, row):
         return {}
     seed = replay["seed"]
     context = seed.get("operating_contract") or {}
-    arm = (replay.get("operating_arms") or {}).get(split.QUANTITY_LEG_FOUR_ARM_IDS[0]) or {}
+    arm = (replay.get("operating_arms") or {}).get(
+        split.QUANTITY_LEG_FOUR_ARM_IDS[0]
+    ) or {}
     if (
         context.get("schema") != ENTRY_OPERATING_SCHEMA
         or context.get("broker_route") != row.get("broker_route")
-        or not entry_operating_route_supported(seed.get("effective_venue"), seed.get("session_bucket"), context.get("broker_route"))
-        or context.get("sha256") != owner_digest({k: v for k, v in context.items() if k != "sha256"})
-        or context.get("model_implementation_sha256") != entry_operating_model_identity()
+        or not entry_operating_route_supported(
+            seed.get("effective_venue"),
+            seed.get("session_bucket"),
+            context.get("broker_route"),
+        )
+        or context.get("sha256")
+        != owner_digest({k: v for k, v in context.items() if k != "sha256"})
+        or context.get("model_implementation_sha256")
+        != entry_operating_model_identity()
         or arm.get("schema") != ENTRY_OPERATING_SCHEMA
         or arm.get("status") != "completed_source_only"
-        or arm.get("sha256") != split._canonical_sha256({k: v for k, v in arm.items() if k != "sha256"})
+        or arm.get("sha256")
+        != split._canonical_sha256({k: v for k, v in arm.items() if k != "sha256"})
         or arm.get("actual_fill_evidence") is not False
         or any(arm.get(k) is not v for k, v in AUTHORITY.items())
         or arm.get("requested_qty") != seed.get("total_qty")
         or type(arm.get("modeled_filled_qty")) is not int
         or not 0 <= arm["modeled_filled_qty"] <= seed["total_qty"]
-        or arm.get("fill_participation_rate") != arm["modeled_filled_qty"] / seed["total_qty"]
+        or arm.get("fill_participation_rate")
+        != arm["modeled_filled_qty"] / seed["total_qty"]
         or arm.get("contract_sha256") != context.get("sha256")
         or arm.get("exit_policy_sha256") != context.get("exit_policy_version")
         or arm.get("cost_policy_version") != context.get("cost_policy_version")
-        or arm.get("cost_provenance") != "frozen_loaded_trade_profit_configuration_not_broker_settlement"
+        or arm.get("cost_provenance")
+        != "frozen_loaded_trade_profit_configuration_not_broker_settlement"
         or arm.get("budget_krw") != context.get("budget_krw")
-        or not finite(arm.get("budget_krw")) or arm["budget_krw"] <= 0
+        or not finite(arm.get("budget_krw"))
+        or arm["budget_krw"] <= 0
         or not split._valid_generation_id(arm.get("terminal_evidence_sha256"))
-        or any(not finite(arm.get(k)) for k in ("net_pnl_krw", "stress_net_pnl_krw", "net_return_pct", "stress_net_return_pct"))
-        or abs(arm["net_return_pct"] - arm["net_pnl_krw"] / arm["budget_krw"] * 100) > 1e-10
-        or abs(arm["stress_net_return_pct"] - arm["stress_net_pnl_krw"] / arm["budget_krw"] * 100) > 1e-10
+        or any(
+            not finite(arm.get(k))
+            for k in (
+                "net_pnl_krw",
+                "stress_net_pnl_krw",
+                "net_return_pct",
+                "stress_net_return_pct",
+            )
+        )
+        or abs(arm["net_return_pct"] - arm["net_pnl_krw"] / arm["budget_krw"] * 100)
+        > 1e-10
+        or abs(
+            arm["stress_net_return_pct"]
+            - arm["stress_net_pnl_krw"] / arm["budget_krw"] * 100
+        )
+        > 1e-10
     ):
         return {}
-    if arm['modeled_filled_qty'] < seed['total_qty']:
-        terminal = arm.get('cancel_wait_terminal') or {}
-        path = arm.get('cash_commitment_path') or {}
-        if (terminal.get('sha256') != owner_digest({k:v for k,v in terminal.items() if k != 'sha256'})
-            or terminal.get('seed_sha256') != seed['seed_sha256']
-            or terminal.get('filled_qty') != arm['modeled_filled_qty']
-            or terminal.get('cancel_ack_and_late_fill_resolved') is not True
-            or terminal.get('model_identity') != entry_operating_model_identity()
-            or path.get('sha256') != owner_digest({k:v for k,v in path.items() if k != 'sha256'})
-            or path.get('seed_sha256') != seed['seed_sha256']
-            or path.get('filled_qty') != arm['modeled_filled_qty']):
+    if arm["modeled_filled_qty"] < seed["total_qty"]:
+        terminal = arm.get("cancel_wait_terminal") or {}
+        path = arm.get("cash_commitment_path") or {}
+        if (
+            terminal.get("sha256")
+            != owner_digest({k: v for k, v in terminal.items() if k != "sha256"})
+            or terminal.get("seed_sha256") != seed["seed_sha256"]
+            or terminal.get("filled_qty") != arm["modeled_filled_qty"]
+            or terminal.get("cancel_ack_and_late_fill_resolved") is not True
+            or terminal.get("model_identity") != entry_operating_model_identity()
+            or path.get("sha256")
+            != owner_digest({k: v for k, v in path.items() if k != "sha256"})
+            or path.get("seed_sha256") != seed["seed_sha256"]
+            or path.get("filled_qty") != arm["modeled_filled_qty"]
+        ):
             return {}
     return arm
 
@@ -338,6 +445,7 @@ def owner_operating_arm(replay, row):
 def owner_model_scope_valid(model, pair):
     from src.engine.scalping import entry_split_order_plan as split
     from src.engine.scalping.strategy_owner_replay import ENTRY_MODEL_SELECTION
+
     seed = pair["owner_replay"]["seed"]
     scope = split._entry_operating_scope(seed)
     for proof in model.get("validated_scopes") or []:
@@ -347,41 +455,80 @@ def owner_model_scope_valid(model, pair):
         if not isinstance(cal, list) or not isinstance(held, list):
             continue
         rows = cal + held
-        arm = owner_operating_arm(pair['owner_replay'], pair)
-        if arm and arm['modeled_filled_qty'] < seed['total_qty']:
-            kind = 'no_fill' if arm['modeled_filled_qty'] == 0 else 'partial'
-            supported = [r for r in rows if isinstance(r, dict) and r.get('execution_state') == kind]
-            if len(supported) < 20 or not any(r in cal for r in supported) or not any(r in held for r in supported):
+        arm = owner_operating_arm(pair["owner_replay"], pair)
+        if arm and arm["modeled_filled_qty"] < seed["total_qty"]:
+            kind = "no_fill" if arm["modeled_filled_qty"] == 0 else "partial"
+            supported = [
+                r
+                for r in rows
+                if isinstance(r, dict) and r.get("execution_state") == kind
+            ]
+            if (
+                len(supported) < 20
+                or not any(r in cal for r in supported)
+                or not any(r in held for r in supported)
+            ):
                 continue
         if (
             proof.get("contract") == ENTRY_MODEL_SELECTION
             and proof.get("validated") is True
-            and proof.get("sha256") == split._canonical_sha256({k: v for k, v in proof.items() if k != "sha256"})
+            and proof.get("sha256")
+            == split._canonical_sha256(
+                {k: v for k, v in proof.items() if k != "sha256"}
+            )
             and proof.get("actual_rows_sha256") == split._canonical_sha256(rows)
-            and proof.get("calibration_attempt_count") == len(proof.get("calibration_rows") or [])
-            and proof.get("holdout_attempt_count") == len(proof.get("holdout_rows") or [])
-            and len(rows) >= 20 and cal and held
-            and len({r.get("episode_id") for r in rows if isinstance(r, dict)}) == len(rows)
+            and proof.get("calibration_attempt_count")
+            == len(proof.get("calibration_rows") or [])
+            and proof.get("holdout_attempt_count")
+            == len(proof.get("holdout_rows") or [])
+            and len(rows) >= 20
+            and cal
+            and held
+            and len({r.get("episode_id") for r in rows if isinstance(r, dict)})
+            == len(rows)
             and isinstance(proof.get("available_after_date"), str)
             and proof["available_after_date"] < pair["source_date"]
-            and all(isinstance(r, dict) and r.get("scope_sha256") == scope
-                    and isinstance(r.get("source_date"), str) and r["source_date"] < pair["source_date"]
-                    and isinstance(r.get("completion_date") or r["source_date"], str)
-                    and (r.get("completion_date") or r["source_date"]) <= proof["available_after_date"]
-                    and r.get("episode_id") != seed.get("entry_plan_sha256") for r in rows)
+            and all(
+                isinstance(r, dict)
+                and r.get("scope_sha256") == scope
+                and isinstance(r.get("source_date"), str)
+                and r["source_date"] < pair["source_date"]
+                and isinstance(r.get("completion_date") or r["source_date"], str)
+                and (r.get("completion_date") or r["source_date"])
+                <= proof["available_after_date"]
+                and r.get("episode_id") != seed.get("entry_plan_sha256")
+                for r in rows
+            )
         ):
-            if max(r.get("completion_date") or r["source_date"] for r in cal) >= min(r["source_date"] for r in held):
+            if max(r.get("completion_date") or r["source_date"] for r in cal) >= min(
+                r["source_date"] for r in held
+            ):
                 continue
-            dimensions = ("vwap_error_bps", "receipt_clock_error_sec", "quantity_error",
-                          "net_error_budget_pct", "capital_error_minutes", "reserve_error_minutes")
-            if not all(all(finite(r.get(k)) for k in dimensions)
-                       and r.get("false_fill") is False and r.get("missed_fill") is False
-                       and r.get("quantity_error") == 0 for r in rows):
+            dimensions = (
+                "vwap_error_bps",
+                "receipt_clock_error_sec",
+                "quantity_error",
+                "net_error_budget_pct",
+                "capital_error_minutes",
+                "reserve_error_minutes",
+            )
+            if not all(
+                all(finite(r.get(k)) for k in dimensions)
+                and r.get("false_fill") is False
+                and r.get("missed_fill") is False
+                and r.get("quantity_error") == 0
+                for r in rows
+            ):
                 continue
             tolerance = {k: max(abs(r[k]) for r in cal) for k in dimensions}
-            if (proof.get("tolerance") != tolerance
-                or any(abs(r[k]) > tolerance[k] + 1e-12 for r in held for k in dimensions)
-                or proof.get("optimistic_net_error_budget_pct") != max([0.] + [r["net_error_budget_pct"] for r in held])):
+            if (
+                proof.get("tolerance") != tolerance
+                or any(
+                    abs(r[k]) > tolerance[k] + 1e-12 for r in held for k in dimensions
+                )
+                or proof.get("optimistic_net_error_budget_pct")
+                != max([0.0] + [r["net_error_budget_pct"] for r in held])
+            ):
                 continue
             return True
     return False
@@ -395,24 +542,46 @@ def runtime_inference_cost_receipt(root, day):
     measured token deltas, and is a contract gap rather than free inference.
     """
     from src.engine.scalping.micro_reversion.provider_budget import (
-        load_reviewed_pricing_artifact, OPERATOR_ZERO_COST_BASIS, ProviderBudgetError)
+        load_reviewed_pricing_artifact,
+        OPERATOR_ZERO_COST_BASIS,
+        ProviderBudgetError,
+    )
+
     path = Path(root) / "policy/micro_reversion/provider_pricing.json"
     try:
-        pricing = load_reviewed_pricing_artifact(path, as_of_date=date.fromisoformat(day))
+        pricing = load_reviewed_pricing_artifact(
+            path, as_of_date=date.fromisoformat(day)
+        )
         price = pricing.price_for("openai", "gpt-5.4-nano")
-        if (pricing.pricing_basis != OPERATOR_ZERO_COST_BASIS
-            or price.input_usd_per_million_tokens != 0 or price.output_usd_per_million_tokens != 0):
-            raise ValueError("reviewed_nonzero_runtime_krw_conversion_and_token_delta_contract_required")
-        return dict(status="reviewed_operator_zero_cost", delta_krw=0.,
-            pricing_path=str(path), pricing_file_sha256=pricing.artifact_file_sha256,
+        if (
+            pricing.pricing_basis != OPERATOR_ZERO_COST_BASIS
+            or price.input_usd_per_million_tokens != 0
+            or price.output_usd_per_million_tokens != 0
+        ):
+            raise ValueError(
+                "reviewed_nonzero_runtime_krw_conversion_and_token_delta_contract_required"
+            )
+        return dict(
+            status="reviewed_operator_zero_cost",
+            delta_krw=0.0,
+            pricing_path=str(path),
+            pricing_file_sha256=pricing.artifact_file_sha256,
             pricing_content_sha256=pricing.artifact_content_sha256,
             raw_source_sha256=pricing.raw_source_bytes_sha256,
-            effective_from=pricing.effective_from.isoformat(), effective_to=pricing.effective_to.isoformat(),
-            basis=pricing.pricing_basis, provider="openai", model="gpt-5.4-nano")
+            effective_from=pricing.effective_from.isoformat(),
+            effective_to=pricing.effective_to.isoformat(),
+            basis=pricing.pricing_basis,
+            provider="openai",
+            model="gpt-5.4-nano",
+        )
     except (OSError, ValueError, ProviderBudgetError) as exc:
-        return dict(status="source_gap", delta_krw=None, blocker=str(exc),
+        return dict(
+            status="source_gap",
+            delta_krw=None,
+            blocker=str(exc),
             owner="micro_reversion_reviewed_provider_pricing",
-            closure_test="effective_reviewed_zero_accounting_or_reviewed_measured_token_and_krw_conversion_contract")
+            closure_test="effective_reviewed_zero_accounting_or_reviewed_measured_token_and_krw_conversion_contract",
+        )
 
 
 def operating_comparison_metrics(pairs, model):
@@ -424,11 +593,17 @@ def operating_comparison_metrics(pairs, model):
     """
     from copy import deepcopy
     from src.engine.scalping import entry_split_order_plan as split
-    empty = dict(status="source_gap", incumbent=None, candidate=None,
-        robust_paired_delta_ev_lower_bound_pct=None, model_error_penalty_pct=None,
+
+    empty = dict(
+        status="source_gap",
+        incumbent=None,
+        candidate=None,
+        robust_paired_delta_ev_lower_bound_pct=None,
+        model_error_penalty_pct=None,
         blocker="validated_operating_scope_exposure_or_runtime_cost_missing",
         owner="entry_execution_model_scope_and_reviewed_provider_pricing",
-        closure_test="independent_prior_model_holdout_exact_scope_and_complete_frozen_exposure_witnesses")
+        closure_test="independent_prior_model_holdout_exact_scope_and_complete_frozen_exposure_witnesses",
+    )
     if not pairs:
         return empty
     old_rows, new_rows, lower, penalties = [], [], [], []
@@ -438,45 +613,68 @@ def operating_comparison_metrics(pairs, model):
         if not arm or not owner_model_scope_valid(model, pair):
             return empty
         cost = pair.get("runtime_inference_cost_delta_krw")
-        if not finite(cost) or any(not finite(arm.get(k)) or arm[k] < 0
-            for k in ("capital_krw_minutes", "reserve_krw_minutes")):
+        if not finite(cost) or any(
+            not finite(arm.get(k)) or arm[k] < 0
+            for k in ("capital_krw_minutes", "reserve_krw_minutes")
+        ):
             return empty
-        proof = next(p for p in model["validated_scopes"]
-                     if p["scope_sha256"] == split._entry_operating_scope(replay["seed"])
-                     and owner_model_scope_valid({"validated_scopes": [p]}, pair))
+        proof = next(
+            p
+            for p in model["validated_scopes"]
+            if p["scope_sha256"] == split._entry_operating_scope(replay["seed"])
+            and owner_model_scope_valid({"validated_scopes": [p]}, pair)
+        )
         changed = pair["candidate_verdict"] != pair["incumbent_verdict"]
-        error = 2 * max(proof["optimistic_net_error_budget_pct"], proof["tolerance"]["net_error_budget_pct"])
-        penalty = error if changed else 0.
+        error = 2 * max(
+            proof["optimistic_net_error_budget_pct"],
+            proof["tolerance"]["net_error_budget_pct"],
+        )
+        penalty = error if changed else 0.0
         penalties.append(penalty)
-        lower.append(min(pair["delta_net_pct"], pair["stress_delta_net_pct"]) - penalty
-                     - cost / arm["budget_krw"] * 100)
-        for verdict, rows, inference in ((pair["incumbent_verdict"], old_rows, 0.),
-                                          (pair["candidate_verdict"], new_rows, cost)):
+        lower.append(
+            min(pair["delta_net_pct"], pair["stress_delta_net_pct"])
+            - penalty
+            - cost / arm["budget_krw"] * 100
+        )
+        for verdict, rows, inference in (
+            (pair["incumbent_verdict"], old_rows, 0.0),
+            (pair["candidate_verdict"], new_rows, cost),
+        ):
             selected = verdict == "PASS"
             output = deepcopy(arm)
-            for k in ("net_pnl_krw", "capital_krw_minutes", "reserve_krw_minutes", "fill_participation_rate"):
+            for k in (
+                "net_pnl_krw",
+                "capital_krw_minutes",
+                "reserve_krw_minutes",
+                "fill_participation_rate",
+            ):
                 output[k] *= int(selected)
             output["net_pnl_krw"] -= inference
             rows.append(dict(budget_krw=arm["budget_krw"], arms={"decision": output}))
     portfolio = portfolio_metrics(pairs)
     if portfolio["portfolio_daily_net_delta_krw"] is None:
-        return {**empty, "status": "unsupported_scope", "blocker": "overlapping_owner_capital_allocation_unsupported"}
-    return dict(status="supported_operating_comparison", blocker=None,
+        return {
+            **empty,
+            "status": "unsupported_scope",
+            "blocker": "overlapping_owner_capital_allocation_unsupported",
+        }
+    return dict(
+        status="supported_operating_comparison",
+        blocker=None,
         incumbent=split._economic_metrics(old_rows, "decision"),
         candidate=split._economic_metrics(new_rows, "decision"),
         robust_paired_delta_ev_lower_bound_pct=sum(lower) / len(lower),
         model_error_penalty_pct=sum(penalties) / len(penalties),
-        pair_lower_bounds_pct=lower, pair_error_penalties_pct=penalties,
+        pair_lower_bounds_pct=lower,
+        pair_error_penalties_pct=penalties,
         lower_bound_method="mean_same_pair_minimum_base_stress_delta_minus_changed_decision_two_arm_empirical_error_and_inference_cost",
-        **portfolio)
+        **portfolio,
+    )
 
 
 def natural_response_contract_exclusion(trace):
     """Classify provider/response defects without inventing market scope loss."""
-    if (
-        trace.get("model") != "gpt-5.4-nano"
-        or trace.get("provider_actual") != "openai"
-    ):
+    if trace.get("model") != "gpt-5.4-nano" or trace.get("provider_actual") != "openai":
         return "natural_provider_or_model_contract_invalid"
     if trace.get("semantic_validation_status") != "pass":
         semantic_status = str(trace.get("semantic_validation_status") or "")
@@ -484,8 +682,12 @@ def natural_response_contract_exclusion(trace):
         quality_status = str(trace.get("decision_quality_contract_status") or "")
         return (
             "natural_response_transport_invalid"
-            if ("transport" in semantic_status or "transport" in result_source
-                or "transport" in quality_status or result_source == "timeout")
+            if (
+                "transport" in semantic_status
+                or "transport" in result_source
+                or "transport" in quality_status
+                or result_source == "timeout"
+            )
             else "natural_response_semantic_invalid"
         )
     if trace.get("decision_quality_contract_status") != "pass":
@@ -502,7 +704,9 @@ def auxiliary_stage_path(label):
         "adverse_pct": outcome.get("entry_path_adverse_pct"),
         "end_return_pct": outcome.get("end_return_pct"),
         "sample_count": outcome.get("sample_count"),
-        "conservative_execution_cost_pct": label.get("entry_conservative_execution_cost_pct"),
+        "conservative_execution_cost_pct": label.get(
+            "entry_conservative_execution_cost_pct"
+        ),
         "label_report_sha256": digest(label) if label else None,
         "label_source_quality_status": label.get("source_quality_status"),
         "observed_venue": outcome.get("observed_venue"),
@@ -514,14 +718,18 @@ def auxiliary_stage_path(label):
 
 def stage_path_label_matches(row, label):
     expected = auxiliary_stage_path(label)
-    actual = row.get('ai_stage_path') or {}
-    if actual.get('cost_scope') == 'full_round_trip_source_bound':
-        actual = {**actual, 'conservative_execution_cost_pct': actual.get('recorded_friction_pct')}
+    actual = row.get("ai_stage_path") or {}
+    if actual.get("cost_scope") == "full_round_trip_source_bound":
+        actual = {
+            **actual,
+            "conservative_execution_cost_pct": actual.get("recorded_friction_pct"),
+        }
     return {key: actual.get(key) for key in expected} == expected
 
 
 def stage_logic_current(projection):
     from src.engine.scalping.postclose_entry_validation import NEW_LOGIC_SOURCE_DATE
+
     return str(projection.get("target_date") or "") >= NEW_LOGIC_SOURCE_DATE
 
 
@@ -533,39 +741,68 @@ def auxiliary_prompt_variants(parent_version, *, current=False):
         ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION as opportunity,
         ENTRY_MACHINE_AUXILIARY_COMPACT_CONTRACT_PROMPT_VERSION as contract,
     )
-    versions = (risk, opportunity, contract, base) if current else (base, opportunity, contract)
-    return tuple(v for v in versions if v != parent_version)[:2] if current else versions
+
+    versions = (
+        (risk, opportunity, contract, base)
+        if current
+        else (base, opportunity, contract)
+    )
+    return (
+        tuple(v for v in versions if v != parent_version)[:2] if current else versions
+    )
 
 
 def bind_stage_full_cost(row, root, *, profile_cache=None):
     """Bind reviewed exact-date fees/tax to recorded friction without inventing costs."""
     from src.engine.scalping import ai_action_outcome_calibration as calibration
+
     path = dict(row.get("ai_stage_path") or {})
-    if path.get('cost_scope') == 'full_round_trip_source_bound':
+    if path.get("cost_scope") == "full_round_trip_source_bound":
         return row
     if row.get("source_date", "") < "2026-09-29":
         return row
     # Trace sessions are historically lower case. Normalize spelling only for
     # the registered cost scope; keep native row/opportunity identities intact.
-    scope = tuple(str(row.get(k) or "").upper() for k in ("effective_venue", "session_bucket"))
+    scope = tuple(
+        str(row.get(k) or "").upper() for k in ("effective_venue", "session_bucket")
+    )
     from src.engine.scalping.entry_setup_evidence import mechanistic_scope_supported
+
     if not mechanistic_scope_supported(*scope):
-        return {**row, "ai_stage_path": {**path, "cost_scope": "counterfactual_friction_no_broker_fees",
-                                       "cost_binding_gap": "unsupported_exact_scope"}}
-    key = (row['source_date'], scope[0])
+        return {
+            **row,
+            "ai_stage_path": {
+                **path,
+                "cost_scope": "counterfactual_friction_no_broker_fees",
+                "cost_binding_gap": "unsupported_exact_scope",
+            },
+        }
+    key = (row["source_date"], scope[0])
     profile_cache = {} if profile_cache is None else profile_cache
     if key not in profile_cache:
         profile_cache[key] = calibration._hierarchy_cost_profiles(Path(root), *key)
     profiles = profile_cache[key]
-    contract = calibration._hierarchy_cost_contract(profiles.get(row.get("stock_code")) or {},
-        row["source_date"], path.get("conservative_execution_cost_pct"),
-        scope)
-    full_cost = calibration._full_entry_cost_pct(contract, source_date=row["source_date"])
+    contract = calibration._hierarchy_cost_contract(
+        profiles.get(row.get("stock_code")) or {},
+        row["source_date"],
+        path.get("conservative_execution_cost_pct"),
+        scope,
+    )
+    full_cost = calibration._full_entry_cost_pct(
+        contract, source_date=row["source_date"]
+    )
     if full_cost is not None:
-        path.update(recorded_friction_pct=path.get("conservative_execution_cost_pct"),
-                    conservative_execution_cost_pct=full_cost, entry_cost_contract=contract,
-                    entry_cost_contract_sha256=digest(contract), cost_scope="full_round_trip_source_bound",
-                    recorded_source_scope=[row.get("effective_venue"), row.get("session_bucket")])
+        path.update(
+            recorded_friction_pct=path.get("conservative_execution_cost_pct"),
+            conservative_execution_cost_pct=full_cost,
+            entry_cost_contract=contract,
+            entry_cost_contract_sha256=digest(contract),
+            cost_scope="full_round_trip_source_bound",
+            recorded_source_scope=[
+                row.get("effective_venue"),
+                row.get("session_bucket"),
+            ],
+        )
     else:
         path["cost_scope"] = "counterfactual_friction_no_broker_fees"
     return {**row, "ai_stage_path": path}
@@ -573,22 +810,35 @@ def bind_stage_full_cost(row, root, *, profile_cache=None):
 
 def stage_full_cost_valid(row):
     from src.engine.scalping.ai_action_outcome_calibration import _full_entry_cost_pct
-    path = row.get('ai_stage_path') or {}
-    contract = path.get('entry_cost_contract') or {}
-    cost = _full_entry_cost_pct(contract, source_date=row['source_date'])
-    return (path.get('cost_scope') == 'full_round_trip_source_bound'
-            and path.get('entry_cost_contract_sha256') == digest(contract)
-            and (contract.get('effective_venue'), contract.get('session_bucket')) == tuple(
-                str(row.get(k) or "").upper() for k in ('effective_venue', 'session_bucket'))
-            and cost is not None and finite(path.get('conservative_execution_cost_pct'))
-            and math.isclose(cost, path['conservative_execution_cost_pct'], rel_tol=0, abs_tol=1e-9))
+
+    path = row.get("ai_stage_path") or {}
+    contract = path.get("entry_cost_contract") or {}
+    cost = _full_entry_cost_pct(contract, source_date=row["source_date"])
+    return (
+        path.get("cost_scope") == "full_round_trip_source_bound"
+        and path.get("entry_cost_contract_sha256") == digest(contract)
+        and (contract.get("effective_venue"), contract.get("session_bucket"))
+        == tuple(
+            str(row.get(k) or "").upper() for k in ("effective_venue", "session_bucket")
+        )
+        and cost is not None
+        and finite(path.get("conservative_execution_cost_pct"))
+        and math.isclose(
+            cost, path["conservative_execution_cost_pct"], rel_tol=0, abs_tol=1e-9
+        )
+    )
 
 
 def prepare(data_root, day):
     """Use actual compact screens, never fabricated AI for machine BLOCK rows."""
-    from src.utils.jsonl_io import iter_jsonl_objects_strict as iter_jsonl, existing_or_gzip_path
+    from src.utils.jsonl_io import (
+        iter_jsonl_objects_strict as iter_jsonl,
+        existing_or_gzip_path,
+    )
     from src.engine.scalping.ai_decision_trace import _json_bytes
-    from src.engine.scalping import mechanistic_entry_runtime_policy as machine_policy_owner
+    from src.engine.scalping import (
+        mechanistic_entry_runtime_policy as machine_policy_owner,
+    )
     from src.engine.scalping.mechanistic_entry_runtime_policy import COMPACT_AI_VARIANTS
     from src.engine.scalping.entry_setup_evidence import ENTRY_RISK_ADJUDICATION_SCHEMA
 
@@ -606,7 +856,10 @@ def prepare(data_root, day):
         root / "ai_decision_trace" / f"ai_decision_trace_{day}.jsonl"
     )
     for trace in iter_jsonl(trace_path) if trace_path else []:
-        if trace.get("decision_stage") == "entry_screen" and trace.get("prompt_version") in COMPACT_AI_VARIANTS:
+        if (
+            trace.get("decision_stage") == "entry_screen"
+            and trace.get("prompt_version") in COMPACT_AI_VARIANTS
+        ):
             census_responses.append(source_contract.response_record(trace))
         if (
             trace.get("decision_stage") != "entry_screen"
@@ -627,8 +880,18 @@ def prepare(data_root, day):
         if trace.get("request_envelope_sha256"):
             envelopes[trace["request_envelope_sha256"]].append((key, trace))
     for group in envelopes.values():
-        variants = {tuple(trace.get(k) for k in ("payload_sha256", "prompt_sha256", "evaluation_attempt_id", "stock_code"))
-                    for _, trace in group}
+        variants = {
+            tuple(
+                trace.get(k)
+                for k in (
+                    "payload_sha256",
+                    "prompt_sha256",
+                    "evaluation_attempt_id",
+                    "stock_code",
+                )
+            )
+            for _, trace in group
+        }
         if len(variants) > 1:
             conflicts.update(key for key, _ in group)
     wanted = {t.get("payload_sha256") for t in traces.values()}
@@ -659,24 +922,41 @@ def prepare(data_root, day):
         root / "report/entry_split_order_plan" / f"entry_split_order_plan_{day}.json"
     )
     summary = split.get("input_summary") or {}
-    owner_source = (summary.get("compact_pre_ai_execution_replay")
+    owner_source = (
+        summary.get("compact_pre_ai_execution_replay")
         or summary.get("entry_opportunity_executable_replay_refresh")
-        or (summary.get("daily_diagnostic") or {}).get("entry_opportunity_executable_replay") or {})
+        or (summary.get("daily_diagnostic") or {}).get(
+            "entry_opportunity_executable_replay"
+        )
+        or {}
+    )
     owner_rows, owner_conflicts = index_owner_replays(owner_source.get("rows", []))
     rows, exclusions = [], Counter()
     machine_policies = {}
     for key, trace in sorted(traces.items()):
         bundle_hash = trace.get("machine_bundle_sha256")
-        cohort = (str(trace.get("effective_venue") or "").upper(),
-                  str(trace.get("session_bucket") or "").upper())
+        cohort = (
+            str(trace.get("effective_venue") or "").upper(),
+            str(trace.get("session_bucket") or "").upper(),
+        )
         policy_key = (bundle_hash, cohort)
         if policy_key not in machine_policies:
-            generation = read(root / "runtime/mechanistic_entry_policy/generations" / f"{bundle_hash}.json")
+            generation = read(
+                root
+                / "runtime/mechanistic_entry_policy/generations"
+                / f"{bundle_hash}.json"
+            )
             try:
-                machine_policy_owner.validate(generation, target_date=generation["target_date"])
+                machine_policy_owner.validate(
+                    generation, target_date=generation["target_date"]
+                )
                 machine_policy_owner._validate_bundle_sources(generation, root)
                 scoped = machine_policy_owner.for_cohort(generation, cohort)
-                machine_policies[policy_key] = scoped["machine_policy"] if scoped and generation["bundle_sha256"] == bundle_hash else None
+                machine_policies[policy_key] = (
+                    scoped["machine_policy"]
+                    if scoped and generation["bundle_sha256"] == bundle_hash
+                    else None
+                )
             except (KeyError, TypeError, ValueError):
                 machine_policies[policy_key] = None
         payload_key = (
@@ -701,20 +981,36 @@ def prepare(data_root, day):
             "source_date": day,
             "evaluation_attempt_id": trace.get("evaluation_attempt_id"),
             "entry_economic_plan_sha256": trace.get("entry_economic_plan_sha256"),
-            "entry_economic_conditional_seed": trace.get("entry_economic_conditional_seed"),
+            "entry_economic_conditional_seed": trace.get(
+                "entry_economic_conditional_seed"
+            ),
             "entry_economic_plan_kind": trace.get("entry_economic_plan_kind"),
-            "entry_economic_operating_context": trace.get("entry_economic_operating_context"),
-            "entry_economic_original_stop_receipt": trace.get("entry_economic_original_stop_receipt"),
-            "entry_economic_writer_plan_sha256": trace.get("entry_economic_writer_plan_sha256"),
+            "entry_economic_operating_context": trace.get(
+                "entry_economic_operating_context"
+            ),
+            "entry_economic_original_stop_receipt": trace.get(
+                "entry_economic_original_stop_receipt"
+            ),
+            "entry_economic_writer_plan_sha256": trace.get(
+                "entry_economic_writer_plan_sha256"
+            ),
             "entry_economic_source_status": trace.get("entry_economic_source_status"),
             "entry_economic_source_blocker": trace.get("entry_economic_source_blocker"),
-            "entry_economic_observation_probe_contract": trace.get("entry_economic_observation_probe_contract"),
+            "entry_economic_observation_probe_contract": trace.get(
+                "entry_economic_observation_probe_contract"
+            ),
             "auxiliary_source_capsule": trace.get("auxiliary_source_capsule"),
             "entry_pre_ai_source_capsule": trace.get("entry_pre_ai_source_capsule"),
-            "entry_pre_ai_source_append_receipt": trace.get("entry_pre_ai_source_append_receipt"),
+            "entry_pre_ai_source_append_receipt": trace.get(
+                "entry_pre_ai_source_append_receipt"
+            ),
             "entry_economic_guard_receipt": trace.get("entry_economic_guard_receipt"),
-            "entry_economic_capacity_blocker": trace.get("entry_economic_capacity_blocker"),
-            "entry_economic_capacity_receipt": trace.get("entry_economic_capacity_receipt"),
+            "entry_economic_capacity_blocker": trace.get(
+                "entry_economic_capacity_blocker"
+            ),
+            "entry_economic_capacity_receipt": trace.get(
+                "entry_economic_capacity_receipt"
+            ),
             "machine_observation_sha256": trace.get("machine_observation_sha256"),
             "request_envelope_sha256": trace.get("request_envelope_sha256"),
             "scanner_promotion_id": trace.get("scanner_promotion_id"),
@@ -731,19 +1027,28 @@ def prepare(data_root, day):
         )
         owner_replay = owner_rows.get(owner_key) or {}
         owner_valid = owner_replay_valid(owner_replay, row_identity)
-        label_identity_reasons = [r for r in by_trace.get(key,{}).get("primary_cohort_exclusion_reasons") or []
-            if r in {"payload_trace_venue_mismatch","payload_trace_session_mismatch",
-                     "canonical_context_venue_session_mismatch", "outcome_route_unproven",
-                     "integrated_order_route_cost_gap"}]
+        label_identity_reasons = [
+            r
+            for r in by_trace.get(key, {}).get("primary_cohort_exclusion_reasons") or []
+            if r
+            in {
+                "payload_trace_venue_mismatch",
+                "payload_trace_session_mismatch",
+                "canonical_context_venue_session_mismatch",
+                "outcome_route_unproven",
+                "integrated_order_route_cost_gap",
+            }
+        ]
         reason = None
         if key in conflicts or payload_key in payload_conflicts:
             reason = "conflicting_exact_input"
         elif trace.get("auxiliary_source_capsule") and source_contract.capsule_errors(
-                trace["auxiliary_source_capsule"], {**trace, "source_date": day}):
+            trace["auxiliary_source_capsule"], {**trace, "source_date": day}
+        ):
             reason = "auxiliary_source_capsule_invalid"
         elif owner_key in owner_conflicts:
             reason = "conflicting_exact_owner_replay"
-        elif (contract_exclusion := natural_response_contract_exclusion(trace)):
+        elif contract_exclusion := natural_response_contract_exclusion(trace):
             reason = contract_exclusion
         elif (
             payload.get("redacted") is not False
@@ -758,12 +1063,16 @@ def prepare(data_root, day):
         ):
             reason = "frozen_payload_missing_or_invalid"
         elif label_identity_reasons:
-            reason = "source_label_identity_contract_invalid:" + label_identity_reasons[0]
+            reason = (
+                "source_label_identity_contract_invalid:" + label_identity_reasons[0]
+            )
         elif sha256_hex(trace.get("entry_economic_plan_sha256")) and not owner_valid:
             conditional_plan = source_contract.plan_state(row_identity)
-            reason = ('conditional_probe_operating_economics_not_supported'
-                      if conditional_plan.get('state') == 'conditional_plan_preserved'
-                      else 'exact_owner_replay_missing_or_invalid')
+            reason = (
+                "conditional_probe_operating_economics_not_supported"
+                if conditional_plan.get("state") == "conditional_plan_preserved"
+                else "exact_owner_replay_missing_or_invalid"
+            )
         elif not owner_valid and path.get("status") != "evaluable":
             reason = path.get("label_reason") or "terminal_path_not_evaluable"
         elif not owner_valid and (
@@ -792,38 +1101,59 @@ def prepare(data_root, day):
                 "incumbent_verdict": verdict,
                 "raw_response": raw_response,
                 "parent_auxiliary_soft_policy": trace.get("entry_ai_soft_policy"),
-                "parent_auxiliary_soft_policy_sha256": trace.get("entry_ai_soft_policy_sha256"),
+                "parent_auxiliary_soft_policy_sha256": trace.get(
+                    "entry_ai_soft_policy_sha256"
+                ),
                 "ai_stage_path": auxiliary_stage_path(label),
                 # Preserve frozen source for a later owner-path evaluation;
                 # exclusion, not deletion of the payload, controls execution.
-                "input": raw if isinstance(raw, dict) and payload.get("replay_exact") is True
-                    and payload.get("redacted") is False else None,
+                "input": (
+                    raw
+                    if isinstance(raw, dict)
+                    and payload.get("replay_exact") is True
+                    and payload.get("redacted") is False
+                    else None
+                ),
                 "owner_replay": owner_replay if owner_valid else None,
                 "entry_quality_path": path,
                 "source_label_identity_reasons": label_identity_reasons,
                 "exclusion_reason": reason,
-                "natural_contract_evidence": {k: trace.get(k) for k in
-                    ("result_source", "model", "provider_actual", "semantic_validation_status",
-                     "decision_quality_contract_status", "decision_quality_contract_errors")},
+                "natural_contract_evidence": {
+                    k: trace.get(k)
+                    for k in (
+                        "result_source",
+                        "model",
+                        "provider_actual",
+                        "semantic_validation_status",
+                        "decision_quality_contract_status",
+                        "decision_quality_contract_errors",
+                    )
+                },
             }
         )
     if day >= "2026-10-02":
         cost_cache = {}
-        rows = [bind_stage_full_cost(row, root, profile_cache=cost_cache) for row in rows]
+        rows = [
+            bind_stage_full_cost(row, root, profile_cache=cost_cache) for row in rows
+        ]
     return sealed(
         {
             "schema": "compact_auxiliary_frozen_projection_v1",
             "source_projection_contract": SOURCE_PROJECTION_CONTRACT,
             "native_watch_metadata_contract": NATIVE_WATCH_METADATA_CONTRACT,
             "auxiliary_source_contract": source_contract.CONTRACT,
-            "source_census_inputs": {"machines": census_machines, "responses": census_responses},
+            "source_census_inputs": {
+                "machines": census_machines,
+                "responses": census_responses,
+            },
             "target_date": day,
             "source_manifest_sha256": manifest.get("source_manifest_sha256"),
             "source_tuning_allowed": receipt.get("tuning_input_allowed") is True
             and isinstance(manifest.get("source_manifest_sha256"), str)
             and len(manifest["source_manifest_sha256"]) == 64,
             "source_label_report_sha256": digest(labels),
-            "owner_execution_model_validation": split.get("execution_model_validation") or {},
+            "owner_execution_model_validation": split.get("execution_model_validation")
+            or {},
             "screened_total": len(rows),
             "exclusion_counts": dict(exclusions),
             "rows": rows,
@@ -851,34 +1181,55 @@ def input_identity(row):
 
 def auxiliary_prompt_identity(row, version, prompt_hash, schema_hash):
     """Bind an offline response to the exact parent and provider contract."""
-    return digest([
-        row.get("source_date"), row.get("evaluation_key"), input_identity(row),
-        row.get("parent_auxiliary_soft_policy_sha256"), version,
-        prompt_hash, schema_hash, PROMPT_PROVIDER, PROMPT_MODEL,
-    ])
+    return digest(
+        [
+            row.get("source_date"),
+            row.get("evaluation_key"),
+            input_identity(row),
+            row.get("parent_auxiliary_soft_policy_sha256"),
+            version,
+            prompt_hash,
+            schema_hash,
+            PROMPT_PROVIDER,
+            PROMPT_MODEL,
+        ]
+    )
 
 
 def auxiliary_prompt_provenance_valid(result):
     provenance = result.get("provider_provenance") or {}
-    return (provenance.get("provider") == PROMPT_PROVIDER
-            and provenance.get("model") == PROMPT_MODEL
-            and provenance.get("provider_call_succeeded") is True)
+    return (
+        provenance.get("provider") == PROMPT_PROVIDER
+        and provenance.get("model") == PROMPT_MODEL
+        and provenance.get("provider_call_succeeded") is True
+    )
 
 
 def auxiliary_stage_net(row):
     """Cost-adjusted fixed 10m path, never an exact stop or realized fill."""
     path = row.get("ai_stage_path") or {}
-    if path.get("schema") != "auxiliary_fixed_path_10m_v1" or not path.get("label_report_sha256"):
+    if path.get("schema") != "auxiliary_fixed_path_10m_v1" or not path.get(
+        "label_report_sha256"
+    ):
         return None
-    if (path.get("label_source_quality_status") != "pass"
-        or str(path.get("observed_venue") or "").upper() != str(row.get("effective_venue") or "").upper()
-        or str(path.get("observed_session_bucket") or "").upper() != str(row.get("session_bucket") or "").upper()):
+    if (
+        path.get("label_source_quality_status") != "pass"
+        or str(path.get("observed_venue") or "").upper()
+        != str(row.get("effective_venue") or "").upper()
+        or str(path.get("observed_session_bucket") or "").upper()
+        != str(row.get("session_bucket") or "").upper()
+    ):
         return None
     if type(path.get("sample_count")) is not int or path["sample_count"] < 1:
         return None
     cost = path.get("conservative_execution_cost_pct")
     target, adverse = path.get("target_pct"), path.get("adverse_pct")
-    if not all(finite(v) for v in (cost, target, adverse)) or cost < 0 or target <= 0 or adverse >= 0:
+    if (
+        not all(finite(v) for v in (cost, target, adverse))
+        or cost < 0
+        or target <= 0
+        or adverse >= 0
+    ):
         return None
     first = path.get("first_hit")
     if first == "target_first":
@@ -895,7 +1246,8 @@ def auxiliary_stage_net(row):
 def auxiliary_v2_candidates(population, incumbent_prompt, *, current=False):
     """Small deterministic one-axis candidates from predecision measurements."""
     from src.engine.scalping.entry_setup_evidence import (
-        auxiliary_materiality_values, validate_auxiliary_soft_policy,
+        auxiliary_materiality_values,
+        validate_auxiliary_soft_policy,
     )
 
     if not isinstance(incumbent_prompt, str) or not incumbent_prompt:
@@ -904,34 +1256,53 @@ def auxiliary_v2_candidates(population, incumbent_prompt, *, current=False):
         "veto_min_independent_evidence_count": 2,
         "pass_min_positive_evidence_count": 2,
         "materiality_max": {
-            "LIQUIDITY_FRAGILE": 0.0, "ADVERSE_TAPE": 0.0,
+            "LIQUIDITY_FRAGILE": 0.0,
+            "ADVERSE_TAPE": 0.0,
             "REWARD_RISK_WEAK": 0.0,
         },
         "prompt_version": incumbent_prompt,
     }
     candidates = []
     for family in base["materiality_max"]:
-        values = sorted({
-            measures[family] for row, _ in population
-            if (measures := auxiliary_materiality_values(
-                row["input"]["entry_setup_evidence_v1"]))[family] is not None
-        })
+        values = sorted(
+            {
+                measures[family]
+                for row, _ in population
+                if (
+                    measures := auxiliary_materiality_values(
+                        row["input"]["entry_setup_evidence_v1"]
+                    )
+                )[family]
+                is not None
+            }
+        )
         if values and (not current or len(values) > 1):
             limit = values[len(values) // 2]
-            profile = {**base, "materiality_max": {
-                **base["materiality_max"], family: limit,
-            }}
-            candidates.append({"schema": "auxiliary_soft_policy_v2",
-                               "parent": profile, "leaves": []})
-    dimensions = ("price_tick_band", "market_cap_band", "liquidity_band",
-                  "volatility_band", "structure_phase")
+            profile = {
+                **base,
+                "materiality_max": {
+                    **base["materiality_max"],
+                    family: limit,
+                },
+            }
+            candidates.append(
+                {"schema": "auxiliary_soft_policy_v2", "parent": profile, "leaves": []}
+            )
+    dimensions = (
+        "price_tick_band",
+        "market_cap_band",
+        "liquidity_band",
+        "volatility_band",
+        "structure_phase",
+    )
     counts = Counter()
     for row, _ in population:
         setup = row["input"]["entry_setup_evidence_v1"]
-        group = ((setup.get("mechanistic_context") or {})
-                 .get("group") or {})
+        group = (setup.get("mechanistic_context") or {}).get("group") or {}
         parts = dict(group.get("key_parts") or {})
-        parts["market_cap_band"] = (setup.get("auxiliary_predecision_type_v1") or {}).get("market_cap_band")
+        parts["market_cap_band"] = (
+            setup.get("auxiliary_predecision_type_v1") or {}
+        ).get("market_cap_band")
         for key in dimensions:
             value = parts.get(key)
             if value and value != "UNKNOWN":
@@ -943,24 +1314,36 @@ def auxiliary_v2_candidates(population, incumbent_prompt, *, current=False):
             continue
         # A leaf changes only the evidence threshold, not a machine gate.
         leaf = {**base, "veto_min_independent_evidence_count": 3}
-        candidates.append({"schema": "auxiliary_soft_policy_v2",
-                           "parent": base, "leaves": [{"match": {key: value}, "profile": leaf}]})
+        candidates.append(
+            {
+                "schema": "auxiliary_soft_policy_v2",
+                "parent": base,
+                "leaves": [{"match": {key: value}, "profile": leaf}],
+            }
+        )
     return [policy for policy in candidates if validate_auxiliary_soft_policy(policy)]
 
 
 def auxiliary_population_projection(current, parent, *, history_hashes=None):
     """Bounded multi-date stage population; each older source stays sealed."""
-    if not valid(current) or current.get("schema") != "compact_auxiliary_frozen_projection_v1":
+    if (
+        not valid(current)
+        or current.get("schema") != "compact_auxiliary_frozen_projection_v1"
+    ):
         raise ValueError("auxiliary_population_current_invalid")
     if history_hashes is not None and (
-        not isinstance(history_hashes, dict) or (not stage_logic_current(current) and len(history_hashes) > 4)
-        or any(not isinstance(day, str) or not sha256_hex(source_hash)
-               for day, source_hash in history_hashes.items())
+        not isinstance(history_hashes, dict)
+        or (not stage_logic_current(current) and len(history_hashes) > 4)
+        or any(
+            not isinstance(day, str) or not sha256_hex(source_hash)
+            for day, source_hash in history_hashes.items()
+        )
     ):
         raise ValueError("auxiliary_history_manifest_unbounded_or_invalid")
     day = current["target_date"]
     prior = []
     from src.engine.scalping.postclose_entry_validation import FrozenRows
+
     cumulative = FrozenRows() if stage_logic_current(current) else None
     cost_cache = {}
     paths_by_day = {}
@@ -974,7 +1357,11 @@ def auxiliary_population_projection(current, parent, *, history_hashes=None):
     for source_day, path in sorted(paths_by_day.items(), reverse=cumulative is None):
         if not (policy_refresh_start_date(day) <= source_day < day):
             continue
-        if history_hashes is None and not stage_logic_current(current) and len(prior) >= 4:
+        if (
+            history_hashes is None
+            and not stage_logic_current(current)
+            and len(prior) >= 4
+        ):
             break
         if history_hashes is not None and source_day not in history_hashes:
             continue
@@ -996,39 +1383,72 @@ def auxiliary_population_projection(current, parent, *, history_hashes=None):
                 value = {}
         else:
             value = read(path)
-        if (not valid(value) or value.get("target_date") != source_day
+        if (
+            not valid(value)
+            or value.get("target_date") != source_day
             or value.get("source_projection_contract") != SOURCE_PROJECTION_CONTRACT
-            or value.get("source_tuning_allowed") is not True):
+            or value.get("source_tuning_allowed") is not True
+        ):
             if history_hashes is not None:
                 raise ValueError("auxiliary_history_source_invalid:" + source_day)
             continue
-        if history_hashes is not None and value["artifact_content_sha256"] != history_hashes[source_day]:
+        if (
+            history_hashes is not None
+            and value["artifact_content_sha256"] != history_hashes[source_day]
+        ):
             raise ValueError("auxiliary_history_source_changed:" + source_day)
         if cumulative is not None:
-            for row in value.get('rows') or []:
-                cumulative.append(bind_stage_full_cost(row, Path(parent).parent.parent, profile_cache=cost_cache))
-            prior.append({'target_date': source_day, 'artifact_content_sha256': value['artifact_content_sha256']})
+            for row in value.get("rows") or []:
+                cumulative.append(
+                    bind_stage_full_cost(
+                        row, Path(parent).parent.parent, profile_cache=cost_cache
+                    )
+                )
+            prior.append(
+                {
+                    "target_date": source_day,
+                    "artifact_content_sha256": value["artifact_content_sha256"],
+                }
+            )
         else:
             prior.append(value)
-    if history_hashes is not None and set(history_hashes) != {p["target_date"] for p in prior}:
+    if history_hashes is not None and set(history_hashes) != {
+        p["target_date"] for p in prior
+    }:
         raise ValueError("auxiliary_history_source_missing")
     if cumulative is None:
         prior.reverse()
     else:
-        for row in current.get('rows') or []:
-            cumulative.append(bind_stage_full_cost(row, Path(parent).parent.parent, profile_cache=cost_cache))
+        for row in current.get("rows") or []:
+            cumulative.append(
+                bind_stage_full_cost(
+                    row, Path(parent).parent.parent, profile_cache=cost_cache
+                )
+            )
     source_hashes = {p["target_date"]: p["artifact_content_sha256"] for p in prior}
-    population = sealed({
-        **{key: value for key, value in current.items() if key != "artifact_content_sha256"},
-        "rows": cumulative if cumulative is not None else [row for p in prior for row in p.get("rows") or []]
-                + list(current.get("rows") or []),
-        "current_projection_sha256": current["artifact_content_sha256"],
-        "history_projection_sha256s": source_hashes,
-    })
+    population = sealed(
+        {
+            **{
+                key: value
+                for key, value in current.items()
+                if key != "artifact_content_sha256"
+            },
+            "rows": (
+                cumulative
+                if cumulative is not None
+                else [row for p in prior for row in p.get("rows") or []]
+                + list(current.get("rows") or [])
+            ),
+            "current_projection_sha256": current["artifact_content_sha256"],
+            "history_projection_sha256s": source_hashes,
+        }
+    )
     return population
 
 
-def evaluate_auxiliary_stage(projection, prompt_results=None, *, frozen_choices=None, partition_scope="all"):
+def evaluate_auxiliary_stage(
+    projection, prompt_results=None, *, frozen_choices=None, partition_scope="all"
+):
     """Bounded deterministic AI-stage replay over actual machine ENTER_NOW calls.
 
     This independent basis deliberately does not inherit the legacy 20-row,
@@ -1040,47 +1460,97 @@ def evaluate_auxiliary_stage(projection, prompt_results=None, *, frozen_choices=
             raise ValueError("partition_source_projection_invalid")
         if frozen_choices is not None or prompt_results:
             raise ValueError("partition_research_requires_retained_parent_responses")
-        rows = [row for row in projection.get("rows", []) if source_contract.selected(row, partition_scope)]
-        filtered = sealed({**projection, "rows": rows, "screened_total": len(rows),
-            "partition_scope": partition_scope, "unpartitioned_source_sha256": projection["artifact_content_sha256"]})
+        rows = [
+            row
+            for row in projection.get("rows", [])
+            if source_contract.selected(row, partition_scope)
+        ]
+        filtered = sealed(
+            {
+                **projection,
+                "rows": rows,
+                "screened_total": len(rows),
+                "partition_scope": partition_scope,
+                "unpartitioned_source_sha256": projection["artifact_content_sha256"],
+            }
+        )
         result = evaluate_auxiliary_stage(filtered)
-        return sealed({**result, "partition_scope": partition_scope, "policy_publication_forbidden": True,
-            "partition_contract": source_contract.CONTRACT})
+        return sealed(
+            {
+                **result,
+                "partition_scope": partition_scope,
+                "policy_publication_forbidden": True,
+                "partition_contract": source_contract.CONTRACT,
+            }
+        )
     from src.engine.scalping.entry_setup_evidence import (
-        evaluate_auxiliary_policy, _evaluate_auxiliary_policy_validated,
-        validate_mechanistic_risk_screen, repair_mechanistic_pass_citations,
-        entry_risk_adjudication_openai_schema, auxiliary_materiality_values,
+        evaluate_auxiliary_policy,
+        _evaluate_auxiliary_policy_validated,
+        validate_mechanistic_risk_screen,
+        repair_mechanistic_pass_citations,
+        entry_risk_adjudication_openai_schema,
+        auxiliary_materiality_values,
     )
-    from src.engine.scalping.entry_strategy_policy import machine_support_adjusted_win_rate
+    from src.engine.scalping.entry_strategy_policy import (
+        machine_support_adjusted_win_rate,
+    )
     from src.engine.ai_prompt_contracts import (
         ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION,
         ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION,
         ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION,
         ENTRY_MACHINE_AUXILIARY_COMPACT_CONTRACT_PROMPT_VERSION,
     )
-    from src.engine.scalping.mechanistic_entry_runtime_policy import compact_auxiliary_prompt
+    from src.engine.scalping.mechanistic_entry_runtime_policy import (
+        compact_auxiliary_prompt,
+    )
     from copy import deepcopy
-    from src.engine.scalping.postclose_entry_validation import chronological_split, opportunity_identity
+    from src.engine.scalping.postclose_entry_validation import (
+        chronological_split,
+        opportunity_identity,
+    )
+
     current = stage_logic_current(projection)
 
     def policy_with_prompt(policy, version):
         chosen = deepcopy(policy)
-        if isinstance(chosen, dict) and chosen.get("schema") == "auxiliary_soft_policy_v2":
+        if (
+            isinstance(chosen, dict)
+            and chosen.get("schema") == "auxiliary_soft_policy_v2"
+        ):
             chosen["parent"]["prompt_version"] = version
             for leaf in chosen["leaves"]:
                 leaf["profile"]["prompt_version"] = version
         return chosen
 
-    if not valid(projection) or projection.get("schema") != "compact_auxiliary_frozen_projection_v1":
+    if (
+        not valid(projection)
+        or projection.get("schema") != "compact_auxiliary_frozen_projection_v1"
+    ):
         raise ValueError("auxiliary_stage_projection_invalid")
     declared_partition = projection.get("partition_scope", "all")
-    if any(not source_contract.selected(row, declared_partition) for row in projection.get("rows", [])):
+    if any(
+        not source_contract.selected(row, declared_partition)
+        for row in projection.get("rows", [])
+    ):
         raise ValueError("auxiliary_declared_partition_population_conflict")
     seen, eligible, excluded = set(), [], Counter()
-    for row in sorted(projection.get("rows") or [], key=lambda r: (
-        str(r.get("decision_ts") or ""), str(r.get("evaluation_key") or ""))):
+    for row in sorted(
+        projection.get("rows") or [],
+        key=lambda r: (
+            str(r.get("decision_ts") or ""),
+            str(r.get("evaluation_key") or ""),
+        ),
+    ):
         try:
-            opportunity = opportunity_identity(row) if current else (row.get("source_date"), row.get("stock_code"), row.get("scanner_promotion_id"))
+            opportunity = (
+                opportunity_identity(row)
+                if current
+                else (
+                    row.get("source_date"),
+                    row.get("stock_code"),
+                    row.get("scanner_promotion_id"),
+                )
+            )
         except (ValueError, TypeError):
             excluded["opportunity_lineage_missing"] += 1
             continue
@@ -1088,36 +1558,60 @@ def evaluate_auxiliary_stage(projection, prompt_results=None, *, frozen_choices=
             excluded["duplicate_promotion_attempt"] += 1
             continue
         seen.add(opportunity)
-        if row.get("auxiliary_source_capsule") and source_contract.capsule_errors(row["auxiliary_source_capsule"], row):
+        if row.get("auxiliary_source_capsule") and source_contract.capsule_errors(
+            row["auxiliary_source_capsule"], row
+        ):
             excluded["auxiliary_source_capsule_invalid"] += 1
             continue
-        if row.get("exclusion_reason") in {"conflicting_exact_input", "conflicting_exact_owner_replay", "frozen_payload_missing_or_invalid", "auxiliary_source_capsule_invalid"}:
+        if row.get("exclusion_reason") in {
+            "conflicting_exact_input",
+            "conflicting_exact_owner_replay",
+            "frozen_payload_missing_or_invalid",
+            "auxiliary_source_capsule_invalid",
+        }:
             excluded["source_identity_contract_invalid"] += 1
             continue
         natural = row.get("natural_contract_evidence") or {}
-        if natural.get("semantic_validation_status") != "pass" or natural.get("decision_quality_contract_status") != "pass":
+        if (
+            natural.get("semantic_validation_status") != "pass"
+            or natural.get("decision_quality_contract_status") != "pass"
+        ):
             excluded["natural_response_invalid"] += 1
             continue
-        if not isinstance(row.get("input"), dict) or row.get("source_label_identity_reasons"):
+        if not isinstance(row.get("input"), dict) or row.get(
+            "source_label_identity_reasons"
+        ):
             excluded["frozen_input_or_label_identity_invalid"] += 1
             continue
         setup = row["input"].get("entry_setup_evidence_v1")
         raw = row.get("raw_response")
-        if not isinstance(setup, dict) or not isinstance(raw, dict) or not isinstance(row.get("machine_policy"), dict):
+        if (
+            not isinstance(setup, dict)
+            or not isinstance(raw, dict)
+            or not isinstance(row.get("machine_policy"), dict)
+        ):
             excluded["raw_response_or_setup_missing"] += 1
             continue
         # Runtime applies this deterministic citation repair before composing
         # its binding screen. Preserve the provider response in the projection.
-        replay_response, _ = repair_mechanistic_pass_citations(raw, setup_evidence=setup)
+        replay_response, _ = repair_mechanistic_pass_citations(
+            raw, setup_evidence=setup
+        )
         parent_policy = row.get("parent_auxiliary_soft_policy")
-        if (parent_policy and digest(parent_policy) != row.get("parent_auxiliary_soft_policy_sha256")):
+        if parent_policy and digest(parent_policy) != row.get(
+            "parent_auxiliary_soft_policy_sha256"
+        ):
             excluded["parent_soft_policy_hash_invalid"] += 1
             continue
         parent = evaluate_auxiliary_policy(
-            replay_response, setup_evidence=setup, machine_policy=row["machine_policy"],
-            soft_policy=parent_policy
+            replay_response,
+            setup_evidence=setup,
+            machine_policy=row["machine_policy"],
+            soft_policy=parent_policy,
         )
-        if parent["validation_errors"] or parent["effective_verdict"] != row.get("incumbent_verdict"):
+        if parent["validation_errors"] or parent["effective_verdict"] != row.get(
+            "incumbent_verdict"
+        ):
             excluded["raw_response_validation_or_verdict_mismatch"] += 1
             continue
         net = auxiliary_stage_net(row)
@@ -1127,29 +1621,42 @@ def evaluate_auxiliary_stage(projection, prompt_results=None, *, frozen_choices=
         eligible.append(({**row, "replay_response": replay_response}, net))
     groups = _scope_groups([row for row, _ in eligible])
     count_candidates = [
-        {"schema": "auxiliary_soft_policy_v1",
-         "veto_min_independent_evidence_count": veto,
-         "pass_min_positive_evidence_count": positive}
-        for veto in (1, 2, 3) for positive in (1, 2, 3)
+        {
+            "schema": "auxiliary_soft_policy_v1",
+            "veto_min_independent_evidence_count": veto,
+            "pass_min_positive_evidence_count": positive,
+        }
+        for veto in (1, 2, 3)
+        for positive in (1, 2, 3)
     ]
     scopes = {}
     candidate_population_keys = []
     for scope, rows in sorted(groups.items()):
-        parent_rows = (_scope_groups(projection.get('rows') or []).get(scope) or rows) if current else rows
-        latest = max(parent_rows, key=lambda row: (
-            str(row.get("source_date") or ""), str(row.get("decision_ts") or ""),
-            str(row.get("evaluation_key") or "")))
+        parent_rows = (
+            (_scope_groups(projection.get("rows") or []).get(scope) or rows)
+            if current
+            else rows
+        )
+        latest = max(
+            parent_rows,
+            key=lambda row: (
+                str(row.get("source_date") or ""),
+                str(row.get("decision_ts") or ""),
+                str(row.get("evaluation_key") or ""),
+            ),
+        )
         current_machine = digest(latest["machine_policy"])
         current_prompt = latest.get("incumbent_prompt_version")
         current_soft = digest(latest.get("parent_auxiliary_soft_policy"))
-        policy_hash_cache = {repr(latest['machine_policy']): current_machine}
+        policy_hash_cache = {repr(latest["machine_policy"]): current_machine}
+
         def compatible_machine(row):
             if not current:
-                return digest(row['machine_policy']) == current_machine
-            value = row.get('machine_policy')
+                return digest(row["machine_policy"]) == current_machine
+            value = row.get("machine_policy")
             # Fast inequality only excludes obviously different parents. An
             # equal dict still needs its canonical SHA (1 vs 1.0/-0.0 differ).
-            if value != latest['machine_policy']:
+            if value != latest["machine_policy"]:
                 return False
             # Frozen projection validity already restricts values to JSON.
             # A complete repr preserves numeric types/signs and key order;
@@ -1160,83 +1667,182 @@ def evaluate_auxiliary_stage(projection, prompt_results=None, *, frozen_choices=
                     policy_hash_cache.clear()
                 policy_hash_cache[identity] = digest(value)
             return policy_hash_cache[identity] == current_machine
-        compatible = [row for row in rows
-                      if compatible_machine(row)
-                      and row.get("incumbent_prompt_version") == current_prompt
-                      and digest(row.get("parent_auxiliary_soft_policy")) == current_soft]
-        by_key = {row["evaluation_key"]: net for row, net in eligible if row in compatible}
+
+        compatible = [
+            row
+            for row in rows
+            if compatible_machine(row)
+            and row.get("incumbent_prompt_version") == current_prompt
+            and digest(row.get("parent_auxiliary_soft_policy")) == current_soft
+        ]
+        by_key = {
+            row["evaluation_key"]: net for row, net in eligible if row in compatible
+        }
         population = [(row, by_key[row["evaluation_key"]]) for row in compatible]
-        full_cost_population = [(row, net) for row,net in population if stage_full_cost_valid(row)] if current else population
-        cost_excluded_count = len(population)-len(full_cost_population) if current else 0
+        full_cost_population = (
+            [(row, net) for row, net in population if stage_full_cost_valid(row)]
+            if current
+            else population
+        )
+        cost_excluded_count = (
+            len(population) - len(full_cost_population) if current else 0
+        )
         if current and full_cost_population:
             # Exact missing-cost rows stay in the source/diagnostic census.
             # They cannot veto independent, fully priced comparison rows.
             population = full_cost_population
-        candidate_population_keys.extend(row["evaluation_key"] for row,_ in full_cost_population)
-        parent_versions = sorted({row.get("incumbent_prompt_version") for row, _ in population})
-        parent_soft_hashes = sorted({digest(row.get("parent_auxiliary_soft_policy")) for row, _ in population})
+        candidate_population_keys.extend(
+            row["evaluation_key"] for row, _ in full_cost_population
+        )
+        parent_versions = sorted(
+            {row.get("incumbent_prompt_version") for row, _ in population}
+        )
+        parent_soft_hashes = sorted(
+            {digest(row.get("parent_auxiliary_soft_policy")) for row, _ in population}
+        )
         days = sorted({row.get("source_date") for row, _ in population})
         holdout_day = days[-1] if len(days) >= 2 else None
         same_day_holdout_keys = _same_day_holdout_keys([row for row, _ in population])
         split_manifest, train_keys, held_keys = None, None, None
         if current:
-            source_rows = [row for row in parent_rows if compatible_machine(row)
-                           and row.get('incumbent_prompt_version') == current_prompt
-                           and digest(row.get('parent_auxiliary_soft_policy')) == current_soft]
+            source_rows = [
+                row
+                for row in parent_rows
+                if compatible_machine(row)
+                and row.get("incumbent_prompt_version") == current_prompt
+                and digest(row.get("parent_auxiliary_soft_policy")) == current_soft
+            ]
             training, held, split_manifest = chronological_split(source_rows)
-            source_days = sorted({row['source_date'] for row in source_rows})
+            source_days = sorted({row["source_date"] for row in source_rows})
             holdout_day = source_days[-1] if len(source_days) > 1 else None
-            train_keys = {row['evaluation_key'] for row in training}
-            held_keys = {row['evaluation_key'] for row in held}
-            population = [(row, net) for row, net in population if row['evaluation_key'] in train_keys | held_keys]
+            train_keys = {row["evaluation_key"] for row in training}
+            held_keys = {row["evaluation_key"] for row in held}
+            population = [
+                (row, net)
+                for row, net in population
+                if row["evaluation_key"] in train_keys | held_keys
+            ]
             if not population:
                 continue
-            same_day_holdout_keys = held_keys if split_manifest['basis'] == 'same_day_70_30_opportunities' else set()
-        train_population = [(row, net) for row, net in population
-                            if ((not current or row['evaluation_key'] in train_keys) and row["evaluation_key"] not in same_day_holdout_keys
-                                and (holdout_day is None or row.get("source_date") != holdout_day))]
+            same_day_holdout_keys = (
+                held_keys
+                if split_manifest["basis"] == "same_day_70_30_opportunities"
+                else set()
+            )
+        train_population = [
+            (row, net)
+            for row, net in population
+            if (
+                (not current or row["evaluation_key"] in train_keys)
+                and row["evaluation_key"] not in same_day_holdout_keys
+                and (holdout_day is None or row.get("source_date") != holdout_day)
+            )
+        ]
         # This independent stage consumes exact facts/response/path and parent
         # policy identity, not the owner's large portfolio snapshots.
-        train_population_hash = digest([
-            {**{k: row.get(k) for k in ('evaluation_key', 'source_date', 'stock_code',
-               'scanner_promotion_id', 'decision_ts', 'effective_venue', 'session_bucket',
-               'input', 'replay_response', 'ai_stage_path', 'incumbent_verdict',
-               'incumbent_prompt_version', 'payload_sha256', 'issued_prompt_sha256',
-               'machine_bundle_sha256', 'natural_contract_evidence', 'source_label_identity_reasons')},
-             'net': net, 'machine_policy_sha256': current_machine, 'parent_soft_sha256': current_soft}
-            for row,net in train_population]) if current else None
+        train_population_hash = (
+            digest(
+                [
+                    {
+                        **{
+                            k: row.get(k)
+                            for k in (
+                                "evaluation_key",
+                                "source_date",
+                                "stock_code",
+                                "scanner_promotion_id",
+                                "decision_ts",
+                                "effective_venue",
+                                "session_bucket",
+                                "input",
+                                "replay_response",
+                                "ai_stage_path",
+                                "incumbent_verdict",
+                                "incumbent_prompt_version",
+                                "payload_sha256",
+                                "issued_prompt_sha256",
+                                "machine_bundle_sha256",
+                                "natural_contract_evidence",
+                                "source_label_identity_reasons",
+                            )
+                        },
+                        "net": net,
+                        "machine_policy_sha256": current_machine,
+                        "parent_soft_sha256": current_soft,
+                    }
+                    for row, net in train_population
+                ]
+            )
+            if current
+            else None
+        )
         axis_support = Counter()
         for row, _ in train_population:
             setup = row["input"]["entry_setup_evidence_v1"]
             for family, value in auxiliary_materiality_values(setup).items():
                 axis_support["materiality:" + family] += int(value is not None)
-            group = ((setup.get("mechanistic_context") or {}).get("group") or {})
+            group = (setup.get("mechanistic_context") or {}).get("group") or {}
             parts = dict(group.get("key_parts") or {})
-            parts["market_cap_band"] = (setup.get("auxiliary_predecision_type_v1") or {}).get("market_cap_band")
-            for dimension in ("price_tick_band", "market_cap_band", "liquidity_band",
-                              "volatility_band", "structure_phase"):
-                axis_support["type:" + dimension] += int(parts.get(dimension) not in (None, "", "UNKNOWN"))
+            parts["market_cap_band"] = (
+                setup.get("auxiliary_predecision_type_v1") or {}
+            ).get("market_cap_band")
+            for dimension in (
+                "price_tick_band",
+                "market_cap_band",
+                "liquidity_band",
+                "volatility_band",
+                "structure_phase",
+            ):
+                axis_support["type:" + dimension] += int(
+                    parts.get(dimension) not in (None, "", "UNKNOWN")
+                )
         candidates = count_candidates + (
-            auxiliary_v2_candidates(train_population, parent_versions[0], **({'current': True} if current else {}))
-            if len(parent_versions) == 1 else []
+            auxiliary_v2_candidates(
+                train_population,
+                parent_versions[0],
+                **({"current": True} if current else {}),
+            )
+            if len(parent_versions) == 1
+            else []
         )
         frozen_scope = (frozen_choices or {}).get(scope) if current else None
-        if frozen_scope and (frozen_scope.get('selection_rank_version') != STAGE_SELECTION_VERSION
-                             or frozen_scope.get('policy_sha256') != digest(frozen_scope.get('policy'))
-                             or frozen_scope.get('prompt_version') not in
-                             (parent_versions[0], *auxiliary_prompt_variants(parent_versions[0], current=True))):
-            raise ValueError('auxiliary_train_selection_invalid')
-        if current and not any(row['incumbent_verdict'] == 'VETO' for row,_ in train_population):
-            inherited = population[0][0].get('parent_auxiliary_soft_policy') or {}
-            inherited_veto = (inherited.get('parent') or inherited).get('veto_min_independent_evidence_count', 2)
+        if frozen_scope and (
+            frozen_scope.get("selection_rank_version") != STAGE_SELECTION_VERSION
+            or frozen_scope.get("policy_sha256") != digest(frozen_scope.get("policy"))
+            or frozen_scope.get("prompt_version")
+            not in (
+                parent_versions[0],
+                *auxiliary_prompt_variants(parent_versions[0], current=True),
+            )
+        ):
+            raise ValueError("auxiliary_train_selection_invalid")
+        if current and not any(
+            row["incumbent_verdict"] == "VETO" for row, _ in train_population
+        ):
+            inherited = population[0][0].get("parent_auxiliary_soft_policy") or {}
+            inherited_veto = (inherited.get("parent") or inherited).get(
+                "veto_min_independent_evidence_count", 2
+            )
+
             def preserves_unobserved_veto_axis(policy):
-                profiles = ([policy['parent']] + [leaf['profile'] for leaf in policy.get('leaves') or []]
-                            if policy.get('schema') == 'auxiliary_soft_policy_v2' else [policy])
-                return all(p.get('veto_min_independent_evidence_count') == inherited_veto for p in profiles)
+                profiles = (
+                    [policy["parent"]]
+                    + [leaf["profile"] for leaf in policy.get("leaves") or []]
+                    if policy.get("schema") == "auxiliary_soft_policy_v2"
+                    else [policy]
+                )
+                return all(
+                    p.get("veto_min_independent_evidence_count") == inherited_veto
+                    for p in profiles
+                )
+
             candidates = [p for p in candidates if preserves_unobserved_veto_axis(p)]
         prompt_variants = auxiliary_prompt_variants(parent_versions[0], current=current)
-        prompt_candidates = [version for version in prompt_variants
-                             if len(parent_versions) == 1 and version != parent_versions[0]]
+        prompt_candidates = [
+            version
+            for version in prompt_variants
+            if len(parent_versions) == 1 and version != parent_versions[0]
+        ]
         # One exact binding/validation per row and prompt variant, shared by
         # prompt-only and joint candidates. Parent raw validation passed above.
         prompt_response_cache = {}
@@ -1250,36 +1856,64 @@ def evaluate_auxiliary_stage(projection, prompt_results=None, *, frozen_choices=
                     continue
                 setup = row["input"]["entry_setup_evidence_v1"]
                 identity = auxiliary_prompt_identity(
-                    row, version, prompt_hash,
-                    digest(entry_risk_adjudication_openai_schema(setup)))
-                if (not valid(item) or item.get("candidate_identity") != identity
+                    row,
+                    version,
+                    prompt_hash,
+                    digest(entry_risk_adjudication_openai_schema(setup)),
+                )
+                if (
+                    not valid(item)
+                    or item.get("candidate_identity") != identity
                     or item.get("input_sha256") != input_identity(row)
                     or item.get("prompt_sha256") != prompt_hash
                     or not auxiliary_prompt_provenance_valid(item)
                     or item.get("validation_errors")
-                    or not isinstance(item.get("candidate_response"), dict)):
+                    or not isinstance(item.get("candidate_response"), dict)
+                ):
                     prompt_response_cache[(version, key)] = None
                     continue
                 response, _ = repair_mechanistic_pass_citations(
-                    item["candidate_response"], setup_evidence=setup,
+                    item["candidate_response"],
+                    setup_evidence=setup,
                 )
                 prompt_response_cache[(version, key)] = (
-                    response, validate_mechanistic_risk_screen(
-                        response, setup_evidence=setup, policy=row["machine_policy"]),
+                    response,
+                    validate_mechanistic_risk_screen(
+                        response, setup_evidence=setup, policy=row["machine_policy"]
+                    ),
                 )
         candidate_specs = [(policy, None) for policy in candidates]
-        candidate_specs += [(policy_with_prompt(
-                                population[0][0].get("parent_auxiliary_soft_policy"), version), version)
-                            for version in prompt_candidates]
+        candidate_specs += [
+            (
+                policy_with_prompt(
+                    population[0][0].get("parent_auxiliary_soft_policy"), version
+                ),
+                version,
+            )
+            for version in prompt_candidates
+        ]
         # Evaluate every single axis before a bounded train-ranked joint beam.
         # Two prompt variants x three train leaders keeps at most 32 candidates.
-        trial_specs = [(population[0][0].get("parent_auxiliary_soft_policy"), None),
-                       *candidate_specs]
+        trial_specs = [
+            (population[0][0].get("parent_auxiliary_soft_policy"), None),
+            *candidate_specs,
+        ]
         if frozen_scope:
-            frozen_prompt = frozen_scope['prompt_version']
-            trial_specs.insert(1, (frozen_scope['policy'], None if frozen_prompt == parent_versions[0] else frozen_prompt))
+            frozen_prompt = frozen_scope["prompt_version"]
+            trial_specs.insert(
+                1,
+                (
+                    frozen_scope["policy"],
+                    None if frozen_prompt == parent_versions[0] else frozen_prompt,
+                ),
+            )
         if current:
-            trial_specs = list({(digest(policy), version): (policy, version) for policy, version in trial_specs}.values())[:27]
+            trial_specs = list(
+                {
+                    (digest(policy), version): (policy, version)
+                    for policy, version in trial_specs
+                }.values()
+            )[:27]
         single_axis_count = len(trial_specs)
         positive_total = sum(net > 0 for _, net in population)
         negative_total = sum(net < 0 for _, net in population)
@@ -1293,19 +1927,33 @@ def evaluate_auxiliary_stage(projection, prompt_results=None, *, frozen_choices=
                 response = row["replay_response"]
                 response_errors = []
                 if prompt_variant:
-                    cached_response = prompt_response_cache[(
-                        prompt_variant, row["evaluation_key"])]
+                    cached_response = prompt_response_cache[
+                        (prompt_variant, row["evaluation_key"])
+                    ]
                     if cached_response is None:
                         prompt_missing += 1
-                        train_prompt_missing += int(not current or row['evaluation_key'] in train_keys)
-                        pairs.append((row["incumbent_verdict"], row["incumbent_verdict"], net))
-                        dated_pairs.append((row.get("source_date"), row["evaluation_key"], row["incumbent_verdict"], row["incumbent_verdict"], net))
+                        train_prompt_missing += int(
+                            not current or row["evaluation_key"] in train_keys
+                        )
+                        pairs.append(
+                            (row["incumbent_verdict"], row["incumbent_verdict"], net)
+                        )
+                        dated_pairs.append(
+                            (
+                                row.get("source_date"),
+                                row["evaluation_key"],
+                                row["incumbent_verdict"],
+                                row["incumbent_verdict"],
+                                net,
+                            )
+                        )
                         continue
                     response, response_errors = cached_response
                 assessment = _evaluate_auxiliary_policy_validated(
                     response,
                     row["input"]["entry_setup_evidence_v1"],
-                    policy, response_errors,
+                    policy,
+                    response_errors,
                 )
                 if assessment["validation_errors"]:
                     unsupported += 1
@@ -1314,123 +1962,262 @@ def evaluate_auxiliary_stage(projection, prompt_results=None, *, frozen_choices=
                 else:
                     verdict = assessment["effective_verdict"]
                 pairs.append((row["incumbent_verdict"], verdict, net))
-                dated_pairs.append((row.get("source_date"), row["evaluation_key"], row["incumbent_verdict"], verdict, net))
-                unsupported += int(bool(assessment.get("unsupported_materiality_codes")))
+                dated_pairs.append(
+                    (
+                        row.get("source_date"),
+                        row["evaluation_key"],
+                        row["incumbent_verdict"],
+                        verdict,
+                        net,
+                    )
+                )
+                unsupported += int(
+                    bool(assessment.get("unsupported_materiality_codes"))
+                )
             passed = [(old, new, net) for old, new, net in pairs if new == "PASS"]
             pass_count = len(passed)
             pass_wins = sum(net > 0 for _, _, net in passed)
-            selected_ev = sum(net for _, _, net in passed) / pass_count if pass_count else None
-            adjusted = machine_support_adjusted_win_rate({
-                "win_rate_pct": 100 * pass_wins / pass_count if pass_count else None,
-                "selected_opportunity_count": pass_count,
-            })
-            good_retention = sum(net > 0 and new == "PASS" for _, new, net in pairs) / positive_total if positive_total else None
-            bad_rejection = sum(net < 0 and new != "PASS" for _, new, net in pairs) / negative_total if negative_total else None
-            quality_parts = [v for v in (good_retention, bad_rejection) if v is not None]
-            balanced = sum(quality_parts) / len(quality_parts) if quality_parts else None
+            selected_ev = (
+                sum(net for _, _, net in passed) / pass_count if pass_count else None
+            )
+            adjusted = machine_support_adjusted_win_rate(
+                {
+                    "win_rate_pct": (
+                        100 * pass_wins / pass_count if pass_count else None
+                    ),
+                    "selected_opportunity_count": pass_count,
+                }
+            )
+            good_retention = (
+                sum(net > 0 and new == "PASS" for _, new, net in pairs) / positive_total
+                if positive_total
+                else None
+            )
+            bad_rejection = (
+                sum(net < 0 and new != "PASS" for _, new, net in pairs) / negative_total
+                if negative_total
+                else None
+            )
+            quality_parts = [
+                v for v in (good_retention, bad_rejection) if v is not None
+            ]
+            balanced = (
+                sum(quality_parts) / len(quality_parts) if quality_parts else None
+            )
             win_rate = pass_wins / pass_count if pass_count else None
-            q = .6 * win_rate + .4 * balanced if win_rate is not None and balanced is not None else None
-            delta = sum((int(new == "PASS") - int(old == "PASS")) * net for old, new, net in pairs) / len(pairs)
-            train = [(old, new, net) for day, key, old, new, net in dated_pairs
-                     if key not in same_day_holdout_keys and day != holdout_day and (not current or key in train_keys)]
-            holdout = [(old, new, net) for day, key, old, new, net in dated_pairs
-                       if (key in same_day_holdout_keys or day == holdout_day) and (not current or key in held_keys)]
+            q = (
+                0.6 * win_rate + 0.4 * balanced
+                if win_rate is not None and balanced is not None
+                else None
+            )
+            delta = sum(
+                (int(new == "PASS") - int(old == "PASS")) * net
+                for old, new, net in pairs
+            ) / len(pairs)
+            train = [
+                (old, new, net)
+                for day, key, old, new, net in dated_pairs
+                if key not in same_day_holdout_keys
+                and day != holdout_day
+                and (not current or key in train_keys)
+            ]
+            holdout = [
+                (old, new, net)
+                for day, key, old, new, net in dated_pairs
+                if (key in same_day_holdout_keys or day == holdout_day)
+                and (not current or key in held_keys)
+            ]
             train_pass = [net for _, new, net in train if new == "PASS"]
             train_pass_wins = sum(net > 0 for net in train_pass)
             held_pass = [net for _, new, net in holdout if new == "PASS"]
             held_wins = sum(net > 0 for net in held_pass)
             held_rate = 100 * held_wins / len(held_pass) if held_pass else None
-            train_adjusted = machine_support_adjusted_win_rate({
-                "win_rate_pct": (100 * train_pass_wins / len(train_pass)
-                                 if train_pass else None),
-                "selected_opportunity_count": len(train_pass),
-            })
+            train_adjusted = machine_support_adjusted_win_rate(
+                {
+                    "win_rate_pct": (
+                        100 * train_pass_wins / len(train_pass) if train_pass else None
+                    ),
+                    "selected_opportunity_count": len(train_pass),
+                }
+            )
+
             def split_delta(items):
-                return (sum((int(new == "PASS") - int(old == "PASS")) * net
-                            for old, new, net in items) / len(items) if items else None)
-            trials.append({
-                "policy": policy, "policy_sha256": digest(policy) if policy else None,
-                "prompt_version": prompt_variant or parent_versions[0],
-                "prompt_response_missing_count": prompt_missing,
-                **({"train_prompt_response_missing_count": train_prompt_missing,
-                    "evaluation_status": 'not_evaluated_prompt' if prompt_missing else 'evaluated',
-                    "train_successful_pass_changed_count": sum(old == 'PASS' and net > 0 and new != 'PASS' for old, new, net in train),
-                    "train_veto_to_pass_count": sum(old == 'VETO' and new == 'PASS' for old, new, _ in train),
-                    "holdout_veto_to_pass_count": sum(old == 'VETO' and new == 'PASS' for old, new, _ in holdout),
-                    "comparison_semantics": 'checkpoint_immediate_cf_caution_followup_unverified'} if current else {}),
-                "eligible_count": len(pairs), "pass_count": pass_count,
-                "pass_win_rate": win_rate, "good_pass_retention": good_retention,
-                "support_adjusted_win_rate_pct": adjusted,
-                "bad_pass_rejection": bad_rejection, "balanced_quality": balanced,
-                "q": q, "paired_delta_ev_pct": round(delta, 10),
-                "pass_mean_net_pct": round(selected_ev, 10) if selected_ev is not None else None,
-                "changed_count": sum(old != new for old, new, _ in pairs),
-                "successful_pass_changed_count": sum(old == "PASS" and net > 0 and new != "PASS" for old, new, net in pairs),
-                "unsupported_fallback_count": unsupported,
-                "train_count": len(train), "holdout_count": len(holdout),
-                "train_positive_count": sum(net > 0 for _, _, net in train),
-                "train_negative_count": sum(net < 0 for _, _, net in train),
-                "holdout_positive_count": sum(net > 0 for _, _, net in holdout),
-                "holdout_negative_count": sum(net < 0 for _, _, net in holdout),
-                "train_pass_count": sum(new == "PASS" for _, new, _ in train),
-                "train_pass_wins": train_pass_wins,
-                "train_pass_win_rate_pct": 100 * train_pass_wins / len(train_pass) if train_pass else None,
-                "holdout_pass_wins": held_wins,
-                "holdout_pass_win_rate_pct": held_rate,
-                "holdout_support_adjusted_win_rate_pct": machine_support_adjusted_win_rate({
-                    'win_rate_pct': held_rate, 'selected_opportunity_count': len(held_pass)}),
-                "holdout_successful_pass_changed_count": sum(old == 'PASS' and net > 0 and new != 'PASS' for old,new,net in holdout),
-                "train_failed_pass_avoided_count": sum(old == 'PASS' and net <= 0 and new != 'PASS' for old,new,net in train),
-                "holdout_failed_pass_avoided_count": sum(old == 'PASS' and net <= 0 and new != 'PASS' for old,new,net in holdout),
-                "train_support_adjusted_win_rate_pct": train_adjusted,
-                "train_pass_mean_net_pct": (round(sum(train_pass) / len(train_pass), 10)
-                                            if train_pass else None),
-                "holdout_pass_count": sum(new == "PASS" for _, new, _ in holdout),
-                "train_changed_count": sum(old != new for old, new, _ in train),
-                "holdout_changed_count": sum(old != new for old, new, _ in holdout),
-                "train_paired_delta_ev_pct": split_delta(train),
-                "holdout_paired_delta_ev_pct": split_delta(holdout),
-                "transitions": dict(Counter(f"{old}->{new}" for old, new, _ in pairs)),
-            })
+                return (
+                    sum(
+                        (int(new == "PASS") - int(old == "PASS")) * net
+                        for old, new, net in items
+                    )
+                    / len(items)
+                    if items
+                    else None
+                )
+
+            trials.append(
+                {
+                    "policy": policy,
+                    "policy_sha256": digest(policy) if policy else None,
+                    "prompt_version": prompt_variant or parent_versions[0],
+                    "prompt_response_missing_count": prompt_missing,
+                    **(
+                        {
+                            "train_prompt_response_missing_count": train_prompt_missing,
+                            "evaluation_status": (
+                                "not_evaluated_prompt"
+                                if prompt_missing
+                                else "evaluated"
+                            ),
+                            "train_successful_pass_changed_count": sum(
+                                old == "PASS" and net > 0 and new != "PASS"
+                                for old, new, net in train
+                            ),
+                            "train_veto_to_pass_count": sum(
+                                old == "VETO" and new == "PASS" for old, new, _ in train
+                            ),
+                            "holdout_veto_to_pass_count": sum(
+                                old == "VETO" and new == "PASS"
+                                for old, new, _ in holdout
+                            ),
+                            "comparison_semantics": "checkpoint_immediate_cf_caution_followup_unverified",
+                        }
+                        if current
+                        else {}
+                    ),
+                    "eligible_count": len(pairs),
+                    "pass_count": pass_count,
+                    "pass_win_rate": win_rate,
+                    "good_pass_retention": good_retention,
+                    "support_adjusted_win_rate_pct": adjusted,
+                    "bad_pass_rejection": bad_rejection,
+                    "balanced_quality": balanced,
+                    "q": q,
+                    "paired_delta_ev_pct": round(delta, 10),
+                    "pass_mean_net_pct": (
+                        round(selected_ev, 10) if selected_ev is not None else None
+                    ),
+                    "changed_count": sum(old != new for old, new, _ in pairs),
+                    "successful_pass_changed_count": sum(
+                        old == "PASS" and net > 0 and new != "PASS"
+                        for old, new, net in pairs
+                    ),
+                    "unsupported_fallback_count": unsupported,
+                    "train_count": len(train),
+                    "holdout_count": len(holdout),
+                    "train_positive_count": sum(net > 0 for _, _, net in train),
+                    "train_negative_count": sum(net < 0 for _, _, net in train),
+                    "holdout_positive_count": sum(net > 0 for _, _, net in holdout),
+                    "holdout_negative_count": sum(net < 0 for _, _, net in holdout),
+                    "train_pass_count": sum(new == "PASS" for _, new, _ in train),
+                    "train_pass_wins": train_pass_wins,
+                    "train_pass_win_rate_pct": (
+                        100 * train_pass_wins / len(train_pass) if train_pass else None
+                    ),
+                    "holdout_pass_wins": held_wins,
+                    "holdout_pass_win_rate_pct": held_rate,
+                    "holdout_support_adjusted_win_rate_pct": machine_support_adjusted_win_rate(
+                        {
+                            "win_rate_pct": held_rate,
+                            "selected_opportunity_count": len(held_pass),
+                        }
+                    ),
+                    "holdout_successful_pass_changed_count": sum(
+                        old == "PASS" and net > 0 and new != "PASS"
+                        for old, new, net in holdout
+                    ),
+                    "train_failed_pass_avoided_count": sum(
+                        old == "PASS" and net <= 0 and new != "PASS"
+                        for old, new, net in train
+                    ),
+                    "holdout_failed_pass_avoided_count": sum(
+                        old == "PASS" and net <= 0 and new != "PASS"
+                        for old, new, net in holdout
+                    ),
+                    "train_support_adjusted_win_rate_pct": train_adjusted,
+                    "train_pass_mean_net_pct": (
+                        round(sum(train_pass) / len(train_pass), 10)
+                        if train_pass
+                        else None
+                    ),
+                    "holdout_pass_count": sum(new == "PASS" for _, new, _ in holdout),
+                    "train_changed_count": sum(old != new for old, new, _ in train),
+                    "holdout_changed_count": sum(old != new for old, new, _ in holdout),
+                    "train_paired_delta_ev_pct": split_delta(train),
+                    "holdout_paired_delta_ev_pct": split_delta(holdout),
+                    "transitions": dict(
+                        Counter(f"{old}->{new}" for old, new, _ in pairs)
+                    ),
+                }
+            )
             if index == single_axis_count - 1 and prompt_candidates:
                 leaders = sorted(
-                    (trial for trial in trials[1:] if trial["prompt_version"] == parent_versions[0]
-                     and trial["train_count"] >= 5 and trial["train_paired_delta_ev_pct"] is not None),
+                    (
+                        trial
+                        for trial in trials[1:]
+                        if trial["prompt_version"] == parent_versions[0]
+                        and trial["train_count"] >= 5
+                        and trial["train_paired_delta_ev_pct"] is not None
+                    ),
                     key=lambda trial: (
                         trial["train_support_adjusted_win_rate_pct"] or -1,
                         trial["train_pass_win_rate_pct"] or -1,
                         trial["train_pass_count"],
                         trial["policy_sha256"] or "",
-                    ), reverse=True,
+                    ),
+                    reverse=True,
                 )[:3]
                 for version in prompt_candidates:
                     for leader in leaders:
                         spec = (policy_with_prompt(leader["policy"], version), version)
-                        if not current or (len(trial_specs) < 33 and all((digest(p), v) != (digest(spec[0]), spec[1]) for p,v in trial_specs)):
+                        if not current or (
+                            len(trial_specs) < 33
+                            and all(
+                                (digest(p), v) != (digest(spec[0]), spec[1])
+                                for p, v in trial_specs
+                            )
+                        ):
                             trial_specs.append(spec)
         incumbent = trials[0]
+
         def rank(trial):
             return (
                 round(trial["train_support_adjusted_win_rate_pct"], 10),
                 trial["train_pass_win_rate_pct"],
                 trial["train_pass_count"],
             )
-        incumbent_rank = (rank(incumbent)
-                          if incumbent["train_support_adjusted_win_rate_pct"] is not None else None)
+
+        incumbent_rank = (
+            rank(incumbent)
+            if incumbent["train_support_adjusted_win_rate_pct"] is not None
+            else None
+        )
         ranked = sorted(
-            (t for t in trials[1:] if t["pass_count"] and t["changed_count"]
-             and t["train_count"] >= 5 and t["holdout_count"] >= 3
-             and all(t[field] >= 1 for field in (
-                 "train_positive_count", "train_negative_count",
-                 "holdout_positive_count", "holdout_negative_count",
-                 "train_pass_count", "holdout_pass_count"))
-             and t["train_changed_count"] >= 2 and t["holdout_changed_count"] >= 1
-             and auxiliary_winrate_improves(t, incumbent, 'train')
-             and auxiliary_winrate_improves(t, incumbent, 'holdout')
-             and t["prompt_response_missing_count"] == 0
-             and t["train_support_adjusted_win_rate_pct"] is not None
-             and (incumbent_rank is None or rank(t) > incumbent_rank)
-             and len(parent_versions) == 1 and len(parent_soft_hashes) == 1),
+            (
+                t
+                for t in trials[1:]
+                if t["pass_count"]
+                and t["changed_count"]
+                and t["train_count"] >= 5
+                and t["holdout_count"] >= 3
+                and all(
+                    t[field] >= 1
+                    for field in (
+                        "train_positive_count",
+                        "train_negative_count",
+                        "holdout_positive_count",
+                        "holdout_negative_count",
+                        "train_pass_count",
+                        "holdout_pass_count",
+                    )
+                )
+                and t["train_changed_count"] >= 2
+                and t["holdout_changed_count"] >= 1
+                and auxiliary_winrate_improves(t, incumbent, "train")
+                and auxiliary_winrate_improves(t, incumbent, "holdout")
+                and t["prompt_response_missing_count"] == 0
+                and t["train_support_adjusted_win_rate_pct"] is not None
+                and (incumbent_rank is None or rank(t) > incumbent_rank)
+                and len(parent_versions) == 1
+                and len(parent_soft_hashes) == 1
+            ),
             key=rank,
             reverse=True,
         )
@@ -1438,141 +2225,281 @@ def evaluate_auxiliary_stage(projection, prompt_results=None, *, frozen_choices=
         frozen_train_choice = None
         holdout_errors = []
         if current:
-            train_ranked = sorted((t for t in trials[1:]
-                if t['train_count'] >= 5 and t['train_changed_count'] >= 2
-                and all(t[field] >= 1 for field in ('train_positive_count', 'train_negative_count', 'train_pass_count'))
-                and auxiliary_winrate_improves(t, incumbent, 'train')
-                and t['train_prompt_response_missing_count'] == 0
-                and t['train_support_adjusted_win_rate_pct'] is not None
-                and (incumbent_rank is None or rank(t) > incumbent_rank)), key=lambda t: (rank(t), t['policy_sha256'] or '', t['prompt_version']), reverse=True)
+            train_ranked = sorted(
+                (
+                    t
+                    for t in trials[1:]
+                    if t["train_count"] >= 5
+                    and t["train_changed_count"] >= 2
+                    and all(
+                        t[field] >= 1
+                        for field in (
+                            "train_positive_count",
+                            "train_negative_count",
+                            "train_pass_count",
+                        )
+                    )
+                    and auxiliary_winrate_improves(t, incumbent, "train")
+                    and t["train_prompt_response_missing_count"] == 0
+                    and t["train_support_adjusted_win_rate_pct"] is not None
+                    and (incumbent_rank is None or rank(t) > incumbent_rank)
+                ),
+                key=lambda t: (rank(t), t["policy_sha256"] or "", t["prompt_version"]),
+                reverse=True,
+            )
             frozen_train_choice = train_ranked[0] if train_ranked else None
             if not full_cost_population:
                 frozen_train_choice = None
-                holdout_errors.append('stage_full_cost_contract_missing')
+                holdout_errors.append("stage_full_cost_contract_missing")
             if frozen_scope:
-                frozen_train_choice = next((t for t in trials
-                    if digest(t['policy']) == frozen_scope.get('policy_sha256')
-                    and t['prompt_version'] == frozen_scope.get('prompt_version')), None)
-                if (frozen_scope.get('machine_policy_sha256') != current_machine
-                    or frozen_scope.get('parent_prompt_version') != current_prompt
-                    or frozen_scope.get('parent_soft_sha256') != current_soft):
-                    holdout_errors.append('frozen_selection_parent_changed')
-                if (frozen_scope.get('train_population_sha256') != train_population_hash
-                    or frozen_scope.get('split_manifest') != split_manifest):
-                    holdout_errors.append('frozen_selection_source_changed')
+                frozen_train_choice = next(
+                    (
+                        t
+                        for t in trials
+                        if digest(t["policy"]) == frozen_scope.get("policy_sha256")
+                        and t["prompt_version"] == frozen_scope.get("prompt_version")
+                    ),
+                    None,
+                )
+                if (
+                    frozen_scope.get("machine_policy_sha256") != current_machine
+                    or frozen_scope.get("parent_prompt_version") != current_prompt
+                    or frozen_scope.get("parent_soft_sha256") != current_soft
+                ):
+                    holdout_errors.append("frozen_selection_parent_changed")
+                if (
+                    frozen_scope.get("train_population_sha256") != train_population_hash
+                    or frozen_scope.get("split_manifest") != split_manifest
+                ):
+                    holdout_errors.append("frozen_selection_source_changed")
                 if frozen_train_choice not in train_ranked:
-                    holdout_errors.append('frozen_train_candidate_training_no_longer_qualified')
+                    holdout_errors.append(
+                        "frozen_train_candidate_training_no_longer_qualified"
+                    )
             if frozen_train_choice:
                 if frozen_train_choice not in ranked:
-                    holdout_errors.append('frozen_train_candidate_holdout_failed')
-                if frozen_train_choice['train_veto_to_pass_count'] and not frozen_train_choice['holdout_veto_to_pass_count']:
-                    holdout_errors.append('veto_to_pass_holdout_support_missing')
-                cost_rows = [row for row,_ in population]
+                    holdout_errors.append("frozen_train_candidate_holdout_failed")
+                if (
+                    frozen_train_choice["train_veto_to_pass_count"]
+                    and not frozen_train_choice["holdout_veto_to_pass_count"]
+                ):
+                    holdout_errors.append("veto_to_pass_holdout_support_missing")
+                cost_rows = [row for row, _ in population]
                 if any(not stage_full_cost_valid(row) for row in cost_rows):
-                    holdout_errors.append('stage_full_cost_contract_missing')
-                if projection.get('source_tuning_allowed') is not True:
-                    holdout_errors.append('stage_source_tuning_not_allowed')
-            ranked = [frozen_train_choice] if frozen_train_choice and not holdout_errors else []
+                    holdout_errors.append("stage_full_cost_contract_missing")
+                if projection.get("source_tuning_allowed") is not True:
+                    holdout_errors.append("stage_source_tuning_not_allowed")
+            ranked = (
+                [frozen_train_choice]
+                if frozen_train_choice and not holdout_errors
+                else []
+            )
             chosen = ranked[0] if ranked else incumbent
             for trial in trials:
-                trial['holdout_role'] = ('frozen_candidate_gate' if trial is frozen_train_choice
-                    else 'parent_comparator' if trial is incumbent else 'diagnostic_unselected_no_promotion_authority')
+                trial["holdout_role"] = (
+                    "frozen_candidate_gate"
+                    if trial is frozen_train_choice
+                    else (
+                        "parent_comparator"
+                        if trial is incumbent
+                        else "diagnostic_unselected_no_promotion_authority"
+                    )
+                )
         scopes[scope] = {
             "status": "candidate_selected" if ranked else "incumbent_carry",
-            "incumbent": incumbent, "selected": chosen, "candidates": trials,
-            "selection_rank_version": STAGE_SELECTION_VERSION if current else "train_winrate_improvement_holdout_gate_v5",
+            "incumbent": incumbent,
+            "selected": chosen,
+            "candidates": trials,
+            "selection_rank_version": (
+                STAGE_SELECTION_VERSION
+                if current
+                else "train_winrate_improvement_holdout_gate_v5"
+            ),
             "successful_pass_retention_role": "diagnostic_only",
-            **({"frozen_train_choice": frozen_train_choice, 'holdout_errors': holdout_errors,
-                'train_population_sha256': train_population_hash,
-                'split_manifest': split_manifest,
-                'prompt_variant_manifest': list(prompt_variants),
-                'completed_candidate_count': sum(t['evaluation_status'] == 'evaluated' for t in trials),
-                'holdout_selection_candidate_count': int(frozen_train_choice is not None),
-                'full_cost_candidate_population_count': len(full_cost_population),
-                'cost_incomplete_diagnostic_count': cost_excluded_count,
-                'metric_authority': 'full_cost_fixed_checkpoint_cf_not_owner_portfolio'} if current else {}),
-            "selection_blocker": (None if ranked else
-                                  "insufficient_independent_evidence" if holdout_day is None and not same_day_holdout_keys else
-                                  "candidate_evaluated_but_not_promotable"),
+            **(
+                {
+                    "frozen_train_choice": frozen_train_choice,
+                    "holdout_errors": holdout_errors,
+                    "train_population_sha256": train_population_hash,
+                    "split_manifest": split_manifest,
+                    "prompt_variant_manifest": list(prompt_variants),
+                    "completed_candidate_count": sum(
+                        t["evaluation_status"] == "evaluated" for t in trials
+                    ),
+                    "holdout_selection_candidate_count": int(
+                        frozen_train_choice is not None
+                    ),
+                    "full_cost_candidate_population_count": len(full_cost_population),
+                    "cost_incomplete_diagnostic_count": cost_excluded_count,
+                    "metric_authority": "full_cost_fixed_checkpoint_cf_not_owner_portfolio",
+                }
+                if current
+                else {}
+            ),
+            "selection_blocker": (
+                None
+                if ranked
+                else (
+                    "insufficient_independent_evidence"
+                    if holdout_day is None and not same_day_holdout_keys
+                    else "candidate_evaluated_but_not_promotable"
+                )
+            ),
             "axis_train_support_count": dict(axis_support),
             "holdout_day": holdout_day,
             "same_day_holdout_keys": sorted(same_day_holdout_keys),
             "prompt_candidate_status": (
-                "complete" if prompt_candidates and all(
-                    any(trial["prompt_version"] == version
+                "complete"
+                if prompt_candidates
+                and all(
+                    any(
+                        trial["prompt_version"] == version
                         and trial["prompt_response_missing_count"] == 0
-                        for trial in trials) for version in prompt_candidates)
+                        for trial in trials
+                    )
+                    for version in prompt_candidates
+                )
                 else "source_gap_exact_variant_response_missing"
             ),
             "parent_prompt_versions": parent_versions,
             "parent_soft_policy_sha256s": parent_soft_hashes,
-            "parent_machine_bundle_sha256s": sorted({
-                row.get("machine_bundle_sha256") for row, _ in population
-                if row.get("machine_bundle_sha256")
-            }),
+            "parent_machine_bundle_sha256s": sorted(
+                {
+                    row.get("machine_bundle_sha256")
+                    for row, _ in population
+                    if row.get("machine_bundle_sha256")
+                }
+            ),
             "eligible_count": len(population),
             "policy_compatible_count": len(population),
             "policy_incompatible_excluded_count": len(rows) - len(population),
             "current_machine_policy_sha256": current_machine,
-            "eligible_successful_pass_count": sum(row["incumbent_verdict"] == "PASS" and net > 0 for row, net in population),
-            "linked_successful_pass_count": sum(row["incumbent_verdict"] == "PASS" and net > 0 for row, net in population),
-            "positive_path_count": positive_total, "negative_path_count": negative_total,
-            "incumbent_net_ev_pct": round(sum(net * int(row["incumbent_verdict"] == "PASS") for row, net in population) / len(population), 10),
+            "eligible_successful_pass_count": sum(
+                row["incumbent_verdict"] == "PASS" and net > 0
+                for row, net in population
+            ),
+            "linked_successful_pass_count": sum(
+                row["incumbent_verdict"] == "PASS" and net > 0
+                for row, net in population
+            ),
+            "positive_path_count": positive_total,
+            "negative_path_count": negative_total,
+            "incumbent_net_ev_pct": round(
+                sum(
+                    net * int(row["incumbent_verdict"] == "PASS")
+                    for row, net in population
+                )
+                / len(population),
+                10,
+            ),
         }
     census = projection.get("source_census_inputs") or {}
     population_scope = projection.get("partition_scope", "all")
     census_responses = census.get("responses", [])
-    if not census and projection.get("source_projection_contract") == SOURCE_PROJECTION_CONTRACT:
-        census_responses = [source_contract.projected_response_record(row) for row in projection.get("rows", [])]
+    if (
+        not census
+        and projection.get("source_projection_contract") == SOURCE_PROJECTION_CONTRACT
+    ):
+        census_responses = [
+            source_contract.projected_response_record(row)
+            for row in projection.get("rows", [])
+        ]
     diagnostics = {
         **source_contract.DIAGNOSTIC_AUTHORITY,
         "contract": source_contract.CONTRACT,
         "partition_scope": population_scope,
-        "census_status": "recorded" if "source_census_inputs" in projection else "historical_machine_census_not_recorded",
-        "historical_machine_observed_count": None if not census else sum(
-            source_contract.selected(row, population_scope) for row in census.get("machines", [])),
-        "response_census_basis": "native_trace" if census else "sealed_v9_actual_provider_filter"
-            if projection.get("source_projection_contract") == SOURCE_PROJECTION_CONTRACT else "not_recorded",
-        "ledger": source_contract.ledger(census.get("machines", []), census_responses,
-            projection.get("rows", []), scope=population_scope,
-            stage_keys=[row["evaluation_key"] for row, _ in eligible]),
-        "plan_state_counts": dict(Counter(source_contract.plan_state(row)["state"] for row in projection.get("rows", []))),
-        "caution_lifecycle": source_contract.caution_lifecycle(projection.get("rows", [])),
-        "comparison_dispositions": {scope: "valid_no_change" if (
-            (evaluated := [trial for trial in result["candidates"] if trial.get("evaluation_status") == "evaluated"])
-            and all(trial.get("changed_count") == 0 for trial in evaluated)) else "changed_or_not_evaluated"
-            for scope, result in scopes.items()},
+        "census_status": (
+            "recorded"
+            if "source_census_inputs" in projection
+            else "historical_machine_census_not_recorded"
+        ),
+        "historical_machine_observed_count": (
+            None
+            if not census
+            else sum(
+                source_contract.selected(row, population_scope)
+                for row in census.get("machines", [])
+            )
+        ),
+        "response_census_basis": (
+            "native_trace"
+            if census
+            else (
+                "sealed_v9_actual_provider_filter"
+                if projection.get("source_projection_contract")
+                == SOURCE_PROJECTION_CONTRACT
+                else "not_recorded"
+            )
+        ),
+        "ledger": source_contract.ledger(
+            census.get("machines", []),
+            census_responses,
+            projection.get("rows", []),
+            scope=population_scope,
+            stage_keys=[row["evaluation_key"] for row, _ in eligible],
+        ),
+        "plan_state_counts": dict(
+            Counter(
+                source_contract.plan_state(row)["state"]
+                for row in projection.get("rows", [])
+            )
+        ),
+        "caution_lifecycle": source_contract.caution_lifecycle(
+            projection.get("rows", [])
+        ),
+        "comparison_dispositions": {
+            scope: (
+                "valid_no_change"
+                if (
+                    (
+                        evaluated := [
+                            trial
+                            for trial in result["candidates"]
+                            if trial.get("evaluation_status") == "evaluated"
+                        ]
+                    )
+                    and all(trial.get("changed_count") == 0 for trial in evaluated)
+                )
+                else "changed_or_not_evaluated"
+            )
+            for scope, result in scopes.items()
+        },
         "operating_comparable_count": None,
         "operating_comparable_status": "requires_independent_owner_paired_evaluation",
     }
-    return sealed({
-        "schema": "auxiliary_ai_stage_evaluation_v1",
-        "partition_scope": population_scope,
-        "policy_publication_forbidden": population_scope != "all",
-        "source_diagnostics": diagnostics,
-        "source_date": projection.get("target_date"),
-        "source_projection_sha256": projection.get("current_projection_sha256")
-                                    or projection["artifact_content_sha256"],
-        "population_projection_sha256": projection["artifact_content_sha256"],
-        "source_manifest_sha256": projection.get("source_manifest_sha256"),
-        "source_tuning_allowed": projection.get("source_tuning_allowed") is True,
-        "label_basis": "fixed_10m_completed_bar_target_adverse_or_end_cost_adjusted_not_actual_fill",
-        "screened_total": len(projection.get("rows") or []),
-        "eligible_count": len(eligible),
-        "eligible_keys": [row["evaluation_key"] for row, _ in eligible],
-        "candidate_population_keys": candidate_population_keys,
-        "excluded_count": sum(excluded.values()),
-        "exclusion_counts": dict(excluded),
-        "scope_results": scopes,
-        "additional_provider_calls": 0,
-        "runtime_effect": False, "actual_order_submitted": False,
-    })
+    return sealed(
+        {
+            "schema": "auxiliary_ai_stage_evaluation_v1",
+            "partition_scope": population_scope,
+            "policy_publication_forbidden": population_scope != "all",
+            "source_diagnostics": diagnostics,
+            "source_date": projection.get("target_date"),
+            "source_projection_sha256": projection.get("current_projection_sha256")
+            or projection["artifact_content_sha256"],
+            "population_projection_sha256": projection["artifact_content_sha256"],
+            "source_manifest_sha256": projection.get("source_manifest_sha256"),
+            "source_tuning_allowed": projection.get("source_tuning_allowed") is True,
+            "label_basis": "fixed_10m_completed_bar_target_adverse_or_end_cost_adjusted_not_actual_fill",
+            "screened_total": len(projection.get("rows") or []),
+            "eligible_count": len(eligible),
+            "eligible_keys": [row["evaluation_key"] for row, _ in eligible],
+            "candidate_population_keys": candidate_population_keys,
+            "excluded_count": sum(excluded.values()),
+            "exclusion_counts": dict(excluded),
+            "scope_results": scopes,
+            "additional_provider_calls": 0,
+            "runtime_effect": False,
+            "actual_order_submitted": False,
+        }
+    )
 
 
 def auxiliary_population_prompt_results(population, parent, current_results):
     """Read only receipts bound to the four sealed historical projections."""
     combined = defaultdict(dict)
-    for day, source_hash in (population.get("history_projection_sha256s") or {}).items():
+    for day, source_hash in (
+        population.get("history_projection_sha256s") or {}
+    ).items():
         old = read(Path(parent) / f"compact_auxiliary_paired_economic_{day}.json")
         if not valid(old) or old.get("source_projection_sha256") != source_hash:
             continue
@@ -1587,24 +2514,36 @@ def auxiliary_population_prompt_results(population, parent, current_results):
 
 def auxiliary_prompt_result_matches(row, version, result):
     """Accept a response only for this exact input, prompt and schema."""
-    from src.engine.scalping.entry_setup_evidence import entry_risk_adjudication_openai_schema
-    from src.engine.scalping.mechanistic_entry_runtime_policy import compact_auxiliary_prompt
+    from src.engine.scalping.entry_setup_evidence import (
+        entry_risk_adjudication_openai_schema,
+    )
+    from src.engine.scalping.mechanistic_entry_runtime_policy import (
+        compact_auxiliary_prompt,
+    )
 
-    if not isinstance(result, dict) or not valid(result) or result.get("validation_errors"):
+    if (
+        not isinstance(result, dict)
+        or not valid(result)
+        or result.get("validation_errors")
+    ):
         return False
     prompt_hash = digest(compact_auxiliary_prompt(prompt_version=version))
     setup = row["input"]["entry_setup_evidence_v1"]
     identity = auxiliary_prompt_identity(
-        row, version, prompt_hash,
-        digest(entry_risk_adjudication_openai_schema(setup)))
-    return (result.get("candidate_identity") == identity
-            and result.get("input_sha256") == input_identity(row)
-            and result.get("prompt_sha256") == prompt_hash
-            and auxiliary_prompt_provenance_valid(result)
-            and isinstance(result.get("candidate_response"), dict))
+        row, version, prompt_hash, digest(entry_risk_adjudication_openai_schema(setup))
+    )
+    return (
+        result.get("candidate_identity") == identity
+        and result.get("input_sha256") == input_identity(row)
+        and result.get("prompt_sha256") == prompt_hash
+        and auxiliary_prompt_provenance_valid(result)
+        and isinstance(result.get("candidate_response"), dict)
+    )
 
 
-def auxiliary_prompt_results_complete(population, results, eligible_keys, *, frozen_choices=None):
+def auxiliary_prompt_results_complete(
+    population, results, eligible_keys, *, frozen_choices=None
+):
     """Keep the execution checkpoint tied to every eligible exact response."""
     from src.engine.ai_prompt_contracts import (
         ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION,
@@ -1612,74 +2551,126 @@ def auxiliary_prompt_results_complete(population, results, eligible_keys, *, fro
         ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION,
         ENTRY_MACHINE_AUXILIARY_COMPACT_CONTRACT_PROMPT_VERSION,
     )
+
     if stage_logic_current(population):
-        schedule = auxiliary_prompt_schedule(population, results, eligible_keys, frozen_choices=frozen_choices)
-        return all(auxiliary_prompt_result_matches(row, version,
-                       (results.get(version) or {}).get(row['evaluation_key']))
-                   for row, versions in schedule for version in versions)
+        schedule = auxiliary_prompt_schedule(
+            population, results, eligible_keys, frozen_choices=frozen_choices
+        )
+        return all(
+            auxiliary_prompt_result_matches(
+                row, version, (results.get(version) or {}).get(row["evaluation_key"])
+            )
+            for row, versions in schedule
+            for version in versions
+        )
     variants = auxiliary_prompt_variants(None)
     return all(
         row["incumbent_prompt_version"] == version
         or auxiliary_prompt_result_matches(
-            row, version, (results.get(version) or {}).get(row["evaluation_key"]),
+            row,
+            version,
+            (results.get(version) or {}).get(row["evaluation_key"]),
         )
-        for row in population["rows"] if row["evaluation_key"] in eligible_keys
+        for row in population["rows"]
+        if row["evaluation_key"] in eligible_keys
         for version in variants
     )
 
 
-def auxiliary_prompt_schedule(population, results, eligible_keys, *, frozen_choices=None, freeze=None):
+def auxiliary_prompt_schedule(
+    population, results, eligible_keys, *, frozen_choices=None, freeze=None
+):
     """Train alternatives first; only the frozen winner consumes holdout calls."""
     if not stage_logic_current(population):
-        for row in population['rows']:
-            if row['evaluation_key'] in eligible_keys:
-                yield row, auxiliary_prompt_variants(row['incumbent_prompt_version'])
+        for row in population["rows"]:
+            if row["evaluation_key"] in eligible_keys:
+                yield row, auxiliary_prompt_variants(row["incumbent_prompt_version"])
         return
-    initial = evaluate_auxiliary_stage(population, results, frozen_choices=frozen_choices)
-    scopes = initial['scope_results']
+    initial = evaluate_auxiliary_stage(
+        population, results, frozen_choices=frozen_choices
+    )
+    scopes = initial["scope_results"]
     from src.engine.scalping.postclose_entry_validation import opportunity_identity
-    train_ids = {tuple(identity) for scope in scopes.values()
-                 for identity in (scope.get('split_manifest') or {}).get('train_opportunity_ids') or []}
-    held_ids = {tuple(identity) for scope in scopes.values()
-                for identity in (scope.get('split_manifest') or {}).get('holdout_opportunity_ids') or []}
-    for row in population['rows']:
-        if row['evaluation_key'] not in eligible_keys:
+
+    train_ids = {
+        tuple(identity)
+        for scope in scopes.values()
+        for identity in (scope.get("split_manifest") or {}).get("train_opportunity_ids")
+        or []
+    }
+    held_ids = {
+        tuple(identity)
+        for scope in scopes.values()
+        for identity in (scope.get("split_manifest") or {}).get(
+            "holdout_opportunity_ids"
+        )
+        or []
+    }
+    for row in population["rows"]:
+        if row["evaluation_key"] not in eligible_keys:
             continue
         if opportunity_identity(row) in train_ids:
-            scope = '|'.join((row['effective_venue'], row['session_bucket']))
-            yield row, tuple(scopes[scope]['prompt_variant_manifest'])
+            scope = "|".join((row["effective_venue"], row["session_bucket"]))
+            yield row, tuple(scopes[scope]["prompt_variant_manifest"])
     # results is the live checkpoint mapping populated as the generator yields.
-    learned = evaluate_auxiliary_stage(population, results, frozen_choices=frozen_choices)
+    learned = evaluate_auxiliary_stage(
+        population, results, frozen_choices=frozen_choices
+    )
     if freeze:
         frozen_choices = freeze(learned)
-        learned = evaluate_auxiliary_stage(population, results, frozen_choices=frozen_choices)
-    for row in population['rows']:
-        if row['evaluation_key'] not in eligible_keys or opportunity_identity(row) not in held_ids:
+        learned = evaluate_auxiliary_stage(
+            population, results, frozen_choices=frozen_choices
+        )
+    for row in population["rows"]:
+        if (
+            row["evaluation_key"] not in eligible_keys
+            or opportunity_identity(row) not in held_ids
+        ):
             continue
-        scope = '|'.join((row['effective_venue'], row['session_bucket']))
-        chosen = (learned['scope_results'].get(scope) or {}).get('frozen_train_choice')
-        errors = (learned['scope_results'].get(scope) or {}).get('holdout_errors') or []
-        if any(error in errors for error in ('frozen_selection_parent_changed',
-               'frozen_selection_source_changed', 'frozen_train_candidate_training_no_longer_qualified')):
+        scope = "|".join((row["effective_venue"], row["session_bucket"]))
+        chosen = (learned["scope_results"].get(scope) or {}).get("frozen_train_choice")
+        errors = (learned["scope_results"].get(scope) or {}).get("holdout_errors") or []
+        if any(
+            error in errors
+            for error in (
+                "frozen_selection_parent_changed",
+                "frozen_selection_source_changed",
+                "frozen_train_candidate_training_no_longer_qualified",
+            )
+        ):
             continue
-        version = chosen.get('prompt_version') if chosen else None
-        if version and version != row['incumbent_prompt_version']:
+        version = chosen.get("prompt_version") if chosen else None
+        if version and version != row["incumbent_prompt_version"]:
             yield row, (version,)
 
 
 def auxiliary_report_prompt_complete(projection, report, parent):
     population = auxiliary_population_projection(
-        projection, parent,
+        projection,
+        parent,
         history_hashes=report.get("auxiliary_history_projection_sha256s") or {},
     )
     results = auxiliary_population_prompt_results(
-        population, parent, report.get("auxiliary_prompt_results") or {},
+        population,
+        parent,
+        report.get("auxiliary_prompt_results") or {},
     )
     return auxiliary_prompt_results_complete(
-        population, results,
-        set((report.get("auxiliary_stage") or {}).get("candidate_population_keys") or []),
-        **({'frozen_choices': (report.get('auxiliary_train_selection') or {}).get('scopes') or {}}
-           if stage_logic_current(population) else {}),
+        population,
+        results,
+        set(
+            (report.get("auxiliary_stage") or {}).get("candidate_population_keys") or []
+        ),
+        **(
+            {
+                "frozen_choices": (report.get("auxiliary_train_selection") or {}).get(
+                    "scopes"
+                )
+                or {}
+            }
+            if stage_logic_current(population)
+            else {}
+        ),
     )
 
 
@@ -1689,52 +2680,89 @@ def replay_auxiliary_stage(projection, report, *, history_root=None):
         if history_root is None:
             raise ValueError("auxiliary_history_root_missing")
         projection = auxiliary_population_projection(
-            projection, history_root,
+            projection,
+            history_root,
             history_hashes=report["auxiliary_history_projection_sha256s"],
         )
         results = auxiliary_population_prompt_results(
-            projection, history_root, report.get("auxiliary_prompt_results") or {})
+            projection, history_root, report.get("auxiliary_prompt_results") or {}
+        )
     else:
         results = report.get("auxiliary_prompt_results") or {}
-    kwargs = {'frozen_choices': (report.get('auxiliary_train_selection') or {}).get('scopes') or {}} if stage_logic_current(projection) else {}
-    return (evaluate_auxiliary_stage(projection, prompt_results=results, **kwargs)
-            if results else evaluate_auxiliary_stage(projection, **kwargs))
+    kwargs = (
+        {
+            "frozen_choices": (report.get("auxiliary_train_selection") or {}).get(
+                "scopes"
+            )
+            or {}
+        }
+        if stage_logic_current(projection)
+        else {}
+    )
+    return (
+        evaluate_auxiliary_stage(projection, prompt_results=results, **kwargs)
+        if results
+        else evaluate_auxiliary_stage(projection, **kwargs)
+    )
 
 
 def auxiliary_winrate_improves(candidate, incumbent, split):
     """Same-population PASS win rates; losing a past winner is not a veto."""
-    raw = candidate.get(split + '_pass_win_rate_pct')
-    old_raw = incumbent.get(split + '_pass_win_rate_pct')
-    adjusted = candidate.get(split + '_support_adjusted_win_rate_pct')
-    old_adjusted = incumbent.get(split + '_support_adjusted_win_rate_pct')
+    raw = candidate.get(split + "_pass_win_rate_pct")
+    old_raw = incumbent.get(split + "_pass_win_rate_pct")
+    adjusted = candidate.get(split + "_support_adjusted_win_rate_pct")
+    old_adjusted = incumbent.get(split + "_support_adjusted_win_rate_pct")
     values = (raw, old_raw, adjusted, old_adjusted)
-    return (all(type(v) in (int, float) and math.isfinite(v) and 0 <= v <= 100 for v in values)
-            and raw > old_raw and adjusted >= old_adjusted)
+    return (
+        all(
+            type(v) in (int, float) and math.isfinite(v) and 0 <= v <= 100
+            for v in values
+        )
+        and raw > old_raw
+        and adjusted >= old_adjusted
+    )
 
 
 def freeze_auxiliary_selection(path, day, stage):
     """One immutable train choice per source day and scope, before held calls."""
-    if stage.get("policy_publication_forbidden") or stage.get("partition_scope", "all") != "all":
+    if (
+        stage.get("policy_publication_forbidden")
+        or stage.get("partition_scope", "all") != "all"
+    ):
         raise ValueError("partition_research_not_a_publishable_whole_scope_policy")
     previous = read(path)
-    if Path(path).exists() and (not valid(previous) or previous.get('target_date') != day
-                     or previous.get('selection_rank_version') != STAGE_SELECTION_VERSION
-                     or previous.get('schema') != 'auxiliary_train_selection_v1'):
-        raise ValueError('auxiliary_train_selection_invalid')
-    scopes = dict(previous.get('scopes') or {})
-    for scope, assessment in stage['scope_results'].items():
-        candidate = assessment.get('frozen_train_choice')
+    if Path(path).exists() and (
+        not valid(previous)
+        or previous.get("target_date") != day
+        or previous.get("selection_rank_version") != STAGE_SELECTION_VERSION
+        or previous.get("schema") != "auxiliary_train_selection_v1"
+    ):
+        raise ValueError("auxiliary_train_selection_invalid")
+    scopes = dict(previous.get("scopes") or {})
+    for scope, assessment in stage["scope_results"].items():
+        candidate = assessment.get("frozen_train_choice")
         if scope in scopes or candidate is None:
             continue
-        scopes[scope] = dict(policy=candidate['policy'], policy_sha256=digest(candidate['policy']),
+        scopes[scope] = dict(
+            policy=candidate["policy"],
+            policy_sha256=digest(candidate["policy"]),
             selection_rank_version=STAGE_SELECTION_VERSION,
-            prompt_version=candidate['prompt_version'], machine_policy_sha256=assessment['current_machine_policy_sha256'],
-            parent_prompt_version=assessment['parent_prompt_versions'][0],
-            parent_soft_sha256=assessment['parent_soft_policy_sha256s'][0],
-            train_population_sha256=assessment['train_population_sha256'],
-            split_manifest=assessment['split_manifest'])
-    value = sealed(dict(schema='auxiliary_train_selection_v1', selection_rank_version=STAGE_SELECTION_VERSION,
-                        target_date=day, scopes=scopes, **AUTHORITY))
+            prompt_version=candidate["prompt_version"],
+            machine_policy_sha256=assessment["current_machine_policy_sha256"],
+            parent_prompt_version=assessment["parent_prompt_versions"][0],
+            parent_soft_sha256=assessment["parent_soft_policy_sha256s"][0],
+            train_population_sha256=assessment["train_population_sha256"],
+            split_manifest=assessment["split_manifest"],
+        )
+    value = sealed(
+        dict(
+            schema="auxiliary_train_selection_v1",
+            selection_rank_version=STAGE_SELECTION_VERSION,
+            target_date=day,
+            scopes=scopes,
+            **AUTHORITY,
+        )
+    )
     write(path, value)
     return scopes
 
@@ -1743,9 +2771,13 @@ def evaluate(rows, results):
     """Cost/stop path CF is a percentage diagnostic, not portfolio realized PnL."""
     pairs, exclusions, transitions = [], Counter(), Counter()
     scope_exclusions = defaultdict(Counter)
+
     def exclude(row, reason):
         exclusions[reason] += 1
-        scope_exclusions["|".join((row["effective_venue"], row["session_bucket"]))][reason] += 1
+        scope_exclusions["|".join((row["effective_venue"], row["session_bucket"]))][
+            reason
+        ] += 1
+
     for row in rows:
         key = row["evaluation_key"]
         reason = row.get("exclusion_reason")
@@ -1838,11 +2870,16 @@ def evaluate(rows, results):
         comparable = len(paired_groups.get(scope, []))
         source_count = sum(bool(r.get("exclusion_reason")) for r in population)
         eligible_count = len(population) - source_count
-        scope_coverage[scope] = dict(screened_total=len(population), paired_comparable_count=comparable,
-            source_excluded_count=source_count, economic_eligible_count=eligible_count,
+        scope_coverage[scope] = dict(
+            screened_total=len(population),
+            paired_comparable_count=comparable,
+            source_excluded_count=source_count,
+            economic_eligible_count=eligible_count,
             response_coverage=comparable / eligible_count if eligible_count else None,
-            denominator_preserved=comparable + sum(scope_exclusions[scope].values()) == len(population),
-            exclusion_counts=dict(scope_exclusions[scope]))
+            denominator_preserved=comparable + sum(scope_exclusions[scope].values())
+            == len(population),
+            exclusion_counts=dict(scope_exclusions[scope]),
+        )
     return {
         "screened_total": len(rows),
         "paired_comparable_count": n,
@@ -1857,12 +2894,12 @@ def evaluate(rows, results):
         "decision_change_rate": (
             sum(not p["same_verdict"] for p in pairs) / n if n else None
         ),
-        "incumbent_net_ev_pct": sum(p["incumbent_net_pct"] for p in pairs) / n
-        if n
-        else None,
-        "candidate_net_ev_pct": sum(p["candidate_net_pct"] for p in pairs) / n
-        if n
-        else None,
+        "incumbent_net_ev_pct": (
+            sum(p["incumbent_net_pct"] for p in pairs) / n if n else None
+        ),
+        "candidate_net_ev_pct": (
+            sum(p["candidate_net_pct"] for p in pairs) / n if n else None
+        ),
         "delta_net_ev_pct": sum(p["delta_net_pct"] for p in pairs) / n if n else None,
         **portfolio,
         "counterfactual_not_realized_pnl": True,
@@ -1885,32 +2922,43 @@ def evaluate(rows, results):
 def _scope_groups(rows):
     groups = defaultdict(list)
     for row in rows:
-        groups["|".join((str(row.get("effective_venue")), str(row.get("session_bucket"))))].append(row)
+        groups[
+            "|".join((str(row.get("effective_venue")), str(row.get("session_bucket"))))
+        ].append(row)
     return groups
 
 
 def _same_day_holdout_keys(rows):
     """Keep retries of one promotion together in a strict KST time split."""
     days = {row.get("source_date") for row in rows}
-    if (len(days) != 1 or not isinstance(next(iter(days)), str)
-        or next(iter(days)) < "2026-09-29"):
+    if (
+        len(days) != 1
+        or not isinstance(next(iter(days)), str)
+        or next(iter(days)) < "2026-09-29"
+    ):
         return set()
     day = next(iter(days))
     groups = defaultdict(list)
     try:
         for row in rows:
             stamp = datetime.fromisoformat(row["decision_ts"])
-            if (stamp.tzinfo is None or stamp.astimezone(KST).date().isoformat() != day
-                or not row.get("scanner_promotion_id") or not row.get("evaluation_key")):
+            if (
+                stamp.tzinfo is None
+                or stamp.astimezone(KST).date().isoformat() != day
+                or not row.get("scanner_promotion_id")
+                or not row.get("evaluation_key")
+            ):
                 return set()
             groups[row["scanner_promotion_id"]].append((stamp, row["evaluation_key"]))
     except (KeyError, TypeError, ValueError):
         return set()
-    ordered = sorted((min(stamp for stamp, _ in values), promotion)
-                     for promotion, values in groups.items())
+    ordered = sorted(
+        (min(stamp for stamp, _ in values), promotion)
+        for promotion, values in groups.items()
+    )
     if len(ordered) < 2:
         return set()
-    boundary = max(1, int(len(ordered) * .7))
+    boundary = max(1, int(len(ordered) * 0.7))
     train = {promotion for _, promotion in ordered[:boundary]}
     held = {promotion for _, promotion in ordered[boundary:]}
     if max(stamp for promotion in train for stamp, _ in groups[promotion]) >= min(
@@ -1926,17 +2974,24 @@ def scope_candidate_validation(pairs, rows, metrics, plan, *, candidate, now):
     Earlier scopes never move their cutoff. A later scope may collect its own
     learning population, but may not use that population as its holdout.
     """
-    from src.engine.scalping.strategy_owner_replay import entry_operating_route_supported
+    from src.engine.scalping.strategy_owner_replay import (
+        entry_operating_route_supported,
+    )
+
     previous = plan.get("scope_candidates") or {}
-    same_day_holdout_keys = set((plan.get("candidate_selection") or {}).get(
-        "same_day_holdout_keys") or [])
+    same_day_holdout_keys = set(
+        (plan.get("candidate_selection") or {}).get("same_day_holdout_keys") or []
+    )
     frozen = dict(previous)
     validations = {}
     for scope, population in _scope_groups(rows).items():
         versions = {r.get("incumbent_prompt_version") for r in population}
         incumbent = next(iter(versions)) if len(versions) == 1 else None
-        exact = [p for p in _scope_groups(pairs).get(scope, [])
-                 if p.get("incumbent_prompt_version") == incumbent]
+        exact = [
+            p
+            for p in _scope_groups(pairs).get(scope, [])
+            if p.get("incumbent_prompt_version") == incumbent
+        ]
         state = frozen.get(scope) or {}
         if state and state.get("incumbent_prompt_version") != incumbent:
             # A changed incumbent is a new comparison; old evidence cannot
@@ -1946,29 +3001,66 @@ def scope_candidate_validation(pairs, rows, metrics, plan, *, candidate, now):
         for pair in exact:
             if pair["evaluation_key"] in same_day_holdout_keys:
                 continue
-            if entry_operating_route_supported(pair["effective_venue"], pair["session_bucket"], pair["broker_route"]):
-                routes[pair["broker_route"]].add((pair["source_date"], pair["scanner_promotion_id"]))
-        if not state and incumbent and incumbent != candidate and routes and all(
-                len(keys) >= CONTRACT["learning_episode_floor"] for keys in routes.values()):
-            state = {"candidate_frozen_at": now.isoformat(), "incumbent_prompt_version": incumbent,
-                     "learning_manifest_sha256": digest([p for p in exact
-                         if p["evaluation_key"] not in same_day_holdout_keys])}
+            if entry_operating_route_supported(
+                pair["effective_venue"], pair["session_bucket"], pair["broker_route"]
+            ):
+                routes[pair["broker_route"]].add(
+                    (pair["source_date"], pair["scanner_promotion_id"])
+                )
+        if (
+            not state
+            and incumbent
+            and incumbent != candidate
+            and routes
+            and all(
+                len(keys) >= CONTRACT["learning_episode_floor"]
+                for keys in routes.values()
+            )
+        ):
+            state = {
+                "candidate_frozen_at": now.isoformat(),
+                "incumbent_prompt_version": incumbent,
+                "learning_manifest_sha256": digest(
+                    [
+                        p
+                        for p in exact
+                        if p["evaluation_key"] not in same_day_holdout_keys
+                    ]
+                ),
+            }
             frozen[scope] = state
         cutoff = state.get("candidate_frozen_at")
         cutoff_day = cutoff[:10] if cutoff else now.date().isoformat()
-        same_day_keys = sorted(p["evaluation_key"] for p in exact
-                               if p["evaluation_key"] in same_day_holdout_keys)
+        same_day_keys = sorted(
+            p["evaluation_key"]
+            for p in exact
+            if p["evaluation_key"] in same_day_holdout_keys
+        )
         validations[scope] = {
             "incumbent_prompt_version": incumbent,
             "candidate_frozen_at": cutoff,
             "coverage": metrics.get("scope_coverage", {}).get(scope, {}),
-            "chronological_validation": {"candidate_frozen_at": cutoff,
+            "chronological_validation": {
+                "candidate_frozen_at": cutoff,
                 "same_day_holdout_keys": same_day_keys,
-                "learning_pairs": [p for p in exact if p["source_date"] <= cutoff_day
-                                   and p["evaluation_key"] not in same_day_holdout_keys],
-                "holdout_pairs": [p for p in exact if p["source_date"] > cutoff_day
-                                  or p["evaluation_key"] in same_day_holdout_keys] if cutoff else [],
-                "holdout_consumed": False},
+                "learning_pairs": [
+                    p
+                    for p in exact
+                    if p["source_date"] <= cutoff_day
+                    and p["evaluation_key"] not in same_day_holdout_keys
+                ],
+                "holdout_pairs": (
+                    [
+                        p
+                        for p in exact
+                        if p["source_date"] > cutoff_day
+                        or p["evaluation_key"] in same_day_holdout_keys
+                    ]
+                    if cutoff
+                    else []
+                ),
+                "holdout_consumed": False,
+            },
         }
     return validations, frozen
 
@@ -1979,8 +3071,12 @@ def _comparison_signatures(parent, day, candidate):
         source_day = path.stem.removeprefix("compact_auxiliary_paired_economic_")
         if len(source_day) == 10 and policy_refresh_start_date(day) <= source_day < day:
             paths.append(path)
-    return {str(path): [path.stat().st_size, path.stat().st_mtime_ns] if path.exists() else None
-            for path in sorted(paths)}
+    return {
+        str(path): (
+            [path.stat().st_size, path.stat().st_mtime_ns] if path.exists() else None
+        )
+        for path in sorted(paths)
+    }
 
 
 def portfolio_metrics(pairs):
@@ -2031,7 +3127,15 @@ def portfolio_metrics(pairs):
     }
 
 
-def promotion_valid(report, *, incumbent, selected, source_manifest_sha256, effective_date=None, scope=("KRX", "KRX_REGULAR")):
+def promotion_valid(
+    report,
+    *,
+    incumbent,
+    selected,
+    source_manifest_sha256,
+    effective_date=None,
+    scope=("KRX", "KRX_REGULAR"),
+):
     """A percentage path alone cannot prove executable daily net-profit uplift."""
     scoped = (report.get("scope_validation") or {}).get("|".join(scope))
     if (
@@ -2060,23 +3164,35 @@ def promotion_valid(report, *, incumbent, selected, source_manifest_sha256, effe
     inference_receipt = report.get("runtime_inference_cost_receipt") or {}
     try:
         pricing_root = Path(inference_receipt["pricing_path"]).parents[2]
-        if (inference_receipt.get("status") != "reviewed_operator_zero_cost"
-            or inference_receipt != runtime_inference_cost_receipt(pricing_root, report["target_date"])):
+        if inference_receipt.get(
+            "status"
+        ) != "reviewed_operator_zero_cost" or inference_receipt != runtime_inference_cost_receipt(
+            pricing_root, report["target_date"]
+        ):
             return False
         day = effective_date or report["target_date"]
-        if not inference_receipt["effective_from"] <= day <= inference_receipt["effective_to"]:
+        if (
+            not inference_receipt["effective_from"]
+            <= day
+            <= inference_receipt["effective_to"]
+        ):
             return False
     except (KeyError, IndexError, TypeError):
         return False
     from src.engine.scalping.entry_split_order_plan import EXECUTION_MODEL_CONTRACT
+
     model = report.get("owner_execution_model_validation") or {}
-    if (model.get("contract_version") != EXECUTION_MODEL_CONTRACT
-            or model.get("source_date") != report.get("target_date")
-            or model.get("status") != "validated_scope"
-            or model.get("allowed_runtime_apply") is not True):
+    if (
+        model.get("contract_version") != EXECUTION_MODEL_CONTRACT
+        or model.get("source_date") != report.get("target_date")
+        or model.get("status") != "validated_scope"
+        or model.get("allowed_runtime_apply") is not True
+    ):
         return False
     proof = (scoped or report).get("chronological_validation") or {}
-    if proof.get("candidate_frozen_at") != (scoped or report).get("candidate_frozen_at"):
+    if proof.get("candidate_frozen_at") != (scoped or report).get(
+        "candidate_frozen_at"
+    ):
         return False
     learning, holdout = (
         proof.get("learning_pairs") or [],
@@ -2084,10 +3200,16 @@ def promotion_valid(report, *, incumbent, selected, source_manifest_sha256, effe
     )
     same_day_keys = set(proof.get("same_day_holdout_keys") or [])
     selected_same_day_keys = set(selection.get("same_day_holdout_keys") or [])
-    if (not same_day_keys.issubset(selected_same_day_keys)
+    if (
+        not same_day_keys.issubset(selected_same_day_keys)
         or any(p.get("evaluation_key") in selected_same_day_keys for p in learning)
-        or {p.get("evaluation_key") for p in holdout
-            if p.get("evaluation_key") in selected_same_day_keys} != same_day_keys):
+        or {
+            p.get("evaluation_key")
+            for p in holdout
+            if p.get("evaluation_key") in selected_same_day_keys
+        }
+        != same_day_keys
+    ):
         return False
     try:
         frozen_day = (
@@ -2106,27 +3228,41 @@ def promotion_valid(report, *, incumbent, selected, source_manifest_sha256, effe
         return False
     if any(p.get("source_date", "") > frozen_day for p in learning) or any(
         p.get("source_date", "") <= frozen_day
-        and p.get("evaluation_key") not in same_day_keys for p in holdout
+        and p.get("evaluation_key") not in same_day_keys
+        for p in holdout
     ):
         return False
     if same_day_keys:
         try:
-            train_times = [datetime.fromisoformat(p["decision_ts"])
-                for p in learning if p.get("source_date") == frozen_day]
-            test_times = [datetime.fromisoformat(p["decision_ts"])
-                for p in holdout if p.get("evaluation_key") in same_day_keys]
+            train_times = [
+                datetime.fromisoformat(p["decision_ts"])
+                for p in learning
+                if p.get("source_date") == frozen_day
+            ]
+            test_times = [
+                datetime.fromisoformat(p["decision_ts"])
+                for p in holdout
+                if p.get("evaluation_key") in same_day_keys
+            ]
         except (KeyError, TypeError, ValueError):
             return False
-        if (not train_times or not test_times
-            or any(stamp.tzinfo is None or stamp.astimezone(KST).date().isoformat() != frozen_day
-                   for stamp in train_times + test_times)
-            or not max(train_times) < min(test_times)):
+        if (
+            not train_times
+            or not test_times
+            or any(
+                stamp.tzinfo is None
+                or stamp.astimezone(KST).date().isoformat() != frozen_day
+                for stamp in train_times + test_times
+            )
+            or not max(train_times) < min(test_times)
+        ):
             return False
     keys = [p.get("evaluation_key") for p in learning + holdout]
     if not all(keys) or len(set(keys)) != len(keys):
         return False
-    if ({(p.get("source_date"), p.get("scanner_promotion_id")) for p in learning}
-        & {(p.get("source_date"), p.get("scanner_promotion_id")) for p in holdout}):
+    if {(p.get("source_date"), p.get("scanner_promotion_id")) for p in learning} & {
+        (p.get("source_date"), p.get("scanner_promotion_id")) for p in holdout
+    }:
         return False
     cohorts = defaultdict(lambda: [[], []])
     for i, rows in enumerate((learning, holdout)):
@@ -2166,18 +3302,36 @@ def promotion_valid(report, *, incumbent, selected, source_manifest_sha256, effe
                 p.get("broker_route"),
             )
             cohorts[cohort][i].append(p)
-    coverage = scoped.get("coverage", {}) if scoped is not None else report.get("metrics", {})
-    if (not cohorts or coverage.get("response_coverage") != CONTRACT["minimum_response_coverage"]
-        or (scoped is not None and (coverage.get("denominator_preserved") is not True
-            or coverage.get("paired_comparable_count") != len(learning) + len(holdout)
-            or coverage.get("economic_eligible_count") != len(learning) + len(holdout)))):
+    coverage = (
+        scoped.get("coverage", {}) if scoped is not None else report.get("metrics", {})
+    )
+    if (
+        not cohorts
+        or coverage.get("response_coverage") != CONTRACT["minimum_response_coverage"]
+        or (
+            scoped is not None
+            and (
+                coverage.get("denominator_preserved") is not True
+                or coverage.get("paired_comparable_count")
+                != len(learning) + len(holdout)
+                or coverage.get("economic_eligible_count")
+                != len(learning) + len(holdout)
+            )
+        )
+    ):
         return False
     from src.engine.scalping.entry_setup_evidence import mechanistic_scope_supported
-    from src.engine.scalping.strategy_owner_replay import entry_operating_route_supported
+    from src.engine.scalping.strategy_owner_replay import (
+        entry_operating_route_supported,
+    )
+
     if not mechanistic_scope_supported(*scope):
         return False
-    exact = [halves for cohort, halves in cohorts.items() if cohort[:2] == tuple(scope)
-             and entry_operating_route_supported(*cohort)]
+    exact = [
+        halves
+        for cohort, halves in cohorts.items()
+        if cohort[:2] == tuple(scope) and entry_operating_route_supported(*cohort)
+    ]
     if not exact:
         return False
     for train, test in exact:
@@ -2206,11 +3360,14 @@ def promotion_valid(report, *, incumbent, selected, source_manifest_sha256, effe
             return False
         for half in (train, test):
             economics = operating_comparison_metrics(half, model)
-            if (economics["status"] != "supported_operating_comparison"
+            if (
+                economics["status"] != "supported_operating_comparison"
                 or economics["robust_paired_delta_ev_lower_bound_pct"] <= 0
-                or economics["candidate"]["net_pnl_krw"] <= economics["incumbent"]["net_pnl_krw"]
+                or economics["candidate"]["net_pnl_krw"]
+                <= economics["incumbent"]["net_pnl_krw"]
                 or economics["candidate"]["worst"] < economics["incumbent"]["worst"]
-                or economics["candidate"]["es10"] < economics["incumbent"]["es10"]):
+                or economics["candidate"]["es10"] < economics["incumbent"]["es10"]
+            ):
                 return False
     return proof.get("holdout_consumed") is False
 
@@ -2227,11 +3384,22 @@ def consume_holdout(proof, data_root, *, scopes=None):
     claims = previous.get("claims", {})
     identity = proof["artifact_content_sha256"]
     scoped = proof.get("scope_validation")
-    held = ([p for key, value in scoped.items() if scopes is None or key in scopes
-             for p in value["chronological_validation"]["holdout_pairs"]]
-            if scoped is not None else proof["chronological_validation"]["holdout_pairs"])
+    held = (
+        [
+            p
+            for key, value in scoped.items()
+            if scopes is None or key in scopes
+            for p in value["chronological_validation"]["holdout_pairs"]
+        ]
+        if scoped is not None
+        else proof["chronological_validation"]["holdout_pairs"]
+    )
     for pair in held:
-        if scopes is not None and "|".join((pair["effective_venue"], pair["session_bucket"])) not in scopes:
+        if (
+            scopes is not None
+            and "|".join((pair["effective_venue"], pair["session_bucket"]))
+            not in scopes
+        ):
             continue
         key = pair["evaluation_key"]
         if key in claims and claims[key] != identity:
@@ -2248,27 +3416,58 @@ def applied_decision_version_performance(split_report, *, day):
     descriptive realized performance does not estimate causal improvement.
     """
     from src.engine.scalping import entry_split_order_plan as split
+
     rows = []
     excluded = Counter()
-    for row in (split_report.get("operating_economic_state") or {}).get("model_rows") or []:
-        receipt=row.get("entry_decision_version_receipt") or {}
-        if (row.get("entry_decision_pid_consumed") is not True
-            or receipt.get("sha256") != split._canonical_sha256({k:v for k,v in receipt.items() if k != "sha256"})
-            or not all(receipt.get(k) for k in (
-                "machine_policy_version","machine_policy_sha256",
-                "compact_prompt_version","compact_prompt_sha256",
-                "decision_trace_id","runtime_pid"))):
-            excluded["exact_submit_decision_version_receipt_missing_or_invalid"]+=1
+    for row in (split_report.get("operating_economic_state") or {}).get(
+        "model_rows"
+    ) or []:
+        receipt = row.get("entry_decision_version_receipt") or {}
+        if (
+            row.get("entry_decision_pid_consumed") is not True
+            or receipt.get("sha256")
+            != split._canonical_sha256(
+                {k: v for k, v in receipt.items() if k != "sha256"}
+            )
+            or not all(
+                receipt.get(k)
+                for k in (
+                    "machine_policy_version",
+                    "machine_policy_sha256",
+                    "compact_prompt_version",
+                    "compact_prompt_sha256",
+                    "decision_trace_id",
+                    "runtime_pid",
+                )
+            )
+        ):
+            excluded["exact_submit_decision_version_receipt_missing_or_invalid"] += 1
             continue
-        rows.append({**row,"policy_version":"|".join((
-                receipt["machine_policy_version"], receipt["machine_policy_sha256"],
-                receipt["compact_prompt_version"], receipt["compact_prompt_sha256"])),
-            "policy_sha256":receipt.get("machine_bundle_sha256"),"policy_applied":True,
-            "pid_consumed":True,"runtime_pid":receipt["runtime_pid"]})
-    value=split.build_entry_split_post_apply_performance(rows,target_date=day)
-    return {**value,"axis":"joint_applied_machine_and_compact_version",
-        "source_owner":"entry_split_exact_initial_owner_custody_completed_cost_capital_join",
-        "excluded_counts":dict(excluded),"causal_profit_improvement":None}
+        rows.append(
+            {
+                **row,
+                "policy_version": "|".join(
+                    (
+                        receipt["machine_policy_version"],
+                        receipt["machine_policy_sha256"],
+                        receipt["compact_prompt_version"],
+                        receipt["compact_prompt_sha256"],
+                    )
+                ),
+                "policy_sha256": receipt.get("machine_bundle_sha256"),
+                "policy_applied": True,
+                "pid_consumed": True,
+                "runtime_pid": receipt["runtime_pid"],
+            }
+        )
+    value = split.build_entry_split_post_apply_performance(rows, target_date=day)
+    return {
+        **value,
+        "axis": "joint_applied_machine_and_compact_version",
+        "source_owner": "entry_split_exact_initial_owner_custody_completed_cost_capital_join",
+        "excluded_counts": dict(excluded),
+        "causal_profit_improvement": None,
+    }
 
 
 def primary_input_blocker(row, model):
@@ -2281,18 +3480,37 @@ def primary_input_blocker(row, model):
         # explicit route/model checks below may classify unsupported scope.
         return "source_gap", reason
     if row.get("source_label_identity_reasons"):
-        return "source_gap", "source_label_identity_contract_invalid:"+row["source_label_identity_reasons"][0]
-    from src.engine.scalping.strategy_owner_replay import entry_operating_route_supported
-    if not entry_operating_route_supported(row.get("effective_venue"), row.get("session_bucket"), row.get("broker_route")):
+        return (
+            "source_gap",
+            "source_label_identity_contract_invalid:"
+            + row["source_label_identity_reasons"][0],
+        )
+    from src.engine.scalping.strategy_owner_replay import (
+        entry_operating_route_supported,
+    )
+
+    if not entry_operating_route_supported(
+        row.get("effective_venue"), row.get("session_bucket"), row.get("broker_route")
+    ):
         return "unsupported_scope", "session_market_route_contract_invalid"
     replay = row.get("owner_replay") or {}
     arm = owner_operating_arm(replay, row)
     if not arm:
         raw = next(iter((replay.get("operating_arms") or {}).values()), {})
-        disposition = {"unsupported_scope":"unsupported_scope", "terminal_pending":"pending"}.get(raw.get("status"), "source_gap")
-        return disposition, raw.get("blocker") or "independent_operating_arm_missing_or_invalid"
+        disposition = {
+            "unsupported_scope": "unsupported_scope",
+            "terminal_pending": "pending",
+        }.get(raw.get("status"), "source_gap")
+        return (
+            disposition,
+            raw.get("blocker") or "independent_operating_arm_missing_or_invalid",
+        )
     if not owner_model_scope_valid(model, row):
-        return "insufficient_sample" if model.get("status") == "insufficient_mature_sample" else "source_gap", "independent_prior_operating_model_scope_not_validated"
+        return (
+            "insufficient_sample"
+            if model.get("status") == "insufficient_mature_sample"
+            else "source_gap"
+        ), "independent_prior_operating_model_scope_not_validated"
     return None
 
 
@@ -2300,7 +3518,8 @@ def blocker_accountability(disposition, blocker):
     """Point a blocker at its first repair owner without changing authority."""
     blocker = str(blocker or "unknown_input_blocker")
     if blocker.startswith("natural_response_") or blocker in {
-        "natural_contract_invalid", "natural_provider_or_model_contract_invalid"
+        "natural_contract_invalid",
+        "natural_provider_or_model_contract_invalid",
     }:
         return {
             "owner": "ai_decision_trace_and_quality_response_contract",
@@ -2343,15 +3562,19 @@ def candidate_selection_projections(parent, day, current):
     """Load only sealed current daily projections for incumbent-only learning."""
     projections = {}
     for path in sorted(parent.glob("compact_auxiliary_paired_economic_*.source.json")):
-        path_day = path.name.removeprefix("compact_auxiliary_paired_economic_").removesuffix(".source.json")
+        path_day = path.name.removeprefix(
+            "compact_auxiliary_paired_economic_"
+        ).removesuffix(".source.json")
         if not policy_refresh_start_date(day) <= path_day <= day:
             continue
         value = read(path)
         source_day = value.get("target_date")
         if (
             valid(value)
-            and value.get("source_projection_contract") in {
-                "compact_pre_ai_execution_source_v7", "compact_pre_ai_execution_source_v8",
+            and value.get("source_projection_contract")
+            in {
+                "compact_pre_ai_execution_source_v7",
+                "compact_pre_ai_execution_source_v8",
                 SOURCE_PROJECTION_CONTRACT,
             }
             and isinstance(source_day, str)
@@ -2380,9 +3603,11 @@ def _candidate_direction_economics(rows):
         outcome = (
             "CLEAN_FAST_PROFIT"
             if net > 0
-            else "CLEAN_FAST_LOSS_OR_ADVERSE"
-            if net < 0
-            else "FLAT_COST_ADJUSTED_OUTCOME"
+            else (
+                "CLEAN_FAST_LOSS_OR_ADVERSE"
+                if net < 0
+                else "FLAT_COST_ADJUSTED_OUTCOME"
+            )
         )
         counts[f"{verdict}|{outcome}"] += 1
         if verdict == "VETO" and net > 0:
@@ -2445,8 +3670,10 @@ def candidate_direction_selection(projections):
         projection_rows = projection.get("rows") or []
         if (
             not valid(projection)
-            or projection.get("source_projection_contract") not in {
-                "compact_pre_ai_execution_source_v7", "compact_pre_ai_execution_source_v8",
+            or projection.get("source_projection_contract")
+            not in {
+                "compact_pre_ai_execution_source_v7",
+                "compact_pre_ai_execution_source_v8",
                 SOURCE_PROJECTION_CONTRACT,
             }
             or projection.get("projection_contract_sha256") != digest(CONTRACT)
@@ -2460,19 +3687,21 @@ def candidate_direction_selection(projections):
             key = row.get("evaluation_key")
             if not key:
                 continue
-            identity = digest({
-                "input_sha256": input_identity(row),
-                "entry_economic_plan_sha256": row.get("entry_economic_plan_sha256"),
-                "evaluation_attempt_id": row.get("evaluation_attempt_id"),
-                "scanner_promotion_id": row.get("scanner_promotion_id"),
-                "incumbent_verdict": row.get("incumbent_verdict"),
-                "effective_venue": row.get("effective_venue"),
-                "session_bucket": row.get("session_bucket"),
-                "broker_route": row.get("broker_route"),
-                "owner_replay_sha256": (row.get("owner_replay") or {}).get(
-                    "replay_sha256"
-                ),
-            })
+            identity = digest(
+                {
+                    "input_sha256": input_identity(row),
+                    "entry_economic_plan_sha256": row.get("entry_economic_plan_sha256"),
+                    "evaluation_attempt_id": row.get("evaluation_attempt_id"),
+                    "scanner_promotion_id": row.get("scanner_promotion_id"),
+                    "incumbent_verdict": row.get("incumbent_verdict"),
+                    "effective_venue": row.get("effective_venue"),
+                    "session_bucket": row.get("session_bucket"),
+                    "broker_route": row.get("broker_route"),
+                    "owner_replay_sha256": (row.get("owner_replay") or {}).get(
+                        "replay_sha256"
+                    ),
+                }
+            )
             policy_scope = "|".join(
                 (str(row.get("effective_venue")), str(row.get("session_bucket")))
             )
@@ -2515,8 +3744,11 @@ def candidate_direction_selection(projections):
     scope_evidence = {}
     ready_rows = []
     for scope, values in sorted(grouped.items()):
-        values = [(row, arm) for row, arm in values
-                  if row["evaluation_key"] not in same_day_holdout_keys]
+        values = [
+            (row, arm)
+            for row, arm in values
+            if row["evaluation_key"] not in same_day_holdout_keys
+        ]
         economics = _candidate_direction_economics(values)
         ready = (
             len(
@@ -2591,15 +3823,21 @@ def candidate_direction_selection(projections):
     )
     receipt = {
         "schema": CANDIDATE_SELECTION_SCHEMA,
-        "status": "candidate_selected" if selected and selected_scopes else "insufficient_sample",
+        "status": (
+            "candidate_selected"
+            if selected and selected_scopes
+            else "insufficient_sample"
+        ),
         "selection_direction": combined_direction,
         "candidate_prompt_version": selected if selected_scopes else None,
         "selection_blocker": (
             None
             if selected
-            else "incumbent_only_candidate_direction_signal_not_decisive"
-            if ready_scope_count
-            else "incumbent_only_candidate_direction_learning_not_ready"
+            else (
+                "incumbent_only_candidate_direction_signal_not_decisive"
+                if ready_scope_count
+                else "incumbent_only_candidate_direction_learning_not_ready"
+            )
         ),
         "selected_policy_scopes": selected_scopes,
         "scope_evidence": scope_evidence,
@@ -2624,10 +3862,15 @@ def _candidate_plan_path(parent, day, candidate):
 def frozen_candidate_selection(parent, day):
     selections = []
     refresh_start = policy_refresh_start_date(day)
-    pattern = ("compact_candidate_plan_*.json" if refresh_start == "2026-06-05"
-               else f"compact_candidate_plan_forward_{refresh_start}_*.json")
+    pattern = (
+        "compact_candidate_plan_*.json"
+        if refresh_start == "2026-06-05"
+        else f"compact_candidate_plan_forward_{refresh_start}_*.json"
+    )
     for path in sorted(parent.glob(pattern)):
-        if refresh_start == "2026-06-05" and path.name.startswith("compact_candidate_plan_forward_"):
+        if refresh_start == "2026-06-05" and path.name.startswith(
+            "compact_candidate_plan_forward_"
+        ):
             continue
         plan = read(path)
         selection = plan.get("candidate_selection") or {}
@@ -2683,8 +3926,11 @@ def candidate_zero_disposition(rows, blockers, report):
     scope_dispositions = {}
     for scope, proof in (report.get("scope_validation") or {}).items():
         chronology = proof["chronological_validation"]
-        local_counts = Counter(blockers[r["evaluation_key"]][0] for r in _scope_groups(rows).get(scope, [])
-                               if r["evaluation_key"] in blockers)
+        local_counts = Counter(
+            blockers[r["evaluation_key"]][0]
+            for r in _scope_groups(rows).get(scope, [])
+            if r["evaluation_key"] in blockers
+        )
         train, held = chronology["learning_pairs"], chronology["holdout_pairs"]
         same_day_keys = set(chronology.get("same_day_holdout_keys") or [])
         by_route = defaultdict(lambda: [[], []])
@@ -2693,71 +3939,158 @@ def candidate_zero_disposition(rows, blockers, report):
                 by_route[pair["broker_route"]][i].append(pair)
         coverage = proof["coverage"]
         complete = bool(by_route) and all(
-            len({(p["source_date"], p["scanner_promotion_id"]) for p in learn}) >= CONTRACT["learning_episode_floor"]
-            and len({(p["source_date"], p["scanner_promotion_id"]) for p in test}) >= CONTRACT["holdout_episode_floor"]
-            and len({p["source_date"] for p in test}) >= CONTRACT["holdout_source_day_floor"]
-            for learn, test in by_route.values())
+            len({(p["source_date"], p["scanner_promotion_id"]) for p in learn})
+            >= CONTRACT["learning_episode_floor"]
+            and len({(p["source_date"], p["scanner_promotion_id"]) for p in test})
+            >= CONTRACT["holdout_episode_floor"]
+            and len({p["source_date"] for p in test})
+            >= CONTRACT["holdout_source_day_floor"]
+            for learn, test in by_route.values()
+        )
         if scope in report.get("promotion_scopes", []):
             disposition = "candidate_selected"
         elif local_counts:
-            disposition = next(k for k in ("source_gap", "unsupported_scope", "pending", "insufficient_sample") if local_counts.get(k))
-        elif coverage.get("economic_eligible_count", 0) > coverage.get("paired_comparable_count", 0):
+            disposition = next(
+                k
+                for k in (
+                    "source_gap",
+                    "unsupported_scope",
+                    "pending",
+                    "insufficient_sample",
+                )
+                if local_counts.get(k)
+            )
+        elif coverage.get("economic_eligible_count", 0) > coverage.get(
+            "paired_comparable_count", 0
+        ):
             disposition = "pending"
         elif not complete or not proof.get("candidate_frozen_at"):
             disposition = "insufficient_sample"
-        elif (coverage.get("denominator_preserved") is not True
-              or len({p["evaluation_key"] for p in train + held}) != len(train) + len(held)
-              or any(p["source_date"] > proof["candidate_frozen_at"][:10] for p in train)
-              or any(p["source_date"] <= proof["candidate_frozen_at"][:10]
-                     and p["evaluation_key"] not in same_day_keys for p in held)
-              or chronology.get("holdout_consumed") is not False):
+        elif (
+            coverage.get("denominator_preserved") is not True
+            or len({p["evaluation_key"] for p in train + held})
+            != len(train) + len(held)
+            or any(p["source_date"] > proof["candidate_frozen_at"][:10] for p in train)
+            or any(
+                p["source_date"] <= proof["candidate_frozen_at"][:10]
+                and p["evaluation_key"] not in same_day_keys
+                for p in held
+            )
+            or chronology.get("holdout_consumed") is not False
+        ):
             disposition = "source_gap"
         else:
-            economics = [operating_comparison_metrics(half, report["owner_execution_model_validation"])
-                         for halves in by_route.values() for half in halves]
-            disposition = ("valid_no_edge" if all(e.get("status") == "supported_operating_comparison" for e in economics)
-                           and any(e["robust_paired_delta_ev_lower_bound_pct"] <= 0
-                                   or e["candidate"]["worst"] < e["incumbent"]["worst"]
-                                   or e["candidate"]["es10"] < e["incumbent"]["es10"] for e in economics)
-                           else "source_gap")
-        scope_dispositions[scope] = {"status": disposition, "primary_input_disposition_counts": dict(local_counts),
-            "coverage": coverage, "valid_no_edge": disposition == "valid_no_edge",
+            economics = [
+                operating_comparison_metrics(
+                    half, report["owner_execution_model_validation"]
+                )
+                for halves in by_route.values()
+                for half in halves
+            ]
+            disposition = (
+                "valid_no_edge"
+                if all(
+                    e.get("status") == "supported_operating_comparison"
+                    for e in economics
+                )
+                and any(
+                    e["robust_paired_delta_ev_lower_bound_pct"] <= 0
+                    or e["candidate"]["worst"] < e["incumbent"]["worst"]
+                    or e["candidate"]["es10"] < e["incumbent"]["es10"]
+                    for e in economics
+                )
+                else "source_gap"
+            )
+        scope_dispositions[scope] = {
+            "status": disposition,
+            "primary_input_disposition_counts": dict(local_counts),
+            "coverage": coverage,
+            "valid_no_edge": disposition == "valid_no_edge",
             "owner": "existing_main_execution_and_empirical_model_owners",
-            "closure_test": "exact_scope_complete_population_prior_validated_model_and_independent_candidate_holdout"}
+            "closure_test": "exact_scope_complete_population_prior_validated_model_and_independent_candidate_holdout",
+        }
     if report.get("promotion_pass"):
         status = "candidate_selected"
     elif counts:
-        status = next(k for k in ("source_gap","unsupported_scope","pending","insufficient_sample") if counts.get(k))
+        status = next(
+            k
+            for k in (
+                "source_gap",
+                "unsupported_scope",
+                "pending",
+                "insufficient_sample",
+            )
+            if counts.get(k)
+        )
     elif report["metrics"]["paired_comparable_count"] < len(rows):
         status = "pending"
     elif scope_dispositions:
         states = {s["status"] for s in scope_dispositions.values()}
-        status = next(k for k in ("source_gap", "unsupported_scope", "pending", "insufficient_sample", "valid_no_edge") if k in states)
+        status = next(
+            k
+            for k in (
+                "source_gap",
+                "unsupported_scope",
+                "pending",
+                "insufficient_sample",
+                "valid_no_edge",
+            )
+            if k in states
+        )
     else:
         proof = report.get("chronological_validation") or {}
-        learning, held = proof.get("learning_pairs") or [], proof.get("holdout_pairs") or []
+        learning, held = (
+            proof.get("learning_pairs") or [],
+            proof.get("holdout_pairs") or [],
+        )
         same_day_keys = set(proof.get("same_day_holdout_keys") or [])
-        complete = (len({(p["source_date"],p["scanner_promotion_id"]) for p in learning}) >= CONTRACT["learning_episode_floor"]
-            and len({(p["source_date"],p["scanner_promotion_id"]) for p in held}) >= CONTRACT["holdout_episode_floor"]
-            and len({p["source_date"] for p in held}) >= CONTRACT["holdout_source_day_floor"])
-        keys=[p["evaluation_key"] for p in learning+held]
-        frozen=report.get("candidate_frozen_at") or ""
-        chronology=(len(keys)==len(set(keys)) and bool(frozen)
-            and all(p["source_date"]<=frozen[:10] for p in learning)
-            and all(p["source_date"]>frozen[:10]
-                    or p["evaluation_key"] in same_day_keys for p in held)
+        complete = (
+            len({(p["source_date"], p["scanner_promotion_id"]) for p in learning})
+            >= CONTRACT["learning_episode_floor"]
+            and len({(p["source_date"], p["scanner_promotion_id"]) for p in held})
+            >= CONTRACT["holdout_episode_floor"]
+            and len({p["source_date"] for p in held})
+            >= CONTRACT["holdout_source_day_floor"]
+        )
+        keys = [p["evaluation_key"] for p in learning + held]
+        frozen = report.get("candidate_frozen_at") or ""
+        chronology = (
+            len(keys) == len(set(keys))
+            and bool(frozen)
+            and all(p["source_date"] <= frozen[:10] for p in learning)
+            and all(
+                p["source_date"] > frozen[:10] or p["evaluation_key"] in same_day_keys
+                for p in held
+            )
             and proof.get("holdout_consumed") is False
-            and report["metrics"].get("response_coverage")==1.)
+            and report["metrics"].get("response_coverage") == 1.0
+        )
         comparison = report["metrics"].get("operating_economic_comparison") or {}
-        status = ("valid_no_edge" if complete and chronology and comparison.get("status") == "supported_operating_comparison"
+        status = (
+            "valid_no_edge"
+            if complete
+            and chronology
+            and comparison.get("status") == "supported_operating_comparison"
             and comparison.get("robust_paired_delta_ev_lower_bound_pct") is not None
-            and comparison["robust_paired_delta_ev_lower_bound_pct"] <= 0 else "source_gap" if complete and not chronology else "insufficient_sample")
-    return dict(status=status, primary_input_disposition_counts=counts, scope_dispositions=scope_dispositions,
-        blockers=[dict(evaluation_key=key,disposition=value[0],blocker=value[1],
-                       **blocker_accountability(value[0], value[1]))
-                  for key,value in blockers.items()],
-        valid_no_edge=status == "valid_no_edge", model_delta_ev_is_actual_profit=False)
-
+            and comparison["robust_paired_delta_ev_lower_bound_pct"] <= 0
+            else "source_gap" if complete and not chronology else "insufficient_sample"
+        )
+    return dict(
+        status=status,
+        primary_input_disposition_counts=counts,
+        scope_dispositions=scope_dispositions,
+        blockers=[
+            dict(
+                evaluation_key=key,
+                disposition=value[0],
+                blocker=value[1],
+                **blocker_accountability(value[0], value[1]),
+            )
+            for key, value in blockers.items()
+        ],
+        valid_no_edge=status == "valid_no_edge",
+        model_delta_ev_is_actual_profit=False,
+    )
 
 
 def upgrade_native_watch_metadata(projection, data_root, day):
@@ -2767,18 +4100,29 @@ def upgrade_native_watch_metadata(projection, data_root, day):
 
     if not valid(projection):
         raise ValueError("native_watch_metadata_projection_invalid")
-    if projection.get("native_watch_metadata_contract") == NATIVE_WATCH_METADATA_CONTRACT:
+    if (
+        projection.get("native_watch_metadata_contract")
+        == NATIVE_WATCH_METADATA_CONTRACT
+    ):
         return projection
     root = Path(data_root).resolve()
     logical = root / "ai_decision_trace" / f"ai_decision_trace_{day}.jsonl"
     actual = existing_or_gzip_path(logical)
     rows = [dict(row) for row in projection.get("rows") or []]
     fields = ("watch_origin", "watch_admission_id", "watch_generation_id")
-    wanted_rows = [row for row in rows if not source_identifier(row.get("scanner_promotion_id"))
-                   and not all(source_identifier(row.get(field)) for field in fields)]
+    wanted_rows = [
+        row
+        for row in rows
+        if not source_identifier(row.get("scanner_promotion_id"))
+        and not all(source_identifier(row.get(field)) for field in fields)
+    ]
     wanted = {row.get("evaluation_key") for row in wanted_rows}
     prior = (projection.get("dependency_signatures") or {}).get(str(logical))
-    signature = [actual.stat().st_size, actual.stat().st_mtime_ns] if actual and actual.exists() else None
+    signature = (
+        [actual.stat().st_size, actual.stat().st_mtime_ns]
+        if actual and actual.exists()
+        else None
+    )
     matches, conflicts = {}, set()
     status = "metadata_already_complete"
     if not wanted:
@@ -2786,11 +4130,20 @@ def upgrade_native_watch_metadata(projection, data_root, day):
     if wanted:
         status = "trace_generation_unavailable_or_changed"
         if actual and actual.exists() and signature == prior:
-            identity_fields = ("stock_code", "decision_ts", "payload_sha256", "machine_bundle_sha256",
-                               "effective_venue", "session_bucket", *fields)
+            identity_fields = (
+                "stock_code",
+                "decision_ts",
+                "payload_sha256",
+                "machine_bundle_sha256",
+                "effective_venue",
+                "session_bucket",
+                *fields,
+            )
             total_bytes = 0
             for trace in iter_jsonl(actual):
-                total_bytes += len(json.dumps(trace, ensure_ascii=False).encode("utf-8"))
+                total_bytes += len(
+                    json.dumps(trace, ensure_ascii=False).encode("utf-8")
+                )
                 if total_bytes > NATIVE_WATCH_METADATA_MAX_SCAN_BYTES:
                     matches.clear()
                     status = "native_watch_metadata_trace_scan_budget_exceeded"
@@ -2810,48 +4163,91 @@ def upgrade_native_watch_metadata(projection, data_root, day):
     for row in rows:
         key = row.get("evaluation_key")
         trace = matches.get(key) or {}
-        if (not source_identifier(key) or key not in wanted or key in conflicts
+        if (
+            not source_identifier(key)
+            or key not in wanted
+            or key in conflicts
             or row.get("source_date") != day
             or not all(source_identifier(trace.get(field)) for field in fields)
-            or not all(sha256_hex(row.get(field)) and row.get(field) == trace.get(field)
-                       for field in ("payload_sha256", "machine_bundle_sha256"))
-            or not all(isinstance(row.get(field), str) and row.get(field) == trace.get(field)
-                       for field in ("stock_code", "decision_ts"))
-            or not all(isinstance(row.get(field), str) and isinstance(trace.get(field), str)
-                       and row[field].upper() == trace[field].upper()
-                       for field in ("effective_venue", "session_bucket"))
+            or not all(
+                sha256_hex(row.get(field)) and row.get(field) == trace.get(field)
+                for field in ("payload_sha256", "machine_bundle_sha256")
+            )
+            or not all(
+                isinstance(row.get(field), str) and row.get(field) == trace.get(field)
+                for field in ("stock_code", "decision_ts")
+            )
+            or not all(
+                isinstance(row.get(field), str)
+                and isinstance(trace.get(field), str)
+                and row[field].upper() == trace[field].upper()
+                for field in ("effective_venue", "session_bucket")
+            )
             or not str(row.get("decision_ts") or "").startswith(day + "T")
-            or any(source_identifier(row.get(field)) and row[field] != trace[field] for field in fields)):
+            or any(
+                source_identifier(row.get(field)) and row[field] != trace[field]
+                for field in fields
+            )
+        ):
             continue
         row.update({field: trace[field] for field in fields})
         repaired += 1
-    return sealed({**projection, "rows": rows,
-        "native_watch_metadata_contract": NATIVE_WATCH_METADATA_CONTRACT,
-        "native_watch_metadata_upgrade": dict(status=status, repaired_rows=repaired,
-            unresolved_rows=len(wanted_rows) - repaired, conflicting_trace_keys=len(conflicts),
-            original_projection_sha256=projection.get("artifact_content_sha256"),
-            trace_generation_signature=signature, payloads_read=False,
-            economic_inputs_reconstructed=False)})
+    return sealed(
+        {
+            **projection,
+            "rows": rows,
+            "native_watch_metadata_contract": NATIVE_WATCH_METADATA_CONTRACT,
+            "native_watch_metadata_upgrade": dict(
+                status=status,
+                repaired_rows=repaired,
+                unresolved_rows=len(wanted_rows) - repaired,
+                conflicting_trace_keys=len(conflicts),
+                original_projection_sha256=projection.get("artifact_content_sha256"),
+                trace_generation_signature=signature,
+                payloads_read=False,
+                economic_inputs_reconstructed=False,
+            ),
+        }
+    )
 
 
 def source_dependency_signatures(data_root, day):
     root = Path(data_root).resolve()
-    paths = [root / "ai_decision_trace" / f"ai_decision_trace_{day}.jsonl",
-             root / "ai_decision_payloads" / f"ai_decision_payloads_{day}.jsonl",
-             root / "report/ai_decision_outcome_labels" / f"ai_decision_outcome_labels_{day}.json",
-             root / "report/observation_source_quality_audit" / f"observation_source_quality_audit_{day}.json",
-             root / "report/entry_split_order_plan" / f"entry_split_order_plan_{day}.json"]
-    if day >= '2026-10-02':
-        paths.append(root / 'report/micro_reversion_economic_reference' / f'micro_reversion_economic_reference_{day}.json')
+    paths = [
+        root / "ai_decision_trace" / f"ai_decision_trace_{day}.jsonl",
+        root / "ai_decision_payloads" / f"ai_decision_payloads_{day}.jsonl",
+        root
+        / "report/ai_decision_outcome_labels"
+        / f"ai_decision_outcome_labels_{day}.json",
+        root
+        / "report/observation_source_quality_audit"
+        / f"observation_source_quality_audit_{day}.json",
+        root / "report/entry_split_order_plan" / f"entry_split_order_plan_{day}.json",
+    ]
+    if day >= "2026-10-02":
+        paths.append(
+            root
+            / "report/micro_reversion_economic_reference"
+            / f"micro_reversion_economic_reference_{day}.json"
+        )
     signatures = {}
     for dependency in paths:
         actual = dependency if dependency.exists() else Path(str(dependency) + ".gz")
-        signatures[str(dependency)] = [actual.stat().st_size, actual.stat().st_mtime_ns] if actual.exists() else None
+        signatures[str(dependency)] = (
+            [actual.stat().st_size, actual.stat().st_mtime_ns]
+            if actual.exists()
+            else None
+        )
     return signatures
 
 
 def evaluation_fingerprint(
-    *, projection, candidate_prompt, candidate_contract, cost_receipt, candidate_selection
+    *,
+    projection,
+    candidate_prompt,
+    candidate_contract,
+    cost_receipt,
+    candidate_selection,
 ):
     """Identify one economically distinct evaluation generation."""
     rows = projection.get("rows") or []
@@ -2860,7 +4256,11 @@ def evaluation_fingerprint(
             "source_generation": projection.get("artifact_content_sha256"),
             "eligible_population_hash": digest(
                 [
-                    [row.get("evaluation_key"), input_identity(row), row.get("exclusion_reason")]
+                    [
+                        row.get("evaluation_key"),
+                        input_identity(row),
+                        row.get("exclusion_reason"),
+                    ]
                     for row in rows
                 ]
             ),
@@ -2879,8 +4279,12 @@ def evaluation_fingerprint(
             "promotion_contract_hash": digest(CONTRACT),
             "partition_scope": projection.get("partition_scope", "all"),
             "source_diagnostics_contract": source_contract.CONTRACT,
-            "consumer_code_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
-            "source_contract_code_sha256": hashlib.sha256(Path(source_contract.__file__).read_bytes()).hexdigest(),
+            "consumer_code_sha256": hashlib.sha256(
+                Path(__file__).read_bytes()
+            ).hexdigest(),
+            "source_contract_code_sha256": hashlib.sha256(
+                Path(source_contract.__file__).read_bytes()
+            ).hexdigest(),
         }
     )
 
@@ -2922,7 +4326,8 @@ def run(
     from src.engine.scalping import ai_decision_quality as quality
     from src.engine.scalping.entry_setup_evidence import (
         entry_risk_adjudication_openai_schema,
-        validate_entry_risk_adjudication, repair_mechanistic_pass_citations,
+        validate_entry_risk_adjudication,
+        repair_mechanistic_pass_citations,
     )
     from src.engine.scalping.mechanistic_entry_runtime_policy import (
         COMPACT_AI_VARIANTS,
@@ -2947,11 +4352,25 @@ def run(
         projection = read(projection_path)
         signatures = source_dependency_signatures(root, day)
         dependency_paths = [Path(p) for p in signatures]
-        label_dependency = str(root / "report/ai_decision_outcome_labels" / f"ai_decision_outcome_labels_{day}.json")
-        split_dependency = str(root / "report/entry_split_order_plan" / f"entry_split_order_plan_{day}.json")
-        split_dependency = str(root / "report/entry_split_order_plan" / f"entry_split_order_plan_{day}.json")
+        label_dependency = str(
+            root
+            / "report/ai_decision_outcome_labels"
+            / f"ai_decision_outcome_labels_{day}.json"
+        )
+        split_dependency = str(
+            root
+            / "report/entry_split_order_plan"
+            / f"entry_split_order_plan_{day}.json"
+        )
+        split_dependency = str(
+            root
+            / "report/entry_split_order_plan"
+            / f"entry_split_order_plan_{day}.json"
+        )
         label_report = read(Path(label_dependency))
-        label_rows = [x for x in label_report.get("labels") or [] if isinstance(x, dict)]
+        label_rows = [
+            x for x in label_report.get("labels") or [] if isinstance(x, dict)
+        ]
         label_index = {x.get("decision_trace_id"): x for x in label_rows}
         label_counts = Counter(x.get("decision_trace_id") for x in label_rows)
         # A hash-only label refresh must not hide a changed admission decision.
@@ -2959,56 +4378,137 @@ def run(
         # attached the new label hash to a projection with stale exclusions.
         label_projection_matches = signatures[label_dependency] is None or (
             label_report.get("target_date") == day
-            and all(label_counts[row.get("evaluation_key")] == 1
-                and row.get("entry_quality_path") == ((label_index[row["evaluation_key"]].get("horizon_metrics") or {}).get("10m") or {}).get("entry_quality_path", {})
-                and (projection.get("schema") != "compact_auxiliary_frozen_projection_v1"
-                     or projection.get("source_projection_contract") != SOURCE_PROJECTION_CONTRACT
-                     or stage_path_label_matches(row, label_index[row["evaluation_key"]]))
-                and (row.get("source_label_identity_reasons") or []) == [
-                    r for r in label_index[row["evaluation_key"]].get("primary_cohort_exclusion_reasons") or []
-                    if r in {"payload_trace_venue_mismatch", "payload_trace_session_mismatch", "canonical_context_venue_session_mismatch"}]
-                for row in projection.get("rows") or []))
+            and all(
+                label_counts[row.get("evaluation_key")] == 1
+                and row.get("entry_quality_path")
+                == (
+                    (
+                        label_index[row["evaluation_key"]].get("horizon_metrics") or {}
+                    ).get("10m")
+                    or {}
+                ).get("entry_quality_path", {})
+                and (
+                    projection.get("schema") != "compact_auxiliary_frozen_projection_v1"
+                    or projection.get("source_projection_contract")
+                    != SOURCE_PROJECTION_CONTRACT
+                    or stage_path_label_matches(row, label_index[row["evaluation_key"]])
+                )
+                and (row.get("source_label_identity_reasons") or [])
+                == [
+                    r
+                    for r in label_index[row["evaluation_key"]].get(
+                        "primary_cohort_exclusion_reasons"
+                    )
+                    or []
+                    if r
+                    in {
+                        "payload_trace_venue_mismatch",
+                        "payload_trace_session_mismatch",
+                        "canonical_context_venue_session_mismatch",
+                    }
+                ]
+                for row in projection.get("rows") or []
+            )
+        )
         # An additive label contract revision does not require rereading large
         # frozen raw inputs. Changed diagnostic/economic paths still rebuild.
         if valid(projection):
             prior = projection.get("dependency_signatures") or {}
             if prior.get(label_dependency) != signatures.get(label_dependency) and all(
-                    prior.get(k) == v for k, v in signatures.items() if k not in (label_dependency,split_dependency)):
+                prior.get(k) == v
+                for k, v in signatures.items()
+                if k not in (label_dependency, split_dependency)
+            ):
                 if label_projection_matches:
-                    write(path.parent / "compact_source_generations" / (projection["artifact_content_sha256"] + ".json"), projection)
-                    projection = sealed({**projection, "dependency_signatures": {**prior,label_dependency:signatures[label_dependency]},
-                                         "source_label_report_sha256": digest(label_report)})
+                    write(
+                        path.parent
+                        / "compact_source_generations"
+                        / (projection["artifact_content_sha256"] + ".json"),
+                        projection,
+                    )
+                    projection = sealed(
+                        {
+                            **projection,
+                            "dependency_signatures": {
+                                **prior,
+                                label_dependency: signatures[label_dependency],
+                            },
+                            "source_label_report_sha256": digest(label_report),
+                        }
+                    )
                     write(projection_path, projection)
         # Code-only source contract upgrades and bounded owner/model refreshes
         # must not rescan sealed raw trace/payload generations. An exclusion
         # with no original frozen input stays excluded, even if an owner exists.
         prior = projection.get("dependency_signatures") or {}
-        split_dependency = str(root / "report/entry_split_order_plan" / f"entry_split_order_plan_{day}.json")
-        unchanged_raw = (valid(projection) and label_projection_matches and prior.get(label_dependency) == signatures.get(label_dependency)
-            and all(prior.get(k) == v for k, v in signatures.items() if k not in (split_dependency, label_dependency)))
-        if unchanged_raw and projection.get("native_watch_metadata_contract") != NATIVE_WATCH_METADATA_CONTRACT:
+        split_dependency = str(
+            root
+            / "report/entry_split_order_plan"
+            / f"entry_split_order_plan_{day}.json"
+        )
+        unchanged_raw = (
+            valid(projection)
+            and label_projection_matches
+            and prior.get(label_dependency) == signatures.get(label_dependency)
+            and all(
+                prior.get(k) == v
+                for k, v in signatures.items()
+                if k not in (split_dependency, label_dependency)
+            )
+        )
+        if (
+            unchanged_raw
+            and projection.get("native_watch_metadata_contract")
+            != NATIVE_WATCH_METADATA_CONTRACT
+        ):
             upgraded = upgrade_native_watch_metadata(projection, root, day)
-            if upgraded["artifact_content_sha256"] != projection["artifact_content_sha256"]:
-                write(path.parent / "compact_source_generations" / (projection["artifact_content_sha256"] + ".json"), projection)
+            if (
+                upgraded["artifact_content_sha256"]
+                != projection["artifact_content_sha256"]
+            ):
+                write(
+                    path.parent
+                    / "compact_source_generations"
+                    / (projection["artifact_content_sha256"] + ".json"),
+                    projection,
+                )
                 projection = upgraded
                 write(projection_path, projection)
-        stage_fields_missing = (
-            projection.get("schema") == "compact_auxiliary_frozen_projection_v1"
-            and any("raw_response" not in row or "ai_stage_path" not in row
-                    or not isinstance(row.get("machine_policy"), dict)
-                    for row in projection.get("rows") or [])
+        stage_fields_missing = projection.get(
+            "schema"
+        ) == "compact_auxiliary_frozen_projection_v1" and any(
+            "raw_response" not in row
+            or "ai_stage_path" not in row
+            or not isinstance(row.get("machine_policy"), dict)
+            for row in projection.get("rows") or []
         )
-        if unchanged_raw and not stage_fields_missing and (projection.get("source_projection_contract") != SOURCE_PROJECTION_CONTRACT
-            or projection.get("projection_contract_sha256") != digest(CONTRACT)
-            or prior.get(split_dependency) != signatures.get(split_dependency)):
+        if (
+            unchanged_raw
+            and not stage_fields_missing
+            and (
+                projection.get("source_projection_contract")
+                != SOURCE_PROJECTION_CONTRACT
+                or projection.get("projection_contract_sha256") != digest(CONTRACT)
+                or prior.get(split_dependency) != signatures.get(split_dependency)
+            )
+        ):
             labels = read(Path(label_dependency))
-            by_trace = {r.get("decision_trace_id"): r for r in labels.get("labels") or []}
+            by_trace = {
+                r.get("decision_trace_id"): r for r in labels.get("labels") or []
+            }
             split_report = read(Path(split_dependency))
             summary = split_report.get("input_summary") or {}
-            owner_source = (summary.get("compact_pre_ai_execution_replay")
+            owner_source = (
+                summary.get("compact_pre_ai_execution_replay")
                 or summary.get("entry_opportunity_executable_replay_refresh")
-                or (summary.get("daily_diagnostic") or {}).get("entry_opportunity_executable_replay") or {})
-            owners, owner_conflicts = index_owner_replays(owner_source.get("rows") or [])
+                or (summary.get("daily_diagnostic") or {}).get(
+                    "entry_opportunity_executable_replay"
+                )
+                or {}
+            )
+            owners, owner_conflicts = index_owner_replays(
+                owner_source.get("rows") or []
+            )
             rebound = []
             for original in projection.get("rows") or []:
                 row = dict(original)
@@ -3019,49 +4519,109 @@ def run(
                 owner = owners.get(owner_key) or {}
                 row["owner_replay"] = owner if owner_replay_valid(owner, row) else None
                 label = by_trace.get(row.get("evaluation_key")) or {}
-                row["source_label_identity_reasons"]=[r for r in label.get("primary_cohort_exclusion_reasons") or []
-                    if r in {"payload_trace_venue_mismatch","payload_trace_session_mismatch","canonical_context_venue_session_mismatch"}]
-                row.setdefault("natural_contract_evidence", {k: label.get(k) for k in
-                    ("result_source", "model", "provider_actual", "semantic_validation_status",
-                     "decision_quality_contract_status", "decision_quality_contract_errors")})
-                if (row.get("exclusion_reason") == "natural_contract_invalid"
-                    or str(row.get("exclusion_reason") or "").startswith("natural_response_")):
+                row["source_label_identity_reasons"] = [
+                    r
+                    for r in label.get("primary_cohort_exclusion_reasons") or []
+                    if r
+                    in {
+                        "payload_trace_venue_mismatch",
+                        "payload_trace_session_mismatch",
+                        "canonical_context_venue_session_mismatch",
+                    }
+                ]
+                row.setdefault(
+                    "natural_contract_evidence",
+                    {
+                        k: label.get(k)
+                        for k in (
+                            "result_source",
+                            "model",
+                            "provider_actual",
+                            "semantic_validation_status",
+                            "decision_quality_contract_status",
+                            "decision_quality_contract_errors",
+                        )
+                    },
+                )
+                if row.get("exclusion_reason") == "natural_contract_invalid" or str(
+                    row.get("exclusion_reason") or ""
+                ).startswith("natural_response_"):
                     row["exclusion_reason"] = (
-                        natural_response_contract_exclusion(row["natural_contract_evidence"])
+                        natural_response_contract_exclusion(
+                            row["natural_contract_evidence"]
+                        )
                         or "natural_contract_invalid"
                     )
-                if (row["owner_replay"] and isinstance(row.get("input"), dict)
-                    and row.get("exclusion_reason") in {"exact_stop_distance_missing", "exact_stop_distance_missing_or_invalid", "terminal_path_not_evaluable", "full_cost_or_terminal_missing"}):
+                if (
+                    row["owner_replay"]
+                    and isinstance(row.get("input"), dict)
+                    and row.get("exclusion_reason")
+                    in {
+                        "exact_stop_distance_missing",
+                        "exact_stop_distance_missing_or_invalid",
+                        "terminal_path_not_evaluable",
+                        "full_cost_or_terminal_missing",
+                    }
+                ):
                     row["exclusion_reason"] = None
                 elif owner_key in owner_conflicts:
                     row["owner_replay"] = None
                     row["exclusion_reason"] = "conflicting_exact_owner_replay"
-                elif (sha256_hex(row.get("entry_economic_plan_sha256"))
-                      and not row["owner_replay"]
-                      and row.get("exclusion_reason") in {
-                          None,
-                          "exact_stop_distance_missing",
-                          "exact_stop_distance_missing_or_invalid",
-                          "terminal_path_not_evaluable",
-                          "full_cost_or_terminal_missing",
-                      }):
+                elif (
+                    sha256_hex(row.get("entry_economic_plan_sha256"))
+                    and not row["owner_replay"]
+                    and row.get("exclusion_reason")
+                    in {
+                        None,
+                        "exact_stop_distance_missing",
+                        "exact_stop_distance_missing_or_invalid",
+                        "terminal_path_not_evaluable",
+                        "full_cost_or_terminal_missing",
+                    }
+                ):
                     row["exclusion_reason"] = "exact_owner_replay_missing_or_invalid"
                 rebound.append(row)
-            write(path.parent / "compact_source_generations" / (projection["artifact_content_sha256"] + ".json"), projection)
-            projection = sealed({**projection, "rows": rebound,
-                "exclusion_counts": dict(Counter(r["exclusion_reason"] for r in rebound if r.get("exclusion_reason"))),
-                "owner_execution_model_validation": split_report.get("execution_model_validation") or {},
-                "dependency_signatures": signatures, "projection_contract_sha256": digest(CONTRACT),
-                "source_projection_contract": SOURCE_PROJECTION_CONTRACT,
-                "source_upgrade": {"original_projection_sha256": projection["artifact_content_sha256"],
-                    "raw_not_read": True, "original_missing_input_not_reconstructed": True}})
+            write(
+                path.parent
+                / "compact_source_generations"
+                / (projection["artifact_content_sha256"] + ".json"),
+                projection,
+            )
+            projection = sealed(
+                {
+                    **projection,
+                    "rows": rebound,
+                    "exclusion_counts": dict(
+                        Counter(
+                            r["exclusion_reason"]
+                            for r in rebound
+                            if r.get("exclusion_reason")
+                        )
+                    ),
+                    "owner_execution_model_validation": split_report.get(
+                        "execution_model_validation"
+                    )
+                    or {},
+                    "dependency_signatures": signatures,
+                    "projection_contract_sha256": digest(CONTRACT),
+                    "source_projection_contract": SOURCE_PROJECTION_CONTRACT,
+                    "source_upgrade": {
+                        "original_projection_sha256": projection[
+                            "artifact_content_sha256"
+                        ],
+                        "raw_not_read": True,
+                        "original_missing_input_not_reconstructed": True,
+                    },
+                }
+            )
             write(projection_path, projection)
         if (
             not valid(projection)
             or not label_projection_matches
             or stage_fields_missing
             or projection.get("dependency_signatures") != signatures
-            or projection.get("source_projection_contract") != SOURCE_PROJECTION_CONTRACT
+            or projection.get("source_projection_contract")
+            != SOURCE_PROJECTION_CONTRACT
             or projection.get("projection_contract_sha256") != digest(CONTRACT)
         ):
             if valid(projection):
@@ -3072,14 +4632,26 @@ def run(
                     projection,
                 )
             if not allow_source_rebuild:
-                raise ValueError("compact_finalize_requires_evaluation_of_changed_source")
+                raise ValueError(
+                    "compact_finalize_requires_evaluation_of_changed_source"
+                )
             projection = sealed(
-                {**prepare(root, day), "dependency_signatures": signatures,
-                 "projection_contract_sha256": digest(CONTRACT), "source_projection_contract": SOURCE_PROJECTION_CONTRACT}
+                {
+                    **prepare(root, day),
+                    "dependency_signatures": signatures,
+                    "projection_contract_sha256": digest(CONTRACT),
+                    "source_projection_contract": SOURCE_PROJECTION_CONTRACT,
+                }
             )
             for dependency in dependency_paths:
-                actual = dependency if dependency.exists() else Path(str(dependency) + ".gz")
-                after = [actual.stat().st_size, actual.stat().st_mtime_ns] if actual.exists() else None
+                actual = (
+                    dependency if dependency.exists() else Path(str(dependency) + ".gz")
+                )
+                after = (
+                    [actual.stat().st_size, actual.stat().st_mtime_ns]
+                    if actual.exists()
+                    else None
+                )
                 if after != signatures[str(dependency)]:
                     raise ValueError("compact_source_generation_changed_during_freeze")
             write(projection_path, projection)
@@ -3093,8 +4665,14 @@ def run(
                 day,
             )
         selected_candidate = selection.get("candidate_prompt_version")
-        if candidate_version and selected_candidate and candidate_version != selected_candidate:
-            raise ValueError("requested_candidate_conflicts_with_frozen_economic_direction")
+        if (
+            candidate_version
+            and selected_candidate
+            and candidate_version != selected_candidate
+        ):
+            raise ValueError(
+                "requested_candidate_conflicts_with_frozen_economic_direction"
+            )
         candidate = (
             selected_candidate
             or candidate_version
@@ -3103,10 +4681,21 @@ def run(
         if candidate not in COMPACT_AI_VARIANTS:
             raise ValueError("unregistered_compact_candidate")
         candidate_prompt = compact_auxiliary_prompt(prompt_version=candidate)
-        candidate_contract = digest([candidate_prompt, {
-            r["evaluation_key"]: digest(entry_risk_adjudication_openai_schema(r["input"]["entry_setup_evidence_v1"]))
-            for r in projection["rows"] if not r.get("exclusion_reason") and isinstance(r.get("input"), dict)
-        }])
+        candidate_contract = digest(
+            [
+                candidate_prompt,
+                {
+                    r["evaluation_key"]: digest(
+                        entry_risk_adjudication_openai_schema(
+                            r["input"]["entry_setup_evidence_v1"]
+                        )
+                    )
+                    for r in projection["rows"]
+                    if not r.get("exclusion_reason")
+                    and isinstance(r.get("input"), dict)
+                },
+            ]
+        )
         cost_receipt = runtime_inference_cost_receipt(root, day)
         fingerprint = evaluation_fingerprint(
             projection=projection,
@@ -3116,8 +4705,11 @@ def run(
             candidate_selection=selection,
         )
         frozen_plan = read(_candidate_plan_path(path.parent, day, candidate))
-        if (frozen_plan.get("scope_candidates") and frozen_plan.get("candidate_prompt_sha256")
-                and frozen_plan["candidate_prompt_sha256"] != digest(candidate_prompt)):
+        if (
+            frozen_plan.get("scope_candidates")
+            and frozen_plan.get("candidate_prompt_sha256")
+            and frozen_plan["candidate_prompt_sha256"] != digest(candidate_prompt)
+        ):
             raise ValueError("frozen_candidate_prompt_or_schema_changed")
         previous = read(path)
         if (
@@ -3127,27 +4719,45 @@ def run(
             == "candidate_selected"
         ):
             raise ValueError("frozen_candidate_selection_mismatch")
-        if (valid(previous)
-                and previous.get("evaluation_fingerprint") == fingerprint
-                and (projection.get("schema") != "compact_auxiliary_frozen_projection_v1"
-                     or projection.get("source_projection_contract") != SOURCE_PROJECTION_CONTRACT
-                     or (valid(previous.get("auxiliary_stage"))
-                         and previous["auxiliary_stage"].get("source_projection_sha256") == projection["artifact_content_sha256"]
-                         and previous["auxiliary_stage"] == replay_auxiliary_stage(
-                             projection, previous, history_root=path.parent)))
-                and previous.get("comparison_dependency_signatures") == _comparison_signatures(path.parent, day, candidate)
-                and (previous.get("prospective_source_contract") or {}).get(
-                    "schema"
-                ) == PROSPECTIVE_SOURCE_CONTRACT_SCHEMA
-                and "natural_prompt_exact_input_count" in (
-                    previous.get("prospective_source_contract") or {})
-                and (not execute
-                     or projection.get("schema") != "compact_auxiliary_frozen_projection_v1"
-                     or (previous.get("auxiliary_prompt_execution_complete") is True
-                         and auxiliary_report_prompt_complete(
-                             projection, previous, path.parent)))
-                and (previous.get("status") in {"valid_empty", "comparison_complete", "incumbent_preserved"}
-                     or previous.get("metrics", {}).get("economic_eligible_count") == 0)):
+        if (
+            valid(previous)
+            and previous.get("evaluation_fingerprint") == fingerprint
+            and (
+                projection.get("schema") != "compact_auxiliary_frozen_projection_v1"
+                or projection.get("source_projection_contract")
+                != SOURCE_PROJECTION_CONTRACT
+                or (
+                    valid(previous.get("auxiliary_stage"))
+                    and previous["auxiliary_stage"].get("source_projection_sha256")
+                    == projection["artifact_content_sha256"]
+                    and previous["auxiliary_stage"]
+                    == replay_auxiliary_stage(
+                        projection, previous, history_root=path.parent
+                    )
+                )
+            )
+            and previous.get("comparison_dependency_signatures")
+            == _comparison_signatures(path.parent, day, candidate)
+            and (previous.get("prospective_source_contract") or {}).get("schema")
+            == PROSPECTIVE_SOURCE_CONTRACT_SCHEMA
+            and "natural_prompt_exact_input_count"
+            in (previous.get("prospective_source_contract") or {})
+            and (
+                not execute
+                or projection.get("schema") != "compact_auxiliary_frozen_projection_v1"
+                or (
+                    previous.get("auxiliary_prompt_execution_complete") is True
+                    and auxiliary_report_prompt_complete(
+                        projection, previous, path.parent
+                    )
+                )
+            )
+            and (
+                previous.get("status")
+                in {"valid_empty", "comparison_complete", "incumbent_preserved"}
+                or previous.get("metrics", {}).get("economic_eligible_count") == 0
+            )
+        ):
             return previous
         checkpoint = read(path.with_suffix(".checkpoint.json"))
         selection_sha256 = selection.get("artifact_content_sha256")
@@ -3156,45 +4766,66 @@ def run(
             and checkpoint.get("candidate_selection_sha256") != selection_sha256
         ):
             checkpoint = {}
-        if (valid(checkpoint) and checkpoint.get("candidate_prompt_version") != candidate):
-            if (previous.get("candidate_selection") or {}).get("status") != "candidate_selected":
+        if (
+            valid(checkpoint)
+            and checkpoint.get("candidate_prompt_version") != candidate
+        ):
+            if (previous.get("candidate_selection") or {}).get(
+                "status"
+            ) != "candidate_selected":
                 checkpoint = {}
             else:
                 raise ValueError("frozen_checkpoint_candidate_mismatch")
         results = (
             checkpoint.get("results", {})
             if valid(checkpoint)
-            else previous.get("results", {})
-            if (
-                valid(previous)
-                and (previous.get("candidate_selection") or {}).get(
-                    "artifact_content_sha256"
+            else (
+                previous.get("results", {})
+                if (
+                    valid(previous)
+                    and (previous.get("candidate_selection") or {}).get(
+                        "artifact_content_sha256"
+                    )
+                    == selection_sha256
                 )
-                == selection_sha256
+                else {}
             )
-            else {}
         )
         ledger, calls, prompt_calls = None, 0, 0
         execution_errors = []
         prompt_source_gaps = []
-        frozen_selection_path = path.with_suffix('.aux_train_selection_winrate_v5.json')
-        frozen_selection = read(frozen_selection_path) if stage_logic_current(projection) else {}
-        if stage_logic_current(projection) and frozen_selection_path.exists() and (not valid(frozen_selection)
-             or frozen_selection.get('selection_rank_version') != STAGE_SELECTION_VERSION
-             or frozen_selection.get('target_date') != day
-             or frozen_selection.get('schema') != 'auxiliary_train_selection_v1'):
-            raise ValueError('auxiliary_train_selection_invalid')
-        frozen_choices = frozen_selection.get('scopes') or {}
+        frozen_selection_path = path.with_suffix(".aux_train_selection_winrate_v5.json")
+        frozen_selection = (
+            read(frozen_selection_path) if stage_logic_current(projection) else {}
+        )
+        if (
+            stage_logic_current(projection)
+            and frozen_selection_path.exists()
+            and (
+                not valid(frozen_selection)
+                or frozen_selection.get("selection_rank_version")
+                != STAGE_SELECTION_VERSION
+                or frozen_selection.get("target_date") != day
+                or frozen_selection.get("schema") != "auxiliary_train_selection_v1"
+            )
+        ):
+            raise ValueError("auxiliary_train_selection_invalid")
+        frozen_choices = frozen_selection.get("scopes") or {}
+
         def freeze_stage(stage):
             nonlocal frozen_choices
-            frozen_choices = freeze_auxiliary_selection(frozen_selection_path, day, stage)
+            frozen_choices = freeze_auxiliary_selection(
+                frozen_selection_path, day, stage
+            )
             return frozen_choices
+
         prompt_checkpoint_path = path.with_suffix(".aux_prompt_checkpoint.json")
         prompt_checkpoint = read(prompt_checkpoint_path)
         prompt_results = (
             prompt_checkpoint.get("results") or {}
             if valid(prompt_checkpoint)
-            and prompt_checkpoint.get("source_projection_sha256") == projection["artifact_content_sha256"]
+            and prompt_checkpoint.get("source_projection_sha256")
+            == projection["artifact_content_sha256"]
             else {}
         )
         from src.engine.ai_prompt_contracts import (
@@ -3203,6 +4834,7 @@ def run(
             ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION,
             ENTRY_MACHINE_AUXILIARY_COMPACT_CONTRACT_PROMPT_VERSION,
         )
+
         variants = (
             ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION,
             ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION,
@@ -3213,15 +4845,34 @@ def run(
             if projection.get("schema") == "compact_auxiliary_frozen_projection_v1"
             else None
         )
-        eligible_keys = (set(evaluate_auxiliary_stage(stage_population)["candidate_population_keys"])
-                         if stage_population is not None else set())
-        all_prompt_results = (auxiliary_population_prompt_results(
-            stage_population, path.parent, prompt_results)
-            if stage_population is not None else {})
+        eligible_keys = (
+            set(evaluate_auxiliary_stage(stage_population)["candidate_population_keys"])
+            if stage_population is not None
+            else set()
+        )
+        all_prompt_results = (
+            auxiliary_population_prompt_results(
+                stage_population, path.parent, prompt_results
+            )
+            if stage_population is not None
+            else {}
+        )
         prompt_started = time.perf_counter()
         if projection.get("source_tuning_allowed") is True:
-            for row, scheduled_variants in auxiliary_prompt_schedule(stage_population, all_prompt_results, eligible_keys,
-                **({'frozen_choices': frozen_choices, 'freeze': freeze_stage} if stage_logic_current(projection) else {})) if stage_population is not None else []:
+            for row, scheduled_variants in (
+                auxiliary_prompt_schedule(
+                    stage_population,
+                    all_prompt_results,
+                    eligible_keys,
+                    **(
+                        {"frozen_choices": frozen_choices, "freeze": freeze_stage}
+                        if stage_logic_current(projection)
+                        else {}
+                    ),
+                )
+                if stage_population is not None
+                else []
+            ):
                 key = row["evaluation_key"]
                 if key not in eligible_keys:
                     continue
@@ -3232,97 +4883,162 @@ def run(
                         continue
                     prompt = compact_auxiliary_prompt(prompt_version=version)
                     identity = auxiliary_prompt_identity(
-                        row, version, digest(prompt), digest(schema))
+                        row, version, digest(prompt), digest(schema)
+                    )
                     cached = (all_prompt_results.get(version) or {}).get(key) or {}
-                    response_path = path.parent / 'auxiliary_prompt_responses' / f'{identity}.json'
-                    if stage_logic_current(projection) and not auxiliary_prompt_result_matches(row, version, cached):
+                    response_path = (
+                        path.parent / "auxiliary_prompt_responses" / f"{identity}.json"
+                    )
+                    if stage_logic_current(
+                        projection
+                    ) and not auxiliary_prompt_result_matches(row, version, cached):
                         durable = read(response_path)
                         if auxiliary_prompt_result_matches(row, version, durable):
                             cached = durable
                             prompt_results.setdefault(version, {})[key] = durable
                             all_prompt_results.setdefault(version, {})[key] = durable
-                    if (valid(cached) and cached.get("candidate_identity") == identity
+                    if (
+                        valid(cached)
+                        and cached.get("candidate_identity") == identity
                         and cached.get("input_sha256") == input_identity(row)
                         and cached.get("prompt_sha256") == digest(prompt)
                         and auxiliary_prompt_provenance_valid(cached)
-                        and not cached.get("validation_errors")):
+                        and not cached.get("validation_errors")
+                    ):
                         continue
                     if not execute or calls >= max_new:
                         continue
                     request = {
-                        "paired_replay_id": identity, "paired_replay_parent_id": key,
-                        "stage": "entry", "candidate_input": row["input"],
+                        "paired_replay_id": identity,
+                        "paired_replay_parent_id": key,
+                        "stage": "entry",
+                        "candidate_input": row["input"],
                         "control": {"provider": PROMPT_PROVIDER, "model": PROMPT_MODEL},
                         "candidate": {
-                            "provider": PROMPT_PROVIDER, "model": PROMPT_MODEL,
-                            "prompt_version": version, "system_prompt": prompt,
+                            "provider": PROMPT_PROVIDER,
+                            "model": PROMPT_MODEL,
+                            "prompt_version": version,
+                            "system_prompt": prompt,
                             "response_schema": schema,
                             "response_schema_sha256": quality._sha256(schema),
                             "schema_name": "entry_setup_risk_adjudication_v1",
-                            "max_output_tokens": 512, "reasoning_effort": "none",
-                        }, **AUTHORITY,
+                            "max_output_tokens": 512,
+                            "reasoning_effort": "none",
+                        },
+                        **AUTHORITY,
                     }
                     try:
                         if runner is None:
                             from src.engine.scalping.micro_reversion.provider_budget import (
-                                ProviderBudgetLedger, load_reviewed_pricing_artifact,
-                                AttemptIdentity, conservative_token_ceiling,
+                                ProviderBudgetLedger,
+                                load_reviewed_pricing_artifact,
+                                AttemptIdentity,
+                                conservative_token_ceiling,
                             )
+
                             now = datetime.now(KST)
                             if ledger is None:
                                 ledger = ProviderBudgetLedger(
-                                    ledger_path=root / "offline_provider_budget" /
-                                        f"ai_micro_reversion_provider_budget_{now.date()}.jsonl",
+                                    ledger_path=root
+                                    / "offline_provider_budget"
+                                    / f"ai_micro_reversion_provider_budget_{now.date()}.jsonl",
                                     pricing=load_reviewed_pricing_artifact(
-                                        root / "policy/micro_reversion/provider_pricing.json",
+                                        root
+                                        / "policy/micro_reversion/provider_pricing.json",
                                         as_of_date=now.date(),
-                                    ), execution_date=now.date(), daily_attempt_cap=390,
+                                    ),
+                                    execution_date=now.date(),
+                                    daily_attempt_cap=390,
                                     daily_usd_cap="1.0",
                                 )
-                            attempt = AttemptIdentity(row.get("source_date"), key, identity,
-                                "compact_auxiliary_prompt", PROMPT_PROVIDER, PROMPT_MODEL, 1)
+                            attempt = AttemptIdentity(
+                                row.get("source_date"),
+                                key,
+                                identity,
+                                "compact_auxiliary_prompt",
+                                PROMPT_PROVIDER,
+                                PROMPT_MODEL,
+                                1,
+                            )
                             permit = ledger.reserve_attempt(
-                                attempt, token_ceiling=conservative_token_ceiling(
-                                    json.dumps(request, ensure_ascii=True, sort_keys=True).encode(),
-                                    b"x" * 4096, max_output_tokens=512,
-                                ))
+                                attempt,
+                                token_ceiling=conservative_token_ceiling(
+                                    json.dumps(
+                                        request, ensure_ascii=True, sort_keys=True
+                                    ).encode(),
+                                    b"x" * 4096,
+                                    max_output_tokens=512,
+                                ),
+                            )
                             calls += 1
                             prompt_calls += 1
                             result = quality.execute_openai_prompt_v2_candidate(
-                                request, timeout_sec=min(timeout_sec, 12.0))
+                                request, timeout_sec=min(timeout_sec, 12.0)
+                            )
                             provenance = result.get("provider_provenance") or {}
                             settlement = ledger.settle_attempt(
-                                attempt, actual_input_tokens=provenance["input_tokens"],
+                                attempt,
+                                actual_input_tokens=provenance["input_tokens"],
                                 actual_output_tokens=provenance["output_tokens"],
-                                provider_response_sha256=provenance["response_sha256"])
-                            result["provider_budget_reservation_id"] = permit.reservation_id
-                            result["evaluation_provider_cost_usd"] = str(settlement.actual_cost_usd)
+                                provider_response_sha256=provenance["response_sha256"],
+                            )
+                            result["provider_budget_reservation_id"] = (
+                                permit.reservation_id
+                            )
+                            result["evaluation_provider_cost_usd"] = str(
+                                settlement.actual_cost_usd
+                            )
                         else:
                             calls += 1
                             prompt_calls += 1
                             result = runner(request)
-                        if not isinstance(result, dict) or not auxiliary_prompt_provenance_valid(result):
+                        if not isinstance(
+                            result, dict
+                        ) or not auxiliary_prompt_provenance_valid(result):
                             raise ValueError("prompt_provider_provenance_invalid")
                         repaired, _ = repair_mechanistic_pass_citations(
-                            result.get("candidate_response"), setup_evidence=setup)
+                            result.get("candidate_response"), setup_evidence=setup
+                        )
                         result["validation_errors"] = validate_entry_risk_adjudication(
-                            repaired, setup_evidence=setup)
-                        prompt_results.setdefault(version, {})[key] = sealed({
-                            **result, "input_sha256": input_identity(row),
-                            "candidate_identity": identity,
-                            "prompt_sha256": digest(prompt),
-                        })
-                        all_prompt_results.setdefault(version, {})[key] = prompt_results[version][key]
+                            repaired, setup_evidence=setup
+                        )
+                        prompt_results.setdefault(version, {})[key] = sealed(
+                            {
+                                **result,
+                                "input_sha256": input_identity(row),
+                                "candidate_identity": identity,
+                                "prompt_sha256": digest(prompt),
+                            }
+                        )
+                        all_prompt_results.setdefault(version, {})[key] = (
+                            prompt_results[version][key]
+                        )
                         if stage_logic_current(projection):
                             write(response_path, prompt_results[version][key])
-                        write(prompt_checkpoint_path, sealed({
-                            "source_projection_sha256": projection["artifact_content_sha256"],
-                            "results": prompt_results, **AUTHORITY,
-                        }))
+                        write(
+                            prompt_checkpoint_path,
+                            sealed(
+                                {
+                                    "source_projection_sha256": projection[
+                                        "artifact_content_sha256"
+                                    ],
+                                    "results": prompt_results,
+                                    **AUTHORITY,
+                                }
+                            ),
+                        )
                     except Exception as exc:
-                        if stage_logic_current(projection) and type(exc).__name__ == 'DuplicateAttemptError':
-                            prompt_source_gaps.append({'evaluation_key': key, 'prompt_version': version,
-                                                       'reason': 'duplicate_reservation_without_exact_response'})
+                        if (
+                            stage_logic_current(projection)
+                            and type(exc).__name__ == "DuplicateAttemptError"
+                        ):
+                            prompt_source_gaps.append(
+                                {
+                                    "evaluation_key": key,
+                                    "prompt_version": version,
+                                    "reason": "duplicate_reservation_without_exact_response",
+                                }
+                            )
                             continue
                         execution_errors.append("prompt_" + type(exc).__name__)
                         break
@@ -3333,7 +5049,9 @@ def run(
         primary_blockers = {}
         selected_scopes = set(selection.get("selected_policy_scopes") or [])
         for row in projection["rows"]:
-            value = primary_input_blocker(row, projection.get("owner_execution_model_validation") or {})
+            value = primary_input_blocker(
+                row, projection.get("owner_execution_model_validation") or {}
+            )
             if value is None and cost_receipt["delta_krw"] is None:
                 value = ("source_gap", cost_receipt["blocker"])
             scope = "|".join(
@@ -3354,7 +5072,10 @@ def run(
                 primary_blockers[row["evaluation_key"]] = value
         for row in projection["rows"]:
             key = row["evaluation_key"]
-            if row["evaluation_key"] in primary_blockers or not projection["source_tuning_allowed"]:
+            if (
+                row["evaluation_key"] in primary_blockers
+                or not projection["source_tuning_allowed"]
+            ):
                 continue
             if row["incumbent_prompt_version"] == candidate:
                 results[key] = sealed(
@@ -3371,7 +5092,16 @@ def run(
             setup = row["input"]["entry_setup_evidence_v1"]
             schema = entry_risk_adjudication_openai_schema(setup)
             prompt = candidate_prompt
-            identity = digest([day, key, input_identity(row), candidate, digest(prompt), digest(schema)])
+            identity = digest(
+                [
+                    day,
+                    key,
+                    input_identity(row),
+                    candidate,
+                    digest(prompt),
+                    digest(schema),
+                ]
+            )
             cached = results.get(key) or {}
             if cached and cached.get("candidate_identity") != identity:
                 results.pop(key, None)
@@ -3438,8 +5168,11 @@ def run(
                     permit = ledger.reserve_attempt(
                         attempt,
                         token_ceiling=conservative_token_ceiling(
-                            json.dumps(request, ensure_ascii=True, sort_keys=True).encode(),
-                            b"x" * 4096, max_output_tokens=512,
+                            json.dumps(
+                                request, ensure_ascii=True, sort_keys=True
+                            ).encode(),
+                            b"x" * 4096,
+                            max_output_tokens=512,
                         ),
                     )
                     calls += 1
@@ -3473,11 +5206,11 @@ def run(
                 write(
                     path.with_suffix(".checkpoint.json"),
                     sealed(
-                            {
-                                "candidate_prompt_version": candidate,
-                                "candidate_selection_sha256": selection_sha256,
-                                "results": results,
-                                **AUTHORITY,
+                        {
+                            "candidate_prompt_version": candidate,
+                            "candidate_selection_sha256": selection_sha256,
+                            "results": results,
+                            **AUTHORITY,
                         }
                     ),
                 )
@@ -3486,14 +5219,31 @@ def run(
                 break
         cost_receipt = runtime_inference_cost_receipt(root, day)
         for key, result in list(results.items()):
-            if valid(result) and cost_receipt["status"] == "reviewed_operator_zero_cost":
-                results[key] = sealed({**result, "runtime_inference_cost_delta_krw": cost_receipt["delta_krw"],
-                                       "runtime_inference_cost_receipt": cost_receipt})
-        metrics = evaluate([
-            {**row,"exclusion_reason":row.get("exclusion_reason") or primary_blockers.get(row["evaluation_key"],(None,None))[1]}
-            for row in projection["rows"]], results)
+            if (
+                valid(result)
+                and cost_receipt["status"] == "reviewed_operator_zero_cost"
+            ):
+                results[key] = sealed(
+                    {
+                        **result,
+                        "runtime_inference_cost_delta_krw": cost_receipt["delta_krw"],
+                        "runtime_inference_cost_receipt": cost_receipt,
+                    }
+                )
+        metrics = evaluate(
+            [
+                {
+                    **row,
+                    "exclusion_reason": row.get("exclusion_reason")
+                    or primary_blockers.get(row["evaluation_key"], (None, None))[1],
+                }
+                for row in projection["rows"]
+            ],
+            results,
+        )
         metrics["operating_economic_comparison"] = operating_comparison_metrics(
-            metrics["pairs"], projection.get("owner_execution_model_validation") or {})
+            metrics["pairs"], projection.get("owner_execution_model_validation") or {}
+        )
         comparison = metrics["operating_economic_comparison"]
         metrics["economic_research_status"] = (
             "supported_cost_adjusted_comparison"
@@ -3512,19 +5262,32 @@ def run(
         status = (
             "source_contract_blocked"
             if not projection["source_tuning_allowed"]
-            else "valid_empty"
-            if not projection["rows"]
-            else "source_contract_blocked"
-            if metrics["economic_eligible_count"] == 0 and hard_source_blocked
-            else "incumbent_preserved"
-            if metrics["economic_eligible_count"] == 0
-            else "incumbent_preserved"
-            if versions == [candidate]
-            else "execution_failed"
-            if execution_errors
-            else "comparison_complete"
-            if metrics["paired_comparable_count"] == metrics["economic_eligible_count"]
-            else "execution_deferred"
+            else (
+                "valid_empty"
+                if not projection["rows"]
+                else (
+                    "source_contract_blocked"
+                    if metrics["economic_eligible_count"] == 0 and hard_source_blocked
+                    else (
+                        "incumbent_preserved"
+                        if metrics["economic_eligible_count"] == 0
+                        else (
+                            "incumbent_preserved"
+                            if versions == [candidate]
+                            else (
+                                "execution_failed"
+                                if execution_errors
+                                else (
+                                    "comparison_complete"
+                                    if metrics["paired_comparable_count"]
+                                    == metrics["economic_eligible_count"]
+                                    else "execution_deferred"
+                                )
+                            )
+                        )
+                    )
+                )
+            )
         )
         plan_path = _candidate_plan_path(path.parent, day, candidate)
         history = []
@@ -3532,7 +5295,9 @@ def run(
         for old_path in sorted(
             path.parent.glob("compact_auxiliary_paired_economic_*.json")
         ):
-            old_day = old_path.name.removeprefix("compact_auxiliary_paired_economic_").removesuffix(".json")
+            old_day = old_path.name.removeprefix(
+                "compact_auxiliary_paired_economic_"
+            ).removesuffix(".json")
             if not policy_refresh_start_date(day) <= old_day < day:
                 continue
             old = read(old_path)
@@ -3547,65 +5312,132 @@ def run(
                 coverage_history.append(old)
         all_pairs = history + metrics["pairs"]
         population = [
-            {**row, "exclusion_reason": row.get("exclusion_reason") or primary_blockers.get(row["evaluation_key"], (None, None))[1]}
-            for row in projection["rows"]]
+            {
+                **row,
+                "exclusion_reason": row.get("exclusion_reason")
+                or primary_blockers.get(row["evaluation_key"], (None, None))[1],
+            }
+            for row in projection["rows"]
+        ]
         # Count every eligible earlier request, including unanswered requests;
         # successful pairs alone cannot establish chronological coverage.
         cumulative_coverage = {}
         for scope, group in _scope_groups(population).items():
             versions_in_scope = {r.get("incumbent_prompt_version") for r in group}
-            incumbent = next(iter(versions_in_scope)) if len(versions_in_scope) == 1 else None
+            incumbent = (
+                next(iter(versions_in_scope)) if len(versions_in_scope) == 1 else None
+            )
             receipts = [metrics["scope_coverage"][scope]]
             for old in coverage_history:
                 old_scope = (old.get("scope_validation") or {}).get(scope, old)
                 if old_scope.get("incumbent_prompt_version") == incumbent:
-                    receipt = (old.get("metrics", {}).get("scope_coverage") or {}).get(scope)
+                    receipt = (old.get("metrics", {}).get("scope_coverage") or {}).get(
+                        scope
+                    )
                     if receipt:
                         receipts.append(receipt)
-            totals = {k: sum(r.get(k, 0) for r in receipts) for k in
-                      ("screened_total", "paired_comparable_count", "source_excluded_count", "economic_eligible_count")}
-            totals["denominator_preserved"] = all(r.get("denominator_preserved") is True for r in receipts)
-            totals["response_coverage"] = (totals["paired_comparable_count"] / totals["economic_eligible_count"]
-                                           if totals["economic_eligible_count"] else None)
+            totals = {
+                k: sum(r.get(k, 0) for r in receipts)
+                for k in (
+                    "screened_total",
+                    "paired_comparable_count",
+                    "source_excluded_count",
+                    "economic_eligible_count",
+                )
+            }
+            totals["denominator_preserved"] = all(
+                r.get("denominator_preserved") is True for r in receipts
+            )
+            totals["response_coverage"] = (
+                totals["paired_comparable_count"] / totals["economic_eligible_count"]
+                if totals["economic_eligible_count"]
+                else None
+            )
             cumulative_coverage[scope] = totals
         if selection.get("status") == "candidate_selected":
             with plan_path.with_suffix(".lock").open("a") as candidate_lock:
                 fcntl.flock(candidate_lock, fcntl.LOCK_EX)
                 plan = read(plan_path)
-                if plan and (not valid(plan) or plan.get("candidate_prompt_version") != candidate):
-                    raise ValueError("candidate_plan_hash_invalid")
-                if (
-                    (plan.get("candidate_selection") or {}).get(
-                        "artifact_content_sha256"
-                    )
-                    != selection.get("artifact_content_sha256")
+                if plan and (
+                    not valid(plan) or plan.get("candidate_prompt_version") != candidate
                 ):
+                    raise ValueError("candidate_plan_hash_invalid")
+                if (plan.get("candidate_selection") or {}).get(
+                    "artifact_content_sha256"
+                ) != selection.get("artifact_content_sha256"):
                     raise ValueError("candidate_plan_selection_mismatch")
-                if (plan.get("scope_candidates") and plan.get("candidate_prompt_sha256")
-                        and plan["candidate_prompt_sha256"] != digest(candidate_prompt)):
+                if (
+                    plan.get("scope_candidates")
+                    and plan.get("candidate_prompt_sha256")
+                    and plan["candidate_prompt_sha256"] != digest(candidate_prompt)
+                ):
                     raise ValueError("frozen_candidate_prompt_or_schema_changed")
-                if plan.get("scope_candidates") and plan.get("promotion_contract_sha256") != digest(CONTRACT):
+                if plan.get("scope_candidates") and plan.get(
+                    "promotion_contract_sha256"
+                ) != digest(CONTRACT):
                     raise ValueError("candidate_plan_contract_mismatch")
                 scope_validation, scope_candidates = scope_candidate_validation(
-                    all_pairs, population, {"scope_coverage": cumulative_coverage}, plan,
-                    candidate=candidate, now=datetime.now(KST))
+                    all_pairs,
+                    population,
+                    {"scope_coverage": cumulative_coverage},
+                    plan,
+                    candidate=candidate,
+                    now=datetime.now(KST),
+                )
                 if scope_candidates != (plan.get("scope_candidates") or {}):
-                    write(plan_path, sealed({"candidate_prompt_version": candidate,
-                        "scope_candidates": scope_candidates, "promotion_contract_sha256": digest(CONTRACT),
-                        "candidate_prompt_sha256": digest(candidate_prompt),
-                        "candidate_selection": selection, **AUTHORITY}))
+                    write(
+                        plan_path,
+                        sealed(
+                            {
+                                "candidate_prompt_version": candidate,
+                                "scope_candidates": scope_candidates,
+                                "promotion_contract_sha256": digest(CONTRACT),
+                                "candidate_prompt_sha256": digest(candidate_prompt),
+                                "candidate_selection": selection,
+                                **AUTHORITY,
+                            }
+                        ),
+                    )
         else:
             scope_validation, scope_candidates = scope_candidate_validation(
-                all_pairs, population, {"scope_coverage": cumulative_coverage}, {},
-                candidate=candidate, now=datetime.now(KST))
-        frozen_at = min((v["candidate_frozen_at"] for v in scope_validation.values()
-                         if v["candidate_frozen_at"]), default=None)
-        chronology = {"candidate_frozen_at": frozen_at,
-            "same_day_holdout_keys": sorted({key for v in scope_validation.values()
-                for key in v["chronological_validation"].get("same_day_holdout_keys", [])}),
-            "learning_pairs": [p for v in scope_validation.values() for p in v["chronological_validation"]["learning_pairs"]],
-            "holdout_pairs": [p for v in scope_validation.values() for p in v["chronological_validation"]["holdout_pairs"]],
-            "holdout_consumed": False}
+                all_pairs,
+                population,
+                {"scope_coverage": cumulative_coverage},
+                {},
+                candidate=candidate,
+                now=datetime.now(KST),
+            )
+        frozen_at = min(
+            (
+                v["candidate_frozen_at"]
+                for v in scope_validation.values()
+                if v["candidate_frozen_at"]
+            ),
+            default=None,
+        )
+        chronology = {
+            "candidate_frozen_at": frozen_at,
+            "same_day_holdout_keys": sorted(
+                {
+                    key
+                    for v in scope_validation.values()
+                    for key in v["chronological_validation"].get(
+                        "same_day_holdout_keys", []
+                    )
+                }
+            ),
+            "learning_pairs": [
+                p
+                for v in scope_validation.values()
+                for p in v["chronological_validation"]["learning_pairs"]
+            ],
+            "holdout_pairs": [
+                p
+                for v in scope_validation.values()
+                for p in v["chronological_validation"]["holdout_pairs"]
+            ],
+            "holdout_consumed": False,
+        }
         report = sealed(
             {
                 "schema": SCHEMA,
@@ -3627,11 +5459,24 @@ def run(
                         if row.get("machine_bundle_sha256")
                     }
                 ),
-                "source_label_report_sha256": projection.get("source_label_report_sha256"),
-                "owner_execution_model_validation": projection.get("owner_execution_model_validation") or {},
+                "source_label_report_sha256": projection.get(
+                    "source_label_report_sha256"
+                ),
+                "owner_execution_model_validation": projection.get(
+                    "owner_execution_model_validation"
+                )
+                or {},
                 "post_apply_decision_version_performance": applied_decision_version_performance(
-                    read(root / "report/entry_split_order_plan" / f"entry_split_order_plan_{day}.json"),day=day),
-                "owner_execution_model_status": (projection.get("owner_execution_model_validation") or {}).get("status", "missing"),
+                    read(
+                        root
+                        / "report/entry_split_order_plan"
+                        / f"entry_split_order_plan_{day}.json"
+                    ),
+                    day=day,
+                ),
+                "owner_execution_model_status": (
+                    projection.get("owner_execution_model_validation") or {}
+                ).get("status", "missing"),
                 "promotion_contract_sha256": digest(CONTRACT),
                 "promotion_contract": CONTRACT,
                 "candidate_improvement_proven": False,
@@ -3648,7 +5493,8 @@ def run(
                 "evaluation_provider_cost_usd": sum(
                     float(r.get("evaluation_provider_cost_usd") or 0)
                     for r in results.values()
-                ) + sum(
+                )
+                + sum(
                     float(item.get("evaluation_provider_cost_usd") or 0)
                     for version_results in prompt_results.values()
                     for item in version_results.values()
@@ -3658,26 +5504,41 @@ def run(
                 "runtime_inference_cost_receipt": cost_receipt,
                 "chronological_validation": chronology,
                 "scope_validation": scope_validation,
-                "comparison_dependency_signatures": _comparison_signatures(path.parent, day, candidate),
+                "comparison_dependency_signatures": _comparison_signatures(
+                    path.parent, day, candidate
+                ),
                 "next_owner": "existing_main_owner_execution_cf_and_portfolio_replay",
                 "closure_test": "full_cost_stop_owner_plan_portfolio_and_forward_holdout_receipts",
                 **AUTHORITY,
             }
         )
-        from src.engine.scalping.entry_setup_scalping_rollout import AUTO_PROMOTION_SCOPES
-        report["promotion_scopes"] = [scope for scope in AUTO_PROMOTION_SCOPES if promotion_valid(
-            report, incumbent=(scope_validation.get(scope) or {}).get("incumbent_prompt_version"), selected=candidate,
-            source_manifest_sha256=report["source_manifest_sha256"], scope=tuple(scope.split("|")))]
+        from src.engine.scalping.entry_setup_scalping_rollout import (
+            AUTO_PROMOTION_SCOPES,
+        )
+
+        report["promotion_scopes"] = [
+            scope
+            for scope in AUTO_PROMOTION_SCOPES
+            if promotion_valid(
+                report,
+                incumbent=(scope_validation.get(scope) or {}).get(
+                    "incumbent_prompt_version"
+                ),
+                selected=candidate,
+                source_manifest_sha256=report["source_manifest_sha256"],
+                scope=tuple(scope.split("|")),
+            )
+        ]
         report["promotion_pass"] = bool(report["promotion_scopes"])
         report["candidate_improvement_proven"] = report["promotion_pass"]
         report["selection_disposition"] = (
             "candidate_selected" if report["promotion_pass"] else "incumbent_preserved"
         )
-        report["candidate_zero_disposition"] = candidate_zero_disposition(projection["rows"], primary_blockers, report)
-        report["evaluation_state"] = evaluation_state(report)
-        report["prospective_source_contract"] = prospective_source_contract(
-            projection
+        report["candidate_zero_disposition"] = candidate_zero_disposition(
+            projection["rows"], primary_blockers, report
         )
+        report["evaluation_state"] = evaluation_state(report)
+        report["prospective_source_contract"] = prospective_source_contract(projection)
         report["historical_evidence_state"] = (
             "exact_source_unrecoverable_preserved_excluded"
             if report["candidate_zero_disposition"].get("status") == "source_gap"
@@ -3687,35 +5548,60 @@ def run(
             is True
             else None
         )
-        if (projection.get("schema") == "compact_auxiliary_frozen_projection_v1"
-            and projection.get("source_projection_contract") == SOURCE_PROJECTION_CONTRACT):
+        if (
+            projection.get("schema") == "compact_auxiliary_frozen_projection_v1"
+            and projection.get("source_projection_contract")
+            == SOURCE_PROJECTION_CONTRACT
+        ):
             report["auxiliary_history_projection_sha256s"] = stage_population[
-                "history_projection_sha256s"]
+                "history_projection_sha256s"
+            ]
             report["auxiliary_stage"] = evaluate_auxiliary_stage(
                 stage_population,
                 prompt_results=auxiliary_population_prompt_results(
-                    stage_population, path.parent, prompt_results),
-                **({'frozen_choices': frozen_choices} if stage_logic_current(projection) else {}),
+                    stage_population, path.parent, prompt_results
+                ),
+                **(
+                    {"frozen_choices": frozen_choices}
+                    if stage_logic_current(projection)
+                    else {}
+                ),
             )
-            report["auxiliary_prompt_execution_complete"] = auxiliary_prompt_results_complete(
-                stage_population, all_prompt_results, eligible_keys,
-                **({'frozen_choices': frozen_choices} if stage_logic_current(projection) else {}),
+            report["auxiliary_prompt_execution_complete"] = (
+                auxiliary_prompt_results_complete(
+                    stage_population,
+                    all_prompt_results,
+                    eligible_keys,
+                    **(
+                        {"frozen_choices": frozen_choices}
+                        if stage_logic_current(projection)
+                        else {}
+                    ),
+                )
             )
-            if any(scope.get("status") == "candidate_selected"
-                   for scope in report["auxiliary_stage"]["scope_results"].values()):
+            if any(
+                scope.get("status") == "candidate_selected"
+                for scope in report["auxiliary_stage"]["scope_results"].values()
+            ):
                 report["selection_disposition"] = "candidate_selected"
         report["postclose_command_elapsed_ms"] = round(
-            (time.perf_counter() - run_started) * 1000, 3)
+            (time.perf_counter() - run_started) * 1000, 3
+        )
         if stage_logic_current(projection):
-            report['auxiliary_prompt_source_gaps'] = prompt_source_gaps
-            report['auxiliary_train_selection'] = read(frozen_selection_path)
+            report["auxiliary_prompt_source_gaps"] = prompt_source_gaps
+            report["auxiliary_train_selection"] = read(frozen_selection_path)
         from src.engine.scalping.main_submit_drought_research import load_projection
+
         drought = load_projection(root, day)
-        report['submission_drought_auxiliary_comparison'] = {
-            'status': drought['status'], 'artifact_content_sha256': drought.get('artifact_content_sha256'),
-            'groups': {scope: value.get('auxiliary_comparison')
-                       for scope, value in (drought.get('groups') or {}).items()},
-            'runtime_effect': False, 'result_is_realized_profit': False,
+        report["submission_drought_auxiliary_comparison"] = {
+            "status": drought["status"],
+            "artifact_content_sha256": drought.get("artifact_content_sha256"),
+            "groups": {
+                scope: value.get("auxiliary_comparison")
+                for scope, value in (drought.get("groups") or {}).items()
+            },
+            "runtime_effect": False,
+            "result_is_realized_profit": False,
         }
         report = sealed(report)
         write(path, report)
@@ -3806,7 +5692,10 @@ def _finalize(*, data_root, day, publication_day):
     from src.engine.scalping import main_ai_prompt_consumer as consumer
 
     root = Path(data_root).resolve()
-    if not isinstance(publication_day, str) or publication_day > datetime.now(KST).date().isoformat():
+    if (
+        not isinstance(publication_day, str)
+        or publication_day > datetime.now(KST).date().isoformat()
+    ):
         raise ValueError("compact_publication_date_invalid")
     paired = read(report_path(root, day))
     if not valid(paired) or paired.get("target_date") != day:
@@ -3837,7 +5726,10 @@ def _finalize(*, data_root, day, publication_day):
         data_root=root,
     )
     frozen_source = None
-    if bundle.get("compact_paired_artifact_sha256") != paired["artifact_content_sha256"]:
+    if (
+        bundle.get("compact_paired_artifact_sha256")
+        != paired["artifact_content_sha256"]
+    ):
         frozen_source = consumer.frozen_compact_policy_source(root, bundle, paired, day)
         freeze_at = datetime.fromisoformat(bundle["target_date"] + "T07:35:00+09:00")
         if frozen_source is None or datetime.now(KST) < freeze_at:
@@ -3861,10 +5753,14 @@ def _finalize(*, data_root, day, publication_day):
         ),
         "policy_bundle_sha256": bundle["bundle_sha256"],
         "selection_disposition": (
-            "incumbent_preserved_after_preopen_recovery" if frozen_source is not None
-            else "candidate_selected"
-            if bundle.get("compact_promoted_scopes") or bundle.get("auxiliary_soft_promoted_scopes")
-            else "incumbent_preserved"
+            "incumbent_preserved_after_preopen_recovery"
+            if frozen_source is not None
+            else (
+                "candidate_selected"
+                if bundle.get("compact_promoted_scopes")
+                or bundle.get("auxiliary_soft_promoted_scopes")
+                else "incumbent_preserved"
+            )
         ),
         "next_owner": paired.get(
             "next_owner", "existing_main_owner_execution_cf_and_portfolio_replay"

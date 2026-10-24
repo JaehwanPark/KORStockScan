@@ -56,10 +56,14 @@ def test_compact_plan_preserves_natural_selection_and_runtime_prompt_registry():
 
 def test_compact_router_economics_reaches_optimizer_without_provider_replay():
     from src.tests.test_ai_action_outcome_calibration import _compact_router_case_table
+
     table = _compact_router_case_table()
     report = {"hierarchical_entry_quality": {"machine_decision_case_table": table}}
     plan = optimizer.compact_evaluation_plan(report)
-    assert plan["economic_contract"] == table["compact_auxiliary_screen_outcomes"]["economic_contract"]
+    assert (
+        plan["economic_contract"]
+        == table["compact_auxiliary_screen_outcomes"]["economic_contract"]
+    )
     assert plan["economic_contract"]["evaluable_caution_count"] == 20
     assert plan["automatic_successor_selection"]["eligible"] is True
     assert plan["provider_calls"] == 0
@@ -1346,8 +1350,12 @@ def test_action_outcome_advisory_rejects_ambiguous_same_version_cohorts() -> Non
 
 def test_removed_standalone_optimizer_cannot_overwrite_compact_reports(monkeypatch):
     import runpy
+
     def forbidden(*args, **kwargs):
-        raise AssertionError("Retired standalone optimizer must not read or write artifacts")
+        raise AssertionError(
+            "Retired standalone optimizer must not read or write artifacts"
+        )
+
     monkeypatch.setattr(optimizer.Path, "read_text", forbidden)
     monkeypatch.setattr(optimizer.Path, "write_text", forbidden)
     namespace = runpy.run_path(optimizer.__file__, run_name="__main__")

@@ -4,6 +4,7 @@ This reader preserves the exact-execution receipt contract. Official whole-day
 position totals are reconciled separately by broker_cost_source; they are not
 rewritten into invented per-fill allocations. Missing values remain unknown.
 """
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -24,8 +25,11 @@ RESEARCH_COST_MAX_RECORDS = 10000
 
 
 def digest(value) -> str:
-    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"),
-                                    allow_nan=False).encode()).hexdigest()
+    return hashlib.sha256(
+        json.dumps(
+            value, sort_keys=True, separators=(",", ":"), allow_nan=False
+        ).encode()
+    ).hexdigest()
 
 
 def _at(value) -> float:
@@ -45,19 +49,29 @@ def _number(value) -> float:
 
 
 def receipt_path(data_root: Path, completion_date: str, record_id: str) -> Path:
-    if datetime.strptime(completion_date, "%Y-%m-%d").date().isoformat() != completion_date:
+    if (
+        datetime.strptime(completion_date, "%Y-%m-%d").date().isoformat()
+        != completion_date
+    ):
         raise ValueError("cost_completion_date_invalid")
     if not str(record_id).isdigit() or int(record_id) <= 0:
         raise ValueError("cost_record_id_invalid")
-    return Path(data_root) / "runtime/holding_actual_costs" / completion_date / f"{record_id}.json"
+    return (
+        Path(data_root)
+        / "runtime/holding_actual_costs"
+        / completion_date
+        / f"{record_id}.json"
+    )
 
 
 def load_receipt(data_root: Path, completion_date: str, record_id: str) -> dict | None:
     path = receipt_path(data_root, completion_date, record_id)
     if not path.exists():
         return None
-    if (any(parent.is_symlink() for parent in (path, path.parent, path.parent.parent))
-            or path.stat().st_size > MAX_BYTES):
+    if (
+        any(parent.is_symlink() for parent in (path, path.parent, path.parent.parent))
+        or path.stat().st_size > MAX_BYTES
+    ):
         raise ValueError("cost_source_path_or_size_invalid")
     with path.open("rb") as handle:
         raw = handle.read(MAX_BYTES + 1)
@@ -69,13 +83,24 @@ def load_receipt(data_root: Path, completion_date: str, record_id: str) -> dict 
     return value
 
 
-def source_generation(data_root: Path, completion_date: str, *, additional_source_dates=None,
-                      declared_research=None) -> dict:
+def source_generation(
+    data_root: Path,
+    completion_date: str,
+    *,
+    additional_source_dates=None,
+    declared_research=None,
+) -> dict:
     if declared_research is None and additional_source_dates is None:
-        from src.engine.automation.main_trailing_source_reuse import frozen_cost_declaration
+        from src.engine.automation.main_trailing_source_reuse import (
+            frozen_cost_declaration,
+        )
+
         declared_research = frozen_cost_declaration(data_root, completion_date)
     directory = receipt_path(data_root, completion_date, "1").parent
-    if any(parent.is_symlink() for parent in (directory, directory.parent, directory.parent.parent)):
+    if any(
+        parent.is_symlink()
+        for parent in (directory, directory.parent, directory.parent.parent)
+    ):
         raise ValueError("cost_source_directory_symlink")
     rows = []
     paths = []
@@ -86,12 +111,19 @@ def source_generation(data_root: Path, completion_date: str, *, additional_sourc
             paths.append(path)
     paths.sort()
     total_bytes = 0
+
     def account_read(size):
         nonlocal total_bytes
-        total_bytes+=size
-        if total_bytes>MAX_GENERATION_BYTES:raise ValueError('research_cost_generation_size_limit')
+        total_bytes += size
+        if total_bytes > MAX_GENERATION_BYTES:
+            raise ValueError("research_cost_generation_size_limit")
+
     for path in paths:
-        if not path.stem.isdigit() or path.is_symlink() or path.stat().st_size > MAX_BYTES:
+        if (
+            not path.stem.isdigit()
+            or path.is_symlink()
+            or path.stat().st_size > MAX_BYTES
+        ):
             raise ValueError("cost_source_path_or_size_invalid")
         if total_bytes + path.stat().st_size > MAX_GENERATION_BYTES:
             raise ValueError("cost_source_generation_size_limit")
@@ -103,19 +135,42 @@ def source_generation(data_root: Path, completion_date: str, *, additional_sourc
         if total_bytes > MAX_GENERATION_BYTES:
             raise ValueError("cost_source_generation_size_limit")
         rows.append({"record_id": path.stem, "sha256": hashlib.sha256(raw).hexdigest()})
-    result = {"schema": "holding_actual_cost_source_generation_v1",
-            "completion_date": completion_date, "count": len(rows),
-            "sha256": digest(rows), "status": "observed" if rows else "cost_source_unavailable"}
+    result = {
+        "schema": "holding_actual_cost_source_generation_v1",
+        "completion_date": completion_date,
+        "count": len(rows),
+        "sha256": digest(rows),
+        "status": "observed" if rows else "cost_source_unavailable",
+    }
     from .broker_cost_source import source_path, MAX_BYTES as SOURCE_MAX_BYTES
+
     official = source_path(data_root, completion_date)
     if official.exists():
-        if official.is_symlink() or official.parent.is_symlink() or official.stat().st_size > SOURCE_MAX_BYTES:
+        if (
+            official.is_symlink()
+            or official.parent.is_symlink()
+            or official.stat().st_size > SOURCE_MAX_BYTES
+        ):
             raise ValueError("broker_cost_source_path_or_size_invalid")
-        declared_official = next((row for row in declared_research.get('source_dates', [])
-            if isinstance(row,dict) and row.get('source_date') == completion_date),None) if isinstance(declared_research,dict) else None
+        declared_official = (
+            next(
+                (
+                    row
+                    for row in declared_research.get("source_dates", [])
+                    if isinstance(row, dict)
+                    and row.get("source_date") == completion_date
+                ),
+                None,
+            )
+            if isinstance(declared_research, dict)
+            else None
+        )
         if declared_official is not None:
             from .broker_cost_source import declared_source_bytes
-            raw = declared_source_bytes(data_root,declared_official,account_read=account_read)
+
+            raw = declared_source_bytes(
+                data_root, declared_official, account_read=account_read
+            )
         else:
             with official.open("rb") as handle:
                 raw = handle.read(SOURCE_MAX_BYTES + 1)
@@ -125,17 +180,23 @@ def source_generation(data_root: Path, completion_date: str, *, additional_sourc
     # Preserve old generations byte-for-byte until the dedicated quantity
     # producer publishes its own dependency index. Prior entry-date cost
     # corrections then invalidate only reports that actually depend on them.
-    research = Path(data_root) / "runtime/initial_quantity_research_costs" / completion_date
+    research = (
+        Path(data_root) / "runtime/initial_quantity_research_costs" / completion_date
+    )
     index_path = research / "index.json"
     if declared_research is False:
         if additional_source_dates is not None:
-            raise ValueError('research_cost_declared_scope_conflict')
+            raise ValueError("research_cost_declared_scope_conflict")
         # The sealed original predates the dedicated research publisher.
         # Its complete actual/official scope was revalidated above.
         return result
     if declared_research is not None and additional_source_dates is not None:
-        raise ValueError('research_cost_declared_scope_conflict')
-    if declared_research is not None or additional_source_dates is not None or index_path.exists():
+        raise ValueError("research_cost_declared_scope_conflict")
+    if (
+        declared_research is not None
+        or additional_source_dates is not None
+        or index_path.exists()
+    ):
         if any(p.is_symlink() for p in (research, research.parent, index_path)):
             raise ValueError("research_cost_generation_symlink")
         index = None
@@ -144,22 +205,28 @@ def source_generation(data_root: Path, completion_date: str, *, additional_sourc
             # Revalidate references sealed by an existing immutable report.
             # Current official/actual costs and every original receipt byte
             # remain mandatory; a newer research allocation is a separate scope.
-            if (not isinstance(declared_research, dict)
-                    or set(declared_research) != {'source_dates', 'receipts'}
-                    or not isinstance(declared_research['receipts'], list)
-                    or not isinstance(declared_research['source_dates'], list)
-                    or len(declared_research['receipts']) > RESEARCH_COST_MAX_RECORDS
-                    or len(declared_research['source_dates']) > RESEARCH_COST_MAX_DATES):
-                raise ValueError('research_cost_declared_generation_invalid')
-            receipt_rows = declared_research['receipts']
-            date_rows = declared_research['source_dates']
-            index = dict(schema=RESEARCH_COST_INDEX_SCHEMA, completion_date=completion_date,
-                receipts={r['record_id']: r['content_sha256'] for r in receipt_rows},
-                source_dates=[r['source_date'] for r in date_rows])
-            if (len(index['receipts']) != len(receipt_rows)
-                    or len(set(index['source_dates'])) != len(date_rows)):
-                raise ValueError('research_cost_declared_generation_duplicate')
-            index['index_sha256'] = digest(index)
+            if (
+                not isinstance(declared_research, dict)
+                or set(declared_research) != {"source_dates", "receipts"}
+                or not isinstance(declared_research["receipts"], list)
+                or not isinstance(declared_research["source_dates"], list)
+                or len(declared_research["receipts"]) > RESEARCH_COST_MAX_RECORDS
+                or len(declared_research["source_dates"]) > RESEARCH_COST_MAX_DATES
+            ):
+                raise ValueError("research_cost_declared_generation_invalid")
+            receipt_rows = declared_research["receipts"]
+            date_rows = declared_research["source_dates"]
+            index = dict(
+                schema=RESEARCH_COST_INDEX_SCHEMA,
+                completion_date=completion_date,
+                receipts={r["record_id"]: r["content_sha256"] for r in receipt_rows},
+                source_dates=[r["source_date"] for r in date_rows],
+            )
+            if len(index["receipts"]) != len(receipt_rows) or len(
+                set(index["source_dates"])
+            ) != len(date_rows):
+                raise ValueError("research_cost_declared_generation_duplicate")
+            index["index_sha256"] = digest(index)
         elif index_path.exists():
             if index_path.stat().st_size > MAX_GENERATION_BYTES:
                 raise ValueError("research_cost_index_size_limit")
@@ -169,18 +236,31 @@ def source_generation(data_root: Path, completion_date: str, *, additional_sourc
                 raise ValueError("research_cost_index_size_limit")
             index = json.loads(index_raw)
         if index is not None:
-            if (index.get("schema") != RESEARCH_COST_INDEX_SCHEMA
-                    or index.get("completion_date") != completion_date
-                    or index.get("index_sha256") != digest({k: v for k, v in index.items() if k != "index_sha256"})
-                    or not isinstance(index.get("receipts"), dict)
-                    or len(index["receipts"]) > RESEARCH_COST_MAX_RECORDS):
+            if (
+                index.get("schema") != RESEARCH_COST_INDEX_SCHEMA
+                or index.get("completion_date") != completion_date
+                or index.get("index_sha256")
+                != digest({k: v for k, v in index.items() if k != "index_sha256"})
+                or not isinstance(index.get("receipts"), dict)
+                or len(index["receipts"]) > RESEARCH_COST_MAX_RECORDS
+            ):
                 raise ValueError("research_cost_index_invalid")
             for record, expected in sorted(index["receipts"].items()):
-                if not isinstance(expected, str) or len(expected) != 64 or any(c not in "0123456789abcdef" for c in expected):
+                if (
+                    not isinstance(expected, str)
+                    or len(expected) != 64
+                    or any(c not in "0123456789abcdef" for c in expected)
+                ):
                     raise ValueError("research_cost_receipt_reference_invalid")
                 path = research / "generations" / (expected + ".json")
-                if (not record.isdigit() or int(record) <= 0 or path.is_symlink() or path.parent.is_symlink()
-                        or not path.is_file() or path.stat().st_size > MAX_BYTES):
+                if (
+                    not record.isdigit()
+                    or int(record) <= 0
+                    or path.is_symlink()
+                    or path.parent.is_symlink()
+                    or not path.is_file()
+                    or path.stat().st_size > MAX_BYTES
+                ):
                     raise ValueError("research_cost_receipt_generation_invalid")
                 with path.open("rb") as handle:
                     raw = handle.read(MAX_BYTES + 1)
@@ -190,18 +270,34 @@ def source_generation(data_root: Path, completion_date: str, *, additional_sourc
                 receipt = json.loads(raw)
                 if digest(receipt) != expected:
                     raise ValueError("research_cost_index_receipt_mismatch")
-                indexed_receipts.append({"record_id": record, "sha256": hashlib.sha256(raw).hexdigest(),
-                                         "content_sha256": digest(receipt),
-                                         "receipt_sha256": receipt.get("receipt_sha256")})
-        dates = sorted(set(additional_source_dates if additional_source_dates is not None
-                           else (index or {}).get("source_dates", [])))
-        declared_sources={row['source_date']:row for row in declared_research['source_dates']} if declared_research is not None else {}
+                indexed_receipts.append(
+                    {
+                        "record_id": record,
+                        "sha256": hashlib.sha256(raw).hexdigest(),
+                        "content_sha256": digest(receipt),
+                        "receipt_sha256": receipt.get("receipt_sha256"),
+                    }
+                )
+        dates = sorted(
+            set(
+                additional_source_dates
+                if additional_source_dates is not None
+                else (index or {}).get("source_dates", [])
+            )
+        )
+        declared_sources = (
+            {row["source_date"]: row for row in declared_research["source_dates"]}
+            if declared_research is not None
+            else {}
+        )
         if len(dates) > RESEARCH_COST_MAX_DATES:
             raise ValueError("research_cost_dependency_date_limit")
         sources = []
         for day in dates:
-            if (datetime.strptime(day, "%Y-%m-%d").date().isoformat() != day
-                    or day > completion_date):
+            if (
+                datetime.strptime(day, "%Y-%m-%d").date().isoformat() != day
+                or day > completion_date
+            ):
                 raise ValueError("research_cost_dependency_date_invalid")
             path = source_path(data_root, day)
             if path.is_symlink() or path.parent.is_symlink():
@@ -211,28 +307,43 @@ def source_generation(data_root: Path, completion_date: str, *, additional_sourc
                     raise ValueError("research_cost_source_dependency_size_limit")
                 if day in declared_sources:
                     from .broker_cost_source import declared_source_bytes
-                    raw=declared_source_bytes(data_root,declared_sources[day],account_read=account_read)
+
+                    raw = declared_source_bytes(
+                        data_root, declared_sources[day], account_read=account_read
+                    )
                 else:
                     with path.open("rb") as handle:
                         raw = handle.read(SOURCE_MAX_BYTES + 1)
                 if len(raw) > SOURCE_MAX_BYTES:
                     raise ValueError("research_cost_source_dependency_size_limit")
-                if day not in declared_sources:total_bytes += len(raw)
+                if day not in declared_sources:
+                    total_bytes += len(raw)
                 if total_bytes > MAX_GENERATION_BYTES:
                     raise ValueError("research_cost_generation_size_limit")
                 try:
                     decoded = json.loads(raw)
                 except (ValueError, UnicodeError):
                     decoded = None
-                logical = decoded.get("source_sha256") if isinstance(decoded, dict) else None
-                sources.append({"source_date": day, "sha256": hashlib.sha256(raw).hexdigest(),
-                                "source_sha256": logical,
-                                **({"status": "source_invalid"} if logical is None else {})})
+                logical = (
+                    decoded.get("source_sha256") if isinstance(decoded, dict) else None
+                )
+                sources.append(
+                    {
+                        "source_date": day,
+                        "sha256": hashlib.sha256(raw).hexdigest(),
+                        "source_sha256": logical,
+                        **({"status": "source_invalid"} if logical is None else {}),
+                    }
+                )
             else:
-                sources.append({"source_date": day, "status": "source_missing", "sha256": None})
+                sources.append(
+                    {"source_date": day, "status": "source_missing", "sha256": None}
+                )
         allocation = {"source_dates": sources, "receipts": indexed_receipts}
         result["quantity_research_cost_generation"] = allocation
-        result["sha256"] = digest({"actual_receipts": rows, "quantity_research": allocation})
+        result["sha256"] = digest(
+            {"actual_receipts": rows, "quantity_research": allocation}
+        )
     return result
 
 
@@ -240,18 +351,26 @@ def prepare_record_source_generation(generation: dict) -> dict | None:
     research = generation.get("quantity_research_cost_generation")
     if not isinstance(research, dict):
         return None
-    return {"generation": generation, "research_generation_sha256": digest(research),
-            "receipts": {row["record_id"]: row for row in research.get("receipts", [])},
-            "sources": {row["source_date"]: row for row in research.get("source_dates", [])}}
+    return {
+        "generation": generation,
+        "research_generation_sha256": digest(research),
+        "receipts": {row["record_id"]: row for row in research.get("receipts", [])},
+        "sources": {
+            row["source_date"]: row for row in research.get("source_dates", [])
+        },
+    }
 
 
 def record_source_projector(generation: dict):
     prepared = prepare_record_source_generation(generation)
     return lambda record_id, receipt=None: record_source_generation(
-        generation, record_id, receipt, projection_index=prepared)
+        generation, record_id, receipt, projection_index=prepared
+    )
 
 
-def record_source_generation(generation: dict, record_id, receipt=None, *, projection_index=None) -> dict:
+def record_source_generation(
+    generation: dict, record_id, receipt=None, *, projection_index=None
+) -> dict:
     """Keep the full native generation in shared metadata, project one fact only.
 
     Full receipt populations must never be serialized into every trade. The
@@ -260,27 +379,52 @@ def record_source_generation(generation: dict, record_id, receipt=None, *, proje
     research = generation.get("quantity_research_cost_generation")
     if not isinstance(research, dict):
         return generation
-    prepared = projection_index if projection_index is not None else prepare_record_source_generation(generation)
+    prepared = (
+        projection_index
+        if projection_index is not None
+        else prepare_record_source_generation(generation)
+    )
     if prepared["generation"] is not generation:
         raise ValueError("research_cost_generation_projection_context_mismatch")
     record = str(record_id)
     dates = {part.get("source_date") for part in (receipt or {}).get("sources", [])}
-    result = {k: v for k, v in generation.items() if k != "quantity_research_cost_generation"}
+    result = {
+        k: v for k, v in generation.items() if k != "quantity_research_cost_generation"
+    }
     result["quantity_research_cost_generation"] = {
-        "projection_scope": "record", "record_id": record,
+        "projection_scope": "record",
+        "record_id": record,
         "parent_generation_sha256": generation["sha256"],
         "research_generation_sha256": prepared["research_generation_sha256"],
-        "receipts": [deepcopy(prepared["receipts"][record])] if record in prepared["receipts"] else [],
-        "source_dates": [deepcopy(prepared["sources"][day]) for day in sorted(dates) if day in prepared["sources"]],
+        "receipts": (
+            [deepcopy(prepared["receipts"][record])]
+            if record in prepared["receipts"]
+            else []
+        ),
+        "source_dates": [
+            deepcopy(prepared["sources"][day])
+            for day in sorted(dates)
+            if day in prepared["sources"]
+        ],
     }
     return result
 
 
-def reconcile(receipt: dict | None, *, context: dict, buy_legs: list,
-              sell_legs: list, knowledge_cutoff: float | None = None) -> dict:
-    missing = {"status": "cost_source_unavailable", "actual_fees_taxes_krw": None,
-               "exact_pnl_krw": None, "exact_profit_rate": None,
-               "reason": "exact_execution_statement_not_available"}
+def reconcile(
+    receipt: dict | None,
+    *,
+    context: dict,
+    buy_legs: list,
+    sell_legs: list,
+    knowledge_cutoff: float | None = None,
+) -> dict:
+    missing = {
+        "status": "cost_source_unavailable",
+        "actual_fees_taxes_krw": None,
+        "exact_pnl_krw": None,
+        "exact_profit_rate": None,
+        "reason": "exact_execution_statement_not_available",
+    }
     if receipt is None:
         return missing
     try:
@@ -289,35 +433,65 @@ def reconcile(receipt: dict | None, *, context: dict, buy_legs: list,
         body = {k: v for k, v in receipt.items() if k != "receipt_sha256"}
         if digest(body) != receipt.get("receipt_sha256"):
             raise ValueError("cost_receipt_hash_mismatch")
-        for key in ("position_key", "symbol", "buy_fill_identity", "account_scope_sha256",
-                    "completion_observed_date", "owner"):
+        for key in (
+            "position_key",
+            "symbol",
+            "buy_fill_identity",
+            "account_scope_sha256",
+            "completion_observed_date",
+            "owner",
+        ):
             if not context.get(key) or receipt.get(key) != context[key]:
                 raise ValueError("cost_context_mismatch:" + key)
         if context["owner"] != "main" or any(
-            len(str(context[k])) != 64 or any(c not in "0123456789abcdef" for c in str(context[k]))
+            len(str(context[k])) != 64
+            or any(c not in "0123456789abcdef" for c in str(context[k]))
             for k in ("buy_fill_identity", "account_scope_sha256")
         ):
             raise ValueError("cost_owner_or_generation_invalid")
-        available, reconciled = _at(receipt["cost_available_at"]), _at(receipt["reconciled_at"])
+        available, reconciled = _at(receipt["cost_available_at"]), _at(
+            receipt["reconciled_at"]
+        )
         completed_at = float(context["completed_at"])
-        if (not math.isfinite(completed_at) or completed_at <= 0
-                or reconciled < available or available < completed_at):
+        if (
+            not math.isfinite(completed_at)
+            or completed_at <= 0
+            or reconciled < available
+            or available < completed_at
+        ):
             raise ValueError("cost_availability_clock_invalid")
-        if knowledge_cutoff is not None and max(available, reconciled) > knowledge_cutoff:
-            return {**missing, "status": "actual_cost_pending", "reason": "cost_after_knowledge_cutoff"}
+        if (
+            knowledge_cutoff is not None
+            and max(available, reconciled) > knowledge_cutoff
+        ):
+            return {
+                **missing,
+                "status": "actual_cost_pending",
+                "reason": "cost_after_knowledge_cutoff",
+            }
         revision = receipt.get("revision")
         if isinstance(revision, bool) or not isinstance(revision, int) or revision < 1:
             raise ValueError("cost_revision_invalid")
         source = receipt.get("source") or {}
         raw = source.get("raw_statement")
-        if (source.get("kind") != "broker_statement_exact_execution_costs"
-                or source.get("environment") != "real"
-                or source.get("allocation_scope") != "exact_execution"
-                or not isinstance(raw, dict) or source.get("raw_sha256") != digest(raw)
-                or raw.get("currency") != "KRW"
-                or raw.get("legs") != receipt.get("legs")
-                or any(raw.get(k) != context[k] for k in (
-                    "position_key", "symbol", "account_scope_sha256", "buy_fill_identity"))):
+        if (
+            source.get("kind") != "broker_statement_exact_execution_costs"
+            or source.get("environment") != "real"
+            or source.get("allocation_scope") != "exact_execution"
+            or not isinstance(raw, dict)
+            or source.get("raw_sha256") != digest(raw)
+            or raw.get("currency") != "KRW"
+            or raw.get("legs") != receipt.get("legs")
+            or any(
+                raw.get(k) != context[k]
+                for k in (
+                    "position_key",
+                    "symbol",
+                    "account_scope_sha256",
+                    "buy_fill_identity",
+                )
+            )
+        ):
             raise ValueError("cost_source_allocation_unproven")
         if not buy_legs or not sell_legs:
             raise ValueError("cost_execution_coverage_missing")
@@ -335,12 +509,15 @@ def reconcile(receipt: dict | None, *, context: dict, buy_legs: list,
             if key in actual or key not in expected:
                 raise ValueError("cost_execution_identity_conflict")
             fill = expected[key]
-            if (str(leg["trade_date"]) != str(fill["at"])[:10]
-                    or _number(leg["qty"]) != _number(fill["qty"])
-                    or _number(leg["price"]) != _number(fill["price"])
-                    or leg.get("route") != fill.get("route")
-                    or leg.get("route") not in {"KRX", "NXT", "SOR"}
-                    or _number(leg["qty"]) <= 0 or _number(leg["price"]) <= 0):
+            if (
+                str(leg["trade_date"]) != str(fill["at"])[:10]
+                or _number(leg["qty"]) != _number(fill["qty"])
+                or _number(leg["price"]) != _number(fill["price"])
+                or leg.get("route") != fill.get("route")
+                or leg.get("route") not in {"KRX", "NXT", "SOR"}
+                or _number(leg["qty"]) <= 0
+                or _number(leg["price"]) <= 0
+            ):
                 raise ValueError("cost_execution_quantity_price_or_route_mismatch")
             actual[key] = leg
             total_cost += _number(leg["fee_krw"]) + _number(leg["tax_krw"])
@@ -350,23 +527,37 @@ def reconcile(receipt: dict | None, *, context: dict, buy_legs: list,
         sell_qty = sum(_number(x["qty"]) for x in sell_legs)
         buy_amount = sum(_number(x["qty"]) * _number(x["price"]) for x in buy_legs)
         sell_amount = sum(_number(x["qty"]) * _number(x["price"]) for x in sell_legs)
-        if (not all(math.isfinite(value) for value in (
-                buy_qty, sell_qty, buy_amount, sell_amount, total_cost))
-                or buy_qty != sell_qty or buy_amount <= 0):
+        if (
+            not all(
+                math.isfinite(value)
+                for value in (buy_qty, sell_qty, buy_amount, sell_amount, total_cost)
+            )
+            or buy_qty != sell_qty
+            or buy_amount <= 0
+        ):
             raise ValueError("cost_final_quantity_unreconciled")
         exact = sell_amount - buy_amount - total_cost
         rate = exact / buy_amount * 100
         if not math.isfinite(exact) or not math.isfinite(rate):
             raise ValueError("cost_aggregate_economics_nonfinite")
         statement_pnl = float(receipt["realized_pnl_krw"])
-        if (isinstance(receipt["realized_pnl_krw"], bool)
-                or not math.isfinite(statement_pnl) or abs(statement_pnl - exact) > 0.01):
+        if (
+            isinstance(receipt["realized_pnl_krw"], bool)
+            or not math.isfinite(statement_pnl)
+            or abs(statement_pnl - exact) > 0.01
+        ):
             raise ValueError("cost_statement_pnl_mismatch")
-        return {"status": "actual_cost_reconciled", "actual_fees_taxes_krw": total_cost,
-                "exact_pnl_krw": exact, "exact_profit_rate": rate,
-                "cost_available_at": receipt["cost_available_at"],
-                "reconciled_at": receipt["reconciled_at"], "revision": revision,
-                "receipt_sha256": receipt["receipt_sha256"], "raw_sha256": source["raw_sha256"],
-                "reason": None}
+        return {
+            "status": "actual_cost_reconciled",
+            "actual_fees_taxes_krw": total_cost,
+            "exact_pnl_krw": exact,
+            "exact_profit_rate": rate,
+            "cost_available_at": receipt["cost_available_at"],
+            "reconciled_at": receipt["reconciled_at"],
+            "revision": revision,
+            "receipt_sha256": receipt["receipt_sha256"],
+            "raw_sha256": source["raw_sha256"],
+            "reason": None,
+        }
     except (KeyError, TypeError, ValueError, OverflowError) as exc:
         return {**missing, "status": "actual_cost_invalid", "reason": str(exc)}

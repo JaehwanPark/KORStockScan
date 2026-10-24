@@ -176,41 +176,64 @@ def _write_policy(tmp_path: Path, payload: dict[str, Any] | None = None) -> Path
 def _publication_resolution(tmp_path: Path) -> dict[str, Any]:
     day = "2026-09-11"
     owner = build_daily_sources(
-        target_date=day, policy_path=_write_policy(tmp_path),
+        target_date=day,
+        policy_path=_write_policy(tmp_path),
         output_root=tmp_path / "sources",
-        fetcher=lambda url: _archive("KOSPI" if url == KIS_KOSPI_MASTER_URL else "KOSDAQ"),
+        fetcher=lambda url: _archive(
+            "KOSPI" if url == KIS_KOSPI_MASTER_URL else "KOSDAQ"
+        ),
         generated_at=datetime.fromisoformat(day + "T18:00:00+09:00"),
     )
     return build_daily_resolution(
-        target_date=day, source_manifest_path=Path(owner["economic_manifest_path"]),
+        target_date=day,
+        source_manifest_path=Path(owner["economic_manifest_path"]),
         generated_at=datetime.fromisoformat(day + "T18:01:00+09:00"),
     )
 
 
-def test_machine_economic_owner_publishes_exact_master_for_existing_consumers(tmp_path, monkeypatch):
+def test_machine_economic_owner_publishes_exact_master_for_existing_consumers(
+    tmp_path, monkeypatch
+):
     from src.engine.monitoring import intraday_ws_freshness_monitor as ws
     from src.engine.monitoring import scanner_lookup_attention_tuning as lookup
 
     report = _publication_resolution(tmp_path)
     directory = tmp_path / "published"
     result = publish_canonical_symbol_master(
-        report, target_date="2026-09-11", directory=directory)
+        report, target_date="2026-09-11", directory=directory
+    )
     path = Path(result["path"])
     before = path.stat()
     again = publish_canonical_symbol_master(
-        report, target_date="2026-09-11", directory=directory)
+        report, target_date="2026-09-11", directory=directory
+    )
     assert result["status"] == "published" and again["status"] == "verified_existing"
-    assert (path.stat().st_ino, path.stat().st_mtime_ns) == (before.st_ino, before.st_mtime_ns)
+    assert (path.stat().st_ino, path.stat().st_mtime_ns) == (
+        before.st_ino,
+        before.st_mtime_ns,
+    )
     assert json.loads(path.read_bytes()) == report["canonical_symbol_master_payload"]
     master, receipt = ws._load_verified_symbol_master("2026-09-11", path)
     assert receipt["status"] == "verified" and master.symbol_count == 2
     monkeypatch.setattr(lookup, "SYMBOL_MASTER_DIR", directory)
     symbols, receipt = lookup._latest_symbol_master(date(2026, 9, 11))
     assert symbols == {"005930", "000250"} and receipt["status"] == "pass"
-    assert result["provider_call_performed"] is False and result["runtime_effect"] is False
+    assert (
+        result["provider_call_performed"] is False and result["runtime_effect"] is False
+    )
 
 
-@pytest.mark.parametrize("fault", ["wrong_day", "unsealed_report", "payload_binding", "authority", "original_missing", "original_changed"])
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "wrong_day",
+        "unsealed_report",
+        "payload_binding",
+        "authority",
+        "original_missing",
+        "original_changed",
+    ],
+)
 def test_symbol_master_publication_rejects_invalid_original_evidence(tmp_path, fault):
     report = _publication_resolution(tmp_path)
     day = "2026-09-11"
@@ -220,12 +243,20 @@ def test_symbol_master_publication_rejects_invalid_original_evidence(tmp_path, f
         report["generated_at"] = "changed"
     elif fault == "payload_binding":
         report["canonical_symbol_master_payload_sha256"] = "a" * 64
-        report["artifact_content_sha256"] = content_sha256({k:v for k,v in report.items() if k != "artifact_content_sha256"})
+        report["artifact_content_sha256"] = content_sha256(
+            {k: v for k, v in report.items() if k != "artifact_content_sha256"}
+        )
     elif fault == "authority":
         report["runtime_effect"] = True
-        report["artifact_content_sha256"] = content_sha256({k:v for k,v in report.items() if k != "artifact_content_sha256"})
+        report["artifact_content_sha256"] = content_sha256(
+            {k: v for k, v in report.items() if k != "artifact_content_sha256"}
+        )
     else:
-        path = Path(report["canonical_symbol_master_payload"]["source_artifacts"][0]["resolved_path"])
+        path = Path(
+            report["canonical_symbol_master_payload"]["source_artifacts"][0][
+                "resolved_path"
+            ]
+        )
         if fault == "original_missing":
             path.unlink()
         else:
@@ -244,7 +275,9 @@ def test_symbol_master_publication_preserves_conflicting_existing_generation(tmp
     path.write_text('{"existing":"different-original"}\n')
     before = path.read_bytes()
     with pytest.raises(ValueError, match="existing_generation_conflict"):
-        publish_canonical_symbol_master(report, target_date="2026-09-11", directory=destination)
+        publish_canonical_symbol_master(
+            report, target_date="2026-09-11", directory=destination
+        )
     assert path.read_bytes() == before
 
 
@@ -252,32 +285,49 @@ def test_symbol_master_publication_requires_metadata_to_match_original_rows(tmp_
     report = _publication_resolution(tmp_path)
     payload = report["canonical_symbol_master_payload"]
     payload["records"][0]["symbol"] = "000251"
-    payload["content_sha256"] = content_sha256({k:v for k,v in payload.items() if k != "content_sha256"})
+    payload["content_sha256"] = content_sha256(
+        {k: v for k, v in payload.items() if k != "content_sha256"}
+    )
     report["canonical_symbol_master_payload_sha256"] = content_sha256(payload)
-    report["artifact_content_sha256"] = content_sha256({k:v for k,v in report.items() if k != "artifact_content_sha256"})
+    report["artifact_content_sha256"] = content_sha256(
+        {k: v for k, v in report.items() if k != "artifact_content_sha256"}
+    )
     with pytest.raises(ValueError, match="original_metadata_mismatch"):
-        publish_canonical_symbol_master(report, target_date="2026-09-11", directory=tmp_path / "published")
+        publish_canonical_symbol_master(
+            report, target_date="2026-09-11", directory=tmp_path / "published"
+        )
 
 
-def test_symbol_master_publication_preserves_identical_gzip_and_rejects_alias_conflict(tmp_path):
+def test_symbol_master_publication_preserves_identical_gzip_and_rejects_alias_conflict(
+    tmp_path,
+):
     import gzip
+
     report = _publication_resolution(tmp_path)
     destination = tmp_path / "published"
     destination.mkdir()
     path = destination / "micro_reversion_symbol_master_2026-09-11.json"
     compressed = path.with_name(path.name + ".gz")
-    compressed.write_bytes(gzip.compress(json.dumps(report["canonical_symbol_master_payload"]).encode()))
+    compressed.write_bytes(
+        gzip.compress(json.dumps(report["canonical_symbol_master_payload"]).encode())
+    )
     original = compressed.read_bytes()
-    result = publish_canonical_symbol_master(report, target_date="2026-09-11", directory=destination)
+    result = publish_canonical_symbol_master(
+        report, target_date="2026-09-11", directory=destination
+    )
     assert result["status"] == "verified_existing" and not path.exists()
     assert compressed.read_bytes() == original
     path.write_text('{"conflicting":"alias"}')
     with pytest.raises(ValueError):
-        publish_canonical_symbol_master(report, target_date="2026-09-11", directory=destination)
+        publish_canonical_symbol_master(
+            report, target_date="2026-09-11", directory=destination
+        )
     assert compressed.read_bytes() == original
 
 
-def test_stored_machine_cost_prerequisite_recovers_master_without_refetch(tmp_path, monkeypatch):
+def test_stored_machine_cost_prerequisite_recovers_master_without_refetch(
+    tmp_path, monkeypatch
+):
     from src.engine.scalping import ai_action_outcome_calibration as calibration
     from src.engine.scalping.micro_reversion import economic_reference_owner as owner
     from src.engine.scalping.micro_reversion.economic_reference import atomic_write_json
@@ -287,8 +337,14 @@ def test_stored_machine_cost_prerequisite_recovers_master_without_refetch(tmp_pa
     path = root / "micro_reversion_economic_reference_2026-09-11.json"
     atomic_write_json(path, report)
     original = path.read_bytes()
-    monkeypatch.setattr(owner, "build_daily_sources", lambda **kwargs: pytest.fail("stored exact source must not be fetched again"))
-    receipt = calibration.ensure_machine_economic_reference(data_root=tmp_path, target_date="2026-09-11")
+    monkeypatch.setattr(
+        owner,
+        "build_daily_sources",
+        lambda **kwargs: pytest.fail("stored exact source must not be fetched again"),
+    )
+    receipt = calibration.ensure_machine_economic_reference(
+        data_root=tmp_path, target_date="2026-09-11"
+    )
     assert receipt["status"] == "existing_verified_sources_preserved"
     assert receipt["symbol_master_publication"]["status"] == "published"
     assert path.read_bytes() == original
@@ -324,12 +380,6 @@ def test_repository_policy_is_effective_on_requested_start_date() -> None:
     )
     assert len(policy["provider_budget_basis"]["source_artifacts"]) == 5
     assert raw == policy_path.read_bytes()
-
-
-
-
-
-
 
 
 def test_owner_blocks_before_effective_date_without_fetching(tmp_path: Path) -> None:

@@ -21,7 +21,10 @@ from zoneinfo import ZoneInfo
 
 from src.utils import kiwoom_utils
 from src.engine.scalping.multi_timeframe_context import promotion_activation_state
-from src.trading.market.quote_consistency import build_market_data_health, _type_route_records
+from src.trading.market.quote_consistency import (
+    build_market_data_health,
+    _type_route_records,
+)
 
 SCHEMA = "ai_market_snapshot_v1"
 PREFLIGHT_SCHEMA = "ai_input_preflight_v1"
@@ -158,7 +161,10 @@ def _mapping(source: dict[str, Any], key: str) -> dict[str, Any]:
 
 
 def completed_candle_timing_validation(
-    context: dict[str, Any], ws: dict[str, Any], *, now_epoch: float,
+    context: dict[str, Any],
+    ws: dict[str, Any],
+    *,
+    now_epoch: float,
     session: str,
 ) -> tuple[float | None, list[str]]:
     """Validate the reduced entry receipt against the original source clocks.
@@ -172,10 +178,15 @@ def completed_candle_timing_validation(
         return None, ["candle_completed_timing_missing"]
     body = {key: value for key, value in receipt.items() if key != "sha256"}
     try:
-        fingerprint = hashlib.sha256(json.dumps(
-            body, sort_keys=True, ensure_ascii=True, separators=(",", ":"),
-            allow_nan=False,
-        ).encode()).hexdigest()
+        fingerprint = hashlib.sha256(
+            json.dumps(
+                body,
+                sort_keys=True,
+                ensure_ascii=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            ).encode()
+        ).hexdigest()
     except (TypeError, ValueError):
         return None, ["candle_completed_timing_invalid"]
     if (
@@ -186,12 +197,19 @@ def completed_candle_timing_validation(
         or receipt.get("interval_seconds") != 60
     ):
         return None, ["candle_completed_timing_invalid"]
-    clocks = [receipt.get(key) for key in (
-        "bar_open_epoch", "bar_close_epoch", "completed_cutoff_epoch",
-        "original_source_verified_epoch", "prepared_at_epoch",
-    )]
-    if any(type(value) not in (int, float) or not math.isfinite(value)
-           for value in clocks):
+    clocks = [
+        receipt.get(key)
+        for key in (
+            "bar_open_epoch",
+            "bar_close_epoch",
+            "completed_cutoff_epoch",
+            "original_source_verified_epoch",
+            "prepared_at_epoch",
+        )
+    ]
+    if any(
+        type(value) not in (int, float) or not math.isfinite(value) for value in clocks
+    ):
         return None, ["candle_completed_clock_invalid"]
     opened, closed, cutoff, verified, prepared = clocks
     current_cutoff = int(now_epoch // 60) * 60
@@ -265,9 +283,7 @@ def publish_broker_account_snapshot(
         try:
             if item.get("remaining_qty") in (None, ""):
                 raise ValueError("remaining_qty_missing")
-            raw_remaining = float(
-                str(item["remaining_qty"]).replace(",", "").strip()
-            )
+            raw_remaining = float(str(item["remaining_qty"]).replace(",", "").strip())
             if not raw_remaining.is_integer() or raw_remaining < 0:
                 raise ValueError("remaining_qty_invalid")
             remaining_qty = max(
@@ -305,20 +321,24 @@ def publish_broker_account_snapshot(
     }
     if query_registry_generation is not None:
         try:
-            if not isinstance(inventory,list) or not isinstance(open_orders,list):
+            if not isinstance(inventory, list) or not isinstance(open_orders, list):
                 raise ValueError("custody_checkpoint_native_list_missing")
             from src.engine.scalping.main_custody_checkpoint import enqueue
-            snapshot["postclose_custody_checkpoint_status"]=enqueue(snapshot,query_generation=query_registry_generation)
-        except (OSError,ValueError,TypeError) as exc:
-            snapshot["postclose_custody_checkpoint_status"]="source_gap"
-            snapshot["postclose_custody_checkpoint_reason"]=str(exc)
+
+            snapshot["postclose_custody_checkpoint_status"] = enqueue(
+                snapshot, query_generation=query_registry_generation
+            )
+        except (OSError, ValueError, TypeError) as exc:
+            snapshot["postclose_custody_checkpoint_status"] = "source_gap"
+            snapshot["postclose_custody_checkpoint_reason"] = str(exc)
     with _BROKER_ACCOUNT_SNAPSHOT_LOCK:
         _BROKER_ACCOUNT_SNAPSHOT.clear()
         _BROKER_ACCOUNT_SNAPSHOT.update(snapshot)
 
 
-def broker_symbol_verified_flat(stock_code: str, *, now_ts: float,
-                                allow_manual_remainder: bool = False) -> tuple[bool, str]:
+def broker_symbol_verified_flat(
+    stock_code: str, *, now_ts: float, allow_manual_remainder: bool = False
+) -> tuple[bool, str]:
     """Require both exchange inventories and open orders before watch admission."""
     code = _base_code(stock_code)
     with _BROKER_ACCOUNT_SNAPSHOT_LOCK:
@@ -351,20 +371,31 @@ def broker_symbol_verified_flat(stock_code: str, *, now_ts: float,
             if not allow_manual_remainder or quantity < 0:
                 return False, "broker_position_nonzero"
             try:
-                from src.trading.order.owner_custody_registry import default_order_owner_registry
+                from src.trading.order.owner_custody_registry import (
+                    default_order_owner_registry,
+                )
+
                 registry = default_order_owner_registry()
                 contract = registry.native_owner_contract(code)
-                if not contract['disposition_hash']:
+                if not contract["disposition_hash"]:
                     return False, "native_manual_management_missing"
-                projection = registry.reconcile_symbol_quantity(symbol=code, broker_quantity=quantity)
-                if projection['registered_owner_quantity']:
+                projection = registry.reconcile_symbol_quantity(
+                    symbol=code, broker_quantity=quantity
+                )
+                if projection["registered_owner_quantity"]:
                     return False, "main_position_nonzero"
             except Exception:
                 return False, "native_owner_quantity_unverified"
     open_orders = (snapshot.get("open_qty_by_code") or {}).get(code) or {}
-    if int(open_orders.get("open_buy_qty") or 0) or int(open_orders.get("open_sell_qty") or 0):
+    if int(open_orders.get("open_buy_qty") or 0) or int(
+        open_orders.get("open_sell_qty") or 0
+    ):
         return False, "broker_open_orders_nonzero"
-    return True, "verified_main_flat_manual_remainder" if inventory is not None and int(quantity) else "verified_flat"
+    return True, (
+        "verified_main_flat_manual_remainder"
+        if inventory is not None and int(quantity)
+        else "verified_flat"
+    )
 
 
 def _broker_account_context(
@@ -510,7 +541,9 @@ def enrich_investor_source(
             * 1000.0
         )
     except Exception as exc:
-        if isinstance(exc, ValueError) and str(exc).startswith('entry_machine_input_deadline_'):
+        if isinstance(exc, ValueError) and str(exc).startswith(
+            "entry_machine_input_deadline_"
+        ):
             raise
         enriched["investor_missing_reason"] = f"ka10059_error:{type(exc).__name__}"
     return enriched
@@ -611,8 +644,11 @@ def realtime_type_provenance(
             ).upper(),
             "observed_at": _iso(observed_epoch),
             "observed_epoch": observed_epoch,
-            "age_ms": (age_ms if age_ms is not None and age_ms < 0 else
-                       round(age_ms, 3) if age_ms is not None else None),
+            "age_ms": (
+                age_ms
+                if age_ms is not None and age_ms < 0
+                else round(age_ms, 3) if age_ms is not None else None
+            ),
             "quality": (
                 "missing"
                 if observed_epoch is None
@@ -782,8 +818,7 @@ def route_realtime_partition_status(
         fresh = bool(
             row.get("quality") == "fresh"
             if source == "canonical_exact_route"
-            else age_ms is not None
-            and 0 <= age_ms <= _FRESH_MS
+            else age_ms is not None and 0 <= age_ms <= _FRESH_MS
         )
         if not route_exact:
             blockers.append(f"{realtime_type.lower()}_route_mismatch")
@@ -1065,8 +1100,11 @@ def _source_row(
     raw_age_ms = (
         (now_epoch - observed_epoch) * 1000.0 if observed_epoch is not None else None
     )
-    age_ms = (raw_age_ms if raw_age_ms is not None and raw_age_ms < 0 else
-              round(raw_age_ms, 3) if raw_age_ms is not None else None)
+    age_ms = (
+        raw_age_ms
+        if raw_age_ms is not None and raw_age_ms < 0
+        else round(raw_age_ms, 3) if raw_age_ms is not None else None
+    )
     quality = "fresh"
     if value is None:
         quality = "missing"
@@ -1457,9 +1495,16 @@ def build_ai_market_snapshot(
             for key in ("last_quote", "last_trade", "closed_episodes")
         },
         "receipts": {
-            kind: {key: row.get(key) for key in (
-                "item", "market_route", "transport_epoch", "observed_epoch", "route_sequence",
-            )}
+            kind: {
+                key: row.get(key)
+                for key in (
+                    "item",
+                    "market_route",
+                    "transport_epoch",
+                    "observed_epoch",
+                    "route_sequence",
+                )
+            }
             for kind in ("0B", "0D")
             if isinstance((row := route_records.get(kind)), dict)
         },
@@ -1543,14 +1588,21 @@ def build_ai_market_snapshot(
         and stage_value in {"entry_context", "entry_screen"}
         and quote_receipt.get("source_type") == "0B"
         and quote_row.get("quality") == "fresh"
-        and type((quote_receipt.get("depth_receipt") or {}).get("transport_epoch")) is int
-        and quote_receipt.get("depth_receipt") == {
-            "item": quote_row.get("item"), "market_route": quote_row.get("market_route"),
-            "transport_epoch": ws.get("market_data_transport_epoch"), "observed_epoch": quote_epoch,
+        and type((quote_receipt.get("depth_receipt") or {}).get("transport_epoch"))
+        is int
+        and quote_receipt.get("depth_receipt")
+        == {
+            "item": quote_row.get("item"),
+            "market_route": quote_row.get("market_route"),
+            "transport_epoch": ws.get("market_data_transport_epoch"),
+            "observed_epoch": quote_epoch,
         }
         and quote_receipt.get("item") == tape_row.get("item") == quote_row.get("item")
-        and quote_receipt.get("market_route") == tape_row.get("market_route") == quote_row.get("market_route")
-        and (quote_receipt.get("best_bid"), quote_receipt.get("best_ask")) == (best_bid, best_ask)
+        and quote_receipt.get("market_route")
+        == tape_row.get("market_route")
+        == quote_row.get("market_route")
+        and (quote_receipt.get("best_bid"), quote_receipt.get("best_ask"))
+        == (best_bid, best_ask)
         and quote_receipt.get("observed_epoch") == tape_epoch
         and type(quote_receipt.get("transport_epoch")) is int
         and quote_receipt["transport_epoch"] == ws.get("market_data_transport_epoch")
@@ -1575,7 +1627,10 @@ def build_ai_market_snapshot(
         and candle_ctx.get("decision_input_profile") == "reduced_completed_v1"
     ):
         candle_epoch, completed_timing_blockers = completed_candle_timing_validation(
-            candle_ctx, ws, now_epoch=now_epoch, session=session_bucket,
+            candle_ctx,
+            ws,
+            now_epoch=now_epoch,
+            session=session_bucket,
         )
         completed_timing = copy.deepcopy(candle_ctx.get("completed_candle_timing"))
     broker_snapshot_at = _epoch(position_ctx.get("broker_snapshot_at"))
@@ -1744,9 +1799,14 @@ def build_ai_market_snapshot(
                         "entry_candle_request_code"
                     ),
                     "source_quality_blockers": candle_quality.get("blockers", []),
-                    "request_route_binding": candle_quality.get("request_route_binding"),
-                    **({"completed_candle_timing": completed_timing}
-                       if completed_timing is not None else {}),
+                    "request_route_binding": candle_quality.get(
+                        "request_route_binding"
+                    ),
+                    **(
+                        {"completed_candle_timing": completed_timing}
+                        if completed_timing is not None
+                        else {}
+                    ),
                 }
                 if candle_ctx
                 else None
@@ -1891,7 +1951,8 @@ def build_ai_market_snapshot(
         not require_position_reconciliation
         and not simulation_position_reconciled
         and explicit_position_is_active
-        and stage_value in {"holding_score", "scalping_holding_score", "holding_path_vote"}
+        and stage_value
+        in {"holding_score", "scalping_holding_score", "holding_path_vote"}
     )
     if optional_holding_reconciliation_advisory and not position_reconciled:
         # A plain holding-score observation may remain provider-call eligible,
@@ -1951,8 +2012,11 @@ def build_ai_market_snapshot(
         blockers.append("source_time_skew")
     feature_blockers: list[str] = []
     provider_event_age = activity.get("trade_event_age_ms")
-    if (isinstance(provider_event_age, (int, float))
-            and not isinstance(provider_event_age, bool) and provider_event_age < 0):
+    if (
+        isinstance(provider_event_age, (int, float))
+        and not isinstance(provider_event_age, bool)
+        and provider_event_age < 0
+    ):
         blockers.append("provider_trade_clock_future")
     if activity_proven:
         # Proven absence of a new print is not transport/source corruption.
@@ -1964,9 +2028,13 @@ def build_ai_market_snapshot(
                 feature_blockers.append(f"required_feature_{blocker}")
         event_age = activity.get("trade_event_age_ms")
         precision_ms = activity.get("provider_trade_time_precision_ms")
-        if (isinstance(event_age, (int, float)) and not isinstance(event_age, bool)
-                and type(precision_ms) is int and precision_ms == 1000
-                and event_age - precision_ms > _FRESH_MS):
+        if (
+            isinstance(event_age, (int, float))
+            and not isinstance(event_age, bool)
+            and type(precision_ms) is int
+            and precision_ms == 1000
+            and event_age - precision_ms > _FRESH_MS
+        ):
             feature_blockers.append("required_feature_provider_trade_late")
     source_blocker_evaluation_order = list(dict.fromkeys(blockers))
     source_blockers = sorted(set(blockers))
@@ -2113,8 +2181,11 @@ def build_ai_market_snapshot(
         "route_partition": route_partition,
         "required_sources": required_sources,
         "market_data_health": market_health,
-        "trade_activity": {**activity, "canonical_binding_proven": activity_proven,
-                           "continuity_evidence": continuity_evidence},
+        "trade_activity": {
+            **activity,
+            "canonical_binding_proven": activity_proven,
+            "continuity_evidence": continuity_evidence,
+        },
         "realtime_type_provenance": provenance,
         "sources": sources,
         "max_source_skew_ms": max_skew_ms,
@@ -2206,9 +2277,13 @@ def ai_market_snapshot_log_fields(
                 "freshness_limit_ms",
                 "market_route",
             )
-        } | ({"completed_candle_timing": row["value"]["completed_candle_timing"]}
-             if isinstance(row.get("value"), dict)
-             and isinstance(row["value"].get("completed_candle_timing"), dict) else {})
+        }
+        | (
+            {"completed_candle_timing": row["value"]["completed_candle_timing"]}
+            if isinstance(row.get("value"), dict)
+            and isinstance(row["value"].get("completed_candle_timing"), dict)
+            else {}
+        )
         for name, row in (snapshot.get("sources") or {}).items()
         if isinstance(row, dict)
     }
@@ -2220,7 +2295,9 @@ def ai_market_snapshot_log_fields(
         "ai_input_preflight_trade_activity": snapshot.get("trade_activity", {}),
         "ai_input_preflight_market_data_health": snapshot.get("market_data_health"),
         "ai_input_preflight_source_timing": source_timing,
-        "ai_input_preflight_realtime_type_provenance": snapshot.get("realtime_type_provenance", {}),
+        "ai_input_preflight_realtime_type_provenance": snapshot.get(
+            "realtime_type_provenance", {}
+        ),
         "ai_input_preflight_source_clock_snapshot_id": snapshot.get("snapshot_id"),
         "ai_input_preflight_source_clock_captured_at": snapshot.get("captured_at"),
         "ai_input_preflight_source_timing_basis": "source_observed_at_to_snapshot_capture",
@@ -2483,11 +2560,20 @@ def runtime_preflight_artifact_status(
             "artifact": str(path),
             "error": f"{type(exc).__name__}:{str(exc)[:120]}",
         }
-    expected_hash = (os.getenv("KORSTOCKSCAN_AI_INPUT_BASELINE_ARTIFACT_SHA256", "").strip()
-                     if mode == "baseline_v1" else "")
-    cache_key = (mode, str(path), artifact_stat.st_mtime_ns,
-                 artifact_stat.st_ctime_ns, artifact_stat.st_size,
-                 _PROCESS_STARTED_AT, expected_hash)
+    expected_hash = (
+        os.getenv("KORSTOCKSCAN_AI_INPUT_BASELINE_ARTIFACT_SHA256", "").strip()
+        if mode == "baseline_v1"
+        else ""
+    )
+    cache_key = (
+        mode,
+        str(path),
+        artifact_stat.st_mtime_ns,
+        artifact_stat.st_ctime_ns,
+        artifact_stat.st_size,
+        _PROCESS_STARTED_AT,
+        expected_hash,
+    )
     cached = _ARTIFACT_STATUS_CACHE.get(cache_key)
     if isinstance(cached, dict):
         return dict(cached)

@@ -68,7 +68,14 @@ _BUY_TP_PCT = 0.5
 _BUY_SL_PCT = -0.5
 _RISING_MISSED_STAGE = "rising_missed_one_share_entry"
 _EVENT_FIELD_PROJECTION_VERSION = "missed_entry_counterfactual_compact_v5"
-_PRICE_PLAN_FIELDS = frozenset({"entry_execution_sizing_plan", "entry_price_plan", "entry_opportunity_replay_seed", "entry_probe_conditional_receipt"})
+_PRICE_PLAN_FIELDS = frozenset(
+    {
+        "entry_execution_sizing_plan",
+        "entry_price_plan",
+        "entry_opportunity_replay_seed",
+        "entry_probe_conditional_receipt",
+    }
+)
 _EVENT_FIELD_KEYS = frozenset(
     {
         "action",
@@ -83,7 +90,10 @@ _EVENT_FIELD_KEYS = frozenset(
         "entry_probe_conditional_receipt",
         "entry_economic_plan_sha256",
         "entry_economic_decision_available_at",
-        "watch_deadline_epoch", "watch_terminal_epoch", "watch_terminal_owner", "watch_terminal_reason",
+        "watch_deadline_epoch",
+        "watch_terminal_epoch",
+        "watch_terminal_owner",
+        "watch_terminal_reason",
         "decision_trace_id",
         "microstructure_reaction_context_id",
         "microstructure_reaction_context_version",
@@ -487,7 +497,11 @@ def _ratio(numerator: int, denominator: int) -> float:
 
 def _kst_wall_time(value: datetime) -> datetime:
     """Use the existing local KST timeline without dropping an explicit offset."""
-    return value.astimezone(_KST).replace(tzinfo=None) if value.tzinfo is not None else value
+    return (
+        value.astimezone(_KST).replace(tzinfo=None)
+        if value.tzinfo is not None
+        else value
+    )
 
 
 def _parse_event_dt(value) -> datetime | None:
@@ -522,7 +536,9 @@ def _parse_minute_time(
         try:
             if re.fullmatch(r"\d{14}", source_text):
                 return datetime.strptime(source_text, "%Y%m%d%H%M%S")
-            return _kst_wall_time(datetime.fromisoformat(source_text.replace("Z", "+00:00")))
+            return _kst_wall_time(
+                datetime.fromisoformat(source_text.replace("Z", "+00:00"))
+            )
         except (TypeError, ValueError, OverflowError):
             return None
     try:
@@ -584,7 +600,9 @@ def _load_entry_events(target_date: str, *, rows=None) -> list[EntryEvent]:
     # The live pipeline can exceed multiple gigabytes.  Decode one row at a
     # time and retain only fields consumed by this report so full-monitor
     # generation cannot duplicate the entire source in memory.
-    for row in (iter_jsonl(_pipeline_events_path(target_date)) if rows is None else rows):
+    for row in (
+        iter_jsonl(_pipeline_events_path(target_date)) if rows is None else rows
+    ):
         if str(row.get("pipeline") or "").strip() != "ENTRY_PIPELINE":
             continue
         code = str(row.get("stock_code") or "").strip()[:6]
@@ -599,9 +617,10 @@ def _load_entry_events(target_date: str, *, rows=None) -> list[EntryEvent]:
                 continue
             if str(key) in _PRICE_PLAN_FIELDS:
                 try:
-                    if (
-                        len(json.dumps(value, ensure_ascii=True, allow_nan=False))
-                        > (2 * 1024 * 1024 if str(key) == "entry_opportunity_replay_seed" else 16_384)
+                    if len(json.dumps(value, ensure_ascii=True, allow_nan=False)) > (
+                        2 * 1024 * 1024
+                        if str(key) == "entry_opportunity_replay_seed"
+                        else 16_384
                     ):
                         value = None
                 except (TypeError, ValueError):
@@ -711,7 +730,10 @@ def _build_candidates(target_date: str) -> list[dict]:
 
 def _price_ready_plan(event: EntryEvent) -> dict:
     """Consume the existing numeric owner's hash-bound plan, not a hypothetical BUY."""
-    if event.stage not in {"entry_execution_sizing_plan", "entry_ai_economic_plan_observed"}:
+    if event.stage not in {
+        "entry_execution_sizing_plan",
+        "entry_ai_economic_plan_observed",
+    }:
         return {}
     try:
         emitted_at = datetime.fromisoformat(event.emitted_at.replace("Z", "+00:00"))
@@ -767,9 +789,17 @@ def _price_ready_plan(event: EntryEvent) -> dict:
         }
         price_sha = digest(price_body)
         if (
-            (event.stage == "entry_ai_economic_plan_observed" and
-             (plan.get("observation_only") is not True or plan.get("capture_stage") != "before_compact_ai"))
-            or (event.stage == "entry_execution_sizing_plan" and plan.get("observation_only") is True)
+            (
+                event.stage == "entry_ai_economic_plan_observed"
+                and (
+                    plan.get("observation_only") is not True
+                    or plan.get("capture_stage") != "before_compact_ai"
+                )
+            )
+            or (
+                event.stage == "entry_execution_sizing_plan"
+                and plan.get("observation_only") is True
+            )
             or digest(plan) != event.fields.get("entry_execution_sizing_plan_sha256")
             or price_sha != event.fields.get("entry_price_plan_sha256")
             or price_sha != price.get("price_plan_sha256")
@@ -802,7 +832,8 @@ def _price_ready_plan(event: EntryEvent) -> dict:
             or not re.fullmatch(
                 r"[a-f0-9]{64}", str(plan.get("policy_bundle_hash") or "")
             )
-            or plan.get("effective_venue") not in (_EXPLICIT_TRADABLE_VENUES | {"KRX_NXT_INTEGRATED"})
+            or plan.get("effective_venue")
+            not in (_EXPLICIT_TRADABLE_VENUES | {"KRX_NXT_INTEGRATED"})
             or type(plan.get("total_qty")) is not int
             or plan["total_qty"] <= 0
         ):
@@ -827,14 +858,26 @@ def _price_ready_plan(event: EntryEvent) -> dict:
                 not isinstance(c, dict)
                 or (
                     c.get("numeric_price") is not None
-                    and (type(c["numeric_price"]) is not int or c["numeric_price"] < 0
-                         or (c["numeric_price"] == 0 and c.get("order_type_code") not in {"3", "03"}))
+                    and (
+                        type(c["numeric_price"]) is not int
+                        or c["numeric_price"] < 0
+                        or (
+                            c["numeric_price"] == 0
+                            and c.get("order_type_code") not in {"3", "03"}
+                        )
+                    )
                 )
                 for c in candidates
             )
             or not any(
-                type(c.get("numeric_price")) is int and (c["numeric_price"] > 0
-                    or (c["numeric_price"] == 0 and c.get("order_type_code") in {"3", "03"}))
+                type(c.get("numeric_price")) is int
+                and (
+                    c["numeric_price"] > 0
+                    or (
+                        c["numeric_price"] == 0
+                        and c.get("order_type_code") in {"3", "03"}
+                    )
+                )
                 for c in candidates
             )
         ):
@@ -853,7 +896,13 @@ def _price_ready_plan(event: EntryEvent) -> dict:
                     and (
                         type(leg["numeric_price"]) is not int
                         or leg["numeric_price"] < 0
-                        or (leg["numeric_price"] == 0 and issued.get(leg.get("price_leg_id"), {}).get("order_type_code") not in {"3", "03"})
+                        or (
+                            leg["numeric_price"] == 0
+                            and issued.get(leg.get("price_leg_id"), {}).get(
+                                "order_type_code"
+                            )
+                            not in {"3", "03"}
+                        )
                     )
                 )
                 for leg in legs
@@ -1979,7 +2028,11 @@ def _build_watch_cycle_participation_ledger(
                 (
                     guard_blocked_at
                     if guard_blocked_at > 0
-                    else event_dt.replace(tzinfo=_KST).timestamp() if event_dt is not None else event_index
+                    else (
+                        event_dt.replace(tzinfo=_KST).timestamp()
+                        if event_dt is not None
+                        else event_index
+                    )
                 )
                 * 1000.0
             )
@@ -3371,16 +3424,30 @@ def build_missed_entry_counterfactual_report(
         }
     )
     from src.utils.evidence_digest import read_object
+
     try:
-        from src.engine.scalping.entry_split_order_plan import REPORT_DIR as split_report_dir
-        split = read_object(split_report_dir / f'entry_split_order_plan_{safe_date}.json',
-                            limit=64 * 1024 * 1024)
-        executable_replay = split['input_summary']['daily_diagnostic']['entry_opportunity_executable_replay']
-        if split.get('date') != safe_date or executable_replay.get('source_date') != safe_date:
-            raise ValueError('canonical_replay_date_mismatch')
+        from src.engine.scalping.entry_split_order_plan import (
+            REPORT_DIR as split_report_dir,
+        )
+
+        split = read_object(
+            split_report_dir / f"entry_split_order_plan_{safe_date}.json",
+            limit=64 * 1024 * 1024,
+        )
+        executable_replay = split["input_summary"]["daily_diagnostic"][
+            "entry_opportunity_executable_replay"
+        ]
+        if (
+            split.get("date") != safe_date
+            or executable_replay.get("source_date") != safe_date
+        ):
+            raise ValueError("canonical_replay_date_mismatch")
     except (OSError, KeyError, TypeError, ValueError):
-        executable_replay = dict(status='canonical_split_replay_not_yet_available',
-            source_date=safe_date, actual_order_submitted=False)
+        executable_replay = dict(
+            status="canonical_split_replay_not_yet_available",
+            source_date=safe_date,
+            actual_order_submitted=False,
+        )
     summary = MissedEntryCounterfactualSummary(date=safe_date)
     summary.total_candidates = len(candidates)
 

@@ -22,7 +22,6 @@ from src.engine.risk.manual_control_exclusion import (
     manual_control_operator_exclusion_source,
 )
 
-
 HEARTBEAT_PATH = PROJECT_ROOT / "tmp" / "error_detector_heartbeat.json"
 POSTCLOSE_BOT_ISOLATION_PATH = PROJECT_ROOT / "tmp" / "postclose_bot_isolation.json"
 SAMSUNG_MORNING_AUTHORITY_PATH = (
@@ -91,7 +90,8 @@ def write_heartbeat(
         if component == "main_loop":
             state["main_loop"] = {"last_beat": now_iso, "pid": os.getpid()}
             from src.engine.monitoring.runtime_performance import circuit_snapshot
-            state['ai_circuit'] = circuit_snapshot()
+
+            state["ai_circuit"] = circuit_snapshot()
         else:
             threads = state.setdefault("threads", {})
             previous = threads.get(component, {})
@@ -121,30 +121,52 @@ def write_heartbeat(
 def _current_ai_circuit_health(pid, now_ts):
     """Same heartbeat/PID/start only. This observation never resets the engine."""
     if not pid:
-        return dict(status='not_applicable', decision_authority='none')
+        return dict(status="not_applicable", decision_authority="none")
     try:
         state = json.loads(HEARTBEAT_PATH.read_text())
-        receipt = state.get('ai_circuit') or {}
-        ticks = Path(f'/proc/{int(pid)}/stat').read_text().rsplit(')', 1)[1].split()[19]
-        age = now_ts-float(receipt['snapshot_epoch'])
-        if (receipt.get('pid') != pid or receipt.get('process_start_ticks') != ticks
-                or not 0 <= age <= 120):
-            raise ValueError('circuit_identity_or_clock_mismatch')
-        entry = receipt.get('entry_transport') or {}
-        observation_epoch = entry.get('recovery_wait_observed_epoch', receipt.get('observed_epoch'))
-        observation_age = now_ts-float(observation_epoch) if observation_epoch is not None else None
-        due_epoch = entry.get('recovery_next_eligible_epoch')
-        remaining = (max(0., float(due_epoch)-now_ts)
-                     if due_epoch is not None and observation_age is not None and 0 <= observation_age <= 120 else None)
-        blocked = receipt.get('state') == 'disabled' or entry.get('state') in {'OPEN', 'HALF_OPEN'}
-        return dict(status='blocked' if blocked else 'observed', receipt=receipt,
-                    entry_observation_age_seconds=observation_age,
-                    recovery_wait_estimate_seconds_as_of_check=remaining,
-                    recovery_wait_estimate_is_admission_authority=False,
-                    decision_authority='none', automatic_recovery_forbidden=True)
+        receipt = state.get("ai_circuit") or {}
+        ticks = Path(f"/proc/{int(pid)}/stat").read_text().rsplit(")", 1)[1].split()[19]
+        age = now_ts - float(receipt["snapshot_epoch"])
+        if (
+            receipt.get("pid") != pid
+            or receipt.get("process_start_ticks") != ticks
+            or not 0 <= age <= 120
+        ):
+            raise ValueError("circuit_identity_or_clock_mismatch")
+        entry = receipt.get("entry_transport") or {}
+        observation_epoch = entry.get(
+            "recovery_wait_observed_epoch", receipt.get("observed_epoch")
+        )
+        observation_age = (
+            now_ts - float(observation_epoch) if observation_epoch is not None else None
+        )
+        due_epoch = entry.get("recovery_next_eligible_epoch")
+        remaining = (
+            max(0.0, float(due_epoch) - now_ts)
+            if due_epoch is not None
+            and observation_age is not None
+            and 0 <= observation_age <= 120
+            else None
+        )
+        blocked = receipt.get("state") == "disabled" or entry.get("state") in {
+            "OPEN",
+            "HALF_OPEN",
+        }
+        return dict(
+            status="blocked" if blocked else "observed",
+            receipt=receipt,
+            entry_observation_age_seconds=observation_age,
+            recovery_wait_estimate_seconds_as_of_check=remaining,
+            recovery_wait_estimate_is_admission_authority=False,
+            decision_authority="none",
+            automatic_recovery_forbidden=True,
+        )
     except (OSError, ValueError, TypeError, KeyError, IndexError):
-        return dict(status='unobservable', reason='exact_pid_circuit_receipt_unavailable',
-                    decision_authority='none')
+        return dict(
+            status="unobservable",
+            reason="exact_pid_circuit_receipt_unavailable",
+            decision_authority="none",
+        )
 
 
 @register_detector
@@ -193,36 +215,39 @@ class ProcessHealthDetector(BaseDetector):
             now_ts=now_ts,
             samsung_morning=samsung_morning,
         )
-        circuit = _current_ai_circuit_health(result.details.get('main_loop_pid'), now_ts)
-        result.details['ai_circuit'] = circuit
-        if circuit.get('status') == 'blocked' and result.severity == 'pass':
-            result.severity = 'warning'
-            result.summary += ' Auxiliary evaluation is blocked by its failure circuit.'
-            result.recommended_action = 'Inspect exact PID circuit evidence and natural recovery; detector has no reset authority.'
+        circuit = _current_ai_circuit_health(
+            result.details.get("main_loop_pid"), now_ts
+        )
+        result.details["ai_circuit"] = circuit
+        if circuit.get("status") == "blocked" and result.severity == "pass":
+            result.severity = "warning"
+            result.summary += " Auxiliary evaluation is blocked by its failure circuit."
+            result.recommended_action = "Inspect exact PID circuit evidence and natural recovery; detector has no reset authority."
         result.details["samsung_morning_runtime"] = samsung_morning
         retirement = _retirement_expected_set(PROJECT_ROOT, now)
-        result.details['retired_owner_runtime'] = retirement
-        if retirement['severity'] == 'fail':
-            result.severity = 'fail'
-            result.summary += ' Retired entry owner census: ' + retirement['status'] + '.'
-            result.recommended_action += ' Inspect the named retired unit/process/intent; preserve Main and manual custody.'
+        result.details["retired_owner_runtime"] = retirement
+        if retirement["severity"] == "fail":
+            result.severity = "fail"
+            result.summary += (
+                " Retired entry owner census: " + retirement["status"] + "."
+            )
+            result.recommended_action += " Inspect the named retired unit/process/intent; preserve Main and manual custody."
         samsung_severity = samsung_morning.get("severity")
         if samsung_severity == "fail":
             retired = str(samsung_morning.get("status") or "").startswith("retirement_")
             samsung_summary = (
-                (
-                    "Samsung retired one-share expected set is not healthy: "
-                    if retired else "Samsung morning expected runtime is not healthy: "
-                )
-                + f"{samsung_morning.get('reason') or 'unknown'}."
-            )
+                "Samsung retired one-share expected set is not healthy: "
+                if retired
+                else "Samsung morning expected runtime is not healthy: "
+            ) + f"{samsung_morning.get('reason') or 'unknown'}."
             if result.severity == "fail":
                 result.summary = f"{result.summary} {samsung_summary}"
             else:
                 result.summary = samsung_summary
             result.severity = "fail"
             result.recommended_action = (
-                f"{result.recommended_action} " + (
+                f"{result.recommended_action} "
+                + (
                     "Inspect retired timers and service PIDs; keep old BUY gateways disabled."
                     if retired
                     else "Inspect the exact-date authority and preflight/live systemd "
@@ -843,15 +868,17 @@ def _load_postclose_bot_isolation(now_ts: float, max_age_sec: int) -> dict | Non
 def _process_entrypoint(argv):
     # Inspect the executed module/script, never test targets or arguments to a
     # shell/python -c command that merely mention a retired implementation.
-    if '-c' in argv:
-        return ''
-    if '-m' in argv:
-        index = argv.index('-m') + 1
-        return argv[index] if index < len(argv) else ''
-    return next((arg for arg in argv if arg.endswith('.py')), '')
+    if "-c" in argv:
+        return ""
+    if "-m" in argv:
+        index = argv.index("-m") + 1
+        return argv[index] if index < len(argv) else ""
+    return next((arg for arg in argv if arg.endswith(".py")), "")
 
 
-def _retirement_expected_set(root, now, *, states=None, processes=None, registry_rows=None):
+def _retirement_expected_set(
+    root, now, *, states=None, processes=None, registry_rows=None
+):
     """Negative census from the existing retirement registry and receipts.
 
     One batched unit query and bounded process/order reads; no service or order
@@ -859,126 +886,240 @@ def _retirement_expected_set(root, now, *, states=None, processes=None, registry
     """
     from src.engine.infrastructure import runtime_release_router as router
     from src.trading.config.owner_retirement import (
-        RETIRED_EPISODE_PROFILES, episode_profile_retired, new_entry_retired,
+        RETIRED_EPISODE_PROFILES,
+        episode_profile_retired,
+        new_entry_retired,
     )
-    result = dict(status='retired_not_expected', severity='pass', leaks=[],
-                  runtime_mutation='none', decision_authority='report_only',
-                  target_date=now.date().isoformat(), order_window='bounded_tail',
-                  order_tail_bytes=1024 * 1024)
+
+    result = dict(
+        status="retired_not_expected",
+        severity="pass",
+        leaks=[],
+        runtime_mutation="none",
+        decision_authority="report_only",
+        target_date=now.date().isoformat(),
+        order_window="bounded_tail",
+        order_tail_bytes=1024 * 1024,
+    )
     if now.date() < date(2026, 10, 7):
-        return {**result, 'status': 'not_required_before_introduction'}
+        return {**result, "status": "not_required_before_introduction"}
     try:
         receipts = router._episode_retirement_receipts(root)
         expected = set(router._retirement_units(RETIRED_EPISODE_PROFILES))
-        result['transition_receipts'] = [r['receipt_sha256'] for r in receipts]
+        result["transition_receipts"] = [r["receipt_sha256"] for r in receipts]
         if states is None:
             # Include renamed/remaining Widget units rather than enumerating a
             # second copy of the permanently removed producer catalog.
-            listed = subprocess.run(['/bin/systemctl', 'list-unit-files', '--no-legend',
-                '--no-pager', 'korstockscan-*widget*'], capture_output=True, text=True,
-                timeout=5, check=False)
-            valid_empty = listed.returncode == 1 and not listed.stdout.strip() and not listed.stderr.strip()
-            if (listed.returncode and not valid_empty) or len(listed.stdout) > 128 * 1024:
-                raise ValueError('retirement_installed_unit_census_unobservable')
-            expected.update(line.split()[0] for line in listed.stdout.splitlines() if line.split())
-            loaded = subprocess.run(['/bin/systemctl', 'list-units', '--all', '--plain',
-                '--no-legend', '--no-pager', 'korstockscan-*widget*'],
-                capture_output=True, text=True, timeout=5, check=False)
+            listed = subprocess.run(
+                [
+                    "/bin/systemctl",
+                    "list-unit-files",
+                    "--no-legend",
+                    "--no-pager",
+                    "korstockscan-*widget*",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+            valid_empty = (
+                listed.returncode == 1
+                and not listed.stdout.strip()
+                and not listed.stderr.strip()
+            )
+            if (listed.returncode and not valid_empty) or len(
+                listed.stdout
+            ) > 128 * 1024:
+                raise ValueError("retirement_installed_unit_census_unobservable")
+            expected.update(
+                line.split()[0] for line in listed.stdout.splitlines() if line.split()
+            )
+            loaded = subprocess.run(
+                [
+                    "/bin/systemctl",
+                    "list-units",
+                    "--all",
+                    "--plain",
+                    "--no-legend",
+                    "--no-pager",
+                    "korstockscan-*widget*",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
             if loaded.returncode or len(loaded.stdout) > 128 * 1024:
-                raise ValueError('retirement_loaded_unit_census_unobservable')
-            expected.update(line.split()[0] for line in loaded.stdout.splitlines() if line.split())
-            queried = subprocess.run(['/bin/systemctl', 'show', *sorted(expected), '--no-pager',
-                '--property=Id,LoadState,ActiveState,UnitFileState,MainPID'],
-                capture_output=True, text=True, timeout=5, check=False)
+                raise ValueError("retirement_loaded_unit_census_unobservable")
+            expected.update(
+                line.split()[0] for line in loaded.stdout.splitlines() if line.split()
+            )
+            queried = subprocess.run(
+                [
+                    "/bin/systemctl",
+                    "show",
+                    *sorted(expected),
+                    "--no-pager",
+                    "--property=Id,LoadState,ActiveState,UnitFileState,MainPID",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
             if queried.returncode or len(queried.stdout) > 256 * 1024:
-                raise ValueError('retirement_unit_census_unobservable')
+                raise ValueError("retirement_unit_census_unobservable")
             states = {}
-            for block in queried.stdout.split('\n\n'):
-                row = dict(line.split('=', 1) for line in block.splitlines() if '=' in line)
-                if row.get('Id'):
-                    states[row['Id']] = row
+            for block in queried.stdout.split("\n\n"):
+                row = dict(
+                    line.split("=", 1) for line in block.splitlines() if "=" in line
+                )
+                if row.get("Id"):
+                    states[row["Id"]] = row
         for name, row in states.items():
-            if name not in expected and 'widget' not in name:
+            if name not in expected and "widget" not in name:
                 continue
-            if (row.get('ActiveState') in {'active', 'activating', 'reloading'}
-                    or int(row.get('MainPID') or 0) > 0
-                    or (name.endswith('.timer') and row.get('UnitFileState') in {'enabled', 'enabled-runtime', 'linked'})):
-                result['leaks'].append(dict(kind='unit', unit=name))
+            if (
+                row.get("ActiveState") in {"active", "activating", "reloading"}
+                or int(row.get("MainPID") or 0) > 0
+                or (
+                    name.endswith(".timer")
+                    and row.get("UnitFileState")
+                    in {"enabled", "enabled-runtime", "linked"}
+                )
+            ):
+                result["leaks"].append(dict(kind="unit", unit=name))
         if expected - states.keys():
-            raise ValueError('retirement_unit_census_incomplete')
+            raise ValueError("retirement_unit_census_incomplete")
         if processes is None:
             processes = []
-            paths = list(Path('/proc').glob('[0-9]*/cmdline'))
+            paths = list(Path("/proc").glob("[0-9]*/cmdline"))
             if len(paths) > 4096:
-                raise ValueError('retirement_process_census_truncated')
+                raise ValueError("retirement_process_census_truncated")
             for path in paths:
                 try:
-                    with path.open('rb') as handle:
-                        argv = handle.read(8192).decode(errors='replace').split('\0')
+                    with path.open("rb") as handle:
+                        argv = handle.read(8192).decode(errors="replace").split("\0")
                     entrypoint = _process_entrypoint(argv)
-                    if entrypoint.startswith(('src.trading.', 'src.engine.')) or '/src/trading/' in entrypoint or '/src/engine/' in entrypoint:
+                    if (
+                        entrypoint.startswith(("src.trading.", "src.engine."))
+                        or "/src/trading/" in entrypoint
+                        or "/src/engine/" in entrypoint
+                    ):
                         processes.append(dict(pid=int(path.parent.name), argv=argv))
                 except (OSError, ValueError):
                     continue  # /proc process exit race
         for row in processes:
-            argv = row['argv']
+            argv = row["argv"]
             entrypoint = _process_entrypoint(argv)
-            episode = 'low_price_two_leg' in entrypoint
-            widget = (entrypoint.startswith(('src.trading.widget_auto_trade', 'src.engine.widget',
-                      'src.engine.samsung_widget', 'src.engine.doosan_widget'))
-                      or '/src/trading/widget_auto_trade/' in entrypoint)
+            episode = "low_price_two_leg" in entrypoint
+            widget = (
+                entrypoint.startswith(
+                    (
+                        "src.trading.widget_auto_trade",
+                        "src.engine.widget",
+                        "src.engine.samsung_widget",
+                        "src.engine.doosan_widget",
+                    )
+                )
+                or "/src/trading/widget_auto_trade/" in entrypoint
+            )
             retired_profile = any(episode_profile_retired(arg) for arg in argv)
-            symbol = next((argv[i + 1] for i, arg in enumerate(argv[:-1]) if arg in {'--symbol', '--stock-code'}), None)
-            if widget or (episode and (retired_profile or new_entry_retired(symbol, 'episode'))):
-                result['leaks'].append(dict(kind='process', pid=row['pid'], owner='widget' if widget else 'episode', symbol=symbol))
+            symbol = next(
+                (
+                    argv[i + 1]
+                    for i, arg in enumerate(argv[:-1])
+                    if arg in {"--symbol", "--stock-code"}
+                ),
+                None,
+            )
+            if widget or (
+                episode and (retired_profile or new_entry_retired(symbol, "episode"))
+            ):
+                result["leaks"].append(
+                    dict(
+                        kind="process",
+                        pid=row["pid"],
+                        owner="widget" if widget else "episode",
+                        symbol=symbol,
+                    )
+                )
         if registry_rows is None:
-            path = root / 'data/runtime/order_owner_registry.jsonl'
+            path = root / "data/runtime/order_owner_registry.jsonl"
             registry_rows = []
             if path.exists():
-                with path.open('rb') as handle:
+                with path.open("rb") as handle:
                     size = os.fstat(handle.fileno()).st_size
-                    start = max(0, size - result['order_tail_bytes'])
+                    start = max(0, size - result["order_tail_bytes"])
                     handle.seek(start)
                     if start:
                         handle.readline()
-                    content = handle.read(result['order_tail_bytes'])
-                    result['order_tail_truncated'] = bool(start)
+                    content = handle.read(result["order_tail_bytes"])
+                    result["order_tail_truncated"] = bool(start)
                     lines = content.splitlines()
-                    if content and not content.endswith(b'\n'):
+                    if content and not content.endswith(b"\n"):
                         lines = lines[:-1]  # atomic append in progress
                     registry_rows = [json.loads(line) for line in lines if line.strip()]
         cutover = None
-        permanent_path = root / 'data/runtime/retirements/main-only-retirement.json'
+        permanent_path = root / "data/runtime/retirements/main-only-retirement.json"
         if permanent_path.exists():
             permanent = json.loads(permanent_path.read_text())
-            if (permanent.get('schema') != 'main_only_automatic_owner_retirement_v1'
-                    or permanent.get('management') != 'operator_manual'
-                    or permanent.get('receipt_sha256') != router._retirement_digest({
-                        k: v for k, v in permanent.items() if k != 'receipt_sha256'})):
-                raise ValueError('retirement_cutover_receipt_invalid')
-            cutover = datetime.fromisoformat(permanent['management_observed_at_kst'])
+            if (
+                permanent.get("schema") != "main_only_automatic_owner_retirement_v1"
+                or permanent.get("management") != "operator_manual"
+                or permanent.get("receipt_sha256")
+                != router._retirement_digest(
+                    {k: v for k, v in permanent.items() if k != "receipt_sha256"}
+                )
+            ):
+                raise ValueError("retirement_cutover_receipt_invalid")
+            cutover = datetime.fromisoformat(permanent["management_observed_at_kst"])
             if cutover.tzinfo is None:
-                raise ValueError('retirement_cutover_clock_invalid')
+                raise ValueError("retirement_cutover_clock_invalid")
         for row in registry_rows:
-            if cutover and row.get('event') == 'INTENT_RESERVED':
-                observed = datetime.fromisoformat(row['observed_at_kst'])
+            if cutover and row.get("event") == "INTENT_RESERVED":
+                observed = datetime.fromisoformat(row["observed_at_kst"])
                 if observed.tzinfo is None:
-                    raise ValueError('retirement_order_clock_invalid')
+                    raise ValueError("retirement_order_clock_invalid")
                 if observed <= cutover:
                     continue  # Historical intent belongs to manual management.
-            if (row.get('order_date') == now.date().isoformat()
-                    and row.get('event') == 'INTENT_RESERVED'
-                    and (cutover is not None or (row.get('side') == 'BUY' and row.get('action') == 'NEW'))
-                    and (new_entry_retired(row.get('symbol'), row.get('owner_type'))
-                         or row.get('owner_type') == 'widget_auto_trade')):
-                result['leaks'].append(dict(kind='retired_automatic_intent' if cutover else 'new_buy_intent', symbol=row.get('symbol'),
-                    owner=row.get('owner_type'), intent_id=row.get('intent_id')))
-        result['units_checked'] = len(states)
-        result['processes_checked'] = len(processes)
-        if result['leaks']:
-            result.update(status='retirement_leak', severity='fail')
-    except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError) as exc:
-        result.update(status='retirement_unverified', severity='fail', error=str(exc)[:160])
+            if (
+                row.get("order_date") == now.date().isoformat()
+                and row.get("event") == "INTENT_RESERVED"
+                and (
+                    cutover is not None
+                    or (row.get("side") == "BUY" and row.get("action") == "NEW")
+                )
+                and (
+                    new_entry_retired(row.get("symbol"), row.get("owner_type"))
+                    or row.get("owner_type") == "widget_auto_trade"
+                )
+            ):
+                result["leaks"].append(
+                    dict(
+                        kind=(
+                            "retired_automatic_intent" if cutover else "new_buy_intent"
+                        ),
+                        symbol=row.get("symbol"),
+                        owner=row.get("owner_type"),
+                        intent_id=row.get("intent_id"),
+                    )
+                )
+        result["units_checked"] = len(states)
+        result["processes_checked"] = len(processes)
+        if result["leaks"]:
+            result.update(status="retirement_leak", severity="fail")
+    except (
+        OSError,
+        ValueError,
+        TypeError,
+        KeyError,
+        subprocess.SubprocessError,
+    ) as exc:
+        result.update(
+            status="retirement_unverified", severity="fail", error=str(exc)[:160]
+        )
     return result
 
 
@@ -986,7 +1127,9 @@ def _retired_samsung_one_share_expected_set(now: datetime) -> dict:
     """A retired BUY owner must have no scheduled or running entry process."""
 
     timers = {unit: _systemd_unit_state(unit) for unit in _SAMSUNG_RETIRED_TIMER_UNITS}
-    services = {unit: _systemd_unit_state(unit) for unit in _SAMSUNG_RETIRED_SERVICE_UNITS}
+    services = {
+        unit: _systemd_unit_state(unit) for unit in _SAMSUNG_RETIRED_SERVICE_UNITS
+    }
     details = {
         "target_date": now.date().isoformat(),
         "runtime_effect": False,
@@ -1195,10 +1338,6 @@ def _samsung_morning_runtime_contract(now: datetime) -> dict:
         "status": "expected_process_not_healthy",
         "reason": reason,
     }
-
-
-
-
 
 
 def _systemd_unit_state(unit: str) -> dict[str, str | int | None]:

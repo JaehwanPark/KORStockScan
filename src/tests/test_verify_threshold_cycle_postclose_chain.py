@@ -19,32 +19,61 @@ def _seed(monkeypatch, tmp_path: Path, target: str):
     monkeypatch.setattr(summary_mod, "REPORT_DIR", report / "runtime_approval_summary")
     monkeypatch.setattr(mod, "DATA_DIR", data)
     monkeypatch.setattr(mod, "REPORT_DIR", report)
-    monkeypatch.setattr(mod, "OUTPUT_DIR", report / "threshold_cycle_postclose_verification")
+    monkeypatch.setattr(
+        mod, "OUTPUT_DIR", report / "threshold_cycle_postclose_verification"
+    )
     for owner, path in summary_mod._paths(target).items():
         if owner in summary_mod.REQUIRED_DIRECT_OWNERS:
-            _write(path, {"report_type": owner, "target_date": target, "status": "pass"})
+            _write(
+                path, {"report_type": owner, "target_date": target, "status": "pass"}
+            )
     summary = summary_mod.build_runtime_approval_summary(target)
-    status_path = report / "threshold_cycle_postclose_status" / f"threshold_cycle_postclose_{target}.status.json"
+    status_path = (
+        report
+        / "threshold_cycle_postclose_status"
+        / f"threshold_cycle_postclose_{target}.status.json"
+    )
     proof = report / "proof.json"
-    _write(proof, {"date": target, "status": "pass", "verification_scope": "main_precommit",
-                   "run_id": "run-1", "code_commit": "a" * 40})
-    _write(status_path, {"target_date": target, "status": "succeeded", "exit_code": 0,
-                        "run_id": "run-1", "code_commit": "a" * 40,
-                        "started_at": "2026-09-19T20:10:00+09:00", "finished_at": "2026-09-19T21:00:00+09:00",
-                        "verification_receipt": {"path": str(proof), "sha256": mod._sha(proof)}})
+    _write(
+        proof,
+        {
+            "date": target,
+            "status": "pass",
+            "verification_scope": "main_precommit",
+            "run_id": "run-1",
+            "code_commit": "a" * 40,
+        },
+    )
+    _write(
+        status_path,
+        {
+            "target_date": target,
+            "status": "succeeded",
+            "exit_code": 0,
+            "run_id": "run-1",
+            "code_commit": "a" * 40,
+            "started_at": "2026-09-19T20:10:00+09:00",
+            "finished_at": "2026-09-19T21:00:00+09:00",
+            "verification_receipt": {"path": str(proof), "sha256": mod._sha(proof)},
+        },
+    )
     return summary
 
 
 def _build_direct_checklist(monkeypatch, tmp_path: Path, target: str) -> Path:
     monkeypatch.setattr(checklist_mod, "PROJECT_ROOT", tmp_path)
     monkeypatch.setattr(checklist_mod, "DOCS_DIR", tmp_path / "docs")
-    monkeypatch.setattr(checklist_mod, "CHECKLIST_DIR", tmp_path / "docs" / "checklists")
+    monkeypatch.setattr(
+        checklist_mod, "CHECKLIST_DIR", tmp_path / "docs" / "checklists"
+    )
     monkeypatch.setattr(checklist_mod, "CHECKLIST_LOCK_DIR", tmp_path / "locks")
     result = checklist_mod.build_next_stage2_checklist(target)
     return Path(result["path"])
 
 
-def test_verifier_passes_without_retired_daily_ev_or_generic_preopen(monkeypatch, tmp_path):
+def test_verifier_passes_without_retired_daily_ev_or_generic_preopen(
+    monkeypatch, tmp_path
+):
     target = "2026-09-19"
     _seed(monkeypatch, tmp_path, target)
 
@@ -76,7 +105,11 @@ def test_optional_direct_receipt_may_be_absent(monkeypatch, tmp_path):
 
     report = mod.build_threshold_cycle_postclose_verification(target)
 
-    optional = next(row for row in report["direct_source_checks"] if row["owner"] == "entry_split_policy")
+    optional = next(
+        row
+        for row in report["direct_source_checks"]
+        if row["owner"] == "entry_split_policy"
+    )
     assert optional["exists"] is False
     assert optional["required"] is False
     assert report["status"] == "pass"
@@ -93,7 +126,10 @@ def test_stale_optional_policy_blocks_only_family_handoff(monkeypatch, tmp_path)
 
     report = mod.build_threshold_cycle_postclose_verification(target)
 
-    assert summary["sources"]["entry_split"]["economic_evidence"]["policy_handoff_state"] == "blocked"
+    assert (
+        summary["sources"]["entry_split"]["economic_evidence"]["policy_handoff_state"]
+        == "blocked"
+    )
     assert report["status"] == "pass"
     assert "direct_source_date_mismatch:entry_split_policy" not in report["issues"]
 
@@ -101,7 +137,11 @@ def test_stale_optional_policy_blocks_only_family_handoff(monkeypatch, tmp_path)
 def test_missing_postclose_terminal_fails_closed(monkeypatch, tmp_path):
     target = "2026-09-19"
     _seed(monkeypatch, tmp_path, target)
-    (mod.REPORT_DIR / "threshold_cycle_postclose_status" / f"threshold_cycle_postclose_{target}.status.json").unlink()
+    (
+        mod.REPORT_DIR
+        / "threshold_cycle_postclose_status"
+        / f"threshold_cycle_postclose_{target}.status.json"
+    ).unlink()
 
     report = mod.build_threshold_cycle_postclose_verification(target)
 
@@ -123,9 +163,7 @@ def test_verifier_rejects_source_gap_marked_runtime_applyable(monkeypatch, tmp_p
     assert "blocked_economic_source_marked_applyable:entry_split" in report["issues"]
 
 
-def test_verifier_rejects_natural_acceptance_without_pid_receipt(
-    monkeypatch, tmp_path
-):
+def test_verifier_rejects_natural_acceptance_without_pid_receipt(monkeypatch, tmp_path):
     target = "2026-09-19"
     summary = _seed(monkeypatch, tmp_path, target)
     summary["natural_acceptance_state"] = "pending"
@@ -161,9 +199,7 @@ def test_required_summary_handoff_verifies_marker_and_task_projection(
     )
 
 
-def test_required_summary_handoff_rejects_task_projection_drift(
-    monkeypatch, tmp_path
-):
+def test_required_summary_handoff_rejects_task_projection_drift(monkeypatch, tmp_path):
     target = "2026-09-19"
     _seed(monkeypatch, tmp_path, target)
     checklist = _build_direct_checklist(monkeypatch, tmp_path, target)
@@ -183,90 +219,156 @@ def test_required_summary_handoff_rejects_task_projection_drift(
     assert "direct_checklist_task_projection_mismatch" in report["issues"]
 
 
-def test_direct_projection_includes_native_holding_owner_and_ignores_unrelated_manual_task(monkeypatch,tmp_path):
-    target='2026-09-19';summary=_seed(monkeypatch,tmp_path,target)
-    summary['holding_exit_threshold_lineage']={'source_contract_repair':{
-        'repair_required':True,'identified_defects':['fixture_source_binding']}}
-    path=mod.REPORT_DIR/'runtime_approval_summary'/f'runtime_approval_summary_{target}.json'
-    _write(path,summary);checklist=_build_direct_checklist(monkeypatch,tmp_path,target)
-    original=checklist.read_text()
-    assert '[HoldingProfitExitSourceContractRepair]' in original
-    checklist.write_text(original+'\n- [ ] `[UnrelatedManualOwner] separate authorized work`\n')
-    view,issues=mod._direct_checklist_checks(target,summary,path)
-    assert issues==[]
-    assert view['actual_task_ids']==view['expected_task_ids']
-    assert 'HoldingProfitExitSourceContractRepair' in view['actual_task_ids']
-    checklist.write_text(original.replace(checklist_mod.AUTO_END,
-        '- [ ] `[UnexpectedGeneratedOwner] unowned projection`\n'+checklist_mod.AUTO_END))
-    _,issues=mod._direct_checklist_checks(target,summary,path)
-    assert 'direct_checklist_task_projection_mismatch' in issues
-
-
-@pytest.mark.parametrize('new_defect', [False, True])
-def test_carried_semantic_owner_preserves_acceptance_and_native_projection(monkeypatch, tmp_path, new_defect):
-    day = '2026-09-19'
-    summary = _seed(monkeypatch, tmp_path, day)
-    summary['holding_exit_threshold_lineage'] = {'source_contract_repair': {
-        'repair_required': new_defect, 'identified_defects': ['fixture_source_binding'] if new_defect else []}}
-    path = mod.REPORT_DIR / 'runtime_approval_summary' / f'runtime_approval_summary_{day}.json'
+def test_direct_projection_includes_native_holding_owner_and_ignores_unrelated_manual_task(
+    monkeypatch, tmp_path
+):
+    target = "2026-09-19"
+    summary = _seed(monkeypatch, tmp_path, target)
+    summary["holding_exit_threshold_lineage"] = {
+        "source_contract_repair": {
+            "repair_required": True,
+            "identified_defects": ["fixture_source_binding"],
+        }
+    }
+    path = (
+        mod.REPORT_DIR
+        / "runtime_approval_summary"
+        / f"runtime_approval_summary_{target}.json"
+    )
     _write(path, summary)
-    source = tmp_path / 'docs/checklists' / f'{day}-stage2-todo-checklist.md'
+    checklist = _build_direct_checklist(monkeypatch, tmp_path, target)
+    original = checklist.read_text()
+    assert "[HoldingProfitExitSourceContractRepair]" in original
+    checklist.write_text(
+        original + "\n- [ ] `[UnrelatedManualOwner] separate authorized work`\n"
+    )
+    view, issues = mod._direct_checklist_checks(target, summary, path)
+    assert issues == []
+    assert view["actual_task_ids"] == view["expected_task_ids"]
+    assert "HoldingProfitExitSourceContractRepair" in view["actual_task_ids"]
+    checklist.write_text(
+        original.replace(
+            checklist_mod.AUTO_END,
+            "- [ ] `[UnexpectedGeneratedOwner] unowned projection`\n"
+            + checklist_mod.AUTO_END,
+        )
+    )
+    _, issues = mod._direct_checklist_checks(target, summary, path)
+    assert "direct_checklist_task_projection_mismatch" in issues
+
+
+@pytest.mark.parametrize("new_defect", [False, True])
+def test_carried_semantic_owner_preserves_acceptance_and_native_projection(
+    monkeypatch, tmp_path, new_defect
+):
+    day = "2026-09-19"
+    summary = _seed(monkeypatch, tmp_path, day)
+    summary["holding_exit_threshold_lineage"] = {
+        "source_contract_repair": {
+            "repair_required": new_defect,
+            "identified_defects": ["fixture_source_binding"] if new_defect else [],
+        }
+    }
+    path = (
+        mod.REPORT_DIR
+        / "runtime_approval_summary"
+        / f"runtime_approval_summary_{day}.json"
+    )
+    _write(path, summary)
+    source = tmp_path / "docs/checklists" / f"{day}-stage2-todo-checklist.md"
     source.parent.mkdir(parents=True, exist_ok=True)
-    source.write_text('- [ ] `[HoldingProfitExitSourceContractRepair] original remaining acceptance` '
-        '(`Due: 2026-09-19`, `Slot: IMPLEMENTATION`, `TimeWindow: 09:00~23:59`, `Track: RuntimeStability`)\n'
-        '  - Acceptance: original BUY/SELL identities; original cost remains null.\n')
+    source.write_text(
+        "- [ ] `[HoldingProfitExitSourceContractRepair] original remaining acceptance` "
+        "(`Due: 2026-09-19`, `Slot: IMPLEMENTATION`, `TimeWindow: 09:00~23:59`, `Track: RuntimeStability`)\n"
+        "  - Acceptance: original BUY/SELL identities; original cost remains null.\n"
+    )
     checklist = _build_direct_checklist(monkeypatch, tmp_path, day)
     text = checklist.read_text()
-    assert text.count('[HoldingProfitExitSourceContractRepair]') == 1
-    assert 'original BUY/SELL identities' in text
+    assert text.count("[HoldingProfitExitSourceContractRepair]") == 1
+    assert "original BUY/SELL identities" in text
     view, issues = mod._direct_checklist_checks(day, summary, path)
     assert issues == []
-    assert view['actual_task_ids'] == view['expected_task_ids']
+    assert view["actual_task_ids"] == view["expected_task_ids"]
 
 
 def test_validated_reversal_preserves_one_manual_workflow_owner(monkeypatch, tmp_path):
-    target = '2026-09-19'
+    target = "2026-09-19"
     _seed(monkeypatch, tmp_path, target)
     checklist = _build_direct_checklist(monkeypatch, tmp_path, target)
     original = checklist.read_text()
-    manual = '\n- [ ] `[DirectFamilySourceRepairMainMechanisticEntry] operator implementation and next-session workflow`\n'
+    manual = "\n- [ ] `[DirectFamilySourceRepairMainMechanisticEntry] operator implementation and next-session workflow`\n"
     checklist.write_text(original + manual)
     from src.engine.scalping import mechanistic_entry_runtime_policy as native
-    monkeypatch.setattr(native, 'load', lambda **kwargs: {
-        'source_date': target, 'target_date': '2026-09-21', 'continuous_reversal': {'validated': True}})
-    result = mod.build_threshold_cycle_postclose_verification(target, require_summary_handoff=True)
-    assert result['status'] == 'pass'
-    assert result['checklist_handoff']['retained_manual_workflow_ids'] == ['DirectFamilySourceRepairMainMechanisticEntry']
+
+    monkeypatch.setattr(
+        native,
+        "load",
+        lambda **kwargs: {
+            "source_date": target,
+            "target_date": "2026-09-21",
+            "continuous_reversal": {"validated": True},
+        },
+    )
+    result = mod.build_threshold_cycle_postclose_verification(
+        target, require_summary_handoff=True
+    )
+    assert result["status"] == "pass"
+    assert result["checklist_handoff"]["retained_manual_workflow_ids"] == [
+        "DirectFamilySourceRepairMainMechanisticEntry"
+    ]
     checklist.write_text(original + manual + manual)
-    result = mod.build_threshold_cycle_postclose_verification(target, require_summary_handoff=True)
-    assert 'direct_checklist_task_projection_mismatch' in result['issues']
+    result = mod.build_threshold_cycle_postclose_verification(
+        target, require_summary_handoff=True
+    )
+    assert "direct_checklist_task_projection_mismatch" in result["issues"]
     checklist.write_text(original + manual)
-    monkeypatch.setattr(native, 'load', lambda **kwargs: None)
-    result = mod.build_threshold_cycle_postclose_verification(target, require_summary_handoff=True)
-    assert 'direct_checklist_task_projection_mismatch' in result['issues']
+    monkeypatch.setattr(native, "load", lambda **kwargs: None)
+    result = mod.build_threshold_cycle_postclose_verification(
+        target, require_summary_handoff=True
+    )
+    assert "direct_checklist_task_projection_mismatch" in result["issues"]
 
 
-def test_new_cancel_contract_requires_actual_tower_in_direct_strict(monkeypatch, tmp_path):
+def test_new_cancel_contract_requires_actual_tower_in_direct_strict(
+    monkeypatch, tmp_path
+):
     from src.engine.automation.entry_cancel_wait_tuning import RECONCILIATION_VERSION
-    target = '2026-10-02'
+
+    target = "2026-10-02"
     summary = _seed(monkeypatch, tmp_path, target)
     _build_direct_checklist(monkeypatch, tmp_path, target)
-    summary['sources']['entry_cancel_wait']['economic_evidence']['cancel_wait_reconciliation'] = {
-        'reconciliation_contract_version': RECONCILIATION_VERSION,
+    summary["sources"]["entry_cancel_wait"]["economic_evidence"][
+        "cancel_wait_reconciliation"
+    ] = {
+        "reconciliation_contract_version": RECONCILIATION_VERSION,
     }
-    path = mod.REPORT_DIR / 'runtime_approval_summary' / f'runtime_approval_summary_{target}.json'
+    path = (
+        mod.REPORT_DIR
+        / "runtime_approval_summary"
+        / f"runtime_approval_summary_{target}.json"
+    )
     _write(path, summary)
     _, issues = mod._direct_checklist_checks(target, summary, path)
-    assert any(issue.startswith('postclose_summary_handoff:tower:') for issue in issues)
+    assert any(issue.startswith("postclose_summary_handoff:tower:") for issue in issues)
 
 
-def test_whole_chain_verification_rejects_failed_stage_with_current_marker(monkeypatch, tmp_path):
+def test_whole_chain_verification_rejects_failed_stage_with_current_marker(
+    monkeypatch, tmp_path
+):
     from src.engine.automation import postclose_summary_handoff as handoff
 
     target = "2026-09-19"
     _seed(monkeypatch, tmp_path, target)
     stage = handoff.stage_path(mod.REPORT_DIR, target, "outcome_labels")
-    _write(stage, {"source_date": target, "run_id": "failed-1", "status": "failed", "exit_code": 2})
+    _write(
+        stage,
+        {
+            "source_date": target,
+            "run_id": "failed-1",
+            "status": "failed",
+            "exit_code": 2,
+        },
+    )
     _build_direct_checklist(monkeypatch, tmp_path, target)
 
     report = mod.build_threshold_cycle_postclose_verification(
@@ -277,20 +379,32 @@ def test_whole_chain_verification_rejects_failed_stage_with_current_marker(monke
     assert report["whole_native_chain_done_claimed"] is False
 
 
-def test_persisted_strict_receipt_detects_summary_and_stage_rewrite(monkeypatch, tmp_path):
+def test_persisted_strict_receipt_detects_summary_and_stage_rewrite(
+    monkeypatch, tmp_path
+):
     from src.engine.automation import postclose_summary_handoff as handoff
 
     target = "2026-09-19"
     _seed(monkeypatch, tmp_path, target)
     stage = handoff.stage_path(mod.REPORT_DIR, target, "outcome_labels")
-    _write(stage, {"source_date": target, "run_id": "off-1", "status": "off",
-                   "off_reason": "explicit_schedule_disabled", "exit_code": 0})
+    _write(
+        stage,
+        {
+            "source_date": target,
+            "run_id": "off-1",
+            "status": "off",
+            "off_reason": "explicit_schedule_disabled",
+            "exit_code": 0,
+        },
+    )
     _build_direct_checklist(monkeypatch, tmp_path, target)
     strict = mod.build_threshold_cycle_postclose_verification(
         target, require_summary_handoff=True
     )
     assert strict["status"] == "pass"
-    strict, _, _, attempt = mod._write_verification_receipts(target, strict, invocation={})
+    strict, _, _, attempt = mod._write_verification_receipts(
+        target, strict, invocation={}
+    )
     assert mod.current_strict_receipt_issues(attempt, target) == []
 
     summary_path = mod._artifact_paths(target)["runtime_summary"]
@@ -298,14 +412,29 @@ def test_persisted_strict_receipt_detects_summary_and_stage_rewrite(monkeypatch,
     summary = json.loads(original_summary)
     summary["generation_test"] = "changed"
     _write(summary_path, summary)
-    assert "strict_summary_generation_stale" in mod.current_strict_receipt_issues(attempt, target)
+    assert "strict_summary_generation_stale" in mod.current_strict_receipt_issues(
+        attempt, target
+    )
     summary_path.write_bytes(original_summary)
 
-    _write(stage, {"source_date": target, "run_id": "retry-2", "status": "failed", "exit_code": 2})
-    assert "strict_stage_generation_stale:outcome_labels" in mod.current_strict_receipt_issues(attempt, target)
+    _write(
+        stage,
+        {
+            "source_date": target,
+            "run_id": "retry-2",
+            "status": "failed",
+            "exit_code": 2,
+        },
+    )
+    assert (
+        "strict_stage_generation_stale:outcome_labels"
+        in mod.current_strict_receipt_issues(attempt, target)
+    )
 
 
-def test_whole_chain_off_receipts_recover_with_new_checklist_and_strict(monkeypatch, tmp_path):
+def test_whole_chain_off_receipts_recover_with_new_checklist_and_strict(
+    monkeypatch, tmp_path
+):
     from src.engine.automation import postclose_summary_handoff as handoff
 
     target = "2026-09-19"
@@ -313,72 +442,133 @@ def test_whole_chain_off_receipts_recover_with_new_checklist_and_strict(monkeypa
     for stage_name in handoff.active_stage_names(target):
         if stage_name == "summary_handoff":
             continue  # Controller creates this terminal after strict verification.
-        handoff._stage_write(handoff.stage_path(mod.REPORT_DIR, target, stage_name), {
-            "schema": handoff.STAGE_SCHEMA, "stage_id": stage_name,
-            "source_date": target, "run_id": f"off-{stage_name}",
-            "status": "off", "off_reason": "explicit_schedule_disabled", "exit_code": 0,
-        })
+        handoff._stage_write(
+            handoff.stage_path(mod.REPORT_DIR, target, stage_name),
+            {
+                "schema": handoff.STAGE_SCHEMA,
+                "stage_id": stage_name,
+                "source_date": target,
+                "run_id": f"off-{stage_name}",
+                "status": "off",
+                "off_reason": "explicit_schedule_disabled",
+                "exit_code": 0,
+            },
+        )
     _build_direct_checklist(monkeypatch, tmp_path, target)
     first = mod.build_threshold_cycle_postclose_verification(
         target, require_summary_handoff=True, require_whole_native_chain=True
     )
     assert first["status"] == "pass"
     assert first["verification_scope"] == "whole_native_chain"
-    _, _, _, old_attempt = mod._write_verification_receipts(target, first, invocation={})
-    assert mod.current_strict_receipt_issues(
-        old_attempt, target, require_whole_native_chain=True
-    ) == []
-    assert mod.current_strict_receipt_issues(
-        old_attempt, target, require_whole_native_chain=True, generation_only=True
-    ) == []
+    _, _, _, old_attempt = mod._write_verification_receipts(
+        target, first, invocation={}
+    )
+    assert (
+        mod.current_strict_receipt_issues(
+            old_attempt, target, require_whole_native_chain=True
+        )
+        == []
+    )
+    assert (
+        mod.current_strict_receipt_issues(
+            old_attempt, target, require_whole_native_chain=True, generation_only=True
+        )
+        == []
+    )
 
-    checklist_path=Path(first['checklist_handoff']['path'])
-    original_bytes=checklist_path.read_bytes()
-    snapshot=tmp_path/'historical-checklist.md';snapshot.write_bytes(original_bytes)
-    checklist_path.write_bytes(original_bytes+b'\ncurrent authorized intraday work\n')
-    assert 'strict_checklist_generation_stale' in mod.current_strict_receipt_issues(
-        old_attempt,target,require_whole_native_chain=True,generation_only=True)
-    assert mod.current_strict_receipt_issues(old_attempt,target,require_whole_native_chain=True,
-        generation_only=True,checklist_snapshot=snapshot)==[]
-    assert mod.current_strict_receipt_issues(old_attempt,target,require_whole_native_chain=True,
-        checklist_snapshot=snapshot)==['strict_historical_checklist_scope_invalid']
-    snapshot.write_text('wrong generation')
-    assert 'strict_checklist_generation_stale' in mod.current_strict_receipt_issues(
-        old_attempt,target,require_whole_native_chain=True,generation_only=True,checklist_snapshot=snapshot)
+    checklist_path = Path(first["checklist_handoff"]["path"])
+    original_bytes = checklist_path.read_bytes()
+    snapshot = tmp_path / "historical-checklist.md"
+    snapshot.write_bytes(original_bytes)
+    checklist_path.write_bytes(original_bytes + b"\ncurrent authorized intraday work\n")
+    assert "strict_checklist_generation_stale" in mod.current_strict_receipt_issues(
+        old_attempt, target, require_whole_native_chain=True, generation_only=True
+    )
+    assert (
+        mod.current_strict_receipt_issues(
+            old_attempt,
+            target,
+            require_whole_native_chain=True,
+            generation_only=True,
+            checklist_snapshot=snapshot,
+        )
+        == []
+    )
+    assert mod.current_strict_receipt_issues(
+        old_attempt,
+        target,
+        require_whole_native_chain=True,
+        checklist_snapshot=snapshot,
+    ) == ["strict_historical_checklist_scope_invalid"]
+    snapshot.write_text("wrong generation")
+    assert "strict_checklist_generation_stale" in mod.current_strict_receipt_issues(
+        old_attempt,
+        target,
+        require_whole_native_chain=True,
+        generation_only=True,
+        checklist_snapshot=snapshot,
+    )
     snapshot.write_bytes(original_bytes)
     checklist_path.write_bytes(original_bytes)
 
     capacity = handoff.stage_path(mod.REPORT_DIR, target, "outcome_labels")
-    handoff._stage_write(capacity, {
-        "schema": handoff.STAGE_SCHEMA, "stage_id": "outcome_labels",
-        "source_date": target, "run_id": "retry-failed",
-        "status": "failed", "exit_code": 2,
-    })
-    assert "strict_stage_generation_stale:outcome_labels" in mod.current_strict_receipt_issues(
-        old_attempt, target, require_whole_native_chain=True
+    handoff._stage_write(
+        capacity,
+        {
+            "schema": handoff.STAGE_SCHEMA,
+            "stage_id": "outcome_labels",
+            "source_date": target,
+            "run_id": "retry-failed",
+            "status": "failed",
+            "exit_code": 2,
+        },
     )
-    assert "strict_stage_generation_stale:outcome_labels" in mod.current_strict_receipt_issues(
-        old_attempt, target, require_whole_native_chain=True, generation_only=True
+    assert (
+        "strict_stage_generation_stale:outcome_labels"
+        in mod.current_strict_receipt_issues(
+            old_attempt, target, require_whole_native_chain=True
+        )
+    )
+    assert (
+        "strict_stage_generation_stale:outcome_labels"
+        in mod.current_strict_receipt_issues(
+            old_attempt, target, require_whole_native_chain=True, generation_only=True
+        )
     )
     _build_direct_checklist(monkeypatch, tmp_path, target)
-    assert "postclose_stage_invalid:outcome_labels" in mod.build_threshold_cycle_postclose_verification(
-        target, require_summary_handoff=True, require_whole_native_chain=True
-    )["issues"]
+    assert (
+        "postclose_stage_invalid:outcome_labels"
+        in mod.build_threshold_cycle_postclose_verification(
+            target, require_summary_handoff=True, require_whole_native_chain=True
+        )["issues"]
+    )
 
-    handoff._stage_write(capacity, {
-        "schema": handoff.STAGE_SCHEMA, "stage_id": "outcome_labels",
-        "source_date": target, "run_id": "retry-off",
-        "status": "off", "off_reason": "explicit_schedule_disabled", "exit_code": 0,
-    })
+    handoff._stage_write(
+        capacity,
+        {
+            "schema": handoff.STAGE_SCHEMA,
+            "stage_id": "outcome_labels",
+            "source_date": target,
+            "run_id": "retry-off",
+            "status": "off",
+            "off_reason": "explicit_schedule_disabled",
+            "exit_code": 0,
+        },
+    )
     _build_direct_checklist(monkeypatch, tmp_path, target)
     recovered = mod.build_threshold_cycle_postclose_verification(
         target, require_summary_handoff=True, require_whole_native_chain=True
     )
     assert recovered["status"] == "pass"
-    _, _, _, new_attempt = mod._write_verification_receipts(target, recovered, invocation={})
-    assert mod.current_strict_receipt_issues(
-        new_attempt, target, require_whole_native_chain=True
-    ) == []
+    _, _, _, new_attempt = mod._write_verification_receipts(
+        target, recovered, invocation={}
+    )
+    assert (
+        mod.current_strict_receipt_issues(
+            new_attempt, target, require_whole_native_chain=True
+        )
+        == []
+    )
 
 
 def test_strict_rejects_checklist_rewrite_during_verification(monkeypatch, tmp_path):
@@ -399,9 +589,7 @@ def test_strict_rejects_checklist_rewrite_during_verification(monkeypatch, tmp_p
     assert "strict_source_generation_changed_during_verification" in report["issues"]
 
 
-def test_main_mechanistic_scope_rejects_compact_only_report(
-    monkeypatch, tmp_path
-):
+def test_main_mechanistic_scope_rejects_compact_only_report(monkeypatch, tmp_path):
     from src.engine.scalping import ai_action_outcome_calibration as calibration
 
     target = "2026-09-17"
@@ -434,33 +622,56 @@ def test_main_mechanistic_scope_rejects_compact_only_report(
 
 
 def test_qualified_machine_admission_selection_requires_runtime_strategy_activation():
-    for basis in ("machine_full_population_opportunity_v1", "machine_nonentry_opportunity_v1"):
-        selected = ("KRX|KRX_REGULAR", {"promotion_pass": True, "candidate": {"evaluation_basis": basis}})
+    for basis in (
+        "machine_full_population_opportunity_v1",
+        "machine_nonentry_opportunity_v1",
+    ):
+        selected = (
+            "KRX|KRX_REGULAR",
+            {"promotion_pass": True, "candidate": {"evaluation_basis": basis}},
+        )
         assert mod._selected_strategy_requires_runtime_activation(selected) is True
-    runtime_selected = ("KRX|KRX_REGULAR", {"promotion_pass": True, "candidate": {"evaluation_basis": "runtime_owner_replay_v1"}})
+    runtime_selected = (
+        "KRX|KRX_REGULAR",
+        {
+            "promotion_pass": True,
+            "candidate": {"evaluation_basis": "runtime_owner_replay_v1"},
+        },
+    )
     assert mod._selected_strategy_requires_runtime_activation(runtime_selected) is True
     assert mod._selected_strategy_requires_runtime_activation(None) is False
 
 
-def test_terminal_rejects_wrong_date_nonzero_exit_missing_identity_and_stale_proof(monkeypatch, tmp_path):
+def test_terminal_rejects_wrong_date_nonzero_exit_missing_identity_and_stale_proof(
+    monkeypatch, tmp_path
+):
     target = "2026-09-19"
     _seed(monkeypatch, tmp_path, target)
     path = mod._artifact_paths(target)["postclose_status"]
     original = mod._load(path)
-    for change, issue in [({"target_date": "2000-01-01"}, "postclose_terminal_date_mismatch"),
-                          ({"exit_code": 17}, "postclose_terminal_exit_code_invalid"),
-                          ({"run_id": "new-run"}, "postclose_terminal_verification_binding_invalid"),
-                          ({"code_commit": None}, "postclose_terminal_code_missing"),
-                          ({"verification_receipt": {}}, "postclose_terminal_verification_binding_invalid")]:
+    for change, issue in [
+        ({"target_date": "2000-01-01"}, "postclose_terminal_date_mismatch"),
+        ({"exit_code": 17}, "postclose_terminal_exit_code_invalid"),
+        ({"run_id": "new-run"}, "postclose_terminal_verification_binding_invalid"),
+        ({"code_commit": None}, "postclose_terminal_code_missing"),
+        (
+            {"verification_receipt": {}},
+            "postclose_terminal_verification_binding_invalid",
+        ),
+    ]:
         _write(path, {**original, **change})
         result = mod.build_threshold_cycle_postclose_verification(target)
         assert result["status"] == "fail" and issue in result["issues"]
 
 
-def test_attempts_never_overwrite_failure_and_preterminal_is_not_done(monkeypatch, tmp_path):
+def test_attempts_never_overwrite_failure_and_preterminal_is_not_done(
+    monkeypatch, tmp_path
+):
     target = "2026-09-19"
     _seed(monkeypatch, tmp_path, target)
-    report = mod.build_threshold_cycle_postclose_verification(target, require_done_marker=False)
+    report = mod.build_threshold_cycle_postclose_verification(
+        target, require_done_marker=False
+    )
     assert report["completion_state"] == "preterminal_verified"
     assert report["whole_native_chain_done_claimed"] is False
     failed = {**report, "status": "fail", "issues": ["first_failure"]}
@@ -471,43 +682,107 @@ def test_attempts_never_overwrite_failure_and_preterminal_is_not_done(monkeypatc
     assert mod._load(first)["issues"] == ["first_failure"]
 
 
-def test_cli_seals_only_current_precommit_after_checklist_verification(monkeypatch, tmp_path):
+def test_cli_seals_only_current_precommit_after_checklist_verification(
+    monkeypatch, tmp_path
+):
     target = "2026-09-19"
     _seed(monkeypatch, tmp_path, target)
     _build_direct_checklist(monkeypatch, tmp_path, target)
     path = mod._artifact_paths(target)["postclose_status"]
     before = mod._load(path)
-    _write(path, {**before, "status": "producers_completed", "verification_receipt": None})
-    assert mod.main(["--date", target, "--seal-main-run", "--expected-run-id", "other", "--require-summary-handoff"]) == 1
+    _write(
+        path, {**before, "status": "producers_completed", "verification_receipt": None}
+    )
+    assert (
+        mod.main(
+            [
+                "--date",
+                target,
+                "--seal-main-run",
+                "--expected-run-id",
+                "other",
+                "--require-summary-handoff",
+            ]
+        )
+        == 1
+    )
     assert mod._load(path)["status"] == "producers_completed"
-    assert mod.main(["--date", target, "--seal-main-run", "--expected-run-id", "run-1", "--require-summary-handoff"]) == 0
+    assert (
+        mod.main(
+            [
+                "--date",
+                target,
+                "--seal-main-run",
+                "--expected-run-id",
+                "run-1",
+                "--require-summary-handoff",
+            ]
+        )
+        == 0
+    )
     assert mod._load(path)["status"] == "succeeded"
-    assert mod.build_threshold_cycle_postclose_verification(target, require_summary_handoff=True)["status"] == "pass"
+    assert (
+        mod.build_threshold_cycle_postclose_verification(
+            target, require_summary_handoff=True
+        )["status"]
+        == "pass"
+    )
 
 
 def test_disabled_active_stage_is_not_an_escape_hatch(monkeypatch, tmp_path):
     _seed(monkeypatch, tmp_path, "2026-09-19")
-    result = mod.build_threshold_cycle_postclose_verification("2026-09-19", disabled_stages={"entry_split"})
+    result = mod.build_threshold_cycle_postclose_verification(
+        "2026-09-19", disabled_stages={"entry_split"}
+    )
     assert "disabled_stage_not_allowed:entry_split" in result["issues"]
 
 
-def test_main_scope_conserves_original_and_structure_eligible_populations(monkeypatch, tmp_path):
+def test_main_scope_conserves_original_and_structure_eligible_populations(
+    monkeypatch, tmp_path
+):
     from src.engine.scalping import ai_action_outcome_calibration as calibration
+
     target = "2026-09-17"
     data = tmp_path / "data"
     monkeypatch.setattr(mod, "DATA_DIR", data)
     monkeypatch.setattr(mod, "REPORT_DIR", data / "report")
-    path = data / "report/ai_decision_action_outcome_calibration" / f"ai_decision_action_outcome_calibration_{target}.json"
-    source = dict(schema=calibration.SCHEMA, target_date=target,
-        report_scope="main_mechanistic_entry", noncompact_sections_refreshed=True,
-        machine_full_evaluation=dict(state="source_gap", full_population_count=10, current_structure_eligible_count=2),
-        mechanistic_entry_refinement=dict(schema=calibration.MECHANISTIC_REFINEMENT_SCHEMA, target_date=target,
-            source_contract=dict(schema="machine_common_refinement_population_v1",
-                structure_contract_population_count=10, accepted_unique_trace_count=2,
-                row_exclusion_reason_counts=dict(structure_contract_version_mismatch=8))),
-        hierarchical_entry_quality=dict(runtime_extensions_by_scope={}, machine_decision_case_table={}))
+    path = (
+        data
+        / "report/ai_decision_action_outcome_calibration"
+        / f"ai_decision_action_outcome_calibration_{target}.json"
+    )
+    source = dict(
+        schema=calibration.SCHEMA,
+        target_date=target,
+        report_scope="main_mechanistic_entry",
+        noncompact_sections_refreshed=True,
+        machine_full_evaluation=dict(
+            state="source_gap",
+            full_population_count=10,
+            current_structure_eligible_count=2,
+        ),
+        mechanistic_entry_refinement=dict(
+            schema=calibration.MECHANISTIC_REFINEMENT_SCHEMA,
+            target_date=target,
+            source_contract=dict(
+                schema="machine_common_refinement_population_v1",
+                structure_contract_population_count=10,
+                accepted_unique_trace_count=2,
+                row_exclusion_reason_counts=dict(structure_contract_version_mismatch=8),
+            ),
+        ),
+        hierarchical_entry_quality=dict(
+            runtime_extensions_by_scope={}, machine_decision_case_table={}
+        ),
+    )
     _write(path, calibration._with_artifact_content_sha256(source))
-    assert "main_machine_refinement_contract_invalid" not in mod._main_mechanistic_scope(target)["issues"]
+    assert (
+        "main_machine_refinement_contract_invalid"
+        not in mod._main_mechanistic_scope(target)["issues"]
+    )
     source["machine_full_evaluation"]["current_structure_eligible_count"] = 3
     _write(path, calibration._with_artifact_content_sha256(source))
-    assert "main_machine_refinement_contract_invalid" in mod._main_mechanistic_scope(target)["issues"]
+    assert (
+        "main_machine_refinement_contract_invalid"
+        in mod._main_mechanistic_scope(target)["issues"]
+    )

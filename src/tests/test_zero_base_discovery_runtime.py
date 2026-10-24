@@ -12,7 +12,6 @@ from src.scanners.zero_base_discovery_runtime import (
     ZeroBaseDiscoveryRuntime,
 )
 
-
 T0 = datetime(2026, 9, 28, 10, 0, tzinfo=ZoneInfo("Asia/Seoul")).timestamp()
 
 
@@ -21,16 +20,25 @@ def _selected_fixture_requirements(monkeypatch):
     # These are orchestration tests; real selected definitions are exercised
     # separately by the native source/readiness contract tests.
     from src.engine.scalping import reversal_source_diagnostics as D
-    monkeypatch.setattr(D, 'residence_requirements', lambda *a: {'minimum_seconds': 0})
+
+    monkeypatch.setattr(D, "residence_requirements", lambda *a: {"minimum_seconds": 0})
     from src.scanners import zero_base_discovery_runtime as R
-    monkeypatch.setattr(R, 'discovery_product_filter', lambda *a:
-        lambda code, name, market: dict(eligible=True, status='fixture_equity'))
+
+    monkeypatch.setattr(
+        R,
+        "discovery_product_filter",
+        lambda *a: lambda code, name, market: dict(
+            eligible=True, status="fixture_equity"
+        ),
+    )
 
 
 class Bus:
     def __init__(self, *, consumer=True):
         # Existing orchestration fixtures model an admitted local worker.
-        self.callbacks = {PROBE_REQUEST_EVENT: [lambda payload: None]} if consumer else {}
+        self.callbacks = (
+            {PROBE_REQUEST_EVENT: [lambda payload: None]} if consumer else {}
+        )
         self.events = []
 
     def subscribe(self, event, callback):
@@ -46,7 +54,7 @@ class Bus:
         return bool(self.callbacks.get(event))
 
     def consumer_readiness(self, event):
-        return {'ready': self.has_subscribers(event), 'reason': 'fixture_ready'}
+        return {"ready": self.has_subscribers(event), "reason": "fixture_ready"}
 
     def publish_with_dispatch_count(self, event, payload):
         self.events.append((event, payload))
@@ -58,212 +66,359 @@ class Bus:
 
 def _isolated_bus():
     from src.core.event_bus import EventBus
+
     class IsolatedBus(EventBus):
         _instance = None
         _lock = threading.Lock()
+
     return IsolatedBus()
 
 
 def test_real_bus_startup_without_consumer_never_reserves_physical_capacity(tmp_path):
     bus = _isolated_bus()
-    runtime = ZeroBaseDiscoveryRuntime(event_bus=bus, session_date='2026-09-28', state_path=tmp_path/'q.json')
-    result = runtime.scan_once('fixture', fetcher=_panel, now_epoch=T0+1)
-    assert result['probe_requested_count'] == 0 and result['probe_consumer_ready'] is False
+    runtime = ZeroBaseDiscoveryRuntime(
+        event_bus=bus, session_date="2026-09-28", state_path=tmp_path / "q.json"
+    )
+    result = runtime.scan_once("fixture", fetcher=_panel, now_epoch=T0 + 1)
+    assert (
+        result["probe_requested_count"] == 0 and result["probe_consumer_ready"] is False
+    )
     assert runtime.queue.in_flight_count() == 0
-    assert runtime.queue.snapshot()['candidates'][0]['handoff_id'] == ''
+    assert runtime.queue.snapshot()["candidates"][0]["handoff_id"] == ""
     requests = []
     receiver = lambda payload: requests.append(payload)
-    receiver.runtime_readiness = lambda: {'ready': True, 'reason': 'fixture_ready'}
+    receiver.runtime_readiness = lambda: {"ready": True, "reason": "fixture_ready"}
     bus.subscribe(PROBE_REQUEST_EVENT, receiver)
-    assert runtime.dispatch_due_probes(now_epoch=T0+2)['probe_requested_count'] == 1
+    assert runtime.dispatch_due_probes(now_epoch=T0 + 2)["probe_requested_count"] == 1
     assert len(requests) == runtime.queue.in_flight_count() == 1
 
 
-def test_consumer_disappearing_during_persist_closes_only_unstarted_claim(tmp_path, monkeypatch):
-    bus = _isolated_bus(); receiver = lambda payload: pytest.fail('removed consumer ran')
-    receiver.runtime_readiness = lambda: {'ready': True, 'reason': 'fixture_ready'}
+def test_consumer_disappearing_during_persist_closes_only_unstarted_claim(
+    tmp_path, monkeypatch
+):
+    bus = _isolated_bus()
+    receiver = lambda payload: pytest.fail("removed consumer ran")
+    receiver.runtime_readiness = lambda: {"ready": True, "reason": "fixture_ready"}
     bus.subscribe(PROBE_REQUEST_EVENT, receiver)
-    runtime = ZeroBaseDiscoveryRuntime(event_bus=bus, session_date='2026-09-28', state_path=tmp_path/'q.json')
+    runtime = ZeroBaseDiscoveryRuntime(
+        event_bus=bus, session_date="2026-09-28", state_path=tmp_path / "q.json"
+    )
     persist = runtime._persist
+
     def remove_then_persist():
         bus.unsubscribe(PROBE_REQUEST_EVENT, receiver)
         persist()
-    monkeypatch.setattr(runtime, '_persist', remove_then_persist)
-    result = runtime.scan_once('fixture', fetcher=_panel, now_epoch=T0+1)
-    assert result['probe_requested_count'] == 0 and result['probe_no_consumer_count'] == 1
+
+    monkeypatch.setattr(runtime, "_persist", remove_then_persist)
+    result = runtime.scan_once("fixture", fetcher=_panel, now_epoch=T0 + 1)
+    assert (
+        result["probe_requested_count"] == 0 and result["probe_no_consumer_count"] == 1
+    )
     assert runtime.queue.in_flight_count() == 0
-    row = runtime.queue.snapshot()['candidates'][0]
-    assert row['lease_phase'] == 'closed' and row['handoff_id'] == ''
-    assert row['last_result'] == 'probe_capacity_deferred'
+    row = runtime.queue.snapshot()["candidates"][0]
+    assert row["lease_phase"] == "closed" and row["handoff_id"] == ""
+    assert row["last_result"] == "probe_capacity_deferred"
 
 
 def test_counted_publication_is_not_callback_success_or_order_authority(monkeypatch):
     from src.core import event_bus as module
-    bus = _isolated_bus(); errors = []
-    monkeypatch.setattr(module, 'log_error', errors.append)
-    assert bus.publish_with_dispatch_count('event', {}) == 0
-    def uncertain(payload): raise RuntimeError('callback started work then failed')
-    bus.subscribe('event', uncertain)
-    assert bus.publish_with_dispatch_count('event', {}) == 1
-    assert bus.publish('event', {}) is None
+
+    bus = _isolated_bus()
+    errors = []
+    monkeypatch.setattr(module, "log_error", errors.append)
+    assert bus.publish_with_dispatch_count("event", {}) == 0
+
+    def uncertain(payload):
+        raise RuntimeError("callback started work then failed")
+
+    bus.subscribe("event", uncertain)
+    assert bus.publish_with_dispatch_count("event", {}) == 1
+    assert bus.publish("event", {}) is None
     assert len(errors) == 2
 
 
 def _panel(_token):
-    return {"panels": [{"status": "observed_panel"}], "observations": [{
-        "code": "123456", "route": "krx_nxt_integrated", "observed_epoch": T0,
-        "source_sha256": "a" * 64, "source_scope": "observed_panel",
-        "source_kind": "activity",
-        "name": "TEST", "market": "KOSPI", "venue": "KRX", "price": 10000,
-    }]}
+    return {
+        "panels": [{"status": "observed_panel"}],
+        "observations": [
+            {
+                "code": "123456",
+                "route": "krx_nxt_integrated",
+                "observed_epoch": T0,
+                "source_sha256": "a" * 64,
+                "source_scope": "observed_panel",
+                "source_kind": "activity",
+                "name": "TEST",
+                "market": "KOSPI",
+                "venue": "KRX",
+                "price": 10000,
+            }
+        ],
+    }
 
 
 def _target_readiness(stamp, codes):
-    owner = dict(runtime_generation='fixture', process_pid=123,
-        process_start_ticks='456', date='2026-09-28')
-    return dict(ready=True, **owner, main_target_snapshot=dict(
-        schema='zero_base_main_target_snapshot_v1', status='observed', **owner,
-        generation='c'*64, observed_epoch=stamp, active_codes=codes, runtime_effect=False))
+    owner = dict(
+        runtime_generation="fixture",
+        process_pid=123,
+        process_start_ticks="456",
+        date="2026-09-28",
+    )
+    return dict(
+        ready=True,
+        **owner,
+        main_target_snapshot=dict(
+            schema="zero_base_main_target_snapshot_v1",
+            status="observed",
+            **owner,
+            generation="c" * 64,
+            observed_epoch=stamp,
+            active_codes=codes,
+            runtime_effect=False,
+        ),
+    )
 
 
-def test_active_target_snapshot_defers_before_claim_and_release_restores_admission(tmp_path):
+def test_active_target_snapshot_defers_before_claim_and_release_restores_admission(
+    tmp_path,
+):
     bus = Bus()
-    readiness = _target_readiness(T0+1, ['123456'])
+    readiness = _target_readiness(T0 + 1, ["123456"])
     bus.consumer_readiness = lambda event: readiness
-    runtime = ZeroBaseDiscoveryRuntime(event_bus=bus, session_date='2026-09-28', state_path=tmp_path/'q.json')
-    summary = runtime.scan_once('fixture', fetcher=_panel, now_epoch=T0+1)
-    assert summary['probe_requested_count'] == runtime.queue.in_flight_count() == 0
-    assert summary['probe_claim_eligibility']['active_target_deferred_count'] == 1
-    assert runtime.queue.snapshot()['candidates'][0]['claim_count'] == 0
-    readiness = _target_readiness(T0+2, [])
-    assert runtime.dispatch_due_probes(now_epoch=T0+2)['probe_requested_count'] == 1
+    runtime = ZeroBaseDiscoveryRuntime(
+        event_bus=bus, session_date="2026-09-28", state_path=tmp_path / "q.json"
+    )
+    summary = runtime.scan_once("fixture", fetcher=_panel, now_epoch=T0 + 1)
+    assert summary["probe_requested_count"] == runtime.queue.in_flight_count() == 0
+    assert summary["probe_claim_eligibility"]["active_target_deferred_count"] == 1
+    assert runtime.queue.snapshot()["candidates"][0]["claim_count"] == 0
+    readiness = _target_readiness(T0 + 2, [])
+    assert runtime.dispatch_due_probes(now_epoch=T0 + 2)["probe_requested_count"] == 1
 
 
-@pytest.mark.parametrize('defect', ['stale', 'future', 'wrong_owner', 'wrong_day', 'invalid_code', 'unknown', 'unbounded'])
-def test_unproven_target_snapshot_falls_back_without_excluding_candidate(tmp_path, defect):
+@pytest.mark.parametrize(
+    "defect",
+    [
+        "stale",
+        "future",
+        "wrong_owner",
+        "wrong_day",
+        "invalid_code",
+        "unknown",
+        "unbounded",
+    ],
+)
+def test_unproven_target_snapshot_falls_back_without_excluding_candidate(
+    tmp_path, defect
+):
     bus = Bus()
-    readiness = _target_readiness(T0+1, ['123456'])
-    snapshot = readiness['main_target_snapshot']
-    if defect == 'stale': snapshot['observed_epoch'] -= 2.001
-    if defect == 'future': snapshot['observed_epoch'] += .001
-    if defect == 'wrong_owner': snapshot['process_start_ticks'] = 'foreign'
-    if defect == 'wrong_day': snapshot['date'] = '2026-09-27'
-    if defect == 'invalid_code': snapshot['active_codes'] = ['invalid']
-    if defect == 'unknown': snapshot['status'] = 'unobserved'
-    if defect == 'unbounded': snapshot['active_codes'] = ['123456']*513
+    readiness = _target_readiness(T0 + 1, ["123456"])
+    snapshot = readiness["main_target_snapshot"]
+    if defect == "stale":
+        snapshot["observed_epoch"] -= 2.001
+    if defect == "future":
+        snapshot["observed_epoch"] += 0.001
+    if defect == "wrong_owner":
+        snapshot["process_start_ticks"] = "foreign"
+    if defect == "wrong_day":
+        snapshot["date"] = "2026-09-27"
+    if defect == "invalid_code":
+        snapshot["active_codes"] = ["invalid"]
+    if defect == "unknown":
+        snapshot["status"] = "unobserved"
+    if defect == "unbounded":
+        snapshot["active_codes"] = ["123456"] * 513
     bus.consumer_readiness = lambda event: readiness
-    runtime = ZeroBaseDiscoveryRuntime(event_bus=bus, session_date='2026-09-28', state_path=tmp_path/'q.json')
-    summary = runtime.scan_once('fixture', fetcher=_panel, now_epoch=T0+1)
-    assert summary['probe_requested_count'] == 1
-    assert summary['probe_active_target_snapshot_status'] == 'fallback'
+    runtime = ZeroBaseDiscoveryRuntime(
+        event_bus=bus, session_date="2026-09-28", state_path=tmp_path / "q.json"
+    )
+    summary = runtime.scan_once("fixture", fetcher=_panel, now_epoch=T0 + 1)
+    assert summary["probe_requested_count"] == 1
+    assert summary["probe_active_target_snapshot_status"] == "fallback"
 
 
-@pytest.mark.parametrize('defect', ['claim_clock', 'claim_scope', 'lease', 'candidate', 'action',
-                                  'claim_shape', 'code_shape', 'action_shape', 'ack_shape'])
+@pytest.mark.parametrize(
+    "defect",
+    [
+        "claim_clock",
+        "claim_scope",
+        "lease",
+        "candidate",
+        "action",
+        "claim_shape",
+        "code_shape",
+        "action_shape",
+        "ack_shape",
+    ],
+)
 def test_invalid_result_cannot_occupy_exact_claim_inbox(tmp_path, defect):
     from copy import deepcopy
+
     bus = Bus()
-    runtime = ZeroBaseDiscoveryRuntime(event_bus=bus, session_date='2026-09-28',
-        state_path=tmp_path/'queue.json')
-    runtime.scan_once('fixture', fetcher=_panel, now_epoch=T0+1)
+    runtime = ZeroBaseDiscoveryRuntime(
+        event_bus=bus, session_date="2026-09-28", state_path=tmp_path / "queue.json"
+    )
+    runtime.scan_once("fixture", fetcher=_panel, now_epoch=T0 + 1)
     request = next(p for event, p in bus.events if event == PROBE_REQUEST_EVENT)
-    valid = dict(request, result='assessed', machine_action='RECHECK',
-        physical_probe_lease_id=request['claim']['physical_probe_lease_id'])
+    valid = dict(
+        request,
+        result="assessed",
+        machine_action="RECHECK",
+        physical_probe_lease_id=request["claim"]["physical_probe_lease_id"],
+    )
     invalid = deepcopy(valid)
-    if defect == 'claim_clock': invalid['claim']['observed_epoch'] -= 1
-    if defect == 'claim_scope': invalid['claim']['source_scope'] = 'foreign'
-    if defect == 'lease': invalid['physical_probe_lease_id'] = 'foreign'
-    if defect == 'candidate': invalid['candidate'] = {'code': '999999'}
-    if defect == 'action': invalid['machine_action'] = 'INVALID'
-    if defect == 'claim_shape': invalid['claim'] = ['invalid']
-    if defect == 'code_shape': invalid['claim']['code'] = ['123456']
-    if defect == 'action_shape': invalid['machine_action'] = {'value': 'RECHECK'}
-    if defect == 'ack_shape': invalid['handoff_closed'] = 1
+    if defect == "claim_clock":
+        invalid["claim"]["observed_epoch"] -= 1
+    if defect == "claim_scope":
+        invalid["claim"]["source_scope"] = "foreign"
+    if defect == "lease":
+        invalid["physical_probe_lease_id"] = "foreign"
+    if defect == "candidate":
+        invalid["candidate"] = {"code": "999999"}
+    if defect == "action":
+        invalid["machine_action"] = "INVALID"
+    if defect == "claim_shape":
+        invalid["claim"] = ["invalid"]
+    if defect == "code_shape":
+        invalid["claim"]["code"] = ["123456"]
+    if defect == "action_shape":
+        invalid["machine_action"] = {"value": "RECHECK"}
+    if defect == "ack_shape":
+        invalid["handoff_closed"] = 1
     bus.publish(PROBE_RESULT_EVENT, invalid)
     bus.publish(PROBE_RESULT_EVENT, valid)
-    assert runtime.drain_results(now_epoch=T0+2) == [valid]
+    assert runtime.drain_results(now_epoch=T0 + 2) == [valid]
     assert runtime.queue.in_flight_count() == 1  # actual release ACK still required
 
 
-@pytest.mark.parametrize('defect', ['lease', 'claim_clock', 'claim_scope'])
+@pytest.mark.parametrize("defect", ["lease", "claim_clock", "claim_scope"])
 def test_wrong_ack_cannot_hide_real_release_ack(tmp_path, defect):
     from copy import deepcopy
     from src.scanners.zero_base_discovery_runtime import HANDOFF_ACK_EVENT
+
     bus = Bus()
-    runtime = ZeroBaseDiscoveryRuntime(event_bus=bus, session_date='2026-09-28',
-        state_path=tmp_path/'queue.json')
-    runtime.scan_once('fixture', fetcher=_panel, now_epoch=T0+1)
+    runtime = ZeroBaseDiscoveryRuntime(
+        event_bus=bus, session_date="2026-09-28", state_path=tmp_path / "queue.json"
+    )
+    runtime.scan_once("fixture", fetcher=_panel, now_epoch=T0 + 1)
     request = next(p for event, p in bus.events if event == PROBE_REQUEST_EVENT)
-    valid = dict(handoff_closed=True, claim=request['claim'],
-        ws_handoff_id=request['claim']['physical_probe_lease_id'])
+    valid = dict(
+        handoff_closed=True,
+        claim=request["claim"],
+        ws_handoff_id=request["claim"]["physical_probe_lease_id"],
+    )
     invalid = deepcopy(valid)
-    if defect == 'lease': invalid['ws_handoff_id'] = 'foreign'
-    if defect == 'claim_clock': invalid['claim']['observed_epoch'] -= 1
-    if defect == 'claim_scope': invalid['claim']['source_scope'] = 'foreign'
+    if defect == "lease":
+        invalid["ws_handoff_id"] = "foreign"
+    if defect == "claim_clock":
+        invalid["claim"]["observed_epoch"] -= 1
+    if defect == "claim_scope":
+        invalid["claim"]["source_scope"] = "foreign"
     bus.publish(HANDOFF_ACK_EVENT, invalid)
     bus.publish(HANDOFF_ACK_EVENT, valid)
-    runtime.drain_results(now_epoch=T0+2)
+    runtime.drain_results(now_epoch=T0 + 2)
     assert runtime.queue.in_flight_count() == 0
 
 
-def test_claim_persist_failure_does_not_strand_unstarted_physical_lease(tmp_path, monkeypatch):
-    bus=Bus()
-    runtime=ZeroBaseDiscoveryRuntime(event_bus=bus,session_date='2026-09-28',state_path=tmp_path/'q.json')
-    persist=runtime._persist
-    monkeypatch.setattr(runtime, '_persist', lambda: (_ for _ in ()).throw(OSError('disk full')))
+def test_claim_persist_failure_does_not_strand_unstarted_physical_lease(
+    tmp_path, monkeypatch
+):
+    bus = Bus()
+    runtime = ZeroBaseDiscoveryRuntime(
+        event_bus=bus, session_date="2026-09-28", state_path=tmp_path / "q.json"
+    )
+    persist = runtime._persist
+    monkeypatch.setattr(
+        runtime, "_persist", lambda: (_ for _ in ()).throw(OSError("disk full"))
+    )
     with pytest.raises(OSError):
-        runtime.scan_once('token', fetcher=_panel, now_epoch=T0+1)
+        runtime.scan_once("token", fetcher=_panel, now_epoch=T0 + 1)
     assert runtime.queue.in_flight_count() == 0
     assert not bus.events
-    monkeypatch.setattr(runtime, '_persist', persist)
-    assert runtime.dispatch_due_probes(now_epoch=T0+2)['probe_requested_count'] == 1
+    monkeypatch.setattr(runtime, "_persist", persist)
+    assert runtime.dispatch_due_probes(now_epoch=T0 + 2)["probe_requested_count"] == 1
 
 
-@pytest.mark.parametrize('expired_after_persist', [False, True])
-def test_result_persist_retry_is_once_and_original_native_deadline_bound(tmp_path, monkeypatch, expired_after_persist):
+@pytest.mark.parametrize("expired_after_persist", [False, True])
+def test_result_persist_retry_is_once_and_original_native_deadline_bound(
+    tmp_path, monkeypatch, expired_after_persist
+):
     from src.engine.scalping import reversal_source_diagnostics as D
     from src.scanners.zero_base_discovery_runtime import HANDOFF_ACK_EVENT
-    bus=Bus()
-    runtime=ZeroBaseDiscoveryRuntime(event_bus=bus,session_date='2026-09-28',state_path=tmp_path/'q.json')
-    runtime.scan_once('token',fetcher=_panel,now_epoch=T0+1)
-    request=next(p for event,p in bus.events if event==PROBE_REQUEST_EVENT)
-    expected=dict(snapshot=[{'epoch':T0}], deadline_epoch=T0+5, deadline_perf=time.perf_counter()+5,
-        observer_pid=D.os.getpid(), observer_start_ticks=D._PROCESS_START_TICKS)
-    result=dict(**request,result='assessed',machine_action='ENTER_NOW', machine_bundle_sha256='b'*64,
-        result_epoch=T0+2, native_observation=expected,
-        physical_probe_lease_id=request['claim']['physical_probe_lease_id'])
-    bus.publish(PROBE_RESULT_EVENT,result)
-    persist=runtime._persist
-    monkeypatch.setattr(runtime,'_persist',lambda: (_ for _ in ()).throw(OSError('disk full')))
-    with pytest.raises(OSError):runtime.drain_results(now_epoch=T0+2)
-    assert not any(e==MACHINE_ENTER_EVENT for e,_ in bus.events)
-    monkeypatch.setattr(runtime,'_persist',persist)
-    runtime.drain_results(now_epoch=T0+(6 if expired_after_persist else 3))
-    runtime.drain_results(now_epoch=T0+4)
-    assert sum(e==MACHINE_ENTER_EVENT for e,_ in bus.events) == int(not expired_after_persist)
+
+    bus = Bus()
+    runtime = ZeroBaseDiscoveryRuntime(
+        event_bus=bus, session_date="2026-09-28", state_path=tmp_path / "q.json"
+    )
+    runtime.scan_once("token", fetcher=_panel, now_epoch=T0 + 1)
+    request = next(p for event, p in bus.events if event == PROBE_REQUEST_EVENT)
+    expected = dict(
+        snapshot=[{"epoch": T0}],
+        deadline_epoch=T0 + 5,
+        deadline_perf=time.perf_counter() + 5,
+        observer_pid=D.os.getpid(),
+        observer_start_ticks=D._PROCESS_START_TICKS,
+    )
+    result = dict(
+        **request,
+        result="assessed",
+        machine_action="ENTER_NOW",
+        machine_bundle_sha256="b" * 64,
+        result_epoch=T0 + 2,
+        native_observation=expected,
+        physical_probe_lease_id=request["claim"]["physical_probe_lease_id"],
+    )
+    bus.publish(PROBE_RESULT_EVENT, result)
+    persist = runtime._persist
+    monkeypatch.setattr(
+        runtime, "_persist", lambda: (_ for _ in ()).throw(OSError("disk full"))
+    )
+    with pytest.raises(OSError):
+        runtime.drain_results(now_epoch=T0 + 2)
+    assert not any(e == MACHINE_ENTER_EVENT for e, _ in bus.events)
+    monkeypatch.setattr(runtime, "_persist", persist)
+    runtime.drain_results(now_epoch=T0 + (6 if expired_after_persist else 3))
+    runtime.drain_results(now_epoch=T0 + 4)
+    assert sum(e == MACHINE_ENTER_EVENT for e, _ in bus.events) == int(
+        not expired_after_persist
+    )
     assert runtime.queue.in_flight_count() == 1
-    ack=dict(handoff_closed=True,claim=request['claim'],ws_handoff_id=request['claim']['physical_probe_lease_id'])
-    bus.publish(HANDOFF_ACK_EVENT,ack);bus.publish(HANDOFF_ACK_EVENT,ack)
-    runtime.drain_results(now_epoch=T0+7)
+    ack = dict(
+        handoff_closed=True,
+        claim=request["claim"],
+        ws_handoff_id=request["claim"]["physical_probe_lease_id"],
+    )
+    bus.publish(HANDOFF_ACK_EVENT, ack)
+    bus.publish(HANDOFF_ACK_EVENT, ack)
+    runtime.drain_results(now_epoch=T0 + 7)
     assert runtime.queue.in_flight_count() == 0
 
 
 def test_pending_panel_transport_does_not_block_result_control_thread(tmp_path):
-    bus=Bus()
-    runtime=ZeroBaseDiscoveryRuntime(event_bus=bus,session_date='2026-09-28',state_path=tmp_path/'q.json')
-    runtime.scan_once('token',fetcher=_panel,now_epoch=T0+1)
-    request=next(p for event,p in bus.events if event==PROBE_REQUEST_EVENT)
-    started,finish=threading.Event(),threading.Event()
+    bus = Bus()
+    runtime = ZeroBaseDiscoveryRuntime(
+        event_bus=bus, session_date="2026-09-28", state_path=tmp_path / "q.json"
+    )
+    runtime.scan_once("token", fetcher=_panel, now_epoch=T0 + 1)
+    request = next(p for event, p in bus.events if event == PROBE_REQUEST_EVENT)
+    started, finish = threading.Event(), threading.Event()
+
     def slow(_):
-        started.set();finish.wait(2)
-        return dict(panels=[],observations=[])
+        started.set()
+        finish.wait(2)
+        return dict(panels=[], observations=[])
+
     try:
-        assert runtime.start_scan('token',fetcher=slow) and started.wait(1)
-        bus.publish(PROBE_RESULT_EVENT,dict(**request,result='assessed',machine_action='RECHECK'))
-        assert len(runtime.drain_results(now_epoch=T0+2)) == 1
+        assert runtime.start_scan("token", fetcher=slow) and started.wait(1)
+        bus.publish(
+            PROBE_RESULT_EVENT,
+            dict(**request, result="assessed", machine_action="RECHECK"),
+        )
+        assert len(runtime.drain_results(now_epoch=T0 + 2)) == 1
         assert not runtime._panel_future.done()
     finally:
-        finish.set();runtime.close()
+        finish.set()
+        runtime.close()
 
 
 def test_runtime_durable_claim_machine_enter_and_late_result_rejection(tmp_path):
@@ -271,38 +426,64 @@ def test_runtime_durable_claim_machine_enter_and_late_result_rejection(tmp_path)
     state = tmp_path / "2026-09-28.json"
     claim_receipts = []
     runtime = ZeroBaseDiscoveryRuntime(
-        event_bus=bus, session_date="2026-09-28", state_path=state,
-        claim_receipt_emitter=lambda *args, **kwargs: claim_receipts.append((args, kwargs)),
+        event_bus=bus,
+        session_date="2026-09-28",
+        state_path=state,
+        claim_receipt_emitter=lambda *args, **kwargs: claim_receipts.append(
+            (args, kwargs)
+        ),
     )
     panel = _panel("token")
     panel["observations"][0]["volume"] = 12345
     summary = runtime.scan_once("token", fetcher=lambda _token: panel, now_epoch=T0 + 1)
     assert summary["probe_requested_count"] == 1
-    request = next(payload for event, payload in bus.events if event == PROBE_REQUEST_EVENT)
+    request = next(
+        payload for event, payload in bus.events if event == PROBE_REQUEST_EVENT
+    )
     assert state.exists()
     assert request["claim"]["source_kind"] == "activity"
     assert claim_receipts[0][0] == ("zero_base_probe_claim",)
     assert claim_receipts[0][1]["fields"]["zero_base_source_sha256"] == "a" * 64
-    assert claim_receipts[0][1]["fields"]["zero_base_discovery_volume"] == request["claim"]["discovery_volume"]
+    assert (
+        claim_receipts[0][1]["fields"]["zero_base_discovery_volume"]
+        == request["claim"]["discovery_volume"]
+    )
     assert claim_receipts[0][1]["fields"]["zero_base_discovery_volume"] == 12345
     assert claim_receipts[0][1]["fields"]["zero_base_source_kind"] == "activity"
-    assert claim_receipts[0][1]["fields"]["physical_probe_lease_id"] == request["claim"]["physical_probe_lease_id"]
+    assert (
+        claim_receipts[0][1]["fields"]["physical_probe_lease_id"]
+        == request["claim"]["physical_probe_lease_id"]
+    )
 
-    bus.publish(PROBE_RESULT_EVENT, {
-        **request, "result": "assessed", "machine_action": "ENTER_NOW",
-        "machine_bundle_sha256": "b" * 64, "result_epoch": T0 + 2,
-    })
+    bus.publish(
+        PROBE_RESULT_EVENT,
+        {
+            **request,
+            "result": "assessed",
+            "machine_action": "ENTER_NOW",
+            "machine_bundle_sha256": "b" * 64,
+            "result_epoch": T0 + 2,
+        },
+    )
     accepted = runtime.drain_results(now_epoch=T0 + 3)
     assert len(accepted) == 1
     assert [event for event, _ in bus.events].count(MACHINE_ENTER_EVENT) == 1
 
-    bus.publish(PROBE_RESULT_EVENT, {
-        **request, "result": "assessed", "machine_action": "ENTER_NOW",
-        "machine_bundle_sha256": "b" * 64, "result_epoch": T0 + 2,
-    })
+    bus.publish(
+        PROBE_RESULT_EVENT,
+        {
+            **request,
+            "result": "assessed",
+            "machine_action": "ENTER_NOW",
+            "machine_bundle_sha256": "b" * 64,
+            "result_epoch": T0 + 2,
+        },
+    )
     assert runtime.drain_results(now_epoch=T0 + 4) == []
     assert [event for event, _ in bus.events].count(MACHINE_ENTER_EVENT) == 1
-    restored = ZeroBaseDiscoveryRuntime(event_bus=Bus(), session_date="2026-09-28", state_path=state)
+    restored = ZeroBaseDiscoveryRuntime(
+        event_bus=Bus(), session_date="2026-09-28", state_path=state
+    )
     assert len(restored.queue.snapshot()["candidates"]) == 1
     assert restored.queue.snapshot()["candidates"][0]["source_kind"] == "activity"
 
@@ -310,10 +491,14 @@ def test_runtime_durable_claim_machine_enter_and_late_result_rejection(tmp_path)
 def test_new_discovery_does_not_drop_running_probe_result(tmp_path):
     bus = Bus()
     runtime = ZeroBaseDiscoveryRuntime(
-        event_bus=bus, session_date="2026-09-28", state_path=tmp_path / "state.json",
+        event_bus=bus,
+        session_date="2026-09-28",
+        state_path=tmp_path / "state.json",
     )
     runtime.scan_once("token", fetcher=_panel, now_epoch=T0 + 1)
-    request = next(payload for event, payload in bus.events if event == PROBE_REQUEST_EVENT)
+    request = next(
+        payload for event, payload in bus.events if event == PROBE_REQUEST_EVENT
+    )
     newer = _panel("token")
     newer["observations"][0] = {
         **newer["observations"][0],
@@ -323,30 +508,52 @@ def test_new_discovery_does_not_drop_running_probe_result(tmp_path):
     repeat = runtime.scan_once("token", fetcher=lambda _token: newer, now_epoch=T0 + 3)
     assert repeat["observed_new_generation_count"] == 1
     assert repeat["probe_requested_count"] == 0
-    bus.publish(PROBE_RESULT_EVENT, {
-        **request, "result": "assessed", "machine_action": "RECHECK",
-        "result_epoch": T0 + 4,
-    })
+    bus.publish(
+        PROBE_RESULT_EVENT,
+        {
+            **request,
+            "result": "assessed",
+            "machine_action": "RECHECK",
+            "result_epoch": T0 + 4,
+        },
+    )
     assert len(runtime.drain_results(now_epoch=T0 + 4)) == 1
     assert runtime.queue.snapshot()["candidates"][0]["source_sha256"] == "c" * 64
     assert runtime.dispatch_due_probes(now_epoch=T0 + 7)["probe_requested_count"] == 1
-    assert [payload["claim"]["source_sha256"] for event, payload in bus.events
-            if event == PROBE_REQUEST_EVENT][-1] == "c" * 64
+    assert [
+        payload["claim"]["source_sha256"]
+        for event, payload in bus.events
+        if event == PROBE_REQUEST_EVENT
+    ][-1] == "c" * 64
 
 
 def test_lost_probe_is_reclaimed_but_old_enter_cannot_promote(tmp_path):
     bus = Bus()
     runtime = ZeroBaseDiscoveryRuntime(
-        event_bus=bus, session_date="2026-09-28", state_path=tmp_path / "state.json",
+        event_bus=bus,
+        session_date="2026-09-28",
+        state_path=tmp_path / "state.json",
     )
     runtime.scan_once("token", fetcher=_panel, now_epoch=T0 + 1)
-    first = next(payload for event, payload in bus.events if event == PROBE_REQUEST_EVENT)
-    summary = runtime.scan_once("token", fetcher=lambda _token: {"panels": [], "observations": []}, now_epoch=first["claim"]["residence_deadline_epoch"] + 1)
+    first = next(
+        payload for event, payload in bus.events if event == PROBE_REQUEST_EVENT
+    )
+    summary = runtime.scan_once(
+        "token",
+        fetcher=lambda _token: {"panels": [], "observations": []},
+        now_epoch=first["claim"]["residence_deadline_epoch"] + 1,
+    )
     assert summary["probe_timeout_count"] == 1
-    bus.publish(PROBE_RESULT_EVENT, {
-        **first, "result": "assessed", "machine_action": "ENTER_NOW",
-        "machine_bundle_sha256": "b" * 64, "result_epoch": T0 + 22,
-    })
+    bus.publish(
+        PROBE_RESULT_EVENT,
+        {
+            **first,
+            "result": "assessed",
+            "machine_action": "ENTER_NOW",
+            "machine_bundle_sha256": "b" * 64,
+            "result_epoch": T0 + 22,
+        },
+    )
     assert runtime.drain_results(now_epoch=T0 + 23) == []
     assert all(event != MACHINE_ENTER_EVENT for event, _ in bus.events)
 
@@ -354,16 +561,27 @@ def test_lost_probe_is_reclaimed_but_old_enter_cannot_promote(tmp_path):
 def test_panel_interval_does_not_limit_probe_dispatch_and_stale_rows_wait(tmp_path):
     bus = Bus()
     runtime = ZeroBaseDiscoveryRuntime(
-        event_bus=bus, session_date="2026-09-28", state_path=tmp_path / "state.json",
+        event_bus=bus,
+        session_date="2026-09-28",
+        state_path=tmp_path / "state.json",
     )
-    panel = {"panels": [{"status": "observed_panel"}], "observations": [
-        {
-            "code": f"{code:06d}", "route": "krx_nxt_integrated", "observed_epoch": T0,
-            "source_sha256": "a" * 64, "source_scope": "observed_panel",
-            "name": "TEST", "market": "KOSPI", "venue": "KRX", "price": 10000,
-        }
-        for code in range(1, 14)
-    ]}
+    panel = {
+        "panels": [{"status": "observed_panel"}],
+        "observations": [
+            {
+                "code": f"{code:06d}",
+                "route": "krx_nxt_integrated",
+                "observed_epoch": T0,
+                "source_sha256": "a" * 64,
+                "source_scope": "observed_panel",
+                "name": "TEST",
+                "market": "KOSPI",
+                "venue": "KRX",
+                "price": 10000,
+            }
+            for code in range(1, 14)
+        ],
+    }
     first = runtime.scan_once("token", fetcher=lambda _token: panel, now_epoch=T0 + 1)
     assert first["probe_requested_count"] == MAX_CONCURRENT_PROBES == 5
     assert first["probe_capacity_limit"] == 5
@@ -372,13 +590,18 @@ def test_panel_interval_does_not_limit_probe_dispatch_and_stale_rows_wait(tmp_pa
     second = runtime.dispatch_due_probes(now_epoch=T0 + 11)
     assert second["probe_requested_count"] == 0
     assert second["probe_claims_in_flight_count"] == 5
-    first_requests = [payload for event, payload in bus.events
-                      if event == PROBE_REQUEST_EVENT]
+    first_requests = [
+        payload for event, payload in bus.events if event == PROBE_REQUEST_EVENT
+    ]
     for request in first_requests[:2]:
-        bus.publish(PROBE_RESULT_EVENT, {
-            **request, "result": "source_unavailable",
-            "reason": "route_snapshot_missing",
-        })
+        bus.publish(
+            PROBE_RESULT_EVENT,
+            {
+                **request,
+                "result": "source_unavailable",
+                "reason": "route_snapshot_missing",
+            },
+        )
     assert len(runtime.drain_results(now_epoch=T0 + 12)) == 2
     assert runtime.dispatch_due_probes(now_epoch=T0 + 13)["probe_requested_count"] == 2
     assert runtime.queue.in_flight_count() == 5
@@ -390,51 +613,75 @@ def test_panel_interval_does_not_limit_probe_dispatch_and_stale_rows_wait(tmp_pa
 def test_aftermarket_dispatch_uses_activity_rotation_without_dropping_gainers(tmp_path):
     bus = Bus()
     runtime = ZeroBaseDiscoveryRuntime(
-        event_bus=bus, session_date="2026-09-28", state_path=tmp_path / "state.json",
+        event_bus=bus,
+        session_date="2026-09-28",
+        state_path=tmp_path / "state.json",
     )
     after = datetime(2026, 9, 28, 18, 30, tzinfo=ZoneInfo("Asia/Seoul")).timestamp()
     observations = [
         {
             **_panel("token")["observations"][0],
-            "code": f"{code:06d}", "observed_epoch": after,
+            "code": f"{code:06d}",
+            "observed_epoch": after,
             "source_kind": "activity" if code <= 12 else "gainers",
         }
         for code in range(1, 17)
     ]
     summary = runtime.scan_once(
-        "token", fetcher=lambda _token: {"panels": [], "observations": observations},
+        "token",
+        fetcher=lambda _token: {"panels": [], "observations": observations},
         now_epoch=after + 1,
     )
     assert summary["probe_requested_count"] == 5
-    kinds = [payload["claim"]["source_kind"] for event, payload in bus.events
-             if event == PROBE_REQUEST_EVENT]
+    kinds = [
+        payload["claim"]["source_kind"]
+        for event, payload in bus.events
+        if event == PROBE_REQUEST_EVENT
+    ]
     assert kinds == ["activity"] * 5
-    for request in [payload for event, payload in bus.events
-                    if event == PROBE_REQUEST_EVENT]:
-        bus.publish(PROBE_RESULT_EVENT, {
-            **request, "result": "source_unavailable",
-            "reason": "route_snapshot_missing",
-        })
+    for request in [
+        payload for event, payload in bus.events if event == PROBE_REQUEST_EVENT
+    ]:
+        bus.publish(
+            PROBE_RESULT_EVENT,
+            {
+                **request,
+                "result": "source_unavailable",
+                "reason": "route_snapshot_missing",
+            },
+        )
     assert len(runtime.drain_results(now_epoch=after + 2)) == 5
-    assert runtime.dispatch_due_probes(now_epoch=after + 3)["probe_requested_count"] == 5
-    kinds = [payload["claim"]["source_kind"] for event, payload in bus.events
-             if event == PROBE_REQUEST_EVENT]
+    assert (
+        runtime.dispatch_due_probes(now_epoch=after + 3)["probe_requested_count"] == 5
+    )
+    kinds = [
+        payload["claim"]["source_kind"]
+        for event, payload in bus.events
+        if event == PROBE_REQUEST_EVENT
+    ]
     assert kinds == ["activity"] * 7 + ["gainers"] + ["activity"] * 2
 
 
 def test_session_handoff_does_not_claim_premarket_route_in_regular_session(tmp_path):
     bus = Bus()
     runtime = ZeroBaseDiscoveryRuntime(
-        event_bus=bus, session_date="2026-09-28", state_path=tmp_path / "state.json",
+        event_bus=bus,
+        session_date="2026-09-28",
+        state_path=tmp_path / "state.json",
     )
-    premarket = datetime(2026, 9, 28, 8, 59, 30,
-                         tzinfo=ZoneInfo("Asia/Seoul")).timestamp()
-    regular = datetime(2026, 9, 28, 9, 0, 30,
-                       tzinfo=ZoneInfo("Asia/Seoul")).timestamp()
+    premarket = datetime(
+        2026, 9, 28, 8, 59, 30, tzinfo=ZoneInfo("Asia/Seoul")
+    ).timestamp()
+    regular = datetime(2026, 9, 28, 9, 0, 30, tzinfo=ZoneInfo("Asia/Seoul")).timestamp()
     runtime.queue.observe(
-        code="123456", route="nxt_only", observed_epoch=premarket,
-        source_sha256="a" * 64, source_scope="observed_panel",
-        received_epoch=premarket, market="KOSPI", venue="NXT",
+        code="123456",
+        route="nxt_only",
+        observed_epoch=premarket,
+        source_sha256="a" * 64,
+        source_scope="observed_panel",
+        received_epoch=premarket,
+        market="KOSPI",
+        venue="NXT",
     )
     assert runtime.dispatch_due_probes(now_epoch=regular)["probe_requested_count"] == 0
     assert all(event != PROBE_REQUEST_EVENT for event, _payload in bus.events)
@@ -450,11 +697,15 @@ def test_enabled_scanner_enters_new_owner_without_legacy_radar(monkeypatch):
     monkeypatch.setattr(scanner, "EventBus", lambda: bus)
     monkeypatch.setattr(scanner.kiwoom_utils, "get_kiwoom_token", lambda: "token")
     monkeypatch.setattr(
-        scanner, "SniperRadar",
-        lambda *_args: (_ for _ in ()).throw(AssertionError("legacy radar constructed")),
+        scanner,
+        "SniperRadar",
+        lambda *_args: (_ for _ in ()).throw(
+            AssertionError("legacy radar constructed")
+        ),
     )
     monkeypatch.setattr(
-        scanner, "run_zero_base_scanner",
+        scanner,
+        "run_zero_base_scanner",
         lambda **kwargs: called.append(kwargs),
     )
     scanner.run_scalper(is_test_mode=True)
@@ -471,46 +722,87 @@ def test_scanner_emits_failed_probe_identity_and_artifact_cause(monkeypatch, tmp
 
     result = {
         "claim": {"code": "058610", "route": "krx_nxt_integrated"},
-        "candidate": {}, "result": "required_feature_insufficient",
+        "candidate": {},
+        "result": "required_feature_insufficient",
         "reason": "source_quality_blocked_before_assessment",
         "machine_source_gap_kind": "runtime_preflight_artifact_not_ready",
         "machine_evaluation_status": "source_quality_blocked_before_assessment",
         "machine_preflight_artifact_status": "artifact_missing",
         "evaluation_attempt_id": "machine-source-invalid-exact",
-        "provider_called": False, "continuous_reversal_rejected_claim_receipt": {"sha256":"exact-proof"},
-        "machine_capture_status": "captured", "machine_observation_sha256": "a" * 64,
-        "ws_source_trace": {"lease": {"collector_result_counts_by_type": {
-            "0D": {"enqueued": 10, "invalid_depth_snapshot": 2, "queue_full": 1}}}},
-        "machine_input_trace": {"entry_machine_input_as_of": 11,
-                                "entry_machine_input_preparation_ms": 0,
-                                "entry_machine_input_preparation_stages_ms": {"policy_resolve_ms": 1.5}},
+        "provider_called": False,
+        "continuous_reversal_rejected_claim_receipt": {"sha256": "exact-proof"},
+        "machine_capture_status": "captured",
+        "machine_observation_sha256": "a" * 64,
+        "ws_source_trace": {
+            "lease": {
+                "collector_result_counts_by_type": {
+                    "0D": {"enqueued": 10, "invalid_depth_snapshot": 2, "queue_full": 1}
+                }
+            }
+        },
+        "machine_input_trace": {
+            "entry_machine_input_as_of": 11,
+            "entry_machine_input_preparation_ms": 0,
+            "entry_machine_input_preparation_stages_ms": {"policy_resolve_ms": 1.5},
+        },
     }
     emitted = []
-    monkeypatch.setattr(scanner, "ZeroBaseDiscoveryRuntime", lambda **_kwargs: type(
-        "Runtime", (), {"drain_results": lambda self: [result],
-            "finish_scan": lambda self: None,
-            "wait": lambda self, seconds: (_ for _ in ()).throw(StopScanner())})())
+    monkeypatch.setattr(
+        scanner,
+        "ZeroBaseDiscoveryRuntime",
+        lambda **_kwargs: type(
+            "Runtime",
+            (),
+            {
+                "drain_results": lambda self: [result],
+                "finish_scan": lambda self: None,
+                "wait": lambda self, seconds: (_ for _ in ()).throw(StopScanner()),
+            },
+        )(),
+    )
     monkeypatch.setattr(scanner, "DATA_DIR", tmp_path)
     monkeypatch.setattr(scanner, "_active_scalping_buy_window", lambda _now: None)
     monkeypatch.setattr(process_health, "write_heartbeat", lambda _name: None)
-    monkeypatch.setattr(scanner, "_zero_base_log_event", lambda stage, **kwargs: emitted.append((stage, kwargs)))
-    monkeypatch.setattr(scanner.time, "sleep", lambda _seconds: (_ for _ in ()).throw(StopScanner()))
+    monkeypatch.setattr(
+        scanner,
+        "_zero_base_log_event",
+        lambda stage, **kwargs: emitted.append((stage, kwargs)),
+    )
+    monkeypatch.setattr(
+        scanner.time, "sleep", lambda _seconds: (_ for _ in ()).throw(StopScanner())
+    )
     with pytest.raises(StopScanner):
         scanner.run_zero_base_scanner(token="token", event_bus=Bus())
     assert len(emitted) == 1
     stage, payload = emitted[0]
     assert stage == "zero_base_probe_result" and payload["code"] == "058610"
     assert payload["fields"]["evaluation_attempt_id"] == result["evaluation_attempt_id"]
-    assert payload["fields"]["zero_base_machine_source_gap_kind"] == "runtime_preflight_artifact_not_ready"
-    assert payload["fields"]["zero_base_machine_preflight_artifact_status"] == "artifact_missing"
-    assert payload["fields"]["zero_base_machine_input_trace"] == result["machine_input_trace"]
+    assert (
+        payload["fields"]["zero_base_machine_source_gap_kind"]
+        == "runtime_preflight_artifact_not_ready"
+    )
+    assert (
+        payload["fields"]["zero_base_machine_preflight_artifact_status"]
+        == "artifact_missing"
+    )
+    assert (
+        payload["fields"]["zero_base_machine_input_trace"]
+        == result["machine_input_trace"]
+    )
     assert payload["fields"]["provider_called"] is False
-    assert payload["fields"]["continuous_reversal_rejected_claim_receipt"] == result["continuous_reversal_rejected_claim_receipt"]
+    assert (
+        payload["fields"]["continuous_reversal_rejected_claim_receipt"]
+        == result["continuous_reversal_rejected_claim_receipt"]
+    )
     assert payload["fields"]["machine_observation_sha256"] == "a" * 64
     assert payload["fields"]["zero_base_ws_source_trace"] == result["ws_source_trace"]
 
-    result.update(result="source_unavailable", evaluation_attempt_id=None,
-                  machine_evaluation_status=None, machine_preflight_artifact_status=None)
+    result.update(
+        result="source_unavailable",
+        evaluation_attempt_id=None,
+        machine_evaluation_status=None,
+        machine_preflight_artifact_status=None,
+    )
     emitted.clear()
     with pytest.raises(StopScanner):
         scanner.run_zero_base_scanner(token="token", event_bus=Bus())
@@ -520,85 +812,178 @@ def test_scanner_emits_failed_probe_identity_and_artifact_cause(monkeypatch, tmp
     assert fields["zero_base_machine_preflight_artifact_status"] == "-"
 
 
-@pytest.mark.parametrize('frozen_clock', [False, True])
-def test_live_callback_snapshot_uses_completion_clock_without_renewing_claim_deadline(tmp_path, monkeypatch, frozen_clock):
+@pytest.mark.parametrize("frozen_clock", [False, True])
+def test_live_callback_snapshot_uses_completion_clock_without_renewing_claim_deadline(
+    tmp_path, monkeypatch, frozen_clock
+):
     from src.scanners import zero_base_discovery_runtime as module
     from src.engine import kiwoom_sniper_v2 as main
+
     bus = Bus()
-    runtime = ZeroBaseDiscoveryRuntime(event_bus=bus, session_date='2026-09-28', state_path=tmp_path/'q.json')
-    runtime.queue.observe(**{k:v for k,v in dict(code='123456', route='krx_nxt_integrated',
-        observed_epoch=T0, source_sha256='a'*64, source_scope='observed_panel',
-        received_epoch=T0).items()})
-    epoch = [T0+1]
+    runtime = ZeroBaseDiscoveryRuntime(
+        event_bus=bus, session_date="2026-09-28", state_path=tmp_path / "q.json"
+    )
+    runtime.queue.observe(
+        **{
+            k: v
+            for k, v in dict(
+                code="123456",
+                route="krx_nxt_integrated",
+                observed_epoch=T0,
+                source_sha256="a" * 64,
+                source_scope="observed_panel",
+                received_epoch=T0,
+            ).items()
+        }
+    )
+    epoch = [T0 + 1]
     perf = [100.0]
-    monkeypatch.setattr(module.time, 'time', lambda: epoch[0])
-    monkeypatch.setattr(module.time, 'perf_counter', lambda: perf[0])
-    monkeypatch.setattr(main, 'ACTIVE_TARGETS', [{'code':'123456','id':1,'status':'WATCHING'}])
+    monkeypatch.setattr(module.time, "time", lambda: epoch[0])
+    monkeypatch.setattr(module.time, "perf_counter", lambda: perf[0])
+    monkeypatch.setattr(
+        main, "ACTIVE_TARGETS", [{"code": "123456", "id": 1, "status": "WATCHING"}]
+    )
+
     def readiness(_event):
-        epoch[0] += .05
-        perf[0] += .05
-        receipt=_target_readiness(epoch[0], ['123456'])
-        receipt['main_target_snapshot']=main._zero_base_active_target_snapshot(receipt)
+        epoch[0] += 0.05
+        perf[0] += 0.05
+        receipt = _target_readiness(epoch[0], ["123456"])
+        receipt["main_target_snapshot"] = main._zero_base_active_target_snapshot(
+            receipt
+        )
         return receipt
+
     bus.consumer_readiness = readiness
-    summary = runtime.dispatch_due_probes(**({'now_epoch':T0+1} if frozen_clock else {}))
-    assert summary['probe_requested_count'] == 0
-    assert summary['probe_active_target_snapshot_status'] == 'observed'
-    assert summary['probe_claim_eligibility']['active_target_deferred_count'] == 1
+    summary = runtime.dispatch_due_probes(
+        **({"now_epoch": T0 + 1} if frozen_clock else {})
+    )
+    assert summary["probe_requested_count"] == 0
+    assert summary["probe_active_target_snapshot_status"] == "observed"
+    assert summary["probe_claim_eligibility"]["active_target_deferred_count"] == 1
     bus.consumer_readiness = lambda event: _target_readiness(epoch[0], [])
     next_boundary = epoch[0]
-    summary = runtime.dispatch_due_probes(**({'now_epoch':next_boundary} if frozen_clock else {}))
-    request = next(payload for event, payload in bus.events if event == PROBE_REQUEST_EVENT)
-    assert request['claim']['last_claim_epoch'] == next_boundary
-    assert request['claim']['residence_deadline_epoch'] == next_boundary+60
+    summary = runtime.dispatch_due_probes(
+        **({"now_epoch": next_boundary} if frozen_clock else {})
+    )
+    request = next(
+        payload for event, payload in bus.events if event == PROBE_REQUEST_EVENT
+    )
+    assert request["claim"]["last_claim_epoch"] == next_boundary
+    assert request["claim"]["residence_deadline_epoch"] == next_boundary + 60
 
 
-@pytest.mark.parametrize('panel_finished', [False, True])
-def test_scanner_publishes_scheduler_diagnostics_in_both_cycle_paths(monkeypatch, tmp_path, panel_finished):
+@pytest.mark.parametrize("panel_finished", [False, True])
+def test_scanner_publishes_scheduler_diagnostics_in_both_cycle_paths(
+    monkeypatch, tmp_path, panel_finished
+):
     from src.scanners import scalping_scanner as scanner
     from src.engine.error_detectors import process_health
-    class StopScanner(Exception): pass
-    summary = dict(probe_requested_count=0, probe_consumer_ready=True,
-        probe_no_consumer_count=0, probe_capacity_limit=5, probe_claims_in_flight_count=3,
-        probe_timeout_count=0, stale_candidate_count=10, queue_count=20,
-        probe_claim_eligibility={'eligible_due_count': 7, 'eligible_due_wait_max_seconds': 40},
-        probe_residence_deferred={'long_slot_wait': 7},
-        probe_active_target_snapshot_status='observed',
-        probe_active_target_snapshot_generation='a'*64, queue_restored_candidate_count=18,
-        observed_new_generation_count=2, panels=[])
+
+    class StopScanner(Exception):
+        pass
+
+    summary = dict(
+        probe_requested_count=0,
+        probe_consumer_ready=True,
+        probe_no_consumer_count=0,
+        probe_capacity_limit=5,
+        probe_claims_in_flight_count=3,
+        probe_timeout_count=0,
+        stale_candidate_count=10,
+        queue_count=20,
+        probe_claim_eligibility={
+            "eligible_due_count": 7,
+            "eligible_due_wait_max_seconds": 40,
+        },
+        probe_residence_deferred={"long_slot_wait": 7},
+        probe_active_target_snapshot_status="observed",
+        probe_active_target_snapshot_generation="a" * 64,
+        queue_restored_candidate_count=18,
+        observed_new_generation_count=2,
+        panels=[],
+    )
+
     class Runtime:
-        def __init__(self, **kwargs): pass
-        def drain_results(self): return []
-        def start_scan(self, token): return False
-        def finish_scan(self): return summary if panel_finished else None
-        def dispatch_due_probes(self): return summary
-        def wait(self, seconds): raise StopScanner()
+        def __init__(self, **kwargs):
+            pass
+
+        def drain_results(self):
+            return []
+
+        def start_scan(self, token):
+            return False
+
+        def finish_scan(self):
+            return summary if panel_finished else None
+
+        def dispatch_due_probes(self):
+            return summary
+
+        def wait(self, seconds):
+            raise StopScanner()
+
     emitted = []
-    monkeypatch.setattr(scanner, 'ZeroBaseDiscoveryRuntime', Runtime)
-    monkeypatch.setattr(scanner, 'DATA_DIR', tmp_path)
-    monkeypatch.setattr(process_health, 'write_heartbeat', lambda *a: None)
-    monkeypatch.setattr(scanner, '_zero_base_log_event', lambda stage, **kw: emitted.append((stage, kw)))
+    monkeypatch.setattr(scanner, "ZeroBaseDiscoveryRuntime", Runtime)
+    monkeypatch.setattr(scanner, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(process_health, "write_heartbeat", lambda *a: None)
+    monkeypatch.setattr(
+        scanner, "_zero_base_log_event", lambda stage, **kw: emitted.append((stage, kw))
+    )
     with pytest.raises(StopScanner):
-        scanner.run_zero_base_scanner(token='offline', event_bus=Bus(), is_test_mode=True)
+        scanner.run_zero_base_scanner(
+            token="offline", event_bus=Bus(), is_test_mode=True
+        )
     stage, payload = emitted[0]
-    assert stage == ('zero_base_discovery_cycle' if panel_finished else 'zero_base_probe_dispatch_cycle')
-    for key in ['probe_claim_eligibility', 'probe_residence_deferred',
-                'probe_active_target_snapshot_status', 'probe_active_target_snapshot_generation',
-                'queue_restored_candidate_count']:
-        assert payload['fields']['zero_base_'+key] == summary[key]
+    assert stage == (
+        "zero_base_discovery_cycle"
+        if panel_finished
+        else "zero_base_probe_dispatch_cycle"
+    )
+    for key in [
+        "probe_claim_eligibility",
+        "probe_residence_deferred",
+        "probe_active_target_snapshot_status",
+        "probe_active_target_snapshot_generation",
+        "queue_restored_candidate_count",
+    ]:
+        assert payload["fields"]["zero_base_" + key] == summary[key]
 
 
-def test_restored_queue_product_rejection_never_dispatches_or_consumes_capacity(tmp_path, monkeypatch):
+def test_restored_queue_product_rejection_never_dispatches_or_consumes_capacity(
+    tmp_path, monkeypatch
+):
     from src.scanners import zero_base_discovery_runtime as R
-    bus=Bus(); runtime=ZeroBaseDiscoveryRuntime(event_bus=bus, session_date='2026-09-28',state_path=tmp_path/'q.json')
-    runtime.queue.observe(code='487130', route='krx_nxt_integrated', observed_epoch=T0,
-        source_sha256='a'*64, source_scope='observed_panel',received_epoch=T0,name='Unlisted Brand',market='KOSPI')
+
+    bus = Bus()
+    runtime = ZeroBaseDiscoveryRuntime(
+        event_bus=bus, session_date="2026-09-28", state_path=tmp_path / "q.json"
+    )
+    runtime.queue.observe(
+        code="487130",
+        route="krx_nxt_integrated",
+        observed_epoch=T0,
+        source_sha256="a" * 64,
+        source_scope="observed_panel",
+        received_epoch=T0,
+        name="Unlisted Brand",
+        market="KOSPI",
+    )
     runtime._persist()
     runtime.close()
-    restored=ZeroBaseDiscoveryRuntime(event_bus=bus,session_date='2026-09-28',state_path=tmp_path/'q.json')
-    monkeypatch.setattr(R,'discovery_product_filter',lambda *a: lambda *args:dict(eligible=False,status='verified_non_common_stock'))
-    before=len(bus.events)
-    result=restored.dispatch_due_probes(now_epoch=T0+2)
-    assert result['probe_requested_count']==0 and restored.queue.in_flight_count()==0
-    assert restored.queue._candidates[('487130','krx_nxt_integrated')].claim_count==0
-    assert not [e for e in bus.events[before:] if e[0]==PROBE_REQUEST_EVENT]
+    restored = ZeroBaseDiscoveryRuntime(
+        event_bus=bus, session_date="2026-09-28", state_path=tmp_path / "q.json"
+    )
+    monkeypatch.setattr(
+        R,
+        "discovery_product_filter",
+        lambda *a: lambda *args: dict(
+            eligible=False, status="verified_non_common_stock"
+        ),
+    )
+    before = len(bus.events)
+    result = restored.dispatch_due_probes(now_epoch=T0 + 2)
+    assert (
+        result["probe_requested_count"] == 0 and restored.queue.in_flight_count() == 0
+    )
+    assert restored.queue._candidates[("487130", "krx_nxt_integrated")].claim_count == 0
+    assert not [e for e in bus.events[before:] if e[0] == PROBE_REQUEST_EVENT]

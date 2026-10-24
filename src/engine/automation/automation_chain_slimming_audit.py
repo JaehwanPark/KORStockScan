@@ -472,7 +472,9 @@ def _build_inventory(
             "src.engine.pattern_lab_ai_review",
             "src.engine.pattern_lab_propagation_audit",
         }:
-            swing_default = default_by_name.get("RUN_SWING_POSTCLOSE", {}).get("resolved_default_enabled")
+            swing_default = default_by_name.get("RUN_SWING_POSTCLOSE", {}).get(
+                "resolved_default_enabled"
+            )
             if swing_default is not True:
                 default_enabled = False
                 default_enabled_resolution = "swing_only_main_retired"

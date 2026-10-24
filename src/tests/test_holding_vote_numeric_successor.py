@@ -594,8 +594,12 @@ def test_post_add_aggregate_and_hard_priority_are_independent_of_votes():
     assert result["modeled_net_krw"] is None
     # Preserve numerical hard priority as a pure decision test. It requires
     # neither an AI vote nor an unsupported whole-position ADD replay.
-    hard = soft_decision(baseline(), profit_pct=values[-1]["decision_profit_pct"],
-        now=values[-1]["at"], after_add=True)
+    hard = soft_decision(
+        baseline(),
+        profit_pct=values[-1]["decision_profit_pct"],
+        now=values[-1]["at"],
+        after_add=True,
+    )
     assert hard.disposition == "exit_candidate" and hard.rule == "scalp_hard_stop_pct"
     values[2]["pending_add"] = True
     values[2]["source_sha256"] = digest(
@@ -607,47 +611,95 @@ def test_post_add_aggregate_and_hard_priority_are_independent_of_votes():
     assert pending["modeled_net_krw"] is None
 
 
-@pytest.mark.parametrize('clock', ['2026-10-08T09:59:59+09:00',
-    '2026-10-08T00:59:59+00:00', '2026-10-08T00:59:59Z'])
+@pytest.mark.parametrize(
+    "clock",
+    ["2026-10-08T09:59:59+09:00", "2026-10-08T00:59:59+00:00", "2026-10-08T00:59:59Z"],
+)
 def test_completed_add_generation_accepts_native_cost_clock_without_rewriting_it(clock):
     from datetime import datetime
     from src.engine.scalping.holding_vote_exit_models import record_generation
-    stamp = datetime.fromisoformat('2026-10-08T10:00:00+09:00').timestamp()
-    stock = dict(id=7, code='005930', pending_add_type='AVG_DOWN', buy_qty=2,
-        buy_price=10000.0, _trailing_entry_cost_model=dict(known_at=clock,
-            buy_cost_krw=0, sell_cost_rate=.0023, source_sha256='a'*64,
-            allocation='frozen_configured_round_trip_rate_on_sell_model_only',
-            actual_broker_cost=False))
-    receipt = dict(economics_complete=True, order_no='ADD', execution_no='1', qty=1)
-    original = copy.deepcopy(stock['_trailing_entry_cost_model'])
+
+    stamp = datetime.fromisoformat("2026-10-08T10:00:00+09:00").timestamp()
+    stock = dict(
+        id=7,
+        code="005930",
+        pending_add_type="AVG_DOWN",
+        buy_qty=2,
+        buy_price=10000.0,
+        _trailing_entry_cost_model=dict(
+            known_at=clock,
+            buy_cost_krw=0,
+            sell_cost_rate=0.0023,
+            source_sha256="a" * 64,
+            allocation="frozen_configured_round_trip_rate_on_sell_model_only",
+            actual_broker_cost=False,
+        ),
+    )
+    receipt = dict(economics_complete=True, order_no="ADD", execution_no="1", qty=1)
+    original = copy.deepcopy(stock["_trailing_entry_cost_model"])
     value = record_generation(stock, receipt, at=stamp, completed=True)
     numeric = copy.deepcopy(stock)
-    numeric['_trailing_entry_cost_model']['known_at'] = datetime.fromisoformat(clock).timestamp()
+    numeric["_trailing_entry_cost_model"]["known_at"] = datetime.fromisoformat(
+        clock
+    ).timestamp()
     assert value == record_generation(numeric, receipt, at=stamp, completed=True)
-    assert value['quantity'] == 2 and value['actual_profit_verified'] is False
-    assert stock['_trailing_entry_cost_model'] == original
-    assert stock['post_add_economic_generation'] == value
+    assert value["quantity"] == 2 and value["actual_profit_verified"] is False
+    assert stock["_trailing_entry_cost_model"] == original
+    assert stock["post_add_economic_generation"] == value
 
 
-@pytest.mark.parametrize('fault', ['missing', 'naive', 'future', 'nonfinite', 'bool',
-    'not_completed', 'incomplete_economics', 'pyramid', 'bad_event_clock'])
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "missing",
+        "naive",
+        "future",
+        "nonfinite",
+        "bool",
+        "not_completed",
+        "incomplete_economics",
+        "pyramid",
+        "bad_event_clock",
+    ],
+)
 def test_add_generation_rejects_unproven_cost_time_and_incomplete_fill(fault):
     from datetime import datetime
     from src.engine.scalping.holding_vote_exit_models import record_generation
-    stamp = datetime.fromisoformat('2026-10-08T10:00:00+09:00').timestamp()
-    stock = dict(id=7, code='005930', pending_add_type='AVG_DOWN', buy_qty=2,
-        buy_price=10000.0, post_add_economic_generation={'old': True},
-        _trailing_entry_cost_model=dict(known_at='2026-10-08T09:59:59+09:00',
-            buy_cost_krw=0, source_sha256='a'*64,
-            allocation='frozen_configured_round_trip_rate_on_sell_model_only'))
-    receipt = dict(economics_complete=fault != 'incomplete_economics')
-    clocks = dict(missing=None, naive='2026-10-08T09:59:59',
-        future='2026-10-08T10:00:01+09:00', nonfinite=float('nan'), bool=True)
-    if fault in clocks: stock['_trailing_entry_cost_model']['known_at'] = clocks[fault]
-    if fault == 'pyramid': stock['pending_add_type'] = 'PYRAMID'
-    if fault == 'bad_event_clock': stamp = float('nan')
-    assert record_generation(stock, receipt, at=stamp, completed=fault != 'not_completed') is None
-    assert 'post_add_economic_generation' not in stock
+
+    stamp = datetime.fromisoformat("2026-10-08T10:00:00+09:00").timestamp()
+    stock = dict(
+        id=7,
+        code="005930",
+        pending_add_type="AVG_DOWN",
+        buy_qty=2,
+        buy_price=10000.0,
+        post_add_economic_generation={"old": True},
+        _trailing_entry_cost_model=dict(
+            known_at="2026-10-08T09:59:59+09:00",
+            buy_cost_krw=0,
+            source_sha256="a" * 64,
+            allocation="frozen_configured_round_trip_rate_on_sell_model_only",
+        ),
+    )
+    receipt = dict(economics_complete=fault != "incomplete_economics")
+    clocks = dict(
+        missing=None,
+        naive="2026-10-08T09:59:59",
+        future="2026-10-08T10:00:01+09:00",
+        nonfinite=float("nan"),
+        bool=True,
+    )
+    if fault in clocks:
+        stock["_trailing_entry_cost_model"]["known_at"] = clocks[fault]
+    if fault == "pyramid":
+        stock["pending_add_type"] = "PYRAMID"
+    if fault == "bad_event_clock":
+        stamp = float("nan")
+    assert (
+        record_generation(stock, receipt, at=stamp, completed=fault != "not_completed")
+        is None
+    )
+    assert "post_add_economic_generation" not in stock
 
 
 def test_original_request_stop_replay_reaches_selector_and_successor(
@@ -693,15 +745,29 @@ def test_original_request_stop_replay_reaches_selector_and_successor(
             buy_price=100.0,
             buy_qty=1,
         )
-        stock.update(entry_requested_qty=1, requested_buy_qty=1,
-            pending_entry_orders=[dict(ord_no='BUY-1', qty=1, filled_qty=0, status='OPEN')])
+        stock.update(
+            entry_requested_qty=1,
+            requested_buy_qty=1,
+            pending_entry_orders=[
+                dict(ord_no="BUY-1", qty=1, filled_qty=0, status="OPEN")
+            ],
+        )
         filled = native_receipts._resolve_entry_effective_fill_qty(
-            target_stock=stock, code='005930', order_no='BUY-1', exec_price=100,
-            exec_qty=1, order_qty=1, remaining_qty=0, cumulative_exec_amount=100,
-            execution_no='FILL-1', unit_exec_qty=1, unit_exec_price=100)
-        assert filled['status'] != 'invalid'
+            target_stock=stock,
+            code="005930",
+            order_no="BUY-1",
+            exec_price=100,
+            exec_qty=1,
+            order_qty=1,
+            remaining_qty=0,
+            cumulative_exec_amount=100,
+            execution_no="FILL-1",
+            unit_exec_qty=1,
+            unit_exec_price=100,
+        )
+        assert filled["status"] != "invalid"
         position = position_cycle_id(stock)
-        vote_position = _scalp_holding_source_position_key(stock, stock['code'])
+        vote_position = _scalp_holding_source_position_key(stock, stock["code"])
         assert vote_position == f"record:{stock['id']}" and vote_position != position
         assert vote.buy_fill_identity_from_runtime(stock) == BUY_IDENTITY
         values = replace(baseline(), soft_stop_pct=-0.5, grace_sec=0)
@@ -775,7 +841,8 @@ def test_original_request_stop_replay_reaches_selector_and_successor(
                 vote.time, "time", lambda event=event: event["received_at"] + 0.1
             )
             assert (
-                vote.append_path_events_file(store, vote_position, [event])[1] == "appended"
+                vote.append_path_events_file(store, vote_position, [event])[1]
+                == "appended"
             )
         source = dict(
             schema=evidence.SCHEMA,
@@ -799,8 +866,12 @@ def test_original_request_stop_replay_reaches_selector_and_successor(
         assert reference["status"] == "source_bound"
         original_vote_bytes = store.read_bytes()
         original_request_bytes = {
-            path: path.read_bytes() for path in
-            (writer._request_path(day), writer._payload_path(day), writer._prompt_path(day))
+            path: path.read_bytes()
+            for path in (
+                writer._request_path(day),
+                writer._payload_path(day),
+                writer._prompt_path(day),
+            )
         }
         original_vote_membership = copy.deepcopy(votes)
         rows = []
@@ -821,7 +892,7 @@ def test_original_request_stop_replay_reaches_selector_and_successor(
                     ),
                     coverage_complete=True,
                     native_decision_required=True,
-                    capture_evaluator='normal',
+                    capture_evaluator="normal",
                     automatic_management_allowed=True,
                     runtime_flags=dict(
                         grace_enabled=True,
@@ -839,7 +910,7 @@ def test_original_request_stop_replay_reaches_selector_and_successor(
                 )
             )
         rows = list(evaluation_stream(rows))
-        assert sum(row.get('stage') == 'common_soft' for row in rows) == 150
+        assert sum(row.get("stage") == "common_soft" for row in rows) == 150
         reader = evidence.PreparedVotes(reference, out)
         try:
             outcomes = experiment.stop_outcomes(
@@ -852,7 +923,9 @@ def test_original_request_stop_replay_reaches_selector_and_successor(
             reader.close()
         assert store.read_bytes() == original_vote_bytes
         assert votes == original_vote_membership
-        assert all(path.read_bytes() == raw for path, raw in original_request_bytes.items())
+        assert all(
+            path.read_bytes() == raw for path, raw in original_request_bytes.items()
+        )
         assert all(x["status"] == "modeled" for x in outcomes.values()), {
             k: (v["status"], v.get("reason")) for k, v in outcomes.items()
         }
@@ -966,229 +1039,454 @@ def test_original_request_stop_replay_reaches_selector_and_successor(
     assert rejected["blocker"] == "holding_vote_frozen_contract_invalid"
 
 
-@pytest.mark.parametrize('mode', ['carry', 'carry_unverified', 'successor'])
-def test_consumer_repair_preserves_only_verified_same_day_incumbent(tmp_path, monkeypatch, mode):
+@pytest.mark.parametrize("mode", ["carry", "carry_unverified", "successor"])
+def test_consumer_repair_preserves_only_verified_same_day_incumbent(
+    tmp_path, monkeypatch, mode
+):
     from src.engine.automation import intraday_release_handoff as handoff
+
     _, _, _, _, _, _, numeric = fixture(tmp_path)
-    if mode != 'successor':numeric['selected_cells'] = {}
-    bundle=policy.create_successor(source_date='2026-10-08',target_date='2026-10-12',
-        source_report_sha256='a'*64,replay={'vote_numeric_research':numeric},source_quality=EMPTY_SOURCE_QUALITY)
-    original=copy.deepcopy(bundle)
-    monkeypatch.setattr(experiment,'code_sha',lambda:'new-generation')
-    seen=[]
+    if mode != "successor":
+        numeric["selected_cells"] = {}
+    bundle = policy.create_successor(
+        source_date="2026-10-08",
+        target_date="2026-10-12",
+        source_report_sha256="a" * 64,
+        replay={"vote_numeric_research": numeric},
+        source_quality=EMPTY_SOURCE_QUALITY,
+    )
+    original = copy.deepcopy(bundle)
+    monkeypatch.setattr(experiment, "code_sha", lambda: "new-generation")
+    seen = []
+
     def verify(day, **kw):
-        seen.append((day,kw))
-        if mode=='carry_unverified':raise ValueError('unverified')
-        assert kw['expected']==original['code_sha256'] and kw['policy_sha']==original['bundle_sha256']
-        assert kw['family']=='holding_vote'
-        assert kw['paths']['sniper_state_handlers.py']=='src/engine/sniper_state_handlers.py'
-    monkeypatch.setattr(handoff,'verify_entry_consumer_code',verify)
-    if mode=='carry':
-        assert policy.validate_successor(bundle,target_date='2026-10-12')==original
-        assert len(seen)==1
+        seen.append((day, kw))
+        if mode == "carry_unverified":
+            raise ValueError("unverified")
+        assert (
+            kw["expected"] == original["code_sha256"]
+            and kw["policy_sha"] == original["bundle_sha256"]
+        )
+        assert kw["family"] == "holding_vote"
+        assert (
+            kw["paths"]["sniper_state_handlers.py"]
+            == "src/engine/sniper_state_handlers.py"
+        )
+
+    monkeypatch.setattr(handoff, "verify_entry_consumer_code", verify)
+    if mode == "carry":
+        assert policy.validate_successor(bundle, target_date="2026-10-12") == original
+        assert len(seen) == 1
     else:
-        with pytest.raises(ValueError):policy.validate_successor(bundle,target_date='2026-10-12')
-        assert len(seen)==(0 if mode=='successor' else 1)
+        with pytest.raises(ValueError):
+            policy.validate_successor(bundle, target_date="2026-10-12")
+        assert len(seen) == (0 if mode == "successor" else 1)
 
 
-def test_consumer_compatible_incumbent_still_reconstructs_exact_source(tmp_path, monkeypatch):
-    from src.engine.automation import intraday_release_handoff as handoff, postclose_summary_handoff as summary
+def test_consumer_compatible_incumbent_still_reconstructs_exact_source(
+    tmp_path, monkeypatch
+):
+    from src.engine.automation import (
+        intraday_release_handoff as handoff,
+        postclose_summary_handoff as summary,
+    )
     from src.engine.automation import runtime_policy_bootstrap as bootstrap
+
     _, _, _, _, _, _, numeric = fixture(tmp_path)
-    numeric['selected_cells']={}
-    replay=summarize_holding_path_votes([],load_events=lambda _:[],model='gpt-5.4-nano')
-    replay['vote_numeric_research']=numeric
-    observation=dict(date='2026-10-08',holding_path_vote_replay=replay,completed_population_quality=dict(
-        complete=False,db_completed_main_ids=[],strict_completed_position_ids=[],source_gap_ids=[],
-        excluded_all_reasons={},source_gap_dates=[]))
-    source=write(tmp_path/'report/monitor_snapshots/holding_exit_observation_2026-10-08.json',observation)
-    bundle=policy.create_bundle(source_date='2026-10-08',target_date='2026-10-12',source_report_sha256=source['sha256'],
-        replay=replay,source_quality=policy.source_quality_from_observation(observation))
-    write(policy.policy_path(tmp_path,'2026-10-12'),bundle)
-    write(tmp_path/'report/runtime_approval_summary/runtime_approval_summary_2026-10-08.json',dict(
-        holding_path_vote_policy=dict(status=policy.publication_status(bundle),source_date='2026-10-08',
-        target_date='2026-10-12',bundle_sha256=bundle['bundle_sha256'],policy_set_sha256=bundle['policy_set_sha256'],
-        source_report_sha256=source['sha256'],cell_count=12)))
-    monkeypatch.setattr(summary,'stage_receipt_issues',lambda *a,**kw:[])
-    monkeypatch.setattr(handoff,'verify_entry_consumer_code',lambda *a,**kw:{'status':'verified_intraday_consumer_repair'})
-    monkeypatch.setattr(experiment,'code_sha',lambda:'new-generation')
-    monkeypatch.setattr(bootstrap,'DATA_DIR',tmp_path)
-    env,receipt=bootstrap._holding_vote_handoff('2026-10-12')
-    assert receipt['status']=='verified_incumbent_carried' and env[policy.ENV_SHA]==bundle['bundle_sha256']
-    selected,loaded=policy.runtime_policy_from_env(env,data_root=tmp_path,active_date='2026-10-12')
-    assert loaded['status']=='verified_incumbent_loaded' and selected
-    mutated=copy.deepcopy(bundle);mutated['source_quality']['strict_population_count']=123
-    mutated['bundle_sha256']=policy.digest({k:v for k,v in mutated.items() if k!='bundle_sha256'})
-    with pytest.raises(ValueError,match='source_semantics_mismatch'):
-        policy.verify_source_handoff(tmp_path,mutated)
-    Path(source['path']).write_text('{}')
-    with pytest.raises(ValueError,match='source_report_hash_mismatch'):
-        policy.verify_source_handoff(tmp_path,bundle)
+    numeric["selected_cells"] = {}
+    replay = summarize_holding_path_votes(
+        [], load_events=lambda _: [], model="gpt-5.4-nano"
+    )
+    replay["vote_numeric_research"] = numeric
+    observation = dict(
+        date="2026-10-08",
+        holding_path_vote_replay=replay,
+        completed_population_quality=dict(
+            complete=False,
+            db_completed_main_ids=[],
+            strict_completed_position_ids=[],
+            source_gap_ids=[],
+            excluded_all_reasons={},
+            source_gap_dates=[],
+        ),
+    )
+    source = write(
+        tmp_path / "report/monitor_snapshots/holding_exit_observation_2026-10-08.json",
+        observation,
+    )
+    bundle = policy.create_bundle(
+        source_date="2026-10-08",
+        target_date="2026-10-12",
+        source_report_sha256=source["sha256"],
+        replay=replay,
+        source_quality=policy.source_quality_from_observation(observation),
+    )
+    write(policy.policy_path(tmp_path, "2026-10-12"), bundle)
+    write(
+        tmp_path
+        / "report/runtime_approval_summary/runtime_approval_summary_2026-10-08.json",
+        dict(
+            holding_path_vote_policy=dict(
+                status=policy.publication_status(bundle),
+                source_date="2026-10-08",
+                target_date="2026-10-12",
+                bundle_sha256=bundle["bundle_sha256"],
+                policy_set_sha256=bundle["policy_set_sha256"],
+                source_report_sha256=source["sha256"],
+                cell_count=12,
+            )
+        ),
+    )
+    monkeypatch.setattr(summary, "stage_receipt_issues", lambda *a, **kw: [])
+    monkeypatch.setattr(
+        handoff,
+        "verify_entry_consumer_code",
+        lambda *a, **kw: {"status": "verified_intraday_consumer_repair"},
+    )
+    monkeypatch.setattr(experiment, "code_sha", lambda: "new-generation")
+    monkeypatch.setattr(bootstrap, "DATA_DIR", tmp_path)
+    env, receipt = bootstrap._holding_vote_handoff("2026-10-12")
+    assert (
+        receipt["status"] == "verified_incumbent_carried"
+        and env[policy.ENV_SHA] == bundle["bundle_sha256"]
+    )
+    selected, loaded = policy.runtime_policy_from_env(
+        env, data_root=tmp_path, active_date="2026-10-12"
+    )
+    assert loaded["status"] == "verified_incumbent_loaded" and selected
+    mutated = copy.deepcopy(bundle)
+    mutated["source_quality"]["strict_population_count"] = 123
+    mutated["bundle_sha256"] = policy.digest(
+        {k: v for k, v in mutated.items() if k != "bundle_sha256"}
+    )
+    with pytest.raises(ValueError, match="source_semantics_mismatch"):
+        policy.verify_source_handoff(tmp_path, mutated)
+    Path(source["path"]).write_text("{}")
+    with pytest.raises(ValueError, match="source_report_hash_mismatch"):
+        policy.verify_source_handoff(tmp_path, bundle)
 
 
-def test_offline_parent_carry_does_not_require_a_new_live_handoff(tmp_path, monkeypatch):
-    from src.engine.automation import intraday_release_handoff as handoff, postclose_summary_handoff as summary
+def test_offline_parent_carry_does_not_require_a_new_live_handoff(
+    tmp_path, monkeypatch
+):
+    from src.engine.automation import (
+        intraday_release_handoff as handoff,
+        postclose_summary_handoff as summary,
+    )
+
     _, _, _, _, _, _, numeric = fixture(tmp_path)
-    numeric['selected_cells'] = {}
-    replay = summarize_holding_path_votes([], load_events=lambda _: [], model='gpt-5.4-nano')
-    replay['vote_numeric_research'] = numeric
-    observation = dict(date='2026-10-08', holding_path_vote_replay=replay,
-        completed_population_quality=dict(complete=False, db_completed_main_ids=[],
-        strict_completed_position_ids=[], source_gap_ids=[], excluded_all_reasons={}, source_gap_dates=[]))
-    source = write(tmp_path/'report/monitor_snapshots/holding_exit_observation_2026-10-08.json', observation)
-    parent = policy.create_bundle(source_date='2026-10-08', target_date='2026-10-12',
-        source_report_sha256=source['sha256'], replay=replay,
-        source_quality=policy.source_quality_from_observation(observation))
-    write(policy.policy_path(tmp_path, '2026-10-12'), parent)
-    write(tmp_path/'report/runtime_approval_summary/runtime_approval_summary_2026-10-08.json', dict(
-        holding_path_vote_policy=dict(status=policy.publication_status(parent), source_date='2026-10-08',
-        target_date='2026-10-12', bundle_sha256=parent['bundle_sha256'],
-        policy_set_sha256=parent['policy_set_sha256'], source_report_sha256=source['sha256'], cell_count=12)))
-    monkeypatch.setattr(summary, 'stage_receipt_issues', lambda *a, **kw: [])
+    numeric["selected_cells"] = {}
+    replay = summarize_holding_path_votes(
+        [], load_events=lambda _: [], model="gpt-5.4-nano"
+    )
+    replay["vote_numeric_research"] = numeric
+    observation = dict(
+        date="2026-10-08",
+        holding_path_vote_replay=replay,
+        completed_population_quality=dict(
+            complete=False,
+            db_completed_main_ids=[],
+            strict_completed_position_ids=[],
+            source_gap_ids=[],
+            excluded_all_reasons={},
+            source_gap_dates=[],
+        ),
+    )
+    source = write(
+        tmp_path / "report/monitor_snapshots/holding_exit_observation_2026-10-08.json",
+        observation,
+    )
+    parent = policy.create_bundle(
+        source_date="2026-10-08",
+        target_date="2026-10-12",
+        source_report_sha256=source["sha256"],
+        replay=replay,
+        source_quality=policy.source_quality_from_observation(observation),
+    )
+    write(policy.policy_path(tmp_path, "2026-10-12"), parent)
+    write(
+        tmp_path
+        / "report/runtime_approval_summary/runtime_approval_summary_2026-10-08.json",
+        dict(
+            holding_path_vote_policy=dict(
+                status=policy.publication_status(parent),
+                source_date="2026-10-08",
+                target_date="2026-10-12",
+                bundle_sha256=parent["bundle_sha256"],
+                policy_set_sha256=parent["policy_set_sha256"],
+                source_report_sha256=source["sha256"],
+                cell_count=12,
+            )
+        ),
+    )
+    monkeypatch.setattr(summary, "stage_receipt_issues", lambda *a, **kw: [])
+
     def missing_live_handoff(*a, **kw):
-        raise ValueError('new_live_handoff_missing')
-    monkeypatch.setattr(handoff, 'verify_entry_consumer_code', missing_live_handoff)
-    monkeypatch.setattr(experiment, 'code_sha', lambda: 'f'*64)
-    with pytest.raises(ValueError, match='new_live_handoff_missing'):
-        policy.load_bundle(tmp_path, '2026-10-12')
-    verified = policy.load_bundle(tmp_path, '2026-10-12', require_current_code=False)
+        raise ValueError("new_live_handoff_missing")
+
+    monkeypatch.setattr(handoff, "verify_entry_consumer_code", missing_live_handoff)
+    monkeypatch.setattr(experiment, "code_sha", lambda: "f" * 64)
+    with pytest.raises(ValueError, match="new_live_handoff_missing"):
+        policy.load_bundle(tmp_path, "2026-10-12")
+    verified = policy.load_bundle(tmp_path, "2026-10-12", require_current_code=False)
     policy.verify_source_handoff(tmp_path, verified, require_current_code=False)
-    current = experiment.native_research(tmp_path, '2026-10-12')
-    assert current['status'] == 'experiment_not_armed'
-    assert current['parent']['bundle_sha256'] == parent['bundle_sha256']
-    assert current['selected_cells'] == {}
-    assert current['parent']['cells'] == {k:v['policy'] for k,v in parent['cells'].items()}
-    successor = policy.create_successor(source_date='2026-10-12', target_date='2026-10-13',
-        source_report_sha256='a'*64, replay={'vote_numeric_research':current},
-        source_quality=EMPTY_SOURCE_QUALITY)
-    assert successor['code_sha256'] == 'f'*64 and successor['selection_mode'] == 'incumbent_carry'
-    assert all(c['policy'] == parent['cells'][k]['policy'] for k,c in successor['cells'].items())
+    current = experiment.native_research(tmp_path, "2026-10-12")
+    assert current["status"] == "experiment_not_armed"
+    assert current["parent"]["bundle_sha256"] == parent["bundle_sha256"]
+    assert current["selected_cells"] == {}
+    assert current["parent"]["cells"] == {
+        k: v["policy"] for k, v in parent["cells"].items()
+    }
+    successor = policy.create_successor(
+        source_date="2026-10-12",
+        target_date="2026-10-13",
+        source_report_sha256="a" * 64,
+        replay={"vote_numeric_research": current},
+        source_quality=EMPTY_SOURCE_QUALITY,
+    )
+    assert (
+        successor["code_sha256"] == "f" * 64
+        and successor["selection_mode"] == "incumbent_carry"
+    )
+    assert all(
+        c["policy"] == parent["cells"][k]["policy"]
+        for k, c in successor["cells"].items()
+    )
     # Historical mode still requires original source bytes and terminal proof.
-    monkeypatch.setattr(summary, 'stage_receipt_issues', lambda *a, **kw: ['terminal_missing'])
-    assert experiment.native_research(tmp_path, '2026-10-12')['status'] == 'incumbent_unverified'
-    monkeypatch.setattr(summary, 'stage_receipt_issues', lambda *a, **kw: [])
-    Path(source['path']).write_text('{}')
-    assert experiment.native_research(tmp_path, '2026-10-12')['status'] == 'incumbent_unverified'
+    monkeypatch.setattr(
+        summary, "stage_receipt_issues", lambda *a, **kw: ["terminal_missing"]
+    )
+    assert (
+        experiment.native_research(tmp_path, "2026-10-12")["status"]
+        == "incumbent_unverified"
+    )
+    monkeypatch.setattr(summary, "stage_receipt_issues", lambda *a, **kw: [])
+    Path(source["path"]).write_text("{}")
+    assert (
+        experiment.native_research(tmp_path, "2026-10-12")["status"]
+        == "incumbent_unverified"
+    )
 
 
 def test_historical_mode_cannot_migrate_a_numerical_successor(tmp_path, monkeypatch):
     *_, numeric = fixture(tmp_path)
-    bundle = policy.create_successor(source_date='2026-10-08', target_date='2026-10-12',
-        source_report_sha256='a'*64, replay={'vote_numeric_research':numeric},
-        source_quality=EMPTY_SOURCE_QUALITY)
-    assert bundle['selection_mode'] == 'validated_successor'
-    monkeypatch.setattr(experiment, 'code_sha', lambda: 'f'*64)
-    with pytest.raises(ValueError, match='holding_vote_successor_code_changed'):
-        policy.validate_successor(bundle, target_date='2026-10-12', require_current_code=False)
+    bundle = policy.create_successor(
+        source_date="2026-10-08",
+        target_date="2026-10-12",
+        source_report_sha256="a" * 64,
+        replay={"vote_numeric_research": numeric},
+        source_quality=EMPTY_SOURCE_QUALITY,
+    )
+    assert bundle["selection_mode"] == "validated_successor"
+    monkeypatch.setattr(experiment, "code_sha", lambda: "f" * 64)
+    with pytest.raises(ValueError, match="holding_vote_successor_code_changed"):
+        policy.validate_successor(
+            bundle, target_date="2026-10-12", require_current_code=False
+        )
 
 
 def _consumed_parent_fixture(root, parent):
-    day = parent['target_date']
-    base = root / 'runtime/policy_bootstrap'
-    env = base / f'runtime_policy_bootstrap_{day}.env'
+    day = parent["target_date"]
+    base = root / "runtime/policy_bootstrap"
+    env = base / f"runtime_policy_bootstrap_{day}.env"
     env.parent.mkdir(parents=True, exist_ok=True)
-    env.write_text('fixture policy environment\n')
-    manifest = dict(report_type='runtime_policy_bootstrap', target_date=day,
-        env_file=str(env), env_sha256=hashlib.sha256(env.read_bytes()).hexdigest(),
-        env_overrides={policy.ENV_PATH: str(policy.policy_path(root, day)),
-                       policy.ENV_SHA: parent['bundle_sha256'], policy.ENV_DATE: day},
-        holding_path_vote_policy_receipt=dict(status='estimated_provisional_verified',
-            source_date=parent['source_date'], target_date=day,
-            bundle_sha256=parent['bundle_sha256'], policy_set_sha256=parent['policy_set_sha256'],
-            source_report_sha256=parent['source_report_sha256'], cell_count=len(parent['cells']),
-            allowed_runtime_apply=True, path=str(policy.policy_path(root, day))))
-    manifest['manifest_sha256'] = policy.digest(manifest)
-    mp = base / f'runtime_policy_bootstrap_{day}.json'
+    env.write_text("fixture policy environment\n")
+    manifest = dict(
+        report_type="runtime_policy_bootstrap",
+        target_date=day,
+        env_file=str(env),
+        env_sha256=hashlib.sha256(env.read_bytes()).hexdigest(),
+        env_overrides={
+            policy.ENV_PATH: str(policy.policy_path(root, day)),
+            policy.ENV_SHA: parent["bundle_sha256"],
+            policy.ENV_DATE: day,
+        },
+        holding_path_vote_policy_receipt=dict(
+            status="estimated_provisional_verified",
+            source_date=parent["source_date"],
+            target_date=day,
+            bundle_sha256=parent["bundle_sha256"],
+            policy_set_sha256=parent["policy_set_sha256"],
+            source_report_sha256=parent["source_report_sha256"],
+            cell_count=len(parent["cells"]),
+            allowed_runtime_apply=True,
+            path=str(policy.policy_path(root, day)),
+        ),
+    )
+    manifest["manifest_sha256"] = policy.digest(manifest)
+    mp = base / f"runtime_policy_bootstrap_{day}.json"
     mr = write(mp, manifest)
-    commit, release = 'a' * 40, root.parent / 'fixture-release'
-    hp = base / 'intraday_handoff' / day / (commit + '.json')
-    handoff = dict(schema='intraday_policy_preserving_release_handoff_v1',
-        authority='APPROVED_INTRADAY_POLICY_PRESERVING_RELEASE_HANDOFF',
-        target_date=day, selected_release_commit=commit, release_root=str(release),
-        status='prepared_verified', policy_effect='unchanged', manifest_sha256=manifest['manifest_sha256'],
-        frozen_files={str(mp): mr['sha256'], str(env): manifest['env_sha256']},
-        prepared_at=day+'T09:00:00+09:00', first_launch_before=day+'T09:15:00+09:00')
+    commit, release = "a" * 40, root.parent / "fixture-release"
+    hp = base / "intraday_handoff" / day / (commit + ".json")
+    handoff = dict(
+        schema="intraday_policy_preserving_release_handoff_v1",
+        authority="APPROVED_INTRADAY_POLICY_PRESERVING_RELEASE_HANDOFF",
+        target_date=day,
+        selected_release_commit=commit,
+        release_root=str(release),
+        status="prepared_verified",
+        policy_effect="unchanged",
+        manifest_sha256=manifest["manifest_sha256"],
+        frozen_files={str(mp): mr["sha256"], str(env): manifest["env_sha256"]},
+        prepared_at=day + "T09:00:00+09:00",
+        first_launch_before=day + "T09:15:00+09:00",
+    )
     hr = write(hp, handoff)
-    cp = hp.with_name(commit + '.consumed.json')
-    consumed = dict(schema='intraday_policy_preserving_consumption_v1', status='pass',
-        actual_pid_consumed=True, target_date=day, selected_release_commit=commit,
-        release_root=str(release), manifest_sha256=manifest['manifest_sha256'],
-        handoff_sha256=hr['sha256'], verified_at=day+'T09:01:00+09:00',
-        pid_identity=dict(pid=123, start_ticks='456', cwd=str(release / 'src')))
+    cp = hp.with_name(commit + ".consumed.json")
+    consumed = dict(
+        schema="intraday_policy_preserving_consumption_v1",
+        status="pass",
+        actual_pid_consumed=True,
+        target_date=day,
+        selected_release_commit=commit,
+        release_root=str(release),
+        manifest_sha256=manifest["manifest_sha256"],
+        handoff_sha256=hr["sha256"],
+        verified_at=day + "T09:01:00+09:00",
+        pid_identity=dict(pid=123, start_ticks="456", cwd=str(release / "src")),
+    )
     write(cp, consumed)
     return mp, env, hp, cp
 
 
-def test_native_consumed_parent_closes_ancestry_but_not_new_source(tmp_path, monkeypatch):
+def test_native_consumed_parent_closes_ancestry_but_not_new_source(
+    tmp_path, monkeypatch
+):
     from src.engine.automation import postclose_summary_handoff as summary
     from src.engine.automation import runtime_policy_bootstrap as bootstrap
+
     parent, *_rest, numeric = fixture(tmp_path)
     _consumed_parent_fixture(tmp_path, parent)
-    numeric['selected_cells'] = {}
-    replay = summarize_holding_path_votes([], load_events=lambda _: [], model='gpt-5.4-nano')
-    replay['vote_numeric_research'] = numeric
-    observation = dict(date='2026-10-08', holding_path_vote_replay=replay,
-        completed_population_quality=dict(complete=False, db_completed_main_ids=[],
-            strict_completed_position_ids=[], source_gap_ids=[], excluded_all_reasons={}, source_gap_dates=[]))
-    source = write(tmp_path/'report/monitor_snapshots/holding_exit_observation_2026-10-08.json', observation)
-    bundle = policy.create_bundle(source_date='2026-10-08', target_date='2026-10-12',
-        source_report_sha256=source['sha256'], replay=replay,
-        source_quality=policy.source_quality_from_observation(observation))
-    write(policy.policy_path(tmp_path, '2026-10-12'), bundle)
-    current_summary = tmp_path/'report/runtime_approval_summary/runtime_approval_summary_2026-10-08.json'
-    write(current_summary, dict(holding_path_vote_policy=dict(status=policy.publication_status(bundle),
-        source_date='2026-10-08', target_date='2026-10-12', bundle_sha256=bundle['bundle_sha256'],
-        policy_set_sha256=bundle['policy_set_sha256'], source_report_sha256=source['sha256'], cell_count=12)))
-    monkeypatch.setattr(summary, 'stage_receipt_issues', lambda *a, **kw: [])
+    numeric["selected_cells"] = {}
+    replay = summarize_holding_path_votes(
+        [], load_events=lambda _: [], model="gpt-5.4-nano"
+    )
+    replay["vote_numeric_research"] = numeric
+    observation = dict(
+        date="2026-10-08",
+        holding_path_vote_replay=replay,
+        completed_population_quality=dict(
+            complete=False,
+            db_completed_main_ids=[],
+            strict_completed_position_ids=[],
+            source_gap_ids=[],
+            excluded_all_reasons={},
+            source_gap_dates=[],
+        ),
+    )
+    source = write(
+        tmp_path / "report/monitor_snapshots/holding_exit_observation_2026-10-08.json",
+        observation,
+    )
+    bundle = policy.create_bundle(
+        source_date="2026-10-08",
+        target_date="2026-10-12",
+        source_report_sha256=source["sha256"],
+        replay=replay,
+        source_quality=policy.source_quality_from_observation(observation),
+    )
+    write(policy.policy_path(tmp_path, "2026-10-12"), bundle)
+    current_summary = (
+        tmp_path
+        / "report/runtime_approval_summary/runtime_approval_summary_2026-10-08.json"
+    )
+    write(
+        current_summary,
+        dict(
+            holding_path_vote_policy=dict(
+                status=policy.publication_status(bundle),
+                source_date="2026-10-08",
+                target_date="2026-10-12",
+                bundle_sha256=bundle["bundle_sha256"],
+                policy_set_sha256=bundle["policy_set_sha256"],
+                source_report_sha256=source["sha256"],
+                cell_count=12,
+            )
+        ),
+    )
+    monkeypatch.setattr(summary, "stage_receipt_issues", lambda *a, **kw: [])
     # The old mutable summary is damaged after a native verified consumption.
-    (tmp_path/'report/runtime_approval_summary/runtime_approval_summary_2026-10-07.json').write_text('{}')
+    (
+        tmp_path
+        / "report/runtime_approval_summary/runtime_approval_summary_2026-10-07.json"
+    ).write_text("{}")
     policy.verify_source_handoff(tmp_path, bundle)
-    monkeypatch.setattr(bootstrap, 'DATA_DIR', tmp_path)
-    env, receipt = bootstrap._holding_vote_handoff('2026-10-12')
-    assert receipt['bundle_sha256'] == bundle['bundle_sha256']
-    assert policy.runtime_policy_from_env(env, data_root=tmp_path, active_date='2026-10-12')[1]['status'] == 'verified_incumbent_loaded'
+    monkeypatch.setattr(bootstrap, "DATA_DIR", tmp_path)
+    env, receipt = bootstrap._holding_vote_handoff("2026-10-12")
+    assert receipt["bundle_sha256"] == bundle["bundle_sha256"]
+    assert (
+        policy.runtime_policy_from_env(
+            env, data_root=tmp_path, active_date="2026-10-12"
+        )[1]["status"]
+        == "verified_incumbent_loaded"
+    )
     # New input and terminal proof must remain strict after ancestry closure.
-    monkeypatch.setattr(summary, 'stage_receipt_issues', lambda *a, **kw: ['new_terminal_invalid'])
-    with pytest.raises(ValueError, match='strict_handoff_not_complete'):
+    monkeypatch.setattr(
+        summary, "stage_receipt_issues", lambda *a, **kw: ["new_terminal_invalid"]
+    )
+    with pytest.raises(ValueError, match="strict_handoff_not_complete"):
         policy.verify_source_handoff(tmp_path, bundle)
-    monkeypatch.setattr(summary, 'stage_receipt_issues', lambda *a, **kw: [])
-    original = Path(source['path']).read_bytes()
-    Path(source['path']).write_text('{}')
-    with pytest.raises(ValueError, match='source_report_hash_mismatch'):
+    monkeypatch.setattr(summary, "stage_receipt_issues", lambda *a, **kw: [])
+    original = Path(source["path"]).read_bytes()
+    Path(source["path"]).write_text("{}")
+    with pytest.raises(ValueError, match="source_report_hash_mismatch"):
         policy.verify_source_handoff(tmp_path, bundle)
-    Path(source['path']).write_bytes(original)
-    current_summary.write_text('{}')
-    with pytest.raises(ValueError, match='summary_binding_invalid'):
+    Path(source["path"]).write_bytes(original)
+    current_summary.write_text("{}")
+    with pytest.raises(ValueError, match="summary_binding_invalid"):
         policy.verify_source_handoff(tmp_path, bundle)
 
 
-@pytest.mark.parametrize('fault', ['policy', 'env', 'handoff', 'consumed', 'pid', 'clock', 'manifest', 'symlink'])
+@pytest.mark.parametrize(
+    "fault",
+    ["policy", "env", "handoff", "consumed", "pid", "clock", "manifest", "symlink"],
+)
 def test_consumed_parent_rejects_changed_or_unproved_binding(tmp_path, fault):
     parent, *_ = fixture(tmp_path)
     mp, env, hp, cp = _consumed_parent_fixture(tmp_path, parent)
-    assert policy.consumed_parent_handoff(tmp_path, parent)['runtime_effect'] is False
-    if fault == 'policy': parent = dict(parent, bundle_sha256='b'*64)
-    elif fault == 'env': env.write_text('changed')
-    elif fault == 'manifest':
-        value=json.loads(mp.read_text()); value['target_date']='2026-10-09'; write(mp, value)
-    elif fault == 'handoff':
-        value=json.loads(hp.read_text()); value['policy_effect']='changed'; write(hp, value)
-    elif fault == 'symlink':
-        raw=cp.read_bytes(); other=tmp_path/'other.json'; other.write_bytes(raw); cp.unlink(); cp.symlink_to(other)
+    assert policy.consumed_parent_handoff(tmp_path, parent)["runtime_effect"] is False
+    if fault == "policy":
+        parent = dict(parent, bundle_sha256="b" * 64)
+    elif fault == "env":
+        env.write_text("changed")
+    elif fault == "manifest":
+        value = json.loads(mp.read_text())
+        value["target_date"] = "2026-10-09"
+        write(mp, value)
+    elif fault == "handoff":
+        value = json.loads(hp.read_text())
+        value["policy_effect"] = "changed"
+        write(hp, value)
+    elif fault == "symlink":
+        raw = cp.read_bytes()
+        other = tmp_path / "other.json"
+        other.write_bytes(raw)
+        cp.unlink()
+        cp.symlink_to(other)
     else:
-        value=json.loads(cp.read_text())
-        if fault == 'consumed': value['actual_pid_consumed']=False
-        elif fault == 'pid': value['pid_identity']['start_ticks']=''
-        else: value['verified_at']='2026-10-09T09:01:00+09:00'
+        value = json.loads(cp.read_text())
+        if fault == "consumed":
+            value["actual_pid_consumed"] = False
+        elif fault == "pid":
+            value["pid_identity"]["start_ticks"] = ""
+        else:
+            value["verified_at"] = "2026-10-09T09:01:00+09:00"
         write(cp, value)
-    with pytest.raises(ValueError): policy.consumed_parent_handoff(tmp_path, parent)
+    with pytest.raises(ValueError):
+        policy.consumed_parent_handoff(tmp_path, parent)
 
 
-def test_missing_native_consumption_does_not_close_historical_parent(tmp_path, monkeypatch):
+def test_missing_native_consumption_does_not_close_historical_parent(
+    tmp_path, monkeypatch
+):
     from src.engine.automation import postclose_summary_handoff as summary
+
     parent, *_ = fixture(tmp_path)
     assert policy.consumed_parent_handoff(tmp_path, parent) is None
-    monkeypatch.setattr(summary, 'stage_receipt_issues', lambda *a, **kw: [])
-    (tmp_path/'report/runtime_approval_summary/runtime_approval_summary_2026-10-07.json').write_text('{}')
-    with pytest.raises(ValueError, match='summary_binding_invalid'):
+    monkeypatch.setattr(summary, "stage_receipt_issues", lambda *a, **kw: [])
+    (
+        tmp_path
+        / "report/runtime_approval_summary/runtime_approval_summary_2026-10-07.json"
+    ).write_text("{}")
+    with pytest.raises(ValueError, match="summary_binding_invalid"):
         policy.verify_source_handoff(tmp_path, parent)

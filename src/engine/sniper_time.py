@@ -201,7 +201,10 @@ def scalping_session_venue_provenance(now_value=None):
             "actual_execution_venue": "UNKNOWN",
         }
 
-    if context.session_regime == session_contract.MARKET_SESSION_REGIME_SESSION_TRANSITION:
+    if (
+        context.session_regime
+        == session_contract.MARKET_SESSION_REGIME_SESSION_TRANSITION
+    ):
         return {
             "venue": "UNKNOWN",
             "effective_venue": "UNKNOWN",

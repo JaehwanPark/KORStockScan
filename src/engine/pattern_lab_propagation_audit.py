@@ -179,11 +179,16 @@ def build_pattern_lab_propagation_audit(
     target_date = str(target_date).strip()
     if not include_swing:
         from src.engine.lifecycle.retirement import retired_status
+
         return retired_status("claude_scalping_pattern_lab")
     swing_path, _ = swing_pattern_lab_automation_report_paths(target_date)
     currentness_path, _ = currentness_report_paths(target_date)
     # Historical path lookup must not import the retired 9,000-line producer.
-    workorder_path = REPORT_DIR / "code_improvement_workorder" / f"code_improvement_workorder_{target_date}.json"
+    workorder_path = (
+        REPORT_DIR
+        / "code_improvement_workorder"
+        / f"code_improvement_workorder_{target_date}.json"
+    )
     runtime_path, _ = runtime_summary_paths(target_date)
 
     swing = _load_json(swing_path) if include_swing else {}
@@ -295,7 +300,9 @@ def build_pattern_lab_propagation_audit(
     runtime_statuses = {"direct_evidence_complete", "direct_evidence_incomplete"}
     if target_date < "2026-09-19":
         runtime_statuses.add("pass")
-    runtime_ok = bool(runtime_summary) and runtime_summary.get("status") in runtime_statuses
+    runtime_ok = (
+        bool(runtime_summary) and runtime_summary.get("status") in runtime_statuses
+    )
     checks.append(
         _check(
             "runtime_summary_direct_family_handoff",
@@ -503,6 +510,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.exclude_swing:
         from src.engine.lifecycle.retirement import retired_status
+
         print(json.dumps(retired_status("claude_scalping_pattern_lab")))
         return 0
     report = build_pattern_lab_propagation_audit(

@@ -107,17 +107,29 @@ def report_path(target_date: str, cohort: tuple[str, str]) -> Path:
     )
 
 
-def candidate_path(source_date: str, cohort: tuple[str, str], *, data_root: Path | None = None) -> Path:
+def candidate_path(
+    source_date: str, cohort: tuple[str, str], *, data_root: Path | None = None
+) -> Path:
     venue, session = _cohort(cohort)
-    directory = Path(data_root) / "threshold_cycle/holding_prompt_candidates" if data_root is not None else CANDIDATE_DIR
+    directory = (
+        Path(data_root) / "threshold_cycle/holding_prompt_candidates"
+        if data_root is not None
+        else CANDIDATE_DIR
+    )
     return directory / (
         f"holding_prompt_live_candidate_{source_date}_{_slug(venue)}_{_slug(session)}.json"
     )
 
 
-def activation_path(target_date: str, cohort: tuple[str, str], *, data_root: Path | None = None) -> Path:
+def activation_path(
+    target_date: str, cohort: tuple[str, str], *, data_root: Path | None = None
+) -> Path:
     venue, session = _cohort(cohort)
-    directory = Path(data_root) / "runtime/holding_prompt_live_policy" if data_root is not None else ACTIVATION_DIR
+    directory = (
+        Path(data_root) / "runtime/holding_prompt_live_policy"
+        if data_root is not None
+        else ACTIVATION_DIR
+    )
     return directory / (
         f"holding_prompt_preopen_activation_{target_date}_{_slug(venue)}_{_slug(session)}.json"
     )
@@ -582,10 +594,16 @@ def run_postclose(
     }
 
 
-def build_activation(target_date: str, cohort: tuple[str, str], *, data_root: Path | None = None) -> dict[str, Any]:
+def build_activation(
+    target_date: str, cohort: tuple[str, str], *, data_root: Path | None = None
+) -> dict[str, Any]:
     venue, session = _cohort(cohort)
     matching: list[tuple[str, Path, dict[str, Any]]] = []
-    directory = Path(data_root) / "threshold_cycle/holding_prompt_candidates" if data_root is not None else CANDIDATE_DIR
+    directory = (
+        Path(data_root) / "threshold_cycle/holding_prompt_candidates"
+        if data_root is not None
+        else CANDIDATE_DIR
+    )
     for path in directory.glob(
         f"holding_prompt_live_candidate_*_{_slug(venue)}_{_slug(session)}.json"
     ):
@@ -648,8 +666,12 @@ def build_activation(target_date: str, cohort: tuple[str, str], *, data_root: Pa
 
 
 def resolve_holding_prompt_policy(
-    *, effective_venue: Any, session_bucket: Any, now: datetime | None = None,
-    policy_target_date: str | None = None, prepared_activation: dict[str, Any] | None = None,
+    *,
+    effective_venue: Any,
+    session_bucket: Any,
+    now: datetime | None = None,
+    policy_target_date: str | None = None,
+    prepared_activation: dict[str, Any] | None = None,
     data_root: Path | None = None,
 ) -> dict[str, Any]:
     current = (now or datetime.now(KST)).astimezone(KST)
@@ -673,11 +695,17 @@ def resolve_holding_prompt_policy(
     activation_signature = _file_signature(path)
     with _POLICY_CACHE_LOCK:
         cached = _POLICY_CACHE.get(cache_key)
-    if prepared_activation is None and cached and cached.get("activation_signature") == activation_signature:
+    if (
+        prepared_activation is None
+        and cached
+        and cached.get("activation_signature") == activation_signature
+    ):
         cached_candidate_path = Path(str(cached.get("candidate_path") or ""))
         if cached.get("candidate_signature") == _file_signature(cached_candidate_path):
             return dict(cached["result"])
-    activation = prepared_activation if prepared_activation is not None else _read_json(path)
+    activation = (
+        prepared_activation if prepared_activation is not None else _read_json(path)
+    )
     if activation.get("artifact_sha256") != _canonical_sha256(
         {key: value for key, value in activation.items() if key != "artifact_sha256"}
     ):

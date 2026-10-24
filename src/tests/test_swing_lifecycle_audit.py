@@ -1,4 +1,3 @@
-
 from src.engine import swing_lifecycle_audit as mod
 
 
@@ -35,8 +34,6 @@ def test_swing_entry_bottleneck_classifies_submit_zero_with_blockers():
     assert "GATEKEEPER_PULLBACK_WAIT" in bottleneck["matches"]
     assert "SUBMIT_ZERO" in bottleneck["matches"]
     assert bottleneck["next_route"] == "code_improvement_workorder"
-
-
 
 
 def test_swing_entry_bottleneck_dry_run_submit_zero_is_not_critical():

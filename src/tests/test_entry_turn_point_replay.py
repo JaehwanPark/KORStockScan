@@ -62,10 +62,16 @@ def test_managed_data_mount_preserves_strict_master_generation(
     assert Path(binding["path"]) == logical
     assert Path(binding["physical_path"]) == physical
     assert binding["artifact_sha256"] == hashlib.sha256(payload).hexdigest()
-    assert binding["raw_artifact_sha256"] == hashlib.sha256(physical.read_bytes()).hexdigest()
+    assert (
+        binding["raw_artifact_sha256"]
+        == hashlib.sha256(physical.read_bytes()).hexdigest()
+    )
 
 
-@pytest.mark.parametrize("unsafe", ["artifact_symlink", "nested_symlink", "invalid_latest", "plain_gzip_conflict"])
+@pytest.mark.parametrize(
+    "unsafe",
+    ["artifact_symlink", "nested_symlink", "invalid_latest", "plain_gzip_conflict"],
+)
 def test_managed_data_mount_keeps_unsafe_latest_master_closed(
     tmp_path, monkeypatch, unsafe
 ):
@@ -82,7 +88,9 @@ def test_managed_data_mount_keeps_unsafe_latest_master_closed(
         latest.write_text('{"fixture_id":"valid"}')
     elif unsafe == "plain_gzip_conflict":
         latest.write_text('{"fixture_id":"valid"}')
-        latest.with_suffix(".json.gz").write_bytes(gzip.compress(b'{"fixture_id":"different"}'))
+        latest.with_suffix(".json.gz").write_bytes(
+            gzip.compress(b'{"fixture_id":"different"}')
+        )
     else:
         latest.write_text('{"fixture_id":"invalid"}')
 

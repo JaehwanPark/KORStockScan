@@ -19,7 +19,10 @@ from typing import Any, Mapping
 from zoneinfo import ZoneInfo
 
 from src.utils import kiwoom_utils
-from src.trading.market.quote_consistency import build_market_data_health, build_rest_market_data_health
+from src.trading.market.quote_consistency import (
+    build_market_data_health,
+    build_rest_market_data_health,
+)
 
 ENTRY_LIQUIDITY_POLICY_ID = "entry_touch_liquidity_guard_v1"
 MIN_TOUCH_QUANTITY_EACH_SIDE = 100
@@ -154,11 +157,15 @@ KIWOOM_EXECUTION_VELOCITY_OFFICIAL_REFERENCE = {
 def _source_policy_contract(contract, source):
     result = deepcopy(contract)
     if source == "kiwoom_ws_orderbook":
-        result.update(sample_floor="one_route_qualified_0D_snapshot_per_submit_bundle",
-                      source_quality_gate="exact_item_epoch_live_producer;original_receive_age_lte_2000ms;positive_uncrossed_bbo;nonnegative_touch_quantities")
+        result.update(
+            sample_floor="one_route_qualified_0D_snapshot_per_submit_bundle",
+            source_quality_gate="exact_item_epoch_live_producer;original_receive_age_lte_2000ms;positive_uncrossed_bbo;nonnegative_touch_quantities",
+        )
     elif source == "kiwoom_ws_trade_prints":
-        result.update(sample_floor="10_route_qualified_0B_trade_prints",
-                      source_quality_gate="exact_item_epoch_live_producer;original_receive_and_provider_clocks;latest_print_age_lte_5000ms;local_sequence_contiguous_not_exchange_completeness;strictly_descending_accumulated_trade_quantity;positive_price_and_absolute_trade_quantity")
+        result.update(
+            sample_floor="10_route_qualified_0B_trade_prints",
+            source_quality_gate="exact_item_epoch_live_producer;original_receive_and_provider_clocks;latest_print_age_lte_5000ms;local_sequence_contiguous_not_exchange_completeness;strictly_descending_accumulated_trade_quantity;positive_price_and_absolute_trade_quantity",
+        )
     return result
 
 
@@ -432,7 +439,11 @@ def parse_ka10003_entry_execution_velocity_snapshot(
     source_meta: dict[str, Any] = {}
     market_health: dict[str, Any] = {}
     response_item = ""
-    receipt_present = any("_kiwoom_source_meta" in tick for tick in payload[:REQUIRED_RECENT_PRINT_COUNT] if isinstance(tick, dict))
+    receipt_present = any(
+        "_kiwoom_source_meta" in tick
+        for tick in payload[:REQUIRED_RECENT_PRINT_COUNT]
+        if isinstance(tick, dict)
+    )
     try:
         for tick in payload[:REQUIRED_RECENT_PRINT_COUNT]:
             if not isinstance(tick, dict) or not isinstance(tick.get("raw"), dict):
@@ -443,12 +454,19 @@ def parse_ka10003_entry_execution_velocity_snapshot(
                 if not isinstance(meta, dict):
                     raise ValueError("ka10003_receive_receipt_missing_or_invalid")
                 health = build_rest_market_data_health(
-                    {"stk_cd": tick.get("response_item_raw")}, api_id="ka10003",
-                    request_code=request_code, source_meta=meta, now_ts=observed.timestamp(),
+                    {"stk_cd": tick.get("response_item_raw")},
+                    api_id="ka10003",
+                    request_code=request_code,
+                    source_meta=meta,
+                    now_ts=observed.timestamp(),
                 )
                 facts = health["rest_input"]
                 age = facts["response_receive_age_ms"]
-                if facts["receipt_binding_proven"] is not True or age is None or age < 0:
+                if (
+                    facts["receipt_binding_proven"] is not True
+                    or age is None
+                    or age < 0
+                ):
                     raise ValueError("ka10003_receive_receipt_scope_or_clock_invalid")
                 if source_meta and meta != source_meta:
                     raise ValueError("ka10003_receive_receipt_packet_conflict")
@@ -488,8 +506,12 @@ def parse_ka10003_entry_execution_velocity_snapshot(
         ) * 1_000 + observed.microsecond // 1_000
         receive_order_valid = True
         if source_meta:
-            received = datetime.fromtimestamp(source_meta["rest_received_ts_ms"] / 1000, tz=KST)
-            received_seconds = received.hour * 3600 + received.minute * 60 + received.second
+            received = datetime.fromtimestamp(
+                source_meta["rest_received_ts_ms"] / 1000, tz=KST
+            )
+            received_seconds = (
+                received.hour * 3600 + received.minute * 60 + received.second
+            )
             # A cached/reused response must not cure a clock conflict merely
             # because consumption waited until its future print time.
             receive_order_valid = received_seconds >= seconds[0]
@@ -517,7 +539,11 @@ def parse_ka10003_entry_execution_velocity_snapshot(
         source_meta=source_meta,
         response_item_raw=response_item,
         market_data_health=market_health,
-        error="" if latest_age_ms >= 0 and receive_order_valid else "ka10003_latest_trade_time_in_future",
+        error=(
+            ""
+            if latest_age_ms >= 0 and receive_order_valid
+            else "ka10003_latest_trade_time_in_future"
+        ),
     )
 
 
@@ -608,16 +634,45 @@ def _refresh_liquidity_snapshot(
     """Recompute quote facts at the decision, never tape inactivity/authority."""
     if snapshot.source == "kiwoom_ws_orderbook":
         from src.trading.market.entry_ws_snapshot import validate_receipt
+
         try:
-            age = validate_receipt(snapshot.source_meta, symbol=snapshot.symbol, route=snapshot.route,
-                                   now_ts=time.time() if now_ts is None else now_ts)
-            if (snapshot.source_meta.get("realtime_type") != "0D"
-                    or any(type(v) is not int or v < 0 for v in (snapshot.age_ms, snapshot.received_ts_ms, snapshot.best_bid, snapshot.best_ask, snapshot.best_bid_qty, snapshot.best_ask_qty))
-                    or snapshot.best_bid <= 0 or snapshot.best_ask < snapshot.best_bid):
+            age = validate_receipt(
+                snapshot.source_meta,
+                symbol=snapshot.symbol,
+                route=snapshot.route,
+                now_ts=time.time() if now_ts is None else now_ts,
+            )
+            if (
+                snapshot.source_meta.get("realtime_type") != "0D"
+                or any(
+                    type(v) is not int or v < 0
+                    for v in (
+                        snapshot.age_ms,
+                        snapshot.received_ts_ms,
+                        snapshot.best_bid,
+                        snapshot.best_ask,
+                        snapshot.best_bid_qty,
+                        snapshot.best_ask_qty,
+                    )
+                )
+                or snapshot.best_bid <= 0
+                or snapshot.best_ask < snapshot.best_bid
+            ):
                 raise ValueError("ws_quote_contract_invalid")
             return replace(snapshot, age_ms=max(snapshot.age_ms, age))
-        except (OSError, ValueError, KeyError, TypeError, AttributeError, OverflowError):
-            return replace(snapshot, source_ok=False, error=snapshot.error or "ws_quote_receipt_invalid")
+        except (
+            OSError,
+            ValueError,
+            KeyError,
+            TypeError,
+            AttributeError,
+            OverflowError,
+        ):
+            return replace(
+                snapshot,
+                source_ok=False,
+                error=snapshot.error or "ws_quote_receipt_invalid",
+            )
     health = build_market_data_health(
         {
             "source": snapshot.source,
@@ -890,28 +945,67 @@ def evaluate_executable_micro_confirmation(
 
 
 def evaluate_entry_execution_velocity(
-    snapshot: EntryExecutionVelocitySnapshot, *, requested_quantity: int,
+    snapshot: EntryExecutionVelocitySnapshot,
+    *,
+    requested_quantity: int,
     now_ts: float | None = None,
 ) -> EntryExecutionVelocityDecision:
     # Revalidate the original successful response, not the carried health age.
     # Legacy declared print fixtures retain their existing receive-window adapter.
     if snapshot.source == "kiwoom_ws_trade_prints":
         from src.trading.market.entry_ws_snapshot import validate_receipt
+
         try:
             consumed = time.time() if now_ts is None else now_ts
-            age = validate_receipt(snapshot.source_meta, symbol=snapshot.symbol, route=snapshot.route, now_ts=consumed)
-            event_age = math.ceil((consumed - snapshot.source_meta["provider_latest_epoch"]) * 1000)
-            if (snapshot.source_meta.get("realtime_type") != "0B" or event_age < 0 or age > MAX_LATEST_PRINT_AGE_MS
-                    or any(type(v) is not int or v < 0 for v in (snapshot.print_count, snapshot.recent_volume, snapshot.latest_print_age_ms, snapshot.recent_print_span_ms))):
+            age = validate_receipt(
+                snapshot.source_meta,
+                symbol=snapshot.symbol,
+                route=snapshot.route,
+                now_ts=consumed,
+            )
+            event_age = math.ceil(
+                (consumed - snapshot.source_meta["provider_latest_epoch"]) * 1000
+            )
+            if (
+                snapshot.source_meta.get("realtime_type") != "0B"
+                or event_age < 0
+                or age > MAX_LATEST_PRINT_AGE_MS
+                or any(
+                    type(v) is not int or v < 0
+                    for v in (
+                        snapshot.print_count,
+                        snapshot.recent_volume,
+                        snapshot.latest_print_age_ms,
+                        snapshot.recent_print_span_ms,
+                    )
+                )
+            ):
                 raise ValueError("ws_trade_clock_invalid")
-            snapshot = replace(snapshot, latest_print_age_ms=max(snapshot.latest_print_age_ms, event_age))
-        except (OSError, ValueError, KeyError, TypeError, AttributeError, OverflowError):
-            snapshot = replace(snapshot, source_ok=False, error=snapshot.error or "ws_trade_receipt_invalid")
+            snapshot = replace(
+                snapshot,
+                latest_print_age_ms=max(snapshot.latest_print_age_ms, event_age),
+            )
+        except (
+            OSError,
+            ValueError,
+            KeyError,
+            TypeError,
+            AttributeError,
+            OverflowError,
+        ):
+            snapshot = replace(
+                snapshot,
+                source_ok=False,
+                error=snapshot.error or "ws_trade_receipt_invalid",
+            )
     elif snapshot.source_meta:
         consumed = time.time() if now_ts is None else now_ts
         health = build_rest_market_data_health(
-            {"stk_cd": snapshot.response_item_raw}, api_id="ka10003",
-            request_code=snapshot.request_code, source_meta=snapshot.source_meta, now_ts=consumed,
+            {"stk_cd": snapshot.response_item_raw},
+            api_id="ka10003",
+            request_code=snapshot.request_code,
+            source_meta=snapshot.source_meta,
+            now_ts=consumed,
         )
         facts = health["rest_input"]
         age = facts["response_receive_age_ms"]
@@ -922,14 +1016,29 @@ def evaluate_entry_execution_velocity(
             lag_ms = (consumed - evaluated.timestamp()) * 1000
             if not math.isfinite(lag_ms) or lag_ms < 0:
                 raise ValueError("velocity_consume_clock_invalid")
-            valid = facts["receipt_binding_proven"] is True and age is not None and 0 <= age <= MAX_LATEST_PRINT_AGE_MS
-            snapshot = replace(snapshot, source_ok=snapshot.source_ok and valid,
-                               latest_print_age_ms=snapshot.latest_print_age_ms + math.ceil(lag_ms),
-                               market_data_health=health,
-                               error=snapshot.error if valid else "ka10003_receive_receipt_scope_or_clock_invalid")
+            valid = (
+                facts["receipt_binding_proven"] is True
+                and age is not None
+                and 0 <= age <= MAX_LATEST_PRINT_AGE_MS
+            )
+            snapshot = replace(
+                snapshot,
+                source_ok=snapshot.source_ok and valid,
+                latest_print_age_ms=snapshot.latest_print_age_ms + math.ceil(lag_ms),
+                market_data_health=health,
+                error=(
+                    snapshot.error
+                    if valid
+                    else "ka10003_receive_receipt_scope_or_clock_invalid"
+                ),
+            )
         except (ValueError, TypeError, OverflowError):
-            snapshot = replace(snapshot, source_ok=False, market_data_health=health,
-                               error="ka10003_consume_clock_invalid")
+            snapshot = replace(
+                snapshot,
+                source_ok=False,
+                market_data_health=health,
+                error="ka10003_consume_clock_invalid",
+            )
     requested = _positive_int(requested_quantity)
     required_recent_volume = max(
         MIN_RECENT_PRINT_VOLUME,

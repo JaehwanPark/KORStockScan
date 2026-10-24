@@ -374,9 +374,9 @@ def _candidate_context_from_fields(
     authority_scopes = (
         AUTO_PROMOTION_SCOPES
         if scope_authority == "operator_all_session_auto_promotion"
-        else ROLLOUT_SCOPES
-        if scope_authority == "operator_all_scalping_rollout"
-        else ()
+        else (
+            ROLLOUT_SCOPES if scope_authority == "operator_all_scalping_rollout" else ()
+        )
     )
     approved_rollout_scope = (
         f"{venue}|{session.upper()}" in authority_scopes

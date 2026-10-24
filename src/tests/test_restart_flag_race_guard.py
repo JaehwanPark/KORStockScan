@@ -20,7 +20,9 @@ def test_sniper_engine_restart_flag_claim_requests_cooperative_shutdown():
     source = inspect.getsource(kiwoom_sniper_v2)
     assert "consume_restart_request(" in source
     assert "os.kill(os.getpid(), signal.SIGTERM)" not in source
-    assert "request_shutdown()" in inspect.getsource(kiwoom_sniper_v2._run_sniper_iterations)
+    assert "request_shutdown()" in inspect.getsource(
+        kiwoom_sniper_v2._run_sniper_iterations
+    )
 
 
 def test_restart_script_publishes_request_metadata_atomically():
@@ -59,24 +61,33 @@ def test_restart_script_uses_current_bootstrap_pid_receipt_contract():
     source = Path("restart.sh").read_text(encoding="utf-8")
 
     assert "src.engine.automation.runtime_policy_bootstrap" in source
-    assert 'runtime_policy_bootstrap_verify_${APPLICATION_DATE}.json' in source
+    assert "runtime_policy_bootstrap_verify_${APPLICATION_DATE}.json" in source
     assert "--write-verify-artifact" in source
     assert "src.engine.threshold_cycle_preopen_apply" not in source
 
 
 @pytest.mark.parametrize(
     "failures,appears,expected_rc,expected_attempts",
-    [(0, "none", 0, 1), (1, "none", 0, 2), (3, "none", 1, 3),
-     (1, "session", 1, 1), (1, "child", 1, 1), (0, "initial_child", 1, 0)],
+    [
+        (0, "none", 0, 1),
+        (1, "none", 0, 2),
+        (3, "none", 1, 3),
+        (1, "session", 1, 1),
+        (1, "child", 1, 1),
+        (0, "initial_child", 1, 0),
+    ],
 )
 def test_drained_supervisor_retries_only_without_a_session_or_child(
     failures, appears, expected_rc, expected_attempts
 ):
     source = Path("restart.sh").read_text()
-    function = "restart_drained_tmux_supervisor() {" + source.split(
-        "restart_drained_tmux_supervisor() {", 1
-    )[1].split("\n}\n", 1)[0] + "\n}\n"
-    script = '''
+    function = (
+        "restart_drained_tmux_supervisor() {"
+        + source.split("restart_drained_tmux_supervisor() {", 1)[1].split("\n}\n", 1)[0]
+        + "\n}\n"
+    )
+    script = (
+        """
 set -eu
 failures=$1; appears=$2; attempts=0; session=1; child=0
 BOT_TMUX_SESSION=isolated_test; PROJECT_DIR=/unused
@@ -98,14 +109,20 @@ tmux() {
         *) return 99 ;;
     esac
 }
-''' + function + '''
+"""
+        + function
+        + """
 rc=0
 restart_drained_tmux_supervisor || rc=$?
 echo "RESULT:$rc:$attempts"
-'''
+"""
+    )
     result = subprocess.run(
         ["bash", "-c", script, "test", str(failures), appears],
-        capture_output=True, text=True, timeout=5, check=True,
+        capture_output=True,
+        text=True,
+        timeout=5,
+        check=True,
     )
     assert f"RESULT:{expected_rc}:{expected_attempts}" in result.stdout
 
@@ -174,9 +191,17 @@ def test_launcher_imports_selected_release_despite_inherited_pythonpath(tmp_path
         "'import release_binding_probe; print(release_binding_probe.MARKER)'"
     )
     result = subprocess.run(
-        ["bash", "-c", command], cwd=tmp_path, check=True, text=True,
-        capture_output=True, env={**os.environ, "PROJECT_DIR": str(selected),
-                                 "PYTHONPATH": str(previous), "PROBE_PYTHON": sys.executable},
+        ["bash", "-c", command],
+        cwd=tmp_path,
+        check=True,
+        text=True,
+        capture_output=True,
+        env={
+            **os.environ,
+            "PROJECT_DIR": str(selected),
+            "PYTHONPATH": str(previous),
+            "PROBE_PYTHON": sys.executable,
+        },
     )
     assert result.stdout.splitlines()[-1] == "selected"
 
@@ -233,18 +258,25 @@ def test_context_promotion_uses_canonical_data_identity():
     assert context.RUNTIME_ENV_DIR == DATA_DIR / "threshold_cycle/runtime_env"
 
 
-@pytest.mark.parametrize('claimant', ['src/bot_main.py', 'src/engine/kiwoom_sniper_v2.py'])
+@pytest.mark.parametrize(
+    "claimant", ["src/bot_main.py", "src/engine/kiwoom_sniper_v2.py"]
+)
 def test_restart_claimant_closes_real_epoch_before_process_exit(tmp_path, claimant):
     import json
     import os
     import sys
+
     tree = ast.parse(Path(claimant).read_text())
-    branch = next(node for node in ast.walk(tree) if isinstance(node, ast.If)
-                  and ast.unparse(node.test) == 'RESTART_FLAG_PATH.exists()')
+    branch = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.If)
+        and ast.unparse(node.test) == "RESTART_FLAG_PATH.exists()"
+    )
     branch_source = ast.unparse(branch)
     # Execute the actual claim branch in an isolated process, with real request
     # coordination, collector, writer, WS cleanup and native final consumer.
-    script = '''
+    script = """
 import json, os, signal, sys, threading, time
 from pathlib import Path
 from types import SimpleNamespace
@@ -292,9 +324,24 @@ def summary():
     (root/'closed-before-exit').write_text('verified')
 sys.modules['src.utils.pipeline_event_logger'] = SimpleNamespace(drain_pipeline_event_summary_before_termination=summary)
 R.finish_main_shutdown(thread)
-'''
-    result = subprocess.run([sys.executable, '-c', script, str(tmp_path), branch_source, claimant],
-                            capture_output=True, text=True, timeout=15, env={**os.environ, 'PYTHONPATH':str(Path.cwd())})
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script, str(tmp_path), branch_source, claimant],
+        capture_output=True,
+        text=True,
+        timeout=15,
+        env={**os.environ, "PYTHONPATH": str(Path.cwd())},
+    )
     assert result.returncode == 0, result.stdout + result.stderr
-    assert (tmp_path/'closed-before-exit').read_text() == 'verified'
-    assert len(list((tmp_path/'data/runtime/scalp_micro_reversion_forward_collector/closed').glob('*.json'))) == 1
+    assert (tmp_path / "closed-before-exit").read_text() == "verified"
+    assert (
+        len(
+            list(
+                (
+                    tmp_path
+                    / "data/runtime/scalp_micro_reversion_forward_collector/closed"
+                ).glob("*.json")
+            )
+        )
+        == 1
+    )

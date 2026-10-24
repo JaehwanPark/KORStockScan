@@ -33,7 +33,11 @@ from src.trading.order.split_execution_math import (
 )
 from src.trading.order.tick_utils import clamp_price_to_tick
 from src.utils.constants import DATA_DIR
-from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl, iter_jsonl_objects_strict
+from src.utils.jsonl_io import (
+    existing_or_gzip_path,
+    iter_jsonl,
+    iter_jsonl_objects_strict,
+)
 from src.utils.market_day import count_krx_trading_days, is_krx_trading_day
 
 SCHEMA_VERSION = "scale_in_split_order_plan_v4"
@@ -518,11 +522,13 @@ def _iter_input_events(
         },
         "source_read_contract": {
             "read_mode": (
-                "strict_streaming_relevant_field_projection" if strict
+                "strict_streaming_relevant_field_projection"
+                if strict
                 else "streaming_relevant_field_projection"
             ),
             "status": (
-                "valid_empty" if strict and source_event_count == 0
+                "valid_empty"
+                if strict and source_event_count == 0
                 else "complete" if strict else "not_strictly_verified"
             ),
             "full_source_materialized": False,
@@ -544,9 +550,7 @@ def _context_bucket(fields: dict[str, Any]) -> str:
     strategy_bucket = (
         "scalping"
         if strategy in {"SCALPING", "SCALP"}
-        else "swing"
-        if strategy
-        else "unknown_strategy"
+        else "swing" if strategy else "unknown_strategy"
     )
     stage = str(fields.get("stage") or "").strip()
     add_reason = str(
@@ -860,7 +864,9 @@ def _event_matches_anchor(
     if anchor_record_id and event_record_id and anchor_record_id != event_record_id:
         return False
     for key in (
-        "position_episode_id", "scale_in_decision_id", "broker_route",
+        "position_episode_id",
+        "scale_in_decision_id",
+        "broker_route",
         "broker_session",
     ):
         if anchor.get(key) and event.get(key) and anchor[key] != event[key]:
@@ -1160,22 +1166,49 @@ def _counterfactual_for_anchor(
             if elapsed in price_samples and price_samples[elapsed] != price:
                 price_conflict = True
             price_samples[elapsed] = price
-            ask = _price_from_fields(event, ("market_data_effective_best_ask", "best_ask"))
-            ask_qty = _safe_int(event.get("market_data_effective_best_ask_qty", event.get("best_ask_qty")))
+            ask = _price_from_fields(
+                event, ("market_data_effective_best_ask", "best_ask")
+            )
+            ask_qty = _safe_int(
+                event.get(
+                    "market_data_effective_best_ask_qty", event.get("best_ask_qty")
+                )
+            )
             route = str(event.get("broker_route") or event.get("effective_venue") or "")
-            anchor_route = str(anchor.get("broker_route") or anchor.get("effective_venue") or "")
+            anchor_route = str(
+                anchor.get("broker_route") or anchor.get("effective_venue") or ""
+            )
             quote = event.get("scale_in_quote_source_receipt") or {}
-            expected_item = code + ("_AL" if anchor_route == "SOR" else "_NX" if anchor_route == "NXT" else "")
+            expected_item = code + (
+                "_AL"
+                if anchor_route == "SOR"
+                else "_NX" if anchor_route == "NXT" else ""
+            )
             stamp = _safe_float(quote.get("observed_epoch"), None)
-            reference = _safe_float(event.get("market_data_effective_quote_reference_epoch"), None)
-            source_valid = bool(event.get("market_data_effective_best_ask_qty_source_valid") is True
-                and quote.get("source_type") == "0D" and quote.get("item") == expected_item
-                and type(quote.get("transport_epoch")) is int and stamp is not None and reference is not None
-                and 0 <= reference - stamp <= 3 and abs(reference - event_time.timestamp()) <= 3)
-            liquidity_samples[elapsed] = {"best_ask": ask, "ask_qty": ask_qty,
-                "quote_epoch": quote.get("transport_epoch"), "quote_sequence": quote.get("route_sequence"),
-                "liquidity_source_valid": bool(source_valid and anchor_route in {"KRX", "NXT", "SOR"}
-                                               and not _safe_bool(event.get("market_data_source_conflict")))}
+            reference = _safe_float(
+                event.get("market_data_effective_quote_reference_epoch"), None
+            )
+            source_valid = bool(
+                event.get("market_data_effective_best_ask_qty_source_valid") is True
+                and quote.get("source_type") == "0D"
+                and quote.get("item") == expected_item
+                and type(quote.get("transport_epoch")) is int
+                and stamp is not None
+                and reference is not None
+                and 0 <= reference - stamp <= 3
+                and abs(reference - event_time.timestamp()) <= 3
+            )
+            liquidity_samples[elapsed] = {
+                "best_ask": ask,
+                "ask_qty": ask_qty,
+                "quote_epoch": quote.get("transport_epoch"),
+                "quote_sequence": quote.get("route_sequence"),
+                "liquidity_source_valid": bool(
+                    source_valid
+                    and anchor_route in {"KRX", "NXT", "SOR"}
+                    and not _safe_bool(event.get("market_data_source_conflict"))
+                ),
+            }
             min_price = price if min_price is None else min(min_price, price)
             max_price = price if max_price is None else max(max_price, price)
 
@@ -1318,7 +1351,11 @@ def _counterfactual_for_anchor(
     result.update(
         {
             "execution_price_samples": [
-                {"elapsed_sec": elapsed, "price": price, **liquidity_samples.get(elapsed, {})}
+                {
+                    "elapsed_sec": elapsed,
+                    "price": price,
+                    **liquidity_samples.get(elapsed, {}),
+                }
                 for elapsed, price in sorted(price_samples.items())
             ],
             "price_sample_conflict": price_conflict,
@@ -1330,15 +1367,25 @@ def _counterfactual_for_anchor(
             "actual_fill_qty": actual_fill_qty,
             "position_quantity_verified": (
                 position_quantity_verified
-                if position_quantity_status != "legacy_unobserved" else None
+                if position_quantity_status != "legacy_unobserved"
+                else None
             ),
             "position_quantity_status": position_quantity_status,
             "actual_fill_price": actual_fill_price,
             "scale_in_receipt_quality_complete": scale_in_receipt_quality_complete,
             "terminal_sell_price": terminal_sell_price or None,
-            "outcome_available_at": (_event_time(terminal_event).isoformat() if terminal_event and _event_time(terminal_event) else None),
+            "outcome_available_at": (
+                _event_time(terminal_event).isoformat()
+                if terminal_event and _event_time(terminal_event)
+                else None
+            ),
             "terminal_lot_basis_complete": terminal_lot_basis_complete,
-            "anchor_source": {key: value for key, value in anchor.items() if key in _INPUT_PROJECTION_KEYS or key in {"source_date", "source_name"}},
+            "anchor_source": {
+                key: value
+                for key, value in anchor.items()
+                if key in _INPUT_PROJECTION_KEYS
+                or key in {"source_date", "source_name"}
+            },
             "terminal_receipt_quality_complete": terminal_receipt_quality_complete,
             "real_outcome_joined": bool(
                 exact_identity
@@ -1611,7 +1658,10 @@ def _replay_execution(
             continue
         quote_keys.add(quote_key)
         liquidity[elapsed] = [ask, ask_qty]
-    if anchor.get("price_sample_conflict") or len({item.get("quote_epoch") for item in raw_samples}) != 1:
+    if (
+        anchor.get("price_sample_conflict")
+        or len({item.get("quote_epoch") for item in raw_samples}) != 1
+    ):
         return None
     terminal_sec = _safe_float(anchor.get("terminal_elapsed_sec"), None)
     if terminal_sec is None or terminal_sec < 0:
@@ -1619,7 +1669,9 @@ def _replay_execution(
     path_end = _safe_float(anchor.get("observation_end_elapsed_sec"), None)
     if path_end is None:
         return None
-    samples = sorted((t, p) for t, p in samples if t in liquidity and t < min(terminal_sec, path_end))
+    samples = sorted(
+        (t, p) for t, p in samples if t in liquidity and t < min(terminal_sec, path_end)
+    )
     if not samples:
         return None
     plan = _candidate_price_qty_plan(anchor, selected) if selected else [(qty, base)]
@@ -1628,7 +1680,16 @@ def _replay_execution(
     canceled_legs = 0
     for (leg_qty, price), ttl in zip(plan, ttls):
         deadline = min(float(ttl), terminal_sec, path_end)
-        crossing = next((t for t, _ in samples if t < deadline and liquidity[t][0] <= price and liquidity[t][1] >= leg_qty), None)
+        crossing = next(
+            (
+                t
+                for t, _ in samples
+                if t < deadline
+                and liquidity[t][0] <= price
+                and liquidity[t][1] >= leg_qty
+            ),
+            None,
+        )
         if crossing is not None:
             # Consume displayed quantity once across legs at this observation.
             liquidity[crossing][1] -= leg_qty
@@ -1697,12 +1758,23 @@ def _evaluate_candidate_economics(
         candidate = _replay_execution(item, selected)
         if control is None or candidate is None:
             continue
-        if control["filled_qty"] != _safe_int(item.get("actual_fill_qty")) or abs(control["average_fill_price"] - (_safe_float(item.get("actual_fill_price"), 0) or 0)) > _tick_size(_safe_int(item.get("base_price"))):
+        if control["filled_qty"] != _safe_int(item.get("actual_fill_qty")) or abs(
+            control["average_fill_price"]
+            - (_safe_float(item.get("actual_fill_price"), 0) or 0)
+        ) > _tick_size(_safe_int(item.get("base_price"))):
             continue
         delta_pnl = candidate["pnl_krw"] - control["pnl_krw"]
         base_notional = control["base_notional"]
-        stress_pnl = (calculate_net_realized_pnl(candidate["average_fill_price"] + _tick_size(_safe_int(item.get("base_price"))),
-                                               item["terminal_sell_price"], candidate["filled_qty"]) if candidate["filled_qty"] else 0)
+        stress_pnl = (
+            calculate_net_realized_pnl(
+                candidate["average_fill_price"]
+                + _tick_size(_safe_int(item.get("base_price"))),
+                item["terminal_sell_price"],
+                candidate["filled_qty"],
+            )
+            if candidate["filled_qty"]
+            else 0
+        )
         stress_delta_pnl_total += stress_pnl - control["pnl_krw"]
         delta_pct = delta_pnl / base_notional * 100.0
         deltas.append(delta_pct)
@@ -1812,8 +1884,15 @@ def _evaluate_candidate_economics(
         ),
         "economic_delta_pnl_krw": delta_pnl_total if deltas else None,
         "conservative_delta_pnl_krw": stress_delta_pnl_total if deltas else None,
-        "daily_delta_net_pnl_krw": {day: sum(row["delta_pnl_krw"] for row in sample_rows if row["source_date"] == day) for day in sorted(source_dates)},
-        "average_daily_delta_net_pnl_krw": delta_pnl_total / len(source_dates) if source_dates else None,
+        "daily_delta_net_pnl_krw": {
+            day: sum(
+                row["delta_pnl_krw"] for row in sample_rows if row["source_date"] == day
+            )
+            for day in sorted(source_dates)
+        },
+        "average_daily_delta_net_pnl_krw": (
+            delta_pnl_total / len(source_dates) if source_dates else None
+        ),
         "economic_base_notional_krw": base_notional_total,
         "economic_sample_rows": sample_rows,
         "runtime_apply_blockers": blockers,
@@ -2194,7 +2273,9 @@ def _candidate_for_bucket(
     )
     for item in counterfactual.get("rolling_anchor_results") or []:
         item["incumbent_policy"] = incumbent
-    calibration, holdout, partition = _partition_outcomes(list(counterfactual.get("rolling_anchor_results") or []))
+    calibration, holdout, partition = _partition_outcomes(
+        list(counterfactual.get("rolling_anchor_results") or [])
+    )
     heuristic_selected = _selected_policy_from_counterfactual(counterfactual)
     evaluated_variants: list[dict[str, Any]] = []
     attribution = _post_apply_attribution(
@@ -2203,19 +2284,21 @@ def _candidate_for_bucket(
     grid = []
     seen_plans = set()
     for variant in _two_leg_variant_grid(heuristic_selected):
-        signature = tuple(tuple(_candidate_price_qty_plan(row, variant)) for row in calibration)
+        signature = tuple(
+            tuple(_candidate_price_qty_plan(row, variant)) for row in calibration
+        )
         if not calibration or signature not in seen_plans:
             grid.append(variant)
             seen_plans.add(signature)
     for row in calibration:
-        row["model_common_cohort"] = all(_replay_execution(row, variant) is not None for variant in grid)
+        row["model_common_cohort"] = all(
+            _replay_execution(row, variant) is not None for variant in grid
+        )
     for variant in grid:
         evaluated_variants.append(
             {
                 **variant,
-                **_evaluate_candidate_economics(
-                    calibration, variant
-                ),
+                **_evaluate_candidate_economics(calibration, variant),
             }
         )
         if any(
@@ -2227,29 +2310,48 @@ def _candidate_for_bucket(
                 "post_apply_negative_economic_evidence"
             )
             evaluated_variants[-1]["runtime_apply_allowed"] = False
-    runtime_variants = [item for item in evaluated_variants if item.get("runtime_apply_allowed")]
+    runtime_variants = [
+        item for item in evaluated_variants if item.get("runtime_apply_allowed")
+    ]
     # Choose once on calibration. A holdout failure must not try another arm.
     if runtime_variants:
         winner = max(runtime_variants, key=_economic_rank)
         validation = _evaluate_candidate_economics(holdout, winner)
         identical = bool(calibration) and all(
-            _candidate_price_qty_plan(row, winner) == (
-                _candidate_price_qty_plan(row, incumbent) if incumbent else
-                [(_safe_int(row.get("requested_qty")), _safe_int(row.get("base_price")))])
-            for row in calibration)
+            _candidate_price_qty_plan(row, winner)
+            == (
+                _candidate_price_qty_plan(row, incumbent)
+                if incumbent
+                else [
+                    (
+                        _safe_int(row.get("requested_qty")),
+                        _safe_int(row.get("base_price")),
+                    )
+                ]
+            )
+            for row in calibration
+        )
         holdout_blockers = list(validation["runtime_apply_blockers"])
         if partition["blockers"]:
             holdout_blockers.extend(partition["blockers"])
         if identical:
             holdout_blockers.append("incumbent_preserved")
-        winner["holdout_evidence"] = {**validation, **partition, "runtime_apply_allowed": not holdout_blockers,
-                                      "runtime_apply_blockers": holdout_blockers}
+        winner["holdout_evidence"] = {
+            **validation,
+            **partition,
+            "runtime_apply_allowed": not holdout_blockers,
+            "runtime_apply_blockers": holdout_blockers,
+        }
         winner["runtime_apply_blockers"] = holdout_blockers
         winner["runtime_apply_allowed"] = not holdout_blockers
         runtime_variants = [winner] if not holdout_blockers else []
     else:
         winner = max(evaluated_variants, key=_economic_rank)
-        winner["holdout_evidence"] = {**partition, "runtime_apply_allowed": False, "blockers": [*partition["blockers"], "calibration_not_ready"]}
+        winner["holdout_evidence"] = {
+            **partition,
+            "runtime_apply_allowed": False,
+            "blockers": [*partition["blockers"], "calibration_not_ready"],
+        }
     selected = winner
     candidate = {
         **counterfactual,
@@ -2313,18 +2415,33 @@ def _candidate_for_bucket(
             "missed_upside_proxy_rate": counterfactual.get("missed_upside_proxy_rate"),
         },
     }
-    candidate.update(
-        _evaluate_candidate_economics(
-            calibration, selected
+    candidate.update(_evaluate_candidate_economics(calibration, selected))
+    candidate["rolling_eligible_runtime_attempt_count"] = counterfactual[
+        "eligible_runtime_attempt_count"
+    ]
+    same_plan = bool(calibration) and all(
+        _candidate_price_qty_plan(row, selected)
+        == (
+            _candidate_price_qty_plan(row, incumbent)
+            if incumbent
+            else [
+                (_safe_int(row.get("requested_qty")), _safe_int(row.get("base_price")))
+            ]
         )
+        for row in calibration
     )
-    candidate["rolling_eligible_runtime_attempt_count"] = counterfactual["eligible_runtime_attempt_count"]
-    same_plan = bool(calibration) and all(_candidate_price_qty_plan(row, selected) == (
-        _candidate_price_qty_plan(row, incumbent) if incumbent else
-        [(_safe_int(row.get("requested_qty")), _safe_int(row.get("base_price")))]) for row in calibration)
-    candidate["selection_status"] = "incumbent_preserved" if same_plan else "distinct_challenger"
+    candidate["selection_status"] = (
+        "incumbent_preserved" if same_plan else "distinct_challenger"
+    )
     candidate["holdout_evidence"] = selected["holdout_evidence"]
-    candidate["calibration_evidence"] = {key: selected.get(key) for key in ("paired_economic_sample_count", "economic_source_dates", "source_quality_adjusted_ev_pct")}
+    candidate["calibration_evidence"] = {
+        key: selected.get(key)
+        for key in (
+            "paired_economic_sample_count",
+            "economic_source_dates",
+            "source_quality_adjusted_ev_pct",
+        )
+    }
     candidate["runtime_apply_blockers"] = selected["runtime_apply_blockers"]
     candidate["runtime_apply_allowed"] = selected["runtime_apply_allowed"]
     candidate["post_apply_attribution"] = attribution
@@ -2445,7 +2562,9 @@ def _runtime_refresh_evidence(
         ),
         "downside_p10_delta_floor_pct": (RUNTIME_REFRESH_DOWNSIDE_P10_DELTA_FLOOR_PCT),
         "blockers": blockers,
-        "holdout_evidence": [item.get("holdout_evidence") for item in runtime_candidates],
+        "holdout_evidence": [
+            item.get("holdout_evidence") for item in runtime_candidates
+        ],
         "insufficient_evidence_action": (
             "block_refresh_until_validated_prior_policy_available"
         ),
@@ -2461,20 +2580,48 @@ def runtime_refresh_contract_error(evidence: Any) -> str:
     if not isinstance(holdouts, list) or not holdouts:
         return "runtime_refresh_independent_holdout_missing"
     for holdout in holdouts:
-        if not isinstance(holdout, dict) or holdout.get("runtime_apply_allowed") is not True or holdout.get("runtime_apply_blockers") or holdout.get("blockers"):
+        if (
+            not isinstance(holdout, dict)
+            or holdout.get("runtime_apply_allowed") is not True
+            or holdout.get("runtime_apply_blockers")
+            or holdout.get("blockers")
+        ):
             return "runtime_refresh_independent_holdout_blocked"
-        calibration_dates, holdout_dates = holdout.get("calibration_dates"), holdout.get("holdout_dates")
-        if (not isinstance(calibration_dates, list) or not calibration_dates or not isinstance(holdout_dates, list) or not holdout_dates
-                or any(not isinstance(day, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day) or not is_date_allowed(day, clean_baseline_policy())
-                       for day in calibration_dates + holdout_dates)
-                or max(calibration_dates) >= min(holdout_dates)):
+        calibration_dates, holdout_dates = holdout.get(
+            "calibration_dates"
+        ), holdout.get("holdout_dates")
+        if (
+            not isinstance(calibration_dates, list)
+            or not calibration_dates
+            or not isinstance(holdout_dates, list)
+            or not holdout_dates
+            or any(
+                not isinstance(day, str)
+                or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day)
+                or not is_date_allowed(day, clean_baseline_policy())
+                for day in calibration_dates + holdout_dates
+            )
+            or max(calibration_dates) >= min(holdout_dates)
+        ):
             return "runtime_refresh_holdout_chronology_invalid"
-        if ((_safe_float(holdout.get("price_join_coverage"), 0) or 0) < 0.8 or (_safe_float(holdout.get("modeled_fill_participation"), 0) or 0) < 0.7
-                or _safe_float(holdout.get("downside_p10_profit_rate"), None) is None or holdout["downside_p10_profit_rate"] < -0.3
-                or set(holdout.get("calibration_dates") or []).intersection(holdout.get("holdout_dates") or [])
-                or len(set(holdout.get("calibration_dates") or [])) < 2
-                or set(holdout.get("economic_source_dates") or []) != set(holdout.get("holdout_dates") or [])
-                or _safe_int(holdout.get("paired_economic_sample_count")) < 3 or len(set(holdout.get("economic_source_dates") or [])) < 2 or (_safe_float(holdout.get("source_quality_adjusted_ev_pct"), 0) or 0) < 0.1 or (_safe_float(holdout.get("average_daily_delta_net_pnl_krw"), 0) or 0) <= 0):
+        if (
+            (_safe_float(holdout.get("price_join_coverage"), 0) or 0) < 0.8
+            or (_safe_float(holdout.get("modeled_fill_participation"), 0) or 0) < 0.7
+            or _safe_float(holdout.get("downside_p10_profit_rate"), None) is None
+            or holdout["downside_p10_profit_rate"] < -0.3
+            or set(holdout.get("calibration_dates") or []).intersection(
+                holdout.get("holdout_dates") or []
+            )
+            or len(set(holdout.get("calibration_dates") or [])) < 2
+            or set(holdout.get("economic_source_dates") or [])
+            != set(holdout.get("holdout_dates") or [])
+            or _safe_int(holdout.get("paired_economic_sample_count")) < 3
+            or len(set(holdout.get("economic_source_dates") or [])) < 2
+            or (_safe_float(holdout.get("source_quality_adjusted_ev_pct"), 0) or 0)
+            < 0.1
+            or (_safe_float(holdout.get("average_daily_delta_net_pnl_krw"), 0) or 0)
+            <= 0
+        ):
             return "runtime_refresh_independent_holdout_floor"
     if evidence.get("runtime_policy_refresh_allowed") is not True:
         return "runtime_refresh_evidence_not_allowed"
@@ -2586,19 +2733,35 @@ def _policy_hash(
 
 
 def _partition_outcomes(rows: list[dict[str, Any]]) -> tuple[list, list, dict]:
-    ready = [r for r in rows if r.get("real_outcome_joined") and r.get("additional_mfe_mae_joined")]
+    ready = [
+        r
+        for r in rows
+        if r.get("real_outcome_joined") and r.get("additional_mfe_mae_joined")
+    ]
     days = sorted({str(r.get("source_date")) for r in ready})
     holdout_days = days[-2:]
-    start = _parse_event_time(f"{holdout_days[0]}T00:00:00+09:00") if holdout_days else None
-    holdout_episodes = {str(r.get("record_id")) for r in ready if r.get("source_date") in holdout_days}
-    calibration = [r for r in ready if r.get("source_date") not in holdout_days
-                   and str(r.get("record_id")) not in holdout_episodes
-                   and (available := _parse_event_time(r.get("outcome_available_at"))) is not None
-                   and start is not None and available < start]
+    start = (
+        _parse_event_time(f"{holdout_days[0]}T00:00:00+09:00") if holdout_days else None
+    )
+    holdout_episodes = {
+        str(r.get("record_id")) for r in ready if r.get("source_date") in holdout_days
+    }
+    calibration = [
+        r
+        for r in ready
+        if r.get("source_date") not in holdout_days
+        and str(r.get("record_id")) not in holdout_episodes
+        and (available := _parse_event_time(r.get("outcome_available_at"))) is not None
+        and start is not None
+        and available < start
+    ]
     holdout = [r for r in ready if r.get("source_date") in holdout_days]
-    consumed = {day for path in REPORT_DIR.glob(f"{REPORT_TYPE}_*.json")
-                if len(path.stem.removeprefix(f"{REPORT_TYPE}_")) == 10
-                for day in _load_json(path).get("consumed_holdout_dates", [])}
+    consumed = {
+        day
+        for path in REPORT_DIR.glob(f"{REPORT_TYPE}_*.json")
+        if len(path.stem.removeprefix(f"{REPORT_TYPE}_")) == 10
+        for day in _load_json(path).get("consumed_holdout_dates", [])
+    }
     # A late evaluation ledger can be newer than its fill dates. Consumption
     # remains permanent even when an earlier cohort is revised or replayed.
     blockers = []
@@ -2608,82 +2771,166 @@ def _partition_outcomes(rows: list[dict[str, Any]]) -> tuple[list, list, dict]:
         blockers.append("independent_holdout_sample_floor")
     if consumed.intersection(holdout_days):
         blockers.append("holdout_already_consumed")
-    return calibration, holdout, {"calibration_dates": sorted({r.get("source_date") for r in calibration}),
-                                  "holdout_dates": holdout_days, "blockers": blockers}
+    return (
+        calibration,
+        holdout,
+        {
+            "calibration_dates": sorted({r.get("source_date") for r in calibration}),
+            "holdout_dates": holdout_days,
+            "blockers": blockers,
+        },
+    )
 
 
 def _query_actual_fill_inventory(target_date: str) -> list[dict[str, Any]]:
     """Read receipt-confirmed DB history; never write facts or call a provider."""
     from src.database.db_manager import DBManager
     from src.database.models import HoldingAddHistory, RecommendationHistory
-    from src.engine.sniper_position_tags import is_default_position_tag, normalize_position_tag
+    from src.engine.sniper_position_tags import (
+        is_default_position_tag,
+        normalize_position_tag,
+    )
 
     refresh_start = policy_refresh_start_date(target_date)
-    days = sorted(p.stem.removeprefix(f"{REPORT_TYPE}_") for p in REPORT_DIR.glob(f"{REPORT_TYPE}_*.json")
-                  if len(p.stem.removeprefix(f"{REPORT_TYPE}_")) == 10
-                  and refresh_start <= p.stem.removeprefix(f"{REPORT_TYPE}_") < target_date
-                  and is_date_allowed(p.stem.removeprefix(f"{REPORT_TYPE}_"), clean_baseline_policy()))
+    days = sorted(
+        p.stem.removeprefix(f"{REPORT_TYPE}_")
+        for p in REPORT_DIR.glob(f"{REPORT_TYPE}_*.json")
+        if len(p.stem.removeprefix(f"{REPORT_TYPE}_")) == 10
+        and refresh_start <= p.stem.removeprefix(f"{REPORT_TYPE}_") < target_date
+        and is_date_allowed(
+            p.stem.removeprefix(f"{REPORT_TYPE}_"), clean_baseline_policy()
+        )
+    )
     # Retain the existing report-date window, including excluded schema dates.
-    first = days[-19] if len(days) >= 19 else (days[0] if days else (
-        refresh_start if refresh_start != clean_baseline_policy().get("clean_tuning_baseline_date") else target_date
-    ))
+    first = (
+        days[-19]
+        if len(days) >= 19
+        else (
+            days[0]
+            if days
+            else (
+                refresh_start
+                if refresh_start
+                != clean_baseline_policy().get("clean_tuning_baseline_date")
+                else target_date
+            )
+        )
+    )
     start = datetime.fromisoformat(first)
     end = datetime.fromisoformat(target_date) + timedelta(days=1)
     with DBManager().get_session() as session:
-        pairs = session.query(HoldingAddHistory, RecommendationHistory).outerjoin(
-            RecommendationHistory, RecommendationHistory.id == HoldingAddHistory.recommendation_id
-        ).filter(HoldingAddHistory.event_time >= start, HoldingAddHistory.event_time < end,
-                 HoldingAddHistory.strategy.in_(["SCALPING", "SCALP"]), HoldingAddHistory.add_type == "AVG_DOWN",
-                 HoldingAddHistory.event_type == "EXECUTED", HoldingAddHistory.reason == "receipt_confirmed",
-                 HoldingAddHistory.executed_qty > 0).order_by(HoldingAddHistory.id).all()
+        pairs = (
+            session.query(HoldingAddHistory, RecommendationHistory)
+            .outerjoin(
+                RecommendationHistory,
+                RecommendationHistory.id == HoldingAddHistory.recommendation_id,
+            )
+            .filter(
+                HoldingAddHistory.event_time >= start,
+                HoldingAddHistory.event_time < end,
+                HoldingAddHistory.strategy.in_(["SCALPING", "SCALP"]),
+                HoldingAddHistory.add_type == "AVG_DOWN",
+                HoldingAddHistory.event_type == "EXECUTED",
+                HoldingAddHistory.reason == "receipt_confirmed",
+                HoldingAddHistory.executed_qty > 0,
+            )
+            .order_by(HoldingAddHistory.id)
+            .all()
+        )
         result = []
         for receipt, position in pairs:
             if position is None:
                 raise ValueError("filled_position_identity_missing")
-            if (not is_default_position_tag(position.strategy, position.position_tag)
-                    and normalize_position_tag(position.strategy, position.position_tag) != "SCANNER"):
+            if (
+                not is_default_position_tag(position.strategy, position.position_tag)
+                and normalize_position_tag(position.strategy, position.position_tag)
+                != "SCANNER"
+            ):
                 continue
-            if not receipt.order_no or not receipt.event_time or not receipt.executed_price or receipt.executed_price <= 0:
+            if (
+                not receipt.order_no
+                or not receipt.event_time
+                or not receipt.executed_price
+                or receipt.executed_price <= 0
+            ):
                 raise ValueError("actual_execution_history_contract_invalid")
             terminal = position.sell_time
             terminal_in_scope = terminal is not None and terminal < end
-            result.append({"history_id": receipt.id, "record_id": str(receipt.recommendation_id),
-                           "code": receipt.stock_code, "order_no": receipt.order_no,
-                           "source_date": receipt.event_time.date().isoformat(), "fill_time": receipt.event_time.isoformat(),
-                           "request_qty": receipt.request_qty, "fill_qty": receipt.executed_qty,
-                           "fill_price": receipt.executed_price, "request_price": receipt.request_price,
-                           "status": position.status if terminal_in_scope or terminal is None else "HOLDING",
-                           "outcome_timing_status": "missing_completed_terminal_clock" if position.status == "COMPLETED" and terminal is None else "in_scope" if terminal_in_scope else "not_terminal_in_scope",
-                           "sell_time": terminal.isoformat() if terminal_in_scope else None,
-                           "sell_price": position.sell_price if terminal_in_scope else None,
-                           "profit_rate": position.profit_rate if terminal_in_scope else None})
+            result.append(
+                {
+                    "history_id": receipt.id,
+                    "record_id": str(receipt.recommendation_id),
+                    "code": receipt.stock_code,
+                    "order_no": receipt.order_no,
+                    "source_date": receipt.event_time.date().isoformat(),
+                    "fill_time": receipt.event_time.isoformat(),
+                    "request_qty": receipt.request_qty,
+                    "fill_qty": receipt.executed_qty,
+                    "fill_price": receipt.executed_price,
+                    "request_price": receipt.request_price,
+                    "status": (
+                        position.status
+                        if terminal_in_scope or terminal is None
+                        else "HOLDING"
+                    ),
+                    "outcome_timing_status": (
+                        "missing_completed_terminal_clock"
+                        if position.status == "COMPLETED" and terminal is None
+                        else (
+                            "in_scope" if terminal_in_scope else "not_terminal_in_scope"
+                        )
+                    ),
+                    "sell_time": terminal.isoformat() if terminal_in_scope else None,
+                    "sell_price": position.sell_price if terminal_in_scope else None,
+                    "profit_rate": position.profit_rate if terminal_in_scope else None,
+                }
+            )
     return result
 
 
 def _semantic_digest(value: Any) -> str:
-    return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
+    return hashlib.sha256(
+        json.dumps(
+            value, sort_keys=True, ensure_ascii=False, separators=(",", ":")
+        ).encode()
+    ).hexdigest()
 
 
 def _fact_sync_receipt(target_date: str) -> dict[str, Any]:
-    path = DATA_DIR / "report/strategy_position_fact_sync" / f"strategy_position_fact_sync_{target_date}.status.json"
+    path = (
+        DATA_DIR
+        / "report/strategy_position_fact_sync"
+        / f"strategy_position_fact_sync_{target_date}.status.json"
+    )
     payload = _load_json(path)
     signature = payload.pop("artifact_sha256", None)
-    if (payload.get("schema_version") != 1 or payload.get("report_type") != "strategy_position_fact_sync"
-            or payload.get("target_date") != target_date or payload.get("consumer_ready") is not True
-            or payload.get("status") not in {"succeeded", "valid_empty"} or payload.get("issues")
-            or not signature or signature != _semantic_digest(payload)):
+    if (
+        payload.get("schema_version") != 1
+        or payload.get("report_type") != "strategy_position_fact_sync"
+        or payload.get("target_date") != target_date
+        or payload.get("consumer_ready") is not True
+        or payload.get("status") not in {"succeeded", "valid_empty"}
+        or payload.get("issues")
+        or not signature
+        or signature != _semantic_digest(payload)
+    ):
         raise ValueError("exact_fact_sync_receipt_missing_or_invalid")
     return payload
 
 
-def _conditioned_source_events(target_date: str, receipt: dict, records: set[str]) -> tuple[list, dict]:
+def _conditioned_source_events(
+    target_date: str, receipt: dict, records: set[str]
+) -> tuple[list, dict]:
     projection = receipt.get("scale_in_execution_projection")
     if "scale_in_execution_projection" in receipt and (
         not isinstance(projection, dict)
         or projection.get("contract") != "scale_in_execution_projection_v1"
     ):
         raise ValueError("execution_projection_contract_invalid")
-    if isinstance(projection, dict) and projection.get("contract") == "scale_in_execution_projection_v1":
+    if (
+        isinstance(projection, dict)
+        and projection.get("contract") == "scale_in_execution_projection_v1"
+    ):
         rows = projection.get("rows")
         if projection.get("target_date") != target_date or not isinstance(rows, list):
             raise ValueError("execution_projection_contract_invalid")
@@ -2715,20 +2962,23 @@ def _conditioned_source_events(target_date: str, receipt: dict, records: set[str
             identities[identity] = digest
             if _record_id(row) in records:
                 selected.append(row)
-        return selected, {"source_read_contract": {
-            "read_mode": "exact_fact_sync_projection",
-            "catalog_sha256": receipt.get("artifact_sha256") or _semantic_digest(receipt),
-            "projection_sha256": _semantic_digest(rows),
-            "pipeline_generation_sha256": (
-                receipt["scanner_source_quality"].get("source_generation_sha256")
-                if isinstance(receipt.get("scanner_source_quality"), dict)
-                else None
-            ),
-            "raw_row_count": len(rows),
-            "retained_event_count": len(selected),
-            "duplicate_count": duplicate_count,
-            "source_date": target_date,
-        }}
+        return selected, {
+            "source_read_contract": {
+                "read_mode": "exact_fact_sync_projection",
+                "catalog_sha256": receipt.get("artifact_sha256")
+                or _semantic_digest(receipt),
+                "projection_sha256": _semantic_digest(rows),
+                "pipeline_generation_sha256": (
+                    receipt["scanner_source_quality"].get("source_generation_sha256")
+                    if isinstance(receipt.get("scanner_source_quality"), dict)
+                    else None
+                ),
+                "raw_row_count": len(rows),
+                "retained_event_count": len(selected),
+                "duplicate_count": duplicate_count,
+                "source_date": target_date,
+            }
+        }
     paths = [_pipeline_events_path(target_date), _threshold_events_path(target_date)]
     if not existing_or_gzip_path(paths[0]).exists():
         raise ValueError("execution_pipeline_source_missing")
@@ -2737,7 +2987,9 @@ def _conditioned_source_events(target_date: str, receipt: dict, records: set[str
         raise ValueError("bounded_execution_projection_missing")
     for path in paths:
         resolved = existing_or_gzip_path(path)
-        if resolved.exists() and (resolved.suffix == ".gz" or resolved.stat().st_size > 64 * 1024 * 1024):
+        if resolved.exists() and (
+            resolved.suffix == ".gz" or resolved.stat().st_size > 64 * 1024 * 1024
+        ):
             raise ValueError("bounded_execution_projection_missing")
     rows, summary = _iter_input_events(target_date, strict=True)
     return [r for r in rows if _record_id(r) in records], summary
@@ -2767,10 +3019,17 @@ def _validated_incumbent(target_date: str) -> dict[str, Any] | None:
     raw = overrides.get("KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_FILE")
     policy = _load_json(Path(raw)) if isinstance(raw, str) and raw else {}
     now = _parse_event_time(f"{target_date}T23:59:59+09:00")
-    if (policy.get("schema_version") == POLICY_SCHEMA_VERSION and policy.get("runtime_apply_allowed") is True
-            and _safe_bool(overrides.get("KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_ENABLED"))
-            and not policy_runtime_contract_error(policy) and not _policy_is_stale(policy, now=now)
-            and policy.get("policy_version") == overrides.get("KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_VERSION")):
+    if (
+        policy.get("schema_version") == POLICY_SCHEMA_VERSION
+        and policy.get("runtime_apply_allowed") is True
+        and _safe_bool(
+            overrides.get("KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_ENABLED")
+        )
+        and not policy_runtime_contract_error(policy)
+        and not _policy_is_stale(policy, now=now)
+        and policy.get("policy_version")
+        == overrides.get("KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_VERSION")
+    ):
         return policy
     return None
 
@@ -2780,69 +3039,155 @@ def build_report(target_date: str) -> dict[str, Any]:
     refresh_start = policy_refresh_start_date(target_date)
     previous = _load_json(report_paths(target_date)[0])
     if not previous:
-        paths = sorted(p for p in REPORT_DIR.glob(f"{REPORT_TYPE}_*.json")
-                       if len(p.stem.removeprefix(f"{REPORT_TYPE}_")) == 10
-                       and refresh_start <= p.stem.removeprefix(f"{REPORT_TYPE}_") < target_date)
+        paths = sorted(
+            p
+            for p in REPORT_DIR.glob(f"{REPORT_TYPE}_*.json")
+            if len(p.stem.removeprefix(f"{REPORT_TYPE}_")) == 10
+            and refresh_start <= p.stem.removeprefix(f"{REPORT_TYPE}_") < target_date
+        )
         previous = _load_json(paths[-1]) if paths else {}
     inventory, error, receipt = [], "", {}
     try:
         receipt = _fact_sync_receipt(target_date)
         inventory = _query_actual_fill_inventory(target_date)
     except Exception as exc:
-        error = str(exc) if isinstance(exc, ValueError) else f"execution_source_unavailable:{type(exc).__name__}"
+        error = (
+            str(exc)
+            if isinstance(exc, ValueError)
+            else f"execution_source_unavailable:{type(exc).__name__}"
+        )
     known = {}
     # Old reports are diagnostic exclusions only, never v4 economic approval.
-    for path in sorted(p for p in REPORT_DIR.glob(f"{REPORT_TYPE}_*.json") if len(p.stem.removeprefix(f"{REPORT_TYPE}_")) == 10 and refresh_start <= p.stem.removeprefix(f"{REPORT_TYPE}_") <= target_date)[-20:]:
+    for path in sorted(
+        p
+        for p in REPORT_DIR.glob(f"{REPORT_TYPE}_*.json")
+        if len(p.stem.removeprefix(f"{REPORT_TYPE}_")) == 10
+        and refresh_start <= p.stem.removeprefix(f"{REPORT_TYPE}_") <= target_date
+    )[-20:]:
         day = path.stem.removeprefix(f"{REPORT_TYPE}_")
         if len(day) == 10 and day <= target_date:
             diagnostic = _load_json(path)
-            if not is_date_allowed(day, clean_baseline_policy()) or (diagnostic.get("source_quality") or {}).get("tuning_input_allowed") is not True:
+            if (
+                not is_date_allowed(day, clean_baseline_policy())
+                or (diagnostic.get("source_quality") or {}).get("tuning_input_allowed")
+                is not True
+            ):
                 continue
             for row in diagnostic.get("daily_attempt_outcomes", []):
                 if isinstance(row, dict):
-                    for order in str(row.get("attempt_id") or "").partition(":order:")[2].split(","):
+                    for order in (
+                        str(row.get("attempt_id") or "")
+                        .partition(":order:")[2]
+                        .split(",")
+                    ):
                         if order:
                             known[(str(row.get("record_id")), order)] = row
-    applicable = [r for r in inventory if _safe_int(r.get("request_qty")) >= 2
-                  and not known.get((r["record_id"], r["order_no"]), {}).get("market_like_order")]
-    ready = [r for r in applicable if r.get("status") == "COMPLETED" and r.get("sell_price")
-             and r.get("sell_time") and r.get("profit_rate") is not None]
+    applicable = [
+        r
+        for r in inventory
+        if _safe_int(r.get("request_qty")) >= 2
+        and not known.get((r["record_id"], r["order_no"]), {}).get("market_like_order")
+    ]
+    ready = [
+        r
+        for r in applicable
+        if r.get("status") == "COMPLETED"
+        and r.get("sell_price")
+        and r.get("sell_time")
+        and r.get("profit_rate") is not None
+    ]
     source_rows = []
     catalog_generations = {target_date: _semantic_digest(receipt)} if receipt else {}
     try:
-        for day in sorted({r["source_date"] for r in ready} | {str(r["sell_time"])[:10] for r in ready}):
+        for day in sorted(
+            {r["source_date"] for r in ready}
+            | {str(r["sell_time"])[:10] for r in ready}
+        ):
             source = receipt if day == target_date else _fact_sync_receipt(day)
             catalog_generations[day] = _semantic_digest(source)
-            for row in (source.get("scale_in_execution_projection") or {}).get("rows", []):
+            for row in (source.get("scale_in_execution_projection") or {}).get(
+                "rows", []
+            ):
                 for fill in ready:
                     stamp = _event_time(row)
                     origin = _parse_event_time(fill["fill_time"])
                     terminal = _parse_event_time(fill["sell_time"])
-                    if (stamp and origin and terminal and _record_id(row) == fill["record_id"]
-                            and origin - timedelta(seconds=5) <= stamp <= terminal
-                            and (stamp <= origin + timedelta(seconds=180) or _is_terminal_after_submit(row))):
+                    if (
+                        stamp
+                        and origin
+                        and terminal
+                        and _record_id(row) == fill["record_id"]
+                        and origin - timedelta(seconds=5) <= stamp <= terminal
+                        and (
+                            stamp <= origin + timedelta(seconds=180)
+                            or _is_terminal_after_submit(row)
+                        )
+                    ):
                         source_rows.append(row)
                         break
     except ValueError as exc:
         error = str(exc)
     incumbent = _validated_incumbent(target_date)
-    comparison_contract = {"contract": ECONOMIC_GATE_VERSION, "cost_rate": get_trade_cost_rate(),
-                           "incumbent_buckets": (incumbent or {}).get("buckets", {})}
-    versions = {str(fill["history_id"]): _semantic_digest({"fill": fill, "comparison": comparison_contract,
+    comparison_contract = {
+        "contract": ECONOMIC_GATE_VERSION,
+        "cost_rate": get_trade_cost_rate(),
+        "incumbent_buckets": (incumbent or {}).get("buckets", {}),
+    }
+    versions = {
+        str(fill["history_id"]): _semantic_digest(
+            {
+                "fill": fill,
+                "comparison": comparison_contract,
                 "fact_catalog_generations": {
                     day: catalog_generations.get(day)
                     for day in {fill["source_date"], str(fill["sell_time"])[:10]}
                 },
-                "source_rows": sorted((row for row in source_rows if _record_id(row) == fill["record_id"]),
-                                      key=lambda r: (_event_time(r).isoformat(), _semantic_digest(r)))}) for fill in ready}
+                "source_rows": sorted(
+                    (
+                        row
+                        for row in source_rows
+                        if _record_id(row) == fill["record_id"]
+                    ),
+                    key=lambda r: (_event_time(r).isoformat(), _semantic_digest(r)),
+                ),
+            }
+        )
+        for fill in ready
+    }
     key = _semantic_digest(versions)
     previous_versions = previous.get("filled_outcome_versions") or {}
-    unchanged = bool(versions) and all(previous_versions.get(identity) == version for identity, version in versions.items())
-    status = ("blocked_execution_source" if error else "blocked_source_contract" if quality.get("tuning_input_allowed") is not True
-              else "skipped_no_actual_fill" if not inventory else "skipped_no_applicable_fill" if not applicable
-              else "pending_filled_outcome" if not ready
-              else "skipped_unchanged_filled_outcome" if unchanged else "evaluated")
-    if status == "pending_filled_outcome" and any(r.get("status") == "COMPLETED" for r in applicable):
+    unchanged = bool(versions) and all(
+        previous_versions.get(identity) == version
+        for identity, version in versions.items()
+    )
+    status = (
+        "blocked_execution_source"
+        if error
+        else (
+            "blocked_source_contract"
+            if quality.get("tuning_input_allowed") is not True
+            else (
+                "skipped_no_actual_fill"
+                if not inventory
+                else (
+                    "skipped_no_applicable_fill"
+                    if not applicable
+                    else (
+                        "pending_filled_outcome"
+                        if not ready
+                        else (
+                            "skipped_unchanged_filled_outcome"
+                            if unchanged
+                            else "evaluated"
+                        )
+                    )
+                )
+            )
+        )
+    )
+    if status == "pending_filled_outcome" and any(
+        r.get("status") == "COMPLETED" for r in applicable
+    ):
         error = "completed_fill_terminal_clock_or_profit_contract_missing"
     report = None
     outcomes = []
@@ -2850,7 +3195,9 @@ def build_report(target_date: str) -> dict[str, Any]:
         try:
             records = {r["record_id"] for r in applicable}
             events, summary = _conditioned_source_events(target_date, receipt, records)
-            for day in sorted({r["source_date"] for r in applicable if r["source_date"] < target_date}):
+            for day in sorted(
+                {r["source_date"] for r in applicable if r["source_date"] < target_date}
+            ):
                 old_receipt = _fact_sync_receipt(day)
                 old_events, _ = _conditioned_source_events(day, old_receipt, records)
                 events.extend(old_events)
@@ -2858,80 +3205,206 @@ def build_report(target_date: str) -> dict[str, Any]:
             historical, _ = _load_rolling_anchor_results(target_date)
             for old in historical:
                 anchor = old.get("anchor_source")
-                if old.get("actual_fill_qty", 0) > 0 and isinstance(anchor, dict) and not old.get("real_outcome_joined"):
+                if (
+                    old.get("actual_fill_qty", 0) > 0
+                    and isinstance(anchor, dict)
+                    and not old.get("real_outcome_joined")
+                ):
                     events.append(anchor)
             # Candidate replay is never opened for a receipt-only or censored cohort.
             enriched = _enrich_avg_down_context(events)
             observations = _build_post_submit_observations(enriched)
-            outcomes = [_counterfactual_for_anchor(a, events=enriched, observations_by_code=observations)
-                        for a in _unique_attempt_anchors(enriched)]
-            valid = [r for r in outcomes if r.get("real_outcome_joined") and r.get("additional_mfe_mae_joined")]
+            outcomes = [
+                _counterfactual_for_anchor(
+                    a, events=enriched, observations_by_code=observations
+                )
+                for a in _unique_attempt_anchors(enriched)
+            ]
+            valid = [
+                r
+                for r in outcomes
+                if r.get("real_outcome_joined") and r.get("additional_mfe_mae_joined")
+            ]
             if not valid:
                 status = "pending_filled_outcome"
                 error = "filled_outcome_receipt_price_or_lot_basis_incomplete"
             else:
-                report = _build_report_from_events(target_date, input_events=(events, summary), incumbent=incumbent)
+                report = _build_report_from_events(
+                    target_date, input_events=(events, summary), incumbent=incumbent
+                )
         except ValueError as exc:
             status, error = "blocked_source_contract", str(exc)
     if report is None:
         evidence = _runtime_refresh_evidence([])
-        policy = deepcopy(incumbent) if incumbent and not status.startswith("blocked") else _build_policy(target_date, [], refresh_evidence=evidence)
+        policy = (
+            deepcopy(incumbent)
+            if incumbent and not status.startswith("blocked")
+            else _build_policy(target_date, [], refresh_evidence=evidence)
+        )
         # A disabled tuning policy preserves the actual incumbent base order.
         policy["target_date"] = target_date
-        policy["effective_execution_policy"] = "approved_split_incumbent" if policy.get("runtime_apply_allowed") else "incumbent_unsplit_base_order"
-        report = {"schema_version": SCHEMA_VERSION, "report_type": REPORT_TYPE, "target_date": target_date,
-                  "generated_at": datetime.now(timezone(timedelta(hours=9))).isoformat(), "source_quality": quality,
-                  "input_summary": {"daily_unique_attempt_count": 0, "atomic_execution_sizing": {"status": "not_evaluated"},
-                                    "source_read_contract": {"read_mode": "actual_execution_db_inventory", "raw_bytes_read": 0}},
-                  "daily_attempt_outcomes": outcomes, "candidate_grid": [],
-                  "rolling_summary": {"target_date": target_date, "window_policy": "latest_20_report_dates_including_target", "excluded_dates": [], "current_source_date_included": False, "current_unique_attempt_count": 0},
-                  "recommended_policy": {"runtime_apply_allowed": False,
-                      "runtime_refresh_evidence": evidence, "incumbent_refresh_evidence": policy.get("runtime_refresh_evidence"), "candidates": [],
-                      "runtime_candidate_count": 0, "policy_file": str(policy_path(target_date)), "policy_version": policy.get("policy_version")},
-                  "policy_artifact": policy}
-    if (status == "evaluated" and incumbent and report["source_quality"].get("tuning_input_allowed") is True
-            and report["input_summary"].get("atomic_execution_sizing", {}).get("status") != "fail"
-            and not report["recommended_policy"].get("runtime_apply_allowed")
-            and not any("post_apply_negative_economic_evidence" in c.get("runtime_apply_blockers", []) for c in report["recommended_policy"].get("candidates", []))):
+        policy["effective_execution_policy"] = (
+            "approved_split_incumbent"
+            if policy.get("runtime_apply_allowed")
+            else "incumbent_unsplit_base_order"
+        )
+        report = {
+            "schema_version": SCHEMA_VERSION,
+            "report_type": REPORT_TYPE,
+            "target_date": target_date,
+            "generated_at": datetime.now(timezone(timedelta(hours=9))).isoformat(),
+            "source_quality": quality,
+            "input_summary": {
+                "daily_unique_attempt_count": 0,
+                "atomic_execution_sizing": {"status": "not_evaluated"},
+                "source_read_contract": {
+                    "read_mode": "actual_execution_db_inventory",
+                    "raw_bytes_read": 0,
+                },
+            },
+            "daily_attempt_outcomes": outcomes,
+            "candidate_grid": [],
+            "rolling_summary": {
+                "target_date": target_date,
+                "window_policy": "latest_20_report_dates_including_target",
+                "excluded_dates": [],
+                "current_source_date_included": False,
+                "current_unique_attempt_count": 0,
+            },
+            "recommended_policy": {
+                "runtime_apply_allowed": False,
+                "runtime_refresh_evidence": evidence,
+                "incumbent_refresh_evidence": policy.get("runtime_refresh_evidence"),
+                "candidates": [],
+                "runtime_candidate_count": 0,
+                "policy_file": str(policy_path(target_date)),
+                "policy_version": policy.get("policy_version"),
+            },
+            "policy_artifact": policy,
+        }
+    if (
+        status == "evaluated"
+        and incumbent
+        and report["source_quality"].get("tuning_input_allowed") is True
+        and report["input_summary"].get("atomic_execution_sizing", {}).get("status")
+        != "fail"
+        and not report["recommended_policy"].get("runtime_apply_allowed")
+        and not any(
+            "post_apply_negative_economic_evidence"
+            in c.get("runtime_apply_blockers", [])
+            for c in report["recommended_policy"].get("candidates", [])
+        )
+    ):
         report["policy_artifact"] = deepcopy(incumbent)
-        report["policy_artifact"]["effective_execution_policy"] = "approved_split_incumbent"
+        report["policy_artifact"][
+            "effective_execution_policy"
+        ] = "approved_split_incumbent"
         report["recommended_policy"]["policy_version"] = incumbent["policy_version"]
-    report["evaluation_state"] = {"status": status, "reason": error or None, "actual_fill_receipt_count": len(inventory),
-                                  "applicable_receipt_count": len(applicable), "completed_receipt_count": len(ready),
-                                  "actual_completed_receipt_count": sum(r.get("status") == "COMPLETED" for r in inventory),
-                                  "completed_missing_terminal_clock_count": sum(r.get("outcome_timing_status") == "missing_completed_terminal_clock" for r in inventory),
-                                  "economic_gate_version": ECONOMIC_GATE_VERSION, "inventory_key": key,
-                                  "modeled_ev_pct": None if status != "evaluated" else report["recommended_policy"]["runtime_refresh_evidence"].get("source_quality_adjusted_ev_pct")}
-    report["filled_outcome_versions"] = versions if status in {"evaluated", "skipped_unchanged_filled_outcome"} else previous_versions
-    report["processed_inventory_key"] = key if status in {"evaluated", "skipped_no_applicable_fill"} else previous.get("processed_inventory_key")
-    report.setdefault("metric_contract", {}).update(cost_basis={"kind": "fixed_comparison_cost_model", "trade_cost_rate": get_trade_cost_rate(), "broker_cost_reconciled": False},
-                                                    population="actual_full_fill_conditioned_only", forbidden_population="unfilled_or_missed_entry_opportunities")
+    report["evaluation_state"] = {
+        "status": status,
+        "reason": error or None,
+        "actual_fill_receipt_count": len(inventory),
+        "applicable_receipt_count": len(applicable),
+        "completed_receipt_count": len(ready),
+        "actual_completed_receipt_count": sum(
+            r.get("status") == "COMPLETED" for r in inventory
+        ),
+        "completed_missing_terminal_clock_count": sum(
+            r.get("outcome_timing_status") == "missing_completed_terminal_clock"
+            for r in inventory
+        ),
+        "economic_gate_version": ECONOMIC_GATE_VERSION,
+        "inventory_key": key,
+        "modeled_ev_pct": (
+            None
+            if status != "evaluated"
+            else report["recommended_policy"]["runtime_refresh_evidence"].get(
+                "source_quality_adjusted_ev_pct"
+            )
+        ),
+    }
+    report["filled_outcome_versions"] = (
+        versions
+        if status in {"evaluated", "skipped_unchanged_filled_outcome"}
+        else previous_versions
+    )
+    report["processed_inventory_key"] = (
+        key
+        if status in {"evaluated", "skipped_no_applicable_fill"}
+        else previous.get("processed_inventory_key")
+    )
+    report.setdefault("metric_contract", {}).update(
+        cost_basis={
+            "kind": "fixed_comparison_cost_model",
+            "trade_cost_rate": get_trade_cost_rate(),
+            "broker_cost_reconciled": False,
+        },
+        population="actual_full_fill_conditioned_only",
+        forbidden_population="unfilled_or_missed_entry_opportunities",
+    )
     report["actual_fill_inventory"] = inventory
-    report_dates = sorted(p.stem.removeprefix(f"{REPORT_TYPE}_") for p in REPORT_DIR.glob(f"{REPORT_TYPE}_*.json")
-                          if len(p.stem.removeprefix(f"{REPORT_TYPE}_")) == 10 and refresh_start <= p.stem.removeprefix(f"{REPORT_TYPE}_") < target_date)
-    revision_start = report_dates[-19] if len(report_dates) >= 19 else (report_dates[0] if report_dates else target_date)
-    revisions = {row["attempt_id"]: row for row in previous.get("outcome_revisions", previous.get("daily_attempt_outcomes", []))
-                 if isinstance(row, dict) and row.get("attempt_id") and row.get("replay_contract_version") == ECONOMIC_GATE_VERSION
-                 and max(refresh_start, revision_start) <= str(row.get("source_date") or "") <= target_date}
+    report_dates = sorted(
+        p.stem.removeprefix(f"{REPORT_TYPE}_")
+        for p in REPORT_DIR.glob(f"{REPORT_TYPE}_*.json")
+        if len(p.stem.removeprefix(f"{REPORT_TYPE}_")) == 10
+        and refresh_start <= p.stem.removeprefix(f"{REPORT_TYPE}_") < target_date
+    )
+    revision_start = (
+        report_dates[-19]
+        if len(report_dates) >= 19
+        else (report_dates[0] if report_dates else target_date)
+    )
+    revisions = {
+        row["attempt_id"]: row
+        for row in previous.get(
+            "outcome_revisions", previous.get("daily_attempt_outcomes", [])
+        )
+        if isinstance(row, dict)
+        and row.get("attempt_id")
+        and row.get("replay_contract_version") == ECONOMIC_GATE_VERSION
+        and max(refresh_start, revision_start)
+        <= str(row.get("source_date") or "")
+        <= target_date
+    }
     for row in report.get("daily_attempt_outcomes") or []:
         revisions[row["attempt_id"]] = row
     report["outcome_revisions"] = list(revisions.values())
     report["evaluation_state"]["excluded_receipt_reasons"] = {
         "qty_lt_two": sum(_safe_int(r.get("request_qty")) < 2 for r in inventory),
-        "market_like_from_frozen_anchor": sum(bool(known.get((r["record_id"], r["order_no"]), {}).get("market_like_order")) for r in inventory)}
+        "market_like_from_frozen_anchor": sum(
+            bool(
+                known.get((r["record_id"], r["order_no"]), {}).get("market_like_order")
+            )
+            for r in inventory
+        ),
+    }
     report["last_valid_evaluation"] = previous.get("last_valid_evaluation")
-    report["consumed_holdout_dates"] = sorted(set(previous.get("consumed_holdout_dates") or []))
+    report["consumed_holdout_dates"] = sorted(
+        set(previous.get("consumed_holdout_dates") or [])
+    )
     if status == "evaluated":
-        report["consumed_holdout_dates"] = sorted(set(report["consumed_holdout_dates"]) | {
-            day for candidate in report["recommended_policy"]["candidates"]
-            if candidate.get("holdout_evidence", {}).get("paired_economic_sample_count", 0) > 0
-            for day in candidate["holdout_evidence"].get("holdout_dates", [])})
+        report["consumed_holdout_dates"] = sorted(
+            set(report["consumed_holdout_dates"])
+            | {
+                day
+                for candidate in report["recommended_policy"]["candidates"]
+                if candidate.get("holdout_evidence", {}).get(
+                    "paired_economic_sample_count", 0
+                )
+                > 0
+                for day in candidate["holdout_evidence"].get("holdout_dates", [])
+            }
+        )
     return report
 
 
-def _build_report_from_events(target_date: str, *, input_events=None, incumbent=None) -> dict[str, Any]:
+def _build_report_from_events(
+    target_date: str, *, input_events=None, incumbent=None
+) -> dict[str, Any]:
     source_quality = _source_quality_summary(target_date)
-    events, input_summary = (_iter_input_events(target_date) if input_events is None else input_events)
+    events, input_summary = (
+        _iter_input_events(target_date) if input_events is None else input_events
+    )
     historical_anchor_results, rolling_summary = _load_rolling_anchor_results(
         target_date
     )
@@ -3016,7 +3489,9 @@ def _build_report_from_events(target_date: str, *, input_events=None, incumbent=
     for row in canonical_rows:
         by_bucket.setdefault(_context_bucket(row), []).append(row)
     for row in historical_anchor_results:
-        row["incumbent_policy"] = (incumbent or {}).get("buckets", {}).get(row.get("context_bucket"))
+        row["incumbent_policy"] = (
+            (incumbent or {}).get("buckets", {}).get(row.get("context_bucket"))
+        )
     historical_by_bucket: dict[str, list[dict[str, Any]]] = {}
     for row in historical_anchor_results:
         historical_by_bucket.setdefault(
@@ -3116,15 +3591,18 @@ def _build_report_from_events(target_date: str, *, input_events=None, incumbent=
         if isinstance(item, dict)
     )
     daily_attempt_outcomes = list(daily_attempt_outcomes_by_id.values())
-    position_quantity_status_counts = dict(Counter(
-        str(row.get("position_quantity_status") or "unobserved")
-        for row in daily_attempt_outcomes
-    ))
+    position_quantity_status_counts = dict(
+        Counter(
+            str(row.get("position_quantity_status") or "unobserved")
+            for row in daily_attempt_outcomes
+        )
+    )
     rolling_unique_attempt_count = sum(
         _safe_int(item.get("unique_attempt_count"), 0) for item in candidates
     )
     rolling_eligible_attempt_count = sum(
-        _safe_int(item.get("rolling_eligible_runtime_attempt_count"), 0) for item in candidates
+        _safe_int(item.get("rolling_eligible_runtime_attempt_count"), 0)
+        for item in candidates
     )
     rolling_summary.update(
         {
@@ -3375,12 +3853,18 @@ def write_outputs(target_date: str, report: dict[str, Any]) -> tuple[Path, Path,
     if (report.get("evaluation_state") or {}).get("status") == "evaluated":
         key = report["evaluation_state"]["inventory_key"]
         snapshot = REPORT_DIR / f"{REPORT_TYPE}_{target_date}_{key}.json"
-        report_to_write["last_valid_evaluation"] = {"path": str(snapshot), "target_date": target_date,
-                                                    "generated_at": report["generated_at"], "inventory_key": key}
+        report_to_write["last_valid_evaluation"] = {
+            "path": str(snapshot),
+            "target_date": target_date,
+            "generated_at": report["generated_at"],
+            "inventory_key": key,
+        }
         if not snapshot.exists():
             _write_json(snapshot, report_to_write)
     _write_json(policy_file, policy)
-    report_to_write["policy_sha256"] = hashlib.sha256(policy_file.read_bytes()).hexdigest()
+    report_to_write["policy_sha256"] = hashlib.sha256(
+        policy_file.read_bytes()
+    ).hexdigest()
     # Daily status is the commit point; never advance its cursor before policy.
     _write_json(json_path, report_to_write)
     _write_markdown(md_path, report_to_write)
@@ -3392,33 +3876,65 @@ def preopen_policy_handoff(source_date: str, target_date: str) -> dict[str, Any]
     path = policy_path(source_date)
     policy = _load_json(path)
     blockers = []
-    if policy.get("schema_version") != POLICY_SCHEMA_VERSION or policy.get("effective_date") != target_date:
+    if (
+        policy.get("schema_version") != POLICY_SCHEMA_VERSION
+        or policy.get("effective_date") != target_date
+    ):
         blockers.append("scale_in_dated_policy_missing_or_mismatched")
-    if policy.get("source_date") != source_date or not is_date_allowed(source_date, clean_baseline_policy()):
+    if policy.get("source_date") != source_date or not is_date_allowed(
+        source_date, clean_baseline_policy()
+    ):
         blockers.append("scale_in_policy_source_date_invalid")
-    if not is_krx_trading_day(datetime.fromisoformat(target_date).date()) or not 0 <= count_krx_trading_days(datetime.fromisoformat(source_date).date(), datetime.fromisoformat(target_date).date()) <= MAX_POLICY_AGE_KRX_TRADING_DAYS:
+    if (
+        not is_krx_trading_day(datetime.fromisoformat(target_date).date())
+        or not 0
+        <= count_krx_trading_days(
+            datetime.fromisoformat(source_date).date(),
+            datetime.fromisoformat(target_date).date(),
+        )
+        <= MAX_POLICY_AGE_KRX_TRADING_DAYS
+    ):
         blockers.append("scale_in_policy_effective_date_or_age_invalid")
     if policy.get("runtime_apply_allowed") is True:
         error = policy_runtime_contract_error(policy)
         if error:
             blockers.append(error)
-    elif (policy.get("effective_execution_policy") != "incumbent_unsplit_base_order"
-          or policy.get("buckets") or (policy.get("default_bucket") or {}).get("runtime_apply_allowed") is not False):
+    elif (
+        policy.get("effective_execution_policy") != "incumbent_unsplit_base_order"
+        or policy.get("buckets")
+        or (policy.get("default_bucket") or {}).get("runtime_apply_allowed")
+        is not False
+    ):
         blockers.append("scale_in_base_order_preservation_contract_invalid")
     report = _load_json(report_paths(source_date)[0])
-    if (not path.exists() or report.get("policy_sha256") != hashlib.sha256(path.read_bytes()).hexdigest()
-            or (report.get("recommended_policy") or {}).get("policy_version") != policy.get("policy_version")):
+    if (
+        not path.exists()
+        or report.get("policy_sha256") != hashlib.sha256(path.read_bytes()).hexdigest()
+        or (report.get("recommended_policy") or {}).get("policy_version")
+        != policy.get("policy_version")
+    ):
         blockers.append("scale_in_policy_report_binding_invalid")
     state = (report.get("evaluation_state") or {}).get("status", "")
     if state.startswith("blocked"):
         blockers.append("scale_in_evaluation_source_blocked")
-    if policy.get("runtime_apply_allowed") is True and _policy_is_stale(policy, now=_parse_event_time(f"{target_date}T09:00:00+09:00")):
+    if policy.get("runtime_apply_allowed") is True and _policy_is_stale(
+        policy, now=_parse_event_time(f"{target_date}T09:00:00+09:00")
+    ):
         blockers.append("scale_in_incumbent_approval_expired")
-    return {"source_date": source_date, "target_date": target_date, "policy_file": str(path),
-            "policy_sha256": hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else None,
-            "policy_version": policy.get("policy_version"), "effective_execution_policy": policy.get("effective_execution_policy"),
-            "available": not blockers, "split_enabled": policy.get("runtime_apply_allowed") is True and not blockers,
-            "new_edge_claim": False, "blockers": blockers}
+    return {
+        "source_date": source_date,
+        "target_date": target_date,
+        "policy_file": str(path),
+        "policy_sha256": (
+            hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else None
+        ),
+        "policy_version": policy.get("policy_version"),
+        "effective_execution_policy": policy.get("effective_execution_policy"),
+        "available": not blockers,
+        "split_enabled": policy.get("runtime_apply_allowed") is True and not blockers,
+        "new_edge_claim": False,
+        "blockers": blockers,
+    }
 
 
 def _load_policy_from_env(
@@ -3456,7 +3972,11 @@ def _load_policy_from_env(
     if policy_error:
         return None, policy_error
     effective_date = str(payload.get("effective_date") or "")
-    if effective_date and effective_date != datetime.now(timezone(timedelta(hours=9))).date().isoformat():
+    if (
+        effective_date
+        and effective_date
+        != datetime.now(timezone(timedelta(hours=9))).date().isoformat()
+    ):
         return None, "policy_effective_date_mismatch"
     return payload, "loaded"
 
@@ -3564,8 +4084,11 @@ def policy_runtime_contract_error(policy: Any) -> str:
         policy_version,
     )
     source_date = source_match.group(1) if source_match else ""
-    if source_date and any(day > source_date for holdout in policy["runtime_refresh_evidence"]["holdout_evidence"]
-                           for day in holdout["calibration_dates"] + holdout["holdout_dates"]):
+    if source_date and any(
+        day > source_date
+        for holdout in policy["runtime_refresh_evidence"]["holdout_evidence"]
+        for day in holdout["calibration_dates"] + holdout["holdout_dates"]
+    ):
         return "runtime_refresh_holdout_after_approval_source_date"
 
     if source_date >= ATOMIC_EXECUTION_SIZING_REQUIRED_FROM:
@@ -3836,33 +4359,75 @@ def main(argv: list[str] | None = None) -> int:
         default=datetime.now().strftime("%Y-%m-%d"),
     )
     parser.add_argument("--no-write", action="store_true")
-    parser.add_argument("--preopen-date", help="Explicit next open date; source/approval age remains unchanged.")
+    parser.add_argument(
+        "--preopen-date",
+        help="Explicit next open date; source/approval age remains unchanged.",
+    )
     args = parser.parse_args(argv)
     effective = datetime.fromisoformat(args.preopen_date or args.target_date).date()
     if args.preopen_date is None:
         effective += timedelta(days=1)
         while not is_krx_trading_day(effective):
             effective += timedelta(days=1)
-    if effective.isoformat() <= args.target_date or not is_krx_trading_day(effective) or count_krx_trading_days(datetime.fromisoformat(args.target_date).date(), effective) > MAX_POLICY_AGE_KRX_TRADING_DAYS:
-        parser.error("preopen date must be a later KRX open date within the existing source-age bound")
+    if (
+        effective.isoformat() <= args.target_date
+        or not is_krx_trading_day(effective)
+        or count_krx_trading_days(
+            datetime.fromisoformat(args.target_date).date(), effective
+        )
+        > MAX_POLICY_AGE_KRX_TRADING_DAYS
+    ):
+        parser.error(
+            "preopen date must be a later KRX open date within the existing source-age bound"
+        )
     if not args.no_write:
         REPORT_DIR.mkdir(parents=True, exist_ok=True)
-    lock_context = nullcontext(None) if args.no_write else (REPORT_DIR / f".{REPORT_TYPE}_{args.target_date}.lock").open("a")
+    lock_context = (
+        nullcontext(None)
+        if args.no_write
+        else (REPORT_DIR / f".{REPORT_TYPE}_{args.target_date}.lock").open("a")
+    )
     with lock_context as lock:
         if lock is not None:
             fcntl.flock(lock, fcntl.LOCK_EX)
         report = build_report(args.target_date)
         policy = report["policy_artifact"]
-        policy.setdefault("approval_source_date", str(policy.get("policy_version") or "").split(":")[1] if str(policy.get("policy_version") or "").startswith(f"{RUNTIME_FAMILY}:") else args.target_date)
+        policy.setdefault(
+            "approval_source_date",
+            (
+                str(policy.get("policy_version") or "").split(":")[1]
+                if str(policy.get("policy_version") or "").startswith(
+                    f"{RUNTIME_FAMILY}:"
+                )
+                else args.target_date
+            ),
+        )
         policy["source_date"] = args.target_date
         policy["effective_date"] = effective.isoformat()
-        policy.setdefault("effective_execution_policy", "validated_split_candidate" if policy.get("runtime_apply_allowed") else "incumbent_unsplit_base_order")
+        policy.setdefault(
+            "effective_execution_policy",
+            (
+                "validated_split_candidate"
+                if policy.get("runtime_apply_allowed")
+                else "incumbent_unsplit_base_order"
+            ),
+        )
         if not args.no_write:
             write_outputs(args.target_date, report)
     if not args.no_write:
-        print(json.dumps({"target_date": args.target_date, "preopen_date": effective.isoformat(),
-                          "evaluation_state": report["evaluation_state"],
-                          "policy_handoff": preopen_policy_handoff(args.target_date, effective.isoformat())}, ensure_ascii=False))
+        print(
+            json.dumps(
+                {
+                    "target_date": args.target_date,
+                    "preopen_date": effective.isoformat(),
+                    "evaluation_state": report["evaluation_state"],
+                    "policy_handoff": preopen_policy_handoff(
+                        args.target_date, effective.isoformat()
+                    ),
+                },
+                ensure_ascii=False,
+            )
+        )
     else:
         print(
             json.dumps(

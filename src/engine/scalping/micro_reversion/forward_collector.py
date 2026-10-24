@@ -465,7 +465,11 @@ class ForwardCollectorSnapshot:
         }
         if self.source_contract == "main_market_source_v1":
             for name in tuple(payload):
-                if "reference" in name or name.startswith("shock_") or name.startswith("detector_"):
+                if (
+                    "reference" in name
+                    or name.startswith("shock_")
+                    or name.startswith("detector_")
+                ):
                     payload[name] = None
         return payload
 
@@ -497,7 +501,7 @@ class ForwardObservationCollector:
             retain_observations=detector is not None,
             max_exchange_timestamp_regression_ms=(
                 self.config.exchange_timestamp_regression_tolerance_ms
-            )
+            ),
         )
         self._coalescer = ParentWavePathCoalescer(
             self._ring,
@@ -518,11 +522,20 @@ class ForwardObservationCollector:
         self._sequence_epoch = time.time_ns()
         self._source_epochs = {self._sequence_epoch}
         self._process_pid = os.getpid()
-        self._process_start_ticks = Path(f"/proc/{self._process_pid}/stat").read_text().rsplit(")", 1)[1].split()[19]
+        self._process_start_ticks = (
+            Path(f"/proc/{self._process_pid}/stat")
+            .read_text()
+            .rsplit(")", 1)[1]
+            .split()[19]
+        )
         # One epoch-owned journal, written only by the existing collector worker.
         # The callback queues receipts without encoding or disk I/O.
         self._rejection_queue = queue.Queue(maxsize=self.config.observation_queue_size)
-        self._rejection_path = self.config.output_root / "timestamp_rejections" / f"{self._sequence_epoch}.jsonl"
+        self._rejection_path = (
+            self.config.output_root
+            / "timestamp_rejections"
+            / f"{self._sequence_epoch}.jsonl"
+        )
         self._rejection_file = None
         self._rejection_digest = hashlib.sha256()
         self._rejection_bytes = self._rejection_persisted = self._rejection_errors = 0
@@ -622,7 +635,6 @@ class ForwardObservationCollector:
         self._producer_0d_callback_latency_ms: deque[float] = deque(maxlen=4_096)
         # Read-only current-axis handoff. Never enables capture or subscriptions.
 
-
     def start(self) -> None:
         with self._state_lock:
             if self._lifecycle is CollectorLifecycle.RUNNING:
@@ -649,8 +661,6 @@ class ForwardObservationCollector:
                     daemon=True,
                 )
                 self._depth_thread.start()
-
-
 
     def bind_completed_bar_transport_epoch(self, epoch: int) -> None:
         if type(epoch) is not int or epoch <= 0:
@@ -814,7 +824,8 @@ class ForwardObservationCollector:
             with self._metrics_lock:
                 self._rejection_sealed = (
                     self._rejection_errors == 0
-                    and self._rejection_persisted == self._timestamp_rejection_sample_total
+                    and self._rejection_persisted
+                    == self._timestamp_rejection_sample_total
                     and self._rejection_queue.empty()
                 )
             if not self._rejection_sealed:
@@ -827,8 +838,11 @@ class ForwardObservationCollector:
             self._increment("_reference_reconciliation_errors")
             close_errors.append(exc)
         with self._metrics_lock:
-            reconciliation_completed = (self._raw_reconciliation_completed if self._detector is None
-                                        else self._reference_reconciliation_completed)
+            reconciliation_completed = (
+                self._raw_reconciliation_completed
+                if self._detector is None
+                else self._reference_reconciliation_completed
+            )
         if not close_errors and not reconciliation_completed:
             close_errors.append(
                 RuntimeError("reference reconciliation did not complete")
@@ -903,16 +917,24 @@ class ForwardObservationCollector:
                 actual_execution_venue,
             ) = registration_item_market_data_identity(item)
             # The canonical route parser already validates the same item.
-            declared_route = str(
-                (snapshot.get("last_realtime_type_market_route") or {}).get("0B")
-                or ""
-            ).strip().lower()
-            declared_actual_venue = str(
-                (snapshot.get("last_realtime_type_actual_execution_venue") or {}).get(
-                    "0B"
+            declared_route = (
+                str(
+                    (snapshot.get("last_realtime_type_market_route") or {}).get("0B")
+                    or ""
                 )
-                or "UNKNOWN"
-            ).strip().upper()
+                .strip()
+                .lower()
+            )
+            declared_actual_venue = (
+                str(
+                    (
+                        snapshot.get("last_realtime_type_actual_execution_venue") or {}
+                    ).get("0B")
+                    or "UNKNOWN"
+                )
+                .strip()
+                .upper()
+            )
             if (
                 not venue
                 or market_symbol != normalize_symbol(symbol)
@@ -1003,10 +1025,18 @@ class ForwardObservationCollector:
                 trade_price=_positive_float_or_none(trade.get("price")),
                 trade_qty=_nonnegative_int_or_none(trade.get("volume")),
                 source_item=item,
-                native_transport_epoch=trade.get('transport_epoch'),
-                native_route_sequence=trade.get('route_sequence'),
-                cumulative_volume_raw=(raw_values.get("13") if isinstance(raw_values.get("13"), str) else None),
-                trade_volume_raw=(raw_values.get("15") if isinstance(raw_values.get("15"), str) else None),
+                native_transport_epoch=trade.get("transport_epoch"),
+                native_route_sequence=trade.get("route_sequence"),
+                cumulative_volume_raw=(
+                    raw_values.get("13")
+                    if isinstance(raw_values.get("13"), str)
+                    else None
+                ),
+                trade_volume_raw=(
+                    raw_values.get("15")
+                    if isinstance(raw_values.get("15"), str)
+                    else None
+                ),
                 best_bid=best_bid,
                 best_ask=best_ask,
                 bid_depth=None,
@@ -1080,16 +1110,24 @@ class ForwardObservationCollector:
                 market_data_route,
                 actual_execution_venue,
             ) = registration_item_market_data_identity(item)
-            declared_route = str(
-                (snapshot.get("last_realtime_type_market_route") or {}).get("0D")
-                or ""
-            ).strip().lower()
-            declared_actual_venue = str(
-                (snapshot.get("last_realtime_type_actual_execution_venue") or {}).get(
-                    "0D"
+            declared_route = (
+                str(
+                    (snapshot.get("last_realtime_type_market_route") or {}).get("0D")
+                    or ""
                 )
-                or "UNKNOWN"
-            ).strip().upper()
+                .strip()
+                .lower()
+            )
+            declared_actual_venue = (
+                str(
+                    (
+                        snapshot.get("last_realtime_type_actual_execution_venue") or {}
+                    ).get("0D")
+                    or "UNKNOWN"
+                )
+                .strip()
+                .upper()
+            )
             if (
                 not venue
                 or market_symbol != normalize_symbol(symbol)
@@ -1190,9 +1228,11 @@ class ForwardObservationCollector:
                 bid_levels=bids,
                 ask_levels=asks,
                 route_depth_totals=route_depth_totals,
-                native_transport_epoch=depth.get('transport_epoch'),
-                native_route_sequence=depth.get('route_sequence'),
-                source_contract='main_market_source_v1' if self._detector is None else None,
+                native_transport_epoch=depth.get("transport_epoch"),
+                native_route_sequence=depth.get("route_sequence"),
+                source_contract=(
+                    "main_market_source_v1" if self._detector is None else None
+                ),
             )
             try:
                 self._depth_sink.put_nowait(point)
@@ -1307,8 +1347,13 @@ class ForwardObservationCollector:
         with self._metrics_lock:
             self._timestamp_rejection_sample_total += 1
             if realtime_type == "0B":
-                if item in self._completed_bar_item_rejections or len(self._completed_bar_item_rejections) < 512:
-                    self._completed_bar_item_rejections[item] = self._completed_bar_item_rejections.get(item, 0) + 1
+                if (
+                    item in self._completed_bar_item_rejections
+                    or len(self._completed_bar_item_rejections) < 512
+                ):
+                    self._completed_bar_item_rejections[item] = (
+                        self._completed_bar_item_rejections.get(item, 0) + 1
+                    )
                 else:
                     self._completed_bar_unscoped_rejections += 1
             sample["rejection_index"] = self._timestamp_rejection_sample_total
@@ -1353,19 +1398,32 @@ class ForwardObservationCollector:
             depth_callback_latency = tuple(self._producer_0d_callback_latency_ms)
             reference_latency = tuple(self._reference_write_latency_ms)
             producer_0b_callback_count = self._producer_0b_callbacks
-        (callback_latency_p50_ms, callback_latency_p95_ms,
-         callback_latency_p99_ms) = _percentiles(callback_latency, (50, 95, 99))
-        (depth_callback_latency_p50_ms, depth_callback_latency_p95_ms,
-         depth_callback_latency_p99_ms) = _percentiles(depth_callback_latency, (50, 95, 99))
-        (reference_write_latency_p95_ms,
-         reference_write_latency_p99_ms) = _percentiles(reference_latency, (95, 99))
+        callback_latency_p50_ms, callback_latency_p95_ms, callback_latency_p99_ms = (
+            _percentiles(callback_latency, (50, 95, 99))
+        )
+        (
+            depth_callback_latency_p50_ms,
+            depth_callback_latency_p95_ms,
+            depth_callback_latency_p99_ms,
+        ) = _percentiles(depth_callback_latency, (50, 95, 99))
+        reference_write_latency_p95_ms, reference_write_latency_p99_ms = _percentiles(
+            reference_latency, (95, 99)
+        )
         sorted_bytes_by_trade_date = dict(sorted(bytes_by_trade_date.items()))
         with self._metrics_lock:
             return ForwardCollectorSnapshot(
                 schema=FORWARD_COLLECTOR_SCHEMA,
-                source_contract="main_market_source_v1" if self._detector is None else None,
-                raw_reconciliation_completed=self._raw_reconciliation_completed if self._detector is None else None,
-                raw_reconciliation_error_count=self._raw_reconciliation_errors if self._detector is None else None,
+                source_contract=(
+                    "main_market_source_v1" if self._detector is None else None
+                ),
+                raw_reconciliation_completed=(
+                    self._raw_reconciliation_completed
+                    if self._detector is None
+                    else None
+                ),
+                raw_reconciliation_error_count=(
+                    self._raw_reconciliation_errors if self._detector is None else None
+                ),
                 process_pid=self._process_pid,
                 process_start_ticks=self._process_start_ticks,
                 timestamp_rejection_ledger={
@@ -1627,7 +1685,11 @@ class ForwardObservationCollector:
                 writer_alive_after_close_count=self._writer_alive_after_close,
                 collector_last_close_error_types=self._last_close_error_types,
                 sequence_epoch=self._sequence_epoch,
-                reconciled_sequence_epochs=tuple(sorted(source_epochs)) if self._raw_reconciliation_completed else (),
+                reconciled_sequence_epochs=(
+                    tuple(sorted(source_epochs))
+                    if self._raw_reconciliation_completed
+                    else ()
+                ),
                 stale_sequence_epoch_envelope_count=(
                     self._stale_sequence_epoch_envelopes
                 ),
@@ -1667,8 +1729,15 @@ class ForwardObservationCollector:
                 if self._rejection_file is None:
                     self._rejection_path.parent.mkdir(parents=True, exist_ok=True)
                     self._rejection_file = self._rejection_path.open("xb")
-                raw = (json.dumps(sample, ensure_ascii=True, allow_nan=False,
-                                  separators=(",", ":")) + "\n").encode()
+                raw = (
+                    json.dumps(
+                        sample,
+                        ensure_ascii=True,
+                        allow_nan=False,
+                        separators=(",", ":"),
+                    )
+                    + "\n"
+                ).encode()
                 if self._rejection_file.write(raw) != len(raw):
                     raise OSError("timestamp_rejection_short_write")
                 with self._metrics_lock:
@@ -1682,11 +1751,20 @@ class ForwardObservationCollector:
                 self._rejection_queue.task_done()
 
     def _run(self) -> None:
-        while (not self._stop_requested.is_set() or self._sink.qsize() > 0
-               or not self._rejection_queue.empty()):
+        while (
+            not self._stop_requested.is_set()
+            or self._sink.qsize() > 0
+            or not self._rejection_queue.empty()
+        ):
             self._persist_timestamp_rejections()
             try:
-                envelope = self._sink.get(timeout=0 if not self._rejection_queue.empty() else self.config.worker_poll_interval_sec)
+                envelope = self._sink.get(
+                    timeout=(
+                        0
+                        if not self._rejection_queue.empty()
+                        else self.config.worker_poll_interval_sec
+                    )
+                )
             except queue.Empty:
                 continue
             try:
@@ -1761,7 +1839,9 @@ class ForwardObservationCollector:
             (
                 to_market_stream_point(
                     envelope,
-                    source_contract='main_market_source_v1' if self._detector is None else None,
+                    source_contract=(
+                        "main_market_source_v1" if self._detector is None else None
+                    ),
                     path_order_status=order_status,
                     exchange_timestamp_regression_ms=(
                         order_assessment.exchange_timestamp_regression_ms
@@ -2032,7 +2112,7 @@ class ForwardObservationCollector:
         # this writer generation's durable counts after all workers drain.
         with self._writers_lock:
             writer_items = tuple(self._writers.items())
-            writers = tuple(w for _,w in writer_items)
+            writers = tuple(w for _, w in writer_items)
             depth_writers = tuple(self._depth_writers.values())
         rows = duplicates = errors = 0
         if not shutdown_clean:
@@ -2040,15 +2120,29 @@ class ForwardObservationCollector:
         else:
             for (day, venue, session), writer in writer_items:
                 try:
-                    path = self.config.storage_policy.stream_partition_path(self.config.output_root, trade_date=day, venue=venue, session_bucket=session)
-                    _, count, repeated, _ = _reconcile_canonical_stream(partition_path_files(path), [])
-                    rows += count;duplicates += repeated
+                    path = self.config.storage_policy.stream_partition_path(
+                        self.config.output_root,
+                        trade_date=day,
+                        venue=venue,
+                        session_bucket=session,
+                    )
+                    _, count, repeated, _ = _reconcile_canonical_stream(
+                        partition_path_files(path), []
+                    )
+                    rows += count
+                    duplicates += repeated
                 except (OSError, ValueError, KeyError, TypeError):
                     errors += 1
             persisted = sum(w.metrics().persisted_envelope_count for w in writers)
-            depth_persisted = sum(w.metrics().persisted_envelope_count for w in depth_writers)
-            if (self.flags.path_capture_enabled and persisted != self._path_submitted
-                or self.flags.depth_capture_active and depth_persisted != self._depth_worker_processed):
+            depth_persisted = sum(
+                w.metrics().persisted_envelope_count for w in depth_writers
+            )
+            if (
+                self.flags.path_capture_enabled
+                and persisted != self._path_submitted
+                or self.flags.depth_capture_active
+                and depth_persisted != self._depth_worker_processed
+            ):
                 errors += 1
         with self._metrics_lock:
             self._canonical_stream_points = rows
@@ -2072,18 +2166,25 @@ class ForwardObservationCollector:
 
     def completed_bar_integrity(self):
         with self._metrics_lock:
-            loss = (self._snapshot_blocks, self._missing_0b_items, self._venue_blocks,
-                    self._worker_errors, self._completed_bar_unscoped_rejections)
+            loss = (
+                self._snapshot_blocks,
+                self._missing_0b_items,
+                self._venue_blocks,
+                self._worker_errors,
+                self._completed_bar_unscoped_rejections,
+            )
             item_rejections = dict(self._completed_bar_item_rejections)
         with self._writers_lock:
             writers = tuple(self._writers.values())
-        return {"observer_epoch": self._sequence_epoch,
-                "transport_epoch": self._completed_bar_transport_epoch,
-                "writer_loss": sum(w._dropped for w in writers),
-                "projection_errors": sum(w._completed_bar_errors for w in writers),
-                "config_error": self._completed_bar_config_error,
-                "loss_revision": list(loss),
-                "item_rejections": item_rejections}
+        return {
+            "observer_epoch": self._sequence_epoch,
+            "transport_epoch": self._completed_bar_transport_epoch,
+            "writer_loss": sum(w._dropped for w in writers),
+            "projection_errors": sum(w._completed_bar_errors for w in writers),
+            "config_error": self._completed_bar_config_error,
+            "loss_revision": list(loss),
+            "item_rejections": item_rejections,
+        }
 
     def _writer_for(
         self, envelope: RawMarketObservation
@@ -2107,16 +2208,26 @@ class ForwardObservationCollector:
             )
             projection = None
             import os
-            if (envelope.venue == "SOR" and
-                    os.getenv("KORSTOCKSCAN_WS_COMPLETED_BARS_PUBLISH", "1") == "1"):
+
+            if (
+                envelope.venue == "SOR"
+                and os.getenv("KORSTOCKSCAN_WS_COMPLETED_BARS_PUBLISH", "1") == "1"
+            ):
                 from src.utils.constants import DATA_DIR
                 from .completed_bars import CompletedBarProjection
+
                 try:
                     projection = CompletedBarProjection(
-                        (DATA_DIR / "runtime" / "shared_ws_completed_bars"
-                         if self.config.output_root.resolve() == DEFAULT_OUTPUT_ROOT.resolve()
-                         else self.config.output_root / "shared_ws_completed_bars"),
-                        symbols=os.getenv("KORSTOCKSCAN_WS_COMPLETED_BAR_SYMBOLS", "005930,034020,036930,196170,403870").split(","),
+                        (
+                            DATA_DIR / "runtime" / "shared_ws_completed_bars"
+                            if self.config.output_root.resolve()
+                            == DEFAULT_OUTPUT_ROOT.resolve()
+                            else self.config.output_root / "shared_ws_completed_bars"
+                        ),
+                        symbols=os.getenv(
+                            "KORSTOCKSCAN_WS_COMPLETED_BAR_SYMBOLS",
+                            "005930,034020,036930,196170,403870",
+                        ).split(","),
                         max_bars=430,
                     )
                 except Exception as exc:

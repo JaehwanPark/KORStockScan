@@ -48,69 +48,147 @@ def _prune_observer_contract_fields() -> dict:
     }
 
 
-@pytest.mark.parametrize("damage", [None, "capture_hash", "native_hash", "snapshot", "pid",
-    "start_ticks", "record", "symbol", "route", "date", "future", "provider_called",
-    "explicit_conflict", "write_failed", "missing_trace_id", "ambiguous", "duplicate_trace", "already_consumed"])
+@pytest.mark.parametrize(
+    "damage",
+    [
+        None,
+        "capture_hash",
+        "native_hash",
+        "snapshot",
+        "pid",
+        "start_ticks",
+        "record",
+        "symbol",
+        "route",
+        "date",
+        "future",
+        "provider_called",
+        "explicit_conflict",
+        "write_failed",
+        "missing_trace_id",
+        "ambiguous",
+        "duplicate_trace",
+        "already_consumed",
+    ],
+)
 def test_pending_machine_terminal_requires_exact_original_completion(tmp_path, damage):
     import hashlib
     from copy import deepcopy
-    digest = lambda x: hashlib.sha256(json.dumps(x, ensure_ascii=False, sort_keys=True,
-        separators=(",", ":"), default=str).encode()).hexdigest()
+
+    digest = lambda x: hashlib.sha256(
+        json.dumps(
+            x, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str
+        ).encode()
+    ).hexdigest()
     day = "2026-10-16"
-    capture = dict(schema="mechanistic_entry_observation_v1", evaluation_role="main_live",
-        captured_at=day+"T15:00:00+09:00", bundle_sha256="b"*64,
+    capture = dict(
+        schema="mechanistic_entry_observation_v1",
+        evaluation_role="main_live",
+        captured_at=day + "T15:00:00+09:00",
+        bundle_sha256="b" * 64,
         source_event_stage="watching_analyze_target_async_v1",
-        label_context=dict(snapshot_id="snapshot", record_id=123, stock_code="005930",
-            effective_venue="KRX", session_bucket="krx_regular", broker_route="SOR"),
-        source=dict(exact_payload=dict(snapshot_id="snapshot"),
-            assessment=dict(action="ENTER_NOW", reason="원본 평가")),
-        runtime_consumption=dict(pid=101, process_start_ticks="1234"))
+        label_context=dict(
+            snapshot_id="snapshot",
+            record_id=123,
+            stock_code="005930",
+            effective_venue="KRX",
+            session_bucket="krx_regular",
+            broker_route="SOR",
+        ),
+        source=dict(
+            exact_payload=dict(snapshot_id="snapshot"),
+            assessment=dict(action="ENTER_NOW", reason="원본 평가"),
+        ),
+        runtime_consumption=dict(pid=101, process_start_ticks="1234"),
+    )
     capture["runtime_consumption"]["continuous_reversal"] = dict(
-        schema="continuous_reversal_consumption_v1", bundle_sha256="b"*64,
-        pid=101, process_start_ticks="1234", captured_at=capture["captured_at"],
+        schema="continuous_reversal_consumption_v1",
+        bundle_sha256="b" * 64,
+        pid=101,
+        process_start_ticks="1234",
+        captured_at=capture["captured_at"],
         assessment_sha256=digest(capture["source"]["assessment"]),
-        exact_payload_sha256=digest(capture["source"]["exact_payload"]))
-    trace = dict(schema="ai_decision_trace_v1", decision_stage="entry_screen",
-        decision_trace_id="trace", decision_ts=day+"T15:00:01+09:00",
-        machine_evaluation_expected=True, machine_evaluation_status="assessment_pending",
-        provider_called=False, result_source="entry_circuit_open", machine_bundle_sha256="b"*64,
-        async_producer_pid=101, async_producer_start_ticks="1234",
-        source_event_stage=capture["source_event_stage"], **capture["label_context"])
+        exact_payload_sha256=digest(capture["source"]["exact_payload"]),
+    )
+    trace = dict(
+        schema="ai_decision_trace_v1",
+        decision_stage="entry_screen",
+        decision_trace_id="trace",
+        decision_ts=day + "T15:00:01+09:00",
+        machine_evaluation_expected=True,
+        machine_evaluation_status="assessment_pending",
+        provider_called=False,
+        result_source="entry_circuit_open",
+        machine_bundle_sha256="b" * 64,
+        async_producer_pid=101,
+        async_producer_start_ticks="1234",
+        source_event_stage=capture["source_event_stage"],
+        **capture["label_context"],
+    )
     if damage == "native_hash":
-        capture["runtime_consumption"]["continuous_reversal"]["assessment_sha256"] = "0"*64
+        capture["runtime_consumption"]["continuous_reversal"]["assessment_sha256"] = (
+            "0" * 64
+        )
     elif damage in {"snapshot", "pid", "start_ticks", "record", "symbol", "route"}:
-        key = dict(snapshot="snapshot_id", pid="async_producer_pid", start_ticks="async_producer_start_ticks",
-            record="record_id", symbol="stock_code", route="broker_route")[damage]
+        key = dict(
+            snapshot="snapshot_id",
+            pid="async_producer_pid",
+            start_ticks="async_producer_start_ticks",
+            record="record_id",
+            symbol="stock_code",
+            route="broker_route",
+        )[damage]
         trace[key] = 999 if damage in {"pid", "record"} else "different"
-    elif damage == "date": trace["decision_ts"] = "2026-10-17T15:00:01+09:00"
-    elif damage == "future": trace["decision_ts"] = day+"T14:59:59+09:00"
-    elif damage == "provider_called": trace["provider_called"] = True
-    elif damage == "explicit_conflict": trace["machine_observation_sha256"] = "0"*64
-    elif damage == "write_failed": trace["machine_capture_status"] = "write_failed"
-    elif damage == "missing_trace_id": del trace["decision_trace_id"]
+    elif damage == "date":
+        trace["decision_ts"] = "2026-10-17T15:00:01+09:00"
+    elif damage == "future":
+        trace["decision_ts"] = day + "T14:59:59+09:00"
+    elif damage == "provider_called":
+        trace["provider_called"] = True
+    elif damage == "explicit_conflict":
+        trace["machine_observation_sha256"] = "0" * 64
+    elif damage == "write_failed":
+        trace["machine_capture_status"] = "write_failed"
+    elif damage == "missing_trace_id":
+        del trace["decision_trace_id"]
     capture["machine_observation_sha256"] = digest(capture)
-    if damage == "capture_hash": capture["machine_observation_sha256"] = "0"*64
+    if damage == "capture_hash":
+        capture["machine_observation_sha256"] = "0" * 64
     captures = [capture]
     if damage == "ambiguous":
-        other = deepcopy(capture); del other["machine_observation_sha256"]
+        other = deepcopy(capture)
+        del other["machine_observation_sha256"]
         other["source"]["assessment"]["reason"] = "different source"
-        other["runtime_consumption"]["continuous_reversal"]["assessment_sha256"] = digest(other["source"]["assessment"])
-        other["machine_observation_sha256"] = digest(other); captures.append(other)
+        other["runtime_consumption"]["continuous_reversal"]["assessment_sha256"] = (
+            digest(other["source"]["assessment"])
+        )
+        other["machine_observation_sha256"] = digest(other)
+        captures.append(other)
     traces = [trace]
     if damage in {"duplicate_trace", "already_consumed"}:
         other = dict(trace, decision_trace_id="another-trace")
         if damage == "already_consumed":
-            other.update(machine_evaluation_status="assessed", machine_capture_status="captured",
-                machine_observation_sha256=capture["machine_observation_sha256"])
+            other.update(
+                machine_evaluation_status="assessed",
+                machine_capture_status="captured",
+                machine_observation_sha256=capture["machine_observation_sha256"],
+            )
         traces.append(other)
     original = {}
-    for name, rows in (("ai_decision_payloads", captures), ("ai_decision_trace", traces)):
-        path = tmp_path/name/f"{name}_{day}.jsonl"; path.parent.mkdir()
-        path.write_text("".join(json.dumps(x)+"\n" for x in rows)); original[path] = path.read_bytes()
+    for name, rows in (
+        ("ai_decision_payloads", captures),
+        ("ai_decision_trace", traces),
+    ):
+        path = tmp_path / name / f"{name}_{day}.jsonl"
+        path.parent.mkdir()
+        path.write_text("".join(json.dumps(x) + "\n" for x in rows))
+        original[path] = path.read_bytes()
     result = audit._machine_ai_natural_source_consumption(day, data_root=tmp_path)
     recovery = result["machine_trace_completion_recovery"]
     assert recovery["count"] == int(damage is None)
-    assert result["machine_attempt_conservation"]["unaccounted_trace_count"] == (2 if damage == "duplicate_trace" else int(damage is not None))
+    assert result["machine_attempt_conservation"]["unaccounted_trace_count"] == (
+        2 if damage == "duplicate_trace" else int(damage is not None)
+    )
     assert all(p.read_bytes() == raw for p, raw in original.items())
     if damage is None:
         assert result["machine_attempt_conservation"]["assessed_trace_count"] == 1
@@ -627,12 +705,16 @@ def test_machine_ai_natural_source_audit_blocks_contract_invalid_attempts(
         ]
         == 1
     )
-    assert report["machine_attempt_conservation"][
-        "assessment_contract_invalid_rows_isolated"
-    ] is False
-    assert report["machine_attempt_conservation"][
-        "assessment_contract_invalid_trace_ids"
-    ] == []
+    assert (
+        report["machine_attempt_conservation"][
+            "assessment_contract_invalid_rows_isolated"
+        ]
+        is False
+    )
+    assert (
+        report["machine_attempt_conservation"]["assessment_contract_invalid_trace_ids"]
+        == []
+    )
     assert report["machine_threshold_tuning_input_allowed"] is False
     assert report["machine_threshold_tuning_blocked_reason"] == (
         "machine_assessment_contract_invalid"
@@ -701,9 +783,12 @@ def test_machine_ai_natural_source_audit_isolates_identified_contract_invalid_ro
 
     assert report["machine_attempt_conservation"]["denominator_preserved"] is True
     assert report["machine_attempt_conservation"]["accounted_trace_count"] == 3
-    assert report["machine_attempt_conservation"][
-        "assessment_contract_invalid_rows_isolated"
-    ] is True
+    assert (
+        report["machine_attempt_conservation"][
+            "assessment_contract_invalid_rows_isolated"
+        ]
+        is True
+    )
     assert report["machine_attempt_conservation"][
         "assessment_contract_invalid_trace_ids"
     ] == ["identified-contract-invalid"]
@@ -852,12 +937,20 @@ def test_avg_down_new_source_contracts_never_allow_runtime_authority(stage):
     # Preserve archive-contract coverage without importing a retired tuner.
     config_fields = {
         "runtime_config_schema": "avg_down_runtime_config_v1",
-        "configured_min_buy_pressure": 85, "effective_min_buy_pressure": 85,
-        "runtime_value_source": "runtime_rules_loaded_value", "runtime_value_raw": "not_set",
-        "runtime_pid_value_verified": True, "avg_down_policy_version": "policy-v2",
-        "sizing_policy_version": "sizing-v1", "cost_policy_version": "trade_profit_net_realized_pnl:rate=0.00230000",
-        "decision_authority": "source_only_runtime_config_observation", "runtime_effect": False,
-        "allowed_runtime_apply": False, "actual_order_submitted": False, "broker_order_forbidden": True}
+        "configured_min_buy_pressure": 85,
+        "effective_min_buy_pressure": 85,
+        "runtime_value_source": "runtime_rules_loaded_value",
+        "runtime_value_raw": "not_set",
+        "runtime_pid_value_verified": True,
+        "avg_down_policy_version": "policy-v2",
+        "sizing_policy_version": "sizing-v1",
+        "cost_policy_version": "trade_profit_net_realized_pnl:rate=0.00230000",
+        "decision_authority": "source_only_runtime_config_observation",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
     contract = audit.STAGE_CONTRACTS[stage]
     fields = {name: "present" for name in contract.required_fields}
     fields.update(
@@ -9140,22 +9233,36 @@ def test_observation_source_quality_audit_writes_json_and_markdown(
     assert md_path.exists()
 
 
-@pytest.mark.parametrize("failure", ["producer_raw_summary_count_mismatch", "producer_summary_profile_invalid"])
-def test_preflight_repairs_only_retained_raw_summary_parity(tmp_path, monkeypatch, failure):
+@pytest.mark.parametrize(
+    "failure",
+    ["producer_raw_summary_count_mismatch", "producer_summary_profile_invalid"],
+)
+def test_preflight_repairs_only_retained_raw_summary_parity(
+    tmp_path, monkeypatch, failure
+):
     from src.engine import pipeline_event_summary as producer
+
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     day = "2026-05-15"
     _write_events(tmp_path, day, [_event("unrelated_stage", {})])
     calls = []
+
     def seal(*args):
         calls.append("seal")
         raise ValueError(failure)
+
     def rebuild(*args):
         calls.append("rebuild")
-        _, path = producer.producer_summary_paths(tmp_path / "pipeline_event_summaries", day)
+        _, path = producer.producer_summary_paths(
+            tmp_path / "pipeline_event_summaries", day
+        )
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text('{}\n')
-        return {"raw_source_ledger": {"ledger_sha256": "a" * 64}, "source_reconstruction": {"runtime_effect": False}}
+        path.write_text("{}\n")
+        return {
+            "raw_source_ledger": {"ledger_sha256": "a" * 64},
+            "source_reconstruction": {"runtime_effect": False},
+        }
+
     monkeypatch.setattr(producer, "seal_producer_summary_source", seal)
     monkeypatch.setattr(producer, "rebuild_producer_summary_source", rebuild)
     report = audit.write_report(day, audit_phase="preflight")
@@ -9168,62 +9275,86 @@ def test_preflight_repairs_only_retained_raw_summary_parity(tmp_path, monkeypatc
         assert report["producer_source_ledger"]["status"] == "source_gap"
 
 
-@pytest.mark.parametrize('after_exclusion', ['unchanged', 'append', 'replace'])
+@pytest.mark.parametrize("after_exclusion", ["unchanged", "append", "replace"])
 def test_preflight_seals_own_quarantine_only_while_its_exact_file_is_unchanged(
     tmp_path, monkeypatch, after_exclusion
 ):
     from src.engine import pipeline_event_summary as producer
-    monkeypatch.setattr(audit, 'DATA_DIR', tmp_path)
-    day = '2026-10-12'
-    _write_events(tmp_path, day, [_event('unrelated_stage', {})])
-    raw = tmp_path / 'pipeline_events' / f'pipeline_events_{day}.jsonl'
+
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    day = "2026-10-12"
+    _write_events(tmp_path, day, [_event("unrelated_stage", {})])
+    raw = tmp_path / "pipeline_events" / f"pipeline_events_{day}.jsonl"
     original_inode = raw.stat().st_ino
     built = []
     native_build = audit.build_observation_source_quality_audit
+
     def build(*args, **kwargs):
         built.append(True)
         if len(built) == 2:
-            if after_exclusion == 'append':
-                with raw.open('a') as output:
-                    output.write(json.dumps(_event('unrelated_stage', {})) + '\n')
-            elif after_exclusion == 'replace':
-                replacement = raw.with_suffix('.replacement')
+            if after_exclusion == "append":
+                with raw.open("a") as output:
+                    output.write(json.dumps(_event("unrelated_stage", {})) + "\n")
+            elif after_exclusion == "replace":
+                replacement = raw.with_suffix(".replacement")
                 replacement.write_bytes(raw.read_bytes())
                 replacement.replace(raw)
         report = native_build(*args, **kwargs)
-        report['hard_blocking_row_exclusions'] = [] if len(built) > 1 else [
-            {'line_no': 1, 'stage': 'unrelated_stage',
-             'exclusion_reasons': ['invalid_label']}]
+        report["hard_blocking_row_exclusions"] = (
+            []
+            if len(built) > 1
+            else [
+                {
+                    "line_no": 1,
+                    "stage": "unrelated_stage",
+                    "exclusion_reasons": ["invalid_label"],
+                }
+            ]
+        )
         return report
-    monkeypatch.setattr(audit, 'build_observation_source_quality_audit', build)
-    monkeypatch.setattr(audit, '_write_markdown', lambda report, path: path.write_text('audit\n'))
+
+    monkeypatch.setattr(audit, "build_observation_source_quality_audit", build)
+    monkeypatch.setattr(
+        audit, "_write_markdown", lambda report, path: path.write_text("audit\n")
+    )
     # A closed file was quiet before quarantine. The newly replaced inode has
     # a recent mtime, reproducing the real preflight's false writer detection.
-    monkeypatch.setattr(audit, '_raw_source_writer_active',
-                        lambda *_args: raw.stat().st_ino != original_inode)
+    monkeypatch.setattr(
+        audit,
+        "_raw_source_writer_active",
+        lambda *_args: raw.stat().st_ino != original_inode,
+    )
     calls = []
+
     def seal(*args, **kwargs):
-        calls.append('seal')
+        calls.append("seal")
         snapshot = audit._raw_exclusion_source_snapshot(raw)
-        assert kwargs['expected_raw_generation'] == {
-            'path': str(raw),
-            'stamp': [snapshot[key] for key in ('dev', 'ino', 'size', 'mtime_ns', 'ctime_ns')],
+        assert kwargs["expected_raw_generation"] == {
+            "path": str(raw),
+            "stamp": [
+                snapshot[key] for key in ("dev", "ino", "size", "mtime_ns", "ctime_ns")
+            ],
         }
-        _, path = producer.producer_summary_paths(tmp_path / 'pipeline_event_summaries', day)
+        _, path = producer.producer_summary_paths(
+            tmp_path / "pipeline_event_summaries", day
+        )
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text('{}\n')
-        return {'raw_source_ledger': {'ledger_sha256': 'a' * 64}}
-    monkeypatch.setattr(producer, 'seal_producer_summary_source', seal)
-    report = audit.write_report(day, audit_phase='preflight')
-    assert report['raw_row_exclusion']['raw_mutation_applied'] is True
-    if after_exclusion == 'unchanged':
-        assert calls == ['seal']
-        assert report['producer_source_ledger']['status'] == 'ready'
+        path.write_text("{}\n")
+        return {"raw_source_ledger": {"ledger_sha256": "a" * 64}}
+
+    monkeypatch.setattr(producer, "seal_producer_summary_source", seal)
+    report = audit.write_report(day, audit_phase="preflight")
+    assert report["raw_row_exclusion"]["raw_mutation_applied"] is True
+    if after_exclusion == "unchanged":
+        assert calls == ["seal"]
+        assert report["producer_source_ledger"]["status"] == "ready"
     else:
         assert calls == []
-        assert report['producer_source_ledger'] == {
-            'status': 'source_gap', 'reason': 'producer_source_writer_active',
-            'runtime_effect': False}
+        assert report["producer_source_ledger"] == {
+            "status": "source_gap",
+            "reason": "producer_source_writer_active",
+            "runtime_effect": False,
+        }
 
 
 def test_stdout_summary_omits_large_stage_contracts():
@@ -10661,31 +10792,49 @@ def test_raw_contract_projection_warm_parity_and_external_census_is_fresh(
     assert len(calls) == 3
 
 
-def test_raw_contract_projection_contract_changes_during_use_fail_closed(tmp_path, monkeypatch):
+def test_raw_contract_projection_contract_changes_during_use_fail_closed(
+    tmp_path, monkeypatch
+):
     _projection_fixture(tmp_path, monkeypatch)
     original = audit._raw_contract_projection_key
     count = 0
+
     def changed(*args):
         nonlocal count
         count += 1
         result = original(*args)
         return result if count == 1 else "changed_contract"
+
     monkeypatch.setattr(audit, "_raw_contract_projection_key", changed)
     result = audit.build_observation_source_quality_audit("2026-09-17")
     assert result["source"]["contract_projection_reused"] is True
-    assert result["summary"]["blocked_reason"] == "source_quality_audit_contract_changed_during_audit"
+    assert (
+        result["summary"]["blocked_reason"]
+        == "source_quality_audit_contract_changed_during_audit"
+    )
     assert result["summary"]["tuning_input_allowed"] is False
     assert result["source"]["contract_projection"]["reusable"] is False
 
 
-def test_raw_contract_projection_preserves_tied_stage_first_seen_order(tmp_path, monkeypatch):
-    rows = [_event(f"fixture_stage_{index:02d}", {"source_fixture": "valid"}) for index in reversed(range(30))]
+def test_raw_contract_projection_preserves_tied_stage_first_seen_order(
+    tmp_path, monkeypatch
+):
+    rows = [
+        _event(f"fixture_stage_{index:02d}", {"source_fixture": "valid"})
+        for index in reversed(range(30))
+    ]
     raw, path, cold, calls = _projection_fixture(tmp_path, monkeypatch, rows)
-    monkeypatch.setattr(audit, "_streaming_contract_audit", lambda *a, **k: pytest.fail("warm raw decode"))
+    monkeypatch.setattr(
+        audit,
+        "_streaming_contract_audit",
+        lambda *a, **k: pytest.fail("warm raw decode"),
+    )
     warm = audit.build_observation_source_quality_audit("2026-09-17")
     assert warm["source"]["contract_projection_reused"] is True
     assert list(warm["summary"]["top_stages"]) == list(cold["summary"]["top_stages"])
-    assert list(warm["source"]["audited_stage_counts"]) == list(cold["source"]["audited_stage_counts"])
+    assert list(warm["source"]["audited_stage_counts"]) == list(
+        cold["source"]["audited_stage_counts"]
+    )
 
 
 @pytest.mark.parametrize(
@@ -10783,18 +10932,26 @@ def test_raw_contract_projection_optional_reader_failure_falls_back(
         assert final["summary"]["event_count"] == 1
 
 
-def test_final_publication_rejects_preflight_and_refreshes_changed_consumer(tmp_path, monkeypatch):
+def test_final_publication_rejects_preflight_and_refreshes_changed_consumer(
+    tmp_path, monkeypatch
+):
     actual_census = audit._machine_ai_natural_source_consumption
     raw, path, _, _ = _projection_fixture(tmp_path, monkeypatch)
-    monkeypatch.setattr(audit, "_machine_ai_natural_source_consumption", lambda day: actual_census(day, data_root=tmp_path))
+    monkeypatch.setattr(
+        audit,
+        "_machine_ai_natural_source_consumption",
+        lambda day: actual_census(day, data_root=tmp_path),
+    )
     audit.write_report("2026-09-17", audit_phase="preflight")
     assert audit.check_audit_reusable("2026-09-17")["reusable"] is False
     final = audit.write_report("2026-09-17", audit_phase="final")
     assert final["source"]["logical_raw_read_bytes_this_run"] == 0
     assert audit.check_audit_reusable("2026-09-17")["reusable"] is True
-    archive = tmp_path / "ai_decision_requests" / "ai_decision_requests_2026-09-17.jsonl"
+    archive = (
+        tmp_path / "ai_decision_requests" / "ai_decision_requests_2026-09-17.jsonl"
+    )
     archive.parent.mkdir()
-    archive.write_text('{}\n')
+    archive.write_text("{}\n")
     assert audit.check_audit_reusable("2026-09-17")["reusable"] is False
     refreshed = audit.write_report("2026-09-17", audit_phase="final")
     assert refreshed["source"]["logical_raw_read_bytes_this_run"] == 0
@@ -10803,31 +10960,55 @@ def test_final_publication_rejects_preflight_and_refreshes_changed_consumer(tmp_
     assert audit.check_audit_reusable("2026-09-17")["reusable"] is False
 
 
-def test_raw_semantics_rejects_observed_contract_change_and_ignores_final_only(tmp_path):
+def test_raw_semantics_rejects_observed_contract_change_and_ignores_final_only(
+    tmp_path,
+):
     original = Path(audit.__file__).read_text()
     producer = tmp_path / "producer.py"
     producer.write_text(original)
     before = audit._raw_semantic_digest(producer)
-    producer.write_text(original.replace('"machine_ai_natural_source_consumption_v1"', '"machine_ai_natural_source_consumption_v2"'))
+    producer.write_text(
+        original.replace(
+            '"machine_ai_natural_source_consumption_v1"',
+            '"machine_ai_natural_source_consumption_v2"',
+        )
+    )
     assert audit._raw_semantic_digest(producer) == before
-    producer.write_text(original.replace('"source_quality_raw_invalid_json"', '"raw_invalid_changed"'))
+    producer.write_text(
+        original.replace('"source_quality_raw_invalid_json"', '"raw_invalid_changed"')
+    )
     # Final status assembly is independent of raw validation.
     assert audit._raw_semantic_digest(producer) == before
-    producer.write_text(original.replace('"source_quality_blocker_or_provenance_backfill"', '"changed_routing"'))
+    producer.write_text(
+        original.replace(
+            '"source_quality_blocker_or_provenance_backfill"', '"changed_routing"'
+        )
+    )
     assert audit._raw_semantic_digest(producer) != before
 
 
 def test_native_large_funnel_reads_only_selected_section_and_keeps_full_hash(tmp_path):
     import hashlib
-    payload = {"target_date": "2026-09-17", "unrelated_section": "x" * (1024 * 1024),
-        "entry_submit_drought_contract": {"machine_primary_entry_funnel": {
-            "ai_pass_terminal_conservation": {"ai_pass": 0}, "evaluation_ledger": []}}}
+
+    payload = {
+        "target_date": "2026-09-17",
+        "unrelated_section": "x" * (1024 * 1024),
+        "entry_submit_drought_contract": {
+            "machine_primary_entry_funnel": {
+                "ai_pass_terminal_conservation": {"ai_pass": 0},
+                "evaluation_ledger": [],
+            }
+        },
+    }
     path = tmp_path / "funnel.json"
     raw = json.dumps(payload, indent=2).encode()
     path.write_bytes(raw)
     selected, digest = audit._read_machine_funnel(path)
     assert "unrelated_section" not in selected
-    assert selected["entry_submit_drought_contract"] == payload["entry_submit_drought_contract"]
+    assert (
+        selected["entry_submit_drought_contract"]
+        == payload["entry_submit_drought_contract"]
+    )
     assert selected["target_date"] == "2026-09-17"
     assert digest == hashlib.sha256(raw).hexdigest()
 
@@ -10835,31 +11016,72 @@ def test_native_large_funnel_reads_only_selected_section_and_keeps_full_hash(tmp
 def test_final_without_verified_projection_never_bootstraps_raw(tmp_path, monkeypatch):
     _, _, _, _ = _projection_fixture(tmp_path, monkeypatch)
     monkeypatch.setattr(audit, "_read_raw_contract_projection", lambda *args: None)
-    monkeypatch.setattr(audit, "_streaming_contract_audit", lambda *args, **kwargs: pytest.fail("unauthorized final raw bootstrap"))
-    with pytest.raises(ValueError, match="final_verified_raw_projection_required_no_automatic_bootstrap"):
+    monkeypatch.setattr(
+        audit,
+        "_streaming_contract_audit",
+        lambda *args, **kwargs: pytest.fail("unauthorized final raw bootstrap"),
+    )
+    with pytest.raises(
+        ValueError,
+        match="final_verified_raw_projection_required_no_automatic_bootstrap",
+    ):
         audit.build_observation_source_quality_audit("2026-09-17", audit_phase="final")
 
 
-def test_final_bound_projection_migration_is_byte_bound_without_raw_bootstrap(tmp_path, monkeypatch):
+def test_final_bound_projection_migration_is_byte_bound_without_raw_bootstrap(
+    tmp_path, monkeypatch
+):
     import shutil
+
     raw, path, _, _ = _projection_fixture(tmp_path, monkeypatch)
     audit.write_report("2026-09-17", audit_phase="final")
     original = tmp_path / "immutable-source"
     tree = __import__("ast").parse(Path(audit.__file__).read_text())
-    owner = next(node for node in tree.body if isinstance(node, __import__("ast").FunctionDef) and node.name == "_final_implementation_digest")
-    names = next(node for node in __import__("ast").walk(owner) if isinstance(node, __import__("ast").Tuple) and all(isinstance(part, __import__("ast").Constant) and isinstance(part.value, str) for part in node.elts))
+    owner = next(
+        node
+        for node in tree.body
+        if isinstance(node, __import__("ast").FunctionDef)
+        and node.name == "_final_implementation_digest"
+    )
+    names = next(
+        node
+        for node in __import__("ast").walk(owner)
+        if isinstance(node, __import__("ast").Tuple)
+        and all(
+            isinstance(part, __import__("ast").Constant) and isinstance(part.value, str)
+            for part in node.elts
+        )
+    )
     paths = {audit.PROJECT_ROOT / part.value for part in names.elts}
-    paths.update(Path(fn.__globals__["__file__"]) for fn in (audit.normalize_flow_state_label, audit.normalize_gatekeeper_action_key, audit.runtime_config_valid))
+    paths.update(
+        Path(fn.__globals__["__file__"])
+        for fn in (
+            audit.normalize_flow_state_label,
+            audit.normalize_gatekeeper_action_key,
+            audit.runtime_config_valid,
+        )
+    )
     for source in paths:
         destination = original / source.relative_to(audit.PROJECT_ROOT)
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source, destination)
     producer = original / "src/engine/observation_source_quality_audit.py"
-    monkeypatch.setattr(audit, "_streaming_contract_audit", lambda *args, **kwargs: pytest.fail("final migration raw bootstrap"))
-    migrated = audit._verified_legacy_projection("2026-09-17", raw, audit._raw_generation(raw), producer)
+    monkeypatch.setattr(
+        audit,
+        "_streaming_contract_audit",
+        lambda *args, **kwargs: pytest.fail("final migration raw bootstrap"),
+    )
+    migrated = audit._verified_legacy_projection(
+        "2026-09-17", raw, audit._raw_generation(raw), producer
+    )
     assert migrated is not None and migrated[0]["event_count"] == 1
     receipt = path.with_name(path.name + ".final-contract.json")
     body = json.loads(receipt.read_text())
     body["artifact_sha256"] = "0" * 64
     receipt.write_text(json.dumps(body))
-    assert audit._verified_legacy_projection("2026-09-17", raw, audit._raw_generation(raw), producer) is None
+    assert (
+        audit._verified_legacy_projection(
+            "2026-09-17", raw, audit._raw_generation(raw), producer
+        )
+        is None
+    )

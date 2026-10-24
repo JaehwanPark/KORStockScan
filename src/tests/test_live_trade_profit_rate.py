@@ -186,31 +186,53 @@ def _install_successful_sell_lifecycle_outbox(monkeypatch, logged):
     )
 
 
-@pytest.mark.parametrize("tamper_field", [None, "sell_qty", "execution_no",
-                                          "native_receipt_entry_trace_id",
-                                          "native_receipt_observed_at"])
+@pytest.mark.parametrize(
+    "tamper_field",
+    [
+        None,
+        "sell_qty",
+        "execution_no",
+        "native_receipt_entry_trace_id",
+        "native_receipt_observed_at",
+    ],
+)
 def test_native_fixed_watch_sell_outbox_acks_exact_receipt_without_scanner(
-    monkeypatch, tamper_field,
+    monkeypatch,
+    tamper_field,
 ):
     from copy import deepcopy
 
     observed_at = datetime(2026, 10, 15, 13, 59, 4, tzinfo=timezone(timedelta(hours=9)))
     trace = "analyze_target:403870:1792038802347:4a778b1f"
-    stock = {"id": 49293, "code": "403870", "name": "HPSP",
-             "last_watching_ai_attempt_decision_trace_id": trace,
-             "effective_venue": "KRX", "market_session_bucket": "krx_regular"}
+    stock = {
+        "id": 49293,
+        "code": "403870",
+        "name": "HPSP",
+        "last_watching_ai_attempt_decision_trace_id": trace,
+        "effective_venue": "KRX",
+        "market_session_bucket": "krx_regular",
+    }
     leg = receipts._build_sell_lifecycle_outbox_leg(
-        stock, code="403870", target_id=49293, now=observed_at,
-        stage="sell_completed", event_fields={
-            "sell_qty": 21, "remaining_sell_qty": 0,
-            "order_no": "0043525", "execution_no": "61455",
-            "main_lifecycle_exit_qty": 21, "main_lifecycle_exit_price": 50500.0,
+        stock,
+        code="403870",
+        target_id=49293,
+        now=observed_at,
+        stage="sell_completed",
+        event_fields={
+            "sell_qty": 21,
+            "remaining_sell_qty": 0,
+            "order_no": "0043525",
+            "execution_no": "61455",
+            "main_lifecycle_exit_qty": 21,
+            "main_lifecycle_exit_price": 50500.0,
             "main_lifecycle_broker_reconciled": True,
             "main_lifecycle_reconciled_final_exit": True,
             "broker_execution_provenance_complete": False,
             "actual_order_submitted": True,
-            "broker_order_forbidden": False, "runtime_effect": True,
-        })
+            "broker_order_forbidden": False,
+            "runtime_effect": True,
+        },
+    )
     frozen = deepcopy(leg)
     captured = []
 
@@ -219,151 +241,354 @@ def test_native_fixed_watch_sell_outbox_acks_exact_receipt_without_scanner(
         if tamper_field:
             normalized[tamper_field] = "tampered"
         captured.append(normalized)
-        return dict(pipeline=pipeline, stock_code=code, stage=stage,
-                    record_id=record_id, fields=normalized,
-                    structured_append_succeeded=True, structured_append_status="raw_appended")
+        return dict(
+            pipeline=pipeline,
+            stock_code=code,
+            stage=stage,
+            record_id=record_id,
+            fields=normalized,
+            structured_append_succeeded=True,
+            structured_append_status="raw_appended",
+        )
 
     monkeypatch.setattr(receipts, "emit_pipeline_event", emit)
-    assert receipts._emit_standard_sell_partial_lifecycle_outbox_leg(leg) is (tamper_field is None)
+    assert receipts._emit_standard_sell_partial_lifecycle_outbox_leg(leg) is (
+        tamper_field is None
+    )
     assert leg == frozen  # A sealed recovery leg is never rewritten.
     assert "main_lifecycle_id" not in captured[0]
     assert "attempt_id" not in captured[0]
     assert captured[0]["broker_execution_provenance_complete"] == "False"
     if tamper_field is None:
         stock[receipts._SELL_EXECUTION_RECEIPT_STATE_KEY] = {
-            receipts._SELL_PARTIAL_LIFECYCLE_OUTBOX_KEY: {leg["leg_sha256"]: leg}}
-        monkeypatch.setattr(receipts, "_persist_sell_receipt_recovery_or_interlock",
-                            lambda *args, **kwargs: True)
+            receipts._SELL_PARTIAL_LIFECYCLE_OUTBOX_KEY: {leg["leg_sha256"]: leg}
+        }
+        monkeypatch.setattr(
+            receipts,
+            "_persist_sell_receipt_recovery_or_interlock",
+            lambda *args, **kwargs: True,
+        )
         assert receipts.replay_pending_sell_partial_lifecycle_outbox(stock)
         count = len(captured)
         assert receipts.replay_pending_sell_partial_lifecycle_outbox(stock)
         assert len(captured) == count
 
 
-@pytest.mark.parametrize('damage', [None, 'position', 'buy_generation', 'bundle', 'signal', 'binding',
-    'broker', 'custody', 'source_gap', 'quantity', 'unit_fill', 'remaining', 'clock', 'naive',
-    'partial', 'scanner', 'simulation', 'invalid_trace', 'event_tamper'])
-def test_overnight_terminal_outbox_acks_only_exact_broker_position_receipt(monkeypatch, damage):
+@pytest.mark.parametrize(
+    "damage",
+    [
+        None,
+        "position",
+        "buy_generation",
+        "bundle",
+        "signal",
+        "binding",
+        "broker",
+        "custody",
+        "source_gap",
+        "quantity",
+        "unit_fill",
+        "remaining",
+        "clock",
+        "naive",
+        "partial",
+        "scanner",
+        "simulation",
+        "invalid_trace",
+        "event_tamper",
+    ],
+)
+def test_overnight_terminal_outbox_acks_only_exact_broker_position_receipt(
+    monkeypatch, damage
+):
     from copy import deepcopy
+
     now = datetime(2026, 10, 16, 8, 18, 25, 167570, tzinfo=timezone(timedelta(hours=9)))
-    stock = dict(id=49328, code='005930', name='Samsung')
-    fields = dict(order_no='0002918', execution_no='105241', sell_qty=1, remaining_sell_qty=0,
-        actual_order_submitted=True, broker_order_forbidden=False,
-        exit_rule='scalp_trailing_take_profit', holding_path_terminal_signal_binding='same_position_buy_generation',
-        holding_path_position_key='record:49328', holding_path_buy_fill_identity='a'*64,
-        holding_path_policy_bundle_sha256='b'*64, holding_path_signal_id='original-signal',
-        broker_execution_provenance_complete=True, main_lifecycle_broker_reconciled=True,
-        main_lifecycle_reconciled_final_exit=True, sell_execution_receipt_quantity_contract_complete=True,
-        sell_execution_receipt_unit_fill_consistent=True, exit_receipt_submission_custody_committed=True,
-        exit_receipt_submission_custody_source_gap=False, exit_execution_received_at=now.isoformat(),
-        main_lifecycle_actual_cost_status='cost_source_unavailable', main_lifecycle_broker_actual_fees_taxes_krw=None)
-    changes = dict(position=('holding_path_position_key','record:1'),buy_generation=('holding_path_buy_fill_identity','bad'),
-        bundle=('holding_path_policy_bundle_sha256','bad'),signal=('holding_path_signal_id',''),
-        binding=('holding_path_terminal_signal_binding','source_gap'),broker=('broker_execution_provenance_complete',False),
-        custody=('exit_receipt_submission_custody_committed',False),source_gap=('exit_receipt_submission_custody_source_gap',True),
-        quantity=('sell_execution_receipt_quantity_contract_complete',False),unit_fill=('sell_execution_receipt_unit_fill_consistent',False),
-        remaining=('remaining_sell_qty',1),clock=('exit_execution_received_at',now.replace(second=26).isoformat()),
-        naive=('exit_execution_received_at',now.replace(tzinfo=None).isoformat()))
-    if damage in changes: fields[changes[damage][0]]=changes[damage][1]
-    if damage=='scanner':stock['scanner_promotion_id']='existing-scanner'
-    if damage=='simulation':stock['simulation_book']='probe'
-    if damage=='invalid_trace':stock['last_watching_ai_attempt_decision_trace_id']='foreign'
-    leg=receipts._build_sell_lifecycle_outbox_leg(stock,code='005930',target_id=49328,now=now,
-        stage='sell_partial_fill_progress' if damage=='partial' else 'sell_completed',event_fields=fields)
-    frozen=deepcopy(leg);emitted=[]
-    def emit(pipeline,name,code,stage,*,record_id,fields):
-        normalized={str(k):str(v) for k,v in fields.items()}
-        if damage=='event_tamper':normalized['execution_no']='other'
+    stock = dict(id=49328, code="005930", name="Samsung")
+    fields = dict(
+        order_no="0002918",
+        execution_no="105241",
+        sell_qty=1,
+        remaining_sell_qty=0,
+        actual_order_submitted=True,
+        broker_order_forbidden=False,
+        exit_rule="scalp_trailing_take_profit",
+        holding_path_terminal_signal_binding="same_position_buy_generation",
+        holding_path_position_key="record:49328",
+        holding_path_buy_fill_identity="a" * 64,
+        holding_path_policy_bundle_sha256="b" * 64,
+        holding_path_signal_id="original-signal",
+        broker_execution_provenance_complete=True,
+        main_lifecycle_broker_reconciled=True,
+        main_lifecycle_reconciled_final_exit=True,
+        sell_execution_receipt_quantity_contract_complete=True,
+        sell_execution_receipt_unit_fill_consistent=True,
+        exit_receipt_submission_custody_committed=True,
+        exit_receipt_submission_custody_source_gap=False,
+        exit_execution_received_at=now.isoformat(),
+        main_lifecycle_actual_cost_status="cost_source_unavailable",
+        main_lifecycle_broker_actual_fees_taxes_krw=None,
+    )
+    changes = dict(
+        position=("holding_path_position_key", "record:1"),
+        buy_generation=("holding_path_buy_fill_identity", "bad"),
+        bundle=("holding_path_policy_bundle_sha256", "bad"),
+        signal=("holding_path_signal_id", ""),
+        binding=("holding_path_terminal_signal_binding", "source_gap"),
+        broker=("broker_execution_provenance_complete", False),
+        custody=("exit_receipt_submission_custody_committed", False),
+        source_gap=("exit_receipt_submission_custody_source_gap", True),
+        quantity=("sell_execution_receipt_quantity_contract_complete", False),
+        unit_fill=("sell_execution_receipt_unit_fill_consistent", False),
+        remaining=("remaining_sell_qty", 1),
+        clock=("exit_execution_received_at", now.replace(second=26).isoformat()),
+        naive=("exit_execution_received_at", now.replace(tzinfo=None).isoformat()),
+    )
+    if damage in changes:
+        fields[changes[damage][0]] = changes[damage][1]
+    if damage == "scanner":
+        stock["scanner_promotion_id"] = "existing-scanner"
+    if damage == "simulation":
+        stock["simulation_book"] = "probe"
+    if damage == "invalid_trace":
+        stock["last_watching_ai_attempt_decision_trace_id"] = "foreign"
+    leg = receipts._build_sell_lifecycle_outbox_leg(
+        stock,
+        code="005930",
+        target_id=49328,
+        now=now,
+        stage="sell_partial_fill_progress" if damage == "partial" else "sell_completed",
+        event_fields=fields,
+    )
+    frozen = deepcopy(leg)
+    emitted = []
+
+    def emit(pipeline, name, code, stage, *, record_id, fields):
+        normalized = {str(k): str(v) for k, v in fields.items()}
+        if damage == "event_tamper":
+            normalized["execution_no"] = "other"
         emitted.append(normalized)
-        return dict(pipeline=pipeline,stock_code=code,stage=stage,record_id=record_id,fields=normalized,
-            structured_append_succeeded=True,structured_append_status='raw_appended')
-    monkeypatch.setattr(receipts,'emit_pipeline_event',emit)
-    assert receipts._emit_standard_sell_partial_lifecycle_outbox_leg(leg) is (damage in (None, 'scanner'))
-    assert leg==frozen
-    if damage == 'scanner':
-        assert receipts._native_sell_receipt_identity(stock,'005930',49328,'sell_completed',fields,now)=={}
-        assert 'native_receipt_identity_schema' not in emitted[0]
-        assert emitted[0]['main_lifecycle_id']
+        return dict(
+            pipeline=pipeline,
+            stock_code=code,
+            stage=stage,
+            record_id=record_id,
+            fields=normalized,
+            structured_append_succeeded=True,
+            structured_append_status="raw_appended",
+        )
+
+    monkeypatch.setattr(receipts, "emit_pipeline_event", emit)
+    assert receipts._emit_standard_sell_partial_lifecycle_outbox_leg(leg) is (
+        damage in (None, "scanner")
+    )
+    assert leg == frozen
+    if damage == "scanner":
+        assert (
+            receipts._native_sell_receipt_identity(
+                stock, "005930", 49328, "sell_completed", fields, now
+            )
+            == {}
+        )
+        assert "native_receipt_identity_schema" not in emitted[0]
+        assert emitted[0]["main_lifecycle_id"]
     if damage is None:
-        assert emitted[0]['native_receipt_identity_schema']=='broker_position_sell_receipt_v1'
-        assert 'main_lifecycle_id' not in emitted[0] and 'attempt_id' not in emitted[0]
-        assert 'native_receipt_entry_trace_id' not in emitted[0]
-        assert emitted[0]['main_lifecycle_actual_cost_status']=='cost_source_unavailable'
-        assert emitted[0]['main_lifecycle_broker_actual_fees_taxes_krw']=='None'
-        stock[receipts._SELL_EXECUTION_RECEIPT_STATE_KEY]={receipts._SELL_PARTIAL_LIFECYCLE_OUTBOX_KEY:{leg['leg_sha256']:leg}}
-        monkeypatch.setattr(receipts,'_persist_sell_receipt_recovery_or_interlock',lambda *a,**k:True)
+        assert (
+            emitted[0]["native_receipt_identity_schema"]
+            == "broker_position_sell_receipt_v1"
+        )
+        assert "main_lifecycle_id" not in emitted[0] and "attempt_id" not in emitted[0]
+        assert "native_receipt_entry_trace_id" not in emitted[0]
+        assert (
+            emitted[0]["main_lifecycle_actual_cost_status"] == "cost_source_unavailable"
+        )
+        assert emitted[0]["main_lifecycle_broker_actual_fees_taxes_krw"] == "None"
+        stock[receipts._SELL_EXECUTION_RECEIPT_STATE_KEY] = {
+            receipts._SELL_PARTIAL_LIFECYCLE_OUTBOX_KEY: {leg["leg_sha256"]: leg}
+        }
+        monkeypatch.setattr(
+            receipts,
+            "_persist_sell_receipt_recovery_or_interlock",
+            lambda *a, **k: True,
+        )
         assert receipts.replay_pending_sell_partial_lifecycle_outbox(stock)
-        count=len(emitted)
+        count = len(emitted)
         assert receipts.replay_pending_sell_partial_lifecycle_outbox(stock)
-        assert len(emitted)==count
+        assert len(emitted) == count
 
 
-@pytest.mark.parametrize("trace", ["", "analyze_target:005930:1792038802347:4a778b1f",
-                                   "manual:403870", "analyze_target:403870:bad:4a778b1f"])
+@pytest.mark.parametrize(
+    "trace",
+    [
+        "",
+        "analyze_target:005930:1792038802347:4a778b1f",
+        "manual:403870",
+        "analyze_target:403870:bad:4a778b1f",
+    ],
+)
 def test_native_receipt_identity_rejects_unbound_entry_trace(trace):
-    fields = dict(actual_order_submitted=True, broker_order_forbidden=False,
-                  broker_execution_provenance_state="complete",
-                  broker_execution_identity="execution", broker_execution_no="61455",
-                  order_no="0043525", execution_no="61455", sell_qty=21)
-    stock = dict(id=49293, code="403870", last_watching_ai_attempt_decision_trace_id=trace)
-    assert receipts._native_sell_receipt_identity(
-        stock, "403870", 49293, "sell_completed", fields,
-        datetime(2026, 10, 15, tzinfo=timezone.utc)) == {}
+    fields = dict(
+        actual_order_submitted=True,
+        broker_order_forbidden=False,
+        broker_execution_provenance_state="complete",
+        broker_execution_identity="execution",
+        broker_execution_no="61455",
+        order_no="0043525",
+        execution_no="61455",
+        sell_qty=21,
+    )
+    stock = dict(
+        id=49293, code="403870", last_watching_ai_attempt_decision_trace_id=trace
+    )
+    assert (
+        receipts._native_sell_receipt_identity(
+            stock,
+            "403870",
+            49293,
+            "sell_completed",
+            fields,
+            datetime(2026, 10, 15, tzinfo=timezone.utc),
+        )
+        == {}
+    )
 
 
-@pytest.mark.parametrize('partial', [False, True])
-@pytest.mark.parametrize('fault', [None, 'raw_qty', 'order', 'execution', 'custody',
-    'source_gap', 'quantity', 'clock', 'scanner', 'simulation', 'append', 'tamper'])
-def test_broker_custody_outbox_does_not_require_research_buy_lineage(monkeypatch, partial, fault):
+@pytest.mark.parametrize("partial", [False, True])
+@pytest.mark.parametrize(
+    "fault",
+    [
+        None,
+        "raw_qty",
+        "order",
+        "execution",
+        "custody",
+        "source_gap",
+        "quantity",
+        "clock",
+        "scanner",
+        "simulation",
+        "append",
+        "tamper",
+    ],
+)
+def test_broker_custody_outbox_does_not_require_research_buy_lineage(
+    monkeypatch, partial, fault
+):
     from copy import deepcopy
+
     at = datetime(2026, 10, 20, 9, 32, 17, 107620, tzinfo=timezone(timedelta(hours=9)))
-    stock = dict(id=49389, code='403870', name='HPSP')
-    fields = dict(order_no='0017685', execution_no='9708', sell_qty=9, remaining_sell_qty=1 if partial else 0,
-        main_lifecycle_exit_qty=9, main_lifecycle_exit_price=51300,
-        main_lifecycle_broker_reconciled=not partial, main_lifecycle_reconciled_final_exit=not partial,
-        actual_order_submitted=True, broker_order_forbidden=False,
-        exit_receipt_submission_custody_committed=True, exit_receipt_submission_custody_source_gap=False,
-        exit_execution_received_at=at.isoformat(), effective_venue='KRX',
-        holding_path_terminal_signal_binding='source_gap_generation_mismatch',
-        main_lifecycle_broker_raw_envelope_schema='kiwoom_websocket_order_execution_00_values_v1',
-        main_lifecycle_broker_raw_source_type='00',
-        **{'9203':'0017685','9001':'403870','900':str(10 if partial else 9),'902':str(1 if partial else 0),
-           '903':'461700','905':'-매도','907':'1','908':'093216','909':'9708','910':'51300',
-           '911':'9','913':'체결','914':'51300','915':'9','2134':'1','2135':'KRX','2136':'N'})
-    prefix = 'sell_receipt' if partial else 'sell_execution_receipt'
-    fields.update({prefix+'_quantity_contract_complete':True, prefix+'_unit_fill_consistent':True})
-    mutations = dict(raw_qty=('915','8'), order=('order_no','9999999'), execution=('execution_no','1'),
-        custody=('exit_receipt_submission_custody_committed',False),
-        source_gap=('exit_receipt_submission_custody_source_gap',True),
-        quantity=(prefix+'_quantity_contract_complete',False),
-        clock=('exit_execution_received_at',at.replace(second=18).isoformat()))
+    stock = dict(id=49389, code="403870", name="HPSP")
+    fields = dict(
+        order_no="0017685",
+        execution_no="9708",
+        sell_qty=9,
+        remaining_sell_qty=1 if partial else 0,
+        main_lifecycle_exit_qty=9,
+        main_lifecycle_exit_price=51300,
+        main_lifecycle_broker_reconciled=not partial,
+        main_lifecycle_reconciled_final_exit=not partial,
+        actual_order_submitted=True,
+        broker_order_forbidden=False,
+        exit_receipt_submission_custody_committed=True,
+        exit_receipt_submission_custody_source_gap=False,
+        exit_execution_received_at=at.isoformat(),
+        effective_venue="KRX",
+        holding_path_terminal_signal_binding="source_gap_generation_mismatch",
+        main_lifecycle_broker_raw_envelope_schema="kiwoom_websocket_order_execution_00_values_v1",
+        main_lifecycle_broker_raw_source_type="00",
+        **{
+            "9203": "0017685",
+            "9001": "403870",
+            "900": str(10 if partial else 9),
+            "902": str(1 if partial else 0),
+            "903": "461700",
+            "905": "-매도",
+            "907": "1",
+            "908": "093216",
+            "909": "9708",
+            "910": "51300",
+            "911": "9",
+            "913": "체결",
+            "914": "51300",
+            "915": "9",
+            "2134": "1",
+            "2135": "KRX",
+            "2136": "N",
+        },
+    )
+    prefix = "sell_receipt" if partial else "sell_execution_receipt"
+    fields.update(
+        {
+            prefix + "_quantity_contract_complete": True,
+            prefix + "_unit_fill_consistent": True,
+        }
+    )
+    mutations = dict(
+        raw_qty=("915", "8"),
+        order=("order_no", "9999999"),
+        execution=("execution_no", "1"),
+        custody=("exit_receipt_submission_custody_committed", False),
+        source_gap=("exit_receipt_submission_custody_source_gap", True),
+        quantity=(prefix + "_quantity_contract_complete", False),
+        clock=("exit_execution_received_at", at.replace(second=18).isoformat()),
+    )
     if fault in mutations:
-        k,v=mutations[fault];fields[k]=v
-    if fault=='scanner':stock['scanner_promotion_id']='scanner-original'
-    if fault=='simulation':stock['simulation_book']='probe'
-    leg=receipts._build_sell_lifecycle_outbox_leg(stock,code=stock['code'],target_id=stock['id'],now=at,
-        stage='sell_partial_fill_progress' if partial else 'sell_completed',event_fields=fields)
-    original=deepcopy(leg);captured=[]
-    def emit(pipeline,name,code,stage,*,record_id,fields):
-        normalized={str(k):str(v) for k,v in fields.items()}
-        if fault=='tamper':normalized['native_receipt_entry_lineage_reason']='invented'
+        k, v = mutations[fault]
+        fields[k] = v
+    if fault == "scanner":
+        stock["scanner_promotion_id"] = "scanner-original"
+    if fault == "simulation":
+        stock["simulation_book"] = "probe"
+    leg = receipts._build_sell_lifecycle_outbox_leg(
+        stock,
+        code=stock["code"],
+        target_id=stock["id"],
+        now=at,
+        stage="sell_partial_fill_progress" if partial else "sell_completed",
+        event_fields=fields,
+    )
+    original = deepcopy(leg)
+    captured = []
+
+    def emit(pipeline, name, code, stage, *, record_id, fields):
+        normalized = {str(k): str(v) for k, v in fields.items()}
+        if fault == "tamper":
+            normalized["native_receipt_entry_lineage_reason"] = "invented"
         captured.append(normalized)
-        return dict(pipeline=pipeline,stock_code=code,stage=stage,record_id=record_id,fields=normalized,
-            structured_append_succeeded=fault!='append',structured_append_status='raw_appended')
-    monkeypatch.setattr(receipts,'emit_pipeline_event',emit)
+        return dict(
+            pipeline=pipeline,
+            stock_code=code,
+            stage=stage,
+            record_id=record_id,
+            fields=normalized,
+            structured_append_succeeded=fault != "append",
+            structured_append_status="raw_appended",
+        )
+
+    monkeypatch.setattr(receipts, "emit_pipeline_event", emit)
     # A scanner receipt keeps its independent canonical lifecycle identity.
-    assert receipts._emit_standard_sell_partial_lifecycle_outbox_leg(leg) is (fault in (None,'scanner'))
-    assert leg==original
+    assert receipts._emit_standard_sell_partial_lifecycle_outbox_leg(leg) is (
+        fault in (None, "scanner")
+    )
+    assert leg == original
     if fault is None:
-        assert captured[0]['native_receipt_entry_lineage_status']=='source_gap'
-        assert captured[0]['native_receipt_buy_fill_identity']=='None'
-        assert 'main_lifecycle_id' not in captured[0] and 'attempt_id' not in captured[0]
-        stock[receipts._SELL_EXECUTION_RECEIPT_STATE_KEY]={receipts._SELL_PARTIAL_LIFECYCLE_OUTBOX_KEY:{leg['leg_sha256']:leg}}
-        monkeypatch.setattr(receipts,'_persist_sell_receipt_recovery_or_interlock',lambda *a,**k:True)
+        assert captured[0]["native_receipt_entry_lineage_status"] == "source_gap"
+        assert captured[0]["native_receipt_buy_fill_identity"] == "None"
+        assert (
+            "main_lifecycle_id" not in captured[0] and "attempt_id" not in captured[0]
+        )
+        stock[receipts._SELL_EXECUTION_RECEIPT_STATE_KEY] = {
+            receipts._SELL_PARTIAL_LIFECYCLE_OUTBOX_KEY: {leg["leg_sha256"]: leg}
+        }
+        monkeypatch.setattr(
+            receipts,
+            "_persist_sell_receipt_recovery_or_interlock",
+            lambda *a, **k: True,
+        )
         assert receipts.replay_pending_sell_partial_lifecycle_outbox(stock)
-        count=len(captured)
+        count = len(captured)
         assert receipts.replay_pending_sell_partial_lifecycle_outbox(stock)
-        assert len(captured)==count
+        assert len(captured) == count
 
 
 def test_sell_lifecycle_outbox_ack_requires_every_durable_field_exact(
@@ -1336,7 +1561,7 @@ def test_replacement_terminal_absence_query_never_overwrites_newer_receipt(
     assert finalize_calls == []
 
 
-@pytest.mark.parametrize('fixed_owner', [False, True])
+@pytest.mark.parametrize("fixed_owner", [False, True])
 def test_scalp_revive_recovers_crash_after_precommit_watch_id_fsync(
     monkeypatch,
     tmp_path,
@@ -1413,9 +1638,9 @@ def test_scalp_revive_recovers_crash_after_precommit_watch_id_fsync(
             return _Session()
 
     if fixed_owner:
-        old_record.watch_origin = 'MAIN_FIXED_WATCH'
-        old_record.watch_admission_id = 'original-admission'
-        old_record.watch_generation_id = 'original-generation'
+        old_record.watch_origin = "MAIN_FIXED_WATCH"
+        old_record.watch_admission_id = "original-admission"
+        old_record.watch_generation_id = "original-generation"
     stock = {
         "id": 7,
         "code": "005930" if fixed_owner else "123456",
@@ -1491,17 +1716,19 @@ def test_scalp_revive_recovers_crash_after_precommit_watch_id_fsync(
     assert [stage for stage, _fields in logged] == ["sell_completed"]
     assert not (tmp_path / "7.json").exists()
 
-
     if fixed_owner:
-        assert db.records[100].watch_origin == stock['watch_origin'] == 'MAIN_FIXED_WATCH'
-        assert stock['watch_admission_id'] != 'original-admission'
-        assert stock['watch_admission_id'] == db.records[100].watch_admission_id
-        assert stock['effective_venue'] == db.records[100].effective_venue == 'KRX'
-        assert stock['_fixed_first_exact_receipt_epoch'] == 0
-        assert stock['_scalp_revive_min_quote_ts'] > 0
-        assert old_record.watch_admission_id == 'original-admission'
+        assert (
+            db.records[100].watch_origin == stock["watch_origin"] == "MAIN_FIXED_WATCH"
+        )
+        assert stock["watch_admission_id"] != "original-admission"
+        assert stock["watch_admission_id"] == db.records[100].watch_admission_id
+        assert stock["effective_venue"] == db.records[100].effective_venue == "KRX"
+        assert stock["_fixed_first_exact_receipt_epoch"] == 0
+        assert stock["_scalp_revive_min_quote_ts"] > 0
+        assert old_record.watch_admission_id == "original-admission"
     else:
-        assert not getattr(db.records[100], 'watch_origin', None)
+        assert not getattr(db.records[100], "watch_origin", None)
+
 
 def test_sell_execution_message_relabels_pending_stop_loss_when_realized_profit():
     bus = _Bus()
@@ -3868,7 +4095,11 @@ def test_periodic_account_sync_recovers_unique_exact_sell_execution(
     sniper_sync.EVENT_BUS = type(
         "EventBus",
         (),
-        {"publish": lambda self, topic, payload: telegram_events.append((topic, payload))},
+        {
+            "publish": lambda self, topic, payload: telegram_events.append(
+                (topic, payload)
+            )
+        },
     )()
 
     sniper_sync.periodic_account_sync()
@@ -3890,32 +4121,54 @@ def test_periodic_account_sync_recovers_unique_exact_sell_execution(
     )
     assert exact_fields["sell_time_precision"] == "order_second_not_fill_second"
     assert exact_fields["sell_time_forbidden_for_intraday_horizon"] is True
-    assert exact_fields["sell_terminal_source_status"] == "balance_reconciled_price_only"
+    assert (
+        exact_fields["sell_terminal_source_status"] == "balance_reconciled_price_only"
+    )
     assert exact_fields["broker_actual_fees_taxes_krw"] is None
     assert exact_fields["sell_reconciliation_source_date"] == now.strftime("%Y-%m-%d")
     assert len(exact_fields["sell_reconciliation_normalized_sha256"]) == 64
     from src.engine import sniper_trade_review_report as trade_review
+
     submitted = trade_review.HoldingEvent(
         timestamp=(now - timedelta(minutes=1)).strftime("%Y-%m-%d %H:%M:%S"),
-        name="TEST", code="096770", stage="sell_order_sent",
-        fields={"id": str(record.id), "broker_order_no": "0015635",
-                "broker_route": "SOR", "actual_order_submitted": "True",
-                "broker_order_forbidden": "False", "attempt_id": "A1",
-                "main_lifecycle_id": "M1"}, raw_line="",
+        name="TEST",
+        code="096770",
+        stage="sell_order_sent",
+        fields={
+            "id": str(record.id),
+            "broker_order_no": "0015635",
+            "broker_route": "SOR",
+            "actual_order_submitted": "True",
+            "broker_order_forbidden": "False",
+            "attempt_id": "A1",
+            "main_lifecycle_id": "M1",
+        },
+        raw_line="",
     )
     balance = trade_review.HoldingEvent(
-        timestamp=now.strftime("%Y-%m-%d %H:%M:%S"), name="TEST",
-        code="096770", stage="sell_completed",
-        fields={**exact_fields, "id": str(record.id)}, raw_line="",
+        timestamp=now.strftime("%Y-%m-%d %H:%M:%S"),
+        name="TEST",
+        code="096770",
+        stage="sell_completed",
+        fields={**exact_fields, "id": str(record.id)},
+        raw_line="",
     )
-    trade = {"id": record.id, "code": "096770", "status": "COMPLETED",
-             "strategy": "SCALPING", "buy_price": record.buy_price,
-             "buy_qty": record.buy_qty, "sell_price": record.sell_price,
-             "profit_rate": record.profit_rate}
+    trade = {
+        "id": record.id,
+        "code": "096770",
+        "status": "COMPLETED",
+        "strategy": "SCALPING",
+        "buy_price": record.buy_price,
+        "buy_qty": record.buy_qty,
+        "sell_price": record.sell_price,
+        "profit_rate": record.profit_rate,
+    }
     projection = trade_review._completed_trade_projection(
-        trade, [submitted, balance], trade)
+        trade, [submitted, balance], trade
+    )
     assert projection["sell_reconciliation_generation_status"] == (
-        "normalized_contract_bound")
+        "normalized_contract_bound"
+    )
     assert projection["realized_pnl_krw"] is None
     assert projection["broker_actual_fees_taxes_krw"] is None
     assert exact_fields["sell_order_no"] == "0015635"
@@ -4253,13 +4506,17 @@ def test_periodic_account_sync_enforces_complete_balance_after_token_retry(
     monkeypatch.setattr(sniper_sync, "log_info", info_logs.append)
     monkeypatch.setattr(sniper_sync, "log_error", error_logs.append)
     monkeypatch.setattr(sniper_sync, "_refresh_kiwoom_token", lambda _reason: None)
-    monkeypatch.setattr(sniper_sync, "_recover_missing_broker_holdings", lambda *_args: 0)
+    monkeypatch.setattr(
+        sniper_sync, "_recover_missing_broker_holdings", lambda *_args: 0
+    )
 
     def balance(_token):
         calls.append(True)
         return ([], set()) if len(calls) == 1 else ([], retry_exchanges)
 
-    monkeypatch.setattr(sniper_sync.kiwoom_utils, "get_account_balance_kt00005", balance)
+    monkeypatch.setattr(
+        sniper_sync.kiwoom_utils, "get_account_balance_kt00005", balance
+    )
     monkeypatch.setattr(
         sniper_sync.kiwoom_utils,
         "get_unfilled_order_snapshot_ka10075_with_meta",
@@ -4274,12 +4531,13 @@ def test_periodic_account_sync_enforces_complete_balance_after_token_retry(
         for message in info_logs
     ) == (retry_exchanges == {"KRX", "NXT"})
     assert any(
-        "PERIODIC_INVENTORY_RECONCILIATION_BLOCKED" in message
-        for message in error_logs
+        "PERIODIC_INVENTORY_RECONCILIATION_BLOCKED" in message for message in error_logs
     ) == (retry_exchanges != {"KRX", "NXT"})
 
 
-def test_periodic_account_sync_logs_failed_balance_without_touching_custody(monkeypatch):
+def test_periodic_account_sync_logs_failed_balance_without_touching_custody(
+    monkeypatch,
+):
     errors = []
     record = type("Record", (), {"status": "HOLDING", "buy_qty": 1})()
     sniper_sync.KIWOOM_TOKEN = "token"
@@ -4723,26 +4981,45 @@ def test_sync_balance_with_db_requests_restart_on_auth_failure(tmp_path, monkeyp
 
 
 def test_startup_reconciles_pending_main_custody_before_timeout_loop(monkeypatch):
-    record=SimpleNamespace(id=101,stock_code='005930',stock_name='TEST',
-        status='BUY_ORDERED',strategy='SCALPING',buy_qty=2,buy_price=9900,
-        buy_time=None,scale_in_locked=False)
-    monkeypatch.setattr(sniper_sync,'KIWOOM_TOKEN','token')
-    monkeypatch.setattr(sniper_sync,'DB',_SyncDB([record]))
-    monkeypatch.setattr(sniper_sync,'ACTIVE_TARGETS',[dict(id=101,code='005930',status='BUY_ORDERED')])
-    monkeypatch.setattr(sniper_sync.kiwoom_orders,'get_my_inventory',
-        lambda _:([dict(code='005930',qty=1,buy_price=10000)],{'KRX','NXT'}))
-    monkeypatch.setattr(sniper_sync,'publish_broker_account_snapshot',lambda **_:None)
-    calls=[]
+    record = SimpleNamespace(
+        id=101,
+        stock_code="005930",
+        stock_name="TEST",
+        status="BUY_ORDERED",
+        strategy="SCALPING",
+        buy_qty=2,
+        buy_price=9900,
+        buy_time=None,
+        scale_in_locked=False,
+    )
+    monkeypatch.setattr(sniper_sync, "KIWOOM_TOKEN", "token")
+    monkeypatch.setattr(sniper_sync, "DB", _SyncDB([record]))
+    monkeypatch.setattr(
+        sniper_sync,
+        "ACTIVE_TARGETS",
+        [dict(id=101, code="005930", status="BUY_ORDERED")],
+    )
+    monkeypatch.setattr(
+        sniper_sync.kiwoom_orders,
+        "get_my_inventory",
+        lambda _: ([dict(code="005930", qty=1, buy_price=10000)], {"KRX", "NXT"}),
+    )
+    monkeypatch.setattr(
+        sniper_sync, "publish_broker_account_snapshot", lambda **_: None
+    )
+    calls = []
+
     def reconcile(**kwargs):
-        assert kwargs['record'] is record and record.status=='BUY_ORDERED'
-        assert kwargs['real_codes']['005930']['qty']==1
-        calls.append(kwargs['source'])
+        assert kwargs["record"] is record and record.status == "BUY_ORDERED"
+        assert kwargs["real_codes"]["005930"]["qty"] == 1
+        calls.append(kwargs["source"])
         return True
-    monkeypatch.setattr(sniper_sync,'_preserve_coexistence_owner_inventory',reconcile)
-    monkeypatch.setattr(sniper_sync,'_recover_missing_broker_holdings',lambda *_:0)
+
+    monkeypatch.setattr(sniper_sync, "_preserve_coexistence_owner_inventory", reconcile)
+    monkeypatch.setattr(sniper_sync, "_recover_missing_broker_holdings", lambda *_: 0)
     sniper_sync.sync_balance_with_db()
-    assert calls==['startup_pending_buy_balance_sync']
-    assert record.status=='BUY_ORDERED' and record.buy_qty==2
+    assert calls == ["startup_pending_buy_balance_sync"]
+    assert record.status == "BUY_ORDERED" and record.buy_qty == 2
 
 
 def test_startup_sync_quarantines_prebaseline_scalping_ghosts(monkeypatch):
@@ -5783,59 +6060,161 @@ def test_fast_sell_final_nonzero_remaining_never_completes():
     assert state.get("sell_receipt_position_complete") is not True
 
 
-@pytest.mark.parametrize('damage',[None,'operator_assigned','operator_assigned_invalid_authority','venue','venue_source','broker_venue','exit_venue','route','route_request',
-    'envelope','packet','ingress','clock','session_clock','session_schema','custody','quantity','remaining','buy','simulation','tamper'])
-@pytest.mark.parametrize('day',[16,21])
-def test_terminal_sor_unknown_venue_acks_custody_and_preserves_source_gap(monkeypatch,damage,day):
+@pytest.mark.parametrize(
+    "damage",
+    [
+        None,
+        "operator_assigned",
+        "operator_assigned_invalid_authority",
+        "venue",
+        "venue_source",
+        "broker_venue",
+        "exit_venue",
+        "route",
+        "route_request",
+        "envelope",
+        "packet",
+        "ingress",
+        "clock",
+        "session_clock",
+        "session_schema",
+        "custody",
+        "quantity",
+        "remaining",
+        "buy",
+        "simulation",
+        "tamper",
+    ],
+)
+@pytest.mark.parametrize("day", [16, 21])
+def test_terminal_sor_unknown_venue_acks_custody_and_preserves_source_gap(
+    monkeypatch, damage, day
+):
     from copy import deepcopy
-    now=datetime(2026,10,day,9,23,48,936821,tzinfo=timezone(timedelta(hours=9)))
-    stock=dict(id=49294,code='036930',name='Jusung')
-    fields=dict(order_no='0015649',execution_no='30414',sell_qty=1,remaining_sell_qty=0,
-        actual_order_submitted=True,broker_order_forbidden=False,exit_rule='scalp_trailing_take_profit',
-        holding_path_terminal_signal_binding='same_position_buy_generation',holding_path_position_key='record:49294',
-        holding_path_buy_fill_identity='a'*64,holding_path_policy_bundle_sha256='b'*64,holding_path_signal_id='original',
-        broker_execution_provenance_complete=False,main_lifecycle_broker_reconciled=True,
-        main_lifecycle_reconciled_final_exit=True,sell_execution_receipt_quantity_contract_complete=True,
-        sell_execution_receipt_unit_fill_consistent=True,exit_receipt_submission_custody_committed=True,
-        exit_receipt_submission_custody_source_gap=False,exit_execution_received_at=now.isoformat(),
-        actual_execution_venue='UNKNOWN',broker_actual_execution_venue='UNKNOWN',exit_effective_venue='UNKNOWN',
-        actual_execution_venue_source='official_exchange_fields_ambiguous_or_missing',
-        broker_actual_execution_venue_source='official_exchange_fields_ambiguous_or_missing',
-        broker_route='SOR',broker_route_requested='SOR',
-        main_lifecycle_broker_raw_envelope_schema='kiwoom_websocket_order_execution_00_values_v1',
-        main_lifecycle_broker_raw_source_type='00',broker_execution_receive_time_source='websocket_packet_ingress',
-        broker_execution_received_at=now.isoformat(),exit_market_session_time_source='websocket_packet_ingress',
-        session_contract_version='market_session_contract_v2',main_lifecycle_actual_cost_status='cost_source_unavailable')
-    changes=dict(venue=('actual_execution_venue','KRX'),venue_source=('actual_execution_venue_source','other'),
-        broker_venue=('broker_actual_execution_venue','KRX'),exit_venue=('exit_effective_venue','KRX'),
-        route=('broker_route','KRX'),route_request=('broker_route_requested','KRX'),
-        envelope=('main_lifecycle_broker_raw_envelope_schema','other'),packet=('main_lifecycle_broker_raw_source_type','04'),
-        ingress=('broker_execution_receive_time_source','poll'),clock=('broker_execution_received_at',now.replace(second=49).isoformat()),
-        session_clock=('exit_market_session_time_source','poll'),session_schema=('session_contract_version','other'),
-        custody=('exit_receipt_submission_custody_committed',False),quantity=('sell_execution_receipt_quantity_contract_complete',False),
-        remaining=('remaining_sell_qty',1),buy=('holding_path_buy_fill_identity','bad'))
-    if damage in changes:fields[changes[damage][0]]=changes[damage][1]
-    if str(damage).startswith('operator_assigned'):
+
+    now = datetime(
+        2026, 10, day, 9, 23, 48, 936821, tzinfo=timezone(timedelta(hours=9))
+    )
+    stock = dict(id=49294, code="036930", name="Jusung")
+    fields = dict(
+        order_no="0015649",
+        execution_no="30414",
+        sell_qty=1,
+        remaining_sell_qty=0,
+        actual_order_submitted=True,
+        broker_order_forbidden=False,
+        exit_rule="scalp_trailing_take_profit",
+        holding_path_terminal_signal_binding="same_position_buy_generation",
+        holding_path_position_key="record:49294",
+        holding_path_buy_fill_identity="a" * 64,
+        holding_path_policy_bundle_sha256="b" * 64,
+        holding_path_signal_id="original",
+        broker_execution_provenance_complete=False,
+        main_lifecycle_broker_reconciled=True,
+        main_lifecycle_reconciled_final_exit=True,
+        sell_execution_receipt_quantity_contract_complete=True,
+        sell_execution_receipt_unit_fill_consistent=True,
+        exit_receipt_submission_custody_committed=True,
+        exit_receipt_submission_custody_source_gap=False,
+        exit_execution_received_at=now.isoformat(),
+        actual_execution_venue="UNKNOWN",
+        broker_actual_execution_venue="UNKNOWN",
+        exit_effective_venue="UNKNOWN",
+        actual_execution_venue_source="official_exchange_fields_ambiguous_or_missing",
+        broker_actual_execution_venue_source="official_exchange_fields_ambiguous_or_missing",
+        broker_route="SOR",
+        broker_route_requested="SOR",
+        main_lifecycle_broker_raw_envelope_schema="kiwoom_websocket_order_execution_00_values_v1",
+        main_lifecycle_broker_raw_source_type="00",
+        broker_execution_receive_time_source="websocket_packet_ingress",
+        broker_execution_received_at=now.isoformat(),
+        exit_market_session_time_source="websocket_packet_ingress",
+        session_contract_version="market_session_contract_v2",
+        main_lifecycle_actual_cost_status="cost_source_unavailable",
+    )
+    changes = dict(
+        venue=("actual_execution_venue", "KRX"),
+        venue_source=("actual_execution_venue_source", "other"),
+        broker_venue=("broker_actual_execution_venue", "KRX"),
+        exit_venue=("exit_effective_venue", "KRX"),
+        route=("broker_route", "KRX"),
+        route_request=("broker_route_requested", "KRX"),
+        envelope=("main_lifecycle_broker_raw_envelope_schema", "other"),
+        packet=("main_lifecycle_broker_raw_source_type", "04"),
+        ingress=("broker_execution_receive_time_source", "poll"),
+        clock=("broker_execution_received_at", now.replace(second=49).isoformat()),
+        session_clock=("exit_market_session_time_source", "poll"),
+        session_schema=("session_contract_version", "other"),
+        custody=("exit_receipt_submission_custody_committed", False),
+        quantity=("sell_execution_receipt_quantity_contract_complete", False),
+        remaining=("remaining_sell_qty", 1),
+        buy=("holding_path_buy_fill_identity", "bad"),
+    )
+    if damage in changes:
+        fields[changes[damage][0]] = changes[damage][1]
+    if str(damage).startswith("operator_assigned"):
         from src.trading.market.execution_venue import execution_venue_fields
-        fields.update(broker_actual_exchange_code='0',broker_actual_exchange_name='SOR',broker_sor_flag='Y')
-        fields.update(execution_venue_fields(fields,observed_at=now),exit_effective_venue='KRX')
-        if damage=='operator_assigned_invalid_authority':fields['execution_venue_override']='unapproved'
-    if damage=='simulation':stock['simulation_book']='probe'
-    leg=receipts._build_sell_lifecycle_outbox_leg(stock,code='036930',target_id=49294,now=now,
-        stage='sell_completed',event_fields=fields);original=deepcopy(leg);captured=[]
-    def emit(pipeline,name,code,stage,*,record_id,fields):
-        normalized={str(k):str(v) for k,v in fields.items()}
-        if damage=='tamper':normalized['broker_execution_provenance_complete']='True'
+
+        fields.update(
+            broker_actual_exchange_code="0",
+            broker_actual_exchange_name="SOR",
+            broker_sor_flag="Y",
+        )
+        fields.update(
+            execution_venue_fields(fields, observed_at=now), exit_effective_venue="KRX"
+        )
+        if damage == "operator_assigned_invalid_authority":
+            fields["execution_venue_override"] = "unapproved"
+    if damage == "simulation":
+        stock["simulation_book"] = "probe"
+    leg = receipts._build_sell_lifecycle_outbox_leg(
+        stock,
+        code="036930",
+        target_id=49294,
+        now=now,
+        stage="sell_completed",
+        event_fields=fields,
+    )
+    original = deepcopy(leg)
+    captured = []
+
+    def emit(pipeline, name, code, stage, *, record_id, fields):
+        normalized = {str(k): str(v) for k, v in fields.items()}
+        if damage == "tamper":
+            normalized["broker_execution_provenance_complete"] = "True"
         captured.append(normalized)
-        return dict(pipeline=pipeline,stock_code=code,stage=stage,record_id=record_id,fields=normalized,
-            structured_append_succeeded=True,structured_append_status='raw_appended')
-    monkeypatch.setattr(receipts,'emit_pipeline_event',emit)
-    assert receipts._emit_standard_sell_partial_lifecycle_outbox_leg(leg) is (damage in (None,'operator_assigned'))
-    assert leg==original
-    if damage in (None,'operator_assigned'):
-        assert captured[0]['native_receipt_execution_venue_status']=='unknown_preserved'
-        assert captured[0]['native_receipt_source_gap']==('None' if day==21 and damage=='operator_assigned' else 'actual_execution_venue_unresolved')
-        assert captured[0]['broker_execution_provenance_complete']=='False'
-        assert captured[0]['actual_execution_venue']==('KRX' if damage=='operator_assigned' else 'UNKNOWN')
-        assert captured[0]['main_lifecycle_actual_cost_status']=='cost_source_unavailable'
-        assert 'main_lifecycle_id' not in captured[0] and 'attempt_id' not in captured[0]
+        return dict(
+            pipeline=pipeline,
+            stock_code=code,
+            stage=stage,
+            record_id=record_id,
+            fields=normalized,
+            structured_append_succeeded=True,
+            structured_append_status="raw_appended",
+        )
+
+    monkeypatch.setattr(receipts, "emit_pipeline_event", emit)
+    assert receipts._emit_standard_sell_partial_lifecycle_outbox_leg(leg) is (
+        damage in (None, "operator_assigned")
+    )
+    assert leg == original
+    if damage in (None, "operator_assigned"):
+        assert (
+            captured[0]["native_receipt_execution_venue_status"] == "unknown_preserved"
+        )
+        assert captured[0]["native_receipt_source_gap"] == (
+            "None"
+            if day == 21 and damage == "operator_assigned"
+            else "actual_execution_venue_unresolved"
+        )
+        assert captured[0]["broker_execution_provenance_complete"] == "False"
+        assert captured[0]["actual_execution_venue"] == (
+            "KRX" if damage == "operator_assigned" else "UNKNOWN"
+        )
+        assert (
+            captured[0]["main_lifecycle_actual_cost_status"]
+            == "cost_source_unavailable"
+        )
+        assert (
+            "main_lifecycle_id" not in captured[0] and "attempt_id" not in captured[0]
+        )

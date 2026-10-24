@@ -15,7 +15,6 @@ from datetime import date, datetime, timedelta
 
 from typing import Any, Iterable
 
-
 STAGES = ("entry", "submit", "holding", "scale_in", "exit")
 
 

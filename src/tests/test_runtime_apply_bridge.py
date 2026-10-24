@@ -177,10 +177,6 @@ def _write_ldm(
     )
 
 
-
-
-
-
 def test_scale_in_rolling_confirmation_excludes_treatment_only_history():
     current = {
         "bucket_type": "arm",
@@ -381,38 +377,19 @@ def _copy_discovery_windows(path):
         )
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-def test_retired_current_producer_preserves_prior_and_has_no_authority(tmp_path,monkeypatch):
+def test_retired_current_producer_preserves_prior_and_has_no_authority(
+    tmp_path, monkeypatch
+):
     import importlib
-    current=importlib.import_module('src.engine.runtime_apply_bridge')
-    prior=tmp_path/"prior.json";prior.write_text("original")
-    def forbidden(*a,**kw):raise AssertionError("retired producer accessed storage")
-    monkeypatch.setattr(type(prior),"write_text",forbidden)
-    monkeypatch.setattr(type(prior),"read_text",forbidden)
-    result=current.build_runtime_apply_bridge_report("2026-10-12")
-    assert result["status"]=="retired" and result["allowed_runtime_apply"] is False
+
+    current = importlib.import_module("src.engine.runtime_apply_bridge")
+    prior = tmp_path / "prior.json"
+    prior.write_text("original")
+
+    def forbidden(*a, **kw):
+        raise AssertionError("retired producer accessed storage")
+
+    monkeypatch.setattr(type(prior), "write_text", forbidden)
+    monkeypatch.setattr(type(prior), "read_text", forbidden)
+    result = current.build_runtime_apply_bridge_report("2026-10-12")
+    assert result["status"] == "retired" and result["allowed_runtime_apply"] is False

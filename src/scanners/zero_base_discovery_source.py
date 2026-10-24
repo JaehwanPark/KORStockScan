@@ -20,7 +20,6 @@ from src.scanners.scanner_source_census import source_target_market_data_route
 from src.utils import kiwoom_utils
 from src.utils.kiwoom_read_request_control import REQUEST_CLASS_SOURCE_ONLY
 
-
 SCHEMA = "zero_base_discovery_panel_v4"
 PANEL_REQUESTS = (
     ("KOSPI", "001", "SOR", "3", "krx_nxt_integrated"),
@@ -48,95 +47,147 @@ def discovery_product_filter(target_date, *, directory=None):
     from src.utils.jsonl_io import read_json_object_strict_receipt
 
     as_of = date.fromisoformat(target_date)
-    directory = (Path(directory) if directory else (
-        Path(__file__).resolve().parents[2] / 'data/report/micro_reversion_economic_reference')).resolve()
+    directory = (
+        Path(directory)
+        if directory
+        else (
+            Path(__file__).resolve().parents[2]
+            / "data/report/micro_reversion_economic_reference"
+        )
+    ).resolve()
     candidates = []
-    for path in directory.glob('micro_reversion_symbol_master_*.json*'):
-        suffix = path.name.removeprefix('micro_reversion_symbol_master_')
+    for path in directory.glob("micro_reversion_symbol_master_*.json*"):
+        suffix = path.name.removeprefix("micro_reversion_symbol_master_")
         try:
-            day = date.fromisoformat(suffix.removesuffix('.gz').removesuffix('.json'))
+            day = date.fromisoformat(suffix.removesuffix(".gz").removesuffix(".json"))
         except ValueError:
             continue
-        if day <= as_of and suffix.endswith(('.json', '.json.gz')):
-            candidates.append((day, suffix.endswith('.json'), path))
+        if day <= as_of and suffix.endswith((".json", ".json.gz")):
+            candidates.append((day, suffix.endswith(".json"), path))
     selected = max(candidates)[-1] if candidates else None
 
     def identity(path):
         stat = Path(path).stat()
-        return stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns
+        return (
+            stat.st_dev,
+            stat.st_ino,
+            stat.st_size,
+            stat.st_mtime_ns,
+            stat.st_ctime_ns,
+        )
 
     key = (str(directory), target_date)
     cached = _PRODUCT_CACHE.get(key)
     try:
-        if cached and selected == cached['path'] and all(
-                identity(p) == stamp for p, stamp in cached['identities'].items()):
-            return cached['check']
+        if (
+            cached
+            and selected == cached["path"]
+            and all(identity(p) == stamp for p, stamp in cached["identities"].items())
+        ):
+            return cached["check"]
         if selected is None:
-            raise ValueError('product_master_missing')
+            raise ValueError("product_master_missing")
         master_identity = identity(selected)
         receipt = read_json_object_strict_receipt(selected)
         payload = receipt.payload
-        master = VerifiedSymbolMaster.from_payload(payload, require_canonical_owner=True)
+        master = VerifiedSymbolMaster.from_payload(
+            payload, require_canonical_owner=True
+        )
         identities = {str(receipt.physical_path): master_identity}
-        for source in payload['source_artifacts']:
-            raw_path = Path(source['resolved_path'])
+        for source in payload["source_artifacts"]:
+            raw_path = Path(source["resolved_path"])
             identities[str(raw_path)] = identity(raw_path)
-            if not 0 < identities[str(raw_path)][2] <= 8*1024*1024 or identities[str(raw_path)][2] != source['observed_size_bytes']:
-                raise ValueError('product_master_source_size_invalid')
+            if (
+                not 0 < identities[str(raw_path)][2] <= 8 * 1024 * 1024
+                or identities[str(raw_path)][2] != source["observed_size_bytes"]
+            ):
+                raise ValueError("product_master_source_size_invalid")
             raw = raw_path.read_bytes()
-            if hashlib.sha256(raw).hexdigest() != source['observed_sha256']:
-                raise ValueError('product_master_source_changed')
+            if hashlib.sha256(raw).hexdigest() != source["observed_sha256"]:
+                raise ValueError("product_master_source_changed")
             raw_source = json.loads(raw)
-            for upstream in raw_source.get('upstream_sources', []):
-                archive = Path(upstream['archive_path'])
+            for upstream in raw_source.get("upstream_sources", []):
+                archive = Path(upstream["archive_path"])
                 identities[str(archive)] = identity(archive)
-                if not 0 < identities[str(archive)][2] <= 8*1024*1024:
-                    raise ValueError('product_master_archive_size_invalid')
-                if hashlib.sha256(archive.read_bytes()).hexdigest() != upstream['archive_sha256']:
-                    raise ValueError('product_master_archive_changed')
+                if not 0 < identities[str(archive)][2] <= 8 * 1024 * 1024:
+                    raise ValueError("product_master_archive_size_invalid")
+                if (
+                    hashlib.sha256(archive.read_bytes()).hexdigest()
+                    != upstream["archive_sha256"]
+                ):
+                    raise ValueError("product_master_archive_changed")
         exclusions = verified_non_common_stock_exclusions(payload, as_of=as_of)
         if any(identity(p) != stamp for p, stamp in identities.items()):
-            raise ValueError('product_master_changed_during_read')
+            raise ValueError("product_master_changed_during_read")
 
         def check(code, name, market):
             lookup = master.lookup(code, as_of=as_of)
             record = lookup.record
-            verified = (lookup.economic_metadata_allowed and record is not None
-                and record.instrument_type.value == 'EQUITY'
+            verified = (
+                lookup.economic_metadata_allowed
+                and record is not None
+                and record.instrument_type.value == "EQUITY"
                 and record.listing_market.value == market
-                and datetime.fromisoformat(record.verified_at).date() <= as_of)
-            return dict(eligible=bool(verified and kiwoom_utils.is_valid_stock(code, name)),
-                status=('name_or_share_class_excluded' if verified and not kiwoom_utils.is_valid_stock(code, name)
-                    else 'ordinary_equity_verified' if verified else
-                    'verified_non_common_stock' if code in exclusions else 'product_unverified'),
-                master_sha256=receipt.decoded_sha256, source_date=str(max(candidates)[0]),
-                target_date=target_date, stock_code=code,
-                exclusion=exclusions.get(code), runtime_order_authority=False)
+                and datetime.fromisoformat(record.verified_at).date() <= as_of
+            )
+            return dict(
+                eligible=bool(verified and kiwoom_utils.is_valid_stock(code, name)),
+                status=(
+                    "name_or_share_class_excluded"
+                    if verified and not kiwoom_utils.is_valid_stock(code, name)
+                    else (
+                        "ordinary_equity_verified"
+                        if verified
+                        else (
+                            "verified_non_common_stock"
+                            if code in exclusions
+                            else "product_unverified"
+                        )
+                    )
+                ),
+                master_sha256=receipt.decoded_sha256,
+                source_date=str(max(candidates)[0]),
+                target_date=target_date,
+                stock_code=code,
+                exclusion=exclusions.get(code),
+                runtime_order_authority=False,
+            )
 
         _PRODUCT_CACHE.clear()  # One active date/source; no unbounded symbol cache.
-        _PRODUCT_CACHE[key] = dict(path=selected, check=check,
-            identities=identities)
+        _PRODUCT_CACHE[key] = dict(path=selected, check=check, identities=identities)
         return check
     except (OSError, KeyError, TypeError, ValueError) as exc:
         reason = str(exc) if isinstance(exc, ValueError) else type(exc).__name__
-        return lambda code, name, market: dict(eligible=False, status='product_unverified',
-            reason=reason, stock_code=code, target_date=target_date, runtime_order_authority=False)
+        return lambda code, name, market: dict(
+            eligible=False,
+            status="product_unverified",
+            reason=reason,
+            stock_code=code,
+            target_date=target_date,
+            runtime_order_authority=False,
+        )
 
 
 def _sha256(value: dict) -> str:
     return hashlib.sha256(
-        json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode()
+        json.dumps(
+            value, sort_keys=True, ensure_ascii=False, separators=(",", ":")
+        ).encode()
     ).hexdigest()
 
 
-def fetch_discovery_panels(token, *, now_epoch=None, fetcher=None,
-                           activity_fetcher=None) -> dict:
+def fetch_discovery_panels(
+    token, *, now_epoch=None, fetcher=None, activity_fetcher=None
+) -> dict:
     """Read session-scoped panels through the source-only gate."""
     observed_epoch = time.time() if now_epoch is None else float(now_epoch)
     context = session_contract.resolve_market_session(
         datetime.fromtimestamp(observed_epoch, tz=session_contract.KST)
     )
-    if context.session_regime == session_contract.MARKET_SESSION_REGIME_LEGACY_PREMARKET:
+    if (
+        context.session_regime
+        == session_contract.MARKET_SESSION_REGIME_LEGACY_PREMARKET
+    ):
         panel_requests = PREMARKET_PANEL_REQUESTS
         # In the 2026-09-29 08:03-08:37 premarket receipts, gainer-only
         # symbols yielded no machine assessments and usually lacked exact _NX 0B/0D.
@@ -149,37 +200,55 @@ def fetch_discovery_panels(token, *, now_epoch=None, fetcher=None,
         panel_requests = PANEL_REQUESTS
         panel_kinds = ("activity", "gainers")
     else:
-        return {"schema": SCHEMA, "panels": [], "observations": [],
-                "source_status": "integrated_buy_session_unavailable"}
+        return {
+            "schema": SCHEMA,
+            "panels": [],
+            "observations": [],
+            "source_status": "integrated_buy_session_unavailable",
+        }
     fetcher = fetcher or kiwoom_utils.get_top_fluctuation_ka10027
-    activity_fetcher = activity_fetcher or kiwoom_utils.get_zero_base_volume_surge_ka10023
+    activity_fetcher = (
+        activity_fetcher or kiwoom_utils.get_zero_base_volume_surge_ka10023
+    )
     panels = []
     observations_by_key = {}
     product_check = discovery_product_filter(
-        datetime.fromtimestamp(observed_epoch, session_contract.KST).date().isoformat())
+        datetime.fromtimestamp(observed_epoch, session_contract.KST).date().isoformat()
+    )
     # A recent-volume panel broadens intake; the exact-route WS probe remains
     # the only source that may supply current microstructure to the machine.
-    requests = [(kind, *panel) for kind in panel_kinds
-                for panel in panel_requests]
+    requests = [(kind, *panel) for kind in panel_kinds for panel in panel_requests]
     for kind, market, mrkt_tp, venue, stex_tp, route in requests:
         request_epoch = time.time() if now_epoch is None else float(now_epoch)
         try:
             if kind == "activity":
                 rows, meta = activity_fetcher(
-                    token, mrkt_tp=mrkt_tp, stex_tp=stex_tp,
+                    token,
+                    mrkt_tp=mrkt_tp,
+                    stex_tp=stex_tp,
                     request_owner="zero_base_activity_panel",
                     request_class=REQUEST_CLASS_SOURCE_ONLY,
                     read_rate_max_wait_sec=3.0,
                 )
             else:
                 rows, meta = fetcher(
-                    token, mrkt_tp=mrkt_tp, trde_qty_cnd="0000",
-                    limit=MAX_ROWS_PER_PANEL, max_pages_limit=1, stex_tp=stex_tp, sort_tp="1",
-                    stk_cnd="4", crd_cnd="0", updown_incls="1",
-                    pric_cnd="0", trde_prica_cnd="0", pure_equity_only=True,
+                    token,
+                    mrkt_tp=mrkt_tp,
+                    trde_qty_cnd="0000",
+                    limit=MAX_ROWS_PER_PANEL,
+                    max_pages_limit=1,
+                    stex_tp=stex_tp,
+                    sort_tp="1",
+                    stk_cnd="4",
+                    crd_cnd="0",
+                    updown_incls="1",
+                    pric_cnd="0",
+                    trde_prica_cnd="0",
+                    pure_equity_only=True,
                     request_owner="zero_base_discovery_panel",
                     request_class=REQUEST_CLASS_SOURCE_ONLY,
-                    read_rate_max_wait_sec=3.0, return_meta=True,
+                    read_rate_max_wait_sec=3.0,
+                    return_meta=True,
                 )
         except Exception as exc:
             rows, meta = [], {"source_error": type(exc).__name__}
@@ -240,18 +309,23 @@ def fetch_discovery_panels(token, *, now_epoch=None, fetcher=None,
                 or change_rate <= 0
                 or price <= 0
                 or volume < 0
-                or (kind == "activity" and (
-                    volume == 0
-                    or surge_qty <= 0
-                    or str(row.get("PreSig") or "") not in {"", "1", "2"}
-                ))
+                or (
+                    kind == "activity"
+                    and (
+                        volume == 0
+                        or surge_qty <= 0
+                        or str(row.get("PreSig") or "") not in {"", "1", "2"}
+                    )
+                )
             ):
                 panel["rejected_count"] += 1
                 continue
             product = product_check(code, name, market)
-            if product.get('eligible') is not True:
-                panel['rejected_count'] += 1
-                panel['product_unverified_count'] += product.get('status') == 'product_unverified'
+            if product.get("eligible") is not True:
+                panel["rejected_count"] += 1
+                panel["product_unverified_count"] += (
+                    product.get("status") == "product_unverified"
+                )
                 continue
             row_payload = {
                 "code": code,
@@ -276,5 +350,8 @@ def fetch_discovery_panels(token, *, now_epoch=None, fetcher=None,
             # wins overlap; a later gainer response must not invalidate a probe.
             observations_by_key.setdefault((code, route), row_payload)
             panel["eligible_count"] += 1
-    return {"schema": SCHEMA, "panels": panels,
-            "observations": list(observations_by_key.values())}
+    return {
+        "schema": SCHEMA,
+        "panels": panels,
+        "observations": list(observations_by_key.values()),
+    }

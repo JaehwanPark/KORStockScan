@@ -352,9 +352,7 @@ class PrunedCandidateBBOCollector:
         )
         route = _request_route(code, effective_venue) if code else None
         now_epoch = float(self._clock() if observed_epoch is None else observed_epoch)
-        selection_pair_evidence = dict(
-            target.get("_LookupSelectionPairEvidence") or {}
-        )
+        selection_pair_evidence = dict(target.get("_LookupSelectionPairEvidence") or {})
         base = {
             "eligible": True,
             "scanner_prune_observer_schedule_status": "source_quality_blocked",
@@ -936,13 +934,15 @@ class PrunedCandidateBBOCollector:
 
         observed_epoch = received if status == "captured" else request_completed_epoch
         from src.trading.market.quote_consistency import (
-            build_market_data_health, rest_quote_receive_age_ms,
+            build_market_data_health,
+            rest_quote_receive_age_ms,
         )
 
         health = build_market_data_health(snapshot, now_ts=request_completed_epoch)
         quote_age_ms = (
             rest_quote_receive_age_ms(snapshot, now_ts=request_completed_epoch)
-            if status == "captured" else None
+            if status == "captured"
+            else None
         )
         terminal_sample = sample_index + 1 >= len(
             episode.get("scheduled_offsets_sec") or []

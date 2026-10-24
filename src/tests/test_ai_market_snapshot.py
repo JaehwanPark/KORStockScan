@@ -114,7 +114,12 @@ def test_proven_five_second_trade_gap_is_feature_shortfall_not_source_damage(
     ws["market_data_health"] = snapshot["market_data_health"]
     del ws["realtime_type_snapshots_by_route"][key]["quiet_tape_observation"]
     missing = build()
-    assert missing["trade_activity"]["continuity_evidence"]["quiet_tape_observation"]["last_trade"] is None
+    assert (
+        missing["trade_activity"]["continuity_evidence"]["quiet_tape_observation"][
+            "last_trade"
+        ]
+        is None
+    )
     # Previously frozen evidence must survive later input mutation.
     assert evidence["quiet_tape_observation"]["last_trade"] == now - gap
     assert missing["trade_activity"]["canonical_binding_proven"] is False
@@ -131,7 +136,12 @@ def test_proven_five_second_trade_gap_is_feature_shortfall_not_source_damage(
     )
     records["0B"]["transport_epoch"] = 1
     cross_epoch = build()
-    assert cross_epoch["trade_activity"]["continuity_evidence"]["receipts"]["0B"]["transport_epoch"] == 1
+    assert (
+        cross_epoch["trade_activity"]["continuity_evidence"]["receipts"]["0B"][
+            "transport_epoch"
+        ]
+        == 1
+    )
     assert cross_epoch["trade_activity"]["canonical_binding_proven"] is False
     assert "tape_stale" in cross_epoch["ai_input_preflight_v1"]["source_blockers"]
 
@@ -938,7 +948,10 @@ def test_future_or_missing_realtime_identity_is_not_fresh(future_offset):
     future_ws = _ws(now)
     # Use at least one representable unit at this epoch for sub-ms coverage.
     import math
-    future_ws["last_realtime_type_ts"]["0B"] = max(now + future_offset, math.nextafter(now, math.inf))
+
+    future_ws["last_realtime_type_ts"]["0B"] = max(
+        now + future_offset, math.nextafter(now, math.inf)
+    )
     future = mod.build_ai_market_snapshot(
         stock_code="005930",
         decision_stage="entry_screen",
@@ -2142,6 +2155,7 @@ def test_baseline_mode_rejects_artifact_that_can_open_authority(tmp_path, monkey
 
 def test_baseline_pin_is_verified_on_cached_reads(tmp_path, monkeypatch):
     import hashlib
+
     monkeypatch.setenv("KORSTOCKSCAN_AI_INPUT_PREFLIGHT_MODE", "baseline_v1")
     monkeypatch.setenv("KORSTOCKSCAN_AI_INPUT_BASELINE_ARTIFACT_DATE", "2026-07-23")
     monkeypatch.setattr(mod, "_BASELINE_REPORT_DIR", tmp_path)
@@ -2152,10 +2166,14 @@ def test_baseline_pin_is_verified_on_cached_reads(tmp_path, monkeypatch):
     monkeypatch.setattr(mod, "_PROCESS_STARTED_AT", path.stat().st_mtime + 60)
     assert mod.runtime_preflight_artifact_status()["ready"] is True
     monkeypatch.setenv("KORSTOCKSCAN_AI_INPUT_BASELINE_ARTIFACT_SHA256", "0" * 64)
-    assert mod.runtime_preflight_artifact_status()["status"] == "baseline_binding_mismatch"
+    assert (
+        mod.runtime_preflight_artifact_status()["status"] == "baseline_binding_mismatch"
+    )
     monkeypatch.setenv("KORSTOCKSCAN_AI_INPUT_BASELINE_ARTIFACT_SHA256", digest)
     path.write_text(path.read_text() + "\n")
-    assert mod.runtime_preflight_artifact_status()["status"] == "baseline_binding_mismatch"
+    assert (
+        mod.runtime_preflight_artifact_status()["status"] == "baseline_binding_mismatch"
+    )
 
 
 def test_unknown_runtime_preflight_mode_fails_closed(monkeypatch):
@@ -2246,38 +2264,57 @@ def test_stale_source_timing_is_diagnostic_and_does_not_change_snapshot():
 
 
 @pytest.mark.parametrize("provider_delay", [6, -0.001])
-def test_fresh_received_but_six_second_old_provider_trade_is_feature_shortfall(provider_delay):
+def test_fresh_received_but_six_second_old_provider_trade_is_feature_shortfall(
+    provider_delay,
+):
     now = datetime(2026, 9, 17, 10, 0, tzinfo=KST).timestamp()
-    ws = _ws(now, effective_venue='KRX')
-    ws['market_data_transport_epoch'] = 2
+    ws = _ws(now, effective_venue="KRX")
+    ws["market_data_transport_epoch"] = 2
     record = {
-        'item': '005930', 'market_route': 'krx_only', 'market_suffix': '',
-        'effective_venue': 'KRX', 'transport_epoch': 2,
-        'orderbook': {'bids': [{'price': 9990}], 'asks': [{'price': 10000}]},
+        "item": "005930",
+        "market_route": "krx_only",
+        "market_suffix": "",
+        "effective_venue": "KRX",
+        "transport_epoch": 2,
+        "orderbook": {"bids": [{"price": 9990}], "asks": [{"price": 10000}]},
     }
-    ws['realtime_type_snapshots_by_route'] = {'KRX|krx_only': {
-        '0D': {**record, 'observed_epoch': now - 0.2},
-        '0B': {**record, 'observed_epoch': now - 0.1, 'current_price': 10000,
-               'provider_trade_epoch': now - provider_delay,
-               'provider_trade_time_precision_ms': 1000,
-               'provider_trade_date_basis': 'local_receive_calendar_date_not_provider_date'},
-        'quiet_tape_observation': {'last_quote': now - 0.2, 'last_trade': now - 0.1,
-                                   'closed_episodes': 0},
-    }}
+    ws["realtime_type_snapshots_by_route"] = {
+        "KRX|krx_only": {
+            "0D": {**record, "observed_epoch": now - 0.2},
+            "0B": {
+                **record,
+                "observed_epoch": now - 0.1,
+                "current_price": 10000,
+                "provider_trade_epoch": now - provider_delay,
+                "provider_trade_time_precision_ms": 1000,
+                "provider_trade_date_basis": "local_receive_calendar_date_not_provider_date",
+            },
+            "quiet_tape_observation": {
+                "last_quote": now - 0.2,
+                "last_trade": now - 0.1,
+                "closed_episodes": 0,
+            },
+        }
+    }
     snapshot = mod.build_ai_market_snapshot(
-        stock_code='005930', decision_stage='entry_screen', ws_data=ws,
-        effective_venue='KRX', session_bucket='krx_regular', broker_route='KRX',
-        candle_context=_candle(), now_ts=now,
+        stock_code="005930",
+        decision_stage="entry_screen",
+        ws_data=ws,
+        effective_venue="KRX",
+        session_bucket="krx_regular",
+        broker_route="KRX",
+        candle_context=_candle(),
+        now_ts=now,
     )
-    preflight = snapshot['ai_input_preflight_v1']
-    assert snapshot['trade_activity']['trade_activity_state'] == 'RECENT_TRADE'
+    preflight = snapshot["ai_input_preflight_v1"]
+    assert snapshot["trade_activity"]["trade_activity_state"] == "RECENT_TRADE"
     if provider_delay < 0:
-        assert preflight['source_allowed'] is False
-        assert preflight['allowed'] is False
-        assert 'provider_trade_clock_future' in preflight['source_blockers']
+        assert preflight["source_allowed"] is False
+        assert preflight["allowed"] is False
+        assert "provider_trade_clock_future" in preflight["source_blockers"]
         return
-    assert preflight['source_allowed'] is True
-    assert preflight['feature_allowed'] is False
-    assert preflight['allowed'] is False
-    assert 'required_feature_provider_trade_late' in preflight['feature_blockers']
-    assert snapshot['sources']['tape']['observed_at'] == mod._iso(now - 0.1)
+    assert preflight["source_allowed"] is True
+    assert preflight["feature_allowed"] is False
+    assert preflight["allowed"] is False
+    assert "required_feature_provider_trade_late" in preflight["feature_blockers"]
+    assert snapshot["sources"]["tape"]["observed_at"] == mod._iso(now - 0.1)

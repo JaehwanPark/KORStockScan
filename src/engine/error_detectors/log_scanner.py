@@ -131,15 +131,23 @@ class LogScanner(BaseDetector):
 
         recovery_day_start = None
         if getattr(self, "postclose_source_date", None):
-            recovery_day_start = datetime.now(ZoneInfo("Asia/Seoul")).replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+            recovery_day_start = (
+                datetime.now(ZoneInfo("Asia/Seoul"))
+                .replace(hour=0, minute=0, second=0, microsecond=0)
+                .timestamp()
+            )
         for log_path in log_files:
             fname = log_path.name
             if recovery_day_start is not None:
                 metadata = log_path.stat()
                 if metadata.st_mtime < recovery_day_start:
-                    details.setdefault("historical_unchanged_logs_not_current_burst", {})[fname] = {
-                        "size_bytes": metadata.st_size, "mtime_ns": metadata.st_mtime_ns,
-                        "historical_error_resolution": "not_claimed", "source_preserved": True,
+                    details.setdefault(
+                        "historical_unchanged_logs_not_current_burst", {}
+                    )[fname] = {
+                        "size_bytes": metadata.st_size,
+                        "mtime_ns": metadata.st_mtime_ns,
+                        "historical_error_resolution": "not_claimed",
+                        "source_preserved": True,
                     }
                     continue
             last_pos = state.get(fname, {}).get("position", 0)
@@ -161,7 +169,10 @@ class LogScanner(BaseDetector):
                 self._save_state(state)
 
         severity, summary = self._classify(total_new_errors, error_counter)
-        if details.get("historical_unchanged_logs_not_current_burst") and severity == "pass":
+        if (
+            details.get("historical_unchanged_logs_not_current_burst")
+            and severity == "pass"
+        ):
             severity = "warning"
             summary = "No current error burst; unchanged historical logs remain separate audit evidence."
 

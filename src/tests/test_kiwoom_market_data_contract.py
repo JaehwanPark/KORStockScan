@@ -6,7 +6,9 @@ from src.engine import sniper_strength_shadow_feedback
 from src.utils import kiwoom_utils
 
 
-def test_base_url_success_is_silent_and_preserves_json_stdout(tmp_path, monkeypatch, capsys):
+def test_base_url_success_is_silent_and_preserves_json_stdout(
+    tmp_path, monkeypatch, capsys
+):
     import json
 
     config_path = tmp_path / "config.json"
@@ -23,7 +25,9 @@ def test_market_cache_scope_repeated_url_resolution_is_silent(
 ):
     config_path = tmp_path / "config.json"
     monkeypatch.setattr(kiwoom_utils, "CONFIG_PATH", config_path)
-    monkeypatch.setattr(kiwoom_utils, "resolve_kiwoom_request_token", lambda token: token)
+    monkeypatch.setattr(
+        kiwoom_utils, "resolve_kiwoom_request_token", lambda token: token
+    )
     config_path.write_text('{"KIWOOM_BASE_URL":"https://example.test"}')
     scopes = [kiwoom_utils._market_data_cache_scope("fixture-token") for _ in range(8)]
     assert all(scope == scopes[0] for scope in scopes)
@@ -38,16 +42,14 @@ def test_market_cache_scope_repeated_url_resolution_is_silent(
     assert captured.out == captured.err == ""
 
 
-def test_base_url_dev_file_and_default_url_remain_silent(
-    tmp_path, monkeypatch, capsys
-):
+def test_base_url_dev_file_and_default_url_remain_silent(tmp_path, monkeypatch, capsys):
     config_path = tmp_path / "missing.json"
     dev_path = tmp_path / "config_dev.json"
     monkeypatch.setattr(kiwoom_utils, "CONFIG_PATH", config_path)
     monkeypatch.setattr(kiwoom_utils, "DEV_PATH", dev_path)
     dev_path.write_text('{"KIWOOM_BASE_URL":"https://mock.test"}')
     assert kiwoom_utils.get_kiwoom_base_url() == "https://mock.test"
-    dev_path.write_text('{}')
+    dev_path.write_text("{}")
     assert kiwoom_utils.get_kiwoom_base_url() == "https://api.kiwoom.com"
     captured = capsys.readouterr()
     assert captured.out == captured.err == ""
@@ -763,26 +765,49 @@ def test_minute_wire_cache_reuses_different_slices_without_clock_extension(monke
     kiwoom_utils._MARKET_DATA_CACHE.clear()
     from datetime import datetime
     from zoneinfo import ZoneInfo
-    start = datetime(2026, 9, 21, 10, 0, 1, tzinfo=ZoneInfo('Asia/Seoul')).timestamp()
+
+    start = datetime(2026, 9, 21, 10, 0, 1, tzinfo=ZoneInfo("Asia/Seoul")).timestamp()
     clock, calls = [start], []
     monkeypatch.setattr(kiwoom_utils.time, "time", lambda: clock[0])
+
     def transport(**kwargs):
         calls.append(kwargs)
-        rows = [{"cntr_tm": f"2026092109{i:02d}00", "cur_prc": "100", "open_pric": "100",
-                 "high_pric": "101", "low_pric": "99", "trde_qty": "10"} for i in range(30)]
+        rows = [
+            {
+                "cntr_tm": f"2026092109{i:02d}00",
+                "cur_prc": "100",
+                "open_pric": "100",
+                "high_pric": "101",
+                "low_pric": "99",
+                "trde_qty": "10",
+            }
+            for i in range(30)
+        ]
         return [{"return_code": 0, "stk_min_pole_chart_qry": rows}], {
-            "rest_received_ts_ms": int(clock[0]*1000), "request_attempt_count": 1,
-            "request_owner": "original", "read_rate_control_status": "admitted"}
-    monkeypatch.setattr(kiwoom_utils, "_fetch_kiwoom_api_continuous_transport", transport)
-    a, _ = kiwoom_utils.get_minute_candles_ka10080_with_meta("cache-test", "005930", 10, explicit_request_code=True)
+            "rest_received_ts_ms": int(clock[0] * 1000),
+            "request_attempt_count": 1,
+            "request_owner": "original",
+            "read_rate_control_status": "admitted",
+        }
+
+    monkeypatch.setattr(
+        kiwoom_utils, "_fetch_kiwoom_api_continuous_transport", transport
+    )
+    a, _ = kiwoom_utils.get_minute_candles_ka10080_with_meta(
+        "cache-test", "005930", 10, explicit_request_code=True
+    )
     clock[0] += 1
-    b, meta = kiwoom_utils.get_minute_candles_ka10080_with_meta("cache-test", "005930", 20, explicit_request_code=True)
+    b, meta = kiwoom_utils.get_minute_candles_ka10080_with_meta(
+        "cache-test", "005930", 20, explicit_request_code=True
+    )
     assert len(a) == 10 and len(b) == 20 and len(calls) == 1
-    assert meta["rest_received_ts_ms"] == int(start*1000)
+    assert meta["rest_received_ts_ms"] == int(start * 1000)
     assert meta["read_response_cache_status"] == "hit"
     assert meta["read_singleflight_caller_http_attempt_count"] == 0
-    clock[0] = start+3.1
-    kiwoom_utils.get_minute_candles_ka10080_with_meta("cache-test", "005930", 20, explicit_request_code=True)
+    clock[0] = start + 3.1
+    kiwoom_utils.get_minute_candles_ka10080_with_meta(
+        "cache-test", "005930", 20, explicit_request_code=True
+    )
     assert len(calls) == 2  # normalized cache cannot extend raw response expiry
     kiwoom_utils._MARKET_DATA_CACHE.clear()
 
@@ -899,6 +924,7 @@ def test_market_join_timeout_returns_defer_without_transport(monkeypatch):
 
 def test_normalized_market_cache_is_token_origin_and_day_scoped(monkeypatch):
     import time
+
     _clear_market_data_cache()
 
     monkeypatch.setattr(kiwoom_utils, "get_effective_kiwoom_code", lambda code: code)
@@ -908,9 +934,22 @@ def test_normalized_market_cache_is_token_origin_and_day_scoped(monkeypatch):
 
     def fetch(**kwargs):
         calls.append(kwargs)
-        return [{'return_code':0,'stk_min_pole_chart_qry':[
-            dict(cntr_tm=f'2026091710{i:02d}00',open_pric='100',high_pric='100',low_pric='100',cur_prc='100',trde_qty='10')
-            for i in range(10)]}], {"rest_received_ts_ms": int(time.time()*1000), "api_id": kwargs["api_id"]}
+        return [
+            {
+                "return_code": 0,
+                "stk_min_pole_chart_qry": [
+                    dict(
+                        cntr_tm=f"2026091710{i:02d}00",
+                        open_pric="100",
+                        high_pric="100",
+                        low_pric="100",
+                        cur_prc="100",
+                        trde_qty="10",
+                    )
+                    for i in range(10)
+                ],
+            }
+        ], {"rest_received_ts_ms": int(time.time() * 1000), "api_id": kwargs["api_id"]}
 
     monkeypatch.setattr(kiwoom_utils, "fetch_kiwoom_api_continuous", fetch)
     for token in ("first", "first", "second"):
@@ -931,43 +970,69 @@ def test_entry_read_uses_remaining_budget_and_stops_next_page(monkeypatch):
     from types import SimpleNamespace
     import pytest
     from src.engine.scalping.entry_deadline import EntryDeadline
-    remaining=[.8];calls=[]
-    monkeypatch.setattr(EntryDeadline,'remaining',lambda self:remaining[0])
-    monkeypatch.setattr(kiwoom_utils,'resolve_kiwoom_request_token',lambda token:token)
+
+    remaining = [0.8]
+    calls = []
+    monkeypatch.setattr(EntryDeadline, "remaining", lambda self: remaining[0])
+    monkeypatch.setattr(
+        kiwoom_utils, "resolve_kiwoom_request_token", lambda token: token
+    )
+
     class Admission:
-        admitted=True;reason='test';waited_sec=0
-        scope_digest='offline'
-        def as_dict(self):return {}
+        admitted = True
+        reason = "test"
+        waited_sec = 0
+        scope_digest = "offline"
+
+        def as_dict(self):
+            return {}
+
     class Rate:
-        def acquire(self,**kw):
-            assert kw['max_wait_sec']<=.8
+        def acquire(self, **kw):
+            assert kw["max_wait_sec"] <= 0.8
             return Admission()
-    def post(*args,**kw):
+
+    def post(*args, **kw):
         calls.append(kw)
-        assert sum(kw['timeout'])<=.8
-        remaining[0]=0
-        return SimpleNamespace(status_code=200,headers={'cont-yn':'Y','next-key':'next'},
-            json=lambda:{'return_code':0,'items':[]})
-    monkeypatch.setattr(kiwoom_utils.requests,'post',post)
-    with pytest.raises(ValueError,match='entry_machine_input_deadline_expired'):
-        with kiwoom_utils.entry_source_budget(EntryDeadline(1,1)):
-            kiwoom_utils.fetch_kiwoom_api_continuous('https://api.test','offline','ka10080',
-                {'stk_cd':'005930'},use_continuous=True,max_pages=2,read_rate_coordinator=Rate())
-    assert len(calls)==1
+        assert sum(kw["timeout"]) <= 0.8
+        remaining[0] = 0
+        return SimpleNamespace(
+            status_code=200,
+            headers={"cont-yn": "Y", "next-key": "next"},
+            json=lambda: {"return_code": 0, "items": []},
+        )
+
+    monkeypatch.setattr(kiwoom_utils.requests, "post", post)
+    with pytest.raises(ValueError, match="entry_machine_input_deadline_expired"):
+        with kiwoom_utils.entry_source_budget(EntryDeadline(1, 1)):
+            kiwoom_utils.fetch_kiwoom_api_continuous(
+                "https://api.test",
+                "offline",
+                "ka10080",
+                {"stk_cd": "005930"},
+                use_continuous=True,
+                max_pages=2,
+                read_rate_coordinator=Rate(),
+            )
+    assert len(calls) == 1
     assert kiwoom_utils._ENTRY_SOURCE_BUDGET.get() is None
 
 
 def test_empty_minute_results_are_not_cached(monkeypatch):
     _clear_market_data_cache()
-    monkeypatch.setattr(kiwoom_utils,'get_effective_kiwoom_code',lambda code:code)
-    monkeypatch.setattr(kiwoom_utils,'get_kiwoom_base_url',lambda:'https://api.test')
-    calls=[]
+    monkeypatch.setattr(kiwoom_utils, "get_effective_kiwoom_code", lambda code: code)
+    monkeypatch.setattr(kiwoom_utils, "get_kiwoom_base_url", lambda: "https://api.test")
+    calls = []
+
     def empty(**kw):
         calls.append(kw)
-        return [],{'rest_received_ts_ms':1,'api_id':'ka10080'}
-    monkeypatch.setattr(kiwoom_utils,'fetch_kiwoom_api_continuous',empty)
-    for _ in range(2):kiwoom_utils.get_minute_candles_ka10080_with_meta('offline','005930')
-    assert len(calls)==2 and not kiwoom_utils._MARKET_DATA_CACHE
+        return [], {"rest_received_ts_ms": 1, "api_id": "ka10080"}
+
+    monkeypatch.setattr(kiwoom_utils, "fetch_kiwoom_api_continuous", empty)
+    for _ in range(2):
+        kiwoom_utils.get_minute_candles_ka10080_with_meta("offline", "005930")
+    assert len(calls) == 2 and not kiwoom_utils._MARKET_DATA_CACHE
+
 
 def test_deferred_market_read_never_replaces_a_valid_cache_entry():
     _clear_market_data_cache()

@@ -44,8 +44,22 @@ def test_control_tower_binds_direct_generation_without_verifier_cycle(
     day = "2026-09-19"
     apply_day = "2026-09-21"
     _write(
-        report_root / "runtime_approval_summary" / f"runtime_approval_summary_{day}.json",
-        {"date": day, "status": "direct_evidence_complete", "direct_evidence_state": "complete", "blocking_reasons": [], "economic_state": "measured_no_edge", "economic_state_counts": {"measured_no_edge": 1}, "validated_edge_count": 0, "policy_candidate_count": 0, "preopen_consumption_state": "verified", "natural_acceptance_state": "pending", "preopen_consumption_receipt": {"apply_date": apply_day}},
+        report_root
+        / "runtime_approval_summary"
+        / f"runtime_approval_summary_{day}.json",
+        {
+            "date": day,
+            "status": "direct_evidence_complete",
+            "direct_evidence_state": "complete",
+            "blocking_reasons": [],
+            "economic_state": "measured_no_edge",
+            "economic_state_counts": {"measured_no_edge": 1},
+            "validated_edge_count": 0,
+            "policy_candidate_count": 0,
+            "preopen_consumption_state": "verified",
+            "natural_acceptance_state": "pending",
+            "preopen_consumption_receipt": {"apply_date": apply_day},
+        },
     )
     _write(
         report_root
@@ -54,7 +68,10 @@ def test_control_tower_binds_direct_generation_without_verifier_cycle(
         {"date": day, "status": "pass", "issues": []},
     )
     _write(
-        data_dir / "runtime" / "policy_bootstrap" / f"runtime_policy_bootstrap_{apply_day}.json",
+        data_dir
+        / "runtime"
+        / "policy_bootstrap"
+        / f"runtime_policy_bootstrap_{apply_day}.json",
         {
             "target_date": apply_day,
             "selected_families": ["entry_cancel_wait"],
@@ -85,8 +102,11 @@ def test_control_tower_binds_direct_generation_without_verifier_cycle(
     assert "postclose_verifier" not in sources
     assert "threshold_cycle_ev" not in sources
     from src.engine.automation.postclose_summary_handoff import verify_summary_handoff
+
     result = verify_summary_handoff(
-        day, report_dir=report_root, checklist_path=tmp_path / "checklist.md",
+        day,
+        report_dir=report_root,
+        checklist_path=tmp_path / "checklist.md",
         require_checklist=False,
     )
     assert result["status"] == "pass", result["issues"]
@@ -95,11 +115,17 @@ def test_control_tower_binds_direct_generation_without_verifier_cycle(
 def test_actual_tower_publishes_cancel_wait_reconciliation(monkeypatch, tmp_path):
     from src.tests.test_entry_cancel_wait_tuning import _reconciliation_fixture
     from src.engine.automation import entry_cancel_wait_tuning as cancel
-    report, policy, _, policy_path = _reconciliation_fixture(tmp_path, monkeypatch, unknown_history=True)
+
+    report, policy, _, policy_path = _reconciliation_fixture(
+        tmp_path, monkeypatch, unknown_history=True
+    )
     _patch_dirs(monkeypatch, tmp_path)
-    tower = mod.build_tuning_performance_control_tower('2026-10-02')
+    tower = mod.build_tuning_performance_control_tower("2026-10-02")
     view = cancel.handoff_view(report, policy, policy_path)
-    assert tower['entry_cancel_wait_economic_tuning'] == view
-    assert view['reconciliation']['daily_zero_is_verified'] is True
-    assert view['reconciliation']['unresolved_prior_custody_count'] is None
-    assert set(tower['source_generation_contract']['sources']) >= {'entry_cancel_wait_tuning','entry_cancel_wait_policy'}
+    assert tower["entry_cancel_wait_economic_tuning"] == view
+    assert view["reconciliation"]["daily_zero_is_verified"] is True
+    assert view["reconciliation"]["unresolved_prior_custody_count"] is None
+    assert set(tower["source_generation_contract"]["sources"]) >= {
+        "entry_cancel_wait_tuning",
+        "entry_cancel_wait_policy",
+    }

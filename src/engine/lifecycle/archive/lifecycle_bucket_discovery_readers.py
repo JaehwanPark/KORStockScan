@@ -61,7 +61,6 @@ from src.engine.lifecycle.bucket_taxonomy import (
 
 from src.utils.constants import DATA_DIR
 
-
 REPORT_DIR = DATA_DIR / "report" / "lifecycle_bucket_discovery"
 
 
@@ -3117,9 +3116,7 @@ def _build_active_sim_priority_seeds(report: dict[str, Any]) -> list[dict[str, A
         active_collection_reason = (
             "positive_ev_parent_needs_sim_collection"
             if eligible and live_conversion_blocked_reason
-            else "positive_ev_parent_active_sim_collection"
-            if eligible
-            else ""
+            else "positive_ev_parent_active_sim_collection" if eligible else ""
         )
         previous = previous_by_parent.get(parent_id, {})
         previous_prefix = (
@@ -3442,9 +3439,9 @@ def _dedupe_active_sim_priority_seed_prefixes(seeds: list[dict[str, Any]]) -> No
             seed.setdefault("targeted_sim_quota", {})
             if isinstance(seed["targeted_sim_quota"], dict):
                 seed["targeted_sim_quota"]["needs_revisit_sample"] = False
-                seed["targeted_sim_quota"]["reason"] = (
-                    "duplicate_observable_prefix_suppressed"
-                )
+                seed["targeted_sim_quota"][
+                    "reason"
+                ] = "duplicate_observable_prefix_suppressed"
                 seed["targeted_sim_quota"]["runtime_effect"] = False
                 seed["targeted_sim_quota"]["allowed_runtime_apply"] = False
 
@@ -5888,9 +5885,9 @@ def _finalize_report(
             for p in parent_conflict_resolution
             if p.get("sim_policy_eligible_after_resolution")
         )
-        report["summary"]["parent_conflict_sim_eligible_after_resolution"] = (
-            sim_eligible
-        )
+        report["summary"][
+            "parent_conflict_sim_eligible_after_resolution"
+        ] = sim_eligible
     else:
         report["summary"]["parent_conflict_resolution_count"] = 0
         report["summary"]["parent_conflict_sim_eligible_after_resolution"] = 0

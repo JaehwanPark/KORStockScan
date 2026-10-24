@@ -253,12 +253,19 @@ def test_tick_history_preserves_request_purpose_and_legacy_return_shape(monkeypa
         kiwoom_utils._MARKET_DATA_CACHE.clear()
     calls = []
     monkeypatch.setattr(kiwoom_utils, "get_effective_kiwoom_code", lambda code: code)
+
     def fetch(**kwargs):
         calls.append(kwargs)
-        return [{"cntr_infr": [{"tm": "090010", "cur_prc": "+10100", "cntr_trde_qty": "3"}]}]
+        return [
+            {"cntr_infr": [{"tm": "090010", "cur_prc": "+10100", "cntr_trde_qty": "3"}]}
+        ]
+
     monkeypatch.setattr(kiwoom_utils, "fetch_kiwoom_api_continuous", fetch)
     result = kiwoom_utils.get_tick_history_ka10003(
-        "token", "005930_AL", request_owner="widget_auto_trade_entry_velocity", request_class="execution_critical"
+        "token",
+        "005930_AL",
+        request_owner="widget_auto_trade_entry_velocity",
+        request_class="execution_critical",
     )
     assert isinstance(result, list) and result[0]["volume"] == 3
     assert result[0]["aggressor_source"] == "price_change_heuristic"
@@ -273,7 +280,9 @@ def test_tick_history_preserves_request_purpose_and_legacy_return_shape(monkeypa
     assert len(calls) == 2  # An unproven wrapper is not a successful fresh cache entry.
 
 
-def test_tick_cache_retains_receive_clock_recalculates_age_and_consumer_purpose(monkeypatch):
+def test_tick_cache_retains_receive_clock_recalculates_age_and_consumer_purpose(
+    monkeypatch,
+):
     monkeypatch.setattr(kiwoom_utils, "_MARKET_DATA_CACHE", {})
     monkeypatch.setattr(kiwoom_utils, "get_effective_kiwoom_code", lambda code: code)
     clock = [1000.0]
@@ -282,20 +291,36 @@ def test_tick_cache_retains_receive_clock_recalculates_age_and_consumer_purpose(
 
     def fetch(**kwargs):
         calls.append(kwargs)
-        return [{"return_code": 0, "stk_cd": "005930", "cntr_infr": [
-            {"tm": "090010", "cur_prc": "10000", "cntr_trde_qty": "10"},
-        ]}], {"api_id": "ka10003", "request_code": "005930",
-              "rest_received_ts_ms": 1000000, "request_owner": "producer",
-              "request_class": "source_only"}
+        return [
+            {
+                "return_code": 0,
+                "stk_cd": "005930",
+                "cntr_infr": [
+                    {"tm": "090010", "cur_prc": "10000", "cntr_trde_qty": "10"},
+                ],
+            }
+        ], {
+            "api_id": "ka10003",
+            "request_code": "005930",
+            "rest_received_ts_ms": 1000000,
+            "request_owner": "producer",
+            "request_class": "source_only",
+        }
 
     monkeypatch.setattr(kiwoom_utils, "fetch_kiwoom_api_continuous", fetch)
-    first = kiwoom_utils.get_tick_history_ka10003("token", "005930", request_owner="first")
-    clock[0] += .5
-    second = kiwoom_utils.get_tick_history_ka10003("token", "005930", request_owner="second")
+    first = kiwoom_utils.get_tick_history_ka10003(
+        "token", "005930", request_owner="first"
+    )
+    clock[0] += 0.5
+    second = kiwoom_utils.get_tick_history_ka10003(
+        "token", "005930", request_owner="second"
+    )
     assert len(calls) == 1
     assert first[0]["market_data_health"]["rest_input"]["response_receive_age_ms"] == 0
     assert second[0]["rest_received_ts_ms"] == 1000000
-    assert second[0]["market_data_health"]["rest_input"]["response_receive_age_ms"] == 500
+    assert (
+        second[0]["market_data_health"]["rest_input"]["response_receive_age_ms"] == 500
+    )
     assert second[0]["market_data_health"]["rest_input"]["request_owner"] == "producer"
     assert second[0]["market_data_consumer_receipt"]["request_owner"] == "second"
     assert second[0]["market_data_consumer_receipt"]["normalized_cache_reused"]
@@ -318,22 +343,34 @@ def test_tick_helpers_share_one_transport_for_different_local_limits(monkeypatch
         calls.append(kwargs)
         entered.set()
         assert release.wait(3)
-        return [{"return_code": 0, "cntr_infr": [
-            {"tm": "090010", "cur_prc": "10000", "cntr_trde_qty": "10"}
-            for _ in range(30)
-        ]}], {"api_id": "ka10003", "request_code": "005930",
-              "rest_received_ts_ms": int(kiwoom_utils.time.time() * 1000)}
+        return [
+            {
+                "return_code": 0,
+                "cntr_infr": [
+                    {"tm": "090010", "cur_prc": "10000", "cntr_trde_qty": "10"}
+                    for _ in range(30)
+                ],
+            }
+        ], {
+            "api_id": "ka10003",
+            "request_code": "005930",
+            "rest_received_ts_ms": int(kiwoom_utils.time.time() * 1000),
+        }
 
     class ObserveWait:
         def __init__(self, event):
             self.event = event
+
         def wait(self, timeout):
             joined.set()
             return self.event.wait(timeout)
+
         def set(self):
             self.event.set()
 
-    monkeypatch.setattr(kiwoom_utils, "_fetch_kiwoom_api_continuous_transport", transport)
+    monkeypatch.setattr(
+        kiwoom_utils, "_fetch_kiwoom_api_continuous_transport", transport
+    )
     with ThreadPoolExecutor(max_workers=2) as pool:
         one = pool.submit(kiwoom_utils.get_tick_history_ka10003, "token", "005930", 10)
         assert entered.wait(1)

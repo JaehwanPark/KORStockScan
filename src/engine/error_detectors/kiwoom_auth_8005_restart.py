@@ -133,9 +133,9 @@ class KiwoomAuth8005RestartDetector(BaseDetector):
             return self._check_state()
         # Cron and the daemon share this cursor and recovery counters. The
         # wrapper's cron lock alone does not serialize the in-process detector.
-        lock_path = SCAN_STATE_PATH.with_name(SCAN_STATE_PATH.name + '.lock')
+        lock_path = SCAN_STATE_PATH.with_name(SCAN_STATE_PATH.name + ".lock")
         lock_path.parent.mkdir(parents=True, exist_ok=True)
-        with lock_path.open('a') as lock:
+        with lock_path.open("a") as lock:
             deadline = time.monotonic() + _STATE_LOCK_WAIT_SEC
             while True:
                 try:
@@ -144,12 +144,19 @@ class KiwoomAuth8005RestartDetector(BaseDetector):
                 except BlockingIOError:
                     if time.monotonic() >= deadline:
                         return DetectionResult(
-                            detector_id=self.id, category=self.category, severity='warning',
-                            summary='Kiwoom auth detector state is busy; check deferred without recovery actions.',
-                            details=dict(state_lock_busy=True, restart_requested=False,
-                                token_cache_invalidated=False, runtime_effect='none'),
-                            recommended_action='Verify the concurrent detector finishes and the next check completes.')
-                    time.sleep(.01)
+                            detector_id=self.id,
+                            category=self.category,
+                            severity="warning",
+                            summary="Kiwoom auth detector state is busy; check deferred without recovery actions.",
+                            details=dict(
+                                state_lock_busy=True,
+                                restart_requested=False,
+                                token_cache_invalidated=False,
+                                runtime_effect="none",
+                            ),
+                            recommended_action="Verify the concurrent detector finishes and the next check completes.",
+                        )
+                    time.sleep(0.01)
             try:
                 return self._check_state()
             finally:
@@ -174,8 +181,11 @@ class KiwoomAuth8005RestartDetector(BaseDetector):
             if state_load_error:
                 details["state_load_error"] = True
                 details["state_load_error_kind"] = state_load_error
-                details.update(restart_requested=False, token_cache_invalidated=False,
-                               runtime_effect='none')
+                details.update(
+                    restart_requested=False,
+                    token_cache_invalidated=False,
+                    runtime_effect="none",
+                )
             if not self.dry_run:
                 self._save_state(state)
             if state_load_error:
@@ -233,7 +243,8 @@ class KiwoomAuth8005RestartDetector(BaseDetector):
             details["historical_auth_cutoff_ts"] = historical_cutoff
             matches = current_matches
             recovery_events = [
-                event for event in recovery_events
+                event
+                for event in recovery_events
                 if not isinstance(event.get("observed_ts"), (int, float))
                 or event["observed_ts"] >= historical_cutoff
             ]
@@ -263,12 +274,18 @@ class KiwoomAuth8005RestartDetector(BaseDetector):
             if not self.dry_run:
                 self._save_state(state)
             if details.get("historical_auth_8005_count"):
-                details.update(restart_requested=False, token_cache_invalidated=False,
-                               runtime_effect="none")
+                details.update(
+                    restart_requested=False,
+                    token_cache_invalidated=False,
+                    runtime_effect="none",
+                )
                 return DetectionResult(
-                    detector_id=self.id, category=self.category, severity="pass",
+                    detector_id=self.id,
+                    category=self.category,
+                    severity="pass",
                     summary="Historical Kiwoom auth 8005 entries predating today's boot/session were consumed; no current auth failure was detected.",
-                    details=details, recommended_action="",
+                    details=details,
+                    recommended_action="",
                 )
             if details.get("prior_runtime_auth_8005_count"):
                 return DetectionResult(
@@ -478,26 +495,42 @@ class KiwoomAuth8005RestartDetector(BaseDetector):
     def _load_state() -> dict:
         try:
             state = json.loads(SCAN_STATE_PATH.read_text(encoding="utf-8"))
-            if not isinstance(state, dict) or not isinstance(state.get('files', {}), dict):
-                raise ValueError('state_shape_invalid')
-            for row in state.get('files', {}).values():
-                if (not isinstance(row, dict) or type(row.get('position')) is not int
-                        or row['position'] < 0):
-                    raise ValueError('state_cursor_invalid')
-            count, last = state.get('restart_count', 0), state.get('last_restart_ts', 0)
-            if (type(count) is not int or count < 0 or type(last) not in (int, float)
-                    or not math.isfinite(last) or last < 0):
-                raise ValueError('state_recovery_counter_invalid')
+            if not isinstance(state, dict) or not isinstance(
+                state.get("files", {}), dict
+            ):
+                raise ValueError("state_shape_invalid")
+            for row in state.get("files", {}).values():
+                if (
+                    not isinstance(row, dict)
+                    or type(row.get("position")) is not int
+                    or row["position"] < 0
+                ):
+                    raise ValueError("state_cursor_invalid")
+            count, last = state.get("restart_count", 0), state.get("last_restart_ts", 0)
+            if (
+                type(count) is not int
+                or count < 0
+                or type(last) not in (int, float)
+                or not math.isfinite(last)
+                or last < 0
+            ):
+                raise ValueError("state_recovery_counter_invalid")
             return state
         except FileNotFoundError:
             return {}
         except (ValueError, UnicodeError, OSError, OverflowError) as exc:
             # Never include state bytes or credential-bearing log lines.
-            detail = dict(error_type=type(exc).__name__, errno=getattr(exc, 'errno', None))
+            detail = dict(
+                error_type=type(exc).__name__, errno=getattr(exc, "errno", None)
+            )
             if isinstance(exc, json.JSONDecodeError):
                 detail.update(line=exc.lineno, column=exc.colno)
-            elif str(exc) in {'state_shape_invalid', 'state_cursor_invalid', 'state_recovery_counter_invalid'}:
-                detail['reason'] = str(exc)
+            elif str(exc) in {
+                "state_shape_invalid",
+                "state_cursor_invalid",
+                "state_recovery_counter_invalid",
+            }:
+                detail["reason"] = str(exc)
             return {"_state_load_error": detail}
 
     @staticmethod
@@ -506,13 +539,18 @@ class KiwoomAuth8005RestartDetector(BaseDetector):
         # Serialize before opening any file; a failed write keeps the previous
         # valid generation. Unique same-directory temp files support replace.
         payload = json.dumps(state, ensure_ascii=False, indent=2, allow_nan=False)
-        fd, name = tempfile.mkstemp(prefix='.' + SCAN_STATE_PATH.name + '.',
-                                    suffix='.tmp', dir=SCAN_STATE_PATH.parent)
+        fd, name = tempfile.mkstemp(
+            prefix="." + SCAN_STATE_PATH.name + ".",
+            suffix=".tmp",
+            dir=SCAN_STATE_PATH.parent,
+        )
         temporary = Path(name)
         try:
-            with os.fdopen(fd, 'w', encoding='utf-8') as handle:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
                 if SCAN_STATE_PATH.exists():
-                    os.fchmod(handle.fileno(), stat.S_IMODE(SCAN_STATE_PATH.stat().st_mode))
+                    os.fchmod(
+                        handle.fileno(), stat.S_IMODE(SCAN_STATE_PATH.stat().st_mode)
+                    )
                 handle.write(payload)
                 handle.flush()
                 os.fsync(handle.fileno())
@@ -647,8 +685,11 @@ def _historical_auth_cutoff() -> float:
     now = datetime.fromtimestamp(_now_ts(), ZoneInfo("Asia/Seoul"))
     cutoff = now.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
     try:
-        boot_line = next(line for line in (PROC_ROOT / "stat").read_text().splitlines()
-                         if line.startswith("btime "))
+        boot_line = next(
+            line
+            for line in (PROC_ROOT / "stat").read_text().splitlines()
+            if line.startswith("btime ")
+        )
         boot = int(boot_line.split()[1])
         if 0 < boot <= now.timestamp():
             # Preserve same-second startup errors at one-second log precision.

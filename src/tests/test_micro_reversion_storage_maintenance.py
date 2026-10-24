@@ -1884,7 +1884,9 @@ def test_report_artifact_maintenance_defers_unsealed_runtime_budget_ledger(
     active.write_text('{"unsealed":true}\n', encoding="utf-8")
 
     result = maintain_report_artifact_storage(
-        [root], as_of_date=today - timedelta(days=1), apply=True,
+        [root],
+        as_of_date=today - timedelta(days=1),
+        apply=True,
     )
 
     assert result["status"] == "pass"
@@ -3271,10 +3273,6 @@ def test_source_exclusion_purge_rolls_back_files_when_manifest_refresh_fails(
     assert not list(stream.parent.glob("*.source-exclusion.tmp"))
 
 
-
-
-
-
 def _write_exact_ai_storage_fixture(
     root: Path,
     *,
@@ -3364,11 +3362,14 @@ def test_exact_ai_storage_compresses_all_six_closed_roots_and_protects_current(
         current_paths.append(current_path)
 
     from src.engine.automation import main_trailing_source_store as index
-    from src.engine.automation.main_trailing_source_assembler import source_generation_matches
+    from src.engine.automation.main_trailing_source_assembler import (
+        source_generation_matches,
+    )
+
     indexed = {}
     for logical, _ in fixtures:
         if logical.parent.name in index.STREAM_NAMESPACES:
-            assert index.build_step(tmp_path, logical, seconds=10)['complete']
+            assert index.build_step(tmp_path, logical, seconds=10)["complete"]
             indexed[logical] = index.generation(tmp_path, logical)
 
     result = maintain_report_artifact_storage(
@@ -3392,7 +3393,9 @@ def test_exact_ai_storage_compresses_all_six_closed_roots_and_protects_current(
         with gzip.open(logical.with_suffix(f"{logical.suffix}.gz"), "rb") as handle:
             assert handle.read() == raw
         if logical in indexed:
-            assert source_generation_matches(tmp_path, closed_date, logical, indexed[logical])
+            assert source_generation_matches(
+                tmp_path, closed_date, logical, indexed[logical]
+            )
             assert index.generation(tmp_path, logical) == indexed[logical]
     for current_path in current_paths:
         assert current_path.exists()

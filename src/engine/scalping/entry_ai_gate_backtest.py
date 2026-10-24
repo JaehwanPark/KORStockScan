@@ -121,26 +121,6 @@ FORBIDDEN_USES = [
 ]
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 def report_paths(target_date: str) -> tuple[Path, Path]:
     base = REPORT_DIR / f"{REPORT_TYPE}_{target_date}"
     return base.with_suffix(".json"), base.with_suffix(".md")

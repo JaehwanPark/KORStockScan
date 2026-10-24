@@ -40,12 +40,19 @@ def test_normalize_institutional_flow_context_builds_source_only_features():
 
 def test_retired_resolver_never_collects_with_or_without_token(monkeypatch):
     from src.utils import kiwoom_utils
+
     def forbidden(*args, **kwargs):
         raise AssertionError("retired resolver attempted REST collection")
-    for name in ("get_investor_flow_summary_ka10059", "get_investor_period_total_ka10061"):
+
+    for name in (
+        "get_investor_flow_summary_ka10059",
+        "get_investor_period_total_ka10061",
+    ):
         monkeypatch.setattr(kiwoom_utils, name, forbidden)
     for token in (None, "T"):
-        result = mod.resolve_institutional_flow_context("005930", token=token, target_date="2026-10-12")
+        result = mod.resolve_institutional_flow_context(
+            "005930", token=token, target_date="2026-10-12"
+        )
         assert result["institutional_flow_status"] == "RETIRED_NO_COLLECTION"
         assert result["runtime_effect"] is False
 
@@ -64,12 +71,19 @@ def test_load_pipeline_event_codes_reads_gzip_sibling(tmp_path, monkeypatch):
     assert mod._load_pipeline_event_codes("2026-05-20") == ["005930", "000660"]
 
 
-def test_retired_current_producer_preserves_prior_and_has_no_authority(tmp_path,monkeypatch):
+def test_retired_current_producer_preserves_prior_and_has_no_authority(
+    tmp_path, monkeypatch
+):
     import importlib
-    current=importlib.import_module('src.engine.institutional_flow_context')
-    prior=tmp_path/"prior.json";prior.write_text("original")
-    def forbidden(*a,**kw):raise AssertionError("retired producer accessed storage")
-    monkeypatch.setattr(type(prior),"write_text",forbidden)
-    monkeypatch.setattr(type(prior),"read_text",forbidden)
-    result=current.build_institutional_flow_context_report("2026-10-12")
-    assert result["status"]=="retired" and result["allowed_runtime_apply"] is False
+
+    current = importlib.import_module("src.engine.institutional_flow_context")
+    prior = tmp_path / "prior.json"
+    prior.write_text("original")
+
+    def forbidden(*a, **kw):
+        raise AssertionError("retired producer accessed storage")
+
+    monkeypatch.setattr(type(prior), "write_text", forbidden)
+    monkeypatch.setattr(type(prior), "read_text", forbidden)
+    result = current.build_institutional_flow_context_report("2026-10-12")
+    assert result["status"] == "retired" and result["allowed_runtime_apply"] is False

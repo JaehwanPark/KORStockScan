@@ -8,32 +8,40 @@ from src.engine.monitoring import policy_generation_contract as generation
 from src.engine.monitoring import semantic_incident_contract as incidents
 
 
-def test_code_cache_invalidates_only_corrected_file_and_never_caches_costs(tmp_path, monkeypatch):
+def test_code_cache_invalidates_only_corrected_file_and_never_caches_costs(
+    tmp_path, monkeypatch
+):
     import os
     from src.engine.lifecycle import holding_window_generation as window
-    files=[tmp_path/'first.py',tmp_path/'second.py']
-    for path in files:path.write_text('original')
-    cost=tmp_path/'cost.json';cost.write_text('cost-one')
-    native=window.byte_generation
-    reads=[]
+
+    files = [tmp_path / "first.py", tmp_path / "second.py"]
+    for path in files:
+        path.write_text("original")
+    cost = tmp_path / "cost.json"
+    cost.write_text("cost-one")
+    native = window.byte_generation
+    reads = []
+
     def recorded(path):
         reads.append(path)
         return native(path)
-    monkeypatch.setattr(window,'byte_generation',recorded)
-    window._code_generation.cache_clear();window._code_file_generation.cache_clear()
-    original=window.cached_code_generation(files)
-    assert reads==files
+
+    monkeypatch.setattr(window, "byte_generation", recorded)
+    window._code_generation.cache_clear()
+    window._code_file_generation.cache_clear()
+    original = window.cached_code_generation(files)
+    assert reads == files
     reads.clear()
-    assert window.cached_code_generation(files)==original and reads==[]
-    stamp=files[1].stat()
-    files[1].write_text('modified')
-    os.utime(files[1],ns=(stamp.st_atime_ns,stamp.st_mtime_ns))
-    corrected=window.cached_code_generation(files)
-    assert reads==[files[1]] and corrected[str(files[1])]!=original[str(files[1])]
-    before=window.byte_generation(cost)['sha256']
-    cost.write_text('cost-two')
-    assert window.cached_code_generation(files)==corrected
-    assert window.byte_generation(cost)['sha256']!=before
+    assert window.cached_code_generation(files) == original and reads == []
+    stamp = files[1].stat()
+    files[1].write_text("modified")
+    os.utime(files[1], ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+    corrected = window.cached_code_generation(files)
+    assert reads == [files[1]] and corrected[str(files[1])] != original[str(files[1])]
+    before = window.byte_generation(cost)["sha256"]
+    cost.write_text("cost-two")
+    assert window.cached_code_generation(files) == corrected
+    assert window.byte_generation(cost)["sha256"] != before
 
 
 def attest(root, family):
@@ -54,23 +62,35 @@ def attest(root, family):
     return path
 
 
-@pytest.mark.parametrize('component', [
-    'scalping/reversal_cumulative_catalog.py', 'scalping/reversal_cumulative_runtime.py',
-    'scalping/reversal_cumulative_registration.py', 'scalping/reversal_cumulative_postclose.py',
-    'scalping/continuous_reversal_policy_v6.py', 'scalping/reversal_extended_catalog.py',
-    'scalping/reversal_extended_state.py',
-])
-def test_auxiliary_generation_binds_cumulative_producer_and_consumer(tmp_path,monkeypatch,component):
+@pytest.mark.parametrize(
+    "component",
+    [
+        "scalping/reversal_cumulative_catalog.py",
+        "scalping/reversal_cumulative_runtime.py",
+        "scalping/reversal_cumulative_registration.py",
+        "scalping/reversal_cumulative_postclose.py",
+        "scalping/continuous_reversal_policy_v6.py",
+        "scalping/reversal_extended_catalog.py",
+        "scalping/reversal_extended_state.py",
+    ],
+)
+def test_auxiliary_generation_binds_cumulative_producer_and_consumer(
+    tmp_path, monkeypatch, component
+):
     from src.engine.lifecycle import holding_window_generation as window
-    original=window.cached_code_generation
-    before=generation.code_generation('auxiliary')
+
+    original = window.cached_code_generation
+    before = generation.code_generation("auxiliary")
+
     def changed(paths):
-        values=original(paths)
-        path=str(generation.ENGINE/component)
-        if path in values:values[path]='f'*64
+        values = original(paths)
+        path = str(generation.ENGINE / component)
+        if path in values:
+            values[path] = "f" * 64
         return values
-    monkeypatch.setattr(window,'cached_code_generation',changed)
-    assert generation.code_generation('auxiliary')!=before
+
+    monkeypatch.setattr(window, "cached_code_generation", changed)
+    assert generation.code_generation("auxiliary") != before
 
 
 def test_native_cutover_reports_unverified_without_reopening_legacy():
@@ -82,22 +102,33 @@ def test_native_cutover_reports_unverified_without_reopening_legacy():
     assert after["observation_complete"] is False
 
 
-@pytest.mark.parametrize('component', [
-    'strategy_position_performance_report.py',
-    'automation/main_trailing_source_assembler.py',
-    'holding_exit_observation_report.py',
-    '../utils/market_day.py',
-])
-def test_holding_contracts_invalidate_when_original_source_validator_changes(monkeypatch, component):
+@pytest.mark.parametrize(
+    "component",
+    [
+        "strategy_position_performance_report.py",
+        "automation/main_trailing_source_assembler.py",
+        "holding_exit_observation_report.py",
+        "../utils/market_day.py",
+    ],
+)
+def test_holding_contracts_invalidate_when_original_source_validator_changes(
+    monkeypatch, component
+):
     from src.engine.lifecycle import holding_window_generation as window
     from src.engine.scalping import holding_vote_experiment as vote
     from src.engine.scalping import main_stop_policy as stop
     from src.engine.automation import main_trailing_all_scope_research as trailing
+
     engine = generation.ENGINE.resolve()
     component_path = (engine / component).resolve()
     original_bytes = component_path.read_bytes()
-    before = (generation.code_generation('holding_vote'), vote.code_sha(), trailing.code_contract(), stop.implementation_sha())
-    auxiliary_before = generation.code_generation('auxiliary')
+    before = (
+        generation.code_generation("holding_vote"),
+        vote.code_sha(),
+        trailing.code_contract(),
+        stop.implementation_sha(),
+    )
+    auxiliary_before = generation.code_generation("auxiliary")
     cached = window.cached_code_generation
     original_sha = trailing.hashlib.sha256
 
@@ -105,37 +136,76 @@ def test_holding_contracts_invalidate_when_original_source_validator_changes(mon
         values = cached(paths)
         for path in tuple(values):
             if Path(path).resolve() == component_path:
-                values[path] = 'f' * 64
+                values[path] = "f" * 64
         return values
 
-    def changed_bytes(value=b'', *args, **kwargs):
-        return original_sha(b'changed_original_source_validation' if value == original_bytes else value,
-                            *args, **kwargs)
+    def changed_bytes(value=b"", *args, **kwargs):
+        return original_sha(
+            b"changed_original_source_validation" if value == original_bytes else value,
+            *args,
+            **kwargs,
+        )
 
-    monkeypatch.setattr(window, 'cached_code_generation', changed)
-    monkeypatch.setattr(trailing.hashlib, 'sha256', changed_bytes)
-    after = (generation.code_generation('holding_vote'), vote.code_sha(), trailing.code_contract(), stop.implementation_sha())
+    monkeypatch.setattr(window, "cached_code_generation", changed)
+    monkeypatch.setattr(trailing.hashlib, "sha256", changed_bytes)
+    after = (
+        generation.code_generation("holding_vote"),
+        vote.code_sha(),
+        trailing.code_contract(),
+        stop.implementation_sha(),
+    )
     assert all(current != previous for previous, current in zip(before, after))
-    assert generation.code_generation('auxiliary') == auxiliary_before
+    assert generation.code_generation("auxiliary") == auxiliary_before
 
 
 def test_fixture_schema_and_component_types_are_verified(tmp_path):
     import hashlib
-    path=attest(tmp_path,'auxiliary')
-    payload=dict(date='2026-10-12')
-    contract=generation.native(payload,family='auxiliary',day='2026-10-12',
-        data_root=tmp_path,source_state='complete',comparison_state='complete',handoff_state='carry')
-    value=json.loads(path.read_text());value['schema']='foreign_receipt_v1'
-    value['receipt_sha256']=generation.digest({k:v for k,v in value.items() if k!='receipt_sha256'})
+
+    path = attest(tmp_path, "auxiliary")
+    payload = dict(date="2026-10-12")
+    contract = generation.native(
+        payload,
+        family="auxiliary",
+        day="2026-10-12",
+        data_root=tmp_path,
+        source_state="complete",
+        comparison_state="complete",
+        handoff_state="carry",
+    )
+    value = json.loads(path.read_text())
+    value["schema"] = "foreign_receipt_v1"
+    value["receipt_sha256"] = generation.digest(
+        {k: v for k, v in value.items() if k != "receipt_sha256"}
+    )
     path.write_text(json.dumps(value))
-    contract['fixture_receipt']['sha256']=hashlib.sha256(path.read_bytes()).hexdigest()
-    contract['contract_sha256']=generation.digest({k:v for k,v in contract.items() if k!='contract_sha256'})
-    assert generation.inspect(contract,family='auxiliary',day='2026-10-12',
-        payload=payload,data_root=tmp_path)['status']=='unverified'
-    contract['components']['comparison']=[]
-    contract['contract_sha256']=generation.digest({k:v for k,v in contract.items() if k!='contract_sha256'})
-    with pytest.raises(ValueError,match='component_type_invalid'):
-        generation.inspect(contract,family='auxiliary',day='2026-10-12',payload=payload,data_root=tmp_path)
+    contract["fixture_receipt"]["sha256"] = hashlib.sha256(
+        path.read_bytes()
+    ).hexdigest()
+    contract["contract_sha256"] = generation.digest(
+        {k: v for k, v in contract.items() if k != "contract_sha256"}
+    )
+    assert (
+        generation.inspect(
+            contract,
+            family="auxiliary",
+            day="2026-10-12",
+            payload=payload,
+            data_root=tmp_path,
+        )["status"]
+        == "unverified"
+    )
+    contract["components"]["comparison"] = []
+    contract["contract_sha256"] = generation.digest(
+        {k: v for k, v in contract.items() if k != "contract_sha256"}
+    )
+    with pytest.raises(ValueError, match="component_type_invalid"):
+        generation.inspect(
+            contract,
+            family="auxiliary",
+            day="2026-10-12",
+            payload=payload,
+            data_root=tmp_path,
+        )
 
 
 @pytest.mark.parametrize("family", list(generation.COMPONENTS))
@@ -266,109 +336,206 @@ def test_native_observation_requires_matching_source_code_and_scope(tmp_path):
 
 def holding_rebinding_fixture(tmp_path, monkeypatch):
     from src.engine.scalping import holding_vote_experiment as vote
-    monkeypatch.setattr(vote, 'code_sha', lambda: 'b' * 64)
-    day = '2026-10-13'
-    replay = dict(vote_numeric_research=dict(schema='holding_vote_numeric_research_v1',
-        status='experiment_not_armed', code_sha256='a' * 64, selected_cells={}, cells={},
-        allowed_runtime_apply=False, actual_profit_verified=False, parent={'values': {'min_votes': 2}}),
-        cost_after_paired_ev_krw=None, allowed_runtime_apply=False)
-    replay['policy_generation'] = generation.native(replay, family='holding_vote', day=day,
-        data_root=tmp_path, source_state='source_gap', comparison_state='experiment_not_armed',
-        handoff_state='incumbent_carried')
-    original = dict(date=day, meta={'snapshot_profile': 'postclose_exit'}, holding_path_vote_replay=replay)
+
+    monkeypatch.setattr(vote, "code_sha", lambda: "b" * 64)
+    day = "2026-10-13"
+    replay = dict(
+        vote_numeric_research=dict(
+            schema="holding_vote_numeric_research_v1",
+            status="experiment_not_armed",
+            code_sha256="a" * 64,
+            selected_cells={},
+            cells={},
+            allowed_runtime_apply=False,
+            actual_profit_verified=False,
+            parent={"values": {"min_votes": 2}},
+        ),
+        cost_after_paired_ev_krw=None,
+        allowed_runtime_apply=False,
+    )
+    replay["policy_generation"] = generation.native(
+        replay,
+        family="holding_vote",
+        day=day,
+        data_root=tmp_path,
+        source_state="source_gap",
+        comparison_state="experiment_not_armed",
+        handoff_state="incumbent_carried",
+    )
+    original = dict(
+        date=day,
+        meta={"snapshot_profile": "postclose_exit"},
+        holding_path_vote_replay=replay,
+    )
     current = copy.deepcopy(original)
-    current['holding_path_vote_replay']['vote_numeric_research']['code_sha256'] = 'b' * 64
-    original_path = tmp_path / 'original.json'
+    current["holding_path_vote_replay"]["vote_numeric_research"]["code_sha256"] = (
+        "b" * 64
+    )
+    original_path = tmp_path / "original.json"
     original_path.write_text(json.dumps(original))
-    path = tmp_path / 'report/monitor_snapshots' / f'holding_exit_observation_{day}.json'
+    path = (
+        tmp_path / "report/monitor_snapshots" / f"holding_exit_observation_{day}.json"
+    )
     path.parent.mkdir(parents=True)
     path.write_text(json.dumps(current))
     return day, original_path, path
 
 
-def test_unarmed_code_rebinding_preserves_snapshot_and_never_verifies_fixture(tmp_path, monkeypatch):
+def test_unarmed_code_rebinding_preserves_snapshot_and_never_verifies_fixture(
+    tmp_path, monkeypatch
+):
     day, original, path = holding_rebinding_fixture(tmp_path, monkeypatch)
     before = path.read_bytes()
-    assert generation.observations(tmp_path.parent, day, data_root=tmp_path)[0]['reason'] == 'policy_generation_native_generation_mismatch'
-    receipt = generation.publish_holding_code_rebinding(day, original_path=original, data_root=tmp_path)
+    assert (
+        generation.observations(tmp_path.parent, day, data_root=tmp_path)[0]["reason"]
+        == "policy_generation_native_generation_mismatch"
+    )
+    receipt = generation.publish_holding_code_rebinding(
+        day, original_path=original, data_root=tmp_path
+    )
     observed = generation.observations(tmp_path.parent, day, data_root=tmp_path)[0]
     assert path.read_bytes() == before
-    assert observed['status'] == 'unverified' and observed['native_validated'] is False
-    assert observed['findings'] == ['policy_generation_unverified']
-    assert observed['source_state'] == 'source_gap' and observed['realized_profit'] is None
-    assert observed['allowed_runtime_apply'] is False
-    assert observed['binding_repair']['sha256'] == receipt['sha256']
-    assert generation.publish_holding_code_rebinding(day, original_path=original, data_root=tmp_path) == receipt
+    assert observed["status"] == "unverified" and observed["native_validated"] is False
+    assert observed["findings"] == ["policy_generation_unverified"]
+    assert (
+        observed["source_state"] == "source_gap" and observed["realized_profit"] is None
+    )
+    assert observed["allowed_runtime_apply"] is False
+    assert observed["binding_repair"]["sha256"] == receipt["sha256"]
+    assert (
+        generation.publish_holding_code_rebinding(
+            day, original_path=original, data_root=tmp_path
+        )
+        == receipt
+    )
 
 
-def test_rebinding_remains_historical_unverified_after_code_deployment(tmp_path, monkeypatch):
+def test_rebinding_remains_historical_unverified_after_code_deployment(
+    tmp_path, monkeypatch
+):
     from src.engine.scalping import holding_vote_experiment as vote
+
     day, original, path = holding_rebinding_fixture(tmp_path, monkeypatch)
-    reference = generation.publish_holding_code_rebinding(day, original_path=original, data_root=tmp_path)
-    before = path.read_bytes(), Path(reference['path']).read_bytes()
-    observed_before = generation.observations(tmp_path.parent, day, data_root=tmp_path)[0]
-    monkeypatch.setattr(vote, 'code_sha', lambda: 'c'*64)
-    monkeypatch.setattr(generation, 'code_generation', lambda family: 'd'*64)
+    reference = generation.publish_holding_code_rebinding(
+        day, original_path=original, data_root=tmp_path
+    )
+    before = path.read_bytes(), Path(reference["path"]).read_bytes()
+    observed_before = generation.observations(tmp_path.parent, day, data_root=tmp_path)[
+        0
+    ]
+    monkeypatch.setattr(vote, "code_sha", lambda: "c" * 64)
+    monkeypatch.setattr(generation, "code_generation", lambda family: "d" * 64)
     observed = generation.observations(tmp_path.parent, day, data_root=tmp_path)[0]
-    assert observed['status']=='unverified' and observed['observation_complete'] is True
-    assert observed['native_validated'] is False and observed['allowed_runtime_apply'] is False
-    assert observed['code_sha256']==observed_before['code_sha256'] != 'd'*64
-    assert observed['findings']==['policy_generation_unverified']
-    assert before == (path.read_bytes(), Path(reference['path']).read_bytes())
+    assert (
+        observed["status"] == "unverified" and observed["observation_complete"] is True
+    )
+    assert (
+        observed["native_validated"] is False
+        and observed["allowed_runtime_apply"] is False
+    )
+    assert observed["code_sha256"] == observed_before["code_sha256"] != "d" * 64
+    assert observed["findings"] == ["policy_generation_unverified"]
+    assert before == (path.read_bytes(), Path(reference["path"]).read_bytes())
     # Reading old custody does not authorize re-publication under new code.
-    with pytest.raises(ValueError, match='not_unarmed_code_only'):
-        generation.publish_holding_code_rebinding(day, original_path=original, data_root=tmp_path)
+    with pytest.raises(ValueError, match="not_unarmed_code_only"):
+        generation.publish_holding_code_rebinding(
+            day, original_path=original, data_root=tmp_path
+        )
 
 
-@pytest.mark.parametrize('change', ['selected', 'armed', 'profit', 'parent', 'meta', 'unknown_code', 'unsealed_original'])
-def test_unarmed_code_rebinding_rejects_source_economics_or_policy_changes(tmp_path, monkeypatch, change):
+@pytest.mark.parametrize(
+    "change",
+    [
+        "selected",
+        "armed",
+        "profit",
+        "parent",
+        "meta",
+        "unknown_code",
+        "unsealed_original",
+    ],
+)
+def test_unarmed_code_rebinding_rejects_source_economics_or_policy_changes(
+    tmp_path, monkeypatch, change
+):
     day, original, path = holding_rebinding_fixture(tmp_path, monkeypatch)
     current = json.loads(path.read_text())
-    numeric = current['holding_path_vote_replay']['vote_numeric_research']
-    if change == 'selected': numeric['selected_cells'] = {'cell': {'value': 1}}
-    elif change == 'armed': numeric['status'] = 'selected'
-    elif change == 'profit': current['holding_path_vote_replay']['cost_after_paired_ev_krw'] = 0
-    elif change == 'parent': numeric['parent']['values']['min_votes'] = 1
-    elif change == 'meta': current['meta']['snapshot_profile'] = 'full'
-    elif change == 'unknown_code': numeric['code_sha256'] = 'c' * 64
+    numeric = current["holding_path_vote_replay"]["vote_numeric_research"]
+    if change == "selected":
+        numeric["selected_cells"] = {"cell": {"value": 1}}
+    elif change == "armed":
+        numeric["status"] = "selected"
+    elif change == "profit":
+        current["holding_path_vote_replay"]["cost_after_paired_ev_krw"] = 0
+    elif change == "parent":
+        numeric["parent"]["values"]["min_votes"] = 1
+    elif change == "meta":
+        current["meta"]["snapshot_profile"] = "full"
+    elif change == "unknown_code":
+        numeric["code_sha256"] = "c" * 64
     else:
         previous = json.loads(original.read_text())
-        previous['holding_path_vote_replay']['vote_numeric_research']['parent']['values']['min_votes'] = 3
+        previous["holding_path_vote_replay"]["vote_numeric_research"]["parent"][
+            "values"
+        ]["min_votes"] = 3
         original.write_text(json.dumps(previous))
     path.write_text(json.dumps(current))
     with pytest.raises(ValueError):
-        generation.publish_holding_code_rebinding(day, original_path=original, data_root=tmp_path)
+        generation.publish_holding_code_rebinding(
+            day, original_path=original, data_root=tmp_path
+        )
 
 
-@pytest.mark.parametrize('change', ['seal', 'runtime', 'contract', 'symlink', 'source_changed', 'fixture'])
-@pytest.mark.parametrize('code_advanced', [False, True])
-def test_rebinding_reader_fails_closed_for_changed_or_unsafe_receipts(tmp_path, monkeypatch, change, code_advanced):
+@pytest.mark.parametrize(
+    "change", ["seal", "runtime", "contract", "symlink", "source_changed", "fixture"]
+)
+@pytest.mark.parametrize("code_advanced", [False, True])
+def test_rebinding_reader_fails_closed_for_changed_or_unsafe_receipts(
+    tmp_path, monkeypatch, change, code_advanced
+):
     from pathlib import Path
+
     day, original, source = holding_rebinding_fixture(tmp_path, monkeypatch)
-    reference = generation.publish_holding_code_rebinding(day, original_path=original, data_root=tmp_path)
+    reference = generation.publish_holding_code_rebinding(
+        day, original_path=original, data_root=tmp_path
+    )
     if code_advanced:
         from src.engine.scalping import holding_vote_experiment as vote
-        monkeypatch.setattr(vote, 'code_sha', lambda: 'c'*64)
-        monkeypatch.setattr(generation, 'code_generation', lambda family: 'd'*64)
-    path = Path(reference['path'])
-    if change == 'symlink':
-        moved = path.with_suffix('.original')
+
+        monkeypatch.setattr(vote, "code_sha", lambda: "c" * 64)
+        monkeypatch.setattr(generation, "code_generation", lambda family: "d" * 64)
+    path = Path(reference["path"])
+    if change == "symlink":
+        moved = path.with_suffix(".original")
         path.rename(moved)
         path.symlink_to(moved)
-    elif change == 'source_changed':
+    elif change == "source_changed":
         current = json.loads(source.read_text())
-        current['holding_path_vote_replay']['cost_after_paired_ev_krw'] = 0
+        current["holding_path_vote_replay"]["cost_after_paired_ev_krw"] = 0
         source.write_text(json.dumps(current))
     else:
         body = json.loads(path.read_text())
-        if change == 'seal': body['receipt_sha256'] = '0' * 64
-        elif change == 'runtime': body['runtime_effect'] = True
-        elif change == 'fixture':
-            body['contract']['fixture_receipt'] = {'path': '/unreviewed', 'sha256': 'e'*64}
-            body['contract']['contract_sha256'] = generation.digest({k:v for k,v in body['contract'].items() if k!='contract_sha256'})
-        else: body['contract']['source_state'] = 'complete'
-        if change != 'seal': body['receipt_sha256'] = generation.digest({k:v for k,v in body.items() if k != 'receipt_sha256'})
+        if change == "seal":
+            body["receipt_sha256"] = "0" * 64
+        elif change == "runtime":
+            body["runtime_effect"] = True
+        elif change == "fixture":
+            body["contract"]["fixture_receipt"] = {
+                "path": "/unreviewed",
+                "sha256": "e" * 64,
+            }
+            body["contract"]["contract_sha256"] = generation.digest(
+                {k: v for k, v in body["contract"].items() if k != "contract_sha256"}
+            )
+        else:
+            body["contract"]["source_state"] = "complete"
+        if change != "seal":
+            body["receipt_sha256"] = generation.digest(
+                {k: v for k, v in body.items() if k != "receipt_sha256"}
+            )
         path.write_text(json.dumps(body))
     observed = generation.observations(tmp_path.parent, day, data_root=tmp_path)[0]
-    assert observed['status'] == 'unobservable' and observed['native_validated'] is False
-    assert observed['findings'] == ['policy_generation_contract_invalid']
+    assert (
+        observed["status"] == "unobservable" and observed["native_validated"] is False
+    )
+    assert observed["findings"] == ["policy_generation_contract_invalid"]

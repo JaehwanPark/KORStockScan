@@ -52,24 +52,20 @@ def test_existing_database_gets_additive_market_eligibility_table(tmp_path):
                 PRIMARY KEY (quote_date, stock_code)
             )
         """))
-        conn.execute(
-            text("""
+        conn.execute(text("""
                 INSERT INTO daily_stock_quotes (quote_date, stock_code, is_nxt)
                 VALUES ('2026-09-11', '005930', true)
-            """)
-        )
+            """))
 
     db.init_db()
 
     assert inspect(db.engine).has_table("security_market_eligibility_daily")
     with db.engine.connect() as conn:
-        old_row = conn.execute(
-            text("""
+        old_row = conn.execute(text("""
                 SELECT quote_date, stock_code, is_nxt
                 FROM daily_stock_quotes
                 WHERE stock_code = '005930'
-            """)
-        ).first()
+            """)).first()
     assert old_row == ("2026-09-11", "005930", 1)
 
 
@@ -120,12 +116,10 @@ def test_reader_reads_old_is_nxt_row_without_aftermarket_inference(tmp_path):
                 PRIMARY KEY (quote_date, stock_code)
             )
         """))
-        conn.execute(
-            text("""
+        conn.execute(text("""
                 INSERT INTO daily_stock_quotes (quote_date, stock_code, is_nxt)
                 VALUES ('2026-09-11', '005930', true)
-            """)
-        )
+            """))
 
     row = db.get_security_market_eligibility("005930_NX", date(2026, 9, 11))
 

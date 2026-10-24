@@ -7,6 +7,7 @@ file discovery and publication still run. Default library callers do full
 native validation. Metadata trust is limited to local, same-owner storage;
 this is not protection against an administrator changing the filesystem.
 """
+
 from __future__ import annotations
 
 import fcntl
@@ -24,12 +25,12 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-ACTIVE = ContextVar('explicit_validation_digest_session', default=None)
+ACTIVE = ContextVar("explicit_validation_digest_session", default=None)
 MIN_BYTES = 1024 * 1024
 MAX_BYTES = 512 * 1024
 MAX_ENTRIES = 4096
 MAX_GENERATIONS = 32
-KST = ZoneInfo('Asia/Seoul')
+KST = ZoneInfo("Asia/Seoul")
 
 
 class ValidationDeferred(Exception):
@@ -38,69 +39,95 @@ class ValidationDeferred(Exception):
 
 class NativeJSONWriter:
     """Hash the bytes already being written by the native snapshot producer."""
+
     def __init__(self, handle):
-        self.handle=handle;self.sha=hashlib.sha256();self.size=0
-    def write(self,text):
-        raw=text.encode('utf-8')
-        result=self.handle.write(text)
-        self.sha.update(raw);self.size+=len(raw)
+        self.handle = handle
+        self.sha = hashlib.sha256()
+        self.size = 0
+
+    def write(self, text):
+        raw = text.encode("utf-8")
+        result = self.handle.write(text)
+        self.sha.update(raw)
+        self.size += len(raw)
         return result
-    def generation(self,path):
-        return dict(path=Path(path).name,size=self.size,sha256=self.sha.hexdigest())
+
+    def generation(self, path):
+        return dict(path=Path(path).name, size=self.size, sha256=self.sha.hexdigest())
 
 
-def _native_proof_path(data_root,path):
-    root=Path(data_root).resolve();path=Path(path).resolve()
-    if path.parent!=root/'report/monitor_snapshots' or path.suffix!='.json':
-        raise ValueError('native_byte_proof_source_owner_invalid')
-    key=hashlib.sha256(str(path.relative_to(root)).encode()).hexdigest()
-    return root/'report/main_trailing_source_index/native_bytes'/(key+'.json')
+def _native_proof_path(data_root, path):
+    root = Path(data_root).resolve()
+    path = Path(path).resolve()
+    if path.parent != root / "report/monitor_snapshots" or path.suffix != ".json":
+        raise ValueError("native_byte_proof_source_owner_invalid")
+    key = hashlib.sha256(str(path.relative_to(root)).encode()).hexdigest()
+    return root / "report/main_trailing_source_index/native_bytes" / (key + ".json")
 
 
-def publish_native_bytes(data_root,path,generation):
+def publish_native_bytes(data_root, path, generation):
     """Native durable writer only; no extra source read, policy or verdict."""
     from src.engine.scalping.pre_submit_delay_initial_policy import _atomic
-    path=Path(path).resolve();before=identity(path)
-    if (generation.get('path')!=path.name or generation.get('size')!=before[4]
-            or not re.fullmatch('[0-9a-f]{64}',str(generation.get('sha256','')))):
-        raise ValueError('native_byte_proof_writer_generation_invalid')
-    body=dict(schema='native_report_source_byte_proof_v1',producer='native_monitor_snapshot_writer',
-        path=str(path),generation=generation,source_stat=before[2:7],
-        runtime_effect=False,allowed_runtime_apply=False,semantic_verdict=False)
-    body['proof_sha256']=_sha(body)
-    destination=_native_proof_path(data_root,path)
-    if identity(path)!=before:
-        raise ValueError('native_byte_proof_source_changed')
-    _atomic(destination,body)
+
+    path = Path(path).resolve()
+    before = identity(path)
+    if (
+        generation.get("path") != path.name
+        or generation.get("size") != before[4]
+        or not re.fullmatch("[0-9a-f]{64}", str(generation.get("sha256", "")))
+    ):
+        raise ValueError("native_byte_proof_writer_generation_invalid")
+    body = dict(
+        schema="native_report_source_byte_proof_v1",
+        producer="native_monitor_snapshot_writer",
+        path=str(path),
+        generation=generation,
+        source_stat=before[2:7],
+        runtime_effect=False,
+        allowed_runtime_apply=False,
+        semantic_verdict=False,
+    )
+    body["proof_sha256"] = _sha(body)
+    destination = _native_proof_path(data_root, path)
+    if identity(path) != before:
+        raise ValueError("native_byte_proof_source_changed")
+    _atomic(destination, body)
     return body
 
 
-def _native_bytes(data_root,path):
+def _native_bytes(data_root, path):
     """A missing proof permits only the caller's existing bounded fallback."""
-    path=Path(path)
+    path = Path(path)
     try:
-        proof_path=_native_proof_path(data_root,path)
+        proof_path = _native_proof_path(data_root, path)
     except ValueError:
         return None
     if not proof_path.exists():
         return None
-    before=identity(proof_path)
-    if (before[4]>4096 or before[8]!=os.getuid() or before[7]&0o077):
-        raise ValidationDeferred('validation_deferred:native_byte_proof_untrusted')
-    value=json.loads(proof_path.read_bytes())
-    if (identity(proof_path)!=before or value.get('schema')!='native_report_source_byte_proof_v1'
-            or value.get('producer')!='native_monitor_snapshot_writer'
-            or value.get('path')!=str(path.resolve())
-            or value.get('proof_sha256')!=_sha({k:v for k,v in value.items() if k!='proof_sha256'})
-            or value.get('semantic_verdict') is not False
-            or value.get('runtime_effect') is not False or value.get('allowed_runtime_apply') is not False
-            or value.get('source_stat')!=identity(path)[2:7]):
-        raise ValidationDeferred('validation_deferred:native_byte_proof_changed')
+    before = identity(proof_path)
+    if before[4] > 4096 or before[8] != os.getuid() or before[7] & 0o077:
+        raise ValidationDeferred("validation_deferred:native_byte_proof_untrusted")
+    value = json.loads(proof_path.read_bytes())
+    if (
+        identity(proof_path) != before
+        or value.get("schema") != "native_report_source_byte_proof_v1"
+        or value.get("producer") != "native_monitor_snapshot_writer"
+        or value.get("path") != str(path.resolve())
+        or value.get("proof_sha256")
+        != _sha({k: v for k, v in value.items() if k != "proof_sha256"})
+        or value.get("semantic_verdict") is not False
+        or value.get("runtime_effect") is not False
+        or value.get("allowed_runtime_apply") is not False
+        or value.get("source_stat") != identity(path)[2:7]
+    ):
+        raise ValidationDeferred("validation_deferred:native_byte_proof_changed")
     return value
 
 
 def _encode(value):
-    return json.dumps(value, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()
+    return json.dumps(
+        value, sort_keys=True, separators=(",", ":"), allow_nan=False
+    ).encode()
 
 
 def _sha(value):
@@ -110,10 +137,15 @@ def _sha(value):
 def _thread_io():
     # Thread counters avoid inherited/reaped child I/O double counting.
     import threading
+
     try:
-        fields = dict(line.split(':', 1) for line in Path(
-            f'/proc/self/task/{threading.get_native_id()}/io').read_text().splitlines())
-        return {k:int(fields[k]) for k in ('rchar', 'read_bytes', 'write_bytes')}
+        fields = dict(
+            line.split(":", 1)
+            for line in Path(f"/proc/self/task/{threading.get_native_id()}/io")
+            .read_text()
+            .splitlines()
+        )
+        return {k: int(fields[k]) for k in ("rchar", "read_bytes", "write_bytes")}
     except (OSError, KeyError, ValueError):
         return None
 
@@ -121,14 +153,22 @@ def _thread_io():
 def _local_filesystem(path):
     resolved = Path(path).resolve()
     matches = []
-    for line in Path('/proc/self/mountinfo').read_text().splitlines():
-        before, after = line.split(' - ', 1)
+    for line in Path("/proc/self/mountinfo").read_text().splitlines():
+        before, after = line.split(" - ", 1)
         mount = before.split()[4]
-        for encoded, actual in ((r'\040',' '),(r'\011','\t'),(r'\134','\\')):
-            mount = mount.replace(encoded,actual)
+        for encoded, actual in ((r"\040", " "), (r"\011", "\t"), (r"\134", "\\")):
+            mount = mount.replace(encoded, actual)
         if resolved.is_relative_to(mount):
             matches.append((len(mount), after.split()[0]))
-    return bool(matches) and max(matches)[1] in {'ext2','ext3','ext4','xfs','btrfs','tmpfs','overlay'}
+    return bool(matches) and max(matches)[1] in {
+        "ext2",
+        "ext3",
+        "ext4",
+        "xfs",
+        "btrfs",
+        "tmpfs",
+        "overlay",
+    }
 
 
 def identity(path):
@@ -137,7 +177,7 @@ def identity(path):
     resolved = path.resolve(strict=True)
     s = resolved.stat()
     if not stat.S_ISREG(s.st_mode):
-        raise ValueError('digest_source_not_regular')
+        raise ValueError("digest_source_not_regular")
     parents = []
     for node in (path, *path.parents, *resolved.parents):
         item = node.lstat()
@@ -145,8 +185,18 @@ def identity(path):
         if stat.S_ISLNK(item.st_mode):
             row += [item.st_ctime_ns, os.readlink(node)]
         parents.append(row)
-    return [str(path), str(resolved), s.st_dev, s.st_ino, s.st_size,
-            s.st_mtime_ns, s.st_ctime_ns, s.st_mode, s.st_uid, parents]
+    return [
+        str(path),
+        str(resolved),
+        s.st_dev,
+        s.st_ino,
+        s.st_size,
+        s.st_mtime_ns,
+        s.st_ctime_ns,
+        s.st_mode,
+        s.st_uid,
+        parents,
+    ]
 
 
 @contextmanager
@@ -154,8 +204,12 @@ def bounded_lock(path, seconds=2, *, private=True):
     fd = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
     try:
         s = os.fstat(fd)
-        if not stat.S_ISREG(s.st_mode) or s.st_uid != os.getuid() or (private and s.st_mode & 0o077):
-            raise ValueError('digest_lock_untrusted')
+        if (
+            not stat.S_ISREG(s.st_mode)
+            or s.st_uid != os.getuid()
+            or (private and s.st_mode & 0o077)
+        ):
+            raise ValueError("digest_lock_untrusted")
         end = time.monotonic() + seconds
         while True:
             try:
@@ -163,8 +217,8 @@ def bounded_lock(path, seconds=2, *, private=True):
                 break
             except BlockingIOError:
                 if time.monotonic() >= end:
-                    raise ValidationDeferred('validation_deferred:resource_wait')
-                time.sleep(min(0.05, max(0, end-time.monotonic())))
+                    raise ValidationDeferred("validation_deferred:resource_wait")
+                time.sleep(min(0.05, max(0, end - time.monotonic())))
         yield
     finally:
         os.close(fd)
@@ -172,69 +226,99 @@ def bounded_lock(path, seconds=2, *, private=True):
 
 class DigestSession:
     def __init__(self, data_root, day, *, role, generation, ttl=None):
-        if role not in {'observer', 'transition', 'postclose'}:
-            raise ValueError('digest_role_invalid')
+        if role not in {"observer", "transition", "postclose"}:
+            raise ValueError("digest_role_invalid")
         if datetime.fromisoformat(day).date().isoformat() != day:
-            raise ValueError('digest_date_invalid')
-        self.ttl = {'observer': 21600, 'transition': 120, 'postclose': 600}[role]
+            raise ValueError("digest_date_invalid")
+        self.ttl = {"observer": 21600, "transition": 120, "postclose": 600}[role]
         if ttl is not None:
             self.ttl = min(self.ttl, ttl)
         self.data_root = Path(data_root).absolute()
-        self.directory = self.data_root/'runtime/validation_digests'/role
-        self.binding = dict(schema='validation_file_digests_v1', role=role, day=day,
-            lexical_root=str(self.data_root), resolved_root=str(self.data_root.resolve(strict=role != 'postclose')),
-            boot_id=Path('/proc/sys/kernel/random/boot_id').read_text().strip(), generation=generation)
-        if role == 'postclose':
-            self.binding['pid'] = os.getpid()
+        self.directory = self.data_root / "runtime/validation_digests" / role
+        self.binding = dict(
+            schema="validation_file_digests_v1",
+            role=role,
+            day=day,
+            lexical_root=str(self.data_root),
+            resolved_root=str(self.data_root.resolve(strict=role != "postclose")),
+            boot_id=Path("/proc/sys/kernel/random/boot_id").read_text().strip(),
+            generation=generation,
+        )
+        if role == "postclose":
+            self.binding["pid"] = os.getpid()
         self.key = _sha(self.binding)
-        self.path = self.directory/(self.key+'.json')
+        self.path = self.directory / (self.key + ".json")
         self.entries = {}
         self.semantic_objects = {}
         self.semantic_bytes = 0
         self.invocation_pid = os.getpid()
         self.native_read_budget = None
         self._loaded_entries_sha = None
-        self.stats = dict(semantic_reused_reads=0, full_reads=0, full_bytes=0, reused_reads=0, reused_bytes=0,
-                          cache_status='unused', role=role, generation_sha256=self.key,
-                          pid=os.getpid(), wall_seconds=0.0, thread_io_delta=None)
+        self.stats = dict(
+            semantic_reused_reads=0,
+            full_reads=0,
+            full_bytes=0,
+            reused_reads=0,
+            reused_bytes=0,
+            cache_status="unused",
+            role=role,
+            generation_sha256=self.key,
+            pid=os.getpid(),
+            wall_seconds=0.0,
+            thread_io_delta=None,
+        )
 
     def _prepare(self):
         if not _local_filesystem(self.data_root):
-            raise ValueError('digest_storage_not_local')
-        base = self.data_root/'runtime'
+            raise ValueError("digest_storage_not_local")
+        base = self.data_root / "runtime"
         base.mkdir(parents=True, exist_ok=True)
-        for p in (base/'validation_digests', self.directory):
+        for p in (base / "validation_digests", self.directory):
             p.mkdir(mode=0o700, exist_ok=True)
             s = p.lstat()
-            if not stat.S_ISDIR(s.st_mode) or s.st_uid != os.getuid() or s.st_mode & 0o077:
-                raise ValueError('digest_directory_untrusted')
-        if self.directory.resolve() != self.data_root.resolve()/'runtime/validation_digests'/self.binding['role']:
-            raise ValueError('digest_directory_alias_rejected')
+            if (
+                not stat.S_ISDIR(s.st_mode)
+                or s.st_uid != os.getuid()
+                or s.st_mode & 0o077
+            ):
+                raise ValueError("digest_directory_untrusted")
+        if (
+            self.directory.resolve()
+            != self.data_root.resolve()
+            / "runtime/validation_digests"
+            / self.binding["role"]
+        ):
+            raise ValueError("digest_directory_alias_rejected")
 
     def _load(self):
         try:
             fd = os.open(self.path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
-            with os.fdopen(fd, 'rb') as stream:
+            with os.fdopen(fd, "rb") as stream:
                 s = os.fstat(stream.fileno())
-                if s.st_uid != os.getuid() or s.st_mode & 0o077 or not stat.S_ISREG(s.st_mode) or s.st_size > MAX_BYTES:
-                    raise ValueError('digest_entry_untrusted')
-                value = json.loads(stream.read(MAX_BYTES+1))
-            payload = value['payload']
-            if value['sha256'] != _sha(payload) or payload['binding'] != self.binding:
-                raise ValueError('digest_entry_binding_invalid')
-            entries = payload['entries']
+                if (
+                    s.st_uid != os.getuid()
+                    or s.st_mode & 0o077
+                    or not stat.S_ISREG(s.st_mode)
+                    or s.st_size > MAX_BYTES
+                ):
+                    raise ValueError("digest_entry_untrusted")
+                value = json.loads(stream.read(MAX_BYTES + 1))
+            payload = value["payload"]
+            if value["sha256"] != _sha(payload) or payload["binding"] != self.binding:
+                raise ValueError("digest_entry_binding_invalid")
+            entries = payload["entries"]
             if not isinstance(entries, dict) or len(entries) > MAX_ENTRIES:
-                raise ValueError('digest_entry_limit')
+                raise ValueError("digest_entry_limit")
             self.entries = entries
             self._loaded_entries_sha = _sha(entries)
-            self.stats['cache_status'] = 'loaded'
+            self.stats["cache_status"] = "loaded"
         except (OSError, ValueError, KeyError, TypeError):
-            self.stats['cache_status'] = 'cold_or_invalid'
+            self.stats["cache_status"] = "cold_or_invalid"
             self.entries = {}
             self._loaded_entries_sha = None
 
     def digest(self, path):
-        if self.binding['role'] == 'postclose' and self.binding['pid'] != os.getpid():
+        if self.binding["role"] == "postclose" and self.binding["pid"] != os.getpid():
             return None  # A fork cannot inherit invocation-local digest authority.
         path = Path(path).absolute()
         before = identity(path)
@@ -242,55 +326,85 @@ class DigestSession:
         # Expiration ends digest reuse, not the native writer's byte proof.
         # Reauthenticate that same issuer/identity before a fresh admission;
         # a changed epoch or an unrenewable proof must still fail closed.
-        created = entry.get('created') if isinstance(entry, dict) else None
-        expired_native = (isinstance(entry, dict) and entry.get('native_generation_proof')
-            and entry.get('identity') == before and isinstance(created, (int, float))
-            and time.time()-created > self.ttl)
-        if self.binding['role']=='postclose' and expired_native:
+        created = entry.get("created") if isinstance(entry, dict) else None
+        expired_native = (
+            isinstance(entry, dict)
+            and entry.get("native_generation_proof")
+            and entry.get("identity") == before
+            and isinstance(created, (int, float))
+            and time.time() - created > self.ttl
+        )
+        if self.binding["role"] == "postclose" and expired_native:
             proof = _native_bytes(self.data_root, path)
-            if proof is not None and proof['proof_sha256']==entry['native_generation_proof']:
-                self.admit_native_generation(path, proof['generation'], proof['source_stat'],
-                    proof_sha256=proof['proof_sha256'])
+            if (
+                proof is not None
+                and proof["proof_sha256"] == entry["native_generation_proof"]
+            ):
+                self.admit_native_generation(
+                    path,
+                    proof["generation"],
+                    proof["source_stat"],
+                    proof_sha256=proof["proof_sha256"],
+                )
                 entry = self.entries[str(path)]
-        if (self.binding['role']=='postclose' and before[4]>=MIN_BYTES
-                and not (isinstance(entry,dict) and entry.get('native_generation_proof'))):
-            proof=_native_bytes(self.data_root,path)
+        if (
+            self.binding["role"] == "postclose"
+            and before[4] >= MIN_BYTES
+            and not (isinstance(entry, dict) and entry.get("native_generation_proof"))
+        ):
+            proof = _native_bytes(self.data_root, path)
             if proof is not None:
-                self.admit_native_generation(path,proof['generation'],proof['source_stat'],
-                    proof_sha256=proof['proof_sha256'])
-                entry=self.entries[str(path)]
-        if (before[4] < MIN_BYTES and self.native_read_budget is None
-                and not (isinstance(entry,dict) and entry.get('native_generation_proof'))):
+                self.admit_native_generation(
+                    path,
+                    proof["generation"],
+                    proof["source_stat"],
+                    proof_sha256=proof["proof_sha256"],
+                )
+                entry = self.entries[str(path)]
+        if (
+            before[4] < MIN_BYTES
+            and self.native_read_budget is None
+            and not (isinstance(entry, dict) and entry.get("native_generation_proof"))
+        ):
             return None
         # Only native data dependencies. Code and control-plane small files are
         # read normally; optional file discovery is never memoized.
-        if (not Path(before[1]).is_relative_to(self.data_root.resolve())
-                or before[2] != self.data_root.stat().st_dev):
+        if (
+            not Path(before[1]).is_relative_to(self.data_root.resolve())
+            or before[2] != self.data_root.stat().st_dev
+        ):
             return None
         key = str(path)
         now = time.time()
         entry = self.entries.get(key, {})
-        if (isinstance(entry, dict) and entry.get('identity') == before
-                and isinstance(entry.get('created'), (int, float))
-                and 0 <= now-entry['created'] <= self.ttl
-                and re.fullmatch('[0-9a-f]{64}', str(entry.get('digest', '')))):
+        if (
+            isinstance(entry, dict)
+            and entry.get("identity") == before
+            and isinstance(entry.get("created"), (int, float))
+            and 0 <= now - entry["created"] <= self.ttl
+            and re.fullmatch("[0-9a-f]{64}", str(entry.get("digest", "")))
+        ):
             if identity(path) != before:
-                raise ValueError('digest_source_changed')
-            self.stats['reused_reads'] += 1
-            self.stats['reused_bytes'] += before[4]
-            return entry['digest']
-        if isinstance(entry, dict) and entry.get('native_generation_proof'):
-            raise ValidationDeferred('validation_deferred:native_source_proof_epoch_changed')
+                raise ValueError("digest_source_changed")
+            self.stats["reused_reads"] += 1
+            self.stats["reused_bytes"] += before[4]
+            return entry["digest"]
+        if isinstance(entry, dict) and entry.get("native_generation_proof"):
+            raise ValidationDeferred(
+                "validation_deferred:native_source_proof_epoch_changed"
+            )
         if self.native_read_budget is not None:
-            if before[4] > self.native_read_budget['remaining']:
-                raise ValidationDeferred('validation_deferred:native_source_read_budget_exceeded')
-            self.native_read_budget['remaining'] -= before[4]
-        with path.open('rb') as stream:
-            observed = hashlib.file_digest(stream, 'sha256').hexdigest()
+            if before[4] > self.native_read_budget["remaining"]:
+                raise ValidationDeferred(
+                    "validation_deferred:native_source_read_budget_exceeded"
+                )
+            self.native_read_budget["remaining"] -= before[4]
+        with path.open("rb") as stream:
+            observed = hashlib.file_digest(stream, "sha256").hexdigest()
         if identity(path) != before:
-            raise ValueError('digest_source_changed')
-        self.stats['full_reads'] += 1
-        self.stats['full_bytes'] += before[4]
+            raise ValueError("digest_source_changed")
+        self.stats["full_reads"] += 1
+        self.stats["full_bytes"] += before[4]
         if len(self.entries) < MAX_ENTRIES or key in self.entries:
             self.entries[key] = dict(identity=before, digest=observed, created=now)
         return observed
@@ -302,42 +416,61 @@ class DigestSession:
         This admits a file digest only; every semantic reader still executes.
         It is distinct from loading an observer/transition verdict or store.
         """
-        if self.binding['role']!='postclose' or self.binding['pid']!=os.getpid():
-            raise ValueError('native_source_generation_proof_requires_postclose_owner')
-        path=Path(path).absolute()
-        observed=identity(path)
-        actual=[observed[2],observed[3],observed[4],observed[5],observed[6]]
-        if (not _local_filesystem(path)
-                or not Path(observed[1]).is_relative_to(self.data_root.resolve())
-                or observed[8]!=os.getuid() or observed[2]!=self.data_root.stat().st_dev
-                or list(expected_stat)!=actual
-                or generation.get('path')!=path.name or generation.get('size')!=observed[4]
-                or re.fullmatch('[0-9a-f]{64}',str(generation.get('sha256',''))) is None
-                or re.fullmatch('[0-9a-f]{64}',str(proof_sha256)) is None
-                or identity(path)!=observed):
-            raise ValueError('native_source_generation_proof_changed_or_unbound')
-        if len(self.entries)>=MAX_ENTRIES and str(path) not in self.entries:
-            raise ValueError('native_source_generation_proof_budget_exceeded')
-        self.entries[str(path)]=dict(identity=observed,digest=generation['sha256'],
-            created=time.time(),native_generation_proof=proof_sha256)
-        self.stats['admitted_native_proofs']=self.stats.get('admitted_native_proofs',0)+1
-        self.stats['admitted_native_bytes']=self.stats.get('admitted_native_bytes',0)+observed[4]
+        if self.binding["role"] != "postclose" or self.binding["pid"] != os.getpid():
+            raise ValueError("native_source_generation_proof_requires_postclose_owner")
+        path = Path(path).absolute()
+        observed = identity(path)
+        actual = [observed[2], observed[3], observed[4], observed[5], observed[6]]
+        if (
+            not _local_filesystem(path)
+            or not Path(observed[1]).is_relative_to(self.data_root.resolve())
+            or observed[8] != os.getuid()
+            or observed[2] != self.data_root.stat().st_dev
+            or list(expected_stat) != actual
+            or generation.get("path") != path.name
+            or generation.get("size") != observed[4]
+            or re.fullmatch("[0-9a-f]{64}", str(generation.get("sha256", ""))) is None
+            or re.fullmatch("[0-9a-f]{64}", str(proof_sha256)) is None
+            or identity(path) != observed
+        ):
+            raise ValueError("native_source_generation_proof_changed_or_unbound")
+        if len(self.entries) >= MAX_ENTRIES and str(path) not in self.entries:
+            raise ValueError("native_source_generation_proof_budget_exceeded")
+        self.entries[str(path)] = dict(
+            identity=observed,
+            digest=generation["sha256"],
+            created=time.time(),
+            native_generation_proof=proof_sha256,
+        )
+        self.stats["admitted_native_proofs"] = (
+            self.stats.get("admitted_native_proofs", 0) + 1
+        )
+        self.stats["admitted_native_bytes"] = (
+            self.stats.get("admitted_native_bytes", 0) + observed[4]
+        )
 
     def _save(self):
         now = time.time()
-        self.entries = {k:v for k,v in self.entries.items() if isinstance(v, dict)
-                        and isinstance(v.get('created'), (int,float)) and 0 <= now-v['created'] <= self.ttl}
+        self.entries = {
+            k: v
+            for k, v in self.entries.items()
+            if isinstance(v, dict)
+            and isinstance(v.get("created"), (int, float))
+            and 0 <= now - v["created"] <= self.ttl
+        }
         if self._loaded_entries_sha == _sha(self.entries):
             return  # A warm read must not introduce periodic fsync writes.
         payload = dict(binding=self.binding, entries=self.entries)
         raw = _encode(dict(payload=payload, sha256=_sha(payload)))
         if len(raw) > MAX_BYTES:
-            self.stats['cache_status'] = 'size_limit_full_fallback'
+            self.stats["cache_status"] = "size_limit_full_fallback"
             return
-        fd, name = tempfile.mkstemp(dir=self.directory, prefix='.digest-')
+        fd, name = tempfile.mkstemp(dir=self.directory, prefix=".digest-")
         try:
-            with os.fdopen(fd, 'wb') as out:
-                out.write(raw); out.flush(); os.fsync(out.fileno())
+            with os.fdopen(fd, "wb") as out:
+                out.write(raw)
+                out.flush()
+                os.fsync(out.fileno())
             os.replace(name, self.path)
             fd = os.open(self.directory, os.O_DIRECTORY)
             try:
@@ -347,19 +480,25 @@ class DigestSession:
         finally:
             Path(name).unlink(missing_ok=True)
         # Only publication/retention holds the role-wide lock. Never delete a lock.
-        files = sorted((p for p in self.directory.glob('*.json')
-                        if re.fullmatch('[0-9a-f]{64}.json', p.name) and not p.is_symlink()),
-                       key=lambda p:p.stat().st_mtime_ns, reverse=True)
+        files = sorted(
+            (
+                p
+                for p in self.directory.glob("*.json")
+                if re.fullmatch("[0-9a-f]{64}.json", p.name) and not p.is_symlink()
+            ),
+            key=lambda p: p.stat().st_mtime_ns,
+            reverse=True,
+        )
         for p in files[MAX_GENERATIONS:]:
             p.unlink(missing_ok=True)
 
     @contextmanager
     def activate(self):
-        if self.binding['role'] == 'postclose':
+        if self.binding["role"] == "postclose":
             # A new postclose invocation must not inherit a persistent observer
             # or transition cache. Nested native checks share this invocation.
             active = ACTIVE.get()
-            if (active is not None and active.binding == self.binding):
+            if active is not None and active.binding == self.binding:
                 yield active
                 return
             try:
@@ -367,14 +506,14 @@ class DigestSession:
             except (OSError, ValueError):
                 local = False
             if not local:
-                self.stats['cache_status'] = 'storage_unavailable_full_fallback'
+                self.stats["cache_status"] = "storage_unavailable_full_fallback"
                 token = ACTIVE.set(None)
                 try:
                     yield self
                 finally:
                     ACTIVE.reset(token)
                 return
-            self.stats['cache_status'] = 'invocation_memory_only'
+            self.stats["cache_status"] = "invocation_memory_only"
             with self._measure_active():
                 try:
                     yield self
@@ -382,20 +521,20 @@ class DigestSession:
                     self.entries.clear()
             return
         active = ACTIVE.get()
-        if active is not None and active.binding['role'] != 'postclose':
+        if active is not None and active.binding["role"] != "postclose":
             yield active
             return
         try:
             self._prepare()
         except (OSError, ValueError):
-            self.stats['cache_status'] = 'storage_unavailable_full_fallback'
+            self.stats["cache_status"] = "storage_unavailable_full_fallback"
             yield self
             return
         with ExitStack() as stack:
             try:
-                stack.enter_context(bounded_lock(self.directory/(self.key+'.lock')))
+                stack.enter_context(bounded_lock(self.directory / (self.key + ".lock")))
             except (OSError, ValueError):
-                self.stats['cache_status'] = 'lock_unavailable_full_fallback'
+                self.stats["cache_status"] = "lock_unavailable_full_fallback"
                 yield self
                 return
             self._load()
@@ -404,10 +543,12 @@ class DigestSession:
                     yield self
                 finally:
                     try:
-                        with bounded_lock(self.directory/'store.lock'):
+                        with bounded_lock(self.directory / "store.lock"):
                             self._save()
                     except (OSError, ValueError, TypeError, ValidationDeferred):
-                        self.stats['cache_status'] = 'publication_failed_no_persistent_reuse'
+                        self.stats["cache_status"] = (
+                            "publication_failed_no_persistent_reuse"
+                        )
 
     @contextmanager
     def _measure_active(self):
@@ -415,17 +556,23 @@ class DigestSession:
         started, io_before = time.monotonic(), _thread_io()
         try:
             from src.engine.automation.main_trailing_source_store import read_session
+
             with read_session(self.data_root):
                 yield
         finally:
             ACTIVE.reset(token)
-            self.semantic_objects.clear();self.semantic_bytes = 0
-            self.stats['wall_seconds'] += time.monotonic()-started
-            self.stats['peak_process_rss_kib'] = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+            self.semantic_objects.clear()
+            self.semantic_bytes = 0
+            self.stats["wall_seconds"] += time.monotonic() - started
+            self.stats["peak_process_rss_kib"] = resource.getrusage(
+                resource.RUSAGE_SELF
+            ).ru_maxrss
             after = _thread_io()
             if io_before is not None and after is not None:
-                prior = self.stats['thread_io_delta'] or dict.fromkeys(after,0)
-                self.stats['thread_io_delta'] = {k:prior[k]+after[k]-io_before[k] for k in after}
+                prior = self.stats["thread_io_delta"] or dict.fromkeys(after, 0)
+                self.stats["thread_io_delta"] = {
+                    k: prior[k] + after[k] - io_before[k] for k in after
+                }
 
 
 def reused_digest(path):
@@ -436,20 +583,30 @@ def reused_digest(path):
 @contextmanager
 def postclose_session(data_root, day):
     """Share content digests, never validator verdicts, within one invocation."""
-    with DigestSession(data_root, day, role='postclose', generation={}).activate() as session:
+    with DigestSession(
+        data_root, day, role="postclose", generation={}
+    ).activate() as session:
         yield session
 
 
 def code_generation():
     root = Path(__file__).resolve().parents[3]
-    files = ['src/engine/infrastructure/validation_digest_session.py',
-             'src/engine/scalping/mechanistic_entry_runtime_policy.py',
-             'src/engine/scalping/continuous_reversal_postclose.py',
-             'src/engine/lifecycle/holding_window_generation.py',
-             'src/engine/automation/runtime_policy_bootstrap.py',
-             'src/engine/automation/intraday_release_handoff.py',
-             'src/engine/monitoring/submission_bottleneck_monitor.py']
-    return dict(root=str(root), code={name:hashlib.sha256((root/name).read_bytes()).hexdigest() for name in files})
+    files = [
+        "src/engine/infrastructure/validation_digest_session.py",
+        "src/engine/scalping/mechanistic_entry_runtime_policy.py",
+        "src/engine/scalping/continuous_reversal_postclose.py",
+        "src/engine/lifecycle/holding_window_generation.py",
+        "src/engine/automation/runtime_policy_bootstrap.py",
+        "src/engine/automation/intraday_release_handoff.py",
+        "src/engine/monitoring/submission_bottleneck_monitor.py",
+    ]
+    return dict(
+        root=str(root),
+        code={
+            name: hashlib.sha256((root / name).read_bytes()).hexdigest()
+            for name in files
+        },
+    )
 
 
 @contextmanager
@@ -457,12 +614,18 @@ def transition_session(data_root, day, session_id=None, pid=None):
     if session_id is None:
         yield None
         return
-    if not re.fullmatch('[0-9a-f]{32}', session_id):
-        raise ValueError('validation_session_id_invalid')
-    generation = dict(code=code_generation(), transition=session_id, phase='prestart')
+    if not re.fullmatch("[0-9a-f]{32}", session_id):
+        raise ValueError("validation_session_id_invalid")
+    generation = dict(code=code_generation(), transition=session_id, phase="prestart")
     if pid is not None:
-        proc = Path('/proc')/str(int(pid))
-        generation.update(phase='post_launch', pid=int(pid), cwd=str((proc/'cwd').resolve(strict=True)),
-                          start=proc.joinpath('stat').read_text().rsplit(')',1)[1].split()[19])
-    with DigestSession(data_root, day, role='transition', generation=generation).activate() as session:
+        proc = Path("/proc") / str(int(pid))
+        generation.update(
+            phase="post_launch",
+            pid=int(pid),
+            cwd=str((proc / "cwd").resolve(strict=True)),
+            start=proc.joinpath("stat").read_text().rsplit(")", 1)[1].split()[19],
+        )
+    with DigestSession(
+        data_root, day, role="transition", generation=generation
+    ).activate() as session:
         yield session

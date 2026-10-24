@@ -569,22 +569,58 @@ def _reviewed_ws_lineage_sources():
     # Keep the historical receipt and runtime guard frozen. The additive raw
     # lineage path has a separate measured, exact-source receipt.
     root = Path(__file__).resolve().parents[2]
-    receipt = json.loads((root / "docs/audit-reports/2026-10-24-collector-source-latency-validation.json.txt").read_text())
-    predecessor = "docs/audit-reports/2026-10-21-collector-epoch-latency-validation.json.txt"
+    receipt = json.loads(
+        (
+            root
+            / "docs/audit-reports/2026-10-24-formatted-collector-latency-validation.json.txt"
+        ).read_text()
+    )
+    predecessor = (
+        "docs/audit-reports/2026-10-24-collector-source-latency-validation.json.txt"
+    )
     assert receipt["predecessor_receipt"] == predecessor
-    assert hashlib.sha256((root / predecessor).read_bytes()).hexdigest() == receipt["predecessor_receipt_sha256"]
+    assert (
+        hashlib.sha256((root / predecessor).read_bytes()).hexdigest()
+        == receipt["predecessor_receipt_sha256"]
+    )
     assert receipt["status"] == "PASS_WITH_UNCHANGED_RUNTIME_LIMITS"
-    assert receipt['scope']=='collector_0b_absolute_canary_only'
+    assert receipt["scope"] == "collector_0b_absolute_canary_only"
     assert receipt["runtime_guard_changed"] is False
-    assert receipt["summary"]["queue_drop_count"] == receipt["summary"]["worker_error_count"] == 0
+    assert (
+        hashlib.sha256(
+            (root / receipt["source_format_review"]).read_bytes()
+        ).hexdigest()
+        == receipt["source_format_review_sha256"]
+    )
+    assert (
+        receipt["summary"]["queue_drop_count"]
+        == receipt["summary"]["worker_error_count"]
+        == 0
+    )
     guard_path = root / "configs/scalp_micro_reversion_canary_guard.toml"
-    assert hashlib.sha256(guard_path.read_bytes()).hexdigest() == receipt["guard_config_sha256"]
-    assert hashlib.sha256((root / "src/engine/scalping/micro_reversion/canary_monitor.py").read_bytes()).hexdigest() == receipt["benchmark_module_sha256"]
+    assert (
+        hashlib.sha256(guard_path.read_bytes()).hexdigest()
+        == receipt["guard_config_sha256"]
+    )
+    assert (
+        hashlib.sha256(
+            (
+                root / "src/engine/scalping/micro_reversion/canary_monitor.py"
+            ).read_bytes()
+        ).hexdigest()
+        == receipt["benchmark_module_sha256"]
+    )
     limits = tomllib.loads(guard_path.read_text())["limits"]
     assert receipt["runtime_limits"] == limits
     for percentile in (95, 99):
-        assert receipt["summary"][f"observer_on_internal_p{percentile}_ms_max"] < limits[f"producer_callback_latency_p{percentile}_max_ms"]
-    sources = {**receipt["source_hashes"], **receipt.get("unchanged_deployed_source_hashes", {})}
+        assert (
+            receipt["summary"][f"observer_on_internal_p{percentile}_ms_max"]
+            < limits[f"producer_callback_latency_p{percentile}_max_ms"]
+        )
+    sources = {
+        **receipt["source_hashes"],
+        **receipt.get("unchanged_deployed_source_hashes", {}),
+    }
     return {root / name: sha for name, sha in sources.items()}
 
 
@@ -596,6 +632,13 @@ def _assert_frozen_source_or_reviewed_mount(path, expected):
     if path in reviewed:
         assert hashlib.sha256(source).hexdigest() == reviewed[path]
         return
+    root = Path(__file__).resolve().parents[2]
+    if path.is_relative_to(root):
+        from src.engine.automation.intraday_release_handoff import (
+            reviewed_formatting_source,
+        )
+
+        source = reviewed_formatting_source(str(path.relative_to(root)), source)
     if hashlib.sha256(source).hexdigest() == expected:
         return
     if path.name == "forward_collector.py" and expected == (
@@ -634,7 +677,10 @@ def test_mount_compatibility_does_not_accept_unreviewed_source(tmp_path):
 @pytest.mark.parametrize("damage", ["guard", "predecessor", "source", "runtime_change"])
 def test_current_callback_receipt_rejects_changed_bindings(monkeypatch, damage):
     root = Path(__file__).resolve().parents[2]
-    receipt_path = root / "docs/audit-reports/2026-10-24-collector-source-latency-validation.json.txt"
+    receipt_path = (
+        root
+        / "docs/audit-reports/2026-10-24-formatted-collector-latency-validation.json.txt"
+    )
     original_read = Path.read_text
     receipt = json.loads(original_read(receipt_path))
     source = "src/engine/scalping/micro_reversion/path_journal.py"
@@ -643,10 +689,19 @@ def test_current_callback_receipt_rejects_changed_bindings(monkeypatch, damage):
     elif damage == "runtime_change":
         receipt["runtime_guard_changed"] = True
     else:
-        key = "guard_config_sha256" if damage == "guard" else "predecessor_receipt_sha256"
+        key = (
+            "guard_config_sha256" if damage == "guard" else "predecessor_receipt_sha256"
+        )
         receipt[key] = "0" * 64
-    monkeypatch.setattr(Path, "read_text", lambda path, *args, **kwargs:
-        json.dumps(receipt) if path == receipt_path else original_read(path, *args, **kwargs))
+    monkeypatch.setattr(
+        Path,
+        "read_text",
+        lambda path, *args, **kwargs: (
+            json.dumps(receipt)
+            if path == receipt_path
+            else original_read(path, *args, **kwargs)
+        ),
+    )
     with pytest.raises(AssertionError):
         _assert_frozen_source_or_reviewed_mount(root / source, "0" * 64)
 

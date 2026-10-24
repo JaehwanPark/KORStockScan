@@ -52,13 +52,19 @@ _AI_STATE: dict[str, dict] = {}
 AI_CIRCUIT_FIELDS = ("ai_disabled", "consecutive_failures", "max_consecutive_failures")
 AI_STATE_FIELDS = (*AI_CIRCUIT_FIELDS, "role_models")
 # Historical capture schema only. These names never select live request models.
-_LEGACY_MODEL_FIELDS = ("current_model_name", "model_tier1_fast",
-                        "model_tier2_balanced", "model_tier3_deep")
+_LEGACY_MODEL_FIELDS = (
+    "current_model_name",
+    "model_tier1_fast",
+    "model_tier2_balanced",
+    "model_tier3_deep",
+)
 
 
 def ai_policy_state(engine):
-    return {**{name: _json_value(getattr(engine, name)) for name in AI_CIRCUIT_FIELDS},
-            "role_models": engine.model_configuration()}
+    return {
+        **{name: _json_value(getattr(engine, name)) for name in AI_CIRCUIT_FIELDS},
+        "role_models": engine.model_configuration(),
+    }
 
 
 def normalize_ai_policy_state(state, rules):
@@ -71,28 +77,47 @@ def normalize_ai_policy_state(state, rules):
     settings = GPTSniperEngine.MODEL_ROLE_SETTINGS
     if set(state) == set(AI_STATE_FIELDS):
         models = state["role_models"]
-        if not isinstance(models, dict) or set(models) != {*settings, "compact_auxiliary"}:
+        if not isinstance(models, dict) or set(models) != {
+            *settings,
+            "compact_auxiliary",
+        }:
             raise ValueError("recorded_role_model_contract_invalid")
     elif set(state) == {*AI_CIRCUIT_FIELDS, *_LEGACY_MODEL_FIELDS}:
-        if any(not isinstance(state[key], str) or not state[key].strip()
-               for key in _LEGACY_MODEL_FIELDS):
+        if any(
+            not isinstance(state[key], str) or not state[key].strip()
+            for key in _LEGACY_MODEL_FIELDS
+        ):
             raise ValueError("recorded_legacy_model_contract_invalid")
         fast, report = state["model_tier1_fast"], state["model_tier2_balanced"]
-        models = {setting: getattr(rules, setting, None) or getattr(TradingConfig, setting)
-                  for setting in settings}
-        for setting in ("OPENAI_SCALPING_SHARED_MODEL", "OPENAI_WATCHING_SHADOW_MODEL",
-                        "OPENAI_GATEKEEPER_SHADOW_MODEL"):
+        models = {
+            setting: getattr(rules, setting, None) or getattr(TradingConfig, setting)
+            for setting in settings
+        }
+        for setting in (
+            "OPENAI_SCALPING_SHARED_MODEL",
+            "OPENAI_WATCHING_SHADOW_MODEL",
+            "OPENAI_GATEKEEPER_SHADOW_MODEL",
+        ):
             models[setting] = fast
-        models["OPENAI_SCALPING_ENTRY_MODEL"] = getattr(rules, "OPENAI_SCALPING_ENTRY_MODEL", None) or fast
+        models["OPENAI_SCALPING_ENTRY_MODEL"] = (
+            getattr(rules, "OPENAI_SCALPING_ENTRY_MODEL", None) or fast
+        )
         for setting in ("OPENAI_REALTIME_REPORT_MODEL", "OPENAI_SWING_ANALYSIS_MODEL"):
             models[setting] = report
         models["compact_auxiliary"] = GPTSniperEngine._get_compact_auxiliary_model()
     else:
         raise ValueError("initial_ai_engine_policy_state_missing")
-    if (any(not isinstance(model, str) or not model.strip() for model in models.values())
-            or models["compact_auxiliary"] != GPTSniperEngine._get_compact_auxiliary_model()):
+    if (
+        any(
+            not isinstance(model, str) or not model.strip() for model in models.values()
+        )
+        or models["compact_auxiliary"] != GPTSniperEngine._get_compact_auxiliary_model()
+    ):
         raise ValueError("recorded_role_model_contract_invalid")
-    return {**{name: state[name] for name in AI_CIRCUIT_FIELDS}, "role_models": dict(models)}
+    return {
+        **{name: state[name] for name in AI_CIRCUIT_FIELDS},
+        "role_models": dict(models),
+    }
 
 
 GLOBALS = (
@@ -178,9 +203,11 @@ def policy_snapshot(handlers, now_ts: float) -> dict:
     """Freeze loaded rules plus selected external files, never credentials."""
     global _IMPLEMENTATION
     from src.engine.scalping.position_peak_ledger import (
-        DEFAULT_LEDGER_PATH, POSITION_PEAK_LEDGER,
+        DEFAULT_LEDGER_PATH,
+        POSITION_PEAK_LEDGER,
     )
     from src.trading.order.owner_custody_registry import registry_path
+
     if _IMPLEMENTATION is None:
         _IMPLEMENTATION = implementation_identity()
     if handlers.TRADING_RULES is None:
@@ -301,13 +328,15 @@ def warm_policy_cache(handlers, *, now_ts: float) -> None:
             pass  # Refresh changed dependencies; never prolong a stale receipt.
     snapshot = policy_snapshot(handlers, now_ts)
     from src.engine.lifecycle.policy_snapshot_reference import persist
-    compact=persist(snapshot,DATA_DIR)
+
+    compact = persist(snapshot, DATA_DIR)
     with _LOCK:
         _POLICY_CACHE.update(
             snapshot=snapshot,
             warmed_at=now_ts,
             rules_identity=id(handlers.TRADING_RULES),
-            compact_snapshot=compact, compact_snapshot_identity=id(snapshot),
+            compact_snapshot=compact,
+            compact_snapshot_identity=id(snapshot),
         )
 
 
@@ -318,8 +347,11 @@ def maintain_main_entry_policy_cache(handlers, *, now_ts: float) -> dict:
         _cached_policy(handlers, now_ts)
         return {"status": "ready", "checked_at": now_ts}
     except Exception as exc:
-        return {"status": "source_gap", "checked_at": now_ts,
-                "blocker": f"{type(exc).__name__}:{exc}"}
+        return {
+            "status": "source_gap",
+            "checked_at": now_ts,
+            "blocker": f"{type(exc).__name__}:{exc}",
+        }
 
 
 def _cached_policy(handlers, now_ts):
@@ -338,8 +370,10 @@ def _cached_policy(handlers, now_ts):
     if _json_value(vars(handlers.TRADING_RULES)) != snapshot["rules"]:
         raise ValueError("loaded_rules_changed_since_snapshot")
     from src.engine.scalping.position_peak_ledger import (
-        DEFAULT_LEDGER_PATH, POSITION_PEAK_LEDGER,
+        DEFAULT_LEDGER_PATH,
+        POSITION_PEAK_LEDGER,
     )
+
     captured_peak = str(POSITION_PEAK_LEDGER.path.absolute())
     if captured_peak != snapshot.get("peak_ledger_source_path"):
         raise ValueError("peak_ledger_source_changed_since_snapshot")
@@ -356,9 +390,11 @@ def _cached_policy(handlers, now_ts):
             raise ValueError("matrix_selection_changed_since_snapshot")
     for name, row in snapshot["files"].items():
         try:
-            actual_path = captured_peak if (
-                name == canonical_peak and captured_peak != canonical_peak
-            ) else name
+            actual_path = (
+                captured_peak
+                if (name == canonical_peak and captured_peak != canonical_peak)
+                else name
+            )
             stat = Path(actual_path).stat()
             if row is None or (stat.st_mtime_ns, stat.st_size) != (
                 row["mtime_ns"],
@@ -374,11 +410,23 @@ def _cached_policy(handlers, now_ts):
 def compact_policy_snapshot(snapshot):
     """No I/O here: only the warm owner may persist a policy blob."""
     with _LOCK:
-        ref=_POLICY_CACHE.get('compact_snapshot') if _POLICY_CACHE.get('compact_snapshot_identity')==id(snapshot) else None
+        ref = (
+            _POLICY_CACHE.get("compact_snapshot")
+            if _POLICY_CACHE.get("compact_snapshot_identity") == id(snapshot)
+            else None
+        )
     return deepcopy(ref) if ref is not None else snapshot
 
 
-def prepare(handlers, stock: dict, code: str, episode: str, *, now_ts: float, family: str = "AVG_DOWN") -> dict:
+def prepare(
+    handlers,
+    stock: dict,
+    code: str,
+    episode: str,
+    *,
+    now_ts: float,
+    family: str = "AVG_DOWN",
+) -> dict:
     """Prepare before emitting the first decision; do not replace a failed first opportunity."""
     global _DAY, _DAILY_FRAME_BYTES
     registry_key = episode if family == "AVG_DOWN" else family + ":" + episode
@@ -502,7 +550,9 @@ def observe_cycle(*, now_ts: float, snapshot_provider, market_builder, emit) -> 
         frame_bytes = len(json.dumps(frame, ensure_ascii=True).encode())
         with _LOCK:
             _DAILY_FRAME_BYTES += frame_bytes
-            active = _ACTIVE.get(frame.get("replay_registry_key") or frame["position_episode_id"])
+            active = _ACTIVE.get(
+                frame.get("replay_registry_key") or frame["position_episode_id"]
+            )
             if active is not None:
                 active["captured_bytes"] += frame_bytes
                 if (
@@ -510,7 +560,11 @@ def observe_cycle(*, now_ts: float, snapshot_provider, market_builder, emit) -> 
                     or _DAILY_FRAME_BYTES >= MAX_DAILY_FRAME_BYTES
                 ):
                     frame["capture_end"] = "capture_byte_budget_exhausted"
-                    _ACTIVE.pop(frame.get("replay_registry_key") or frame["position_episode_id"], None)
+                    _ACTIVE.pop(
+                        frame.get("replay_registry_key")
+                        or frame["position_episode_id"],
+                        None,
+                    )
         frame["source_event_id"] = "avgdn-frame-" + canonical_digest(frame)
         try:
             result = emit(frame)
@@ -583,13 +637,25 @@ def recorded_market_inputs(code: str, *, cutoff_ts: float) -> dict:
     No requests/subscriptions, no later values, no reconstruction of old frames.
     """
     with _LOCK:
-        values=deepcopy(_MARKET_INPUTS.get(str(code)[:6],{}))
-        regime=deepcopy(_MAIN_MARKET_REGIME)
-    if regime and ("market_regime" not in values or values["market_regime"].get("observed_at",0) < regime["observed_at"]):
+        values = deepcopy(_MARKET_INPUTS.get(str(code)[:6], {}))
+        regime = deepcopy(_MAIN_MARKET_REGIME)
+    if regime and (
+        "market_regime" not in values
+        or values["market_regime"].get("observed_at", 0) < regime["observed_at"]
+    ):
         values["market_regime"] = regime
-    values={key:row for key,row in values.items()
-        if isinstance(row,dict) and type(row.get("observed_at")) in (int,float)
-        and 0 <= cutoff_ts-row["observed_at"] <= MAX_FRAME_GAP_SEC}
-    if len(json.dumps(values,ensure_ascii=True).encode())>MAX_FRAME_BYTES:
-        return {"operating_capture":{"observed_at":cutoff_ts,"input_gap":"recorded_market_inputs_size_limit"}}
+    values = {
+        key: row
+        for key, row in values.items()
+        if isinstance(row, dict)
+        and type(row.get("observed_at")) in (int, float)
+        and 0 <= cutoff_ts - row["observed_at"] <= MAX_FRAME_GAP_SEC
+    }
+    if len(json.dumps(values, ensure_ascii=True).encode()) > MAX_FRAME_BYTES:
+        return {
+            "operating_capture": {
+                "observed_at": cutoff_ts,
+                "input_gap": "recorded_market_inputs_size_limit",
+            }
+        }
     return values

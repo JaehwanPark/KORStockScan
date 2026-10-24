@@ -12,14 +12,16 @@ from src.engine.scalping import mechanistic_entry_runtime_policy as policy
 
 def test_source_anchor_is_cwd_independent_and_cache_tracks_mount(tmp_path, monkeypatch):
     from pathlib import Path
-    mount = tmp_path / 'data'
-    first = tmp_path / 'first'
-    second = tmp_path / 'second'
-    first.mkdir(); second.mkdir()
+
+    mount = tmp_path / "data"
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
     for target in (first, second):
-        (target / 'receipt.json').write_text('{"value": 1}')
+        (target / "receipt.json").write_text('{"value": 1}')
     mount.symlink_to(first, target_is_directory=True)
-    relative = Path('data/receipt.json')
+    relative = Path("data/receipt.json")
     deps = {}
     token = policy._READ_DEPENDENCIES.set(deps)
     try:
@@ -27,33 +29,46 @@ def test_source_anchor_is_cwd_independent_and_cache_tracks_mount(tmp_path, monke
             signature = policy._signature(relative)
             expected = policy._source_hash(str(relative), signature)
             monkeypatch.chdir(second)
-            assert policy._read(relative) == {'value': 1}
-            assert policy._source_hash(str(relative), policy._signature(relative)) == expected
-        assert set(deps) == {str(mount / 'receipt.json')}
+            assert policy._read(relative) == {"value": 1}
+            assert (
+                policy._source_hash(str(relative), policy._signature(relative))
+                == expected
+            )
+        assert set(deps) == {str(mount / "receipt.json")}
     finally:
         policy._READ_DEPENDENCIES.reset(token)
-    mount.unlink(); mount.symlink_to(second, target_is_directory=True)
-    assert policy._signature(mount / 'receipt.json') != signature
+    mount.unlink()
+    mount.symlink_to(second, target_is_directory=True)
+    assert policy._signature(mount / "receipt.json") != signature
     with policy.source_anchor(mount):
-        (second / 'receipt.json').write_text('{"value": 2}')
-        assert policy._source_hash(str(relative), policy._signature(relative)) != expected
+        (second / "receipt.json").write_text('{"value": 2}')
+        assert (
+            policy._source_hash(str(relative), policy._signature(relative)) != expected
+        )
 
 
-@pytest.mark.parametrize('name', ['../receipt.json', 'data/../receipt.json', 'other/receipt.json'])
+@pytest.mark.parametrize(
+    "name", ["../receipt.json", "data/../receipt.json", "other/receipt.json"]
+)
 def test_source_anchor_rejects_ambiguous_or_escaping_paths(tmp_path, name):
-    with policy.source_anchor(tmp_path), pytest.raises(ValueError, match='source_path_prefix_invalid'):
-        policy._read(__import__('pathlib').Path(name))
+    with (
+        policy.source_anchor(tmp_path),
+        pytest.raises(ValueError, match="source_path_prefix_invalid"),
+    ):
+        policy._read(__import__("pathlib").Path(name))
 
 
 def test_source_anchor_rejects_external_link_and_missing_source(tmp_path):
-    mount = tmp_path / 'data'; mount.mkdir()
-    outside = tmp_path / 'outside.json'; outside.write_text('{}')
-    (mount / 'escape.json').symlink_to(outside)
+    mount = tmp_path / "data"
+    mount.mkdir()
+    outside = tmp_path / "outside.json"
+    outside.write_text("{}")
+    (mount / "escape.json").symlink_to(outside)
     with policy.source_anchor(mount):
-        with pytest.raises(ValueError, match='source_path_escape'):
-            policy._signature(__import__('pathlib').Path('data/escape.json'))
+        with pytest.raises(ValueError, match="source_path_escape"):
+            policy._signature(__import__("pathlib").Path("data/escape.json"))
         with pytest.raises(FileNotFoundError):
-            policy._signature(__import__('pathlib').Path('data/missing.json'))
+            policy._signature(__import__("pathlib").Path("data/missing.json"))
 
 
 def source(tmp_path, source_date="2026-09-11"):
@@ -88,358 +103,552 @@ def initial(tmp_path):
 def test_operator_prompt_stage_preserves_machine_and_other_scopes(tmp_path):
     incumbent = initial(tmp_path)
     evidence = {
-        'schema': 'auxiliary_prompt_operator_review_v1',
-        'prompt_version': policy.ENTRY_MACHINE_AUXILIARY_COMPACT_CONTRACT_PROMPT_VERSION,
-        'scope': 'KRX|KRX_REGULAR',
-        'operator_direction': 'explicit_prompt_change',
-        'independent_holdout_claimed': False,
-        'research_dates': ['2026-09-22', '2026-09-23'],
+        "schema": "auxiliary_prompt_operator_review_v1",
+        "prompt_version": policy.ENTRY_MACHINE_AUXILIARY_COMPACT_CONTRACT_PROMPT_VERSION,
+        "scope": "KRX|KRX_REGULAR",
+        "operator_direction": "explicit_prompt_change",
+        "independent_holdout_claimed": False,
+        "research_dates": ["2026-09-22", "2026-09-23"],
     }
     result = policy.activate_operator_auxiliary_prompt(
-        data_root=tmp_path, target_date='2026-09-28', evidence=evidence,
+        data_root=tmp_path,
+        target_date="2026-09-28",
+        evidence=evidence,
         now=datetime(2026, 9, 26, 12, tzinfo=policy.KST),
     )
-    assert result['status'] == 'staged'
-    assert policy._load_current(tmp_path, '2026-09-26')['bundle_sha256'] == incumbent['bundle_sha256']
-    selected = policy.load_effective(data_root=tmp_path, target_date='2026-09-28')
-    assert selected['ai_policy']['prompt_version'] == evidence['prompt_version']
-    assert selected['machine_policy'] == incumbent['machine_policy']
-    assert policy.activate_operator_auxiliary_prompt(
-        data_root=tmp_path, target_date='2026-09-28', evidence=evidence,
-        now=datetime(2026, 9, 26, 12, tzinfo=policy.KST),
-    )['status'] == 'already_staged'
-    source = policy.root(tmp_path) / 'sources' / f"{policy.digest(evidence)}.json"
-    source.write_text('{}')
+    assert result["status"] == "staged"
+    assert (
+        policy._load_current(tmp_path, "2026-09-26")["bundle_sha256"]
+        == incumbent["bundle_sha256"]
+    )
+    selected = policy.load_effective(data_root=tmp_path, target_date="2026-09-28")
+    assert selected["ai_policy"]["prompt_version"] == evidence["prompt_version"]
+    assert selected["machine_policy"] == incumbent["machine_policy"]
+    assert (
+        policy.activate_operator_auxiliary_prompt(
+            data_root=tmp_path,
+            target_date="2026-09-28",
+            evidence=evidence,
+            now=datetime(2026, 9, 26, 12, tzinfo=policy.KST),
+        )["status"]
+        == "already_staged"
+    )
+    source = policy.root(tmp_path) / "sources" / f"{policy.digest(evidence)}.json"
+    source.write_text("{}")
     policy._CURRENT_CACHE.clear()
-    with pytest.raises(ValueError, match='auxiliary_operator_component_binding_invalid'):
-        policy.load_effective(data_root=tmp_path, target_date='2026-09-28')
+    with pytest.raises(
+        ValueError, match="auxiliary_operator_component_binding_invalid"
+    ):
+        policy.load_effective(data_root=tmp_path, target_date="2026-09-28")
 
 
 def test_winrate_stage_requires_explicit_preopen_activation(tmp_path, monkeypatch):
     from src.engine.scalping import entry_strategy_policy as strategy
+
     previous = copy.deepcopy(initial(tmp_path))
-    previous['machine_policy'] = strategy.seed(previous['machine_policy'], ('KRX', 'KRX_REGULAR'))
-    previous['bundle_sha256'] = policy.digest({k: v for k, v in previous.items() if k != 'bundle_sha256'})
-    policy._atomic_write_json(policy.root(tmp_path) / 'policy_2026-09-14.json', previous)
-    policy._atomic_write_json(policy.root(tmp_path) / 'generations' / f"{previous['bundle_sha256']}.json", previous)
-    candidate = copy.deepcopy(previous['machine_policy'])
-    candidate['entry_situation_veto'] = dict(schema='entry_situation_veto_v1',
-        selection_basis='win_rate_only', market='REGULAR', exact_scope='KRX|KRX_REGULAR',
-        feature='curr_vs_micro_vwap_bp', threshold_bp=68.75,
-        condition='parent_ENTER_NOW_and_fresh_available', selected_action='BLOCK',
-        unknown_action='parent')
-    report = calibration._with_artifact_content_sha256(dict(
-        schema='main_entry_winrate_policy_report_v1', target_date='2026-09-23',
-        report_scope='main_entry_winrate', selection_basis='win_rate_only',
-        policy_version='winrate_initial_v1',
-        disposition='initial_adopted', source_contract_sha256='a' * 64,
-        evaluated_attempt_manifest_sha256='b' * 64,
-        source_receipt=dict(target_date='2026-09-23', tuning_input_allowed=True,
-            machine_threshold_tuning_input_allowed=True),
-        parent_bundle_sha256=previous['bundle_sha256'],
-        parent_machine_policy_sha256=policy.digest(previous['machine_policy']),
-        candidate_machine_policy_sha256=policy.digest(candidate), candidate_policy=candidate,
-        policy_by_scope={'KRX|KRX_REGULAR': candidate},
-        policy_sha256=policy.digest({'KRX|KRX_REGULAR': candidate}),
-        candidate_threshold_bp=68.75, input_attempt_count=1485,
-        accepted_attempt_count=351, source_contract_excluded_count=60,
-        source_contract_exclusion_reasons={'conflicting_exact_attempt': 60},
-        excluded_attempt_counts={'quality_path_cost_missing_or_mismatched': 1074},
-        situation_attempt_counts={'VWAP_NOT_EXTENDED': 291, 'VWAP_EXTENDED': 60},
-        market_census={
-            'KRX|KRX_REGULAR': dict(market='REGULAR', input_attempt_count=1485,
-                accepted_attempt_count=351, source_contract_excluded_count=60,
-                source_contract_exclusion_reasons={'conflicting_exact_attempt': 60},
-                excluded_attempt_counts={'quality_path_cost_missing_or_mismatched': 1074},
-                gross_label_difference_count=9),
-            'PREMARKET_KRX_LIKE|PREMARKET_KRX_LIKE': dict(market='PREMARKET',
-                input_attempt_count=116, accepted_attempt_count=19, source_contract_excluded_count=6,
-                source_contract_exclusion_reasons={'conflicting_exact_attempt': 6},
-                excluded_attempt_counts={'quality_path_cost_missing_or_mismatched': 91}),
-            'KRX_NXT_INTEGRATED|KRX_NXT_AFTERMARKET': dict(market='AFTERMARKET',
-                input_attempt_count=484, accepted_attempt_count=84, source_contract_excluded_count=8,
-                source_contract_exclusion_reasons={'conflicting_exact_attempt': 8},
-                excluded_attempt_counts={'quality_path_cost_missing_or_mismatched': 392})},
-        gross_label_difference_count=9,
-        historical_full_evaluation_reference=dict(
-            artifact_content_sha256='10b29ced3cf6e61bee35e84de5e456db3dd78b562378cd0aef9db605fdc85564',
-            total_eligible_count=476,
-            exact_scope_eligible_counts={'KRX|KRX_REGULAR': 351,
-                'PREMARKET_KRX_LIKE|PREMARKET_KRX_LIKE': 25,
-                'KRX_NXT_INTEGRATED|KRX_NXT_AFTERMARKET': 100}),
-        train_dates=['2026-09-22'], holdout_dates=['2026-09-23'],
-        candidate=dict(train=dict(selected_opportunity_count=11, winning_attempt_count=10),
-                       holdout=dict(selected_opportunity_count=4, winning_attempt_count=3)),
-        hurdle_errors=[]))
-    source_path = tmp_path / 'winrate_report.json'
+    previous["machine_policy"] = strategy.seed(
+        previous["machine_policy"], ("KRX", "KRX_REGULAR")
+    )
+    previous["bundle_sha256"] = policy.digest(
+        {k: v for k, v in previous.items() if k != "bundle_sha256"}
+    )
+    policy._atomic_write_json(
+        policy.root(tmp_path) / "policy_2026-09-14.json", previous
+    )
+    policy._atomic_write_json(
+        policy.root(tmp_path) / "generations" / f"{previous['bundle_sha256']}.json",
+        previous,
+    )
+    candidate = copy.deepcopy(previous["machine_policy"])
+    candidate["entry_situation_veto"] = dict(
+        schema="entry_situation_veto_v1",
+        selection_basis="win_rate_only",
+        market="REGULAR",
+        exact_scope="KRX|KRX_REGULAR",
+        feature="curr_vs_micro_vwap_bp",
+        threshold_bp=68.75,
+        condition="parent_ENTER_NOW_and_fresh_available",
+        selected_action="BLOCK",
+        unknown_action="parent",
+    )
+    report = calibration._with_artifact_content_sha256(
+        dict(
+            schema="main_entry_winrate_policy_report_v1",
+            target_date="2026-09-23",
+            report_scope="main_entry_winrate",
+            selection_basis="win_rate_only",
+            policy_version="winrate_initial_v1",
+            disposition="initial_adopted",
+            source_contract_sha256="a" * 64,
+            evaluated_attempt_manifest_sha256="b" * 64,
+            source_receipt=dict(
+                target_date="2026-09-23",
+                tuning_input_allowed=True,
+                machine_threshold_tuning_input_allowed=True,
+            ),
+            parent_bundle_sha256=previous["bundle_sha256"],
+            parent_machine_policy_sha256=policy.digest(previous["machine_policy"]),
+            candidate_machine_policy_sha256=policy.digest(candidate),
+            candidate_policy=candidate,
+            policy_by_scope={"KRX|KRX_REGULAR": candidate},
+            policy_sha256=policy.digest({"KRX|KRX_REGULAR": candidate}),
+            candidate_threshold_bp=68.75,
+            input_attempt_count=1485,
+            accepted_attempt_count=351,
+            source_contract_excluded_count=60,
+            source_contract_exclusion_reasons={"conflicting_exact_attempt": 60},
+            excluded_attempt_counts={"quality_path_cost_missing_or_mismatched": 1074},
+            situation_attempt_counts={"VWAP_NOT_EXTENDED": 291, "VWAP_EXTENDED": 60},
+            market_census={
+                "KRX|KRX_REGULAR": dict(
+                    market="REGULAR",
+                    input_attempt_count=1485,
+                    accepted_attempt_count=351,
+                    source_contract_excluded_count=60,
+                    source_contract_exclusion_reasons={"conflicting_exact_attempt": 60},
+                    excluded_attempt_counts={
+                        "quality_path_cost_missing_or_mismatched": 1074
+                    },
+                    gross_label_difference_count=9,
+                ),
+                "PREMARKET_KRX_LIKE|PREMARKET_KRX_LIKE": dict(
+                    market="PREMARKET",
+                    input_attempt_count=116,
+                    accepted_attempt_count=19,
+                    source_contract_excluded_count=6,
+                    source_contract_exclusion_reasons={"conflicting_exact_attempt": 6},
+                    excluded_attempt_counts={
+                        "quality_path_cost_missing_or_mismatched": 91
+                    },
+                ),
+                "KRX_NXT_INTEGRATED|KRX_NXT_AFTERMARKET": dict(
+                    market="AFTERMARKET",
+                    input_attempt_count=484,
+                    accepted_attempt_count=84,
+                    source_contract_excluded_count=8,
+                    source_contract_exclusion_reasons={"conflicting_exact_attempt": 8},
+                    excluded_attempt_counts={
+                        "quality_path_cost_missing_or_mismatched": 392
+                    },
+                ),
+            },
+            gross_label_difference_count=9,
+            historical_full_evaluation_reference=dict(
+                artifact_content_sha256="10b29ced3cf6e61bee35e84de5e456db3dd78b562378cd0aef9db605fdc85564",
+                total_eligible_count=476,
+                exact_scope_eligible_counts={
+                    "KRX|KRX_REGULAR": 351,
+                    "PREMARKET_KRX_LIKE|PREMARKET_KRX_LIKE": 25,
+                    "KRX_NXT_INTEGRATED|KRX_NXT_AFTERMARKET": 100,
+                },
+            ),
+            train_dates=["2026-09-22"],
+            holdout_dates=["2026-09-23"],
+            candidate=dict(
+                train=dict(selected_opportunity_count=11, winning_attempt_count=10),
+                holdout=dict(selected_opportunity_count=4, winning_attempt_count=3),
+            ),
+            hurdle_errors=[],
+        )
+    )
+    source_path = tmp_path / "winrate_report.json"
     policy._atomic_write_json(source_path, report)
-    staged = policy.stage_winrate_policy(source_path, data_root=tmp_path,
-        now=datetime(2026, 9, 24, 14, tzinfo=policy.KST))
-    assert staged['status'] == 'staged' and staged['target_date'] == '2026-09-28'
-    assert not (policy.root(tmp_path) / 'current.json').exists()
-    assert policy.load(data_root=tmp_path, target_date='2026-09-28')['machine_policy'] == candidate
-    assert policy.load_effective(data_root=tmp_path, target_date='2026-09-28')['machine_policy'] == previous['machine_policy']
+    staged = policy.stage_winrate_policy(
+        source_path,
+        data_root=tmp_path,
+        now=datetime(2026, 9, 24, 14, tzinfo=policy.KST),
+    )
+    assert staged["status"] == "staged" and staged["target_date"] == "2026-09-28"
+    assert not (policy.root(tmp_path) / "current.json").exists()
+    assert (
+        policy.load(data_root=tmp_path, target_date="2026-09-28")["machine_policy"]
+        == candidate
+    )
+    assert (
+        policy.load_effective(data_root=tmp_path, target_date="2026-09-28")[
+            "machine_policy"
+        ]
+        == previous["machine_policy"]
+    )
     pending = copy.deepcopy(report)
-    pending.update(target_date='2026-09-24', publication_date='2026-09-24',
-        disposition='incumbent_carried', candidate_policy=None, policy_by_scope={},
-        policy_sha256=policy.digest({}), candidate_threshold_bp=None,
-        hurdle_errors=['initial_policy_pending_activation'],
-        pending_initial_bundle_sha256=staged['bundle_sha256'],
-        pending_initial_target_date='2026-09-28')
-    pending['source_receipt']['target_date'] = '2026-09-24'
-    pending = calibration._with_artifact_content_sha256({k: v for k, v in pending.items()
-        if k != 'artifact_content_sha256'})
+    pending.update(
+        target_date="2026-09-24",
+        publication_date="2026-09-24",
+        disposition="incumbent_carried",
+        candidate_policy=None,
+        policy_by_scope={},
+        policy_sha256=policy.digest({}),
+        candidate_threshold_bp=None,
+        hurdle_errors=["initial_policy_pending_activation"],
+        pending_initial_bundle_sha256=staged["bundle_sha256"],
+        pending_initial_target_date="2026-09-28",
+    )
+    pending["source_receipt"]["target_date"] = "2026-09-24"
+    pending = calibration._with_artifact_content_sha256(
+        {k: v for k, v in pending.items() if k != "artifact_content_sha256"}
+    )
     policy._atomic_write_json(source_path, pending)
-    carried = policy.stage_winrate_policy(source_path, data_root=tmp_path,
-        now=datetime(2026, 9, 24, 14, tzinfo=policy.KST))
-    assert carried['status'] == 'pending_initial_preserved'
-    assert policy.load(data_root=tmp_path, target_date='2026-09-28')['bundle_sha256'] == staged['bundle_sha256']
+    carried = policy.stage_winrate_policy(
+        source_path,
+        data_root=tmp_path,
+        now=datetime(2026, 9, 24, 14, tzinfo=policy.KST),
+    )
+    assert carried["status"] == "pending_initial_preserved"
+    assert (
+        policy.load(data_root=tmp_path, target_date="2026-09-28")["bundle_sha256"]
+        == staged["bundle_sha256"]
+    )
     invalid_pending = copy.deepcopy(pending)
-    invalid_pending['pending_initial_bundle_sha256'] = 'f' * 64
-    invalid_pending = calibration._with_artifact_content_sha256({k: v for k, v in invalid_pending.items()
-        if k != 'artifact_content_sha256'})
+    invalid_pending["pending_initial_bundle_sha256"] = "f" * 64
+    invalid_pending = calibration._with_artifact_content_sha256(
+        {k: v for k, v in invalid_pending.items() if k != "artifact_content_sha256"}
+    )
     policy._atomic_write_json(source_path, invalid_pending)
-    with pytest.raises(ValueError, match='winrate_pending_initial_contract_invalid'):
-        policy.stage_winrate_policy(source_path, data_root=tmp_path,
-            now=datetime(2026, 9, 24, 14, tzinfo=policy.KST))
+    with pytest.raises(ValueError, match="winrate_pending_initial_contract_invalid"):
+        policy.stage_winrate_policy(
+            source_path,
+            data_root=tmp_path,
+            now=datetime(2026, 9, 24, 14, tzinfo=policy.KST),
+        )
     changed = copy.deepcopy(report)
-    changed['candidate_policy']['thresholds']['min_score'] = -999
-    changed['candidate_machine_policy_sha256'] = policy.digest(changed['candidate_policy'])
-    changed['policy_by_scope'] = {'KRX|KRX_REGULAR': changed['candidate_policy']}
-    changed['policy_sha256'] = policy.digest(changed['policy_by_scope'])
-    changed = calibration._with_artifact_content_sha256({k: v for k, v in changed.items()
-        if k != 'artifact_content_sha256'})
+    changed["candidate_policy"]["thresholds"]["min_score"] = -999
+    changed["candidate_machine_policy_sha256"] = policy.digest(
+        changed["candidate_policy"]
+    )
+    changed["policy_by_scope"] = {"KRX|KRX_REGULAR": changed["candidate_policy"]}
+    changed["policy_sha256"] = policy.digest(changed["policy_by_scope"])
+    changed = calibration._with_artifact_content_sha256(
+        {k: v for k, v in changed.items() if k != "artifact_content_sha256"}
+    )
     policy._atomic_write_json(source_path, changed)
-    with pytest.raises(ValueError, match='winrate_candidate_contract_invalid'):
-        policy.stage_winrate_policy(source_path, data_root=tmp_path,
-            now=datetime(2026, 9, 24, 14, tzinfo=policy.KST))
+    with pytest.raises(ValueError, match="winrate_candidate_contract_invalid"):
+        policy.stage_winrate_policy(
+            source_path,
+            data_root=tmp_path,
+            now=datetime(2026, 9, 24, 14, tzinfo=policy.KST),
+        )
     misbound = copy.deepcopy(report)
-    misbound['policy_sha256'] = 'f' * 64
-    misbound = calibration._with_artifact_content_sha256({k: v for k, v in misbound.items()
-        if k != 'artifact_content_sha256'})
+    misbound["policy_sha256"] = "f" * 64
+    misbound = calibration._with_artifact_content_sha256(
+        {k: v for k, v in misbound.items() if k != "artifact_content_sha256"}
+    )
     policy._atomic_write_json(source_path, misbound)
-    with pytest.raises(ValueError, match='winrate_candidate_contract_invalid'):
-        policy.stage_winrate_policy(source_path, data_root=tmp_path,
-            now=datetime(2026, 9, 24, 14, tzinfo=policy.KST))
+    with pytest.raises(ValueError, match="winrate_candidate_contract_invalid"):
+        policy.stage_winrate_policy(
+            source_path,
+            data_root=tmp_path,
+            now=datetime(2026, 9, 24, 14, tzinfo=policy.KST),
+        )
     prompt_evidence = {
-        'schema': 'auxiliary_prompt_operator_review_v1',
-        'prompt_version': policy.ENTRY_MACHINE_AUXILIARY_COMPACT_CONTRACT_PROMPT_VERSION,
-        'scope': 'KRX|KRX_REGULAR', 'operator_direction': 'explicit_prompt_change',
-        'independent_holdout_claimed': False,
+        "schema": "auxiliary_prompt_operator_review_v1",
+        "prompt_version": policy.ENTRY_MACHINE_AUXILIARY_COMPACT_CONTRACT_PROMPT_VERSION,
+        "scope": "KRX|KRX_REGULAR",
+        "operator_direction": "explicit_prompt_change",
+        "independent_holdout_claimed": False,
     }
-    assert policy.activate_operator_auxiliary_prompt(
-        data_root=tmp_path, target_date='2026-09-28', evidence=prompt_evidence,
-        now=datetime(2026, 9, 26, 12, tzinfo=policy.KST),
-    )['status'] == 'staged'
+    assert (
+        policy.activate_operator_auxiliary_prompt(
+            data_root=tmp_path,
+            target_date="2026-09-28",
+            evidence=prompt_evidence,
+            now=datetime(2026, 9, 26, 12, tzinfo=policy.KST),
+        )["status"]
+        == "staged"
+    )
+
     class FrozenDateTime(datetime):
         @classmethod
         def now(cls, tz=None):
             return cls(2026, 9, 28, 8, 30, tzinfo=tz or policy.KST)
-    monkeypatch.setattr(policy, 'datetime', FrozenDateTime)
-    activated = policy.activate_dated_winrate_policy(data_root=tmp_path,
-        target_date='2026-09-28', now=FrozenDateTime.now(policy.KST))
-    assert activated['status'] == 'activated'
-    assert policy.load_effective(data_root=tmp_path, target_date='2026-09-28')['machine_policy'] == candidate
-    assert policy.load_effective(data_root=tmp_path, target_date='2026-09-28')['ai_policy']['prompt_version'] == prompt_evidence['prompt_version']
-    repeated = policy.activate_dated_winrate_policy(data_root=tmp_path,
-        target_date='2026-09-28', now=FrozenDateTime.now(policy.KST))
-    assert repeated == {'status': 'already_active', 'bundle_sha256': activated['bundle_sha256']}
-    auxiliary_child = copy.deepcopy(policy.load_effective(data_root=tmp_path, target_date='2026-09-28'))
-    auxiliary_child['bundle_sha256'] = 'c' * 64
-    auxiliary_child['strategy_activation'] = dict(schema='main_auxiliary_activation_v1',
-        parent_bundle_sha256=activated['bundle_sha256'])
+
+    monkeypatch.setattr(policy, "datetime", FrozenDateTime)
+    activated = policy.activate_dated_winrate_policy(
+        data_root=tmp_path, target_date="2026-09-28", now=FrozenDateTime.now(policy.KST)
+    )
+    assert activated["status"] == "activated"
+    assert (
+        policy.load_effective(data_root=tmp_path, target_date="2026-09-28")[
+            "machine_policy"
+        ]
+        == candidate
+    )
+    assert (
+        policy.load_effective(data_root=tmp_path, target_date="2026-09-28")[
+            "ai_policy"
+        ]["prompt_version"]
+        == prompt_evidence["prompt_version"]
+    )
+    repeated = policy.activate_dated_winrate_policy(
+        data_root=tmp_path, target_date="2026-09-28", now=FrozenDateTime.now(policy.KST)
+    )
+    assert repeated == {
+        "status": "already_active",
+        "bundle_sha256": activated["bundle_sha256"],
+    }
+    auxiliary_child = copy.deepcopy(
+        policy.load_effective(data_root=tmp_path, target_date="2026-09-28")
+    )
+    auxiliary_child["bundle_sha256"] = "c" * 64
+    auxiliary_child["strategy_activation"] = dict(
+        schema="main_auxiliary_activation_v1",
+        parent_bundle_sha256=activated["bundle_sha256"],
+    )
     with monkeypatch.context() as patch:
-        patch.setattr(policy, '_load_current', lambda *_args: auxiliary_child)
-        after_auxiliary = policy.activate_dated_winrate_policy(data_root=tmp_path,
-            target_date='2026-09-28', now=FrozenDateTime.now(policy.KST))
-    assert after_auxiliary == {'status': 'already_active', 'bundle_sha256': 'c' * 64}
+        patch.setattr(policy, "_load_current", lambda *_args: auxiliary_child)
+        after_auxiliary = policy.activate_dated_winrate_policy(
+            data_root=tmp_path,
+            target_date="2026-09-28",
+            now=FrozenDateTime.now(policy.KST),
+        )
+    assert after_auxiliary == {"status": "already_active", "bundle_sha256": "c" * 64}
     relaxed = copy.deepcopy(candidate)
-    relaxed['entry_situation_veto']['threshold_bp'] = 80.0
+    relaxed["entry_situation_veto"]["threshold_bp"] = 80.0
     successor = copy.deepcopy(report)
-    successor.update(target_date='2026-10-01', publication_date='2026-10-01',
-        policy_version='winrate_successor_v1', disposition='successor_selected',
-        parent_bundle_sha256=activated['bundle_sha256'],
+    successor.update(
+        target_date="2026-10-01",
+        publication_date="2026-10-01",
+        policy_version="winrate_successor_v1",
+        disposition="successor_selected",
+        parent_bundle_sha256=activated["bundle_sha256"],
         parent_machine_policy_sha256=policy.digest(candidate),
-        candidate_policy=relaxed, candidate_machine_policy_sha256=policy.digest(relaxed),
-        policy_by_scope={'KRX|KRX_REGULAR': relaxed},
-        policy_sha256=policy.digest({'KRX|KRX_REGULAR': relaxed}),
-        candidate_threshold_bp=80.0)
-    successor['source_receipt']['target_date'] = '2026-10-01'
-    successor = calibration._with_artifact_content_sha256({k: v for k, v in successor.items()
-        if k != 'artifact_content_sha256'})
-    successor_path = tmp_path / 'successor_report.json'
+        candidate_policy=relaxed,
+        candidate_machine_policy_sha256=policy.digest(relaxed),
+        policy_by_scope={"KRX|KRX_REGULAR": relaxed},
+        policy_sha256=policy.digest({"KRX|KRX_REGULAR": relaxed}),
+        candidate_threshold_bp=80.0,
+    )
+    successor["source_receipt"]["target_date"] = "2026-10-01"
+    successor = calibration._with_artifact_content_sha256(
+        {k: v for k, v in successor.items() if k != "artifact_content_sha256"}
+    )
+    successor_path = tmp_path / "successor_report.json"
     policy._atomic_write_json(successor_path, successor)
-    monkeypatch.setattr(policy, '_winrate_successor_hurdles_valid', lambda _source: True)
-    with pytest.raises(ValueError, match='winrate_stage_source_invalid'):
-        policy.stage_winrate_policy(successor_path, data_root=tmp_path,
-            now=datetime(2026, 10, 1, 20, tzinfo=policy.KST))
+    monkeypatch.setattr(
+        policy, "_winrate_successor_hurdles_valid", lambda _source: True
+    )
+    with pytest.raises(ValueError, match="winrate_stage_source_invalid"):
+        policy.stage_winrate_policy(
+            successor_path,
+            data_root=tmp_path,
+            now=datetime(2026, 10, 1, 20, tzinfo=policy.KST),
+        )
 
 
-def test_winrate_carry_reuses_existing_immutable_generation_after_source_repair(tmp_path, monkeypatch):
+def test_winrate_carry_reuses_existing_immutable_generation_after_source_repair(
+    tmp_path, monkeypatch
+):
     from src.engine.scalping import entry_strategy_policy as strategy
 
     previous = copy.deepcopy(initial(tmp_path))
-    previous['machine_policy'] = strategy.seed(
-        previous['machine_policy'], ('KRX', 'KRX_REGULAR')
+    previous["machine_policy"] = strategy.seed(
+        previous["machine_policy"], ("KRX", "KRX_REGULAR")
     )
-    previous['bundle_sha256'] = policy.digest(
-        {k: v for k, v in previous.items() if k != 'bundle_sha256'}
+    previous["bundle_sha256"] = policy.digest(
+        {k: v for k, v in previous.items() if k != "bundle_sha256"}
     )
-    policy._atomic_write_json(policy.root(tmp_path) / 'policy_2026-09-14.json', previous)
     policy._atomic_write_json(
-        policy.root(tmp_path) / 'generations' / f"{previous['bundle_sha256']}.json",
+        policy.root(tmp_path) / "policy_2026-09-14.json", previous
+    )
+    policy._atomic_write_json(
+        policy.root(tmp_path) / "generations" / f"{previous['bundle_sha256']}.json",
         previous,
     )
-    parent_machine = policy.for_cohort(
-        previous, ('KRX', 'KRX_REGULAR')
-    )['machine_policy']
+    parent_machine = policy.for_cohort(previous, ("KRX", "KRX_REGULAR"))[
+        "machine_policy"
+    ]
     markets = {
         scope: {
-            'market': market,
-            'input_attempt_count': 0,
-            'accepted_attempt_count': 0,
-            'source_contract_excluded_count': 0,
-            'source_contract_exclusion_reasons': {},
-            'excluded_attempt_counts': {},
-            'gross_label_difference_count': 0,
-            'source_state': 'no_rows',
+            "market": market,
+            "input_attempt_count": 0,
+            "accepted_attempt_count": 0,
+            "source_contract_excluded_count": 0,
+            "source_contract_exclusion_reasons": {},
+            "excluded_attempt_counts": {},
+            "gross_label_difference_count": 0,
+            "source_state": "no_rows",
         }
         for scope, market in (
-            ('KRX|KRX_REGULAR', 'REGULAR'),
-            ('PREMARKET_KRX_LIKE|PREMARKET_KRX_LIKE', 'PREMARKET'),
-            ('KRX_NXT_INTEGRATED|KRX_NXT_AFTERMARKET', 'AFTERMARKET'),
+            ("KRX|KRX_REGULAR", "REGULAR"),
+            ("PREMARKET_KRX_LIKE|PREMARKET_KRX_LIKE", "PREMARKET"),
+            ("KRX_NXT_INTEGRATED|KRX_NXT_AFTERMARKET", "AFTERMARKET"),
         )
     }
-    report = calibration._with_artifact_content_sha256({
-        'schema': 'main_entry_winrate_policy_report_v1',
-        'target_date': '2026-09-24',
-        'publication_date': '2026-09-24',
-        'report_scope': 'main_entry_winrate',
-        'selection_basis': 'win_rate_only',
-        'policy_version': 'winrate_initial_v1',
-        'disposition': 'incumbent_carried',
-        'source_contract_sha256': 'a' * 64,
-        'evaluated_attempt_manifest_sha256': 'b' * 64,
-        'source_receipt': {'target_date': '2026-09-24'},
-        'parent_bundle_sha256': previous['bundle_sha256'],
-        'parent_machine_policy_sha256': policy.digest(parent_machine),
-        'candidate_machine_policy_sha256': None,
-        'candidate_policy': None,
-        'policy_by_scope': {},
-        'policy_sha256': policy.digest({}),
-        'candidate_threshold_bp': None,
-        'input_attempt_count': 0,
-        'accepted_attempt_count': 0,
-        'source_contract_excluded_count': 0,
-        'source_contract_exclusion_reasons': {},
-        'excluded_attempt_counts': {},
-        'situation_attempt_counts': {},
-        'market_census': markets,
-        'gross_label_difference_count': 0,
-        'hurdle_errors': ['eligible_candidate_absent'],
-    })
-    source_path = tmp_path / 'winrate_carry.json'
+    report = calibration._with_artifact_content_sha256(
+        {
+            "schema": "main_entry_winrate_policy_report_v1",
+            "target_date": "2026-09-24",
+            "publication_date": "2026-09-24",
+            "report_scope": "main_entry_winrate",
+            "selection_basis": "win_rate_only",
+            "policy_version": "winrate_initial_v1",
+            "disposition": "incumbent_carried",
+            "source_contract_sha256": "a" * 64,
+            "evaluated_attempt_manifest_sha256": "b" * 64,
+            "source_receipt": {"target_date": "2026-09-24"},
+            "parent_bundle_sha256": previous["bundle_sha256"],
+            "parent_machine_policy_sha256": policy.digest(parent_machine),
+            "candidate_machine_policy_sha256": None,
+            "candidate_policy": None,
+            "policy_by_scope": {},
+            "policy_sha256": policy.digest({}),
+            "candidate_threshold_bp": None,
+            "input_attempt_count": 0,
+            "accepted_attempt_count": 0,
+            "source_contract_excluded_count": 0,
+            "source_contract_exclusion_reasons": {},
+            "excluded_attempt_counts": {},
+            "situation_attempt_counts": {},
+            "market_census": markets,
+            "gross_label_difference_count": 0,
+            "hurdle_errors": ["eligible_candidate_absent"],
+        }
+    )
+    source_path = tmp_path / "winrate_carry.json"
     policy._atomic_write_json(source_path, report)
     now = datetime(2026, 9, 24, 20, tzinfo=policy.KST)
     first = policy.stage_winrate_policy(
-        source_path, data_root=tmp_path, now=now, publication_day='2026-09-24'
+        source_path, data_root=tmp_path, now=now, publication_day="2026-09-24"
     )
-    assert first['status'] == 'staged'
+    assert first["status"] == "staged"
     target_path = policy.root(tmp_path) / f"policy_{first['target_date']}.json"
     original_bundle = target_path.read_bytes()
 
     updated = copy.deepcopy(report)
-    updated['evaluated_attempt_manifest_sha256'] = 'c' * 64
-    updated['source_receipt']['source_manifest_sha256'] = 'd' * 64
-    updated = calibration._with_artifact_content_sha256({
-        k: v for k, v in updated.items() if k != 'artifact_content_sha256'
-    })
+    updated["evaluated_attempt_manifest_sha256"] = "c" * 64
+    updated["source_receipt"]["source_manifest_sha256"] = "d" * 64
+    updated = calibration._with_artifact_content_sha256(
+        {k: v for k, v in updated.items() if k != "artifact_content_sha256"}
+    )
     policy._atomic_write_json(source_path, updated)
     real_load = policy.load
 
     def load_with_later_overlay(*, data_root, target_date):
         existing = real_load(data_root=data_root, target_date=target_date)
-        if target_date == '2026-09-25' and existing is not None:
+        if target_date == "2026-09-25" and existing is not None:
             existing = copy.deepcopy(existing)
-            existing['previous_bundle_sha256'] = 'e' * 64
+            existing["previous_bundle_sha256"] = "e" * 64
         return existing
 
-    monkeypatch.setattr(policy, 'load', load_with_later_overlay)
+    monkeypatch.setattr(policy, "load", load_with_later_overlay)
     reused = policy.stage_winrate_policy(
-        source_path, data_root=tmp_path, now=now, publication_day='2026-09-24'
+        source_path, data_root=tmp_path, now=now, publication_day="2026-09-24"
     )
 
-    assert reused['status'] == 'existing_incumbent_preserved'
-    assert reused['bundle_sha256'] == first['bundle_sha256']
-    assert reused['current_report_sha256'] == updated['artifact_content_sha256']
-    assert reused['bundle_report_sha256'] == report['artifact_content_sha256']
+    assert reused["status"] == "existing_incumbent_preserved"
+    assert reused["bundle_sha256"] == first["bundle_sha256"]
+    assert reused["current_report_sha256"] == updated["artifact_content_sha256"]
+    assert reused["bundle_report_sha256"] == report["artifact_content_sha256"]
     assert target_path.read_bytes() == original_bundle
 
 
 def test_winrate_successor_publisher_rechecks_fresh_holdout_and_winrate_hurdles():
-    report = {'target_date': '2026-10-01',
-        'train_dates': ['2026-09-29', '2026-09-30'],
-        'holdout_dates': ['2026-10-01'], 'consumed_holdout_dates': [],
-        'baseline': {
-            'train': {'source_dates': ['2026-09-29', '2026-09-30'],
-                'selected_attempt_count': 40, 'selected_opportunity_count': 40,
-                'winning_attempt_count': 24, 'win_rate_pct': 60.0,
-                'support_adjusted_win_rate_pct': 50.0},
-            'holdout': {'source_dates': ['2026-10-01'],
-                'selected_attempt_count': 20, 'selected_opportunity_count': 20,
-                'winning_attempt_count': 12, 'win_rate_pct': 60.0,
-                'support_adjusted_win_rate_pct': 45.0}},
-        'candidate': {
-            'train': {'source_dates': ['2026-09-29', '2026-09-30'],
-                'selected_attempt_count': 32, 'selected_opportunity_count': 32,
-                'winning_attempt_count': 23, 'win_rate_pct': 71.875,
-                'support_adjusted_win_rate_pct': 58.0},
-            'holdout': {'source_dates': ['2026-10-01'],
-                'selected_attempt_count': 16, 'selected_opportunity_count': 16,
-                'winning_attempt_count': 11, 'win_rate_pct': 68.75,
-                'support_adjusted_win_rate_pct': 52.0}}}
+    report = {
+        "target_date": "2026-10-01",
+        "train_dates": ["2026-09-29", "2026-09-30"],
+        "holdout_dates": ["2026-10-01"],
+        "consumed_holdout_dates": [],
+        "baseline": {
+            "train": {
+                "source_dates": ["2026-09-29", "2026-09-30"],
+                "selected_attempt_count": 40,
+                "selected_opportunity_count": 40,
+                "winning_attempt_count": 24,
+                "win_rate_pct": 60.0,
+                "support_adjusted_win_rate_pct": 50.0,
+            },
+            "holdout": {
+                "source_dates": ["2026-10-01"],
+                "selected_attempt_count": 20,
+                "selected_opportunity_count": 20,
+                "winning_attempt_count": 12,
+                "win_rate_pct": 60.0,
+                "support_adjusted_win_rate_pct": 45.0,
+            },
+        },
+        "candidate": {
+            "train": {
+                "source_dates": ["2026-09-29", "2026-09-30"],
+                "selected_attempt_count": 32,
+                "selected_opportunity_count": 32,
+                "winning_attempt_count": 23,
+                "win_rate_pct": 71.875,
+                "support_adjusted_win_rate_pct": 58.0,
+            },
+            "holdout": {
+                "source_dates": ["2026-10-01"],
+                "selected_attempt_count": 16,
+                "selected_opportunity_count": 16,
+                "winning_attempt_count": 11,
+                "win_rate_pct": 68.75,
+                "support_adjusted_win_rate_pct": 52.0,
+            },
+        },
+    }
     assert policy._winrate_successor_hurdles_valid(report)
     # Keep only 75% of incumbent winners; larger loser rejection improves rate.
     reduced = copy.deepcopy(report)
-    reduced['baseline']['train'].update(selected_attempt_count=60, selected_opportunity_count=60,
-        winning_attempt_count=30, win_rate_pct=50., support_adjusted_win_rate_pct=40.)
-    reduced['candidate']['train'].update(winning_attempt_count=22, win_rate_pct=68.75)
-    reduced['candidate']['holdout'].update(selected_attempt_count=10, selected_opportunity_count=10,
-        winning_attempt_count=9, win_rate_pct=90., support_adjusted_win_rate_pct=65.)
+    reduced["baseline"]["train"].update(
+        selected_attempt_count=60,
+        selected_opportunity_count=60,
+        winning_attempt_count=30,
+        win_rate_pct=50.0,
+        support_adjusted_win_rate_pct=40.0,
+    )
+    reduced["candidate"]["train"].update(winning_attempt_count=22, win_rate_pct=68.75)
+    reduced["candidate"]["holdout"].update(
+        selected_attempt_count=10,
+        selected_opportunity_count=10,
+        winning_attempt_count=9,
+        win_rate_pct=90.0,
+        support_adjusted_win_rate_pct=65.0,
+    )
     assert policy._winrate_successor_hurdles_valid(reduced)
     malformed = copy.deepcopy(report)
-    malformed['candidate'] = ['wrong_type']
+    malformed["candidate"] = ["wrong_type"]
     assert not policy._winrate_successor_hurdles_valid(malformed)
     malformed = copy.deepcopy(report)
-    malformed['candidate']['holdout']['selected_attempt_count'] = 1
+    malformed["candidate"]["holdout"]["selected_attempt_count"] = 1
     assert not policy._winrate_successor_hurdles_valid(malformed)
     one_day = copy.deepcopy(report)
-    one_day['candidate']['holdout']['source_dates'] = ['2026-09-30']
+    one_day["candidate"]["holdout"]["source_dates"] = ["2026-09-30"]
     assert not policy._winrate_successor_hurdles_valid(one_day)
     reused = copy.deepcopy(report)
-    reused['consumed_holdout_dates'] = ['2026-10-01']
+    reused["consumed_holdout_dates"] = ["2026-10-01"]
     assert not policy._winrate_successor_hurdles_valid(reused)
     weak = copy.deepcopy(report)
-    weak['candidate']['holdout']['support_adjusted_win_rate_pct'] = 49.0
+    weak["candidate"]["holdout"]["support_adjusted_win_rate_pct"] = 49.0
     assert not policy._winrate_successor_hurdles_valid(weak)
 
 
 def test_winrate_market_census_requires_all_three_markets_and_top_level_binding():
-    row = dict(market='REGULAR', input_attempt_count=4, accepted_attempt_count=2,
-        source_contract_excluded_count=1, source_contract_exclusion_reasons={'conflict': 1},
-        excluded_attempt_counts={'path_missing': 1}, gross_label_difference_count=0)
-    report = dict(input_attempt_count=4, accepted_attempt_count=2,
-        source_contract_excluded_count=1, source_contract_exclusion_reasons={'conflict': 1},
-        excluded_attempt_counts={'path_missing': 1}, gross_label_difference_count=0,
-        market_census={'KRX|KRX_REGULAR': row,
-            'PREMARKET_KRX_LIKE|PREMARKET_KRX_LIKE': dict(row, market='PREMARKET'),
-            'KRX_NXT_INTEGRATED|KRX_NXT_AFTERMARKET': dict(row, market='AFTERMARKET')})
+    row = dict(
+        market="REGULAR",
+        input_attempt_count=4,
+        accepted_attempt_count=2,
+        source_contract_excluded_count=1,
+        source_contract_exclusion_reasons={"conflict": 1},
+        excluded_attempt_counts={"path_missing": 1},
+        gross_label_difference_count=0,
+    )
+    report = dict(
+        input_attempt_count=4,
+        accepted_attempt_count=2,
+        source_contract_excluded_count=1,
+        source_contract_exclusion_reasons={"conflict": 1},
+        excluded_attempt_counts={"path_missing": 1},
+        gross_label_difference_count=0,
+        market_census={
+            "KRX|KRX_REGULAR": row,
+            "PREMARKET_KRX_LIKE|PREMARKET_KRX_LIKE": dict(row, market="PREMARKET"),
+            "KRX_NXT_INTEGRATED|KRX_NXT_AFTERMARKET": dict(row, market="AFTERMARKET"),
+        },
+    )
     assert policy.winrate_market_census_valid(report)
     missing = copy.deepcopy(report)
-    missing['market_census'].pop('PREMARKET_KRX_LIKE|PREMARKET_KRX_LIKE')
+    missing["market_census"].pop("PREMARKET_KRX_LIKE|PREMARKET_KRX_LIKE")
     assert not policy.winrate_market_census_valid(missing)
     changed = copy.deepcopy(report)
-    changed['market_census']['KRX|KRX_REGULAR']['accepted_attempt_count'] = 3
+    changed["market_census"]["KRX|KRX_REGULAR"]["accepted_attempt_count"] = 3
     assert not policy.winrate_market_census_valid(changed)
 
 
@@ -472,9 +681,7 @@ def test_historical_source_uses_publication_day_for_next_preopen_policy(tmp_path
     )
     report.pop("artifact_content_sha256")
     report = calibration._with_artifact_content_sha256(report)
-    calibration._atomic_write_json(
-        path, report
-    )
+    calibration._atomic_write_json(path, report)
 
     bundle = policy.publish(
         path,
@@ -486,9 +693,10 @@ def test_historical_source_uses_publication_day_for_next_preopen_policy(tmp_path
     assert bundle["source_date"] == "2026-09-17"
     assert bundle["publication_date"] == "2026-09-20"
     assert bundle["target_date"] == "2026-09-21"
-    assert bundle["machine_evaluation_source"]["artifact_content_sha256"] == report[
-        "artifact_content_sha256"
-    ]
+    assert (
+        bundle["machine_evaluation_source"]["artifact_content_sha256"]
+        == report["artifact_content_sha256"]
+    )
     assert bundle["machine_evaluation_source"]["terminal_state"] == "evaluated_no_edge"
     policy.validate(bundle, target_date="2026-09-21")
 
@@ -509,128 +717,224 @@ def test_compact_successor_accepts_carried_machine_activation(tmp_path):
 
 
 @pytest.mark.parametrize("changed_parent", [False, True])
-def test_common_successor_is_automatic_only_against_exact_current_parent(monkeypatch, tmp_path, changed_parent):
+def test_common_successor_is_automatic_only_against_exact_current_parent(
+    monkeypatch, tmp_path, changed_parent
+):
     from src.engine.scalping import entry_setup_live_policy as activation
+
     previous = initial(tmp_path)
     parent = copy.deepcopy(previous["machine_policy"])
     if changed_parent:
         parent["thresholds"]["minimum_micro_net_aggressive_delta_10t"] = 7.0
     successor_machine = copy.deepcopy(parent)
     successor_machine["thresholds"]["maximum_spread_bp"] = 40.0
-    monkeypatch.setattr(activation, "_mechanistic_primary_activation_projection", lambda *a, **kw: ({
-        "threshold_policy": successor_machine,
-        "incumbent_machine_policy_sha256": policy.digest(parent),
-    }, []))
+    monkeypatch.setattr(
+        activation,
+        "_mechanistic_primary_activation_projection",
+        lambda *a, **kw: (
+            {
+                "threshold_policy": successor_machine,
+                "incumbent_machine_policy_sha256": policy.digest(parent),
+            },
+            [],
+        ),
+    )
     successor = policy.publish(
-        source(tmp_path, "2026-09-14"), data_root=tmp_path,
+        source(tmp_path, "2026-09-14"),
+        data_root=tmp_path,
         now=datetime(2026, 9, 14, 21, tzinfo=policy.KST),
     )
     if changed_parent:
         assert successor["machine_policy"] == previous["machine_policy"]
-        assert successor["machine_disposition"] == "candidate_parent_changed_revalidation_required"
+        assert (
+            successor["machine_disposition"]
+            == "candidate_parent_changed_revalidation_required"
+        )
     else:
         assert successor["machine_policy"] == successor_machine
         assert successor["machine_disposition"] == "evidence_qualified_threshold_update"
-    assert successor["ai_policy"]["prompt_version"] == previous["ai_policy"]["prompt_version"]
+    assert (
+        successor["ai_policy"]["prompt_version"]
+        == previous["ai_policy"]["prompt_version"]
+    )
 
 
 @pytest.mark.parametrize("parent_changed", [False, True])
 @pytest.mark.parametrize("scope", ["KRX|KRX_REGULAR", "NXT|NXT_AFTERMARKET"])
-def test_full_population_hierarchy_automatic_publisher_requires_exact_parent(tmp_path, parent_changed, scope, monkeypatch):
+def test_full_population_hierarchy_automatic_publisher_requires_exact_parent(
+    tmp_path, parent_changed, scope, monkeypatch
+):
     # This test isolates publisher parent binding. Operating model correctness
     # is tested with signed owner proofs in test_ai_action_outcome_calibration.
     original_metrics = calibration._mechanistic_paired_population_metrics
+
     def supported_metrics(*args, **kwargs):
-        return {**original_metrics(*args, **kwargs),
-                "operating_economic_promotion_pass": True,
-                "downstream_operating_evidence_complete": True,
-                "daily_net_profit_delta_krw": 10.0,
-                "operating_economic_comparison": {
-                    "status": "supported_operating_comparison",
-                    "incumbent": {"ev_pct": 0.0}, "candidate": {"ev_pct": 0.12}}}
-    monkeypatch.setattr(calibration, "_mechanistic_paired_population_metrics", supported_metrics)
+        return {
+            **original_metrics(*args, **kwargs),
+            "operating_economic_promotion_pass": True,
+            "downstream_operating_evidence_complete": True,
+            "daily_net_profit_delta_krw": 10.0,
+            "operating_economic_comparison": {
+                "status": "supported_operating_comparison",
+                "incumbent": {"ev_pct": 0.0},
+                "candidate": {"ev_pct": 0.12},
+            },
+        }
+
+    monkeypatch.setattr(
+        calibration, "_mechanistic_paired_population_metrics", supported_metrics
+    )
     from src.tests.test_ai_action_outcome_calibration import _natural_refinement_fixture
+
     previous = initial(tmp_path)
     if scope != "KRX|KRX_REGULAR":
-        previous = policy.publish(source(tmp_path), data_root=tmp_path,
-                                  adopt_hierarchy=True, adopt_all_continuous=True,
-                                  now=datetime(2026, 9, 13, 22, tzinfo=policy.KST))
+        previous = policy.publish(
+            source(tmp_path),
+            data_root=tmp_path,
+            adopt_hierarchy=True,
+            adopt_all_continuous=True,
+            now=datetime(2026, 9, 13, 22, tzinfo=policy.KST),
+        )
     previous["hierarchy_adopted"] = True
-    incumbent = previous["machine_policy"] if scope == "KRX|KRX_REGULAR" else previous["scope_policies"][scope]["machine_policy"]
+    incumbent = (
+        previous["machine_policy"]
+        if scope == "KRX|KRX_REGULAR"
+        else previous["scope_policies"][scope]["machine_policy"]
+    )
     incumbent["thresholds"]["maximum_spread_bp"] = 20
     original_parent = json.loads(json.dumps(incumbent))
     cohort = tuple(scope.split("|"))
     rows, receipt = _natural_refinement_fixture()
     for row in rows:
-        row["entry_group_observation"]["key_parts"].update(venue=cohort[0], session_bucket=cohort[1])
+        row["entry_group_observation"]["key_parts"].update(
+            venue=cohort[0], session_bucket=cohort[1]
+        )
         row.update(effective_venue=cohort[0], session_bucket=cohort[1])
-        row["comparison"]["entry_cost_contract"].update(effective_venue=cohort[0], session_bucket=cohort[1])
+        row["comparison"]["entry_cost_contract"].update(
+            effective_venue=cohort[0], session_bucket=cohort[1]
+        )
         row["comparison"]["entry_path_target_pct"] = 0.32
         evidence = row["setup_evidence"]
         evidence["micro_recovery_observation"] = {
-            "source_usable": True, "net_aggressive_delta_10t": 20, "price_change_10t_pct": 0.1,
+            "source_usable": True,
+            "net_aggressive_delta_10t": 20,
+            "price_change_10t_pct": 0.1,
         }
-        evidence["evidence_sha256"] = policy.digest({k: v for k, v in evidence.items() if k != "evidence_sha256"})
+        evidence["evidence_sha256"] = policy.digest(
+            {k: v for k, v in evidence.items() if k != "evidence_sha256"}
+        )
     normalized, contract = calibration._common_refinement_population(
-        [], rows, target_date="2026-09-15", source_receipt=receipt, paired_contract={}, cohort=cohort,
+        [],
+        rows,
+        target_date="2026-09-15",
+        source_receipt=receipt,
+        paired_contract={},
+        cohort=cohort,
     )
     extension = calibration.build_mechanistic_hierarchy_candidate(
-        normalized, target_date="2026-09-15", parent_policy=original_parent,
+        normalized,
+        target_date="2026-09-15",
+        parent_policy=original_parent,
         population_source_contract=contract,
         cohort=cohort,
     )
     assert extension["promotion_pass"] is True
     if parent_changed:
         incumbent["thresholds"]["minimum_micro_net_aggressive_delta_10t"] = 2.0
-    previous["bundle_sha256"] = policy.digest({k: v for k, v in previous.items() if k != "bundle_sha256"})
-    calibration._atomic_write_json(policy.root(tmp_path) / "policy_2026-09-14.json", previous)
+    previous["bundle_sha256"] = policy.digest(
+        {k: v for k, v in previous.items() if k != "bundle_sha256"}
+    )
+    calibration._atomic_write_json(
+        policy.root(tmp_path) / "policy_2026-09-14.json", previous
+    )
     path = source(tmp_path, "2026-09-15")
     report = json.loads(path.read_text())
-    report["hierarchical_entry_quality"] = {"runtime_extension": extension} if scope == "KRX|KRX_REGULAR" else {"runtime_extensions_by_scope": {scope: extension}}
+    report["hierarchical_entry_quality"] = (
+        {"runtime_extension": extension}
+        if scope == "KRX|KRX_REGULAR"
+        else {"runtime_extensions_by_scope": {scope: extension}}
+    )
     report["report_scope"] = "main_mechanistic_entry"
     report["machine_full_evaluation"] = {"state": "evaluated_no_edge"}
     report.pop("artifact_content_sha256")
-    calibration._atomic_write_json(path, calibration._with_artifact_content_sha256(report))
-    successor = policy.publish(path, data_root=tmp_path,
-                               now=datetime(2026, 9, 15, 21, tzinfo=policy.KST))
-    selected = successor if scope == "KRX|KRX_REGULAR" else successor["scope_policies"][scope]
-    selected_disposition = selected["historical_context"]["hierarchy_disposition"] if scope == "KRX|KRX_REGULAR" else selected["machine_disposition"]
+    calibration._atomic_write_json(
+        path, calibration._with_artifact_content_sha256(report)
+    )
+    successor = policy.publish(
+        path, data_root=tmp_path, now=datetime(2026, 9, 15, 21, tzinfo=policy.KST)
+    )
+    selected = (
+        successor if scope == "KRX|KRX_REGULAR" else successor["scope_policies"][scope]
+    )
+    selected_disposition = (
+        selected["historical_context"]["hierarchy_disposition"]
+        if scope == "KRX|KRX_REGULAR"
+        else selected["machine_disposition"]
+    )
     if parent_changed:
         assert selected["machine_policy"] == incumbent
         assert selected_disposition == "candidate_parent_changed_revalidation_required"
     else:
-        assert selected["machine_policy"] == extension["policy_candidate"]["threshold_policy"]
-        assert selected_disposition == ("evidence_qualified_hierarchy_update" if scope == "KRX|KRX_REGULAR" else "evidence_qualified_exact_scope_update")
+        assert (
+            selected["machine_policy"]
+            == extension["policy_candidate"]["threshold_policy"]
+        )
+        assert selected_disposition == (
+            "evidence_qualified_hierarchy_update"
+            if scope == "KRX|KRX_REGULAR"
+            else "evidence_qualified_exact_scope_update"
+        )
     if scope != "KRX|KRX_REGULAR":
         assert successor["machine_policy"] == previous["machine_policy"]
-    assert successor["ai_policy"]["prompt_version"] == previous["ai_policy"]["prompt_version"]
-
-
-def test_proxy_only_full_population_candidate_is_carried_without_runtime_promotion(tmp_path):
-    from src.tests.test_ai_action_outcome_calibration import (
-        _natural_refinement_fixture, _mechanistic_evidence,
+    assert (
+        successor["ai_policy"]["prompt_version"]
+        == previous["ai_policy"]["prompt_version"]
     )
+
+
+def test_proxy_only_full_population_candidate_is_carried_without_runtime_promotion(
+    tmp_path,
+):
+    from src.tests.test_ai_action_outcome_calibration import (
+        _natural_refinement_fixture,
+        _mechanistic_evidence,
+    )
+
     previous = initial(tmp_path)
     # Model an already selected tighter incumbent, not a second live owner.
     previous["machine_policy"]["thresholds"]["maximum_spread_bp"] = 40.0
-    previous["bundle_sha256"] = policy.digest({k: v for k, v in previous.items() if k != "bundle_sha256"})
-    calibration._atomic_write_json(policy.root(tmp_path) / "policy_2026-09-14.json", previous)
+    previous["bundle_sha256"] = policy.digest(
+        {k: v for k, v in previous.items() if k != "bundle_sha256"}
+    )
+    calibration._atomic_write_json(
+        policy.root(tmp_path) / "policy_2026-09-14.json", previous
+    )
     rows, receipt = _natural_refinement_fixture()
     for row in rows:
         row["setup_evidence"] = _mechanistic_evidence(spread_bp=50)
         row["comparison"]["entry_path_target_pct"] = 0.27
     normalized, contract = calibration._common_refinement_population(
-        [], rows, target_date="2026-09-15", source_receipt=receipt, paired_contract={},
+        [],
+        rows,
+        target_date="2026-09-15",
+        source_receipt=receipt,
+        paired_contract={},
     )
     refinement = calibration.build_clean_baseline_mechanistic_refinement(
-        tmp_path / "unused", target_date="2026-09-15", source_rows=normalized,
-        source_contract=contract, parent_policy=previous["machine_policy"],
+        tmp_path / "unused",
+        target_date="2026-09-15",
+        source_rows=normalized,
+        source_contract=contract,
+        parent_policy=previous["machine_policy"],
     )
     assert refinement["promotion_pass"] is False
     assert refinement["policy_candidate"] is None
-    assert refinement["best_observed_candidate"]["calibration_paired_population"][
-        "downstream_operating_evidence_complete"
-    ] is False
+    assert (
+        refinement["best_observed_candidate"]["calibration_paired_population"][
+            "downstream_operating_evidence_complete"
+        ]
+        is False
+    )
     path = source(tmp_path, "2026-09-15")
     report = json.loads(path.read_text())
     report["mechanistic_entry_refinement"] = refinement
@@ -640,12 +944,21 @@ def test_proxy_only_full_population_candidate_is_carried_without_runtime_promoti
         "state": "evaluated_no_edge",
     }
     report.pop("artifact_content_sha256")
-    calibration._atomic_write_json(path, calibration._with_artifact_content_sha256(report))
-    successor = policy.publish(path, data_root=tmp_path, now=datetime(2026, 9, 15, 21, tzinfo=policy.KST))
+    calibration._atomic_write_json(
+        path, calibration._with_artifact_content_sha256(report)
+    )
+    successor = policy.publish(
+        path, data_root=tmp_path, now=datetime(2026, 9, 15, 21, tzinfo=policy.KST)
+    )
     assert successor["machine_disposition"] == "incumbent_carried"
     assert successor["machine_policy"] == previous["machine_policy"]
-    assert successor["ai_policy"]["prompt_version"] == previous["ai_policy"]["prompt_version"]
-    assert successor["machine_evaluation_source"]["terminal_state"] == "evaluated_no_edge"
+    assert (
+        successor["ai_policy"]["prompt_version"]
+        == previous["ai_policy"]["prompt_version"]
+    )
+    assert (
+        successor["machine_evaluation_source"]["terminal_state"] == "evaluated_no_edge"
+    )
 
 
 def test_frozen_legacy_prompt_bundle_remains_readable(tmp_path):
@@ -755,9 +1068,7 @@ def test_frozen_compact_citations_migrate_only_next_date(
         "detailed_counts",
     ],
 )
-def test_natural_direction_without_paired_proof_preserves_compact(
-    tmp_path, corruption
-):
+def test_natural_direction_without_paired_proof_preserves_compact(tmp_path, corruption):
     previous = initial(tmp_path)
     path = source(tmp_path, "2026-09-14")
     report = json.loads(path.read_text())
@@ -864,13 +1175,13 @@ def test_natural_direction_without_paired_proof_preserves_compact(
             == previous["ai_policy"]["prompt_version"]
         )
         return
-    assert successor["ai_policy"]["prompt_version"] == (
-        policy.AI_VERSION
-    )
+    assert successor["ai_policy"]["prompt_version"] == (policy.AI_VERSION)
     assert successor["ai_policy"]["variant"] == policy.compact_prompt_variant(
         successor["ai_policy"]["prompt_version"]
     )
-    assert successor["ai_policy"]["system_prompt"] == policy.compact_auxiliary_prompt(successor["historical_context"], prompt_version=policy.AI_VERSION)
+    assert successor["ai_policy"]["system_prompt"] == policy.compact_auxiliary_prompt(
+        successor["historical_context"], prompt_version=policy.AI_VERSION
+    )
     # A later source still evaluates the policy used today, not tomorrow's
     # unlaunched opportunity candidate. It must be able to replace that draft.
     economic["material_tail_pass_count"] = 1
@@ -886,18 +1197,13 @@ def test_natural_direction_without_paired_proof_preserves_compact(
     revised = policy.publish(
         path, data_root=tmp_path, now=datetime(2026, 9, 14, 22, tzinfo=policy.KST)
     )
-    assert (
-        revised["ai_policy"]["prompt_version"]
-        == policy.AI_VERSION
-    )
+    assert revised["ai_policy"]["prompt_version"] == policy.AI_VERSION
     assert (
         policy.load(data_root=tmp_path, target_date="2026-09-14")["bundle_sha256"]
         == previous["bundle_sha256"]
     )
     economic["material_tail_pass_count"] = 0
-    selection["selected_prompt_version"] = (
-        policy.AI_VERSION
-    )
+    selection["selected_prompt_version"] = policy.AI_VERSION
     calibration._atomic_write_json(
         path, calibration._with_artifact_content_sha256(report)
     )
@@ -964,9 +1270,13 @@ def test_next_preopen_publish_replaces_legacy_prompt_without_threshold_change(tm
     assert successor["ai_policy"]["system_prompt"] == policy.compact_auxiliary_prompt()
 
 
-@pytest.mark.parametrize("corruption", [None, "count", "contract_version", "partition", "nan_amount", "terminal_gate"])
+@pytest.mark.parametrize(
+    "corruption",
+    [None, "count", "contract_version", "partition", "nan_amount", "terminal_gate"],
+)
 def test_router_caution_without_paired_proof_preserves_compact(tmp_path, corruption):
     from src.tests.test_ai_action_outcome_calibration import _compact_router_case_table
+
     previous = initial(tmp_path)
     path = source(tmp_path, "2026-09-15")
     report = json.loads(path.read_text())
@@ -975,26 +1285,38 @@ def test_router_caution_without_paired_proof_preserves_compact(tmp_path, corrupt
     if corruption == "count":
         outcome["economic_contract"]["evaluable_caution_count"] -= 1
     elif corruption == "contract_version":
-        outcome["automatic_successor_selection"]["contract_version"] = "compact_auxiliary_economic_selection_v2"
+        outcome["automatic_successor_selection"][
+            "contract_version"
+        ] = "compact_auxiliary_economic_selection_v2"
     elif corruption == "partition":
         table["compact_auxiliary_policy_measurement"]["measurement_allowed"] = False
     elif corruption == "nan_amount":
         outcome["economic_contract"]["missed_profit_caution_net_sum_pct"] = float("nan")
     elif corruption == "terminal_gate":
-        table["machine_ai_natural_source_receipt"]["machine_terminal_tuning_gate"]["decision_counterfactual_tuning_input_allowed"] = False
+        table["machine_ai_natural_source_receipt"]["machine_terminal_tuning_gate"][
+            "decision_counterfactual_tuning_input_allowed"
+        ] = False
     report["hierarchical_entry_quality"] = {"machine_decision_case_table": table}
     report.pop("artifact_content_sha256")
-    calibration._atomic_write_json(path, calibration._with_artifact_content_sha256(report))
-    successor = policy.publish(path, data_root=tmp_path, now=datetime(2026, 9, 15, 21, tzinfo=policy.KST))
+    calibration._atomic_write_json(
+        path, calibration._with_artifact_content_sha256(report)
+    )
+    successor = policy.publish(
+        path, data_root=tmp_path, now=datetime(2026, 9, 15, 21, tzinfo=policy.KST)
+    )
     assert successor["machine_policy"] == previous["machine_policy"]
     assert successor["ai_policy"]["prompt_version"] == (policy.AI_VERSION)
     assert "model" not in successor["ai_policy"]
     assert "provider" not in successor["ai_policy"]
 
 
-@pytest.mark.parametrize("corruption", [None, "unlocated", "duplicate", "missing", "learned", "count_bool"])
+@pytest.mark.parametrize(
+    "corruption", [None, "unlocated", "duplicate", "missing", "learned", "count_bool"]
+)
 def test_localized_conflict_does_not_replace_missing_paired_proof(tmp_path, corruption):
-    from src.tests.test_ai_action_outcome_calibration import _compact_conflict_case_table
+    from src.tests.test_ai_action_outcome_calibration import (
+        _compact_conflict_case_table,
+    )
 
     previous = initial(tmp_path)
     path = source(tmp_path, "2026-09-15")
@@ -1007,19 +1329,21 @@ def test_localized_conflict_does_not_replace_missing_paired_proof(tmp_path, corr
     elif corruption == "missing":
         table.pop("conflicting_evaluation_keys")
     elif corruption == "learned":
-        table["policy_learning_exact_enter_keys"].extend(table["conflicting_evaluation_keys"])
+        table["policy_learning_exact_enter_keys"].extend(
+            table["conflicting_evaluation_keys"]
+        )
     elif corruption == "count_bool":
         table["conflicting_attempt_identity_count"] = True
     report["hierarchical_entry_quality"] = {"machine_decision_case_table": table}
     report.pop("artifact_content_sha256")
-    calibration._atomic_write_json(path, calibration._with_artifact_content_sha256(report))
+    calibration._atomic_write_json(
+        path, calibration._with_artifact_content_sha256(report)
+    )
     successor = policy.publish(
         path, data_root=tmp_path, now=datetime(2026, 9, 15, 21, tzinfo=policy.KST)
     )
     assert successor["machine_policy"] == previous["machine_policy"]
-    assert successor["ai_policy"]["prompt_version"] == (
-        policy.AI_VERSION
-    )
+    assert successor["ai_policy"]["prompt_version"] == (policy.AI_VERSION)
     assert "model" not in successor["ai_policy"]
     assert "provider" not in successor["ai_policy"]
 
@@ -1352,40 +1676,96 @@ def test_invalid_source_does_not_destroy_previous_policy(tmp_path):
 
 
 def test_terminal_count_is_not_decision_cf_authority_and_date_is_required():
-    from src.engine.scalping.mechanistic_entry_runtime_policy import compact_terminal_gate_allowed
-    assert compact_terminal_gate_allowed({"machine_terminal_tuning_gate": {"economic_tuning_input_allowed": True}}) is False
-    assert compact_terminal_gate_allowed({"target_date": "2026-09-17", "machine_terminal_tuning_gate": {"economic_tuning_input_allowed": True}}) is False
-    assert compact_terminal_gate_allowed({"target_date": "2026-09-17", "machine_terminal_tuning_gate": {
-        "decision_counterfactual_tuning_input_allowed": True, "lineage_gap_excluded_count": 4}}) is True
+    from src.engine.scalping.mechanistic_entry_runtime_policy import (
+        compact_terminal_gate_allowed,
+    )
+
+    assert (
+        compact_terminal_gate_allowed(
+            {"machine_terminal_tuning_gate": {"economic_tuning_input_allowed": True}}
+        )
+        is False
+    )
+    assert (
+        compact_terminal_gate_allowed(
+            {
+                "target_date": "2026-09-17",
+                "machine_terminal_tuning_gate": {"economic_tuning_input_allowed": True},
+            }
+        )
+        is False
+    )
+    assert (
+        compact_terminal_gate_allowed(
+            {
+                "target_date": "2026-09-17",
+                "machine_terminal_tuning_gate": {
+                    "decision_counterfactual_tuning_input_allowed": True,
+                    "lineage_gap_excluded_count": 4,
+                },
+            }
+        )
+        is True
+    )
 
 
 @pytest.mark.parametrize("joint", [False, True])
-def test_scoped_common_candidate_uses_own_incumbent_when_krx_has_no_candidate(tmp_path, monkeypatch, joint):
+def test_scoped_common_candidate_uses_own_incumbent_when_krx_has_no_candidate(
+    tmp_path, monkeypatch, joint
+):
     from src.engine.scalping import entry_setup_live_policy as activation
-    previous = policy.publish(source(tmp_path), data_root=tmp_path, bootstrap=True,
-        adopt_all_continuous=True, now=datetime(2026, 9, 13, 20, tzinfo=policy.KST))
+
+    previous = policy.publish(
+        source(tmp_path),
+        data_root=tmp_path,
+        bootstrap=True,
+        adopt_all_continuous=True,
+        now=datetime(2026, 9, 13, 20, tzinfo=policy.KST),
+    )
     scope = "NXT|NXT_AFTERMARKET"
     parent = previous["scope_policies"][scope]["machine_policy"]
     successor = copy.deepcopy(parent)
     successor["thresholds"]["maximum_spread_bp"] = 40.0
+
     def projection(*a, cohort=("KRX", "KRX_REGULAR"), **kw):
         if "|".join(cohort) != scope:
             return None, []
-        return {"threshold_policy": successor,
-                "incumbent_machine_policy_sha256": policy.digest(parent)}, []
-    monkeypatch.setattr(activation, "_mechanistic_primary_activation_projection", projection)
+        return {
+            "threshold_policy": successor,
+            "incumbent_machine_policy_sha256": policy.digest(parent),
+        }, []
+
+    monkeypatch.setattr(
+        activation, "_mechanistic_primary_activation_projection", projection
+    )
     path = source(tmp_path, "2026-09-14")
     if joint:
         report = json.loads(path.read_text())
         report.pop("artifact_content_sha256")
-        report.update(report_scope="main_mechanistic_entry", mechanistic_refinements_by_scope={
-            k: {"policy_candidate": {"fixture": "projection_mocked_above"}} for k in (scope, "NXT|NXT_PREMARKET")})
-        calibration._atomic_write_json(path, calibration._with_artifact_content_sha256(report))
-    result = policy.publish(path, data_root=tmp_path,
-        now=datetime(2026, 9, 14, 21, tzinfo=policy.KST))
+        report.update(
+            report_scope="main_mechanistic_entry",
+            mechanistic_refinements_by_scope={
+                k: {"policy_candidate": {"fixture": "projection_mocked_above"}}
+                for k in (scope, "NXT|NXT_PREMARKET")
+            },
+        )
+        calibration._atomic_write_json(
+            path, calibration._with_artifact_content_sha256(report)
+        )
+    result = policy.publish(
+        path, data_root=tmp_path, now=datetime(2026, 9, 14, 21, tzinfo=policy.KST)
+    )
     assert result["machine_policy"] == previous["machine_policy"]
-    assert result["scope_policies"][scope]["machine_policy"] == (parent if joint else successor)
+    assert result["scope_policies"][scope]["machine_policy"] == (
+        parent if joint else successor
+    )
     assert result["scope_policies"][scope]["machine_disposition"] == (
-        "joint_scope_capital_replay_required_incumbent_carried" if joint else "evidence_qualified_exact_scope_common_update")
-    assert result["scope_policies"][scope]["ai_policy"]["prompt_version"] == previous["scope_policies"][scope]["ai_policy"]["prompt_version"]
+        "joint_scope_capital_replay_required_incumbent_carried"
+        if joint
+        else "evidence_qualified_exact_scope_common_update"
+    )
+    assert (
+        result["scope_policies"][scope]["ai_policy"]["prompt_version"]
+        == previous["scope_policies"][scope]["ai_policy"]["prompt_version"]
+    )
     assert policy.load(data_root=tmp_path, target_date="2026-09-15") == result

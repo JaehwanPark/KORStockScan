@@ -1,8 +1,8 @@
 """Single consumption of an operator Main restart flag across bot threads."""
+
 import fcntl
 from pathlib import Path
 from src.utils.constants import PROJECT_ROOT
-
 
 # Both restart claimants share one cooperative stop; only Main owns process exit.
 _SHUTDOWN_REQUESTED = False
@@ -27,7 +27,10 @@ def finish_main_shutdown(engine_thread=None):
     request_shutdown()
     if engine_thread is not None:
         engine_thread.join()
-    from src.utils.pipeline_event_logger import drain_pipeline_event_summary_before_termination
+    from src.utils.pipeline_event_logger import (
+        drain_pipeline_event_summary_before_termination,
+    )
+
     drain_pipeline_event_summary_before_termination()
 
 

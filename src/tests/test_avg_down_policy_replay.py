@@ -14,8 +14,11 @@ from src.tests.test_avg_down_replay import replay_fixture
 
 def test_snapshot_date_and_datetime_preserve_distinct_types():
     from datetime import date, timezone
-    values = {"rec_date": date(2026, 9, 21),
-              "observed_at": datetime(2026, 9, 21, tzinfo=timezone.utc)}
+
+    values = {
+        "rec_date": date(2026, 9, 21),
+        "observed_at": datetime(2026, 9, 21, tzinfo=timezone.utc),
+    }
     frozen = policy._json_value(values)
     assert frozen["rec_date"] == {"__replay_date__": "2026-09-21"}
     assert "__replay_datetime__" in frozen["observed_at"]
@@ -64,13 +67,17 @@ def policy_fixture():
     # recorded bytes/absence into that namespace; never read production files.
     from pathlib import Path
     from src.utils.constants import DATA_DIR
+
     for name, row in list(snapshot["files"].items()):
         if Path(name).is_relative_to(DATA_DIR):
-            worker_path = policy.REPO / 'data' / Path(name).relative_to(DATA_DIR)
+            worker_path = policy.REPO / "data" / Path(name).relative_to(DATA_DIR)
             snapshot["files"][str(worker_path)] = deepcopy(row)
     for name in snapshot["files"]:
-        if ("manual_control_excluded_codes" in name or "symbol_owner_policy_" in name
-                or "order_owner_registry" in name):
+        if (
+            "manual_control_excluded_codes" in name
+            or "symbol_owner_policy_" in name
+            or "order_owner_registry" in name
+        ):
             snapshot["files"][name] = None
     # Explicit test-only control exclusion makes a deterministic full-handler
     # early HOLD, without replacing the handler with a callback fixture.
@@ -158,19 +165,24 @@ def test_existing_fast_policy_reaches_virtual_exit_without_order_transport():
 
 def test_missing_peak_ledger_capture_cannot_become_successful_virtual_exit():
     observation, frames = exit_fixture()
-    snapshot = observation['policy_snapshot']
-    removed = [name for name in snapshot['files'] if name.endswith('scalp_position_peak_state.json')]
+    snapshot = observation["policy_snapshot"]
+    removed = [
+        name
+        for name in snapshot["files"]
+        if name.endswith("scalp_position_peak_state.json")
+    ]
     assert removed
     for name in removed:
-        del snapshot['files'][name]
-    observation['exit_policy_version'] = policy.snapshot_version(snapshot)
+        del snapshot["files"][name]
+    observation["exit_policy_version"] = policy.snapshot_version(snapshot)
     for frame in frames:
-        frame['exit_policy_version'] = observation['exit_policy_version']
+        frame["exit_policy_version"] = observation["exit_policy_version"]
     result = policy.isolated_replay(observation, frames)
-    assert result['blockers'] and all(
-        reason.startswith('unrecorded_file_read:') for reason in result['blockers'].values()
+    assert result["blockers"] and all(
+        reason.startswith("unrecorded_file_read:")
+        for reason in result["blockers"].values()
     ), result
-    assert result.get('state') != 'paired_exit_complete_source_only'
+    assert result.get("state") != "paired_exit_complete_source_only"
 
 
 def test_virtual_add_receipt_then_actual_exit_preserves_independent_quantities():
@@ -329,7 +341,9 @@ def test_existing_report_runs_policy_adapter_but_never_grants_order_authority():
 
 
 @pytest.mark.parametrize("importing", [True, False])
-def test_worker_effect_guard_blocks_database_network_and_file_writes(tmp_path, importing):
+def test_worker_effect_guard_blocks_database_network_and_file_writes(
+    tmp_path, importing
+):
     import subprocess
     import sys
 
@@ -375,7 +389,6 @@ def ai_request(observation, frame, *, call="ai_provider.current_prompt"):
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
     }
-
 
 
 def test_ai_replay_is_exact_bound_deduplicated_and_reuses_cache(monkeypatch):
@@ -522,8 +535,10 @@ def test_capture_byte_budget_stops_and_hash_includes_final_reason(monkeypatch):
 
 def test_retired_avg_down_capture_does_not_restart_from_shared_replay(monkeypatch):
     from src.engine import sniper_state_handlers as handlers
+
     def forbidden(*args, **kwargs):
         raise AssertionError("retired collector must not run")
+
     monkeypatch.setattr(capture, "observe_cycle", forbidden)
     assert handlers.observe_avg_down_exit_replay_cycle(now_ts=0) == 0
 
@@ -550,29 +565,33 @@ def test_frozen_files_reject_expansion_and_unknown_data_reads(tmp_path):
 
 
 def test_frozen_policy_preserves_both_immutable_entry_catalog_sources():
-    import base64,gzip,hashlib
+    import base64, gzip, hashlib
     from pathlib import Path
     from src.engine.scalping import reversal_cumulative_catalog as catalog
-    observation,_=policy_fixture()
-    snapshot=observation["policy_snapshot"]
-    for name,expected in (
-        ("reversal_cumulative_data.json",catalog.DATA_SHA256),
-        ("reversal_price_progress_data.json",catalog.PROGRESS_DATA_SHA256),
+
+    observation, _ = policy_fixture()
+    snapshot = observation["policy_snapshot"]
+    for name, expected in (
+        ("reversal_cumulative_data.json", catalog.DATA_SHA256),
+        ("reversal_price_progress_data.json", catalog.PROGRESS_DATA_SHA256),
     ):
-        path=Path(capture.__file__).with_name(name).absolute()
-        frozen=snapshot["files"][str(path)]
-        raw=gzip.decompress(base64.b64decode(frozen["content_gzip_b64"]))
-        assert len(raw)==frozen["size"]
-        assert hashlib.sha256(raw).hexdigest()==expected
+        path = Path(capture.__file__).with_name(name).absolute()
+        frozen = snapshot["files"][str(path)]
+        raw = gzip.decompress(base64.b64decode(frozen["content_gzip_b64"]))
+        assert len(raw) == frozen["size"]
+        assert hashlib.sha256(raw).hexdigest() == expected
     assert len(str(snapshot).encode()) <= capture.MAX_SNAPSHOT_BYTES
 
 
 @pytest.mark.parametrize("historical", [False, True])
-def test_model_state_capture_and_historical_reader_keep_roles_and_frozen_bytes(monkeypatch, historical):
+def test_model_state_capture_and_historical_reader_keep_roles_and_frozen_bytes(
+    monkeypatch, historical
+):
     from src.engine import ai_engine_openai as module
     from src.engine.ai_engine_openai import GPTSniperEngine
     from dataclasses import replace
     import json
+
     engine = GPTSniperEngine.__new__(GPTSniperEngine)
     engine.ai_disabled = False
     engine.consecutive_failures = 2
@@ -582,8 +601,12 @@ def test_model_state_capture_and_historical_reader_keep_roles_and_frozen_bytes(m
     state = capture.ai_policy_state(engine)
     if historical:
         state.pop("role_models")
-        state.update(current_model_name="old-fast", model_tier1_fast="old-fast",
-                     model_tier2_balanced="old-report", model_tier3_deep="old-deep")
+        state.update(
+            current_model_name="old-fast",
+            model_tier1_fast="old-fast",
+            model_tier2_balanced="old-report",
+            model_tier3_deep="old-deep",
+        )
     original = json.dumps(state, sort_keys=True)
     normalized = capture.normalize_ai_policy_state(state, rules)
     assert json.dumps(state, sort_keys=True) == original
@@ -592,8 +615,12 @@ def test_model_state_capture_and_historical_reader_keep_roles_and_frozen_bytes(m
     assert models["OPENAI_HOLDING_FLOW_MODEL"] == "frozen-flow"
     assert models["compact_auxiliary"] == "gpt-5.4-nano"
     assert models["OPENAI_SCALPING_ENTRY_MODEL"] == rules.OPENAI_SCALPING_ENTRY_MODEL
-    assert models["OPENAI_REALTIME_REPORT_MODEL"] == ("old-report" if historical else rules.OPENAI_REALTIME_REPORT_MODEL)
-    assert models["OPENAI_SCALPING_SHARED_MODEL"] == ("old-fast" if historical else rules.OPENAI_SCALPING_SHARED_MODEL)
+    assert models["OPENAI_REALTIME_REPORT_MODEL"] == (
+        "old-report" if historical else rules.OPENAI_REALTIME_REPORT_MODEL
+    )
+    assert models["OPENAI_SCALPING_SHARED_MODEL"] == (
+        "old-fast" if historical else rules.OPENAI_SCALPING_SHARED_MODEL
+    )
     # The actual next source capture records only roles, not the old aliases.
     monkeypatch.setattr(capture, "_AI_STATE", {})
     capture.record_ai_state("005930", engine)
@@ -614,6 +641,7 @@ def test_model_state_capture_and_historical_reader_keep_roles_and_frozen_bytes(m
 def test_isolated_policy_worker_consumes_both_model_capture_schemas(historical):
     from src.engine import ai_engine_openai as module
     from src.engine.ai_engine_openai import GPTSniperEngine
+
     observation, frames = policy_fixture()
     engine = GPTSniperEngine.__new__(GPTSniperEngine)
     engine.ai_disabled = False
@@ -622,14 +650,21 @@ def test_isolated_policy_worker_consumes_both_model_capture_schemas(historical):
     state = capture.ai_policy_state(engine)
     if historical:
         state.pop("role_models")
-        state.update(current_model_name="historical-fast", model_tier1_fast="historical-fast",
-                     model_tier2_balanced="historical-report", model_tier3_deep="historical-deep")
+        state.update(
+            current_model_name="historical-fast",
+            model_tier1_fast="historical-fast",
+            model_tier2_balanced="historical-report",
+            model_tier3_deep="historical-deep",
+        )
     observation["initial_policy_state"]["ai_engine_state"] = state
     source = deepcopy(observation)
     rules = module.TRADING_RULES
     result = policy.isolated_replay(observation, frames)
     assert "adapter_error" not in result, result
     assert set(result["blockers"].values()) == {"pending_exit_outcome"}, result
-    assert result["actual_order_submitted"] is False and result["broker_order_forbidden"] is True
+    assert (
+        result["actual_order_submitted"] is False
+        and result["broker_order_forbidden"] is True
+    )
     assert observation == source
     assert module.TRADING_RULES is rules

@@ -12,19 +12,41 @@ RETIRED_AUTOMATIC_OWNERS = frozenset({"episode", "widget_auto_trade"})
 def automatic_owner_retired(owner: object) -> bool:
     return str(owner or "").strip().lower() in RETIRED_AUTOMATIC_OWNERS
 
+
 # Historical identities only. Runtime parameters for these lanes are removed.
 RETIRED_EPISODE_PROFILES = {
-    "034020": ("doosan_enerbility_morning", "doosan_enerbility_late_morning", "doosan_enerbility_afternoon"),
+    "034020": (
+        "doosan_enerbility_morning",
+        "doosan_enerbility_late_morning",
+        "doosan_enerbility_afternoon",
+    ),
     "002900": ("tym_morning", "tym_late_morning", "tym_midday", "tym_afternoon"),
-    "079160": ("cj_cgv_morning", "cj_cgv_late_morning", "cj_cgv_midday", "cj_cgv_afternoon"),
+    "079160": (
+        "cj_cgv_morning",
+        "cj_cgv_late_morning",
+        "cj_cgv_midday",
+        "cj_cgv_afternoon",
+    ),
     "111770": ("youngone_morning", "youngone_midday", "youngone_afternoon"),
-    "017670": ("sk_telecom_morning", "sk_telecom_late_morning", "sk_telecom_midday", "sk_telecom_afternoon"),
+    "017670": (
+        "sk_telecom_morning",
+        "sk_telecom_late_morning",
+        "sk_telecom_midday",
+        "sk_telecom_afternoon",
+    ),
     "080220": ("jeju_semiconductor_morning",),
-    "105630": ("hanse_morning", "hanse_late_morning", "hanse_midday", "hanse_afternoon"),
+    "105630": (
+        "hanse_morning",
+        "hanse_late_morning",
+        "hanse_midday",
+        "hanse_afternoon",
+    ),
     "181710": ("nhn_morning", "nhn_late_morning", "nhn_midday", "nhn_afternoon"),
     "035720": ("kakao_morning", "kakao_late_morning", "kakao_midday"),
 }
-RETIRED_SYMBOL_OWNERS = frozenset((symbol, "episode") for symbol in RETIRED_EPISODE_PROFILES)
+RETIRED_SYMBOL_OWNERS = frozenset(
+    (symbol, "episode") for symbol in RETIRED_EPISODE_PROFILES
+)
 
 
 def new_entry_retired(symbol: object, owner: object) -> bool:
@@ -39,7 +61,10 @@ def new_entry_retired(symbol: object, owner: object) -> bool:
         return True
     if owner_name == "episode":
         from src.engine.scalping.main_fixed_watch import SPECS
-        return any(spec.symbol == code and spec.episode_entry_forbidden for spec in SPECS)
+
+        return any(
+            spec.symbol == code and spec.episode_entry_forbidden for spec in SPECS
+        )
     return False
 
 
@@ -49,7 +74,9 @@ def require_new_entry_owner(symbol: object, owner: object) -> None:
 
 
 # Historical identities only, used to exclude immutable archived lane rows.
-RETIRED_EPISODE_PROFILE_IDS = frozenset(profile for profiles in RETIRED_EPISODE_PROFILES.values() for profile in profiles)
+RETIRED_EPISODE_PROFILE_IDS = frozenset(
+    profile for profiles in RETIRED_EPISODE_PROFILES.values() for profile in profiles
+)
 
 
 def episode_profile_retired(profile_id: object) -> bool:
@@ -76,5 +103,6 @@ def active_entry_owners(symbol: object, owners) -> list[str]:
 def main_manual_after_episode_retirement(symbol: object, owners) -> bool:
     """Accept the surviving native owners only for a retired episode symbol."""
     return new_entry_retired(symbol, "episode") and set(owners) == {
-        "main_scalping", "manual_operator",
+        "main_scalping",
+        "manual_operator",
     }

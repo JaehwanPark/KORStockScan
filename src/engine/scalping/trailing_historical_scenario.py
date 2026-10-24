@@ -18,7 +18,10 @@ from zoneinfo import ZoneInfo
 from src.trading.market import session_contract
 from src.engine.scalping.trailing_start_replay import _epoch, _number
 from src.engine.scalping.trailing_threshold_policy import (
-    START_MARKETS, THRESHOLD_KEYS, default_values, market_type_at,
+    START_MARKETS,
+    THRESHOLD_KEYS,
+    default_values,
+    market_type_at,
 )
 from src.engine.trade_profit import get_trade_cost_rate
 
@@ -33,9 +36,14 @@ SLIPPAGE_BPS = (0, 30, 100)
 
 
 def _digest(value: Any) -> str:
-    return hashlib.sha256(json.dumps(
-        value, sort_keys=True, separators=(",", ":"), allow_nan=False,
-    ).encode()).hexdigest()
+    return hashlib.sha256(
+        json.dumps(
+            value,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode()
+    ).hexdigest()
 
 
 def _peak_mfe(trade: dict) -> float | None:
@@ -53,12 +61,17 @@ def _prepare(trade: dict, *, clean_start: str, cost_rate: float) -> dict:
     base = {"id": trade_id, "source_grade": "excluded", "reason": None}
     entry_date = str(trade.get("rec_date") or "")[:10]
     completion_date = str(
-        trade.get("completion_observed_date") or trade.get("exact_sell_fill_time")
-        or trade.get("sell_time") or ""
+        trade.get("completion_observed_date")
+        or trade.get("exact_sell_fill_time")
+        or trade.get("sell_time")
+        or ""
     )[:10]
-    if (str(trade.get("status") or "").upper() != "COMPLETED"
-            or str(trade.get("strategy") or "").upper() not in {"SCALP", "SCALPING"}
-            or entry_date < clean_start or completion_date < clean_start):
+    if (
+        str(trade.get("status") or "").upper() != "COMPLETED"
+        or str(trade.get("strategy") or "").upper() not in {"SCALP", "SCALPING"}
+        or entry_date < clean_start
+        or completion_date < clean_start
+    ):
         return {**base, "reason": "outside_completed_clean_main_scope"}
     if completion_date < entry_date:
         return {**base, "reason": "completion_before_entry_day"}
@@ -66,8 +79,15 @@ def _prepare(trade: dict, *, clean_start: str, cost_rate: float) -> dict:
     sell = _number(trade.get("sell_price"))
     qty = _number(trade.get("buy_qty"))
     profit = _number(trade.get("profit_rate"))
-    if (buy is None or buy <= 0 or sell is None or sell <= 0
-            or qty is None or qty <= 0 or profit is None):
+    if (
+        buy is None
+        or buy <= 0
+        or sell is None
+        or sell <= 0
+        or qty is None
+        or qty <= 0
+        or profit is None
+    ):
         return {**base, "reason": "missing_price_quantity_or_valid_profit"}
     sell_at = _epoch(trade.get("exact_sell_fill_time") or trade.get("sell_time"))
     market = market_type_at(sell_at) if sell_at is not None else None
@@ -81,12 +101,17 @@ def _prepare(trade: dict, *, clean_start: str, cost_rate: float) -> dict:
     modeled_sell_net_pct = 100 * (sell * (1 - cost_rate) / buy - 1)
     mfe_conflicts_with_sell = mfe is not None and mfe + 0.1 < modeled_sell_net_pct
     grade = (
-        "neutral_inconsistent_mfe" if mfe_conflicts_with_sell
-        else
-        "reported_mfe_assumed_peak_to_sell_path" if mfe is not None
-        else "inferred_trailing_rule_assumed_peak_to_sell_path"
-        if signal.get("exit_rule") == "scalp_trailing_take_profit"
-        else "neutral_unknown_peak"
+        "neutral_inconsistent_mfe"
+        if mfe_conflicts_with_sell
+        else (
+            "reported_mfe_assumed_peak_to_sell_path"
+            if mfe is not None
+            else (
+                "inferred_trailing_rule_assumed_peak_to_sell_path"
+                if signal.get("exit_rule") == "scalp_trailing_take_profit"
+                else "neutral_unknown_peak"
+            )
+        )
     )
     recorded_cost = bool(
         trade.get("realized_pnl_krw_source") == "broker_fill_prices_fee_aware"
@@ -95,14 +120,21 @@ def _prepare(trade: dict, *, clean_start: str, cost_rate: float) -> dict:
         and trade.get("exact_sell_fill_time")
     )
     return {
-        **base, "source_grade": grade, "market": market, "buy": buy,
-        "sell": sell, "qty": qty, "profit_rate": profit,
+        **base,
+        "source_grade": grade,
+        "market": market,
+        "buy": buy,
+        "sell": sell,
+        "qty": qty,
+        "profit_rate": profit,
         "completion_day": completion_date,
-        "notional": buy * qty, "mfe_pct": None if mfe_conflicts_with_sell else mfe,
+        "notional": buy * qty,
+        "mfe_pct": None if mfe_conflicts_with_sell else mfe,
         "cost_rate": cost_rate,
         "exit_rule_provenance": "inferred" if signal.get("inferred") else "observed",
         "cost_evidence": (
-            "recorded_fill_cost" if recorded_cost
+            "recorded_fill_cost"
+            if recorded_cost
             else "reported_net_profit_rate_cost_unverified"
         ),
         "buy_clock_status": "observed" if buy_at is not None else "missing",
@@ -113,8 +145,11 @@ def _prepare(trade: dict, *, clean_start: str, cost_rate: float) -> dict:
 
 
 def _scenario_sell_price(
-    row: dict, vector: dict[str, float | int], incumbent: dict[str, float | int],
-    *, strong: bool,
+    row: dict,
+    vector: dict[str, float | int],
+    incumbent: dict[str, float | int],
+    *,
+    strong: bool,
 ) -> float | None:
     if row["source_grade"].startswith("neutral_"):
         return None
@@ -137,7 +172,9 @@ def _scenario_sell_price(
 
 
 def _score_rows(
-    rows: list[dict], vector: dict[str, float | int], incumbent: dict[str, float | int],
+    rows: list[dict],
+    vector: dict[str, float | int],
+    incumbent: dict[str, float | int],
 ) -> dict:
     capital = sum(row["notional"] for row in rows)
     scenario = {}
@@ -150,10 +187,16 @@ def _score_rows(
             neutral_ids = []
             for row in rows:
                 candidate_price = _scenario_sell_price(
-                    row, vector, incumbent, strong=strong,
+                    row,
+                    vector,
+                    incumbent,
+                    strong=strong,
                 )
                 baseline_price = _scenario_sell_price(
-                    row, incumbent, incumbent, strong=strong,
+                    row,
+                    incumbent,
+                    incumbent,
+                    strong=strong,
                 )
                 if candidate_price is None:
                     neutral_ids.append(row["id"])
@@ -185,22 +228,32 @@ def _score_rows(
 
 
 def summarize_legacy_neutral_scenarios(
-    trades: list[dict], *, clean_start: str, source_gap_dates: list[dict],
+    trades: list[dict],
+    *,
+    clean_start: str,
+    source_gap_dates: list[dict],
 ) -> dict:
     """Maximize identifiable legacy coverage without creating live evidence."""
 
     cost_rate = get_trade_cost_rate()
     incumbent = default_values()
-    prepared = [_prepare(row, clean_start=clean_start, cost_rate=cost_rate)
-                for row in trades]
+    prepared = [
+        _prepare(row, clean_start=clean_start, cost_rate=cost_rate) for row in trades
+    ]
     counts = Counter(row["id"] for row in prepared)
     for row in prepared:
         if counts[row["id"]] > 1:
-            row.update(source_grade="excluded", reason="duplicate_completed_position_id")
-    usable = [row for row in prepared
-              if row.get("market") in START_MARKETS and not row.get("reason")]
+            row.update(
+                source_grade="excluded", reason="duplicate_completed_position_id"
+            )
+    usable = [
+        row
+        for row in prepared
+        if row.get("market") in START_MARKETS and not row.get("reason")
+    ]
     result = {
-        "schema": SCHEMA, "metric_role": "source_quality_gate",
+        "schema": SCHEMA,
+        "metric_role": "source_quality_gate",
         "decision_authority": "historical_scenario_diagnostic_only",
         "window_policy": "clean_baseline_completed_display_through_target_date",
         "sample_floor": "all_identifiable_legacy_completed_rows_with_valid_profit",
@@ -208,46 +261,72 @@ def summarize_legacy_neutral_scenarios(
         "source_quality_gate": "assumption_and_neutral_coverage_disclosed",
         "forbidden_uses": "threshold_apply|runtime_selection|actual_fill_or_cost_claim|primary_ev",
         "source_gap_dates": source_gap_dates,
-        "input_projection_sha256": _digest(sorted(((
-            str(row.get("id")), str(row.get("rec_date")),
-            str(row.get("completion_observed_date")), str(row.get("buy_price")),
-            str(row.get("buy_qty")), str(row.get("sell_price")),
-            str(row.get("sell_time")), str(row.get("exact_sell_fill_time")),
-            str(row.get("profit_rate")),
-            str((row.get("exit_signal") or {}).get("exit_rule")),
-            str(_peak_mfe(row)),
-        ) for row in trades), key=lambda item: str(item[0]))),
+        "input_projection_sha256": _digest(
+            sorted(
+                (
+                    (
+                        str(row.get("id")),
+                        str(row.get("rec_date")),
+                        str(row.get("completion_observed_date")),
+                        str(row.get("buy_price")),
+                        str(row.get("buy_qty")),
+                        str(row.get("sell_price")),
+                        str(row.get("sell_time")),
+                        str(row.get("exact_sell_fill_time")),
+                        str(row.get("profit_rate")),
+                        str((row.get("exit_signal") or {}).get("exit_rule")),
+                        str(_peak_mfe(row)),
+                    )
+                    for row in trades
+                ),
+                key=lambda item: str(item[0]),
+            )
+        ),
         "reported_completed_ids": sorted(row["id"] for row in prepared),
         "duplicate_completed_ids": sorted(
             trade_id for trade_id, count in counts.items() if count > 1
         ),
-        "excluded_by_id": {row["id"]: row["reason"] for row in prepared if row["reason"]},
+        "excluded_by_id": {
+            row["id"]: row["reason"] for row in prepared if row["reason"]
+        },
         "source_grade_counts": dict(Counter(row["source_grade"] for row in usable)),
         "cost_evidence_counts": dict(Counter(row["cost_evidence"] for row in usable)),
-        "buy_clock_status_counts": dict(Counter(row["buy_clock_status"] for row in usable)),
-        "cost_model_rate": cost_rate, "slippage_sensitivity_bps": list(SLIPPAGE_BPS),
+        "buy_clock_status_counts": dict(
+            Counter(row["buy_clock_status"] for row in usable)
+        ),
+        "cost_model_rate": cost_rate,
+        "slippage_sensitivity_bps": list(SLIPPAGE_BPS),
         "score_path_status": "unidentified_neutral_no_threshold_score_effect",
         "assumed_path": "entry_to_peak_to_recorded_sell_no_clock_or_depth_reconstruction",
-        "incumbent_projection": incumbent, "grid": {key: list(values) for key, values in GRID.items()},
-        "grid_sha256": _digest(GRID), "markets": {},
-        "research_candidate": None, "runtime_selected": None,
+        "incumbent_projection": incumbent,
+        "grid": {key: list(values) for key, values in GRID.items()},
+        "grid_sha256": _digest(GRID),
+        "markets": {},
+        "research_candidate": None,
+        "runtime_selected": None,
     }
     for market in START_MARKETS:
         market_rows = [row for row in usable if row["market"] == market]
         market_days = sorted({row["completion_day"] for row in market_rows})
-        holdout_days = set(
-            market_days[-max(2, math.ceil(len(market_days) * .2)):]
-        ) if len(market_days) >= 3 else set()
-        train_rows = [row for row in market_rows
-                      if row["completion_day"] not in holdout_days]
-        holdout_rows = [row for row in market_rows
-                        if row["completion_day"] in holdout_days]
+        holdout_days = (
+            set(market_days[-max(2, math.ceil(len(market_days) * 0.2)) :])
+            if len(market_days) >= 3
+            else set()
+        )
+        train_rows = [
+            row for row in market_rows if row["completion_day"] not in holdout_days
+        ]
+        holdout_rows = [
+            row for row in market_rows if row["completion_day"] in holdout_days
+        ]
+
         def score(vector: dict[str, float | int]) -> dict:
             return {
                 **_score_rows(market_rows, vector, incumbent),
                 "train": _score_rows(train_rows, vector, incumbent),
                 "holdout": _score_rows(holdout_rows, vector, incumbent),
             }
+
         single = {}
         for axis in THRESHOLD_KEYS:
             candidates = {}
@@ -265,16 +344,22 @@ def summarize_legacy_neutral_scenarios(
             label = "|".join(map(str, values))
             combinations[label] = score(vector)
         result["markets"][market] = {
-            "n": len(market_rows), "ids": sorted(row["id"] for row in market_rows),
+            "n": len(market_rows),
+            "ids": sorted(row["id"] for row in market_rows),
             "holdout_date_basis": "observed_completion_or_sell_time_date",
             "holdout_days": sorted(holdout_days),
-            "train_n": len(train_rows), "holdout_n": len(holdout_rows),
+            "train_n": len(train_rows),
+            "holdout_n": len(holdout_rows),
             "current_exit_clock_blocked_ids": sorted(
-                row["id"] for row in market_rows
+                row["id"]
+                for row in market_rows
                 if not row["current_exit_clock_allowed"]
             ),
-            "source_grade_counts": dict(Counter(row["source_grade"] for row in market_rows)),
-            "single_axis": single, "combinations": combinations,
+            "source_grade_counts": dict(
+                Counter(row["source_grade"] for row in market_rows)
+            ),
+            "single_axis": single,
+            "combinations": combinations,
             "combination_count": len(combinations),
         }
     return result

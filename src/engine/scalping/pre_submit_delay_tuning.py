@@ -36,103 +36,206 @@ DELAYS_SEC = (0.0, 30.0, 60.0, 120.0, 180.0)
 OBSERVATION_GRID_VERSION = "legacy_and_short_clock_v1"
 SHORT_RESEARCH_HORIZONS = (1, 3, 5)
 OBSERVATION_HORIZONS = (0, 1, 3, 5, 30, 60, 120, 180)
-SHORT_OBSERVATION_TOLERANCE_SEC = .25
+SHORT_OBSERVATION_TOLERANCE_SEC = 0.25
 _OBSERVATION_CONTRACT_KEYS = (
-    "observation_grid_version", "observation_horizons_sec", "observation_tolerance_sec",
+    "observation_grid_version",
+    "observation_horizons_sec",
+    "observation_tolerance_sec",
 )
 _SHORT_QUOTE_CONTRACT_KEYS = (
-    "quote_contract_version", "observation_grid_version", "observation_tolerance_sec",
+    "quote_contract_version",
+    "observation_grid_version",
+    "observation_tolerance_sec",
     "target_due_at_epoch",
 )
 _SIGNAL_REFERENCE_KEYS = (
-    'signal_reference_contract_version', 'original_signal_reference_price',
-    'original_signal_reference_epoch', 'original_signal_id',
+    "signal_reference_contract_version",
+    "original_signal_reference_price",
+    "original_signal_reference_epoch",
+    "original_signal_id",
 )
-SOURCE_STAGES = frozenset({
-    "pre_submit_delay_committed",
-    "pre_submit_delay_quote_observed",
-    "pre_submit_delay_intent_terminal",
-    "pre_submit_delay_recheck_observed",
-})
+SOURCE_STAGES = frozenset(
+    {
+        "pre_submit_delay_committed",
+        "pre_submit_delay_quote_observed",
+        "pre_submit_delay_intent_terminal",
+        "pre_submit_delay_recheck_observed",
+    }
+)
 REPORT_DIR = DATA_DIR / "report" / "pre_submit_delay_tuning"
 POLICY_DIR = DATA_DIR / "threshold_cycle" / "pre_submit_delay_policy"
 
 _DECISION_SOURCE_KEYS = (
-    "delay_intent_id", "decision_committed_at_epoch", "route",
-    "quote_transport_epoch", "delay_policy_sha256",
-    "original_machine_observation_sha256", "planned_qty", "owner",
+    "delay_intent_id",
+    "decision_committed_at_epoch",
+    "route",
+    "quote_transport_epoch",
+    "delay_policy_sha256",
+    "original_machine_observation_sha256",
+    "planned_qty",
+    "owner",
     "market_session_bucket",
 )
 _QUOTE_SOURCE_KEYS = (
-    "delay_intent_id", "decision_source_sha256", "target_delay_sec",
-    "actual_offset_sec", "quote_observed_at_epoch", "route", "quote_route",
-    "quote_transport_epoch", "ask_price", "best_bid", "ask_qty",
-    "ws_last_0d_epoch", "quote_consistency_state",
-    "quote_valid", "quote_source_reason", "route_depth_source_sha256",
+    "delay_intent_id",
+    "decision_source_sha256",
+    "target_delay_sec",
+    "actual_offset_sec",
+    "quote_observed_at_epoch",
+    "route",
+    "quote_route",
+    "quote_transport_epoch",
+    "ask_price",
+    "best_bid",
+    "ask_qty",
+    "ws_last_0d_epoch",
+    "quote_consistency_state",
+    "quote_valid",
+    "quote_source_reason",
+    "route_depth_source_sha256",
 )
 MAX_V2_SCAN_BYTES = 2 * 1024 * 1024 * 1024
 MAX_V2_RECORD_BYTES = 64 * 1024
-_V2_SOURCE_FIELDS = frozenset(_DECISION_SOURCE_KEYS + _QUOTE_SOURCE_KEYS + (
-    'decision_source_sha256','quote_source_sha256','original_evaluation_attempt_id',
-    'evaluation_attempt_id','request_id','ai_decision_trace_id','anchor_contract_version',
-    'anchor_kind','entry_mechanistic_policy_sha256','entry_ai_soft_policy_sha256',
-    'primary_branch_id','matched_branch_ids','entry_action','auxiliary_effective_action',
-    'entry_auxiliary_policy_identity','entry_auxiliary_policy_identity_version',
-    'situation_definition_refs','situation_mapping_version','situation_key','situation_source_status','selected_delay_sec',
-    *_OBSERVATION_CONTRACT_KEYS, *_SHORT_QUOTE_CONTRACT_KEYS,
-    *_SIGNAL_REFERENCE_KEYS,
-    'observation_only', 'observation_closed_at_epoch', 'terminal_finished_at_epoch',
-    'terminal_reason', 'submit_call_outcome', 'submit_call_broker_accepted',
-    'actual_order_submitted', 'committed_at_epoch', 'submit_finished_at_epoch',
-    'resolved_machine_attempt_id', 'resolved_machine_observation_sha256',
-    'recheck_status', 'successor_request_id', 'successor_evaluation_attempt_id',
-    'recheck_submitted_at_epoch', 'recheck_completed_at_epoch', 'recheck_deadline_epoch',
-    'due_at_epoch', 'entry_submit_attempt_id', 'original_request_id',
-    'recheck_commit_allowed', 'recheck_entry_action', 'recheck_auxiliary_effective_action',
-    'recheck_native_status', 'recheck_machine_policy_sha256', 'recheck_ai_policy_sha256',
-    'successor_machine_observation_sha256',
-    'delay_decision_type', 'price_cap',
-    'delay_policy_status', 'delay_selection_basis', 'delay_evidence_verdict',
-    'delay_selected_cell_key',
-))
+_V2_SOURCE_FIELDS = frozenset(
+    _DECISION_SOURCE_KEYS
+    + _QUOTE_SOURCE_KEYS
+    + (
+        "decision_source_sha256",
+        "quote_source_sha256",
+        "original_evaluation_attempt_id",
+        "evaluation_attempt_id",
+        "request_id",
+        "ai_decision_trace_id",
+        "anchor_contract_version",
+        "anchor_kind",
+        "entry_mechanistic_policy_sha256",
+        "entry_ai_soft_policy_sha256",
+        "primary_branch_id",
+        "matched_branch_ids",
+        "entry_action",
+        "auxiliary_effective_action",
+        "entry_auxiliary_policy_identity",
+        "entry_auxiliary_policy_identity_version",
+        "situation_definition_refs",
+        "situation_mapping_version",
+        "situation_key",
+        "situation_source_status",
+        "selected_delay_sec",
+        *_OBSERVATION_CONTRACT_KEYS,
+        *_SHORT_QUOTE_CONTRACT_KEYS,
+        *_SIGNAL_REFERENCE_KEYS,
+        "observation_only",
+        "observation_closed_at_epoch",
+        "terminal_finished_at_epoch",
+        "terminal_reason",
+        "submit_call_outcome",
+        "submit_call_broker_accepted",
+        "actual_order_submitted",
+        "committed_at_epoch",
+        "submit_finished_at_epoch",
+        "resolved_machine_attempt_id",
+        "resolved_machine_observation_sha256",
+        "recheck_status",
+        "successor_request_id",
+        "successor_evaluation_attempt_id",
+        "recheck_submitted_at_epoch",
+        "recheck_completed_at_epoch",
+        "recheck_deadline_epoch",
+        "due_at_epoch",
+        "entry_submit_attempt_id",
+        "original_request_id",
+        "recheck_commit_allowed",
+        "recheck_entry_action",
+        "recheck_auxiliary_effective_action",
+        "recheck_native_status",
+        "recheck_machine_policy_sha256",
+        "recheck_ai_policy_sha256",
+        "successor_machine_observation_sha256",
+        "delay_decision_type",
+        "price_cap",
+        "delay_policy_status",
+        "delay_selection_basis",
+        "delay_evidence_verdict",
+        "delay_selected_cell_key",
+    )
+)
 
 
 def _digest(payload: Any) -> str:
     return hashlib.sha256(
-        json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
+        json.dumps(
+            payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+        ).encode()
     ).hexdigest()
 
 
 def decision_source_sha256(fields: dict[str, Any]) -> str:
     """Logical generation shared by the observer and its first reader."""
     keys = _DECISION_SOURCE_KEYS
-    if fields.get('anchor_contract_version') == 2 or str(fields.get('anchor_contract_version')) in {'3', '4'}:
-        keys += ('anchor_contract_version', 'anchor_kind', 'evaluation_attempt_id',
-                 'request_id', 'ai_decision_trace_id', 'entry_mechanistic_policy_sha256',
-                 'entry_ai_soft_policy_sha256', 'primary_branch_id', 'entry_action',
-                 'auxiliary_effective_action')
-    if str(fields.get('anchor_contract_version')) == '4':
-        keys += ('matched_branch_ids', 'situation_definition_refs', 'situation_mapping_version',
-                 'situation_key', 'situation_source_status', 'selected_delay_sec')
-    if fields.get('entry_auxiliary_policy_identity_version') not in (None,'','None','null'):
-        keys += ('entry_auxiliary_policy_identity_version','entry_auxiliary_policy_identity')
+    if fields.get("anchor_contract_version") == 2 or str(
+        fields.get("anchor_contract_version")
+    ) in {"3", "4"}:
+        keys += (
+            "anchor_contract_version",
+            "anchor_kind",
+            "evaluation_attempt_id",
+            "request_id",
+            "ai_decision_trace_id",
+            "entry_mechanistic_policy_sha256",
+            "entry_ai_soft_policy_sha256",
+            "primary_branch_id",
+            "entry_action",
+            "auxiliary_effective_action",
+        )
+    if str(fields.get("anchor_contract_version")) == "4":
+        keys += (
+            "matched_branch_ids",
+            "situation_definition_refs",
+            "situation_mapping_version",
+            "situation_key",
+            "situation_source_status",
+            "selected_delay_sec",
+        )
+    if fields.get("entry_auxiliary_policy_identity_version") not in (
+        None,
+        "",
+        "None",
+        "null",
+    ):
+        keys += (
+            "entry_auxiliary_policy_identity_version",
+            "entry_auxiliary_policy_identity",
+        )
     if any(key in fields for key in _OBSERVATION_CONTRACT_KEYS):
         keys += _OBSERVATION_CONTRACT_KEYS
-    if fields.get('signal_reference_contract_version') not in (None, '', 'None', 'null'):
+    if fields.get("signal_reference_contract_version") not in (
+        None,
+        "",
+        "None",
+        "null",
+    ):
         keys += _SIGNAL_REFERENCE_KEYS
-    proof = fields.get('entry_auxiliary_policy_identity')
+    proof = fields.get("entry_auxiliary_policy_identity")
     if isinstance(proof, str):
         try:
             proof = json.loads(proof)
         except (ValueError, TypeError):
             proof = None
-    return _digest({key: (_digest(proof) if key == 'entry_auxiliary_policy_identity'
-                         else str(fields.get(key))) for key in keys})
+    return _digest(
+        {
+            key: (
+                _digest(proof)
+                if key == "entry_auxiliary_policy_identity"
+                else str(fields.get(key))
+            )
+            for key in keys
+        }
+    )
 
 
 def quote_source_sha256(fields: dict[str, Any]) -> str:
     keys = _QUOTE_SOURCE_KEYS
-    if str(fields.get('quote_contract_version')) == '2':
+    if str(fields.get("quote_contract_version")) == "2":
         keys += _SHORT_QUOTE_CONTRACT_KEYS
     return _digest({key: str(fields.get(key)) for key in keys})
 
@@ -141,17 +244,20 @@ def observation_horizons(fields: dict[str, Any]) -> tuple[int, ...] | None:
     """Recognize bound research grids without extending executable policy values."""
     if not any(key in fields for key in _OBSERVATION_CONTRACT_KEYS):
         return tuple(int(value) for value in DELAYS_SEC)
-    horizons = fields.get('observation_horizons_sec')
+    horizons = fields.get("observation_horizons_sec")
     if isinstance(horizons, str):
         try:
             horizons = json.loads(horizons)
         except ValueError:
             return None
-    if (fields.get('observation_grid_version') != OBSERVATION_GRID_VERSION
-            or not isinstance(horizons, (list, tuple))
-            or any(isinstance(value, bool) for value in horizons)
-            or tuple(horizons) != OBSERVATION_HORIZONS
-            or _number(fields.get('observation_tolerance_sec')) != SHORT_OBSERVATION_TOLERANCE_SEC):
+    if (
+        fields.get("observation_grid_version") != OBSERVATION_GRID_VERSION
+        or not isinstance(horizons, (list, tuple))
+        or any(isinstance(value, bool) for value in horizons)
+        or tuple(horizons) != OBSERVATION_HORIZONS
+        or _number(fields.get("observation_tolerance_sec"))
+        != SHORT_OBSERVATION_TOLERANCE_SEC
+    ):
         return None
     return OBSERVATION_HORIZONS
 
@@ -161,16 +267,22 @@ def expected_route_for_session(session: Any) -> str | None:
     bucket = str(session or "").strip().upper()
     if not bucket or bucket in {"CLOSED", "SESSION_TRANSITION", "UNKNOWN"}:
         return None
-    return "NXT_ONLY" if "PREMARKET" in bucket or bucket == 'PRE' else "KRX_NXT_INTEGRATED"
+    return (
+        "NXT_ONLY" if "PREMARKET" in bucket or bucket == "PRE" else "KRX_NXT_INTEGRATED"
+    )
 
 
 def _quote_source_issue(commit: dict[str, Any], quote: dict[str, Any]) -> str | None:
     expected = str(commit.get("decision_source_sha256") or "")
     epoch = str(commit.get("quote_transport_epoch") or "")
-    if (not expected or expected != decision_source_sha256(commit)
-            or not str(commit.get("route") or "") or not epoch.isdecimal()
-            or expected != str(quote.get("decision_source_sha256") or "")
-            or epoch != str(quote.get("quote_transport_epoch") or "")):
+    if (
+        not expected
+        or expected != decision_source_sha256(commit)
+        or not str(commit.get("route") or "")
+        or not epoch.isdecimal()
+        or expected != str(quote.get("decision_source_sha256") or "")
+        or epoch != str(quote.get("quote_transport_epoch") or "")
+    ):
         return "quote_generation_or_epoch_mismatch"
     committed = _number(commit.get("decision_committed_at_epoch"))
     observed = _number(quote.get("quote_observed_at_epoch"))
@@ -179,36 +291,51 @@ def _quote_source_issue(commit: dict[str, Any], quote: dict[str, Any]) -> str | 
     horizons = observation_horizons(commit)
     short = horizon in SHORT_RESEARCH_HORIZONS
     if horizons is None or horizon not in horizons:
-        return 'quote_observation_contract_invalid'
+        return "quote_observation_contract_invalid"
     if short:
-        if (str(quote.get('quote_contract_version')) != '2'
-                or quote.get('observation_grid_version') != OBSERVATION_GRID_VERSION
-                or _number(quote.get('observation_tolerance_sec')) != SHORT_OBSERVATION_TOLERANCE_SEC
-                or committed is None
-                or _number(quote.get('target_due_at_epoch')) != committed + horizon):
-            return 'quote_observation_contract_invalid'
-    elif quote.get('quote_contract_version') not in (None, '', 1, '1'):
-        return 'quote_observation_contract_invalid'
+        if (
+            str(quote.get("quote_contract_version")) != "2"
+            or quote.get("observation_grid_version") != OBSERVATION_GRID_VERSION
+            or _number(quote.get("observation_tolerance_sec"))
+            != SHORT_OBSERVATION_TOLERANCE_SEC
+            or committed is None
+            or _number(quote.get("target_due_at_epoch")) != committed + horizon
+        ):
+            return "quote_observation_contract_invalid"
+    elif quote.get("quote_contract_version") not in (None, "", 1, "1"):
+        return "quote_observation_contract_invalid"
     depth = _number(quote.get("ws_last_0d_epoch"))
     depth_sha = str(quote.get("route_depth_source_sha256") or "")
-    if (str(quote.get("quote_source_sha256") or "") != quote_source_sha256(quote)
-            or committed is None or observed is None or offset is None
-            or horizon is None or depth is None
-            or len(depth_sha) != 64 or any(char not in "0123456789abcdef" for char in depth_sha)
-            or abs(observed - committed - offset) > .01
-            or (not 0 <= offset - horizon <= SHORT_OBSERVATION_TOLERANCE_SEC
-                if short else abs(offset - horizon) > 3.0)
-            or not 0 <= observed - depth <= .7):
+    if (
+        str(quote.get("quote_source_sha256") or "") != quote_source_sha256(quote)
+        or committed is None
+        or observed is None
+        or offset is None
+        or horizon is None
+        or depth is None
+        or len(depth_sha) != 64
+        or any(char not in "0123456789abcdef" for char in depth_sha)
+        or abs(observed - committed - offset) > 0.01
+        or (
+            not 0 <= offset - horizon <= SHORT_OBSERVATION_TOLERANCE_SEC
+            if short
+            else abs(offset - horizon) > 3.0
+        )
+        or not 0 <= observed - depth <= 0.7
+    ):
         return "quote_clock_or_hash_invalid"
-    if (str(quote.get("route") or "") != str(commit.get("route") or "")
-            or str(quote.get("quote_route") or "") != str(commit.get("route") or "")):
+    if str(quote.get("route") or "") != str(commit.get("route") or "") or str(
+        quote.get("quote_route") or ""
+    ) != str(commit.get("route") or ""):
         return "quote_route_mismatch"
     return None
 
 
 def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, delete=False) as handle:
+    with tempfile.NamedTemporaryFile(
+        "w", encoding="utf-8", dir=path.parent, delete=False
+    ) as handle:
         json.dump(payload, handle, sort_keys=True, ensure_ascii=False, indent=2)
         handle.write("\n")
         temporary = Path(handle.name)
@@ -226,18 +353,29 @@ def policy_path(target_date: str) -> Path:
     return POLICY_DIR / f"pre_submit_delay_policy_{target_date}.json"
 
 
-def _source_rows(target_date: str, *, data_root: Path | None = None,
-                 allowed_current_ids: set[str] | None = None,
-                 strict_projection: bool = False, source_snapshot=None,
-                 v2_minimal=False, resident_claim=None) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+def _source_rows(
+    target_date: str,
+    *,
+    data_root: Path | None = None,
+    allowed_current_ids: set[str] | None = None,
+    strict_projection: bool = False,
+    source_snapshot=None,
+    v2_minimal=False,
+    resident_claim=None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     if source_snapshot is not None:
         source_snapshot.verify(target_date, data_root or DATA_DIR)
         rows = source_snapshot.rows
         if allowed_current_ids is not None:
-            rows = [row for row in rows if row.get("emitted_date") != target_date
-                    or row.get("execution_source_event_sha256") in allowed_current_ids]
+            rows = [
+                row
+                for row in rows
+                if row.get("emitted_date") != target_date
+                or row.get("execution_source_event_sha256") in allowed_current_ids
+            ]
         return rows, dict(source_snapshot.source)
     from src.engine.pipeline_event_summary import execution_projection_identity
+
     strict_projection = strict_projection or target_date >= "2026-09-29"
     baseline = policy_refresh_start_date(target_date)
     root = (Path(data_root) if data_root is not None else DATA_DIR) / "threshold_cycle"
@@ -246,8 +384,10 @@ def _source_rows(target_date: str, *, data_root: Path | None = None,
         for directory in root.glob("date=*/family=" + FAMILY):
             source_date = directory.parent.name.removeprefix("date=")
             try:
-                if (date.fromisoformat(source_date).isoformat() == source_date
-                        and baseline <= source_date <= target_date):
+                if (
+                    date.fromisoformat(source_date).isoformat() == source_date
+                    and baseline <= source_date <= target_date
+                ):
                     source_partitions.extend(
                         (source_date, path)
                         for path in sorted(directory.glob("part-execution-*.jsonl"))
@@ -274,19 +414,38 @@ def _source_rows(target_date: str, *, data_root: Path | None = None,
         source_dates.add(source_date)
         before = path.stat()
         partition_digest = hashlib.sha256()
-        if (path.is_symlink() or not path.resolve().is_relative_to(root.resolve())
-                or any(parent.is_symlink() for parent in path.parents) or before.st_size > 64 * 1024 * 1024):
+        if (
+            path.is_symlink()
+            or not path.resolve().is_relative_to(root.resolve())
+            or any(parent.is_symlink() for parent in path.parents)
+            or before.st_size > 64 * 1024 * 1024
+        ):
             raise ValueError("delay_partition_invalid_or_unbounded")
         with path.open(encoding="utf-8") as handle:
-            for line in iter(lambda:handle.readline(MAX_V2_RECORD_BYTES+1) if v2_minimal else handle.readline(), ''):
+            for line in iter(
+                lambda: (
+                    handle.readline(MAX_V2_RECORD_BYTES + 1)
+                    if v2_minimal
+                    else handle.readline()
+                ),
+                "",
+            ):
                 total_bytes += len(line.encode())
-                if (total_bytes > (MAX_V2_SCAN_BYTES if v2_minimal else 64 * 1024 * 1024)
-                        or not line.endswith("\n") or v2_minimal and len(line.encode())>MAX_V2_RECORD_BYTES):
+                if (
+                    total_bytes
+                    > (MAX_V2_SCAN_BYTES if v2_minimal else 64 * 1024 * 1024)
+                    or not line.endswith("\n")
+                    or v2_minimal
+                    and len(line.encode()) > MAX_V2_RECORD_BYTES
+                ):
                     raise ValueError("delay_partition_decoded_budget_or_partial_line")
                 source_hash.update(line.encode())
                 partition_digest.update(line.encode())
                 row = json.loads(line)
-                if row.get("emitted_date") != source_date or row.get("family") != FAMILY:
+                if (
+                    row.get("emitted_date") != source_date
+                    or row.get("family") != FAMILY
+                ):
                     raise ValueError("delay_partition_date_or_family_mismatch")
                 if row.get("stage") not in SOURCE_STAGES:
                     continue
@@ -297,25 +456,42 @@ def _source_rows(target_date: str, *, data_root: Path | None = None,
                     raise ValueError("delay_partition_identity_missing")
                 if strict_projection and identity != execution_projection_identity(row):
                     raise ValueError("delay_partition_projection_identity_mismatch")
-                content_sha = _digest({key: value for key, value in row.items()
-                                       if key != "execution_source_event_sha256"})
+                content_sha = _digest(
+                    {
+                        key: value
+                        for key, value in row.items()
+                        if key != "execution_source_event_sha256"
+                    }
+                )
                 if identity in seen and seen[identity] != content_sha:
                     raise ValueError("delay_partition_identity_collision")
                 if identity not in seen:
                     retained = row
                     if v2_minimal:
-                        fields = row.get('fields')
-                        if not isinstance(fields,dict):
-                            raise ValueError('delay_projection_fields_invalid')
+                        fields = row.get("fields")
+                        if not isinstance(fields, dict):
+                            raise ValueError("delay_projection_fields_invalid")
                         # Original identity is checked before this projection.
                         # Full-field digest preserves conflicts in unused fields.
-                        retained = {key:value for key,value in row.items() if key!='fields'}
-                        retained['fields'] = {key:value for key,value in fields.items() if key in _V2_SOURCE_FIELDS}
-                        retained['fields']['_source_fields_sha256'] = _digest(fields)
+                        retained = {
+                            key: value for key, value in row.items() if key != "fields"
+                        }
+                        retained["fields"] = {
+                            key: value
+                            for key, value in fields.items()
+                            if key in _V2_SOURCE_FIELDS
+                        }
+                        retained["fields"]["_source_fields_sha256"] = _digest(fields)
                     if resident_claim is not None:
-                        resident_claim.grow(len(json.dumps(retained,allow_nan=False).encode())*8+512)
-                    if (allowed_current_ids is not None and source_date == target_date
-                            and identity not in allowed_current_ids):
+                        resident_claim.grow(
+                            len(json.dumps(retained, allow_nan=False).encode()) * 8
+                            + 512
+                        )
+                    if (
+                        allowed_current_ids is not None
+                        and source_date == target_date
+                        and identity not in allowed_current_ids
+                    ):
                         isolated_event_count += 1
                     else:
                         rows.append(retained)
@@ -325,39 +501,73 @@ def _source_rows(target_date: str, *, data_root: Path | None = None,
                     duplicate_identities.add(identity)
         after = path.stat()
         if (before.st_ino, before.st_size, before.st_mtime_ns) != (
-            after.st_ino, after.st_size, after.st_mtime_ns
+            after.st_ino,
+            after.st_size,
+            after.st_mtime_ns,
         ):
             raise ValueError("delay_partition_changed_during_read")
-        partition_generations[str(path)] = {"size": before.st_size, "sha256": partition_digest.hexdigest()}
-        cumulative_generations[source_date] = {'sha256':source_hash.hexdigest(),
-            'paths':list(partition_generations)}
-    current_partitions = sorted(
-        (source_date, path)
-        for source_date, directory in (
-            (item.parent.name.removeprefix("date="), item)
-            for item in root.glob("date=*/family=" + FAMILY)
+        partition_generations[str(path)] = {
+            "size": before.st_size,
+            "sha256": partition_digest.hexdigest(),
+        }
+        cumulative_generations[source_date] = {
+            "sha256": source_hash.hexdigest(),
+            "paths": list(partition_generations),
+        }
+    current_partitions = (
+        sorted(
+            (source_date, path)
+            for source_date, directory in (
+                (item.parent.name.removeprefix("date="), item)
+                for item in root.glob("date=*/family=" + FAMILY)
+            )
+            if baseline <= source_date <= target_date
+            for path in directory.glob("part-execution-*.jsonl")
         )
-        if baseline <= source_date <= target_date
-        for path in directory.glob("part-execution-*.jsonl")
-    ) if root.is_dir() else []
+        if root.is_dir()
+        else []
+    )
     if source_partitions != current_partitions:
         raise ValueError("delay_partition_inventory_changed")
     return rows, {
-        "status": "ready_with_isolation" if rows and isolated_event_count else
-                  "ready" if rows else "source_gap" if isolated_event_count else
-                  "valid_empty" if paths else "source_gap",
-        "first_blocker": (None if rows else "valid_empty_delay_observations"
-                          if paths and not isolated_event_count else
-                          "no_matched_delay_source_events" if isolated_event_count else
-                          "clean_baseline_delay_observations_missing"),
+        "status": (
+            "ready_with_isolation"
+            if rows and isolated_event_count
+            else (
+                "ready"
+                if rows
+                else (
+                    "source_gap"
+                    if isolated_event_count
+                    else "valid_empty" if paths else "source_gap"
+                )
+            )
+        ),
+        "first_blocker": (
+            None
+            if rows
+            else (
+                "valid_empty_delay_observations"
+                if paths and not isolated_event_count
+                else (
+                    "no_matched_delay_source_events"
+                    if isolated_event_count
+                    else "clean_baseline_delay_observations_missing"
+                )
+            )
+        ),
         "paths": [str(path) for path in paths],
         "partition_generations": partition_generations,
         "cumulative_generations": cumulative_generations,
-        "window_policy": ("selected_policy_forward_through_target_date"
-                          if baseline != "2026-06-05" else
-                          "clean_baseline_cumulative_through_target_date"),
+        "window_policy": (
+            "selected_policy_forward_through_target_date"
+            if baseline != "2026-06-05"
+            else "clean_baseline_cumulative_through_target_date"
+        ),
         **({"refresh_start_date": baseline} if baseline != "2026-06-05" else {}),
-        "clean_tuning_baseline_date": clean_baseline_policy().get("clean_tuning_baseline_date"),
+        "clean_tuning_baseline_date": clean_baseline_policy().get(
+            "clean_tuning_baseline_date"
+        ),
         "through_date": target_date,
         "source_dates": sorted(source_dates),
         "source_date_count": len(source_dates),
@@ -369,14 +579,21 @@ def _source_rows(target_date: str, *, data_root: Path | None = None,
         "isolated_current_event_count": isolated_event_count,
         "raw_stage_counts": dict(stage_counts),
         "sha256": source_hash.hexdigest() if paths else None,
-        **({'source_projection':'v2_minimal_fields_original_identity_verified',
-             'resident_claim_bytes':resident_claim.size} if v2_minimal and resident_claim is not None else {}),
+        **(
+            {
+                "source_projection": "v2_minimal_fields_original_identity_verified",
+                "resident_claim_bytes": resident_claim.size,
+            }
+            if v2_minimal and resident_claim is not None
+            else {}
+        ),
     }
 
 
 @dataclass
 class SourceSnapshot:
     """One decode per family run; independent verification still hashes bytes."""
+
     target_date: str
     data_root: Path
     rows: list
@@ -386,39 +603,58 @@ class SourceSnapshot:
     @classmethod
     def load(cls, target_date, data_root, *, v2_minimal=False):
         from src.engine.lifecycle.research_input_budget import Claim
+
         root = Path(data_root).resolve()
         floor = policy_refresh_start_date(target_date)
-        size = sum(path.stat().st_size for directory in (root / 'threshold_cycle').glob('date=*/family=' + FAMILY)
-                   if floor <= directory.parent.name.removeprefix('date=') <= target_date
-                   for path in directory.glob('part-execution-*.jsonl'))
+        size = sum(
+            path.stat().st_size
+            for directory in (root / "threshold_cycle").glob("date=*/family=" + FAMILY)
+            if floor <= directory.parent.name.removeprefix("date=") <= target_date
+            for path in directory.glob("part-execution-*.jsonl")
+        )
         if v2_minimal and size > MAX_V2_SCAN_BYTES:
-            raise ValueError('delay_scan_job_partition_resume_required')
+            raise ValueError("delay_scan_job_partition_resume_required")
         claim = Claim(0 if v2_minimal else size * 8)
         try:
             if v2_minimal:
-                with Claim(MAX_V2_RECORD_BYTES*8):
-                    rows, source = _source_rows(target_date,data_root=root,v2_minimal=True,resident_claim=claim)
+                with Claim(MAX_V2_RECORD_BYTES * 8):
+                    rows, source = _source_rows(
+                        target_date,
+                        data_root=root,
+                        v2_minimal=True,
+                        resident_claim=claim,
+                    )
             else:
                 rows, source = _source_rows(target_date, data_root=root)
-            if source['bytes_read'] != size:
-                raise ValueError('delay_source_changed_during_budget_admission')
+            if source["bytes_read"] != size:
+                raise ValueError("delay_source_changed_during_budget_admission")
         except Exception:
             claim.close()
             raise
         return cls(target_date, Path(data_root).resolve(), rows, source, claim)
 
     def verify(self, target_date, data_root):
-        if target_date != self.target_date or Path(data_root).resolve() != self.data_root:
+        if (
+            target_date != self.target_date
+            or Path(data_root).resolve() != self.data_root
+        ):
             raise ValueError("delay_snapshot_date_or_root_changed")
-        current = sorted(str(path) for directory in (self.data_root / "threshold_cycle").glob(
-            "date=*/family=" + FAMILY) if policy_refresh_start_date(target_date)
-            <= directory.parent.name.removeprefix("date=") <= target_date
-            for path in directory.glob("part-execution-*.jsonl"))
+        current = sorted(
+            str(path)
+            for directory in (self.data_root / "threshold_cycle").glob(
+                "date=*/family=" + FAMILY
+            )
+            if policy_refresh_start_date(target_date)
+            <= directory.parent.name.removeprefix("date=")
+            <= target_date
+            for path in directory.glob("part-execution-*.jsonl")
+        )
         if current != sorted(self.source["paths"]):
             raise ValueError("delay_snapshot_inventory_changed")
         for name, generation in self.source["partition_generations"].items():
             path = Path(name)
             from src.engine.lifecycle.holding_window_generation import source_stat
+
             before = path.stat()
             if path.is_symlink() or path.stat().st_size != generation["size"]:
                 raise ValueError("delay_snapshot_generation_changed")
@@ -426,7 +662,9 @@ class SourceSnapshot:
             with path.open("rb") as handle:
                 for chunk in iter(lambda: handle.read(64 * 1024), b""):
                     hasher.update(chunk)
-            if hasher.hexdigest() != generation["sha256"] or source_stat(path.stat()) != source_stat(before):
+            if hasher.hexdigest() != generation["sha256"] or source_stat(
+                path.stat()
+            ) != source_stat(before):
                 raise ValueError("delay_snapshot_generation_changed")
 
 
@@ -438,8 +676,9 @@ def _number(value: Any) -> float | None:
         return None
 
 
-def decision_type_snapshot(*, price: Any, ask: Any, bid: Any,
-                           venue: Any, session: Any) -> dict[str, Any]:
+def decision_type_snapshot(
+    *, price: Any, ask: Any, bid: Any, venue: Any, session: Any
+) -> dict[str, Any]:
     """Freeze only source-known execution features at intent time.
 
     A spread alone is not the machine's liquidity score. Missing volatility
@@ -454,47 +693,73 @@ def decision_type_snapshot(*, price: Any, ask: Any, bid: Any,
     if observed_price is not None and observed_price > 0:
         tick_pct = get_tick_size(observed_price) / observed_price * 100
     tick_band = (
-        "UNKNOWN" if tick_pct is None else
-        "LT_5BP" if tick_pct < .05 else
-        "5_TO_10BP" if tick_pct < .10 else "GE_10BP"
+        "UNKNOWN"
+        if tick_pct is None
+        else (
+            "LT_5BP"
+            if tick_pct < 0.05
+            else "5_TO_10BP" if tick_pct < 0.10 else "GE_10BP"
+        )
     )
     spread_bp = None
-    if (observed_ask is not None and observed_bid is not None
-            and observed_ask >= observed_bid > 0):
+    if (
+        observed_ask is not None
+        and observed_bid is not None
+        and observed_ask >= observed_bid > 0
+    ):
         spread_bp = (observed_ask - observed_bid) / observed_bid * 10000
     venue_name = str(venue or "UNKNOWN").strip().upper()
     session_name = str(session or "UNKNOWN").strip().upper()
     return {
         "schema": "pre_submit_delay_decision_type_v1",
-        "venue": venue_name, "session_bucket": session_name,
-        "price_tick_band": tick_band, "tick_pct": tick_pct,
+        "venue": venue_name,
+        "session_bucket": session_name,
+        "price_tick_band": tick_band,
+        "tick_pct": tick_pct,
         "spread_bp": spread_bp,
-        "liquidity_band": "UNKNOWN", "volatility_band": "UNKNOWN",
+        "liquidity_band": "UNKNOWN",
+        "volatility_band": "UNKNOWN",
         "market_cap_krw": None,
         "type_key": "|".join((venue_name, session_name, tick_band)),
     }
 
 
-def _validated_candidate(policy: dict[str, Any], report: dict[str, Any],
-                         *, scope_key: str | None = None,
-                         type_key: str | None = None) -> bool:
+def _validated_candidate(
+    policy: dict[str, Any],
+    report: dict[str, Any],
+    *,
+    scope_key: str | None = None,
+    type_key: str | None = None,
+) -> bool:
     """Require each selected arm to exist on its own paired denominator."""
     if type_key is not None:
         selected_policy = (policy.get("type_policies") or {}).get(type_key)
-        source_rows = [row for row in report.get("type_census", [])
-                       if isinstance(row, dict) and row.get("type_key") == type_key]
-        if (len(source_rows) != 1 or not isinstance(selected_policy, dict)
-                or (report.get("selected_type_policies") or {}).get(type_key)
-                != selected_policy.get("selected_delay_sec")):
+        source_rows = [
+            row
+            for row in report.get("type_census", [])
+            if isinstance(row, dict) and row.get("type_key") == type_key
+        ]
+        if (
+            len(source_rows) != 1
+            or not isinstance(selected_policy, dict)
+            or (report.get("selected_type_policies") or {}).get(type_key)
+            != selected_policy.get("selected_delay_sec")
+        ):
             return False
         grid = source_rows[0].get("candidate_grid") or []
     elif scope_key is not None:
         selected_policy = (policy.get("scope_policies") or {}).get(scope_key)
-        source_rows = [row for row in report.get("scope_census", [])
-                       if isinstance(row, dict) and row.get("scope_key") == scope_key]
-        if (len(source_rows) != 1 or not isinstance(selected_policy, dict)
-                or (report.get("selected_scope_policies") or {}).get(scope_key)
-                != selected_policy.get("selected_delay_sec")):
+        source_rows = [
+            row
+            for row in report.get("scope_census", [])
+            if isinstance(row, dict) and row.get("scope_key") == scope_key
+        ]
+        if (
+            len(source_rows) != 1
+            or not isinstance(selected_policy, dict)
+            or (report.get("selected_scope_policies") or {}).get(scope_key)
+            != selected_policy.get("selected_delay_sec")
+        ):
             return False
         grid = source_rows[0].get("candidate_grid") or []
     else:
@@ -506,12 +771,19 @@ def _validated_candidate(policy: dict[str, Any], report: dict[str, Any],
         return False
     if selected not in DELAYS_SEC or report.get("status") != "validated_edge":
         return False
-    if report.get("model_status") != "validated" or selected_policy.get("model_status") != "validated":
+    if (
+        report.get("model_status") != "validated"
+        or selected_policy.get("model_status") != "validated"
+    ):
         return False
-    if (report.get("source") or {}).get("status") not in {"ready", "ready_with_isolation"}:
+    if (report.get("source") or {}).get("status") not in {
+        "ready",
+        "ready_with_isolation",
+    }:
         return False
     rows = [
-        row for row in grid
+        row
+        for row in grid
         if isinstance(row, dict) and _number(row.get("delay_sec")) == selected
     ]
     if len(rows) != 1 or rows[0].get("candidate_passed") is not True:
@@ -524,8 +796,10 @@ def _validated_candidate(policy: dict[str, Any], report: dict[str, Any],
         and (_number(selected_policy.get("paired_net_ev_delta_pct")) or 0) > 0
         and _number(selected_policy.get("holdout_net_ev_delta_pct")) is not None
         and _number(selected_policy.get("holdout_net_ev_delta_pct")) >= 0
-        and _number(row.get("paired_net_ev_delta_pct")) == _number(selected_policy.get("paired_net_ev_delta_pct"))
-        and _number(row.get("holdout_net_ev_delta_pct")) == _number(selected_policy.get("holdout_net_ev_delta_pct"))
+        and _number(row.get("paired_net_ev_delta_pct"))
+        == _number(selected_policy.get("paired_net_ev_delta_pct"))
+        and _number(row.get("holdout_net_ev_delta_pct"))
+        == _number(selected_policy.get("holdout_net_ev_delta_pct"))
         and (_number(row.get("source_valid_attempt_count")) or 0) >= 10
         and (_number(row.get("holdout_attempt_count")) or 0) >= 3
         and (_number(report.get("terminal_observation_count")) or 0) >= 10
@@ -540,7 +814,12 @@ def _existing_quote_census(target_date: str) -> dict[str, Any]:
     at each delay horizon. This bounded read distinguishes that partial source
     from a complete absence of market data without promoting a counterfactual.
     """
-    directory = DATA_DIR / "threshold_cycle" / f"date={target_date}" / "family=dynamic_entry_price_resolver"
+    directory = (
+        DATA_DIR
+        / "threshold_cycle"
+        / f"date={target_date}"
+        / "family=dynamic_entry_price_resolver"
+    )
     orders: dict[str, list[datetime]] = defaultdict(list)
     partition_bytes = 0
     for path in sorted(directory.glob("part-execution-*.jsonl")):
@@ -551,7 +830,10 @@ def _existing_quote_census(target_date: str) -> dict[str, Any]:
         with path.open(encoding="utf-8") as handle:
             for line in handle:
                 event = json.loads(line)
-                if event.get("stage") == "order_leg_sent" and event.get("emitted_date") == target_date:
+                if (
+                    event.get("stage") == "order_leg_sent"
+                    and event.get("emitted_date") == target_date
+                ):
                     orders[str(event.get("stock_code") or "")].append(
                         datetime.fromisoformat(event["emitted_at"])
                     )
@@ -569,18 +851,25 @@ def _existing_quote_census(target_date: str) -> dict[str, Any]:
     max_read_bytes = 64 * 1024 * 1024
     read_start = max(0, before.st_size - max_read_bytes)
     cache_path = REPORT_DIR / f"existing_quote_census_{target_date}.json"
-    cache_key = _digest({
-        "orders": {code: [value.isoformat() for value in times] for code, times in sorted(orders.items())},
-        "raw_inode": before.st_ino,
-        "raw_size": before.st_size,
-        "raw_mtime_ns": before.st_mtime_ns,
-        "read_start": read_start,
-        "horizons": DELAYS_SEC,
-    })
+    cache_key = _digest(
+        {
+            "orders": {
+                code: [value.isoformat() for value in times]
+                for code, times in sorted(orders.items())
+            },
+            "raw_inode": before.st_ino,
+            "raw_size": before.st_size,
+            "raw_mtime_ns": before.st_mtime_ns,
+            "read_start": read_start,
+            "horizons": DELAYS_SEC,
+        }
+    )
     if cache_path.is_file() and cache_path.stat().st_size <= 1024 * 1024:
         try:
             cached = json.loads(cache_path.read_text(encoding="utf-8"))
-            if cached.get("cache_key") == cache_key and not cached.get("raw_changed_during_read"):
+            if cached.get("cache_key") == cache_key and not cached.get(
+                "raw_changed_during_read"
+            ):
                 return {**cached, "cache_hit": True}
         except (OSError, ValueError, AttributeError):
             pass
@@ -588,8 +877,11 @@ def _existing_quote_census(target_date: str) -> dict[str, Any]:
     field_count = Counter()
     horizon_count = Counter()
     field_names = (
-        "best_ask_at_submit", "fresh_best_ask", "market_data_effective_best_ask",
-        "executable_best_ask", "holding_context_best_ask",
+        "best_ask_at_submit",
+        "fresh_best_ask",
+        "market_data_effective_best_ask",
+        "executable_best_ask",
+        "holding_context_best_ask",
         "entry_split_order_probe_submit_best_ask",
     )
     with raw_path.open("rb") as handle:
@@ -622,14 +914,18 @@ def _existing_quote_census(target_date: str) -> dict[str, Any]:
                 break
     after = raw_path.stat()
     changed = (before.st_ino, before.st_size, before.st_mtime_ns) != (
-        after.st_ino, after.st_size, after.st_mtime_ns
+        after.st_ino,
+        after.st_size,
+        after.st_mtime_ns,
     )
     result = {
         "status": "bounded_tail_field_presence_only",
         "submit_count": count,
         "stocks_with_quote_fields": len(field_count),
         "horizon_stock_count": {
-            f"{horizon:g}": len({code for code, observed in horizon_count if observed == horizon})
+            f"{horizon:g}": len(
+                {code for code, observed in horizon_count if observed == horizon}
+            )
             for horizon in DELAYS_SEC
         },
         "raw_bytes_read": before.st_size - read_start,
@@ -648,114 +944,216 @@ def _existing_quote_census(target_date: str) -> dict[str, Any]:
 
 
 def family_source_ledger_path(data_root: Path, target_date: str) -> Path:
-    return Path(data_root) / "pipeline_event_summaries" / f"pre_submit_delay_source_ledger_{target_date}.json"
+    return (
+        Path(data_root)
+        / "pipeline_event_summaries"
+        / f"pre_submit_delay_source_ledger_{target_date}.json"
+    )
 
 
-def seal_family_source_ledger(data_root: Path, target_date: str, *, source_snapshot=None, partitioned=False) -> dict[str, Any]:
+def seal_family_source_ledger(
+    data_root: Path, target_date: str, *, source_snapshot=None, partitioned=False
+) -> dict[str, Any]:
     """Bind exact raw/compact overlap without requiring unrelated summary stages."""
     if partitioned:
         from src.engine.automation.pre_submit_delay_source_ledger import seal
-        return seal(data_root,target_date,source_snapshot=source_snapshot)
-    from src.engine.pipeline_event_summary import _producer_raw_ledger, load_summary_rows, producer_summary_paths
+
+        return seal(data_root, target_date, source_snapshot=source_snapshot)
+    from src.engine.pipeline_event_summary import (
+        _producer_raw_ledger,
+        load_summary_rows,
+        producer_summary_paths,
+    )
 
     data_root = Path(data_root)
     raw = _producer_raw_ledger(data_root, target_date, selected_stages=SOURCE_STAGES)
     if not raw["parts"]:
         raise ValueError("raw_source_missing")
-    if raw["source_quality_reasons"].get("invalid_json") or raw["source_quality_reasons"].get("incomplete_line"):
+    if raw["source_quality_reasons"].get("invalid_json") or raw[
+        "source_quality_reasons"
+    ].get("incomplete_line"):
         raise ValueError("unidentifiable_raw_source_quarantine")
     source_snapshot = source_snapshot or SourceSnapshot.load(target_date, data_root)
-    compact_rows, compact = _source_rows(target_date, data_root=data_root, strict_projection=True, source_snapshot=source_snapshot)
-    raw_counts = Counter(identity for ids in raw["selected_execution_identities"].values() for identity in ids)
-    compact_counts = Counter(str(row.get("execution_source_event_sha256") or "")
-                             for row in compact_rows if row.get("emitted_date") == target_date)
+    compact_rows, compact = _source_rows(
+        target_date,
+        data_root=data_root,
+        strict_projection=True,
+        source_snapshot=source_snapshot,
+    )
+    raw_counts = Counter(
+        identity
+        for ids in raw["selected_execution_identities"].values()
+        for identity in ids
+    )
+    compact_counts = Counter(
+        str(row.get("execution_source_event_sha256") or "")
+        for row in compact_rows
+        if row.get("emitted_date") == target_date
+    )
     compact_duplicates = set(compact["duplicate_event_identities"])
-    matched = sorted(identity for identity in raw_counts.keys() & compact_counts.keys()
-                     if raw_counts[identity] == compact_counts[identity] == 1
-                     and identity not in compact_duplicates)
+    matched = sorted(
+        identity
+        for identity in raw_counts.keys() & compact_counts.keys()
+        if raw_counts[identity] == compact_counts[identity] == 1
+        and identity not in compact_duplicates
+    )
     raw_only = sorted(raw_counts.keys() - set(matched))
     compact_only = sorted(compact_counts.keys() - set(matched))
-    summary_path, manifest_path = producer_summary_paths(data_root / "pipeline_event_summaries", target_date)
-    summary = {"status": "unobservable", "stage_event_counts": {}, "raw_summary_gap_by_stage": {}}
+    summary_path, manifest_path = producer_summary_paths(
+        data_root / "pipeline_event_summaries", target_date
+    )
+    summary = {
+        "status": "unobservable",
+        "stage_event_counts": {},
+        "raw_summary_gap_by_stage": {},
+    }
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        summary_rows = load_summary_rows(summary_path, include_samples=False, strict=True)
-        if (manifest.get("summary_path") != str(summary_path)
-                or manifest.get("summary_event_count") != sum(row["event_count"] for row in summary_rows)
-                or manifest.get("summary_storage_size_bytes") != summary_path.stat().st_size):
+        summary_rows = load_summary_rows(
+            summary_path, include_samples=False, strict=True
+        )
+        if (
+            manifest.get("summary_path") != str(summary_path)
+            or manifest.get("summary_event_count")
+            != sum(row["event_count"] for row in summary_rows)
+            or manifest.get("summary_storage_size_bytes") != summary_path.stat().st_size
+        ):
             raise ValueError("summary_manifest_invalid")
         counts = Counter()
         for row in summary_rows:
             if row.get("target_date") == target_date:
                 counts[row["stage"]] += row["event_count"]
-        summary = {"status": "observed", "stage_event_counts": dict(counts),
-                   "raw_summary_gap_by_stage": {
-                       stage: raw["stages"].get(stage, {}).get("valid_count", 0) - counts[stage]
-                       for stage in sorted(set(raw["stages"]) | set(counts))
-                       if raw["stages"].get(stage, {}).get("valid_count", 0) != counts[stage]},
-                   "manifest_last_writer_pid": manifest.get("last_writer_pid"),
-                   "manifest_updated_at": manifest.get("updated_at"),
-                   "flush_error_count": manifest.get("flush_error_count")}
+        summary = {
+            "status": "observed",
+            "stage_event_counts": dict(counts),
+            "raw_summary_gap_by_stage": {
+                stage: raw["stages"].get(stage, {}).get("valid_count", 0)
+                - counts[stage]
+                for stage in sorted(set(raw["stages"]) | set(counts))
+                if raw["stages"].get(stage, {}).get("valid_count", 0) != counts[stage]
+            },
+            "manifest_last_writer_pid": manifest.get("last_writer_pid"),
+            "manifest_updated_at": manifest.get("updated_at"),
+            "flush_error_count": manifest.get("flush_error_count"),
+        }
     except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
         summary["reason"] = type(exc).__name__
     ledger = {
-        "schema": "pre_submit_delay_family_source_ledger_v1", "source_date": target_date,
-        "status": "ready_with_isolation" if raw_only or compact_only else
-                  "ready" if matched else "valid_empty",
-        "metric_role": "source_quality_gate", "decision_authority": "report_only",
+        "schema": "pre_submit_delay_family_source_ledger_v1",
+        "source_date": target_date,
+        "status": (
+            "ready_with_isolation"
+            if raw_only or compact_only
+            else "ready" if matched else "valid_empty"
+        ),
+        "metric_role": "source_quality_gate",
+        "decision_authority": "report_only",
         "window_policy": "exact_source_date_raw_compact_identity_intersection",
-        "sample_floor": "one_exact_matched_event", "primary_decision_metric": "matched_event_count",
+        "sample_floor": "one_exact_matched_event",
+        "primary_decision_metric": "matched_event_count",
         "source_quality_gate": "raw_compact_exact_identity_and_stable_generation",
-        "forbidden_uses": ["order_authority", "missing_as_zero_ev", "summary_count_as_identity"],
-        "raw_parts": raw["parts"], "raw_logical_sha256": raw["logical_sha256"],
-        "raw_stage_counts": {stage: raw["stages"].get(stage, {}).get("valid_count", 0)
-                             for stage in sorted(SOURCE_STAGES)},
-        "compact_source_sha256": compact["sha256"], "compact_paths": compact["paths"],
+        "forbidden_uses": [
+            "order_authority",
+            "missing_as_zero_ev",
+            "summary_count_as_identity",
+        ],
+        "raw_parts": raw["parts"],
+        "raw_logical_sha256": raw["logical_sha256"],
+        "raw_stage_counts": {
+            stage: raw["stages"].get(stage, {}).get("valid_count", 0)
+            for stage in sorted(SOURCE_STAGES)
+        },
+        "compact_source_sha256": compact["sha256"],
+        "compact_paths": compact["paths"],
         "compact_stage_counts": compact["raw_stage_counts"],
-        "matched_event_ids": matched, "raw_only_event_ids": raw_only,
-        "compact_only_event_ids": compact_only, "summary_diagnostic": summary,
+        "matched_event_ids": matched,
+        "raw_only_event_ids": raw_only,
+        "compact_only_event_ids": compact_only,
+        "summary_diagnostic": summary,
         "runtime_effect": False,
     }
     ledger["ledger_sha256"] = _digest(ledger)
     _atomic_json(family_source_ledger_path(data_root, target_date), ledger)
-    issues = family_source_ledger_issues(data_root, target_date, source_snapshot=source_snapshot)
+    issues = family_source_ledger_issues(
+        data_root, target_date, source_snapshot=source_snapshot
+    )
     if issues:
         raise ValueError(",".join(issues))
     return ledger
 
 
-def family_source_ledger_issues(data_root: Path, target_date: str, *, source_snapshot=None,
-                               ledger_path=None, pipeline_reference_only=False) -> list[str]:
-    from src.engine.pipeline_event_summary import _part_snapshot_stamp, _source_part_path
+def family_source_ledger_issues(
+    data_root: Path,
+    target_date: str,
+    *,
+    source_snapshot=None,
+    ledger_path=None,
+    pipeline_reference_only=False,
+) -> list[str]:
+    from src.engine.pipeline_event_summary import (
+        _part_snapshot_stamp,
+        _source_part_path,
+    )
     from src.engine.lifecycle.holding_window_generation import source_stat
 
     data_root = Path(data_root)
-    path = Path(ledger_path) if ledger_path is not None else family_source_ledger_path(data_root, target_date)
+    path = (
+        Path(ledger_path)
+        if ledger_path is not None
+        else family_source_ledger_path(data_root, target_date)
+    )
     try:
         ledger = json.loads(path.read_text(encoding="utf-8"))
-        if (ledger.get("schema") not in {"pre_submit_delay_family_source_ledger_v1","pre_submit_delay_family_source_ledger_v2"}
-                or ledger.get("source_date") != target_date
-                or ledger.get("ledger_sha256") != _digest({k: v for k, v in ledger.items() if k != "ledger_sha256"})):
+        if (
+            ledger.get("schema")
+            not in {
+                "pre_submit_delay_family_source_ledger_v1",
+                "pre_submit_delay_family_source_ledger_v2",
+            }
+            or ledger.get("source_date") != target_date
+            or ledger.get("ledger_sha256")
+            != _digest({k: v for k, v in ledger.items() if k != "ledger_sha256"})
+        ):
             return ["family_source_ledger_invalid"]
-        if ledger['schema']=='pre_submit_delay_family_source_ledger_v2':
+        if ledger["schema"] == "pre_submit_delay_family_source_ledger_v2":
             from src.engine.lifecycle.research_storage import iter_tree
-            for _ in iter_tree(path.parent,ledger['matched_event_ids_ref']): pass
+
+            for _ in iter_tree(path.parent, ledger["matched_event_ids_ref"]):
+                pass
             from src.engine.lifecycle.holding_window_generation import byte_generation
-            for part in ledger['raw_parts']:
-                for representation in part['representations']:
+
+            for part in ledger["raw_parts"]:
+                for representation in part["representations"]:
                     if pipeline_reference_only:
                         from . import mechanistic_entry_runtime_policy as native
-                        generation = representation['generation']
-                        if (not native.is_pipeline_source_reference(representation['path'], data_root=data_root)
-                                or not native.source_receipt_matches(
-                                    dict(path=representation['path'], sha256=generation['sha256']), data_root=data_root)
-                                or type(generation.get('size')) is not int or generation['size'] < 0):
-                            return ['raw_source_reference_invalid']
+
+                        generation = representation["generation"]
+                        if (
+                            not native.is_pipeline_source_reference(
+                                representation["path"], data_root=data_root
+                            )
+                            or not native.source_receipt_matches(
+                                dict(
+                                    path=representation["path"],
+                                    sha256=generation["sha256"],
+                                ),
+                                data_root=data_root,
+                            )
+                            or type(generation.get("size")) is not int
+                            or generation["size"] < 0
+                        ):
+                            return ["raw_source_reference_invalid"]
                         continue
-                    prior_path = Path(representation['path'])
-                    if not prior_path.exists() or byte_generation(prior_path)!=representation['generation']:
-                        from src.engine.automation.pre_submit_delay_source_ledger import verify_logical_part
-                        verify_logical_part(part, data_root/'pipeline_events')
+                    prior_path = Path(representation["path"])
+                    if (
+                        not prior_path.exists()
+                        or byte_generation(prior_path) != representation["generation"]
+                    ):
+                        from src.engine.automation.pre_submit_delay_source_ledger import (
+                            verify_logical_part,
+                        )
+
+                        verify_logical_part(part, data_root / "pipeline_events")
         raw_dir = data_root / "pipeline_events"
         for part in ledger["raw_parts"]:
             logical = _source_part_path(raw_dir, target_date, part["partition"])
@@ -763,45 +1161,77 @@ def family_source_ledger_issues(data_root: Path, target_date: str, *, source_sna
                 return ["raw_source_path_invalid"]
             if pipeline_reference_only:
                 from . import mechanistic_entry_runtime_policy as native
-                if (not part['representations'] or any(
-                        not native.is_pipeline_source_reference(item['path'], data_root=data_root)
-                        or Path(item['path']).name not in {logical.name, logical.name + '.gz'}
-                        for item in part['representations'])):
-                    return ['raw_source_reference_invalid']
+
+                if not part["representations"] or any(
+                    not native.is_pipeline_source_reference(
+                        item["path"], data_root=data_root
+                    )
+                    or Path(item["path"]).name
+                    not in {logical.name, logical.name + ".gz"}
+                    for item in part["representations"]
+                ):
+                    return ["raw_source_reference_invalid"]
                 continue
-            current = {str(item.resolve()): _part_snapshot_stamp(item)
-                       for item in (logical, Path(str(logical) + ".gz")) if item.exists()}
-            if current != {item["path"]: item["stamp"] for item in part["representations"]}:
-                from src.engine.automation.pre_submit_delay_source_ledger import verify_logical_part
+            current = {
+                str(item.resolve()): _part_snapshot_stamp(item)
+                for item in (logical, Path(str(logical) + ".gz"))
+                if item.exists()
+            }
+            if current != {
+                item["path"]: item["stamp"] for item in part["representations"]
+            }:
+                from src.engine.automation.pre_submit_delay_source_ledger import (
+                    verify_logical_part,
+                )
+
                 verify_logical_part(part, raw_dir)
-        if not pipeline_reference_only and (Path(str(_source_part_path(raw_dir, target_date, "late"))).exists()
-                or Path(str(_source_part_path(raw_dir, target_date, "late")) + ".gz").exists()) != any(
-                    part["partition"] == "late" for part in ledger["raw_parts"]):
+        if not pipeline_reference_only and (
+            Path(str(_source_part_path(raw_dir, target_date, "late"))).exists()
+            or Path(
+                str(_source_part_path(raw_dir, target_date, "late")) + ".gz"
+            ).exists()
+        ) != any(part["partition"] == "late" for part in ledger["raw_parts"]):
             return ["raw_generation_changed"]
         if source_snapshot is not None and target_date < source_snapshot.target_date:
             source_snapshot.verify(source_snapshot.target_date, data_root)
-            compact = source_snapshot.source.get('cumulative_generations', {}).get(target_date, {})
-        elif ledger['schema']=='pre_submit_delay_family_source_ledger_v2':
+            compact = source_snapshot.source.get("cumulative_generations", {}).get(
+                target_date, {}
+            )
+        elif ledger["schema"] == "pre_submit_delay_family_source_ledger_v2":
             if source_snapshot is not None:
-                source_snapshot.verify(source_snapshot.target_date,data_root)
-                compact=source_snapshot.source
+                source_snapshot.verify(source_snapshot.target_date, data_root)
+                compact = source_snapshot.source
             else:
                 # Verification is read-only and bounded. The seal already
                 # contains exact overlap; rehash its complete source inventory.
-                from src.engine.automation.pre_submit_delay_partitioned_research import inventory
-                paths=[str(p) for _,p in inventory(data_root,target_date)]
-                sha=hashlib.sha256()
+                from src.engine.automation.pre_submit_delay_partitioned_research import (
+                    inventory,
+                )
+
+                paths = [str(p) for _, p in inventory(data_root, target_date)]
+                sha = hashlib.sha256()
                 for name in paths:
-                    p=Path(name)
-                    if p.is_symlink(): return ['compact_source_path_invalid']
-                    before=p.stat()
-                    with p.open('rb') as handle:
-                        for block in iter(lambda:handle.read(65536),b''):sha.update(block)
-                    if source_stat(p.stat())!=source_stat(before):return ['compact_generation_changed']
-                compact={'sha256':sha.hexdigest() if paths else None,'paths':paths}
+                    p = Path(name)
+                    if p.is_symlink():
+                        return ["compact_source_path_invalid"]
+                    before = p.stat()
+                    with p.open("rb") as handle:
+                        for block in iter(lambda: handle.read(65536), b""):
+                            sha.update(block)
+                    if source_stat(p.stat()) != source_stat(before):
+                        return ["compact_generation_changed"]
+                compact = {"sha256": sha.hexdigest() if paths else None, "paths": paths}
         else:
-            _, compact = _source_rows(target_date, data_root=data_root, strict_projection=True, source_snapshot=source_snapshot)
-        if compact["sha256"] != ledger["compact_source_sha256"] or compact["paths"] != ledger["compact_paths"]:
+            _, compact = _source_rows(
+                target_date,
+                data_root=data_root,
+                strict_projection=True,
+                source_snapshot=source_snapshot,
+            )
+        if (
+            compact["sha256"] != ledger["compact_source_sha256"]
+            or compact["paths"] != ledger["compact_paths"]
+        ):
             return ["compact_generation_changed"]
     except (OSError, EOFError, ValueError, TypeError, KeyError, AttributeError):
         return ["family_source_ledger_missing_or_invalid"]
@@ -840,30 +1270,39 @@ def _price_statistics(values: list[float], eligible_count: int) -> dict[str, Any
         "improved_fraction": improved / count if count else None,
         "worse_fraction": worse / count if count else None,
         "unchanged_fraction": (count - improved - worse) / count if count else None,
-        "mean_paired_price_improvement_bp": round(math.fsum(value / count for value in values), 6) if count else None,
-        "median_price_improvement_bp": quantile(.5),
-        "p10_price_improvement_bp": quantile(.1),
-        "p90_price_improvement_bp": quantile(.9),
+        "mean_paired_price_improvement_bp": (
+            round(math.fsum(value / count for value in values), 6) if count else None
+        ),
+        "median_price_improvement_bp": quantile(0.5),
+        "p10_price_improvement_bp": quantile(0.1),
+        "p90_price_improvement_bp": quantile(0.9),
     }
 
 
 def _price_pattern_selection(opportunities: list[dict[str, Any]]) -> dict[str, Any]:
     """Freeze one learning comparison before looking at validation prices."""
-    ordered = sorted((row for row in opportunities if row["retry_identity_verified"]),
-                     key=lambda row: (row["committed_at"], row["identity"]))
+    ordered = sorted(
+        (row for row in opportunities if row["retry_identity_verified"]),
+        key=lambda row: (row["committed_at"], row["identity"]),
+    )
     size = len(ordered)
-    split_count = min(size - 1, max(1, int(size * .7))) if size >= 2 else size
+    split_count = min(size - 1, max(1, int(size * 0.7))) if size >= 2 else size
     learning, validation = ordered[:split_count], ordered[split_count:]
     cutoff = validation[0]["committed_at"] if validation else None
-    retained = [row for row in learning if cutoff is None or row["observation_end_at"] < cutoff]
+    retained = [
+        row for row in learning if cutoff is None or row["observation_end_at"] < cutoff
+    ]
     result = {
-        "status": "insufficient_sample", "recommended_delay_sec": None,
-        "comparison_delay_sec": None, "validation_cutoff_epoch": cutoff,
+        "status": "insufficient_sample",
+        "recommended_delay_sec": None,
+        "comparison_delay_sec": None,
+        "validation_cutoff_epoch": cutoff,
         "learning_opportunity_count": len(retained),
         "validation_opportunity_count": len(validation),
         "purged_learning_count": len(learning) - len(retained),
         "retry_identity_excluded_count": len(opportunities) - size,
-        "candidate_delays_sec": [], "common_learning_pair_count": 0,
+        "candidate_delays_sec": [],
+        "common_learning_pair_count": 0,
         "learning_mean_price_improvement_bp": None,
         "validation_mean_price_improvement_bp": None,
         "validation_paired_count": 0,
@@ -874,20 +1313,38 @@ def _price_pattern_selection(opportunities: list[dict[str, Any]]) -> dict[str, A
     }
     if not retained:
         return result
-    candidates = [second for second in DELAYS_SEC[1:]
-                  if any(second in row["pairs"] for row in retained)]
-    common = [row for row in retained if candidates and all(second in row["pairs"] for second in candidates)]
-    result.update(candidate_delays_sec=candidates, common_learning_pair_count=len(common),
-                  common_learning_identity_sha256=_digest([row["identity"] for row in common]))
+    candidates = [
+        second
+        for second in DELAYS_SEC[1:]
+        if any(second in row["pairs"] for row in retained)
+    ]
+    common = [
+        row
+        for row in retained
+        if candidates and all(second in row["pairs"] for second in candidates)
+    ]
+    result.update(
+        candidate_delays_sec=candidates,
+        common_learning_pair_count=len(common),
+        common_learning_identity_sha256=_digest([row["identity"] for row in common]),
+    )
     if not common:
         result["status"] = "insufficient_comparable_pairs"
         return result
-    means = {second: math.fsum(row["pairs"][second] / len(common) for row in common)
-             for second in candidates}
+    means = {
+        second: math.fsum(row["pairs"][second] / len(common) for row in common)
+        for second in candidates
+    }
     selected = min(candidates, key=lambda second: (-means[second], second))
     learning_mean = means[selected]
-    validation_values = [row["pairs"][selected] for row in validation if selected in row["pairs"]]
-    validation_mean = math.fsum(value / len(validation_values) for value in validation_values) if validation_values else None
+    validation_values = [
+        row["pairs"][selected] for row in validation if selected in row["pairs"]
+    ]
+    validation_mean = (
+        math.fsum(value / len(validation_values) for value in validation_values)
+        if validation_values
+        else None
+    )
     result.update(
         comparison_delay_sec=selected,
         recommended_delay_sec=selected if learning_mean > 0 else 0.0,
@@ -895,22 +1352,33 @@ def _price_pattern_selection(opportunities: list[dict[str, Any]]) -> dict[str, A
         validation_mean_price_improvement_bp=validation_mean,
         validation_paired_count=len(validation_values),
         validation_statistics=_price_statistics(validation_values, len(validation)),
-        validation_pair_identity_sha256=_digest([row["identity"] for row in validation if selected in row["pairs"]]),
+        validation_pair_identity_sha256=_digest(
+            [row["identity"] for row in validation if selected in row["pairs"]]
+        ),
     )
     if validation_mean is None:
         return result
     result["status"] = (
-        "no_price_difference" if learning_mean == validation_mean == 0 else
-        "pattern_supported" if (learning_mean > 0 and validation_mean > 0)
-        or (learning_mean <= 0 and validation_mean <= 0) else "pattern_not_confirmed"
+        "no_price_difference"
+        if learning_mean == validation_mean == 0
+        else (
+            "pattern_supported"
+            if (learning_mean > 0 and validation_mean > 0)
+            or (learning_mean <= 0 and validation_mean <= 0)
+            else "pattern_not_confirmed"
+        )
     )
     return result
 
 
 def _build_price_pattern_analysis(
-    target_date: str, source: dict[str, Any], commits: dict[str, dict[str, Any]],
-    eligible: list[str], quotes: dict[str, dict[float, dict[str, Any]]],
-    quote_issues: dict[tuple[str, float], str], type_by_attempt: dict[str, str],
+    target_date: str,
+    source: dict[str, Any],
+    commits: dict[str, dict[str, Any]],
+    eligible: list[str],
+    quotes: dict[str, dict[float, dict[str, Any]]],
+    quote_issues: dict[tuple[str, float], str],
+    type_by_attempt: dict[str, str],
     invalid_counts: dict[str, int],
 ) -> dict[str, Any]:
     exclusions = Counter()
@@ -918,9 +1386,13 @@ def _build_price_pattern_analysis(
     opportunities = []
     examples = []
     duplicate_count = 0
-    for key in sorted(eligible, key=lambda item: (
-        _price_number(commits[item].get("decision_committed_at_epoch")) or 0, item
-    )):
+    for key in sorted(
+        eligible,
+        key=lambda item: (
+            _price_number(commits[item].get("decision_committed_at_epoch")) or 0,
+            item,
+        ),
+    ):
         commit = commits[key]
         type_key = type_by_attempt[key]
         frozen_type = commit.get("delay_decision_type")
@@ -929,20 +1401,33 @@ def _build_price_pattern_analysis(
                 frozen_type = json.loads(frozen_type)
             except ValueError:
                 frozen_type = None
-        spread = (_price_number(frozen_type.get("spread_bp"))
-                  if type_key != "UNKNOWN" and isinstance(frozen_type, dict) else None)
+        spread = (
+            _price_number(frozen_type.get("spread_bp"))
+            if type_key != "UNKNOWN" and isinstance(frozen_type, dict)
+            else None
+        )
         stamp = _price_number(commit.get("decision_committed_at_epoch"))
         machine = str(commit.get("original_machine_observation_sha256") or "")
-        verified = len(machine) == 64 and all(char in "0123456789abcdef" for char in machine)
+        verified = len(machine) == 64 and all(
+            char in "0123456789abcdef" for char in machine
+        )
         # The machine hash identifies the original decision, not a later retry.
         # Keep parent policy, route, session and source date on that identity.
         source_date, _, stock_code, _ = key.split("|", 3)
-        retry_key = tuple(str(value) for value in (
-            source_date, stock_code, commit.get("owner"), machine,
-            commit.get("delay_policy_sha256"), commit.get("entry_mechanistic_policy_sha256"),
-            commit.get("entry_ai_soft_policy_sha256"), commit.get("route"),
-            commit.get("market_session_bucket"),
-        ))
+        retry_key = tuple(
+            str(value)
+            for value in (
+                source_date,
+                stock_code,
+                commit.get("owner"),
+                machine,
+                commit.get("delay_policy_sha256"),
+                commit.get("entry_mechanistic_policy_sha256"),
+                commit.get("entry_ai_soft_policy_sha256"),
+                commit.get("route"),
+                commit.get("market_session_bucket"),
+            )
+        )
         if verified and retry_key in seen_opportunities:
             duplicate_count += 1
             continue
@@ -955,12 +1440,22 @@ def _build_price_pattern_analysis(
             depth = _price_number(quote.get("ask_qty"))
             observed = _price_number(quote.get("quote_observed_at_epoch"))
             offset = _price_number(quote.get("actual_offset_sec"))
-            if (stamp is None or stamp <= 0 or (_price_number(commit.get("planned_qty")) or 0) <= 0
-                    or ask is None or bid is None or depth is None or observed is None or offset is None
-                    or _price_number(quote.get("target_delay_sec")) != second
-                    or not 0 < bid <= ask or depth <= 0 or offset < 0
-                    or str(quote.get("quote_consistency_state") or "").lower()
-                    not in {"single_source", "fresh_consistent"}):
+            if (
+                stamp is None
+                or stamp <= 0
+                or (_price_number(commit.get("planned_qty")) or 0) <= 0
+                or ask is None
+                or bid is None
+                or depth is None
+                or observed is None
+                or offset is None
+                or _price_number(quote.get("target_delay_sec")) != second
+                or not 0 < bid <= ask
+                or depth <= 0
+                or offset < 0
+                or str(quote.get("quote_consistency_state") or "").lower()
+                not in {"single_source", "fresh_consistent"}
+            ):
                 quote_issues[(key, second)] = "price_quote_values_invalid"
             else:
                 valid[second] = quote
@@ -973,64 +1468,135 @@ def _build_price_pattern_analysis(
             if not zero:
                 exclusions[f"{second:g}s:zero_quote_missing_or_invalid"] += 1
             elif not delayed:
-                exclusions[f"{second:g}s:" + quote_issues.get((key, second), "delayed_quote_missing")] += 1
+                exclusions[
+                    f"{second:g}s:"
+                    + quote_issues.get((key, second), "delayed_quote_missing")
+                ] += 1
             else:
                 price = float(delayed["ask_price"])
-                gain = (float(zero["ask_price"]) - price) / float(zero["ask_price"]) * 10000
+                gain = (
+                    (float(zero["ask_price"]) - price)
+                    / float(zero["ask_price"])
+                    * 10000
+                )
                 if not math.isfinite(gain):
                     exclusions[f"{second:g}s:price_change_not_finite"] += 1
                     continue
                 pairs[second] = gain
                 caps[second] = price > cap if cap is not None and cap > 0 else None
                 if second and len(examples) < 8:
-                    examples.append({
-                        "source_date": source_date, "stock_code": stock_code,
-                        "intent_event_key": key, "decision_source_sha256": commit["decision_source_sha256"],
-                        "delay_sec": second, "zero_ask_price": float(zero["ask_price"]),
-                        "delayed_ask_price": price, "price_change_bp": round(-gain, 6),
-                        "price_improvement_bp": round(gain, 6),
-                        "zero_quote_source_sha256": zero["quote_source_sha256"],
-                        "delayed_quote_source_sha256": delayed["quote_source_sha256"],
-                        "price_cap_exceeded": caps[second],
-                        "type_key": type_key, "frozen_spread_bp": spread,
-                    })
-        opportunities.append({
-            "identity": key, "committed_at": stamp or 0,
-            "observation_end_at": max((float(quote["quote_observed_at_epoch"]) for quote in valid.values()), default=stamp or 0),
-            "retry_identity_verified": verified, "pairs": pairs, "caps": caps,
-            "type_key": type_key, "scope_key": "|".join(type_key.split("|")[:2]) if type_key != "UNKNOWN" else "UNKNOWN",
-        })
+                    examples.append(
+                        {
+                            "source_date": source_date,
+                            "stock_code": stock_code,
+                            "intent_event_key": key,
+                            "decision_source_sha256": commit["decision_source_sha256"],
+                            "delay_sec": second,
+                            "zero_ask_price": float(zero["ask_price"]),
+                            "delayed_ask_price": price,
+                            "price_change_bp": round(-gain, 6),
+                            "price_improvement_bp": round(gain, 6),
+                            "zero_quote_source_sha256": zero["quote_source_sha256"],
+                            "delayed_quote_source_sha256": delayed[
+                                "quote_source_sha256"
+                            ],
+                            "price_cap_exceeded": caps[second],
+                            "type_key": type_key,
+                            "frozen_spread_bp": spread,
+                        }
+                    )
+        opportunities.append(
+            {
+                "identity": key,
+                "committed_at": stamp or 0,
+                "observation_end_at": max(
+                    (
+                        float(quote["quote_observed_at_epoch"])
+                        for quote in valid.values()
+                    ),
+                    default=stamp or 0,
+                ),
+                "retry_identity_verified": verified,
+                "pairs": pairs,
+                "caps": caps,
+                "type_key": type_key,
+                "scope_key": (
+                    "|".join(type_key.split("|")[:2])
+                    if type_key != "UNKNOWN"
+                    else "UNKNOWN"
+                ),
+            }
+        )
 
     def group_statistics(group: list[dict[str, Any]]) -> dict[str, Any]:
         grid = []
         for second in DELAYS_SEC:
             paired = [row for row in group if second in row["pairs"]]
-            grid.append({
-                "delay_sec": second, **_price_statistics([row["pairs"][second] for row in paired], len(group)),
-                "price_cap_exceeded_count": sum(row["caps"][second] is True for row in paired),
-                "price_cap_unknown_count": sum(row["caps"][second] is None for row in paired),
-            })
+            grid.append(
+                {
+                    "delay_sec": second,
+                    **_price_statistics(
+                        [row["pairs"][second] for row in paired], len(group)
+                    ),
+                    "price_cap_exceeded_count": sum(
+                        row["caps"][second] is True for row in paired
+                    ),
+                    "price_cap_unknown_count": sum(
+                        row["caps"][second] is None for row in paired
+                    ),
+                }
+            )
         selection = _price_pattern_selection(group)
         if any(row["scope_key"] == "UNKNOWN" for row in group):
-            selection.update(status="mixed_or_unknown_scope_descriptive_only", recommended_delay_sec=None)
-        return {"eligible_opportunity_count": len(group), "candidate_grid": grid, "selection": selection}
+            selection.update(
+                status="mixed_or_unknown_scope_descriptive_only",
+                recommended_delay_sec=None,
+            )
+        return {
+            "eligible_opportunity_count": len(group),
+            "candidate_grid": grid,
+            "selection": selection,
+        }
 
     overall = group_statistics(opportunities)
     paired_count = sum(row["paired_count"] for row in overall["candidate_grid"][1:])
-    complete = bool(opportunities) and all(len(row["pairs"]) == len(DELAYS_SEC) for row in opportunities)
-    empty_verified = not eligible and (
-        source.get("status") == "valid_empty" or
-        (source.get("status") in {"ready", "ready_with_isolation"} and bool(commits)
-         and not any(invalid_counts.get(reason) for reason in ("fields_missing", "attempt_identity_missing", "commit_conflict"))
-         and all(commit.get("decision_source_sha256") == decision_source_sha256(commit)
-                 and commit.get("owner") in {"main_scalping", "widget", "episode", "manual"}
-                 and commit.get("entry_action") in {"ENTER_NOW", "RECHECK", "BLOCK"}
-                 and commit.get("auxiliary_effective_action") in {"PASS", "CAUTION", "VETO", "INSUFFICIENT", "NOT_EVALUATED"}
-                 and _price_number(commit.get("planned_qty")) is not None for commit in commits.values()))
+    complete = bool(opportunities) and all(
+        len(row["pairs"]) == len(DELAYS_SEC) for row in opportunities
     )
-    status = ("computed" if complete else "partial" if paired_count else
-              "valid_empty" if empty_verified
-              else "source_gap")
+    empty_verified = not eligible and (
+        source.get("status") == "valid_empty"
+        or (
+            source.get("status") in {"ready", "ready_with_isolation"}
+            and bool(commits)
+            and not any(
+                invalid_counts.get(reason)
+                for reason in (
+                    "fields_missing",
+                    "attempt_identity_missing",
+                    "commit_conflict",
+                )
+            )
+            and all(
+                commit.get("decision_source_sha256") == decision_source_sha256(commit)
+                and commit.get("owner")
+                in {"main_scalping", "widget", "episode", "manual"}
+                and commit.get("entry_action") in {"ENTER_NOW", "RECHECK", "BLOCK"}
+                and commit.get("auxiliary_effective_action")
+                in {"PASS", "CAUTION", "VETO", "INSUFFICIENT", "NOT_EVALUATED"}
+                and _price_number(commit.get("planned_qty")) is not None
+                for commit in commits.values()
+            )
+        )
+    )
+    status = (
+        "computed"
+        if complete
+        else (
+            "partial"
+            if paired_count
+            else "valid_empty" if empty_verified else "source_gap"
+        )
+    )
     scope_groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
     type_groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for opportunity in opportunities:
@@ -1038,33 +1604,64 @@ def _build_price_pattern_analysis(
         type_groups[opportunity["type_key"]].append(opportunity)
     scopes = sorted(scope_groups)
     if len(scopes) > 1 or scopes == ["UNKNOWN"]:
-        overall["selection"].update(status="mixed_or_unknown_scope_descriptive_only", recommended_delay_sec=None)
+        overall["selection"].update(
+            status="mixed_or_unknown_scope_descriptive_only", recommended_delay_sec=None
+        )
     section = {
-        "schema": PRICE_PATTERN_SCHEMA, "source_date": target_date,
+        "schema": PRICE_PATTERN_SCHEMA,
+        "source_date": target_date,
         "source_sha256": source.get("sha256"),
         "algorithm_version": PRICE_PATTERN_ALGORITHM,
-        "algorithm_sha256": _digest({"version": PRICE_PATTERN_ALGORITHM, "delays": DELAYS_SEC, "learning_fraction": .7}),
-        "metric_role": "diagnostic_entry_price_timing", "decision_authority": "report_only",
+        "algorithm_sha256": _digest(
+            {
+                "version": PRICE_PATTERN_ALGORITHM,
+                "delays": DELAYS_SEC,
+                "learning_fraction": 0.7,
+            }
+        ),
+        "metric_role": "diagnostic_entry_price_timing",
+        "decision_authority": "report_only",
         "window_policy": "forward_from_20260929_same_intent_zero_vs_fixed_delay",
         "sample_floor": {"price_pairs": 1, "independent_learning_validation": True},
         "primary_decision_metric": "mean_paired_price_improvement_bp",
         "source_quality_gate": "exact_intent_zero_and_delayed_route_epoch_hash_clock_quote_pair",
-        "forbidden_uses": ["realized_pnl", "net_ev", "execution_fill_claim", "runtime_apply",
-                           "entry_action_override", "price_quantity_or_safety_override"],
-        "status": status, "analysis_complete": status in {"computed", "partial", "valid_empty"},
-        "first_blocker": None if status != "source_gap" else "exact_zero_and_delayed_quote_pair_missing",
-        "eligible_attempt_count": len(eligible), "duplicate_intent_count": duplicate_count,
-        "retry_linkage_unknown_count": sum(not row["retry_identity_verified"] for row in opportunities),
+        "forbidden_uses": [
+            "realized_pnl",
+            "net_ev",
+            "execution_fill_claim",
+            "runtime_apply",
+            "entry_action_override",
+            "price_quantity_or_safety_override",
+        ],
+        "status": status,
+        "analysis_complete": status in {"computed", "partial", "valid_empty"},
+        "first_blocker": (
+            None
+            if status != "source_gap"
+            else "exact_zero_and_delayed_quote_pair_missing"
+        ),
+        "eligible_attempt_count": len(eligible),
+        "duplicate_intent_count": duplicate_count,
+        "retry_linkage_unknown_count": sum(
+            not row["retry_identity_verified"] for row in opportunities
+        ),
         "paired_comparison_count": paired_count,
         "empty_population_verified": empty_verified,
-        "exclusion_counts": dict(sorted(exclusions.items())), **overall,
+        "exclusion_counts": dict(sorted(exclusions.items())),
+        **overall,
         "examples": examples,
-        "scope_census": [{"scope_key": scope, **group_statistics(scope_groups[scope])}
-                         for scope in scopes],
-        "type_census": [{"type_key": kind, **group_statistics(type_groups[kind])}
-                        for kind in sorted(type_groups)],
+        "scope_census": [
+            {"scope_key": scope, **group_statistics(scope_groups[scope])}
+            for scope in scopes
+        ],
+        "type_census": [
+            {"type_key": kind, **group_statistics(type_groups[kind])}
+            for kind in sorted(type_groups)
+        ],
         "recommended_delay_sec": overall["selection"]["recommended_delay_sec"],
-        "runtime_effect": False, "runtime_apply_allowed": False, "actual_order_submitted": False,
+        "runtime_effect": False,
+        "runtime_apply_allowed": False,
+        "actual_order_submitted": False,
     }
     section["section_sha256"] = _digest(section)
     return section
@@ -1074,42 +1671,85 @@ def price_pattern_projection(report: dict[str, Any]) -> dict[str, Any]:
     """Bounded diagnostic consumption; this cannot grant runtime authority."""
     section = report.get("price_pattern_analysis")
     if section is None:
-        return {"status": "not_evaluated_legacy", "analysis_complete": False, "runtime_apply_allowed": False}
+        return {
+            "status": "not_evaluated_legacy",
+            "analysis_complete": False,
+            "runtime_apply_allowed": False,
+        }
 
     def validate_statistics(row: dict[str, Any], denominator: int) -> None:
         count = row["paired_count"]
         fields = ("improved_count", "worse_count", "unchanged_count")
-        metrics = ("mean_paired_price_improvement_bp", "median_price_improvement_bp",
-                   "p10_price_improvement_bp", "p90_price_improvement_bp")
-        if (type(count) is not int or not 0 <= count <= denominator
-                or type(row["eligible_opportunity_count"]) is not int
-                or row["eligible_opportunity_count"] != denominator
-                or any(type(row[field]) is not int or row[field] < 0 for field in fields)
-                or count != sum(row[field] for field in fields)
-                or row["coverage"] != (count / denominator if denominator else None)
-                or any(row[field.replace("_count", "_fraction")] != (row[field] / count if count else None) for field in fields)
-                or any((_price_number(row[field]) is None if count else row[field] is not None) for field in metrics)):
+        metrics = (
+            "mean_paired_price_improvement_bp",
+            "median_price_improvement_bp",
+            "p10_price_improvement_bp",
+            "p90_price_improvement_bp",
+        )
+        if (
+            type(count) is not int
+            or not 0 <= count <= denominator
+            or type(row["eligible_opportunity_count"]) is not int
+            or row["eligible_opportunity_count"] != denominator
+            or any(type(row[field]) is not int or row[field] < 0 for field in fields)
+            or count != sum(row[field] for field in fields)
+            or row["coverage"] != (count / denominator if denominator else None)
+            or any(
+                row[field.replace("_count", "_fraction")]
+                != (row[field] / count if count else None)
+                for field in fields
+            )
+            or any(
+                (_price_number(row[field]) is None if count else row[field] is not None)
+                for field in metrics
+            )
+        ):
             raise ValueError("price_pattern_counts_invalid")
-        if count and not (_price_number(row["p10_price_improvement_bp"]) <=
-                          _price_number(row["median_price_improvement_bp"]) <=
-                          _price_number(row["p90_price_improvement_bp"])):
+        if count and not (
+            _price_number(row["p10_price_improvement_bp"])
+            <= _price_number(row["median_price_improvement_bp"])
+            <= _price_number(row["p90_price_improvement_bp"])
+        ):
             raise ValueError("price_pattern_quantiles_invalid")
 
     try:
-        if (not isinstance(section, dict) or section.get("schema") != PRICE_PATTERN_SCHEMA
-                or report.get("schema") != REPORT_SCHEMA or report.get("analysis_axis") != FAMILY
-                or str(section.get("source_date") or "") < "2026-09-29"
-                or section.get("source_date") != report.get("source_date")
-                or section.get("source_sha256") != (report.get("source") or {}).get("sha256")
-                or section.get("section_sha256") != _digest({k: v for k, v in section.items() if k != "section_sha256"})
-                or section.get("decision_authority") != "report_only"
-                or section.get("metric_role") != "diagnostic_entry_price_timing"
-                or section.get("primary_decision_metric") != "mean_paired_price_improvement_bp"
-                or section.get("algorithm_version") != PRICE_PATTERN_ALGORITHM
-                or section.get("algorithm_sha256") != _digest({"version": PRICE_PATTERN_ALGORITHM, "delays": DELAYS_SEC, "learning_fraction": .7})
-                or any(section.get(field) is not False for field in ("runtime_apply_allowed", "runtime_effect", "actual_order_submitted"))
-                or section.get("status") not in {"computed", "partial", "valid_empty", "source_gap"}
-                or section.get("analysis_complete") is not (section["status"] != "source_gap")):
+        if (
+            not isinstance(section, dict)
+            or section.get("schema") != PRICE_PATTERN_SCHEMA
+            or report.get("schema") != REPORT_SCHEMA
+            or report.get("analysis_axis") != FAMILY
+            or str(section.get("source_date") or "") < "2026-09-29"
+            or section.get("source_date") != report.get("source_date")
+            or section.get("source_sha256")
+            != (report.get("source") or {}).get("sha256")
+            or section.get("section_sha256")
+            != _digest({k: v for k, v in section.items() if k != "section_sha256"})
+            or section.get("decision_authority") != "report_only"
+            or section.get("metric_role") != "diagnostic_entry_price_timing"
+            or section.get("primary_decision_metric")
+            != "mean_paired_price_improvement_bp"
+            or section.get("algorithm_version") != PRICE_PATTERN_ALGORITHM
+            or section.get("algorithm_sha256")
+            != _digest(
+                {
+                    "version": PRICE_PATTERN_ALGORITHM,
+                    "delays": DELAYS_SEC,
+                    "learning_fraction": 0.7,
+                }
+            )
+            or any(
+                section.get(field) is not False
+                for field in (
+                    "runtime_apply_allowed",
+                    "runtime_effect",
+                    "actual_order_submitted",
+                )
+            )
+            or section.get("status")
+            not in {"computed", "partial", "valid_empty", "source_gap"}
+            or section.get("analysis_complete")
+            is not (section["status"] != "source_gap")
+        ):
             raise ValueError("price_pattern_contract_invalid")
         eligible = section["eligible_opportunity_count"]
         groups = [section, *section["scope_census"], *section["type_census"]]
@@ -1118,85 +1758,217 @@ def price_pattern_projection(report: dict[str, Any]) -> dict[str, Any]:
             if type(denominator) is not int or denominator < 0:
                 raise ValueError("price_pattern_denominator_invalid")
             grid = group["candidate_grid"]
-            if (not isinstance(grid, list) or [row.get("delay_sec") for row in grid] != list(DELAYS_SEC)
-                    or any(isinstance(row.get("delay_sec"), bool) for row in grid)):
+            if (
+                not isinstance(grid, list)
+                or [row.get("delay_sec") for row in grid] != list(DELAYS_SEC)
+                or any(isinstance(row.get("delay_sec"), bool) for row in grid)
+            ):
                 raise ValueError("price_pattern_grid_invalid")
             for row in grid:
                 validate_statistics(row, denominator)
             zero = grid[0]
-            if (zero["improved_count"] or zero["worse_count"]
-                    or any(zero[field] != 0 for field in ("mean_paired_price_improvement_bp",
-                        "median_price_improvement_bp", "p10_price_improvement_bp", "p90_price_improvement_bp"))
-                    and zero["paired_count"]):
+            if (
+                zero["improved_count"]
+                or zero["worse_count"]
+                or any(
+                    zero[field] != 0
+                    for field in (
+                        "mean_paired_price_improvement_bp",
+                        "median_price_improvement_bp",
+                        "p10_price_improvement_bp",
+                        "p90_price_improvement_bp",
+                    )
+                )
+                and zero["paired_count"]
+            ):
                 raise ValueError("price_pattern_zero_control_invalid")
             selection = group["selection"]
             recommendation = selection["recommended_delay_sec"]
             comparison = selection["comparison_delay_sec"]
             candidates = selection["candidate_delays_sec"]
-            if (selection["runtime_apply_allowed"] is not False
-                    or not isinstance(candidates, list)
-                    or candidates != [second for second in DELAYS_SEC[1:] if second in candidates]
-                    or (comparison is not None and comparison not in candidates)
-                    or selection["status"] not in {"insufficient_sample", "insufficient_comparable_pairs",
-                         "pattern_supported", "pattern_not_confirmed", "no_price_difference", "mixed_or_unknown_scope_descriptive_only"}
-                    or (recommendation is not None and (isinstance(recommendation, bool) or recommendation not in DELAYS_SEC))
-                    or (comparison is not None and (isinstance(comparison, bool) or comparison not in DELAYS_SEC[1:]))
-                    or any(type(selection[field]) is not int or selection[field] < 0 for field in (
-                        "learning_opportunity_count", "validation_opportunity_count", "common_learning_pair_count",
-                        "validation_paired_count", "purged_learning_count", "retry_identity_excluded_count"))
-                    or sum(selection[field] for field in ("learning_opportunity_count", "validation_opportunity_count",
-                        "purged_learning_count", "retry_identity_excluded_count")) != denominator
-                    or selection["common_learning_pair_count"] > selection["learning_opportunity_count"]
-                    or selection["validation_paired_count"] > selection["validation_opportunity_count"]
-                    or any(value is not None and _price_number(value) is None for value in (
-                        selection["learning_mean_price_improvement_bp"], selection["validation_mean_price_improvement_bp"]))
-                    or (selection["status"] in {"pattern_supported", "pattern_not_confirmed", "no_price_difference"}
-                        and (not selection["common_learning_pair_count"] or not selection["validation_paired_count"] or comparison is None))):
+            if (
+                selection["runtime_apply_allowed"] is not False
+                or not isinstance(candidates, list)
+                or candidates
+                != [second for second in DELAYS_SEC[1:] if second in candidates]
+                or (comparison is not None and comparison not in candidates)
+                or selection["status"]
+                not in {
+                    "insufficient_sample",
+                    "insufficient_comparable_pairs",
+                    "pattern_supported",
+                    "pattern_not_confirmed",
+                    "no_price_difference",
+                    "mixed_or_unknown_scope_descriptive_only",
+                }
+                or (
+                    recommendation is not None
+                    and (
+                        isinstance(recommendation, bool)
+                        or recommendation not in DELAYS_SEC
+                    )
+                )
+                or (
+                    comparison is not None
+                    and (
+                        isinstance(comparison, bool) or comparison not in DELAYS_SEC[1:]
+                    )
+                )
+                or any(
+                    type(selection[field]) is not int or selection[field] < 0
+                    for field in (
+                        "learning_opportunity_count",
+                        "validation_opportunity_count",
+                        "common_learning_pair_count",
+                        "validation_paired_count",
+                        "purged_learning_count",
+                        "retry_identity_excluded_count",
+                    )
+                )
+                or sum(
+                    selection[field]
+                    for field in (
+                        "learning_opportunity_count",
+                        "validation_opportunity_count",
+                        "purged_learning_count",
+                        "retry_identity_excluded_count",
+                    )
+                )
+                != denominator
+                or selection["common_learning_pair_count"]
+                > selection["learning_opportunity_count"]
+                or selection["validation_paired_count"]
+                > selection["validation_opportunity_count"]
+                or any(
+                    value is not None and _price_number(value) is None
+                    for value in (
+                        selection["learning_mean_price_improvement_bp"],
+                        selection["validation_mean_price_improvement_bp"],
+                    )
+                )
+                or (
+                    selection["status"]
+                    in {
+                        "pattern_supported",
+                        "pattern_not_confirmed",
+                        "no_price_difference",
+                    }
+                    and (
+                        not selection["common_learning_pair_count"]
+                        or not selection["validation_paired_count"]
+                        or comparison is None
+                    )
+                )
+            ):
                 raise ValueError("price_pattern_selection_invalid")
             learning_mean = selection["learning_mean_price_improvement_bp"]
             validation_mean = selection["validation_mean_price_improvement_bp"]
             validation_statistics = selection["validation_statistics"]
-            validate_statistics(validation_statistics, selection["validation_opportunity_count"])
-            if (validation_statistics["paired_count"] != selection["validation_paired_count"]
-                    or validation_statistics["mean_paired_price_improvement_bp"] !=
-                    (round(validation_mean, 6) if validation_mean is not None else None)):
+            validate_statistics(
+                validation_statistics, selection["validation_opportunity_count"]
+            )
+            if validation_statistics["paired_count"] != selection[
+                "validation_paired_count"
+            ] or validation_statistics["mean_paired_price_improvement_bp"] != (
+                round(validation_mean, 6) if validation_mean is not None else None
+            ):
                 raise ValueError("price_pattern_validation_statistics_invalid")
-            if selection["status"] in {"pattern_supported", "pattern_not_confirmed", "no_price_difference"}:
+            if selection["status"] in {
+                "pattern_supported",
+                "pattern_not_confirmed",
+                "no_price_difference",
+            }:
                 if learning_mean is None or validation_mean is None:
                     raise ValueError("price_pattern_means_missing")
                 expected_selection = (
-                    "no_price_difference" if learning_mean == validation_mean == 0 else
-                    "pattern_supported" if (learning_mean > 0 and validation_mean > 0)
-                    or (learning_mean <= 0 and validation_mean <= 0) else "pattern_not_confirmed")
-                if selection["status"] != expected_selection or recommendation != (comparison if learning_mean > 0 else 0.0):
+                    "no_price_difference"
+                    if learning_mean == validation_mean == 0
+                    else (
+                        "pattern_supported"
+                        if (learning_mean > 0 and validation_mean > 0)
+                        or (learning_mean <= 0 and validation_mean <= 0)
+                        else "pattern_not_confirmed"
+                    )
+                )
+                if selection["status"] != expected_selection or recommendation != (
+                    comparison if learning_mean > 0 else 0.0
+                ):
                     raise ValueError("price_pattern_direction_invalid")
         grid = section["candidate_grid"]
-        if section["paired_comparison_count"] != sum(row["paired_count"] for row in grid[1:]):
+        if section["paired_comparison_count"] != sum(
+            row["paired_count"] for row in grid[1:]
+        ):
             raise ValueError("price_pattern_pair_count_invalid")
-        if (section["paired_comparison_count"] and
-                (not isinstance(section["source_sha256"], str) or len(section["source_sha256"]) != 64)):
+        if section["paired_comparison_count"] and (
+            not isinstance(section["source_sha256"], str)
+            or len(section["source_sha256"]) != 64
+        ):
             raise ValueError("price_pattern_source_hash_missing")
         complete = eligible > 0 and all(row["paired_count"] == eligible for row in grid)
-        expected = ("computed" if complete else "partial" if section["paired_comparison_count"] else
-                    "valid_empty" if not eligible and section["empty_population_verified"] is True else "source_gap")
-        if (section["status"] != expected
-                or section["recommended_delay_sec"] != section["selection"]["recommended_delay_sec"]
-                or section["eligible_attempt_count"] != eligible + section["duplicate_intent_count"]
-                or any(sum(group["eligible_opportunity_count"] for group in section[name]) != eligible for name in ("scope_census", "type_census"))):
+        expected = (
+            "computed"
+            if complete
+            else (
+                "partial"
+                if section["paired_comparison_count"]
+                else (
+                    "valid_empty"
+                    if not eligible and section["empty_population_verified"] is True
+                    else "source_gap"
+                )
+            )
+        )
+        if (
+            section["status"] != expected
+            or section["recommended_delay_sec"]
+            != section["selection"]["recommended_delay_sec"]
+            or section["eligible_attempt_count"]
+            != eligible + section["duplicate_intent_count"]
+            or any(
+                sum(group["eligible_opportunity_count"] for group in section[name])
+                != eligible
+                for name in ("scope_census", "type_census")
+            )
+        ):
             raise ValueError("price_pattern_status_invalid")
-        return {key: section[key] for key in (
-            "schema", "status", "analysis_complete", "source_date", "source_sha256", "section_sha256",
-            "eligible_opportunity_count", "paired_comparison_count", "candidate_grid",
-            "selection", "scope_census", "type_census", "recommended_delay_sec", "first_blocker", "runtime_apply_allowed",
-        )}
+        return {
+            key: section[key]
+            for key in (
+                "schema",
+                "status",
+                "analysis_complete",
+                "source_date",
+                "source_sha256",
+                "section_sha256",
+                "eligible_opportunity_count",
+                "paired_comparison_count",
+                "candidate_grid",
+                "selection",
+                "scope_census",
+                "type_census",
+                "recommended_delay_sec",
+                "first_blocker",
+                "runtime_apply_allowed",
+            )
+        }
     except (ValueError, TypeError, KeyError, AttributeError, OverflowError):
-        return {"status": "source_invalid", "analysis_complete": False,
-                "first_blocker": "price_pattern_contract_invalid", "runtime_apply_allowed": False}
+        return {
+            "status": "source_invalid",
+            "analysis_complete": False,
+            "first_blocker": "price_pattern_contract_invalid",
+            "runtime_apply_allowed": False,
+        }
 
 
 def build_report(
-    target_date: str, *, effective_date: str, write: bool = True,
-    require_family_ledger: bool = False, source_snapshot=None, input_root=None, output_root=None,
+    target_date: str,
+    *,
+    effective_date: str,
+    write: bool = True,
+    require_family_ledger: bool = False,
+    source_snapshot=None,
+    input_root=None,
+    output_root=None,
 ) -> dict[str, Any]:
     date.fromisoformat(target_date)
     if date.fromisoformat(effective_date) <= date.fromisoformat(target_date):
@@ -1207,29 +1979,53 @@ def build_report(
     allowed_ids = None
     family_ledger = None
     if require_family_ledger:
-        issues = family_source_ledger_issues(data_root, target_date, source_snapshot=source_snapshot)
+        issues = family_source_ledger_issues(
+            data_root, target_date, source_snapshot=source_snapshot
+        )
         if issues:
             raise ValueError("delay_family_source_invalid:" + ",".join(issues))
-        family_ledger = json.loads(family_source_ledger_path(data_root, target_date).read_text(encoding="utf-8"))
-        if family_ledger['schema']=='pre_submit_delay_family_source_ledger_v2':
+        family_ledger = json.loads(
+            family_source_ledger_path(data_root, target_date).read_text(
+                encoding="utf-8"
+            )
+        )
+        if family_ledger["schema"] == "pre_submit_delay_family_source_ledger_v2":
             from src.engine.lifecycle.research_storage import iter_tree
-            reference=family_ledger['matched_event_ids_ref']
-            if reference['count']>20000:
-                raise ValueError('legacy_delay_report_partitioned_producer_required')
-            allowed_ids=set(iter_tree(family_source_ledger_path(data_root,target_date).parent,reference))
+
+            reference = family_ledger["matched_event_ids_ref"]
+            if reference["count"] > 20000:
+                raise ValueError("legacy_delay_report_partitioned_producer_required")
+            allowed_ids = set(
+                iter_tree(
+                    family_source_ledger_path(data_root, target_date).parent, reference
+                )
+            )
         else:
             allowed_ids = set(family_ledger["matched_event_ids"])
-    rows, source = _source_rows(target_date, data_root=data_root, allowed_current_ids=allowed_ids,
-                                strict_projection=require_family_ledger, source_snapshot=source_snapshot)
+    rows, source = _source_rows(
+        target_date,
+        data_root=data_root,
+        allowed_current_ids=allowed_ids,
+        strict_projection=require_family_ledger,
+        source_snapshot=source_snapshot,
+    )
     if family_ledger is not None:
         if family_ledger["status"] == "valid_empty" and not rows:
             source["status"] = "valid_empty"
             source["first_blocker"] = "no_pre_submit_delay_events_observed"
         source["family_source_ledger_sha256"] = family_ledger["ledger_sha256"]
-        source["raw_only_event_count"] = family_ledger.get('raw_only_event_count',len(family_ledger.get("raw_only_event_ids",[])))
-        source["compact_only_event_count"] = family_ledger.get('compact_only_event_count',len(family_ledger.get("compact_only_event_ids",[])))
-    existing_quote_census = (_existing_quote_census(target_date) if write and input_root is None
-                            and output_root is None else {"status": "not_evaluated_diagnostic"})
+        source["raw_only_event_count"] = family_ledger.get(
+            "raw_only_event_count", len(family_ledger.get("raw_only_event_ids", []))
+        )
+        source["compact_only_event_count"] = family_ledger.get(
+            "compact_only_event_count",
+            len(family_ledger.get("compact_only_event_ids", [])),
+        )
+    existing_quote_census = (
+        _existing_quote_census(target_date)
+        if write and input_root is None and output_root is None
+        else {"status": "not_evaluated_diagnostic"}
+    )
     commits: dict[str, dict[str, Any]] = {}
     samples: dict[str, dict[float, dict[str, Any]]] = defaultdict(dict)
     terminals: dict[str, dict[str, Any]] = {}
@@ -1247,8 +2043,14 @@ def build_report(
         if not attempt:
             invalid["attempt_identity_missing"] += 1
             continue
-        attempt = "|".join((row["emitted_date"], str(row.get("record_id")),
-                            str(row.get("stock_code")), attempt))
+        attempt = "|".join(
+            (
+                row["emitted_date"],
+                str(row.get("record_id")),
+                str(row.get("stock_code")),
+                attempt,
+            )
+        )
         stage = row["stage"]
         if stage == "pre_submit_delay_committed":
             if attempt in commits and commits[attempt] != fields:
@@ -1261,9 +2063,11 @@ def build_report(
                 commits[attempt] = fields
         elif stage == "pre_submit_delay_quote_observed":
             second = _number(fields.get("target_delay_sec"))
-            if (second in SHORT_RESEARCH_HORIZONS
-                    and str(fields.get('quote_contract_version')) == '2'
-                    and fields.get('observation_grid_version') == OBSERVATION_GRID_VERSION):
+            if (
+                second in SHORT_RESEARCH_HORIZONS
+                and str(fields.get("quote_contract_version")) == "2"
+                and fields.get("observation_grid_version") == OBSERVATION_GRID_VERSION
+            ):
                 # The original report/selector owns only its legacy grid.
                 # Short-clock qualification belongs to the v2 projection.
                 continue
@@ -1281,7 +2085,7 @@ def build_report(
             else:
                 samples[attempt][second] = fields
         elif stage == "pre_submit_delay_intent_terminal":
-            if str(fields.get('observation_only')).lower() == 'true':
+            if str(fields.get("observation_only")).lower() == "true":
                 # A stopped observer does not close the broker intent.
                 continue
             if attempt in terminals and terminals[attempt] != fields:
@@ -1294,7 +2098,8 @@ def build_report(
                 terminals[attempt] = fields
 
     eligible = [
-        key for key, commit in commits.items()
+        key
+        for key, commit in commits.items()
         if str(commit.get("entry_action") or "") == "ENTER_NOW"
         and str(commit.get("auxiliary_effective_action") or "") in {"PASS", "CAUTION"}
         and (_number(commit.get("planned_qty")) or 0) > 0
@@ -1309,7 +2114,10 @@ def build_report(
             excluded_commits["other_or_unknown_owner"] += 1
         elif str(commit.get("entry_action") or "") != "ENTER_NOW":
             excluded_commits["not_enter_now"] += 1
-        elif str(commit.get("auxiliary_effective_action") or "") not in {"PASS", "CAUTION"}:
+        elif str(commit.get("auxiliary_effective_action") or "") not in {
+            "PASS",
+            "CAUTION",
+        }:
             excluded_commits["auxiliary_not_eligible"] += 1
         else:
             excluded_commits["planned_quantity_missing_or_zero"] += 1
@@ -1324,15 +2132,26 @@ def build_report(
     for key, terminal in terminals.items():
         commit = commits.get(key)
         committed = _number((commit or {}).get("decision_committed_at_epoch"))
-        finished = _number(terminal.get("submit_finished_at_epoch")
-                           or terminal.get("terminal_finished_at_epoch"))
-        if (not commit or not commit.get("decision_source_sha256")
-                or commit["decision_source_sha256"] != decision_source_sha256(commit)
-                or terminal.get("decision_source_sha256") != commit["decision_source_sha256"]
-                or committed is None or finished is None or finished < committed
-                or (terminal.get("entry_submit_attempt_id")
-                    and commit.get("entry_submit_attempt_id")
-                    and terminal["entry_submit_attempt_id"] != commit["entry_submit_attempt_id"])):
+        finished = _number(
+            terminal.get("submit_finished_at_epoch")
+            or terminal.get("terminal_finished_at_epoch")
+        )
+        if (
+            not commit
+            or not commit.get("decision_source_sha256")
+            or commit["decision_source_sha256"] != decision_source_sha256(commit)
+            or terminal.get("decision_source_sha256")
+            != commit["decision_source_sha256"]
+            or committed is None
+            or finished is None
+            or finished < committed
+            or (
+                terminal.get("entry_submit_attempt_id")
+                and commit.get("entry_submit_attempt_id")
+                and terminal["entry_submit_attempt_id"]
+                != commit["entry_submit_attempt_id"]
+            )
+        ):
             source_quality["terminal_unbound_or_clock_invalid"] += 1
             terminal_status["unbound_or_clock_invalid"] += 1
         else:
@@ -1340,10 +2159,14 @@ def build_report(
             if str(terminal.get("submit_call_broker_accepted") or "").lower() == "true":
                 terminal_status["broker_ack_execution_terminal_unobserved"] += 1
             elif str(terminal.get("submit_call_outcome") or "") in {
-                "raised", "not_returned", "returned_other",
+                "raised",
+                "not_returned",
+                "returned_other",
             }:
                 terminal_status["response_uncertain"] += 1
-            elif not terminal.get("submit_call_outcome") and terminal.get("terminal_reason"):
+            elif not terminal.get("submit_call_outcome") and terminal.get(
+                "terminal_reason"
+            ):
                 terminal_status["unsubmitted_expired"] += 1
             else:
                 terminal_status["no_broker_ack_observed"] += 1
@@ -1355,11 +2178,17 @@ def build_report(
                 observed = json.loads(observed)
             except ValueError:
                 observed = None
-        if isinstance(observed, dict) and observed.get("schema") == "pre_submit_delay_decision_type_v1":
-            expected = "|".join(str(observed.get(part) or "UNKNOWN") for part in (
-                "venue", "session_bucket", "price_tick_band"
-            ))
-            type_by_attempt[key] = expected if observed.get("type_key") == expected else "UNKNOWN"
+        if (
+            isinstance(observed, dict)
+            and observed.get("schema") == "pre_submit_delay_decision_type_v1"
+        ):
+            expected = "|".join(
+                str(observed.get(part) or "UNKNOWN")
+                for part in ("venue", "session_bucket", "price_tick_band")
+            )
+            type_by_attempt[key] = (
+                expected if observed.get("type_key") == expected else "UNKNOWN"
+            )
         else:
             type_by_attempt[key] = "UNKNOWN"
     missing = Counter()
@@ -1382,7 +2211,11 @@ def build_report(
             ask = _number(row.get("ask_price"))
             depth = _number(row.get("ask_qty"))
             if (
-                issue is not None or ask is None or ask <= 0 or depth is None or depth <= 0
+                issue is not None
+                or ask is None
+                or ask <= 0
+                or depth is None
+                or depth <= 0
                 or str(row.get("quote_valid") or "").lower() != "true"
                 or row.get("route") != commits[key].get("route")
             ):
@@ -1391,10 +2224,13 @@ def build_report(
                 source_quality[issue or "quote_source_invalid"] += 1
                 reason = str(row.get("quote_source_reason") or "unknown").lower()
                 if reason in {
-                    "horizon_late_or_early", "route_mismatch_or_missing",
+                    "horizon_late_or_early",
+                    "route_mismatch_or_missing",
                     "route_depth_missing_conflicted_or_ambiguous",
-                    "transport_epoch_changed", "depth_stale_or_clock_invalid",
-                    "quote_stale_or_conflicted", "price_or_depth_invalid",
+                    "transport_epoch_changed",
+                    "depth_stale_or_clock_invalid",
+                    "quote_stale_or_conflicted",
+                    "price_or_depth_invalid",
                 }:
                     source_quality[f"producer_{reason}"] += 1
                 continue
@@ -1402,75 +2238,106 @@ def build_report(
             price_quotes[key][second] = row
             comparable.append((key, ask, depth))
             valid_asks_by_type[(type_by_attempt[key], second)].append(ask)
-        diagnostic.append({
-            "delay_sec": second,
-            "source_valid_attempt_count": len(comparable),
-            "mean_observed_ask": (
-                round(sum(item[1] for item in comparable) / len(comparable), 4)
-                if comparable else None
-            ),
-            "paired_net_ev_pct": None,
-            "paired_net_ev_delta_pct": None,
-            "holdout_net_ev_delta_pct": None,
-            "holdout_attempt_count": None,
-            "model_fill_error": None,
-            "winner_retention": None,
-            "candidate_passed": False,
-        })
+        diagnostic.append(
+            {
+                "delay_sec": second,
+                "source_valid_attempt_count": len(comparable),
+                "mean_observed_ask": (
+                    round(sum(item[1] for item in comparable) / len(comparable), 4)
+                    if comparable
+                    else None
+                ),
+                "paired_net_ev_pct": None,
+                "paired_net_ev_delta_pct": None,
+                "holdout_net_ev_delta_pct": None,
+                "holdout_attempt_count": None,
+                "model_fill_error": None,
+                "winner_retention": None,
+                "candidate_passed": False,
+            }
+        )
         observed_count = sum(second in samples.get(key, {}) for key in eligible)
         valid_count = len(comparable)
         conflicted_count = sum((key, second) in conflicted for key in eligible)
-        horizon_source_quality.append({
-            "delay_sec": second,
-            "eligible_attempt_count": len(eligible),
-            "observed_attempt_count": observed_count + conflicted_count,
-            "valid_attempt_count": valid_count,
-            "quarantined_attempt_count": observed_count - valid_count + conflicted_count,
-            "unobserved_attempt_count": len(eligible) - observed_count - conflicted_count,
-            "conflicted_attempt_count": conflicted_count,
-        })
+        horizon_source_quality.append(
+            {
+                "delay_sec": second,
+                "eligible_attempt_count": len(eligible),
+                "observed_attempt_count": observed_count + conflicted_count,
+                "valid_attempt_count": valid_count,
+                "quarantined_attempt_count": observed_count
+                - valid_count
+                + conflicted_count,
+                "unobserved_attempt_count": len(eligible)
+                - observed_count
+                - conflicted_count,
+                "conflicted_attempt_count": conflicted_count,
+            }
+        )
     type_counts = Counter(type_by_attempt.values())
-    scope_by_attempt = {key: "|".join(type_by_attempt[key].split("|")[:2])
-                        if type_by_attempt[key] != "UNKNOWN" else "UNKNOWN"
-                        for key in eligible}
+    scope_by_attempt = {
+        key: (
+            "|".join(type_by_attempt[key].split("|")[:2])
+            if type_by_attempt[key] != "UNKNOWN"
+            else "UNKNOWN"
+        )
+        for key in eligible
+    }
     scope_counts = Counter(scope_by_attempt.values())
     valid_asks_by_scope: dict[tuple[str, float], list[float]] = defaultdict(list)
     for (type_key, second), asks in valid_asks_by_type.items():
-        scope = "|".join(type_key.split("|")[:2]) if type_key != "UNKNOWN" else "UNKNOWN"
+        scope = (
+            "|".join(type_key.split("|")[:2]) if type_key != "UNKNOWN" else "UNKNOWN"
+        )
         valid_asks_by_scope[(scope, second)].extend(asks)
     scope_diagnostic = [
         {
-            "scope_key": scope_key, "eligible_attempt_count": scope_counts[scope_key],
-            "candidate_grid": [
-                {"delay_sec": second,
-                 "source_valid_attempt_count": len(valid_asks_by_scope[(scope_key, second)]),
-                 "paired_net_ev_delta_pct": None,
-                 "holdout_net_ev_delta_pct": None,
-                 "candidate_passed": False}
-                for second in DELAYS_SEC
-            ],
-            "selection_status": "unselected_source_gap",
-        } for scope_key in sorted(scope_counts)
-    ]
-    type_diagnostic = [
-        {
-            "type_key": type_key, "eligible_attempt_count": type_counts[type_key],
+            "scope_key": scope_key,
+            "eligible_attempt_count": scope_counts[scope_key],
             "candidate_grid": [
                 {
                     "delay_sec": second,
-                    "source_valid_attempt_count": len(valid_asks_by_type[(type_key, second)]),
-                    "mean_observed_ask": (
-                        round(sum(valid_asks_by_type[(type_key, second)])
-                              / len(valid_asks_by_type[(type_key, second)]), 4)
-                        if valid_asks_by_type[(type_key, second)] else None
+                    "source_valid_attempt_count": len(
+                        valid_asks_by_scope[(scope_key, second)]
                     ),
                     "paired_net_ev_delta_pct": None,
                     "holdout_net_ev_delta_pct": None,
                     "candidate_passed": False,
-                } for second in DELAYS_SEC
+                }
+                for second in DELAYS_SEC
             ],
             "selection_status": "unselected_source_gap",
-        } for type_key in sorted(type_counts)
+        }
+        for scope_key in sorted(scope_counts)
+    ]
+    type_diagnostic = [
+        {
+            "type_key": type_key,
+            "eligible_attempt_count": type_counts[type_key],
+            "candidate_grid": [
+                {
+                    "delay_sec": second,
+                    "source_valid_attempt_count": len(
+                        valid_asks_by_type[(type_key, second)]
+                    ),
+                    "mean_observed_ask": (
+                        round(
+                            sum(valid_asks_by_type[(type_key, second)])
+                            / len(valid_asks_by_type[(type_key, second)]),
+                            4,
+                        )
+                        if valid_asks_by_type[(type_key, second)]
+                        else None
+                    ),
+                    "paired_net_ev_delta_pct": None,
+                    "holdout_net_ev_delta_pct": None,
+                    "candidate_passed": False,
+                }
+                for second in DELAYS_SEC
+            ],
+            "selection_status": "unselected_source_gap",
+        }
+        for type_key in sorted(type_counts)
     ]
     # Ask improvements alone are not executable fills. Until full/partial/no-fill
     # and completed-cost calibration are joined on this same denominator, every
@@ -1482,9 +2349,11 @@ def build_report(
             else source["first_blocker"]
         )
     elif not commits:
-        blocker = ("no_committed_intent_observed" if family_ledger is not None
-                   and family_ledger["status"] == "valid_empty" else
-                   "exact_committed_intent_missing")
+        blocker = (
+            "no_committed_intent_observed"
+            if family_ledger is not None and family_ledger["status"] == "valid_empty"
+            else "exact_committed_intent_missing"
+        )
     elif not eligible:
         blocker = "eligible_enter_now_auxiliary_pass_intent_missing"
     elif not any(row["source_valid_attempt_count"] for row in diagnostic[1:]):
@@ -1493,12 +2362,24 @@ def build_report(
         blocker = "exact_submit_terminal_receipt_missing"
     else:
         blocker = "paired_fill_terminal_cost_model_not_validated"
-    report_status = ("valid_empty" if blocker == "no_committed_intent_observed" else
-                     "model_not_validated" if blocker == "paired_fill_terminal_cost_model_not_validated" else
-                     "source_gap")
-    unselected_status = ("unselected_source_gap" if report_status == "source_gap" else
-                         "unselected_valid_empty" if report_status == "valid_empty" else
-                         "unselected_model_not_validated")
+    report_status = (
+        "valid_empty"
+        if blocker == "no_committed_intent_observed"
+        else (
+            "model_not_validated"
+            if blocker == "paired_fill_terminal_cost_model_not_validated"
+            else "source_gap"
+        )
+    )
+    unselected_status = (
+        "unselected_source_gap"
+        if report_status == "source_gap"
+        else (
+            "unselected_valid_empty"
+            if report_status == "valid_empty"
+            else "unselected_model_not_validated"
+        )
+    )
     report = {
         "schema": REPORT_SCHEMA,
         "source_date": target_date,
@@ -1512,12 +2393,15 @@ def build_report(
         "eligible_attempt_count": len(eligible),
         "excluded_committed_attempt_count": len(commits) - len(eligible),
         "excluded_commit_reasons": dict(excluded_commits),
-        "owner_census": dict(Counter(str(row.get("owner") or "UNKNOWN")
-                                     for row in commits.values())),
+        "owner_census": dict(
+            Counter(str(row.get("owner") or "UNKNOWN") for row in commits.values())
+        ),
         "terminal_observation_count": valid_terminals,
         "raw_terminal_observation_count": len(terminals),
         "terminal_status_counts": dict(terminal_status),
-        "eligible_terminal_unobserved_count": sum(key not in terminals for key in eligible),
+        "eligible_terminal_unobserved_count": sum(
+            key not in terminals for key in eligible
+        ),
         "invalid_counts": dict(invalid),
         "source_quality_counts": dict(source_quality),
         "horizon_source_quality": horizon_source_quality,
@@ -1535,8 +2419,13 @@ def build_report(
         "sample_floor": {"paired_attempts": 10, "holdout_attempts": 3},
         "primary_decision_metric": "paired_completed_cost_net_ev_delta_pct",
         "source_quality_gate": "exact_intent_route_fresh_depth_fill_terminal_cost_and_holdout",
-        "forbidden_uses": ["entry_action", "split_shape", "price_override",
-                           "quantity_increase", "safety_guard_bypass"],
+        "forbidden_uses": [
+            "entry_action",
+            "split_shape",
+            "price_override",
+            "quantity_increase",
+            "safety_guard_bypass",
+        ],
         "incumbent_net_ev_pct": None,
         "selected_delay_sec": None,
         "status": report_status,
@@ -1548,7 +2437,14 @@ def build_report(
     }
     if target_date >= "2026-09-29":
         report["price_pattern_analysis"] = _build_price_pattern_analysis(
-            target_date, source, commits, eligible, price_quotes, price_quote_issues, type_by_attempt, dict(invalid),
+            target_date,
+            source,
+            commits,
+            eligible,
+            price_quotes,
+            price_quote_issues,
+            type_by_attempt,
+            dict(invalid),
         )
         report["elapsed_sec"] = round(time.monotonic() - started, 4)
     policy_selected = (
@@ -1569,14 +2465,16 @@ def build_report(
                 "selected_delay_sec": None,
                 "selection_status": unselected_status,
                 "runtime_apply_allowed": False,
-            } for row in scope_diagnostic
+            }
+            for row in scope_diagnostic
         },
         "type_policies": {
             row["type_key"]: {
                 "selected_delay_sec": None,
                 "selection_status": unselected_status,
                 "runtime_apply_allowed": False,
-            } for row in type_diagnostic
+            }
+            for row in type_diagnostic
         },
         "runtime_apply_allowed": False,
         "selection_status": unselected_status,
@@ -1598,18 +2496,34 @@ def build_report(
     report["policy_sha256"] = policy["policy_sha256"]
     if write:
         source_snapshot.verify(target_date, data_root)
-        report_file = (Path(output_root) / "report/pre_submit_delay_tuning" / report_path(target_date).name
-                       if output_root is not None else report_path(target_date))
-        policy_file = (Path(output_root) / "threshold_cycle/pre_submit_delay_policy" / policy_path(target_date).name
-                       if output_root is not None else policy_path(target_date))
+        report_file = (
+            Path(output_root)
+            / "report/pre_submit_delay_tuning"
+            / report_path(target_date).name
+            if output_root is not None
+            else report_path(target_date)
+        )
+        policy_file = (
+            Path(output_root)
+            / "threshold_cycle/pre_submit_delay_policy"
+            / policy_path(target_date).name
+            if output_root is not None
+            else policy_path(target_date)
+        )
         _atomic_json(report_file, report)
         _atomic_json(policy_file, policy)
     return report
 
 
-def _load_legacy_runtime_policy(*, now: datetime | None = None,
-                        decision_type: dict[str, Any] | None = None, _preloaded=None,
-                        env=None, data_root=None, target_date=None) -> dict[str, Any]:
+def _load_legacy_runtime_policy(
+    *,
+    now: datetime | None = None,
+    decision_type: dict[str, Any] | None = None,
+    _preloaded=None,
+    env=None,
+    data_root=None,
+    target_date=None,
+) -> dict[str, Any]:
     """Return zero unless an exact-date, economic-valid independent policy loads."""
     env = os.environ if env is None else env
     fallback = {
@@ -1618,30 +2532,50 @@ def _load_legacy_runtime_policy(*, now: datetime | None = None,
         "policy_sha256": None,
     }
     if env.get("KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_ENABLED", "").lower() not in {
-        "1", "true", "yes", "on"
+        "1",
+        "true",
+        "yes",
+        "on",
     }:
         return fallback
     path = Path(env.get("KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_FILE") or "")
     if not path.is_file() or path.stat().st_size > 1024 * 1024:
         return {**fallback, "status": "policy_missing_or_unbounded"}
     try:
-        policy = dict(_preloaded[0]) if _preloaded is not None else json.loads(path.read_text(encoding="utf-8"))
-        now_date = target_date or (now or datetime.now(KST)).astimezone(KST).date().isoformat()
+        policy = (
+            dict(_preloaded[0])
+            if _preloaded is not None
+            else json.loads(path.read_text(encoding="utf-8"))
+        )
+        now_date = (
+            target_date or (now or datetime.now(KST)).astimezone(KST).date().isoformat()
+        )
         digest = policy.pop("policy_sha256")
         valid = (
             policy.get("schema") == POLICY_SCHEMA
             and digest == _digest(policy)
             and policy.get("effective_from") <= now_date <= policy.get("expires_on")
-            and env.get("KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_ACTIVE_DATE", now_date) == now_date
+            and env.get("KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_ACTIVE_DATE", now_date)
+            == now_date
         )
         if not valid:
             return {**fallback, "status": "policy_identity_or_date_invalid"}
-        report_file = ((Path(data_root) / "report/pre_submit_delay_tuning" /
-                        report_path(str(policy.get("source_date") or "")).name)
-                       if data_root is not None else report_path(str(policy.get("source_date") or "")))
+        report_file = (
+            (
+                Path(data_root)
+                / "report/pre_submit_delay_tuning"
+                / report_path(str(policy.get("source_date") or "")).name
+            )
+            if data_root is not None
+            else report_path(str(policy.get("source_date") or ""))
+        )
         if not report_file.is_file() or report_file.stat().st_size > 1024 * 1024:
             return {**fallback, "status": "policy_report_missing_or_unbounded"}
-        report = dict(_preloaded[1]) if _preloaded is not None else json.loads(report_file.read_text(encoding="utf-8"))
+        report = (
+            dict(_preloaded[1])
+            if _preloaded is not None
+            else json.loads(report_file.read_text(encoding="utf-8"))
+        )
         report_policy_digest = report.pop("policy_sha256", None)
         if (
             report_policy_digest != digest
@@ -1659,20 +2593,33 @@ def _load_legacy_runtime_policy(*, now: datetime | None = None,
             and policy.get("runtime_apply_allowed") is True
         )
         if selected is None and not selector_only:
-            unresolved = {"source_gap": "unselected_source_gap",
-                          "valid_empty": "unselected_valid_empty",
-                          "model_not_validated": "unselected_model_not_validated"}
-            if (policy.get("selection_status") == unresolved.get(report.get("status"))
-                    and policy.get("runtime_apply_allowed") is False):
-                return {**fallback, "status": (
-                    "no_validated_delay_policy_source_gap" if report.get("status") == "source_gap"
-                    else "no_validated_delay_policy_not_evaluated")}
+            unresolved = {
+                "source_gap": "unselected_source_gap",
+                "valid_empty": "unselected_valid_empty",
+                "model_not_validated": "unselected_model_not_validated",
+            }
+            if (
+                policy.get("selection_status") == unresolved.get(report.get("status"))
+                and policy.get("runtime_apply_allowed") is False
+            ):
+                return {
+                    **fallback,
+                    "status": (
+                        "no_validated_delay_policy_source_gap"
+                        if report.get("status") == "source_gap"
+                        else "no_validated_delay_policy_not_evaluated"
+                    ),
+                }
             return {**fallback, "status": "policy_delay_invalid"}
         if selected is not None and selected not in DELAYS_SEC:
             return {**fallback, "status": "policy_delay_invalid"}
         if selected == 0:
             return {**fallback, "status": "zero_seconds_is_control_not_policy"}
-        if selected is not None and selected > 0 and not _validated_candidate(policy, report):
+        if (
+            selected is not None
+            and selected > 0
+            and not _validated_candidate(policy, report)
+        ):
             return {**fallback, "status": "policy_economics_unvalidated"}
         for family, evidence_key, key_name in (
             ("scope_policies", "scope_census", "scope_key"),
@@ -1682,22 +2629,39 @@ def _load_legacy_runtime_policy(*, now: datetime | None = None,
             if not isinstance(branches, dict):
                 return {**fallback, "status": "policy_selector_invalid"}
             for key, branch in branches.items():
-                if not isinstance(branch, dict) or key not in {
-                    row.get(key_name) for row in report.get(evidence_key, [])
-                    if isinstance(row, dict)
-                } or _number(branch.get("selected_delay_sec")) not in DELAYS_SEC or _number(branch.get("selected_delay_sec")) <= 0:
+                if (
+                    not isinstance(branch, dict)
+                    or key
+                    not in {
+                        row.get(key_name)
+                        for row in report.get(evidence_key, [])
+                        if isinstance(row, dict)
+                    }
+                    or _number(branch.get("selected_delay_sec")) not in DELAYS_SEC
+                    or _number(branch.get("selected_delay_sec")) <= 0
+                ):
                     return {**fallback, "status": "policy_selector_invalid"}
-                if _number(branch.get("selected_delay_sec")) > 0 and not _validated_candidate(
-                    policy, report,
+                if _number(
+                    branch.get("selected_delay_sec")
+                ) > 0 and not _validated_candidate(
+                    policy,
+                    report,
                     scope_key=key if family == "scope_policies" else None,
                     type_key=key if family == "type_policies" else None,
                 ):
                     return {**fallback, "status": "policy_economics_unvalidated"}
-        if (policy.get("type_policies") or policy.get("scope_policies")) and not isinstance(decision_type, dict):
+        if (
+            policy.get("type_policies") or policy.get("scope_policies")
+        ) and not isinstance(decision_type, dict):
             return {**fallback, "status": "decision_type_missing"}
         type_key = str((decision_type or {}).get("type_key") or "")
-        scope_key = "|".join(type_key.split("|")[:2]) if type_key.count("|") == 2 else ""
-        if (decision_type and decision_type.get("schema") != "pre_submit_delay_decision_type_v1"):
+        scope_key = (
+            "|".join(type_key.split("|")[:2]) if type_key.count("|") == 2 else ""
+        )
+        if (
+            decision_type
+            and decision_type.get("schema") != "pre_submit_delay_decision_type_v1"
+        ):
             return {**fallback, "status": "decision_type_invalid"}
         type_branch = (policy.get("type_policies") or {}).get(type_key)
         scope_branch = (policy.get("scope_policies") or {}).get(scope_key)
@@ -1705,9 +2669,15 @@ def _load_legacy_runtime_policy(*, now: datetime | None = None,
         chosen = _number(branch.get("selected_delay_sec")) if branch else selected
         if chosen is None or chosen <= 0:
             return {**fallback, "status": "policy_type_uncovered"}
-        return {"delay_sec": chosen, "status": "loaded", "policy_sha256": digest,
-                "selected_type_key": type_key if type_branch else None,
-                "selected_scope_key": scope_key if scope_branch and not type_branch else None}
+        return {
+            "delay_sec": chosen,
+            "status": "loaded",
+            "policy_sha256": digest,
+            "selected_type_key": type_key if type_branch else None,
+            "selected_scope_key": (
+                scope_key if scope_branch and not type_branch else None
+            ),
+        }
     except (OSError, ValueError, TypeError, KeyError):
         return {**fallback, "status": "policy_parse_invalid"}
 
@@ -1722,29 +2692,47 @@ def _runtime_preparation_key(day, *, env=None, data_root=None):
     # enable/date/manifest change must not reuse another activation's cache.
     env = os.environ if env is None else env
     root = DATA_DIR if data_root is None else Path(data_root)
-    return (os.getpid(), day,
-            env.get("KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_MANIFEST_SHA256"),
-            env.get("KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_FILE"),
-            env.get("KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_ENABLED", "").lower(),
-            env.get("KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_ACTIVE_DATE"), str(root.resolve()))
+    return (
+        os.getpid(),
+        day,
+        env.get("KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_MANIFEST_SHA256"),
+        env.get("KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_FILE"),
+        env.get("KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_ENABLED", "").lower(),
+        env.get("KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_ACTIVE_DATE"),
+        str(root.resolve()),
+    )
 
 
 def _verify_runtime_code_contract(policy, day):
     """Preserve only a sealed same-day policy through the reviewed entry repair."""
     from .pre_submit_delay_initial_policy import code_contract, CONTRACT_PATHS
+
     actual = code_contract()
-    if actual == policy.get('code_contract_sha256'):
-        return {'status': 'exact_code_contract', 'code_contract_sha256': actual}
-    from src.engine.automation.intraday_release_handoff import verify_entry_consumer_code
-    return verify_entry_consumer_code(day, family='pre_submit_delay',
-        policy_sha=policy.get('policy_sha256'), expected=policy.get('code_contract_sha256'),
-        paths={name: name for name in CONTRACT_PATHS}, actual=actual)
+    if actual == policy.get("code_contract_sha256"):
+        return {"status": "exact_code_contract", "code_contract_sha256": actual}
+    from src.engine.automation.intraday_release_handoff import (
+        verify_entry_consumer_code,
+    )
+
+    return verify_entry_consumer_code(
+        day,
+        family="pre_submit_delay",
+        policy_sha=policy.get("policy_sha256"),
+        expected=policy.get("code_contract_sha256"),
+        paths={name: name for name in CONTRACT_PATHS},
+        actual=actual,
+    )
 
 
 def prepare_runtime_policy(*, now=None, target_date=None, env=None, data_root=None):
     """Called by the existing preparation owner, never from warm submission."""
     global _PREPARED_DELAY_POLICY, _PREPARED_DELAY_KEY, _PREPARED_DELAY_RECEIPT
-    from .pre_submit_delay_initial_policy import PreparedPolicy, POLICY_SCHEMA as V2, committed_paths
+    from .pre_submit_delay_initial_policy import (
+        PreparedPolicy,
+        POLICY_SCHEMA as V2,
+        committed_paths,
+    )
+
     env = os.environ if env is None else env
     explicit_root = data_root is not None
     data_root = DATA_DIR if data_root is None else Path(data_root)
@@ -1759,7 +2747,12 @@ def prepare_runtime_policy(*, now=None, target_date=None, env=None, data_root=No
     _PREPARED_DELAY_POLICY = None
     _PREPARED_DELAY_KEY = None
     _PREPARED_DELAY_RECEIPT = None
-    if env.get("KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_ENABLED", "").lower() not in {"1", "true", "on", "yes"}:
+    if env.get("KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_ENABLED", "").lower() not in {
+        "1",
+        "true",
+        "on",
+        "yes",
+    }:
         _PREPARED_DELAY_KEY = key
         _PREPARED_DELAY_RECEIPT = {"status": "disabled"}
         return dict(_PREPARED_DELAY_RECEIPT)
@@ -1771,44 +2764,84 @@ def prepare_runtime_policy(*, now=None, target_date=None, env=None, data_root=No
         policy = json.loads(path.read_text())
         if policy.get("schema") == V2:
             from .pre_submit_delay_initial_policy import verify_source, _read
+
             code_compatibility = _verify_runtime_code_contract(policy, day)
-            report_file, policy_file, pointer, manifest = committed_paths(data_root, policy["source_date"])
+            report_file, policy_file, pointer, manifest = committed_paths(
+                data_root, policy["source_date"]
+            )
             policy, prepared_report = _read(policy_file), _read(report_file)
             verify_source(data_root, prepared_report, pipeline_reference_only=True)
-            if (policy_file.resolve() != path.resolve()
+            if (
+                policy_file.resolve() != path.resolve()
                 or manifest["manifest_sha256"] != key[2]
-                or env.get("KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_ACTIVE_DATE") != day):
+                or env.get("KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_ACTIVE_DATE") != day
+            ):
                 raise ValueError("committed_policy_binding_invalid")
-            _PREPARED_DELAY_POLICY = PreparedPolicy.from_artifacts(policy, prepared_report, target_date=day)
+            _PREPARED_DELAY_POLICY = PreparedPolicy.from_artifacts(
+                policy, prepared_report, target_date=day
+            )
         else:
             # Preserve legacy economics and selectors, but decode/validate at
             # preparation once. Warm selection never rebuilds the full tree.
-            report_file = ((data_root / 'report/pre_submit_delay_tuning' / report_path(str(policy.get('source_date') or '')).name)
-                           if explicit_root else report_path(str(policy.get('source_date') or '')))
-            if report_file.stat().st_size > 1024*1024:
-                raise ValueError('legacy_delay_report_unbounded')
+            report_file = (
+                (
+                    data_root
+                    / "report/pre_submit_delay_tuning"
+                    / report_path(str(policy.get("source_date") or "")).name
+                )
+                if explicit_root
+                else report_path(str(policy.get("source_date") or ""))
+            )
+            if report_file.stat().st_size > 1024 * 1024:
+                raise ValueError("legacy_delay_report_unbounded")
             legacy_report = json.loads(report_file.read_text())
-            types, scopes = policy.get('type_policies') or {}, policy.get('scope_policies') or {}
-            first_key = next(iter(types), next(iter(scopes), '') + '|PREPARE')
-            result = _load_legacy_runtime_policy(now=now, target_date=day, env=env, data_root=data_root if explicit_root else None, decision_type={
-                'schema':'pre_submit_delay_decision_type_v1', 'type_key':first_key},
-                _preloaded=(policy, legacy_report))
-            if result.get('status') == 'loaded':
+            types, scopes = (
+                policy.get("type_policies") or {},
+                policy.get("scope_policies") or {},
+            )
+            first_key = next(iter(types), next(iter(scopes), "") + "|PREPARE")
+            result = _load_legacy_runtime_policy(
+                now=now,
+                target_date=day,
+                env=env,
+                data_root=data_root if explicit_root else None,
+                decision_type={
+                    "schema": "pre_submit_delay_decision_type_v1",
+                    "type_key": first_key,
+                },
+                _preloaded=(policy, legacy_report),
+            )
+            if result.get("status") == "loaded":
                 from types import MappingProxyType
-                _PREPARED_DELAY_POLICY = {'_legacy_maps':True, 'policy_sha256':policy['policy_sha256'],
-                    'default_delay_sec':policy.get('selected_delay_sec'),
-                    'types':MappingProxyType({k:v['selected_delay_sec'] for k,v in types.items()}),
-                    'scopes':MappingProxyType({k:v['selected_delay_sec'] for k,v in scopes.items()})}
+
+                _PREPARED_DELAY_POLICY = {
+                    "_legacy_maps": True,
+                    "policy_sha256": policy["policy_sha256"],
+                    "default_delay_sec": policy.get("selected_delay_sec"),
+                    "types": MappingProxyType(
+                        {k: v["selected_delay_sec"] for k, v in types.items()}
+                    ),
+                    "scopes": MappingProxyType(
+                        {k: v["selected_delay_sec"] for k, v in scopes.items()}
+                    ),
+                }
         native_status = "prepared" if _PREPARED_DELAY_POLICY else "not_applicable"
         if isinstance(_PREPARED_DELAY_POLICY, PreparedPolicy):
-            cells = {key: dict(value) for key, value in _PREPARED_DELAY_POLICY.cells.items()}
-            loaded = {"policy_sha256": _PREPARED_DELAY_POLICY.policy_sha256,
-                      "effective_from": _PREPARED_DELAY_POLICY.effective_from,
-                      "expires_on": _PREPARED_DELAY_POLICY.expires_on, "cells": cells,
-                      "code_contract_sha256": _PREPARED_DELAY_POLICY.code_contract_sha256}
+            cells = {
+                key: dict(value) for key, value in _PREPARED_DELAY_POLICY.cells.items()
+            }
+            loaded = {
+                "policy_sha256": _PREPARED_DELAY_POLICY.policy_sha256,
+                "effective_from": _PREPARED_DELAY_POLICY.effective_from,
+                "expires_on": _PREPARED_DELAY_POLICY.expires_on,
+                "cells": cells,
+                "code_contract_sha256": _PREPARED_DELAY_POLICY.code_contract_sha256,
+            }
         else:
-            loaded = {key: dict(value) if hasattr(value, "items") else value
-                      for key, value in (_PREPARED_DELAY_POLICY or {}).items()}
+            loaded = {
+                key: dict(value) if hasattr(value, "items") else value
+                for key, value in (_PREPARED_DELAY_POLICY or {}).items()
+            }
         source_hashes = {}
         loaded_report = prepared_report if policy.get("schema") == V2 else legacy_report
         for source_path, loaded_value in ((path, policy), (report_file, loaded_report)):
@@ -1816,12 +2849,21 @@ def prepare_runtime_policy(*, now=None, target_date=None, env=None, data_root=No
             if json.loads(raw) != loaded_value:
                 raise ValueError("delay_source_changed_after_loading")
             source_hashes[str(source_path)] = hashlib.sha256(raw).hexdigest()
-        _PREPARED_DELAY_RECEIPT = {"status": native_status, "target_date": day,
+        _PREPARED_DELAY_RECEIPT = {
+            "status": native_status,
+            "target_date": day,
             "policy_sha256": policy.get("policy_sha256"),
             "loaded_object_sha256": _digest(loaded),
             "source_hashes": source_hashes,
-            **({"fallback_status": result["status"]} if native_status == "not_applicable" else {}),
-            **({'code_compatibility': code_compatibility} if code_compatibility else {})}
+            **(
+                {"fallback_status": result["status"]}
+                if native_status == "not_applicable"
+                else {}
+            ),
+            **(
+                {"code_compatibility": code_compatibility} if code_compatibility else {}
+            ),
+        }
         _PREPARED_DELAY_KEY = key
         return dict(_PREPARED_DELAY_RECEIPT)
     except (OSError, ValueError, TypeError, KeyError) as exc:
@@ -1831,60 +2873,123 @@ def prepare_runtime_policy(*, now=None, target_date=None, env=None, data_root=No
 
 def load_runtime_policy(*, now=None, decision_type=None):
     from .pre_submit_delay_initial_policy import PreparedPolicy
+
     day = (now or datetime.now(KST)).astimezone(KST).date().isoformat()
-    enabled = os.getenv("KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_ENABLED", "").lower() in {"1", "true", "on", "yes"}
+    enabled = os.getenv("KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_ENABLED", "").lower() in {
+        "1",
+        "true",
+        "on",
+        "yes",
+    }
     key = _runtime_preparation_key(day)
     if not enabled or _PREPARED_DELAY_KEY != key:
         # v1 compatibility is retained only without a v2 manifest. Existing
         # legacy installations keep their original validation semantics.
-        if enabled and not key[2] and day < '2026-10-10':
+        if enabled and not key[2] and day < "2026-10-10":
             return _load_legacy_runtime_policy(now=now, decision_type=decision_type)
-        return {"delay_sec": 0, "status": "policy_not_prepared_existing_submit_behavior", "policy_sha256": None}
+        return {
+            "delay_sec": 0,
+            "status": "policy_not_prepared_existing_submit_behavior",
+            "policy_sha256": None,
+        }
     if isinstance(_PREPARED_DELAY_POLICY, PreparedPolicy):
         fields = decision_type or {}
-        return _PREPARED_DELAY_POLICY.lookup(target_date=day, market=fields.get("session_bucket"),
-                                           kind=fields.get("machine_situation", "UNKNOWN"),
-                                           parents=fields.get("parent_compatibility"))
-    if isinstance(_PREPARED_DELAY_POLICY, dict) and _PREPARED_DELAY_POLICY.get('_legacy_maps'):
+        return _PREPARED_DELAY_POLICY.lookup(
+            target_date=day,
+            market=fields.get("session_bucket"),
+            kind=fields.get("machine_situation", "UNKNOWN"),
+            parents=fields.get("parent_compatibility"),
+        )
+    if isinstance(_PREPARED_DELAY_POLICY, dict) and _PREPARED_DELAY_POLICY.get(
+        "_legacy_maps"
+    ):
         cache, fields = _PREPARED_DELAY_POLICY, decision_type or {}
-        if (cache['types'] or cache['scopes']) and fields.get('schema') != 'pre_submit_delay_decision_type_v1':
-            return {'delay_sec':0, 'status':'decision_type_missing', 'policy_sha256':None}
-        kind = str(fields.get('type_key') or '')
-        scope = '|'.join(kind.split('|')[:2]) if kind.count('|') == 2 else ''
-        selected = cache['types'].get(kind, cache['scopes'].get(scope, cache['default_delay_sec']))
-        return {'delay_sec':selected or 0, 'status':'loaded' if selected else 'policy_type_uncovered',
-                'policy_sha256':cache['policy_sha256'] if selected else None,
-                'selected_type_key':kind if kind in cache['types'] else None,
-                'selected_scope_key':scope if kind not in cache['types'] and scope in cache['scopes'] else None}
-    return dict(_PREPARED_DELAY_POLICY or {"delay_sec": 0,
-                "status": "no_validated_delay_policy_existing_submit_behavior", "policy_sha256": None})
+        if (cache["types"] or cache["scopes"]) and fields.get(
+            "schema"
+        ) != "pre_submit_delay_decision_type_v1":
+            return {
+                "delay_sec": 0,
+                "status": "decision_type_missing",
+                "policy_sha256": None,
+            }
+        kind = str(fields.get("type_key") or "")
+        scope = "|".join(kind.split("|")[:2]) if kind.count("|") == 2 else ""
+        selected = cache["types"].get(
+            kind, cache["scopes"].get(scope, cache["default_delay_sec"])
+        )
+        return {
+            "delay_sec": selected or 0,
+            "status": "loaded" if selected else "policy_type_uncovered",
+            "policy_sha256": cache["policy_sha256"] if selected else None,
+            "selected_type_key": kind if kind in cache["types"] else None,
+            "selected_scope_key": (
+                scope
+                if kind not in cache["types"] and scope in cache["scopes"]
+                else None
+            ),
+        }
+    return dict(
+        _PREPARED_DELAY_POLICY
+        or {
+            "delay_sec": 0,
+            "status": "no_validated_delay_policy_existing_submit_behavior",
+            "policy_sha256": None,
+        }
+    )
 
 
 def initial_policy_projection(report):
     from .pre_submit_delay_initial_policy import REPORT_SCHEMA as V2
+
     if report.get("schema") != V2:
         return None
-    return {key: report.get(key) for key in ("schema", "status", "census", "price_ready_pair_n", "source_sha256",
-            "policy_sha256", "code_contract_sha256", "metric_role", "decision_authority")}
+    return {
+        key: report.get(key)
+        for key in (
+            "schema",
+            "status",
+            "census",
+            "price_ready_pair_n",
+            "source_sha256",
+            "policy_sha256",
+            "code_contract_sha256",
+            "metric_role",
+            "decision_authority",
+        )
+    }
 
 
 def initial_cached_projection(root, output, day, *, contract):
     """Reuse sealed minimal opportunities; verify source bytes independently."""
-    from .pre_submit_delay_initial_policy import committed_paths, _read, verify_source, projection_contract
-    pointer = Path(output) / 'threshold_cycle/pre_submit_delay_policy' / f'committed_{day}.json'
+    from .pre_submit_delay_initial_policy import (
+        committed_paths,
+        _read,
+        verify_source,
+        projection_contract,
+    )
+
+    pointer = (
+        Path(output)
+        / "threshold_cycle/pre_submit_delay_policy"
+        / f"committed_{day}.json"
+    )
     if not pointer.exists():
         return None
     try:
         report_file, _, _, _ = committed_paths(output, day, validate_selection=False)
         saved = _read(report_file)
-        if saved.get('source_projection_contract_sha256') != projection_contract():
+        if saved.get("source_projection_contract_sha256") != projection_contract():
             return None
         verify_source(root, saved)
-        if saved.get('storage_schema'):
+        if saved.get("storage_schema"):
             from src.engine.lifecycle.research_storage import iter_tree
-            rows = iter_tree(saved.evidence_root,saved['qualified_projection_ref'])
+
+            rows = iter_tree(saved.evidence_root, saved["qualified_projection_ref"])
         else:
-            rows = [{**row,'pairs':{int(k):v for k,v in row['pairs'].items()}} for row in saved['qualified_projection']]
+            rows = [
+                {**row, "pairs": {int(k): v for k, v in row["pairs"].items()}}
+                for row in saved["qualified_projection"]
+            ]
         return saved, rows
     except (OSError, ValueError, TypeError, KeyError):
         return None
@@ -1902,54 +3007,115 @@ def _main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
     if args.initial_policy_v2:
-        from .pre_submit_delay_initial_policy import build_initial, publish, code_contract, verify_source
+        from .pre_submit_delay_initial_policy import (
+            build_initial,
+            publish,
+            code_contract,
+            verify_source,
+        )
+
         root = args.input_root or DATA_DIR
         output = args.output_root or DATA_DIR
         contract = code_contract()
         cached = initial_cached_projection(root, output, args.date, contract=contract)
-        if cached is not None and cached[0].get('storage_schema'):
-            from src.engine.automation.pre_submit_delay_partitioned_research import run as run_partitioned
-            result = run_partitioned(root,output,args.date,
-                publication_date=args.publication_date or datetime.now(KST).date().isoformat(),
-                effective_date=args.effective_date,require_ledger=args.require_family_ledger,
-                dry_run=args.dry_run,contract=contract,cached=cached)
+        if cached is not None and cached[0].get("storage_schema"):
+            from src.engine.automation.pre_submit_delay_partitioned_research import (
+                run as run_partitioned,
+            )
+
+            result = run_partitioned(
+                root,
+                output,
+                args.date,
+                publication_date=args.publication_date
+                or datetime.now(KST).date().isoformat(),
+                effective_date=args.effective_date,
+                require_ledger=args.require_family_ledger,
+                dry_run=args.dry_run,
+                contract=contract,
+                cached=cached,
+            )
             print(json.dumps(result))
-            return 0 if result['status'] != 'blocked' else 2
+            return 0 if result["status"] != "blocked" else 2
         if cached is not None:
             saved, projection = cached
-            report, policy = build_initial([], source_date=args.date,
-                publication_date=args.publication_date or datetime.now(KST).date().isoformat(),
-                effective_date=args.effective_date, source_sha256=saved['source_sha256'], code_contract_sha256=contract,
-                _projected=(projection, saved['census']), source_receipt=saved['source_receipt'])
+            report, policy = build_initial(
+                [],
+                source_date=args.date,
+                publication_date=args.publication_date
+                or datetime.now(KST).date().isoformat(),
+                effective_date=args.effective_date,
+                source_sha256=saved["source_sha256"],
+                code_contract_sha256=contract,
+                _projected=(projection, saved["census"]),
+                source_receipt=saved["source_receipt"],
+            )
+
             def verify_cached():
                 verify_source(root, report)
                 if code_contract() != contract:
-                    raise ValueError('delay_code_changed_during_research')
+                    raise ValueError("delay_code_changed_during_research")
+
             verify_cached()
             if not args.dry_run:
                 from .pre_submit_delay_initial_policy import committed_paths
-                incumbent = committed_paths(output, args.date, validate_selection=False)[3]['manifest_sha256']
-                publish(output, report, policy, expected_incumbent=incumbent, source_verifier=verify_cached)
-            print(json.dumps({**initial_policy_projection(report), 'source_decode_passes':0,
-                              'minimal_projection_reused':True}))
-            return 0 if policy['runtime_apply_allowed'] else 2
-        from src.engine.automation.pre_submit_delay_partitioned_research import run as run_partitioned
-        result = run_partitioned(root,output,args.date,
-            publication_date=args.publication_date or datetime.now(KST).date().isoformat(),
-            effective_date=args.effective_date,require_ledger=args.require_family_ledger,
-            dry_run=args.dry_run,contract=contract)
+
+                incumbent = committed_paths(
+                    output, args.date, validate_selection=False
+                )[3]["manifest_sha256"]
+                publish(
+                    output,
+                    report,
+                    policy,
+                    expected_incumbent=incumbent,
+                    source_verifier=verify_cached,
+                )
+            print(
+                json.dumps(
+                    {
+                        **initial_policy_projection(report),
+                        "source_decode_passes": 0,
+                        "minimal_projection_reused": True,
+                    }
+                )
+            )
+            return 0 if policy["runtime_apply_allowed"] else 2
+        from src.engine.automation.pre_submit_delay_partitioned_research import (
+            run as run_partitioned,
+        )
+
+        result = run_partitioned(
+            root,
+            output,
+            args.date,
+            publication_date=args.publication_date
+            or datetime.now(KST).date().isoformat(),
+            effective_date=args.effective_date,
+            require_ledger=args.require_family_ledger,
+            dry_run=args.dry_run,
+            contract=contract,
+        )
         print(json.dumps(result))
-        return 0 if result['status'] != 'blocked' else 2
-    result = build_report(args.date, effective_date=args.effective_date,
-                          require_family_ledger=args.require_family_ledger, write=not args.dry_run,
-                          input_root=args.input_root, output_root=args.output_root)
-    print(json.dumps({
-        "status": result["status"],
-        "price_analysis": price_pattern_projection(result),
-        "first_blocker": result["first_blocker"],
-        "eligible_attempt_count": result["eligible_attempt_count"],
-        "policy": str(policy_path(args.date)),
-    }))
+        return 0 if result["status"] != "blocked" else 2
+    result = build_report(
+        args.date,
+        effective_date=args.effective_date,
+        require_family_ledger=args.require_family_ledger,
+        write=not args.dry_run,
+        input_root=args.input_root,
+        output_root=args.output_root,
+    )
+    print(
+        json.dumps(
+            {
+                "status": result["status"],
+                "price_analysis": price_pattern_projection(result),
+                "first_blocker": result["first_blocker"],
+                "eligible_attempt_count": result["eligible_attempt_count"],
+                "policy": str(policy_path(args.date)),
+            }
+        )
+    )
     return 0
 
 
@@ -1957,13 +3123,16 @@ def main(argv: list[str] | None = None) -> int:
     # Admission uses the same writer identity as the dispatcher. CLI parsing
     # is deliberately read-only and does not consume source data twice.
     admission_parser = argparse.ArgumentParser(add_help=False)
-    admission_parser.add_argument('--date')
-    admission_parser.add_argument('--input-root', type=Path)
+    admission_parser.add_argument("--date")
+    admission_parser.add_argument("--input-root", type=Path)
     admission_args, _ = admission_parser.parse_known_args(argv)
     if not admission_args.date:
         return _main(argv)
     from src.engine.lifecycle.research_admission import direct_job
-    with direct_job(admission_args.input_root or DATA_DIR, 'pre_submit_delay', admission_args.date):
+
+    with direct_job(
+        admission_args.input_root or DATA_DIR, "pre_submit_delay", admission_args.date
+    ):
         return _main(argv)
 
 

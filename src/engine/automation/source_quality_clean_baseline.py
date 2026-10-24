@@ -78,14 +78,21 @@ def clean_baseline_policy() -> dict[str, Any]:
     }
 
 
-def policy_refresh_start_date(target_date: str, policy: dict[str, Any] | None = None) -> str:
+def policy_refresh_start_date(
+    target_date: str, policy: dict[str, Any] | None = None
+) -> str:
     """Keep dated audits reproducible; new scheduled refreshes use forward evidence."""
     if policy is None:
         configured = _load_policy_file()
-        policy = {**configured, **clean_baseline_policy(),
-                  "policy_refresh_start_date": configured.get("policy_refresh_start_date")}
+        policy = {
+            **configured,
+            **clean_baseline_policy(),
+            "policy_refresh_start_date": configured.get("policy_refresh_start_date"),
+        }
     historical = str(policy.get("clean_tuning_baseline_date") or DEFAULT_START_DATE)
-    forward = str(policy.get("policy_refresh_start_date") or DEFAULT_POLICY_REFRESH_START_DATE)
+    forward = str(
+        policy.get("policy_refresh_start_date") or DEFAULT_POLICY_REFRESH_START_DATE
+    )
     target = date.fromisoformat(target_date)
     historical_day = date.fromisoformat(historical)
     forward_day = date.fromisoformat(forward)

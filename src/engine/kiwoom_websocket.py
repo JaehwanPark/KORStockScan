@@ -153,8 +153,13 @@ SWING_CONDITION_KEYWORDS = (
 
 
 def _zero_base_discovery_enabled() -> bool:
-    return str(os.getenv("KORSTOCKSCAN_ZERO_BASE_SCANNER_ENABLED", "false")).strip().lower() in {
-        "1", "true", "yes", "on",
+    return str(
+        os.getenv("KORSTOCKSCAN_ZERO_BASE_SCANNER_ENABLED", "false")
+    ).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
     }
 
 
@@ -374,6 +379,7 @@ class KiwoomWSManager:
         self._micro_reversion_observation_route_data = {}
         self._micro_reversion_registration_receipt = {}
         from src.engine.infrastructure.ws_control_receipts import ControlReceipts
+
         self._control_receipts = ControlReceipts()
         self._micro_reversion_observation_only_codes = set()
         self._market_data_transport_epoch = 0
@@ -1205,8 +1211,14 @@ class KiwoomWSManager:
         return KiwoomWSManager._flag_enabled(raw, default=False)
 
     def _registered_item_count_locked(self):
-        registered = {item for items in self._registered_items_by_code.values() for item in items or ()}
-        uncertain = set(getattr(self, "_exact_probe_item_leases", {})).difference(registered)
+        registered = {
+            item
+            for items in self._registered_items_by_code.values()
+            for item in items or ()
+        }
+        uncertain = set(getattr(self, "_exact_probe_item_leases", {})).difference(
+            registered
+        )
         return len(registered) + len(uncertain)
 
     def is_pinned_observation_subscription(self, code):
@@ -1289,9 +1301,16 @@ class KiwoomWSManager:
                 for code, items in self._registered_items_by_code.items()
             )
             # Unconfirmed probe sends still occupy bounded broker item custody.
-            registered = {item for items in self._registered_items_by_code.values() for item in items or ()}
-            planned_item_count += len(set(getattr(self, "_exact_probe_item_leases", {}))
-                                      .difference(registered).difference(register_items))
+            registered = {
+                item
+                for items in self._registered_items_by_code.values()
+                for item in items or ()
+            }
+            planned_item_count += len(
+                set(getattr(self, "_exact_probe_item_leases", {}))
+                .difference(registered)
+                .difference(register_items)
+            )
             for code in normalized_codes or []:
                 candidate_items = tuple(items_by_code.get(code) or ())
                 if not candidate_items:
@@ -1640,12 +1659,22 @@ class KiwoomWSManager:
                 session_clock = datetime.fromtimestamp(now_value, KST).strftime("%H:%M")
                 quiet_session_wait = bool(
                     (session_clock < "09:00" or session_clock >= "15:20")
-                    and subscribed and registered_items
-                    and self.websocket is not None and self._session_ready.is_set()
-                    and all(getattr(self, "_registered_item_epochs", {}).get(item) == self._market_data_transport_epoch
-                            and set(required_realtime_types).issubset(getattr(self, "_registered_item_types", {}).get(item, ()))
-                            for item in registered_items)
-                    and (freshness_state in {"no_tick", "stale"} or not required_realtime_received)
+                    and subscribed
+                    and registered_items
+                    and self.websocket is not None
+                    and self._session_ready.is_set()
+                    and all(
+                        getattr(self, "_registered_item_epochs", {}).get(item)
+                        == self._market_data_transport_epoch
+                        and set(required_realtime_types).issubset(
+                            getattr(self, "_registered_item_types", {}).get(item, ())
+                        )
+                        for item in registered_items
+                    )
+                    and (
+                        freshness_state in {"no_tick", "stale"}
+                        or not required_realtime_received
+                    )
                 )
                 if quiet_session_wait:
                     repair_reason = "quiet_session_waiting_event_no_transport_failure"
@@ -1693,7 +1722,8 @@ class KiwoomWSManager:
                         "route_repair_policy": "remove_then_reg_required_for_route_transition",
                         "total_registered_item_count": registered_item_count,
                         "quiet_session_wait": quiet_session_wait,
-                        "repair_recommended": subscribed and not quiet_session_wait
+                        "repair_recommended": subscribed
+                        and not quiet_session_wait
                         and (
                             freshness_state in {"no_tick", "stale"}
                             or not required_realtime_received
@@ -1701,7 +1731,8 @@ class KiwoomWSManager:
                         "repair_reason": repair_reason,
                         "recommended_repair": (
                             "remove_then_reg_backoff"
-                            if subscribed and not quiet_session_wait
+                            if subscribed
+                            and not quiet_session_wait
                             and (
                                 freshness_state in {"no_tick", "stale"}
                                 or not required_realtime_received
@@ -1918,27 +1949,41 @@ class KiwoomWSManager:
             sell_tick_value = tick_value
             tick_direction_source = "trusted_aggressor"
 
-        now_ts = (source_tick["received_at_ms"] / 1000.0 if source_tick else time.time())
+        now_ts = source_tick["received_at_ms"] / 1000.0 if source_tick else time.time()
         from src.engine.infrastructure.snapshot_copy import freeze_history
+
         history.append(
-            freeze_history({
-                **({key: source_tick.get(key) for key in ("item", "market_route",
-                    "transport_epoch", "route_sequence")} if source_tick else {}),
-                "ts": now_ts,
-                "v_pw": float(current_vpw or 0.0),
-                "price": int(current_price or 0),
-                "signed_qty": int(signed_qty or 0),
-                "buy_qty": int(buy_qty or 0),
-                "sell_qty": int(sell_qty or 0),
-                "buy_exec_qty_cum": int(buy_qty or 0),
-                "sell_exec_qty_cum": int(sell_qty or 0),
-                "tick_value": int(tick_value or 0),
-                "tick_value_source": str(tick_value_source or "unknown"),
-                "tick_direction_source": tick_direction_source,
-                "buy_tick_value": int(buy_tick_value or 0),
-                "sell_tick_value": int(sell_tick_value or 0),
-                "buy_ratio": float(buy_ratio or 0.0),
-            })
+            freeze_history(
+                {
+                    **(
+                        {
+                            key: source_tick.get(key)
+                            for key in (
+                                "item",
+                                "market_route",
+                                "transport_epoch",
+                                "route_sequence",
+                            )
+                        }
+                        if source_tick
+                        else {}
+                    ),
+                    "ts": now_ts,
+                    "v_pw": float(current_vpw or 0.0),
+                    "price": int(current_price or 0),
+                    "signed_qty": int(signed_qty or 0),
+                    "buy_qty": int(buy_qty or 0),
+                    "sell_qty": int(sell_qty or 0),
+                    "buy_exec_qty_cum": int(buy_qty or 0),
+                    "sell_exec_qty_cum": int(sell_qty or 0),
+                    "tick_value": int(tick_value or 0),
+                    "tick_value_source": str(tick_value_source or "unknown"),
+                    "tick_direction_source": tick_direction_source,
+                    "buy_tick_value": int(buy_tick_value or 0),
+                    "sell_tick_value": int(sell_tick_value or 0),
+                    "buy_ratio": float(buy_ratio or 0.0),
+                }
+            )
         )
 
         keep_seconds = max(
@@ -2076,18 +2121,22 @@ class KiwoomWSManager:
             "best_ask_qty": best_ask_qty,
             "bid_tot": bid_tot,
             "ask_tot": ask_tot,
-            "last_realtime_type_ts": {"0D": source_observation["received_at_ms"] / 1000.0},
+            "last_realtime_type_ts": {
+                "0D": source_observation["received_at_ms"] / 1000.0
+            },
             "last_realtime_type_item": {"0D": item_code},
             "market_data_transport_epoch": source_observation["transport_epoch"],
             "market_session_state": self.market_session_state,
             "realtime_type_snapshots_by_route": {
-                "depth": {"0D": {
-                    "item": item_code,
-                    "market_route": self._ws_item_route(item_code),
-                    "transport_epoch": source_observation["transport_epoch"],
-                    "route_sequence": source_observation["route_sequence"],
-                    "observed_epoch": source_observation["received_at_ms"] / 1000.0,
-                }}
+                "depth": {
+                    "0D": {
+                        "item": item_code,
+                        "market_route": self._ws_item_route(item_code),
+                        "transport_epoch": source_observation["transport_epoch"],
+                        "route_sequence": source_observation["route_sequence"],
+                        "observed_epoch": source_observation["received_at_ms"] / 1000.0,
+                    }
+                }
             },
             "source_quality_state": "fresh_ws_orderbook_observation",
         }
@@ -2153,6 +2202,7 @@ class KiwoomWSManager:
     @contextmanager
     def _snapshot_lock(self):
         from src.engine.monitoring.runtime_performance import observe
+
         start = time.perf_counter()
         self.lock.acquire()
         acquired = time.perf_counter()
@@ -2161,10 +2211,12 @@ class KiwoomWSManager:
         finally:
             held = time.perf_counter() - acquired
             self.lock.release()
-            observe('ws_lock_wait', acquired - start)
-            observe('ws_lock_hold', held)
+            observe("ws_lock_wait", acquired - start)
+            observe("ws_lock_hold", held)
 
-    def _snapshot_target(self, target, *, include_history=True, dashboard_only=False, _defer_finish=False):
+    def _snapshot_target(
+        self, target, *, include_history=True, dashboard_only=False, _defer_finish=False
+    ):
         # Raw 0B/0D observers consume the current event, not accumulated history.
         # Copying every historical row for each incoming tick starves ws.recv.
         history_keys = (
@@ -2181,17 +2233,33 @@ class KiwoomWSManager:
             # The dashboard writer consumes these fields only. Live getters
             # retain their full histories; publication freezes only the same
             # 120 newest route rows that write_ws_snapshot exports.
-            target = {key: value for key, value in target.items() if key in {
-                "curr", "orderbook", "received_types", "last_ws_update_ts",
-                "foreign_broker_net_est_qty", "foreign_broker_net_est_delta_qty",
-                "last_foreign_broker_update_ts", "last_ws_item",
-                "last_ws_market_suffix", "last_ws_market_route",
-                "last_realtime_type_ts", "last_realtime_type_item", "last_realtime_type_transport_epoch",
-                "last_realtime_type_market_suffix", "last_realtime_type_market_route",
-                "last_trade_tick", "realtime_type_snapshots_by_route",
-                "recent_trade_ticks", "recent_trade_ticks_by_route",
-                "recent_depth_ticks_by_route",
-            }}
+            target = {
+                key: value
+                for key, value in target.items()
+                if key
+                in {
+                    "curr",
+                    "orderbook",
+                    "received_types",
+                    "last_ws_update_ts",
+                    "foreign_broker_net_est_qty",
+                    "foreign_broker_net_est_delta_qty",
+                    "last_foreign_broker_update_ts",
+                    "last_ws_item",
+                    "last_ws_market_suffix",
+                    "last_ws_market_route",
+                    "last_realtime_type_ts",
+                    "last_realtime_type_item",
+                    "last_realtime_type_transport_epoch",
+                    "last_realtime_type_market_suffix",
+                    "last_realtime_type_market_route",
+                    "last_trade_tick",
+                    "realtime_type_snapshots_by_route",
+                    "recent_trade_ticks",
+                    "recent_trade_ticks_by_route",
+                    "recent_depth_ticks_by_route",
+                }
+            }
             for key in ("recent_trade_ticks_by_route", "recent_depth_ticks_by_route"):
                 if isinstance(target.get(key), dict):
                     target[key] = {
@@ -2199,17 +2267,27 @@ class KiwoomWSManager:
                         for route, rows in target[key].items()
                     }
             if "recent_trade_ticks" in target:
-                target["recent_trade_ticks"] = list(target["recent_trade_ticks"] or ())[:120]
+                target["recent_trade_ticks"] = list(target["recent_trade_ticks"] or ())[
+                    :120
+                ]
         snapshot_started = time.perf_counter()
-        from src.engine.infrastructure.snapshot_copy import snapshot_copy, freeze_history
-        frozen_history = {key: freeze_history(target[key]) for key in history_keys
-                          if include_history and key in target}
+        from src.engine.infrastructure.snapshot_copy import (
+            snapshot_copy,
+            freeze_history,
+        )
+
+        frozen_history = {
+            key: freeze_history(target[key])
+            for key in history_keys
+            if include_history and key in target
+        }
         snapshot = snapshot_copy(
             {key: value for key, value in target.items() if key not in history_keys}
         )
         snapshot.update(frozen_history)
         from src.engine.monitoring.runtime_performance import observe
-        observe('ws_snapshot', time.perf_counter() - snapshot_started)
+
+        observe("ws_snapshot", time.perf_counter() - snapshot_started)
         snapshot["market_session_state"] = self.market_session_state
         snapshot["market_session_remaining"] = self.market_session_remaining
         snapshot["market_data_transport_epoch"] = getattr(
@@ -2222,9 +2300,17 @@ class KiwoomWSManager:
     @staticmethod
     def _finish_snapshot(snapshot, *, dashboard_only=False):
         from src.engine.infrastructure.snapshot_copy import materialize_history
-        for key in ('price_history', 'v_pw_history', 'signed_volume_history', 'program_history',
-                    'strength_momentum_history', 'recent_trade_ticks',
-                    'recent_trade_ticks_by_route', 'recent_depth_ticks_by_route'):
+
+        for key in (
+            "price_history",
+            "v_pw_history",
+            "signed_volume_history",
+            "program_history",
+            "strength_momentum_history",
+            "recent_trade_ticks",
+            "recent_trade_ticks_by_route",
+            "recent_depth_ticks_by_route",
+        ):
             if key in snapshot:
                 snapshot[key] = materialize_history(snapshot[key])
         if not dashboard_only:
@@ -2268,8 +2354,6 @@ class KiwoomWSManager:
             }
         return snapshot
 
-
-
     def _maybe_write_dashboard_snapshot(self):
         now_ts = time.time()
         if (
@@ -2292,37 +2376,72 @@ class KiwoomWSManager:
                 with self.lock:
                     capture_started = time.monotonic()
                     realtime_snapshot = {
-                        str(code): self._snapshot_target(target, dashboard_only=True, _defer_finish=True)
+                        str(code): self._snapshot_target(
+                            target, dashboard_only=True, _defer_finish=True
+                        )
                         for code, target in self.realtime_data.items()
                     }
                     observation_route_snapshot = {
-                        str(item): self._snapshot_target(target, dashboard_only=True, _defer_finish=True)
+                        str(item): self._snapshot_target(
+                            target, dashboard_only=True, _defer_finish=True
+                        )
                         for item, target in (
                             self._micro_reversion_observation_route_data.items()
                         )
                     }
                     from src.engine.infrastructure.snapshot_copy import snapshot_copy
-                    registration_receipt_snapshot = snapshot_copy(self._micro_reversion_registration_receipt)
-                    for item, row in (registration_receipt_snapshot.get("items") or {}).items():
-                        row["control_evidence"] = self._control_receipts.projection(item=item,
-                            epoch=row.get("registration_transport_epoch"))
+
+                    registration_receipt_snapshot = snapshot_copy(
+                        self._micro_reversion_registration_receipt
+                    )
+                    for item, row in (
+                        registration_receipt_snapshot.get("items") or {}
+                    ).items():
+                        row["control_evidence"] = self._control_receipts.projection(
+                            item=item, epoch=row.get("registration_transport_epoch")
+                        )
                     shared_transport_producer = {
                         "transport_epoch": self._market_data_transport_epoch,
-                        "registered_items": sorted({item for items in self._registered_items_by_code.values() for item in items}),
+                        "registered_items": sorted(
+                            {
+                                item
+                                for items in self._registered_items_by_code.values()
+                                for item in items
+                            }
+                        ),
                         "registration_basis": "local_sent_registry_not_broker_ack",
                         "control_evidence": self._control_receipts.snapshot(),
-                        "connection_available": self.websocket is not None and self._session_ready.is_set(),
-                        "capture_lock_ms": round((time.monotonic() - capture_started) * 1000, 3),
+                        "connection_available": self.websocket is not None
+                        and self._session_ready.is_set(),
+                        "capture_lock_ms": round(
+                            (time.monotonic() - capture_started) * 1000, 3
+                        ),
                     }
                     frame_captured_at = time.time()
-                registration_receipt_snapshot = self._finish_main_source_registration_receipt(
-                    registration_receipt_snapshot, set(shared_transport_producer["registered_items"]))
-                realtime_snapshot = {k:self._finish_snapshot(v, dashboard_only=True) for k,v in realtime_snapshot.items()}
-                observation_route_snapshot = {k:self._finish_snapshot(v, dashboard_only=True) for k,v in observation_route_snapshot.items()}
+                registration_receipt_snapshot = (
+                    self._finish_main_source_registration_receipt(
+                        registration_receipt_snapshot,
+                        set(shared_transport_producer["registered_items"]),
+                    )
+                )
+                realtime_snapshot = {
+                    k: self._finish_snapshot(v, dashboard_only=True)
+                    for k, v in realtime_snapshot.items()
+                }
+                observation_route_snapshot = {
+                    k: self._finish_snapshot(v, dashboard_only=True)
+                    for k, v in observation_route_snapshot.items()
+                }
                 collector = self._micro_reversion_forward_collector
-                if collector is not None and hasattr(collector, "completed_bar_integrity"):
-                    shared_transport_producer["completed_bar_integrity"] = collector.completed_bar_integrity()
-                shared_transport_producer["configured_item_budget"] = self._max_registered_item_count()
+                if collector is not None and hasattr(
+                    collector, "completed_bar_integrity"
+                ):
+                    shared_transport_producer["completed_bar_integrity"] = (
+                        collector.completed_bar_integrity()
+                    )
+                shared_transport_producer["configured_item_budget"] = (
+                    self._max_registered_item_count()
+                )
                 written_snapshot = write_ws_snapshot(
                     realtime_snapshot,
                     observation_route_data=observation_route_snapshot,
@@ -2450,7 +2569,9 @@ class KiwoomWSManager:
         normalized_realtime_type = str(realtime_type or "").strip()
         if normalized_realtime_type in {"0B", "0D"}:
             self._observe_micro_reversion_forward(
-                code, data, realtime_type=normalized_realtime_type,
+                code,
+                data,
+                realtime_type=normalized_realtime_type,
                 snapshot_lock_held=snapshot_lock_held,
             )
         normalized_code = self._normalize_code(code)
@@ -2482,7 +2603,9 @@ class KiwoomWSManager:
     def _source_recovery_lease_locked(self, item):
         """Freeze existing local subscription custody; never imply broker ACK."""
         epoch = self._market_data_transport_epoch
-        registration = (self._micro_reversion_registration_receipt.get("items") or {}).get(item) or {}
+        registration = (
+            self._micro_reversion_registration_receipt.get("items") or {}
+        ).get(item) or {}
         lease = self._exact_probe_item_leases.get(item) or {}
         return {
             "schema": "entry_source_lease_v1",
@@ -2491,7 +2614,8 @@ class KiwoomWSManager:
             "registration_epoch": self._registered_item_epochs.get(item),
             "registration_sent_at_epoch": (
                 registration.get("registration_sent_at_epoch")
-                if registration.get("registration_transport_epoch") == epoch else None
+                if registration.get("registration_transport_epoch") == epoch
+                else None
             ),
             "realtime_types": sorted(self._registered_item_types.get(item) or ()),
             "physical_probe_lease_id": lease.get("lease_id"),
@@ -2505,21 +2629,30 @@ class KiwoomWSManager:
         """Wake exact source consumers only after their 0D snapshot is visible."""
         item = source.get("item")
         epoch = source.get("transport_epoch")
-        if (source.get("realtime_type") != "0D"
-                or type(epoch) is not int or epoch <= 0
-                or epoch != self._market_data_transport_epoch
-                or self._normalize_code(item) != code
-                or source.get("market_route") != self._ws_item_route(item)
-                or item not in self._registered_items_by_code.get(code, ())
-                or self._registered_item_epochs.get(item) != epoch
-                or "0D" not in self._registered_item_types.get(item, ())):
+        if (
+            source.get("realtime_type") != "0D"
+            or type(epoch) is not int
+            or epoch <= 0
+            or epoch != self._market_data_transport_epoch
+            or self._normalize_code(item) != code
+            or source.get("market_route") != self._ws_item_route(item)
+            or item not in self._registered_items_by_code.get(code, ())
+            or self._registered_item_epochs.get(item) != epoch
+            or "0D" not in self._registered_item_types.get(item, ())
+        ):
             return
-        route_key = f"{self._ws_item_market_suffix(item) or 'KRX'}|{self._ws_item_route(item)}"
-        published = (target.get("realtime_type_snapshots_by_route") or {}).get(route_key) or {}
+        route_key = (
+            f"{self._ws_item_market_suffix(item) or 'KRX'}|{self._ws_item_route(item)}"
+        )
+        published = (target.get("realtime_type_snapshots_by_route") or {}).get(
+            route_key
+        ) or {}
         if published.get("0D") is not source:
             return
         from src.engine.scalping.zero_base_probe import notify_exact_probe_source
-        from src.engine.scalping.entry_machine_source_recovery import notify_pending_quote
+        from src.engine.scalping.entry_machine_source_recovery import (
+            notify_pending_quote,
+        )
 
         notify_exact_probe_source(self, item=item, transport_epoch=epoch)
         notify_pending_quote(code, item, target, now=time.time())
@@ -2580,8 +2713,9 @@ class KiwoomWSManager:
             )
             self._close_micro_reversion_forward_collector()
 
-    def _observe_micro_reversion_forward(self, code, data, *, realtime_type,
-                                         snapshot_lock_held=False):
+    def _observe_micro_reversion_forward(
+        self, code, data, *, realtime_type, snapshot_lock_held=False
+    ):
         collector = self._micro_reversion_forward_collector
         if collector is None and not getattr(self, "_exact_probe_item_leases", None):
             return
@@ -2594,7 +2728,9 @@ class KiwoomWSManager:
         items = snapshot.get("last_realtime_type_item")
         item = items.get(normalized_type) if isinstance(items, dict) else None
         item = item if isinstance(item, str) else None
-        source = snapshot.get("last_trade_tick" if normalized_type == "0B" else "last_depth_tick")
+        source = snapshot.get(
+            "last_trade_tick" if normalized_type == "0B" else "last_depth_tick"
+        )
         source = source if isinstance(source, dict) else {}
         # Native ingress already owns the non-reentrant snapshot lock. Direct
         # offline/source callers acquire it; never infer ownership from locked().
@@ -2602,27 +2738,47 @@ class KiwoomWSManager:
             lease = getattr(self, "_exact_probe_item_leases", {}).get(item)
             interval = (lease or {}).get("interval_started_epoch")
             received = source.get("received_at_ms")
-            bound = bool(lease and lease.get("epoch") == self._market_data_transport_epoch
+            bound = bool(
+                lease
+                and lease.get("epoch") == self._market_data_transport_epoch
                 and source.get("transport_epoch") == lease.get("epoch")
                 and source.get("item") == item
                 and source.get("market_route") == self._ws_item_route(item)
                 and self._normalize_code(item) == code
-                and type(interval) in (int, float) and math.isfinite(interval)
-                and type(received) in (int, float) and math.isfinite(received)
-                and received >= interval * 1000)
+                and type(interval) in (int, float)
+                and math.isfinite(interval)
+                and type(received) in (int, float)
+                and math.isfinite(received)
+                and received >= interval * 1000
+            )
             original_epoch = self._market_data_transport_epoch
             original_lease_id = (lease or {}).get("lease_id")
-            source_clock = {key: source.get(key) for key in ("route_sequence", "received_at_ms")} if bound else None
+            source_clock = (
+                {key: source.get(key) for key in ("route_sequence", "received_at_ms")}
+                if bound
+                else None
+            )
         outcome = "collector_unavailable"
         try:
             # Per-packet ticks already contain native identity. Do not copy
             # the whole frame or resolve its exact route a second time.
             if collector is not None:
-                observe = collector.observe_kiwoom_0b if normalized_type == "0B" else collector.observe_kiwoom_0d
+                observe = (
+                    collector.observe_kiwoom_0b
+                    if normalized_type == "0B"
+                    else collector.observe_kiwoom_0d
+                )
                 result = observe(code, data, realtime_type=normalized_type)
                 if bound:
-                    from src.engine.scalping.micro_reversion.forward_collector import ProducerCanaryResult
-                    outcome = result.value if isinstance(result, ProducerCanaryResult) else "unobservable_result"
+                    from src.engine.scalping.micro_reversion.forward_collector import (
+                        ProducerCanaryResult,
+                    )
+
+                    outcome = (
+                        result.value
+                        if isinstance(result, ProducerCanaryResult)
+                        else "unobservable_result"
+                    )
         except Exception as exc:
             outcome = "callback_error"
             self._micro_reversion_forward_collector_error = type(exc).__name__
@@ -2632,16 +2788,24 @@ class KiwoomWSManager:
             )
         if bound:
             with nullcontext() if snapshot_lock_held else self.lock:
-                if (self._market_data_transport_epoch == original_epoch
-                        and self._exact_probe_item_leases.get(item) is lease
-                        and lease.get("epoch") == original_epoch
-                        and lease.get("lease_id") == original_lease_id):
-                    counts = lease.setdefault("collector_result_counts_by_type", {}).setdefault(normalized_type, {})
+                if (
+                    self._market_data_transport_epoch == original_epoch
+                    and self._exact_probe_item_leases.get(item) is lease
+                    and lease.get("epoch") == original_epoch
+                    and lease.get("lease_id") == original_lease_id
+                ):
+                    counts = lease.setdefault(
+                        "collector_result_counts_by_type", {}
+                    ).setdefault(normalized_type, {})
                     counts[outcome] = counts.get(outcome, 0) + 1
                     receipt = dict(source_clock, result=outcome)
-                    lease.setdefault("collector_last_result_by_type", {})[normalized_type] = receipt
+                    lease.setdefault("collector_last_result_by_type", {})[
+                        normalized_type
+                    ] = receipt
                     if outcome != "enqueued":
-                        lease.setdefault("collector_first_non_enqueued_by_type", {}).setdefault(normalized_type, receipt)
+                        lease.setdefault(
+                            "collector_first_non_enqueued_by_type", {}
+                        ).setdefault(normalized_type, receipt)
 
     def _begin_micro_reversion_transport_epoch(self):
         """Rotate source-only collector state after a successful WS reconnect."""
@@ -2911,7 +3075,9 @@ class KiwoomWSManager:
                     try:
                         target = payload.pop("_snapshot_target", None)
                         if target is not None:
-                            payload["data"] = self._snapshot_target(target, _defer_finish=True)
+                            payload["data"] = self._snapshot_target(
+                                target, _defer_finish=True
+                            )
                         ready_items.append(payload)
                     except Exception as e:
                         log_error(
@@ -3144,8 +3310,12 @@ class KiwoomWSManager:
         # Retain provenance before await: a response can arrive before send returns.
         socket = self.websocket
         with self.lock:
-            row = self._control_receipts.begin(packet, epoch=self._market_data_transport_epoch,
-                now=time.time(), leases=self._exact_probe_item_leases)
+            row = self._control_receipts.begin(
+                packet,
+                epoch=self._market_data_transport_epoch,
+                now=time.time(),
+                leases=self._exact_probe_item_leases,
+            )
         try:
             await socket.send(json.dumps(packet))
         except BaseException as exc:
@@ -3163,11 +3333,13 @@ class KiwoomWSManager:
         # process-local counter can alias a previous Main PID's durable signal.
         self._session_ready.clear()
         from src.trading.market.transport_epoch import allocate_transport_epoch
-        transport_epoch = allocate_transport_epoch(previous=self._market_data_transport_epoch)
+
+        transport_epoch = allocate_transport_epoch(
+            previous=self._market_data_transport_epoch
+        )
 
         if is_ws_condition_search_enabled() and (
-            not _zero_base_discovery_enabled()
-            or is_swing_real_watching_enabled()
+            not _zero_base_discovery_enabled() or is_swing_real_watching_enabled()
         ):
             print("🔍 [WS] HTS 조건검색식 목록(CNSRLST)을 요청합니다.")
             await self.websocket.send(json.dumps({"trnm": "CNSRLST"}))
@@ -3193,8 +3365,12 @@ class KiwoomWSManager:
             self._enqueue_state_event("WS_RECONNECTED", {})
 
         collector = self._micro_reversion_forward_collector
-        if collector is not None and hasattr(collector, "bind_completed_bar_transport_epoch"):
-            collector.bind_completed_bar_transport_epoch(self._market_data_transport_epoch)
+        if collector is not None and hasattr(
+            collector, "bind_completed_bar_transport_epoch"
+        ):
+            collector.bind_completed_bar_transport_epoch(
+                self._market_data_transport_epoch
+            )
         self.is_reconnected = True
 
         exec_reg_packet = {
@@ -3297,7 +3473,9 @@ class KiwoomWSManager:
                         message = await ws.recv()
                         packet_received_at = datetime.now(KST)
                         await self._handle_message(
-                            message, received_at=packet_received_at, transport_epoch=receive_epoch
+                            message,
+                            received_at=packet_received_at,
+                            transport_epoch=receive_epoch,
                         )
 
             except websockets.ConnectionClosed as e:
@@ -3367,9 +3545,15 @@ class KiwoomWSManager:
             trnm = msg_dict.get("trnm")
             if trnm in {"REG", "REMOVE"}:
                 with self.lock:
-                    self._control_receipts.receive(msg_dict,
-                        epoch=self._market_data_transport_epoch if transport_epoch is None else transport_epoch,
-                        now=packet_received_at.timestamp())
+                    self._control_receipts.receive(
+                        msg_dict,
+                        epoch=(
+                            self._market_data_transport_epoch
+                            if transport_epoch is None
+                            else transport_epoch
+                        ),
+                        now=packet_received_at.timestamp(),
+                    )
                 return
 
             # =========================================================
@@ -3498,7 +3682,9 @@ class KiwoomWSManager:
             # =========================================================
             if trnm == "REAL" and "data" in msg_dict:
                 for d in msg_dict["data"]:
-                    self._record_exact_probe_wire_receipt(d, packet_received_at.timestamp())
+                    self._record_exact_probe_wire_receipt(
+                        d, packet_received_at.timestamp()
+                    )
                     values = d.get("values", {})
                     if not values:
                         continue
@@ -4037,7 +4223,8 @@ class KiwoomWSManager:
                                 # source clock (0D already preserves ingress).
                                 received_ts = (
                                     packet_received_at.timestamp()
-                                    if packet_receive_time_source == _ORDER_EXECUTION_RECEIVE_TIME_SOURCE
+                                    if packet_receive_time_source
+                                    == _ORDER_EXECUTION_RECEIVE_TIME_SOURCE
                                     else time.time()
                                 )
                                 quote_resolution = self._resolve_0b_touch_quote(
@@ -4130,16 +4317,21 @@ class KiwoomWSManager:
                                     "time": tick_time,
                                     "exchange_time_raw": str(values.get("20") or ""),
                                     "provider_trade_epoch": (
-                                        self._tick_time_to_epoch_ms(values.get("20"), now_ts=received_ts) / 1000.0
+                                        self._tick_time_to_epoch_ms(
+                                            values.get("20"), now_ts=received_ts
+                                        )
+                                        / 1000.0
                                         if len(str(values.get("20") or "")) == 6
                                         and str(values.get("20") or "").isascii()
                                         and str(values.get("20") or "").isdigit()
                                         else None
                                     ),
                                     "provider_trade_time_precision_ms": (
-                                        1000 if len(str(values.get("20") or "")) == 6
+                                        1000
+                                        if len(str(values.get("20") or "")) == 6
                                         and str(values.get("20") or "").isascii()
-                                        and str(values.get("20") or "").isdigit() else None
+                                        and str(values.get("20") or "").isdigit()
+                                        else None
                                     ),
                                     "provider_trade_date_basis": "local_receive_calendar_date_not_provider_date",
                                     "exchange_code_9081": str(values.get("9081") or ""),
@@ -4246,7 +4438,10 @@ class KiwoomWSManager:
                                     **normalized_tick,
                                 }
                                 if isinstance(target.get("recent_trade_ticks"), deque):
-                                    from src.engine.infrastructure.snapshot_copy import freeze_history
+                                    from src.engine.infrastructure.snapshot_copy import (
+                                        freeze_history,
+                                    )
+
                                     normalized_tick = freeze_history(normalized_tick)
                                     target["recent_trade_ticks"].appendleft(
                                         normalized_tick
@@ -4268,7 +4463,9 @@ class KiwoomWSManager:
                                     normalized_raw_item,
                                     price=trade_price,
                                     ts=target["last_trade_tick"]["ts"],
-                                    transport_epoch=int(self._market_data_transport_epoch),
+                                    transport_epoch=int(
+                                        self._market_data_transport_epoch
+                                    ),
                                 )
                                 self._append_strength_momentum(
                                     target,
@@ -4405,8 +4602,11 @@ class KiwoomWSManager:
                                     best_ask_qty=best_ask_qty,
                                     bid_depth_l=bid_depth_l,
                                     ask_depth_l=ask_depth_l,
-                                    ts=current_depth_observation["received_at_ms"] / 1000.0,
-                                    transport_epoch=int(self._market_data_transport_epoch),
+                                    ts=current_depth_observation["received_at_ms"]
+                                    / 1000.0,
+                                    transport_epoch=int(
+                                        self._market_data_transport_epoch
+                                    ),
                                 )
                                 self._update_tob_cache(
                                     normalized_raw_item,
@@ -4436,8 +4636,13 @@ class KiwoomWSManager:
                                         route_depth_buffers[depth_route_key] = (
                                             depth_buffer
                                         )
-                                    from src.engine.infrastructure.snapshot_copy import freeze_history
-                                    depth_buffer.appendleft(freeze_history(current_depth_observation))
+                                    from src.engine.infrastructure.snapshot_copy import (
+                                        freeze_history,
+                                    )
+
+                                    depth_buffer.appendleft(
+                                        freeze_history(current_depth_observation)
+                                    )
 
                             # '0w' 프로그램 매매 데이터 파싱
                             if real_type == "0w":
@@ -4549,9 +4754,12 @@ class KiwoomWSManager:
                                 current_depth_observation["received_at_ms"] / 1000.0
                                 if real_type == "0D"
                                 and isinstance(current_depth_observation, dict)
-                                else packet_received_at.timestamp()
-                                if packet_receive_time_source == _ORDER_EXECUTION_RECEIVE_TIME_SOURCE
-                                else time.time()
+                                else (
+                                    packet_received_at.timestamp()
+                                    if packet_receive_time_source
+                                    == _ORDER_EXECUTION_RECEIVE_TIME_SOURCE
+                                    else time.time()
+                                )
                             )
                             target["last_ws_update_ts"] = now_update_ts
                             self._record_micro_reversion_registration_receipt(
@@ -4568,7 +4776,9 @@ class KiwoomWSManager:
                                 self._ws_item_actual_execution_venue(raw_item_code)
                             )
                             type_ts = target.setdefault("last_realtime_type_ts", {})
-                            target.setdefault("last_realtime_type_transport_epoch", {})[real_type] = self._market_data_transport_epoch
+                            target.setdefault("last_realtime_type_transport_epoch", {})[
+                                real_type
+                            ] = self._market_data_transport_epoch
                             if isinstance(type_ts, dict):
                                 type_ts[real_type] = now_update_ts
                             type_items = target.setdefault(
@@ -4683,10 +4893,16 @@ class KiwoomWSManager:
                                                     values.get("28"), 0
                                                 ),
                                                 "provider_trade_epoch": (
-                                                    last_trade.get("provider_trade_epoch")
+                                                    last_trade.get(
+                                                        "provider_trade_epoch"
+                                                    )
                                                 ),
-                                                "provider_trade_time_precision_ms": last_trade.get("provider_trade_time_precision_ms"),
-                                                "provider_trade_date_basis": last_trade.get("provider_trade_date_basis"),
+                                                "provider_trade_time_precision_ms": last_trade.get(
+                                                    "provider_trade_time_precision_ms"
+                                                ),
+                                                "provider_trade_date_basis": last_trade.get(
+                                                    "provider_trade_date_basis"
+                                                ),
                                                 "aggressor_side": str(
                                                     last_trade.get("aggressor_side")
                                                     or "UNKNOWN"
@@ -4740,48 +4956,111 @@ class KiwoomWSManager:
                                                 )
                                             )
                                     normalized_epoch = time.time()
-                                    packet_epoch = (packet_received_at.timestamp()
-                                        if packet_receive_time_source == _ORDER_EXECUTION_RECEIVE_TIME_SOURCE
-                                        else None)
-                                    provider_epoch = realtime_snapshot.get("provider_trade_epoch")
+                                    packet_epoch = (
+                                        packet_received_at.timestamp()
+                                        if packet_receive_time_source
+                                        == _ORDER_EXECUTION_RECEIVE_TIME_SOURCE
+                                        else None
+                                    )
+                                    provider_epoch = realtime_snapshot.get(
+                                        "provider_trade_epoch"
+                                    )
                                     realtime_snapshot["market_source_latency"] = {
                                         "schema": "market_source_latency_v1",
                                         "item": str(raw_item_code or ""),
-                                        "transport_epoch": int(self._market_data_transport_epoch),
+                                        "transport_epoch": int(
+                                            self._market_data_transport_epoch
+                                        ),
                                         "route_sequence": route_sequence,
                                         "receive_time_source": packet_receive_time_source,
                                         "packet_received_epoch": packet_epoch,
                                         "dispatch_started_epoch": dispatch_started_epoch,
                                         "normalized_epoch": normalized_epoch,
                                         "provider_to_packet_ms": (
-                                            round((packet_epoch - provider_epoch) * 1000, 3)
-                                            if packet_epoch is not None and provider_epoch is not None else None),
+                                            round(
+                                                (packet_epoch - provider_epoch) * 1000,
+                                                3,
+                                            )
+                                            if packet_epoch is not None
+                                            and provider_epoch is not None
+                                            else None
+                                        ),
                                         "packet_to_normalization_ms": (
-                                            round((normalized_epoch - packet_epoch) * 1000, 3)
-                                            if packet_epoch is not None else None),
+                                            round(
+                                                (normalized_epoch - packet_epoch)
+                                                * 1000,
+                                                3,
+                                            )
+                                            if packet_epoch is not None
+                                            else None
+                                        ),
                                     }
                                     route_snapshot[real_type] = realtime_snapshot
-                                    target["source_recovery_lease"] = self._source_recovery_lease_locked(
-                                        realtime_snapshot["item"]
+                                    target["source_recovery_lease"] = (
+                                        self._source_recovery_lease_locked(
+                                            realtime_snapshot["item"]
+                                        )
                                     )
-                                    if real_type == '0B':
+                                    if real_type == "0B":
                                         # Consumer of the existing normalized envelope only.
                                         # No broker parsing, provider calls, disk replay or orders.
-                                        from src.engine.scalping.reversal_current_backend import observe_normalized
-                                        from src.trading.market.session_contract import market_source_session_bucket as _session_bucket, market_source_partition_venue as _explicit_item_venue
-                                        observed_clock = datetime.fromtimestamp(now_update_ts, KST).timetz()
-                                        reversal_session = _session_bucket(_explicit_item_venue(realtime_snapshot['item']), observed_clock)
-                                        observe_normalized(item_code[:6], reversal_session, realtime_snapshot)
-                                        realtime_snapshot['market_source_latency']['native_ingest_returned_epoch'] = time.time()
-                                        from src.engine.scalping.reversal_source_diagnostics import notify_observation
-                                        notify_observation(realtime_snapshot['item'])
+                                        from src.engine.scalping.reversal_current_backend import (
+                                            observe_normalized,
+                                        )
+                                        from src.trading.market.session_contract import (
+                                            market_source_session_bucket as _session_bucket,
+                                            market_source_partition_venue as _explicit_item_venue,
+                                        )
+
+                                        observed_clock = datetime.fromtimestamp(
+                                            now_update_ts, KST
+                                        ).timetz()
+                                        reversal_session = _session_bucket(
+                                            _explicit_item_venue(
+                                                realtime_snapshot["item"]
+                                            ),
+                                            observed_clock,
+                                        )
+                                        observe_normalized(
+                                            item_code[:6],
+                                            reversal_session,
+                                            realtime_snapshot,
+                                        )
+                                        realtime_snapshot["market_source_latency"][
+                                            "native_ingest_returned_epoch"
+                                        ] = time.time()
+                                        from src.engine.scalping.reversal_source_diagnostics import (
+                                            notify_observation,
+                                        )
+
+                                        notify_observation(realtime_snapshot["item"])
                                         try:
-                                            from src.engine.scalping.reversal_current_backend import backend
-                                            from src.engine.monitoring.runtime_performance import record_native_ready
-                                            from src.engine.scalping.continuous_reversal import market_bucket
-                                            record_native_ready(backend(), item_code[:6], _explicit_item_venue(realtime_snapshot['item']),
-                                                realtime_snapshot['item'], market_bucket(reversal_session), now_update_ts)
-                                        except (ValueError, TypeError, KeyError, AttributeError):
+                                            from src.engine.scalping.reversal_current_backend import (
+                                                backend,
+                                            )
+                                            from src.engine.monitoring.runtime_performance import (
+                                                record_native_ready,
+                                            )
+                                            from src.engine.scalping.continuous_reversal import (
+                                                market_bucket,
+                                            )
+
+                                            record_native_ready(
+                                                backend(),
+                                                item_code[:6],
+                                                _explicit_item_venue(
+                                                    realtime_snapshot["item"]
+                                                ),
+                                                realtime_snapshot["item"],
+                                                market_bucket(reversal_session),
+                                                now_update_ts,
+                                            )
+                                        except (
+                                            ValueError,
+                                            TypeError,
+                                            KeyError,
+                                            AttributeError,
+                                        ):
                                             pass  # Diagnostics cannot change ingress or native admission.
                                     quiet_state = route_snapshot["_quiet_tape_state"]
                                     if real_type in {"0B", "0D"}:
@@ -4815,7 +5094,8 @@ class KiwoomWSManager:
                                             provider_event_at=(
                                                 realtime_snapshot.get(
                                                     "provider_trade_epoch"
-                                                ) or 0.0
+                                                )
+                                                or 0.0
                                                 if real_type == "0B"
                                                 else None
                                             ),
@@ -4823,9 +5103,13 @@ class KiwoomWSManager:
                             target["time"] = datetime.now().strftime("%H:%M:%S")
                             if real_type == "0D":
                                 published_depth = (
-                                    (target.get("realtime_type_snapshots_by_route") or {}).get(
+                                    (
+                                        target.get("realtime_type_snapshots_by_route")
+                                        or {}
+                                    ).get(
                                         f"{market_suffix or 'KRX'}|{market_route or 'unknown'}"
-                                    ) or {}
+                                    )
+                                    or {}
                                 ).get("0D")
                                 if isinstance(published_depth, dict):
                                     self._notify_published_quote_source_locked(
@@ -4936,7 +5220,9 @@ class KiwoomWSManager:
         if lease.get("adopted"):
             return False
         code = self._normalize_code(item)
-        remaining = tuple(x for x in self._registered_items_by_code.get(code, ()) if x != item)
+        remaining = tuple(
+            x for x in self._registered_items_by_code.get(code, ()) if x != item
+        )
         if remaining:
             self._registered_items_by_code[code] = remaining
         else:
@@ -4945,7 +5231,7 @@ class KiwoomWSManager:
             self._micro_reversion_observation_only_codes.discard(code)
         self._registered_item_epochs.pop(item, None)
         self._registered_item_types.pop(item, None)
-        (self._micro_reversion_registration_receipt.get('items') or {}).pop(item, None)
+        (self._micro_reversion_registration_receipt.get("items") or {}).pop(item, None)
         self._micro_reversion_observation_only_items.discard(item)
         self._micro_reversion_observation_route_data.pop(item, None)
         return True
@@ -4954,68 +5240,135 @@ class KiwoomWSManager:
         future = asyncio.run_coroutine_threadsafe(operation, self.loop)
         with self._pending_future_lock:
             self._pending_loop_futures.add(future)
+
         def completed(fut):
             with self._pending_future_lock:
                 self._pending_loop_futures.discard(fut)
+
         future.add_done_callback(completed)
         return future
 
     def execute_acquire_exact_probe_item(self, item, lease_id):
         """Add only a missing observation item; never replace another route."""
-        if (not lease_id or not self._started or self._stop_event.is_set()
-                or not self.loop or not self.loop.is_running()):
+        if (
+            not lease_id
+            or not self._started
+            or self._stop_event.is_set()
+            or not self.loop
+            or not self.loop.is_running()
+        ):
             return None
         code = self._normalize_code(item)
         if not code or item not in (code, code + "_NX", code + "_AL"):
             raise ValueError("invalid_exact_probe_item")
         return self._dispatch_exact_probe_operation(
-            self._acquire_exact_probe_item(item, lease_id))
+            self._acquire_exact_probe_item(item, lease_id)
+        )
 
     async def _acquire_exact_probe_item(self, item, lease_id):
         code = self._normalize_code(item)
         async with self._wire_lock():
             epoch = self._market_data_transport_epoch
             socket = self.websocket
-            receipt = {"item": item, "lease_id": lease_id, "transport_epoch": epoch,
-                       "created": False, "registered": False}
+            receipt = {
+                "item": item,
+                "lease_id": lease_id,
+                "transport_epoch": epoch,
+                "created": False,
+                "registered": False,
+            }
             with self.lock:
                 existing = self._exact_probe_item_leases.get(item)
                 if existing and existing["lease_id"] != lease_id:
                     return {**receipt, "reason": "exact_probe_item_already_leased"}
                 if item in self._registered_items_by_code.get(code, ()):
-                    valid = (self._registered_item_epochs.get(item) == epoch
-                             and {"0B", "0D"}.issubset(self._registered_item_types.get(item, ())))
-                    return {**receipt, "registered": valid, "created": bool(existing),
-                            "interval_started_epoch": (existing or {}).get('interval_started_epoch'),
-                            "reason": "existing_exact_item" if valid else "existing_exact_item_invalid"}
-                if (not socket or not self._session_ready.is_set() or epoch <= 0
-                        or self._registered_item_count_locked() >= self._max_registered_item_count()):
-                    return {**receipt, "reason": "exact_probe_session_or_item_budget_unavailable"}
-                self._exact_probe_item_leases[item] = {"lease_id": lease_id, "epoch": epoch,
-                                                      "interval_started_epoch": time.time()}
+                    valid = self._registered_item_epochs.get(item) == epoch and {
+                        "0B",
+                        "0D",
+                    }.issubset(self._registered_item_types.get(item, ()))
+                    return {
+                        **receipt,
+                        "registered": valid,
+                        "created": bool(existing),
+                        "interval_started_epoch": (existing or {}).get(
+                            "interval_started_epoch"
+                        ),
+                        "reason": (
+                            "existing_exact_item"
+                            if valid
+                            else "existing_exact_item_invalid"
+                        ),
+                    }
+                if (
+                    not socket
+                    or not self._session_ready.is_set()
+                    or epoch <= 0
+                    or self._registered_item_count_locked()
+                    >= self._max_registered_item_count()
+                ):
+                    return {
+                        **receipt,
+                        "reason": "exact_probe_session_or_item_budget_unavailable",
+                    }
+                self._exact_probe_item_leases[item] = {
+                    "lease_id": lease_id,
+                    "epoch": epoch,
+                    "interval_started_epoch": time.time(),
+                }
                 self._micro_reversion_observation_only_items.add(item)
                 self._micro_reversion_observation_route_data.pop(item, None)
                 if code not in self.subscribed_codes:
                     self._micro_reversion_observation_only_codes.add(code)
+
             def current():
-                return (self.websocket is socket and self._market_data_transport_epoch == epoch
-                        and not self._stop_event.is_set()
-                        and self._exact_probe_item_leases.get(item, {}).get("lease_id") == lease_id)
+                return (
+                    self.websocket is socket
+                    and self._market_data_transport_epoch == epoch
+                    and not self._stop_event.is_set()
+                    and self._exact_probe_item_leases.get(item, {}).get("lease_id")
+                    == lease_id
+                )
+
             await self._send_reg_impl(
-                [item], source="zero_base_exact_probe", observation_only=True,
-                realtime_types=("0B", "0D"), remove_before_reg=False,
-                replace_existing=False, enforce_item_budget=True, dispatch_guard=current)
+                [item],
+                source="zero_base_exact_probe",
+                observation_only=True,
+                realtime_types=("0B", "0D"),
+                remove_before_reg=False,
+                replace_existing=False,
+                enforce_item_budget=True,
+                dispatch_guard=current,
+            )
             with self.lock:
-                valid = (current() and item in self._registered_items_by_code.get(code, ())
-                         and self._registered_item_epochs.get(item) == epoch)
+                valid = (
+                    current()
+                    and item in self._registered_items_by_code.get(code, ())
+                    and self._registered_item_epochs.get(item) == epoch
+                )
                 # Keep custody on uncertain sends; the caller must attempt exact REMOVE.
-                control = self._control_receipts.projection(item=item, epoch=epoch, lease_id=lease_id)
+                control = self._control_receipts.projection(
+                    item=item, epoch=epoch, lease_id=lease_id
+                )
                 rejected = control["broker_result"] == "rejected"
-            result = {**receipt, "created": True, "registered": valid, "server_registration_rejected": rejected,
-                      "control_evidence": control,
-                      "interval_started_epoch": self._exact_probe_item_leases.get(item, {}).get('interval_started_epoch'),
-                      "reason": "exact_probe_registration_rejected" if rejected else
-                          "additive_exact_item" if valid else "exact_probe_registration_unconfirmed"}
+            result = {
+                **receipt,
+                "created": True,
+                "registered": valid,
+                "server_registration_rejected": rejected,
+                "control_evidence": control,
+                "interval_started_epoch": self._exact_probe_item_leases.get(
+                    item, {}
+                ).get("interval_started_epoch"),
+                "reason": (
+                    "exact_probe_registration_rejected"
+                    if rejected
+                    else (
+                        "additive_exact_item"
+                        if valid
+                        else "exact_probe_registration_unconfirmed"
+                    )
+                ),
+            }
             print("[ZERO_BASE_EXACT_WS_LEASE] " + json.dumps(result, sort_keys=True))
             return result
 
@@ -5023,7 +5376,8 @@ class KiwoomWSManager:
         if not self.loop or not self.loop.is_running() or self._stop_event.is_set():
             return None
         return self._dispatch_exact_probe_operation(
-            self._release_exact_probe_item(item, lease_id))
+            self._release_exact_probe_item(item, lease_id)
+        )
 
     async def _release_exact_probe_item(self, item, lease_id):
         async with self._wire_lock():
@@ -5043,20 +5397,36 @@ class KiwoomWSManager:
                 with self.lock:
                     lease.pop("removing", None)
                 return False
-            packet = {"trnm": "REMOVE", "grp_no": "1", "data": [
-                {"item": [item], "type": ["0B", "0D"]}]}
+            packet = {
+                "trnm": "REMOVE",
+                "grp_no": "1",
+                "data": [{"item": [item], "type": ["0B", "0D"]}],
+            }
             # An uncertain REMOVE must not leave a trusted registration receipt.
             with self.lock:
                 self._registered_item_epochs.pop(item, None)
                 self._registered_item_types.pop(item, None)
-            from src.engine.scalping.reversal_source_diagnostics import invalidate_observation_interval
+            from src.engine.scalping.reversal_source_diagnostics import (
+                invalidate_observation_interval,
+            )
+
             invalidate_observation_interval(item)
             await self._send_control_packet(packet)
             with self.lock:
                 self._discard_exact_probe_item_locked(item, lease_id)
-            print("[ZERO_BASE_EXACT_WS_LEASE] " + json.dumps({
-                "item": item, "lease_id": lease_id, "transport_epoch": epoch,
-                "phase": "released", "actual_order_submitted": False}, sort_keys=True))
+            print(
+                "[ZERO_BASE_EXACT_WS_LEASE] "
+                + json.dumps(
+                    {
+                        "item": item,
+                        "lease_id": lease_id,
+                        "transport_epoch": epoch,
+                        "phase": "released",
+                        "actual_order_submitted": False,
+                    },
+                    sort_keys=True,
+                )
+            )
             return True
 
     async def _send_remove_impl(
@@ -5149,7 +5519,10 @@ class KiwoomWSManager:
                         getattr(self, "_exact_probe_item_leases", {}).pop(item, None)
                         getattr(self, "_registered_item_epochs", {}).pop(item, None)
                         getattr(self, "_registered_item_types", {}).pop(item, None)
-                        (self._micro_reversion_registration_receipt.get('items') or {}).pop(item, None)
+                        (
+                            self._micro_reversion_registration_receipt.get("items")
+                            or {}
+                        ).pop(item, None)
                 now_ts = time.time()
                 with self.lock:
                     for code in normalized_codes:
@@ -5198,7 +5571,12 @@ class KiwoomWSManager:
         dispatch_guard=None,
         observation_only=False,
     ):
-        if str(source or "").startswith(("micro_reversion_collection_feedback", "machine_microstructure_gap_collection_feedback")):
+        if str(source or "").startswith(
+            (
+                "micro_reversion_collection_feedback",
+                "machine_microstructure_gap_collection_feedback",
+            )
+        ):
             return None
         try:
             if dispatch_guard is not None and not dispatch_guard():
@@ -5207,7 +5585,9 @@ class KiwoomWSManager:
             if source != "zero_base_exact_probe":
                 with self.lock:
                     for item in codes:
-                        getattr(self, "_exact_probe_item_leases", {}).pop(str(item), None)
+                        getattr(self, "_exact_probe_item_leases", {}).pop(
+                            str(item), None
+                        )
             requested_realtime_types = self._normalize_required_realtime_types(
                 realtime_types
             ) or ("0B", "0D", "0w", "0F")
@@ -5412,11 +5792,20 @@ class KiwoomWSManager:
                                     )
                                 )
                             self._registered_items_by_code[code] = registered_items
-                            if str(source).startswith("main_fixed_watch_") and not observation_only:
+                            if (
+                                str(source).startswith("main_fixed_watch_")
+                                and not observation_only
+                            ):
                                 for item in incoming_items:
-                                    self._micro_reversion_observation_only_items.discard(item)
-                                self._micro_reversion_observation_only_codes.discard(code)
-                                self._runtime_primary_items_by_code[code] = incoming_items[0]
+                                    self._micro_reversion_observation_only_items.discard(
+                                        item
+                                    )
+                                self._micro_reversion_observation_only_codes.discard(
+                                    code
+                                )
+                                self._runtime_primary_items_by_code[code] = (
+                                    incoming_items[0]
+                                )
                                 self._implicit_runtime_route_codes.discard(code)
                                 if incoming_items[0].endswith("_AL"):
                                     self._runtime_integrated_route_active = True
@@ -5425,12 +5814,27 @@ class KiwoomWSManager:
                             if not hasattr(self, "_registered_item_types"):
                                 self._registered_item_types = {}
                             for item in incoming_items:
-                                prior_types = (self._registered_item_types.get(item, ())
-                                    if self._registered_item_epochs.get(item) == self._market_data_transport_epoch
-                                    and not remove_before_reg and code not in replacement_code_set else ())
-                                self._registered_item_types[item] = tuple(sorted(set(prior_types) | set(requested_realtime_types)))
-                                self._registered_item_epochs[item] = self._market_data_transport_epoch
-                                self._record_main_source_registration_locked(item, self._registered_item_types[item], source=source)
+                                prior_types = (
+                                    self._registered_item_types.get(item, ())
+                                    if self._registered_item_epochs.get(item)
+                                    == self._market_data_transport_epoch
+                                    and not remove_before_reg
+                                    and code not in replacement_code_set
+                                    else ()
+                                )
+                                self._registered_item_types[item] = tuple(
+                                    sorted(
+                                        set(prior_types) | set(requested_realtime_types)
+                                    )
+                                )
+                                self._registered_item_epochs[item] = (
+                                    self._market_data_transport_epoch
+                                )
+                                self._record_main_source_registration_locked(
+                                    item,
+                                    self._registered_item_types[item],
+                                    source=source,
+                                )
                             target = self._ensure_target_defaults(code)
                             if "0w" in requested_realtime_types:
                                 target["program_subscription_requested_at"] = (
@@ -5459,7 +5863,6 @@ class KiwoomWSManager:
             log_error(f"🚨 [WS] _send_reg 에러 발생: {e}")
             print(f"🚨 [WS] _send_reg 내부 치명적 에러 발생: {e}")
 
-
     def _defer_missing_micro_registration(self, codes, *, source):
         """Retired target feedback cannot schedule a deferred REG."""
         return None
@@ -5477,7 +5880,12 @@ class KiwoomWSManager:
         realtime_types=None,
         observation_only=False,
     ):
-        if str(source or "").startswith(("micro_reversion_collection_feedback", "machine_microstructure_gap_collection_feedback")):
+        if str(source or "").startswith(
+            (
+                "micro_reversion_collection_feedback",
+                "machine_microstructure_gap_collection_feedback",
+            )
+        ):
             return None
         if not codes:
             return
@@ -5509,35 +5917,69 @@ class KiwoomWSManager:
                         lease = getattr(self, "_exact_probe_item_leases", {}).get(item)
                         if lease:
                             lease["adopted"] = True
-                            if lease.get("removing") or item not in self._registered_items_by_code.get(self._normalize_code(item), ()):
+                            if lease.get(
+                                "removing"
+                            ) or item not in self._registered_items_by_code.get(
+                                self._normalize_code(item), ()
+                            ):
                                 adopted_pending_items.append(item)
-        if adopted_pending_items and self.loop and self.loop.is_running() and not self._stop_event.is_set():
+        if (
+            adopted_pending_items
+            and self.loop
+            and self.loop.is_running()
+            and not self._stop_event.is_set()
+        ):
             # An in-flight REMOVE cannot be recalled. Serialize the new owner's
             # additive REG after it and invalidate the removed receipt meanwhile.
-            self._dispatch_exact_probe_operation(self._send_reg(
-                adopted_pending_items, source=source, observation_only=observation_only,
-                realtime_types=required_realtime_types or realtime_types,
-                replace_existing=False, remove_before_reg=False, enforce_item_budget=True))
-        requested_types = set(self._normalize_required_realtime_types(
-            required_realtime_types or realtime_types) or ("0B", "0D", "0w", "0F"))
+            self._dispatch_exact_probe_operation(
+                self._send_reg(
+                    adopted_pending_items,
+                    source=source,
+                    observation_only=observation_only,
+                    realtime_types=required_realtime_types or realtime_types,
+                    replace_existing=False,
+                    remove_before_reg=False,
+                    enforce_item_budget=True,
+                )
+            )
+        requested_types = set(
+            self._normalize_required_realtime_types(
+                required_realtime_types or realtime_types
+            )
+            or ("0B", "0D", "0w", "0F")
+        )
         clock = datetime.now(KST).strftime("%H:%M")
         quiet_session = clock < "09:00" or clock >= "15:20"
         # Age-only persistent repair cannot refresh a healthy quiet tape.
         # Explicit route/type requests and owner transitions still proceed.
-        if (quiet_session and (repair_cycle == "persistent_ws_gap" or "persistent" in source_key)
-                and not explicit_alternate_route and not observation_only
-                and self.websocket is not None and self._session_ready.is_set()):
+        if (
+            quiet_session
+            and (repair_cycle == "persistent_ws_gap" or "persistent" in source_key)
+            and not explicit_alternate_route
+            and not observation_only
+            and self.websocket is not None
+            and self._session_ready.is_set()
+        ):
             with self.lock:
                 epochs = getattr(self, "_registered_item_epochs", {})
-                normalized_codes = [code for code in normalized_codes if
-                    code in self._micro_reversion_observation_only_codes
+                normalized_codes = [
+                    code
+                    for code in normalized_codes
+                    if code in self._micro_reversion_observation_only_codes
                     or not self._registered_items_by_code.get(code)
-                    or any(epochs.get(item) != self._market_data_transport_epoch
-                           or not requested_types.issubset(getattr(self, "_registered_item_types", {}).get(item, ()))
-                           for item in self._registered_items_by_code.get(code, ()))
-                    or any(item.endswith(("_AL", "_NX")) and item not in
-                           self._registered_items_by_code.get(code, ())
-                           for item in requested_items_by_code.get(code, ()))]
+                    or any(
+                        epochs.get(item) != self._market_data_transport_epoch
+                        or not requested_types.issubset(
+                            getattr(self, "_registered_item_types", {}).get(item, ())
+                        )
+                        for item in self._registered_items_by_code.get(code, ())
+                    )
+                    or any(
+                        item.endswith(("_AL", "_NX"))
+                        and item not in self._registered_items_by_code.get(code, ())
+                        for item in requested_items_by_code.get(code, ())
+                    )
+                ]
             if not normalized_codes:
                 return
         with self.lock:
@@ -5705,7 +6147,9 @@ class KiwoomWSManager:
                     repair_cycle=repair_cycle,
                     realtime_types=realtime_types,
                     replacement_codes=(
-                        set() if fixed_watch_transition else transitioned_source_only | source_only_replacement
+                        set()
+                        if fixed_watch_transition
+                        else transitioned_source_only | source_only_replacement
                     ),
                     trading_promotion_codes=transitioned_source_only,
                 ),
@@ -5744,21 +6188,37 @@ class KiwoomWSManager:
 
         # Recheck at the command consumer: admissions can follow a producer's
         # inactive-target snapshot. Keep both physical items and the 0D cache.
-        from src.engine.scalping.pre_submit_delay_observation import should_retain_ws_subscription
+        from src.engine.scalping.pre_submit_delay_observation import (
+            should_retain_ws_subscription,
+        )
+
         now_ts = time.time()
-        normalized_codes = {code for code in normalized_codes
-                            if not should_retain_ws_subscription(code, now_ts=now_ts)}
+        normalized_codes = {
+            code
+            for code in normalized_codes
+            if not should_retain_ws_subscription(code, now_ts=now_ts)
+        }
         if not normalized_codes:
             return
 
         items_by_code_snapshot = {}
         with self.lock:
             items_by_code_snapshot = {
-                code: tuple(OrderedDict.fromkeys((
-                    *tuple(self._registered_items_by_code.get(code) or ()),
-                    *(item for item in getattr(self, "_exact_probe_item_leases", {})
-                      if self._normalize_code(item) == code),
-                ))) for code in normalized_codes
+                code: tuple(
+                    OrderedDict.fromkeys(
+                        (
+                            *tuple(self._registered_items_by_code.get(code) or ()),
+                            *(
+                                item
+                                for item in getattr(
+                                    self, "_exact_probe_item_leases", {}
+                                )
+                                if self._normalize_code(item) == code
+                            ),
+                        )
+                    )
+                )
+                for code in normalized_codes
             }
             # Cancel pending exact registrations before a code owner's REMOVE.
             for item in list(getattr(self, "_exact_probe_item_leases", {})):
@@ -5772,7 +6232,9 @@ class KiwoomWSManager:
             for code in normalized_codes:
                 self._recent_reg_request_ts.pop(code, None)
                 for item in self._registered_items_by_code.get(code, ()):
-                    (self._micro_reversion_registration_receipt.get("items") or {}).pop(item, None)
+                    (self._micro_reversion_registration_receipt.get("items") or {}).pop(
+                        item, None
+                    )
                 self._registered_items_by_code.pop(code, None)
                 self.realtime_data.pop(code, None)
                 self._persistent_repair_request_ts.pop(code, None)
@@ -5813,57 +6275,111 @@ class KiwoomWSManager:
             future.add_done_callback(on_complete)
             return future
 
-
-
     def _record_exact_probe_wire_receipt(self, row, received_epoch):
         """Bounded receipt counts before normalization; never a broker ACK."""
-        if not isinstance(row, dict) or row.get('type') not in {'0B', '0D'}:
+        if not isinstance(row, dict) or row.get("type") not in {"0B", "0D"}:
             return
-        item = str(row.get('item') or '').strip().upper()
+        item = str(row.get("item") or "").strip().upper()
         with self.lock:
-            lease = getattr(self, '_exact_probe_item_leases', {}).get(item)
-            if not lease or lease.get('epoch') != self._market_data_transport_epoch:
+            lease = getattr(self, "_exact_probe_item_leases", {}).get(item)
+            if not lease or lease.get("epoch") != self._market_data_transport_epoch:
                 return
-            counts = lease.setdefault('wire_receipt_count_by_type', {})
-            kind = row['type']; counts[kind] = counts.get(kind, 0) + 1
-            lease.setdefault('wire_first_received_epoch_by_type', {}).setdefault(kind, received_epoch)
-            lease.setdefault('wire_last_received_epoch_by_type', {})[kind] = received_epoch
+            counts = lease.setdefault("wire_receipt_count_by_type", {})
+            kind = row["type"]
+            counts[kind] = counts.get(kind, 0) + 1
+            lease.setdefault("wire_first_received_epoch_by_type", {}).setdefault(
+                kind, received_epoch
+            )
+            lease.setdefault("wire_last_received_epoch_by_type", {})[
+                kind
+            ] = received_epoch
 
     def exact_probe_control_failure(self, item, lease_id):
         """An attributed rejection belongs to this lease, not a replacement owner."""
         with self.lock:
             lease = self._exact_probe_item_leases.get(item) or {}
-            if lease.get("lease_id") != lease_id or lease.get("epoch") != self._market_data_transport_epoch:
+            if (
+                lease.get("lease_id") != lease_id
+                or lease.get("epoch") != self._market_data_transport_epoch
+            ):
                 return ""
             for request in reversed(self._control_receipts.requests):
-                if (request["trnm"] == "REG" and request["transport_epoch"] == lease["epoch"]
-                        and request["lease_ids"].get(item) == lease_id):
-                    return "exact_probe_registration_rejected" if request["broker_result"] == "rejected" else ""
+                if (
+                    request["trnm"] == "REG"
+                    and request["transport_epoch"] == lease["epoch"]
+                    and request["lease_ids"].get(item) == lease_id
+                ):
+                    return (
+                        "exact_probe_registration_rejected"
+                        if request["broker_result"] == "rejected"
+                        else ""
+                    )
         return ""
 
     def exact_probe_source_trace(self, item, lease_id):
         """Freeze the exact lease's diagnostics before REMOVE discards its state."""
         import copy
+
         with self.lock:
-            lease = getattr(self, '_exact_probe_item_leases', {}).get(item, {})
-            registration = getattr(self, '_micro_reversion_registration_receipt', {}).get('items', {}).get(item, {})
-            bound = lease.get('lease_id') == lease_id and lease.get('epoch') == self._market_data_transport_epoch
-            registration_bound = bound and registration.get('registration_transport_epoch') == lease.get('epoch')
-            wire = lease.get('wire_receipt_count_by_type', {}) if bound else {}
-            normalized = registration.get('receipt_count_by_type', {}) if registration_bound else {}
-            control = self._control_receipts.projection(item=item, epoch=self._market_data_transport_epoch, lease_id=lease_id)
-            first_missing = {kind: ('lease_binding' if not bound else
-                'local_reg_receipt' if not registration_bound else
-                'wire_receive' if not wire.get(kind, 0) else
-                'normalized_receive' if not normalized.get(kind, 0) else 'native_consumer_not_proven_here')
-                for kind in ('0B', '0D')}
-            return copy.deepcopy(dict(schema='exact_probe_source_trace_v1', item=item, lease_id=lease_id,
-                transport_epoch=self._market_data_transport_epoch, lease_bound=bound,
-                registration_basis='local_sent_registry_not_broker_ack',
-                broker_ack_observed=control['broker_ack_observed'], control_evidence=control,
-                lease=lease if bound else {}, registration=registration if registration_bound else {},
-                first_unobserved_boundary_by_type=first_missing, runtime_effect=False,
-                order_authority=False))
+            lease = getattr(self, "_exact_probe_item_leases", {}).get(item, {})
+            registration = (
+                getattr(self, "_micro_reversion_registration_receipt", {})
+                .get("items", {})
+                .get(item, {})
+            )
+            bound = (
+                lease.get("lease_id") == lease_id
+                and lease.get("epoch") == self._market_data_transport_epoch
+            )
+            registration_bound = bound and registration.get(
+                "registration_transport_epoch"
+            ) == lease.get("epoch")
+            wire = lease.get("wire_receipt_count_by_type", {}) if bound else {}
+            normalized = (
+                registration.get("receipt_count_by_type", {})
+                if registration_bound
+                else {}
+            )
+            control = self._control_receipts.projection(
+                item=item, epoch=self._market_data_transport_epoch, lease_id=lease_id
+            )
+            first_missing = {
+                kind: (
+                    "lease_binding"
+                    if not bound
+                    else (
+                        "local_reg_receipt"
+                        if not registration_bound
+                        else (
+                            "wire_receive"
+                            if not wire.get(kind, 0)
+                            else (
+                                "normalized_receive"
+                                if not normalized.get(kind, 0)
+                                else "native_consumer_not_proven_here"
+                            )
+                        )
+                    )
+                )
+                for kind in ("0B", "0D")
+            }
+            return copy.deepcopy(
+                dict(
+                    schema="exact_probe_source_trace_v1",
+                    item=item,
+                    lease_id=lease_id,
+                    transport_epoch=self._market_data_transport_epoch,
+                    lease_bound=bound,
+                    registration_basis="local_sent_registry_not_broker_ack",
+                    broker_ack_observed=control["broker_ack_observed"],
+                    control_evidence=control,
+                    lease=lease if bound else {},
+                    registration=registration if registration_bound else {},
+                    first_unobserved_boundary_by_type=first_missing,
+                    runtime_effect=False,
+                    order_authority=False,
+                )
+            )
 
     def _record_micro_reversion_registration_receipt(
         self, *, item, realtime_type, observed_at_epoch
@@ -5876,7 +6392,7 @@ class KiwoomWSManager:
         row = rows.get(normalized_item) if isinstance(rows, dict) else None
         if not isinstance(row, dict) or realtime_type not in {"0B", "0D"}:
             return
-        if row.get('registration_transport_epoch') != self._market_data_transport_epoch:
+        if row.get("registration_transport_epoch") != self._market_data_transport_epoch:
             return
         previous_at = self._safe_float(row.get("last_received_at_epoch"), 0.0)
         observed_at = float(observed_at_epoch)
@@ -5908,47 +6424,94 @@ class KiwoomWSManager:
         transport_epochs = set(row.get("transport_epochs") or ())
         transport_epochs.add(int(self._market_data_transport_epoch))
         row["transport_epochs"] = sorted(transport_epochs)
+
     def _record_main_source_registration_locked(self, item, realtime_types, *, source):
         """One REG transition updates one bounded receipt; caller owns lock."""
         today = datetime.now(KST).date().isoformat()
         receipt = self._micro_reversion_registration_receipt
-        if receipt.get("schema") != "main_market_source_registration_v1" or receipt.get("effective_date") != today:
-            receipt = {"schema": "main_market_source_registration_v1", "effective_date": today,
-                       "registration_basis": "local_sent_registry_not_broker_ack", "broker_ack_observed": None,
-                       "items": {}, "decision_authority": "market_data_source_quality_only", "runtime_effect": False,
-                       "trading_runtime_effect": False, "actual_order_submitted": False, "broker_order_forbidden": True}
+        if (
+            receipt.get("schema") != "main_market_source_registration_v1"
+            or receipt.get("effective_date") != today
+        ):
+            receipt = {
+                "schema": "main_market_source_registration_v1",
+                "effective_date": today,
+                "registration_basis": "local_sent_registry_not_broker_ack",
+                "broker_ack_observed": None,
+                "items": {},
+                "decision_authority": "market_data_source_quality_only",
+                "runtime_effect": False,
+                "trading_runtime_effect": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+            }
             self._micro_reversion_registration_receipt = receipt
-        rows = receipt["items"];row = rows.get(item)
+        rows = receipt["items"]
+        row = rows.get(item)
         epoch = self._market_data_transport_epoch
         if row is None or row.get("registration_transport_epoch") != epoch:
-            row = {"received_realtime_types": [], "receipt_count_by_type": {}, "first_received_at_epoch_by_type": {},
-                   "transport_epochs": [], "first_received_at_epoch": None, "last_received_at_epoch": None,
-                   "max_interarrival_gap_sec": 0.0}
+            row = {
+                "received_realtime_types": [],
+                "receipt_count_by_type": {},
+                "first_received_at_epoch_by_type": {},
+                "transport_epochs": [],
+                "first_received_at_epoch": None,
+                "last_received_at_epoch": None,
+                "max_interarrival_gap_sec": 0.0,
+            }
             rows[item] = row
-        row.update(registration_transport_epoch=epoch, registration_sent_at_epoch=time.time(),
-                   required_realtime_types=sorted(set(realtime_types) & {"0B", "0D"}), source=source)
+        row.update(
+            registration_transport_epoch=epoch,
+            registration_sent_at_epoch=time.time(),
+            required_realtime_types=sorted(set(realtime_types) & {"0B", "0D"}),
+            source=source,
+        )
 
     @staticmethod
     def _finish_main_source_registration_receipt(receipt, registered_items):
-        if receipt.get("schema") != "main_market_source_registration_v1":return receipt
+        if receipt.get("schema") != "main_market_source_registration_v1":
+            return receipt
         rows = receipt.get("items") or {}
         # Historical receipt rows retain their receive evidence; released rows
         # are not active expectations and cannot renew an exact lease.
         complete = 0
-        for item,row in rows.items():
+        for item, row in rows.items():
             row["active_expectation"] = item in registered_items
             required = set(row.get("required_realtime_types") or ())
-            row["source_status"] = ("released" if item not in registered_items else
-                "received" if required <= set(row.get("received_realtime_types") or ()) else "awaiting_first_type")
+            row["source_status"] = (
+                "released"
+                if item not in registered_items
+                else (
+                    "received"
+                    if required <= set(row.get("received_realtime_types") or ())
+                    else "awaiting_first_type"
+                )
+            )
             complete += int(row["source_status"] == "received")
-        receipt["summary"] = {"active_item_count": len(registered_items), "received_item_count": complete,
-            "connection_rate": None if not registered_items else complete / len(registered_items),
-            "ack_count": sum(r.get("control_evidence", {}).get("broker_ack_observed") is True
-                for r in rows.values()), "ack_count_scope": "provably_attributed_only",
-            "metric_role": "source_quality_gate", "decision_authority": "report_only",
-            "window_policy": "exact_item_current_transport_epoch", "sample_floor": "none",
-            "primary_decision_metric": "source_status", "source_quality_gate": "exact_item_type_epoch_receipts",
-            "forbidden_uses": ["order_authority", "policy_promotion", "execution_venue_claim", "economic_claim"]}
+        receipt["summary"] = {
+            "active_item_count": len(registered_items),
+            "received_item_count": complete,
+            "connection_rate": (
+                None if not registered_items else complete / len(registered_items)
+            ),
+            "ack_count": sum(
+                r.get("control_evidence", {}).get("broker_ack_observed") is True
+                for r in rows.values()
+            ),
+            "ack_count_scope": "provably_attributed_only",
+            "metric_role": "source_quality_gate",
+            "decision_authority": "report_only",
+            "window_policy": "exact_item_current_transport_epoch",
+            "sample_floor": "none",
+            "primary_decision_metric": "source_status",
+            "source_quality_gate": "exact_item_type_epoch_receipts",
+            "forbidden_uses": [
+                "order_authority",
+                "policy_promotion",
+                "execution_venue_claim",
+                "economic_claim",
+            ],
+        }
         return receipt
 
     def _configure_micro_reversion_observation_items(
@@ -6005,7 +6568,9 @@ class KiwoomWSManager:
         code = self._normalize_code(code)
         with self._snapshot_lock():
             target = self.realtime_data.get(code, {})
-            snapshot = self._snapshot_target(target, _defer_finish=True) if target else {}
+            snapshot = (
+                self._snapshot_target(target, _defer_finish=True) if target else {}
+            )
         return self._finish_snapshot(snapshot) if snapshot else {}
 
     def get_pre_submit_delay_depth(self, code):
@@ -6017,13 +6582,19 @@ class KiwoomWSManager:
         code = self._normalize_code(code)
         with self._snapshot_lock():
             target = self.realtime_data.get(code, {})
-            partitions = target.get('realtime_type_snapshots_by_route') or {}
+            partitions = target.get("realtime_type_snapshots_by_route") or {}
             if not isinstance(partitions, dict) or len(partitions) > 16:
                 return {}
-            return dict(market_data_transport_epoch=getattr(self, '_market_data_transport_epoch', None),
-                realtime_type_snapshots_by_route={route: {'0D': copy.deepcopy(value['0D'])}
+            return dict(
+                market_data_transport_epoch=getattr(
+                    self, "_market_data_transport_epoch", None
+                ),
+                realtime_type_snapshots_by_route={
+                    route: {"0D": copy.deepcopy(value["0D"])}
                     for route, value in partitions.items()
-                    if isinstance(value, dict) and isinstance(value.get('0D'), dict)})
+                    if isinstance(value, dict) and isinstance(value.get("0D"), dict)
+                },
+            )
 
     def get_exact_item_data(self, code, item):
         """Read the registered item's owning view without mixing route stores."""
@@ -6044,12 +6615,17 @@ class KiwoomWSManager:
             observation_only = item in self._micro_reversion_observation_only_items
             store = (
                 self._micro_reversion_observation_route_data
-                if observation_only else self.realtime_data
+                if observation_only
+                else self.realtime_data
             )
             target = store.get(item if observation_only else code)
-            snapshot = self._snapshot_target(target, _defer_finish=True) if target else {}
+            snapshot = (
+                self._snapshot_target(target, _defer_finish=True) if target else {}
+            )
             if snapshot:
-                snapshot["source_recovery_lease"] = self._source_recovery_lease_locked(item)
+                snapshot["source_recovery_lease"] = self._source_recovery_lease_locked(
+                    item
+                )
         return self._finish_snapshot(snapshot) if snapshot else {}
 
     def adopt_zero_base_probe_target(self, payload):
@@ -6058,46 +6634,82 @@ class KiwoomWSManager:
         A same-lease, same-process native receipt can retain the existing REAL
         buffer. Unverified observation snapshots never become executable data.
         """
-        from src.engine.scalping.reversal_source_diagnostics import observation_binding_valid
+        from src.engine.scalping.reversal_source_diagnostics import (
+            observation_binding_valid,
+        )
+
         expected = (payload or {}).get("native_observation")
-        if not (payload or {}).get("zero_base_pending_db") or not observation_binding_valid(expected):
+        if not (payload or {}).get(
+            "zero_base_pending_db"
+        ) or not observation_binding_valid(expected):
             return False
         code = str(payload.get("code") or "")
-        route = {"nxt_only": ("NXT", code + "_NX"),
-                 "krx_nxt_integrated": ("SOR", code + "_AL")}.get(payload.get("market_data_route"))
+        route = {
+            "nxt_only": ("NXT", code + "_NX"),
+            "krx_nxt_integrated": ("SOR", code + "_AL"),
+        }.get(payload.get("market_data_route"))
         event = expected["snapshot"][0]
         lease_id = payload.get("ws_handoff_id")
-        if (len(code) != 6 or not code.isdigit() or not route or not lease_id
-                or payload.get("physical_probe_lease_id") != lease_id
-                or event.get("symbol") != code or event.get("venue") != route[0]
-                or event.get("source_item") != route[1]):
+        if (
+            len(code) != 6
+            or not code.isdigit()
+            or not route
+            or not lease_id
+            or payload.get("physical_probe_lease_id") != lease_id
+            or event.get("symbol") != code
+            or event.get("venue") != route[0]
+            or event.get("source_item") != route[1]
+        ):
             return False
         item = route[1]
         with self.lock:
             epoch = self._market_data_transport_epoch
             lease = self._exact_probe_item_leases.get(item)
-            if (self._stop_event.is_set() or self.websocket is None or not self._session_ready.is_set()
-                    or not observation_binding_valid(expected)
-                    or event.get("native_epoch") != epoch
-                    or code not in self.subscribed_codes
-                    or item not in self._registered_items_by_code.get(code, ())
-                    or self._registered_item_epochs.get(item) != epoch
-                    or not {"0B", "0D"}.issubset(self._registered_item_types.get(item, ()))
-                    or self._runtime_primary_items_by_code.get(code) not in (None, item)
-                    or any(other != item and other not in self._micro_reversion_observation_only_items
-                           for other in self._registered_items_by_code.get(code, ()))
-                    or (lease is not None and (lease.get("lease_id") != lease_id
-                        or lease.get("epoch") != epoch or lease.get("removing")))):
+            if (
+                self._stop_event.is_set()
+                or self.websocket is None
+                or not self._session_ready.is_set()
+                or not observation_binding_valid(expected)
+                or event.get("native_epoch") != epoch
+                or code not in self.subscribed_codes
+                or item not in self._registered_items_by_code.get(code, ())
+                or self._registered_item_epochs.get(item) != epoch
+                or not {"0B", "0D"}.issubset(self._registered_item_types.get(item, ()))
+                or self._runtime_primary_items_by_code.get(code) not in (None, item)
+                or any(
+                    other != item
+                    and other not in self._micro_reversion_observation_only_items
+                    for other in self._registered_items_by_code.get(code, ())
+                )
+                or (
+                    lease is not None
+                    and (
+                        lease.get("lease_id") != lease_id
+                        or lease.get("epoch") != epoch
+                        or lease.get("removing")
+                    )
+                )
+            ):
                 return False
             # Move the actual producer-owned store atomically with write custody.
             # No replay, synthetic packet, timestamp renewal or native re-ingest.
             from src.engine.scalping.native_source_continuity import build_receipt
+
             source = self._micro_reversion_observation_route_data.get(item)
-            receipt = build_receipt(source, payload, epoch=epoch, lease=lease, now=time.time()) if source else None
+            receipt = (
+                build_receipt(
+                    source, payload, epoch=epoch, lease=lease, now=time.time()
+                )
+                if source
+                else None
+            )
             if receipt:
                 import copy
+
                 source["_zero_base_source_continuity"] = copy.deepcopy(receipt)
-                self.realtime_data[code] = self._micro_reversion_observation_route_data.pop(item)
+                self.realtime_data[code] = (
+                    self._micro_reversion_observation_route_data.pop(item)
+                )
                 payload["_zero_base_source_continuity"] = copy.deepcopy(receipt)
             else:
                 payload.pop("_zero_base_source_continuity", None)
@@ -6118,21 +6730,29 @@ class KiwoomWSManager:
         snapshot is never copied into executable fields during the transfer.
         """
         from src.engine.scalping import main_fixed_watch as fixed
+
         if not fixed.is_fixed_watch(target) or target.get("status") != "WATCHING":
             return False
         code = str(target.get("code") or "")[:6]
         route = fixed.session_route(now_ts, code)
-        if (not route or target.get("watch_generation_id") != fixed.generation_id(now_ts, route)
+        if (
+            not route
+            or target.get("watch_generation_id") != fixed.generation_id(now_ts, route)
             or not target.get("watch_admission_id")
-            or not 0 < float(target.get("entry_armed_at_epoch") or 0) <= now_ts):
+            or not 0 < float(target.get("entry_armed_at_epoch") or 0) <= now_ts
+        ):
             return False
         item = route["item"]
         with self.lock:
-            if (self.websocket is None or not self._session_ready.is_set()
+            if (
+                self.websocket is None
+                or not self._session_ready.is_set()
                 or code not in self.subscribed_codes
                 or item not in self._registered_items_by_code.get(code, ())
-                or self._registered_item_epochs.get(item) != self._market_data_transport_epoch
-                or not {"0B", "0D"}.issubset(self._registered_item_types.get(item, ()))):
+                or self._registered_item_epochs.get(item)
+                != self._market_data_transport_epoch
+                or not {"0B", "0D"}.issubset(self._registered_item_types.get(item, ()))
+            ):
                 return False
             self._micro_reversion_observation_only_items.discard(item)
             self._micro_reversion_observation_only_codes.discard(code)
@@ -6151,7 +6771,7 @@ class KiwoomWSManager:
                 self._normalize_code(code): (
                     self._snapshot_target(
                         self.realtime_data.get(self._normalize_code(code), {}),
-                        _defer_finish=True
+                        _defer_finish=True,
                     )
                     if self.realtime_data.get(self._normalize_code(code), {})
                     else {}
@@ -6159,5 +6779,7 @@ class KiwoomWSManager:
                 for code in codes
             }
 
-        return {code: self._finish_snapshot(value) if value else {}
-                for code, value in snapshots.items()}
+        return {
+            code: self._finish_snapshot(value) if value else {}
+            for code, value in snapshots.items()
+        }

@@ -5,7 +5,9 @@ not source hashes: binding their changing generation would create a verification
 """
 
 from __future__ import annotations
-from src.engine.scalping.holding_path_vote_policy import publication_status as holding_vote_publication_status
+from src.engine.scalping.holding_path_vote_policy import (
+    publication_status as holding_vote_publication_status,
+)
 
 import hashlib
 import json
@@ -53,10 +55,23 @@ def installed_producer_terminal_states(
     if any(stage_path(report_dir, target_date, s).exists() for s in STAGE_REGISTRY):
         result = {}
         for owner, stages in STAGE_OWNER_GROUPS.items():
-            checks = [issue for stage in stages for issue in stage_receipt_issues(
-                report_dir, target_date, stage, allow_historical_terminal=True)]
-            running = any(_load_json(stage_path(report_dir, target_date, stage)).get('status') in {'running','pending'} for stage in stages)
-            result['stage_group:' + owner] = 'waiting_running' if running else 'failed_receipt:' + ','.join(checks) if checks else 'done'
+            checks = [
+                issue
+                for stage in stages
+                for issue in stage_receipt_issues(
+                    report_dir, target_date, stage, allow_historical_terminal=True
+                )
+            ]
+            running = any(
+                _load_json(stage_path(report_dir, target_date, stage)).get("status")
+                in {"running", "pending"}
+                for stage in stages
+            )
+            result["stage_group:" + owner] = (
+                "waiting_running"
+                if running
+                else "failed_receipt:" + ",".join(checks) if checks else "done"
+            )
         return result
     paths = intake_source_paths(report_dir, target_date)
     runner = runner or subprocess.run
@@ -68,8 +83,11 @@ def installed_producer_terminal_states(
         if receipt_path.exists():
             receipt = _load_json(receipt_path)
             problems = producer_receipt_issues(report_dir, target_date, owner)
-            result[unit] = ("waiting_running" if receipt.get("status") == "running" else
-                            ("failed_receipt:" + ",".join(problems) if problems else "done"))
+            result[unit] = (
+                "waiting_running"
+                if receipt.get("status") == "running"
+                else ("failed_receipt:" + ",".join(problems) if problems else "done")
+            )
             continue
         try:
             command = runner(
@@ -135,6 +153,7 @@ def _initial_quantity_refresh_due(report_dir: Path, target_date: str) -> bool:
     try:
         current = json.loads(current_path.read_text())
         from datetime import date
+
         target = date.fromisoformat(target_date)
         effective = date.fromisoformat(current["effective_from"])
     except (OSError, ValueError, KeyError, TypeError) as exc:
@@ -144,6 +163,7 @@ def _initial_quantity_refresh_due(report_dir: Path, target_date: str) -> bool:
     from src.engine.scalping.initial_quantity_activation import (
         selected_initial_quantity_env,
     )
+
     try:
         selected_initial_quantity_env(current_path, target_date)
     except (OSError, ValueError, KeyError, TypeError) as exc:
@@ -166,26 +186,47 @@ def source_paths(report_dir: Path, target_date: str, consumer: str) -> dict[str,
         # later normal bootstrap must not invalidate the immutable postclose
         # generation receipt merely because its previously absent file arrived.
         paths = {"runtime_approval_summary": summary_path}
-        cancel_path = report_dir / 'entry_cancel_wait_tuning' / f'entry_cancel_wait_tuning_{target_date}.json'
-        if target_date >= '2026-10-02' or cancel_path.exists():
-            paths['entry_cancel_wait_tuning'] = cancel_path
-            paths['entry_cancel_wait_policy'] = cancel_path.with_name(f'entry_cancel_wait_policy_{target_date}.json')
+        cancel_path = (
+            report_dir
+            / "entry_cancel_wait_tuning"
+            / f"entry_cancel_wait_tuning_{target_date}.json"
+        )
+        if target_date >= "2026-10-02" or cancel_path.exists():
+            paths["entry_cancel_wait_tuning"] = cancel_path
+            paths["entry_cancel_wait_policy"] = cancel_path.with_name(
+                f"entry_cancel_wait_policy_{target_date}.json"
+            )
         from src.engine.scalping.holding_path_vote_policy import (
             START_DATE as HOLDING_VOTE_POLICY_START_DATE,
             policy_path as holding_vote_policy_path,
         )
+
         if target_date >= HOLDING_VOTE_POLICY_START_DATE:
             from src.engine.build_next_stage2_checklist import _next_krx_trading_day
+
             paths["holding_path_vote_policy"] = holding_vote_policy_path(
-                report_dir.parent, _next_krx_trading_day(target_date),
+                report_dir.parent,
+                _next_krx_trading_day(target_date),
             )
         if _initial_quantity_refresh_due(report_dir, target_date):
-            from src.engine.scalping.initial_quantity_policy import committed_refresh_stage_path
+            from src.engine.scalping.initial_quantity_policy import (
+                committed_refresh_stage_path,
+            )
+
             paths["initial_quantity_refresh_stage"] = committed_refresh_stage_path(
-                report_dir / "initial_entry_quantity_type_policy" / f"refresh_postclose_{target_date}", target_date)
+                report_dir
+                / "initial_entry_quantity_type_policy"
+                / f"refresh_postclose_{target_date}",
+                target_date,
+            )
         if any(stage_path(report_dir, target_date, s).exists() for s in STAGE_REGISTRY):
-            paths.update({f'stage_{stage}':stage_path(report_dir, target_date, stage)
-                for stage in active_stage_names(target_date) if stage != 'summary_handoff'})
+            paths.update(
+                {
+                    f"stage_{stage}": stage_path(report_dir, target_date, stage)
+                    for stage in active_stage_names(target_date)
+                    if stage != "summary_handoff"
+                }
+            )
             return paths
         for owner in ("machine",):
             path = producer_receipt_path(report_dir, target_date, owner)
@@ -245,9 +286,21 @@ def source_paths(report_dir: Path, target_date: str, consumer: str) -> dict[str,
             / f"threshold_runtime_env_verify_{target_date}.json"
         )
     if target_date >= "2026-09-17":
-        paths["pipeline_event_verbosity"] = report_dir / "pipeline_event_verbosity" / f"pipeline_event_verbosity_{target_date}.json"
-        paths['entry_cancel_wait_tuning'] = report_dir / 'entry_cancel_wait_tuning' / f'entry_cancel_wait_tuning_{target_date}.json'
-        paths['entry_cancel_wait_policy'] = report_dir / 'entry_cancel_wait_tuning' / f'entry_cancel_wait_policy_{target_date}.json'
+        paths["pipeline_event_verbosity"] = (
+            report_dir
+            / "pipeline_event_verbosity"
+            / f"pipeline_event_verbosity_{target_date}.json"
+        )
+        paths["entry_cancel_wait_tuning"] = (
+            report_dir
+            / "entry_cancel_wait_tuning"
+            / f"entry_cancel_wait_tuning_{target_date}.json"
+        )
+        paths["entry_cancel_wait_policy"] = (
+            report_dir
+            / "entry_cancel_wait_tuning"
+            / f"entry_cancel_wait_policy_{target_date}.json"
+        )
     return paths
 
 
@@ -262,9 +315,12 @@ def source_receipt(paths: dict[str, Path], target_date: str) -> dict[str, Any]:
             from src.engine.scalping.initial_quantity_policy import (
                 refresh_quantity_stage_terminal_valid,
             )
+
             stage = json.loads(raw) if raw is not None else None
-            if (not refresh_quantity_stage_terminal_valid(stage)
-                    or stage.get("source_date") != target_date):
+            if (
+                not refresh_quantity_stage_terminal_valid(stage)
+                or stage.get("source_date") != target_date
+            ):
                 raise RuntimeError("initial_quantity_refresh_stage_invalid")
         # Missing optional inputs are explicit, so a later arriving input invalidates
         # the summary. Permission/I/O errors must not look like optional absence.
@@ -333,8 +389,11 @@ def direct_future_handoff(summary: dict[str, Any], source_date: str) -> dict[str
         "source_reported_pid_receipt": preopen.get("actual_pid_consumed") is True,
         "actual_pid_consumed": False,
         "policy_receipts": policies,
-        **({"holding_path_vote_policy": summary["holding_path_vote_policy"]}
-           if "holding_path_vote_policy" in summary else {}),
+        **(
+            {"holding_path_vote_policy": summary["holding_path_vote_policy"]}
+            if "holding_path_vote_policy" in summary
+            else {}
+        ),
         "runtime_effect": False,
         "allowed_runtime_apply": False,
     }
@@ -345,7 +404,10 @@ def direct_future_handoff_marker(payload: dict[str, Any]) -> str:
 
 
 def inspect_future_handoff(
-    summary: dict[str, Any], source_date: str, *, report_dir: Path,
+    summary: dict[str, Any],
+    source_date: str,
+    *,
+    report_dir: Path,
 ) -> dict[str, Any]:
     """Read the current future bootstrap without granting PREOPEN or PID authority."""
     from src.engine.automation.runtime_policy_bootstrap import (
@@ -356,15 +418,22 @@ def inspect_future_handoff(
 
     preopen = summary.get("preopen_consumption_receipt") or {}
     apply_date = preopen.get("apply_date") if isinstance(preopen, dict) else None
-    base = {"source_date": source_date, "apply_date": apply_date,
-            "actual_pid_consumed": False, "pid_receipt_present": False,
-            "valid_empty": False, "issues": []}
+    base = {
+        "source_date": source_date,
+        "apply_date": apply_date,
+        "actual_pid_consumed": False,
+        "pid_receipt_present": False,
+        "valid_empty": False,
+        "issues": [],
+    }
     if not apply_date:
         return {**base, "status": "not_applicable"}
     try:
-        if (date.fromisoformat(source_date).isoformat() != source_date
-                or date.fromisoformat(apply_date).isoformat() != apply_date
-                or source_date >= apply_date):
+        if (
+            date.fromisoformat(source_date).isoformat() != source_date
+            or date.fromisoformat(apply_date).isoformat() != apply_date
+            or source_date >= apply_date
+        ):
             raise ValueError("invalid_date_order")
     except (TypeError, ValueError):
         return {**base, "status": "rejected", "issues": ["future_pointer_date_invalid"]}
@@ -372,10 +441,17 @@ def inspect_future_handoff(
     root = data_dir / "runtime" / "policy_bootstrap"
     manifest_file = root / f"runtime_policy_bootstrap_{apply_date}.json"
     verification_file = root / f"runtime_policy_bootstrap_verify_{apply_date}.json"
-    if (summary.get("date") != source_date or preopen.get("source_date") != source_date
-            or preopen.get("manifest_path") != str(manifest_file)
-            or preopen.get("verification_path") != str(verification_file)):
-        return {**base, "status": "rejected", "issues": ["future_pointer_identity_invalid"]}
+    if (
+        summary.get("date") != source_date
+        or preopen.get("source_date") != source_date
+        or preopen.get("manifest_path") != str(manifest_file)
+        or preopen.get("verification_path") != str(verification_file)
+    ):
+        return {
+            **base,
+            "status": "rejected",
+            "issues": ["future_pointer_identity_invalid"],
+        }
     if summary.get("preopen_consumption_state") == "off":
         return {**base, "status": "off", "issues": ["source_summary_explicit_off"]}
     try:
@@ -389,27 +465,49 @@ def inspect_future_handoff(
     except FileNotFoundError:
         verification_raw = None
     except OSError:
-        return {**base, "status": "rejected", "issues": ["future_verification_unreadable"]}
+        return {
+            **base,
+            "status": "rejected",
+            "issues": ["future_verification_unreadable"],
+        }
     if manifest_raw is None or verification_raw is None:
-        if (manifest_raw is None and verification_raw is None
-                and preopen.get("manifest_sha256") is None
-                and preopen.get("verification_sha256") is None):
+        if (
+            manifest_raw is None
+            and verification_raw is None
+            and preopen.get("manifest_sha256") is None
+            and preopen.get("verification_sha256") is None
+        ):
             return {**base, "status": "pending"}
-        return {**base, "status": "stale", "issues": ["future_generation_missing_or_partial"]}
+        return {
+            **base,
+            "status": "stale",
+            "issues": ["future_generation_missing_or_partial"],
+        }
     manifest_sha = hashlib.sha256(manifest_raw).hexdigest()
     verification_sha = hashlib.sha256(verification_raw).hexdigest()
     try:
         verification = json.loads(verification_raw)
         manifest = json.loads(manifest_raw)
     except (OSError, ValueError, TypeError, json.JSONDecodeError):
-        return {**base, "status": "rejected", "issues": ["future_generation_unreadable"]}
+        return {
+            **base,
+            "status": "rejected",
+            "issues": ["future_generation_unreadable"],
+        }
     if not isinstance(verification, dict) or not isinstance(manifest, dict):
-        return {**base, "status": "rejected", "issues": ["future_generation_object_invalid"]}
-    selection_binding = release_selection_for_generation(data_dir, manifest, verification)
+        return {
+            **base,
+            "status": "rejected",
+            "issues": ["future_generation_object_invalid"],
+        }
+    selection_binding = release_selection_for_generation(
+        data_dir, manifest, verification
+    )
     if selection_binding["status"] == "invalid":
         return {**base, "status": "stale", "issues": selection_binding["issues"]}
     base["pid_receipt_present"] = (
-        type(verification.get("pid")) is int and verification["pid"] > 0
+        type(verification.get("pid")) is int
+        and verification["pid"] > 0
         and verification.get("pid_passed") is True
         and verification.get("pid_env_available") is True
     )
@@ -418,72 +516,110 @@ def inspect_future_handoff(
     if verification.get("status") == "off":
         return {**base, "status": "off", "issues": ["future_verification_explicit_off"]}
     contract = future_handoff_transition_contract(
-        source_date, apply_date, data_dir=data_dir,
+        source_date,
+        apply_date,
+        data_dir=data_dir,
         allow_pid_receipt=base["pid_receipt_present"],
     )
     if contract.get("status") != "linked":
         return {**base, "status": "stale", "issues": contract.get("issues", [])}
-    result = {**base, "valid_empty": contract["valid_empty"],
-              "manifest_sha256": manifest_sha, "verification_sha256": verification_sha,
-              "manifest_content_sha256": contract["manifest_content_sha256"],
-              "env_sha256": contract["env_sha256"],
-              "selected_release_commit": contract["selected_release_commit"],
-              "release_selection_status": selection_binding["status"]}
+    result = {
+        **base,
+        "valid_empty": contract["valid_empty"],
+        "manifest_sha256": manifest_sha,
+        "verification_sha256": verification_sha,
+        "manifest_content_sha256": contract["manifest_content_sha256"],
+        "env_sha256": contract["env_sha256"],
+        "selected_release_commit": contract["selected_release_commit"],
+        "release_selection_status": selection_binding["status"],
+    }
     if selection_binding["status"] == "intraday_preserved":
         # The original summary stays immutable during a code-only handoff.
         # Its native reseal and consumed-PID receipts authenticate the newer
         # verification without rewriting PREOPEN or synthesizing a transition.
         try:
             preserved_raw = Path(selection_binding["handoff_path"]).read_bytes()
-            if hashlib.sha256(preserved_raw).hexdigest() != selection_binding["handoff_sha256"]:
+            if (
+                hashlib.sha256(preserved_raw).hexdigest()
+                != selection_binding["handoff_sha256"]
+            ):
                 raise ValueError("handoff_generation_changed")
             preserved = json.loads(preserved_raw)
         except (OSError, ValueError, TypeError):
-            return {**result, "status": "stale", "issues": ["intraday_handoff_generation_changed"]}
+            return {
+                **result,
+                "status": "stale",
+                "issues": ["intraday_handoff_generation_changed"],
+            }
         reseal = preserved.get("postclose_source_reseal") or {}
         source = reseal.get("current_source_receipts") or {}
-        if (reseal.get("source_date") == source_date
-                and reseal.get("target_date") == apply_date
-                and reseal.get("policy_effect") == "unchanged"
-                and source.get("summary_path") == contract["source_summary_path"]
-                and source.get("summary_sha256") == contract["source_summary_sha256"]):
-            return {**result, "status": "intraday_preserved_generation_pid_receipt_unconfirmed",
-                    "handoff_sha256": selection_binding["handoff_sha256"],
-                    "consumption_sha256": selection_binding["consumption_sha256"]}
+        if (
+            reseal.get("source_date") == source_date
+            and reseal.get("target_date") == apply_date
+            and reseal.get("policy_effect") == "unchanged"
+            and source.get("summary_path") == contract["source_summary_path"]
+            and source.get("summary_sha256") == contract["source_summary_sha256"]
+        ):
+            return {
+                **result,
+                "status": "intraday_preserved_generation_pid_receipt_unconfirmed",
+                "handoff_sha256": selection_binding["handoff_sha256"],
+                "consumption_sha256": selection_binding["consumption_sha256"],
+            }
     same = (
         preopen.get("manifest_sha256") == manifest_sha
         and preopen.get("verification_sha256") == verification_sha
-        and preopen.get("release_selection_sha256") == contract["release_selection_sha256"]
-        and preopen.get("selected_release_commit") == contract["selected_release_commit"]
+        and preopen.get("release_selection_sha256")
+        == contract["release_selection_sha256"]
+        and preopen.get("selected_release_commit")
+        == contract["selected_release_commit"]
     )
     if same:
-        return {**result, "status": (
-            "historical_generation_pid_receipt_unconfirmed"
-            if selection_binding["status"] == "historical" and base["pid_receipt_present"]
-            else "historical_generation_no_pid"
-            if selection_binding["status"] == "historical"
-            else "same_generation_pid_receipt_unconfirmed"
-            if base["pid_receipt_present"] else "same_generation_no_pid"
-        )}
+        return {
+            **result,
+            "status": (
+                "historical_generation_pid_receipt_unconfirmed"
+                if selection_binding["status"] == "historical"
+                and base["pid_receipt_present"]
+                else (
+                    "historical_generation_no_pid"
+                    if selection_binding["status"] == "historical"
+                    else (
+                        "same_generation_pid_receipt_unconfirmed"
+                        if base["pid_receipt_present"]
+                        else "same_generation_no_pid"
+                    )
+                )
+            ),
+        }
     path = future_handoff_transition_path(
-        source_date, apply_date, contract["source_summary_sha256"],
-        manifest_sha, verification_sha, data_dir=data_dir,
+        source_date,
+        apply_date,
+        contract["source_summary_sha256"],
+        manifest_sha,
+        verification_sha,
+        data_dir=data_dir,
     )
     if _load_json(path) == contract:
         return {**result, "status": "transitioned_no_pid", "transition_path": str(path)}
-    return {**result, "status": "stale", "issues": ["future_transition_missing_or_mismatched"]}
+    return {
+        **result,
+        "status": "stale",
+        "issues": ["future_transition_missing_or_mismatched"],
+    }
 
 
 def direct_tower_required(target_date: str, summary: dict[str, Any]) -> bool:
     """Require the report consumer for the issued cancel reconciliation contract."""
-    if target_date < '2026-10-02':
+    if target_date < "2026-10-02":
         return False
     from src.engine.automation.entry_cancel_wait_tuning import RECONCILIATION_VERSION
-    sources = summary.get('sources') or {}
-    source = sources.get('entry_cancel_wait') or {}
-    evidence = source.get('economic_evidence') or {}
-    view = evidence.get('cancel_wait_reconciliation') or {}
-    return view.get('reconciliation_contract_version') == RECONCILIATION_VERSION
+
+    sources = summary.get("sources") or {}
+    source = sources.get("entry_cancel_wait") or {}
+    evidence = source.get("economic_evidence") or {}
+    view = evidence.get("cancel_wait_reconciliation") or {}
+    return view.get("reconciliation_contract_version") == RECONCILIATION_VERSION
 
 
 def verify_summary_handoff(
@@ -519,38 +655,54 @@ def verify_summary_handoff(
         if direct_mode and target_date >= "2026-09-23"
         else {"status": "not_applicable", "actual_pid_consumed": False, "issues": []}
     )
-    if (future_handoff["status"] in {"stale", "rejected"}
-            or (future_handoff["status"] == "off"
-                and summary.get("preopen_consumption_state") != "off")):
+    if future_handoff["status"] in {"stale", "rejected"} or (
+        future_handoff["status"] == "off"
+        and summary.get("preopen_consumption_state") != "off"
+    ):
         issues.append("postclose_summary_handoff:future_preopen_generation_stale")
     from src.engine.scalping.holding_path_vote_policy import (
         START_DATE as HOLDING_VOTE_POLICY_START_DATE,
         load_bundle as load_holding_vote_policy,
     )
+
     if direct_mode and target_date >= HOLDING_VOTE_POLICY_START_DATE:
         receipt = summary.get("holding_path_vote_policy") or {}
         from src.engine.build_next_stage2_checklist import _next_krx_trading_day
+
         target_policy_date = _next_krx_trading_day(target_date)
-        observation_path = (report_dir / "monitor_snapshots" /
-                            f"holding_exit_observation_{target_date}.json")
+        observation_path = (
+            report_dir
+            / "monitor_snapshots"
+            / f"holding_exit_observation_{target_date}.json"
+        )
         try:
             from src.engine.lifecycle.snapshot_archive import read_bytes
-            observation_sha = hashlib.sha256(read_bytes(observation_path, maximum=64*1024*1024)).hexdigest()
+
+            observation_sha = hashlib.sha256(
+                read_bytes(observation_path, maximum=64 * 1024 * 1024)
+            ).hexdigest()
             bundle = load_holding_vote_policy(
-                report_dir.parent, target_policy_date,
+                report_dir.parent,
+                target_policy_date,
                 source_report_sha256=observation_sha,
             )
-            if (receipt.get("status") != holding_vote_publication_status(bundle)
-                    or receipt.get("source_date") != target_date
-                    or receipt.get("target_date") != target_policy_date
-                    or receipt.get("bundle_sha256") != bundle["bundle_sha256"]
-                    or receipt.get("policy_set_sha256") != bundle["policy_set_sha256"]
-                    or receipt.get("source_report_sha256") != observation_sha
-                    or receipt.get("cell_count") != len(bundle["cells"])
-                    or receipt.get("allowed_runtime_apply") is not True):
-                issues.append("postclose_summary_handoff:holding_vote_policy_semantics_invalid")
+            if (
+                receipt.get("status") != holding_vote_publication_status(bundle)
+                or receipt.get("source_date") != target_date
+                or receipt.get("target_date") != target_policy_date
+                or receipt.get("bundle_sha256") != bundle["bundle_sha256"]
+                or receipt.get("policy_set_sha256") != bundle["policy_set_sha256"]
+                or receipt.get("source_report_sha256") != observation_sha
+                or receipt.get("cell_count") != len(bundle["cells"])
+                or receipt.get("allowed_runtime_apply") is not True
+            ):
+                issues.append(
+                    "postclose_summary_handoff:holding_vote_policy_semantics_invalid"
+                )
         except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
-            issues.append("postclose_summary_handoff:holding_vote_policy_missing_or_invalid")
+            issues.append(
+                "postclose_summary_handoff:holding_vote_policy_missing_or_invalid"
+            )
     intake = (
         build_intake(report_dir, target_date)
         if EFFECTIVE_DATE <= target_date < COMMON_THRESHOLD_TUNING_RETIRED_FROM
@@ -673,7 +825,7 @@ def verify_summary_handoff(
 
 # Independent producer receipts survive manual historical recovery and do not
 # depend on systemd's most recent (possibly different-date) invocation.
-INDEPENDENT_SOURCES = {'machine': ('machine_policy', 'machine_policy_terminal')}
+INDEPENDENT_SOURCES = {"machine": ("machine_policy", "machine_policy_terminal")}
 
 
 def producer_receipt_path(report_dir: Path, day: str, owner: str) -> Path:
@@ -684,15 +836,25 @@ def producer_receipt_issues(report_dir: Path, day: str, owner: str) -> list[str]
     if owner not in INDEPENDENT_SOURCES:
         raise ValueError("retired_or_unknown_postclose_owner")
     from src.engine.verify_threshold_cycle_postclose_chain import _sha
+
     if any(stage_path(report_dir, day, s).exists() for s in STAGE_REGISTRY):
-        return [issue for stage in STAGE_OWNER_GROUPS[owner]
-                for issue in stage_receipt_issues(
-                    report_dir, day, stage, allow_historical_terminal=True)]
+        return [
+            issue
+            for stage in STAGE_OWNER_GROUPS[owner]
+            for issue in stage_receipt_issues(
+                report_dir, day, stage, allow_historical_terminal=True
+            )
+        ]
     value = _load_json(producer_receipt_path(report_dir, day, owner))
-    if (value.get("status") != "succeeded" or value.get("target_date") != day
-        or value.get("owner") != owner or type(value.get("exit_code")) is not int
-        or value.get("exit_code") != 0 or not value.get("run_id")
-        or not re.fullmatch(r"[0-9a-f]{40}", str(value.get("code_commit") or ""))):
+    if (
+        value.get("status") != "succeeded"
+        or value.get("target_date") != day
+        or value.get("owner") != owner
+        or type(value.get("exit_code")) is not int
+        or value.get("exit_code") != 0
+        or not value.get("run_id")
+        or not re.fullmatch(r"[0-9a-f]{40}", str(value.get("code_commit") or ""))
+    ):
         return [f"{owner}:terminal_missing_or_invalid"]
     issues = []
     for label in INDEPENDENT_SOURCES[owner]:
@@ -709,15 +871,18 @@ def machine_input_issues(report_dir: Path, day: str) -> list[str]:
     success: final main verification may itself consume machine evidence.
     """
     from src.engine.automation.postclose_recommendation_intake import _report_date
+
     issues = []
-    main = _load_json(report_dir / "threshold_cycle_postclose_status" /
-                      f"threshold_cycle_postclose_{day}.status.json")
+    main = _load_json(
+        report_dir
+        / "threshold_cycle_postclose_status"
+        / f"threshold_cycle_postclose_{day}.status.json"
+    )
     if main.get("status") == "running":
         issues.append("main:producer_running")
     if issues:
         return issues
-    for label in ("ai_decision_outcome_labels",
-                  "runtime_approval_summary"):
+    for label in ("ai_decision_outcome_labels", "runtime_approval_summary"):
         path = report_dir / label / f"{label}_{day}.json"
         if _report_date(_load_json(path)) != day:
             issues.append(f"{label}:exact_date_input_missing_or_invalid")
@@ -725,15 +890,27 @@ def machine_input_issues(report_dir: Path, day: str) -> list[str]:
     return issues
 
 
-def wait_for_machine_inputs(report_dir: Path, day: str, *, timeout: float, poll: float = 30) -> int:
+def wait_for_machine_inputs(
+    report_dir: Path, day: str, *, timeout: float, poll: float = 30
+) -> int:
     import time
+
     deadline = time.monotonic() + max(0, timeout)
     previous = None
     while True:
         issues = machine_input_issues(report_dir, day)
         if issues != previous:
-            print(json.dumps(dict(owner="machine", target_date=day,
-                status="waiting_inputs" if issues else "inputs_ready", issues=issues)), flush=True)
+            print(
+                json.dumps(
+                    dict(
+                        owner="machine",
+                        target_date=day,
+                        status="waiting_inputs" if issues else "inputs_ready",
+                        issues=issues,
+                    )
+                ),
+                flush=True,
+            )
             previous = issues
         if not issues:
             return 0
@@ -749,11 +926,19 @@ def _producer_main(argv=None) -> int:
     from zoneinfo import ZoneInfo
     from src.utils.constants import DATA_DIR, PROJECT_ROOT
     from src.engine.verify_threshold_cycle_postclose_chain import _atomic_write, _sha
-    from src.engine.automation.postclose_recommendation_intake import source_paths, _report_date
-    parser = argparse.ArgumentParser(description="Record surviving independent postclose execution")
+    from src.engine.automation.postclose_recommendation_intake import (
+        source_paths,
+        _report_date,
+    )
+
+    parser = argparse.ArgumentParser(
+        description="Record surviving independent postclose execution"
+    )
     parser.add_argument("--owner", choices=sorted(INDEPENDENT_SOURCES), required=True)
     parser.add_argument("--date", required=True, type=date.fromisoformat)
-    parser.add_argument("--phase", choices=("started", "finished", "wait-inputs"), required=True)
+    parser.add_argument(
+        "--phase", choices=("started", "finished", "wait-inputs"), required=True
+    )
     parser.add_argument("--source-wait-sec", type=float, default=43200)
     parser.add_argument("--exit-code", type=int, default=0)
     args = parser.parse_args(argv)
@@ -768,16 +953,31 @@ def _producer_main(argv=None) -> int:
     if args.phase == "started":
         previous = _load_json(path)
         if previous:
-            old = path.parent / "attempts" / f"{args.owner}_{day}_{uuid.uuid4().hex}.json"
+            old = (
+                path.parent / "attempts" / f"{args.owner}_{day}_{uuid.uuid4().hex}.json"
+            )
             _atomic_write(old, json.dumps(previous, indent=2) + "\n")
-        value = dict(schema="postclose_producer_terminal_v2", target_date=day, owner=args.owner,
-            status="running", run_id=uuid.uuid4().hex, started_at=now, wrapper_pid=os.getppid(),
-            code_commit=subprocess.check_output(["git", "-C", str(PROJECT_ROOT), "rev-parse", "HEAD"], text=True).strip(),
-            runtime_effect=False)
+        value = dict(
+            schema="postclose_producer_terminal_v2",
+            target_date=day,
+            owner=args.owner,
+            status="running",
+            run_id=uuid.uuid4().hex,
+            started_at=now,
+            wrapper_pid=os.getppid(),
+            code_commit=subprocess.check_output(
+                ["git", "-C", str(PROJECT_ROOT), "rev-parse", "HEAD"], text=True
+            ).strip(),
+            runtime_effect=False,
+        )
     else:
         value = _load_json(path)
-        if (value.get("owner") != args.owner or value.get("target_date") != day
-            or value.get("status") != "running" or value.get("wrapper_pid") != os.getppid()):
+        if (
+            value.get("owner") != args.owner
+            or value.get("target_date") != day
+            or value.get("status") != "running"
+            or value.get("wrapper_pid") != os.getppid()
+        ):
             raise RuntimeError("producer_started_receipt_missing")
         paths = source_paths(report_dir, day)
         sources, issues = {}, []
@@ -787,220 +987,411 @@ def _producer_main(argv=None) -> int:
             sources[label] = dict(path=str(source.resolve()), sha256=_sha(source))
             if not sources[label]["sha256"] or _report_date(payload) != day:
                 issues.append(f"source_missing_or_date_invalid:{label}")
-        value.update(status="succeeded" if args.exit_code == 0 and not issues else "failed",
+        value.update(
+            status="succeeded" if args.exit_code == 0 and not issues else "failed",
             exit_code=args.exit_code if args.exit_code else (1 if issues else 0),
-            sources=sources, issues=issues, finished_at=now)
-    _atomic_write(path, json.dumps(value, indent=2)+"\n")
+            sources=sources,
+            issues=issues,
+            finished_at=now,
+        )
+    _atomic_write(path, json.dumps(value, indent=2) + "\n")
     return 0 if value["status"] != "failed" else 1
 
 
 # Stage registry is shared by dispatch, summary, verifier and controller. Legacy
 # v1 terminals remain readable, but never synthesize a successful v2 stage.
-STAGE_SCHEMA = 'postclose_stage_terminal_v3'
+STAGE_SCHEMA = "postclose_stage_terminal_v3"
 # Episode research reports can legitimately exceed the legacy 32 MiB
 # validation bound. Keep the read bounded while matching the producer's
 # existing artifact-size contract.
 FAMILY_ARTIFACT_MAX_BYTES = 64 * 1024 * 1024
 STAGE_REGISTRY = {
-    'main_machine_policy': ((), ('machine_policy', 'machine_policy_terminal')),
-    'main_stop_confirmation': ((), ('main_stop_research', 'main_stop_committed')),
-    'pre_submit_delay': ((), ('pre_submit_delay_tuning', 'pre_submit_delay_policy')),
-    'legacy_machine_report': ((), ('ai_decision_action_outcome_calibration',)),
-    'main_auxiliary_policy': (('outcome_labels', 'legacy_machine_report'), ('compact_auxiliary_paired_economic',)),
-    'outcome_labels': ((), ('ai_decision_outcome_labels',)),
-    'summary_handoff': ((), ('postclose_done_controller',)),
+    "main_machine_policy": ((), ("machine_policy", "machine_policy_terminal")),
+    "main_stop_confirmation": ((), ("main_stop_research", "main_stop_committed")),
+    "pre_submit_delay": ((), ("pre_submit_delay_tuning", "pre_submit_delay_policy")),
+    "legacy_machine_report": ((), ("ai_decision_action_outcome_calibration",)),
+    "main_auxiliary_policy": (
+        ("outcome_labels", "legacy_machine_report"),
+        ("compact_auxiliary_paired_economic",),
+    ),
+    "outcome_labels": ((), ("ai_decision_outcome_labels",)),
+    "summary_handoff": ((), ("postclose_done_controller",)),
 }
 
 
 def active_stage_names(day):
     """A new mandatory family must not retroactively invalidate old dates."""
-    return tuple(stage for stage in STAGE_REGISTRY
-                 if (stage != 'pre_submit_delay' or day >= '2026-09-23')
-                 and (stage != 'main_stop_confirmation' or day >= '2026-10-12'))
-STAGE_OWNER_GROUPS = {'machine': ('main_machine_policy', 'main_auxiliary_policy', 'legacy_machine_report', 'outcome_labels')}
+    return tuple(
+        stage
+        for stage in STAGE_REGISTRY
+        if (stage != "pre_submit_delay" or day >= "2026-09-23")
+        and (stage != "main_stop_confirmation" or day >= "2026-10-12")
+    )
 
 
-def stage_prerequisites(stage,day):
-    if stage=='main_auxiliary_policy' and day>='2026-10-06':
-        return ('main_machine_policy',)
+STAGE_OWNER_GROUPS = {
+    "machine": (
+        "main_machine_policy",
+        "main_auxiliary_policy",
+        "legacy_machine_report",
+        "outcome_labels",
+    )
+}
+
+
+def stage_prerequisites(stage, day):
+    if stage == "main_auxiliary_policy" and day >= "2026-10-06":
+        return ("main_machine_policy",)
     return STAGE_REGISTRY[stage][0]
 
 
 def machine_group_children(day):
     # Main owns its single producer run. Recomputing it in the independent
     # group would invalidate the auxiliary bundle already bound to its hash.
-    return tuple(s for s in STAGE_OWNER_GROUPS['machine'][:6]
-                 if s != 'machine_attribution'
-                 and not (day >= '2026-10-06' and s == 'main_machine_policy'))
+    return tuple(
+        s
+        for s in STAGE_OWNER_GROUPS["machine"][:6]
+        if s != "machine_attribution"
+        and not (day >= "2026-10-06" and s == "main_machine_policy")
+    )
 
 
 def stage_path(report_dir, day, stage):
     if stage not in STAGE_REGISTRY:
-        raise ValueError('unknown_postclose_stage')
-    return Path(report_dir) / 'postclose_stage_terminal' / day / f'{stage}.json'
+        raise ValueError("unknown_postclose_stage")
+    return Path(report_dir) / "postclose_stage_terminal" / day / f"{stage}.json"
 
 
 def stage_artifacts(report_dir, day, stage):
-    from src.engine.automation.postclose_recommendation_intake import source_paths as catalog
+    from src.engine.automation.postclose_recommendation_intake import (
+        source_paths as catalog,
+    )
+
     paths = catalog(Path(report_dir), day)
-    for label in ('machine_policy', 'machine_policy_terminal', 'compact_auxiliary_paired_economic'):
-        folder = 'ai_entry_setup_paired_replay_batch' if label.startswith('compact') else 'ai_decision_action_outcome_calibration'
-        filename = {'machine_policy': 'winrate_policy',
-                    'machine_policy_terminal': 'winrate_policy_terminal'}.get(label, label)
-        paths[label] = Path(report_dir) / folder / f'{filename}_{day}.json'
-    paths['research_native_capacity'] = Path(report_dir).parent / 'runtime' / 'machine_research_closed_loop' / f'capacity_source_{day}.json'
-    paths['pre_submit_delay_tuning'] = Path(report_dir) / 'pre_submit_delay_tuning' / f'pre_submit_delay_tuning_{day}.json'
-    paths['pre_submit_delay_policy'] = Path(report_dir).parent / 'threshold_cycle' / 'pre_submit_delay_policy' / f'pre_submit_delay_policy_{day}.json'
-    if stage == 'pre_submit_delay' and (Path(report_dir).parent / 'threshold_cycle/pre_submit_delay_policy' / f'committed_{day}.json').exists():
+    for label in (
+        "machine_policy",
+        "machine_policy_terminal",
+        "compact_auxiliary_paired_economic",
+    ):
+        folder = (
+            "ai_entry_setup_paired_replay_batch"
+            if label.startswith("compact")
+            else "ai_decision_action_outcome_calibration"
+        )
+        filename = {
+            "machine_policy": "winrate_policy",
+            "machine_policy_terminal": "winrate_policy_terminal",
+        }.get(label, label)
+        paths[label] = Path(report_dir) / folder / f"{filename}_{day}.json"
+    paths["research_native_capacity"] = (
+        Path(report_dir).parent
+        / "runtime"
+        / "machine_research_closed_loop"
+        / f"capacity_source_{day}.json"
+    )
+    paths["pre_submit_delay_tuning"] = (
+        Path(report_dir)
+        / "pre_submit_delay_tuning"
+        / f"pre_submit_delay_tuning_{day}.json"
+    )
+    paths["pre_submit_delay_policy"] = (
+        Path(report_dir).parent
+        / "threshold_cycle"
+        / "pre_submit_delay_policy"
+        / f"pre_submit_delay_policy_{day}.json"
+    )
+    if (
+        stage == "pre_submit_delay"
+        and (
+            Path(report_dir).parent
+            / "threshold_cycle/pre_submit_delay_policy"
+            / f"committed_{day}.json"
+        ).exists()
+    ):
         from src.engine.scalping.pre_submit_delay_initial_policy import committed_paths
-        report_file, policy_file, pointer, _ = committed_paths(Path(report_dir).parent, day)
-        paths.update(pre_submit_delay_tuning=report_file, pre_submit_delay_policy=policy_file,
-                     pre_submit_delay_committed_manifest=pointer)
+
+        report_file, policy_file, pointer, _ = committed_paths(
+            Path(report_dir).parent, day
+        )
+        paths.update(
+            pre_submit_delay_tuning=report_file,
+            pre_submit_delay_policy=policy_file,
+            pre_submit_delay_committed_manifest=pointer,
+        )
     from src.engine.automation.main_stop_postclose import report_path, committed_path
-    paths['main_stop_research'] = report_path(Path(report_dir).parent, day)
-    paths['main_stop_committed'] = committed_path(Path(report_dir).parent, day)
-    outputs = {name: paths.get(name, Path(report_dir) / name / f'{name}_{day}.json') for name in STAGE_REGISTRY[stage][1]}
-    if stage == 'pre_submit_delay' and 'pre_submit_delay_committed_manifest' in paths:
-        outputs['pre_submit_delay_committed_manifest'] = paths['pre_submit_delay_committed_manifest']
-    initial_registration = (_joint_initial_machine(report_dir, day)
-        if stage in {'main_machine_policy', 'main_auxiliary_policy'} else {})
-    if stage in {'main_machine_policy', 'main_auxiliary_policy'} and initial_registration:
-        owned = Path(report_dir) / 'continuous_reversal' / day
-        outputs['reversal_machine'] = owned / 'machine.json'
-        if stage == 'main_auxiliary_policy':
-            outputs['reversal_auxiliary'] = owned / 'auxiliary.json'
-        outputs['joint_registration_request'] = (Path(report_dir).parent / 'runtime'
-            / 'mechanistic_entry_policy' / 'joint-registration.json')
-        for index, receipt in enumerate(initial_registration.get('source_receipts', [])):
-            if isinstance(receipt, dict) and isinstance(receipt.get('path'), str):
-                outputs[f'joint_source_{index}'] = Path(receipt['path'])
+
+    paths["main_stop_research"] = report_path(Path(report_dir).parent, day)
+    paths["main_stop_committed"] = committed_path(Path(report_dir).parent, day)
+    outputs = {
+        name: paths.get(name, Path(report_dir) / name / f"{name}_{day}.json")
+        for name in STAGE_REGISTRY[stage][1]
+    }
+    if stage == "pre_submit_delay" and "pre_submit_delay_committed_manifest" in paths:
+        outputs["pre_submit_delay_committed_manifest"] = paths[
+            "pre_submit_delay_committed_manifest"
+        ]
+    initial_registration = (
+        _joint_initial_machine(report_dir, day)
+        if stage in {"main_machine_policy", "main_auxiliary_policy"}
+        else {}
+    )
+    if (
+        stage in {"main_machine_policy", "main_auxiliary_policy"}
+        and initial_registration
+    ):
+        owned = Path(report_dir) / "continuous_reversal" / day
+        outputs["reversal_machine"] = owned / "machine.json"
+        if stage == "main_auxiliary_policy":
+            outputs["reversal_auxiliary"] = owned / "auxiliary.json"
+        outputs["joint_registration_request"] = (
+            Path(report_dir).parent
+            / "runtime"
+            / "mechanistic_entry_policy"
+            / "joint-registration.json"
+        )
+        for index, receipt in enumerate(
+            initial_registration.get("source_receipts", [])
+        ):
+            if isinstance(receipt, dict) and isinstance(receipt.get("path"), str):
+                outputs[f"joint_source_{index}"] = Path(receipt["path"])
         return outputs
-    if day >= '2026-10-06' and stage in {'main_machine_policy','main_auxiliary_policy'}:
-        owned=Path(report_dir)/'continuous_reversal'/day
-        if stage=='main_machine_policy':outputs['reversal_source_manifest']=owned/'source.json'
+    if day >= "2026-10-06" and stage in {
+        "main_machine_policy",
+        "main_auxiliary_policy",
+    }:
+        owned = Path(report_dir) / "continuous_reversal" / day
+        if stage == "main_machine_policy":
+            outputs["reversal_source_manifest"] = owned / "source.json"
         else:
-            outputs.update(reversal_auxiliary=owned/'auxiliary.json',reversal_call_freeze=owned/'call-freeze.json',
-                           reversal_actual_responses=owned/'provider-results.jsonl')
-    if stage == 'main_machine_policy' and day >= '2026-10-06' and not (
-        Path(report_dir)/'continuous_reversal'/day/'source.json').is_file():
-        outputs['main_fixed_watch_policy_research'] = Path(report_dir) / 'main_fixed_watch_policy_research' / f'main_fixed_watch_policy_research_{day}.json'
+            outputs.update(
+                reversal_auxiliary=owned / "auxiliary.json",
+                reversal_call_freeze=owned / "call-freeze.json",
+                reversal_actual_responses=owned / "provider-results.jsonl",
+            )
+    if (
+        stage == "main_machine_policy"
+        and day >= "2026-10-06"
+        and not (
+            Path(report_dir) / "continuous_reversal" / day / "source.json"
+        ).is_file()
+    ):
+        outputs["main_fixed_watch_policy_research"] = (
+            Path(report_dir)
+            / "main_fixed_watch_policy_research"
+            / f"main_fixed_watch_policy_research_{day}.json"
+        )
         from src.engine.scalping.main_fixed_watch import SPECS
+
         for spec in SPECS:
             if spec.episode_entry_forbidden:
-                outputs['main_fixed_watch_policy_research_' + spec.symbol] = Path(report_dir) / 'main_fixed_watch_policy_research' / f'main_fixed_watch_policy_research_{spec.symbol}_{day}.json'
+                outputs["main_fixed_watch_policy_research_" + spec.symbol] = (
+                    Path(report_dir)
+                    / "main_fixed_watch_policy_research"
+                    / f"main_fixed_watch_policy_research_{spec.symbol}_{day}.json"
+                )
     return outputs
 
 
 def validate_initial_quantity_resume(project, day):
     """Bind a failed native prefix before resuming its first unfinished command."""
-    project = Path(project); report = (project / 'data').resolve() / 'report'
-    status_path = report / 'threshold_cycle_postclose_status' / f'threshold_cycle_postclose_{day}.status.json'
+    project = Path(project)
+    report = (project / "data").resolve() / "report"
+    status_path = (
+        report
+        / "threshold_cycle_postclose_status"
+        / f"threshold_cycle_postclose_{day}.status.json"
+    )
     status = _load_json(status_path)
-    if (status.get('target_date') != day or status.get('status') != 'failed'
-            or status.get('exit_code') != 1 or status.get('reason') != 'command_failed'):
-        raise ValueError('resume_requires_failed_native_main')
-    log = project / 'logs/threshold_cycle_postclose_cron.log'
-    with log.open('rb') as handle:
+    if (
+        status.get("target_date") != day
+        or status.get("status") != "failed"
+        or status.get("exit_code") != 1
+        or status.get("reason") != "command_failed"
+    ):
+        raise ValueError("resume_requires_failed_native_main")
+    log = project / "logs/threshold_cycle_postclose_cron.log"
+    with log.open("rb") as handle:
         handle.seek(max(0, log.stat().st_size - 16 * 1024 * 1024))
-        lines = handle.read().decode(errors='replace').splitlines()
+        lines = handle.read().decode(errors="replace").splitlines()
     metrics = []
     for line in lines:
-        if line.startswith('[PERF] '):
+        if line.startswith("[PERF] "):
             value = json.loads(line[7:])
-            if value.get('run_id') == status['run_id'] and value.get('phase') == 'command':
+            if (
+                value.get("run_id") == status["run_id"]
+                and value.get("phase") == "command"
+            ):
                 metrics.append(value)
-    if (not metrics or metrics[-1].get('producer_module') != 'src.engine.scalping.initial_quantity_policy'
-            or metrics[-1].get('exit_code') != 1):
-        raise ValueError('resume_failed_command_not_initial_quantity')
-    completed = {v['producer_module']:v for v in metrics if v.get('exit_code') == 0
-                 and v.get('measurement_complete') is True and v.get('target_date') == day
-                 and v.get('code_commit') == status.get('code_commit')}
-    artifacts = {
-        'src.engine.monitoring.rising_missed_intraday_feedback':report / 'rising_missed_intraday_feedback' / f'rising_missed_intraday_feedback_{day}.json',
-        'src.engine.observation_source_quality_audit':report / 'observation_source_quality_audit' / f'observation_source_quality_audit_{day}.json',
-        'src.engine.scalping.entry_split_order_plan':report / 'entry_split_order_plan' / f'entry_split_order_plan_{day}.json',
-        'src.engine.automation.entry_cancel_wait_tuning':report / 'entry_cancel_wait_tuning' / f'entry_cancel_wait_tuning_{day}.json',
+    if (
+        not metrics
+        or metrics[-1].get("producer_module")
+        != "src.engine.scalping.initial_quantity_policy"
+        or metrics[-1].get("exit_code") != 1
+    ):
+        raise ValueError("resume_failed_command_not_initial_quantity")
+    completed = {
+        v["producer_module"]: v
+        for v in metrics
+        if v.get("exit_code") == 0
+        and v.get("measurement_complete") is True
+        and v.get("target_date") == day
+        and v.get("code_commit") == status.get("code_commit")
     }
-    contract_names = {'src/trading/market/session_contract.py',
-        'src/trading/market/aftermarket_eligibility.py',
-        'src/trading/order/aftermarket_reconciliation.py',
-        'src/engine/monitoring/market_opportunity_census.py',
-        'src/engine/observation_source_quality_audit.py'}
+    artifacts = {
+        "src.engine.monitoring.rising_missed_intraday_feedback": report
+        / "rising_missed_intraday_feedback"
+        / f"rising_missed_intraday_feedback_{day}.json",
+        "src.engine.observation_source_quality_audit": report
+        / "observation_source_quality_audit"
+        / f"observation_source_quality_audit_{day}.json",
+        "src.engine.scalping.entry_split_order_plan": report
+        / "entry_split_order_plan"
+        / f"entry_split_order_plan_{day}.json",
+        "src.engine.automation.entry_cancel_wait_tuning": report
+        / "entry_cancel_wait_tuning"
+        / f"entry_cancel_wait_tuning_{day}.json",
+    }
+    contract_names = {
+        "src/trading/market/session_contract.py",
+        "src/trading/market/aftermarket_eligibility.py",
+        "src/trading/order/aftermarket_reconciliation.py",
+        "src/engine/monitoring/market_opportunity_census.py",
+        "src/engine/observation_source_quality_audit.py",
+    }
     bindings = {}
     for module, artifact in artifacts.items():
-        if module not in completed: raise ValueError('resume_completed_command_missing:' + module)
-        receipt_path = Path(str(artifact) + '.reuse-contract.json')
+        if module not in completed:
+            raise ValueError("resume_completed_command_missing:" + module)
+        receipt_path = Path(str(artifact) + ".reuse-contract.json")
         receipt = _load_json(receipt_path)
-        if (receipt.get('schema') != 'postclose_artifact_reuse_contract_v1'
-                or receipt.get('target_date') != day
-                or Path(receipt.get('artifact_path', '')).resolve() != artifact.resolve()
-                or set(receipt.get('aftermarket_contract_sha256s', {})) != contract_names):
-            raise ValueError('resume_artifact_receipt_invalid:' + module)
-        for field, sha_field in [('artifact_path','artifact_sha256'), ('markdown_path','markdown_sha256')]:
-            if _stage_sources({'source':receipt[field]})['source']['sha256'] != receipt[sha_field]:
-                raise ValueError('resume_artifact_changed:' + module)
-        for path, sha in receipt['aftermarket_contract_sha256s'].items():
-            if _stage_sources({'code':project/path})['code']['sha256'] != sha:
-                raise ValueError('resume_contract_code_changed:' + path)
-        bindings[module] = {'receipt_sha256':_stage_sources({'receipt':receipt_path})['receipt']['sha256'],
-                            'artifact_sha256':receipt['artifact_sha256']}
+        if (
+            receipt.get("schema") != "postclose_artifact_reuse_contract_v1"
+            or receipt.get("target_date") != day
+            or Path(receipt.get("artifact_path", "")).resolve() != artifact.resolve()
+            or set(receipt.get("aftermarket_contract_sha256s", {})) != contract_names
+        ):
+            raise ValueError("resume_artifact_receipt_invalid:" + module)
+        for field, sha_field in [
+            ("artifact_path", "artifact_sha256"),
+            ("markdown_path", "markdown_sha256"),
+        ]:
+            if (
+                _stage_sources({"source": receipt[field]})["source"]["sha256"]
+                != receipt[sha_field]
+            ):
+                raise ValueError("resume_artifact_changed:" + module)
+        for path, sha in receipt["aftermarket_contract_sha256s"].items():
+            if _stage_sources({"code": project / path})["code"]["sha256"] != sha:
+                raise ValueError("resume_contract_code_changed:" + path)
+        bindings[module] = {
+            "receipt_sha256": _stage_sources({"receipt": receipt_path})["receipt"][
+                "sha256"
+            ],
+            "artifact_sha256": receipt["artifact_sha256"],
+        }
     from src.engine.automation.postclose_recommendation_intake import _report_date
+
     for module, artifact in {
-        'src.engine.market_panic_breadth_collector':report / 'market_panic_breadth' / f'market_panic_breadth_{day}.json',
-        'src.engine.strategy_position_performance_report':report / 'strategy_position_fact_sync' / f'strategy_position_fact_sync_{day}.status.json',
-        'src.engine.scalping.scale_in_split_order_plan':report / 'scale_in_split_order_plan' / f'scale_in_split_order_plan_{day}.json',
+        "src.engine.market_panic_breadth_collector": report
+        / "market_panic_breadth"
+        / f"market_panic_breadth_{day}.json",
+        "src.engine.strategy_position_performance_report": report
+        / "strategy_position_fact_sync"
+        / f"strategy_position_fact_sync_{day}.status.json",
+        "src.engine.scalping.scale_in_split_order_plan": report
+        / "scale_in_split_order_plan"
+        / f"scale_in_split_order_plan_{day}.json",
     }.items():
         value = _load_json(artifact)
-        if (module not in completed or _report_date(value) != day
-                or value.get('status') in {'failed', 'pending', 'running', 'error'}):
-            raise ValueError('resume_prefix_artifact_invalid:' + module)
-        bindings[module] = {'artifact_sha256':_stage_sources({'artifact':artifact})['artifact']['sha256']}
-    for artifact in (Path(report).parent / 'threshold_cycle/scale_in_split_order_policy' / f'scale_in_split_order_policy_{day}.json',
-                     Path(report).parent / 'threshold_cycle/entry_split_order_policy' / f'entry_split_order_policy_{day}.json',
-                     report / 'entry_cancel_wait_tuning' / f'entry_cancel_wait_policy_{day}.json'):
+        if (
+            module not in completed
+            or _report_date(value) != day
+            or value.get("status") in {"failed", "pending", "running", "error"}
+        ):
+            raise ValueError("resume_prefix_artifact_invalid:" + module)
+        bindings[module] = {
+            "artifact_sha256": _stage_sources({"artifact": artifact})["artifact"][
+                "sha256"
+            ]
+        }
+    for artifact in (
+        Path(report).parent
+        / "threshold_cycle/scale_in_split_order_policy"
+        / f"scale_in_split_order_policy_{day}.json",
+        Path(report).parent
+        / "threshold_cycle/entry_split_order_policy"
+        / f"entry_split_order_policy_{day}.json",
+        report / "entry_cancel_wait_tuning" / f"entry_cancel_wait_policy_{day}.json",
+    ):
         if _report_date(_load_json(artifact)) != day:
-            raise ValueError('resume_prefix_policy_date_invalid')
-        bindings[str(artifact)] = {'artifact_sha256':_stage_sources({'artifact':artifact})['artifact']['sha256']}
-    for stage in ('main_machine_policy', 'pre_submit_delay', 'outcome_labels'):
+            raise ValueError("resume_prefix_policy_date_invalid")
+        bindings[str(artifact)] = {
+            "artifact_sha256": _stage_sources({"artifact": artifact})["artifact"][
+                "sha256"
+            ]
+        }
+    for stage in ("main_machine_policy", "pre_submit_delay", "outcome_labels"):
         issues = stage_receipt_issues(report, day, stage)
-        if issues: raise ValueError('resume_predecessor_invalid:' + ','.join(issues))
+        if issues:
+            raise ValueError("resume_predecessor_invalid:" + ",".join(issues))
     issue = _machine_source_preflight_issue(report, day, recovery=True)
-    if issue: raise ValueError('resume_preflight_invalid:' + issue)
-    eod = _load_json(project / 'data/runtime/update_kospi_status' / f'update_kospi_{day}.json')
-    if (eod.get('status') not in {'completed', 'completed_with_warnings'}
-            or eod.get('target_date') != day or eod.get('db_state', {}).get('latest_quote_date') != day
-            or not eod.get('db_state', {}).get('rows_on_latest_date')):
-        raise ValueError('resume_eod_not_current')
-    return dict(schema='postclose_initial_quantity_resume_v1', source_date=day,
-        origin_run_id=status['run_id'], origin_code_commit=status['code_commit'],
-        origin_status_sha256=_stage_sources({'status':status_path})['status']['sha256'],
-        reused_artifacts=bindings, runtime_effect=False, allowed_runtime_apply=False)
+    if issue:
+        raise ValueError("resume_preflight_invalid:" + issue)
+    eod = _load_json(
+        project / "data/runtime/update_kospi_status" / f"update_kospi_{day}.json"
+    )
+    if (
+        eod.get("status") not in {"completed", "completed_with_warnings"}
+        or eod.get("target_date") != day
+        or eod.get("db_state", {}).get("latest_quote_date") != day
+        or not eod.get("db_state", {}).get("rows_on_latest_date")
+    ):
+        raise ValueError("resume_eod_not_current")
+    return dict(
+        schema="postclose_initial_quantity_resume_v1",
+        source_date=day,
+        origin_run_id=status["run_id"],
+        origin_code_commit=status["code_commit"],
+        origin_status_sha256=_stage_sources({"status": status_path})["status"][
+            "sha256"
+        ],
+        reused_artifacts=bindings,
+        runtime_effect=False,
+        allowed_runtime_apply=False,
+    )
 
 
 def _joint_initial_machine(report_dir, day):
     """Select the issued initial-registration contract, never infer empty research."""
-    value = _load_json(Path(report_dir) / 'continuous_reversal' / day / 'machine.json')
-    registration = value.get('registration_change')
-    if (value.get('schema') == 'continuous_reversal_operating_comparison_v1'
-            and isinstance(registration, dict) and registration.get('schema')
-                == 'main_joint_registration_request_v1'
-            and registration.get('publication_date') == day):
+    value = _load_json(Path(report_dir) / "continuous_reversal" / day / "machine.json")
+    registration = value.get("registration_change")
+    if (
+        value.get("schema") == "continuous_reversal_operating_comparison_v1"
+        and isinstance(registration, dict)
+        and registration.get("schema") == "main_joint_registration_request_v1"
+        and registration.get("publication_date") == day
+    ):
         return value
     return {}
 
 
 def _stage_digest(value):
-    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=True).encode()).hexdigest()
+    return hashlib.sha256(
+        json.dumps(
+            value, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+        ).encode()
+    ).hexdigest()
 
 
 def _stage_sources(paths):
     result = {}
     for name, path in paths.items():
         path = Path(path)
-        if path.parent.name == 'monitor_snapshots' and path.suffix == '.json':
+        if path.parent.name == "monitor_snapshots" and path.suffix == ".json":
             from src.engine.lifecycle.snapshot_archive import generation
+
             try:
-                sha = generation(path)['sha256']
+                sha = generation(path)["sha256"]
             except FileNotFoundError:
                 sha = None
             result[name] = dict(path=str(path.resolve()), sha256=sha)
@@ -1008,14 +1399,24 @@ def _stage_sources(paths):
         # Exact AI storage may replace a closed-date plain source with a
         # verified gzip. Keep the original logical path and decoded SHA in
         # older stage receipts; validate the producer's date/schema contract.
-        if (path.parent.name in {'ai_decision_payloads', 'ai_decision_outcome_labels'}
-            and re.fullmatch(r'(ai_decision_payloads_\d{4}-\d{2}-\d{2}\.jsonl|ai_decision_outcome_labels_\d{4}-\d{2}-\d{2}\.json)', path.name)
-            and path.with_suffix(path.suffix + '.gz').exists()):
-            from src.engine.scalping.micro_reversion.storage_maintenance import validate_exact_ai_artifact_source
+        if (
+            path.parent.name in {"ai_decision_payloads", "ai_decision_outcome_labels"}
+            and re.fullmatch(
+                r"(ai_decision_payloads_\d{4}-\d{2}-\d{2}\.jsonl|ai_decision_outcome_labels_\d{4}-\d{2}-\d{2}\.json)",
+                path.name,
+            )
+            and path.with_suffix(path.suffix + ".gz").exists()
+        ):
+            from src.engine.scalping.micro_reversion.storage_maintenance import (
+                validate_exact_ai_artifact_source,
+            )
+
             try:
-                source_date = date.fromisoformat(path.stem.rsplit('_', 1)[-1])
-                verified = validate_exact_ai_artifact_source(path, expected_date=source_date)
-                sha = verified['decoded_content_sha256']
+                source_date = date.fromisoformat(path.stem.rsplit("_", 1)[-1])
+                verified = validate_exact_ai_artifact_source(
+                    path, expected_date=source_date
+                )
+                sha = verified["decoded_content_sha256"]
             except (OSError, ValueError, KeyError):
                 sha = None
             result[name] = dict(path=str(path.resolve()), sha256=sha)
@@ -1023,12 +1424,16 @@ def _stage_sources(paths):
         try:
             before = path.stat()
             h = hashlib.sha256()
-            with path.open('rb') as stream:
-                for block in iter(lambda: stream.read(1024 * 1024), b''):
+            with path.open("rb") as stream:
+                for block in iter(lambda: stream.read(1024 * 1024), b""):
                     h.update(block)
             after = path.stat()
-            if (before.st_ino, before.st_size, before.st_mtime_ns) != (after.st_ino, after.st_size, after.st_mtime_ns):
-                raise ValueError('stage_source_changed_during_read')
+            if (before.st_ino, before.st_size, before.st_mtime_ns) != (
+                after.st_ino,
+                after.st_size,
+                after.st_mtime_ns,
+            ):
+                raise ValueError("stage_source_changed_during_read")
             result[name] = dict(path=str(path.resolve()), sha256=h.hexdigest())
         except FileNotFoundError:
             result[name] = dict(path=str(path.resolve()), sha256=None)
@@ -1037,9 +1442,10 @@ def _stage_sources(paths):
 
 def _stage_write(path, value):
     from src.engine.verify_threshold_cycle_postclose_chain import _atomic_write
-    value = {k:v for k,v in value.items() if k != 'receipt_sha256'}
-    value['receipt_sha256'] = _stage_digest(value)
-    _atomic_write(path, json.dumps(value, indent=2) + '\n')
+
+    value = {k: v for k, v in value.items() if k != "receipt_sha256"}
+    value["receipt_sha256"] = _stage_digest(value)
+    _atomic_write(path, json.dumps(value, indent=2) + "\n")
     return value
 
 
@@ -1051,47 +1457,59 @@ def reseal_summary_handoff_for_final_controller(report_dir, day, controller_path
     bounded reseal, the successful stage immediately becomes stale.
     """
     import fcntl
-    path = stage_path(report_dir, day, 'summary_handoff')
+
+    path = stage_path(report_dir, day, "summary_handoff")
     if not path.exists():
         return False  # Legacy dates have no independent summary stage.
-    expected = stage_artifacts(report_dir, day, 'summary_handoff')
-    owner = expected['postclose_done_controller']
+    expected = stage_artifacts(report_dir, day, "summary_handoff")
+    owner = expected["postclose_done_controller"]
     if Path(controller_path).resolve() != owner.resolve():
-        raise ValueError('summary_handoff:final_controller_path_invalid')
-    with path.with_suffix('.lock').open('a') as lock:
+        raise ValueError("summary_handoff:final_controller_path_invalid")
+    with path.with_suffix(".lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         value = _load_json(path)
-        issues = stage_receipt_issues(report_dir, day, 'summary_handoff')
-        if (value.get('status') != 'succeeded' or value.get('exit_code') != 0
-                or any(issue != 'summary_handoff:output_generation_changed' for issue in issues)):
-            raise ValueError('summary_handoff:final_controller_stage_invalid')
+        issues = stage_receipt_issues(report_dir, day, "summary_handoff")
+        if (
+            value.get("status") != "succeeded"
+            or value.get("exit_code") != 0
+            or any(
+                issue != "summary_handoff:output_generation_changed" for issue in issues
+            )
+        ):
+            raise ValueError("summary_handoff:final_controller_stage_invalid")
         controller = _load_json(owner)
-        if (controller.get('date') != day or controller.get('status') != 'done'
-                or controller.get('whole_native_chain_done_claimed') is not True
-                or controller.get('final_verifier_status') != 'pass'):
-            raise ValueError('summary_handoff:final_controller_not_verified')
+        if (
+            controller.get("date") != day
+            or controller.get("status") != "done"
+            or controller.get("whole_native_chain_done_claimed") is not True
+            or controller.get("final_verifier_status") != "pass"
+        ):
+            raise ValueError("summary_handoff:final_controller_not_verified")
         # Output drift is reported before input drift by stage_receipt_issues.
         # Validate the consumed generation before changing the saved receipt.
         # A refreshed controller cannot make an old summary computation current.
-        prerequisites = {s: str(stage_path(report_dir, day, s))
-                         for s in STAGE_REGISTRY['summary_handoff'][0]}
-        if value.get('prerequisite_receipts') != _stage_sources(prerequisites):
-            raise ValueError('summary_handoff:prerequisite_generation_changed')
-        if value.get('input_sources') != _stage_sources(
-                stage_input_paths(report_dir, day, 'summary_handoff')):
-            raise ValueError('summary_handoff:input_generation_changed')
+        prerequisites = {
+            s: str(stage_path(report_dir, day, s))
+            for s in STAGE_REGISTRY["summary_handoff"][0]
+        }
+        if value.get("prerequisite_receipts") != _stage_sources(prerequisites):
+            raise ValueError("summary_handoff:prerequisite_generation_changed")
+        if value.get("input_sources") != _stage_sources(
+            stage_input_paths(report_dir, day, "summary_handoff")
+        ):
+            raise ValueError("summary_handoff:input_generation_changed")
         sources = _stage_sources(expected)
-        if not sources['postclose_done_controller']['sha256']:
-            raise ValueError('summary_handoff:final_controller_missing')
-        if value.get('sources') != sources:
-            value['sources'] = sources
-            value['final_controller_reseal'] = {
-                'status': 'done',
-                'controller_sha256': sources['postclose_done_controller']['sha256'],
+        if not sources["postclose_done_controller"]["sha256"]:
+            raise ValueError("summary_handoff:final_controller_missing")
+        if value.get("sources") != sources:
+            value["sources"] = sources
+            value["final_controller_reseal"] = {
+                "status": "done",
+                "controller_sha256": sources["postclose_done_controller"]["sha256"],
             }
             _stage_write(path, value)
-        if stage_receipt_issues(report_dir, day, 'summary_handoff'):
-            raise ValueError('summary_handoff:final_controller_reseal_invalid')
+        if stage_receipt_issues(report_dir, day, "summary_handoff"):
+            raise ValueError("summary_handoff:final_controller_reseal_invalid")
     return True
 
 
@@ -1103,359 +1521,532 @@ def _retired_summary_archive_issues(report_dir, day, value):
     still match. Current/future dates always use the active stage contract.
     """
     root = Path(report_dir).parent
-    retirement = _load_json(root / 'runtime/retirements/main-only-retirement.json')
-    archive_sha = retirement.get('historical_summary_archive_sha256')
-    if not archive_sha or day >= '2026-10-08':
+    retirement = _load_json(root / "runtime/retirements/main-only-retirement.json")
+    archive_sha = retirement.get("historical_summary_archive_sha256")
+    if not archive_sha or day >= "2026-10-08":
         return None
-    archive_path = root / 'runtime/retirements/historical-summary-archive.json'
+    archive_path = root / "runtime/retirements/historical-summary-archive.json"
     archive = _load_json(archive_path)
-    if (retirement.get('schema') != 'main_only_automatic_owner_retirement_v1'
-            or retirement.get('management') != 'operator_manual'
-            or retirement.get('receipt_sha256') != _stage_digest({
-                k: v for k, v in retirement.items() if k != 'receipt_sha256'})
-            or _stage_sources({'archive': archive_path})['archive']['sha256'] != archive_sha
-            or archive.get('schema') != 'retirement_historical_summary_archive_v1'
-            or archive.get('authority') != 'operator_main_only_complete_retirement_20261008'
-            or archive.get('cutover_date') != '2026-10-08'
-            or archive.get('runtime_effect') is not False):
-        return ['summary_handoff:retirement_archive_invalid']
-    entry = archive.get('summaries', {}).get(day)
+    if (
+        retirement.get("schema") != "main_only_automatic_owner_retirement_v1"
+        or retirement.get("management") != "operator_manual"
+        or retirement.get("receipt_sha256")
+        != _stage_digest({k: v for k, v in retirement.items() if k != "receipt_sha256"})
+        or _stage_sources({"archive": archive_path})["archive"]["sha256"] != archive_sha
+        or archive.get("schema") != "retirement_historical_summary_archive_v1"
+        or archive.get("authority") != "operator_main_only_complete_retirement_20261008"
+        or archive.get("cutover_date") != "2026-10-08"
+        or archive.get("runtime_effect") is not False
+    ):
+        return ["summary_handoff:retirement_archive_invalid"]
+    entry = archive.get("summaries", {}).get(day)
     if entry is None:
         return None
-    if (entry.get('validated_original_contract') is not True
-            or not re.fullmatch('[0-9a-f]{40}', str(entry.get('original_code_commit', '')))
-            or entry.get('terminal_sha256') != _stage_sources({'terminal': stage_path(report_dir, day, 'summary_handoff')})['terminal']['sha256']):
-        return ['summary_handoff:retirement_archive_terminal_changed']
-    strict_path = Path(entry.get('strict_attempt_path', ''))
+    if (
+        entry.get("validated_original_contract") is not True
+        or not re.fullmatch("[0-9a-f]{40}", str(entry.get("original_code_commit", "")))
+        or entry.get("terminal_sha256")
+        != _stage_sources({"terminal": stage_path(report_dir, day, "summary_handoff")})[
+            "terminal"
+        ]["sha256"]
+    ):
+        return ["summary_handoff:retirement_archive_terminal_changed"]
+    strict_path = Path(entry.get("strict_attempt_path", ""))
     strict = _load_json(strict_path)
-    if (entry.get('strict_attempt_sha256') != _stage_sources({'strict': strict_path})['strict']['sha256']
-            or strict.get('date') != day or strict.get('status') != 'pass'
-            or strict.get('verification_scope') != 'whole_native_chain'
-            or strict.get('whole_native_chain_done_claimed') is not True):
-        return ['summary_handoff:retirement_archive_strict_changed']
-    for key in ('sources', 'prerequisite_receipts', 'input_sources'):
+    if (
+        entry.get("strict_attempt_sha256")
+        != _stage_sources({"strict": strict_path})["strict"]["sha256"]
+        or strict.get("date") != day
+        or strict.get("status") != "pass"
+        or strict.get("verification_scope") != "whole_native_chain"
+        or strict.get("whole_native_chain_done_claimed") is not True
+    ):
+        return ["summary_handoff:retirement_archive_strict_changed"]
+    for key in ("sources", "prerequisite_receipts", "input_sources"):
         captured = value.get(key)
         if not isinstance(captured, dict):
-            return ['summary_handoff:retirement_archive_sources_invalid']
-        paths = {name: item.get('path', '') for name, item in captured.items()
-                 if isinstance(item, dict)}
-        if (len(paths) != len(captured) or any(not item.get('sha256') for item in captured.values())
-                or captured != _stage_sources(paths)):
-            return ['summary_handoff:retirement_archive_generation_changed']
-    if (_load_json(root / 'runtime/retirements/main-only-retirement.json') != retirement
-            or _stage_sources({'archive': archive_path})['archive']['sha256'] != archive_sha
-            or _stage_sources({'terminal': stage_path(report_dir, day, 'summary_handoff')})['terminal']['sha256'] != entry['terminal_sha256']):
-        return ['summary_handoff:retirement_archive_changed_during_read']
+            return ["summary_handoff:retirement_archive_sources_invalid"]
+        paths = {
+            name: item.get("path", "")
+            for name, item in captured.items()
+            if isinstance(item, dict)
+        }
+        if (
+            len(paths) != len(captured)
+            or any(not item.get("sha256") for item in captured.values())
+            or captured != _stage_sources(paths)
+        ):
+            return ["summary_handoff:retirement_archive_generation_changed"]
+    if (
+        _load_json(root / "runtime/retirements/main-only-retirement.json") != retirement
+        or _stage_sources({"archive": archive_path})["archive"]["sha256"] != archive_sha
+        or _stage_sources({"terminal": stage_path(report_dir, day, "summary_handoff")})[
+            "terminal"
+        ]["sha256"]
+        != entry["terminal_sha256"]
+    ):
+        return ["summary_handoff:retirement_archive_changed_during_read"]
     return []
 
 
 def _operating_machine_terminal_selected(terminal, day, report):
     """Recognize the issued operating comparison, without policy/PID/EV approval."""
-    if (not isinstance(terminal, dict) or not isinstance(report, dict)
-        or terminal.get('schema') != 'continuous_reversal_operating_comparison_v1'):
+    if (
+        not isinstance(terminal, dict)
+        or not isinstance(report, dict)
+        or terminal.get("schema") != "continuous_reversal_operating_comparison_v1"
+    ):
         return False
     from src.engine.scalping.continuous_reversal_postclose import digest
-    staging = terminal.get('staged')
+
+    staging = terminal.get("staged")
     return bool(
-        terminal.get('status') == 'completed'
-        and report.get('schema') == terminal['schema']
-        and report.get('source_date') == report.get('target_date') == day
-        and report.get('status') == 'completed'
-        and report.get('artifact_content_sha256') == terminal.get('report_sha256')
-        and report.get('runtime_effect') is False
-        and report.get('allowed_runtime_apply') is False
-        and report.get('actual_order_submitted') is False
-        and report.get('broker_order_forbidden') is True
-        and terminal.get('source_date') == terminal.get('target_date') == day
-        and terminal.get('selection_basis') == 'cumulative_raw_win_fraction'
-        and terminal.get('disposition') == 'continuous_reversal_selected'
-        and isinstance(staging, dict) and staging.get('status') == 'machine_component_prepared'
-        and isinstance(terminal.get('report_sha256'), str)
-        and re.fullmatch(r'[0-9a-f]{64}', terminal['report_sha256'])
-        and terminal.get('artifact_content_sha256') == digest({k:v for k,v in terminal.items() if k!='artifact_content_sha256'})
-        and terminal.get('runtime_effect') is False
-        and terminal.get('allowed_runtime_apply') is False
-        and terminal.get('actual_order_submitted') is False
-        and terminal.get('broker_order_forbidden') is True
+        terminal.get("status") == "completed"
+        and report.get("schema") == terminal["schema"]
+        and report.get("source_date") == report.get("target_date") == day
+        and report.get("status") == "completed"
+        and report.get("artifact_content_sha256") == terminal.get("report_sha256")
+        and report.get("runtime_effect") is False
+        and report.get("allowed_runtime_apply") is False
+        and report.get("actual_order_submitted") is False
+        and report.get("broker_order_forbidden") is True
+        and terminal.get("source_date") == terminal.get("target_date") == day
+        and terminal.get("selection_basis") == "cumulative_raw_win_fraction"
+        and terminal.get("disposition") == "continuous_reversal_selected"
+        and isinstance(staging, dict)
+        and staging.get("status") == "machine_component_prepared"
+        and isinstance(terminal.get("report_sha256"), str)
+        and re.fullmatch(r"[0-9a-f]{64}", terminal["report_sha256"])
+        and terminal.get("artifact_content_sha256")
+        == digest({k: v for k, v in terminal.items() if k != "artifact_content_sha256"})
+        and terminal.get("runtime_effect") is False
+        and terminal.get("allowed_runtime_apply") is False
+        and terminal.get("actual_order_submitted") is False
+        and terminal.get("broker_order_forbidden") is True
     )
 
 
-def stage_receipt_issues(report_dir, day, stage, *, code_hash=None,
-                         allow_historical_summary=False,
-                         allow_historical_terminal=False):
+def stage_receipt_issues(
+    report_dir,
+    day,
+    stage,
+    *,
+    code_hash=None,
+    allow_historical_summary=False,
+    allow_historical_terminal=False,
+):
     value = _load_json(stage_path(report_dir, day, stage))
     # Read-only consumers may authenticate unchanged pre-retirement evidence.
     # Dispatch/check/reuse of a producer still requires v3. This never rewrites
     # a v2 receipt or brings the retired Widget stages back into the registry.
     historical_summary = False
     historical_terminal = False
-    if ((allow_historical_terminal or (allow_historical_summary and stage == 'summary_handoff'))
-            and value.get('schema') == 'postclose_stage_terminal_v2'):
+    if (
+        allow_historical_terminal
+        or (allow_historical_summary and stage == "summary_handoff")
+    ) and value.get("schema") == "postclose_stage_terminal_v2":
         from datetime import date
+
         try:
-            publication = value.get('publication_date', day)
+            publication = value.get("publication_date", day)
             historical_terminal = (
                 date.fromisoformat(day).isoformat() == day
                 and date.fromisoformat(publication).isoformat() == publication
-                and '2026-06-05' <= day <= publication < '2026-10-06'
+                and "2026-06-05" <= day <= publication < "2026-10-06"
             )
         except (TypeError, ValueError):
             pass
-        historical_summary = historical_terminal and stage == 'summary_handoff'
-    if ((value.get('schema') != STAGE_SCHEMA and not historical_terminal) or value.get('stage_id') != stage
-        or value.get('source_date') != day or not value.get('run_id')
-        or value.get('receipt_sha256') != _stage_digest({k:v for k,v in value.items() if k != 'receipt_sha256'})):
-        return [f'{stage}:terminal_missing_or_invalid']
-    if value.get('status') == 'off' and value.get('off_reason') == 'explicit_schedule_disabled':
+        historical_summary = historical_terminal and stage == "summary_handoff"
+    if (
+        (value.get("schema") != STAGE_SCHEMA and not historical_terminal)
+        or value.get("stage_id") != stage
+        or value.get("source_date") != day
+        or not value.get("run_id")
+        or value.get("receipt_sha256")
+        != _stage_digest({k: v for k, v in value.items() if k != "receipt_sha256"})
+    ):
+        return [f"{stage}:terminal_missing_or_invalid"]
+    if (
+        value.get("status") == "off"
+        and value.get("off_reason") == "explicit_schedule_disabled"
+    ):
         return []
-    if value.get('status') != 'succeeded' or value.get('exit_code') != 0:
+    if value.get("status") != "succeeded" or value.get("exit_code") != 0:
         return [f'{stage}:{value.get("status")}']
-    if stage == 'summary_handoff' and code_hash is None:
+    if stage == "summary_handoff" and code_hash is None:
         archived = _retired_summary_archive_issues(report_dir, day, value)
         if archived is not None:
             return archived
-    if stage == 'summary_handoff' and (
-        value.get('prepared_effective_date') is not None
-        or value.get('publication_date', day) > day
+    if stage == "summary_handoff" and (
+        value.get("prepared_effective_date") is not None
+        or value.get("publication_date", day) > day
     ):
         from src.engine.build_next_stage2_checklist import _next_krx_trading_day
-        if value.get('prepared_effective_date') != _next_krx_trading_day(day):
-            return ['summary_handoff:prepared_source_session_mismatch']
-    if stage == 'pre_submit_delay':
-        from src.engine.scalping.pre_submit_delay_tuning import family_source_ledger_issues
+
+        if value.get("prepared_effective_date") != _next_krx_trading_day(day):
+            return ["summary_handoff:prepared_source_session_mismatch"]
+    if stage == "pre_submit_delay":
+        from src.engine.scalping.pre_submit_delay_tuning import (
+            family_source_ledger_issues,
+        )
+
         source_issues = family_source_ledger_issues(Path(report_dir).parent, day)
         if source_issues:
-            return [f'{stage}:{issue}' for issue in source_issues]
-        ledger = _load_json(stage_input_paths(report_dir, day, stage)['pre_submit_delay_source_ledger'])
-        if value.get('pipeline_source_generation_sha256') != ledger.get('ledger_sha256'):
-            return [f'{stage}:pipeline_source_generation_changed']
+            return [f"{stage}:{issue}" for issue in source_issues]
+        ledger = _load_json(
+            stage_input_paths(report_dir, day, stage)["pre_submit_delay_source_ledger"]
+        )
+        if value.get("pipeline_source_generation_sha256") != ledger.get(
+            "ledger_sha256"
+        ):
+            return [f"{stage}:pipeline_source_generation_changed"]
     if code_hash is None:
-        code_hash = _stage_code(stage, stage_commands(stage, day, value.get('publication_date') or day, recovery=value.get('recovery_mode', False)), Path(__file__).resolve().parents[3])
-    if value.get('stage_code_sha256') != code_hash:
-        if not _historical_stage_code_matches(report_dir, day, stage, value,
-                legacy_main_machine=historical_terminal and stage == 'main_machine_policy'):
-            return [f'{stage}:code_changed']
+        code_hash = _stage_code(
+            stage,
+            stage_commands(
+                stage,
+                day,
+                value.get("publication_date") or day,
+                recovery=value.get("recovery_mode", False),
+            ),
+            Path(__file__).resolve().parents[3],
+        )
+    if value.get("stage_code_sha256") != code_hash:
+        if not _historical_stage_code_matches(
+            report_dir,
+            day,
+            stage,
+            value,
+            legacy_main_machine=historical_terminal and stage == "main_machine_policy",
+        ):
+            return [f"{stage}:code_changed"]
     expected = stage_artifacts(report_dir, day, stage)
-    if set(value.get('sources', {})) != set(expected):
-        return [f'{stage}:source_set_invalid']
-    if value['sources'] != _stage_sources(expected) or any(not r['sha256'] for r in value['sources'].values()):
-        return [f'{stage}:output_generation_changed']
-    prerequisites = {s:str(stage_path(report_dir, day, s)) for s in stage_prerequisites(stage,day)}
-    if value.get('prerequisite_receipts') != _stage_sources(prerequisites):
-        return [f'{stage}:prerequisite_generation_changed']
+    if set(value.get("sources", {})) != set(expected):
+        return [f"{stage}:source_set_invalid"]
+    if value["sources"] != _stage_sources(expected) or any(
+        not r["sha256"] for r in value["sources"].values()
+    ):
+        return [f"{stage}:output_generation_changed"]
+    prerequisites = {
+        s: str(stage_path(report_dir, day, s)) for s in stage_prerequisites(stage, day)
+    }
+    if value.get("prerequisite_receipts") != _stage_sources(prerequisites):
+        return [f"{stage}:prerequisite_generation_changed"]
     input_paths = stage_input_paths(report_dir, day, stage)
     if historical_summary:
         # Retired terminals remain immutable evidence; reading them does not
         # restore their producers or grant current Widget trading authority.
-        for retired_stage in ('widget_policy', 'collector_recommendation'):
+        for retired_stage in ("widget_policy", "collector_recommendation"):
             input_paths[retired_stage] = (
-                Path(report_dir) / 'postclose_stage_terminal' / day / f'{retired_stage}.json'
+                Path(report_dir)
+                / "postclose_stage_terminal"
+                / day
+                / f"{retired_stage}.json"
             )
-    if value.get('input_sources') != _stage_sources(input_paths):
-        return [f'{stage}:input_generation_changed']
+    if value.get("input_sources") != _stage_sources(input_paths):
+        return [f"{stage}:input_generation_changed"]
     issues = _safe_stage_output_issues(report_dir, day, stage)
-    if not issues and stage == 'main_machine_policy':
-        terminal = _load_json(expected['machine_policy_terminal'])
-        selected = _operating_machine_terminal_selected(terminal, day, _load_json(expected['machine_policy']))
-        if terminal.get('schema') == 'continuous_reversal_operating_comparison_v1':
-            if (value.get('policy_disposition') == 'continuous_reversal_selected' and not selected
-                or value.get('machine_report_sha256') not in (None, terminal.get('report_sha256'))
-                or value.get('selection_metric') not in (None, 'cumulative_raw_win_fraction')):
-                issues.append('main_machine_policy:recorded_native_disposition_unproven')
+    if not issues and stage == "main_machine_policy":
+        terminal = _load_json(expected["machine_policy_terminal"])
+        selected = _operating_machine_terminal_selected(
+            terminal, day, _load_json(expected["machine_policy"])
+        )
+        if terminal.get("schema") == "continuous_reversal_operating_comparison_v1":
+            if (
+                value.get("policy_disposition") == "continuous_reversal_selected"
+                and not selected
+                or value.get("machine_report_sha256")
+                not in (None, terminal.get("report_sha256"))
+                or value.get("selection_metric")
+                not in (None, "cumulative_raw_win_fraction")
+            ):
+                issues.append(
+                    "main_machine_policy:recorded_native_disposition_unproven"
+                )
     return issues
 
 
-
-
 def stage_input_paths(report_dir, day, stage):
-    paths = {s:stage_path(report_dir, day, s) for s in stage_prerequisites(stage,day)}
-    if stage == 'summary_handoff':
-        paths.update({s:stage_path(report_dir, day, s) for s in active_stage_names(day)
-                      if s != 'summary_handoff'})
-    if stage == 'main_stop_confirmation':
-        paths['postclose_exit_snapshot'] = Path(report_dir)/'monitor_snapshots/manifests'/f'monitor_snapshot_manifest_{day}_postclose_exit.json'
-    if stage == 'pre_submit_delay':
-        paths['pre_submit_delay_source_ledger'] = Path(report_dir).parent / 'pipeline_event_summaries' / f'pre_submit_delay_source_ledger_{day}.json'
-    if stage in {'outcome_labels'}:
-        paths['labels'] = Path(report_dir) / 'ai_decision_outcome_labels' / f'ai_decision_outcome_labels_{day}.json'
-        paths['payloads'] = Path(report_dir).parent / 'ai_decision_payloads' / f'ai_decision_payloads_{day}.jsonl'
-    if stage == 'outcome_labels': paths.pop('labels', None)
+    paths = {s: stage_path(report_dir, day, s) for s in stage_prerequisites(stage, day)}
+    if stage == "summary_handoff":
+        paths.update(
+            {
+                s: stage_path(report_dir, day, s)
+                for s in active_stage_names(day)
+                if s != "summary_handoff"
+            }
+        )
+    if stage == "main_stop_confirmation":
+        paths["postclose_exit_snapshot"] = (
+            Path(report_dir)
+            / "monitor_snapshots/manifests"
+            / f"monitor_snapshot_manifest_{day}_postclose_exit.json"
+        )
+    if stage == "pre_submit_delay":
+        paths["pre_submit_delay_source_ledger"] = (
+            Path(report_dir).parent
+            / "pipeline_event_summaries"
+            / f"pre_submit_delay_source_ledger_{day}.json"
+        )
+    if stage in {"outcome_labels"}:
+        paths["labels"] = (
+            Path(report_dir)
+            / "ai_decision_outcome_labels"
+            / f"ai_decision_outcome_labels_{day}.json"
+        )
+        paths["payloads"] = (
+            Path(report_dir).parent
+            / "ai_decision_payloads"
+            / f"ai_decision_payloads_{day}.jsonl"
+        )
+    if stage == "outcome_labels":
+        paths.pop("labels", None)
     return paths
 
 
 def _machine_source_preflight_issue(report_dir, day, *, recovery=False):
     """Require a bound audit; closed-date recovery may use its final successor."""
-    source_path = (Path(report_dir) / 'observation_source_quality_audit'
-                   / f'observation_source_quality_audit_{day}.json')
-    binding = _load_json(Path(str(source_path) + '.final-contract.json'))
+    source_path = (
+        Path(report_dir)
+        / "observation_source_quality_audit"
+        / f"observation_source_quality_audit_{day}.json"
+    )
+    binding = _load_json(Path(str(source_path) + ".final-contract.json"))
     try:
         source_bytes = source_path.read_bytes()
         source = json.loads(source_bytes)
     except (OSError, ValueError, TypeError):
-        return 'source_quality_preflight_missing_or_invalid'
+        return "source_quality_preflight_missing_or_invalid"
     if not isinstance(source, dict) or not binding:
-        return 'source_quality_preflight_missing_or_invalid'
-    phase = source.get('audit_phase')
-    if (source.get('target_date') != day
-        or phase not in ({'preflight', 'final'} if recovery else {'preflight'})
-        or binding.get('schema') != 'observation_source_quality_final_binding_v1'
-        or binding.get('target_date') != day
-        or binding.get('audit_phase') != phase
-        or binding.get('artifact_sha256') != hashlib.sha256(source_bytes).hexdigest()
-        or binding.get('implementation_sha256') != source.get('consumer_implementation_sha256')):
-        return 'source_quality_preflight_identity_or_hash_invalid'
-    if recovery and phase == 'final':
+        return "source_quality_preflight_missing_or_invalid"
+    phase = source.get("audit_phase")
+    if (
+        source.get("target_date") != day
+        or phase not in ({"preflight", "final"} if recovery else {"preflight"})
+        or binding.get("schema") != "observation_source_quality_final_binding_v1"
+        or binding.get("target_date") != day
+        or binding.get("audit_phase") != phase
+        or binding.get("artifact_sha256") != hashlib.sha256(source_bytes).hexdigest()
+        or binding.get("implementation_sha256")
+        != source.get("consumer_implementation_sha256")
+    ):
+        return "source_quality_preflight_identity_or_hash_invalid"
+    if recovery and phase == "final":
         from src.engine.observation_source_quality_audit import check_audit_reusable
-        if check_audit_reusable(day, audit_phase='final', artifact_path=source_path).get('reusable') is not True:
-            return 'source_quality_final_audit_not_reusable'
-    summary = source.get('summary')
-    generation = source.get('source')
-    if (source.get('status') not in {'pass', 'warning'}
+
+        if (
+            check_audit_reusable(
+                day, audit_phase="final", artifact_path=source_path
+            ).get("reusable")
+            is not True
+        ):
+            return "source_quality_final_audit_not_reusable"
+    summary = source.get("summary")
+    generation = source.get("source")
+    if (
+        source.get("status") not in {"pass", "warning"}
         or not isinstance(summary, dict)
-        or summary.get('tuning_input_allowed') is not True
+        or summary.get("tuning_input_allowed") is not True
         or not isinstance(generation, dict)
-        or generation.get('generation_stable') is not True):
-        return 'source_quality_preflight_blocked'
-    raw_path = generation.get('pipeline_events')
-    raw_generation = generation.get('generation')
-    raw_root = Path(report_dir).parent / 'pipeline_events'
-    allowed_raw = {raw_root / f'pipeline_events_{day}.jsonl',
-                   raw_root / f'pipeline_events_{day}.jsonl.gz'}
-    if (not isinstance(raw_path, str) or not isinstance(raw_generation, dict)
-        or Path(raw_path).resolve() not in {path.resolve() for path in allowed_raw}):
-        return 'source_quality_preflight_raw_identity_invalid'
+        or generation.get("generation_stable") is not True
+    ):
+        return "source_quality_preflight_blocked"
+    raw_path = generation.get("pipeline_events")
+    raw_generation = generation.get("generation")
+    raw_root = Path(report_dir).parent / "pipeline_events"
+    allowed_raw = {
+        raw_root / f"pipeline_events_{day}.jsonl",
+        raw_root / f"pipeline_events_{day}.jsonl.gz",
+    }
+    if (
+        not isinstance(raw_path, str)
+        or not isinstance(raw_generation, dict)
+        or Path(raw_path).resolve() not in {path.resolve() for path in allowed_raw}
+    ):
+        return "source_quality_preflight_raw_identity_invalid"
     try:
         stat = Path(raw_path).stat()
     except OSError:
-        return 'source_quality_preflight_raw_generation_changed'
-    if any(getattr(stat, stat_field) != raw_generation.get(receipt_field)
-           for stat_field, receipt_field in (
-               ('st_dev', 'device'), ('st_ino', 'inode'),
-               ('st_size', 'size_bytes'), ('st_mtime_ns', 'mtime_ns'),
-               ('st_ctime_ns', 'ctime_ns'))):
-        return 'source_quality_preflight_raw_generation_changed'
+        return "source_quality_preflight_raw_generation_changed"
+    if any(
+        getattr(stat, stat_field) != raw_generation.get(receipt_field)
+        for stat_field, receipt_field in (
+            ("st_dev", "device"),
+            ("st_ino", "inode"),
+            ("st_size", "size_bytes"),
+            ("st_mtime_ns", "mtime_ns"),
+            ("st_ctime_ns", "ctime_ns"),
+        )
+    ):
+        return "source_quality_preflight_raw_generation_changed"
     return None
 
 
-def _existing_incumbent_winrate_binding_valid(report, staged, bundle, previous, runtime_policy,
-                                              staged_bundle=None, data_root=None):
+def _existing_incumbent_winrate_binding_valid(
+    report, staged, bundle, previous, runtime_policy, staged_bundle=None, data_root=None
+):
     """Validate a fresh carry evaluation against an already staged immutable bundle."""
     if not all(isinstance(value, dict) for value in (report, staged, bundle, previous)):
         return False
     try:
-        previous_machine = runtime_policy.for_cohort(
-            previous, ('KRX', 'KRX_REGULAR')
-        )['machine_policy']
-        existing_machine = runtime_policy.for_cohort(
-            bundle, ('KRX', 'KRX_REGULAR')
-        )['machine_policy']
+        previous_machine = runtime_policy.for_cohort(previous, ("KRX", "KRX_REGULAR"))[
+            "machine_policy"
+        ]
+        existing_machine = runtime_policy.for_cohort(bundle, ("KRX", "KRX_REGULAR"))[
+            "machine_policy"
+        ]
         machine_sha = runtime_policy.digest(previous_machine)
     except (KeyError, TypeError, ValueError):
         return False
-    proof = bundle.get('winrate_selection') or {}
-    staged_hash = staged.get('bundle_sha256')
-    same_generation = bundle.get('bundle_sha256') == staged_hash
-    preserving_descendant = bundle.get('bundle_sha256') == staged_hash
+    proof = bundle.get("winrate_selection") or {}
+    staged_hash = staged.get("bundle_sha256")
+    same_generation = bundle.get("bundle_sha256") == staged_hash
+    preserving_descendant = bundle.get("bundle_sha256") == staged_hash
     if isinstance(staged_bundle, dict):
         preserving_descendant = preserving_descendant or (
-            staged_bundle.get('bundle_sha256') == staged_hash
-            and staged_bundle.get('target_date') == staged.get('target_date')
-            and bundle.get('previous_bundle_sha256') == staged_hash
-            and bundle.get('winrate_selection') == staged_bundle.get('winrate_selection')
-            and runtime_policy.for_cohort(bundle, ('KRX', 'KRX_REGULAR'))['machine_policy']
-                == runtime_policy.for_cohort(staged_bundle, ('KRX', 'KRX_REGULAR'))['machine_policy']
+            staged_bundle.get("bundle_sha256") == staged_hash
+            and staged_bundle.get("target_date") == staged.get("target_date")
+            and bundle.get("previous_bundle_sha256") == staged_hash
+            and bundle.get("winrate_selection")
+            == staged_bundle.get("winrate_selection")
+            and runtime_policy.for_cohort(bundle, ("KRX", "KRX_REGULAR"))[
+                "machine_policy"
+            ]
+            == runtime_policy.for_cohort(staged_bundle, ("KRX", "KRX_REGULAR"))[
+                "machine_policy"
+            ]
         )
     if not preserving_descendant and data_root is not None:
         current = bundle
-        expected_proof = bundle.get('winrate_selection')
+        expected_proof = bundle.get("winrate_selection")
         expected_machine = existing_machine
-        seen = {bundle.get('bundle_sha256')}
+        seen = {bundle.get("bundle_sha256")}
         # A bounded chain permits independently receipted same-policy refreshes
         # while rejecting a reparented or policy-changing generation.
         for _ in range(8):
-            parent_hash = current.get('previous_bundle_sha256')
-            if (not isinstance(parent_hash, str) or len(parent_hash) != 64
-                or parent_hash in seen):
+            parent_hash = current.get("previous_bundle_sha256")
+            if (
+                not isinstance(parent_hash, str)
+                or len(parent_hash) != 64
+                or parent_hash in seen
+            ):
                 break
             seen.add(parent_hash)
-            parent_path = (runtime_policy.root(Path(data_root)) / 'generations'
-                           / f'{parent_hash}.json')
+            parent_path = (
+                runtime_policy.root(Path(data_root))
+                / "generations"
+                / f"{parent_hash}.json"
+            )
             try:
                 parent_generation = runtime_policy._read(parent_path)
-                runtime_policy.validate(parent_generation, target_date=staged.get('target_date'))
-                runtime_policy._validate_bundle_sources(parent_generation, Path(data_root))
+                runtime_policy.validate(
+                    parent_generation, target_date=staged.get("target_date")
+                )
+                runtime_policy._validate_bundle_sources(
+                    parent_generation, Path(data_root)
+                )
                 parent_machine = runtime_policy.for_cohort(
-                    parent_generation, ('KRX', 'KRX_REGULAR'))['machine_policy']
+                    parent_generation, ("KRX", "KRX_REGULAR")
+                )["machine_policy"]
             except (OSError, ValueError, TypeError, KeyError, AttributeError):
                 break
-            if (parent_generation.get('bundle_sha256') != parent_hash
-                or parent_generation.get('target_date') != staged.get('target_date')
-                or parent_generation.get('winrate_selection') != expected_proof
-                or parent_machine != expected_machine):
+            if (
+                parent_generation.get("bundle_sha256") != parent_hash
+                or parent_generation.get("target_date") != staged.get("target_date")
+                or parent_generation.get("winrate_selection") != expected_proof
+                or parent_machine != expected_machine
+            ):
                 break
             if parent_hash == staged_hash:
                 preserving_descendant = True
                 break
             current = parent_generation
     return (
-        staged.get('current_report_sha256') == report.get('artifact_content_sha256')
-        and staged.get('bundle_report_sha256') == proof.get('report_sha256')
-        and staged.get('previous_bundle_sha256') == report.get('parent_bundle_sha256')
-        and proof.get('disposition') == 'incumbent_carried'
-        and proof.get('policy_version') == report.get('policy_version')
-        and proof.get('parent_bundle_sha256') == report.get('parent_bundle_sha256')
-        and proof.get('machine_policy_sha256') == machine_sha
-        and report.get('disposition') == 'incumbent_carried'
-        and report.get('candidate_policy') is None
+        staged.get("current_report_sha256") == report.get("artifact_content_sha256")
+        and staged.get("bundle_report_sha256") == proof.get("report_sha256")
+        and staged.get("previous_bundle_sha256") == report.get("parent_bundle_sha256")
+        and proof.get("disposition") == "incumbent_carried"
+        and proof.get("policy_version") == report.get("policy_version")
+        and proof.get("parent_bundle_sha256") == report.get("parent_bundle_sha256")
+        and proof.get("machine_policy_sha256") == machine_sha
+        and report.get("disposition") == "incumbent_carried"
+        and report.get("candidate_policy") is None
         and (same_generation or preserving_descendant)
-        and previous.get('bundle_sha256') == report.get('parent_bundle_sha256')
-        and bundle.get('machine_policy') == previous_machine
+        and previous.get("bundle_sha256") == report.get("parent_bundle_sha256")
+        and bundle.get("machine_policy") == previous_machine
         and existing_machine == previous_machine
-        and staged.get('machine_policy_sha256') == machine_sha
-        and report.get('parent_machine_policy_sha256') == machine_sha
+        and staged.get("machine_policy_sha256") == machine_sha
+        and report.get("parent_machine_policy_sha256") == machine_sha
     )
 
 
-def _staged_winrate_generation_preserved(staged, bundle, runtime_policy, data_root,
-                                        *, generation_only=False):
+def _staged_winrate_generation_preserved(
+    staged, bundle, runtime_policy, data_root, *, generation_only=False
+):
     """Accept a later same-policy bundle only with an intact archived parent chain."""
-    expected = staged.get('bundle_sha256')
-    if bundle.get('bundle_sha256') == expected:
+    expected = staged.get("bundle_sha256")
+    if bundle.get("bundle_sha256") == expected:
         return True
     current = bundle
-    seen = {current.get('bundle_sha256')}
-    proof = current.get('winrate_selection')
-    machine = runtime_policy.for_cohort(current, ('KRX', 'KRX_REGULAR'))['machine_policy']
+    seen = {current.get("bundle_sha256")}
+    proof = current.get("winrate_selection")
+    machine = runtime_policy.for_cohort(current, ("KRX", "KRX_REGULAR"))[
+        "machine_policy"
+    ]
     for _ in range(8):
-        parent_hash = current.get('previous_bundle_sha256')
-        if not isinstance(parent_hash, str) or len(parent_hash) != 64 or parent_hash in seen:
+        parent_hash = current.get("previous_bundle_sha256")
+        if (
+            not isinstance(parent_hash, str)
+            or len(parent_hash) != 64
+            or parent_hash in seen
+        ):
             return False
         seen.add(parent_hash)
-        path = runtime_policy.root(Path(data_root)) / 'generations' / f'{parent_hash}.json'
+        path = (
+            runtime_policy.root(Path(data_root)) / "generations" / f"{parent_hash}.json"
+        )
         try:
-            if generation_only and (path.is_symlink() or path.stat().st_size > FAMILY_ARTIFACT_MAX_BYTES):
+            if generation_only and (
+                path.is_symlink() or path.stat().st_size > FAMILY_ARTIFACT_MAX_BYTES
+            ):
                 return False
             parent = runtime_policy._read(path)
             if generation_only:
                 # The caller fully validates the current bundle. Ancestors must
                 # retain its exact machine/proof below; do not rerun the same
                 # policy coordinate validation at each archived generation.
-                if (parent.get('bundle_sha256') != runtime_policy.digest({
-                        k: v for k, v in parent.items() if k != 'bundle_sha256'})
-                    or parent.get('target_date') != staged.get('target_date')
-                    or any(parent.get(k) != bundle.get(k) for k in (
-                        'schema', 'cohort', 'role_contract', 'adoption_basis',
-                        'actual_order_submitted', 'hard_guards_unchanged'))):
+                if (
+                    parent.get("bundle_sha256")
+                    != runtime_policy.digest(
+                        {k: v for k, v in parent.items() if k != "bundle_sha256"}
+                    )
+                    or parent.get("target_date") != staged.get("target_date")
+                    or any(
+                        parent.get(k) != bundle.get(k)
+                        for k in (
+                            "schema",
+                            "cohort",
+                            "role_contract",
+                            "adoption_basis",
+                            "actual_order_submitted",
+                            "hard_guards_unchanged",
+                        )
+                    )
+                ):
                     return False
             else:
-                runtime_policy.validate(parent, target_date=staged.get('target_date'))
+                runtime_policy.validate(parent, target_date=staged.get("target_date"))
             runtime_policy._validate_bundle_sources(parent, Path(data_root))
-            parent_machine = runtime_policy.for_cohort(parent, ('KRX', 'KRX_REGULAR'))['machine_policy']
+            parent_machine = runtime_policy.for_cohort(parent, ("KRX", "KRX_REGULAR"))[
+                "machine_policy"
+            ]
         except (OSError, ValueError, TypeError, KeyError, AttributeError):
             return False
-        if (parent.get('bundle_sha256') != parent_hash
-            or parent.get('winrate_selection') != proof
-            or parent_machine != machine):
+        if (
+            parent.get("bundle_sha256") != parent_hash
+            or parent.get("winrate_selection") != proof
+            or parent_machine != machine
+        ):
             return False
         if parent_hash == expected:
             return True
@@ -1469,294 +2060,530 @@ def _joint_initial_output_issues(report_dir, day, stage, machine):
     from src.engine.scalping import reversal_joint_registration as joint
     from src.engine.scalping.reversal_registered_catalog import cells, ROUTES
     from src.engine.build_next_stage2_checklist import _next_krx_trading_day
+
     try:
-        request = joint.validate_request(machine['registration_change'])
-        if (request['publication_date'] != day
-                or request['target_date'] != _next_krx_trading_day(day)
-                or _load_json(joint.pending_path(Path(report_dir).parent)) != request):
-            raise ValueError('registration_source_or_date_changed')
+        request = joint.validate_request(machine["registration_change"])
+        if (
+            request["publication_date"] != day
+            or request["target_date"] != _next_krx_trading_day(day)
+            or _load_json(joint.pending_path(Path(report_dir).parent)) != request
+        ):
+            raise ValueError("registration_source_or_date_changed")
         paths = stage_artifacts(report_dir, day, stage)
         reports = [machine]
-        if stage == 'main_auxiliary_policy':
-            auxiliary = _load_json(paths['reversal_auxiliary'])
-            compact = _load_json(paths['compact_auxiliary_paired_economic'])
-            if (auxiliary.get('initial_registration') != request
-                    or auxiliary.get('machine_report_sha256') != machine['artifact_content_sha256']
-                    or compact.get('machine_report_sha256') != machine['artifact_content_sha256']
-                    or compact.get('initial_registration') != request):
-                raise ValueError('auxiliary_generation_changed')
+        if stage == "main_auxiliary_policy":
+            auxiliary = _load_json(paths["reversal_auxiliary"])
+            compact = _load_json(paths["compact_auxiliary_paired_economic"])
+            if (
+                auxiliary.get("initial_registration") != request
+                or auxiliary.get("machine_report_sha256")
+                != machine["artifact_content_sha256"]
+                or compact.get("machine_report_sha256")
+                != machine["artifact_content_sha256"]
+                or compact.get("initial_registration") != request
+            ):
+                raise ValueError("auxiliary_generation_changed")
             reports.extend([auxiliary, compact])
         else:
-            report = _load_json(paths['machine_policy'])
-            terminal = _load_json(paths['machine_policy_terminal'])
-            if (report != machine or terminal.get('report_sha256') != machine['artifact_content_sha256']
-                    or terminal.get('status') != 'completed'
-                    or terminal.get('source_date') != day or terminal.get('target_date') != day
-                    or terminal.get('schema') != machine['schema']
-                    or terminal.get('artifact_content_sha256') != p.seal(terminal)['artifact_content_sha256']
-                    or any(terminal.get(k) != v for k, v in p.AUTH.items())):
-                raise ValueError('machine_terminal_generation_changed')
+            report = _load_json(paths["machine_policy"])
+            terminal = _load_json(paths["machine_policy_terminal"])
+            if (
+                report != machine
+                or terminal.get("report_sha256") != machine["artifact_content_sha256"]
+                or terminal.get("status") != "completed"
+                or terminal.get("source_date") != day
+                or terminal.get("target_date") != day
+                or terminal.get("schema") != machine["schema"]
+                or terminal.get("artifact_content_sha256")
+                != p.seal(terminal)["artifact_content_sha256"]
+                or any(terminal.get(k) != v for k, v in p.AUTH.items())
+            ):
+                raise ValueError("machine_terminal_generation_changed")
         for value in reports:
-            if (value.get('schema') != 'continuous_reversal_operating_comparison_v1'
-                    or value.get('source_date') != day or value.get('target_date') != day
-                    or value.get('publication_date') != day
-                    or value.get('status') != 'completed'
-                    or value.get('adoption_basis') != 'operator_designated'
-                    or value.get('registration_state') != 'registered'
-                    or value.get('comparison_complete') is not False
-                    or value.get('artifact_content_sha256') != p.seal(value)['artifact_content_sha256']
-                    or any(value.get(k) != v for k, v in p.AUTH.items())
-                    or {c['key'] for c in value['cells']} != set(cells())
-                    or len(value['cells']) != len(cells())
-                    or any(set(c.get('routes', {})) != set(ROUTES[c['key'].split('|')[1]])
-                           for c in value['cells'])
-                    or not value.get('source_receipts')):
-                raise ValueError('initial_registration_report_invalid')
-            for receipt in value['source_receipts']:
-                source = Path(receipt['path'])
-                if not source.is_absolute() or p.file_hash(source) != receipt['sha256']:
-                    raise ValueError('initial_registration_source_changed')
-        if stage == 'main_auxiliary_policy':
-            from src.engine.scalping.continuous_reversal_policy import scoped_verification
-            return scoped_verification(Path(report_dir).parent, day)['issues']
+            if (
+                value.get("schema") != "continuous_reversal_operating_comparison_v1"
+                or value.get("source_date") != day
+                or value.get("target_date") != day
+                or value.get("publication_date") != day
+                or value.get("status") != "completed"
+                or value.get("adoption_basis") != "operator_designated"
+                or value.get("registration_state") != "registered"
+                or value.get("comparison_complete") is not False
+                or value.get("artifact_content_sha256")
+                != p.seal(value)["artifact_content_sha256"]
+                or any(value.get(k) != v for k, v in p.AUTH.items())
+                or {c["key"] for c in value["cells"]} != set(cells())
+                or len(value["cells"]) != len(cells())
+                or any(
+                    set(c.get("routes", {})) != set(ROUTES[c["key"].split("|")[1]])
+                    for c in value["cells"]
+                )
+                or not value.get("source_receipts")
+            ):
+                raise ValueError("initial_registration_report_invalid")
+            for receipt in value["source_receipts"]:
+                source = Path(receipt["path"])
+                if not source.is_absolute() or p.file_hash(source) != receipt["sha256"]:
+                    raise ValueError("initial_registration_source_changed")
+        if stage == "main_auxiliary_policy":
+            from src.engine.scalping.continuous_reversal_policy import (
+                scoped_verification,
+            )
+
+            return scoped_verification(Path(report_dir).parent, day)["issues"]
         return []
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
-        return [f'{stage}:joint_initial_registration_contract_invalid']
+        return [f"{stage}:joint_initial_registration_contract_invalid"]
 
 
 def _stage_output_issues(report_dir, day, stage):
     from src.engine.automation.postclose_recommendation_intake import _report_date
+
     errors = []
-    if stage in {'main_machine_policy', 'main_auxiliary_policy'}:
+    if stage in {"main_machine_policy", "main_auxiliary_policy"}:
         initial = _joint_initial_machine(report_dir, day)
         if initial:
             return _joint_initial_output_issues(report_dir, day, stage, initial)
-    if stage == 'main_stop_confirmation':
+    if stage == "main_stop_confirmation":
         from src.engine.automation.main_stop_postclose import read_committed
-        try: read_committed(Path(report_dir).parent, day)
-        except (ValueError, OSError, KeyError, TypeError): return ['main_stop_confirmation:committed_generation_invalid']
+
+        try:
+            read_committed(Path(report_dir).parent, day)
+        except (ValueError, OSError, KeyError, TypeError):
+            return ["main_stop_confirmation:committed_generation_invalid"]
         return []
-    reversal_source=Path(report_dir)/'continuous_reversal'/day/'source.json'
-    if reversal_source.is_file() and stage in {'main_machine_policy','main_auxiliary_policy'}:
-        from src.engine.scalping.continuous_reversal_postclose import SCHEMA, digest, expected_cells
-        name='machine' if stage=='main_machine_policy' else 'auxiliary'
-        path=Path(report_dir)/'continuous_reversal'/day/(name+'.json')
-        value=_load_json(path)
-        from src.engine.scalping.continuous_reversal_registered_postclose import SCHEMA as registered_schema
-        from src.engine.scalping.reversal_registered_catalog import cells as registered_cells
-        from src.engine.scalping.continuous_reversal_path_postclose import SCHEMA as path_schema
-        from src.engine.scalping.continuous_reversal_operating_postclose import SCHEMA as operating_schema
-        schema=value.get('schema')
-        expected=registered_cells() if schema in {registered_schema,path_schema,operating_schema} else expected_cells()
-        if (schema not in {SCHEMA,registered_schema,path_schema,operating_schema} or value.get('source_date')!=day or value.get('status') not in {'completed','completed_with_scope_carry'}
-            or value.get('artifact_content_sha256')!=digest({k:v for k,v in value.items() if k!='artifact_content_sha256'})
-            or {c.get('key') for c in value.get('cells',[])}!=set(expected)):
-            return [f'{stage}:continuous_reversal_output_invalid']
-        if schema in {registered_schema,path_schema,operating_schema}:
+    reversal_source = Path(report_dir) / "continuous_reversal" / day / "source.json"
+    if reversal_source.is_file() and stage in {
+        "main_machine_policy",
+        "main_auxiliary_policy",
+    }:
+        from src.engine.scalping.continuous_reversal_postclose import (
+            SCHEMA,
+            digest,
+            expected_cells,
+        )
+
+        name = "machine" if stage == "main_machine_policy" else "auxiliary"
+        path = Path(report_dir) / "continuous_reversal" / day / (name + ".json")
+        value = _load_json(path)
+        from src.engine.scalping.continuous_reversal_registered_postclose import (
+            SCHEMA as registered_schema,
+        )
+        from src.engine.scalping.reversal_registered_catalog import (
+            cells as registered_cells,
+        )
+        from src.engine.scalping.continuous_reversal_path_postclose import (
+            SCHEMA as path_schema,
+        )
+        from src.engine.scalping.continuous_reversal_operating_postclose import (
+            SCHEMA as operating_schema,
+        )
+
+        schema = value.get("schema")
+        expected = (
+            registered_cells()
+            if schema in {registered_schema, path_schema, operating_schema}
+            else expected_cells()
+        )
+        if (
+            schema not in {SCHEMA, registered_schema, path_schema, operating_schema}
+            or value.get("source_date") != day
+            or value.get("status") not in {"completed", "completed_with_scope_carry"}
+            or value.get("artifact_content_sha256")
+            != digest(
+                {k: v for k, v in value.items() if k != "artifact_content_sha256"}
+            )
+            or {c.get("key") for c in value.get("cells", [])} != set(expected)
+        ):
+            return [f"{stage}:continuous_reversal_output_invalid"]
+        if schema in {registered_schema, path_schema, operating_schema}:
             from src.engine.scalping.reversal_registered_catalog import ROUTES
-            if len(value['cells'])!=48 or any(set(c.get('routes',{}))!=set(ROUTES[c['key'].split('|')[1]]) for c in value['cells']):
-                return [f'{stage}:continuous_reversal_route_output_invalid']
-        for label,output in stage_artifacts(report_dir,day,stage).items():
-            if label=='reversal_actual_responses':continue
-            current=_load_json(output)
-            expected_schema=SCHEMA if label=='reversal_source_manifest' else schema
-            if current.get('schema')!=expected_schema or current.get('source_date')!=day or current.get('artifact_content_sha256')!=digest(
-                {k:v for k,v in current.items() if k!='artifact_content_sha256'}):
-                errors.append(f'{stage}:continuous_reversal_compatibility_output_invalid')
-        if stage == 'main_machine_policy' and schema == operating_schema:
-            terminal = _load_json(stage_artifacts(report_dir, day, stage)['machine_policy_terminal'])
-            staging = terminal.get('staged') if isinstance(terminal.get('staged'), dict) else {}
-            claims_selected = (terminal.get('disposition') == 'continuous_reversal_selected'
-                or terminal.get('selection_basis') == 'cumulative_raw_win_fraction'
-                or staging.get('status') == 'machine_component_prepared')
-            if (claims_selected and terminal.get('status') != 'source_gap'
-                and not _operating_machine_terminal_selected(terminal, day, value)):
-                errors.append('main_machine_policy:operating_terminal_disposition_invalid')
-        if stage=='main_auxiliary_policy':
-            from src.engine.scalping.continuous_reversal_policy import scoped_verification
-            errors.extend(scoped_verification(Path(report_dir).parent,day)['issues'])
+
+            if len(value["cells"]) != 48 or any(
+                set(c.get("routes", {})) != set(ROUTES[c["key"].split("|")[1]])
+                for c in value["cells"]
+            ):
+                return [f"{stage}:continuous_reversal_route_output_invalid"]
+        for label, output in stage_artifacts(report_dir, day, stage).items():
+            if label == "reversal_actual_responses":
+                continue
+            current = _load_json(output)
+            expected_schema = SCHEMA if label == "reversal_source_manifest" else schema
+            if (
+                current.get("schema") != expected_schema
+                or current.get("source_date") != day
+                or current.get("artifact_content_sha256")
+                != digest(
+                    {k: v for k, v in current.items() if k != "artifact_content_sha256"}
+                )
+            ):
+                errors.append(
+                    f"{stage}:continuous_reversal_compatibility_output_invalid"
+                )
+        if stage == "main_machine_policy" and schema == operating_schema:
+            terminal = _load_json(
+                stage_artifacts(report_dir, day, stage)["machine_policy_terminal"]
+            )
+            staging = (
+                terminal.get("staged")
+                if isinstance(terminal.get("staged"), dict)
+                else {}
+            )
+            claims_selected = (
+                terminal.get("disposition") == "continuous_reversal_selected"
+                or terminal.get("selection_basis") == "cumulative_raw_win_fraction"
+                or staging.get("status") == "machine_component_prepared"
+            )
+            if (
+                claims_selected
+                and terminal.get("status") != "source_gap"
+                and not _operating_machine_terminal_selected(terminal, day, value)
+            ):
+                errors.append(
+                    "main_machine_policy:operating_terminal_disposition_invalid"
+                )
+        if stage == "main_auxiliary_policy":
+            from src.engine.scalping.continuous_reversal_policy import (
+                scoped_verification,
+            )
+
+            errors.extend(scoped_verification(Path(report_dir).parent, day)["issues"])
         return errors
     for name, path in stage_artifacts(report_dir, day, stage).items():
-        if (name == 'ai_decision_outcome_labels'
-            and path.with_suffix(path.suffix + '.gz').exists()):
-            from src.engine.scalping.micro_reversion.storage_maintenance import _read_owned_bytes
+        if (
+            name == "ai_decision_outcome_labels"
+            and path.with_suffix(path.suffix + ".gz").exists()
+        ):
+            from src.engine.scalping.micro_reversion.storage_maintenance import (
+                _read_owned_bytes,
+            )
+
             value = json.loads(_read_owned_bytes(path))
             if not isinstance(value, dict):
                 value = {}
         else:
             value = _load_json(path)
-        if not value or (_report_date(value) or value.get('source_date') or value.get('end_date')) != day:
-            errors.append(f'{stage}:invalid_output:{name}')
-        elif str(value.get('status', '')).lower() in {'failed', 'error', 'running', 'waiting', 'searching_train', 'pending'}:
-            errors.append(f'{stage}:incomplete_output:{name}')
-        if name.startswith('main_fixed_watch_policy_research'):
-            from src.engine.monitoring.main_fixed_watch_policy_research import validate_report
+        if (
+            not value
+            or (
+                _report_date(value) or value.get("source_date") or value.get("end_date")
+            )
+            != day
+        ):
+            errors.append(f"{stage}:invalid_output:{name}")
+        elif str(value.get("status", "")).lower() in {
+            "failed",
+            "error",
+            "running",
+            "waiting",
+            "searching_train",
+            "pending",
+        }:
+            errors.append(f"{stage}:incomplete_output:{name}")
+        if name.startswith("main_fixed_watch_policy_research"):
+            from src.engine.monitoring.main_fixed_watch_policy_research import (
+                validate_report,
+            )
+
             try:
                 validate_report(value, source_date=day)
-                expected_symbol = '034020' if name == 'main_fixed_watch_policy_research' else name.rsplit('_', 1)[-1]
-                if value['symbol'] != expected_symbol:
-                    raise ValueError('fixed_watch_research_symbol_mismatch')
+                expected_symbol = (
+                    "034020"
+                    if name == "main_fixed_watch_policy_research"
+                    else name.rsplit("_", 1)[-1]
+                )
+                if value["symbol"] != expected_symbol:
+                    raise ValueError("fixed_watch_research_symbol_mismatch")
             except (OSError, ValueError, KeyError, TypeError):
-                errors.append(f'{stage}:fixed_watch_research_contract_invalid')
-        if name == 'machine_policy_terminal' and value.get('status') not in {'completed', 'source_gap'}:
-            errors.append(f'{stage}:search_incomplete')
-        if name in {'machine_policy', 'machine_policy_terminal'}:
-            from src.engine.scalping.ai_action_outcome_calibration import _artifact_content_sha256_valid
+                errors.append(f"{stage}:fixed_watch_research_contract_invalid")
+        if name == "machine_policy_terminal" and value.get("status") not in {
+            "completed",
+            "source_gap",
+        }:
+            errors.append(f"{stage}:search_incomplete")
+        if name in {"machine_policy", "machine_policy_terminal"}:
+            from src.engine.scalping.ai_action_outcome_calibration import (
+                _artifact_content_sha256_valid,
+            )
+
             if not _artifact_content_sha256_valid(value):
-                errors.append(f'{stage}:artifact_hash_invalid')
-        if name == 'ai_decision_outcome_labels':
+                errors.append(f"{stage}:artifact_hash_invalid")
+        if name == "ai_decision_outcome_labels":
             from datetime import datetime
             from zoneinfo import ZoneInfo
-            generated = datetime.fromisoformat(str(value.get('generated_at')))
-            if (value.get('schema') != 'ai_decision_outcome_labels_v1' or not isinstance(value.get('labels'), list)
-                or value.get('status') not in {'mature_label_rows_available','partial_horizons_keep_maturing'}
-                or generated.tzinfo is None or generated.astimezone(ZoneInfo('Asia/Seoul')) < datetime.fromisoformat(day + 'T20:00:00+09:00')):
-                errors.append(f'{stage}:label_contract_invalid')
-    if stage == 'main_machine_policy':
+
+            generated = datetime.fromisoformat(str(value.get("generated_at")))
+            if (
+                value.get("schema") != "ai_decision_outcome_labels_v1"
+                or not isinstance(value.get("labels"), list)
+                or value.get("status")
+                not in {"mature_label_rows_available", "partial_horizons_keep_maturing"}
+                or generated.tzinfo is None
+                or generated.astimezone(ZoneInfo("Asia/Seoul"))
+                < datetime.fromisoformat(day + "T20:00:00+09:00")
+            ):
+                errors.append(f"{stage}:label_contract_invalid")
+    if stage == "main_machine_policy":
         paths = stage_artifacts(report_dir, day, stage)
-        report, terminal = _load_json(paths['machine_policy']), _load_json(paths['machine_policy_terminal'])
-        from src.engine.scalping.ai_action_outcome_calibration import (
-            MACHINE_COMPLETED_PRICE_CACHE_SCHEMA, _artifact_content_sha256_valid,
+        report, terminal = _load_json(paths["machine_policy"]), _load_json(
+            paths["machine_policy_terminal"]
         )
-        source_counts = report.get('observation_source_counts') or {}
+        from src.engine.scalping.ai_action_outcome_calibration import (
+            MACHINE_COMPLETED_PRICE_CACHE_SCHEMA,
+            _artifact_content_sha256_valid,
+        )
+
+        source_counts = report.get("observation_source_counts") or {}
         if not isinstance(source_counts, dict):
-            errors.append(f'{stage}:completed_price_source_receipts_invalid')
+            errors.append(f"{stage}:completed_price_source_receipts_invalid")
             source_counts = {}
-        receipts = source_counts.get('completed_price_cache_receipts') or []
+        receipts = source_counts.get("completed_price_cache_receipts") or []
         if not isinstance(receipts, list):
-            errors.append(f'{stage}:completed_price_source_receipts_invalid')
+            errors.append(f"{stage}:completed_price_source_receipts_invalid")
             receipts = []
         for receipt in receipts:
             if not isinstance(receipt, dict):
-                errors.append(f'{stage}:completed_price_source_receipts_invalid')
+                errors.append(f"{stage}:completed_price_source_receipts_invalid")
                 continue
-            if not receipt.get('artifact_content_sha256'):
-                if receipt.get('status') not in {'cache_missing', 'cache_missing_or_invalid'}:
-                    errors.append(f'{stage}:completed_price_source_receipts_invalid')
+            if not receipt.get("artifact_content_sha256"):
+                if receipt.get("status") not in {
+                    "cache_missing",
+                    "cache_missing_or_invalid",
+                }:
+                    errors.append(f"{stage}:completed_price_source_receipts_invalid")
                 continue
-            source_day = receipt.get('source_date')
-            if not isinstance(source_day, str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}', source_day) or source_day > day:
-                errors.append(f'{stage}:completed_price_source_date_invalid')
+            source_day = receipt.get("source_date")
+            if (
+                not isinstance(source_day, str)
+                or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", source_day)
+                or source_day > day
+            ):
+                errors.append(f"{stage}:completed_price_source_date_invalid")
                 continue
-            expected_path = (Path(report_dir).parent / 'report' / 'machine_completed_price_source'
-                             / f'machine_completed_price_source_{source_day}.json')
-            if (not isinstance(receipt.get('path'), str)
-                or Path(receipt['path']).resolve() != expected_path.resolve()):
-                errors.append(f'{stage}:completed_price_source_path_invalid')
+            expected_path = (
+                Path(report_dir).parent
+                / "report"
+                / "machine_completed_price_source"
+                / f"machine_completed_price_source_{source_day}.json"
+            )
+            if (
+                not isinstance(receipt.get("path"), str)
+                or Path(receipt["path"]).resolve() != expected_path.resolve()
+            ):
+                errors.append(f"{stage}:completed_price_source_path_invalid")
                 continue
             cache = _load_json(expected_path)
-            if (cache.get('schema') != MACHINE_COMPLETED_PRICE_CACHE_SCHEMA
-                or cache.get('source_date') != source_day
+            if (
+                cache.get("schema") != MACHINE_COMPLETED_PRICE_CACHE_SCHEMA
+                or cache.get("source_date") != source_day
                 or not _artifact_content_sha256_valid(cache)
-                or cache.get('artifact_content_sha256') != receipt['artifact_content_sha256']):
-                errors.append(f'{stage}:completed_price_source_generation_changed')
-        if (terminal.get('report_sha256') != report.get('artifact_content_sha256')
-            or terminal.get('policy_sha256') != report.get('policy_sha256')):
-            errors.append(f'{stage}:report_terminal_binding_invalid')
-        if terminal.get('status') == 'source_gap' and report.get('selection_basis') != 'win_rate_only':
-            errors.append(f'{stage}:source_gap_contract_invalid')
-        if report.get('selection_basis') == 'win_rate_only':
-            from src.engine.scalping import mechanistic_entry_runtime_policy as runtime_policy
-            staged = terminal.get('staged') or {}
-            counts = report.get('excluded_attempt_counts') or {}
+                or cache.get("artifact_content_sha256")
+                != receipt["artifact_content_sha256"]
+            ):
+                errors.append(f"{stage}:completed_price_source_generation_changed")
+        if terminal.get("report_sha256") != report.get(
+            "artifact_content_sha256"
+        ) or terminal.get("policy_sha256") != report.get("policy_sha256"):
+            errors.append(f"{stage}:report_terminal_binding_invalid")
+        if (
+            terminal.get("status") == "source_gap"
+            and report.get("selection_basis") != "win_rate_only"
+        ):
+            errors.append(f"{stage}:source_gap_contract_invalid")
+        if report.get("selection_basis") == "win_rate_only":
+            from src.engine.scalping import (
+                mechanistic_entry_runtime_policy as runtime_policy,
+            )
+
+            staged = terminal.get("staged") or {}
+            counts = report.get("excluded_attempt_counts") or {}
             market_counts_valid = runtime_policy.winrate_market_census_valid(report)
-            if (report.get('schema') != 'main_entry_winrate_policy_report_v1'
-                or (report.get('observation_status') == 'source_gap' and
-                    (terminal.get('status') != 'source_gap' or report.get('accepted_attempt_count') != 0
-                     or report.get('candidate_policy') is not None))
-                or (report.get('observation_status') != 'source_gap' and terminal.get('status') != 'completed')
-                or report.get('disposition') not in {'initial_adopted', 'successor_selected', 'incumbent_carried'}
-                or terminal.get('disposition') != report.get('disposition')
-                or staged.get('status') not in {'staged', 'already_staged', 'pending_initial_preserved', 'existing_incumbent_preserved', 'operator_designation_preserved', 'designated_policy_staged'}
-                or type(report.get('input_attempt_count')) is not int
-                or type(report.get('accepted_attempt_count')) is not int
-                or type(report.get('source_contract_excluded_count')) is not int
+            if (
+                report.get("schema") != "main_entry_winrate_policy_report_v1"
+                or (
+                    report.get("observation_status") == "source_gap"
+                    and (
+                        terminal.get("status") != "source_gap"
+                        or report.get("accepted_attempt_count") != 0
+                        or report.get("candidate_policy") is not None
+                    )
+                )
+                or (
+                    report.get("observation_status") != "source_gap"
+                    and terminal.get("status") != "completed"
+                )
+                or report.get("disposition")
+                not in {"initial_adopted", "successor_selected", "incumbent_carried"}
+                or terminal.get("disposition") != report.get("disposition")
+                or staged.get("status")
+                not in {
+                    "staged",
+                    "already_staged",
+                    "pending_initial_preserved",
+                    "existing_incumbent_preserved",
+                    "operator_designation_preserved",
+                    "designated_policy_staged",
+                }
+                or type(report.get("input_attempt_count")) is not int
+                or type(report.get("accepted_attempt_count")) is not int
+                or type(report.get("source_contract_excluded_count")) is not int
                 or any(type(value) is not int or value < 0 for value in counts.values())
-                or report['accepted_attempt_count'] + report['source_contract_excluded_count']
-                    + sum(counts.values()) != report.get('input_attempt_count')
-                or sum((report.get('situation_attempt_counts') or {}).values()) != report['accepted_attempt_count']
-                or not market_counts_valid):
-                errors.append(f'{stage}:winrate_semantics_invalid')
+                or report["accepted_attempt_count"]
+                + report["source_contract_excluded_count"]
+                + sum(counts.values())
+                != report.get("input_attempt_count")
+                or sum((report.get("situation_attempt_counts") or {}).values())
+                != report["accepted_attempt_count"]
+                or not market_counts_valid
+            ):
+                errors.append(f"{stage}:winrate_semantics_invalid")
             else:
                 try:
-                    if report.get('acceptance_contract') is not None:
-                        from src.engine.scalping.entry_admission_acceptance import validate_source
+                    if report.get("acceptance_contract") is not None:
+                        from src.engine.scalping.entry_admission_acceptance import (
+                            validate_source,
+                        )
+
                         validate_source(report)
-                    bundle = runtime_policy.load(data_root=Path(report_dir).parent,
-                        target_date=staged['target_date'])
-                    proof = (bundle or {}).get('winrate_selection') or {}
-                    pending = staged['status'] == 'pending_initial_preserved'
-                    reused_incumbent = staged['status'] == 'existing_incumbent_preserved'
-                    designated = proof.get('schema') == 'main_machine_designated_selection_v1'
+                    bundle = runtime_policy.load(
+                        data_root=Path(report_dir).parent,
+                        target_date=staged["target_date"],
+                    )
+                    proof = (bundle or {}).get("winrate_selection") or {}
+                    pending = staged["status"] == "pending_initial_preserved"
+                    reused_incumbent = (
+                        staged["status"] == "existing_incumbent_preserved"
+                    )
+                    designated = (
+                        proof.get("schema") == "main_machine_designated_selection_v1"
+                    )
                     if designated:
-                        from src.engine.scalping.entry_designated_policy import binding_valid
-                        binding_invalid = (not binding_valid(report, bundle, Path(report_dir).parent)
-                            or staged.get('bundle_sha256') != bundle['bundle_sha256'])
+                        from src.engine.scalping.entry_designated_policy import (
+                            binding_valid,
+                        )
+
+                        binding_invalid = (
+                            not binding_valid(report, bundle, Path(report_dir).parent)
+                            or staged.get("bundle_sha256") != bundle["bundle_sha256"]
+                        )
                     elif reused_incumbent:
                         previous = runtime_policy.load_effective(
                             data_root=Path(report_dir).parent,
-                            target_date=report.get('publication_date'),
+                            target_date=report.get("publication_date"),
                         )
                         binding_invalid = not _existing_incumbent_winrate_binding_valid(
-                            report, staged, bundle, previous, runtime_policy,
+                            report,
+                            staged,
+                            bundle,
+                            previous,
+                            runtime_policy,
                             data_root=Path(report_dir).parent,
                         )
                     else:
-                        binding_invalid = (
-                            not _staged_winrate_generation_preserved(
-                                staged, bundle, runtime_policy, Path(report_dir).parent)
-                            or proof.get('machine_policy_sha256') != runtime_policy.digest(bundle['machine_policy'])
+                        binding_invalid = not _staged_winrate_generation_preserved(
+                            staged, bundle, runtime_policy, Path(report_dir).parent
+                        ) or proof.get(
+                            "machine_policy_sha256"
+                        ) != runtime_policy.digest(
+                            bundle["machine_policy"]
                         )
-                    if (binding_invalid
-                        or (pending and (report.get('pending_initial_bundle_sha256') != bundle['bundle_sha256']
-                            or report.get('pending_initial_target_date') != staged['target_date']
-                            or report.get('hurdle_errors') != ['initial_policy_pending_activation']
-                            or report['disposition'] != 'incumbent_carried'
-                            or proof.get('disposition') != 'initial_adopted'
-                            or proof.get('policy_version') != 'winrate_initial_v1'
-                            or proof.get('parent_bundle_sha256') != report.get('parent_bundle_sha256')
-                            or bundle.get('previous_bundle_sha256') != report.get('parent_bundle_sha256')
-                            or (bundle['machine_policy'].get('entry_situation_veto') or {}).get('threshold_bp') != 68.75))
-                        or (not pending and not reused_incumbent and not designated
-                            and (proof.get('report_sha256') != report.get('artifact_content_sha256')
-                            or proof.get('disposition') != report['disposition']))):
-                        errors.append(f'{stage}:winrate_staged_binding_invalid')
+                    if (
+                        binding_invalid
+                        or (
+                            pending
+                            and (
+                                report.get("pending_initial_bundle_sha256")
+                                != bundle["bundle_sha256"]
+                                or report.get("pending_initial_target_date")
+                                != staged["target_date"]
+                                or report.get("hurdle_errors")
+                                != ["initial_policy_pending_activation"]
+                                or report["disposition"] != "incumbent_carried"
+                                or proof.get("disposition") != "initial_adopted"
+                                or proof.get("policy_version") != "winrate_initial_v1"
+                                or proof.get("parent_bundle_sha256")
+                                != report.get("parent_bundle_sha256")
+                                or bundle.get("previous_bundle_sha256")
+                                != report.get("parent_bundle_sha256")
+                                or (
+                                    bundle["machine_policy"].get("entry_situation_veto")
+                                    or {}
+                                ).get("threshold_bp")
+                                != 68.75
+                            )
+                        )
+                        or (
+                            not pending
+                            and not reused_incumbent
+                            and not designated
+                            and (
+                                proof.get("report_sha256")
+                                != report.get("artifact_content_sha256")
+                                or proof.get("disposition") != report["disposition"]
+                            )
+                        )
+                    ):
+                        errors.append(f"{stage}:winrate_staged_binding_invalid")
                 except (OSError, ValueError, TypeError, KeyError, AttributeError):
-                    errors.append(f'{stage}:winrate_staged_binding_invalid')
-    if stage == 'pre_submit_delay':
-        from src.engine.scalping.pre_submit_delay_tuning import _digest, price_pattern_projection
+                    errors.append(f"{stage}:winrate_staged_binding_invalid")
+    if stage == "pre_submit_delay":
+        from src.engine.scalping.pre_submit_delay_tuning import (
+            _digest,
+            price_pattern_projection,
+        )
+
         paths = stage_artifacts(report_dir, day, stage)
-        report = _load_json(paths['pre_submit_delay_tuning'])
-        policy = _load_json(paths['pre_submit_delay_policy'])
-        if policy.get('schema') == 'pre_submit_delay_policy_v2':
-            from src.engine.scalping.pre_submit_delay_initial_policy import validate, code_contract, verify_source, _read
+        report = _load_json(paths["pre_submit_delay_tuning"])
+        policy = _load_json(paths["pre_submit_delay_policy"])
+        if policy.get("schema") == "pre_submit_delay_policy_v2":
+            from src.engine.scalping.pre_submit_delay_initial_policy import (
+                validate,
+                code_contract,
+                verify_source,
+                _read,
+            )
+
             try:
-                policy, report = _read(paths['pre_submit_delay_policy']), _read(paths['pre_submit_delay_tuning'])
+                policy, report = _read(paths["pre_submit_delay_policy"]), _read(
+                    paths["pre_submit_delay_tuning"]
+                )
                 validate(policy, report)
                 verify_source(Path(report_dir).parent, report)
-                if report.get('source_date') != day:
-                    raise ValueError('source_date_or_release_code_changed')
-                if policy.get('code_contract_sha256') != code_contract():
-                    from src.engine.scalping.pre_submit_delay_tuning import _verify_runtime_code_contract
+                if report.get("source_date") != day:
+                    raise ValueError("source_date_or_release_code_changed")
+                if policy.get("code_contract_sha256") != code_contract():
+                    from src.engine.scalping.pre_submit_delay_tuning import (
+                        _verify_runtime_code_contract,
+                    )
+
                     # Preserve only the same exact prepared policy through its
                     # reviewed target-date code handoff; source checks stay full.
-                    _verify_runtime_code_contract(policy, policy['effective_from'])
-                ledger_path = stage_input_paths(report_dir, day, stage)['pre_submit_delay_source_ledger']
-                if ledger_path.exists() and _load_json(ledger_path).get('compact_source_sha256') != report.get('source_sha256'):
-                    raise ValueError('source_ledger_generation_changed')
+                    _verify_runtime_code_contract(policy, policy["effective_from"])
+                ledger_path = stage_input_paths(report_dir, day, stage)[
+                    "pre_submit_delay_source_ledger"
+                ]
+                if ledger_path.exists() and _load_json(ledger_path).get(
+                    "compact_source_sha256"
+                ) != report.get("source_sha256"):
+                    raise ValueError("source_ledger_generation_changed")
             except (OSError, ValueError, TypeError, KeyError) as exc:
-                errors.append(f'{stage}:v2_contract_invalid:{exc}')
+                errors.append(f"{stage}:v2_contract_invalid:{exc}")
             return errors
-        if (report.get('schema') != 'pre_submit_delay_tuning_v1'
-            or policy.get('schema') != 'pre_submit_delay_policy_v1'
-            or report.get('source_date') != day or policy.get('source_date') != day
-            or report.get('effective_date') != policy.get('effective_from')
-            or report.get('policy_sha256') != policy.get('policy_sha256')
-            or policy.get('report_sha256') != _digest({k:v for k,v in report.items() if k != 'policy_sha256'})
-            or policy.get('policy_sha256') != _digest({k:v for k,v in policy.items() if k != 'policy_sha256'})):
-            errors.append(f'{stage}:report_policy_binding_invalid')
-        if price_pattern_projection(report)['status'] == 'source_invalid':
-            errors.append(f'{stage}:price_pattern_contract_invalid')
+        if (
+            report.get("schema") != "pre_submit_delay_tuning_v1"
+            or policy.get("schema") != "pre_submit_delay_policy_v1"
+            or report.get("source_date") != day
+            or policy.get("source_date") != day
+            or report.get("effective_date") != policy.get("effective_from")
+            or report.get("policy_sha256") != policy.get("policy_sha256")
+            or policy.get("report_sha256")
+            != _digest({k: v for k, v in report.items() if k != "policy_sha256"})
+            or policy.get("policy_sha256")
+            != _digest({k: v for k, v in policy.items() if k != "policy_sha256"})
+        ):
+            errors.append(f"{stage}:report_policy_binding_invalid")
+        if price_pattern_projection(report)["status"] == "source_invalid":
+            errors.append(f"{stage}:price_pattern_contract_invalid")
     return errors
 
 
@@ -1764,102 +2591,236 @@ def _safe_stage_output_issues(report_dir, day, stage):
     try:
         return _stage_output_issues(report_dir, day, stage)
     except (OSError, ValueError, TypeError, KeyError) as exc:
-        return [f'{stage}:output_validation_failed:{type(exc).__name__}']
+        return [f"{stage}:output_validation_failed:{type(exc).__name__}"]
 
 
 def stage_commands(stage, day, publication, *, recovery=False):
     import sys
     from src.engine.build_next_stage2_checklist import _next_krx_trading_day
-    prefix = [sys.executable, '-m']
+
+    prefix = [sys.executable, "-m"]
+
     def command(module, *args):
-        return prefix + ['src.engine.' + module, *args]
+        return prefix + ["src.engine." + module, *args]
+
     def fixed_watch_commands():
-        if day < '2026-10-06':
+        if day < "2026-10-06":
             return []
         from src.engine.scalping.main_fixed_watch import SPECS
-        return [command('monitoring.main_fixed_watch_policy_research', '--source-date', day,
-                        '--publication-date', publication, '--symbol', spec.symbol)
-                for spec in SPECS if spec.initial_policy_scope == 'non_samsung']
-    date_args = ['--target-date', day, '--write']
-    reversal_enabled=day >= '2026-10-06'
-    if reversal_enabled and stage in {'main_machine_policy','main_auxiliary_policy'}:
-        return [command('scalping.continuous_reversal_postclose','--date',day,'--publication-date',publication,
-                        '--mode','machine' if stage=='main_machine_policy' else 'auxiliary')]
-    if stage == 'main_machine_policy' and recovery:
+
+        return [
+            command(
+                "monitoring.main_fixed_watch_policy_research",
+                "--source-date",
+                day,
+                "--publication-date",
+                publication,
+                "--symbol",
+                spec.symbol,
+            )
+            for spec in SPECS
+            if spec.initial_policy_scope == "non_samsung"
+        ]
+
+    date_args = ["--target-date", day, "--write"]
+    reversal_enabled = day >= "2026-10-06"
+    if reversal_enabled and stage in {"main_machine_policy", "main_auxiliary_policy"}:
+        return [
+            command(
+                "scalping.continuous_reversal_postclose",
+                "--date",
+                day,
+                "--publication-date",
+                publication,
+                "--mode",
+                "machine" if stage == "main_machine_policy" else "auxiliary",
+            )
+        ]
+    if stage == "main_machine_policy" and recovery:
         return fixed_watch_commands()
-    if stage == 'main_machine_policy':
-        return [command('scalping.ai_action_outcome_calibration', *date_args,
-                        '--winrate-policy-only', '--admission-recipe', 'pullback_p60_v0',
-                        '--publication-date', publication)] + fixed_watch_commands()
-    if stage == 'main_stop_confirmation':
-        return [command('automation.main_stop_postclose', '--date', day, '--target', _next_krx_trading_day(publication), '--publication-date', publication)]
-    if stage == 'pre_submit_delay':
-        return [command('scalping.pre_submit_delay_tuning', '--date', day,
-                        '--effective-date', _next_krx_trading_day(publication), '--require-family-ledger',
-                        *(['--initial-policy-v2', '--publication-date', publication]
-                          if publication >= '2026-10-10' and day >= '2026-09-29' else []))]
-    if stage == 'legacy_machine_report':
-        return [command('scalping.ai_action_outcome_calibration', *date_args, '--machine-only', '--publication-date', publication,
-                        *(['--report-only'] if reversal_enabled else ['--activate-now']))]
-    if stage == 'main_auxiliary_policy':
-        common = ['--date', day, '--compact-only', '--write']
-        return [command('scalping.entry_setup_paired_replay_batch', *common, '--execute-compact-candidate'),
-                command('scalping.entry_setup_paired_replay_batch', *common, '--finalize-compact', '--publication-date', publication)]
-    if stage == 'outcome_labels':
-        return [command('scalping.ai_decision_quality', '--date', day, '--mode', 'postclose', '--write')]
-    return [command('automation.postclose_done_controller', '--date', day, '--summary-handoff-only', '--require-independent-producers')]
+    if stage == "main_machine_policy":
+        return [
+            command(
+                "scalping.ai_action_outcome_calibration",
+                *date_args,
+                "--winrate-policy-only",
+                "--admission-recipe",
+                "pullback_p60_v0",
+                "--publication-date",
+                publication,
+            )
+        ] + fixed_watch_commands()
+    if stage == "main_stop_confirmation":
+        return [
+            command(
+                "automation.main_stop_postclose",
+                "--date",
+                day,
+                "--target",
+                _next_krx_trading_day(publication),
+                "--publication-date",
+                publication,
+            )
+        ]
+    if stage == "pre_submit_delay":
+        return [
+            command(
+                "scalping.pre_submit_delay_tuning",
+                "--date",
+                day,
+                "--effective-date",
+                _next_krx_trading_day(publication),
+                "--require-family-ledger",
+                *(
+                    ["--initial-policy-v2", "--publication-date", publication]
+                    if publication >= "2026-10-10" and day >= "2026-09-29"
+                    else []
+                ),
+            )
+        ]
+    if stage == "legacy_machine_report":
+        return [
+            command(
+                "scalping.ai_action_outcome_calibration",
+                *date_args,
+                "--machine-only",
+                "--publication-date",
+                publication,
+                *(["--report-only"] if reversal_enabled else ["--activate-now"]),
+            )
+        ]
+    if stage == "main_auxiliary_policy":
+        common = ["--date", day, "--compact-only", "--write"]
+        return [
+            command(
+                "scalping.entry_setup_paired_replay_batch",
+                *common,
+                "--execute-compact-candidate",
+            ),
+            command(
+                "scalping.entry_setup_paired_replay_batch",
+                *common,
+                "--finalize-compact",
+                "--publication-date",
+                publication,
+            ),
+        ]
+    if stage == "outcome_labels":
+        return [
+            command(
+                "scalping.ai_decision_quality",
+                "--date",
+                day,
+                "--mode",
+                "postclose",
+                "--write",
+            )
+        ]
+    return [
+        command(
+            "automation.postclose_done_controller",
+            "--date",
+            day,
+            "--summary-handoff-only",
+            "--require-independent-producers",
+        )
+    ]
 
 
-
-def _historical_stage_code_matches(report_dir, day, stage, value, *, legacy_main_machine=False):
+def _historical_stage_code_matches(
+    report_dir, day, stage, value, *, legacy_main_machine=False
+):
     """Resolve sealed producer code before bounded legacy discovery.
 
     New receipts carry their exact root. Old receipts can use the strict
     verifier's commit as a locator only; the original full code digest must
     still match. Release inventory growth never skips those direct checks.
     """
-    selection = _load_json(Path(report_dir).parent/'runtime/runtime_release_selection.json')
-    selected = Path(selection.get('release_root', ''))
-    if (selection.get('schema') != 'runtime_release_selection_v1'
-            or not re.fullmatch('[0-9a-f]{40}', str(selection.get('git_commit', '')))
-            or not selected.is_absolute() or selected.parent.name != 'KORStockScan-runtime-releases'):
+    selection = _load_json(
+        Path(report_dir).parent / "runtime/runtime_release_selection.json"
+    )
+    selected = Path(selection.get("release_root", ""))
+    if (
+        selection.get("schema") != "runtime_release_selection_v1"
+        or not re.fullmatch("[0-9a-f]{40}", str(selection.get("git_commit", "")))
+        or not selected.is_absolute()
+        or selected.parent.name != "KORStockScan-runtime-releases"
+    ):
         return False
     managed = selected.parent.resolve()
+
     def admitted(root):
-        return (root.is_absolute() and root.parent == managed and not root.is_symlink()
-            and root.resolve() == root and (root/'.git').exists() and not (root/'.git').is_symlink())
-    commands = stage_commands(stage, day, value.get('publication_date') or day,
-                              recovery=value.get('recovery_mode', False))
+        return (
+            root.is_absolute()
+            and root.parent == managed
+            and not root.is_symlink()
+            and root.resolve() == root
+            and (root / ".git").exists()
+            and not (root / ".git").is_symlink()
+        )
+
+    commands = stage_commands(
+        stage,
+        day,
+        value.get("publication_date") or day,
+        recovery=value.get("recovery_mode", False),
+    )
+
     def matches(root):
-        dispatcher = root/'src/engine/automation/postclose_summary_handoff.py'
+        dispatcher = root / "src/engine/automation/postclose_summary_handoff.py"
         if not admitted(root) or not dispatcher.is_file():
             return False
         options = [False, True] if legacy_main_machine else [False]
-        return any(_stage_code(stage, commands, root, dispatcher_path=dispatcher,
-                    **({'legacy_main_machine': True} if legacy else {})) == value.get('stage_code_sha256')
-                   for legacy in options)
-    origin = value.get('stage_code_root')
-    if 'stage_code_root' in value:
+        return any(
+            _stage_code(
+                stage,
+                commands,
+                root,
+                dispatcher_path=dispatcher,
+                **({"legacy_main_machine": True} if legacy else {}),
+            )
+            == value.get("stage_code_sha256")
+            for legacy in options
+        )
+
+    origin = value.get("stage_code_root")
+    if "stage_code_root" in value:
         return isinstance(origin, str) and matches(Path(origin))
     if matches(selected):
         return True
-    strict = _load_json(Path(report_dir)/'threshold_cycle_postclose_verification'/
-                        f'threshold_cycle_postclose_verification_{day}.json')
+    strict = _load_json(
+        Path(report_dir)
+        / "threshold_cycle_postclose_verification"
+        / f"threshold_cycle_postclose_verification_{day}.json"
+    )
     from src.engine.build_next_stage2_checklist import _next_krx_trading_day
+
     target = _next_krx_trading_day(day)
-    preopen = _load_json(Path(report_dir)/'threshold_cycle_preopen_status'/
-                        f'threshold_cycle_preopen_{target}.status.json')
-    commits = {commit for commit in (
-        strict.get('code_commit') if strict.get('date') == day else None,
-        preopen.get('selected_release_commit') if preopen.get('target_date') == target
-            and preopen.get('status') == 'succeeded' else None)
-        if re.fullmatch('[0-9a-f]{40}', str(commit))}
+    preopen = _load_json(
+        Path(report_dir)
+        / "threshold_cycle_preopen_status"
+        / f"threshold_cycle_preopen_{target}.status.json"
+    )
+    commits = {
+        commit
+        for commit in (
+            strict.get("code_commit") if strict.get("date") == day else None,
+            (
+                preopen.get("selected_release_commit")
+                if preopen.get("target_date") == target
+                and preopen.get("status") == "succeeded"
+                else None
+            ),
+        )
+        if re.fullmatch("[0-9a-f]{40}", str(commit))
+    }
     if commits:
         # Main P5 forbids process creation. Reuse its native read-only Git
         # identity reader; commits locate roots, the original code digest still
         # authenticates them. Bound metadata discovery separately from code IO.
         from itertools import islice
         from src.engine.infrastructure.startup_validation_code_context import _git_head
+
         try:
             for root in islice(managed.iterdir(), 4096):
                 if not admitted(root):
@@ -1876,324 +2837,785 @@ def _historical_stage_code_matches(report_dir, day, stage, value, *, legacy_main
     # maximum code reads; never turn inventory overflow into whole-input loss.
     try:
         from itertools import islice
-        roots = islice((root for root in managed.iterdir() if admitted(root) and root != selected), 256)
+
+        roots = islice(
+            (root for root in managed.iterdir() if admitted(root) and root != selected),
+            256,
+        )
         return any(matches(root) for root in roots)
     except OSError:
         return False
 
 
-def _stage_code(stage, commands, project, *, dispatcher_path=None,
-                legacy_main_machine=False):
-    paths = {'dispatcher': Path(dispatcher_path or __file__)}
+def _stage_code(
+    stage, commands, project, *, dispatcher_path=None, legacy_main_machine=False
+):
+    paths = {"dispatcher": Path(dispatcher_path or __file__)}
     for cmd in commands:
-        if '-m' in cmd:
-            module = cmd[cmd.index('-m') + 1]
-            paths[module] = project / (module.replace('.', '/') + '.py')
-        elif cmd[0] == '/bin/bash':
+        if "-m" in cmd:
+            module = cmd[cmd.index("-m") + 1]
+            paths[module] = project / (module.replace(".", "/") + ".py")
+        elif cmd[0] == "/bin/bash":
             paths[cmd[1]] = project / cmd[1]
-    if stage == 'main_stop_confirmation':
-        for name in ('main_stop_policy', 'main_stop_replay'):
-            paths[name] = project/f'src/engine/scalping/{name}.py'
-    if stage == 'summary_handoff':
-        paths['next_stage2_checklist'] = project / 'src/engine/build_next_stage2_checklist.py'
-        paths['direct_tower'] = project / 'src/engine/automation/tuning_performance_control_tower.py'
-        paths['runtime_approval_summary'] = project / 'src/engine/runtime_approval_summary.py'
-        paths['holding_profit_semantics'] = project / 'src/engine/scalping/holding_profit_exit_semantics.py'
-        paths['holding_profit_freshness'] = project / 'src/engine/error_detectors/artifact_freshness.py'
-        paths['holding_profit_forward_window'] = project / 'src/engine/scalping/trailing_mechanical_policy.py'
-        paths['holding_broker_cost_source'] = project / 'src/engine/lifecycle/broker_cost_source.py'
-        paths['holding_broker_cost_reconciliation'] = project / 'src/engine/lifecycle/broker_cost_reconciliation.py'
-    if stage == 'main_machine_policy':
+    if stage == "main_stop_confirmation":
+        for name in ("main_stop_policy", "main_stop_replay"):
+            paths[name] = project / f"src/engine/scalping/{name}.py"
+    if stage == "summary_handoff":
+        paths["next_stage2_checklist"] = (
+            project / "src/engine/build_next_stage2_checklist.py"
+        )
+        paths["direct_tower"] = (
+            project / "src/engine/automation/tuning_performance_control_tower.py"
+        )
+        paths["runtime_approval_summary"] = (
+            project / "src/engine/runtime_approval_summary.py"
+        )
+        paths["holding_profit_semantics"] = (
+            project / "src/engine/scalping/holding_profit_exit_semantics.py"
+        )
+        paths["holding_profit_freshness"] = (
+            project / "src/engine/error_detectors/artifact_freshness.py"
+        )
+        paths["holding_profit_forward_window"] = (
+            project / "src/engine/scalping/trailing_mechanical_policy.py"
+        )
+        paths["holding_broker_cost_source"] = (
+            project / "src/engine/lifecycle/broker_cost_source.py"
+        )
+        paths["holding_broker_cost_reconciliation"] = (
+            project / "src/engine/lifecycle/broker_cost_reconciliation.py"
+        )
+    if stage == "main_machine_policy":
         if not legacy_main_machine:
-            paths['main_fixed_watch_research'] = project / 'src/engine/monitoring/main_fixed_watch_policy_research.py'
-            paths['fixed_watch_runtime'] = project / 'src/engine/scalping/main_fixed_watch.py'
-            paths['owner_retirement'] = project / 'src/trading/config/owner_retirement.py'
-        for name in ('entry_strategy_policy', 'entry_setup_evidence', 'ai_decision_quality', 'entry_candle_context', 'mechanistic_entry_runtime_policy',
-                     'entry_admission_analysis', 'entry_admission_acceptance', 'entry_admission_recipe', 'entry_designated_policy'):
-            paths[name] = project / f'src/engine/scalping/{name}.py'
-    if stage in {'main_machine_policy','main_auxiliary_policy'}:
-        for name in ('continuous_reversal','continuous_reversal_source','continuous_reversal_policy','continuous_reversal_postclose','reversal_auxiliary_contract',
-                     'continuous_reversal_branches','continuous_reversal_branch_postclose','continuous_reversal_policy_v2','reversal_auxiliary_phases','reversal_registered_catalog','reversal_registered_runtime',
-                     'continuous_reversal_policy_v3','continuous_reversal_registered_postclose',
-                     'reversal_path_catalog','reversal_path_runtime','reversal_path_auxiliary','reversal_policy_backend',
-                     'continuous_reversal_policy_v4','continuous_reversal_path_postclose',
-                     'continuous_reversal_policy_v5','reversal_operating_backend','reversal_operating_runtime',
-                     'reversal_operating_auxiliary','reversal_operating_outbox','reversal_operating_evaluation',
-                     'continuous_reversal_operating_postclose','continuous_reversal_policy_v6',
-                     'reversal_extended_catalog','reversal_extended_state','reversal_extended_runtime',
-                     'reversal_extended_auxiliary','reversal_extended_union','reversal_extended_registration',
-                     'reversal_current_backend','reversal_policy_status','reversal_extended_intraday'):
-            paths[name]=project/f'src/engine/scalping/{name}.py'
-    if stage == 'main_auxiliary_policy':
-        paths['shared_comparison_adapter'] = project/'src/engine/scalping/continuous_reversal_shared_ledger.py'
-        paths['offline_comparison_store'] = project/'src/engine/ai/offline_comparison_store.py'
-        for name in ('reversal_auxiliary_registry', 'reversal_auxiliary_tuning',
-                     'reversal_auxiliary_intraday', 'reversal_auxiliary_wire'):
-            paths[name] = project/f'src/engine/scalping/{name}.py'
+            paths["main_fixed_watch_research"] = (
+                project / "src/engine/monitoring/main_fixed_watch_policy_research.py"
+            )
+            paths["fixed_watch_runtime"] = (
+                project / "src/engine/scalping/main_fixed_watch.py"
+            )
+            paths["owner_retirement"] = (
+                project / "src/trading/config/owner_retirement.py"
+            )
+        for name in (
+            "entry_strategy_policy",
+            "entry_setup_evidence",
+            "ai_decision_quality",
+            "entry_candle_context",
+            "mechanistic_entry_runtime_policy",
+            "entry_admission_analysis",
+            "entry_admission_acceptance",
+            "entry_admission_recipe",
+            "entry_designated_policy",
+        ):
+            paths[name] = project / f"src/engine/scalping/{name}.py"
+    if stage in {"main_machine_policy", "main_auxiliary_policy"}:
+        for name in (
+            "continuous_reversal",
+            "continuous_reversal_source",
+            "continuous_reversal_policy",
+            "continuous_reversal_postclose",
+            "reversal_auxiliary_contract",
+            "continuous_reversal_branches",
+            "continuous_reversal_branch_postclose",
+            "continuous_reversal_policy_v2",
+            "reversal_auxiliary_phases",
+            "reversal_registered_catalog",
+            "reversal_registered_runtime",
+            "continuous_reversal_policy_v3",
+            "continuous_reversal_registered_postclose",
+            "reversal_path_catalog",
+            "reversal_path_runtime",
+            "reversal_path_auxiliary",
+            "reversal_policy_backend",
+            "continuous_reversal_policy_v4",
+            "continuous_reversal_path_postclose",
+            "continuous_reversal_policy_v5",
+            "reversal_operating_backend",
+            "reversal_operating_runtime",
+            "reversal_operating_auxiliary",
+            "reversal_operating_outbox",
+            "reversal_operating_evaluation",
+            "continuous_reversal_operating_postclose",
+            "continuous_reversal_policy_v6",
+            "reversal_extended_catalog",
+            "reversal_extended_state",
+            "reversal_extended_runtime",
+            "reversal_extended_auxiliary",
+            "reversal_extended_union",
+            "reversal_extended_registration",
+            "reversal_current_backend",
+            "reversal_policy_status",
+            "reversal_extended_intraday",
+        ):
+            paths[name] = project / f"src/engine/scalping/{name}.py"
+    if stage == "main_auxiliary_policy":
+        paths["shared_comparison_adapter"] = (
+            project / "src/engine/scalping/continuous_reversal_shared_ledger.py"
+        )
+        paths["offline_comparison_store"] = (
+            project / "src/engine/ai/offline_comparison_store.py"
+        )
+        for name in (
+            "reversal_auxiliary_registry",
+            "reversal_auxiliary_tuning",
+            "reversal_auxiliary_intraday",
+            "reversal_auxiliary_wire",
+        ):
+            paths[name] = project / f"src/engine/scalping/{name}.py"
     return _stage_digest(_stage_sources(paths))
 
 
-def run_stage(stage, day, *, report_dir, project, publication=None, effective=None,
-              recovery=False, execute=True, runner=None, timeout=14400, off=False,
-              prerequisite_wait=0, stop_event=None, resource_blocked=None):
+def run_stage(
+    stage,
+    day,
+    *,
+    report_dir,
+    project,
+    publication=None,
+    effective=None,
+    recovery=False,
+    execute=True,
+    runner=None,
+    timeout=14400,
+    off=False,
+    prerequisite_wait=0,
+    stop_event=None,
+    resource_blocked=None,
+):
     import os, fcntl, time, uuid
     from datetime import datetime
     from zoneinfo import ZoneInfo
     from src.engine.build_next_stage2_checklist import _next_krx_trading_day
+
     publication = publication or day
     effective = effective or _next_krx_trading_day(publication)
-    if not '2026-06-05' <= day <= publication <= datetime.now(ZoneInfo('Asia/Seoul')).date().isoformat() or effective != _next_krx_trading_day(publication):
-        raise ValueError('stage_date_contract_invalid')
-    if not execute and stage != 'outcome_labels':
-        raise ValueError('only_committed_labels_support_validation_intake')
-    path = stage_path(report_dir, day, stage); path.parent.mkdir(parents=True, exist_ok=True)
-    with path.with_suffix('.lock').open('a') as lock:
-        try: fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError: return dict(stage_id=stage, status='running', exit_code=75, reason='existing_stage_writer')
+    if not "2026-06-05" <= day <= publication <= datetime.now(
+        ZoneInfo("Asia/Seoul")
+    ).date().isoformat() or effective != _next_krx_trading_day(publication):
+        raise ValueError("stage_date_contract_invalid")
+    if not execute and stage != "outcome_labels":
+        raise ValueError("only_committed_labels_support_validation_intake")
+    path = stage_path(report_dir, day, stage)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.with_suffix(".lock").open("a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return dict(
+                stage_id=stage,
+                status="running",
+                exit_code=75,
+                reason="existing_stage_writer",
+            )
         commands = stage_commands(stage, day, publication, recovery=recovery)
         code = _stage_code(stage, commands, project)
         old = _load_json(path)
         try:
-            if old.get('status') == 'running' and old.get('child_start_ticks') and Path(f"/proc/{old['child_pid']}/stat").read_text().split()[21] == old['child_start_ticks']:
-                return dict(stage_id=stage, status='running', exit_code=75, reason='existing_child_running')
+            if (
+                old.get("status") == "running"
+                and old.get("child_start_ticks")
+                and Path(f"/proc/{old['child_pid']}/stat").read_text().split()[21]
+                == old["child_start_ticks"]
+            ):
+                return dict(
+                    stage_id=stage,
+                    status="running",
+                    exit_code=75,
+                    reason="existing_child_running",
+                )
         except (OSError, KeyError, IndexError):
             pass
-        if (resource_blocked is not None and os.environ.get('POSTCLOSE_REGENERATION_SCOPE')!='all_except_eod'
-            and old.get('status') == 'succeeded'
+        if (
+            resource_blocked is not None
+            and os.environ.get("POSTCLOSE_REGENERATION_SCOPE") != "all_except_eod"
+            and old.get("status") == "succeeded"
             and not stage_receipt_issues(report_dir, day, stage, code_hash=code)
-            and old.get('publication_date') == publication
-            and old.get('effective_date') == effective):
-            return {**old, 'cache_reused': True}
-        if not off and not execute and not stage_receipt_issues(report_dir, day, stage, code_hash=code) and old.get('publication_date') == publication and old.get('effective_date') == effective:
-            return {**old, 'cache_reused': True}
-        now = lambda: datetime.now(ZoneInfo('Asia/Seoul')).isoformat()
-        value = dict(schema=STAGE_SCHEMA, stage_id=stage, source_date=day, target_date=day,
-            publication_date=publication, effective_date=effective, run_id=uuid.uuid4().hex,
-            stage_code_sha256=code, stage_code_root=str(project.resolve()),
-            recovery_mode=recovery, status='pending', exit_code=None, pid=os.getpid(),
-            process_start_ticks=Path('/proc/self/stat').read_text().split()[21], started_at=now(),
-            heartbeat_at=now(), prerequisite_receipts={}, sources={}, retryable=True,
-            policy_disposition='incumbent_carry', computation_executed=execute,
-            checkpoint=str(report_dir / 'ai_decision_action_outcome_calibration') if stage == 'main_machine_policy' else None)
-        value.update(regeneration_scope=os.environ.get('POSTCLOSE_REGENERATION_SCOPE','normal'),
-                     regeneration_id=os.environ.get('POSTCLOSE_REGENERATION_ID'))
-        if stage == 'summary_handoff':
+            and old.get("publication_date") == publication
+            and old.get("effective_date") == effective
+        ):
+            return {**old, "cache_reused": True}
+        if (
+            not off
+            and not execute
+            and not stage_receipt_issues(report_dir, day, stage, code_hash=code)
+            and old.get("publication_date") == publication
+            and old.get("effective_date") == effective
+        ):
+            return {**old, "cache_reused": True}
+        now = lambda: datetime.now(ZoneInfo("Asia/Seoul")).isoformat()
+        value = dict(
+            schema=STAGE_SCHEMA,
+            stage_id=stage,
+            source_date=day,
+            target_date=day,
+            publication_date=publication,
+            effective_date=effective,
+            run_id=uuid.uuid4().hex,
+            stage_code_sha256=code,
+            stage_code_root=str(project.resolve()),
+            recovery_mode=recovery,
+            status="pending",
+            exit_code=None,
+            pid=os.getpid(),
+            process_start_ticks=Path("/proc/self/stat").read_text().split()[21],
+            started_at=now(),
+            heartbeat_at=now(),
+            prerequisite_receipts={},
+            sources={},
+            retryable=True,
+            policy_disposition="incumbent_carry",
+            computation_executed=execute,
+            checkpoint=(
+                str(report_dir / "ai_decision_action_outcome_calibration")
+                if stage == "main_machine_policy"
+                else None
+            ),
+        )
+        value.update(
+            regeneration_scope=os.environ.get("POSTCLOSE_REGENERATION_SCOPE", "normal"),
+            regeneration_id=os.environ.get("POSTCLOSE_REGENERATION_ID"),
+        )
+        if stage == "summary_handoff":
             # Summary/PREOPEN reconciliation belongs to the original source
             # day even if policy publication and recovery occur later.
-            value['prepared_effective_date'] = _next_krx_trading_day(day)
+            value["prepared_effective_date"] = _next_krx_trading_day(day)
         if old:
-            _stage_write(path.parent / 'attempts' / f'{stage}_{old.get("run_id", uuid.uuid4().hex)}.json', old)
+            _stage_write(
+                path.parent
+                / "attempts"
+                / f'{stage}_{old.get("run_id", uuid.uuid4().hex)}.json',
+                old,
+            )
         if off:
-            return _stage_write(path, {**value, 'status':'off', 'off_reason':'explicit_schedule_disabled', 'exit_code':0})
+            return _stage_write(
+                path,
+                {
+                    **value,
+                    "status": "off",
+                    "off_reason": "explicit_schedule_disabled",
+                    "exit_code": 0,
+                },
+            )
         if resource_blocked is not None:
-            if stage != 'main_machine_policy' or not isinstance(resource_blocked, dict) or resource_blocked.get('ok') is not False:
-                raise ValueError('resource_blocked_receipt_invalid')
-            return _stage_write(path, {**value, 'status':'deferred', 'exit_code':75,
-                'issues':['resource_guard_timeout'], 'policy_disposition':'source_gap',
-                'resource_guard':resource_blocked, 'finished_at':now()})
-        prerequisites = {s:stage_path(report_dir, day, s) for s in stage_prerequisites(stage,day)}
+            if (
+                stage != "main_machine_policy"
+                or not isinstance(resource_blocked, dict)
+                or resource_blocked.get("ok") is not False
+            ):
+                raise ValueError("resource_blocked_receipt_invalid")
+            return _stage_write(
+                path,
+                {
+                    **value,
+                    "status": "deferred",
+                    "exit_code": 75,
+                    "issues": ["resource_guard_timeout"],
+                    "policy_disposition": "source_gap",
+                    "resource_guard": resource_blocked,
+                    "finished_at": now(),
+                },
+            )
+        prerequisites = {
+            s: stage_path(report_dir, day, s) for s in stage_prerequisites(stage, day)
+        }
         wait_deadline = time.monotonic() + prerequisite_wait
         while True:
             if stop_event is not None and stop_event.is_set():
-                return _stage_write(path, {**value, 'status':'deferred', 'exit_code':75, 'issues':['stage_interrupted_at_saved_checkpoint']})
-            issues = [e for s in prerequisites for e in stage_receipt_issues(report_dir, day, s)]
-            waiting = any(_load_json(p).get('status', 'pending') in {'pending', 'running'} for p in prerequisites.values())
+                return _stage_write(
+                    path,
+                    {
+                        **value,
+                        "status": "deferred",
+                        "exit_code": 75,
+                        "issues": ["stage_interrupted_at_saved_checkpoint"],
+                    },
+                )
+            issues = [
+                e
+                for s in prerequisites
+                for e in stage_receipt_issues(report_dir, day, s)
+            ]
+            waiting = any(
+                _load_json(p).get("status", "pending") in {"pending", "running"}
+                for p in prerequisites.values()
+            )
             terminal_blocked = any(
-                _load_json(p).get('status', 'pending') not in {'pending', 'running'}
+                _load_json(p).get("status", "pending") not in {"pending", "running"}
                 and stage_receipt_issues(report_dir, day, s)
                 for s, p in prerequisites.items()
             )
-            if not issues or terminal_blocked or not waiting or time.monotonic() >= wait_deadline:
+            if (
+                not issues
+                or terminal_blocked
+                or not waiting
+                or time.monotonic() >= wait_deadline
+            ):
                 break
-            _stage_write(path, {**value, 'heartbeat_at':now(), 'reason':'prerequisite_pending', 'issues':issues})
+            _stage_write(
+                path,
+                {
+                    **value,
+                    "heartbeat_at": now(),
+                    "reason": "prerequisite_pending",
+                    "issues": issues,
+                },
+            )
             time.sleep(min(5, max(0, wait_deadline - time.monotonic())))
-        value['prerequisite_receipts'] = _stage_sources(prerequisites)
+        value["prerequisite_receipts"] = _stage_sources(prerequisites)
         if issues:
-            return _stage_write(path, {**value, 'status':'deferred', 'exit_code':75, 'issues':issues, 'policy_disposition':'source_gap'})
-        if stage == 'main_machine_policy':
-            preflight_issue = _machine_source_preflight_issue(report_dir, day, recovery=recovery)
+            return _stage_write(
+                path,
+                {
+                    **value,
+                    "status": "deferred",
+                    "exit_code": 75,
+                    "issues": issues,
+                    "policy_disposition": "source_gap",
+                },
+            )
+        if stage == "main_machine_policy":
+            preflight_issue = _machine_source_preflight_issue(
+                report_dir, day, recovery=recovery
+            )
             if preflight_issue:
-                return _stage_write(path, {**value, 'status':'deferred', 'exit_code':75,
-                    'issues':[preflight_issue], 'policy_disposition':'source_quality_blocked',
-                    'finished_at':now()})
-            preflight_path = (Path(report_dir) / 'observation_source_quality_audit'
-                              / f'observation_source_quality_audit_{day}.json')
-            value['source_quality_preflight_sha256'] = hashlib.sha256(preflight_path.read_bytes()).hexdigest()
-            value['source_quality_audit_phase'] = _load_json(preflight_path).get('audit_phase')
-            binding_path = Path(str(preflight_path) + '.final-contract.json')
-            if _load_json(binding_path).get('artifact_sha256') != value['source_quality_preflight_sha256']:
-                return _stage_write(path, {**value, 'status':'deferred', 'exit_code':75,
-                    'issues':['source_quality_preflight_changed_before_consumption'],
-                    'policy_disposition':'source_quality_blocked', 'finished_at':now()})
+                return _stage_write(
+                    path,
+                    {
+                        **value,
+                        "status": "deferred",
+                        "exit_code": 75,
+                        "issues": [preflight_issue],
+                        "policy_disposition": "source_quality_blocked",
+                        "finished_at": now(),
+                    },
+                )
+            preflight_path = (
+                Path(report_dir)
+                / "observation_source_quality_audit"
+                / f"observation_source_quality_audit_{day}.json"
+            )
+            value["source_quality_preflight_sha256"] = hashlib.sha256(
+                preflight_path.read_bytes()
+            ).hexdigest()
+            value["source_quality_audit_phase"] = _load_json(preflight_path).get(
+                "audit_phase"
+            )
+            binding_path = Path(str(preflight_path) + ".final-contract.json")
+            if (
+                _load_json(binding_path).get("artifact_sha256")
+                != value["source_quality_preflight_sha256"]
+            ):
+                return _stage_write(
+                    path,
+                    {
+                        **value,
+                        "status": "deferred",
+                        "exit_code": 75,
+                        "issues": [
+                            "source_quality_preflight_changed_before_consumption"
+                        ],
+                        "policy_disposition": "source_quality_blocked",
+                        "finished_at": now(),
+                    },
+                )
         if not execute:
             # Review-only intake is explicit: validates existing artifacts, never
             # claims that their calculation was executed by this new runner.
-            value['input_sources'] = _stage_sources(stage_input_paths(report_dir, day, stage))
+            value["input_sources"] = _stage_sources(
+                stage_input_paths(report_dir, day, stage)
+            )
             issues = _safe_stage_output_issues(report_dir, day, stage)
-            return _stage_write(path, {**value, 'sources':_stage_sources(stage_artifacts(report_dir, day, stage)),
-                'status':'failed' if issues else 'succeeded', 'exit_code':1 if issues else 0,
-                'issues':issues, 'execution_mode':'existing_output_validation', 'finished_at':now()})
-        value['input_sources'] = _stage_sources(stage_input_paths(report_dir, day, stage))
+            return _stage_write(
+                path,
+                {
+                    **value,
+                    "sources": _stage_sources(stage_artifacts(report_dir, day, stage)),
+                    "status": "failed" if issues else "succeeded",
+                    "exit_code": 1 if issues else 0,
+                    "issues": issues,
+                    "execution_mode": "existing_output_validation",
+                    "finished_at": now(),
+                },
+            )
+        value["input_sources"] = _stage_sources(
+            stage_input_paths(report_dir, day, stage)
+        )
         # Host-wide admission shared across independent scheduled wrappers.
-        slots = Path(report_dir).parent / 'runtime' / 'postclose_stage_slots'; slots.mkdir(parents=True, exist_ok=True)
+        slots = Path(report_dir).parent / "runtime" / "postclose_stage_slots"
+        slots.mkdir(parents=True, exist_ok=True)
         from src.engine.lifecycle.research_admission import acquire
-        slot = None; admission_started = time.monotonic(); deadline = admission_started + timeout
+
+        slot = None
+        admission_started = time.monotonic()
+        deadline = admission_started + timeout
         while slot is None and time.monotonic() < deadline:
             if stop_event is not None and stop_event.is_set():
-                return _stage_write(path, {**value, 'status':'deferred', 'exit_code':75, 'issues':['stage_interrupted_at_saved_checkpoint']})
+                return _stage_write(
+                    path,
+                    {
+                        **value,
+                        "status": "deferred",
+                        "exit_code": 75,
+                        "issues": ["stage_interrupted_at_saved_checkpoint"],
+                    },
+                )
             slot = acquire(Path(report_dir).parent, stage, day)
             if slot is None:
-                _stage_write(path, {**value, 'status':'pending', 'heartbeat_at':now(), 'reason':'resource_admission'})
-                time.sleep(min(1, max(0, deadline-time.monotonic())))
+                _stage_write(
+                    path,
+                    {
+                        **value,
+                        "status": "pending",
+                        "heartbeat_at": now(),
+                        "reason": "resource_admission",
+                    },
+                )
+                time.sleep(min(1, max(0, deadline - time.monotonic())))
         if slot is None:
-            return _stage_write(path, {**value, 'status':'deferred', 'exit_code':75, 'issues':['resource_admission_timeout']})
+            return _stage_write(
+                path,
+                {
+                    **value,
+                    "status": "deferred",
+                    "exit_code": 75,
+                    "issues": ["resource_admission_timeout"],
+                },
+            )
         try:
-            value['resource_admission_wait_sec'] = round(time.monotonic() - admission_started, 3)
-            value.update(status='running', heartbeat_at=now()); _stage_write(path, value)
+            value["resource_admission_wait_sec"] = round(
+                time.monotonic() - admission_started, 3
+            )
+            value.update(status="running", heartbeat_at=now())
+            _stage_write(path, value)
             # Raw/compact reconciliation is part of the heavy calculation.
             # Reserve both host slots before scanning, including in this parent.
-            if stage == 'pre_submit_delay':
-                from src.engine.scalping.pre_submit_delay_tuning import seal_family_source_ledger, family_source_ledger_issues
+            if stage == "pre_submit_delay":
+                from src.engine.scalping.pre_submit_delay_tuning import (
+                    seal_family_source_ledger,
+                    family_source_ledger_issues,
+                )
+
                 try:
-                    source_manifest = seal_family_source_ledger(Path(report_dir).parent, day, partitioned=True)
-                    source_issues = family_source_ledger_issues(Path(report_dir).parent, day)
+                    source_manifest = seal_family_source_ledger(
+                        Path(report_dir).parent, day, partitioned=True
+                    )
+                    source_issues = family_source_ledger_issues(
+                        Path(report_dir).parent, day
+                    )
                     if source_issues:
-                        raise ValueError(','.join(source_issues))
-                    value['pipeline_source_generation_sha256'] = source_manifest['ledger_sha256']
-                    value['input_sources'] = _stage_sources(stage_input_paths(report_dir, day, stage))
+                        raise ValueError(",".join(source_issues))
+                    value["pipeline_source_generation_sha256"] = source_manifest[
+                        "ledger_sha256"
+                    ]
+                    value["input_sources"] = _stage_sources(
+                        stage_input_paths(report_dir, day, stage)
+                    )
                 except (OSError, ValueError, KeyError, TypeError) as exc:
-                    return _stage_write(path, {**value, 'status':'deferred', 'exit_code':75,
-                        'issues':[f'pipeline_source_quality:{exc}'], 'policy_disposition':'source_gap',
-                        'finished_at':now()})
+                    return _stage_write(
+                        path,
+                        {
+                            **value,
+                            "status": "deferred",
+                            "exit_code": 75,
+                            "issues": [f"pipeline_source_quality:{exc}"],
+                            "policy_disposition": "source_gap",
+                            "finished_at": now(),
+                        },
+                    )
             if time.monotonic() >= deadline:
-                return _stage_write(path, {**value, 'status':'deferred', 'exit_code':75,
-                    'issues':['stage_deadline_after_source_reconciliation'], 'finished_at':now()})
-            env = {**os.environ, 'PYTHONPATH':str(project), 'POSTCLOSE_STAGE_WORKER':'1', 'POSTCLOSE_SOURCE_DATE':day,
-                'POSTCLOSE_POLICY_PUBLICATION_DATE':publication,
-                'POSTCLOSE_STAGE_DEADLINE_EPOCH':str(time.time()+max(0,deadline-time.monotonic())),
-                'POSTCLOSE_PREPARED_EFFECTIVE_DATE':value.get('prepared_effective_date', effective)}
+                return _stage_write(
+                    path,
+                    {
+                        **value,
+                        "status": "deferred",
+                        "exit_code": 75,
+                        "issues": ["stage_deadline_after_source_reconciliation"],
+                        "finished_at": now(),
+                    },
+                )
+            env = {
+                **os.environ,
+                "PYTHONPATH": str(project),
+                "POSTCLOSE_STAGE_WORKER": "1",
+                "POSTCLOSE_SOURCE_DATE": day,
+                "POSTCLOSE_POLICY_PUBLICATION_DATE": publication,
+                "POSTCLOSE_STAGE_DEADLINE_EPOCH": str(
+                    time.time() + max(0, deadline - time.monotonic())
+                ),
+                "POSTCLOSE_PREPARED_EFFECTIVE_DATE": value.get(
+                    "prepared_effective_date", effective
+                ),
+            }
             env.update(slot.environment())
             rc = 0
             child = None
             for command in commands:
                 if runner:
-                    value['execution_mode']='synchronous_producer_adapter'
+                    value["execution_mode"] = "synchronous_producer_adapter"
                     with slot.worker():
                         rc = runner(command, env=env, cwd=project)
                     if time.monotonic() >= deadline:
-                        rc=75
-                        value['synchronous_deadline_expired']=True
+                        rc = 75
+                        value["synchronous_deadline_expired"] = True
                 else:
-                    with path.with_suffix('.log').open('a') as log:
-                        child = subprocess.Popen(command, env=env, cwd=project, stdout=log, stderr=subprocess.STDOUT, start_new_session=True, pass_fds=slot.pass_fds)
+                    with path.with_suffix(".log").open("a") as log:
+                        child = subprocess.Popen(
+                            command,
+                            env=env,
+                            cwd=project,
+                            stdout=log,
+                            stderr=subprocess.STDOUT,
+                            start_new_session=True,
+                            pass_fds=slot.pass_fds,
+                        )
                         while child.poll() is None:
                             if stop_event is not None and stop_event.is_set():
-                                raise InterruptedError('stage_interrupted_at_saved_checkpoint')
+                                raise InterruptedError(
+                                    "stage_interrupted_at_saved_checkpoint"
+                                )
                             try:
-                                start_ticks = Path(f'/proc/{child.pid}/stat').read_text().split()[21]
+                                start_ticks = (
+                                    Path(f"/proc/{child.pid}/stat")
+                                    .read_text()
+                                    .split()[21]
+                                )
                             except FileNotFoundError:
                                 child.wait()
                                 break
-                            value.update(child_pid=child.pid, child_start_ticks=start_ticks, heartbeat_at=now()); _stage_write(path, value)
+                            value.update(
+                                child_pid=child.pid,
+                                child_start_ticks=start_ticks,
+                                heartbeat_at=now(),
+                            )
+                            _stage_write(path, value)
                             if time.monotonic() >= deadline:
                                 import signal
+
                                 os.killpg(child.pid, signal.SIGTERM)
-                                try: child.wait(timeout=30)
-                                except subprocess.TimeoutExpired: os.killpg(child.pid, signal.SIGKILL); child.wait()
+                                try:
+                                    child.wait(timeout=30)
+                                except subprocess.TimeoutExpired:
+                                    os.killpg(child.pid, signal.SIGKILL)
+                                    child.wait()
                                 break
                             time.sleep(1)
                         rc = child.returncode
-                if rc: break
-            issues = _safe_stage_output_issues(report_dir, day, stage) if not rc else [f'command_exit:{rc}']
-            if value['prerequisite_receipts'] != _stage_sources(prerequisites): issues.append('prerequisite_changed_during_consumption')
-            if value['input_sources'] != _stage_sources(stage_input_paths(report_dir, day, stage)): issues.append('input_changed_during_consumption')
-            if stage == 'main_machine_policy':
-                preflight_path = (Path(report_dir) / 'observation_source_quality_audit'
-                                  / f'observation_source_quality_audit_{day}.json')
-                preflight_issue = _machine_source_preflight_issue(report_dir, day, recovery=recovery)
+                if rc:
+                    break
+            issues = (
+                _safe_stage_output_issues(report_dir, day, stage)
+                if not rc
+                else [f"command_exit:{rc}"]
+            )
+            if value["prerequisite_receipts"] != _stage_sources(prerequisites):
+                issues.append("prerequisite_changed_during_consumption")
+            if value["input_sources"] != _stage_sources(
+                stage_input_paths(report_dir, day, stage)
+            ):
+                issues.append("input_changed_during_consumption")
+            if stage == "main_machine_policy":
+                preflight_path = (
+                    Path(report_dir)
+                    / "observation_source_quality_audit"
+                    / f"observation_source_quality_audit_{day}.json"
+                )
+                preflight_issue = _machine_source_preflight_issue(
+                    report_dir, day, recovery=recovery
+                )
                 try:
-                    current_preflight_sha = hashlib.sha256(preflight_path.read_bytes()).hexdigest()
+                    current_preflight_sha = hashlib.sha256(
+                        preflight_path.read_bytes()
+                    ).hexdigest()
                 except OSError:
                     current_preflight_sha = None
-                if (preflight_issue or current_preflight_sha != value.get('source_quality_preflight_sha256')):
-                    issues.append('source_quality_preflight_changed_during_consumption')
-            if stage == 'pre_submit_delay':
-                from src.engine.scalping.pre_submit_delay_tuning import family_source_ledger_issues
-                issues.extend(f'pipeline_source_quality:{issue}' for issue in
-                              family_source_ledger_issues(Path(report_dir).parent, day))
-            machine_gap = (stage == 'main_machine_policy' and not rc and not issues and
-                _load_json(stage_artifacts(report_dir, day, stage)['machine_policy_terminal']).get('status') == 'source_gap')
+                if preflight_issue or current_preflight_sha != value.get(
+                    "source_quality_preflight_sha256"
+                ):
+                    issues.append("source_quality_preflight_changed_during_consumption")
+            if stage == "pre_submit_delay":
+                from src.engine.scalping.pre_submit_delay_tuning import (
+                    family_source_ledger_issues,
+                )
+
+                issues.extend(
+                    f"pipeline_source_quality:{issue}"
+                    for issue in family_source_ledger_issues(
+                        Path(report_dir).parent, day
+                    )
+                )
+            machine_gap = (
+                stage == "main_machine_policy"
+                and not rc
+                and not issues
+                and _load_json(
+                    stage_artifacts(report_dir, day, stage)["machine_policy_terminal"]
+                ).get("status")
+                == "source_gap"
+            )
             if machine_gap:
-                issues.append('machine_observation_source_gap')
-            value.update(status='deferred' if machine_gap or rc == 75 else 'failed' if rc or issues else 'succeeded',
-                exit_code=75 if machine_gap else rc or (1 if issues else 0), issues=issues, finished_at=now(), heartbeat_at=now(),
-                sources=_stage_sources(stage_artifacts(report_dir, day, stage)))
-            if stage == 'main_machine_policy' and (not issues or machine_gap):
-                terminal = _load_json(stage_artifacts(report_dir, day, stage)['machine_policy_terminal'])
-                staging = terminal.get('staged') or {}
-                activation = (terminal.get('activation') or {}).get('status')
-                value['policy_disposition'] = ('source_gap' if machine_gap else terminal.get('disposition')
-                    if terminal.get('selection_basis') == 'win_rate_only' and staging.get('status') in {'staged', 'already_staged', 'pending_initial_preserved', 'existing_incumbent_preserved'}
-                    else 'operator_designated' if staging.get('status') in {'operator_designation_preserved', 'designated_policy_staged'}
-                    else 'updated' if activation == 'activated' else 'incumbent_carry' if activation in {'already_active', 'incumbent_carry'} else 'no_valid_candidate')
-                if staging.get('status') in {'operator_designation_preserved', 'designated_policy_staged'}:
-                    value['automatic_policy_disposition'] = terminal.get('disposition')
-                    value['designated_bundle_sha256'] = staging.get('bundle_sha256')
-                value['policy_sha256'] = terminal.get('policy_sha256')
-                if (terminal.get('schema') in {'continuous_reversal_research_v1','continuous_reversal_registered_postclose_v1','continuous_reversal_path_postclose_v1'}
-                    or _operating_machine_terminal_selected(terminal, day,
-                        _load_json(stage_artifacts(report_dir, day, stage)['machine_policy']))):
-                    value['policy_disposition']='continuous_reversal_selected'
-                    value['selection_metric']='cumulative_raw_win_fraction'
-                    value['machine_report_sha256']=terminal.get('report_sha256')
+                issues.append("machine_observation_source_gap")
+            value.update(
+                status=(
+                    "deferred"
+                    if machine_gap or rc == 75
+                    else "failed" if rc or issues else "succeeded"
+                ),
+                exit_code=75 if machine_gap else rc or (1 if issues else 0),
+                issues=issues,
+                finished_at=now(),
+                heartbeat_at=now(),
+                sources=_stage_sources(stage_artifacts(report_dir, day, stage)),
+            )
+            if stage == "main_machine_policy" and (not issues or machine_gap):
+                terminal = _load_json(
+                    stage_artifacts(report_dir, day, stage)["machine_policy_terminal"]
+                )
+                staging = terminal.get("staged") or {}
+                activation = (terminal.get("activation") or {}).get("status")
+                value["policy_disposition"] = (
+                    "source_gap"
+                    if machine_gap
+                    else (
+                        terminal.get("disposition")
+                        if terminal.get("selection_basis") == "win_rate_only"
+                        and staging.get("status")
+                        in {
+                            "staged",
+                            "already_staged",
+                            "pending_initial_preserved",
+                            "existing_incumbent_preserved",
+                        }
+                        else (
+                            "operator_designated"
+                            if staging.get("status")
+                            in {
+                                "operator_designation_preserved",
+                                "designated_policy_staged",
+                            }
+                            else (
+                                "updated"
+                                if activation == "activated"
+                                else (
+                                    "incumbent_carry"
+                                    if activation
+                                    in {"already_active", "incumbent_carry"}
+                                    else "no_valid_candidate"
+                                )
+                            )
+                        )
+                    )
+                )
+                if staging.get("status") in {
+                    "operator_designation_preserved",
+                    "designated_policy_staged",
+                }:
+                    value["automatic_policy_disposition"] = terminal.get("disposition")
+                    value["designated_bundle_sha256"] = staging.get("bundle_sha256")
+                value["policy_sha256"] = terminal.get("policy_sha256")
+                if terminal.get("schema") in {
+                    "continuous_reversal_research_v1",
+                    "continuous_reversal_registered_postclose_v1",
+                    "continuous_reversal_path_postclose_v1",
+                } or _operating_machine_terminal_selected(
+                    terminal,
+                    day,
+                    _load_json(
+                        stage_artifacts(report_dir, day, stage)["machine_policy"]
+                    ),
+                ):
+                    value["policy_disposition"] = "continuous_reversal_selected"
+                    value["selection_metric"] = "cumulative_raw_win_fraction"
+                    value["machine_report_sha256"] = terminal.get("report_sha256")
             return _stage_write(path, value)
         except (OSError, ValueError, TypeError, KeyError, InterruptedError) as exc:
-            return _stage_write(path, {**value, 'status':'failed', 'exit_code':1, 'issues':[str(exc)], 'finished_at':now()})
+            return _stage_write(
+                path,
+                {
+                    **value,
+                    "status": "failed",
+                    "exit_code": 1,
+                    "issues": [str(exc)],
+                    "finished_at": now(),
+                },
+            )
         except Exception as exc:
             # Unexpected internal failures must leave a terminal failure, not
             # a durable running receipt after the child/slot has disappeared.
-            return _stage_write(path, {**value, 'status':'failed', 'exit_code':1,
-                'issues':[f'stage_internal_error:{type(exc).__name__}:{exc}'], 'finished_at':now()})
+            return _stage_write(
+                path,
+                {
+                    **value,
+                    "status": "failed",
+                    "exit_code": 1,
+                    "issues": [f"stage_internal_error:{type(exc).__name__}:{exc}"],
+                    "finished_at": now(),
+                },
+            )
         finally:
-            if 'child' in locals() and child is not None and child.poll() is None:
+            if "child" in locals() and child is not None and child.poll() is None:
                 import signal
+
                 os.killpg(child.pid, signal.SIGTERM)
-                try: child.wait(timeout=30)
-                except subprocess.TimeoutExpired: os.killpg(child.pid, signal.SIGKILL); child.wait()
+                try:
+                    child.wait(timeout=30)
+                except subprocess.TimeoutExpired:
+                    os.killpg(child.pid, signal.SIGKILL)
+                    child.wait()
             slot.close()
 
 
 def _stage_disposition_view(report_dir, day, stage, value, issues):
     """Expose current native semantics without rewriting original execution proof."""
-    recorded = value.get('policy_disposition')
-    result = dict(status=value.get('status', 'pending'), issues=list(issues), policy_disposition=recorded)
-    if stage != 'main_machine_policy':
+    recorded = value.get("policy_disposition")
+    result = dict(
+        status=value.get("status", "pending"),
+        issues=list(issues),
+        policy_disposition=recorded,
+    )
+    if stage != "main_machine_policy":
         return result
-    result['recorded_policy_disposition'] = recorded
+    result["recorded_policy_disposition"] = recorded
     if issues:
-        if recorded == 'continuous_reversal_selected':
-            result['policy_disposition'] = 'unverified_recorded_disposition'
+        if recorded == "continuous_reversal_selected":
+            result["policy_disposition"] = "unverified_recorded_disposition"
         return result
     paths = stage_artifacts(report_dir, day, stage)
-    references = [*map(Path, paths.values()), stage_path(report_dir,day,stage), Path(__file__)]
+    references = [
+        *map(Path, paths.values()),
+        stage_path(report_dir, day, stage),
+        Path(__file__),
+    ]
+
     def generations():
-        return {str(path):(stat.st_dev,stat.st_ino,stat.st_size,stat.st_mtime_ns,stat.st_ctime_ns)
-                for path in references for stat in (path.stat(),)}
+        return {
+            str(path): (
+                stat.st_dev,
+                stat.st_ino,
+                stat.st_size,
+                stat.st_mtime_ns,
+                stat.st_ctime_ns,
+            )
+            for path in references
+            for stat in (path.stat(),)
+        }
+
     try:
         before = generations()
     except OSError:
-        result['issues'].append('main_machine_policy:disposition_source_changed')
+        result["issues"].append("main_machine_policy:disposition_source_changed")
         return result
-    terminal = _load_json(paths['machine_policy_terminal'])
-    report = _load_json(paths['machine_policy'])
+    terminal = _load_json(paths["machine_policy_terminal"])
+    report = _load_json(paths["machine_policy"])
     # The old stage code remains execution provenance. The current consumer
     # authenticates its unchanged native source instead of rewriting a receipt.
     observed = _stage_sources(paths)
-    if (value.get('sources') != observed
-        or _load_json(stage_path(report_dir, day, stage)) != value):
-        result['issues'].append('main_machine_policy:disposition_source_changed')
-        if recorded == 'continuous_reversal_selected':
-            result['policy_disposition'] = 'unverified_recorded_disposition'
+    if (
+        value.get("sources") != observed
+        or _load_json(stage_path(report_dir, day, stage)) != value
+    ):
+        result["issues"].append("main_machine_policy:disposition_source_changed")
+        if recorded == "continuous_reversal_selected":
+            result["policy_disposition"] = "unverified_recorded_disposition"
         return result
     if not _operating_machine_terminal_selected(terminal, day, report):
         try:
@@ -2201,186 +3623,339 @@ def _stage_disposition_view(report_dir, day, stage, value, issues):
         except OSError:
             stable = False
         if not stable:
-            result['issues'].append('main_machine_policy:disposition_source_changed')
-            if recorded == 'continuous_reversal_selected':
-                result['policy_disposition'] = 'unverified_recorded_disposition'
+            result["issues"].append("main_machine_policy:disposition_source_changed")
+            if recorded == "continuous_reversal_selected":
+                result["policy_disposition"] = "unverified_recorded_disposition"
         return result
-    result['policy_disposition'] = 'continuous_reversal_selected'
-    result['native_disposition_projection'] = dict(
-        schema='postclose_native_terminal_disposition_projection_v1', source_date=day,
-        role='current_read_semantics_original_native_execution_preserved',
-        correction_applied=recorded != 'continuous_reversal_selected',
-        original_stage_receipt_sha256=value.get('receipt_sha256'),
-        original_stage_file_sha256=_stage_sources({'stage':stage_path(report_dir,day,stage)})['stage']['sha256'],
-        original_stage_code_sha256=value.get('stage_code_sha256'),
-        original_computation_executed=value.get('computation_executed'),
-        native_terminal=observed['machine_policy_terminal'],
-        native_terminal_content_sha256=terminal['artifact_content_sha256'],
-        machine_report=observed['machine_policy'],
-        machine_report_content_sha256=terminal['report_sha256'],
-        current_consumer_sha256=_stage_sources({'consumer':Path(__file__)})['consumer']['sha256'],
-        interpretation='selected_machine_component_prepared_not_activation_pid_or_profit',
-        runtime_effect=False, allowed_runtime_apply=False, actual_pid_consumed=False)
+    result["policy_disposition"] = "continuous_reversal_selected"
+    result["native_disposition_projection"] = dict(
+        schema="postclose_native_terminal_disposition_projection_v1",
+        source_date=day,
+        role="current_read_semantics_original_native_execution_preserved",
+        correction_applied=recorded != "continuous_reversal_selected",
+        original_stage_receipt_sha256=value.get("receipt_sha256"),
+        original_stage_file_sha256=_stage_sources(
+            {"stage": stage_path(report_dir, day, stage)}
+        )["stage"]["sha256"],
+        original_stage_code_sha256=value.get("stage_code_sha256"),
+        original_computation_executed=value.get("computation_executed"),
+        native_terminal=observed["machine_policy_terminal"],
+        native_terminal_content_sha256=terminal["artifact_content_sha256"],
+        machine_report=observed["machine_policy"],
+        machine_report_content_sha256=terminal["report_sha256"],
+        current_consumer_sha256=_stage_sources({"consumer": Path(__file__)})[
+            "consumer"
+        ]["sha256"],
+        interpretation="selected_machine_component_prepared_not_activation_pid_or_profit",
+        runtime_effect=False,
+        allowed_runtime_apply=False,
+        actual_pid_consumed=False,
+    )
     try:
         stable = before == generations()
     except OSError:
         stable = False
     if not stable:
-        result.pop('native_disposition_projection')
-        result['policy_disposition'] = ('unverified_recorded_disposition'
-                                       if recorded == 'continuous_reversal_selected' else recorded)
-        result['issues'].append('main_machine_policy:disposition_source_changed')
+        result.pop("native_disposition_projection")
+        result["policy_disposition"] = (
+            "unverified_recorded_disposition"
+            if recorded == "continuous_reversal_selected"
+            else recorded
+        )
+        result["issues"].append("main_machine_policy:disposition_source_changed")
     return result
 
 
 def stage_overview(report_dir, day):
-    states = {s:_load_json(stage_path(report_dir, day, s)) for s in active_stage_names(day)}
-    issues = {s:stage_receipt_issues(report_dir, day, s, allow_historical_terminal=True)
-              for s in states if s != 'summary_handoff'}
-    stage_views = {s:_stage_disposition_view(report_dir,day,s,v,issues.get(s,[])) for s,v in states.items()}
-    issues.update({s:view['issues'] for s,view in stage_views.items() if view['issues']})
+    states = {
+        s: _load_json(stage_path(report_dir, day, s)) for s in active_stage_names(day)
+    }
+    issues = {
+        s: stage_receipt_issues(report_dir, day, s, allow_historical_terminal=True)
+        for s in states
+        if s != "summary_handoff"
+    }
+    stage_views = {
+        s: _stage_disposition_view(report_dir, day, s, v, issues.get(s, []))
+        for s, v in states.items()
+    }
+    issues.update(
+        {s: view["issues"] for s, view in stage_views.items() if view["issues"]}
+    )
     # Startup evidence has its own date and contract, independent of diagnostics.
     from src.engine.build_next_stage2_checklist import _next_krx_trading_day
+
     effective = _next_krx_trading_day(day)
-    bootstrap = _load_json(Path(report_dir).parent / 'runtime' / 'policy_bootstrap' / f'runtime_policy_bootstrap_verify_{effective}.json')
-    ready = bootstrap.get('passed') is True and bootstrap.get('target_date') == effective
+    bootstrap = _load_json(
+        Path(report_dir).parent
+        / "runtime"
+        / "policy_bootstrap"
+        / f"runtime_policy_bootstrap_verify_{effective}.json"
+    )
+    ready = (
+        bootstrap.get("passed") is True and bootstrap.get("target_date") == effective
+    )
     if ready:
-        from src.engine.automation.runtime_policy_bootstrap import verify_bootstrap, manifest_path
-        ready = (manifest_path(effective).parent.resolve() == (Path(report_dir).parent / 'runtime' / 'policy_bootstrap').resolve()
-            and verify_bootstrap(effective, write=False).get('passed') is True)
-    startup_basis = 'dated_live_bootstrap' if ready else 'unverified'
+        from src.engine.automation.runtime_policy_bootstrap import (
+            verify_bootstrap,
+            manifest_path,
+        )
+
+        ready = (
+            manifest_path(effective).parent.resolve()
+            == (Path(report_dir).parent / "runtime" / "policy_bootstrap").resolve()
+            and verify_bootstrap(effective, write=False).get("passed") is True
+        )
+    startup_basis = "dated_live_bootstrap" if ready else "unverified"
     if not ready:
         # Before PREOPEN, only the isolated preparation exists. Its owner
         # rechecks the current whole-chain, policies and selected release.
         # Never create or activate tomorrow's live bootstrap here.
         from src.engine.automation.next_preopen_readiness import verify_prepared
-        prepared_index = (Path(report_dir).parent / 'runtime' / 'policy_bootstrap' /
-                          'prepared' / effective / 'latest.json')
+
+        prepared_index = (
+            Path(report_dir).parent
+            / "runtime"
+            / "policy_bootstrap"
+            / "prepared"
+            / effective
+            / "latest.json"
+        )
         if prepared_index.is_file():
             try:
                 prepared = verify_prepared(effective)
-                receipt = _load_json(Path(str(_load_json(prepared_index).get('receipt_path') or '')))
-                ready = prepared.get('status') == 'pass' and receipt.get('source_date') == day
+                receipt = _load_json(
+                    Path(str(_load_json(prepared_index).get("receipt_path") or ""))
+                )
+                ready = (
+                    prepared.get("status") == "pass"
+                    and receipt.get("source_date") == day
+                )
                 if ready:
-                    startup_basis = 'isolated_prepared_next_preopen'
+                    startup_basis = "isolated_prepared_next_preopen"
             except (OSError, ValueError, TypeError, KeyError):
                 ready = False
     policy_checks = {}
     from src.engine.scalping.mechanistic_entry_runtime_policy import load_effective
+
     data_root = Path(report_dir).parent
-    try: policy_checks['main'] = bool(load_effective(data_root=data_root, target_date=effective))
-    except (OSError, ValueError, TypeError, KeyError): policy_checks['main'] = False
+    try:
+        policy_checks["main"] = bool(
+            load_effective(data_root=data_root, target_date=effective)
+        )
+    except (OSError, ValueError, TypeError, KeyError):
+        policy_checks["main"] = False
     ready = ready and all(policy_checks.values())
     future_handoff = {"status": "not_applicable", "actual_pid_consumed": False}
     if day >= "2026-09-23":
-        summary = _load_json(Path(report_dir) / "runtime_approval_summary" /
-                             f"runtime_approval_summary_{day}.json")
+        summary = _load_json(
+            Path(report_dir)
+            / "runtime_approval_summary"
+            / f"runtime_approval_summary_{day}.json"
+        )
         future_handoff = inspect_future_handoff(summary, day, report_dir=report_dir)
-        ready = ready and (startup_basis == 'isolated_prepared_next_preopen' or future_handoff["status"] in {
-            "same_generation_no_pid", "transitioned_no_pid",
-            "same_generation_pid_receipt_unconfirmed",
-            "intraday_preserved_generation_pid_receipt_unconfirmed",
-        })
-    return dict(schema='postclose_stage_overview_v2', source_date=day, effective_date=effective,
+        ready = ready and (
+            startup_basis == "isolated_prepared_next_preopen"
+            or future_handoff["status"]
+            in {
+                "same_generation_no_pid",
+                "transitioned_no_pid",
+                "same_generation_pid_receipt_unconfirmed",
+                "intraday_preserved_generation_pid_receipt_unconfirmed",
+            }
+        )
+    return dict(
+        schema="postclose_stage_overview_v2",
+        source_date=day,
+        effective_date=effective,
         stages=stage_views,
-        postclose_all_active_stages_complete=not any(issues.values()) and states['summary_handoff'].get('status') == 'succeeded',
-        next_session_policy_ready=ready, policy_loader_checks=policy_checks,
+        postclose_all_active_stages_complete=not any(issues.values())
+        and states["summary_handoff"].get("status") == "succeeded",
+        next_session_policy_ready=ready,
+        policy_loader_checks=policy_checks,
         future_handoff=future_handoff,
-        startup_basis=startup_basis, day_of_activation_required=startup_basis == 'isolated_prepared_next_preopen',
+        startup_basis=startup_basis,
+        day_of_activation_required=startup_basis == "isolated_prepared_next_preopen",
         actual_pid_consumed=False,
-        startup_contract='prepared_verified' if startup_basis == 'isolated_prepared_next_preopen' else bootstrap.get('status', 'not_verified'))
+        startup_contract=(
+            "prepared_verified"
+            if startup_basis == "isolated_prepared_next_preopen"
+            else bootstrap.get("status", "not_verified")
+        ),
+    )
 
 
 def _stage_main(argv):
     import argparse, sys
     from concurrent.futures import ThreadPoolExecutor
     from src.utils.constants import DATA_DIR, PROJECT_ROOT
-    parser = argparse.ArgumentParser(description='Independent postclose stage dispatcher')
-    parser.add_argument('--stage', choices=[*STAGE_REGISTRY, 'machine_group', 'overview', 'wait'], required=True)
-    parser.add_argument('--date', required=True, type=date.fromisoformat)
-    parser.add_argument('--publication-date')
-    parser.add_argument('--recover-closed-target', action='store_true')
-    parser.add_argument('--validate-existing', action='store_true')
-    parser.add_argument('--off', action='store_true')
-    parser.add_argument('--launch', action='store_true')
-    parser.add_argument('--check', action='store_true')
-    parser.add_argument('--resource-guard-status')
-    parser.add_argument('--timeout-sec', type=int, default=14400)
-    parser.add_argument('--wait-stage', choices=list(STAGE_REGISTRY))
-    args = parser.parse_args(argv); day = args.date.isoformat()
+
+    parser = argparse.ArgumentParser(
+        description="Independent postclose stage dispatcher"
+    )
+    parser.add_argument(
+        "--stage",
+        choices=[*STAGE_REGISTRY, "machine_group", "overview", "wait"],
+        required=True,
+    )
+    parser.add_argument("--date", required=True, type=date.fromisoformat)
+    parser.add_argument("--publication-date")
+    parser.add_argument("--recover-closed-target", action="store_true")
+    parser.add_argument("--validate-existing", action="store_true")
+    parser.add_argument("--off", action="store_true")
+    parser.add_argument("--launch", action="store_true")
+    parser.add_argument("--check", action="store_true")
+    parser.add_argument("--resource-guard-status")
+    parser.add_argument("--timeout-sec", type=int, default=14400)
+    parser.add_argument("--wait-stage", choices=list(STAGE_REGISTRY))
+    args = parser.parse_args(argv)
+    day = args.date.isoformat()
     from datetime import datetime
     from zoneinfo import ZoneInfo
+
     publication = args.publication_date or day
-    if not '2026-06-05' <= day <= publication <= datetime.now(ZoneInfo('Asia/Seoul')).date().isoformat() or args.timeout_sec <= 0:
-        parser.error('stage_date_or_timeout_contract_invalid')
-    if (args.check or args.off or args.validate_existing or args.launch) and args.stage not in STAGE_REGISTRY:
-        parser.error('action_requires_one_stage')
-    if args.validate_existing and args.stage != 'outcome_labels':
-        parser.error('only_committed_labels_support_validation_intake')
+    if (
+        not "2026-06-05"
+        <= day
+        <= publication
+        <= datetime.now(ZoneInfo("Asia/Seoul")).date().isoformat()
+        or args.timeout_sec <= 0
+    ):
+        parser.error("stage_date_or_timeout_contract_invalid")
+    if (
+        args.check or args.off or args.validate_existing or args.launch
+    ) and args.stage not in STAGE_REGISTRY:
+        parser.error("action_requires_one_stage")
+    if args.validate_existing and args.stage != "outcome_labels":
+        parser.error("only_committed_labels_support_validation_intake")
     if args.launch and (args.off or args.check or args.validate_existing):
-        parser.error('launch_requires_execution')
-    if args.wait_stage and args.stage!='wait':
-        parser.error('wait_stage_requires_wait_operation')
+        parser.error("launch_requires_execution")
+    if args.wait_stage and args.stage != "wait":
+        parser.error("wait_stage_requires_wait_operation")
     import signal, threading
+
     stop_event = threading.Event()
+
     def interrupted(signum, frame):
         stop_event.set()
+
     signal.signal(signal.SIGTERM, interrupted)
-    if args.stage == 'wait':
+    if args.stage == "wait":
         import time
+
         deadline = time.monotonic() + args.timeout_sec
         # The checklist binds every producer receipt, including independent
         # stages. Rendering while any producer still updates its heartbeat
         # would invalidate the generation immediately after publication.
         # Summary/controller is the later consumer, never its own predecessor.
-        required = ((args.wait_stage,) if args.wait_stage else tuple(
-            stage for stage in active_stage_names(day) if stage != 'summary_handoff'))
-        while any(_load_json(stage_path(DATA_DIR / 'report', day, s)).get('status', 'pending') in {'pending','running'} for s in required):
-            if time.monotonic() >= deadline: return 75
-            if stop_event.is_set(): return 75
+        required = (
+            (args.wait_stage,)
+            if args.wait_stage
+            else tuple(
+                stage for stage in active_stage_names(day) if stage != "summary_handoff"
+            )
+        )
+        while any(
+            _load_json(stage_path(DATA_DIR / "report", day, s)).get("status", "pending")
+            in {"pending", "running"}
+            for s in required
+        ):
+            if time.monotonic() >= deadline:
+                return 75
+            if stop_event.is_set():
+                return 75
             time.sleep(1)
         return 0
     if args.check:
-        status = _load_json(stage_path(DATA_DIR / 'report', day, args.stage)).get('status', 'pending')
-        if status in {'pending', 'running', 'deferred'}: return 75
-        return 1 if stage_receipt_issues(DATA_DIR / 'report', day, args.stage) else 0
-    if args.resource_guard_status is not None and (args.stage != 'main_machine_policy' or args.launch or args.off):
-        parser.error('resource_guard_status_requires_machine_terminal')
+        status = _load_json(stage_path(DATA_DIR / "report", day, args.stage)).get(
+            "status", "pending"
+        )
+        if status in {"pending", "running", "deferred"}:
+            return 75
+        return 1 if stage_receipt_issues(DATA_DIR / "report", day, args.stage) else 0
+    if args.resource_guard_status is not None and (
+        args.stage != "main_machine_policy" or args.launch or args.off
+    ):
+        parser.error("resource_guard_status_requires_machine_terminal")
     if args.launch:
-        subprocess.Popen([sys.executable, '-m', 'src.engine.automation.postclose_summary_handoff', *[a for a in argv if a != '--launch']],
-            cwd=PROJECT_ROOT, start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "src.engine.automation.postclose_summary_handoff",
+                *[a for a in argv if a != "--launch"],
+            ],
+            cwd=PROJECT_ROOT,
+            start_new_session=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
         return 0
-    if args.stage == 'overview':
-        print(json.dumps(stage_overview(DATA_DIR / 'report', day))); return 0
+    if args.stage == "overview":
+        print(json.dumps(stage_overview(DATA_DIR / "report", day)))
+        return 0
+
     def run(s):
         resource_blocked = None
         if args.resource_guard_status is not None:
             try:
                 resource_blocked = json.loads(args.resource_guard_status)
             except json.JSONDecodeError:
-                parser.error('resource_guard_status_invalid_json')
-        return run_stage(s, day, report_dir=DATA_DIR / 'report', project=PROJECT_ROOT,
-            publication=args.publication_date, recovery=args.recover_closed_target,
-            execute=not args.validate_existing, timeout=args.timeout_sec,
+                parser.error("resource_guard_status_invalid_json")
+        return run_stage(
+            s,
+            day,
+            report_dir=DATA_DIR / "report",
+            project=PROJECT_ROOT,
+            publication=args.publication_date,
+            recovery=args.recover_closed_target,
+            execute=not args.validate_existing,
+            timeout=args.timeout_sec,
             off=args.off,
             # Native recovery launches Main and compact together. Compact must
             # wait for that live predecessor outside the compute slot; zero
             # wait would defer it permanently before Main can finish.
-            prerequisite_wait=(args.timeout_sec if s == 'main_auxiliary_policy'
-                               else 0) if args.recover_closed_target else args.timeout_sec,
-            stop_event=stop_event, resource_blocked=resource_blocked)
-    if args.stage == 'machine_group':
+            prerequisite_wait=(
+                (args.timeout_sec if s == "main_auxiliary_policy" else 0)
+                if args.recover_closed_target
+                else args.timeout_sec
+            ),
+            stop_event=stop_event,
+            resource_blocked=resource_blocked,
+        )
+
+    if args.stage == "machine_group":
         # Finish refreshed parents before launching their consumers. Otherwise
         # a consumer can accept the previous succeeded parent receipt before
         # the concurrent parent has published its new pending/running state.
         # The existing host-wide two-child compute limit remains unchanged.
-        results=[]
-        results.append(run('summary_handoff'))
-    else: results=[run(args.stage)]
-    print(json.dumps([dict(stage=r.get('stage_id'), status=r['status'], exit_code=r['exit_code'], cache_reused=r.get('cache_reused',False)) for r in results]))
-    return 1 if any(r['exit_code'] not in (0,75) for r in results) else 75 if any(r['exit_code']==75 for r in results) else 0
+        results = []
+        results.append(run("summary_handoff"))
+    else:
+        results = [run(args.stage)]
+    print(
+        json.dumps(
+            [
+                dict(
+                    stage=r.get("stage_id"),
+                    status=r["status"],
+                    exit_code=r["exit_code"],
+                    cache_reused=r.get("cache_reused", False),
+                )
+                for r in results
+            ]
+        )
+    )
+    return (
+        1
+        if any(r["exit_code"] not in (0, 75) for r in results)
+        else 75 if any(r["exit_code"] == 75 for r in results) else 0
+    )
 
 
 if __name__ == "__main__":
     import sys
-    raise SystemExit(_stage_main(sys.argv[1:]) if "--stage" in sys.argv else _producer_main())
+
+    raise SystemExit(
+        _stage_main(sys.argv[1:]) if "--stage" in sys.argv else _producer_main()
+    )

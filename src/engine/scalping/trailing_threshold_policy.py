@@ -119,16 +119,20 @@ def market_values_from_env(
 
     scalar = normalize_values(scalar_values)
     market_values = {
-        market: normalize_values({
-            key: env_values.get(MARKET_ENV_KEYS[key][market], scalar[key])
-            for key in THRESHOLD_KEYS
-        })
+        market: normalize_values(
+            {
+                key: env_values.get(MARKET_ENV_KEYS[key][market], scalar[key])
+                for key in THRESHOLD_KEYS
+            }
+        )
         for market in START_MARKETS
     }
     return _validate_market_widths(market_values)
 
 
-def _validate_market_widths(values: dict[str, dict[str, float | int]]) -> dict[str, dict[str, float | int]]:
+def _validate_market_widths(
+    values: dict[str, dict[str, float | int]],
+) -> dict[str, dict[str, float | int]]:
     for market, vector in values.items():
         if vector["SCALP_TRAILING_LIMIT_STRONG"] < vector["SCALP_TRAILING_LIMIT_WEAK"]:
             raise ValueError(f"{market}:strong_width_narrower_than_weak")
@@ -138,25 +142,30 @@ def _validate_market_widths(values: dict[str, dict[str, float | int]]) -> dict[s
 def market_values_hash(values: Mapping[str, Mapping[str, Any]]) -> str:
     if set(values) != set(START_MARKETS):
         raise ValueError("market_keys_mismatch")
-    normalized = _validate_market_widths({
-        market: normalize_values(values[market]) for market in START_MARKETS
-    })
+    normalized = _validate_market_widths(
+        {market: normalize_values(values[market]) for market in START_MARKETS}
+    )
     payload = json.dumps(normalized, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode("ascii")).hexdigest()
 
 
 def selected_policy_env(
-    policy: Mapping[str, Any], report: Mapping[str, Any], *,
-    target_date: str, report_sha256: str,
+    policy: Mapping[str, Any],
+    report: Mapping[str, Any],
+    *,
+    target_date: str,
+    report_sha256: str,
 ) -> dict[str, str]:
     """Validate an explicit next-date selection against its immutable report."""
 
-    if (policy.get("schema") != SELECTED_POLICY_SCHEMA
-            or policy.get("family") != "scalp_trailing_four_axis_selector"
-            or policy.get("target_date") != target_date
-            or policy.get("allowed_runtime_apply") is not True
-            or policy.get("runtime_effect") is not True
-            or policy.get("apply_scope") != "one_stage_canary"):
+    if (
+        policy.get("schema") != SELECTED_POLICY_SCHEMA
+        or policy.get("family") != "scalp_trailing_four_axis_selector"
+        or policy.get("target_date") != target_date
+        or policy.get("allowed_runtime_apply") is not True
+        or policy.get("runtime_effect") is not True
+        or policy.get("apply_scope") != "one_stage_canary"
+    ):
         raise ValueError("selection_authority_invalid")
     source_date = str(policy.get("source_date") or "")
     try:
@@ -166,57 +175,70 @@ def selected_policy_env(
             raise ValueError("target_date_format")
     except (TypeError, ValueError) as exc:
         raise ValueError("selection_date_invalid") from exc
-    if (not source_date or source_date >= target_date
-            or source_date < "2026-06-05"
-            or report.get("date") != source_date
-            or policy.get("source_report_sha256") != report_sha256):
+    if (
+        not source_date
+        or source_date >= target_date
+        or source_date < "2026-06-05"
+        or report.get("date") != source_date
+        or policy.get("source_report_sha256") != report_sha256
+    ):
         raise ValueError("source_report_binding_invalid")
     population = report.get("completed_population_quality") or {}
     research = report.get("trailing_four_axis_market_tuning") or {}
     candidate = research.get("research_candidate") or {}
-    if (population.get("complete") is not True
-            or research.get("population_complete") is not True
-            or research.get("status") != "research_candidate_holdout_positive_review_required"
-            or not candidate or candidate.get("decision_authority")
-                != "research_candidate_requires_policy_selection"):
+    if (
+        population.get("complete") is not True
+        or research.get("population_complete") is not True
+        or research.get("status")
+        != "research_candidate_holdout_positive_review_required"
+        or not candidate
+        or candidate.get("decision_authority")
+        != "research_candidate_requires_policy_selection"
+    ):
         raise ValueError("research_candidate_not_eligible")
     values = policy.get("market_values")
-    if (not isinstance(values, dict)
-            or values != candidate.get("values")
-            or market_values_hash(values) != policy.get("market_values_sha256")
-            or policy.get("market_values_sha256")
-                != candidate.get("market_values_sha256")):
+    if (
+        not isinstance(values, dict)
+        or values != candidate.get("values")
+        or market_values_hash(values) != policy.get("market_values_sha256")
+        or policy.get("market_values_sha256") != candidate.get("market_values_sha256")
+    ):
         raise ValueError("selected_vector_mismatch")
     evidence = research.get("joint_selection_evidence") or {}
-    if (evidence.get("winner_sha256") != policy.get("market_values_sha256")
-            or evidence.get("tail_review_required") is not False
-            or not isinstance(evidence.get("holdout_conservative_delta_krw"), (int, float))
-            or evidence["holdout_conservative_delta_krw"] <= 0
-            or not isinstance(
-                evidence.get("holdout_conservative_worst_slippage_delta_krw"),
-                (int, float),
-            )
-            or evidence["holdout_conservative_worst_slippage_delta_krw"] <= 0
-            or not isinstance(
-                evidence.get("holdout_worst_slippage_min_day_ev_pct"), (int, float)
-            )
-            or evidence["holdout_worst_slippage_min_day_ev_pct"] <= 0):
+    if (
+        evidence.get("winner_sha256") != policy.get("market_values_sha256")
+        or evidence.get("tail_review_required") is not False
+        or not isinstance(evidence.get("holdout_conservative_delta_krw"), (int, float))
+        or evidence["holdout_conservative_delta_krw"] <= 0
+        or not isinstance(
+            evidence.get("holdout_conservative_worst_slippage_delta_krw"),
+            (int, float),
+        )
+        or evidence["holdout_conservative_worst_slippage_delta_krw"] <= 0
+        or not isinstance(
+            evidence.get("holdout_worst_slippage_min_day_ev_pct"), (int, float)
+        )
+        or evidence["holdout_worst_slippage_min_day_ev_pct"] <= 0
+    ):
         raise ValueError("selection_safety_evidence_invalid")
     parent = str(policy.get("rollback_market_values_sha256") or "")
     if len(parent) != 64 or any(char not in "0123456789abcdef" for char in parent):
         raise ValueError("rollback_parent_hash_invalid")
     review = policy.get("selection_review") or {}
-    if (not isinstance(review, dict)
-            or review.get("status") != "reviewed_one_stage_canary"
-            or review.get("candidate_sha256") != policy.get("market_values_sha256")
-            or review.get("source_quality") != "pass"
-            or review.get("execution_model") != "pass"
-            or review.get("same_stage_owner") != "scalp_trailing_take_profit"
-            or review.get("rollback_sha256") != parent):
+    if (
+        not isinstance(review, dict)
+        or review.get("status") != "reviewed_one_stage_canary"
+        or review.get("candidate_sha256") != policy.get("market_values_sha256")
+        or review.get("source_quality") != "pass"
+        or review.get("execution_model") != "pass"
+        or review.get("same_stage_owner") != "scalp_trailing_take_profit"
+        or review.get("rollback_sha256") != parent
+    ):
         raise ValueError("selection_review_missing_or_invalid")
     return {
         MARKET_ENV_KEYS[key][market]: str(values[market][key])
-        for market in START_MARKETS for key in THRESHOLD_KEYS
+        for market in START_MARKETS
+        for key in THRESHOLD_KEYS
     }
 
 

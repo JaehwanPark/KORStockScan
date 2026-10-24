@@ -552,7 +552,8 @@ def test_market_data_signed_tape_accepts_fresh_official_ka10084_time_shape():
 
 def test_market_data_enrichment_future_rest_receipt_is_never_fresh():
     _enriched, fields = build_market_data_enrichment(
-        ws_data={}, rest_orderbook={**_rest_orderbook(10000), "rest_received_ts": 1000.001},
+        ws_data={},
+        rest_orderbook={**_rest_orderbook(10000), "rest_received_ts": 1000.001},
         now_ts=1000.0,
     )
     assert fields["market_data_freshness_state"] == STALE

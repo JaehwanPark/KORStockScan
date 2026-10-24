@@ -57,13 +57,23 @@ def _cost(_stamp):
     return {"round_trip_cost_pct": 0.2, "policy_id": "test-cost"}
 
 
-def test_direct_paired_evaluator_measures_negative_support_relaxation(monkeypatch, tmp_path):
+def test_direct_paired_evaluator_measures_negative_support_relaxation(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(mod, "comparison_cost_contract", _cost)
     paths = []
     for day in ("2026-09-10", "2026-09-11", "2026-09-14", "2026-09-15", "2026-09-16"):
-        paths.append(_feedback(tmp_path / f"rising_missed_intraday_feedback_{day}.json", day, [("adverse_stop_first", None)] * 12))
+        paths.append(
+            _feedback(
+                tmp_path / f"rising_missed_intraday_feedback_{day}.json",
+                day,
+                [("adverse_stop_first", None)] * 12,
+            )
+        )
 
-    report = mod.build_report("2026-09-16", source_paths=paths, generated_at="2026-09-16T21:00:00+09:00")
+    report = mod.build_report(
+        "2026-09-16", source_paths=paths, generated_at="2026-09-16T21:00:00+09:00"
+    )
 
     support = report["economic_evaluation"]["candidates"][0]
     assert report["status"] == "measured_no_edge"
@@ -77,7 +87,10 @@ def test_direct_paired_evaluator_measures_negative_support_relaxation(monkeypatc
         "unavailable_quantity_and_capital_constraints_missing"
     )
     assert support["disposition"] == "measured_no_edge"
-    assert all(row["disposition"] == "unsupported_scope" for row in report["economic_evaluation"]["candidates"][1:])
+    assert all(
+        row["disposition"] == "unsupported_scope"
+        for row in report["economic_evaluation"]["candidates"][1:]
+    )
     assert report["code_improvement_orders"] == []
 
 
@@ -116,8 +129,16 @@ def test_positive_ev_without_quantity_or_capital_does_not_publish_policy(
     monkeypatch.setattr(mod, "comparison_cost_contract", _cost)
     paths = []
     for day in ("2026-09-10", "2026-09-11", "2026-09-14", "2026-09-15", "2026-09-16"):
-        paths.append(_feedback(tmp_path / f"rising_missed_intraday_feedback_{day}.json", day, [("gross_target_first", None)] * 12))
-    report = mod.build_report("2026-09-16", source_paths=paths, generated_at="2026-09-16T21:00:00+09:00")
+        paths.append(
+            _feedback(
+                tmp_path / f"rising_missed_intraday_feedback_{day}.json",
+                day,
+                [("gross_target_first", None)] * 12,
+            )
+        )
+    report = mod.build_report(
+        "2026-09-16", source_paths=paths, generated_at="2026-09-16T21:00:00+09:00"
+    )
     monkeypatch.setattr(mod, "OUTPUT_DIR", tmp_path / "out")
 
     result = mod.write_outputs(
@@ -169,13 +190,26 @@ def test_source_loader_rejects_schema_mismatch_and_future_explicit_source(tmp_pa
     assert future_report["source_receipts"][1]["state"] == "blocked_future_source"
 
 
-def test_no_edge_policy_receipt_preserves_incumbent_without_env_mutation(monkeypatch, tmp_path):
+def test_no_edge_policy_receipt_preserves_incumbent_without_env_mutation(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(mod, "comparison_cost_contract", _cost)
-    path = _feedback(tmp_path / "rising_missed_intraday_feedback_2026-09-16.json", "2026-09-16", [("adverse_stop_first", None)] * 2)
-    report = mod.build_report("2026-09-16", source_paths=[path], generated_at="2026-09-16T21:00:00+09:00")
+    path = _feedback(
+        tmp_path / "rising_missed_intraday_feedback_2026-09-16.json",
+        "2026-09-16",
+        [("adverse_stop_first", None)] * 2,
+    )
+    report = mod.build_report(
+        "2026-09-16", source_paths=[path], generated_at="2026-09-16T21:00:00+09:00"
+    )
     monkeypatch.setattr(mod, "OUTPUT_DIR", tmp_path / "out")
 
-    result = mod.write_outputs(report, output_json=tmp_path / "report.json", output_md=tmp_path / "report.md", effective_date="2026-09-17")
+    result = mod.write_outputs(
+        report,
+        output_json=tmp_path / "report.json",
+        output_md=tmp_path / "report.md",
+        effective_date="2026-09-17",
+    )
 
     assert result["policy"]["status"] == "incumbent_preserved"
     assert result["policy"]["runtime_env_overrides"] == {}
@@ -190,7 +224,9 @@ def test_no_edge_policy_receipt_preserves_incumbent_without_env_mutation(monkeyp
     ("publication", "effective"),
     [("2026-09-17", "2026-09-18"), ("2026-09-20", "2026-09-21")],
 )
-def test_publication_date_selects_consumer_policy(monkeypatch, tmp_path, publication, effective):
+def test_publication_date_selects_consumer_policy(
+    monkeypatch, tmp_path, publication, effective
+):
     from src.engine.automation import runtime_policy_bootstrap as bootstrap
 
     monkeypatch.setattr(mod, "OUTPUT_DIR", tmp_path)
@@ -222,15 +258,15 @@ def test_publication_date_selects_consumer_policy(monkeypatch, tmp_path, publica
 def test_publication_rejects_changed_source_before_any_write(monkeypatch, tmp_path):
     monkeypatch.setattr(mod, "OUTPUT_DIR", tmp_path)
     monkeypatch.setattr(mod, "FEEDBACK_DIR", tmp_path / "feedback")
-    report = mod.build_report(
-        "2026-09-17", generated_at="2026-09-20T14:00:00+09:00"
-    )
+    report = mod.build_report("2026-09-17", generated_at="2026-09-20T14:00:00+09:00")
     report["decision"] = "changed_after_hash"
     report_path = tmp_path / "report.json"
     report_path.write_text("previous-generation")
 
     with pytest.raises(ValueError, match="source_report_sha256_mismatch"):
-        mod.write_outputs(report, output_json=report_path, output_md=tmp_path / "report.md")
+        mod.write_outputs(
+            report, output_json=report_path, output_md=tmp_path / "report.md"
+        )
 
     assert report_path.read_text() == "previous-generation"
     assert not (tmp_path / "rising_missed_tp1_policy_2026-09-21.json").exists()
@@ -241,9 +277,15 @@ def test_overnight_recovery_preserves_requested_publication_date(monkeypatch, tm
     monkeypatch.setattr(mod, "FEEDBACK_DIR", tmp_path / "feedback")
     monkeypatch.setenv("POSTCLOSE_POLICY_PUBLICATION_DATE", "2026-09-21")
     report = mod.build_report("2026-09-21", generated_at="2026-09-22T00:30:00+09:00")
-    result = mod.write_outputs(report, output_json=tmp_path / "report.json", output_md=tmp_path / "report.md")
+    result = mod.write_outputs(
+        report, output_json=tmp_path / "report.json", output_md=tmp_path / "report.md"
+    )
     assert result["policy"]["publication_date"] == "2026-09-21"
     assert result["policy"]["effective_date"] == "2026-09-22"
     monkeypatch.setenv("POSTCLOSE_POLICY_PUBLICATION_DATE", "2026-09-23")
     with pytest.raises(ValueError, match="publication_date_invalid"):
-        mod.write_outputs(report, output_json=tmp_path / "report.json", output_md=tmp_path / "report.md")
+        mod.write_outputs(
+            report,
+            output_json=tmp_path / "report.json",
+            output_md=tmp_path / "report.md",
+        )

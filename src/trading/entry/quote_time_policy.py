@@ -31,10 +31,17 @@ class QuoteTimePolicy:
             raise ValueError("unsupported_quote_time_policy_version")
         for key, value in asdict(self).items():
             if key.endswith("_ms"):
-                if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
+                if (
+                    type(value) not in (int, float)
+                    or not math.isfinite(value)
+                    or value < 0
+                ):
                     raise ValueError(f"invalid_quote_time_policy_limit:{key}")
                 object.__setattr__(self, key, float(value))
-        if type(self.consistency_enabled) is not bool or type(self.refresh_enabled) is not bool:
+        if (
+            type(self.consistency_enabled) is not bool
+            or type(self.refresh_enabled) is not bool
+        ):
             raise ValueError("invalid_quote_time_policy_flag")
 
     def budget_for(self, stage: str) -> float:
@@ -59,7 +66,9 @@ class QuoteTimePolicy:
     def to_dict(self) -> dict:
         values = asdict(self)
         values["sha256"] = hashlib.sha256(
-            json.dumps(values, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+            json.dumps(
+                values, sort_keys=True, separators=(",", ":"), allow_nan=False
+            ).encode()
         ).hexdigest()
         values["source_clock"] = "ws_quote_source_receipt.observed_epoch"
         values["transport_clock"] = "last_ws_update_ts"
@@ -82,7 +91,9 @@ def active_contract_receipt(receipt) -> dict:
     remain bound; turning a disabled owner on always changes the contract.
     """
     try:
-        policy = QuoteTimePolicy(**{field.name: receipt[field.name] for field in fields(QuoteTimePolicy)})
+        policy = QuoteTimePolicy(
+            **{field.name: receipt[field.name] for field in fields(QuoteTimePolicy)}
+        )
         if dict(receipt) != policy.to_dict():
             raise ValueError("quote_time_policy_receipt_invalid")
         active = dict(receipt)

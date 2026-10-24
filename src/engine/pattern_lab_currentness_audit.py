@@ -483,6 +483,7 @@ def build_pattern_lab_currentness_audit(
 ) -> dict[str, Any]:
     if not include_swing:
         from src.engine.lifecycle.retirement import retired_status
+
         return retired_status("claude_scalping_pattern_lab")
     target_date = str(target_date).strip()
     paths = _lab_paths()
@@ -772,6 +773,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.exclude_swing:
         from src.engine.lifecycle.retirement import retired_status
+
         print(json.dumps(retired_status("claude_scalping_pattern_lab")))
         return 0
     report = build_pattern_lab_currentness_audit(

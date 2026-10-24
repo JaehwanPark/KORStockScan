@@ -9,12 +9,12 @@ from src.engine.automation import postclose_recommendation_intake as mod
 from src.engine.automation import postclose_summary_handoff as handoff
 from src.engine.automation import postclose_workorder_contract as contract
 from src.engine.automation.tuning_performance_control_tower import _selected_runtime
-from src.engine.lifecycle.archive.build_code_improvement_workorder_readers import _previous_workorder_lineage
+from src.engine.lifecycle.archive.build_code_improvement_workorder_readers import (
+    _previous_workorder_lineage,
+)
 from src.engine.monitoring.machine_recommendation_identity import bind_recommendation
 
 DATE = "2026-09-09"
-
-
 
 
 def write(path, payload):
@@ -187,11 +187,6 @@ def test_nonselected_change_and_rank_change_are_different():
     assert result["new_selected_order_ids"] == ["order_b"]
 
 
-
-
-
-
-
 def receipt(reports, paths):
     row = mod.build_intake(reports, DATE)["rows"][0]
     evidence_path = reports.parent.parent / "docs/review.json"
@@ -308,10 +303,6 @@ def publish_summaries(reports, checklist):
     return tower
 
 
-
-
-
-
 def test_equal_plan_manifest_counts_are_not_equal_selection():
     plan = {
         "target_date": DATE,
@@ -338,12 +329,6 @@ def test_equal_plan_manifest_counts_are_not_equal_selection():
         _selected_runtime(plan, {}, manifest, target_date=DATE)["target_date"]
         == "2026-09-08"
     )
-
-
-
-
-
-
 
 
 def test_workorder_source_race_never_binds_new_hash_to_old_input(tmp_path):
@@ -396,8 +381,6 @@ def test_permission_error_is_not_a_zero_byte_source(monkeypatch, tmp_path):
         producer._file_fingerprint(path, "source")
 
 
-
-
 def test_existing_pid_receipt_is_reported_without_current_process_claim():
     manifest = {
         "target_date": DATE,
@@ -417,22 +400,24 @@ def test_existing_pid_receipt_is_reported_without_current_process_claim():
     assert result["pid_passed"] is True
     assert result["common_candidate_selection_retired"] is True
     pid["target_date"] = "2026-09-08"
-    assert _selected_runtime(
-        {}, {}, manifest, target_date=DATE, pid_receipt=pid
-    )["verification_status"] == "not_generated"
+    assert (
+        _selected_runtime({}, {}, manifest, target_date=DATE, pid_receipt=pid)[
+            "verification_status"
+        ]
+        == "not_generated"
+    )
 
 
 def test_direct_tower_reads_summary_and_verifier(tmp_path, monkeypatch):
     from src.engine.automation import tuning_performance_control_tower as tower_builder
+
     reports = tmp_path / "data/report"
     monkeypatch.setattr(tower_builder, "REPORT_ROOT_DIR", reports)
     monkeypatch.setattr(
         tower_builder, "REPORT_DIR", reports / "tuning_performance_control_tower"
     )
     write(
-        reports
-        / "runtime_approval_summary"
-        / f"runtime_approval_summary_{DATE}.json",
+        reports / "runtime_approval_summary" / f"runtime_approval_summary_{DATE}.json",
         {"status": "direct_evidence_complete", "direct_evidence_state": "complete"},
     )
     write(
@@ -446,12 +431,19 @@ def test_direct_tower_reads_summary_and_verifier(tmp_path, monkeypatch):
     assert result["summary"]["common_tuning_search_retired"] is True
 
 
-def test_retired_aggregate_producer_does_not_publish_or_replace_prior(tmp_path,monkeypatch):
+def test_retired_aggregate_producer_does_not_publish_or_replace_prior(
+    tmp_path, monkeypatch
+):
     from src.engine import build_code_improvement_workorder as producer
-    def forbidden(*args,**kwargs):raise AssertionError("retired aggregate performed I/O")
-    monkeypatch.setattr(Path,"read_text",forbidden)
-    monkeypatch.setattr(Path,"write_text",forbidden)
-    result=producer.build_code_improvement_workorder("2026-10-12",include_swing=False)
-    assert result["status"]=="retired"
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("retired aggregate performed I/O")
+
+    monkeypatch.setattr(Path, "read_text", forbidden)
+    monkeypatch.setattr(Path, "write_text", forbidden)
+    result = producer.build_code_improvement_workorder(
+        "2026-10-12", include_swing=False
+    )
+    assert result["status"] == "retired"
     assert result["allowed_runtime_apply"] is False
     assert "code_improvement_workorder" not in mod.active_source_labels("2026-10-12")

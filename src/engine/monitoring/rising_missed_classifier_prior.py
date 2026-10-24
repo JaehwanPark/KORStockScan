@@ -17,7 +17,9 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from src.trading.market.comparison_cost import comparison_cost_contract
-from src.engine.automation.source_quality_clean_baseline import policy_refresh_start_date
+from src.engine.automation.source_quality_clean_baseline import (
+    policy_refresh_start_date,
+)
 from src.utils.constants import DATA_DIR
 from src.utils.market_day import is_krx_trading_day
 
@@ -71,7 +73,9 @@ def _sha_bytes(raw: bytes) -> str:
 
 def _sha_json(value: Any) -> str:
     return _sha_bytes(
-        json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode()
+        json.dumps(
+            value, ensure_ascii=True, sort_keys=True, separators=(",", ":")
+        ).encode()
     )
 
 
@@ -124,7 +128,11 @@ def _source_paths(target_date: str, explicit: Iterable[Path] = ()) -> list[Path]
             report_date = date.fromisoformat(suffix)
         except ValueError:
             continue
-        if date.fromisoformat(policy_refresh_start_date(target_date)) <= report_date <= maximum:
+        if (
+            date.fromisoformat(policy_refresh_start_date(target_date))
+            <= report_date
+            <= maximum
+        ):
             rows.append((report_date, path))
     return [path for _, path in sorted(rows)[-MAX_SOURCE_DAYS:]]
 
@@ -146,7 +154,9 @@ def _read_source(
     try:
         stat_before = path.stat()
         receipt.update(
-            exists=True, size_bytes=stat_before.st_size, mtime_ns=stat_before.st_mtime_ns
+            exists=True,
+            size_bytes=stat_before.st_size,
+            mtime_ns=stat_before.st_mtime_ns,
         )
         if stat_before.st_size > MAX_SOURCE_BYTES:
             receipt["state"] = "blocked_oversized"
@@ -255,18 +265,37 @@ def _outcome_return(row: dict[str, Any]) -> tuple[float | None, str, dict[str, A
 
 
 def _execution_model(label, source):
-    if not isinstance(source,dict):return None
-    horizon=_primary_horizon(label)
-    quote=(horizon.get("first_hit_execution_quote") if label.get("gross_first_hit_label") in
-           {"gross_target_first","adverse_stop_first"} else horizon.get("terminal_execution_quote"))
-    if not isinstance(quote,dict):return None
-    return dict(quote,status="full_depth_model",route=quote.get("route"),
-        buy_cost_rate=0.0,sell_cost_rate=source.get("cost_rate"),
+    if not isinstance(source, dict):
+        return None
+    horizon = _primary_horizon(label)
+    quote = (
+        horizon.get("first_hit_execution_quote")
+        if label.get("gross_first_hit_label")
+        in {"gross_target_first", "adverse_stop_first"}
+        else horizon.get("terminal_execution_quote")
+    )
+    if not isinstance(quote, dict):
+        return None
+    return dict(
+        quote,
+        status="full_depth_model",
+        route=quote.get("route"),
+        buy_cost_rate=0.0,
+        sell_cost_rate=source.get("cost_rate"),
         cost_known_at=source.get("cost_known_at"),
-        cost_source_sha256=_sha_json([source.get("policy_sha256"),source.get("cost_rate"),source.get("cost_known_at")]))
+        cost_source_sha256=_sha_json(
+            [
+                source.get("policy_sha256"),
+                source.get("cost_rate"),
+                source.get("cost_known_at"),
+            ]
+        ),
+    )
 
 
-def _joined_rows(payloads: list[tuple[dict[str, Any], dict[str, Any]]]) -> tuple[list[dict[str, Any]], Counter[str]]:
+def _joined_rows(
+    payloads: list[tuple[dict[str, Any], dict[str, Any]]],
+) -> tuple[list[dict[str, Any]], Counter[str]]:
     rows: list[dict[str, Any]] = []
     exclusions: Counter[str] = Counter()
     seen: set[tuple[str, str]] = set()
@@ -276,10 +305,15 @@ def _joined_rows(payloads: list[tuple[dict[str, Any], dict[str, Any]]]) -> tuple
         source_date = str(payload.get("target_date") or "")
         support_by_id = {
             str(item.get("evaluation_id")): item
-            for item in payload.get("rising_missed_tp1_counterfactual_submit_safety_rows") or []
+            for item in payload.get(
+                "rising_missed_tp1_counterfactual_submit_safety_rows"
+            )
+            or []
             if isinstance(item, dict) and item.get("evaluation_id")
         }
-        for label in payload.get("rising_missed_tp1_counterfactual_first_hit_label_rows") or []:
+        for label in (
+            payload.get("rising_missed_tp1_counterfactual_first_hit_label_rows") or []
+        ):
             if not isinstance(label, dict):
                 exclusions["invalid_label_row"] += 1
                 continue
@@ -309,19 +343,29 @@ def _joined_rows(payloads: list[tuple[dict[str, Any], dict[str, Any]]]) -> tuple
                     "effective_venue": label.get("effective_venue"),
                     "market_session_bucket": label.get("market_session_bucket"),
                     "selector_reason": label.get("selector_reason"),
-                    "positive_support_count": _int(support.get("positive_support_count")),
+                    "positive_support_count": _int(
+                        support.get("positive_support_count")
+                    ),
                     "spread_ratio": _float(label.get("spread_ratio")),
                     "watch_delta_pct": _float(label.get("watch_delta_pct")),
                     "outcome_label": label.get("gross_first_hit_label"),
                     "net_return_pct": net_return,
                     "outcome_state": outcome_state,
                     "quantity_capital_source": support.get("quantity_capital_source"),
-                    "counterfactual_execution": _execution_model(label,support.get("quantity_capital_source")),
+                    "counterfactual_execution": _execution_model(
+                        label, support.get("quantity_capital_source")
+                    ),
                     "cost_contract": cost,
                     "evidence_mode": "counterfactual",
                 }
             )
-    rows.sort(key=lambda row: (row["source_date"], str(row["candidate_ts"]), row["evaluation_id"]))
+    rows.sort(
+        key=lambda row: (
+            row["source_date"],
+            str(row["candidate_ts"]),
+            row["evaluation_id"],
+        )
+    )
     return rows, exclusions
 
 
@@ -332,7 +376,8 @@ def _candidate_selected(row: dict[str, Any], axis: str, value: float | int) -> b
     return bool(
         axis == "positive_support_min"
         and int(value) < int(BASELINE_POLICY[axis])
-        and row.get("selector_reason") == "rising_missed_tp1_insufficient_positive_support"
+        and row.get("selector_reason")
+        == "rising_missed_tp1_insufficient_positive_support"
         and _int(row.get("positive_support_count")) >= int(value)
     )
 
@@ -346,7 +391,10 @@ def _split_dates(rows: list[dict[str, Any]]) -> tuple[set[str], set[str]]:
     for source_date in sorted(by_date, reverse=True):
         holdout.add(source_date)
         holdout_samples += by_date[source_date]
-        if holdout_samples >= HOLDOUT_SAMPLE_FLOOR and len(holdout) >= HOLDOUT_DAY_FLOOR:
+        if (
+            holdout_samples >= HOLDOUT_SAMPLE_FLOOR
+            and len(holdout) >= HOLDOUT_DAY_FLOOR
+        ):
             break
     calibration = set(by_date) - holdout
     return calibration, holdout
@@ -360,23 +408,40 @@ def _metrics(rows: list[dict[str, Any]], dates: set[str]) -> dict[str, Any]:
     for row in usable:
         daily_return_sum_pct[row["source_date"]] += float(row["net_return_pct"])
     from src.engine.scalping.tp1_capital_replay import replay
-    capital=replay(selected)
-    daily=capital.get("daily_net_profit_krw")
+
+    capital = replay(selected)
+    daily = capital.get("daily_net_profit_krw")
     if daily is not None:
-        returns=[r["challenger_net_krw"]/r["buy_notional_krw"]*100 if r["buy_notional_krw"] else 0.0
-                 for r in capital["rows"]]
+        returns = [
+            (
+                r["challenger_net_krw"] / r["buy_notional_krw"] * 100
+                if r["buy_notional_krw"]
+                else 0.0
+            )
+            for r in capital["rows"]
+        ]
     return {
         "capital_replay": capital,
         "paired_sample_count": len(usable),
         "distinct_day_count": len({row["source_date"] for row in usable}),
         "censored_count": len(selected) - len(usable),
-        "outcome_counts": dict(sorted(Counter(str(row["outcome_label"]) for row in selected).items())),
+        "outcome_counts": dict(
+            sorted(Counter(str(row["outcome_label"]) for row in selected).items())
+        ),
         "baseline_cost_adjusted_ev_pct": 0.0 if usable else None,
-        "challenger_cost_adjusted_ev_pct": round(sum(returns) / len(returns), 8) if returns else None,
-        "paired_delta_ev_pct": round(sum(returns) / len(returns), 8) if returns else None,
+        "challenger_cost_adjusted_ev_pct": (
+            round(sum(returns) / len(returns), 8) if returns else None
+        ),
+        "paired_delta_ev_pct": (
+            round(sum(returns) / len(returns), 8) if returns else None
+        ),
         "baseline_daily_net_profit_krw": 0.0 if daily else None,
-        "challenger_daily_net_profit_krw": sum(daily.values())/len(daily) if daily else None,
-        "paired_delta_daily_net_profit_krw": sum(daily.values())/len(daily) if daily else None,
+        "challenger_daily_net_profit_krw": (
+            sum(daily.values()) / len(daily) if daily else None
+        ),
+        "paired_delta_daily_net_profit_krw": (
+            sum(daily.values()) / len(daily) if daily else None
+        ),
         "worst_day_net_profit_krw": min(daily.values()) if daily else None,
         "paired_delta_daily_return_sum_pct": (
             round(sum(daily_return_sum_pct.values()) / len(daily_return_sum_pct), 8)
@@ -389,11 +454,17 @@ def _metrics(rows: list[dict[str, Any]], dates: set[str]) -> dict[str, Any]:
             else None
         ),
         "model_notional_per_attempt_krw": None,
-        "daily_net_profit_authority": "modeled_same_capital_v2" if daily else "unavailable_quantity_and_capital_constraints_missing",
+        "daily_net_profit_authority": (
+            "modeled_same_capital_v2"
+            if daily
+            else "unavailable_quantity_and_capital_constraints_missing"
+        ),
     }
 
 
-def _evaluate_candidate(rows: list[dict[str, Any]], axis: str, value: float | int) -> dict[str, Any]:
+def _evaluate_candidate(
+    rows: list[dict[str, Any]], axis: str, value: float | int
+) -> dict[str, Any]:
     policy = dict(BASELINE_POLICY)
     policy[axis] = value
     selected = [row for row in rows if _candidate_selected(row, axis, value)]
@@ -423,9 +494,10 @@ def _evaluate_candidate(rows: list[dict[str, Any]], axis: str, value: float | in
     ) <= 0.0:
         disposition = "measured_no_edge"
         blocker = "cost_adjusted_ev_not_improved"
-    elif calibration["paired_delta_daily_net_profit_krw"] is None or holdout[
-        "paired_delta_daily_net_profit_krw"
-    ] is None:
+    elif (
+        calibration["paired_delta_daily_net_profit_krw"] is None
+        or holdout["paired_delta_daily_net_profit_krw"] is None
+    ):
         disposition = "structurally_blocked"
         blocker = "counterfactual_quantity_or_capital_constraints_missing"
     elif (
@@ -471,7 +543,9 @@ def policy_paths(source_date: str, effective_date: str) -> tuple[Path, Path]:
 
 def _publication_date(report: dict[str, Any]) -> date:
     generated = date.fromisoformat(str(report["generated_at"])[:10])
-    publication = date.fromisoformat(os.environ.get("POSTCLOSE_POLICY_PUBLICATION_DATE") or str(generated))
+    publication = date.fromisoformat(
+        os.environ.get("POSTCLOSE_POLICY_PUBLICATION_DATE") or str(generated)
+    )
     if not date.fromisoformat(report["target_date"]) <= publication <= generated:
         raise ValueError("rising_missed_publication_date_invalid")
     return publication
@@ -517,13 +591,21 @@ def _policy_receipt(report: dict[str, Any], effective_date: str) -> dict[str, An
         "decision": "publish_challenger" if selected else "hold_no_edge",
         "selected_axis": selected.get("axis") if selected else None,
         "evaluated_axis": evaluated.get("axis") if evaluated else None,
-        "evaluated_before_value": evaluated.get("baseline_value") if evaluated else None,
-        "evaluated_after_value": evaluated.get("challenger_value") if evaluated else None,
-        "economic_disposition": evaluated.get("disposition") if evaluated else report.get("status"),
+        "evaluated_before_value": (
+            evaluated.get("baseline_value") if evaluated else None
+        ),
+        "evaluated_after_value": (
+            evaluated.get("challenger_value") if evaluated else None
+        ),
+        "economic_disposition": (
+            evaluated.get("disposition") if evaluated else report.get("status")
+        ),
         "baseline_policy": dict(BASELINE_POLICY),
         "challenger_policy": selected.get("challenger_policy") if selected else None,
         "baseline_policy_sha256": _sha_json(BASELINE_POLICY),
-        "challenger_policy_sha256": selected.get("challenger_policy_sha256") if selected else None,
+        "challenger_policy_sha256": (
+            selected.get("challenger_policy_sha256") if selected else None
+        ),
         "source_report_sha256": report["artifact_sha256"],
         "calibration": evaluated.get("calibration") if evaluated else None,
         "holdout": evaluated.get("holdout") if evaluated else None,
@@ -542,9 +624,13 @@ def _policy_receipt(report: dict[str, Any], effective_date: str) -> dict[str, An
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
     }
-    receipt["policy_sha256"] = _sha_json({key: value for key, value in receipt.items() if key != "policy_sha256"})
+    receipt["policy_sha256"] = _sha_json(
+        {key: value for key, value in receipt.items() if key != "policy_sha256"}
+    )
     if selected:
-        receipt["runtime_env_overrides"]["KORSTOCKSCAN_RISING_MISSED_TP1_POLICY_SHA256"] = receipt["policy_sha256"]
+        receipt["runtime_env_overrides"][
+            "KORSTOCKSCAN_RISING_MISSED_TP1_POLICY_SHA256"
+        ] = receipt["policy_sha256"]
     return receipt
 
 
@@ -581,8 +667,12 @@ def build_report(
         source_blocker = "source:missing"
     elif not exact_target and source_blocker is None:
         source_blocker = "source:exact_target_missing"
-    if not loaded or not exact_target or any(
-        receipt["state"] not in {"loaded", "valid_empty"} for _, receipt in loaded
+    if (
+        not loaded
+        or not exact_target
+        or any(
+            receipt["state"] not in {"loaded", "valid_empty"} for _, receipt in loaded
+        )
     ):
         status = "structurally_blocked"
     elif any(receipt["state"] == "valid_empty" for receipt in exact_target):
@@ -611,9 +701,11 @@ def build_report(
         }.get(status, "hold_no_edge"),
         "source_quality": {
             "clean_tuning_baseline_date": CLEAN_BASELINE_DATE.isoformat(),
-            "tuning_input_allowed": bool(loaded) and all(
+            "tuning_input_allowed": bool(loaded)
+            and all(
                 receipt["state"] in {"loaded", "valid_empty"} for _, receipt in loaded
-            ) and bool(exact_target),
+            )
+            and bool(exact_target),
             "source_state_counts": dict(sorted(source_states.items())),
             "exclusion_counts": dict(sorted(exclusions.items())),
         },
@@ -623,8 +715,10 @@ def build_report(
             "metric_role": "direct_same_attempt_cost_adjusted_counterfactual",
             "comparison_status": status,
             "paired_sample_count": sum(
-                row["calibration"]["paired_sample_count"] + row["holdout"]["paired_sample_count"]
-                for row in candidates if row["decision_change_count"]
+                row["calibration"]["paired_sample_count"]
+                + row["holdout"]["paired_sample_count"]
+                for row in candidates
+                if row["decision_change_count"]
             ),
             "source_date_count": len({row["source_date"] for row in rows}),
             "candidate_count": len(candidates),
@@ -642,8 +736,12 @@ def build_report(
             },
             "counterfactual": {
                 "row_count": len(rows),
-                "usable_outcome_count": sum(row["net_return_pct"] is not None for row in rows),
-                "censored_outcome_count": sum(row["net_return_pct"] is None for row in rows),
+                "usable_outcome_count": sum(
+                    row["net_return_pct"] is not None for row in rows
+                ),
+                "censored_outcome_count": sum(
+                    row["net_return_pct"] is None for row in rows
+                ),
                 "daily_net_profit_authority": "unavailable_quantity_and_capital_constraints_missing",
             },
             "first_blocker": (
@@ -671,9 +769,20 @@ def build_report(
         "code_improvement_orders": [],
     }
     from src.engine.monitoring.policy_generation_contract import native
-    report['policy_generation']=native(report,family='rising_missed',day=target_date,data_root=DATA_DIR,
-        source_state='valid_empty' if not rows else 'partitioned',comparison_state=report['status'],
-        handoff_state='pending_publication' if report['status']=='validated_edge' else 'incumbent_carried')
+
+    report["policy_generation"] = native(
+        report,
+        family="rising_missed",
+        day=target_date,
+        data_root=DATA_DIR,
+        source_state="valid_empty" if not rows else "partitioned",
+        comparison_state=report["status"],
+        handoff_state=(
+            "pending_publication"
+            if report["status"] == "validated_edge"
+            else "incumbent_carried"
+        ),
+    )
     report["artifact_sha256"] = _sha_json(
         {key: value for key, value in report.items() if key != "artifact_sha256"}
     )
@@ -681,7 +790,11 @@ def build_report(
 
 
 def write_outputs(
-    report: dict[str, Any], *, output_json: Path, output_md: Path, effective_date: str | None = None
+    report: dict[str, Any],
+    *,
+    output_json: Path,
+    output_md: Path,
+    effective_date: str | None = None,
 ) -> dict[str, Any]:
     from src.engine.automation.runtime_policy_bootstrap import (
         validate_rising_missed_policy_receipt,
@@ -698,7 +811,9 @@ def write_outputs(
     )
     if binding_error:
         raise ValueError(f"rising_missed_policy_publication_invalid:{binding_error}")
-    source_policy_path, effective_policy_path = policy_paths(str(report["target_date"]), effective_date)
+    source_policy_path, effective_policy_path = policy_paths(
+        str(report["target_date"]), effective_date
+    )
     body = json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
     _atomic_write(output_json, body)
     lines = [
@@ -722,7 +837,9 @@ def write_outputs(
             f"`{row['disposition']}` | `{row['blocker'] or '-'}` |"
         )
     _atomic_write(output_md, "\n".join(lines) + "\n")
-    policy_body = json.dumps(policy, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    policy_body = (
+        json.dumps(policy, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    )
     _atomic_write(source_policy_path, policy_body)
     _atomic_write(effective_policy_path, policy_body)
     return {

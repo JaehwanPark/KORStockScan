@@ -19,8 +19,10 @@ from datetime import date, datetime, time as bar_time, timedelta
 from zoneinfo import ZoneInfo
 from src.utils.market_day import is_krx_trading_day
 
+
 def fixture(days, symbol_number, *, populated=False):
     import math
+
     day = date(2026, 6, 5)
     rows, dates = [], []
     while len(dates) < days:
@@ -28,15 +30,25 @@ def fixture(days, symbol_number, *, populated=False):
             dates.append(day)
             for minute in range(390):
                 close = round(10000 + symbol_number * 10 + 150 * math.sin(minute / 12))
-                rows.append(spot.Bar(
-                    datetime.combine(day, bar_time(9), ZoneInfo("Asia/Seoul")) + timedelta(minutes=minute),
-                    close - 3 if populated else close + 3, close + 9, close - 9, close))
+                rows.append(
+                    spot.Bar(
+                        datetime.combine(day, bar_time(9), ZoneInfo("Asia/Seoul"))
+                        + timedelta(minutes=minute),
+                        close - 3 if populated else close + 3,
+                        close + 9,
+                        close - 9,
+                        close,
+                    )
+                )
         day += timedelta(days=1)
     return rows, dates
 
+
 def research_contract_hash():
     import hashlib
+
     return hashlib.sha256(Path(expanded.__file__).read_bytes()).hexdigest()
+
 
 from src.trading.low_price_two_leg.profiles import PROFILES
 
@@ -94,9 +106,9 @@ def run(symbols, days, output, cache, budget=5400):
                     holdout_days=spot.HOLDOUT_DAYS,
                 )
                 reference_cpu += time.process_time() - control
-                assert digest == loop.digest(reference), (
-                    "original_native_episode_parity"
-                )
+                assert digest == loop.digest(
+                    reference
+                ), "original_native_episode_parity"
                 del reference
             hashes[str(i)] = digest
             if i + 1 in {19, 50, 100, symbols} or candidate_wall > budget:
@@ -116,9 +128,11 @@ def run(symbols, days, output, cache, budget=5400):
                 )
                 receipt = dict(
                     status="deferred" if candidate_wall > budget else "running",
-                    reason="compute_phase_budget_exceeded"
-                    if candidate_wall > budget
-                    else None,
+                    reason=(
+                        "compute_phase_budget_exceeded"
+                        if candidate_wall > budget
+                        else None
+                    ),
                     fixture="native_templates_synthetic_390_bars_no_broker_or_policy_acceptance",
                     producer_sha256=semantic,
                     measurements=measurements,

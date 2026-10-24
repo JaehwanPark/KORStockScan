@@ -43,8 +43,15 @@ class BoundedObservationQueue:
     The producer supplies immutable, small arguments. One drain is scheduled,
     including the running job in both limits. Enqueue is not append success.
     """
-    def __init__(self, executor, *, max_items=1024, max_bytes=4*1024*1024,
-                 max_item_bytes=64*1024):
+
+    def __init__(
+        self,
+        executor,
+        *,
+        max_items=1024,
+        max_bytes=4 * 1024 * 1024,
+        max_item_bytes=64 * 1024,
+    ):
         self.executor = executor
         self.max_items, self.max_bytes = max_items, max_bytes
         self.max_item_bytes = max_item_bytes
@@ -56,48 +63,76 @@ class BoundedObservationQueue:
         self._category_bytes = {}
         self._last_rejection = None
         self._outcomes = {}
-        self._stats = dict(queued=0, completed=0, append_confirmed=0,
-                           intentionally_not_written=0, append_unobservable=0, append_failed=0,
-                           completed_without_append_receipt=0, failed=0, unavailable=0,
-                           peak_items=0, peak_bytes=0)
+        self._stats = dict(
+            queued=0,
+            completed=0,
+            append_confirmed=0,
+            intentionally_not_written=0,
+            append_unobservable=0,
+            append_failed=0,
+            completed_without_append_receipt=0,
+            failed=0,
+            unavailable=0,
+            peak_items=0,
+            peak_bytes=0,
+        )
 
     def submit(self, callback, *args, **kwargs):
-        category = kwargs.pop('observation_category', 'default')
-        if category not in {'default', 'pre_submit_delay', 'initial_quantity', 'main_stop', 'trailing'}:
-            return self._unavailable('observation_category_invalid')
+        category = kwargs.pop("observation_category", "default")
+        if category not in {
+            "default",
+            "pre_submit_delay",
+            "initial_quantity",
+            "main_stop",
+            "trailing",
+        }:
+            return self._unavailable("observation_category_invalid")
         try:
             # Copy at admission, never retain a live stock or an AI payload.
-            encoded = json.dumps([args, kwargs], ensure_ascii=True,
-                                 separators=(',', ':'), allow_nan=False).encode()
+            encoded = json.dumps(
+                [args, kwargs],
+                ensure_ascii=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            ).encode()
             size = len(encoded)
         except (TypeError, ValueError):
             # Record types/paths only, never argument values, credentials or
             # a stringified live object. Keep the strict finite JSON gate.
             with self._condition:
                 self._last_rejection = {
-                    'callback': str(getattr(callback, '__qualname__', type(callback).__name__))[:96],
+                    "callback": str(
+                        getattr(callback, "__qualname__", type(callback).__name__)
+                    )[:96],
                     **self._invalid_location([args, kwargs]),
                 }
-            return self._unavailable('observation_envelope_invalid')
+            return self._unavailable("observation_envelope_invalid")
         with self._condition:
-            if (self._closed or size > self.max_item_bytes
-                    or self._items >= self.max_items or self._bytes + size > self.max_bytes):
-                return self._unavailable('observation_queue_unavailable')
-            if category == 'pre_submit_delay' and (
+            if (
+                self._closed
+                or size > self.max_item_bytes
+                or self._items >= self.max_items
+                or self._bytes + size > self.max_bytes
+            ):
+                return self._unavailable("observation_queue_unavailable")
+            if category == "pre_submit_delay" and (
                 self._category_items.get(category, 0) >= min(256, self.max_items // 4)
                 or self._category_bytes.get(category, 0) + size > self.max_bytes // 4
             ):
-                return self._unavailable('observation_category_budget_exceeded')
-            if category in {'initial_quantity','main_stop','trailing'} and (
-                self._category_items.get(category,0)>=min(128,max(1,self.max_items//8))
-                or self._category_bytes.get(category,0)+size>self.max_bytes//8
+                return self._unavailable("observation_category_budget_exceeded")
+            if category in {"initial_quantity", "main_stop", "trailing"} and (
+                self._category_items.get(category, 0)
+                >= min(128, max(1, self.max_items // 8))
+                or self._category_bytes.get(category, 0) + size > self.max_bytes // 8
             ):
-                return self._unavailable('observation_category_budget_exceeded')
+                return self._unavailable("observation_category_budget_exceeded")
             self._jobs.append((callback, encoded, time.perf_counter(), category))
             self._items += 1
             self._bytes += size
             self._category_items[category] = self._category_items.get(category, 0) + 1
-            self._category_bytes[category] = self._category_bytes.get(category, 0) + size
+            self._category_bytes[category] = (
+                self._category_bytes.get(category, 0) + size
+            )
             if not self._scheduled:
                 self._scheduled = True
                 try:
@@ -109,48 +144,59 @@ class BoundedObservationQueue:
                     self._category_items[category] -= 1
                     self._category_bytes[category] -= size
                     self._scheduled = False
-                    return self._unavailable('observation_executor_unavailable')
-            self._stats['queued'] += 1
-            self._stats['peak_items'] = max(self._stats['peak_items'], self._items)
-            self._stats['peak_bytes'] = max(self._stats['peak_bytes'], self._bytes)
-            return {'status': 'queued', 'structured_append_succeeded': False}
+                    return self._unavailable("observation_executor_unavailable")
+            self._stats["queued"] += 1
+            self._stats["peak_items"] = max(self._stats["peak_items"], self._items)
+            self._stats["peak_bytes"] = max(self._stats["peak_bytes"], self._bytes)
+            return {"status": "queued", "structured_append_succeeded": False}
 
     @staticmethod
     def _invalid_location(value):
-        pending, seen = [(value, '$', 0)], set()
+        pending, seen = [(value, "$", 0)], set()
         for _ in range(1024):
             if not pending:
                 break
             item, path, depth = pending.pop()
             if isinstance(item, float) and not math.isfinite(item):
-                return {'path': path[:160], 'type': 'nonfinite_float'}
+                return {"path": path[:160], "type": "nonfinite_float"}
             if item is None or isinstance(item, (str, int, float, bool)):
                 continue
             if not isinstance(item, (dict, list, tuple)):
-                return {'path': path[:160], 'type': type(item).__name__[:64]}
+                return {"path": path[:160], "type": type(item).__name__[:64]}
             if id(item) in seen or depth >= 8:
                 continue
             seen.add(id(item))
             if isinstance(item, dict):
                 # Field names are local schema keys. Do not include map keys
                 # from large dynamic payloads or any field values.
-                children = list(islice(item.items(), min(128, max(0, 1024-len(pending)))))
-                pending.extend((v, path+'.'+str(k)[:48], depth+1) for k, v in children)
+                children = list(
+                    islice(item.items(), min(128, max(0, 1024 - len(pending))))
+                )
+                pending.extend(
+                    (v, path + "." + str(k)[:48], depth + 1) for k, v in children
+                )
             else:
-                pending.extend((v, path+'['+str(i)+']', depth+1)
-                               for i, v in enumerate(item[:min(128, max(0, 1024-len(pending)))]))
-        return {'path': '$', 'type': 'invalid_or_cyclic_envelope'}
+                pending.extend(
+                    (v, path + "[" + str(i) + "]", depth + 1)
+                    for i, v in enumerate(item[: min(128, max(0, 1024 - len(pending)))])
+                )
+        return {"path": "$", "type": "invalid_or_cyclic_envelope"}
 
     def _unavailable(self, reason):
         with self._condition:
-            self._stats['unavailable'] += 1
+            self._stats["unavailable"] += 1
         from src.engine.monitoring.runtime_performance import failure
-        failure('observation_queue', reason, emit_log=False)
-        return {'status': 'unavailable', 'reason': reason,
-                'structured_append_succeeded': False}
+
+        failure("observation_queue", reason, emit_log=False)
+        return {
+            "status": "unavailable",
+            "reason": reason,
+            "structured_append_succeeded": False,
+        }
 
     def _drain(self):
         from src.engine.monitoring.runtime_performance import observe, failure
+
         started, processed = time.perf_counter(), 0
         while True:
             with self._condition:
@@ -158,7 +204,9 @@ class BoundedObservationQueue:
                     self._scheduled = False
                     self._condition.notify_all()
                     return
-                if processed >= 8 or (processed and time.perf_counter() - started >= .004):
+                if processed >= 8 or (
+                    processed and time.perf_counter() - started >= 0.004
+                ):
                     try:
                         self.executor.submit(self._drain)
                         return
@@ -168,35 +216,58 @@ class BoundedObservationQueue:
                         processed, started = 0, time.perf_counter()
                 callback, encoded, queued_at, category = self._jobs.popleft()
             try:
-                observe('observation_queue_wait', time.perf_counter() - queued_at)
+                observe("observation_queue_wait", time.perf_counter() - queued_at)
                 args, kwargs = json.loads(encoded)
                 outcome = callback(*args, **kwargs)
-                intentional = (isinstance(outcome, dict)
-                    and outcome.get('status') == 'intentionally_not_written'
-                    and bool(outcome.get('reason')))
-                if not intentional and (outcome is False or (isinstance(outcome, dict) and (
-                        outcome.get('structured_append_succeeded') is False
-                        or outcome.get('structured_compact_append_succeeded') is False))):
-                    raise OSError('observation_append_unconfirmed')
-                state = ('intentionally_not_written' if intentional else 'append_confirmed'
-                         if isinstance(outcome, dict) and outcome.get('structured_append_succeeded') is True
-                         else 'append_unobservable')
+                intentional = (
+                    isinstance(outcome, dict)
+                    and outcome.get("status") == "intentionally_not_written"
+                    and bool(outcome.get("reason"))
+                )
+                if not intentional and (
+                    outcome is False
+                    or (
+                        isinstance(outcome, dict)
+                        and (
+                            outcome.get("structured_append_succeeded") is False
+                            or outcome.get("structured_compact_append_succeeded")
+                            is False
+                        )
+                    )
+                ):
+                    raise OSError("observation_append_unconfirmed")
+                state = (
+                    "intentionally_not_written"
+                    if intentional
+                    else (
+                        "append_confirmed"
+                        if isinstance(outcome, dict)
+                        and outcome.get("structured_append_succeeded") is True
+                        else "append_unobservable"
+                    )
+                )
                 with self._condition:
-                    self._stats['completed'] += 1
+                    self._stats["completed"] += 1
                     self._stats[state] += 1
-                    if state == 'append_unobservable':
-                        self._stats['completed_without_append_receipt'] += 1
+                    if state == "append_unobservable":
+                        self._stats["completed_without_append_receipt"] += 1
             except Exception as exc:
-                state = 'append_failed'
-                failure('observation_append', type(exc).__name__, emit_log=False)
+                state = "append_failed"
+                failure("observation_append", type(exc).__name__, emit_log=False)
                 with self._condition:
-                    self._stats['failed'] += 1
-                    self._stats['append_failed'] += 1
+                    self._stats["failed"] += 1
+                    self._stats["append_failed"] += 1
             finally:
                 with self._condition:
-                    owner = category + ':' + str(getattr(callback, '__qualname__', type(callback).__name__))[:96]
+                    owner = (
+                        category
+                        + ":"
+                        + str(
+                            getattr(callback, "__qualname__", type(callback).__name__)
+                        )[:96]
+                    )
                     if owner not in self._outcomes and len(self._outcomes) >= 32:
-                        owner = 'overflow'
+                        owner = "overflow"
                     counters = self._outcomes.setdefault(owner, {})
                     counters[state] = counters.get(state, 0) + 1
                     self._items -= 1
@@ -208,21 +279,27 @@ class BoundedObservationQueue:
 
     def snapshot(self):
         with self._condition:
-            return {**self._stats, 'pending_items': self._items,
-                    'pending_bytes': self._bytes, 'closed': self._closed,
-                    'last_rejection': dict(self._last_rejection) if self._last_rejection else None,
-                    'outcomes_by_owner': {k: dict(v) for k,v in self._outcomes.items()},
-                    'category_items': dict(self._category_items),
-                    'category_bytes': dict(self._category_bytes)}
+            return {
+                **self._stats,
+                "pending_items": self._items,
+                "pending_bytes": self._bytes,
+                "closed": self._closed,
+                "last_rejection": (
+                    dict(self._last_rejection) if self._last_rejection else None
+                ),
+                "outcomes_by_owner": {k: dict(v) for k, v in self._outcomes.items()},
+                "category_items": dict(self._category_items),
+                "category_bytes": dict(self._category_bytes),
+            }
 
     def close(self, *, timeout=1.0):
         deadline = time.monotonic() + max(0, timeout)
         with self._condition:
             self._closed = True
             while self._items and time.monotonic() < deadline:
-                self._condition.wait(max(0, deadline-time.monotonic()))
+                self._condition.wait(max(0, deadline - time.monotonic()))
             if self._items:
-                self._unavailable('observation_shutdown_drain_timeout')
+                self._unavailable("observation_shutdown_drain_timeout")
             return self._items == 0
 
 
@@ -237,12 +314,24 @@ def configure_trailing_observation_sink(sink):
 
 def _append_trailing_observation(name, code, record_id, fields):
     from src.engine.scalping.universal_trailing_replay import encode_quote
-    fields['universal_trailing_quote_source_sha256'] = fields['universal_trailing_quote'].get('source_sha256')
-    fields['universal_trailing_quote'] = json.dumps(
-        encode_quote(fields['universal_trailing_quote']), sort_keys=True, separators=(',', ':'))
-    return emit_pipeline_event('HOLDING_PIPELINE', name, code,
-        'scalp_trailing_input_transition', record_id=record_id, fields=fields,
-        observed_at_epoch=fields['evaluation_at_epoch'])
+
+    fields["universal_trailing_quote_source_sha256"] = fields[
+        "universal_trailing_quote"
+    ].get("source_sha256")
+    fields["universal_trailing_quote"] = json.dumps(
+        encode_quote(fields["universal_trailing_quote"]),
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return emit_pipeline_event(
+        "HOLDING_PIPELINE",
+        name,
+        code,
+        "scalp_trailing_input_transition",
+        record_id=record_id,
+        fields=fields,
+        observed_at_epoch=fields["evaluation_at_epoch"],
+    )
 
 
 def enqueue_trailing_observation(name, code, record_id, fields):
@@ -250,10 +339,20 @@ def enqueue_trailing_observation(name, code, record_id, fields):
     # No synchronous fallback when the diagnostic queue is full or closed.
     sink = _TRAILING_OBSERVATION_SINK
     if sink is None:
-        return dict(status='unavailable', reason='trailing_observation_sink_missing',
-                    structured_append_succeeded=False)
-    return sink(_append_trailing_observation, name, code, record_id, fields,
-                observation_category='trailing')
+        return dict(
+            status="unavailable",
+            reason="trailing_observation_sink_missing",
+            structured_append_succeeded=False,
+        )
+    return sink(
+        _append_trailing_observation,
+        name,
+        code,
+        record_id,
+        fields,
+        observation_category="trailing",
+    )
+
 
 _TEXT_INFO_STAGE_KEYWORDS = (
     "order_submitted",
@@ -491,7 +590,10 @@ def _threshold_cycle_dir(*, ensure_exists: bool = True) -> Path:
 
 
 def _threshold_cycle_event_path(target_date: str) -> Path:
-    return _threshold_cycle_dir(ensure_exists=False) / f"threshold_events_{target_date}.jsonl"
+    return (
+        _threshold_cycle_dir(ensure_exists=False)
+        / f"threshold_events_{target_date}.jsonl"
+    )
 
 
 def _compaction_mode() -> str:
@@ -537,7 +639,13 @@ def _get_producer_compactor() -> ProducerSummaryCompactor | None:
     global _PRODUCER_COMPACTOR
     mode = _compaction_mode()
     with _COMPACTOR_LOCK:
-        _RETIRING_COMPACTORS[:] = [c for c in _RETIRING_COMPACTORS if c._pending_batch is not None or c._groups or (c._worker and c._worker.is_alive())]
+        _RETIRING_COMPACTORS[:] = [
+            c
+            for c in _RETIRING_COMPACTORS
+            if c._pending_batch is not None
+            or c._groups
+            or (c._worker and c._worker.is_alive())
+        ]
         if (
             _PRODUCER_COMPACTOR is not None
             and _PRODUCER_COMPACTOR.requested_mode != mode
@@ -546,8 +654,14 @@ def _get_producer_compactor() -> ProducerSummaryCompactor | None:
                 # At most one retiring and one current bounded buffer. Keep both
                 # references on repeated handover failure; raw remains available.
                 _PRODUCER_COMPACTOR.close(wait=False)
-                if (_PRODUCER_COMPACTOR._pending_batch is not None or _PRODUCER_COMPACTOR._groups or
-                        (_PRODUCER_COMPACTOR._worker and _PRODUCER_COMPACTOR._worker.is_alive())):
+                if (
+                    _PRODUCER_COMPACTOR._pending_batch is not None
+                    or _PRODUCER_COMPACTOR._groups
+                    or (
+                        _PRODUCER_COMPACTOR._worker
+                        and _PRODUCER_COMPACTOR._worker.is_alive()
+                    )
+                ):
                     return None
                 _PRODUCER_COMPACTOR = None
             else:
@@ -587,7 +701,9 @@ def _flush_producer_summary_at_exit() -> None:
             compactor.close()
         except Exception as exc:
             failed.append(compactor)
-            log_error(f"[PIPELINE_EVENT] producer summary shutdown drain failed; raw retained: {exc}")
+            log_error(
+                f"[PIPELINE_EVENT] producer summary shutdown drain failed; raw retained: {exc}"
+            )
     with _COMPACTOR_LOCK:
         _RETIRING_COMPACTORS[:] = [c for c in failed if c is not _PRODUCER_COMPACTOR]
         _TERMINATION_DRAIN_ACTIVE = False
@@ -596,12 +712,12 @@ def _flush_producer_summary_at_exit() -> None:
 def drain_pipeline_event_summary_before_termination() -> None:
     """Close loaded observation sources, then flush their rows before SIGTERM."""
     global _TERMINATION_DRAIN_ACTIVE
-    engine = sys.modules.get('src.engine.kiwoom_sniper_v2')
+    engine = sys.modules.get("src.engine.kiwoom_sniper_v2")
     if engine is not None:
         try:
             engine.close_observation_sources()
         except Exception as exc:
-            log_error('[SOURCE_OBSERVATION_SHUTDOWN_FAILED] type=' + type(exc).__name__)
+            log_error("[SOURCE_OBSERVATION_SHUTDOWN_FAILED] type=" + type(exc).__name__)
     with _COMPACTOR_LOCK:
         _TERMINATION_DRAIN_ACTIVE = True
         current = _PRODUCER_COMPACTOR
@@ -614,15 +730,20 @@ def drain_pipeline_event_summary_before_termination() -> None:
             compactor.close()
         except Exception as exc:
             failed.append(compactor)
-            log_error(f"[PIPELINE_EVENT] producer summary shutdown drain failed; raw retained: {exc}")
+            log_error(
+                f"[PIPELINE_EVENT] producer summary shutdown drain failed; raw retained: {exc}"
+            )
     if current is not None:
         try:
             current.flush()
         except Exception as exc:
-            log_error(f"[PIPELINE_EVENT] producer summary shutdown drain failed; raw retained: {exc}")
+            log_error(
+                f"[PIPELINE_EVENT] producer summary shutdown drain failed; raw retained: {exc}"
+            )
     with _COMPACTOR_LOCK:
         _RETIRING_COMPACTORS[:] = [
-            compactor for compactor in _RETIRING_COMPACTORS
+            compactor
+            for compactor in _RETIRING_COMPACTORS
             if compactor not in retiring or compactor in failed
         ]
 
@@ -648,9 +769,7 @@ def zero_context_value_missing(value) -> bool:
     )
 
 
-def zero_context_observation_fields(
-    *, domain: str, blocker: str, states: dict
-) -> dict:
+def zero_context_observation_fields(*, domain: str, blocker: str, states: dict) -> dict:
     zero_states = {str(key): str(value) for key, value in (states or {}).items()}
     blocking_states = [
         value
@@ -747,12 +866,22 @@ def _project_fields_for_compact_stream(
 ) -> dict[str, str]:
     if stage in LOSSLESS_ORDER_STAGES:
         return fields
-    if stage in {"entry_async_disposition", "zero_base_probe_result", "entry_ai_economic_plan_observed", "entry_ai_economic_source_gap",
-                 "entry_ai_economic_decision_available", "entry_machine_watch_terminal",
-                 "entry_execution_sizing_plan", "entry_execution_sizing_plan_block",
-                 "entry_quantity_leg_four_arm_evaluation", "order_leg_sent",
-                 "order_leg_fail", "order_leg_no_response",
-                 "order_bundle_failed", "order_bundle_submitted"}:
+    if stage in {
+        "entry_async_disposition",
+        "zero_base_probe_result",
+        "entry_ai_economic_plan_observed",
+        "entry_ai_economic_source_gap",
+        "entry_ai_economic_decision_available",
+        "entry_machine_watch_terminal",
+        "entry_execution_sizing_plan",
+        "entry_execution_sizing_plan_block",
+        "entry_quantity_leg_four_arm_evaluation",
+        "order_leg_sent",
+        "order_leg_fail",
+        "order_leg_no_response",
+        "order_bundle_failed",
+        "order_bundle_submitted",
+    }:
         # Exact source/quantity/price/attempt hashes must not be lost at 40 fields.
         return fields
     high_volume = stage in HIGH_VOLUME_OBSERVATION_STAGES
@@ -785,11 +914,37 @@ def _project_fields_for_compact_stream(
                 break
     if submit_stage:
         # Preserve exact atomic contracts in addition to the normal compact view.
-        selected.update({key: value for key, value in fields.items()
-            if key.startswith(("entry_execution_sizing_", "entry_price_plan_",
-                               "entry_opportunity_", "entry_quantity_leg_"))
-            or key in {"entry_split_order_policy_sha256", "entry_split_order_runtime_pid", "entry_split_order_runtime_consumed", "entry_split_order_policy_version", "entry_split_order_policy_applied", "entry_split_submitted_price", "entry_split_submitted_at"}
-            or key in {"broker_order_no", "ord_no", "effective_venue", "market_session_bucket"}})
+        selected.update(
+            {
+                key: value
+                for key, value in fields.items()
+                if key.startswith(
+                    (
+                        "entry_execution_sizing_",
+                        "entry_price_plan_",
+                        "entry_opportunity_",
+                        "entry_quantity_leg_",
+                    )
+                )
+                or key
+                in {
+                    "entry_split_order_policy_sha256",
+                    "entry_split_order_runtime_pid",
+                    "entry_split_order_runtime_consumed",
+                    "entry_split_order_policy_version",
+                    "entry_split_order_policy_applied",
+                    "entry_split_submitted_price",
+                    "entry_split_submitted_at",
+                }
+                or key
+                in {
+                    "broker_order_no",
+                    "ord_no",
+                    "effective_venue",
+                    "market_session_bucket",
+                }
+            }
+        )
     omitted_field_count = max(0, len(fields) - len(selected))
     if omitted_field_count <= 0:
         return fields
@@ -804,35 +959,67 @@ def _project_fields_for_compact_stream(
 
 
 def _project_fields_for_text(stage: str, fields: dict[str, str]) -> dict[str, str]:
-    if stage == 'zero_base_probe_result':
+    if stage == "zero_base_probe_result":
         # Full capsules remain in the canonical structured execution record.
-        return {k:v for k,v in fields.items() if k not in {
-            'zero_base_branch_readiness', 'zero_base_first_data_branch_readiness',
-            'zero_base_observation_requirements', 'zero_base_consumer_readiness',
-            'zero_base_ws_registration',
-            'zero_base_consumer_readiness_at_callback', 'zero_base_consumer_readiness_at_worker',
-            'zero_base_ws_source_clocks', 'zero_base_ws_pre_machine_source_clocks',
-            'zero_base_ws_terminal_source_clocks', 'zero_base_recheck_followup_ws_source_clocks'}} | {
-                'text_field_projection': 'probe_diagnostic_reference_only_v1'}
-    if stage in {'native_signal_lifecycle', 'entry_async_disposition'}:
-        return {k:v for k,v in fields.items()
-                if k not in {'native_signal_lifecycle', 'native_commit_revalidation', 'entry_local_stage_clocks'}} | {
-                    'text_field_projection': 'native_diagnostic_reference_only_v1'}
-    if stage == 'main_stop_source':
+        return {
+            k: v
+            for k, v in fields.items()
+            if k
+            not in {
+                "zero_base_branch_readiness",
+                "zero_base_first_data_branch_readiness",
+                "zero_base_observation_requirements",
+                "zero_base_consumer_readiness",
+                "zero_base_ws_registration",
+                "zero_base_consumer_readiness_at_callback",
+                "zero_base_consumer_readiness_at_worker",
+                "zero_base_ws_source_clocks",
+                "zero_base_ws_pre_machine_source_clocks",
+                "zero_base_ws_terminal_source_clocks",
+                "zero_base_recheck_followup_ws_source_clocks",
+            }
+        } | {"text_field_projection": "probe_diagnostic_reference_only_v1"}
+    if stage in {"native_signal_lifecycle", "entry_async_disposition"}:
+        return {
+            k: v
+            for k, v in fields.items()
+            if k
+            not in {
+                "native_signal_lifecycle",
+                "native_commit_revalidation",
+                "entry_local_stage_clocks",
+            }
+        } | {"text_field_projection": "native_diagnostic_reference_only_v1"}
+    if stage == "main_stop_source":
         # The structured source is stored once; diagnostics carry its identity.
-        return {key:value for key,value in fields.items() if key!='main_stop_source'} | {
-            'text_field_projection':'main_stop_source_reference_only_v1'}
-    if stage == 'scalp_trailing_input_transition':
+        return {
+            key: value for key, value in fields.items() if key != "main_stop_source"
+        } | {"text_field_projection": "main_stop_source_reference_only_v1"}
+    if stage == "scalp_trailing_input_transition":
         # Canonical fields retain the lossless source once. Text diagnostics
         # reference the sequence/hash instead of duplicating the large capsule.
-        keys = ('id', 'position_key', 'event_sequence', 'evaluation_at_epoch',
-                'observation_stream_contract', 'observation_buy_fill_identity',
-                'universal_trailing_quote_source_sha256', 'observation_telemetry_gap',
-                'observation_admission_failure', 'tuning_grid_source_complete',
-                'tuning_grid_source_gap_reason', 'tuning_market_type', 'evaluator',
-                'armed', 'triggered', 'decision_authority', 'runtime_effect')
-        return {key:fields[key] for key in keys if key in fields} | {
-            'text_field_projection':'trailing_quote_reference_only_v1'}
+        keys = (
+            "id",
+            "position_key",
+            "event_sequence",
+            "evaluation_at_epoch",
+            "observation_stream_contract",
+            "observation_buy_fill_identity",
+            "universal_trailing_quote_source_sha256",
+            "observation_telemetry_gap",
+            "observation_admission_failure",
+            "tuning_grid_source_complete",
+            "tuning_grid_source_gap_reason",
+            "tuning_market_type",
+            "evaluator",
+            "armed",
+            "triggered",
+            "decision_authority",
+            "runtime_effect",
+        )
+        return {key: fields[key] for key in keys if key in fields} | {
+            "text_field_projection": "trailing_quote_reference_only_v1"
+        }
     if stage in {
         "scalping_scanner_source_fetch_census",
         "scalping_scanner_candidate_pool_census",
@@ -1016,10 +1203,17 @@ def _append_partition_jsonl(
                 if created or durable_every_append:
                     os.fsync(descriptor)
                     _fsync_parent_directory(parent_descriptor, target=physical_path)
-                if physical_path.parent.name == 'pipeline_events':
-                    from src.engine.automation.main_trailing_source_store import capture_native_append
-                    capture_native_append(physical_path, before=metadata,
-                        after=os.fstat(descriptor), raw=payload)
+                if physical_path.parent.name == "pipeline_events":
+                    from src.engine.automation.main_trailing_source_store import (
+                        capture_native_append,
+                    )
+
+                    capture_native_append(
+                        physical_path,
+                        before=metadata,
+                        after=os.fstat(descriptor),
+                        raw=payload,
+                    )
             finally:
                 try:
                     fcntl.flock(descriptor, fcntl.LOCK_UN)
@@ -1096,11 +1290,11 @@ def emit_pipeline_event(
     emitted_dt = datetime.now()
     if observed_at_epoch is not None:
         if isinstance(observed_at_epoch, bool):
-            raise ValueError('pipeline_observation_clock_invalid')
+            raise ValueError("pipeline_observation_clock_invalid")
         observed = float(observed_at_epoch)
-        if not math.isfinite(observed) or observed <= 0 or observed > time.time() + .5:
-            raise ValueError('pipeline_observation_clock_invalid')
-        emitted_dt = datetime.fromtimestamp(observed, ZoneInfo('Asia/Seoul'))
+        if not math.isfinite(observed) or observed <= 0 or observed > time.time() + 0.5:
+            raise ValueError("pipeline_observation_clock_invalid")
+        emitted_dt = datetime.fromtimestamp(observed, ZoneInfo("Asia/Seoul"))
 
     normalized_fields = {str(key): str(value) for key, value in (fields or {}).items()}
     merged_fields = {}
@@ -1182,7 +1376,9 @@ def emit_pipeline_event(
             "emitted_date": event_payload["emitted_date"],
         }
         if safe_stage in LOSSLESS_ORDER_STAGES:
-            compact_payload["execution_source_event_sha256"] = execution_projection_identity(event_payload)
+            compact_payload["execution_source_event_sha256"] = (
+                execution_projection_identity(event_payload)
+            )
         compact_line = (
             json.dumps(
                 compact_payload, ensure_ascii=False, separators=(",", ":"), default=str
@@ -1201,6 +1397,7 @@ def emit_pipeline_event(
         with _WRITE_LOCK:
             raw_append_attempted = True
             from src.engine.automation.main_trailing_source_store import append_record
+
             with append_record(event_payload):
                 _append_pipeline_event_jsonl(
                     _event_path(storage_partition_date),
@@ -1217,11 +1414,19 @@ def emit_pipeline_event(
                 if safe_stage in LOSSLESS_ORDER_STAGES:
                     # The existing family projection receives exact low-volume
                     # owner inputs directly; it no longer requires a raw backfill.
-                    family_dir = _threshold_cycle_dir(ensure_exists=False) / ("date=" + emitted_date) / ("family=" + threshold_family)
+                    family_dir = (
+                        _threshold_cycle_dir(ensure_exists=False)
+                        / ("date=" + emitted_date)
+                        / ("family=" + threshold_family)
+                    )
                     minute = re.sub(r"[^0-9]", "", event_payload["emitted_at"][:16])
                     part = family_dir / ("part-execution-" + minute + ".jsonl")
-                    _append_partition_jsonl(family_dir / ".execution-compact.jsonl", part,
-                                           compact_line, durable_every_append=False)
+                    _append_partition_jsonl(
+                        family_dir / ".execution-compact.jsonl",
+                        part,
+                        compact_line,
+                        durable_every_append=False,
+                    )
                 compact_append_succeeded = True
     except Exception as exc:
         append_error = exc
@@ -1230,12 +1435,17 @@ def emit_pipeline_event(
     # Diagnostic failure must never prevent raw or threshold-companion writes.
     # Its disk flush also must not hold the raw writer's process-wide lock.
     if raw_append_succeeded:
-        if safe_pipeline == 'HOLDING_PIPELINE' and safe_stage == 'sell_completed':
+        if safe_pipeline == "HOLDING_PIPELINE" and safe_stage == "sell_completed":
             try:
-                from src.engine.scalping.initial_quantity_cap_observation import observe_position_terminal
+                from src.engine.scalping.initial_quantity_cap_observation import (
+                    observe_position_terminal,
+                )
+
                 observe_position_terminal(event_payload)
             except Exception as exc:
-                log_error(f"[QUANTITY_CAPTURE_TERMINAL_SOURCE_FAILED] record_id={record_id}: {type(exc).__name__}")
+                log_error(
+                    f"[QUANTITY_CAPTURE_TERMINAL_SOURCE_FAILED] record_id={record_id}: {type(exc).__name__}"
+                )
         try:
             compactor = _get_producer_compactor()
             if compactor is not None:

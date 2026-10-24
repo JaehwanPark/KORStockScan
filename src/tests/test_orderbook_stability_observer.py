@@ -347,9 +347,15 @@ def test_orderbook_micro_bucket_manifest_falls_back_when_symbol_samples_low():
 
 def test_observer_keeps_exact_items_epochs_and_original_quote_clock():
     observer = OrderbookStabilityObserver()
-    observer.record_quote("005930", best_bid=10000, best_ask=10010, ts=1000, transport_epoch=1)
-    observer.record_quote("005930_NX", best_bid=10100, best_ask=10110, ts=1000.1, transport_epoch=1)
-    krx, nxt = observer.snapshot("005930", now=1000.5), observer.snapshot("005930_NX", now=1000.5)
+    observer.record_quote(
+        "005930", best_bid=10000, best_ask=10010, ts=1000, transport_epoch=1
+    )
+    observer.record_quote(
+        "005930_NX", best_bid=10100, best_ask=10110, ts=1000.1, transport_epoch=1
+    )
+    krx, nxt = observer.snapshot("005930", now=1000.5), observer.snapshot(
+        "005930_NX", now=1000.5
+    )
     assert krx["best_bid"] == 10000
     assert nxt["best_bid"] == 10100
     assert krx["observer_quote_received_epoch"] == 1000

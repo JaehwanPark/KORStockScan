@@ -17,23 +17,33 @@ from math import isfinite
 from src.trading.market import session_contract
 
 from src.scanners.zero_base_discovery_queue import ACTIONS, DiscoveryQueue, RESULTS
-from src.scanners.zero_base_discovery_source import fetch_discovery_panels, discovery_product_filter
-
+from src.scanners.zero_base_discovery_source import (
+    fetch_discovery_panels,
+    discovery_product_filter,
+)
 
 PROBE_REQUEST_EVENT = "ZERO_BASE_PROBE_REQUESTED"
 PROBE_RESULT_EVENT = "ZERO_BASE_PROBE_RESULT"
 MACHINE_ENTER_EVENT = "ZERO_BASE_MACHINE_ENTER"
-HANDOFF_ACK_EVENT = 'ZERO_BASE_HANDOFF_CLOSED'
+HANDOFF_ACK_EVENT = "ZERO_BASE_HANDOFF_CLOSED"
 MAX_CONCURRENT_PROBES = 5
 MAX_CLAIMS_PER_CYCLE = MAX_CONCURRENT_PROBES
 MAX_DISCOVERY_OBSERVATION_AGE_SEC = 120
 # One physical panel worker per process, including a session-date rollover.
-_PANEL_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix='discovery_panel')
+_PANEL_EXECUTOR = ThreadPoolExecutor(
+    max_workers=1, thread_name_prefix="discovery_panel"
+)
 
 
 class ZeroBaseDiscoveryRuntime:
-    def __init__(self, *, event_bus, session_date: str, state_path: Path,
-                 claim_receipt_emitter=None):
+    def __init__(
+        self,
+        *,
+        event_bus,
+        session_date: str,
+        state_path: Path,
+        claim_receipt_emitter=None,
+    ):
         self.event_bus = event_bus
         self.state_path = Path(state_path)
         self.claim_receipt_emitter = claim_receipt_emitter
@@ -83,30 +93,45 @@ class ZeroBaseDiscoveryRuntime:
     def _receive_result(self, result):
         with self._wake_lock:
             if not self._closed and isinstance(result, dict):
-                if result.get('handoff_closed') is not None and type(result['handoff_closed']) is not bool:
+                if (
+                    result.get("handoff_closed") is not None
+                    and type(result["handoff_closed"]) is not bool
+                ):
                     return
-                claim = result.get('claim') or {}
+                claim = result.get("claim") or {}
                 if not self.queue.matches_claim(claim):
                     return
-                row = self.queue._candidates[(claim['code'], claim['route'])]
-                closed = result.get('handoff_closed') is True
+                row = self.queue._candidates[(claim["code"], claim["route"])]
+                closed = result.get("handoff_closed") is True
                 if closed:
-                    if not row.handoff_id or result.get('ws_handoff_id') != row.handoff_id:
+                    if (
+                        not row.handoff_id
+                        or result.get("ws_handoff_id") != row.handoff_id
+                    ):
                         return
                 else:
-                    candidate = result.get('candidate')
-                    status, action = result.get('result'), result.get('machine_action', '')
-                    if (not isinstance(candidate, dict)
-                            or any(candidate.get(k) != claim.get(k)
-                                   for k in ('code', 'route', 'source_sha256'))
-                            or not isinstance(status, str) or status not in RESULTS
-                            or not isinstance(action, str)
-                            or (status == 'assessed') != (action in ACTIONS)):
+                    candidate = result.get("candidate")
+                    status, action = result.get("result"), result.get(
+                        "machine_action", ""
+                    )
+                    if (
+                        not isinstance(candidate, dict)
+                        or any(
+                            candidate.get(k) != claim.get(k)
+                            for k in ("code", "route", "source_sha256")
+                        )
+                        or not isinstance(status, str)
+                        or status not in RESULTS
+                        or not isinstance(action, str)
+                        or (status == "assessed") != (action in ACTIONS)
+                    ):
                         return
                     # Preserve existing pre-worker/legacy no-lease responses.
                     # Supplied lease fields must bind the physical owner.
-                    if any(result.get(k) and result[k] != row.handoff_id
-                           for k in ('physical_probe_lease_id', 'ws_handoff_id')):
+                    if any(
+                        result.get(k) and result[k] != row.handoff_id
+                        for k in ("physical_probe_lease_id", "ws_handoff_id")
+                    ):
                         return
                 key = (row.code, row.route, row.claim_count, closed)
                 # At most RESULT + CLOSED for each of five physical leases.
@@ -134,9 +159,11 @@ class ZeroBaseDiscoveryRuntime:
         if self._closed or self._panel_future is not None:
             return False
         self._panel_future = _PANEL_EXECUTOR.submit(fetcher, token)
+
         def notify(_):
             with self._wake_lock:
                 self.wakeup.set()
+
         self._panel_future.add_done_callback(notify)
         return True
 
@@ -159,8 +186,8 @@ class ZeroBaseDiscoveryRuntime:
                     break
                 _, result = self._results.popitem(last=False)
             claim = result.get("claim")
-            if result.get('handoff_closed') and isinstance(claim, dict):
-                if self.queue.close_handoff(claim, result.get('ws_handoff_id')):
+            if result.get("handoff_closed") and isinstance(claim, dict):
+                if self.queue.close_handoff(claim, result.get("ws_handoff_id")):
                     ack_changed = True
                 continue
             candidate = result.get("candidate")
@@ -183,13 +210,19 @@ class ZeroBaseDiscoveryRuntime:
                 "policy_unavailable": 120,
                 "active_conflict": 60,
                 "probe_capacity_deferred": 10,
-            }.get(status, {"BLOCK": 180, "RECHECK": 30, "ENTER_NOW": 120}.get(machine_action, 120))
+            }.get(
+                status,
+                {"BLOCK": 180, "RECHECK": 30, "ENTER_NOW": 120}.get(
+                    machine_action, 120
+                ),
+            )
             if not self.queue.resolve(
                 claim,
                 result=status,
                 machine_action=machine_action,
                 next_due_epoch=now_epoch + due_sec,
-                handoff_id=result.get('physical_probe_lease_id') or result.get('ws_handoff_id', ''),
+                handoff_id=result.get("physical_probe_lease_id")
+                or result.get("ws_handoff_id", ""),
             ):
                 continue
             accepted.append(result)
@@ -208,14 +241,18 @@ class ZeroBaseDiscoveryRuntime:
             self._dirty = False
         while promotions:
             result = promotions.pop(0)
-            expected = result.get('native_observation')
-            if result.get('physical_probe_lease_id') and expected is None:
+            expected = result.get("native_observation")
+            if result.get("physical_probe_lease_id") and expected is None:
                 continue
             if expected is not None:
-                from src.engine.scalping.reversal_source_diagnostics import observation_binding_valid
+                from src.engine.scalping.reversal_source_diagnostics import (
+                    observation_binding_valid,
+                )
+
                 # Persistence/retry is part of the original five seconds.
-                if not observation_binding_valid(expected,
-                        now=now_epoch + time.perf_counter() - drain_started):
+                if not observation_binding_valid(
+                    expected, now=now_epoch + time.perf_counter() - drain_started
+                ):
                     continue
             self.event_bus.publish(MACHINE_ENTER_EVENT, result)
         return accepted
@@ -230,51 +267,76 @@ class ZeroBaseDiscoveryRuntime:
         eligible_routes = (
             {"nxt_only"}
             if regime == session_contract.MARKET_SESSION_REGIME_LEGACY_PREMARKET
-            else {"krx_nxt_integrated"}
-            if regime in {
-                session_contract.MARKET_SESSION_REGIME_KRX_REGULAR,
-                session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET,
-            }
-            else set()
+            else (
+                {"krx_nxt_integrated"}
+                if regime
+                in {
+                    session_contract.MARKET_SESSION_REGIME_KRX_REGULAR,
+                    session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET,
+                }
+                else set()
+            )
         )
         before_admission = deepcopy(self.queue)
         abandoned = self.queue.abandon_expired_claims(
-            now_epoch=now_epoch, timeout_sec=60,
+            now_epoch=now_epoch,
+            timeout_sec=60,
         )
         active_claims = self.queue.in_flight_count()
-        check = getattr(self.event_bus, 'consumer_readiness', None)
-        readiness = (check(PROBE_REQUEST_EVENT) if callable(check) else
-                     {'ready': False, 'reason': 'consumer_readiness_unobserved'})
+        check = getattr(self.event_bus, "consumer_readiness", None)
+        readiness = (
+            check(PROBE_REQUEST_EVENT)
+            if callable(check)
+            else {"ready": False, "reason": "consumer_readiness_unobserved"}
+        )
         # The callback publishes its snapshot after the dispatch boundary.
         # Validate that observation at callback completion. Queue/claim/lease
         # clocks below remain the original boundary without budget renewal.
-        snapshot_checked_epoch = (now_epoch + max(0.0, time.perf_counter()-dispatch_started_perf)
-            if frozen_clock else time.time())
+        snapshot_checked_epoch = (
+            now_epoch + max(0.0, time.perf_counter() - dispatch_started_perf)
+            if frozen_clock
+            else time.time()
+        )
         if self._closed:
-            readiness = dict(readiness, ready=False, reason='discovery_runtime_closed')
-        consumer_ready = readiness.get('ready') is True
-        snapshot = readiness.get('main_target_snapshot')
+            readiness = dict(readiness, ready=False, reason="discovery_runtime_closed")
+        consumer_ready = readiness.get("ready") is True
+        snapshot = readiness.get("main_target_snapshot")
         valid_snapshot = (
             isinstance(snapshot, dict)
-            and snapshot.get('schema') == 'zero_base_main_target_snapshot_v1'
-            and snapshot.get('status') == 'observed'
-            and snapshot.get('runtime_effect') is False
-            and all(snapshot.get(key) == readiness.get(key) and snapshot.get(key) is not None
-                for key in ('runtime_generation', 'process_pid', 'process_start_ticks', 'date'))
-            and snapshot.get('date') == self.queue.session_date
-            and isinstance(snapshot.get('generation'), str)
-            and re.fullmatch('[a-f0-9]{64}', snapshot['generation']) is not None
-            and type(snapshot.get('observed_epoch')) in (int, float)
-            and isfinite(snapshot['observed_epoch'])
-            and 0 <= snapshot_checked_epoch-snapshot['observed_epoch'] <= 2
-            and isinstance(snapshot.get('active_codes'), list)
-            and len(snapshot['active_codes']) <= 512
-            and all(isinstance(code, str) and re.fullmatch(r'\d{6}', code)
-                    for code in snapshot['active_codes'])
+            and snapshot.get("schema") == "zero_base_main_target_snapshot_v1"
+            and snapshot.get("status") == "observed"
+            and snapshot.get("runtime_effect") is False
+            and all(
+                snapshot.get(key) == readiness.get(key)
+                and snapshot.get(key) is not None
+                for key in (
+                    "runtime_generation",
+                    "process_pid",
+                    "process_start_ticks",
+                    "date",
+                )
+            )
+            and snapshot.get("date") == self.queue.session_date
+            and isinstance(snapshot.get("generation"), str)
+            and re.fullmatch("[a-f0-9]{64}", snapshot["generation"]) is not None
+            and type(snapshot.get("observed_epoch")) in (int, float)
+            and isfinite(snapshot["observed_epoch"])
+            and 0 <= snapshot_checked_epoch - snapshot["observed_epoch"] <= 2
+            and isinstance(snapshot.get("active_codes"), list)
+            and len(snapshot["active_codes"]) <= 512
+            and all(
+                isinstance(code, str) and re.fullmatch(r"\d{6}", code)
+                for code in snapshot["active_codes"]
+            )
         )
-        active_codes = set(snapshot['active_codes']) if valid_snapshot else set()
-        from src.engine.scalping.reversal_source_diagnostics import residence_requirements
-        available_slots = max(0, MAX_CONCURRENT_PROBES - active_claims) if consumer_ready else 0
+        active_codes = set(snapshot["active_codes"]) if valid_snapshot else set()
+        from src.engine.scalping.reversal_source_diagnostics import (
+            residence_requirements,
+        )
+
+        available_slots = (
+            max(0, MAX_CONCURRENT_PROBES - active_claims) if consumer_ready else 0
+        )
         claims = self.queue.claim(
             now_epoch=now_epoch,
             limit=min(MAX_CLAIMS_PER_CYCLE, available_slots),
@@ -286,7 +348,8 @@ class ZeroBaseDiscoveryRuntime:
             product_check=discovery_product_filter(self.queue.session_date),
             borrow_idle_short_slot=True,
             activity_claims_per_gainer=(
-                7 if regime == session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET
+                7
+                if regime == session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET
                 else 3
             ),
         )
@@ -303,7 +366,8 @@ class ZeroBaseDiscoveryRuntime:
             if self.claim_receipt_emitter is not None:
                 self.claim_receipt_emitter(
                     "zero_base_probe_claim",
-                    code=claim.get("code"), name=claim.get("name"),
+                    code=claim.get("code"),
+                    name=claim.get("name"),
                     fields={
                         "zero_base_source_sha256": claim.get("source_sha256"),
                         "zero_base_route": claim.get("route"),
@@ -324,8 +388,12 @@ class ZeroBaseDiscoveryRuntime:
                 # A subscriber can disappear during durable reservation I/O.
                 # Only zero attempted callbacks proves that no physical WS
                 # lease could have been requested by this publication.
-                if not self.queue.resolve(claim, result="probe_capacity_deferred",
-                        machine_action="", next_due_epoch=now_epoch + 10):
+                if not self.queue.resolve(
+                    claim,
+                    result="probe_capacity_deferred",
+                    machine_action="",
+                    next_due_epoch=now_epoch + 10,
+                ):
                     raise RuntimeError("zero_base_unstarted_claim_resolution_failed")
                 not_dispatched += 1
         if not_dispatched:
@@ -334,11 +402,17 @@ class ZeroBaseDiscoveryRuntime:
             "probe_requested_count": dispatched,
             "probe_consumer_ready": consumer_ready,
             "probe_readiness": readiness,
-            "probe_active_target_snapshot_status": 'observed' if valid_snapshot else 'fallback',
-            "probe_active_target_snapshot_generation": snapshot['generation'] if valid_snapshot else None,
+            "probe_active_target_snapshot_status": (
+                "observed" if valid_snapshot else "fallback"
+            ),
+            "probe_active_target_snapshot_generation": (
+                snapshot["generation"] if valid_snapshot else None
+            ),
             "probe_claim_eligibility": dict(self.queue.claim_eligibility),
             "queue_restored_candidate_count": self._restored_candidate_count,
-            "probe_residence_deferred": dict(getattr(self.queue, 'residence_deferred', {})),
+            "probe_residence_deferred": dict(
+                getattr(self.queue, "residence_deferred", {})
+            ),
             "probe_no_consumer_count": not_dispatched,
             "probe_capacity_limit": MAX_CONCURRENT_PROBES,
             "probe_claims_in_flight_count": self.queue.in_flight_count(),
@@ -350,7 +424,9 @@ class ZeroBaseDiscoveryRuntime:
             "queue_count": len(self.queue.snapshot()["candidates"]),
         }
 
-    def scan_once(self, token, *, fetcher=fetch_discovery_panels, now_epoch=None) -> dict:
+    def scan_once(
+        self, token, *, fetcher=fetch_discovery_panels, now_epoch=None
+    ) -> dict:
         panel = fetcher(token)
         return self._apply_panel(panel, now_epoch=now_epoch)
 
@@ -358,7 +434,8 @@ class ZeroBaseDiscoveryRuntime:
         observed = 0
         for row in panel.get("observations") or []:
             status = self.queue.observe(
-                code=row["code"], route=row["route"],
+                code=row["code"],
+                route=row["route"],
                 observed_epoch=row["observed_epoch"],
                 source_sha256=row["source_sha256"],
                 source_scope=row["source_scope"],

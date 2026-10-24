@@ -27,14 +27,23 @@ def test_storage_lane_recovery_requires_explicit_closed_target_recovery(tmp_path
     assert '"$CLEANUP_RUNNER" 30 "${cleanup_recovery_args[@]}"' in script
 
 
-@pytest.mark.parametrize('prefix_rc',[0,1])
-def test_detector_resume_executes_only_fresh_detector_after_prefix_validation(tmp_path,prefix_rc):
-    project=tmp_path/'project';project.mkdir()
+@pytest.mark.parametrize("prefix_rc", [0, 1])
+def test_detector_resume_executes_only_fresh_detector_after_prefix_validation(
+    tmp_path, prefix_rc
+):
+    project = tmp_path / "project"
+    project.mkdir()
     _write_ready_predecessors(project)
-    cleanup=project/'cleanup.sh';detector=project/'detector.sh';python=project/'python'
-    _write_executable(cleanup,'echo unexpected-cleanup >> "$PROJECT_DIR/order.txt"\nexit 87\n')
-    _write_executable(detector,'echo detector >> "$PROJECT_DIR/order.txt"\n')
-    _write_executable(python,'''\
+    cleanup = project / "cleanup.sh"
+    detector = project / "detector.sh"
+    python = project / "python"
+    _write_executable(
+        cleanup, 'echo unexpected-cleanup >> "$PROJECT_DIR/order.txt"\nexit 87\n'
+    )
+    _write_executable(detector, 'echo detector >> "$PROJECT_DIR/order.txt"\n')
+    _write_executable(
+        python,
+        """\
 if [[ "${1:-}" == *postclose_finalization_generation.py ]]; then
   echo prefix >> "$PROJECT_DIR/order.txt"
   [[ "$PREFIX_RC" == 0 ]] || exit "$PREFIX_RC"
@@ -47,14 +56,32 @@ if [[ "$body" == *capture_final_detector_receipt* ]]; then echo 'cron-retry repo
 elif [[ "$body" == *capture_finalization_generation* || "$body" == *"receipt=json.loads"* ]]; then echo 'chain snapshot';
 elif [[ "$body" == *is_krx_trading_day* ]]; then echo '2026-09-03';
 fi
-''')
-    result=subprocess.run(['bash',str(WRAPPER),TARGET_DATE,'--recover-closed-target','--resume-final-detector'],
-        env={**_base_env(project,cleanup,detector),'VENV_PY':str(python),'PREFIX_RC':str(prefix_rc)},
-        text=True,capture_output=True,timeout=20)
-    assert result.returncode==prefix_rc,result.stdout+result.stderr
-    assert (project/'order.txt').read_text().splitlines()==(['prefix','detector'] if not prefix_rc else ['prefix'])
-    assert ('[DONE] postclose_finalization' in result.stdout)==(not prefix_rc)
-    if not prefix_rc:assert 'original-time' in result.stdout
+""",
+    )
+    result = subprocess.run(
+        [
+            "bash",
+            str(WRAPPER),
+            TARGET_DATE,
+            "--recover-closed-target",
+            "--resume-final-detector",
+        ],
+        env={
+            **_base_env(project, cleanup, detector),
+            "VENV_PY": str(python),
+            "PREFIX_RC": str(prefix_rc),
+        },
+        text=True,
+        capture_output=True,
+        timeout=20,
+    )
+    assert result.returncode == prefix_rc, result.stdout + result.stderr
+    assert (project / "order.txt").read_text().splitlines() == (
+        ["prefix", "detector"] if not prefix_rc else ["prefix"]
+    )
+    assert ("[DONE] postclose_finalization" in result.stdout) == (not prefix_rc)
+    if not prefix_rc:
+        assert "original-time" in result.stdout
 
 
 def _write_executable(path: Path, body: str) -> None:
@@ -86,7 +113,15 @@ def _write_ready_predecessors(
     for path in (threshold_dir, controller_dir, tuning_dir, log_dir):
         path.mkdir(parents=True, exist_ok=True)
     (threshold_dir / f"threshold_cycle_postclose_{TARGET_DATE}.status.json").write_text(
-        json.dumps({"target_date": TARGET_DATE, "status": "running" if final_threshold_marker == "START" else "succeeded", "exit_code": 0}),
+        json.dumps(
+            {
+                "target_date": TARGET_DATE,
+                "status": (
+                    "running" if final_threshold_marker == "START" else "succeeded"
+                ),
+                "exit_code": 0,
+            }
+        ),
         encoding="utf-8",
     )
     (controller_dir / f"postclose_done_controller_{TARGET_DATE}.json").write_text(
@@ -213,9 +248,21 @@ def test_explicit_recovery_requires_source_terminal_and_retains_source_date(
         encoding="utf-8",
     )
     if prior_failure:
-        terminal = project / "data/report/threshold_cycle_postclose_status" / f"threshold_cycle_postclose_{day}.status.json"
+        terminal = (
+            project
+            / "data/report/threshold_cycle_postclose_status"
+            / f"threshold_cycle_postclose_{day}.status.json"
+        )
         terminal.parent.mkdir(parents=True)
-        terminal.write_text(json.dumps({"target_date": day, "status": "failed" if controller_failed else "running", "exit_code": 1 if controller_failed else 0}))
+        terminal.write_text(
+            json.dumps(
+                {
+                    "target_date": day,
+                    "status": "failed" if controller_failed else "running",
+                    "exit_code": 1 if controller_failed else 0,
+                }
+            )
+        )
     detector = project / "detector.sh"
     cleanup = project / "cleanup.sh"
     _write_executable(detector, 'printf "%s\\n" "$@" > "$PROJECT_DIR/detector-args"\n')
@@ -265,7 +312,9 @@ def test_finalization_rejects_start_after_done_as_nonterminal(tmp_path):
 
 
 def test_retired_controller_status_is_not_a_required_predecessor(tmp_path):
-    result, order = _run(tmp_path, ready=True, controller_status="blocked_structural_contract_gap")
+    result, order = _run(
+        tmp_path, ready=True, controller_status="blocked_structural_contract_gap"
+    )
     assert result.returncode == 0
     assert order == ["cleanup", "detector"]
 
@@ -289,24 +338,32 @@ def test_cleanup_failure_preserves_detector_handoff_but_not_success_marker(tmp_p
     assert "[DONE] postclose_finalization" not in result.stdout
 
 
-@pytest.mark.parametrize('migration_rc,expected_order', [
-    (0, ['migration', 'controller', 'cleanup', 'detector']),
-    (9, ['migration', 'detector']),
-])
+@pytest.mark.parametrize(
+    "migration_rc,expected_order",
+    [
+        (0, ["migration", "controller", "cleanup", "detector"]),
+        (9, ["migration", "detector"]),
+    ],
+)
 def test_closed_target_migrates_only_summary_before_controller(
-    tmp_path, monkeypatch, migration_rc, expected_order,
+    tmp_path,
+    monkeypatch,
+    migration_rc,
+    expected_order,
 ):
-    monkeypatch.setattr(sys.modules[__name__], 'TARGET_DATE', '2026-09-09')
-    project = tmp_path / 'project'
+    monkeypatch.setattr(sys.modules[__name__], "TARGET_DATE", "2026-09-09")
+    project = tmp_path / "project"
     project.mkdir()
     _write_ready_predecessors(project)
-    cleanup, detector = project / 'bin/cleanup.sh', project / 'bin/detector.sh'
+    cleanup, detector = project / "bin/cleanup.sh", project / "bin/detector.sh"
     _write_executable(cleanup, 'printf "cleanup\\n" >> "$PROJECT_DIR/order.txt"\n')
     _write_executable(detector, 'printf "detector\\n" >> "$PROJECT_DIR/order.txt"\n')
-    python = project / 'bin/python'
+    python = project / "bin/python"
     # Mock only native receipt/command boundaries. Hash/schema authentication
     # is exercised by the handoff, controller and strict-verifier tests.
-    _write_executable(python, '''
+    _write_executable(
+        python,
+        """
 if [[ "${1:-}" == "-m" ]]; then
   case "$2" in
     src.engine.automation.postclose_summary_handoff)
@@ -333,18 +390,26 @@ if [[ "${1:-}" == "-" ]]; then
   exit $?
 fi
 exec "$REAL_PY" "$@"
-''')
-    result = subprocess.run(
-        ['bash', str(WRAPPER), TARGET_DATE, '--recover-closed-target'],
-        env={**_base_env(project, cleanup, detector), 'VENV_PY': str(python),
-             'REAL_PY': sys.executable, 'MOCK_MIGRATION_RC': str(migration_rc)},
-        text=True, capture_output=True,
+""",
     )
-    assert result.returncode == (0 if migration_rc == 0 else 1), result.stdout + result.stderr
-    assert (project / 'order.txt').read_text().splitlines() == expected_order
+    result = subprocess.run(
+        ["bash", str(WRAPPER), TARGET_DATE, "--recover-closed-target"],
+        env={
+            **_base_env(project, cleanup, detector),
+            "VENV_PY": str(python),
+            "REAL_PY": sys.executable,
+            "MOCK_MIGRATION_RC": str(migration_rc),
+        },
+        text=True,
+        capture_output=True,
+    )
+    assert result.returncode == (0 if migration_rc == 0 else 1), (
+        result.stdout + result.stderr
+    )
+    assert (project / "order.txt").read_text().splitlines() == expected_order
     if migration_rc:
-        assert 'reason=summary_stage_migration_failed' in result.stdout
-        assert '[DONE] postclose_finalization' not in result.stdout
+        assert "reason=summary_stage_migration_failed" in result.stdout
+        assert "[DONE] postclose_finalization" not in result.stdout
 
 
 def test_finalization_reserves_morning_margin_before_preopen():
@@ -359,13 +424,15 @@ def test_finalization_reserves_morning_margin_before_preopen():
     assert 'bounded_stage_budget "$PREPARE_TIMEOUT_SEC"' in script
     assert "POSTCLOSE_FINALIZATION_FINISH_BY_KST:-06:50" in script
     assert script.count('timeout --foreground "${') == 2
-    assert "bounded_stage_budget \"$DETECTOR_TIMEOUT_SEC\"" in script
+    assert 'bounded_stage_budget "$DETECTOR_TIMEOUT_SEC"' in script
     assert 'timeout --kill-after=10s "${summary_budget}s"' in script
     assert "reason=effective_date_hard_deadline" in script
     assert "--resolve-effective-today" in script
 
 
-@pytest.mark.parametrize("prepare_rc,detector_rc,expected_rc", [(0, 0, 0), (9, 0, 1), (124, 0, 1), (0, 9, 1)])
+@pytest.mark.parametrize(
+    "prepare_rc,detector_rc,expected_rc", [(0, 0, 0), (9, 0, 1), (124, 0, 1), (0, 9, 1)]
+)
 @pytest.mark.parametrize("prepare_budget", [None, "450"])
 def test_final_detector_reads_refreshed_prepared_generation(
     tmp_path, monkeypatch, prepare_rc, detector_rc, expected_rc, prepare_budget
@@ -378,13 +445,18 @@ def test_final_detector_reads_refreshed_prepared_generation(
     (project / "prepared-generation.txt").write_text("previous-controller\n")
     cleanup, detector = project / "bin/cleanup.sh", project / "bin/detector.sh"
     _write_executable(cleanup, 'printf "cleanup\\n" >> "$PROJECT_DIR/order.txt"\n')
-    _write_executable(detector, '''
+    _write_executable(
+        detector,
+        """
 printf 'detector\\n' >> "$PROJECT_DIR/order.txt"
 cmp -s "$PROJECT_DIR/current-generation.txt" "$PROJECT_DIR/prepared-generation.txt"
 exit "$MOCK_DETECTOR_RC"
-''')
+""",
+    )
     python = project / "bin/python"
-    _write_executable(python, '''
+    _write_executable(
+        python,
+        """
 if [[ "${1:-}" == "-m" ]]; then
   case "$2" in
     src.engine.automation.postclose_done_controller)
@@ -413,35 +485,56 @@ if [[ "${1:-}" == "-" ]]; then
   exit $?
 fi
 exec "$REAL_PY" "$@"
-''')
+""",
+    )
     timeout = project / "bin/timeout"
-    _write_executable(timeout, '''
+    _write_executable(
+        timeout,
+        """
 printf '%s\\n' "$*" >> "$PROJECT_DIR/timeout-arguments.txt"
 exec /usr/bin/timeout "$@"
-''')
-    env = {**_base_env(project, cleanup, detector), "VENV_PY": str(python),
-           "REAL_PY": sys.executable, "MOCK_PREPARE_RC": str(prepare_rc),
-           "MOCK_DETECTOR_RC": str(detector_rc),
-           "PATH": str(project / "bin") + os.pathsep + os.environ["PATH"]}
+""",
+    )
+    env = {
+        **_base_env(project, cleanup, detector),
+        "VENV_PY": str(python),
+        "REAL_PY": sys.executable,
+        "MOCK_PREPARE_RC": str(prepare_rc),
+        "MOCK_DETECTOR_RC": str(detector_rc),
+        "PATH": str(project / "bin") + os.pathsep + os.environ["PATH"],
+    }
     env.pop("POSTCLOSE_FINALIZATION_PREPARE_TIMEOUT_SEC", None)
     if prepare_budget is not None:
         env["POSTCLOSE_FINALIZATION_PREPARE_TIMEOUT_SEC"] = prepare_budget
     result = subprocess.run(
         ["bash", str(WRAPPER), TARGET_DATE],
         env=env,
-        text=True, capture_output=True, timeout=30,
+        text=True,
+        capture_output=True,
+        timeout=30,
     )
     assert result.returncode == expected_rc, result.stdout + result.stderr
-    prepare_calls = [line for line in (project / "timeout-arguments.txt").read_text().splitlines()
-                     if "src.engine.automation.next_preopen_readiness" in line]
+    prepare_calls = [
+        line
+        for line in (project / "timeout-arguments.txt").read_text().splitlines()
+        if "src.engine.automation.next_preopen_readiness" in line
+    ]
     assert len(prepare_calls) == 1
-    assert prepare_calls[0].startswith("--kill-after=10s " + (prepare_budget or "600") + "s ")
+    assert prepare_calls[0].startswith(
+        "--kill-after=10s " + (prepare_budget or "600") + "s "
+    )
     if prepare_rc:
-        assert f"reason=next_preopen_preparation_failed prepare_exit_code={prepare_rc}" in result.stdout
+        assert (
+            f"reason=next_preopen_preparation_failed prepare_exit_code={prepare_rc}"
+            in result.stdout
+        )
     else:
         assert "reason=next_preopen_preparation_failed" not in result.stdout
     assert (project / "order.txt").read_text().splitlines() == [
-        "controller", "cleanup", "prepare", "detector",
+        "controller",
+        "cleanup",
+        "prepare",
+        "detector",
     ]
     if expected_rc:
         assert "[DONE] postclose_finalization" not in result.stdout
@@ -482,26 +575,26 @@ def test_late_summary_refresh_precedes_cleanup_and_failure_cannot_reuse_done(
         '  [[ "$2" == "src.engine.automation.postclose_done_controller" ]]\n'
         '  [[ " $* " == *" --require-independent-producers "* ]]\n'
         '  "$REAL_PY" - "$PROJECT_DIR" "2026-09-09" <<\'PY\'\n'
-        'import json, os, sys\n'
-        'from datetime import datetime\n'
-        'from pathlib import Path\n'
+        "import json, os, sys\n"
+        "from datetime import datetime\n"
+        "from pathlib import Path\n"
         'root=Path(sys.argv[1]) / "data/report/postclose_done_controller"\n'
-        'root.mkdir(parents=True, exist_ok=True)\n'
+        "root.mkdir(parents=True, exist_ok=True)\n"
         'attempt=root / "attempts/2026-09-09_fixture.json"\n'
-        'attempt.parent.mkdir(parents=True, exist_ok=True)\n'
+        "attempt.parent.mkdir(parents=True, exist_ok=True)\n"
         'report={"date":"2026-09-09","generated_at":datetime.now().astimezone().isoformat(timespec="seconds"),"status":os.environ.get("MOCK_CONTROLLER_STATUS","done"),"whole_native_chain_done_claimed":True,"require_independent_producers":True,"final_verifier_status":"pass","attempt_path":str(attempt)}\n'
         'payload=json.dumps(report, indent=2) + "\\n"\n'
         'attempt.write_text(payload, encoding="utf-8")\n'
         '(root / "postclose_done_controller_2026-09-09.json").write_text(payload, encoding="utf-8")\n'
-        'PY\n'
+        "PY\n"
         '  printf "summary\\n" >> "$PROJECT_DIR/order.txt"\n'
-        f'  exit {refresh_rc}\nfi\n'
+        f"  exit {refresh_rc}\nfi\n"
         # This wrapper-order fixture fabricates a controller report. Its
         # strict-generation reader is covered by the controller/verifier tests.
         'if [[ "${1:-}" == "-" && "${4:-}" =~ ^[0-9]+$ ]]; then\n'
         '  if [[ "${MOCK_CONTROLLER_STATUS:-}" == "done" ]]; then\n'
         '    printf \'{"status":"pass","issues":[]}\\n\'; exit 0\n'
-        '  fi\n'
+        "  fi\n"
         '  printf \'{"status":"blocked","issues":["controller_report_not_done"]}\\n\'; exit 1\n'
         'fi\nexec "$REAL_PY" "$@"\n',
     )
@@ -515,9 +608,7 @@ def test_late_summary_refresh_precedes_cleanup_and_failure_cannot_reuse_done(
     result = subprocess.run(
         ["bash", str(WRAPPER), TARGET_DATE], env=env, text=True, capture_output=True
     )
-    assert result.returncode == expected_rc, (
-        result.stdout + result.stderr
-    )
+    assert result.returncode == expected_rc, result.stdout + result.stderr
     assert (project / "order.txt").read_text().splitlines() == (
         ["summary", "cleanup", "detector"]
         if expected_rc == 0
@@ -527,15 +618,27 @@ def test_late_summary_refresh_precedes_cleanup_and_failure_cannot_reuse_done(
         assert "controller_terminal_receipt_invalid" in result.stdout
 
 
-@pytest.mark.parametrize('mode', ['--resume-final-detector', '--rebind-final-generation'])
-@pytest.mark.parametrize('detector_exit', [0, 1])
-def test_bounded_finalization_suffix_skips_completed_producers(tmp_path, monkeypatch, mode, detector_exit):
-    monkeypatch.setattr(sys.modules[__name__], 'TARGET_DATE', '2026-10-20')
-    project=tmp_path/'project';project.mkdir();_write_ready_predecessors(project)
-    cleanup=project/'bin/cleanup';detector=project/'bin/detector';python=project/'bin/python'
-    _write_executable(cleanup, 'exit 99\n')
-    _write_executable(detector, f'echo detector >> "$PROJECT_DIR/order.txt"\nexit {detector_exit}\n')
-    _write_executable(python, '''
+@pytest.mark.parametrize(
+    "mode", ["--resume-final-detector", "--rebind-final-generation"]
+)
+@pytest.mark.parametrize("detector_exit", [0, 1])
+def test_bounded_finalization_suffix_skips_completed_producers(
+    tmp_path, monkeypatch, mode, detector_exit
+):
+    monkeypatch.setattr(sys.modules[__name__], "TARGET_DATE", "2026-10-20")
+    project = tmp_path / "project"
+    project.mkdir()
+    _write_ready_predecessors(project)
+    cleanup = project / "bin/cleanup"
+    detector = project / "bin/detector"
+    python = project / "bin/python"
+    _write_executable(cleanup, "exit 99\n")
+    _write_executable(
+        detector, f'echo detector >> "$PROJECT_DIR/order.txt"\nexit {detector_exit}\n'
+    )
+    _write_executable(
+        python,
+        """
 if [[ "$1" == *postclose_finalization_generation.py ]]; then
   echo "$2" >> "$PROJECT_DIR/order.txt"
   echo '{"chain_sha256":"aaa","snapshot_sha256":"bbb"}'
@@ -553,12 +656,28 @@ if [[ "$1" == - ]]; then
   exit $?
 fi
 exec "$REAL_PY" "$@"
-''')
-    env={**_base_env(project,cleanup,detector), 'VENV_PY':str(python),'REAL_PY':sys.executable,
-         'EXPECTED_CONSUMED':str(mode=='--rebind-final-generation').lower()}
-    result=subprocess.run(['bash',str(WRAPPER),TARGET_DATE,'--recover-closed-target',mode],
-        env=env,capture_output=True,text=True,timeout=10)
-    assert result.returncode==detector_exit,result.stdout+result.stderr
-    assert (project/'order.txt').read_text().splitlines()==[
-        '--rebind-completed' if mode=='--rebind-final-generation' else '--resume-prefix', 'detector']
-    assert ('[DONE] postclose_finalization' in result.stdout)==(detector_exit==0)
+""",
+    )
+    env = {
+        **_base_env(project, cleanup, detector),
+        "VENV_PY": str(python),
+        "REAL_PY": sys.executable,
+        "EXPECTED_CONSUMED": str(mode == "--rebind-final-generation").lower(),
+    }
+    result = subprocess.run(
+        ["bash", str(WRAPPER), TARGET_DATE, "--recover-closed-target", mode],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode == detector_exit, result.stdout + result.stderr
+    assert (project / "order.txt").read_text().splitlines() == [
+        (
+            "--rebind-completed"
+            if mode == "--rebind-final-generation"
+            else "--resume-prefix"
+        ),
+        "detector",
+    ]
+    assert ("[DONE] postclose_finalization" in result.stdout) == (detector_exit == 0)

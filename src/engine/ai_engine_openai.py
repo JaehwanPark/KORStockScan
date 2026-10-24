@@ -30,7 +30,13 @@ from datetime import datetime, timezone
 from itertools import cycle
 from typing import Any
 from src.engine.monitoring.runtime_performance import timed_entry_call, entry_timings
-from openai import OpenAI, RateLimitError, DefaultHttpxClient, APITimeoutError, APIStatusError
+from openai import (
+    OpenAI,
+    RateLimitError,
+    DefaultHttpxClient,
+    APITimeoutError,
+    APIStatusError,
+)
 import httpx
 
 from src.engine.ai_response_contracts import (
@@ -42,9 +48,13 @@ from src.engine.ai_response_contracts import (
     normalize_gatekeeper_action_key,
 )
 from src.engine.ai.holding_exit_vote import (
-    PATH_IDS, PATH_PROMPT_VERSION, build_path_vote_input,
-    path_vote_input_hashes, input_snapshot_id,
-    normalize_path_vote_bundle, normalize_vote_response,
+    PATH_IDS,
+    PATH_PROMPT_VERSION,
+    build_path_vote_input,
+    path_vote_input_hashes,
+    input_snapshot_id,
+    normalize_path_vote_bundle,
+    normalize_vote_response,
 )
 from src.engine.holding_exit_matrix_runtime import (
     build_holding_exit_matrix_runtime_context,
@@ -177,11 +187,19 @@ from src.engine.ai_prompt_contracts import (
 )
 
 
-def _final_entry_machine_inputs(ws_data, recent_ticks, candle_context, *, refresher,
-                                deadline_epoch=None, entry_budget=None):
+def _final_entry_machine_inputs(
+    ws_data,
+    recent_ticks,
+    candle_context,
+    *,
+    refresher,
+    deadline_epoch=None,
+    entry_budget=None,
+):
     """Freeze local inputs after slow preparation; never renew an attempt deadline."""
     from src.engine.scalping.entry_candle_context import (
-        revalidate_entry_candle_snapshot, wait_for_completed_entry_candle,
+        revalidate_entry_candle_snapshot,
+        wait_for_completed_entry_candle,
     )
 
     started = time.perf_counter()
@@ -195,14 +213,19 @@ def _final_entry_machine_inputs(ws_data, recent_ticks, candle_context, *, refres
             raise ValueError("entry_machine_input_deadline_expired")
         if entry_budget is None and deadline_epoch is not None:
             from src.engine.scalping.entry_deadline import EntryDeadline
+
             entry_budget = EntryDeadline.create(caller_epoch=deadline_epoch)
         if entry_budget is not None:
             entry_budget.require()
         if deadline_epoch is not None:
-            fields['entry_machine_input_budget_at_freeze_ms'] = round((deadline_epoch - time.time()) * 1000, 3)
+            fields["entry_machine_input_budget_at_freeze_ms"] = round(
+                (deadline_epoch - time.time()) * 1000, 3
+            )
         copy_started = time.perf_counter()
         ws, ticks, context = copy.deepcopy((ws_data, recent_ticks, candle_context))
-        fields['entry_machine_input_initial_copy_ms'] = round((time.perf_counter() - copy_started) * 1000, 3)
+        fields["entry_machine_input_initial_copy_ms"] = round(
+            (time.perf_counter() - copy_started) * 1000, 3
+        )
         phase = "after_input_copy"
         if deadline_epoch is not None and time.time() >= deadline_epoch:
             raise ValueError("entry_machine_input_deadline_expired")
@@ -213,15 +236,25 @@ def _final_entry_machine_inputs(ws_data, recent_ticks, candle_context, *, refres
         try:
             ws, ticks, context, refresh_fields = refresher(ws, ticks, context)
         finally:
-            fields["entry_machine_input_local_refresh_ms"] = round((time.perf_counter() - refresh_started) * 1000, 3)
+            fields["entry_machine_input_local_refresh_ms"] = round(
+                (time.perf_counter() - refresh_started) * 1000, 3
+            )
         phase = "refreshed_input_copy"
         copy_started = time.perf_counter()
         ws, ticks, context = copy.deepcopy((ws, ticks, context))
-        fields['entry_machine_input_refreshed_copy_ms'] = round((time.perf_counter() - copy_started) * 1000, 3)
-        fields.update({key.replace("entry_ai_final_", "entry_machine_input_", 1): value
-                       for key, value in refresh_fields.items()})
+        fields["entry_machine_input_refreshed_copy_ms"] = round(
+            (time.perf_counter() - copy_started) * 1000, 3
+        )
+        fields.update(
+            {
+                key.replace("entry_ai_final_", "entry_machine_input_", 1): value
+                for key, value in refresh_fields.items()
+            }
+        )
         if refresh_fields.get("entry_ai_final_snapshot_revalidation_error"):
-            raise ValueError(refresh_fields["entry_ai_final_snapshot_revalidation_error"])
+            raise ValueError(
+                refresh_fields["entry_ai_final_snapshot_revalidation_error"]
+            )
         old_epoch = (ws_data or {}).get("market_data_transport_epoch")
         new_epoch = (ws or {}).get("market_data_transport_epoch")
         if old_epoch != new_epoch:
@@ -232,11 +265,17 @@ def _final_entry_machine_inputs(ws_data, recent_ticks, candle_context, *, refres
         phase = "canonical_revalidation"
         revalidate_started = time.perf_counter()
         try:
-            context = revalidate_entry_candle_snapshot(context, ws, now_ts=as_of, _owned_inputs=True)
+            context = revalidate_entry_candle_snapshot(
+                context, ws, now_ts=as_of, _owned_inputs=True
+            )
         finally:
-            fields["entry_machine_input_canonical_revalidation_ms"] = round((time.perf_counter() - revalidate_started) * 1000, 3)
+            fields["entry_machine_input_canonical_revalidation_ms"] = round(
+                (time.perf_counter() - revalidate_started) * 1000, 3
+            )
         phase = "completed_candle_publication"
-        ready = wait_for_completed_entry_candle(context, ws, budget=entry_budget, fields=fields)
+        ready = wait_for_completed_entry_candle(
+            context, ws, budget=entry_budget, fields=fields
+        )
         if ready is not context:
             # Publication never refreshes the executable quote or grants a claim.
             # Reuse the same local refresher, then revalidate the entire new view.
@@ -244,23 +283,40 @@ def _final_entry_machine_inputs(ws_data, recent_ticks, candle_context, *, refres
             ws, ticks, context, refresh_fields = refresher(ws, ticks, ready)
             ws, ticks, context = copy.deepcopy((ws, ticks, context))
             if refresh_fields.get("entry_ai_final_snapshot_revalidation_error"):
-                raise ValueError(refresh_fields["entry_ai_final_snapshot_revalidation_error"])
-            if (ws_data or {}).get("market_data_transport_epoch") != (ws or {}).get("market_data_transport_epoch"):
+                raise ValueError(
+                    refresh_fields["entry_ai_final_snapshot_revalidation_error"]
+                )
+            if (ws_data or {}).get("market_data_transport_epoch") != (ws or {}).get(
+                "market_data_transport_epoch"
+            ):
                 raise ValueError("entry_machine_transport_epoch_changed")
             entry_budget.require()
             as_of = time.time()
-            context = revalidate_entry_candle_snapshot(context, ws, now_ts=as_of, _owned_inputs=True)
+            context = revalidate_entry_candle_snapshot(
+                context, ws, now_ts=as_of, _owned_inputs=True
+            )
         phase = "quote_consistency"
-        from src.trading.market.quote_consistency import ws_quote_receive_age_ms, ws_quote_source_receipt
-        bbo = (context.get("ai_market_snapshot_v1") or {}).get("sources", {}).get("bbo", {})
+        from src.trading.market.quote_consistency import (
+            ws_quote_receive_age_ms,
+            ws_quote_source_receipt,
+        )
+
+        bbo = (
+            (context.get("ai_market_snapshot_v1") or {})
+            .get("sources", {})
+            .get("bbo", {})
+        )
         canonical_age = bbo.get("age_ms")
         feature_age = ws_quote_receive_age_ms(ws, now_ts=as_of)
         quote_receipt = ws_quote_source_receipt(ws, now_ts=as_of)
         fields["entry_machine_input_quote_clock_comparison"] = {
-            "as_of": as_of, "canonical_source": bbo.get("source"),
+            "as_of": as_of,
+            "canonical_source": bbo.get("source"),
             "canonical_observed_at": bbo.get("observed_at"),
-            "canonical_age_ms": canonical_age, "canonical_value": bbo.get("value"),
-            "feature_age_ms": feature_age, "feature_receipt": quote_receipt,
+            "canonical_age_ms": canonical_age,
+            "canonical_value": bbo.get("value"),
+            "feature_age_ms": feature_age,
+            "feature_receipt": quote_receipt,
         }
         if canonical_age is not None and (
             feature_age is None or abs(float(canonical_age) - feature_age) > 1.0
@@ -273,8 +329,9 @@ def _final_entry_machine_inputs(ws_data, recent_ticks, candle_context, *, refres
             # clocks must not hide a different price or another route's book.
             for side, key in (("bids", "best_bid"), ("asks", "best_ask")):
                 levels = book.get(side) or []
-                if (value.get(key) != quote_receipt.get(key)
-                        or (levels and float(levels[0]["price"]) != value.get(key))):
+                if value.get(key) != quote_receipt.get(key) or (
+                    levels and float(levels[0]["price"]) != value.get(key)
+                ):
                     raise ValueError("entry_machine_quote_value_conflict")
         if deadline_epoch is not None and time.time() >= deadline_epoch:
             raise ValueError("entry_machine_input_deadline_expired")
@@ -287,14 +344,18 @@ def _final_entry_machine_inputs(ws_data, recent_ticks, candle_context, *, refres
         ws, ticks, context = copy.deepcopy((ws_data, recent_ticks, candle_context))
         ws = ws if isinstance(ws, dict) else {}
         context = context if isinstance(context, dict) else {}
-    fields.update(entry_machine_input_as_of=as_of,
-                  entry_machine_input_refresh_ms=round((time.perf_counter() - started) * 1000, 3))
+    fields.update(
+        entry_machine_input_as_of=as_of,
+        entry_machine_input_refresh_ms=round((time.perf_counter() - started) * 1000, 3),
+    )
     if deadline_epoch is not None:
         try:
             remaining_ms = (float(deadline_epoch) - time.time()) * 1000
-            fields['entry_machine_input_budget_after_freeze_ms'] = round(remaining_ms, 3) if math.isfinite(remaining_ms) else None
+            fields["entry_machine_input_budget_after_freeze_ms"] = (
+                round(remaining_ms, 3) if math.isfinite(remaining_ms) else None
+            )
         except (ValueError, TypeError, OverflowError):
-            fields['entry_machine_input_budget_after_freeze_ms'] = None
+            fields["entry_machine_input_budget_after_freeze_ms"] = None
     if isinstance(context, dict):
         snapshot = context.get("ai_market_snapshot_v1") or {}
         snapshot = snapshot if isinstance(snapshot, dict) else {}
@@ -329,7 +390,10 @@ def _response_schema_sha256(request, *, registry_used, entry_setup_evidence):
     if not registry_used or not request.schema_name:
         return None
     schema_override = request.response_schema_override
-    if schema_override is None and request.schema_name == ENTRY_RISK_ADJUDICATION_SCHEMA:
+    if (
+        schema_override is None
+        and request.schema_name == ENTRY_RISK_ADJUDICATION_SCHEMA
+    ):
         schema_override = entry_risk_adjudication_openai_schema(
             entry_setup_evidence or None
         )
@@ -500,19 +564,39 @@ def _entry_price_v1_response_contract_errors(value):
 
 def _entry_provider_ledger(setup):
     """Keep raw replay custody out of the compact provider token budget."""
-    if 'continuous_reversal_response_schema' in setup:
+    if "continuous_reversal_response_schema" in setup:
         # This family carries typed fact records and its own exact projection.
         # Never pass them through the legacy string-fact confirmation binder.
-        return {k: v for k, v in setup.items()
-                if k != 'continuous_reversal_response_schema'}
-    ledger = {k: v for k, v in setup.items() if k not in {
-        "strategy_raw_input", "strategy_raw_sha256", "strategy_selection", "evidence_sha256"}}
+        return {
+            k: v for k, v in setup.items() if k != "continuous_reversal_response_schema"
+        }
+    ledger = {
+        k: v
+        for k, v in setup.items()
+        if k
+        not in {
+            "strategy_raw_input",
+            "strategy_raw_sha256",
+            "strategy_selection",
+            "evidence_sha256",
+        }
+    }
     from src.engine.scalping.entry_admission_recipe import confirmation_facts
-    ledger["positive_facts"] = list(dict.fromkeys(
-        [*(ledger.get("positive_facts") or []), *confirmation_facts(setup)]))
-    ledger["evidence_sha256"] = hashlib.sha256(json.dumps(
-        ledger, ensure_ascii=True, sort_keys=True, separators=(",", ":"), default=str
-    ).encode()).hexdigest()
+
+    ledger["positive_facts"] = list(
+        dict.fromkeys(
+            [*(ledger.get("positive_facts") or []), *confirmation_facts(setup)]
+        )
+    )
+    ledger["evidence_sha256"] = hashlib.sha256(
+        json.dumps(
+            ledger,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode()
+    ).hexdigest()
     return ledger
 
 
@@ -725,6 +809,7 @@ class OpenAIWSRequestIdMismatchError(RuntimeError):
 @dataclass
 class OpenAITransportObservation:
     """Local stage facts, never reservation release or proof of network delivery."""
+
     stages: dict = field(default_factory=dict)
     stage_monotonic: dict = field(default_factory=dict)
     stage_remaining_ms: dict = field(default_factory=dict)
@@ -736,7 +821,9 @@ class OpenAITransportObservation:
             self.stages.setdefault(stage, time.time())
             self.stage_monotonic.setdefault(stage, time.perf_counter())
             if remaining_sec is not None:
-                self.stage_remaining_ms.setdefault(stage, max(0., remaining_sec) * 1000)
+                self.stage_remaining_ms.setdefault(
+                    stage, max(0.0, remaining_sec) * 1000
+                )
 
     def record_budget(self, facts):
         with self.mutex:
@@ -748,16 +835,25 @@ class OpenAITransportObservation:
             monotonic = dict(self.stage_monotonic)
             remaining = dict(self.stage_remaining_ms)
             budget = dict(self.deadline_budget)
-        sdk = 'sdk_started' in stages
-        response = 'response_received' in stages
-        return dict(provider_stage_epochs=stages,
-                    provider_stage_monotonic=monotonic,
-                    provider_stage_remaining_ms=remaining,
-                    provider_deadline_budget=budget,
-                    provider_adapter_entered='adapter_entered' in stages,
-                    provider_sdk_started=sdk, provider_response_received=response,
-                    provider_physical_transmission='response_confirmed' if response else 'unknown' if sdk else 'not_observed',
-                    provider_called=True if sdk else False if 'adapter_entered' in stages else None)
+        sdk = "sdk_started" in stages
+        response = "response_received" in stages
+        return dict(
+            provider_stage_epochs=stages,
+            provider_stage_monotonic=monotonic,
+            provider_stage_remaining_ms=remaining,
+            provider_deadline_budget=budget,
+            provider_adapter_entered="adapter_entered" in stages,
+            provider_sdk_started=sdk,
+            provider_response_received=response,
+            provider_physical_transmission=(
+                "response_confirmed"
+                if response
+                else "unknown" if sdk else "not_observed"
+            ),
+            provider_called=(
+                True if sdk else False if "adapter_entered" in stages else None
+            ),
+        )
 
 
 @dataclass
@@ -781,12 +877,18 @@ class OpenAIResponseRequest:
     response_schema_override: dict[str, Any] | None = None
     caller_deadline_perf: float | None = None
     transport_observation: OpenAITransportObservation | None = None
-    _entry_payload_cache: Any = field(default=None, init=False, repr=False, compare=False)
+    _entry_payload_cache: Any = field(
+        default=None, init=False, repr=False, compare=False
+    )
 
     @property
     def deadline_perf(self) -> float:
         own = self.submitted_at_perf + (max(1, int(self.timeout_ms)) / 1000.0)
-        return min(own, self.caller_deadline_perf) if self.caller_deadline_perf is not None else own
+        return (
+            min(own, self.caller_deadline_perf)
+            if self.caller_deadline_perf is not None
+            else own
+        )
 
     def remaining_timeout_sec(self) -> float:
         return max(0.0, self.deadline_perf - time.perf_counter())
@@ -807,29 +909,46 @@ class OpenAIResponseRequest:
 
     def build_provider_payload(self, *, use_schema_registry: bool) -> dict[str, Any]:
         from src.engine.infrastructure.snapshot_copy import snapshot_copy
+
         # Only explicit entry wire schemas are immutable per request. Generic
         # registry/dynamic schemas keep their original rebuild boundary.
-        cacheable = self.endpoint_name == 'analyze_target' and self.response_schema_override is not None
-        identity = (use_schema_registry, self.prompt, self.user_input, self.require_json,
-                    self.model_name, self.temperature, self.max_output_tokens,
-                    self.reasoning_effort, self.schema_name, self.metadata,
-                    self.response_schema_override)
+        cacheable = (
+            self.endpoint_name == "analyze_target"
+            and self.response_schema_override is not None
+        )
+        identity = (
+            use_schema_registry,
+            self.prompt,
+            self.user_input,
+            self.require_json,
+            self.model_name,
+            self.temperature,
+            self.max_output_tokens,
+            self.reasoning_effort,
+            self.schema_name,
+            self.metadata,
+            self.response_schema_override,
+        )
         cached = self._entry_payload_cache
         if cacheable and cached is not None and cached[0] == identity:
             return snapshot_copy(cached[1])
         payload = self._build_provider_payload(use_schema_registry=use_schema_registry)
         if cacheable:
-            owned_identity = identity[:9] + (snapshot_copy(self.metadata),
-                                             snapshot_copy(self.response_schema_override))
+            owned_identity = identity[:9] + (
+                snapshot_copy(self.metadata),
+                snapshot_copy(self.response_schema_override),
+            )
             self._entry_payload_cache = (owned_identity, snapshot_copy(payload))
         return payload
 
     def _build_provider_payload(self, *, use_schema_registry: bool) -> dict[str, Any]:
-        registered_auxiliary=bool((self.metadata or {}).get('auxiliary_registry_sha256'))
+        registered_auxiliary = bool(
+            (self.metadata or {}).get("auxiliary_registry_sha256")
+        )
         if registered_auxiliary:
             if not self.response_schema_override:
-                raise ValueError('registered_auxiliary_response_schema_missing')
-            use_schema_registry=True
+                raise ValueError("registered_auxiliary_response_schema_missing")
+            use_schema_registry = True
         payload: dict[str, Any] = {
             "model": self.model_name,
             "input": (
@@ -853,7 +972,10 @@ class OpenAIResponseRequest:
         if self.require_json:
             if use_schema_registry and self.schema_name:
                 schema_override = self.response_schema_override
-                if schema_override is None and self.schema_name == ENTRY_RISK_ADJUDICATION_SCHEMA:
+                if (
+                    schema_override is None
+                    and self.schema_name == ENTRY_RISK_ADJUDICATION_SCHEMA
+                ):
                     setup_evidence = self.entry_setup_evidence()
                     schema_override = entry_risk_adjudication_openai_schema(
                         setup_evidence or None
@@ -1048,9 +1170,12 @@ class OpenAIResponsesWSWorker:
                             f"OpenAI Responses WS late discard ({request.context_name})"
                         )
                     raw_text = str(getattr(response, "output_text", "") or "").strip()
-                    if request.schema_name=='auxiliary_compact_citations_v1':
-                        from src.engine.scalping.reversal_auxiliary_wire import parse_response_text
-                        payload=parse_response_text(raw_text)
+                    if request.schema_name == "auxiliary_compact_citations_v1":
+                        from src.engine.scalping.reversal_auxiliary_wire import (
+                            parse_response_text,
+                        )
+
+                        payload = parse_response_text(raw_text)
                     elif request.require_json:
                         try:
                             payload = json.loads(raw_text)
@@ -1074,9 +1199,15 @@ class OpenAIResponsesWSWorker:
                     usage_meta["openai_response_sha256"] = hashlib.sha256(
                         raw_text.encode("utf-8")
                     ).hexdigest()
-                    if request.schema_name=='auxiliary_compact_citations_v1':
-                        usage_meta['auxiliary_raw_output_bytes_b64']=__import__('base64').b64encode(raw_text.encode('utf-8')).decode('ascii')
-                        usage_meta['auxiliary_response_status']=_get_usage_value(response,'status')
+                    if request.schema_name == "auxiliary_compact_citations_v1":
+                        usage_meta["auxiliary_raw_output_bytes_b64"] = (
+                            __import__("base64")
+                            .b64encode(raw_text.encode("utf-8"))
+                            .decode("ascii")
+                        )
+                        usage_meta["auxiliary_response_status"] = _get_usage_value(
+                            response, "status"
+                        )
                     return OpenAITransportResult(
                         payload=payload,
                         transport_mode="responses_ws",
@@ -1145,19 +1276,29 @@ class GPTSniperEngine:
     내부적으로 OpenAI REST API를 호출한다.
     """
 
-    def __init__(self, api_keys, announce_startup=True, *, initialize_entry_policy=True):
+    def __init__(
+        self, api_keys, announce_startup=True, *, initialize_entry_policy=True
+    ):
         from src.engine.scalping.reversal_current_backend import configure_bundle
         from src.engine.scalping.mechanistic_entry_runtime_policy import load_effective
         from src.utils.constants import DATA_DIR
+
         try:
-            day=datetime.now(__import__('zoneinfo').ZoneInfo('Asia/Seoul')).date().isoformat()
+            day = (
+                datetime.now(__import__("zoneinfo").ZoneInfo("Asia/Seoul"))
+                .date()
+                .isoformat()
+            )
             # Holding-only offline replay has no entry detector and must not
             # consult today's policy namespace while replaying frozen inputs.
-            incumbent=(load_effective(data_root=DATA_DIR,target_date=day)
-                       if initialize_entry_policy else None)
-            if (incumbent or {}).get('continuous_reversal'):
-                configure_bundle(incumbent,data_root=DATA_DIR,day=day)
-        except (ValueError,KeyError,TypeError,OSError):
+            incumbent = (
+                load_effective(data_root=DATA_DIR, target_date=day)
+                if initialize_entry_policy
+                else None
+            )
+            if (incumbent or {}).get("continuous_reversal"):
+                configure_bundle(incumbent, data_root=DATA_DIR, day=day)
+        except (ValueError, KeyError, TypeError, OSError):
             # An unknown first session observation remains unknown. Never
             # substitute the first post-restart price for historical context.
             pass
@@ -1175,12 +1316,18 @@ class GPTSniperEngine:
         self.consecutive_failures = 0
         self.ai_disabled = False
         from src.engine.monitoring.runtime_performance import observe_ai_circuit
-        observe_ai_circuit(failures=self.consecutive_failures, disabled=self.ai_disabled)
+
+        observe_ai_circuit(
+            failures=self.consecutive_failures, disabled=self.ai_disabled
+        )
         self.max_consecutive_failures = getattr(
             TRADING_RULES, "AI_MAX_CONSECUTIVE_FAILURES", 5
         )
         from src.engine.ai.entry_transport_circuit import EntryTransportCircuit
-        self._entry_transport_circuit = EntryTransportCircuit(self.max_consecutive_failures)
+
+        self._entry_transport_circuit = EntryTransportCircuit(
+            self.max_consecutive_failures
+        )
         self.current_api_key_index = 0
 
         self.cache_lock = threading.RLock()
@@ -1239,34 +1386,44 @@ class GPTSniperEngine:
 
     def _client_for_key(self, key):
         # Key rotation retains its original order; each key retains its pool.
-        if not hasattr(self, '_http_clients'):
+        if not hasattr(self, "_http_clients"):
             self._http_clients = {}
             self._http_clients_lock = threading.Lock()
         with self._http_clients_lock:
             if key not in self._http_clients:
                 self._http_clients[key] = OpenAI(
-                    api_key=key, max_retries=OPENAI_SDK_MAX_RETRIES,
-                    http_client=DefaultHttpxClient(limits=httpx.Limits(
-                        max_connections=1000, max_keepalive_connections=100,
-                        keepalive_expiry=300)),
+                    api_key=key,
+                    max_retries=OPENAI_SDK_MAX_RETRIES,
+                    http_client=DefaultHttpxClient(
+                        limits=httpx.Limits(
+                            max_connections=1000,
+                            max_keepalive_connections=100,
+                            keepalive_expiry=300,
+                        )
+                    ),
                 )
             return self._http_clients[key]
 
     def start_transport_warmup(self, *, allowed):
         from src.engine.ai.transport_warmup import TransportWarmup
-        if getattr(self, '_transport_warmup', None) is not None:
+
+        if getattr(self, "_transport_warmup", None) is not None:
             return
         clients = [self._client_for_key(key) for key in dict.fromkeys(self.api_keys)]
+
         def record(receipt):
             receipt.update(pid=os.getpid(), source_root=str(PROJECT_ROOT))
-            directory = PROJECT_ROOT / 'data/runtime/ai_transport_warmup'
+            directory = PROJECT_ROOT / "data/runtime/ai_transport_warmup"
             directory.mkdir(parents=True, exist_ok=True)
-            path = directory / (datetime.now().strftime('%Y-%m-%d') + '.jsonl')
-            with path.open('a', encoding='utf-8') as stream:
-                stream.write(json.dumps(receipt, ensure_ascii=True) + '\n')
+            path = directory / (datetime.now().strftime("%Y-%m-%d") + ".jsonl")
+            with path.open("a", encoding="utf-8") as stream:
+                stream.write(json.dumps(receipt, ensure_ascii=True) + "\n")
+
         self._transport_warmup = TransportWarmup(
-            clients, allowed=lambda: allowed() and not self.ai_disabled,
-            busy=lambda: self.api_call_lock.locked() or self.lock.locked(), record=record,
+            clients,
+            allowed=lambda: allowed() and not self.ai_disabled,
+            busy=lambda: self.api_call_lock.locked() or self.lock.locked(),
+            record=record,
         )
         try:
             self._transport_warmup.start()
@@ -1276,15 +1433,15 @@ class GPTSniperEngine:
 
     def stop_transport_warmup(self):
         """Diagnostic shutdown must never interrupt Main's remaining cleanup."""
-        warmup = getattr(self, '_transport_warmup', None)
+        warmup = getattr(self, "_transport_warmup", None)
         self._transport_warmup = None
         if warmup is not None:
             try:
                 warmup.stop()
             except Exception as exc:
                 logging.getLogger(__name__).warning(
-                    'AI warmup shutdown failed: %s', type(exc).__name__)
-
+                    "AI warmup shutdown failed: %s", type(exc).__name__
+                )
 
     @staticmethod
     def _get_compact_auxiliary_model():
@@ -1294,21 +1451,31 @@ class GPTSniperEngine:
     @staticmethod
     def _get_role_model(setting):
         """Resolve one role from its configuration, never another request's state."""
-        return str(getattr(TRADING_RULES, setting, None)
-                   or getattr(TradingConfig, setting)).strip()
+        return str(
+            getattr(TRADING_RULES, setting, None) or getattr(TradingConfig, setting)
+        ).strip()
 
     MODEL_ROLE_SETTINGS = (
-        "OPENAI_SCALPING_ENTRY_MODEL", "OPENAI_HOLDING_SCORE_MODEL",
-        "OPENAI_HOLDING_EXIT_VOTE_MODEL", "OPENAI_HOLDING_FLOW_MODEL",
-        "OPENAI_REALTIME_REPORT_MODEL", "OPENAI_SWING_ANALYSIS_MODEL",
-        "OPENAI_SCALPING_SHARED_MODEL", "OPENAI_WATCHING_SHADOW_MODEL",
+        "OPENAI_SCALPING_ENTRY_MODEL",
+        "OPENAI_HOLDING_SCORE_MODEL",
+        "OPENAI_HOLDING_EXIT_VOTE_MODEL",
+        "OPENAI_HOLDING_FLOW_MODEL",
+        "OPENAI_REALTIME_REPORT_MODEL",
+        "OPENAI_SWING_ANALYSIS_MODEL",
+        "OPENAI_SCALPING_SHARED_MODEL",
+        "OPENAI_WATCHING_SHADOW_MODEL",
         "OPENAI_GATEKEEPER_SHADOW_MODEL",
     )
 
     def model_configuration(self):
         # This same projection is used by startup and new frozen replay captures.
-        return {**{setting: self._get_role_model(setting) for setting in self.MODEL_ROLE_SETTINGS},
-                "compact_auxiliary": self._get_compact_auxiliary_model()}
+        return {
+            **{
+                setting: self._get_role_model(setting)
+                for setting in self.MODEL_ROLE_SETTINGS
+            },
+            "compact_auxiliary": self._get_compact_auxiliary_model(),
+        }
 
     def _announce_model_configuration(self):
         roles = [("진입 보조평가", self._get_compact_auxiliary_model())]
@@ -1324,8 +1491,10 @@ class GPTSniperEngine:
             ("gatekeeper 페르소나(shadow)", "OPENAI_GATEKEEPER_SHADOW_MODEL"),
         ):
             roles.append((label, self._get_role_model(setting)))
-        print("OpenAI 모델 설정\n" + "\n".join(
-            f"  {label}: {model}" for label, model in roles))
+        print(
+            "OpenAI 모델 설정\n"
+            + "\n".join(f"  {label}: {model}" for label, model in roles)
+        )
 
     def _record_ws_metric(self, metric_name, value=1):
         if not hasattr(self, "_ws_metrics_lock"):
@@ -1425,7 +1594,6 @@ class GPTSniperEngine:
         return max(
             1, int(getattr(TRADING_RULES, "OPENAI_RESPONSES_WS_TIMEOUT_MS", 700) or 700)
         )
-
 
     def _should_use_openai_schema_registry(self, *, require_json, schema_name):
         if require_json and schema_name == ENTRY_RISK_ADJUDICATION_SCHEMA:
@@ -1886,7 +2054,9 @@ class GPTSniperEngine:
     ):
         context = candle_context if isinstance(candle_context, dict) else {}
         if not context or (
-            not bool(context.get("enabled", False)) and not validation_only and not machine_base_only
+            not bool(context.get("enabled", False))
+            and not validation_only
+            and not machine_base_only
         ):
             return None
         payload = {
@@ -1929,8 +2099,8 @@ class GPTSniperEngine:
             # optional AI context promotion. Never enable the promoted MTF view.
             payload["multi_timeframe_ai_input_enabled"] = False
             payload["input_role"] = "main_machine_base_candles_no_context_promotion"
-            if context.get('strategy_completed_bars'):
-                payload['strategy_completed_bars'] = context['strategy_completed_bars']
+            if context.get("strategy_completed_bars"):
+                payload["strategy_completed_bars"] = context["strategy_completed_bars"]
             payload.pop("regime", None)
             payload.pop("alignment", None)
         if payload["multi_timeframe_ai_input_enabled"]:
@@ -1983,7 +2153,9 @@ class GPTSniperEngine:
             metadata=dict(metadata or {}),
         )
 
-    def _attach_entry_candle_inputs(self, payload, candle_context, *, machine_base_only=False):
+    def _attach_entry_candle_inputs(
+        self, payload, candle_context, *, machine_base_only=False
+    ):
         target = payload if isinstance(payload, dict) else {}
         candle_payload = self._entry_candle_model_payload(
             candle_context, machine_base_only=machine_base_only
@@ -2157,18 +2329,21 @@ class GPTSniperEngine:
         return float(self.analysis_cache_ttl or 0.0)
 
     def _annotate_analysis_result(
-        self, result, **kwargs,
+        self,
+        result,
+        **kwargs,
     ):
-        if kwargs.get('prompt_type') != 'scalping_entry':
+        if kwargs.get("prompt_type") != "scalping_entry":
             return self._annotate_analysis_result_frame(result, **kwargs)
-        annotated = timed_entry_call('entry_annotation', self._annotate_analysis_result_frame,
-                                     result, **kwargs)
+        annotated = timed_entry_call(
+            "entry_annotation", self._annotate_analysis_result_frame, result, **kwargs
+        )
         stages = entry_timings()
         if stages:
-            clocks = dict(annotated.get('entry_local_stage_clocks') or {})
-            clocks['stage_durations_ms'] = stages
-            clocks['stage_duration_basis'] = 'nested_same_pid_monotonic_not_additive'
-            annotated['entry_local_stage_clocks'] = clocks
+            clocks = dict(annotated.get("entry_local_stage_clocks") or {})
+            clocks["stage_durations_ms"] = stages
+            clocks["stage_duration_basis"] = "nested_same_pid_monotonic_not_additive"
+            annotated["entry_local_stage_clocks"] = clocks
         return annotated
 
     def _annotate_analysis_result_frame(
@@ -2187,12 +2362,12 @@ class GPTSniperEngine:
         input_contract_fields=None,
     ):
         payload = dict(result or {})
-        if prompt_type == 'scalping_entry' and entry_timings():
-            payload['entry_local_stage_timings_ms'] = entry_timings()
+        if prompt_type == "scalping_entry" and entry_timings():
+            payload["entry_local_stage_timings_ms"] = entry_timings()
         if cache_hit:
             # Monotonic timings belong to the original invocation, not this
             # cache delivery. Parent trace remains the source of those clocks.
-            payload.pop('entry_local_stage_clocks', None)
+            payload.pop("entry_local_stage_clocks", None)
             parent_trace_id = payload.get("ai_decision_trace_id")
             for trace_key in (
                 "ai_decision_trace_id",
@@ -2214,11 +2389,15 @@ class GPTSniperEngine:
         payload["cache_mode"] = str(cache_mode or "miss")
         if isinstance(input_contract_fields, dict):
             payload.update(
-                {k: v for k, v in input_contract_fields.items()
-                 if v not in (None, "") and not (
-                     k.startswith(("ai_input_payload_", "ai_request_", "ai_prompt_"))
-                     and k in payload
-                 )}
+                {
+                    k: v
+                    for k, v in input_contract_fields.items()
+                    if v not in (None, "")
+                    and not (
+                        k.startswith(("ai_input_payload_", "ai_request_", "ai_prompt_"))
+                        and k in payload
+                    )
+                }
             )
         if "ai_decision_trace_id" not in payload and str(result_source or "") in {
             "error",
@@ -2265,7 +2444,13 @@ class GPTSniperEngine:
         if not isinstance(payload, dict):
             return fields
         fields["ai_input_schema"] = (
-            str(payload.get("input_schema") or payload.get("schema") or default_schema or "-").strip() or "-"
+            str(
+                payload.get("input_schema")
+                or payload.get("schema")
+                or default_schema
+                or "-"
+            ).strip()
+            or "-"
         )
         fields["ai_input_contract_mode"] = "structured_json"
         fallback_reason = str(payload.get("input_build_fallback") or "").strip()
@@ -2308,34 +2493,59 @@ class GPTSniperEngine:
             self._common_recoverable_chain = True
             self._common_circuit().ordinary_success()
         from src.engine.monitoring.runtime_performance import observe_ai_circuit
-        observe_ai_circuit(failures=self.consecutive_failures, disabled=self.ai_disabled)
+
+        observe_ai_circuit(
+            failures=self.consecutive_failures, disabled=self.ai_disabled
+        )
         if update_last_call_time:
             self.last_call_time = time.time()
 
-    def _record_failure_and_maybe_disable(self, *, context_name, error=None, recovery_ticket=None):
-        cause=getattr(error,'provider_common_error',None) or error
-        visited=set()
-        while cause is not None and not isinstance(cause,APIStatusError) and id(cause) not in visited:
-            visited.add(id(cause));cause=cause.__cause__
-        transient=isinstance(cause,APIStatusError) and (cause.status_code==429 or 500<=cause.status_code<=599)
-        self._common_recoverable_chain = (getattr(self,'_common_recoverable_chain',self.consecutive_failures==0)
-                                         and transient)
+    def _record_failure_and_maybe_disable(
+        self, *, context_name, error=None, recovery_ticket=None
+    ):
+        cause = getattr(error, "provider_common_error", None) or error
+        visited = set()
+        while (
+            cause is not None
+            and not isinstance(cause, APIStatusError)
+            and id(cause) not in visited
+        ):
+            visited.add(id(cause))
+            cause = cause.__cause__
+        transient = isinstance(cause, APIStatusError) and (
+            cause.status_code == 429 or 500 <= cause.status_code <= 599
+        )
+        self._common_recoverable_chain = (
+            getattr(self, "_common_recoverable_chain", self.consecutive_failures == 0)
+            and transient
+        )
         if transient:
-            circuit=self._common_circuit()
-            ticket=recovery_ticket or circuit.admit(None,eligible=False,deadline_remaining=1)
+            circuit = self._common_circuit()
+            ticket = recovery_ticket or circuit.admit(
+                None, eligible=False, deadline_remaining=1
+            )
             if ticket is not None:
-                wait=0
+                wait = 0
                 try:
-                    wait=float(cause.response.headers.get('retry-after') or 0)
-                    if not math.isfinite(wait) or wait<0:wait=0
-                except (ValueError,TypeError):
+                    wait = float(cause.response.headers.get("retry-after") or 0)
+                    if not math.isfinite(wait) or wait < 0:
+                        wait = 0
+                except (ValueError, TypeError):
                     from email.utils import parsedate_to_datetime
+
                     try:
-                        limit=parsedate_to_datetime(cause.response.headers.get('retry-after') or '')
-                        wait=max(0,limit.timestamp()-time.time())
-                    except (ValueError,TypeError,OverflowError):wait=0
-                circuit.failed(ticket,reason='provider_http_'+str(cause.status_code),retry_after_seconds=wait,
-                    future=getattr(error,'provider_future',None))
+                        limit = parsedate_to_datetime(
+                            cause.response.headers.get("retry-after") or ""
+                        )
+                        wait = max(0, limit.timestamp() - time.time())
+                    except (ValueError, TypeError, OverflowError):
+                        wait = 0
+                circuit.failed(
+                    ticket,
+                    reason="provider_http_" + str(cause.status_code),
+                    retry_after_seconds=wait,
+                    future=getattr(error, "provider_future", None),
+                )
         self.consecutive_failures += 1
         failure_count = self.consecutive_failures
         if failure_count >= self.max_consecutive_failures:
@@ -2345,38 +2555,63 @@ class GPTSniperEngine:
                 f"API키 인덱스 {self.current_api_key_index}, context={context_name})"
             )
         from src.engine.monitoring.runtime_performance import observe_ai_circuit
-        observe_ai_circuit(failures=self.consecutive_failures, disabled=self.ai_disabled,
-            common=self._common_circuit().snapshot(),common_failure=dict(
-                error_type=type(error).__name__ if error else 'unobserved',
-                http_status=cause.status_code if isinstance(cause,APIStatusError) else None,
-                recovery_supported=self._common_recoverable_chain))
+
+        observe_ai_circuit(
+            failures=self.consecutive_failures,
+            disabled=self.ai_disabled,
+            common=self._common_circuit().snapshot(),
+            common_failure=dict(
+                error_type=type(error).__name__ if error else "unobserved",
+                http_status=(
+                    cause.status_code if isinstance(cause, APIStatusError) else None
+                ),
+                recovery_supported=self._common_recoverable_chain,
+            ),
+        )
         return failure_count
 
     def _common_circuit(self):
-        circuit=getattr(self,'_provider_common_circuit',None)
+        circuit = getattr(self, "_provider_common_circuit", None)
         if circuit is None:
             from src.engine.ai.entry_transport_circuit import EntryTransportCircuit
-            circuit=self._provider_common_circuit=EntryTransportCircuit(self.max_consecutive_failures,owner='provider_common')
+
+            circuit = self._provider_common_circuit = EntryTransportCircuit(
+                self.max_consecutive_failures, owner="provider_common"
+            )
         return circuit
 
     def _admit_common_recovery(self, identity, *, eligible, deadline_remaining):
-        if (not self.ai_disabled or not eligible or not all(isinstance(v,str) and bool(v) for v in identity)
-                or not getattr(self,'_common_recoverable_chain',False)
-                or self._common_circuit().snapshot()['state']!='OPEN'):
+        if (
+            not self.ai_disabled
+            or not eligible
+            or not all(isinstance(v, str) and bool(v) for v in identity)
+            or not getattr(self, "_common_recoverable_chain", False)
+            or self._common_circuit().snapshot()["state"] != "OPEN"
+        ):
             return None
-        return self._common_circuit().admit(identity,eligible=True,deadline_remaining=deadline_remaining)
+        return self._common_circuit().admit(
+            identity, eligible=True, deadline_remaining=deadline_remaining
+        )
 
     def _entry_circuit(self):
-        circuit = getattr(self, '_entry_transport_circuit', None)
+        circuit = getattr(self, "_entry_transport_circuit", None)
         if circuit is None:
             from src.engine.ai.entry_transport_circuit import EntryTransportCircuit
-            circuit = self._entry_transport_circuit = EntryTransportCircuit(self.max_consecutive_failures)
+
+            circuit = self._entry_transport_circuit = EntryTransportCircuit(
+                self.max_consecutive_failures
+            )
         return circuit
 
     def _observe_entry_circuit(self):
         from src.engine.monitoring.runtime_performance import observe_ai_circuit
-        observe_ai_circuit(failures=self.consecutive_failures, disabled=self.ai_disabled,
-                           entry=self._entry_circuit().snapshot(),common=self._common_circuit().snapshot())
+
+        observe_ai_circuit(
+            failures=self.consecutive_failures,
+            disabled=self.ai_disabled,
+            entry=self._entry_circuit().snapshot(),
+            common=self._common_circuit().snapshot(),
+        )
 
     def _resolve_scalping_prompt(self, prompt_profile, *, prompt_version_override=None):
         profile = str(prompt_profile or "shared").strip().lower()
@@ -2791,20 +3026,29 @@ class GPTSniperEngine:
             machine_rejection_fields = {}
             if mechanistic_primary and not setup_contract_errors:
                 machine_rejection_fields = {
-                    key: value for key, value in composed_for_live.items()
-                    if key.startswith("entry_mechanistic_") or key in {
-                        "primary_schema", "entry_primary_decision_owner",
-                        "entry_ai_role", "entry_decision_role_contract",
+                    key: value
+                    for key, value in composed_for_live.items()
+                    if key.startswith("entry_mechanistic_")
+                    or key
+                    in {
+                        "primary_schema",
+                        "entry_primary_decision_owner",
+                        "entry_ai_role",
+                        "entry_decision_role_contract",
                     }
                 }
                 screen_required = composed.get("entry_ai_screen_required") is True
                 machine_rejection_fields.update(
                     entry_ai_screen_required=screen_required,
                     entry_ai_screen_pass=False,
-                    entry_ai_screen_status=("response_invalid" if screen_required
-                                            else "not_requested_machine_nonentry"),
+                    entry_ai_screen_status=(
+                        "response_invalid"
+                        if screen_required
+                        else "not_requested_machine_nonentry"
+                    ),
                     entry_ai_followup_disposition=(
-                        "ai_screen_invalid_fail_closed_wait" if screen_required
+                        "ai_screen_invalid_fail_closed_wait"
+                        if screen_required
                         else composed.get("entry_ai_followup_disposition")
                     ),
                     entry_ai_followup_authority="no_entry_authority",
@@ -3064,70 +3308,109 @@ class GPTSniperEngine:
         """Bounded evidence from the received response, before live composition."""
         received = result if isinstance(result, dict) else {}
         from src.engine.scalping.continuous_reversal_postclose import digest
-        fields = ('risk_verdict', 'risk_codes', 'supporting_fact_ids',
-                  'contradicting_fact_ids', 'confidence')
+
+        fields = (
+            "risk_verdict",
+            "risk_codes",
+            "supporting_fact_ids",
+            "contradicting_fact_ids",
+            "confidence",
+        )
         projection = {
-            'entry_ai_raw_fields_present': {key: key in received for key in fields},
-            'entry_ai_raw_fields_truncated': False,
-            'entry_ai_raw_truncated_field_names': [],
-            'entry_ai_raw_fields_invalid_shape': [],
-            'entry_ai_raw_fields_source': 'decoded_provider_response',
-            'entry_ai_raw_response_sha256': response_sha256 or digest(received),
+            "entry_ai_raw_fields_present": {key: key in received for key in fields},
+            "entry_ai_raw_fields_truncated": False,
+            "entry_ai_raw_truncated_field_names": [],
+            "entry_ai_raw_fields_invalid_shape": [],
+            "entry_ai_raw_fields_source": "decoded_provider_response",
+            "entry_ai_raw_response_sha256": response_sha256 or digest(received),
         }
         for key in fields:
             value = received.get(key)
-            if key.endswith('_ids') or key == 'risk_codes':
+            if key.endswith("_ids") or key == "risk_codes":
                 values = value if isinstance(value, list) else []
                 if key in received and not isinstance(value, list):
-                    projection['entry_ai_raw_fields_invalid_shape'].append(key)
-                if len(values) > 64 or any((isinstance(v, str) and len(v) > 512)
-                        or (v is not None and type(v) not in (bool, int, float, str)) for v in values):
-                    projection['entry_ai_raw_fields_truncated'] = True
-                    projection['entry_ai_raw_truncated_field_names'].append(key)
+                    projection["entry_ai_raw_fields_invalid_shape"].append(key)
+                if len(values) > 64 or any(
+                    (isinstance(v, str) and len(v) > 512)
+                    or (v is not None and type(v) not in (bool, int, float, str))
+                    for v in values
+                ):
+                    projection["entry_ai_raw_fields_truncated"] = True
+                    projection["entry_ai_raw_truncated_field_names"].append(key)
                 # JSON scalar values remain exact, including invalid citations;
                 # non-scalar malformed members are represented by their type.
-                projection['entry_ai_raw_' + key] = [
-                    v[:512] if isinstance(v, str) else v
-                    if v is None or type(v) in (bool, int, float)
-                    else {'invalid_type': type(v).__name__}
+                projection["entry_ai_raw_" + key] = [
+                    (
+                        v[:512]
+                        if isinstance(v, str)
+                        else (
+                            v
+                            if v is None or type(v) in (bool, int, float)
+                            else {"invalid_type": type(v).__name__}
+                        )
+                    )
                     for v in values[:64]
                 ]
-            elif key == 'risk_verdict':
-                projection['entry_ai_raw_risk_verdict'] = value[:512] if isinstance(value, str) else ''
-                if key in received and not isinstance(value,str):
-                    projection['entry_ai_raw_fields_invalid_shape'].append(key)
+            elif key == "risk_verdict":
+                projection["entry_ai_raw_risk_verdict"] = (
+                    value[:512] if isinstance(value, str) else ""
+                )
+                if key in received and not isinstance(value, str):
+                    projection["entry_ai_raw_fields_invalid_shape"].append(key)
                 if isinstance(value, str) and len(value) > 512:
-                    projection['entry_ai_raw_fields_truncated'] = True
-                    projection['entry_ai_raw_truncated_field_names'].append(key)
+                    projection["entry_ai_raw_fields_truncated"] = True
+                    projection["entry_ai_raw_truncated_field_names"].append(key)
             else:
-                projection['entry_ai_raw_confidence'] = value[:512] if isinstance(value, str) else value if (
-                    value is None or type(value) in (bool, int, float, str)) else None
-                if isinstance(value,str) and len(value)>512:
-                    projection['entry_ai_raw_fields_truncated']=True
-                    projection['entry_ai_raw_truncated_field_names'].append(key)
+                projection["entry_ai_raw_confidence"] = (
+                    value[:512]
+                    if isinstance(value, str)
+                    else (
+                        value
+                        if (value is None or type(value) in (bool, int, float, str))
+                        else None
+                    )
+                )
+                if isinstance(value, str) and len(value) > 512:
+                    projection["entry_ai_raw_fields_truncated"] = True
+                    projection["entry_ai_raw_truncated_field_names"].append(key)
         return projection
 
     @staticmethod
     def _received_reversal_response_failure(raw_fields, *, error, response_errors=None):
         """A completed response rejected locally remains received evidence."""
-        contract_errors=(list(response_errors) if response_errors is not None else
-            ['auxiliary_response_validator_exception:'+type(error).__name__])
-        execution_errors=['entry_post_response_projection_error:'+type(error).__name__]
-        return dict(raw_fields, action='WAIT', action_v2='WAIT',
+        contract_errors = (
+            list(response_errors)
+            if response_errors is not None
+            else ["auxiliary_response_validator_exception:" + type(error).__name__]
+        )
+        execution_errors = [
+            "entry_post_response_projection_error:" + type(error).__name__
+        ]
+        return dict(
+            raw_fields,
+            action="WAIT",
+            action_v2="WAIT",
             entry_auxiliary_response_received=True,
-            entry_auxiliary_response_contract_valid=(response_errors is not None and not response_errors),
+            entry_auxiliary_response_contract_valid=(
+                response_errors is not None and not response_errors
+            ),
             entry_auxiliary_response_contract_errors=contract_errors,
             entry_post_response_execution_valid=False,
-            entry_ai_contract_valid=False, entry_ai_contract_errors=contract_errors+execution_errors,
-            entry_ai_screen_required=True, entry_ai_screen_pass=False,
-            entry_ai_screen_status='response_invalid',
-            entry_ai_evaluation_status='response_invalid',
+            entry_ai_contract_valid=False,
+            entry_ai_contract_errors=contract_errors + execution_errors,
+            entry_ai_screen_required=True,
+            entry_ai_screen_pass=False,
+            entry_ai_screen_status="response_invalid",
+            entry_ai_evaluation_status="response_invalid",
             entry_machine_pass_submit_candidate=False,
-            decision_quality_contract_status='rejected',
-            semantic_validation_status='rejected',
+            decision_quality_contract_status="rejected",
+            semantic_validation_status="rejected",
             entry_post_response_failure_reason=str(error)[:240],
-            openai_timeout_like=False, openai_transport_fail_closed=False, actual_order_submitted=False,
-            broker_order_forbidden=True)
+            openai_timeout_like=False,
+            openai_transport_fail_closed=False,
+            actual_order_submitted=False,
+            broker_order_forbidden=True,
+        )
 
     def _normalize_decision_quality_entry_result(
         self,
@@ -3138,40 +3421,68 @@ class GPTSniperEngine:
         entry_setup_evidence=None,
         live_policy=None,
     ):
-        if isinstance(live_policy, dict) and live_policy.get('continuous_reversal_assessment'):
+        if isinstance(live_policy, dict) and live_policy.get(
+            "continuous_reversal_assessment"
+        ):
             # Capture the received logical response before the composer replaces
             # it with a guarded execution decision. Raw citations never repair
             # a semantic failure and are not passed back to the validator.
-            raw_response_fields = self._raw_reversal_response_fields(result,
-                live_policy.get('continuous_reversal_raw_response_sha256'))
+            raw_response_fields = self._raw_reversal_response_fields(
+                result, live_policy.get("continuous_reversal_raw_response_sha256")
+            )
             from src.engine.scalping.continuous_reversal_policy import compose
-            if live_policy['continuous_reversal_assessment'].get('policy_version') == 'continuous_reversal_policy_v6':
+
+            if (
+                live_policy["continuous_reversal_assessment"].get("policy_version")
+                == "continuous_reversal_policy_v6"
+            ):
                 # New boundary after provider I/O: share only the loader-owned
                 # immutable view, never the earlier signal or source validity.
-                from src.engine.scalping import mechanistic_entry_runtime_policy as native
+                from src.engine.scalping import (
+                    mechanistic_entry_runtime_policy as native,
+                )
                 from src.utils.constants import DATA_DIR
-                day = datetime.now(__import__('zoneinfo').ZoneInfo('Asia/Seoul')).date().isoformat()
+
+                day = (
+                    datetime.now(__import__("zoneinfo").ZoneInfo("Asia/Seoul"))
+                    .date()
+                    .isoformat()
+                )
                 try:
-                    with native.signature_pass(), native.verified_evaluation(
-                            data_root=DATA_DIR, target_date=day):
+                    with (
+                        native.signature_pass(),
+                        native.verified_evaluation(data_root=DATA_DIR, target_date=day),
+                    ):
                         return dict(compose(result, live_policy), **raw_response_fields)
                 except (OSError, ValueError, TypeError, KeyError) as exc:
                     # Preserve the completed provider result as a transport
                     # fact, but never retry a failed execution boundary to BUY.
-                    return dict(**raw_response_fields, action='WAIT', action_v2='WAIT', score=50,
-                        reason='entry_post_response_source_invalid',
+                    return dict(
+                        **raw_response_fields,
+                        action="WAIT",
+                        action_v2="WAIT",
+                        score=50,
+                        reason="entry_post_response_source_invalid",
                         continuous_reversal_applied=True,
-                        entry_mechanistic_action=live_policy['continuous_reversal_assessment']['action'],
-                        entry_mechanistic_policy_decision=live_policy['continuous_reversal_assessment'],
-                        machine_bundle_sha256=live_policy.get('machine_bundle_sha256'),
-                        entry_ai_screen_required=True, entry_ai_screen_pass=False,
-                        entry_ai_screen_status='response_invalid',
+                        entry_mechanistic_action=live_policy[
+                            "continuous_reversal_assessment"
+                        ]["action"],
+                        entry_mechanistic_policy_decision=live_policy[
+                            "continuous_reversal_assessment"
+                        ],
+                        machine_bundle_sha256=live_policy.get("machine_bundle_sha256"),
+                        entry_ai_screen_required=True,
+                        entry_ai_screen_pass=False,
+                        entry_ai_screen_status="response_invalid",
                         entry_ai_advisory_contract_errors=[str(exc)],
                         entry_ai_contract_errors=[str(exc)],
-                        entry_ai_contract_valid=False, entry_ai_advisory_contract_valid=False,
-                        decision_quality_contract_status='rejected',
+                        entry_ai_contract_valid=False,
+                        entry_ai_advisory_contract_valid=False,
+                        decision_quality_contract_status="rejected",
                         entry_machine_pass_submit_candidate=False,
-                        actual_order_submitted=False, broker_order_forbidden=True)
+                        actual_order_submitted=False,
+                        broker_order_forbidden=True,
+                    )
             return dict(compose(result, live_policy), **raw_response_fields)
         payload = dict(result or {}) if isinstance(result, dict) else {}
         normalized_prompt_version = (
@@ -4433,7 +4744,7 @@ class GPTSniperEngine:
     def _apply_remote_entry_guard(
         self, result, *, prompt_type, ws_data, recent_ticks, recent_candles
     ):
-        if result.get('continuous_reversal_applied'):
+        if result.get("continuous_reversal_applied"):
             # Superseded strategy AND conditions; submit/source guards remain downstream.
             return result
         if prompt_type not in {"scalping_entry", "scalping_shared"}:
@@ -4475,9 +4786,7 @@ class GPTSniperEngine:
             result["entry_machine_pass_submit_candidate"] = False
             result["entry_probe_intent"] = False
             result["remote_buy_guard_applied"] = True
-            result["decision_quality_runtime_action_mapping"] = (
-                "remote_buy_guard_wait"
-            )
+            result["decision_quality_runtime_action_mapping"] = "remote_buy_guard_wait"
             result["decision_quality_score_semantics"] = (
                 "action_only_compatibility_score"
             )
@@ -4619,14 +4928,11 @@ class GPTSniperEngine:
             feature_pass_count = (
                 int(position_pass) + int(accel >= 1.10) + int(supply_pass)
             )
-            if (
-                feature_pass_count >= 3
-                and (
-                    "insufficient buy" in lowered
-                    or "prevents buy" in lowered
-                    or "buy setup is incomplete" in lowered
-                    or "buy signals" in lowered
-                )
+            if feature_pass_count >= 3 and (
+                "insufficient buy" in lowered
+                or "prevents buy" in lowered
+                or "buy setup is incomplete" in lowered
+                or "buy signals" in lowered
             ):
                 contradiction = True
                 inconsistency_field = "entry_feature_bundle"
@@ -4959,8 +5265,8 @@ class GPTSniperEngine:
     def _build_invalid_prompt_retry_request(
         self, request: OpenAIResponseRequest
     ) -> OpenAIResponseRequest:
-        if (request.metadata or {}).get('auxiliary_registry_sha256'):
-            raise ValueError('registered_auxiliary_prompt_rewrite_forbidden')
+        if (request.metadata or {}).get("auxiliary_registry_sha256"):
+            raise ValueError("registered_auxiliary_prompt_rewrite_forbidden")
         if request.require_json:
             if request.schema_name == "holding_score_v2":
                 safe_prompt = (
@@ -5058,80 +5364,119 @@ class GPTSniperEngine:
     ):
         remaining = request.remaining_timeout_sec()
         if request.transport_observation is not None:
-            request.transport_observation.mark('http_prepare_completed', remaining_sec=remaining)
+            request.transport_observation.mark(
+                "http_prepare_completed", remaining_sec=remaining
+            )
         if remaining <= 0:
             if request.transport_observation is not None:
-                request.transport_observation.mark('caller_adapter_finished')
+                request.transport_observation.mark("caller_adapter_finished")
             raise OpenAIHTTPWallClockDeadlineError(
                 "OpenAI HTTP wall-clock deadline exhausted before provider call",
                 future_cancelled=True,
             )
         client = self.client
-        warmup = getattr(self, '_transport_warmup', None)
-        if warmup is not None and request.model_name == 'gpt-5.4-nano':
+        warmup = getattr(self, "_transport_warmup", None)
+        if warmup is not None and request.model_name == "gpt-5.4-nano":
             warmup.note_activity(client)
+
         def transmit():
-            attempt_clocks['executor_started'] = time.perf_counter()
+            attempt_clocks["executor_started"] = time.perf_counter()
             if request.transport_observation is not None:
-                request.transport_observation.mark('executor_started', remaining_sec=request.remaining_timeout_sec())
+                request.transport_observation.mark(
+                    "executor_started", remaining_sec=request.remaining_timeout_sec()
+                )
             physical_remaining = request.remaining_timeout_sec()
             if physical_remaining <= 0:
-                raise OpenAIHTTPWallClockDeadlineError('OpenAI HTTP deadline exhausted in worker queue', future_cancelled=True)
+                raise OpenAIHTTPWallClockDeadlineError(
+                    "OpenAI HTTP deadline exhausted in worker queue",
+                    future_cancelled=True,
+                )
             from src.engine.monitoring.runtime_performance import observe
+
             started = time.perf_counter()
-            observe('provider_key_wait', max(0., started-request.submitted_at_perf))
+            observe("provider_key_wait", max(0.0, started - request.submitted_at_perf))
             try:
                 if request.transport_observation is not None:
-                    request.transport_observation.mark('sdk_started', remaining_sec=physical_remaining)
-                attempt_clocks['sdk_started'] = time.perf_counter()
-                response = client.responses.create(**provider_payload, timeout=physical_remaining)
+                    request.transport_observation.mark(
+                        "sdk_started", remaining_sec=physical_remaining
+                    )
+                attempt_clocks["sdk_started"] = time.perf_counter()
+                response = client.responses.create(
+                    **provider_payload, timeout=physical_remaining
+                )
                 if request.transport_observation is not None:
-                    request.transport_observation.mark('response_received')
+                    request.transport_observation.mark("response_received")
                 return response
             finally:
-                attempt_clocks['sdk_finished'] = time.perf_counter()
+                attempt_clocks["sdk_finished"] = time.perf_counter()
                 if request.transport_observation is not None:
-                    request.transport_observation.mark('sdk_finished')
-                observe('provider_transport', time.perf_counter()-started)
-        attempt_clocks = {'executor_enqueued': time.perf_counter()}
+                    request.transport_observation.mark("sdk_finished")
+                observe("provider_transport", time.perf_counter() - started)
+
+        attempt_clocks = {"executor_enqueued": time.perf_counter()}
         if request.transport_observation is not None:
-            request.transport_observation.mark('executor_enqueued', remaining_sec=request.remaining_timeout_sec())
+            request.transport_observation.mark(
+                "executor_enqueued", remaining_sec=request.remaining_timeout_sec()
+            )
         future = self._get_http_deadline_executor().submit(transmit)
+
         def settled(done):
             try:
                 if request.transport_observation is not None:
-                    request.transport_observation.mark('future_settled')
+                    request.transport_observation.mark("future_settled")
                 # A caller deadline can precede the actual SDK terminal. Keep
                 # the Future's typed outcome without payloads or exception
                 # messages, and without admitting its late response anywhere.
                 cancelled = done.cancelled()
                 terminal_error = None if cancelled else done.exception()
-                status_code = getattr(terminal_error, 'status_code', None)
+                status_code = getattr(terminal_error, "status_code", None)
                 terminal = dict(
-                    future_status=('cancelled' if cancelled else
-                                   'exception' if terminal_error is not None else 'completed'),
-                    exception_type=(type(terminal_error).__name__[:80]
-                                    if terminal_error is not None else None),
-                    http_status_code=(status_code if type(status_code) is int
-                                      and 100 <= status_code <= 599 else None))
-                from src.engine.monitoring.runtime_performance import record_http_settlement
-                record_http_settlement(request.request_id, request.symbol,
-                    {**attempt_clocks, 'future_settled': time.perf_counter()},
-                    cancelled=cancelled, terminal=terminal,
-                    transport_facts=(request.transport_observation.fields()
-                        if request.transport_observation is not None else None))
+                    future_status=(
+                        "cancelled"
+                        if cancelled
+                        else "exception" if terminal_error is not None else "completed"
+                    ),
+                    exception_type=(
+                        type(terminal_error).__name__[:80]
+                        if terminal_error is not None
+                        else None
+                    ),
+                    http_status_code=(
+                        status_code
+                        if type(status_code) is int and 100 <= status_code <= 599
+                        else None
+                    ),
+                )
+                from src.engine.monitoring.runtime_performance import (
+                    record_http_settlement,
+                )
+
+                record_http_settlement(
+                    request.request_id,
+                    request.symbol,
+                    {**attempt_clocks, "future_settled": time.perf_counter()},
+                    cancelled=cancelled,
+                    terminal=terminal,
+                    transport_facts=(
+                        request.transport_observation.fields()
+                        if request.transport_observation is not None
+                        else None
+                    ),
+                )
             except Exception:
                 # Diagnostic callbacks cannot unlock a circuit or change the
                 # request Future's provider result/exception.
                 from src.engine.monitoring.runtime_performance import record_entry_gap
+
                 record_entry_gap()
+
         if request.transport_observation is not None:
             future.add_done_callback(settled)
         wait_remaining = request.remaining_timeout_sec()
         if wait_remaining <= 0:
             cancelled = future.cancel()
             if request.transport_observation is not None:
-                request.transport_observation.mark('caller_adapter_finished')
+                request.transport_observation.mark("caller_adapter_finished")
             error = OpenAIHTTPWallClockDeadlineError(
                 "OpenAI HTTP wall-clock deadline exhausted while queueing provider call",
                 future_cancelled=cancelled,
@@ -5156,9 +5501,9 @@ class GPTSniperEngine:
             raise error from exc
         finally:
             if request.transport_observation is not None:
-                request.transport_observation.mark('caller_adapter_finished')
+                request.transport_observation.mark("caller_adapter_finished")
                 if future.done():
-                    request.transport_observation.mark('future_settled')
+                    request.transport_observation.mark("future_settled")
 
     def _call_openai_responses_http(self, request: OpenAIResponseRequest):
         use_schema_registry = self._should_use_openai_schema_registry(
@@ -5185,8 +5530,10 @@ class GPTSniperEngine:
             try:
                 response = self._create_openai_response_with_deadline(
                     request,
-                    provider_payload=timed_entry_call('entry_wire', request.build_provider_payload,
-                        use_schema_registry=use_schema_registry
+                    provider_payload=timed_entry_call(
+                        "entry_wire",
+                        request.build_provider_payload,
+                        use_schema_registry=use_schema_registry,
                     ),
                 )
                 response_received = True
@@ -5197,9 +5544,12 @@ class GPTSniperEngine:
                 provider_total_ms += provider_ms
                 self._rotate_client()
                 raw_text = self._extract_openai_response_text(response)
-                if request.schema_name=='auxiliary_compact_citations_v1':
-                    from src.engine.scalping.reversal_auxiliary_wire import parse_response_text
-                    payload=parse_response_text(raw_text)
+                if request.schema_name == "auxiliary_compact_citations_v1":
+                    from src.engine.scalping.reversal_auxiliary_wire import (
+                        parse_response_text,
+                    )
+
+                    payload = parse_response_text(raw_text)
                 else:
                     payload = self._parse_openai_transport_payload(
                         raw_text, require_json=request.require_json
@@ -5214,9 +5564,15 @@ class GPTSniperEngine:
                 usage_meta["openai_response_sha256"] = hashlib.sha256(
                     raw_text.encode("utf-8")
                 ).hexdigest()
-                if request.schema_name=='auxiliary_compact_citations_v1':
-                    usage_meta['auxiliary_raw_output_bytes_b64']=__import__('base64').b64encode(raw_text.encode('utf-8')).decode('ascii')
-                    usage_meta['auxiliary_response_status']=_get_usage_value(response,'status')
+                if request.schema_name == "auxiliary_compact_citations_v1":
+                    usage_meta["auxiliary_raw_output_bytes_b64"] = (
+                        __import__("base64")
+                        .b64encode(raw_text.encode("utf-8"))
+                        .decode("ascii")
+                    )
+                    usage_meta["auxiliary_response_status"] = _get_usage_value(
+                        response, "status"
+                    )
                 return OpenAITransportResult(
                     payload=payload,
                     transport_mode="http",
@@ -5263,7 +5619,8 @@ class GPTSniperEngine:
                 continue
             except Exception as e:
                 last_typed_error = e
-                if isinstance(e,APIStatusError):provider_common_error = e
+                if isinstance(e, APIStatusError):
+                    provider_common_error = e
                 last_provider_ms = max(
                     0, int((time.perf_counter() - provider_started_at) * 1000)
                 )
@@ -5277,16 +5634,22 @@ class GPTSniperEngine:
                 last_provider_future_cancelled = bool(
                     getattr(e, "future_cancelled", False)
                 )
-                if (isinstance(e, OpenAIHTTPWallClockDeadlineError)
-                        and e.future_cancelled
-                        and request.transport_observation is not None
-                        and not request.transport_observation.fields()['provider_sdk_started']):
+                if (
+                    isinstance(e, OpenAIHTTPWallClockDeadlineError)
+                    and e.future_cancelled
+                    and request.transport_observation is not None
+                    and not request.transport_observation.fields()[
+                        "provider_sdk_started"
+                    ]
+                ):
                     # A cancelled, unsent entry cannot benefit from key retries.
                     # Preserve the typed cause across the adapter boundary.
                     raise
                 if self._is_invalid_prompt_error(e) and not invalid_prompt_retried:
-                    if (request.metadata or {}).get('auxiliary_registry_sha256'):
-                        raise ValueError('registered_auxiliary_prompt_rewrite_forbidden') from e
+                    if (request.metadata or {}).get("auxiliary_registry_sha256"):
+                        raise ValueError(
+                            "registered_auxiliary_prompt_rewrite_forbidden"
+                        ) from e
                     log_error(
                         f"⚠️ [OpenAI invalid_prompt retry] {request.context_name} | "
                         "retrying with minimal numeric JSON prompt"
@@ -5371,9 +5734,11 @@ class GPTSniperEngine:
             },
         )
         # Preserve a typed terminal cause; string matching never grants recovery.
-        if isinstance(last_typed_error, (OpenAIHTTPWallClockDeadlineError, APITimeoutError)):
+        if isinstance(
+            last_typed_error, (OpenAIHTTPWallClockDeadlineError, APITimeoutError)
+        ):
             error.entry_deadline_timeout = True
-            error.provider_future = getattr(last_typed_error, 'provider_future', None)
+            error.provider_future = getattr(last_typed_error, "provider_future", None)
         error.provider_common_error = provider_common_error
         raise error from last_typed_error
 
@@ -5455,7 +5820,7 @@ class GPTSniperEngine:
     ):
         """Responses API HTTP/WS transport와 예외 처리를 전담하는 중앙 호출기."""
         if transport_observation is not None:
-            transport_observation.mark('adapter_entered')
+            transport_observation.mark("adapter_entered")
         metadata = dict(metadata_extra or {})
         selected_prompt_version = str(
             metadata.get("entry_setup_live_policy_selected_prompt_version")
@@ -5485,47 +5850,79 @@ class GPTSniperEngine:
         reasoning_effort = self._resolve_openai_reasoning_effort(
             model_name=target_model
         )
-        from src.engine.ai_prompt_contracts import CONTINUOUS_REVERSAL_AUXILIARY_PROMPT_VERSIONS
+        from src.engine.ai_prompt_contracts import (
+            CONTINUOUS_REVERSAL_AUXILIARY_PROMPT_VERSIONS,
+        )
+
         if selected_prompt_version in CONTINUOUS_REVERSAL_AUXILIARY_PROMPT_VERSIONS:
             # These are the exact issued parameters of the actual five-arm study.
             max_output_tokens = 512
-            reasoning_effort = 'none'
+            reasoning_effort = "none"
         registered_auxiliary = None
         auxiliary_envelope = None
         if auxiliary_registry_sha256:
             from src.engine.scalping import reversal_auxiliary_registry as registry
             from src.utils.constants import DATA_DIR
-            registered_auxiliary=registry.load(DATA_DIR,auxiliary_registry_sha256)
-            projected=json.loads(user_input)
-            if (prompt!=registered_auxiliary['prompt']
-                    or selected_prompt_version!=registry.binding(registered_auxiliary)['prompt_version']
-                    or target_model!=registered_auxiliary['model']
-                    or projected.get('schema')!=registered_auxiliary['input_version']
-                    or user_input!=json.dumps(projected,ensure_ascii=True,sort_keys=True,separators=(',',':'))):
-                raise ValueError('registered_auxiliary_transport_contract_changed')
-            if registered_auxiliary['schema']==registry.SCHEMA_V2:
-                auxiliary_envelope=registry.envelope(projected,registered_auxiliary)
+
+            registered_auxiliary = registry.load(DATA_DIR, auxiliary_registry_sha256)
+            projected = json.loads(user_input)
+            if (
+                prompt != registered_auxiliary["prompt"]
+                or selected_prompt_version
+                != registry.binding(registered_auxiliary)["prompt_version"]
+                or target_model != registered_auxiliary["model"]
+                or projected.get("schema") != registered_auxiliary["input_version"]
+                or user_input
+                != json.dumps(
+                    projected, ensure_ascii=True, sort_keys=True, separators=(",", ":")
+                )
+            ):
+                raise ValueError("registered_auxiliary_transport_contract_changed")
+            if registered_auxiliary["schema"] == registry.SCHEMA_V2:
+                auxiliary_envelope = registry.envelope(projected, registered_auxiliary)
                 # The envelope already computes the exact logical schema.
                 # Reuse that request-owned value for the same mandatory check.
-                expected_schema=auxiliary_envelope['logical_schema']
+                expected_schema = auxiliary_envelope["logical_schema"]
             else:
-                expected_schema=registry.projector(registered_auxiliary['input_version']).response_schema(projected)
-            if response_schema_override!=expected_schema:
-                raise ValueError('registered_auxiliary_transport_contract_changed')
+                expected_schema = registry.projector(
+                    registered_auxiliary["input_version"]
+                ).response_schema(projected)
+            if response_schema_override != expected_schema:
+                raise ValueError("registered_auxiliary_transport_contract_changed")
             if auxiliary_envelope is not None:
-                prompt=auxiliary_envelope['final_prompt']
-                user_input=json.dumps(auxiliary_envelope['wire_input'],ensure_ascii=True,sort_keys=True,separators=(',',':'))
-                response_schema_override=auxiliary_envelope['wire_schema']
-            compact_auxiliary_call=True  # Registered OpenAI transport; no provider substitution.
-            max_output_tokens=registered_auxiliary['max_output_tokens']
-            reasoning_effort=registered_auxiliary['reasoning_effort']
-            target_temp=None
-            metadata_extra=dict(metadata_extra or {},auxiliary_registry_sha256=auxiliary_registry_sha256)
-            if registered_auxiliary.get('production_input_contract') is not None and auxiliary_identity_context is not None:
-                auxiliary_identity_context=dict(auxiliary_identity_context,
-                    production_input_contract=copy.deepcopy(registered_auxiliary['production_input_contract']))
+                prompt = auxiliary_envelope["final_prompt"]
+                user_input = json.dumps(
+                    auxiliary_envelope["wire_input"],
+                    ensure_ascii=True,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                response_schema_override = auxiliary_envelope["wire_schema"]
+            compact_auxiliary_call = (
+                True  # Registered OpenAI transport; no provider substitution.
+            )
+            max_output_tokens = registered_auxiliary["max_output_tokens"]
+            reasoning_effort = registered_auxiliary["reasoning_effort"]
+            target_temp = None
+            metadata_extra = dict(
+                metadata_extra or {},
+                auxiliary_registry_sha256=auxiliary_registry_sha256,
+            )
+            if (
+                registered_auxiliary.get("production_input_contract") is not None
+                and auxiliary_identity_context is not None
+            ):
+                auxiliary_identity_context = dict(
+                    auxiliary_identity_context,
+                    production_input_contract=copy.deepcopy(
+                        registered_auxiliary["production_input_contract"]
+                    ),
+                )
             if auxiliary_envelope:
-                metadata_extra['auxiliary_wire_envelope']=dict(contract=auxiliary_envelope['contract'],hashes=auxiliary_envelope['hashes'])
+                metadata_extra["auxiliary_wire_envelope"] = dict(
+                    contract=auxiliary_envelope["contract"],
+                    hashes=auxiliary_envelope["hashes"],
+                )
         request = self._build_openai_response_request(
             prompt=prompt,
             user_input=user_input,
@@ -5545,9 +5942,14 @@ class GPTSniperEngine:
         request.caller_deadline_perf = caller_deadline_perf
         request.transport_observation = transport_observation
         if transport_observation is not None:
-            transport_observation.mark('request_built_before_capture', remaining_sec=request.remaining_timeout_sec())
+            transport_observation.mark(
+                "request_built_before_capture",
+                remaining_sec=request.remaining_timeout_sec(),
+            )
         if request.remaining_timeout_sec() <= 0:
-            raise OpenAIHTTPWallClockDeadlineError("OpenAI deadline exhausted before capture", future_cancelled=True)
+            raise OpenAIHTTPWallClockDeadlineError(
+                "OpenAI deadline exhausted before capture", future_cancelled=True
+            )
         if not compact_auxiliary_call and self._uses_openai_primary_bedrock_fallback(
             request
         ):
@@ -5559,13 +5961,18 @@ class GPTSniperEngine:
         if registered_auxiliary:
             # Offline execution sends these exact bytes without the generic
             # runtime glossary. Preserve that registered contract end to end.
-            request.prompt=auxiliary_envelope['final_prompt'] if auxiliary_envelope else registered_auxiliary['prompt']
-            request.schema_name=registered_auxiliary['response_schema_version']
+            request.prompt = (
+                auxiliary_envelope["final_prompt"]
+                if auxiliary_envelope
+                else registered_auxiliary["prompt"]
+            )
+            request.schema_name = registered_auxiliary["response_schema_version"]
         response_schema_registry_used = self._should_use_openai_schema_registry(
             require_json=request.require_json,
             schema_name=request.schema_name,
         )
-        if registered_auxiliary:response_schema_registry_used=True
+        if registered_auxiliary:
+            response_schema_registry_used = True
         entry_setup_schema_evidence = request.entry_setup_evidence()
         response_schema_sha256 = _response_schema_sha256(
             request,
@@ -5612,26 +6019,48 @@ class GPTSniperEngine:
         }
 
         if auxiliary_identity_context is not None:
-            from src.engine.scalping.reversal_auxiliary_registry import provider_identity
+            from src.engine.scalping.reversal_auxiliary_registry import (
+                provider_identity,
+            )
+
             try:
-                transport_meta['entry_auxiliary_policy_identity'] = provider_identity(
-                    timed_entry_call('entry_wire', request.build_provider_payload,
-                        use_schema_registry=response_schema_registry_used),
-                    auxiliary_identity_context)
-            except (ValueError,TypeError,KeyError,OSError) as exc:
+                transport_meta["entry_auxiliary_policy_identity"] = provider_identity(
+                    timed_entry_call(
+                        "entry_wire",
+                        request.build_provider_payload,
+                        use_schema_registry=response_schema_registry_used,
+                    ),
+                    auxiliary_identity_context,
+                )
+            except (ValueError, TypeError, KeyError, OSError) as exc:
                 # Evidence failure is local to research, never a new BUY veto.
-                transport_meta['entry_auxiliary_policy_identity'] = None
-                transport_meta['entry_auxiliary_identity_source_gap'] = type(exc).__name__
+                transport_meta["entry_auxiliary_policy_identity"] = None
+                transport_meta["entry_auxiliary_identity_source_gap"] = type(
+                    exc
+                ).__name__
 
         if auxiliary_envelope:
-            payload=timed_entry_call('entry_wire', request.build_provider_payload, use_schema_registry=True)
-            transport_meta['auxiliary_provider_request']=dict(
-                model=payload['model'],instructions_sha256=hashlib.sha256(payload['instructions'].encode()).hexdigest(),
-                input_sha256=hashlib.sha256(payload['input'].encode()).hexdigest(),
-                schema_name=request.schema_name,schema_sha256=auxiliary_envelope['hashes']['wire_schema'],
-                max_output_tokens=payload['max_output_tokens'],reasoning=payload.get('reasoning'),
-                temperature_application='omitted',store=payload['store'],text_verbosity=payload['text']['verbosity'],strict=True,
-                wire_contract=auxiliary_envelope['contract'],registry_sha256=auxiliary_registry_sha256)
+            payload = timed_entry_call(
+                "entry_wire", request.build_provider_payload, use_schema_registry=True
+            )
+            transport_meta["auxiliary_provider_request"] = dict(
+                model=payload["model"],
+                instructions_sha256=hashlib.sha256(
+                    payload["instructions"].encode()
+                ).hexdigest(),
+                input_sha256=hashlib.sha256(payload["input"].encode()).hexdigest(),
+                schema_name=request.schema_name,
+                schema_sha256=auxiliary_envelope["hashes"]["wire_schema"],
+                max_output_tokens=payload["max_output_tokens"],
+                reasoning=payload.get("reasoning"),
+                temperature_application="omitted",
+                store=payload["store"],
+                text_verbosity=payload["text"]["verbosity"],
+                strict=True,
+                wire_contract=auxiliary_envelope["contract"],
+                registry_sha256=auxiliary_registry_sha256,
+            )
+
         def capture_request(selected_request):
             return capture_ai_request(
                 prompt=selected_request.prompt,
@@ -5647,32 +6076,76 @@ class GPTSniperEngine:
                 reasoning_effort=selected_request.reasoning_effort,
                 # Local source binding must survive the provider's 16-field
                 # metadata limit. This does not change wire metadata/prompt.
-                metadata={**dict(selected_request.metadata),
-                    **({'holding_provider_contract': {k:v for k,v in selected_request.build_provider_payload(
-                        use_schema_registry=response_schema_registry_used).items() if k != 'input'}}
-                       if selected_request.endpoint_name == 'holding_path_vote' else {}),
-                    **{k:v for k,v in (metadata_extra or {}).items() if k in (
-                        'async_request_id','async_producer_pid','async_producer_start_ticks',
-                        'async_origin_deadline_epoch','async_order_venue','scanner_generation_id')},
-                    **({**{k:v for k,v in (metadata_extra or {}).items() if k in (
-                        'machine_observation_sha256','continuous_reversal_consumption')},
-                        'auxiliary_wire_envelope':dict(contract=auxiliary_envelope['contract'],
-                            hashes=auxiliary_envelope['hashes'])} if auxiliary_envelope else {})},
+                metadata={
+                    **dict(selected_request.metadata),
+                    **(
+                        {
+                            "holding_provider_contract": {
+                                k: v
+                                for k, v in selected_request.build_provider_payload(
+                                    use_schema_registry=response_schema_registry_used
+                                ).items()
+                                if k != "input"
+                            }
+                        }
+                        if selected_request.endpoint_name == "holding_path_vote"
+                        else {}
+                    ),
+                    **{
+                        k: v
+                        for k, v in (metadata_extra or {}).items()
+                        if k
+                        in (
+                            "async_request_id",
+                            "async_producer_pid",
+                            "async_producer_start_ticks",
+                            "async_origin_deadline_epoch",
+                            "async_order_venue",
+                            "scanner_generation_id",
+                        )
+                    },
+                    **(
+                        {
+                            **{
+                                k: v
+                                for k, v in (metadata_extra or {}).items()
+                                if k
+                                in (
+                                    "machine_observation_sha256",
+                                    "continuous_reversal_consumption",
+                                )
+                            },
+                            "auxiliary_wire_envelope": dict(
+                                contract=auxiliary_envelope["contract"],
+                                hashes=auxiliary_envelope["hashes"],
+                            ),
+                        }
+                        if auxiliary_envelope
+                        else {}
+                    ),
+                },
                 replay_context=replay_context,
             )
 
         capture_started = time.perf_counter()
         if transport_observation is not None:
-            transport_observation.mark('capture_started', remaining_sec=request.remaining_timeout_sec())
+            transport_observation.mark(
+                "capture_started", remaining_sec=request.remaining_timeout_sec()
+            )
         capture_meta = capture_request(request)
         if transport_observation is not None:
-            transport_observation.mark('capture_finished', remaining_sec=request.remaining_timeout_sec())
+            transport_observation.mark(
+                "capture_finished", remaining_sec=request.remaining_timeout_sec()
+            )
         transport_meta.update(capture_meta)
-        if transport_meta.get('entry_auxiliary_policy_identity'):
-            transport_meta['entry_auxiliary_policy_identity']['provenance'].update(
+        if transport_meta.get("entry_auxiliary_policy_identity"):
+            transport_meta["entry_auxiliary_policy_identity"]["provenance"].update(
                 request_id=request.request_id,
-                request_capture_sha256=capture_meta.get('ai_request_envelope_sha256'))
-        transport_meta["ai_trace_capture_ms"] = (time.perf_counter() - capture_started) * 1000
+                request_capture_sha256=capture_meta.get("ai_request_envelope_sha256"),
+            )
+        transport_meta["ai_trace_capture_ms"] = (
+            time.perf_counter() - capture_started
+        ) * 1000
         bedrock_primary_payload = (
             None
             if compact_auxiliary_call
@@ -9114,7 +9587,10 @@ class GPTSniperEngine:
         local_stage_clocks = dict(analysis_started_perf=analysis_started)
         transport_observation = None
         from src.engine.scalping.entry_deadline import EntryDeadline
-        entry_budget = EntryDeadline.create(reversal_signal_claim, entry_input_deadline_epoch, entry_input_deadline_perf)
+
+        entry_budget = EntryDeadline.create(
+            reversal_signal_claim, entry_input_deadline_epoch, entry_input_deadline_perf
+        )
         if entry_budget is not None:
             entry_input_deadline_epoch = entry_budget.epoch
         preparation_stages = {}
@@ -9146,7 +9622,9 @@ class GPTSniperEngine:
                 or "hot_v1"
             ).strip()
             policy_started = time.perf_counter()
-            entry_setup_live_policy = timed_entry_call('entry_policy', resolve_live_prompt_policy,
+            entry_setup_live_policy = timed_entry_call(
+                "entry_policy",
+                resolve_live_prompt_policy,
                 strategy=strategy if rollout_entry else None,
                 configured_prompt_version=configured_entry_prompt_version,
                 position_tag=(
@@ -9190,12 +9668,23 @@ class GPTSniperEngine:
                     or (ws_data.get("session") if isinstance(ws_data, dict) else None)
                 ),
             )
-            if entry_setup_live_policy.get("status") == "fallback_machine_policy_invalid":
-                return {"action": "WAIT", "reason": "active_machine_policy_invalid",
-                    "provider_called": False, "ai_decision_outcome_eligible": False,
+            if (
+                entry_setup_live_policy.get("status")
+                == "fallback_machine_policy_invalid"
+            ):
+                return {
+                    "action": "WAIT",
+                    "reason": "active_machine_policy_invalid",
+                    "provider_called": False,
+                    "ai_decision_outcome_eligible": False,
                     "machine_evaluation_status": "policy_contract_blocked",
-                    "machine_policy_error": entry_setup_live_policy.get("machine_policy_error")}
-            preparation_stages["policy_resolve_ms"] = (time.perf_counter() - policy_started) * 1000
+                    "machine_policy_error": entry_setup_live_policy.get(
+                        "machine_policy_error"
+                    ),
+                }
+            preparation_stages["policy_resolve_ms"] = (
+                time.perf_counter() - policy_started
+            ) * 1000
             context_started = time.perf_counter()
             selected_runtime_prompt_version = (
                 entry_setup_live_policy.get("selected_prompt_version")
@@ -9307,7 +9796,9 @@ class GPTSniperEngine:
             lifecycle_ai_runtime = build_lifecycle_ai_runtime_context(
                 prompt_profile=normalized_profile
             )
-            preparation_stages["runtime_context_ms"] = (time.perf_counter() - context_started) * 1000
+            preparation_stages["runtime_context_ms"] = (
+                time.perf_counter() - context_started
+            ) * 1000
             cache_strategy = f"{strategy}:{normalized_profile}"
             cache_strategy = (
                 f"{cache_strategy}:adm:{matrix_runtime.get('cache_token', 'disabled')}"
@@ -9482,11 +9973,17 @@ class GPTSniperEngine:
                     )
                 }
             )
-            if is_scalping_entry_call and decision_quality_v2_14_selected and entry_setup_live_policy.get("machine_bundle_sha256"):
+            if (
+                is_scalping_entry_call
+                and decision_quality_v2_14_selected
+                and entry_setup_live_policy.get("machine_bundle_sha256")
+            ):
                 # The machine owner below persists the final exact input for
                 # every action (including source-invalid). Do not serialize a
                 # second, already superseded forensic snapshot before its freeze.
-                input_contract_fields["entry_machine_context_capture_owner"] = "mechanistic_entry_observation_v1"
+                input_contract_fields["entry_machine_context_capture_owner"] = (
+                    "mechanistic_entry_observation_v1"
+                )
             else:
                 input_contract_fields.update(
                     self._capture_prepromotion_context_candidate(
@@ -9495,7 +9992,9 @@ class GPTSniperEngine:
                             (candle_context.get("ai_market_snapshot_v1") or {}).get(
                                 "stock_code"
                             )
-                            if isinstance(candle_context.get("ai_market_snapshot_v1"), dict)
+                            if isinstance(
+                                candle_context.get("ai_market_snapshot_v1"), dict
+                            )
                             else target_name
                         ),
                         entry_context=candle_context,
@@ -9513,7 +10012,9 @@ class GPTSniperEngine:
                     )
                 )
 
-            preparation_stages["context_capture_ms"] = (time.perf_counter() - candidate_started) * 1000
+            preparation_stages["context_capture_ms"] = (
+                time.perf_counter() - candidate_started
+            ) * 1000
 
         fallback_policy_trace_fields = (
             {
@@ -9559,45 +10060,85 @@ class GPTSniperEngine:
         if is_scalping_entry_call and callable(entry_input_refresher):
             # File-backed optional context can also be slow. Read it BEFORE
             # the final WS freeze, not between that freeze and adjudication.
-            if machine_policy_trace_fields and not entry_setup_live_policy.get('continuous_reversal'):
+            if machine_policy_trace_fields and not entry_setup_live_policy.get(
+                "continuous_reversal"
+            ):
                 micro_started = time.perf_counter()
                 try:
-                    from src.trading.market.micro_confirmation import load_live_dynamic_confirmation_source
+                    from src.trading.market.micro_confirmation import (
+                        load_live_dynamic_confirmation_source,
+                    )
+
                     prepared_micro_source = load_live_dynamic_confirmation_source()
                 except Exception as exc:
                     micro_source_error = "source_read_failed:" + type(exc).__name__
                 finally:
-                    preparation_stages["micro_source_prepare_ms"] = (time.perf_counter() - micro_started) * 1000
+                    preparation_stages["micro_source_prepare_ms"] = (
+                        time.perf_counter() - micro_started
+                    ) * 1000
             prepared_snapshot_id = pre_prompt_snapshot.get("snapshot_id")
-            valid_identity = lambda value: str(value or "").strip().lower() not in {"", "-", "none", "null", "unknown"}
-            prepared_attempt_id = next((source.get(key)
-                for key in ("evaluation_attempt_id", "entry_evaluation_attempt_id")
-                for source in (pre_prompt_snapshot, ws_data or {}, metadata_extra or {})
-                if valid_identity(source.get(key))), None)
+            valid_identity = lambda value: str(value or "").strip().lower() not in {
+                "",
+                "-",
+                "none",
+                "null",
+                "unknown",
+            }
+            prepared_attempt_id = next(
+                (
+                    source.get(key)
+                    for key in ("evaluation_attempt_id", "entry_evaluation_attempt_id")
+                    for source in (
+                        pre_prompt_snapshot,
+                        ws_data or {},
+                        metadata_extra or {},
+                    )
+                    if valid_identity(source.get(key))
+                ),
+                None,
+            )
             if prepared_attempt_id is None and valid_identity(prepared_snapshot_id):
                 prepared_attempt_id = prepared_snapshot_id
             preparation_ms = round((time.perf_counter() - analysis_started) * 1000, 3)
-            ws_data, recent_ticks, candle_context, machine_input_fields = _final_entry_machine_inputs(
-                ws_data, recent_ticks, candle_context, refresher=entry_input_refresher,
-                deadline_epoch=entry_input_deadline_epoch, entry_budget=entry_budget,
+            ws_data, recent_ticks, candle_context, machine_input_fields = (
+                _final_entry_machine_inputs(
+                    ws_data,
+                    recent_ticks,
+                    candle_context,
+                    refresher=entry_input_refresher,
+                    deadline_epoch=entry_input_deadline_epoch,
+                    entry_budget=entry_budget,
+                )
             )
             machine_input_fields["entry_machine_input_preparation_ms"] = preparation_ms
-            preparation_stages["other_preparation_ms"] = max(0.0, preparation_ms - sum(preparation_stages.values()))
+            preparation_stages["other_preparation_ms"] = max(
+                0.0, preparation_ms - sum(preparation_stages.values())
+            )
             machine_input_fields["entry_machine_input_preparation_stages_ms"] = {
                 key: round(value, 3) for key, value in preparation_stages.items()
             }
             if micro_source_error:
                 machine_input_fields["entry_machine_input_error"] = micro_source_error
-            machine_input_fields["entry_machine_input_parent_snapshot_id"] = prepared_snapshot_id
+            machine_input_fields["entry_machine_input_parent_snapshot_id"] = (
+                prepared_snapshot_id
+            )
             if prepared_attempt_id is not None:
                 ws_data["evaluation_attempt_id"] = prepared_attempt_id
-            pre_prompt_snapshot = (candle_context or {}).get("ai_market_snapshot_v1") or {}
+            pre_prompt_snapshot = (candle_context or {}).get(
+                "ai_market_snapshot_v1"
+            ) or {}
             if not isinstance(pre_prompt_snapshot, dict):
-                pre_prompt_snapshot = {}  # Malformed storage must reach source-invalid, not crash.
+                pre_prompt_snapshot = (
+                    {}
+                )  # Malformed storage must reach source-invalid, not crash.
             # Final preflight and trace must use the same snapshot and clocks.
-            input_contract_fields.update(entry_candle_context_log_fields(candle_context))
+            input_contract_fields.update(
+                entry_candle_context_log_fields(candle_context)
+            )
             input_contract_fields.update(ai_market_snapshot_log_fields(candle_context))
-            input_contract_fields["ai_input_snapshot_id"] = pre_prompt_snapshot.get("snapshot_id")
+            input_contract_fields["ai_input_snapshot_id"] = pre_prompt_snapshot.get(
+                "snapshot_id"
+            )
 
         def _merge_runtime_fields(payload: dict[str, Any] | None) -> dict[str, Any]:
             merged = merge_holding_exit_matrix_result_fields(payload, matrix_runtime)
@@ -9605,8 +10146,14 @@ class GPTSniperEngine:
             # Preserve the caller's original async identity on those receipts
             # too, without importing arbitrary metadata into a decision.
             if isinstance(metadata_extra, dict):
-                for key in ('async_request_id', 'async_producer_pid', 'async_producer_start_ticks',
-                            'async_origin_deadline_epoch', 'async_order_venue', 'scanner_generation_id'):
+                for key in (
+                    "async_request_id",
+                    "async_producer_pid",
+                    "async_producer_start_ticks",
+                    "async_origin_deadline_epoch",
+                    "async_order_venue",
+                    "scanner_generation_id",
+                ):
                     if key in metadata_extra:
                         merged[key] = metadata_extra[key]
             if isinstance(entry_adm_runtime, dict):
@@ -9626,25 +10173,39 @@ class GPTSniperEngine:
         if machine_input_fields.get("entry_machine_input_error"):
             candle_preflight = dict(candle_preflight)
             reason = "entry_machine_input_refresh_failed"
-            candle_preflight.update(allowed=False, source_allowed=False, status="blocked",
-                                   primary_blocker=reason, primary_blocker_category="source_quality")
-            candle_preflight["blockers"] = list(candle_preflight.get("blockers") or []) + [reason]
-            candle_preflight["source_blockers"] = list(candle_preflight.get("source_blockers") or []) + [reason]
+            candle_preflight.update(
+                allowed=False,
+                source_allowed=False,
+                status="blocked",
+                primary_blocker=reason,
+                primary_blocker_category="source_quality",
+            )
+            candle_preflight["blockers"] = list(
+                candle_preflight.get("blockers") or []
+            ) + [reason]
+            candle_preflight["source_blockers"] = list(
+                candle_preflight.get("source_blockers") or []
+            ) + [reason]
         feature_input_blocked = bool(
             candle_preflight.get("source_allowed") is True
             and isinstance(candle_preflight.get("feature_blockers"), list)
             and candle_preflight.get("feature_blockers")
             and isinstance(candle_preflight.get("blockers"), list)
             and all(isinstance(value, str) for value in candle_preflight["blockers"])
-            and all(isinstance(value, str) and value.startswith("required_feature_")
-                    for value in candle_preflight["feature_blockers"])
+            and all(
+                isinstance(value, str) and value.startswith("required_feature_")
+                for value in candle_preflight["feature_blockers"]
+            )
             and set(candle_preflight.get("blockers") or [])
             == set(candle_preflight["feature_blockers"])
         )
         if (
             is_scalping_entry_call
-            and (runtime_preflight_required() or decision_quality_v2_7_selected
-                 or machine_input_fields.get("entry_machine_input_error"))
+            and (
+                runtime_preflight_required()
+                or decision_quality_v2_7_selected
+                or machine_input_fields.get("entry_machine_input_error")
+            )
             and not bool(candle_preflight.get("allowed", False))
         ):
             machine_source_invalid_fields: dict[str, Any] = {}
@@ -9657,7 +10218,9 @@ class GPTSniperEngine:
                 # created, mint a producer-owned attempt id for this receipt.
                 invalid_exact = dict(pre_prompt_snapshot or {})
                 if machine_input_fields:
-                    invalid_exact["entry_machine_input_trace"] = dict(machine_input_fields)
+                    invalid_exact["entry_machine_input_trace"] = dict(
+                        machine_input_fields
+                    )
                 identity_sources = (
                     candle_context if isinstance(candle_context, dict) else {},
                     ws_data if isinstance(ws_data, dict) else {},
@@ -9727,8 +10290,14 @@ class GPTSniperEngine:
                         entry_setup_live_policy.get("machine_bundle_sha256") or ""
                     ),
                     metadata=(
-                        {**(dict(metadata_extra) if isinstance(metadata_extra, dict) else {}),
-                         **machine_input_fields}
+                        {
+                            **(
+                                dict(metadata_extra)
+                                if isinstance(metadata_extra, dict)
+                                else {}
+                            ),
+                            **machine_input_fields,
+                        }
                     ),
                 )
                 machine_source_invalid_fields.update(
@@ -9801,11 +10370,17 @@ class GPTSniperEngine:
                         for key, value in machine_source_invalid_fields.items()
                         if not key.startswith("entry_source_invalid_")
                     }
-            from src.engine.scalping.entry_machine_source_recovery import capture_quote_failure
+            from src.engine.scalping.entry_machine_source_recovery import (
+                capture_quote_failure,
+            )
+
             quote_recovery_source = capture_quote_failure(
-                candle_preflight, ws_data, reversal_signal_claim,
+                candle_preflight,
+                ws_data,
+                reversal_signal_claim,
                 deadline_perf=entry_input_deadline_perf,
-                observation=entry_source_recovery_observation if machine_only else None)
+                observation=entry_source_recovery_observation if machine_only else None,
+            )
             return self._annotate_analysis_result(
                 _merge_runtime_fields(
                     {
@@ -9885,9 +10460,19 @@ class GPTSniperEngine:
             try:
                 feature_started = time.perf_counter()
                 machine_feature_packet = extract_scalping_feature_packet(
-                    ws_data, recent_ticks, recent_candles,
-                    **({"now": datetime.fromtimestamp(machine_input_fields["entry_machine_input_as_of"], timezone.utc)}
-                       if machine_input_fields else {}),
+                    ws_data,
+                    recent_ticks,
+                    recent_candles,
+                    **(
+                        {
+                            "now": datetime.fromtimestamp(
+                                machine_input_fields["entry_machine_input_as_of"],
+                                timezone.utc,
+                            )
+                        }
+                        if machine_input_fields
+                        else {}
+                    ),
                 )
                 # The probe result owns a bounded replay receipt when machine
                 # construction fails before the normal observation capture.
@@ -9895,9 +10480,12 @@ class GPTSniperEngine:
                     "_feature_tick_diagnostic_window", []
                 )
                 if machine_input_fields:
-                    machine_feature_packet["evaluation_as_of"] = machine_input_fields["entry_machine_input_as_of"]
-                    machine_input_fields["entry_machine_input_feature_build_ms"] = round(
-                        (time.perf_counter() - feature_started) * 1000, 3)
+                    machine_feature_packet["evaluation_as_of"] = machine_input_fields[
+                        "entry_machine_input_as_of"
+                    ]
+                    machine_input_fields["entry_machine_input_feature_build_ms"] = (
+                        round((time.perf_counter() - feature_started) * 1000, 3)
+                    )
                 machine_hot_payload = self._format_entry_screen_hot_data(
                     ws_data,
                     recent_ticks,
@@ -9913,20 +10501,29 @@ class GPTSniperEngine:
                     ),
                 )
                 machine_exact = json.loads(machine_hot_payload)
-                machine_exact['strategy_observed_at'] = datetime.now(timezone.utc).isoformat()
+                machine_exact["strategy_observed_at"] = datetime.now(
+                    timezone.utc
+                ).isoformat()
                 if machine_input_fields:
                     # Capture persists exact_payload, not arbitrary metadata.
-                    machine_exact["entry_machine_input_trace"] = dict(machine_input_fields)
+                    machine_exact["entry_machine_input_trace"] = dict(
+                        machine_input_fields
+                    )
                 if "entry_candle_context" not in machine_exact:
                     self._attach_entry_candle_inputs(
                         machine_exact, candle_context, machine_base_only=True
                     )
-                if isinstance(candle_context, dict) and candle_context.get('strategy_completed_bars'):
+                if isinstance(candle_context, dict) and candle_context.get(
+                    "strategy_completed_bars"
+                ):
                     # The formatter may already have attached the smaller AI
                     # projection. Machine replay retains its full closed-bar source.
-                    machine_exact.setdefault('entry_candle_context', {}).update(
-                        strategy_completed_bars=candle_context['strategy_completed_bars'],
-                        completed_bar_count=candle_context.get('completed_bar_count'))
+                    machine_exact.setdefault("entry_candle_context", {}).update(
+                        strategy_completed_bars=candle_context[
+                            "strategy_completed_bars"
+                        ],
+                        completed_bar_count=candle_context.get("completed_bar_count"),
+                    )
                 # Preserve explicit identity for both common and child policy
                 # observations; no venue/session is inferred from the symbol.
                 for key in (
@@ -9943,31 +10540,64 @@ class GPTSniperEngine:
                     "broker_route",
                 ):
                     if str(machine_exact.get(key) or "").strip().lower() in {
-                        "", "-", "none", "null", "unknown"
+                        "",
+                        "-",
+                        "none",
+                        "null",
+                        "unknown",
                     }:
                         machine_exact[key] = next(
-                            (source.get(key) for source in (
-                                pre_prompt_snapshot, ws_data, metadata_extra or {}
-                            ) if str(source.get(key) or "").strip().lower() not in {
-                                "", "-", "none", "null", "unknown"
-                            }),
+                            (
+                                source.get(key)
+                                for source in (
+                                    pre_prompt_snapshot,
+                                    ws_data,
+                                    metadata_extra or {},
+                                )
+                                if str(source.get(key) or "").strip().lower()
+                                not in {"", "-", "none", "null", "unknown"}
+                            ),
                             None,
                         )
                 # Read the existing master collector's timestamped snapshot.
                 # Missing or future metadata means an unknown selector feature.
                 from src.utils.constants import DATA_DIR as strategy_data_dir
-                from src.engine.scalping.entry_strategy_policy import features as strategy_features
-                symbol = str((metadata_extra or {}).get('stock_code') or ws_data.get('stock_code') or machine_exact.get('stock_code') or '')[:6]
-                metadata_path = strategy_data_dir / 'runtime' / 'entry_strategy_metadata' / f'{symbol}.json'
+                from src.engine.scalping.entry_strategy_policy import (
+                    features as strategy_features,
+                )
+
+                symbol = str(
+                    (metadata_extra or {}).get("stock_code")
+                    or ws_data.get("stock_code")
+                    or machine_exact.get("stock_code")
+                    or ""
+                )[:6]
+                metadata_path = (
+                    strategy_data_dir
+                    / "runtime"
+                    / "entry_strategy_metadata"
+                    / f"{symbol}.json"
+                )
                 try:
-                    if symbol.isdigit() and len(symbol) == 6 and metadata_path.is_file() and metadata_path.stat().st_size < 16384:
+                    if (
+                        symbol.isdigit()
+                        and len(symbol) == 6
+                        and metadata_path.is_file()
+                        and metadata_path.stat().st_size < 16384
+                    ):
                         strategy_metadata = json.loads(metadata_path.read_text())
-                        if strategy_metadata.get('stock_code') == symbol:
-                            strategy_metadata['observed_at'] = datetime.now(timezone.utc).isoformat()
-                            strategy_features({'strategy_metadata': strategy_metadata}, {})
-                            machine_exact['strategy_metadata'] = strategy_metadata
+                        if strategy_metadata.get("stock_code") == symbol:
+                            strategy_metadata["observed_at"] = datetime.now(
+                                timezone.utc
+                            ).isoformat()
+                            strategy_features(
+                                {"strategy_metadata": strategy_metadata}, {}
+                            )
+                            machine_exact["strategy_metadata"] = strategy_metadata
                 except (OSError, ValueError, TypeError, KeyError):
-                    machine_exact['strategy_metadata_status'] = 'missing_or_invalid_master_snapshot'
+                    machine_exact["strategy_metadata_status"] = (
+                        "missing_or_invalid_master_snapshot"
+                    )
 
                 # The compact feature formatter omits lifecycle identity. Bind
                 # it before capture AND economics so both publish the same
@@ -9984,18 +10614,27 @@ class GPTSniperEngine:
                 from src.trading.market.micro_confirmation import (
                     load_live_dynamic_confirmation_source,
                 )
-                from src.trading.market.main_entry_micro_window import evaluate_machine_entry_payload
+                from src.trading.market.main_entry_micro_window import (
+                    evaluate_machine_entry_payload,
+                )
 
                 # Observe before first child adoption too: collection must not
                 # require the policy whose evidence it is meant to produce.
-                cutoff_ms = int(machine_input_fields.get("entry_machine_input_as_of", time.time()) * 1000)
+                cutoff_ms = int(
+                    machine_input_fields.get("entry_machine_input_as_of", time.time())
+                    * 1000
+                )
                 machine_exact["entry_machine_input_as_of"] = cutoff_ms / 1000.0
                 snapshot, snapshot_status = (
-                    prepared_micro_source if prepared_micro_source is not None
-                    else load_live_dynamic_confirmation_source())
+                    prepared_micro_source
+                    if prepared_micro_source is not None
+                    else load_live_dynamic_confirmation_source()
+                )
                 machine_exact["mechanistic_micro_window"] = (
                     evaluate_machine_entry_payload(
-                        snapshot=snapshot, payload=machine_exact, cutoff_ms=cutoff_ms,
+                        snapshot=snapshot,
+                        payload=machine_exact,
+                        cutoff_ms=cutoff_ms,
                     )
                     if snapshot is not None
                     else {
@@ -10003,18 +10642,29 @@ class GPTSniperEngine:
                         "reason": snapshot_status,
                     }
                 )
-                if (machine_exact.get("stock_code") == "005930"
-                        and str(machine_exact.get("effective_venue") or "").upper() == "KRX"
-                        and str(machine_exact.get("session_bucket") or "").upper() == "KRX_REGULAR"):
-                    from src.engine.scalping.entry_machine_observation import build_receipt
+                if (
+                    machine_exact.get("stock_code") == "005930"
+                    and str(machine_exact.get("effective_venue") or "").upper() == "KRX"
+                    and str(machine_exact.get("session_bucket") or "").upper()
+                    == "KRX_REGULAR"
+                ):
+                    from src.engine.scalping.entry_machine_observation import (
+                        build_receipt,
+                    )
+
                     machine_exact["entry_machine_observation_receipt"] = build_receipt(
-                        ws_data, {**machine_feature_packet,
-                                  "_feature_tick_diagnostic_window": machine_tick_window},
-                        machine_exact, cutoff=machine_input_fields.get(
-                            "entry_machine_input_as_of", cutoff_ms / 1000.0),
+                        ws_data,
+                        {
+                            **machine_feature_packet,
+                            "_feature_tick_diagnostic_window": machine_tick_window,
+                        },
+                        machine_exact,
+                        cutoff=machine_input_fields.get(
+                            "entry_machine_input_as_of", cutoff_ms / 1000.0
+                        ),
                     )
                 machine_hot_payload = json.dumps(machine_exact, ensure_ascii=True)
-                reversal_family = entry_setup_live_policy.get('continuous_reversal')
+                reversal_family = entry_setup_live_policy.get("continuous_reversal")
                 reversal_receipt = None
                 reversal_request = None
                 machine_setup = {}
@@ -10040,167 +10690,447 @@ class GPTSniperEngine:
                 if reversal_family:
                     from src.engine.scalping.continuous_reversal import current_snapshot
                     from src.engine.scalping.continuous_reversal_policy import assess
-                    from src.trading.market.session_contract import market_source_partition_venue as _explicit_item_venue
-                    item = (ws_data.get('last_realtime_type_item') or {}).get('0B')
-                    snapshot_now=time.time()
-                    if reversal_family.get('schema') in {'continuous_reversal_policy_v2','continuous_reversal_policy_v3','continuous_reversal_policy_v4','continuous_reversal_policy_v5','continuous_reversal_policy_v6'}:
+                    from src.trading.market.session_contract import (
+                        market_source_partition_venue as _explicit_item_venue,
+                    )
+
+                    item = (ws_data.get("last_realtime_type_item") or {}).get("0B")
+                    snapshot_now = time.time()
+                    if reversal_family.get("schema") in {
+                        "continuous_reversal_policy_v2",
+                        "continuous_reversal_policy_v3",
+                        "continuous_reversal_policy_v4",
+                        "continuous_reversal_policy_v5",
+                        "continuous_reversal_policy_v6",
+                    }:
                         from src.engine.scalping.reversal_source_diagnostics import (
-                            claim_snapshot_with_receipt as claim_snapshot, validate_claim_with_receipt)
+                            claim_snapshot_with_receipt as claim_snapshot,
+                            validate_claim_with_receipt,
+                        )
+
                         if machine_only:
-                            from src.engine.scalping.reversal_source_diagnostics import observe_snapshot, _PROCESS_START_TICKS
+                            from src.engine.scalping.reversal_source_diagnostics import (
+                                observe_snapshot,
+                                _PROCESS_START_TICKS,
+                            )
+
                             if entry_source_recovery_observation is not None:
-                                if entry_source_recovery_observation.get('family_sha256') != reversal_family['family_sha256']:
-                                    raise ValueError('machine_source_quote_observer_policy_changed')
-                                from src.engine.scalping.entry_machine_source_recovery import validated_observer_snapshot
+                                if (
+                                    entry_source_recovery_observation.get(
+                                        "family_sha256"
+                                    )
+                                    != reversal_family["family_sha256"]
+                                ):
+                                    raise ValueError(
+                                        "machine_source_quote_observer_policy_changed"
+                                    )
+                                from src.engine.scalping.entry_machine_source_recovery import (
+                                    validated_observer_snapshot,
+                                )
+
                                 observation = {}
-                                snapshot = validated_observer_snapshot(entry_source_recovery_observation,
-                                    now=snapshot_now, receipt_out=observation,
-                                    evaluation_attempt_id=machine_exact['evaluation_attempt_id'],
-                                    machine_bundle_sha256=entry_setup_live_policy['machine_bundle_sha256'])
+                                snapshot = validated_observer_snapshot(
+                                    entry_source_recovery_observation,
+                                    now=snapshot_now,
+                                    receipt_out=observation,
+                                    evaluation_attempt_id=machine_exact[
+                                        "evaluation_attempt_id"
+                                    ],
+                                    machine_bundle_sha256=entry_setup_live_policy[
+                                        "machine_bundle_sha256"
+                                    ],
+                                )
                             else:
-                                snapshot, observation = observe_snapshot(symbol, _explicit_item_venue(item),
-                                    machine_exact['session_bucket'], now=snapshot_now, item=item,
-                                    family_sha256=reversal_family['family_sha256'], live_clock=True)
+                                snapshot, observation = observe_snapshot(
+                                    symbol,
+                                    _explicit_item_venue(item),
+                                    machine_exact["session_bucket"],
+                                    now=snapshot_now,
+                                    item=item,
+                                    family_sha256=reversal_family["family_sha256"],
+                                    live_clock=True,
+                                )
                             claim = None
-                            machine_exact['evaluation_role'] = 'probe_observation'
-                            machine_exact['native_observation_receipt'] = observation
+                            machine_exact["evaluation_role"] = "probe_observation"
+                            machine_exact["native_observation_receipt"] = observation
                             if snapshot:
                                 entry_budget = EntryDeadline.create(
-                                    caller_epoch=snapshot[0]['epoch']+5,
-                                    caller_perf=entry_input_deadline_perf)
+                                    caller_epoch=snapshot[0]["epoch"] + 5,
+                                    caller_perf=entry_input_deadline_perf,
+                                )
                                 entry_input_deadline_epoch = entry_budget.epoch
                                 entry_input_deadline_perf = entry_budget.perf
-                                entry_setup_live_policy['native_observation'] = dict(
-                                    family_sha256=reversal_family['family_sha256'],
+                                entry_setup_live_policy["native_observation"] = dict(
+                                    family_sha256=reversal_family["family_sha256"],
                                     snapshot=[copy.deepcopy(snapshot[0]), {}],
-                                    snapshot_sha256=__import__('hashlib').sha256(json.dumps(snapshot,
-                                        sort_keys=True, default=str).encode()).hexdigest(),
-                                    deadline_epoch=entry_budget.epoch, deadline_perf=entry_budget.perf,
-                                    observer_pid=os.getpid(), observer_start_ticks=_PROCESS_START_TICKS)
+                                    snapshot_sha256=__import__("hashlib")
+                                    .sha256(
+                                        json.dumps(
+                                            snapshot, sort_keys=True, default=str
+                                        ).encode()
+                                    )
+                                    .hexdigest(),
+                                    deadline_epoch=entry_budget.epoch,
+                                    deadline_perf=entry_budget.perf,
+                                    observer_pid=os.getpid(),
+                                    observer_start_ticks=_PROCESS_START_TICKS,
+                                )
                         else:
-                            machine_exact['evaluation_role'] = 'main_live'
-                            claim=reversal_signal_claim or claim_snapshot(symbol,_explicit_item_venue(item),machine_exact['session_bucket'],
-                                now=snapshot_now,item=item,family_sha256=reversal_family['family_sha256'],live_clock=True)
-                            snapshot=validate_claim_with_receipt(claim,reversal_family['family_sha256'],now=snapshot_now,
-                                evaluation_attempt_id=machine_exact['evaluation_attempt_id'],
-                                machine_bundle_sha256=entry_setup_live_policy['machine_bundle_sha256'],live_clock=True) if claim else None
-                            if claim and claim.get('observer_snapshot_sha256'):
-                                machine_exact['parent_observation_snapshot_sha256'] = claim['observer_snapshot_sha256']
-                                machine_exact['observation_subset_changed'] = claim.get('observation_subset_changed', False)
-                        entry_setup_live_policy['continuous_reversal_claim']=claim
+                            machine_exact["evaluation_role"] = "main_live"
+                            claim = reversal_signal_claim or claim_snapshot(
+                                symbol,
+                                _explicit_item_venue(item),
+                                machine_exact["session_bucket"],
+                                now=snapshot_now,
+                                item=item,
+                                family_sha256=reversal_family["family_sha256"],
+                                live_clock=True,
+                            )
+                            snapshot = (
+                                validate_claim_with_receipt(
+                                    claim,
+                                    reversal_family["family_sha256"],
+                                    now=snapshot_now,
+                                    evaluation_attempt_id=machine_exact[
+                                        "evaluation_attempt_id"
+                                    ],
+                                    machine_bundle_sha256=entry_setup_live_policy[
+                                        "machine_bundle_sha256"
+                                    ],
+                                    live_clock=True,
+                                )
+                                if claim
+                                else None
+                            )
+                            if claim and claim.get("observer_snapshot_sha256"):
+                                machine_exact["parent_observation_snapshot_sha256"] = (
+                                    claim["observer_snapshot_sha256"]
+                                )
+                                machine_exact["observation_subset_changed"] = claim.get(
+                                    "observation_subset_changed", False
+                                )
+                        entry_setup_live_policy["continuous_reversal_claim"] = claim
                         if claim and entry_budget is None:
-                            entry_budget = EntryDeadline.create(claim, entry_input_deadline_epoch, entry_input_deadline_perf)
+                            entry_budget = EntryDeadline.create(
+                                claim,
+                                entry_input_deadline_epoch,
+                                entry_input_deadline_perf,
+                            )
                             entry_input_deadline_epoch = entry_budget.epoch
 
                     else:
                         # A wake-selected v1 signal is passed as a frozen tuple.
-                        snapshot=(reversal_signal_claim or {}).get('snapshot') if reversal_signal_claim else current_snapshot(
-                            symbol,_explicit_item_venue(item),machine_exact['session_bucket'],now=snapshot_now,item=item)
-                        if reversal_signal_claim and snapshot and not 0<=snapshot_now-snapshot[0]['epoch']<=5:snapshot=None
+                        snapshot = (
+                            (reversal_signal_claim or {}).get("snapshot")
+                            if reversal_signal_claim
+                            else current_snapshot(
+                                symbol,
+                                _explicit_item_venue(item),
+                                machine_exact["session_bucket"],
+                                now=snapshot_now,
+                                item=item,
+                            )
+                        )
+                        if (
+                            reversal_signal_claim
+                            and snapshot
+                            and not 0 <= snapshot_now - snapshot[0]["epoch"] <= 5
+                        ):
+                            snapshot = None
                     reversal_snapshot_as_of = time.time()
-                    from src.engine.scalping.entry_machine_source_recovery import evaluation_quote_receipt
+                    from src.engine.scalping.entry_machine_source_recovery import (
+                        evaluation_quote_receipt,
+                    )
+
                     quote_recovery_receipt = evaluation_quote_receipt(
-                        reversal_signal_claim, ws_data, now=reversal_snapshot_as_of,
-                        evaluation_attempt_id=machine_exact['evaluation_attempt_id'],
-                        observation=entry_source_recovery_observation if machine_only else None)
+                        reversal_signal_claim,
+                        ws_data,
+                        now=reversal_snapshot_as_of,
+                        evaluation_attempt_id=machine_exact["evaluation_attempt_id"],
+                        observation=(
+                            entry_source_recovery_observation if machine_only else None
+                        ),
+                    )
                     if quote_recovery_receipt is not None:
-                        from src.engine.scalping.entry_machine_source_recovery import calculation_snapshot
-                        snapshot = calculation_snapshot(snapshot, quote_recovery_receipt)
-                        machine_exact['entry_source_quote_recovery'] = quote_recovery_receipt
-                    machine_assessment, reversal_input, reversal_prompt, reversal_schema = timed_entry_call('entry_machine_assess', assess,
-                        reversal_family, snapshot, symbol=symbol, session=machine_exact['session_bucket'])
+                        from src.engine.scalping.entry_machine_source_recovery import (
+                            calculation_snapshot,
+                        )
+
+                        snapshot = calculation_snapshot(
+                            snapshot, quote_recovery_receipt
+                        )
+                        machine_exact["entry_source_quote_recovery"] = (
+                            quote_recovery_receipt
+                        )
+                    (
+                        machine_assessment,
+                        reversal_input,
+                        reversal_prompt,
+                        reversal_schema,
+                    ) = timed_entry_call(
+                        "entry_machine_assess",
+                        assess,
+                        reversal_family,
+                        snapshot,
+                        symbol=symbol,
+                        session=machine_exact["session_bucket"],
+                    )
                     if quote_recovery_receipt is not None:
-                        machine_assessment['entry_source_quote_recovery'] = quote_recovery_receipt
-                        from src.engine.scalping.entry_machine_source_recovery import validate_evaluation_quote_receipt
-                        validate_evaluation_quote_receipt(quote_recovery_receipt, snapshot[0], machine_exact)
+                        machine_assessment["entry_source_quote_recovery"] = (
+                            quote_recovery_receipt
+                        )
+                        from src.engine.scalping.entry_machine_source_recovery import (
+                            validate_evaluation_quote_receipt,
+                        )
+
+                        validate_evaluation_quote_receipt(
+                            quote_recovery_receipt, snapshot[0], machine_exact
+                        )
                     from src.engine.monitoring.runtime_performance import mark_signal
-                    mark_signal(machine_assessment.get('signal_id') or machine_assessment.get('event_id'), 'machine')
-                    if reversal_family.get('schema') in {'continuous_reversal_policy_v5','continuous_reversal_policy_v6'}:
-                        from src.engine.scalping.reversal_auxiliary_intraday import apply_request
+
+                    mark_signal(
+                        machine_assessment.get("signal_id")
+                        or machine_assessment.get("event_id"),
+                        "machine",
+                    )
+                    if reversal_family.get("schema") in {
+                        "continuous_reversal_policy_v5",
+                        "continuous_reversal_policy_v6",
+                    }:
+                        from src.engine.scalping.reversal_auxiliary_intraday import (
+                            apply_request,
+                        )
                         from src.utils.constants import DATA_DIR
-                        machine_assessment, reversal_input, reversal_prompt, reversal_schema = timed_entry_call('entry_wire', apply_request,
-                            DATA_DIR, entry_setup_live_policy, snapshot,
-                            (machine_assessment, reversal_input, reversal_prompt, reversal_schema))
+
+                        (
+                            machine_assessment,
+                            reversal_input,
+                            reversal_prompt,
+                            reversal_schema,
+                        ) = timed_entry_call(
+                            "entry_wire",
+                            apply_request,
+                            DATA_DIR,
+                            entry_setup_live_policy,
+                            snapshot,
+                            (
+                                machine_assessment,
+                                reversal_input,
+                                reversal_prompt,
+                                reversal_schema,
+                            ),
+                        )
                     if quote_recovery_receipt is not None:
-                        from src.engine.scalping.entry_machine_source_recovery import apply_quote_calculation
+                        from src.engine.scalping.entry_machine_source_recovery import (
+                            apply_quote_calculation,
+                        )
                         from src.utils.constants import DATA_DIR
-                        machine_assessment, reversal_input, reversal_prompt, reversal_schema = apply_quote_calculation(
-                            (machine_assessment, reversal_input, reversal_prompt, reversal_schema),
-                            quote_recovery_receipt, data_root=DATA_DIR)
+
+                        (
+                            machine_assessment,
+                            reversal_input,
+                            reversal_prompt,
+                            reversal_schema,
+                        ) = apply_quote_calculation(
+                            (
+                                machine_assessment,
+                                reversal_input,
+                                reversal_prompt,
+                                reversal_schema,
+                            ),
+                            quote_recovery_receipt,
+                            data_root=DATA_DIR,
+                        )
                     # Source telemetry must not change the pinned research
                     # kernel, selected rule, feature values or auxiliary input.
                     from src.engine.scalping.reversal_source_diagnostics import project
+
                     try:
-                        source_envelopes = (ws_data.get('realtime_type_snapshots_by_route') or {}).values()
-                        exact_trade = next((rows.get('0B') for rows in source_envelopes
-                            if isinstance(rows, dict) and isinstance(rows.get('0B'), dict)
-                            and rows['0B'].get('item') == item), None)
-                        diagnostics = project(snapshot, symbol=symbol, venue=_explicit_item_venue(item),
-                            session=machine_exact['session_bucket'], item=item, envelope=exact_trade,
-                            now=machine_input_fields.get('entry_machine_input_as_of', time.time()))
+                        source_envelopes = (
+                            ws_data.get("realtime_type_snapshots_by_route") or {}
+                        ).values()
+                        exact_trade = next(
+                            (
+                                rows.get("0B")
+                                for rows in source_envelopes
+                                if isinstance(rows, dict)
+                                and isinstance(rows.get("0B"), dict)
+                                and rows["0B"].get("item") == item
+                            ),
+                            None,
+                        )
+                        diagnostics = project(
+                            snapshot,
+                            symbol=symbol,
+                            venue=_explicit_item_venue(item),
+                            session=machine_exact["session_bucket"],
+                            item=item,
+                            envelope=exact_trade,
+                            now=machine_input_fields.get(
+                                "entry_machine_input_as_of", time.time()
+                            ),
+                        )
                     except Exception as exc:
-                        diagnostics = dict(status='unobservable', reason='diagnostic_projection_failed',
-                                           error_type=type(exc).__name__, runtime_effect=False)
-                    machine_assessment['source_diagnostics'] = diagnostics
-                    entry_setup_live_policy.update(continuous_reversal_assessment=machine_assessment,
+                        diagnostics = dict(
+                            status="unobservable",
+                            reason="diagnostic_projection_failed",
+                            error_type=type(exc).__name__,
+                            runtime_effect=False,
+                        )
+                    machine_assessment["source_diagnostics"] = diagnostics
+                    entry_setup_live_policy.update(
+                        continuous_reversal_assessment=machine_assessment,
                         continuous_reversal_input=reversal_input,
-                        continuous_reversal_arm=(machine_assessment.get('auxiliary_arm') if reversal_family.get('schema') in {'continuous_reversal_policy_v2','continuous_reversal_policy_v3','continuous_reversal_policy_v4','continuous_reversal_policy_v5','continuous_reversal_policy_v6'}
-                            else reversal_family['auxiliary_cells'][machine_assessment['cell_key']]['payload']['arm'] if machine_assessment.get('cell_key') else None))
-                    from src.engine.scalping.mechanistic_entry_runtime_policy import digest
+                        continuous_reversal_arm=(
+                            machine_assessment.get("auxiliary_arm")
+                            if reversal_family.get("schema")
+                            in {
+                                "continuous_reversal_policy_v2",
+                                "continuous_reversal_policy_v3",
+                                "continuous_reversal_policy_v4",
+                                "continuous_reversal_policy_v5",
+                                "continuous_reversal_policy_v6",
+                            }
+                            else (
+                                reversal_family["auxiliary_cells"][
+                                    machine_assessment["cell_key"]
+                                ]["payload"]["arm"]
+                                if machine_assessment.get("cell_key")
+                                else None
+                            )
+                        ),
+                    )
+                    from src.engine.scalping.mechanistic_entry_runtime_policy import (
+                        digest,
+                    )
+
                     reversal_receipt = dict(
-                        family_sha256=reversal_family.get('family_sha256'),
-                        source_date=reversal_family.get('source_date'),
-                        publication_date=reversal_family.get('publication_date'),
-                        effective_date=reversal_family.get('effective_date'),
-                        machine_component_sha256=digest(reversal_family['machine_cells']),
-                        auxiliary_component_sha256=digest(reversal_family['auxiliary_cells']),
-                        arm=entry_setup_live_policy['continuous_reversal_arm'],
-                        phase=machine_assessment.get('decision_phase','FIRST_UPTICK'),
-                        primary_branch=machine_assessment.get('primary_branch'),
-                        matched_branches=machine_assessment.get('matched_branches'),
-                        signal_id=machine_assessment.get('signal_id',machine_assessment.get('event_id')),
-                        branch_definition_sha256=machine_assessment.get('branch_definition_sha256'),
-                        signal_token=(entry_setup_live_policy.get('continuous_reversal_claim') or {}).get('token'),
+                        family_sha256=reversal_family.get("family_sha256"),
+                        source_date=reversal_family.get("source_date"),
+                        publication_date=reversal_family.get("publication_date"),
+                        effective_date=reversal_family.get("effective_date"),
+                        machine_component_sha256=digest(
+                            reversal_family["machine_cells"]
+                        ),
+                        auxiliary_component_sha256=digest(
+                            reversal_family["auxiliary_cells"]
+                        ),
+                        arm=entry_setup_live_policy["continuous_reversal_arm"],
+                        phase=machine_assessment.get("decision_phase", "FIRST_UPTICK"),
+                        primary_branch=machine_assessment.get("primary_branch"),
+                        matched_branches=machine_assessment.get("matched_branches"),
+                        signal_id=machine_assessment.get(
+                            "signal_id", machine_assessment.get("event_id")
+                        ),
+                        branch_definition_sha256=machine_assessment.get(
+                            "branch_definition_sha256"
+                        ),
+                        signal_token=(
+                            entry_setup_live_policy.get("continuous_reversal_claim")
+                            or {}
+                        ).get("token"),
                         snapshot_read_at=reversal_snapshot_as_of,
-                        snapshot_cutoff=machine_input_fields.get('entry_machine_input_as_of'),
-                        input_sha256=digest(reversal_input) if reversal_input is not None else None,
-                        prompt_sha256=digest(reversal_prompt) if reversal_input is not None else None,
-                        response_schema_sha256=digest(reversal_schema) if reversal_input is not None else None,
+                        snapshot_cutoff=machine_input_fields.get(
+                            "entry_machine_input_as_of"
+                        ),
+                        input_sha256=(
+                            digest(reversal_input)
+                            if reversal_input is not None
+                            else None
+                        ),
+                        prompt_sha256=(
+                            digest(reversal_prompt)
+                            if reversal_input is not None
+                            else None
+                        ),
+                        response_schema_sha256=(
+                            digest(reversal_schema)
+                            if reversal_input is not None
+                            else None
+                        ),
                     )
                     if reversal_input:
-                        reversal_request = dict(input=reversal_input, prompt=reversal_prompt,
-                                                response_schema=reversal_schema)
-                        from src.engine.scalping.reversal_auxiliary_contract import PRODUCTION_VERSION
-                        from src.engine.scalping.reversal_auxiliary_phases import version as phase_version
-                        prompt_version=(machine_assessment['auxiliary_binding']['prompt_version']
-                            if machine_assessment.get('policy_version') in {'continuous_reversal_policy_v5','continuous_reversal_policy_v6'}
-                            else phase_version(machine_assessment.get('decision_phase','FIRST_UPTICK'),entry_setup_live_policy['continuous_reversal_arm']))
-                        entry_setup_live_policy.update(auxiliary_system_prompt=reversal_prompt,
+                        reversal_request = dict(
+                            input=reversal_input,
+                            prompt=reversal_prompt,
+                            response_schema=reversal_schema,
+                        )
+                        from src.engine.scalping.reversal_auxiliary_contract import (
+                            PRODUCTION_VERSION,
+                        )
+                        from src.engine.scalping.reversal_auxiliary_phases import (
+                            version as phase_version,
+                        )
+
+                        prompt_version = (
+                            machine_assessment["auxiliary_binding"]["prompt_version"]
+                            if machine_assessment.get("policy_version")
+                            in {
+                                "continuous_reversal_policy_v5",
+                                "continuous_reversal_policy_v6",
+                            }
+                            else phase_version(
+                                machine_assessment.get(
+                                    "decision_phase", "FIRST_UPTICK"
+                                ),
+                                entry_setup_live_policy["continuous_reversal_arm"],
+                            )
+                        )
+                        entry_setup_live_policy.update(
+                            auxiliary_system_prompt=reversal_prompt,
                             selected_prompt_version=prompt_version,
-                            auxiliary_system_prompt_sha256=__import__('hashlib').sha256(json.dumps(reversal_prompt,ensure_ascii=True,sort_keys=True,separators=(',',':')).encode()).hexdigest(),
-                            auxiliary_prompt_variant=entry_setup_live_policy['continuous_reversal_arm'])
-                        machine_setup = {**reversal_input['entry_setup_evidence_v1'],
-                                         'continuous_reversal_response_schema': reversal_schema}
-                        machine_exact['continuous_reversal_event'] = machine_assessment['event']
+                            auxiliary_system_prompt_sha256=__import__("hashlib")
+                            .sha256(
+                                json.dumps(
+                                    reversal_prompt,
+                                    ensure_ascii=True,
+                                    sort_keys=True,
+                                    separators=(",", ":"),
+                                ).encode()
+                            )
+                            .hexdigest(),
+                            auxiliary_prompt_variant=entry_setup_live_policy[
+                                "continuous_reversal_arm"
+                            ],
+                        )
+                        machine_setup = {
+                            **reversal_input["entry_setup_evidence_v1"],
+                            "continuous_reversal_response_schema": reversal_schema,
+                        }
+                        machine_exact["continuous_reversal_event"] = machine_assessment[
+                            "event"
+                        ]
                 else:
-                    machine_assessment = timed_entry_call('entry_machine_assess', mechanistic_entry_policy_decision,
+                    machine_assessment = timed_entry_call(
+                        "entry_machine_assess",
+                        mechanistic_entry_policy_decision,
                         machine_setup,
                         policy=entry_setup_live_policy["mechanistic_threshold_policy"],
                     )
                 # Pin the selected profile and its rebuilt facts to this attempt.
-                machine_setup = machine_assessment.pop("effective_setup_evidence", machine_setup)
+                machine_setup = machine_assessment.pop(
+                    "effective_setup_evidence", machine_setup
+                )
                 from src.engine.scalping.entry_admission_recipe import bind_confirmation
+
                 if not reversal_family:
                     machine_setup = bind_confirmation(
-                        machine_setup, entry_setup_live_policy["mechanistic_threshold_policy"])
+                        machine_setup,
+                        entry_setup_live_policy["mechanistic_threshold_policy"],
+                    )
                 from src.engine.scalping.ai_decision_trace import (
                     capture_machine_observation,
                 )
 
-                if entry_input_deadline_epoch is not None and time.time() >= entry_input_deadline_epoch:
+                if (
+                    entry_input_deadline_epoch is not None
+                    and time.time() >= entry_input_deadline_epoch
+                ):
                     raise ValueError("entry_machine_input_deadline_expired")
                 capture_started_perf = time.perf_counter()
-                machine_capture = timed_entry_call('entry_machine_capture', capture_machine_observation,
+                machine_capture = timed_entry_call(
+                    "entry_machine_capture",
+                    capture_machine_observation,
                     exact_payload=machine_exact,
                     setup_evidence=machine_setup,
                     assessment=machine_assessment,
@@ -10208,13 +11138,22 @@ class GPTSniperEngine:
                     reversal_context=reversal_receipt,
                     reversal_request=reversal_request,
                     metadata=(
-                        {**(dict(metadata_extra or {}) if isinstance(metadata_extra, dict) else {}),
-                         **machine_input_fields,
-                         'ai_component_sha256': entry_setup_live_policy.get('auxiliary_policy_sha256')}
+                        {
+                            **(
+                                dict(metadata_extra or {})
+                                if isinstance(metadata_extra, dict)
+                                else {}
+                            ),
+                            **machine_input_fields,
+                            "ai_component_sha256": entry_setup_live_policy.get(
+                                "auxiliary_policy_sha256"
+                            ),
+                        }
                     ),
                 )
                 from src.engine.monitoring.runtime_performance import observe
-                observe('capture_append', time.perf_counter()-capture_started_perf)
+
+                observe("capture_append", time.perf_counter() - capture_started_perf)
                 # Circuit/lock/common-provider exits occur after this assessment.
                 # Preserve its original capture on every terminal return without
                 # changing the WAIT/DROP decision or authorizing a provider call.
@@ -10233,18 +11172,27 @@ class GPTSniperEngine:
                         "entry_primary_decision_owner": "mechanistic_entry_adjudicator",
                         "entry_mechanistic_action": machine_assessment["action"],
                         "mechanistic_entry_assessment": machine_assessment,
-                        "machine_bundle_sha256": entry_setup_live_policy["machine_bundle_sha256"],
+                        "machine_bundle_sha256": entry_setup_live_policy[
+                            "machine_bundle_sha256"
+                        ],
                         "machine_evaluation_status": "assessed",
-                        "native_observation": entry_setup_live_policy.get('native_observation'),
+                        "native_observation": entry_setup_live_policy.get(
+                            "native_observation"
+                        ),
                         **machine_capture,
                         "provider_called": False,
                         "ai_decision_outcome_eligible": False,
                         "actual_order_submitted": False,
                         "broker_order_forbidden": True,
                     }
-                if machine_assessment["action"] in {"ENTER_NOW", "BLOCK", "RECHECK"} and callable(entry_economics_observer):
+                if machine_assessment["action"] in {
+                    "ENTER_NOW",
+                    "BLOCK",
+                    "RECHECK",
+                } and callable(entry_economics_observer):
                     try:
                         from src.utils import kiwoom_utils
+
                         parent_budget = kiwoom_utils._ENTRY_SOURCE_BUDGET.get()
                         observer_budget = entry_budget or parent_budget
                         if entry_budget is not None and parent_budget is not None:
@@ -10254,37 +11202,66 @@ class GPTSniperEngine:
                             )
                         # Direct and async evaluations share the original deadline.
                         # A missing deadline retains cache-only account observation.
-                        with (kiwoom_utils.entry_source_budget(observer_budget)
-                              if observer_budget is not None else nullcontext()):
-                            economic_source_fields = timed_entry_call('entry_economics', entry_economics_observer,
-                                exact_payload=machine_exact, assessment=machine_assessment,
-                                capture=machine_capture, bundle_sha256=entry_setup_live_policy["machine_bundle_sha256"],
-                                **({"observation_ws_data": ws_data} if callable(entry_input_refresher) else {}),
-                            ) or {}
+                        with (
+                            kiwoom_utils.entry_source_budget(observer_budget)
+                            if observer_budget is not None
+                            else nullcontext()
+                        ):
+                            economic_source_fields = (
+                                timed_entry_call(
+                                    "entry_economics",
+                                    entry_economics_observer,
+                                    exact_payload=machine_exact,
+                                    assessment=machine_assessment,
+                                    capture=machine_capture,
+                                    bundle_sha256=entry_setup_live_policy[
+                                        "machine_bundle_sha256"
+                                    ],
+                                    **(
+                                        {"observation_ws_data": ws_data}
+                                        if callable(entry_input_refresher)
+                                        else {}
+                                    ),
+                                )
+                                or {}
+                            )
                     except Exception as exc:
                         # Instrumentation can never alter machine/AI/order authority.
-                        economic_source_fields = {"entry_economic_source_status": "source_gap",
-                            "entry_economic_source_blocker": "observer_failed:" + type(exc).__name__}
+                        economic_source_fields = {
+                            "entry_economic_source_status": "source_gap",
+                            "entry_economic_source_blocker": "observer_failed:"
+                            + type(exc).__name__,
+                        }
                 machine_first_context = {
                     "assessment": machine_assessment,
-                    "flow_observation": {} if reversal_family else build_mechanistic_entry_flow_observation(
-                        machine_analysis
+                    "flow_observation": (
+                        {}
+                        if reversal_family
+                        else build_mechanistic_entry_flow_observation(machine_analysis)
                     ),
                     "setup": machine_setup,
                     "bundle_sha256": entry_setup_live_policy["machine_bundle_sha256"],
                 }
                 soft_policy = entry_setup_live_policy.get("auxiliary_soft_policy")
-                if (machine_assessment["action"] == "ENTER_NOW"
+                if (
+                    machine_assessment["action"] == "ENTER_NOW"
                     and isinstance(soft_policy, dict)
-                    and soft_policy.get("schema") == "auxiliary_soft_policy_v2"):
+                    and soft_policy.get("schema") == "auxiliary_soft_policy_v2"
+                ):
                     from src.engine.scalping.entry_setup_evidence import (
-                        select_auxiliary_soft_profile, validate_auxiliary_soft_policy,
+                        select_auxiliary_soft_profile,
+                        validate_auxiliary_soft_policy,
                     )
                     from src.engine.scalping.mechanistic_entry_runtime_policy import (
-                        compact_auxiliary_prompt, compact_prompt_variant, digest,
+                        compact_auxiliary_prompt,
+                        compact_prompt_variant,
+                        digest,
                     )
+
                     if not validate_auxiliary_soft_policy(soft_policy):
-                        raise ValueError("auxiliary_soft_policy_invalid_before_provider")
+                        raise ValueError(
+                            "auxiliary_soft_policy_invalid_before_provider"
+                        )
                     selected_profile, leaf = select_auxiliary_soft_profile(
                         soft_policy, machine_setup
                     )
@@ -10313,8 +11290,11 @@ class GPTSniperEngine:
                     # decision. Preserve that exact decision for its terminal
                     # receipt; no AI or order authority is created here.
                     machine_action = machine_assessment["action"]
-                    if (decision.get("entry_mechanistic_action") is not None
-                            and str(decision["entry_mechanistic_action"]).upper() != machine_action):
+                    if (
+                        decision.get("entry_mechanistic_action") is not None
+                        and str(decision["entry_mechanistic_action"]).upper()
+                        != machine_action
+                    ):
                         raise ValueError("machine_predecision_composer_disagreement")
                     decision.update(
                         entry_primary_decision_owner="mechanistic_entry_adjudicator",
@@ -10355,63 +11335,105 @@ class GPTSniperEngine:
                         input_contract_fields=input_contract_fields,
                     )
             except (ValueError, TypeError, KeyError) as exc:
-                feature_receipt = {
-                    key: machine_feature_packet.get(key)
-                    for key in (
-                        "feature_tick_source", "feature_tick_selection_reason",
-                        "feature_tick_window_sha256", "tick_sample_count",
-                        "tick_aggressor_trusted_count", "trade_volume_source_counts",
-                        "order_flow_pressure_source", "feature_exact_tick_filter",
-                    )
-                } if isinstance(machine_feature_packet, dict) else {}
+                feature_receipt = (
+                    {
+                        key: machine_feature_packet.get(key)
+                        for key in (
+                            "feature_tick_source",
+                            "feature_tick_selection_reason",
+                            "feature_tick_window_sha256",
+                            "tick_sample_count",
+                            "tick_aggressor_trusted_count",
+                            "trade_volume_source_counts",
+                            "order_flow_pressure_source",
+                            "feature_exact_tick_filter",
+                        )
+                    }
+                    if isinstance(machine_feature_packet, dict)
+                    else {}
+                )
                 source_gap_kind = None
                 if str(exc) == "strategy_tape_score_source_missing":
-                    exact_filter = feature_receipt.get("feature_exact_tick_filter") or {}
-                    if (exact_filter.get("source_row_count", 0) > 0
-                        and exact_filter.get("accepted_row_count") == 0):
+                    exact_filter = (
+                        feature_receipt.get("feature_exact_tick_filter") or {}
+                    )
+                    if (
+                        exact_filter.get("source_row_count", 0) > 0
+                        and exact_filter.get("accepted_row_count") == 0
+                    ):
                         source_gap_kind = "source_route_conflict"
-                    elif (feature_receipt.get("feature_tick_source") == "ws_exact_route"
-                          and int(feature_receipt.get("tick_aggressor_trusted_count") or 0) > 0):
+                    elif (
+                        feature_receipt.get("feature_tick_source") == "ws_exact_route"
+                        and int(
+                            feature_receipt.get("tick_aggressor_trusted_count") or 0
+                        )
+                        > 0
+                    ):
                         source_gap_kind = "feature_tick_selection_gap"
                     else:
                         source_gap_kind = "trusted_tape_source_insufficient"
                 rejected_fields = {}
-                if not machine_only and not machine_capture and isinstance(machine_exact, dict):
+                if (
+                    not machine_only
+                    and not machine_capture
+                    and isinstance(machine_exact, dict)
+                ):
                     # Native validation can reject before an adjudication exists.
                     # Capture that exact source-invalid attempt through the same
                     # producer as preflight; never invent ENTER_NOW or a provider
                     # request, or replace an already captured machine decision.
-                    from src.engine.scalping.ai_decision_trace import capture_machine_observation
-                    from src.engine.scalping.ai_market_snapshot import classify_ai_input_blocker
+                    from src.engine.scalping.ai_decision_trace import (
+                        capture_machine_observation,
+                    )
+                    from src.engine.scalping.ai_market_snapshot import (
+                        classify_ai_input_blocker,
+                    )
+
                     rejected_fields = capture_machine_observation(
-                        exact_payload={**machine_exact, 'evaluation_role': 'main_live'},
+                        exact_payload={**machine_exact, "evaluation_role": "main_live"},
                         setup_evidence={
-                            'source_quality_status': 'blocked',
-                            'source_quality_blockers': [str(exc) or 'unclassified'],
-                            'machine_contract_error': str(exc),
-                            'continuous_reversal_rejected_claim_receipt': getattr(
-                                exc, 'reversal_source_receipt', None),
+                            "source_quality_status": "blocked",
+                            "source_quality_blockers": [str(exc) or "unclassified"],
+                            "machine_contract_error": str(exc),
+                            "continuous_reversal_rejected_claim_receipt": getattr(
+                                exc, "reversal_source_receipt", None
+                            ),
                         },
-                        assessment={'schema': 'mechanistic_entry_source_invalid_v1',
-                            'action': 'source_invalid', 'reason': str(exc)},
-                        bundle_sha256=entry_setup_live_policy['machine_bundle_sha256'],
-                        metadata={**(dict(metadata_extra or {}) if isinstance(metadata_extra, dict) else {}),
+                        assessment={
+                            "schema": "mechanistic_entry_source_invalid_v1",
+                            "action": "source_invalid",
+                            "reason": str(exc),
+                        },
+                        bundle_sha256=entry_setup_live_policy["machine_bundle_sha256"],
+                        metadata={
+                            **(
+                                dict(metadata_extra or {})
+                                if isinstance(metadata_extra, dict)
+                                else {}
+                            ),
                             **machine_input_fields,
-                            'ai_component_sha256': entry_setup_live_policy.get('auxiliary_policy_sha256')},
+                            "ai_component_sha256": entry_setup_live_policy.get(
+                                "auxiliary_policy_sha256"
+                            ),
+                        },
                     )
                     rejected_fields.update(
                         machine_source_invalid_receipt=True,
-                        entry_mechanistic_action='source_invalid',
-                        entry_mechanistic_policy_decision='source_invalid',
+                        entry_mechanistic_action="source_invalid",
+                        entry_mechanistic_policy_decision="source_invalid",
                         entry_mechanistic_policy_version=(
-                            entry_setup_live_policy.get('mechanistic_threshold_policy') or {}).get('version'),
+                            entry_setup_live_policy.get("mechanistic_threshold_policy")
+                            or {}
+                        ).get("version"),
                         machine_decision_before_provider=True,
-                        entry_source_invalid_schema='machine_source_invalid_decomposition_v1',
-                        entry_source_invalid_stage='machine_pre_adjudication',
-                        entry_source_invalid_primary_blocker=str(exc) or 'unclassified',
-                        entry_source_invalid_primary_category=classify_ai_input_blocker(str(exc)),
-                        entry_source_invalid_primary_basis='producer_pre_adjudication_exception',
-                        entry_ai_screen_status='not_requested_machine_source_invalid',
+                        entry_source_invalid_schema="machine_source_invalid_decomposition_v1",
+                        entry_source_invalid_stage="machine_pre_adjudication",
+                        entry_source_invalid_primary_blocker=str(exc) or "unclassified",
+                        entry_source_invalid_primary_category=classify_ai_input_blocker(
+                            str(exc)
+                        ),
+                        entry_source_invalid_primary_basis="producer_pre_adjudication_exception",
+                        entry_ai_screen_status="not_requested_machine_source_invalid",
                         entry_ai_screen_required=False,
                         entry_ai_screen_pass=False,
                     )
@@ -10428,7 +11450,8 @@ class GPTSniperEngine:
                             "machine_feature_source_receipt": feature_receipt,
                             "machine_feature_tick_window": machine_tick_window,
                             "continuous_reversal_rejected_claim_receipt": getattr(
-                                exc, "reversal_source_receipt", None),
+                                exc, "reversal_source_receipt", None
+                            ),
                             **rejected_fields,
                         }
                     ),
@@ -10447,10 +11470,15 @@ class GPTSniperEngine:
         target_model = (
             self._get_role_model("OPENAI_SWING_ANALYSIS_MODEL")
             if strategy in {"KOSPI_ML", "KOSDAQ_ML"}
-            else self._get_compact_auxiliary_model()
-            if prompt_version in MACHINE_AUXILIARY_COMPACT_ENTRY_PROMPT_VERSIONS
-            else self._get_role_model("OPENAI_SCALPING_ENTRY_MODEL"
-                if is_scalping_entry_call else "OPENAI_SCALPING_SHARED_MODEL")
+            else (
+                self._get_compact_auxiliary_model()
+                if prompt_version in MACHINE_AUXILIARY_COMPACT_ENTRY_PROMPT_VERSIONS
+                else self._get_role_model(
+                    "OPENAI_SCALPING_ENTRY_MODEL"
+                    if is_scalping_entry_call
+                    else "OPENAI_SCALPING_SHARED_MODEL"
+                )
+            )
         )
         cache_key = self._build_analysis_cache_key_with_profile(
             target_name=target_name,
@@ -10462,7 +11490,9 @@ class GPTSniperEngine:
             cache_profile=cache_profile,
             candle_context=candle_context,
         )
-        cache_key = self._build_cache_digest({"input_key": cache_key, "model": target_model})
+        cache_key = self._build_cache_digest(
+            {"input_key": cache_key, "model": target_model}
+        )
         cached_result = (
             None
             if machine_first_context is not None
@@ -10491,7 +11521,7 @@ class GPTSniperEngine:
             int(getattr(TRADING_RULES, "OPENAI_ANALYZE_TARGET_LOCK_WAIT_MS", 250) or 0),
         )
         if entry_budget is not None:
-            lock_wait_ms = min(lock_wait_ms, int(entry_budget.remaining()*1000))
+            lock_wait_ms = min(lock_wait_ms, int(entry_budget.remaining() * 1000))
         lock_wait_started = time.perf_counter()
         if lock_wait_ms > 0:
             lock_acquired = self.lock.acquire(timeout=lock_wait_ms / 1000.0)
@@ -10558,11 +11588,24 @@ class GPTSniperEngine:
                 )
 
             if self.ai_disabled and is_scalping_entry_call and entry_budget is not None:
-                recovery_identity=(machine_capture.get('evaluation_attempt_id'),machine_capture.get('machine_observation_sha256'))
-                eligible=(machine_first_context is not None and all(isinstance(v,str) and bool(v) for v in recovery_identity)
-                    and str((machine_first_context.get('assessment') or {}).get('action') or '').upper()=='ENTER_NOW')
-                common_recovery_ticket=self._admit_common_recovery(recovery_identity,
-                    eligible=eligible,deadline_remaining=entry_budget.remaining())
+                recovery_identity = (
+                    machine_capture.get("evaluation_attempt_id"),
+                    machine_capture.get("machine_observation_sha256"),
+                )
+                eligible = (
+                    machine_first_context is not None
+                    and all(isinstance(v, str) and bool(v) for v in recovery_identity)
+                    and str(
+                        (machine_first_context.get("assessment") or {}).get("action")
+                        or ""
+                    ).upper()
+                    == "ENTER_NOW"
+                )
+                common_recovery_ticket = self._admit_common_recovery(
+                    recovery_identity,
+                    eligible=eligible,
+                    deadline_remaining=entry_budget.remaining(),
+                )
                 self._observe_entry_circuit()
             if self.ai_disabled and common_recovery_ticket is None:
                 return self._annotate_analysis_result(
@@ -10588,34 +11631,67 @@ class GPTSniperEngine:
                 )
 
             if is_scalping_entry_call and entry_budget is not None:
-                eligible = (machine_first_context is not None and
-                    str((machine_first_context.get('assessment') or {}).get('action') or '').upper() == 'ENTER_NOW')
-                identity = (machine_capture.get('evaluation_attempt_id'),
-                            machine_capture.get('machine_observation_sha256'))
-                eligible = eligible and all(isinstance(v,str) and bool(v) for v in identity)
-                entry_circuit_ticket = self._entry_circuit().admit(identity,
-                    eligible=eligible, deadline_remaining=entry_budget.remaining(),
-                    common_disabled=self.ai_disabled and common_recovery_ticket is None)
+                eligible = (
+                    machine_first_context is not None
+                    and str(
+                        (machine_first_context.get("assessment") or {}).get("action")
+                        or ""
+                    ).upper()
+                    == "ENTER_NOW"
+                )
+                identity = (
+                    machine_capture.get("evaluation_attempt_id"),
+                    machine_capture.get("machine_observation_sha256"),
+                )
+                eligible = eligible and all(
+                    isinstance(v, str) and bool(v) for v in identity
+                )
+                entry_circuit_ticket = self._entry_circuit().admit(
+                    identity,
+                    eligible=eligible,
+                    deadline_remaining=entry_budget.remaining(),
+                    common_disabled=self.ai_disabled and common_recovery_ticket is None,
+                )
                 self._observe_entry_circuit()
                 if entry_circuit_ticket is None:
-                    return self._annotate_analysis_result(_merge_runtime_fields(dict(
-                        action='WAIT', score=50, reason='entry_transport_circuit_open',
-                        provider_called=False, entry_ai_screen_status='not_evaluated_transport',
-                        entry_ai_screen_pass=False, ai_circuit=self._entry_circuit().snapshot(),
-                        actual_order_submitted=False, broker_order_forbidden=True)),
-                        prompt_type=prompt_type, prompt_version=prompt_version,
-                        response_ms=int((time.perf_counter()-analysis_started)*1000),
-                        parse_ok=False, parse_fail=False, fallback_score_50=False,
-                        cache_hit=False, cache_mode='miss', result_source='entry_circuit_open',
-                        input_contract_fields=input_contract_fields)
+                    return self._annotate_analysis_result(
+                        _merge_runtime_fields(
+                            dict(
+                                action="WAIT",
+                                score=50,
+                                reason="entry_transport_circuit_open",
+                                provider_called=False,
+                                entry_ai_screen_status="not_evaluated_transport",
+                                entry_ai_screen_pass=False,
+                                ai_circuit=self._entry_circuit().snapshot(),
+                                actual_order_submitted=False,
+                                broker_order_forbidden=True,
+                            )
+                        ),
+                        prompt_type=prompt_type,
+                        prompt_version=prompt_version,
+                        response_ms=int(
+                            (time.perf_counter() - analysis_started) * 1000
+                        ),
+                        parse_ok=False,
+                        parse_fail=False,
+                        fallback_score_50=False,
+                        cache_hit=False,
+                        cache_mode="miss",
+                        result_source="entry_circuit_open",
+                        input_contract_fields=input_contract_fields,
+                    )
 
             min_interval_wait_ms = 0
             min_interval_remaining = float(self.min_interval or 0.0) - (
                 time.time() - self.last_call_time
             )
             if min_interval_remaining > 0:
-                if entry_budget is not None and min_interval_remaining >= entry_budget.remaining():
-                    raise ValueError('entry_machine_input_deadline_expired')
+                if (
+                    entry_budget is not None
+                    and min_interval_remaining >= entry_budget.remaining()
+                ):
+                    raise ValueError("entry_machine_input_deadline_expired")
                 time.sleep(min_interval_remaining)
                 min_interval_wait_ms = int(round(min_interval_remaining * 1000))
 
@@ -10739,9 +11815,12 @@ class GPTSniperEngine:
                                 ).encode("utf-8")
                             ).hexdigest()
                             if machine_first_context is not None:
-                                cost_source = replay_context.get(
-                                    "anticipatory_reversal_analysis_v1"
-                                ) or {}
+                                cost_source = (
+                                    replay_context.get(
+                                        "anticipatory_reversal_analysis_v1"
+                                    )
+                                    or {}
+                                )
                                 cost_source = (
                                     cost_source.get("execution_cost") or {}
                                     if isinstance(cost_source, dict)
@@ -10751,7 +11830,9 @@ class GPTSniperEngine:
                                     cost_source = {}
                                 try:
                                     pre_provider_cost = float(
-                                        cost_source.get("conservative_execution_cost_pct")
+                                        cost_source.get(
+                                            "conservative_execution_cost_pct"
+                                        )
                                     )
                                 except (TypeError, ValueError):
                                     pre_provider_cost = None
@@ -10774,25 +11855,35 @@ class GPTSniperEngine:
                                 )
                                 economic_source_fields["entry_cost_contract_sha256"] = (
                                     hashlib.sha256(
-                                        json.dumps(cost_source, ensure_ascii=False,
-                                                   sort_keys=True, separators=(",", ":"),
-                                                   default=str).encode("utf-8")
+                                        json.dumps(
+                                            cost_source,
+                                            ensure_ascii=False,
+                                            sort_keys=True,
+                                            separators=(",", ":"),
+                                            default=str,
+                                        ).encode("utf-8")
                                     ).hexdigest()
-                                    if cost_source else None
+                                    if cost_source
+                                    else None
                                 )
-                                economic_source_fields["entry_cost_replay_context_sha256"] = (
-                                    replay_context_sha256
-                                )
-                                economic_source_fields["entry_cost_evaluation_attempt_id"] = (
-                                    exact_payload.get("evaluation_attempt_id")
-                                )
-                                if economic_source_fields["entry_cost_source_status"] == "exact_pre_provider_replay":
-                                    economic_source_fields["entry_conservative_execution_cost_pct"] = round(
-                                        pre_provider_cost, 10
-                                    )
+                                economic_source_fields[
+                                    "entry_cost_replay_context_sha256"
+                                ] = replay_context_sha256
+                                economic_source_fields[
+                                    "entry_cost_evaluation_attempt_id"
+                                ] = exact_payload.get("evaluation_attempt_id")
+                                if (
+                                    economic_source_fields["entry_cost_source_status"]
+                                    == "exact_pre_provider_replay"
+                                ):
+                                    economic_source_fields[
+                                        "entry_conservative_execution_cost_pct"
+                                    ] = round(pre_provider_cost, 10)
                             decision_quality_input = {
                                 "input_schema": entry_setup_live_input_schema,
-                                "entry_setup_evidence_v1": _entry_provider_ledger(entry_setup_evidence),
+                                "entry_setup_evidence_v1": _entry_provider_ledger(
+                                    entry_setup_evidence
+                                ),
                                 "exact_replay_context_sha256": (replay_context_sha256),
                                 "provider_input_authority": (
                                     "deterministic_setup_ledger_only"
@@ -10814,8 +11905,12 @@ class GPTSniperEngine:
                                 )
                         if "mechanistic_entry_assessment" in decision_quality_input:
                             decision_quality_input["mechanistic_entry_assessment"] = {
-                                k: v for k, v in decision_quality_input["mechanistic_entry_assessment"].items()
-                                if k != "strategy_selection"}
+                                k: v
+                                for k, v in decision_quality_input[
+                                    "mechanistic_entry_assessment"
+                                ].items()
+                                if k != "strategy_selection"
+                            }
                         formatted_data = json.dumps(
                             decision_quality_input,
                             ensure_ascii=False,
@@ -11111,99 +12206,227 @@ class GPTSniperEngine:
                         if trace_metadata_extra.get(key) not in (None, "")
                     }
                 )
-            if entry_setup_live_policy.get('continuous_reversal_input'):
+            if entry_setup_live_policy.get("continuous_reversal_input"):
                 # Send the same allowlisted as-of input used by actual postclose replay.
-                replay_context = entry_setup_live_policy['continuous_reversal_input']
-                formatted_data = json.dumps(replay_context, ensure_ascii=True, sort_keys=True, separators=(',',':'))
+                replay_context = entry_setup_live_policy["continuous_reversal_input"]
+                formatted_data = json.dumps(
+                    replay_context,
+                    ensure_ascii=True,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
                 # The compact policy replaces the earlier formatted context.
                 # Non-provider endings also need the actual final input identity.
-                input_contract_fields.update(self._resolve_ai_input_contract_fields(
-                    formatted_data, default_schema=replay_context.get('schema'),
-                    default_mode='structured_json'))
-                entry_setup_evidence = {**replay_context['entry_setup_evidence_v1'],
-                                       'continuous_reversal_response_schema': reversal_schema}
-                trace_metadata_extra['entry_setup_live_policy_selected_prompt_version']=prompt_version
-                input_contract_fields['entry_setup_live_policy_selected_prompt_version']=prompt_version
-            if entry_setup_live_policy.get('continuous_reversal_assessment',{}).get('policy_version') in {'continuous_reversal_policy_v2','continuous_reversal_policy_v3','continuous_reversal_policy_v4','continuous_reversal_policy_v5','continuous_reversal_policy_v6'}:
-                from src.engine.scalping.reversal_current_backend import validate_any_claim as validate_claim
-                from src.engine.scalping.initial_quantity_bundle_state import reserve_reversal_signal
+                input_contract_fields.update(
+                    self._resolve_ai_input_contract_fields(
+                        formatted_data,
+                        default_schema=replay_context.get("schema"),
+                        default_mode="structured_json",
+                    )
+                )
+                entry_setup_evidence = {
+                    **replay_context["entry_setup_evidence_v1"],
+                    "continuous_reversal_response_schema": reversal_schema,
+                }
+                trace_metadata_extra[
+                    "entry_setup_live_policy_selected_prompt_version"
+                ] = prompt_version
+                input_contract_fields[
+                    "entry_setup_live_policy_selected_prompt_version"
+                ] = prompt_version
+            if entry_setup_live_policy.get("continuous_reversal_assessment", {}).get(
+                "policy_version"
+            ) in {
+                "continuous_reversal_policy_v2",
+                "continuous_reversal_policy_v3",
+                "continuous_reversal_policy_v4",
+                "continuous_reversal_policy_v5",
+                "continuous_reversal_policy_v6",
+            }:
+                from src.engine.scalping.reversal_current_backend import (
+                    validate_any_claim as validate_claim,
+                )
+                from src.engine.scalping.initial_quantity_bundle_state import (
+                    reserve_reversal_signal,
+                )
                 from src.utils.constants import DATA_DIR
-                assessment=entry_setup_live_policy['continuous_reversal_assessment']
-                if assessment.get('policy_version') in {'continuous_reversal_policy_v5','continuous_reversal_policy_v6'}:
-                    from src.engine.scalping.reversal_evaluation_context import validate_before_provider
+
+                assessment = entry_setup_live_policy["continuous_reversal_assessment"]
+                if assessment.get("policy_version") in {
+                    "continuous_reversal_policy_v5",
+                    "continuous_reversal_policy_v6",
+                }:
+                    from src.engine.scalping.reversal_evaluation_context import (
+                        validate_before_provider,
+                    )
+
                     try:
-                        timed_entry_call('entry_native_check', validate_before_provider,
-                            entry_setup_live_policy, data_root=DATA_DIR, model=target_model)
+                        timed_entry_call(
+                            "entry_native_check",
+                            validate_before_provider,
+                            entry_setup_live_policy,
+                            data_root=DATA_DIR,
+                            model=target_model,
+                        )
                     except ValueError as exc:
                         # Only native eligibility endings from this validator
                         # are neutral to the provider circuit. Unknown errors,
                         # source parsing, registry and transport remain failures.
                         if str(exc) not in {
-                            'reversal_signal_generation_changed',
-                            'reversal_signal_expired_or_changed',
-                            'reversal_signal_path_changed',
-                            'reversal_first_signal_invalidated',
-                            'reversal_all_signals_invalidated',
-                            'reversal_all_requested_signals_invalidated',
-                            'reversal_scope_execution_changed',
-                            'reversal_request_signal_set_changed_before_send',
-                            'auxiliary_decision_generation_revoked',
+                            "reversal_signal_generation_changed",
+                            "reversal_signal_expired_or_changed",
+                            "reversal_signal_path_changed",
+                            "reversal_first_signal_invalidated",
+                            "reversal_all_signals_invalidated",
+                            "reversal_all_requested_signals_invalidated",
+                            "reversal_scope_execution_changed",
+                            "reversal_request_signal_set_changed_before_send",
+                            "auxiliary_decision_generation_revoked",
                         }:
                             raise
                         return self._annotate_analysis_result(
-                            _merge_runtime_fields({
-                                **machine_capture,
-                                'action': 'WAIT', 'score': 50, 'reason': str(exc),
-                                'provider_called': False,
-                                'entry_ai_screen_status': 'not_evaluated_source',
-                                'entry_ai_screen_pass': False,
-                                'openai_local_failure_reason': str(exc),
-                                'actual_order_submitted': False, 'broker_order_forbidden': True,
-                            }), prompt_type=prompt_type, prompt_version=prompt_version,
-                            response_ms=int((time.perf_counter()-analysis_started)*1000),
-                            parse_ok=False, parse_fail=False, fallback_score_50=False,
-                            cache_hit=False, cache_mode='miss', result_source='native_signal_invalidated',
-                            input_contract_fields=input_contract_fields)
+                            _merge_runtime_fields(
+                                {
+                                    **machine_capture,
+                                    "action": "WAIT",
+                                    "score": 50,
+                                    "reason": str(exc),
+                                    "provider_called": False,
+                                    "entry_ai_screen_status": "not_evaluated_source",
+                                    "entry_ai_screen_pass": False,
+                                    "openai_local_failure_reason": str(exc),
+                                    "actual_order_submitted": False,
+                                    "broker_order_forbidden": True,
+                                }
+                            ),
+                            prompt_type=prompt_type,
+                            prompt_version=prompt_version,
+                            response_ms=int(
+                                (time.perf_counter() - analysis_started) * 1000
+                            ),
+                            parse_ok=False,
+                            parse_fail=False,
+                            fallback_score_50=False,
+                            cache_hit=False,
+                            cache_mode="miss",
+                            result_source="native_signal_invalidated",
+                            input_contract_fields=input_contract_fields,
+                        )
                 else:
-                    from src.engine.scalping.mechanistic_entry_runtime_policy import load_effective
-                    active=load_effective(data_root=DATA_DIR,target_date=datetime.now(__import__('zoneinfo').ZoneInfo('Asia/Seoul')).date().isoformat())
-                    if not active or active['bundle_sha256']!=entry_setup_live_policy['machine_bundle_sha256']:
-                        raise ValueError('reversal_policy_changed_before_provider')
-                    validate_claim(entry_setup_live_policy.get('continuous_reversal_claim'),assessment['family_sha256'],now=time.time())
+                    from src.engine.scalping.mechanistic_entry_runtime_policy import (
+                        load_effective,
+                    )
+
+                    active = load_effective(
+                        data_root=DATA_DIR,
+                        target_date=datetime.now(
+                            __import__("zoneinfo").ZoneInfo("Asia/Seoul")
+                        )
+                        .date()
+                        .isoformat(),
+                    )
+                    if (
+                        not active
+                        or active["bundle_sha256"]
+                        != entry_setup_live_policy["machine_bundle_sha256"]
+                    ):
+                        raise ValueError("reversal_policy_changed_before_provider")
+                    validate_claim(
+                        entry_setup_live_policy.get("continuous_reversal_claim"),
+                        assessment["family_sha256"],
+                        now=time.time(),
+                    )
                 if entry_budget is not None:
                     entry_budget.require()
-                request_identity=digest([assessment['signal_id'],prompt_version,replay_context,prompt,reversal_schema,assessment.get('auxiliary_wire_contract'),assessment.get('auxiliary_wire_hashes')]) if assessment.get('auxiliary_wire_contract') else digest([assessment['signal_id'],prompt_version,replay_context,prompt,reversal_schema])
-                if assessment.get('policy_version') in {'continuous_reversal_policy_v5','continuous_reversal_policy_v6'}:
+                request_identity = (
+                    digest(
+                        [
+                            assessment["signal_id"],
+                            prompt_version,
+                            replay_context,
+                            prompt,
+                            reversal_schema,
+                            assessment.get("auxiliary_wire_contract"),
+                            assessment.get("auxiliary_wire_hashes"),
+                        ]
+                    )
+                    if assessment.get("auxiliary_wire_contract")
+                    else digest(
+                        [
+                            assessment["signal_id"],
+                            prompt_version,
+                            replay_context,
+                            prompt,
+                            reversal_schema,
+                        ]
+                    )
+                )
+                if assessment.get("policy_version") in {
+                    "continuous_reversal_policy_v5",
+                    "continuous_reversal_policy_v6",
+                }:
                     transport_observation = OpenAITransportObservation()
                     from src.engine.scalping.reversal_operating_outbox import reserve
+
                     reserve_started_perf = time.perf_counter()
-                    reserve(DATA_DIR,assessment,request_identity)
-                    transport_observation.mark('reserved')
+                    reserve(DATA_DIR, assessment, request_identity)
+                    transport_observation.mark("reserved")
                     from src.engine.monitoring.runtime_performance import observe
-                    observe('provider_reserve', time.perf_counter()-reserve_started_perf)
+
+                    observe(
+                        "provider_reserve", time.perf_counter() - reserve_started_perf
+                    )
                     from src.engine.monitoring.runtime_performance import mark_signal
-                    mark_signal(assessment['signal_id'],'machine',identity=dict(evaluation_attempt_id=machine_capture.get('evaluation_attempt_id'),
-                        opportunity_key=assessment.get('opportunity_key'),request_identity=request_identity))
+
+                    mark_signal(
+                        assessment["signal_id"],
+                        "machine",
+                        identity=dict(
+                            evaluation_attempt_id=machine_capture.get(
+                                "evaluation_attempt_id"
+                            ),
+                            opportunity_key=assessment.get("opportunity_key"),
+                            request_identity=request_identity,
+                        ),
+                    )
                 else:
-                    reserve_reversal_signal(DATA_DIR/'runtime/initial_quantity/reversal_signals',
-                        signal_id=assessment['signal_id'],stage='provider_request',identity=request_identity,
-                        binding=dict(family_sha256=assessment['family_sha256'],primary_branch=assessment['primary_branch'],
-                                     phase=assessment['decision_phase'],request_sha256=request_identity))
-                trace_metadata_extra['continuous_reversal_request_identity']=request_identity
+                    reserve_reversal_signal(
+                        DATA_DIR / "runtime/initial_quantity/reversal_signals",
+                        signal_id=assessment["signal_id"],
+                        stage="provider_request",
+                        identity=request_identity,
+                        binding=dict(
+                            family_sha256=assessment["family_sha256"],
+                            primary_branch=assessment["primary_branch"],
+                            phase=assessment["decision_phase"],
+                            request_sha256=request_identity,
+                        ),
+                    )
+                trace_metadata_extra["continuous_reversal_request_identity"] = (
+                    request_identity
+                )
             if entry_budget is not None:
                 entry_budget.require()
             provider_attempted = True
             provider_started_monotonic = time.perf_counter()
-            local_stage_clocks.update(analysis_started_perf=analysis_started,
+            local_stage_clocks.update(
+                analysis_started_perf=analysis_started,
                 provider_started_perf=provider_started_monotonic,
-                pre_provider_seconds=provider_started_monotonic-analysis_started)
-            timeout_override = getattr(TRADING_RULES, 'OPENAI_SCALPING_ENTRY_TIMEOUT_MS', 5000) if is_scalping_entry_call else None
+                pre_provider_seconds=provider_started_monotonic - analysis_started,
+            )
+            timeout_override = (
+                getattr(TRADING_RULES, "OPENAI_SCALPING_ENTRY_TIMEOUT_MS", 5000)
+                if is_scalping_entry_call
+                else None
+            )
             if entry_budget is not None and is_scalping_entry_call:
                 from src.engine.monitoring.runtime_performance import response_reserve
+
                 budget_facts = {}
-                local_stage_clocks['transport_budget'] = budget_facts
-                timeout_override = entry_budget.transport_ms(timeout_override,
-                    reserve_sec=response_reserve(), facts=budget_facts)
+                local_stage_clocks["transport_budget"] = budget_facts
+                timeout_override = entry_budget.transport_ms(
+                    timeout_override, reserve_sec=response_reserve(), facts=budget_facts
+                )
                 if transport_observation is not None:
                     transport_observation.record_budget(budget_facts)
             result = self._call_openai_safe(
@@ -11239,98 +12462,236 @@ class GPTSniperEngine:
                     else None
                 ),
                 timeout_ms_override=timeout_override,
-                caller_deadline_perf=entry_budget.perf if entry_budget is not None else None,
-                **({'transport_observation': transport_observation} if transport_observation is not None else {}),
+                caller_deadline_perf=(
+                    entry_budget.perf if entry_budget is not None else None
+                ),
+                **(
+                    {"transport_observation": transport_observation}
+                    if transport_observation is not None
+                    else {}
+                ),
                 replay_context=replay_context,
-                **({'auxiliary_identity_context': dict(
-                    policy_version=entry_setup_live_policy['continuous_reversal_assessment'].get('policy_version','continuous_reversal_policy_v1'),
-                    registry_sha256=entry_setup_live_policy['continuous_reversal_assessment'].get('auxiliary_registry_sha256'),
-                    overlay_sha256=entry_setup_live_policy['continuous_reversal_assessment'].get('auxiliary_overlay_sha256'),
-                    bundle_sha256=entry_setup_live_policy.get('machine_bundle_sha256'))}
-                   if entry_setup_live_policy.get('continuous_reversal_input') else {}),
-                **({'response_schema_override': reversal_schema,
-                    'auxiliary_registry_sha256': entry_setup_live_policy.get('continuous_reversal_assessment',{}).get('auxiliary_registry_sha256')}
-                   if entry_setup_live_policy.get('continuous_reversal_input') else {}),
+                **(
+                    {
+                        "auxiliary_identity_context": dict(
+                            policy_version=entry_setup_live_policy[
+                                "continuous_reversal_assessment"
+                            ].get("policy_version", "continuous_reversal_policy_v1"),
+                            registry_sha256=entry_setup_live_policy[
+                                "continuous_reversal_assessment"
+                            ].get("auxiliary_registry_sha256"),
+                            overlay_sha256=entry_setup_live_policy[
+                                "continuous_reversal_assessment"
+                            ].get("auxiliary_overlay_sha256"),
+                            bundle_sha256=entry_setup_live_policy.get(
+                                "machine_bundle_sha256"
+                            ),
+                        )
+                    }
+                    if entry_setup_live_policy.get("continuous_reversal_input")
+                    else {}
+                ),
+                **(
+                    {
+                        "response_schema_override": reversal_schema,
+                        "auxiliary_registry_sha256": entry_setup_live_policy.get(
+                            "continuous_reversal_assessment", {}
+                        ).get("auxiliary_registry_sha256"),
+                    }
+                    if entry_setup_live_policy.get("continuous_reversal_input")
+                    else {}
+                ),
             )
-            from src.engine.monitoring.runtime_performance import observe as observe_performance
-            local_stage_clocks['provider_returned_perf'] = time.perf_counter()
+            from src.engine.monitoring.runtime_performance import (
+                observe as observe_performance,
+            )
+
+            local_stage_clocks["provider_returned_perf"] = time.perf_counter()
             provider_returned_deadline_remaining = (
-                entry_budget.remaining() if entry_budget is not None else None)
-            local_stage_clocks['provider_call_seconds'] = (
-                local_stage_clocks['provider_returned_perf']-provider_started_monotonic)
-            observe_performance('provider_response', time.perf_counter() - provider_started_monotonic)
-            if entry_setup_live_policy.get('continuous_reversal_input'):
+                entry_budget.remaining() if entry_budget is not None else None
+            )
+            local_stage_clocks["provider_call_seconds"] = (
+                local_stage_clocks["provider_returned_perf"]
+                - provider_started_monotonic
+            )
+            observe_performance(
+                "provider_response", time.perf_counter() - provider_started_monotonic
+            )
+            if entry_setup_live_policy.get("continuous_reversal_input"):
                 from src.engine.monitoring.runtime_performance import mark_signal
-                assessment = entry_setup_live_policy.get('continuous_reversal_assessment', {})
-                mark_signal(assessment.get('signal_id') or assessment.get('event_id'), 'provider')
+
+                assessment = entry_setup_live_policy.get(
+                    "continuous_reversal_assessment", {}
+                )
+                mark_signal(
+                    assessment.get("signal_id") or assessment.get("event_id"),
+                    "provider",
+                )
                 validation_started_perf = time.perf_counter()
             # V2.14 validates a deliberately narrow model-response schema.
-            if entry_setup_live_policy.get('continuous_reversal_assessment',{}).get('policy_version') in {'continuous_reversal_policy_v5','continuous_reversal_policy_v6'}:
+            if entry_setup_live_policy.get("continuous_reversal_assessment", {}).get(
+                "policy_version"
+            ) in {"continuous_reversal_policy_v5", "continuous_reversal_policy_v6"}:
                 from src.engine.scalping.reversal_operating_outbox import advance
-                received_meta=self._consume_last_transport_meta()
+
+                received_meta = self._consume_last_transport_meta()
                 self._set_last_transport_meta(received_meta)
-                self._copy_ai_transport_trace_metadata(received_auxiliary_transport_fields,received_meta)
-                for identity_key in ('async_request_id','async_producer_pid','async_producer_start_ticks',
-                        'async_origin_deadline_epoch','async_order_venue','scanner_generation_id'):
+                self._copy_ai_transport_trace_metadata(
+                    received_auxiliary_transport_fields, received_meta
+                )
+                for identity_key in (
+                    "async_request_id",
+                    "async_producer_pid",
+                    "async_producer_start_ticks",
+                    "async_origin_deadline_epoch",
+                    "async_order_venue",
+                    "scanner_generation_id",
+                ):
                     if identity_key in received_meta:
-                        received_auxiliary_transport_fields[identity_key]=received_meta[identity_key]
-                if isinstance(received_meta.get('entry_auxiliary_policy_identity'),dict):
-                    received_auxiliary_transport_fields['entry_auxiliary_policy_identity']=copy.deepcopy(
-                        received_meta['entry_auxiliary_policy_identity'])
-                advance(DATA_DIR,entry_setup_live_policy['continuous_reversal_assessment']['opportunity_key'],
-                    'response_received',binding=dict(response=result,request_sha256=request_identity,
-                        **(transport_observation.fields() if transport_observation is not None else {}),
-                        **({'provider_receipt':{k:v for k,v in received_meta.items() if k in
-                            ('openai_response_id','openai_response_sha256','auxiliary_raw_output_bytes_b64','auxiliary_response_status','auxiliary_provider_request')}}
-                           if entry_setup_live_policy['continuous_reversal_assessment'].get('auxiliary_wire_contract') else {})))
+                        received_auxiliary_transport_fields[identity_key] = (
+                            received_meta[identity_key]
+                        )
+                if isinstance(
+                    received_meta.get("entry_auxiliary_policy_identity"), dict
+                ):
+                    received_auxiliary_transport_fields[
+                        "entry_auxiliary_policy_identity"
+                    ] = copy.deepcopy(received_meta["entry_auxiliary_policy_identity"])
+                advance(
+                    DATA_DIR,
+                    entry_setup_live_policy["continuous_reversal_assessment"][
+                        "opportunity_key"
+                    ],
+                    "response_received",
+                    binding=dict(
+                        response=result,
+                        request_sha256=request_identity,
+                        **(
+                            transport_observation.fields()
+                            if transport_observation is not None
+                            else {}
+                        ),
+                        **(
+                            {
+                                "provider_receipt": {
+                                    k: v
+                                    for k, v in received_meta.items()
+                                    if k
+                                    in (
+                                        "openai_response_id",
+                                        "openai_response_sha256",
+                                        "auxiliary_raw_output_bytes_b64",
+                                        "auxiliary_response_status",
+                                        "auxiliary_provider_request",
+                                    )
+                                }
+                            }
+                            if entry_setup_live_policy[
+                                "continuous_reversal_assessment"
+                            ].get("auxiliary_wire_contract")
+                            else {}
+                        ),
+                    ),
+                )
             # Raw response is durable above; decoding is a separate projection.
-            auxiliary_assessment=entry_setup_live_policy.get('continuous_reversal_assessment',{})
-            if auxiliary_assessment.get('auxiliary_wire_contract'):
-                from src.engine.scalping import reversal_auxiliary_registry as auxiliary_registry
-                registered=auxiliary_registry.load(DATA_DIR,auxiliary_assessment['auxiliary_registry_sha256'])
-                raw_result=result
-                if received_meta.get('auxiliary_response_status')!='completed':
-                    raise ValueError('auxiliary_provider_response_incomplete')
-                result=auxiliary_registry.decode_response(raw_result,entry_setup_live_policy['continuous_reversal_input'],registered)
-                from src.engine.scalping.reversal_auxiliary_intraday import record_decoded_response
-                decoded_receipt=record_decoded_response(DATA_DIR,auxiliary_assessment,request_identity,raw_result,result,registered)
-                received_meta['auxiliary_decoded_receipt_sha256']=decoded_receipt['artifact_content_sha256']
+            auxiliary_assessment = entry_setup_live_policy.get(
+                "continuous_reversal_assessment", {}
+            )
+            if auxiliary_assessment.get("auxiliary_wire_contract"):
+                from src.engine.scalping import (
+                    reversal_auxiliary_registry as auxiliary_registry,
+                )
+
+                registered = auxiliary_registry.load(
+                    DATA_DIR, auxiliary_assessment["auxiliary_registry_sha256"]
+                )
+                raw_result = result
+                if received_meta.get("auxiliary_response_status") != "completed":
+                    raise ValueError("auxiliary_provider_response_incomplete")
+                result = auxiliary_registry.decode_response(
+                    raw_result,
+                    entry_setup_live_policy["continuous_reversal_input"],
+                    registered,
+                )
+                from src.engine.scalping.reversal_auxiliary_intraday import (
+                    record_decoded_response,
+                )
+
+                decoded_receipt = record_decoded_response(
+                    DATA_DIR,
+                    auxiliary_assessment,
+                    request_identity,
+                    raw_result,
+                    result,
+                    registered,
+                )
+                received_meta["auxiliary_decoded_receipt_sha256"] = decoded_receipt[
+                    "artifact_content_sha256"
+                ]
                 self._set_last_transport_meta(received_meta)
-            if auxiliary_assessment.get('policy_version') in {
-                    'continuous_reversal_policy_v5', 'continuous_reversal_policy_v6'}:
+            if auxiliary_assessment.get("policy_version") in {
+                "continuous_reversal_policy_v5",
+                "continuous_reversal_policy_v6",
+            }:
                 # Hash decoded provider semantics before local transport fields
                 # and guarded decisions are merged into the response projection.
-                from src.engine.scalping.continuous_reversal_postclose import digest as raw_response_digest
-                entry_setup_live_policy['continuous_reversal_raw_response_sha256'] = raw_response_digest(result)
-                raw_auxiliary_response_fields = self._raw_reversal_response_fields(result,
-                    entry_setup_live_policy['continuous_reversal_raw_response_sha256'])
+                from src.engine.scalping.continuous_reversal_postclose import (
+                    digest as raw_response_digest,
+                )
+
+                entry_setup_live_policy["continuous_reversal_raw_response_sha256"] = (
+                    raw_response_digest(result)
+                )
+                raw_auxiliary_response_fields = self._raw_reversal_response_fields(
+                    result,
+                    entry_setup_live_policy["continuous_reversal_raw_response_sha256"],
+                )
                 # Validate the received model result against its issued input
                 # before the composer independently rechecks live eligibility.
                 # A changed price path cannot make transport failures consecutive.
-                if auxiliary_assessment['policy_version'] == 'continuous_reversal_policy_v6':
-                    from src.engine.scalping.reversal_extended_union import validate_response
+                if (
+                    auxiliary_assessment["policy_version"]
+                    == "continuous_reversal_policy_v6"
+                ):
+                    from src.engine.scalping.reversal_extended_union import (
+                        validate_response,
+                    )
                 else:
-                    from src.engine.scalping.reversal_operating_auxiliary import validate_response
+                    from src.engine.scalping.reversal_operating_auxiliary import (
+                        validate_response,
+                    )
                 frozen_auxiliary_response_errors = validate_response(
-                    result, entry_setup_live_policy['continuous_reversal_input'],
-                    arm=entry_setup_live_policy['continuous_reversal_arm'],
-                    phase=auxiliary_assessment.get('decision_phase', 'FIRST_UPTICK'))
+                    result,
+                    entry_setup_live_policy["continuous_reversal_input"],
+                    arm=entry_setup_live_policy["continuous_reversal_arm"],
+                    phase=auxiliary_assessment.get("decision_phase", "FIRST_UPTICK"),
+                )
             # Transport/timing metadata is generated locally and must not be
             # mistaken for model output by the strict semantic validator.
             v2_14_transport_meta = {}
             if decision_quality_v2_14_selected:
                 v2_14_transport_meta = self._consume_last_transport_meta()
-                entry_setup_live_policy['entry_auxiliary_policy_identity'] = (
-                    v2_14_transport_meta.get('entry_auxiliary_policy_identity'))
+                entry_setup_live_policy["entry_auxiliary_policy_identity"] = (
+                    v2_14_transport_meta.get("entry_auxiliary_policy_identity")
+                )
             else:
                 result = self._merge_last_transport_meta(result)
-                entry_setup_live_policy['entry_auxiliary_policy_identity'] = (
-                    result.get('entry_auxiliary_policy_identity') if isinstance(result,dict) else None)
-            identity_receipt=entry_setup_live_policy.get('entry_auxiliary_policy_identity')
-            if isinstance(identity_receipt,dict):
-                original_transport=v2_14_transport_meta if decision_quality_v2_14_selected else result
-                identity_receipt['provenance'].update(response_sha256=original_transport.get('openai_response_sha256'),
-                    response_id=original_transport.get('openai_response_id'))
+                entry_setup_live_policy["entry_auxiliary_policy_identity"] = (
+                    result.get("entry_auxiliary_policy_identity")
+                    if isinstance(result, dict)
+                    else None
+                )
+            identity_receipt = entry_setup_live_policy.get(
+                "entry_auxiliary_policy_identity"
+            )
+            if isinstance(identity_receipt, dict):
+                original_transport = (
+                    v2_14_transport_meta if decision_quality_v2_14_selected else result
+                )
+                identity_receipt["provenance"].update(
+                    response_sha256=original_transport.get("openai_response_sha256"),
+                    response_id=original_transport.get("openai_response_id"),
+                )
 
             if strategy not in ["KOSPI_ML", "KOSDAQ_ML"]:
                 if decision_quality_v2_7_selected:
@@ -11379,7 +12740,7 @@ class GPTSniperEngine:
                     prompt_type != "scalping_holding"
                     and isinstance(candle_context, dict)
                     and candle_context
-                    and not result.get('continuous_reversal_applied')
+                    and not result.get("continuous_reversal_applied")
                 ):
                     result = apply_entry_candle_hybrid_guard(
                         result,
@@ -11431,37 +12792,58 @@ class GPTSniperEngine:
 
             result = _merge_runtime_fields(result)
             result["openai_min_interval_wait_ms"] = min_interval_wait_ms
-            valid_transport=(result.get('semantic_validation_status')=='pass'
-                and result.get('openai_transport_fail_closed') is not True)
+            valid_transport = (
+                result.get("semantic_validation_status") == "pass"
+                and result.get("openai_transport_fail_closed") is not True
+            )
             if frozen_auxiliary_response_errors is not None:
-                result['entry_auxiliary_response_contract_valid'] = not frozen_auxiliary_response_errors
-                result['entry_auxiliary_response_contract_errors'] = frozen_auxiliary_response_errors
-                result['entry_post_response_execution_valid'] = valid_transport
+                result["entry_auxiliary_response_contract_valid"] = (
+                    not frozen_auxiliary_response_errors
+                )
+                result["entry_auxiliary_response_contract_errors"] = (
+                    frozen_auxiliary_response_errors
+                )
+                result["entry_post_response_execution_valid"] = valid_transport
             if entry_circuit_ticket is not None:
-                self._entry_circuit().succeeded(entry_circuit_ticket,
+                self._entry_circuit().succeeded(
+                    entry_circuit_ticket,
                     # CLOSED transport health uses the actual response clock.
                     # Local validation may exhaust the execution budget after
                     # an on-time reply; recovery still needs a live deadline.
-                    deadline_remaining=(entry_budget.remaining()
-                        if entry_circuit_ticket['recovery'] else
-                        provider_returned_deadline_remaining),
-                    valid_response=(not frozen_auxiliary_response_errors
-                                    if frozen_auxiliary_response_errors is not None else valid_transport),
-                    execution_valid=valid_transport)
+                    deadline_remaining=(
+                        entry_budget.remaining()
+                        if entry_circuit_ticket["recovery"]
+                        else provider_returned_deadline_remaining
+                    ),
+                    valid_response=(
+                        not frozen_auxiliary_response_errors
+                        if frozen_auxiliary_response_errors is not None
+                        else valid_transport
+                    ),
+                    execution_valid=valid_transport,
+                )
                 self._observe_entry_circuit()
-            common_recovered=(common_recovery_ticket is not None and self._common_circuit().succeeded(
-                common_recovery_ticket,deadline_remaining=entry_budget.remaining(),valid_response=valid_transport))
+            common_recovered = (
+                common_recovery_ticket is not None
+                and self._common_circuit().succeeded(
+                    common_recovery_ticket,
+                    deadline_remaining=entry_budget.remaining(),
+                    valid_response=valid_transport,
+                )
+            )
             if common_recovered:
-                self.ai_disabled=False
+                self.ai_disabled = False
             if common_recovery_ticket is None or common_recovered:
                 self._mark_successful_ai_call()
             self._observe_entry_circuit()
-            local_stage_clocks['annotation_started_perf'] = time.perf_counter()
-            local_stage_clocks['response_processing_seconds'] = (
-                local_stage_clocks['annotation_started_perf']-local_stage_clocks['provider_returned_perf'])
+            local_stage_clocks["annotation_started_perf"] = time.perf_counter()
+            local_stage_clocks["response_processing_seconds"] = (
+                local_stage_clocks["annotation_started_perf"]
+                - local_stage_clocks["provider_returned_perf"]
+            )
             # Annotation owns trace/outcome writes; capture its own interval
             # separately from native/semantic response validation.
-            result['entry_local_stage_clocks'] = dict(local_stage_clocks)
+            result["entry_local_stage_clocks"] = dict(local_stage_clocks)
             if transport_observation is not None:
                 result.update(transport_observation.fields())
             result = self._annotate_analysis_result(
@@ -11479,9 +12861,15 @@ class GPTSniperEngine:
             )
             if transport_observation is not None:
                 result.update(transport_observation.fields())
-            if entry_setup_live_policy.get('continuous_reversal_input') and provider_attempted:
+            if (
+                entry_setup_live_policy.get("continuous_reversal_input")
+                and provider_attempted
+            ):
                 from src.engine.monitoring.runtime_performance import observe
-                observe('response_validate', time.perf_counter()-validation_started_perf)
+
+                observe(
+                    "response_validate", time.perf_counter() - validation_started_perf
+                )
             if machine_first_context is None:
                 self._cache_set(
                     "_analysis_cache",
@@ -11489,81 +12877,147 @@ class GPTSniperEngine:
                     result,
                     self._resolve_analysis_cache_ttl(cache_profile),
                 )
-            local_stage_clocks['analysis_return_perf'] = time.perf_counter()
-            local_stage_clocks['annotation_and_cache_seconds'] = (
-                local_stage_clocks['analysis_return_perf']-local_stage_clocks['annotation_started_perf'])
-            result['entry_local_stage_clocks'] = dict(local_stage_clocks)
+            local_stage_clocks["analysis_return_perf"] = time.perf_counter()
+            local_stage_clocks["annotation_and_cache_seconds"] = (
+                local_stage_clocks["analysis_return_perf"]
+                - local_stage_clocks["annotation_started_perf"]
+            )
+            result["entry_local_stage_clocks"] = dict(local_stage_clocks)
             return result
 
         except Exception as e:
             failure_perf = time.perf_counter()
-            from src.engine.scalping.reversal_operating_outbox import OperatingOpportunityError
+            from src.engine.scalping.reversal_operating_outbox import (
+                OperatingOpportunityError,
+            )
+
             opportunity_custody_error = isinstance(e, OperatingOpportunityError)
-            provider_start = local_stage_clocks.get('provider_started_perf')
-            if provider_start is not None and 'provider_returned_perf' not in local_stage_clocks:
-                local_stage_clocks['provider_returned_perf'] = failure_perf
-                local_stage_clocks['provider_call_seconds'] = failure_perf-provider_start
-            local_stage_clocks['failure_observed_perf'] = failure_perf
-            stage_fields = transport_observation.fields() if transport_observation is not None else {}
-            unsent_entry_timeout = (transport_observation is not None
-                and stage_fields['provider_adapter_entered'] and not stage_fields['provider_sdk_started']
+            provider_start = local_stage_clocks.get("provider_started_perf")
+            if (
+                provider_start is not None
+                and "provider_returned_perf" not in local_stage_clocks
+            ):
+                local_stage_clocks["provider_returned_perf"] = failure_perf
+                local_stage_clocks["provider_call_seconds"] = (
+                    failure_perf - provider_start
+                )
+            local_stage_clocks["failure_observed_perf"] = failure_perf
+            stage_fields = (
+                transport_observation.fields()
+                if transport_observation is not None
+                else {}
+            )
+            unsent_entry_timeout = (
+                transport_observation is not None
+                and stage_fields["provider_adapter_entered"]
+                and not stage_fields["provider_sdk_started"]
                 and isinstance(e, OpenAIHTTPWallClockDeadlineError)
-                and e.future_cancelled)
-            if unsent_entry_timeout or (isinstance(e, ValueError) and str(e).startswith('entry_machine_input_deadline_')):
-                deadline_result = {"action":"WAIT", "score":50, "reason":str(e),
-                    "provider_called":bool(provider_attempted),
-                    "entry_ai_screen_status":"not_evaluated_local", "entry_ai_screen_pass":False,
-                    "openai_local_failure_reason":str(e),
-                    "entry_local_stage_clocks":dict(local_stage_clocks),
-                    "actual_order_submitted":False, "broker_order_forbidden":True,
-                    **machine_capture, **stage_fields}
+                and e.future_cancelled
+            )
+            if unsent_entry_timeout or (
+                isinstance(e, ValueError)
+                and str(e).startswith("entry_machine_input_deadline_")
+            ):
+                deadline_result = {
+                    "action": "WAIT",
+                    "score": 50,
+                    "reason": str(e),
+                    "provider_called": bool(provider_attempted),
+                    "entry_ai_screen_status": "not_evaluated_local",
+                    "entry_ai_screen_pass": False,
+                    "openai_local_failure_reason": str(e),
+                    "entry_local_stage_clocks": dict(local_stage_clocks),
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    **machine_capture,
+                    **stage_fields,
+                }
                 # Only this cancelled adapter has prepared request metadata.
                 # Pre-adapter guards must not take a previous call's identity.
                 if unsent_entry_timeout:
                     deadline_result = self._merge_last_transport_meta(deadline_result)
-                return self._annotate_analysis_result(_merge_runtime_fields(deadline_result),
-                    prompt_type=prompt_type, prompt_version=prompt_version,
-                    response_ms=int((time.perf_counter()-analysis_started)*1000),
-                    parse_ok=False, parse_fail=False, fallback_score_50=False,
-                    cache_hit=False, cache_mode='miss', result_source='entry_deadline_expired',
-                    input_contract_fields=input_contract_fields)
-            owned_entry_timeout = (entry_circuit_ticket is not None and provider_attempted
+                return self._annotate_analysis_result(
+                    _merge_runtime_fields(deadline_result),
+                    prompt_type=prompt_type,
+                    prompt_version=prompt_version,
+                    response_ms=int((time.perf_counter() - analysis_started) * 1000),
+                    parse_ok=False,
+                    parse_fail=False,
+                    fallback_score_50=False,
+                    cache_hit=False,
+                    cache_mode="miss",
+                    result_source="entry_deadline_expired",
+                    input_contract_fields=input_contract_fields,
+                )
+            owned_entry_timeout = (
+                entry_circuit_ticket is not None
+                and provider_attempted
                 and not raw_auxiliary_response_fields
-                and getattr(e,'provider_common_error',None) is None
-                and (isinstance(e, (OpenAIHTTPWallClockDeadlineError, APITimeoutError))
-                     or getattr(e, 'entry_deadline_timeout', False) is True))
-            local_contract_error = (opportunity_custody_error or bool(raw_auxiliary_response_fields)
-                or (isinstance(e, ValueError) and str(e) in {
-                'auxiliary_soft_policy_invalid_before_provider', 'machine_predecision_composer_disagreement',
-                'auxiliary_registered_model_mismatch', 'reversal_request_signal_set_changed_before_send',
-                'reversal_policy_changed_before_provider', 'registered_auxiliary_transport_contract_changed',
-                'entry_machine_transport_epoch_changed', 'entry_machine_quote_clock_conflict',
-                'entry_machine_quote_value_conflict'}))
+                and getattr(e, "provider_common_error", None) is None
+                and (
+                    isinstance(e, (OpenAIHTTPWallClockDeadlineError, APITimeoutError))
+                    or getattr(e, "entry_deadline_timeout", False) is True
+                )
+            )
+            local_contract_error = (
+                opportunity_custody_error
+                or bool(raw_auxiliary_response_fields)
+                or (
+                    isinstance(e, ValueError)
+                    and str(e)
+                    in {
+                        "auxiliary_soft_policy_invalid_before_provider",
+                        "machine_predecision_composer_disagreement",
+                        "auxiliary_registered_model_mismatch",
+                        "reversal_request_signal_set_changed_before_send",
+                        "reversal_policy_changed_before_provider",
+                        "registered_auxiliary_transport_contract_changed",
+                        "entry_machine_transport_epoch_changed",
+                        "entry_machine_quote_clock_conflict",
+                        "entry_machine_quote_value_conflict",
+                    }
+                )
+            )
             if owned_entry_timeout:
-                self._entry_circuit().failed(entry_circuit_ticket,
-                    future=getattr(e, 'provider_future', None))
+                self._entry_circuit().failed(
+                    entry_circuit_ticket, future=getattr(e, "provider_future", None)
+                )
                 if common_recovery_ticket is not None:
-                    self._common_circuit().failed(common_recovery_ticket,
-                        future=getattr(e,'provider_future',None),reason='recovery_entry_deadline')
+                    self._common_circuit().failed(
+                        common_recovery_ticket,
+                        future=getattr(e, "provider_future", None),
+                        reason="recovery_entry_deadline",
+                    )
                 self._observe_entry_circuit()
-                failure_count = self._entry_circuit().snapshot()['consecutive_failures']
+                failure_count = self._entry_circuit().snapshot()["consecutive_failures"]
             elif local_contract_error:
                 from src.engine.monitoring.runtime_performance import failure
-                failure('entry_local_contract', str(e))
+
+                failure("entry_local_contract", str(e))
                 failure_count = self.consecutive_failures
             else:
                 failure_count = self._record_failure_and_maybe_disable(
-                    context_name=f"{target_name}({strategy}:{prompt_type})",error=e,
-                    recovery_ticket=common_recovery_ticket)
+                    context_name=f"{target_name}({strategy}:{prompt_type})",
+                    error=e,
+                    recovery_ticket=common_recovery_ticket,
+                )
             timeout_like = bool(
                 provider_attempted and self._is_openai_timeout_like_error(e)
             )
-            result_source = ("operating_opportunity_blocked" if opportunity_custody_error
-                else "schema_semantic_rejected" if raw_auxiliary_response_fields
-                else "timeout" if timeout_like else "exception")
+            result_source = (
+                "operating_opportunity_blocked"
+                if opportunity_custody_error
+                else (
+                    "schema_semantic_rejected"
+                    if raw_auxiliary_response_fields
+                    else "timeout" if timeout_like else "exception"
+                )
+            )
             if opportunity_custody_error:
-                log_info(f"[ENTRY_OPPORTUNITY_CUSTODY_BLOCK] [{target_name}][{strategy}] "
-                         f"provider_called={provider_attempted} reason={e}")
+                log_info(
+                    f"[ENTRY_OPPORTUNITY_CUSTODY_BLOCK] [{target_name}][{strategy}] "
+                    f"provider_called={provider_attempted} reason={e}"
+                )
             else:
                 log_error(
                     f"🚨 [{target_name}][{strategy}] OpenAI 실시간 분석 에러 (연속 실패 {failure_count}회, API키 인덱스 {self.current_api_key_index}): {e}"
@@ -11699,53 +13153,77 @@ class GPTSniperEngine:
             fallback_payload = _merge_runtime_fields(fallback_payload)
             fallback_payload.update(stage_fields)
             if raw_auxiliary_response_fields:
-                fallback_payload.update(self._received_reversal_response_failure(
-                    raw_auxiliary_response_fields, error=e,
-                    response_errors=frozen_auxiliary_response_errors))
+                fallback_payload.update(
+                    self._received_reversal_response_failure(
+                        raw_auxiliary_response_fields,
+                        error=e,
+                        response_errors=frozen_auxiliary_response_errors,
+                    )
+                )
             if opportunity_custody_error:
                 # Reservation/receipt custody can fail on either side of the
                 # provider call. Retain observed transport facts, but never
                 # turn local custody failure into provider failure or retry.
-                fallback_payload.update(action='WAIT', score=50, reason=str(e),
-                    entry_ai_screen_pass=False, entry_ai_primary_reason='operating_opportunity_blocked',
-                    entry_ai_final_disposition='operating_opportunity_blocked',
-                    entry_ai_screen_status='blocked_local_custody',
-                    entry_ai_followup_disposition='operating_opportunity_blocked',
-                    entry_ai_followup_authority='none', entry_recheck_intent=False,
-                    entry_recheck_reasons=[], entry_recheck_intent_status='blocked_existing_opportunity_custody',
-                    entry_probe_intent=False, entry_probe_intent_status='blocked_local_custody',
-                    decision_quality_contract_status='not_evaluated_local_custody',
-                    decision_quality_runtime_action_mapping='operating_opportunity_blocked_to_wait',
-                    openai_transport_fail_closed=False, openai_local_failure_reason=str(e)[:240],
-                    actual_order_submitted=False, broker_order_forbidden=True)
-                fallback_payload.pop('openai_transport_fail_closed_reason', None)
+                fallback_payload.update(
+                    action="WAIT",
+                    score=50,
+                    reason=str(e),
+                    entry_ai_screen_pass=False,
+                    entry_ai_primary_reason="operating_opportunity_blocked",
+                    entry_ai_final_disposition="operating_opportunity_blocked",
+                    entry_ai_screen_status="blocked_local_custody",
+                    entry_ai_followup_disposition="operating_opportunity_blocked",
+                    entry_ai_followup_authority="none",
+                    entry_recheck_intent=False,
+                    entry_recheck_reasons=[],
+                    entry_recheck_intent_status="blocked_existing_opportunity_custody",
+                    entry_probe_intent=False,
+                    entry_probe_intent_status="blocked_local_custody",
+                    decision_quality_contract_status="not_evaluated_local_custody",
+                    decision_quality_runtime_action_mapping="operating_opportunity_blocked_to_wait",
+                    openai_transport_fail_closed=False,
+                    openai_local_failure_reason=str(e)[:240],
+                    actual_order_submitted=False,
+                    broker_order_forbidden=True,
+                )
+                fallback_payload.pop("openai_transport_fail_closed_reason", None)
                 if not provider_attempted:
-                    fallback_payload['provider_called'] = False
+                    fallback_payload["provider_called"] = False
             try:
                 fallback_score_50 = float(fallback_payload.get("score")) == 50.0
             except Exception:
                 fallback_score_50 = False
-            local_stage_clocks['annotation_started_perf'] = time.perf_counter()
-            local_stage_clocks['failure_processing_seconds'] = local_stage_clocks['annotation_started_perf']-failure_perf
+            local_stage_clocks["annotation_started_perf"] = time.perf_counter()
+            local_stage_clocks["failure_processing_seconds"] = (
+                local_stage_clocks["annotation_started_perf"] - failure_perf
+            )
             from src.engine.monitoring.runtime_performance import observe
-            observe('entry_error_processing', local_stage_clocks['failure_processing_seconds'])
-            fallback_payload['entry_local_stage_clocks'] = dict(local_stage_clocks)
+
+            observe(
+                "entry_error_processing",
+                local_stage_clocks["failure_processing_seconds"],
+            )
+            fallback_payload["entry_local_stage_clocks"] = dict(local_stage_clocks)
             result = self._annotate_analysis_result(
                 fallback_payload,
                 prompt_type=prompt_type,
                 prompt_version=prompt_version,
                 response_ms=int((time.perf_counter() - analysis_started) * 1000),
                 parse_ok=bool(raw_auxiliary_response_fields),
-                parse_fail=not bool(raw_auxiliary_response_fields) and not opportunity_custody_error,
+                parse_fail=not bool(raw_auxiliary_response_fields)
+                and not opportunity_custody_error,
                 fallback_score_50=fallback_score_50,
                 cache_hit=False,
                 cache_mode="miss",
                 result_source=result_source,
                 input_contract_fields=input_contract_fields,
             )
-            local_stage_clocks['analysis_return_perf'] = time.perf_counter()
-            local_stage_clocks['annotation_and_cache_seconds'] = local_stage_clocks['analysis_return_perf']-local_stage_clocks['annotation_started_perf']
-            result['entry_local_stage_clocks'] = dict(local_stage_clocks)
+            local_stage_clocks["analysis_return_perf"] = time.perf_counter()
+            local_stage_clocks["annotation_and_cache_seconds"] = (
+                local_stage_clocks["analysis_return_perf"]
+                - local_stage_clocks["annotation_started_perf"]
+            )
+            result["entry_local_stage_clocks"] = dict(local_stage_clocks)
             return result
         finally:
             if common_recovery_ticket is not None:
@@ -11825,7 +13303,10 @@ class GPTSniperEngine:
         )
         late_recheck_source_preflight_blocked = bool(
             late_recheck_source_preflight_required
-            and not (preflight.get("source_allowed", False) and preflight.get("allowed", False))
+            and not (
+                preflight.get("source_allowed", False)
+                and preflight.get("allowed", False)
+            )
         )
         if global_preflight_blocked or late_recheck_source_preflight_blocked:
             preflight_block_reason = (
@@ -11983,7 +13464,6 @@ class GPTSniperEngine:
     # ==========================================
     # 퍼블릭 메서드: 오버나이트 의사결정
     # ==========================================
-
 
     def _safe_float(self, value, default=0.0):
         try:
@@ -12547,7 +14027,15 @@ class GPTSniperEngine:
         )
 
     def evaluate_main_rebound_entry(
-        self, *, stock_code, ws_data, recent_ticks, recent_candles, candle_meta, now_ts, position_tag=None,
+        self,
+        *,
+        stock_code,
+        ws_data,
+        recent_ticks,
+        recent_candles,
+        candle_meta,
+        now_ts,
+        position_tag=None,
     ):
         """Reuse Main entry policy/assessment on existing holding market input.
 
@@ -12556,13 +14044,21 @@ class GPTSniperEngine:
         """
         from src.engine.scalping import mechanistic_entry_runtime_policy as policy_owner
         from src.engine.scalping.entry_candle_context import (
-            build_entry_candle_context, resolve_entry_candle_session,
+            build_entry_candle_context,
+            resolve_entry_candle_session,
             resolve_entry_candle_venue,
         )
-        from src.trading.market.micro_confirmation import load_live_dynamic_confirmation_source
-        from src.trading.market.main_entry_micro_window import evaluate_machine_entry_payload
+        from src.trading.market.micro_confirmation import (
+            load_live_dynamic_confirmation_source,
+        )
+        from src.trading.market.main_entry_micro_window import (
+            evaluate_machine_entry_payload,
+        )
 
-        blocked = {"should_add": False, "reason": "shared_main_rebound_source_unavailable"}
+        blocked = {
+            "should_add": False,
+            "reason": "shared_main_rebound_source_unavailable",
+        }
         try:
             session = resolve_entry_candle_session(now_ts=now_ts)
             venue = resolve_entry_candle_venue(ws_data, session=session)
@@ -12572,26 +14068,48 @@ class GPTSniperEngine:
             cohort = (venue.upper(), session.upper())
             # Resolve through the exact Main entry owner, including its
             # activation, same-stage, position-tag and scope constraints.
-            live = resolve_live_prompt_policy(strategy="SCALPING",
-                configured_prompt_version=str(getattr(TRADING_RULES,
-                    "OPENAI_ANALYZE_TARGET_PROMPT_VERSION", "hot_v1")),
+            live = resolve_live_prompt_policy(
+                strategy="SCALPING",
+                configured_prompt_version=str(
+                    getattr(
+                        TRADING_RULES, "OPENAI_ANALYZE_TARGET_PROMPT_VERSION", "hot_v1"
+                    )
+                ),
                 position_tag=position_tag or ws_data.get("position_tag"),
-                effective_venue=venue, session_bucket=session,
-                now=datetime.fromtimestamp(now_ts, tz=policy_owner.KST))
-            if (live.get("enabled") is not True or not live.get("machine_bundle_sha256")
-                    or not (isinstance(live.get("continuous_reversal"), dict)
-                            or isinstance(live.get("mechanistic_threshold_policy"), dict))):
-                return {**blocked, "reason": "shared_main_entry_policy_scope_missing",
-                        "policy_status": live.get("status")}
-            bundle = {"bundle_sha256": live["machine_bundle_sha256"],
-                      "machine_policy": live.get("mechanistic_threshold_policy")}
+                effective_venue=venue,
+                session_bucket=session,
+                now=datetime.fromtimestamp(now_ts, tz=policy_owner.KST),
+            )
+            if (
+                live.get("enabled") is not True
+                or not live.get("machine_bundle_sha256")
+                or not (
+                    isinstance(live.get("continuous_reversal"), dict)
+                    or isinstance(live.get("mechanistic_threshold_policy"), dict)
+                )
+            ):
+                return {
+                    **blocked,
+                    "reason": "shared_main_entry_policy_scope_missing",
+                    "policy_status": live.get("status"),
+                }
+            bundle = {
+                "bundle_sha256": live["machine_bundle_sha256"],
+                "machine_policy": live.get("mechanistic_threshold_policy"),
+            }
             # Explicit list and auxiliary-fetch OFF prevent the neutral context
             # builder from acquiring any extra source for ADD observations.
             meta = dict(candle_meta or {})
             meta["multi_timeframe_auxiliary_fetch"] = False
             context = build_entry_candle_context(
-                None, stock_code, ws_data, venue, session, now_ts=now_ts,
-                recent_candles=list(recent_candles or []), source_meta=meta,
+                None,
+                stock_code,
+                ws_data,
+                venue,
+                session,
+                now_ts=now_ts,
+                recent_candles=list(recent_candles or []),
+                source_meta=meta,
                 include_investor_source=False,
             )
             preflight = ai_input_preflight(context)
@@ -12599,9 +14117,12 @@ class GPTSniperEngine:
                 snapshot_fields = ai_market_snapshot_log_fields(context)
 
                 def bounded_code(value):
-                    return (value if isinstance(value, str)
-                            and re.fullmatch(r"[A-Za-z0-9_:.|/-]{1,96}", value)
-                            else "invalid_or_missing_code")
+                    return (
+                        value
+                        if isinstance(value, str)
+                        and re.fullmatch(r"[A-Za-z0-9_:.|/-]{1,96}", value)
+                        else "invalid_or_missing_code"
+                    )
 
                 def bounded_codes(value):
                     if not isinstance(value, list):
@@ -12612,123 +14133,224 @@ class GPTSniperEngine:
                 if not isinstance(source_timing, dict):
                     source_timing = {}
                 source_timing = {
-                    name: {key: row.get(key) for key in (
-                        "observed_at", "age_ms", "quality", "freshness_limit_ms",
-                    )}
+                    name: {
+                        key: row.get(key)
+                        for key in (
+                            "observed_at",
+                            "age_ms",
+                            "quality",
+                            "freshness_limit_ms",
+                        )
+                    }
                     for name, row in list(source_timing.items())[:8]
                     if isinstance(name, str) and isinstance(row, dict)
                 }
-                return {**blocked, "reason": "shared_main_rebound_input_preflight_blocked",
-                    "preflight_primary_blocker": bounded_code(preflight.get("primary_blocker")),
+                return {
+                    **blocked,
+                    "reason": "shared_main_rebound_input_preflight_blocked",
+                    "preflight_primary_blocker": bounded_code(
+                        preflight.get("primary_blocker")
+                    ),
                     "preflight_primary_blocker_category": bounded_code(
-                        preflight.get("primary_blocker_category")),
+                        preflight.get("primary_blocker_category")
+                    ),
                     "preflight_blockers": bounded_codes(preflight.get("blockers")),
-                    "preflight_missing_sources": bounded_codes(preflight.get("missing_sources")),
-                    "source_clock_snapshot_id": snapshot_fields.get("ai_input_preflight_source_clock_snapshot_id"),
-                    "source_clock_captured_at": snapshot_fields.get("ai_input_preflight_source_clock_captured_at"),
+                    "preflight_missing_sources": bounded_codes(
+                        preflight.get("missing_sources")
+                    ),
+                    "source_clock_snapshot_id": snapshot_fields.get(
+                        "ai_input_preflight_source_clock_snapshot_id"
+                    ),
+                    "source_clock_captured_at": snapshot_fields.get(
+                        "ai_input_preflight_source_clock_captured_at"
+                    ),
                     "source_timing": source_timing,
                     "machine_bundle_sha256": bundle["bundle_sha256"],
                     "policy_status": live.get("status"),
-                    "effective_venue": venue, "session_bucket": session}
+                    "effective_venue": venue,
+                    "session_bucket": session,
+                }
             if live.get("continuous_reversal"):
                 from src.engine.scalping.avg_down_rebound import evaluate_native_rebound
-                signal = evaluate_native_rebound(live, stock_code=stock_code,
-                    ws_data=ws_data, session=session, now_ts=now_ts)
+
+                signal = evaluate_native_rebound(
+                    live,
+                    stock_code=stock_code,
+                    ws_data=ws_data,
+                    session=session,
+                    now_ts=now_ts,
+                )
                 return {**signal, "effective_venue": venue, "session_bucket": session}
             exact = self._build_entry_screen_hot_payload(
-                ws_data, recent_ticks, recent_candles, candle_context=context,
+                ws_data,
+                recent_ticks,
+                recent_candles,
+                candle_context=context,
             )
-            exact.update(stock_code=stock_code, effective_venue=venue, session_bucket=session)
+            exact.update(
+                stock_code=stock_code, effective_venue=venue, session_bucket=session
+            )
             snapshot, status = load_live_dynamic_confirmation_source()
             exact["mechanistic_micro_window"] = (
-                evaluate_machine_entry_payload(snapshot=snapshot, payload=exact,
-                    cutoff_ms=int(now_ts * 1000))
-                if snapshot is not None else {"source_quality_status": "source_gap", "reason": status}
+                evaluate_machine_entry_payload(
+                    snapshot=snapshot, payload=exact, cutoff_ms=int(now_ts * 1000)
+                )
+                if snapshot is not None
+                else {"source_quality_status": "source_gap", "reason": status}
             )
             setup = build_entry_setup_evidence(
                 exact_payload=exact,
-                exact_analysis=build_exact_payload_analysis_v1(exact, stage="entry", live_entry=True),
-                recovery_analysis=build_v2_13_recovery_confirmation_analysis_v1(exact, stage="entry"),
+                exact_analysis=build_exact_payload_analysis_v1(
+                    exact, stage="entry", live_entry=True
+                ),
+                recovery_analysis=build_v2_13_recovery_confirmation_analysis_v1(
+                    exact, stage="entry"
+                ),
                 entry_timing_context=exact.get("entry_timing_context"),
-                balanced_policy=live.get("selected_prompt_version") in AUXILIARY_ENTRY_RISK_PROMPT_VERSIONS,
-                timing_aware_policy=live.get("selected_prompt_version") not in {
+                balanced_policy=live.get("selected_prompt_version")
+                in AUXILIARY_ENTRY_RISK_PROMPT_VERSIONS,
+                timing_aware_policy=live.get("selected_prompt_version")
+                not in {
                     DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
-                    DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION},
+                    DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION,
+                },
             )
             # Initial-entry v2 profiles do not change the holding/add owner.
             from src.engine.scalping.entry_strategy_policy import legacy_projection
+
             holding_policy = legacy_projection(bundle["machine_policy"])
             assessment = mechanistic_entry_policy_decision(setup, policy=holding_policy)
             family = str(setup.get("setup_family") or "")
             # Continuation alone cannot become an averaging-down signal. This
             # uses the existing entry family classification without a new grid.
-            rebound = family in {"PULLBACK_RECOVERY", "RECOVERY_CONFIRMATION", "MICRO_RECOVERY"}
+            rebound = family in {
+                "PULLBACK_RECOVERY",
+                "RECOVERY_CONFIRMATION",
+                "MICRO_RECOVERY",
+            }
             if not rebound or assessment["action"] != "ENTER_NOW":
-                return {"should_add": False, "reason": "shared_main_rebound_not_confirmed",
-                    "machine_action": assessment["action"], "structure_phase_family": family}
+                return {
+                    "should_add": False,
+                    "reason": "shared_main_rebound_not_confirmed",
+                    "machine_action": assessment["action"],
+                    "structure_phase_family": family,
+                }
             return {
                 "should_add": True,
-                "source_signal_id": policy_owner.digest({"symbol": stock_code,
-                    "cohort": cohort, "bundle": bundle["bundle_sha256"],
-                    "source": {"ticks": recent_ticks, "completed_bars": recent_candles,
-                        "ws": {key: value for key, value in ws_data.items()
-                            if key not in {"quote_age_ms", "tick_latest_age_ms",
-                                "market_data_effective_quote_age_ms",
-                                "quote_consistency_ws_age_ms", "quote_consistency_rest_age_ms",
-                                "market_data_health", "market_session_remaining"}}}}),
+                "source_signal_id": policy_owner.digest(
+                    {
+                        "symbol": stock_code,
+                        "cohort": cohort,
+                        "bundle": bundle["bundle_sha256"],
+                        "source": {
+                            "ticks": recent_ticks,
+                            "completed_bars": recent_candles,
+                            "ws": {
+                                key: value
+                                for key, value in ws_data.items()
+                                if key
+                                not in {
+                                    "quote_age_ms",
+                                    "tick_latest_age_ms",
+                                    "market_data_effective_quote_age_ms",
+                                    "quote_consistency_ws_age_ms",
+                                    "quote_consistency_rest_age_ms",
+                                    "market_data_health",
+                                    "market_session_remaining",
+                                }
+                            },
+                        },
+                    }
+                ),
                 "machine_bundle_sha256": bundle["bundle_sha256"],
                 "machine_policy_version": assessment["policy_version"],
-                "machine_action": assessment["action"], "structure_phase_family": family,
-                "effective_venue": venue, "session_bucket": session,
+                "machine_action": assessment["action"],
+                "structure_phase_family": family,
+                "effective_venue": venue,
+                "session_bucket": session,
             }
         except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
-            return {**blocked, "reason": "shared_main_rebound_contract_invalid",
-                "error_type": type(exc).__name__}
+            return {
+                **blocked,
+                "reason": "shared_main_rebound_contract_invalid",
+                "error_type": type(exc).__name__,
+            }
 
     def evaluate_scalping_holding_path_votes(
-        self, stock_name, stock_code, ws_data, recent_ticks, recent_candles,
-        position_ctx, *, requested_paths, market, session_key, position_key,
-        buy_fill_identity, buy_fill_legs, route, transport_epoch, source_generation,
-        quote_observed_at, holding_context=None,
-        metadata_extra=None, expected_path_hashes=None,
+        self,
+        stock_name,
+        stock_code,
+        ws_data,
+        recent_ticks,
+        recent_candles,
+        position_ctx,
+        *,
+        requested_paths,
+        market,
+        session_key,
+        position_key,
+        buy_fill_identity,
+        buy_fill_legs,
+        route,
+        transport_epoch,
+        source_generation,
+        quote_observed_at,
+        holding_context=None,
+        metadata_extra=None,
+        expected_path_hashes=None,
         path_policy_hashes=None,
     ):
         """One provider call returns one prospective vote for each requested path."""
         paths = tuple(requested_paths)
         if not paths or len(set(paths)) != len(paths) or set(paths) - PATH_IDS:
             raise ValueError("invalid_holding_vote_paths")
-        model = str(getattr(TRADING_RULES, "OPENAI_HOLDING_EXIT_VOTE_MODEL",
-                            "gpt-5.4-nano") or "gpt-5.4-nano")
+        model = str(
+            getattr(TRADING_RULES, "OPENAI_HOLDING_EXIT_VOTE_MODEL", "gpt-5.4-nano")
+            or "gpt-5.4-nano"
+        )
         requested_at = time.time()
         started = time.perf_counter()
         preflight = ai_input_preflight(holding_context)
         payload = build_path_vote_input(
-            stock_code=stock_code, ws_data=ws_data,
-            recent_ticks=recent_ticks, recent_candles=recent_candles,
-            position_ctx=position_ctx, requested_paths=paths, market=market,
-            session_key=session_key, position_key=position_key,
-            buy_fill_identity=buy_fill_identity, route=route,
-            transport_epoch=transport_epoch, source_generation=source_generation,
-            quote_observed_at=quote_observed_at, holding_context=holding_context,
+            stock_code=stock_code,
+            ws_data=ws_data,
+            recent_ticks=recent_ticks,
+            recent_candles=recent_candles,
+            position_ctx=position_ctx,
+            requested_paths=paths,
+            market=market,
+            session_key=session_key,
+            position_key=position_key,
+            buy_fill_identity=buy_fill_identity,
+            route=route,
+            transport_epoch=transport_epoch,
+            source_generation=source_generation,
+            quote_observed_at=quote_observed_at,
+            holding_context=holding_context,
         )
         hashes = path_vote_input_hashes(
-            payload, model=model, path_policy_hashes=path_policy_hashes,
+            payload,
+            model=model,
+            path_policy_hashes=path_policy_hashes,
         )
         snapshot_id = hashes["input_snapshot_id"]
         payload["input_snapshot_id"] = snapshot_id
         wrapped_prompt_sha256 = hashlib.sha256(
             self._wrap_openai_prompt_contract(
                 SCALPING_HOLDING_PATH_VOTE_SYSTEM_PROMPT,
-                require_json=True, schema_name=PATH_PROMPT_VERSION,
+                require_json=True,
+                schema_name=PATH_PROMPT_VERSION,
                 endpoint_name="holding_path_vote",
             ).encode("utf-8")
         ).hexdigest()
-        timeout_ms = int(getattr(
-            TRADING_RULES, "OPENAI_HOLDING_EXIT_VOTE_TIMEOUT_MS", 7000
-        ) or 7000)
+        timeout_ms = int(
+            getattr(TRADING_RULES, "OPENAI_HOLDING_EXIT_VOTE_TIMEOUT_MS", 7000) or 7000
+        )
         failure = None
-        if (expected_path_hashes is not None
-                and expected_path_hashes != hashes["path_decision_input_sha256"]):
+        if (
+            expected_path_hashes is not None
+            and expected_path_hashes != hashes["path_decision_input_sha256"]
+        ):
             failure = "input_changed_before_provider"
         elif model != "gpt-5.4-nano":
             failure = "holding_vote_model_mismatch"
@@ -12745,15 +14367,20 @@ class GPTSniperEngine:
             try:
                 result = self._call_openai_safe(
                     SCALPING_HOLDING_PATH_VOTE_SYSTEM_PROMPT,
-                    json.dumps(payload, ensure_ascii=True, separators=(",", ":"),
-                               default=str),
+                    json.dumps(
+                        payload, ensure_ascii=True, separators=(",", ":"), default=str
+                    ),
                     require_json=True,
                     context_name=f"HOLDING_PATH_VOTE:{stock_name}",
-                    model_override=model, schema_name=PATH_PROMPT_VERSION,
-                    endpoint_name="holding_path_vote", symbol=stock_code,
-                    metadata_extra={**dict(metadata_extra or {}),
-                                    "prompt_version": PATH_PROMPT_VERSION,
-                                    "input_snapshot_id": snapshot_id},
+                    model_override=model,
+                    schema_name=PATH_PROMPT_VERSION,
+                    endpoint_name="holding_path_vote",
+                    symbol=stock_code,
+                    metadata_extra={
+                        **dict(metadata_extra or {}),
+                        "prompt_version": PATH_PROMPT_VERSION,
+                        "input_snapshot_id": snapshot_id,
+                    },
                     transport_mode_override="http",
                     timeout_ms_override=timeout_ms,
                 )
@@ -12770,16 +14397,21 @@ class GPTSniperEngine:
             result.update(transport_meta)
             model_family_ok = bool(
                 response_model_actual == model
-                or re.fullmatch(r"gpt-5\.4-nano-\d{4}-\d{2}-\d{2}",
-                                response_model_actual)
+                or re.fullmatch(
+                    r"gpt-5\.4-nano-\d{4}-\d{2}-\d{2}", response_model_actual
+                )
             )
-            if (not model_family_ok
-                    or transport_meta.get("openai_model") != model
-                    or transport_meta.get("openai_transport_mode") != "http"):
+            if (
+                not model_family_ok
+                or transport_meta.get("openai_model") != model
+                or transport_meta.get("openai_transport_mode") != "http"
+            ):
                 failure = "provider_response_model_missing_or_mismatch"
                 result = None
-            elif (trace_prompt_sha256 is not None
-                  and trace_prompt_sha256 != wrapped_prompt_sha256):
+            elif (
+                trace_prompt_sha256 is not None
+                and trace_prompt_sha256 != wrapped_prompt_sha256
+            ):
                 failure = "prompt_receipt_mismatch"
                 result = None
             elif (time.time() - requested_at) * 1000 > timeout_ms:
@@ -12787,11 +14419,16 @@ class GPTSniperEngine:
                 result = None
         if isinstance(result, dict):
             result = self._annotate_analysis_result(
-                result, prompt_type="scalping_holding_path_votes",
+                result,
+                prompt_type="scalping_holding_path_votes",
                 prompt_version=PATH_PROMPT_VERSION,
                 response_ms=int((time.perf_counter() - started) * 1000),
-                parse_ok=True, parse_fail=False, fallback_score_50=False,
-                cache_hit=False, cache_mode="miss", result_source="live",
+                parse_ok=True,
+                parse_fail=False,
+                fallback_score_50=False,
+                cache_hit=False,
+                cache_mode="miss",
+                result_source="live",
                 input_contract_fields={
                     "ai_trace_endpoint_name": "holding_path_vote",
                     "ai_input_schema": PATH_PROMPT_VERSION,
@@ -12805,11 +14442,18 @@ class GPTSniperEngine:
                 },
             )
         events = normalize_path_vote_bundle(
-            result, requested_paths=paths, expected_snapshot_id=snapshot_id,
-            position_key=position_key, market=market, session_key=session_key,
-            model=model, route=route, transport_epoch=transport_epoch,
+            result,
+            requested_paths=paths,
+            expected_snapshot_id=snapshot_id,
+            position_key=position_key,
+            market=market,
+            session_key=session_key,
+            model=model,
+            route=route,
+            transport_epoch=transport_epoch,
             source_generation=source_generation,
-            buy_fill_identity=buy_fill_identity, buy_fill_legs=buy_fill_legs,
+            buy_fill_identity=buy_fill_identity,
+            buy_fill_legs=buy_fill_legs,
             quote_observed_at=quote_observed_at,
             requested_at=requested_at,
             received_at=time.time(),
@@ -12822,9 +14466,9 @@ class GPTSniperEngine:
                 "prompt_receipt_mismatch",
             }
             event["decision_input_sha256"] = hashes["decision_input_sha256"]
-            event["path_decision_input_sha256"] = (
-                hashes["path_decision_input_sha256"][event["path_id"]]
-            )
+            event["path_decision_input_sha256"] = hashes["path_decision_input_sha256"][
+                event["path_id"]
+            ]
             event["request_payload_sha256"] = hashes["request_payload_sha256"]
             event["prompt_template_sha256"] = hashlib.sha256(
                 SCALPING_HOLDING_PATH_VOTE_SYSTEM_PROMPT.encode("ascii")
@@ -12836,23 +14480,28 @@ class GPTSniperEngine:
             )
             event["openai_http_provider_ms"] = (
                 result.get("openai_http_provider_ms")
-                if isinstance(result, dict) else None
+                if isinstance(result, dict)
+                else None
             )
             event["openai_response_model"] = response_model_actual
             event["ai_decision_trace_id"] = (
                 result.get("ai_decision_trace_id") if isinstance(result, dict) else None
             )
-            event['actual_request_reference'] = ({
-                'schema':'holding_actual_request_reference_v1',
-                'date':result.get('ai_input_payload_store_date'),
-                'request_id':result.get('ai_decision_trace_id'),
-                'request_envelope_sha256':result.get('ai_request_envelope_sha256'),
-                'prompt_sha256':result.get('ai_prompt_sha256'),
-                'payload_sha256':result.get('ai_input_payload_sha256'),
-                'replay_exact':result.get('ai_input_payload_replay_exact') is True
-                    and result.get('ai_prompt_replay_exact') is True,
-                'response_sha256':result.get('openai_response_sha256'),
-            } if isinstance(result,dict) else None)
+            event["actual_request_reference"] = (
+                {
+                    "schema": "holding_actual_request_reference_v1",
+                    "date": result.get("ai_input_payload_store_date"),
+                    "request_id": result.get("ai_decision_trace_id"),
+                    "request_envelope_sha256": result.get("ai_request_envelope_sha256"),
+                    "prompt_sha256": result.get("ai_prompt_sha256"),
+                    "payload_sha256": result.get("ai_input_payload_sha256"),
+                    "replay_exact": result.get("ai_input_payload_replay_exact") is True
+                    and result.get("ai_prompt_replay_exact") is True,
+                    "response_sha256": result.get("openai_response_sha256"),
+                }
+                if isinstance(result, dict)
+                else None
+            )
             if failure is not None:
                 event["excluded_reason"] = failure
         return events
@@ -12896,15 +14545,19 @@ class GPTSniperEngine:
             "market": str(market or ""),
             "session_key": str(session_key or ""),
             "position": {
-                key: position.get(key) for key in (
-                    "buy_price", "curr_price", "profit_rate", "peak_profit",
-                    "drawdown_from_peak_pct", "held_sec",
+                key: position.get(key)
+                for key in (
+                    "buy_price",
+                    "curr_price",
+                    "profit_rate",
+                    "peak_profit",
+                    "drawdown_from_peak_pct",
+                    "held_sec",
                 )
             },
             "quote": {
-                key: quote.get(key) for key in (
-                    "best_bid", "best_ask", "best_bid_qty", "best_ask_qty"
-                )
+                key: quote.get(key)
+                for key in ("best_bid", "best_ask", "best_bid_qty", "best_ask_qty")
             },
             "last_ticks": [
                 dict(tick)
@@ -12920,52 +14573,72 @@ class GPTSniperEngine:
                 "status": preflight.get("status"),
                 "blockers": preflight.get("blockers"),
             },
-            "source": {"route": str(route or ""),
-                       "transport_epoch": str(transport_epoch or ""),
-                       "source_generation": str(source_generation or "")},
+            "source": {
+                "route": str(route or ""),
+                "transport_epoch": str(transport_epoch or ""),
+                "source_generation": str(source_generation or ""),
+            },
         }
         snapshot_id = input_snapshot_id(payload)
         payload["input_snapshot_id"] = snapshot_id
         if self.ai_disabled or not bool(preflight.get("allowed")):
             return normalize_vote_response(
-                {}, expected_snapshot_id=snapshot_id,
-                position_key=position_key, market=market, session_key=session_key,
-                model=model, prompt_version=prompt_version, route=route,
+                {},
+                expected_snapshot_id=snapshot_id,
+                position_key=position_key,
+                market=market,
+                session_key=session_key,
+                model=model,
+                prompt_version=prompt_version,
+                route=route,
                 transport_epoch=transport_epoch,
-                source_generation=source_generation, requested_at=requested_at,
+                source_generation=source_generation,
+                requested_at=requested_at,
                 received_at=time.time(),
-            ) | {"excluded_reason": "engine_disabled" if self.ai_disabled
-                 else "input_preflight_blocked", "provider_called": False}
+            ) | {
+                "excluded_reason": (
+                    "engine_disabled" if self.ai_disabled else "input_preflight_blocked"
+                ),
+                "provider_called": False,
+            }
         if not self.lock.acquire(blocking=False):
             return normalize_vote_response(
-                {}, expected_snapshot_id=snapshot_id,
-                position_key=position_key, market=market, session_key=session_key,
-                model=model, prompt_version=prompt_version, route=route,
+                {},
+                expected_snapshot_id=snapshot_id,
+                position_key=position_key,
+                market=market,
+                session_key=session_key,
+                model=model,
+                prompt_version=prompt_version,
+                route=route,
                 transport_epoch=transport_epoch,
-                source_generation=source_generation, requested_at=requested_at,
+                source_generation=source_generation,
+                requested_at=requested_at,
                 received_at=time.time(),
             ) | {"excluded_reason": "ai_lock_contention", "provider_called": False}
         try:
             result = self._call_openai_safe(
                 SCALPING_HOLDING_EXIT_VOTE_SYSTEM_PROMPT,
-                json.dumps(payload, ensure_ascii=True, separators=(",", ":"), default=str),
+                json.dumps(
+                    payload, ensure_ascii=True, separators=(",", ":"), default=str
+                ),
                 require_json=True,
                 context_name=f"HOLDING_EXIT_VOTE:{stock_name}",
                 model_override=model,
                 schema_name=prompt_version,
                 endpoint_name="holding_exit_vote",
                 symbol=stock_code,
-                metadata_extra={**dict(metadata_extra or {}),
-                                "prompt_version": prompt_version,
-                                "input_snapshot_id": snapshot_id},
+                metadata_extra={
+                    **dict(metadata_extra or {}),
+                    "prompt_version": prompt_version,
+                    "input_snapshot_id": snapshot_id,
+                },
                 transport_mode_override="http",
             )
         finally:
             self.lock.release()
         response_is_object = isinstance(result, dict)
-        result = self._merge_last_transport_meta(
-            result if response_is_object else {}
-        )
+        result = self._merge_last_transport_meta(result if response_is_object else {})
         result = self._annotate_analysis_result(
             result,
             prompt_type="scalping_holding_exit_vote",
@@ -12991,11 +14664,17 @@ class GPTSniperEngine:
         )
         received_at = time.time()
         vote = normalize_vote_response(
-            result, expected_snapshot_id=snapshot_id,
-            position_key=position_key, market=market, session_key=session_key,
-            model=model, prompt_version=prompt_version, route=route,
+            result,
+            expected_snapshot_id=snapshot_id,
+            position_key=position_key,
+            market=market,
+            session_key=session_key,
+            model=model,
+            prompt_version=prompt_version,
+            route=route,
             transport_epoch=transport_epoch,
-            source_generation=source_generation, requested_at=requested_at,
+            source_generation=source_generation,
+            requested_at=requested_at,
             received_at=received_at,
         )
         vote["provider_called"] = bool(
@@ -14127,7 +15806,6 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
         finally:
             self.lock.release()
 
-
     # ==========================================
     # 퍼블릭 메서드: 조건검색식 진입/청산 판단
     # ==========================================
@@ -14669,7 +16347,6 @@ class OpenAIDualPersonaShadowEngine(GPTSniperEngine):
             gemini_result,
             callback=callback,
         )
-
 
     def _normalize_shared_prompt_result(self, result):
         if not isinstance(result, dict):

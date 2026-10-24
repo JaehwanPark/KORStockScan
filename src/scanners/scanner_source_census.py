@@ -48,9 +48,7 @@ def source_target_market_data_route(code, request_route="unknown"):
         return "unknown"
     if code.endswith("_AL"):
         return (
-            "krx_nxt_integrated"
-            if request_route == "krx_nxt_integrated"
-            else "unknown"
+            "krx_nxt_integrated" if request_route == "krx_nxt_integrated" else "unknown"
         )
     if code.endswith("_NX"):
         return "nxt_only" if request_route == "nxt_only" else "unknown"

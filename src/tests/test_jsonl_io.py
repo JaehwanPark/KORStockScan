@@ -539,37 +539,54 @@ def test_generation_safe_writer_rejects_invalid_legacy_gzip_without_mutation(
     assert not (tmp_path / "superseded").exists()
 
 
-@pytest.mark.parametrize('compressed', [False, True])
+@pytest.mark.parametrize("compressed", [False, True])
 def test_strict_jsonl_read_limits_bound_archive_expansion(tmp_path, compressed):
-    path = tmp_path/'source.jsonl'
-    raw = b'{"v":"' + b'x'*200 + b'"}\n'
-    (path.with_name(path.name+'.gz') if compressed else path).write_bytes(
-        gzip.compress(raw) if compressed else raw)
-    with pytest.raises(ValueError, match='line_limit'):
+    path = tmp_path / "source.jsonl"
+    raw = b'{"v":"' + b"x" * 200 + b'"}\n'
+    (path.with_name(path.name + ".gz") if compressed else path).write_bytes(
+        gzip.compress(raw) if compressed else raw
+    )
+    with pytest.raises(ValueError, match="line_limit"):
         list(iter_jsonl_objects_strict(path, max_line_bytes=32))
-    with pytest.raises(ValueError, match='decoded_limit'):
+    with pytest.raises(ValueError, match="decoded_limit"):
         list(iter_jsonl_objects_strict(path, max_decoded_bytes=64))
     receipt = {}
-    assert len(list(iter_jsonl_objects_strict(path, provenance=receipt,
-        max_decoded_bytes=len(raw), max_line_bytes=len(raw)))) == 1
-    assert receipt['source_content_bytes'] == len(raw)
+    assert (
+        len(
+            list(
+                iter_jsonl_objects_strict(
+                    path,
+                    provenance=receipt,
+                    max_decoded_bytes=len(raw),
+                    max_line_bytes=len(raw),
+                )
+            )
+        )
+        == 1
+    )
+    assert receipt["source_content_bytes"] == len(raw)
 
 
 def test_strict_receipt_decodes_each_alias_once(tmp_path, monkeypatch):
     import gzip
     import hashlib
     from src.utils import jsonl_io as owner
-    path = tmp_path / 'report.json'
+
+    path = tmp_path / "report.json"
     raw = b'{"rows":[{"id":"a"}],"source_date":"2026-10-19"}'
     path.write_bytes(raw)
-    path.with_suffix('.json.gz').write_bytes(gzip.compress(raw))
+    path.with_suffix(".json.gz").write_bytes(gzip.compress(raw))
     original = owner._json_object_from_bytes
     calls = []
+
     def counted(data, **kwargs):
-        calls.append(kwargs['source'])
+        calls.append(kwargs["source"])
         return original(data, **kwargs)
-    monkeypatch.setattr(owner, '_json_object_from_bytes', counted)
+
+    monkeypatch.setattr(owner, "_json_object_from_bytes", counted)
     receipt = owner.read_json_object_strict_receipt(path)
     assert len(calls) == 2
-    assert receipt.raw_sha256 == receipt.decoded_sha256 == hashlib.sha256(raw).hexdigest()
-    assert receipt.payload['rows'] == [{'id': 'a'}]
+    assert (
+        receipt.raw_sha256 == receipt.decoded_sha256 == hashlib.sha256(raw).hexdigest()
+    )
+    assert receipt.payload["rows"] == [{"id": "a"}]

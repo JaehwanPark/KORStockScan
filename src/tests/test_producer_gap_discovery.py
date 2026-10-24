@@ -18,15 +18,30 @@ def test_project_root_resolves_repo_root_after_package_move():
     assert mod.POST_SELL_DIR == mod.PROJECT_ROOT / "data" / "post_sell"
 
 
-@pytest.mark.parametrize("family,decision,other_decision,ascii_output", [
-    (mod, "new_producer", "new_hook", False),
-    (hooks, "new_hook", "new_producer", True),
-])
-@pytest.mark.parametrize("case", [
-    "valid", "valid_empty", "other_reviewer", "other_decision", "missing",
-    "invalid_json", "schema", "candidate_ids", "proposal_ids",
-    "comparative_ids", "source_contract", "runtime_authority",
-])
+@pytest.mark.parametrize(
+    "family,decision,other_decision,ascii_output",
+    [
+        (mod, "new_producer", "new_hook", False),
+        (hooks, "new_hook", "new_producer", True),
+    ],
+)
+@pytest.mark.parametrize(
+    "case",
+    [
+        "valid",
+        "valid_empty",
+        "other_reviewer",
+        "other_decision",
+        "missing",
+        "invalid_json",
+        "schema",
+        "candidate_ids",
+        "proposal_ids",
+        "comparative_ids",
+        "source_contract",
+        "runtime_authority",
+    ],
+)
 def test_shared_review_preserves_family_contract_and_provider_arguments(
     monkeypatch, family, decision, other_decision, ascii_output, case
 ):
@@ -38,9 +53,9 @@ def test_shared_review_preserves_family_contract_and_provider_arguments(
         row["proposal_decision"] = decision
     for row in payload["comparative_reviews"]:
         row["selected_decision"] = decision
-    context = {"candidates": [] if case == "valid_empty" else [
-        {"candidate_id": "candidate_a"}
-    ]}
+    context = {
+        "candidates": [] if case == "valid_empty" else [{"candidate_id": "candidate_a"}]
+    }
     if case == "other_reviewer":
         payload["reviewer"] = (
             hooks.AI_REVIEWER_NAME if family is mod else mod.AI_REVIEWER_NAME
@@ -56,17 +71,19 @@ def test_shared_review_preserves_family_contract_and_provider_arguments(
         payload["ai_tier2_proposals"][0]["candidate_id"] = "other"
         payload["comparative_reviews"][0]["candidate_id"] = "other"
     elif case == "comparative_ids":
-        payload["comparative_reviews"].append({
-            **payload["comparative_reviews"][0], "candidate_id": "other"
-        })
+        payload["comparative_reviews"].append(
+            {**payload["comparative_reviews"][0], "candidate_id": "other"}
+        )
     elif case == "source_contract":
         payload["ai_tier2_proposals"][0]["required_source_fields"] = []
     elif case == "runtime_authority":
         payload["ai_tier2_proposals"][0]["forbidden_uses"].append(
             "broker_order_allowed"
         )
-    raw = None if case == "missing" else (
-        "{" if case == "invalid_json" else json.dumps(payload)
+    raw = (
+        None
+        if case == "missing"
+        else ("{" if case == "invalid_json" else json.dumps(payload))
     )
     config = family._ai_review_config()
     seen = []
@@ -76,7 +93,8 @@ def test_shared_review_preserves_family_contract_and_provider_arguments(
         assert kwargs["config"] is config
         assert kwargs["schema_name"] == family.AI_REVIEW_SCHEMA_NAME
         assert kwargs["metadata"] == {
-            "endpoint_name": family.AI_REVIEWER_NAME, "report_type": family.REPORT_TYPE
+            "endpoint_name": family.AI_REVIEWER_NAME,
+            "report_type": family.REPORT_TYPE,
         }
         assert kwargs["instructions"] == family._build_ai_review_instructions()
         assert kwargs["ensure_ascii"] is ascii_output
@@ -85,10 +103,12 @@ def test_shared_review_preserves_family_contract_and_provider_arguments(
 
     monkeypatch.setattr(provider, "call_postclose_structured_review", mock_provider)
     assert family._call_openai_ai_review(context, config=config) == (
-        raw, {"status": "mock"}
+        raw,
+        {"status": "mock"},
     )
     expected = {
-        "valid": (True, ""), "valid_empty": (True, ""),
+        "valid": (True, ""),
+        "valid_empty": (True, ""),
         "missing": (False, "missing"),
         "candidate_ids": (False, "candidate_reviews_id_mismatch"),
         "proposal_ids": (False, "ai_tier2_proposals_id_mismatch"),
@@ -241,7 +261,8 @@ def test_producer_gap_ai_review_rejects_real_preapply_primary_ev_claim():
     ] = "Treat preapply_real primary_ev as decisive and merge_real_pnl_with_sim before policy enablement."
 
     status, _, warnings = mod.parse_candidate_review_response(
-        payload, reviewer=mod.AI_REVIEWER_NAME,
+        payload,
+        reviewer=mod.AI_REVIEWER_NAME,
         allowed_decisions=mod.PRODUCER_DUAL_DECISIONS,
     )
 

@@ -13,6 +13,7 @@ import pytest
 
 import src.engine.sniper_scale_in as scale_in
 import src.engine.sniper_state_handlers as state_handlers
+
 _REAL_KT00011_LOOKUP = state_handlers.kiwoom_utils.get_orderable_by_margin_kt00011
 import src.engine.sniper_execution_receipts as receipts
 import src.engine.sniper_entry_state as entry_state
@@ -26,18 +27,35 @@ from src.engine.scalping import main_lifecycle_journal
 from src.engine.kiwoom_websocket import KiwoomWSManager
 
 
-@pytest.mark.parametrize("failure", [
-    None, "missing", "wrong_symbol", "stale", "future", "incomplete",
-    "conflict", "other_blocker", "no_provenance",
-])
-def test_entry_order_eligibility_binds_only_canonical_current_source(monkeypatch, failure):
+@pytest.mark.parametrize(
+    "failure",
+    [
+        None,
+        "missing",
+        "wrong_symbol",
+        "stale",
+        "future",
+        "incomplete",
+        "conflict",
+        "other_blocker",
+        "no_provenance",
+    ],
+)
+def test_entry_order_eligibility_binds_only_canonical_current_source(
+    monkeypatch, failure
+):
     now = datetime(2026, 10, 14, 18, 33, tzinfo=state_handlers._KST)
     source = {
-        "stock_code": "036930", "trade_date": "2026-10-14",
-        "source_api_id": "ka10099", "source_revision": "a" * 40,
-        "payload_sha256": "b" * 64, "observed_at_kst": "2026-10-14T08:00:00+09:00",
-        "krx_regular_eligible": True, "nxt_eligible": True,
-        "krx_aftermarket_eligible": None, "quality_state": "PARTIAL",
+        "stock_code": "036930",
+        "trade_date": "2026-10-14",
+        "source_api_id": "ka10099",
+        "source_revision": "a" * 40,
+        "payload_sha256": "b" * 64,
+        "observed_at_kst": "2026-10-14T08:00:00+09:00",
+        "krx_regular_eligible": True,
+        "nxt_eligible": True,
+        "krx_aftermarket_eligible": None,
+        "quality_state": "PARTIAL",
         "eligible_venues_json": ["NXT"],
         "blocked_reasons_json": ["krx_aftermarket_eligibility_unknown"],
     }
@@ -58,13 +76,23 @@ def test_entry_order_eligibility_binds_only_canonical_current_source(monkeypatch
     elif failure == "no_provenance":
         source["payload_sha256"] = None
     reads = []
-    monkeypatch.setattr(state_handlers, "DB", SimpleNamespace(
-        get_security_market_eligibility=lambda code, day: reads.append((code, day)) or source))
+    monkeypatch.setattr(
+        state_handlers,
+        "DB",
+        SimpleNamespace(
+            get_security_market_eligibility=lambda code, day: reads.append((code, day))
+            or source
+        ),
+    )
     result = state_handlers._entry_order_venue_eligibility("036930", now=now)
     assert reads == [("036930", now.date())]
     checked = state_handlers.session_contract.resolve_order_type_preflight(
         state_handlers.session_contract.resolve_market_session(now),
-        "NXT", "buy", "6", eligibility=result)
+        "NXT",
+        "buy",
+        "6",
+        eligibility=result,
+    )
     assert checked.allowed is (failure is None)
     if not failure:
         assert result.stock_code == "036930"
@@ -75,152 +103,283 @@ def test_entry_order_eligibility_binds_only_canonical_current_source(monkeypatch
 
 
 def test_entry_order_eligibility_has_no_regular_session_read(monkeypatch):
-    monkeypatch.setattr(state_handlers, "DB", SimpleNamespace(
-        get_security_market_eligibility=lambda *_args: pytest.fail("regular listing read")))
-    assert state_handlers._entry_order_venue_eligibility(
-        "036930", now=datetime(2026, 10, 14, 10, tzinfo=state_handlers._KST)) is None
+    monkeypatch.setattr(
+        state_handlers,
+        "DB",
+        SimpleNamespace(
+            get_security_market_eligibility=lambda *_args: pytest.fail(
+                "regular listing read"
+            )
+        ),
+    )
+    assert (
+        state_handlers._entry_order_venue_eligibility(
+            "036930", now=datetime(2026, 10, 14, 10, tzinfo=state_handlers._KST)
+        )
+        is None
+    )
 
 
 def test_initial_quantity_cap_research_context_is_source_only_and_bounded():
     from src.engine.scalping.position_sizing_allocator import ScalpingSizingContext
 
     context = ScalpingSizingContext(
-        allocation_stage="initial_entry", reference_time=datetime.now(),
-        effective_venue="KRX", source_signature="SCANNER",
-        budget_base_krw=1_000_000, price_krw=10_000,
-        safety_ratio=0.95, absolute_budget_cap_krw=0,
-        cash_orderable_qty_cap=20)
-    decision = SimpleNamespace(tier=5, ratio=0.25, pre_cap_qty=23,
-                               effective_qty=20, quantity_type="KRX_PARENT",
-                               reference_time="2026-09-28T09:30:00+09:00")
-    receipt = state_handlers._initial_quantity_cap_research_context(
-        context, decision)
+        allocation_stage="initial_entry",
+        reference_time=datetime.now(),
+        effective_venue="KRX",
+        source_signature="SCANNER",
+        budget_base_krw=1_000_000,
+        price_krw=10_000,
+        safety_ratio=0.95,
+        absolute_budget_cap_krw=0,
+        cash_orderable_qty_cap=20,
+    )
+    decision = SimpleNamespace(
+        tier=5,
+        ratio=0.25,
+        pre_cap_qty=23,
+        effective_qty=20,
+        quantity_type="KRX_PARENT",
+        reference_time="2026-09-28T09:30:00+09:00",
+    )
+    receipt = state_handlers._initial_quantity_cap_research_context(context, decision)
     assert receipt["schema_version"] == "initial_quantity_cap_context_v1"
     assert receipt["cash_orderable_qty_cap"] == 20
     assert receipt["actual_effective_qty"] == 20
-    assert state_handlers._initial_quantity_cap_research_context(
-        replace(context, simulation=True), decision) is None
-    assert state_handlers._initial_quantity_cap_research_context(
-        replace(context, price_krw=0), decision) is None
+    assert (
+        state_handlers._initial_quantity_cap_research_context(
+            replace(context, simulation=True), decision
+        )
+        is None
+    )
+    assert (
+        state_handlers._initial_quantity_cap_research_context(
+            replace(context, price_krw=0), decision
+        )
+        is None
+    )
 
 
 def test_buy_fill_identity_store_failure_blocks_later_add(monkeypatch):
-    monkeypatch.setattr(state_handlers, "_scale_in_exit_authority_block_reason",
-                        lambda _stock: None)
-    monkeypatch.setattr(receipts, "persist_buy_fill_receipt",
-                        lambda _stock, _data_dir: (_ for _ in ()).throw(OSError("disk")))
-    stock = {"id": 7, "code": "000007", "strategy": "SCALPING",
-             "buy_price": 100, "buy_qty": 1}
+    monkeypatch.setattr(
+        state_handlers, "_scale_in_exit_authority_block_reason", lambda _stock: None
+    )
+    monkeypatch.setattr(
+        receipts,
+        "persist_buy_fill_receipt",
+        lambda _stock, _data_dir: (_ for _ in ()).throw(OSError("disk")),
+    )
+    stock = {
+        "id": 7,
+        "code": "000007",
+        "strategy": "SCALPING",
+        "buy_price": 100,
+        "buy_qty": 1,
+    }
     receipts._persist_buy_fill_receipt_or_block(stock, "000007")
     assert stock["buy_fill_identity_store_gap"] == "OSError"
     result = state_handlers.can_consider_scale_in(
-        stock, "000007", {"curr": 99}, "SCALPING", "BULL",
+        stock,
+        "000007",
+        {"curr": 99},
+        "SCALPING",
+        "BULL",
     )
     assert result == {"allowed": False, "reason": "buy_fill_identity_store_gap"}
 
 
-def test_shared_rebound_actual_receipt_keeps_identity_after_complete_and_restart(monkeypatch, tmp_path):
+def test_shared_rebound_actual_receipt_keeps_identity_after_complete_and_restart(
+    monkeypatch, tmp_path
+):
     from src.engine.ai.holding_exit_vote import (
-        buy_fill_identity_from_runtime, buy_fill_legs_from_runtime,
-        persist_buy_fill_receipt, restore_buy_fill_receipt,
+        buy_fill_identity_from_runtime,
+        buy_fill_legs_from_runtime,
+        persist_buy_fill_receipt,
+        restore_buy_fill_receipt,
     )
-    stock = dict(id=42, code='123456', name='TEST', strategy='SCALPING', position_tag='SCANNER',
-        status='HOLDING', buy_price=10000, buy_qty=1, buy_time=datetime(2026,10,16,9,tzinfo=receipts._KST),
-        entry_filled_qty=1, _entry_receipt_filled_by_order_no={'100':1},
-        _entry_receipt_executions_by_order_no={'100':{'1':{'cumulative_qty':1}}},
-        pending_add_order=True,pending_add_type='AVG_DOWN',pending_add_reason='shared_main_rebound_entry',
-        pending_add_qty=1,pending_add_ord_no='200')
-    before=persist_buy_fill_receipt(stock,tmp_path)
-    monkeypatch.setattr(receipts,'ACTIVE_TARGETS',[stock])
-    monkeypatch.setattr(receipts,'highest_prices',{})
-    monkeypatch.setattr(receipts,'_get_fast_state',lambda code:None)
-    monkeypatch.setattr(receipts,'_update_db_for_add',lambda *a,**k:None)
-    monkeypatch.setattr(receipts,'record_add_history_event',lambda *a,**k:None)
-    monkeypatch.setattr(receipts,'_request_broker_snapshot_refresh',lambda *a,**k:None)
-    monkeypatch.setattr(receipts,'_log_holding_pipeline',lambda *a,**k:None)
-    receipts.handle_real_execution(dict(code='123456',type='BUY',order_no='200',execution_no='2',
-        price=9950,qty=1,order_qty=1,remaining_qty=0))
-    assert stock['buy_qty']==2 and 'pending_add_order' not in stock
-    assert stock['reversal_add_state']=='POST_ADD_EVAL'
-    identity=buy_fill_identity_from_runtime(stock)
-    assert identity and identity!=before
-    assert len(buy_fill_legs_from_runtime(stock))==2
-    restored={key:stock[key] for key in ('id','code','buy_time','buy_price','buy_qty')}
-    assert restore_buy_fill_receipt(restored,tmp_path)=='restored'
-    assert buy_fill_identity_from_runtime(restored)==identity
+
+    stock = dict(
+        id=42,
+        code="123456",
+        name="TEST",
+        strategy="SCALPING",
+        position_tag="SCANNER",
+        status="HOLDING",
+        buy_price=10000,
+        buy_qty=1,
+        buy_time=datetime(2026, 10, 16, 9, tzinfo=receipts._KST),
+        entry_filled_qty=1,
+        _entry_receipt_filled_by_order_no={"100": 1},
+        _entry_receipt_executions_by_order_no={"100": {"1": {"cumulative_qty": 1}}},
+        pending_add_order=True,
+        pending_add_type="AVG_DOWN",
+        pending_add_reason="shared_main_rebound_entry",
+        pending_add_qty=1,
+        pending_add_ord_no="200",
+    )
+    before = persist_buy_fill_receipt(stock, tmp_path)
+    monkeypatch.setattr(receipts, "ACTIVE_TARGETS", [stock])
+    monkeypatch.setattr(receipts, "highest_prices", {})
+    monkeypatch.setattr(receipts, "_get_fast_state", lambda code: None)
+    monkeypatch.setattr(receipts, "_update_db_for_add", lambda *a, **k: None)
+    monkeypatch.setattr(receipts, "record_add_history_event", lambda *a, **k: None)
+    monkeypatch.setattr(
+        receipts, "_request_broker_snapshot_refresh", lambda *a, **k: None
+    )
+    monkeypatch.setattr(receipts, "_log_holding_pipeline", lambda *a, **k: None)
+    receipts.handle_real_execution(
+        dict(
+            code="123456",
+            type="BUY",
+            order_no="200",
+            execution_no="2",
+            price=9950,
+            qty=1,
+            order_qty=1,
+            remaining_qty=0,
+        )
+    )
+    assert stock["buy_qty"] == 2 and "pending_add_order" not in stock
+    assert stock["reversal_add_state"] == "POST_ADD_EVAL"
+    identity = buy_fill_identity_from_runtime(stock)
+    assert identity and identity != before
+    assert len(buy_fill_legs_from_runtime(stock)) == 2
+    restored = {
+        key: stock[key] for key in ("id", "code", "buy_time", "buy_price", "buy_qty")
+    }
+    assert restore_buy_fill_receipt(restored, tmp_path) == "restored"
+    assert buy_fill_identity_from_runtime(restored) == identity
 
 
-def test_initial_quantity_cap_depth_and_following_tick_require_bound_source(monkeypatch):
+def test_initial_quantity_cap_depth_and_following_tick_require_bound_source(
+    monkeypatch,
+):
     from src.engine.scalping.position_sizing_allocator import ScalpingSizingContext
     from src.trading.market import quote_consistency
 
     context = ScalpingSizingContext(
-        allocation_stage="initial_entry", reference_time=datetime(2026,9,28,9,30),
-        effective_venue="KRX", source_signature="SCANNER",
-        budget_base_krw=1000, price_krw=100,
-        safety_ratio=1.0, absolute_budget_cap_krw=0)
-    decision = SimpleNamespace(tier=5, ratio=0.25, pre_cap_qty=2,
-                               effective_qty=2, quantity_type="KRX_PARENT",
-                               reference_time="2026-09-28T09:30:00+09:00")
-    now = datetime(2026, 9, 28, 9, 30,
-                   tzinfo=state_handlers._KST).timestamp()
-    monkeypatch.setattr(quote_consistency, "ws_quote_source_receipt",
+        allocation_stage="initial_entry",
+        reference_time=datetime(2026, 9, 28, 9, 30),
+        effective_venue="KRX",
+        source_signature="SCANNER",
+        budget_base_krw=1000,
+        price_krw=100,
+        safety_ratio=1.0,
+        absolute_budget_cap_krw=0,
+    )
+    decision = SimpleNamespace(
+        tier=5,
+        ratio=0.25,
+        pre_cap_qty=2,
+        effective_qty=2,
+        quantity_type="KRX_PARENT",
+        reference_time="2026-09-28T09:30:00+09:00",
+    )
+    now = datetime(2026, 9, 28, 9, 30, tzinfo=state_handlers._KST).timestamp()
+    monkeypatch.setattr(
+        quote_consistency,
+        "ws_quote_source_receipt",
         lambda *_args, **_kwargs: {
-            "source_type": "0D", "item": "123456",
+            "source_type": "0D",
+            "item": "123456",
             "market_route": "krx_only",
             "transport_epoch": 4,
-            "depth_receipt": {"item": "123456", "market_route": "krx_only",
-                              "transport_epoch": 4, "observed_epoch": now},
-        })
+            "depth_receipt": {
+                "item": "123456",
+                "market_route": "krx_only",
+                "transport_epoch": 4,
+                "observed_epoch": now,
+            },
+        },
+    )
     ws = {"orderbook": {"asks": [{"price": 101, "volume": 3}]}}
     source = state_handlers._initial_quantity_cap_research_context(
-        context, decision, ws_data=ws, now_ts=now)
-    assert source["ask_depth_source"]["levels"] == [
-        {"price_krw": 101, "quantity": 3}]
-    assert "ask_depth_source" not in state_handlers._initial_quantity_cap_research_context(
-        context, decision, ws_data=ws, now_ts=now + 2)
+        context, decision, ws_data=ws, now_ts=now
+    )
+    assert source["ask_depth_source"]["levels"] == [{"price_krw": 101, "quantity": 3}]
+    assert (
+        "ask_depth_source"
+        not in state_handlers._initial_quantity_cap_research_context(
+            context, decision, ws_data=ws, now_ts=now + 2
+        )
+    )
     events = []
     from src.engine.scalping import initial_quantity_cap_observation as observation
-    monkeypatch.setattr(observation, "append",
-                        lambda **kwargs: events.append((kwargs['stage'], kwargs['fields'])) or True)
-    stock = {"id": 1, "_initial_quantity_cap_trace": {
-        "started_at_epoch": now, "entry_submit_attempt_id": "attempt-1",
-        "entry_execution_sizing_plan_sha256": "a" * 64,
-        "depth_item": "123456", "depth_route": "KRX",
-        "transport_epoch": 4}}
-    ws["last_trade_tick"] = {"aggressor_source":
-        "kiwoom_0b_signed_trade_volume", "signed_trade_volume": "+2",
-        "price": 101, "ts": now + 1}
-    monkeypatch.setattr(quote_consistency, "ws_quote_source_receipt",
+
+    monkeypatch.setattr(
+        observation,
+        "append",
+        lambda **kwargs: events.append((kwargs["stage"], kwargs["fields"])) or True,
+    )
+    stock = {
+        "id": 1,
+        "_initial_quantity_cap_trace": {
+            "started_at_epoch": now,
+            "entry_submit_attempt_id": "attempt-1",
+            "entry_execution_sizing_plan_sha256": "a" * 64,
+            "depth_item": "123456",
+            "depth_route": "KRX",
+            "transport_epoch": 4,
+        },
+    }
+    ws["last_trade_tick"] = {
+        "aggressor_source": "kiwoom_0b_signed_trade_volume",
+        "signed_trade_volume": "+2",
+        "price": 101,
+        "ts": now + 1,
+    }
+    monkeypatch.setattr(
+        quote_consistency,
+        "ws_quote_source_receipt",
         lambda *_args, **_kwargs: {
-            "source_type": "0B", "item": "123456",
+            "source_type": "0B",
+            "item": "123456",
             "observed_epoch": now + 1,
-            "market_route": "KRX", "transport_epoch": 4,
-            "depth_receipt": {"item": "123456", "market_route": "KRX",
-                              "transport_epoch": 4},
-        })
+            "market_route": "KRX",
+            "transport_epoch": 4,
+            "depth_receipt": {
+                "item": "123456",
+                "market_route": "KRX",
+                "transport_epoch": 4,
+            },
+        },
+    )
     state_handlers._observe_initial_quantity_cap_following_tick(
-        stock, "123456", ws, now_ts=now + 1)
+        stock, "123456", ws, now_ts=now + 1
+    )
     state_handlers._observe_initial_quantity_cap_following_tick(
-        stock, "123456", ws, now_ts=now + 1)
+        stock, "123456", ws, now_ts=now + 1
+    )
     assert len(events) == 1
     ws["last_trade_tick"]["signed_trade_volume"] = "+3"
-    monkeypatch.setattr(quote_consistency, "ws_quote_source_receipt",
+    monkeypatch.setattr(
+        quote_consistency,
+        "ws_quote_source_receipt",
         lambda *_args, **_kwargs: {
-            "source_type": "0B", "item": "123456",
+            "source_type": "0B",
+            "item": "123456",
             "observed_epoch": now + 0.5,
-            "market_route": "KRX", "transport_epoch": 4,
-            "depth_receipt": {"item": "123456", "market_route": "KRX",
-                              "transport_epoch": 4},
-        })
+            "market_route": "KRX",
+            "transport_epoch": 4,
+            "depth_receipt": {
+                "item": "123456",
+                "market_route": "KRX",
+                "transport_epoch": 4,
+            },
+        },
+    )
     state_handlers._observe_initial_quantity_cap_following_tick(
-        stock, "123456", ws, now_ts=now + 1)
+        stock, "123456", ws, now_ts=now + 1
+    )
     assert len(events) == 1
     assert events[0][1]["cap_tick_quantity"] == 2
     ws["last_trade_tick"]["signed_trade_volume"] = "-3"
     state_handlers._observe_initial_quantity_cap_following_tick(
-        stock, "123456", ws, now_ts=now + 1)
+        stock, "123456", ws, now_ts=now + 1
+    )
     assert len(events) == 1
+
+
 from src.engine.scalping.micro_estimator_state import (
     MicroEstimatorConfig,
     MicroEstimatorStore,
@@ -231,11 +390,15 @@ from src.engine.scalping.micro_estimator_state import (
 def test_micro_estimator_future_probe_has_no_source_confidence():
     store = MicroEstimatorStore()
     state = store.update_from_feature_probe(
-        "000001", {"buy_pressure_10t": 100, "net_aggressive_delta_10t": 1000},
-        now_ts=1000.0, observed_ts=1000.001,
+        "000001",
+        {"buy_pressure_10t": 100, "net_aggressive_delta_10t": 1000},
+        now_ts=1000.0,
+        observed_ts=1000.001,
     )
     assert state.confidence == 0.0
     assert state.source_state == "default_prior"
+
+
 from src.utils.constants import TRADING_RULES as CONFIG
 from src.engine.scalping.rising_missed_candidate import (
     BLOCK_ALREADY_HOLDING,
@@ -760,8 +923,11 @@ def test_entry_sizing_persists_venue_resolution_with_allocator_event_fields():
         )
     )
     decision = replace(
-        decision, policy_status="initial_policy_loaded",
-        policy_version="initial-test", policy_sha256="a" * 64)
+        decision,
+        policy_status="initial_policy_loaded",
+        policy_version="initial-test",
+        policy_sha256="a" * 64,
+    )
     stock = {"strategy": "SCALPING"}
 
     fields = state_handlers._store_scalping_sizing_decision(
@@ -844,9 +1010,16 @@ def _machine_submit_guard_fixture(stock, code, case):
             f"guard-observation-{code}-{case}".encode()
         ).hexdigest(),
     }
-    stock.update({key: fields[key] for key in (
-        "scanner_promotion_id", "effective_venue", "market_session_bucket"
-    )})
+    stock.update(
+        {
+            key: fields[key]
+            for key in (
+                "scanner_promotion_id",
+                "effective_venue",
+                "market_session_bucket",
+            )
+        }
+    )
     stock["code"] = code
     bind_machine_observation_revision(
         stock, fields, symbol=code, bundle_sha256=fields["policy_bundle_hash"]
@@ -1302,14 +1475,20 @@ def test_holding_score_runtime_context_role_gates_by_quality():
     assert stale["score"] == 50.0
 
 
-
-
 def _holding_path_conversion_stock(now_ts):
-    return {"id": 91, "code": "123456", "name": "TEST", "status": "HOLDING",
-            "strategy": "SCALPING", "position_tag": "SCANNER",
-            "buy_price": 100, "buy_qty": 10, "order_time": now_ts - 120,
-            "last_ai_reviewed_at": now_ts - 999,
-            **_fresh_holding_score_fields(72, now_ts=now_ts - 10)}
+    return {
+        "id": 91,
+        "code": "123456",
+        "name": "TEST",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "buy_price": 100,
+        "buy_qty": 10,
+        "order_time": now_ts - 120,
+        "last_ai_reviewed_at": now_ts - 999,
+        **_fresh_holding_score_fields(72, now_ts=now_ts - 10),
+    }
 
 
 def test_retired_holding_score_endpoint_cannot_change_live_state(monkeypatch):
@@ -1321,17 +1500,32 @@ def test_retired_holding_score_endpoint_cannot_change_live_state(monkeypatch):
     state_handlers.LAST_LOG_TIMES = {}
     state_handlers.DB = _DummyDB()
     now_ts = state_handlers.time.time()
-    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_tick_history_ka10003",
-                        lambda *a, **k: [{"time": "09:01:00", "price": 100, "volume": 1}])
-    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_minute_candles_ka10080",
-                        lambda *a, **k: [{"현재가": 100, "고가": 101, "저가": 99, "거래량": 1000}])
-    monkeypatch.setattr(state_handlers, "_holding_score_preflight_source_quality",
-                        lambda *a, **k: {"blocked": False})
-    monkeypatch.setattr(state_handlers, "can_consider_scale_in",
-                        lambda *a, **k: {"allowed": False, "reason": "test_block"})
+    monkeypatch.setattr(
+        state_handlers.kiwoom_utils,
+        "get_tick_history_ka10003",
+        lambda *a, **k: [{"time": "09:01:00", "price": 100, "volume": 1}],
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_utils,
+        "get_minute_candles_ka10080",
+        lambda *a, **k: [{"현재가": 100, "고가": 101, "저가": 99, "거래량": 1000}],
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_holding_score_preflight_source_quality",
+        lambda *a, **k: {"blocked": False},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "can_consider_scale_in",
+        lambda *a, **k: {"allowed": False, "reason": "test_block"},
+    )
     calls = []
-    monkeypatch.setattr(state_handlers, "_collect_holding_path_votes",
-                        lambda **kwargs: calls.append(kwargs) or "appended")
+    monkeypatch.setattr(
+        state_handlers,
+        "_collect_holding_path_votes",
+        lambda **kwargs: calls.append(kwargs) or "appended",
+    )
 
     class FakeEngine:
         def evaluate_scalping_holding_score(self, *args, **kwargs):
@@ -1339,11 +1533,19 @@ def test_retired_holding_score_endpoint_cannot_change_live_state(monkeypatch):
 
     stock = _holding_path_conversion_stock(now_ts)
     state_handlers.handle_holding_state(
-        stock=stock, code="123456",
-        ws_data={"curr": 100, "orderbook": {
-            "asks": [{"price": 101, "volume": 1000}],
-            "bids": [{"price": 100, "volume": 1000}]}},
-        admin_id=1, market_regime="BULL", radar=object(), ai_engine=FakeEngine(),
+        stock=stock,
+        code="123456",
+        ws_data={
+            "curr": 100,
+            "orderbook": {
+                "asks": [{"price": 101, "volume": 1000}],
+                "bids": [{"price": 100, "volume": 1000}],
+            },
+        },
+        admin_id=1,
+        market_regime="BULL",
+        radar=object(),
+        ai_engine=FakeEngine(),
     )
     assert stock["holding_score_raw"] == 72  # archive only
     assert not calls or calls[0]["code"] == "123456"
@@ -1359,19 +1561,37 @@ def test_holding_path_stale_tick_preflight_blocks_provider(monkeypatch):
     state_handlers.DB = _DummyDB()
     now_ts = state_handlers.time.time()
     logs = []
-    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_tick_history_ka10003",
-                        lambda *a, **k: [{"time": "09:01:00", "price": 100, "volume": 1}])
-    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_minute_candles_ka10080",
-                        lambda *a, **k: [{"현재가": 100, "고가": 101, "저가": 99, "거래량": 1000}])
-    monkeypatch.setattr(state_handlers, "_holding_score_preflight_source_quality",
-                        lambda *a, **k: {"blocked": True,
-                                          "source_quality_reason": "stale_tick_context"})
-    monkeypatch.setattr(state_handlers, "_pre_submit_input_snapshot_has_usable_quote",
-                        lambda *_: True)
-    monkeypatch.setattr(state_handlers, "can_consider_scale_in",
-                        lambda *a, **k: {"allowed": False, "reason": "test_block"})
-    monkeypatch.setattr(state_handlers, "_log_holding_pipeline",
-                        lambda _s, _c, stage, **fields: logs.append((stage, fields)))
+    monkeypatch.setattr(
+        state_handlers.kiwoom_utils,
+        "get_tick_history_ka10003",
+        lambda *a, **k: [{"time": "09:01:00", "price": 100, "volume": 1}],
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_utils,
+        "get_minute_candles_ka10080",
+        lambda *a, **k: [{"현재가": 100, "고가": 101, "저가": 99, "거래량": 1000}],
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_holding_score_preflight_source_quality",
+        lambda *a, **k: {
+            "blocked": True,
+            "source_quality_reason": "stale_tick_context",
+        },
+    )
+    monkeypatch.setattr(
+        state_handlers, "_pre_submit_input_snapshot_has_usable_quote", lambda *_: True
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "can_consider_scale_in",
+        lambda *a, **k: {"allowed": False, "reason": "test_block"},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda _s, _c, stage, **fields: logs.append((stage, fields)),
+    )
 
     class FakeEngine:
         def evaluate_scalping_holding_path_votes(self, *args, **kwargs):
@@ -1379,11 +1599,19 @@ def test_holding_path_stale_tick_preflight_blocks_provider(monkeypatch):
 
     stock = _holding_path_conversion_stock(now_ts)
     state_handlers.handle_holding_state(
-        stock=stock, code="123456",
-        ws_data={"curr": 100, "orderbook": {
-            "asks": [{"price": 101, "volume": 1000}],
-            "bids": [{"price": 100, "volume": 1000}]}},
-        admin_id=1, market_regime="BULL", radar=object(), ai_engine=FakeEngine(),
+        stock=stock,
+        code="123456",
+        ws_data={
+            "curr": 100,
+            "orderbook": {
+                "asks": [{"price": 101, "volume": 1000}],
+                "bids": [{"price": 100, "volume": 1000}],
+            },
+        },
+        admin_id=1,
+        market_regime="BULL",
+        radar=object(),
+        ai_engine=FakeEngine(),
     )
     assert not any(stage == "holding_path_votes_collected" for stage, _ in logs)
 
@@ -1414,7 +1642,8 @@ def test_general_entry_margin_one_share_position_blocks_real_scale_in(monkeypatc
         lambda _stock, _code, stage, **fields: events.append((stage, fields)),
     )
 
-    result = _execute_shared_rebound_guard_fixture(monkeypatch=monkeypatch,
+    result = _execute_shared_rebound_guard_fixture(
+        monkeypatch=monkeypatch,
         stock={
             "name": "테스트",
             "strategy": "SCALPING",
@@ -1433,8 +1662,9 @@ def test_general_entry_margin_one_share_position_blocks_real_scale_in(monkeypatc
         "reason": "general_entry_margin_one_share_position",
         "qty": 0,
     }
-    margin_events = [fields for stage, fields in events
-                     if stage == "scale_in_margin_authority_block"]
+    margin_events = [
+        fields for stage, fields in events if stage == "scale_in_margin_authority_block"
+    ]
     assert len(margin_events) == 1
     assert margin_events[0]["actual_order_submitted"] is False
     assert margin_events[0]["broker_order_forbidden"] is True
@@ -1451,7 +1681,7 @@ def test_holding_sell_exchange_resolution_blocks_krx_only_during_nxt_time(monkey
     decision = state_handlers._resolve_holding_sell_dmst_stex_tp(
         {"name": "스피어"},
         "347700",
-        observed_at=datetime(2026,10,20,16,10,tzinfo=state_handlers._KST),
+        observed_at=datetime(2026, 10, 20, 16, 10, tzinfo=state_handlers._KST),
     )
 
     assert decision["blocked"] is True
@@ -1472,7 +1702,7 @@ def test_holding_sell_exchange_resolution_preserves_missing_nxt_provenance(
     decision = state_handlers._resolve_holding_sell_dmst_stex_tp(
         {"name": "에스티팜", "status": "HOLDING", "buy_qty": 1},
         "237690",
-        observed_at=datetime(2026,10,20,17,0,tzinfo=state_handlers._KST),
+        observed_at=datetime(2026, 10, 20, 17, 0, tzinfo=state_handlers._KST),
     )
 
     assert decision["blocked"] is True
@@ -1480,10 +1710,6 @@ def test_holding_sell_exchange_resolution_preserves_missing_nxt_provenance(
     assert decision["nxt_enabled"] is None
     assert decision["nxt_flag_source"] == "daily_stock_quotes.is_nxt_missing"
     assert decision["reason"] == "holding_sell_route_authority_missing"
-
-
-
-
 
 
 def test_entry_opportunity_recheck_submission_binds_only_first_broker_order():
@@ -1561,7 +1787,7 @@ def test_holding_sell_exchange_resolution_labels_unconfirmed_nxt_capability(
     decision = state_handlers._resolve_holding_sell_dmst_stex_tp(
         {"name": "미확인"},
         "123456",
-        observed_at=datetime(2026,10,20,16,39,tzinfo=state_handlers._KST),
+        observed_at=datetime(2026, 10, 20, 16, 39, tzinfo=state_handlers._KST),
     )
 
     assert decision["blocked"] is True
@@ -1631,14 +1857,6 @@ def test_holding_sell_exchange_resolution_parses_string_false_nxt_flag(monkeypat
 
     assert decision["blocked"] is True
     assert decision["nxt_flag_source"] == "stock.is_nxt"
-
-
-
-
-
-
-
-
 
 
 @pytest.mark.parametrize("cached_action", ["BUY", None])
@@ -2659,30 +2877,6 @@ def test_rising_missed_tp1_probability_gate_blocks_insufficient_support_and_sell
     )
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 def test_upper_limit_submit_hard_block_keeps_default_27_pct_boundary(monkeypatch):
     monkeypatch.delenv(
         "KORSTOCKSCAN_SCALP_UPPER_LIMIT_ENTRY_BLOCK_ENABLED", raising=False
@@ -2704,18 +2898,6 @@ def test_upper_limit_submit_hard_block_keeps_default_27_pct_boundary(monkeypatch
     assert below["upper_limit_entry_block_threshold_pct"] == "27.00"
     assert at_threshold["blocked"] is True
     assert at_threshold["block_reason"] == BLOCK_UPPER_LIMIT_PROXIMITY
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 def test_real_weak_ai_micro_entry_block_matches_jusung_case(monkeypatch):
@@ -3641,7 +3823,9 @@ def test_entry_ai_submit_authority_blocks_not_evaluated_positive_score_without_p
     assert decision["entry_ai_submit_authority_score"] == "72.0"
 
 
-def test_entry_ai_submit_authority_rejects_prior_valid_score_without_action(monkeypatch):
+def test_entry_ai_submit_authority_rejects_prior_valid_score_without_action(
+    monkeypatch,
+):
     now_ts = 1_783_471_000.0
     monkeypatch.setattr(state_handlers.time, "time", lambda: now_ts)
 
@@ -4256,16 +4440,18 @@ def test_wait_probe_requires_two_distinct_strong_confirmations(monkeypatch):
     assert count == 2
 
 
-@pytest.mark.parametrize('receipt_failure', [None, 'build', 'write'])
-@pytest.mark.parametrize('callback_completed', [False, True])
+@pytest.mark.parametrize("receipt_failure", [None, "build", "write"])
+@pytest.mark.parametrize("callback_completed", [False, True])
 def test_wait_probe_submit_contract_survives_guard_rollover_and_submits_once(
-    monkeypatch, receipt_failure, callback_completed,
+    monkeypatch,
+    receipt_failure,
+    callback_completed,
 ):
     from types import SimpleNamespace
     from src.engine.scalping.entry_cancel_wait_runtime import probe_submit_source
 
     now_ts = 1_785_710_000.0
-    monkeypatch.setattr(state_handlers.time, 'time', lambda: now_ts)
+    monkeypatch.setattr(state_handlers.time, "time", lambda: now_ts)
     stock = {
         "id": 26323,
         "code": "199430",
@@ -4289,20 +4475,32 @@ def test_wait_probe_submit_contract_survives_guard_rollover_and_submits_once(
         "entry_split_probe_ai_confirmed_at_submit": now_ts - 0.1,
         "entry_split_probe_wait_contract_at_submit": True,
     }
-    owner = SimpleNamespace(owner_type='main_scalping', owner_id='main_scalping:26323',
-                            client_intent_id='original-residual-client')
-    monkeypatch.setattr(state_handlers, 'main_owner_context', lambda *a, **k: owner)
-    monkeypatch.setattr(state_handlers, 'broker_account_key', lambda: 'account-a')
-    stock['entry_split_probe_submit_source'] = probe_submit_source(
-        stock, parent_id='original-attempt', account_key='account-a', owner_context=owner,
-        planned_qty=2, source_date=datetime.fromtimestamp(now_ts, state_handlers._KST).date().isoformat())
-    if receipt_failure == 'build':
+    owner = SimpleNamespace(
+        owner_type="main_scalping",
+        owner_id="main_scalping:26323",
+        client_intent_id="original-residual-client",
+    )
+    monkeypatch.setattr(state_handlers, "main_owner_context", lambda *a, **k: owner)
+    monkeypatch.setattr(state_handlers, "broker_account_key", lambda: "account-a")
+    stock["entry_split_probe_submit_source"] = probe_submit_source(
+        stock,
+        parent_id="original-attempt",
+        account_key="account-a",
+        owner_context=owner,
+        planned_qty=2,
+        source_date=datetime.fromtimestamp(now_ts, state_handlers._KST)
+        .date()
+        .isoformat(),
+    )
+    if receipt_failure == "build":
         from src.engine.scalping import entry_cancel_wait_runtime as receipt_source
 
         def unavailable_source(*args, **kwargs):
-            raise RuntimeError('diagnostic formatter unavailable')
+            raise RuntimeError("diagnostic formatter unavailable")
 
-        monkeypatch.setattr(receipt_source, 'residual_submission_fields', unavailable_source)
+        monkeypatch.setattr(
+            receipt_source, "residual_submission_fields", unavailable_source
+        )
     direction_calls = []
     buy_calls = []
 
@@ -4414,14 +4612,19 @@ def test_wait_probe_submit_contract_survives_guard_rollover_and_submits_once(
             "order_type_remap_reason": "-",
         },
     )
+
     def accepted_order(*args, **kwargs):
         buy_calls.append((args, kwargs))
         if callback_completed:
-            stock.update(entry_split_probe_phase='complete', buy_qty=2)
-        return dict(return_code='0', ord_no='RESIDUAL-1', broker_route='KRX',
-                    owner_registry_intent_id='original-registry-intent')
+            stock.update(entry_split_probe_phase="complete", buy_qty=2)
+        return dict(
+            return_code="0",
+            ord_no="RESIDUAL-1",
+            broker_route="KRX",
+            owner_registry_intent_id="original-registry-intent",
+        )
 
-    monkeypatch.setattr(state_handlers.kiwoom_orders, 'send_buy_order', accepted_order)
+    monkeypatch.setattr(state_handlers.kiwoom_orders, "send_buy_order", accepted_order)
     monkeypatch.setattr(state_handlers, "_stage_buy_order_submission", lambda *_: None)
     monkeypatch.setattr(
         state_handlers, "update_probe_runtime_bundle", lambda *_a, **_k: None
@@ -4430,10 +4633,10 @@ def test_wait_probe_submit_contract_survives_guard_rollover_and_submits_once(
 
     def record_pipeline(stock, code, stage, **fields):
         pipeline_events.append((stage, fields))
-        if receipt_failure == 'write' and stage == 'order_leg_sent':
-            raise OSError('receipt storage unavailable')
+        if receipt_failure == "write" and stage == "order_leg_sent":
+            raise OSError("receipt storage unavailable")
 
-    monkeypatch.setattr(state_handlers, '_log_entry_pipeline', record_pipeline)
+    monkeypatch.setattr(state_handlers, "_log_entry_pipeline", record_pipeline)
 
     first = state_handlers._maybe_submit_entry_split_probe_residual(
         stock,
@@ -4461,20 +4664,22 @@ def test_wait_probe_submit_contract_survives_guard_rollover_and_submits_once(
     assert second is True
     assert duplicate is False
     assert stock["probe_confirmation_count"] == 2
-    assert stock["entry_split_probe_phase"] == ('complete' if callback_completed else 'residual_submitted')
+    assert stock["entry_split_probe_phase"] == (
+        "complete" if callback_completed else "residual_submitted"
+    )
     assert len(buy_calls) == 1
-    assert buy_calls[0][1]['owner_context'] is owner
-    sent = [fields for stage, fields in pipeline_events if stage == 'order_leg_sent']
+    assert buy_calls[0][1]["owner_context"] is owner
+    sent = [fields for stage, fields in pipeline_events if stage == "order_leg_sent"]
     assert len(sent) == 1
-    assert sent[0]['actual_order_submitted'] is True
-    if receipt_failure == 'build':
-        assert sent[0]['cancel_wait_source_gap'] == 'diagnostic formatter unavailable'
-        assert sent[0]['buy_registry_mode'] == 'unknown'
+    assert sent[0]["actual_order_submitted"] is True
+    if receipt_failure == "build":
+        assert sent[0]["cancel_wait_source_gap"] == "diagnostic formatter unavailable"
+        assert sent[0]["buy_registry_mode"] == "unknown"
         return
-    assert 'cancel_wait_source_gap' not in sent[0], sent[0]
-    assert sent[0]['buy_parent_id'] == 'original-attempt'
-    assert sent[0]['owner_registry_intent_id'] == 'original-registry-intent'
-    assert sent[0]['cancel_wait_timeout_owner'] == 'entry_split_probe_residual_runtime'
+    assert "cancel_wait_source_gap" not in sent[0], sent[0]
+    assert sent[0]["buy_parent_id"] == "original-attempt"
+    assert sent[0]["owner_registry_intent_id"] == "original-registry-intent"
+    assert sent[0]["cancel_wait_timeout_owner"] == "entry_split_probe_residual_runtime"
 
 
 def test_wait_probe_neutral_defers_but_buy_probe_keeps_existing_behavior(monkeypatch):
@@ -4740,9 +4945,12 @@ def test_krx_like_wait_probe_timeout_releases_existing_scale_in_owner(monkeypatc
     assert stock["entry_split_probe_scale_in_forbidden"] is False
     assert stock["probe_expand_forbidden"] is False
     assert stock["entry_split_probe_residual_terminal_qty"] == 19
-    assert state_handlers._entry_split_probe_observation_contract_fields(stock)[
-        "entry_split_probe_actual_submitted_qty"
-    ] == 1
+    assert (
+        state_handlers._entry_split_probe_observation_contract_fields(stock)[
+            "entry_split_probe_actual_submitted_qty"
+        ]
+        == 1
+    )
 
 
 def test_nxt_wait_probe_timeout_keeps_fast_tape_fail_closed(monkeypatch):
@@ -4838,11 +5046,17 @@ def test_pre_submit_entry_ai_authority_retry_refreshes_missing_ai(monkeypatch):
     logs = []
     snapshots = []
     ai_calls = []
-    machine_lineage = {"entry_primary_decision_owner": "mechanistic_entry_adjudicator",
-        "evaluation_attempt_id": "retry-machine-exact", "scanner_promotion_id": "SCANPROM-123456-retry",
-        "effective_venue": "KRX_NXT_INTEGRATED", "market_session_bucket": "KRX_NXT_AFTERMARKET",
-        "policy_bundle_hash": "a" * 64, "entry_mechanistic_action": "ENTER_NOW",
-        "entry_ai_screen_status": "pass", "entry_ai_screen_pass": True}
+    machine_lineage = {
+        "entry_primary_decision_owner": "mechanistic_entry_adjudicator",
+        "evaluation_attempt_id": "retry-machine-exact",
+        "scanner_promotion_id": "SCANPROM-123456-retry",
+        "effective_venue": "KRX_NXT_INTEGRATED",
+        "market_session_bucket": "KRX_NXT_AFTERMARKET",
+        "policy_bundle_hash": "a" * 64,
+        "entry_mechanistic_action": "ENTER_NOW",
+        "entry_ai_screen_status": "pass",
+        "entry_ai_screen_pass": True,
+    }
 
     class DummyAI:
         def analyze_target(self, *args, **kwargs):
@@ -5004,10 +5218,13 @@ def test_pre_submit_entry_ai_authority_retry_refreshes_missing_ai(monkeypatch):
     )
     assert snapshots
 
-
-    assert stock["last_watching_ai_machine_primary_fields"]["evaluation_attempt_id"] == "retry-machine-exact"
+    assert (
+        stock["last_watching_ai_machine_primary_fields"]["evaluation_attempt_id"]
+        == "retry-machine-exact"
+    )
     assert retry["evaluation_attempt_id"] == "retry-machine-exact"
     assert dict(logs)["ai_confirmed"]["evaluation_attempt_id"] == "retry-machine-exact"
+
 
 def test_machine_nonentry_closes_exact_attempt_without_changing_action(monkeypatch):
     calls = []
@@ -5059,21 +5276,40 @@ def test_machine_nonentry_closes_exact_attempt_without_changing_action(monkeypat
     assert calls == []
 
 
-def test_machine_recheck_terminal_keeps_each_revision_without_order_authority(monkeypatch):
+def test_machine_recheck_terminal_keeps_each_revision_without_order_authority(
+    monkeypatch,
+):
     calls = []
-    monkeypatch.setattr(state_handlers, "_log_entry_pipeline",
-                        lambda stock, code, stage, **fields: calls.append((stage, fields)))
-    decision = {"action": "WAIT", "provider_called": False,
-        "machine_decision_before_provider": True, "entry_mechanistic_action": "RECHECK",
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: calls.append((stage, fields)),
+    )
+    decision = {
+        "action": "WAIT",
+        "provider_called": False,
+        "machine_decision_before_provider": True,
+        "entry_mechanistic_action": "RECHECK",
         "entry_primary_decision_owner": "mechanistic_entry_adjudicator",
-        "evaluation_attempt_id": "attempt", "machine_observation_sha256": "a" * 64,
-        "machine_revision_schema": "exact_machine_revision_v1", "machine_revision_parent_sha256": "",
-        "entry_decision_large_sell_print_detected": True}
+        "evaluation_attempt_id": "attempt",
+        "machine_observation_sha256": "a" * 64,
+        "machine_revision_schema": "exact_machine_revision_v1",
+        "machine_revision_parent_sha256": "",
+        "entry_decision_large_sell_print_detected": True,
+    }
     stock = {"id": 1}
-    assert state_handlers._log_machine_nonentry_terminal_if_needed(stock, "005930", ai_decision=decision)
-    assert not state_handlers._log_machine_nonentry_terminal_if_needed(stock, "005930", ai_decision=decision)
-    decision.update(machine_observation_sha256="b" * 64, machine_revision_parent_sha256="a" * 64)
-    assert state_handlers._log_machine_nonentry_terminal_if_needed(stock, "005930", ai_decision=decision)
+    assert state_handlers._log_machine_nonentry_terminal_if_needed(
+        stock, "005930", ai_decision=decision
+    )
+    assert not state_handlers._log_machine_nonentry_terminal_if_needed(
+        stock, "005930", ai_decision=decision
+    )
+    decision.update(
+        machine_observation_sha256="b" * 64, machine_revision_parent_sha256="a" * 64
+    )
+    assert state_handlers._log_machine_nonentry_terminal_if_needed(
+        stock, "005930", ai_decision=decision
+    )
     assert len(calls) == 2
     for _, fields in calls:
         assert fields["terminal_reason"] == "machine_recheck_before_auxiliary_ai"
@@ -5105,12 +5341,20 @@ def test_probe_submit_receipt_keeps_machine_revision_chain(monkeypatch):
         "machine_revision_parent_sha256": "",
     }
     stock = {
-        "id": 1, "name": "probe", "code": "005930", "strategy": "SCALPING",
+        "id": 1,
+        "name": "probe",
+        "code": "005930",
+        "strategy": "SCALPING",
         "last_watching_ai_machine_primary_fields": lineage,
     }
     state_handlers._log_entry_pipeline(
-        stock, "005930", "probe_submitted", probe_bundle_id="bundle-1",
-        order_no="12345", qty=1, actual_order_submitted=True,
+        stock,
+        "005930",
+        "probe_submitted",
+        probe_bundle_id="bundle-1",
+        order_no="12345",
+        qty=1,
+        actual_order_submitted=True,
         broker_order_forbidden=False,
     )
     stage, probe_fields = emitted[0]
@@ -5122,12 +5366,20 @@ def test_probe_submit_receipt_keeps_machine_revision_chain(monkeypatch):
     base = datetime(2026, 9, 30, 11, 48, 10)
     rows = [
         sentinel.PipelineEvent(
-            base + timedelta(milliseconds=index), "ENTRY_PIPELINE", event_stage,
-            "probe", "005930", "1", fields,
+            base + timedelta(milliseconds=index),
+            "ENTRY_PIPELINE",
+            event_stage,
+            "probe",
+            "005930",
+            "1",
+            fields,
         )
         for index, (event_stage, fields) in enumerate(
-            [("ai_confirmed", lineage), ("probe_submitted", probe_fields),
-             ("order_leg_sent", lineage)]
+            [
+                ("ai_confirmed", lineage),
+                ("probe_submitted", probe_fields),
+                ("order_leg_sent", lineage),
+            ]
         )
     ]
     _, status, conflicts = sentinel._machine_revision_rows(rows)
@@ -5135,56 +5387,121 @@ def test_probe_submit_receipt_keeps_machine_revision_chain(monkeypatch):
     assert conflicts == []
 
 
-@pytest.mark.parametrize('stage', ['pre_submit_weak_context_late_entry_guard_block',
-                                  'real_weak_pullback_entry_block', 'residual_blocked'])
+@pytest.mark.parametrize(
+    "stage",
+    [
+        "pre_submit_weak_context_late_entry_guard_block",
+        "real_weak_pullback_entry_block",
+        "residual_blocked",
+    ],
+)
 def test_final_guard_and_residual_keep_exact_machine_receipt(monkeypatch, stage):
     from src.engine import buy_funnel_sentinel as sentinel
+
     emitted = []
-    monkeypatch.setattr(state_handlers, 'emit_pipeline_event',
-        lambda pipeline, name, code, stage, record_id=None, fields=None:
-            emitted.append((stage, dict(fields or {}))))
-    lineage = {'entry_primary_decision_owner': 'mechanistic_entry_adjudicator',
-        'entry_mechanistic_action': 'ENTER_NOW', 'entry_ai_screen_status': 'pass',
-        'evaluation_attempt_id': 'original-attempt', 'scanner_promotion_id': 'promotion',
-        'machine_observation_sha256': 'a'*64, 'machine_revision_schema': 'exact_machine_revision_v1',
-        'machine_revision_parent_sha256': '',
-        'entry_ai_effective_assessment': {'effective_verdict': 'PASS'}}
-    stock = {'id': 1, 'name': 'guard', 'code': '005930', 'strategy': 'SCALPING',
-        'entry_split_probe_bundle_id': 'original-bundle',
-        'entry_split_probe_machine_primary_receipt': {
-            'bundle_id': 'original-bundle', 'stock_code': '005930', 'fields': lineage},
-        'last_watching_ai_machine_primary_fields': lineage}
-    if stage == 'residual_blocked':
-        stock['last_watching_ai_machine_primary_fields'] = {
-            **lineage, 'evaluation_attempt_id': 'newer-attempt', 'machine_observation_sha256': 'b'*64}
-    state_handlers._log_entry_pipeline(stock, '005930', stage, reason='quality_guard_block',
-        actual_order_submitted=False, broker_order_forbidden=True)
+    monkeypatch.setattr(
+        state_handlers,
+        "emit_pipeline_event",
+        lambda pipeline, name, code, stage, record_id=None, fields=None: emitted.append(
+            (stage, dict(fields or {}))
+        ),
+    )
+    lineage = {
+        "entry_primary_decision_owner": "mechanistic_entry_adjudicator",
+        "entry_mechanistic_action": "ENTER_NOW",
+        "entry_ai_screen_status": "pass",
+        "evaluation_attempt_id": "original-attempt",
+        "scanner_promotion_id": "promotion",
+        "machine_observation_sha256": "a" * 64,
+        "machine_revision_schema": "exact_machine_revision_v1",
+        "machine_revision_parent_sha256": "",
+        "entry_ai_effective_assessment": {"effective_verdict": "PASS"},
+    }
+    stock = {
+        "id": 1,
+        "name": "guard",
+        "code": "005930",
+        "strategy": "SCALPING",
+        "entry_split_probe_bundle_id": "original-bundle",
+        "entry_split_probe_machine_primary_receipt": {
+            "bundle_id": "original-bundle",
+            "stock_code": "005930",
+            "fields": lineage,
+        },
+        "last_watching_ai_machine_primary_fields": lineage,
+    }
+    if stage == "residual_blocked":
+        stock["last_watching_ai_machine_primary_fields"] = {
+            **lineage,
+            "evaluation_attempt_id": "newer-attempt",
+            "machine_observation_sha256": "b" * 64,
+        }
+    state_handlers._log_entry_pipeline(
+        stock,
+        "005930",
+        stage,
+        reason="quality_guard_block",
+        actual_order_submitted=False,
+        broker_order_forbidden=True,
+    )
     fields = emitted[0][1]
-    assert fields['evaluation_attempt_id'] == 'original-attempt'
-    assert fields['machine_observation_sha256'] == 'a'*64
-    assert fields['machine_revision_schema'] == 'exact_machine_revision_v1'
-    assert json.loads(fields['entry_ai_effective_assessment'])['effective_verdict'] == 'PASS'
-    rows = [sentinel.PipelineEvent(datetime(2026,10,2,10,58,2), 'ENTRY_PIPELINE',
-                                  'ai_confirmed', 'guard', '005930', '1', lineage),
-            sentinel.PipelineEvent(datetime(2026,10,2,10,58,3), 'ENTRY_PIPELINE',
-                                  stage, 'guard', '005930', '1', fields)]
+    assert fields["evaluation_attempt_id"] == "original-attempt"
+    assert fields["machine_observation_sha256"] == "a" * 64
+    assert fields["machine_revision_schema"] == "exact_machine_revision_v1"
+    assert (
+        json.loads(fields["entry_ai_effective_assessment"])["effective_verdict"]
+        == "PASS"
+    )
+    rows = [
+        sentinel.PipelineEvent(
+            datetime(2026, 10, 2, 10, 58, 2),
+            "ENTRY_PIPELINE",
+            "ai_confirmed",
+            "guard",
+            "005930",
+            "1",
+            lineage,
+        ),
+        sentinel.PipelineEvent(
+            datetime(2026, 10, 2, 10, 58, 3),
+            "ENTRY_PIPELINE",
+            stage,
+            "guard",
+            "005930",
+            "1",
+            fields,
+        ),
+    ]
     _, status, conflicts = sentinel._machine_revision_rows(rows)
-    assert status == 'single_revision' and not conflicts
-    assert fields['actual_order_submitted'] is False
+    assert status == "single_revision" and not conflicts
+    assert fields["actual_order_submitted"] is False
 
 
 def test_residual_machine_receipt_does_not_bind_another_bundle(monkeypatch):
     emitted = []
-    monkeypatch.setattr(state_handlers, 'emit_pipeline_event',
-        lambda pipeline, name, code, stage, record_id=None, fields=None:
-            emitted.append(dict(fields or {})))
-    stock = {'id': 1, 'name': 'guard', 'code': '005930', 'strategy': 'SCALPING',
-        'entry_split_probe_bundle_id': 'new-bundle',
-        'entry_split_probe_machine_primary_receipt': {'bundle_id': 'old-bundle',
-            'stock_code': '005930', 'fields': {'evaluation_attempt_id': 'old-attempt'}}}
-    state_handlers._log_entry_pipeline(stock, '005930', 'residual_blocked',
-        actual_order_submitted=False)
-    assert emitted[0].get('evaluation_attempt_id') != 'old-attempt'
+    monkeypatch.setattr(
+        state_handlers,
+        "emit_pipeline_event",
+        lambda pipeline, name, code, stage, record_id=None, fields=None: emitted.append(
+            dict(fields or {})
+        ),
+    )
+    stock = {
+        "id": 1,
+        "name": "guard",
+        "code": "005930",
+        "strategy": "SCALPING",
+        "entry_split_probe_bundle_id": "new-bundle",
+        "entry_split_probe_machine_primary_receipt": {
+            "bundle_id": "old-bundle",
+            "stock_code": "005930",
+            "fields": {"evaluation_attempt_id": "old-attempt"},
+        },
+    }
+    state_handlers._log_entry_pipeline(
+        stock, "005930", "residual_blocked", actual_order_submitted=False
+    )
+    assert emitted[0].get("evaluation_attempt_id") != "old-attempt"
 
 
 def test_pre_submit_entry_ai_authority_retry_rebases_stale_quote_before_ai(
@@ -5403,10 +5720,6 @@ def test_entry_ai_submit_authority_blocks_prior_valid_without_fresh_timestamp():
     assert decision["blocked"] is True
     assert decision["block_reason"] == "entry_ai_decision_unavailable"
     assert decision["entry_ai_submit_authority_fresh_prior"] is False
-
-
-
-
 
 
 def test_rising_missed_retry_rechecks_preflight_blocked_cached_drop(monkeypatch):
@@ -5734,8 +6047,13 @@ def test_rising_missed_async_retry_defers_when_symbol_entry_budget_is_full(
 ):
     # Explicit historical replay fixture; the live default is now uncapped.
     from src.engine.ai.hot_path_ai_symbol_budget import HotPathAISymbolBudget
-    monkeypatch.setattr(state_handlers, "DEFAULT_HOT_PATH_AI_SYMBOL_BUDGET",
-                        HotPathAISymbolBudget(window_sec=60, total_cap=4, group_cap=2))
+
+    monkeypatch.setattr(
+        state_handlers,
+        "DEFAULT_HOT_PATH_AI_SYMBOL_BUDGET",
+        HotPathAISymbolBudget(window_sec=60, total_cap=4, group_cap=2),
+    )
+
     class AsyncCoordinator:
         pass
 
@@ -6053,14 +6371,6 @@ def test_scanner_entry_realtime_latency_rejects_timestamp_reversal():
     )
 
 
-
-
-
-
-
-
-
-
 def test_prev_close_gainer_handoff_counts_once_per_scanner_promotion(monkeypatch):
     entry_logs = []
     stock = {
@@ -6137,10 +6447,6 @@ def test_prev_close_gainer_handoff_retries_after_log_failure(monkeypatch):
     ]
 
 
-
-
-
-
 def test_rising_missed_normal_bridge_refreshes_live_delta_before_classification(
     monkeypatch,
 ):
@@ -6189,7 +6495,10 @@ def test_rising_missed_normal_bridge_refreshes_live_delta_before_classification(
 
     assert captured == {}
     assert result["rising_missed_normal_buy_bridge_allowed"] is False
-    assert result["rising_missed_normal_buy_bridge_reason"] == "uncalibrated_ai_score_bridge_retired"
+    assert (
+        result["rising_missed_normal_buy_bridge_reason"]
+        == "uncalibrated_ai_score_bridge_retired"
+    )
 
 
 def test_scanner_fast_precheck_reallocates_not_rising_missed_without_recovery(
@@ -7679,8 +7988,6 @@ def test_rising_missed_scout_quality_guard_preserves_explicit_wait_as_weak_ai(
     assert decision["rising_missed_scout_quality_guard_ai_provenance_missing"] is False
 
 
-
-
 def test_rising_missed_scout_quality_guard_blocks_fresh_adverse_micro(monkeypatch):
     monkeypatch.delenv(
         "KORSTOCKSCAN_RISING_MISSED_SCOUT_QUALITY_GUARD_ENABLED", raising=False
@@ -7758,12 +8065,6 @@ def test_rising_missed_scout_quality_guard_does_not_block_buy_pressure_alone(
     assert decision["rising_missed_scout_quality_guard_adverse_micro_signal_count"] == 0
     assert decision["block_reason"] == "quality_guard_pass"
     assert decision["rising_missed_filter_action"] == "observe_only"
-
-
-
-
-
-
 
 
 def test_rising_missed_submit_safety_ignores_expired_cached_scanner_envelope(
@@ -7909,7 +8210,8 @@ def test_rising_missed_quality_guard_pre_envelope_compares_fresh_ws_with_rest(
     refreshed_ws, fields = state_handlers._rising_missed_quality_guard_pre_envelope(
         {},
         "123462",
-        {"last_ws_update_ts": 999.9,
+        {
+            "last_ws_update_ts": 999.9,
             "curr": 10000,
             "best_bid": 9990,
             "best_ask": 10000,
@@ -8033,7 +8335,8 @@ def test_rising_missed_submit_safety_prefers_fresh_live_ws_over_older_scanner_ca
             "market_data_signed_tape_sample_count": 5,
             "market_data_rest_signed_tape_pressure_usable": False,
         },
-        "_scanner_market_data_enrichment_ws_data": {"last_ws_update_ts": 999.5,
+        "_scanner_market_data_enrichment_ws_data": {
+            "last_ws_update_ts": 999.5,
             "curr": 9900,
             "best_bid": 9890,
             "best_ask": 9900,
@@ -8047,7 +8350,8 @@ def test_rising_missed_submit_safety_prefers_fresh_live_ws_over_older_scanner_ca
 
     merged = state_handlers._merge_scanner_market_data_enrichment_into_ws_data(
         stock,
-        {"last_ws_update_ts": 999.9,
+        {
+            "last_ws_update_ts": 999.9,
             "curr": 10000,
             "best_bid": 9990,
             "best_ask": 10000,
@@ -8096,7 +8400,8 @@ def test_rising_missed_submit_safety_preserves_cached_conflict_until_rest_rechec
             "market_data_ws_rest_gap_bps": 250.0,
             "market_data_source_selection_policy": "freshest_age",
         },
-        "_scanner_market_data_enrichment_ws_data": {"last_ws_update_ts": 999.5,
+        "_scanner_market_data_enrichment_ws_data": {
+            "last_ws_update_ts": 999.5,
             "curr": 9900,
             "best_bid": 9890,
             "best_ask": 9900,
@@ -8107,7 +8412,8 @@ def test_rising_missed_submit_safety_preserves_cached_conflict_until_rest_rechec
             "market_data_ws_rest_gap_bps": 250.0,
         },
     }
-    current_ws = {"last_ws_update_ts": 999.9,
+    current_ws = {
+        "last_ws_update_ts": 999.9,
         "curr": 10000,
         "best_bid": 9990,
         "best_ask": 10000,
@@ -8304,8 +8610,6 @@ def test_rising_missed_submit_safety_cached_envelope_ages_before_guard(monkeypat
     assert decision["rising_missed_scout_quality_guard_blocked"] is True
     assert decision["rising_missed_scout_quality_guard_quote_stale"] is True
     assert decision["block_reason"] == "stale_quote_with_weak_ai_or_strength"
-
-
 
 
 def test_rising_missed_micro_estimator_rejects_rest_selected_quote_provenance(
@@ -9258,8 +9562,6 @@ def test_rising_missed_decision_cache_reselects_fresher_live_ws_quote():
         == "ka10004_rest_orderbook"
     )
     assert fields["rising_missed_tp1_resolver_cache_prior_effective_age_ms"] == 3580.0
-
-
 
 
 def test_rising_missed_nxt_post_block_sampler_uses_only_fresh_actual_nxt_ws(
@@ -10397,32 +10699,51 @@ def test_rising_missed_normal_bridge_uses_common_tp1_resolver(monkeypatch):
 
     assert resolver_calls == []
     assert result["rising_missed_normal_buy_bridge_allowed"] is False
-    assert result["rising_missed_normal_buy_bridge_reason"] == "uncalibrated_ai_score_bridge_retired"
-
-
-
+    assert (
+        result["rising_missed_normal_buy_bridge_reason"]
+        == "uncalibrated_ai_score_bridge_retired"
+    )
 
 
 def test_micro_estimator_ws_original_receipt_identity_and_scope():
-    book = {"best_bid": 10000, "best_ask": 10010,
-            "best_bid_qty": 100, "best_ask_qty": 100}
-    for extra in ({}, {"quote_age_ms": -1}, {"quote_age_ms": 0},
-                  {"last_realtime_type_ts": {"0D": 1001}},
-                  {"last_realtime_type_ts": {"0D": True}},
-                  {"last_realtime_type_ts": {"0D": float("nan")}},
-                  {"last_realtime_type_ts": {"0D": 990}, "quote_age_ms": 0},
-                  {"last_ws_update_ts": 1000}):
+    book = {
+        "best_bid": 10000,
+        "best_ask": 10010,
+        "best_bid_qty": 100,
+        "best_ask_qty": 100,
+    }
+    for extra in (
+        {},
+        {"quote_age_ms": -1},
+        {"quote_age_ms": 0},
+        {"last_realtime_type_ts": {"0D": 1001}},
+        {"last_realtime_type_ts": {"0D": True}},
+        {"last_realtime_type_ts": {"0D": float("nan")}},
+        {"last_realtime_type_ts": {"0D": 990}, "quote_age_ms": 0},
+        {"last_ws_update_ts": 1000},
+    ):
         store = MicroEstimatorStore()
         store.update_from_ws_quote("005930", {**book, **extra}, now_ts=1000)
         assert store.snapshot("005930", now_ts=1000)["sample_count"] == 0
 
     def frame(stamp, sequence, epoch=1, item="005930"):
-        return {**book, "last_realtime_type_ts": {"0D": stamp},
-                "last_realtime_type_item": {"0D": item},
-                "market_data_transport_epoch": epoch,
-                "realtime_type_snapshots_by_route": {"exact": {"0D": {
-                    "item": item, "market_route": "krx", "transport_epoch": epoch,
-                    "observed_epoch": stamp, "route_sequence": sequence}}}}
+        return {
+            **book,
+            "last_realtime_type_ts": {"0D": stamp},
+            "last_realtime_type_item": {"0D": item},
+            "market_data_transport_epoch": epoch,
+            "realtime_type_snapshots_by_route": {
+                "exact": {
+                    "0D": {
+                        "item": item,
+                        "market_route": "krx",
+                        "transport_epoch": epoch,
+                        "observed_epoch": stamp,
+                        "route_sequence": sequence,
+                    }
+                }
+            },
+        }
 
     store = MicroEstimatorStore()
     store.update_from_ws_quote("005930", frame(999, 1, item="042660"), now_ts=1000)
@@ -10456,6 +10777,7 @@ def test_micro_estimator_ws_original_receipt_identity_and_scope():
     assert snap["source_state"] == "fresh_ws_estimate"
     store.update_from_ws_quote("005930", frame(1001, 3, epoch=1), now_ts=1001)
     assert store.snapshot("005930", now_ts=1001)["sample_count"] == 1
+
 
 def test_micro_estimator_state_defaults_rest_probe_ws_and_eviction():
     store = MicroEstimatorStore(
@@ -10795,18 +11117,6 @@ def test_holding_flow_override_passes_micro_estimator_fields_to_ai(monkeypatch):
     assert any(stage == "holding_flow_override_defer_exit" for stage, _fields in logs)
 
 
-
-
-
-
-
-
-
-
-
-
-
-
 def test_rising_missed_position_cycle_marker_restores_holding_and_exit_lineage():
     stock = {
         "strategy": "SCALPING",
@@ -10816,8 +11126,6 @@ def test_rising_missed_position_cycle_marker_restores_holding_and_exit_lineage()
     assert scale_in._is_rising_missed_scout_lineage(stock) is True
     assert state_handlers._has_rising_missed_entry_lineage(stock) is True
     assert state_handlers._is_rising_missed_scout_exit_context(stock) is True
-
-
 
 
 def test_rising_missed_same_day_reentry_guard_hydrates_pipeline_event(
@@ -12228,8 +12536,6 @@ def test_rising_missed_weak_micro_reentry_allows_higher_qi_and_low_rebound(
     assert low_rebound["block_reason"] == "source_signature_not_strict_price_jump_start"
 
 
-
-
 def test_rising_missed_pipeline_canonicalizes_strategy_venue_and_conflicts():
     canonical = state_handlers._canonicalize_rising_missed_venue_fields(
         {"rising_missed_effective_venue": "KRX"}
@@ -12251,10 +12557,6 @@ def test_rising_missed_pipeline_canonicalizes_strategy_venue_and_conflicts():
     )
     assert conflict["venue_source_quality_status"] == "reviewed_fail_closed"
     assert conflict["venue_unknown_reviewed_reason"] == conflict["venue_resolution"]
-
-
-
-
 
 
 def test_rising_missed_one_share_skip_hook_allows_normal_watching_branch(monkeypatch):
@@ -12306,10 +12608,6 @@ def test_rising_missed_one_share_skip_hook_allows_normal_watching_branch(monkeyp
 
     assert len(branch_calls) == 1
     assert branch_calls[0]["scout_upgrade_entry"] is True
-
-
-
-
 
 
 def test_rising_missed_scout_upgrade_staging_preserves_holding_status():
@@ -12570,10 +12868,6 @@ def _without_validated_failed_submit_completion(logs):
     return logs[:-1]
 
 
-
-
-
-
 def test_normal_scalping_buy_blocks_mechanistic_price_contract_before_broker_submit(
     monkeypatch,
 ):
@@ -12745,10 +13039,6 @@ def test_normal_scalping_buy_blocks_mechanistic_price_contract_before_broker_sub
     assert blocked["broker_order_forbidden"] is True
 
 
-
-
-
-
 def test_scalping_buy_submit_blocks_upper_limit_before_deposit(monkeypatch):
     state_handlers.TRADING_RULES = CONFIG
     logs = []
@@ -12879,9 +13169,7 @@ def test_entry_adm_snapshot_drops_numeric_micro_vwap_when_provenance_is_unusable
 
 
 def test_entry_receipt_market_axes_use_exact_receive_session_over_stale_stock_axes():
-    received_at = datetime(
-        2026, 9, 16, 14, 33, tzinfo=state_handlers._KST
-    ).isoformat()
+    received_at = datetime(2026, 9, 16, 14, 33, tzinfo=state_handlers._KST).isoformat()
 
     fields = receipts._probe_venue_provenance_fields(
         {
@@ -13505,22 +13793,6 @@ def test_pre_submit_contract_fields_override_report_only_panic_fields():
     )
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 def _rising_missed_scout_pyramid_stock(**overrides):
     stock = {
         "rising_missed_one_share_scout": True,
@@ -13558,18 +13830,6 @@ def _rising_missed_scout_pyramid_stock(**overrides):
     return stock
 
 
-
-
-
-
-
-
-
-
-
-
-
-
 def test_rising_missed_scout_pyramid_bridge_blocked_probe_preserves_runtime_provenance():
     merged = state_handlers._append_pyramid_probe_fields(
         {"decision_authority": "scale_in_attribution_source_only"},
@@ -13602,46 +13862,6 @@ def test_pyramid_probe_missing_ai_source_does_not_erase_snapshot_provenance():
     assert merged["current_ai_score"] == 50.0
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 def test_swing_avg_down_simulation_signal():
     original = scale_in.TRADING_RULES
     scale_in.TRADING_RULES = replace(
@@ -13665,12 +13885,6 @@ def test_swing_avg_down_simulation_signal():
     assert result["should_add"] is True
     assert result["add_type"] == "AVG_DOWN"
     assert result["reason"] == "swing_avg_down_ok"
-
-
-
-
-
-
 
 
 def test_calc_held_minutes_prefers_order_time_epoch():
@@ -14589,55 +14803,68 @@ def test_post_probe_ai_thesis_does_not_mix_partial_frozen_and_latest_provenance(
     assert context["supportive"] is False
 
 
-@pytest.mark.parametrize('frozen_parent', [False, True])
-@pytest.mark.parametrize('mutation', ['add', 'remove'])
-def test_post_probe_ai_thesis_uses_one_snapshot_during_concurrent_stock_mutation(frozen_parent, mutation):
+@pytest.mark.parametrize("frozen_parent", [False, True])
+@pytest.mark.parametrize("mutation", ["add", "remove"])
+def test_post_probe_ai_thesis_uses_one_snapshot_during_concurrent_stock_mutation(
+    frozen_parent, mutation
+):
     entered, changed = Event(), Event()
 
     class CoordinatedKey(str):
         def startswith(self, prefix, *args):
             entered.set()
-            assert changed.wait(5), 'writer did not finish outside snapshot lock'
+            assert changed.wait(5), "writer did not finish outside snapshot lock"
             return super().startswith(prefix, *args)
 
     now = time.time()
-    stock = {CoordinatedKey('unrelated_runtime_field'): 1,
-        'last_watching_ai_action': 'DROP', 'last_watching_ai_result_source': 'live',
-        'last_watching_ai_attempt_contract_status': 'pass',
-        'last_watching_ai_decision_trace_id': 'original-trace',
-        'last_watching_ai_attempt_decision_trace_id': 'original-trace',
-        'last_watching_ai_attempt_trusted': True,
-        'last_watching_ai_snapshot_id': 'original-snapshot',
-        'last_watching_ai_probe_intent_prompt_version': 'entry-v9',
-        'last_watching_ai_confirmed_at': now - 10}
+    stock = {
+        CoordinatedKey("unrelated_runtime_field"): 1,
+        "last_watching_ai_action": "DROP",
+        "last_watching_ai_result_source": "live",
+        "last_watching_ai_attempt_contract_status": "pass",
+        "last_watching_ai_decision_trace_id": "original-trace",
+        "last_watching_ai_attempt_decision_trace_id": "original-trace",
+        "last_watching_ai_attempt_trusted": True,
+        "last_watching_ai_snapshot_id": "original-snapshot",
+        "last_watching_ai_probe_intent_prompt_version": "entry-v9",
+        "last_watching_ai_confirmed_at": now - 10,
+    }
     if frozen_parent:
-        stock['rising_missed_scout_parent_ai_action'] = 'WAIT'
+        stock["rising_missed_scout_parent_ai_action"] = "WAIT"
 
     def writer():
-        assert entered.wait(5), 'reader did not reach parent census'
+        assert entered.wait(5), "reader did not reach parent census"
         try:
-            if mutation == 'add':
-                state_handlers._mutate_stock_state(stock, set_fields={
-                    'rising_missed_scout_parent_ai_new_field': 'late-value',
-                    'last_watching_ai_decision_trace_id': 'later-trace'})
+            if mutation == "add":
+                state_handlers._mutate_stock_state(
+                    stock,
+                    set_fields={
+                        "rising_missed_scout_parent_ai_new_field": "late-value",
+                        "last_watching_ai_decision_trace_id": "later-trace",
+                    },
+                )
             else:
-                state_handlers._mutate_stock_state(stock, pop_fields=['last_watching_ai_snapshot_id'])
+                state_handlers._mutate_stock_state(
+                    stock, pop_fields=["last_watching_ai_snapshot_id"]
+                )
         finally:
             changed.set()
 
     with ThreadPoolExecutor(max_workers=1) as executor:
         future = executor.submit(writer)
         context = state_handlers._post_probe_ai_thesis_context(
-            stock, current_ai_score=68, now_ts=now, market_path_confirmed=True)
+            stock, current_ai_score=68, now_ts=now, market_path_confirmed=True
+        )
         future.result(timeout=5)
-    assert context['latest_entry_negative'] is True
-    assert context['negative'] is True and context['supportive'] is False
-    assert context['parent_provenance_source'] == (
-        'frozen_scout_parent' if frozen_parent else 'latest_entry_fallback')
-    assert context['parent_trusted'] is (not frozen_parent)
+    assert context["latest_entry_negative"] is True
+    assert context["negative"] is True and context["supportive"] is False
+    assert context["parent_provenance_source"] == (
+        "frozen_scout_parent" if frozen_parent else "latest_entry_fallback"
+    )
+    assert context["parent_trusted"] is (not frozen_parent)
     if not frozen_parent:
-        assert context['parent_trace_id'] == 'original-trace'
-        assert context['parent_snapshot_id'] == 'original-snapshot'
+        assert context["parent_trace_id"] == "original-trace"
+        assert context["parent_snapshot_id"] == "original-snapshot"
     assert changed.is_set()
 
 
@@ -14803,8 +15030,6 @@ def test_post_probe_recovery_does_not_double_count_tick_and_candle_group(
     assert result["confirmation_count"] == 0
 
 
-
-
 def test_winner_recovery_ai_receipt_fields_freeze_pending_decision_provenance():
     stock = {
         "pending_add_reason": "post_probe_winner_recovery_first_leg",
@@ -14840,22 +15065,6 @@ def test_winner_recovery_ai_receipt_fields_freeze_pending_decision_provenance():
     assert not any(key.startswith("pending_add_") for key in stock)
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 def test_post_probe_winner_recovery_cycle_signatures_clear_with_probe_runtime():
     stock = {
         "_post_probe_winner_recovery_gate_bypass_signature": "old-bypass",
@@ -14866,8 +15075,6 @@ def test_post_probe_winner_recovery_cycle_signatures_clear_with_probe_runtime():
 
     assert "_post_probe_winner_recovery_gate_bypass_signature" not in stock
     assert "_post_probe_winner_recovery_event_signature" not in stock
-
-
 
 
 def test_post_probe_forced_refresh_spacing_does_not_spend_holding_ai_budget(
@@ -14935,10 +15142,6 @@ def test_post_probe_forced_refresh_spacing_does_not_spend_holding_ai_budget(
 
     assert result is None
     assert "_post_probe_winner_recovery_gate_bypass_signature" not in stock
-
-
-
-
 
 
 def test_holding_gate_block_preserves_hard_abort_source_only_observation(monkeypatch):
@@ -15137,10 +15340,6 @@ def test_winner_recovery_runtime_activation_restarts_confirmation_sequence(
     assert logs[-1][1]["post_probe_winner_recovery_runtime_effective_venue"] == ("KRX")
 
 
-
-
-
-
 def test_winner_recovery_central_sizing_requires_loaded_policy():
     action = {
         "post_probe_winner_recovery_quantity_mode": "central_sizing_first_residual"
@@ -15335,7 +15534,8 @@ def test_add_count_increment_once_on_partial_fills(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "pending_add_reason", ["reversal_add_ok", "shallow_volatility_avg_down", "shared_main_rebound_entry"]
+    "pending_add_reason",
+    ["reversal_add_ok", "shallow_volatility_avg_down", "shared_main_rebound_entry"],
 )
 def test_reversal_add_post_eval_starts_on_execution_receipt(
     monkeypatch, pending_add_reason
@@ -15901,19 +16101,40 @@ def test_scale_in_exit_authority_blocks_gate_ai_and_broker(monkeypatch):
     assert broker_calls == []
     assert pipeline_logs == []
 
+
 @pytest.mark.parametrize("hour, expected_route", [(8, "NXT"), (10, "SOR"), (17, "NXT")])
 @pytest.mark.parametrize("resolved_stop_blocked", [False, True])
-def test_execute_scale_in_order_partial_split_submit_keeps_pending(monkeypatch, resolved_stop_blocked, hour, expected_route):
+def test_execute_scale_in_order_partial_split_submit_keeps_pending(
+    monkeypatch, resolved_stop_blocked, hour, expected_route
+):
     from datetime import datetime
     from zoneinfo import ZoneInfo
+
     native_route = state_handlers.kiwoom_orders.describe_order_route_resolution
-    monkeypatch.setattr(state_handlers.kiwoom_orders, "describe_order_route_resolution",
-        lambda: native_route(now=datetime(2026, 10, 19, hour, 30, tzinfo=ZoneInfo("Asia/Seoul"))))
-    monkeypatch.setattr(state_handlers, "_pre_submit_refresh_real_ws_snapshot", lambda code, ws, strategy: (ws, {}))
-    monkeypatch.setattr(state_handlers, "_pre_submit_input_snapshot_needs_rest_orderbook_recheck", lambda ws: False)
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "describe_order_route_resolution",
+        lambda: native_route(
+            now=datetime(2026, 10, 19, hour, 30, tzinfo=ZoneInfo("Asia/Seoul"))
+        ),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_pre_submit_refresh_real_ws_snapshot",
+        lambda code, ws, strategy: (ws, {}),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_pre_submit_input_snapshot_needs_rest_orderbook_recheck",
+        lambda ws: False,
+    )
     import requests
-    monkeypatch.setattr(requests.sessions.Session, "request",
-        lambda *a, **k: pytest.fail("fixture may not access network"))
+
+    monkeypatch.setattr(
+        requests.sessions.Session,
+        "request",
+        lambda *a, **k: pytest.fail("fixture may not access network"),
+    )
     state_handlers.KIWOOM_TOKEN = "test"
 
     monkeypatch.setattr(
@@ -16002,12 +16223,20 @@ def test_execute_scale_in_order_partial_split_submit_keeps_pending(monkeypatch, 
 
     stock, rebound_kwargs = _shared_rebound_fixture(monkeypatch)
     monkeypatch.setattr(state_handlers, "TRADING_RULES", CONFIG)
-    monkeypatch.setattr(state_handlers, "can_consider_scale_in", lambda *a, **k: {"allowed": True})
+    monkeypatch.setattr(
+        state_handlers, "can_consider_scale_in", lambda *a, **k: {"allowed": True}
+    )
     stock.update(name="TEST", buy_price=10100)
-    state_handlers._record_main_rebound_entry_source(stock, "005930", [{"completed": True}], {}, now_ts=2000)
-    rebound_kwargs.update(curr_price=10000, ws_data={"curr": 10000, "best_bid": 10000, "best_ask": 10010})
+    state_handlers._record_main_rebound_entry_source(
+        stock, "005930", [{"completed": True}], {}, now_ts=2000
+    )
+    rebound_kwargs.update(
+        curr_price=10000, ws_data={"curr": 10000, "best_bid": 10000, "best_ask": 10010}
+    )
     if resolved_stop_blocked:
-        rebound_kwargs["stop_guard_pct"] = state_handlers.calculate_net_profit_rate(10100, 10000) - 0.05
+        rebound_kwargs["stop_guard_pct"] = (
+            state_handlers.calculate_net_profit_rate(10100, 10000) - 0.05
+        )
     action = state_handlers._evaluate_scale_in_signal(**rebound_kwargs)
     assert action is not None
     result = state_handlers.execute_scale_in_order(
@@ -16019,7 +16248,11 @@ def test_execute_scale_in_order_partial_split_submit_keeps_pending(monkeypatch, 
     )
 
     if resolved_stop_blocked:
-        assert result == {"status": "blocked", "reason": "shared_rebound_signal_invalidated_before_submit", "qty": 0}
+        assert result == {
+            "status": "blocked",
+            "reason": "shared_rebound_signal_invalidated_before_submit",
+            "qty": 0,
+        }
         assert send_calls == []
         assert not stock.get("pending_add_order")
         assert "last_avg_down_rebound_signal_id" not in stock
@@ -16086,14 +16319,6 @@ def test_execute_scalping_pyramid_blocks_wide_spread_price_guard(monkeypatch):
     assert stock.get("pending_add_order") is None
 
 
-
-
-
-
-
-
-
-
 def test_non_defensive_avg_down_still_blocks_quote_divergence(monkeypatch):
     rules = replace(CONFIG, MAX_POSITION_PCT=1.0)
     monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
@@ -16141,7 +16366,8 @@ def test_non_defensive_avg_down_still_blocks_quote_divergence(monkeypatch):
         ),
     )
 
-    result = _execute_shared_rebound_guard_fixture(monkeypatch=monkeypatch,
+    result = _execute_shared_rebound_guard_fixture(
+        monkeypatch=monkeypatch,
         stock={
             "id": 1,
             "name": "SK하이닉스",
@@ -16245,7 +16471,8 @@ def test_scale_in_quote_consistency_block_backfills_blank_price_source(monkeypat
         ),
     )
 
-    result = _execute_shared_rebound_guard_fixture(monkeypatch=monkeypatch,
+    result = _execute_shared_rebound_guard_fixture(
+        monkeypatch=monkeypatch,
         stock={
             "id": 1,
             "name": "TEST",
@@ -16273,8 +16500,6 @@ def test_scale_in_quote_consistency_block_backfills_blank_price_source(monkeypat
     assert blocked
     assert blocked[-1]["price_source"] == "ws"
     assert blocked[-1]["canonical_mark_price"] == 10_000
-
-
 
 
 def test_real_scalping_scale_in_uses_buy_window_not_regular_market_close(monkeypatch):
@@ -16339,7 +16564,8 @@ def test_real_scalping_scale_in_uses_buy_window_not_regular_market_close(monkeyp
         state_handlers, "record_add_history_event", lambda *args, **kwargs: True
     )
 
-    result = _execute_shared_rebound_guard_fixture(monkeypatch=monkeypatch,
+    result = _execute_shared_rebound_guard_fixture(
+        monkeypatch=monkeypatch,
         stock={
             "id": 1,
             "name": "가온전선",
@@ -16367,16 +16593,6 @@ def test_real_scalping_scale_in_uses_buy_window_not_regular_market_close(monkeyp
     assert sent_orders
     assert sent_orders[0][1]["dmst_stex_tp"] == "NXT"
     assert not [stage for stage, _ in logs if stage == "scale_in_market_closed_block"]
-
-
-
-
-
-
-
-
-
-
 
 
 def test_pending_scale_in_revalidation_context_detects_deterioration():
@@ -16530,34 +16746,6 @@ def test_pending_scale_in_revalidation_flags_missing_feature_context():
     assert "tick_acceleration_deteriorated" in decision["reason"]
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 def test_holding_ai_submit_authority_retry_fails_closed_when_engine_missing(
     monkeypatch,
 ):
@@ -16677,8 +16865,6 @@ def test_scale_in_lifecycle_requires_explicit_current_ai_trace():
     )
 
 
-
-
 def test_holding_ai_submit_authority_retry_shares_holding_symbol_budget(
     monkeypatch,
 ):
@@ -16713,12 +16899,6 @@ def test_holding_ai_submit_authority_retry_shares_holding_symbol_budget(
         retry_fields["scale_in_ai_authority_hot_path_ai_symbol_budget_endpoint_group"]
         == "holding_score"
     )
-
-
-
-
-
-
 
 
 def test_dynamic_scale_in_stage_cap_is_composed_by_central_allocator(monkeypatch):
@@ -16822,22 +17002,39 @@ def test_dynamic_scale_in_qty_uses_deposit_budget_with_cash_orderable_qty_cap(
     assert blocked["qty_reason"] == "position_cap_or_budget"
 
 
-def test_entry_capacity_source_reuses_exact_receipt_but_normal_submit_reads_fresh(monkeypatch):
+def test_entry_capacity_source_reuses_exact_receipt_but_normal_submit_reads_fresh(
+    monkeypatch,
+):
     from datetime import datetime, timezone
+
     state_handlers._reset_entry_capacity_receipts()
     clock = [1000.0]
     state = ["inventory-1"]
     calls = []
     monkeypatch.setattr(state_handlers.time, "time", lambda: clock[0])
-    monkeypatch.setattr(state_handlers, "_entry_capacity_receipt_key",
-        lambda code, price: (state[0], code, price))
+    monkeypatch.setattr(
+        state_handlers,
+        "_entry_capacity_receipt_key",
+        lambda code, price: (state[0], code, price),
+    )
+
     def fetch(token, code, unit_price=None, **kwargs):
         calls.append(kwargs)
-        return {"return_code": 0, "cash_orderable_contract_status": "valid",
-            "capacity_observed_at": datetime.fromtimestamp(clock[0], timezone.utc).isoformat(),
-            "capacity_source_sha256": "a" * 64, "requested_stock_code": code,
-            "requested_unit_price": unit_price, "raw": {"value": 1}}
-    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_orderable_by_margin_kt00011", fetch)
+        return {
+            "return_code": 0,
+            "cash_orderable_contract_status": "valid",
+            "capacity_observed_at": datetime.fromtimestamp(
+                clock[0], timezone.utc
+            ).isoformat(),
+            "capacity_source_sha256": "a" * 64,
+            "requested_stock_code": code,
+            "requested_unit_price": unit_price,
+            "raw": {"value": 1},
+        }
+
+    monkeypatch.setattr(
+        state_handlers.kiwoom_utils, "get_orderable_by_margin_kt00011", fetch
+    )
     read = state_handlers._read_entry_capacity_snapshot
     read("005930", 10000)
     reused = read("005930", 10000, source_only=True)
@@ -16847,48 +17044,80 @@ def test_entry_capacity_source_reuses_exact_receipt_but_normal_submit_reads_fres
     assert read("005930", 10000, source_only=True)["raw"]["value"] == 1
     read("005930", 10000)
     assert len(calls) == 2
-    assert all(row["request_purpose"] == "entry_live_sizing" and "source_only" not in row for row in calls)
+    assert all(
+        row["request_purpose"] == "entry_live_sizing" and "source_only" not in row
+        for row in calls
+    )
     read("005930", 10001, source_only=True)
     state[0] = "inventory-2"
     read("005930", 10000, source_only=True)
     clock[0] += 2.01
     read("005930", 10000, source_only=True)
     assert len(calls) == 5
-    assert all(row["source_only"] and row["request_purpose"] == "entry_operating_observation" for row in calls[-3:])
+    assert all(
+        row["source_only"] and row["request_purpose"] == "entry_operating_observation"
+        for row in calls[-3:]
+    )
     state_handlers._reset_entry_capacity_receipts()
 
 
 def test_entry_capacity_source_collapses_inflight_and_rejects_state_change(monkeypatch):
     state_handlers._reset_entry_capacity_receipts()
     state = ["inventory-1"]
-    monkeypatch.setattr(state_handlers, "_entry_capacity_receipt_key", lambda *a: state[0])
+    monkeypatch.setattr(
+        state_handlers, "_entry_capacity_receipt_key", lambda *a: state[0]
+    )
     read = state_handlers._read_entry_capacity_snapshot
+
     def fetch(*args, **kwargs):
-        assert read("005930", 10000, source_only=True)["error"] == "capacity_source_inflight"
+        assert (
+            read("005930", 10000, source_only=True)["error"]
+            == "capacity_source_inflight"
+        )
         state[0] = "inventory-2"
         return {"error": "fixture_deferred"}
-    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_orderable_by_margin_kt00011", fetch)
-    assert read("005930", 10000, source_only=True)["error"] == "capacity_inventory_changed_during_read"
+
+    monkeypatch.setattr(
+        state_handlers.kiwoom_utils, "get_orderable_by_margin_kt00011", fetch
+    )
+    assert (
+        read("005930", 10000, source_only=True)["error"]
+        == "capacity_inventory_changed_during_read"
+    )
     state[0] = "inventory-1"
-    assert read("005930", 10000, source_only=True)["error"] == "capacity_source_retry_deferred"
+    assert (
+        read("005930", 10000, source_only=True)["error"]
+        == "capacity_source_retry_deferred"
+    )
     assert not state_handlers._ENTRY_CAPACITY_RECEIPTS
     state_handlers._reset_entry_capacity_receipts()
 
 
-def test_entry_capacity_scope_includes_account_origin_token_date_price_and_inventory(monkeypatch):
+def test_entry_capacity_scope_includes_account_origin_token_date_price_and_inventory(
+    monkeypatch,
+):
     from src.trading.order import owner_custody_registry as custody
+
     scope = [("token-hash-1", "origin-1", "2026-09-21")]
     account = ["account-1"]
     inventory = ["state-1"]
     deposit = [{"raw_amount": 10000}]
-    monkeypatch.setattr(state_handlers.kiwoom_utils, "_market_data_cache_scope", lambda *a: scope[0])
+    monkeypatch.setattr(
+        state_handlers.kiwoom_utils, "_market_data_cache_scope", lambda *a: scope[0]
+    )
     monkeypatch.setattr(custody, "broker_account_key", lambda: account[0])
-    monkeypatch.setattr(state_handlers, "_scale_in_budget_inventory_signature", lambda: inventory[0])
-    monkeypatch.setattr(state_handlers.kiwoom_orders, "get_last_deposit_meta", lambda: deposit[0])
+    monkeypatch.setattr(
+        state_handlers, "_scale_in_budget_inventory_signature", lambda: inventory[0]
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders, "get_last_deposit_meta", lambda: deposit[0]
+    )
     key = state_handlers._entry_capacity_receipt_key("005930", 10000)
-    for next_scope in (("token-hash-2", "origin-1", "2026-09-21"),
-                       ("token-hash-1", "origin-2", "2026-09-21"),
-                       ("token-hash-1", "origin-1", "2026-09-22")):
+    for next_scope in (
+        ("token-hash-2", "origin-1", "2026-09-21"),
+        ("token-hash-1", "origin-2", "2026-09-21"),
+        ("token-hash-1", "origin-1", "2026-09-22"),
+    ):
         scope[0] = next_scope
         assert state_handlers._entry_capacity_receipt_key("005930", 10000) != key
     scope[0] = ("token-hash-1", "origin-1", "2026-09-21")
@@ -16906,18 +17135,27 @@ def test_entry_capacity_scope_includes_account_origin_token_date_price_and_inven
 
 def test_entry_capacity_receipt_rejects_stale_future_and_unbound_proof():
     from datetime import datetime, timezone
-    valid = {"return_code": 0, "cash_orderable_contract_status": "valid",
+
+    valid = {
+        "return_code": 0,
+        "cash_orderable_contract_status": "valid",
         "capacity_observed_at": datetime.fromtimestamp(1000, timezone.utc).isoformat(),
-        "capacity_source_sha256": "a" * 64, "requested_stock_code": "005930",
-        "requested_unit_price": 10000}
+        "capacity_source_sha256": "a" * 64,
+        "requested_stock_code": "005930",
+        "requested_unit_price": 10000,
+    }
     check = state_handlers._entry_capacity_receipt_valid
     assert check(valid, "005930", 10000, 1001)
     assert not check(valid, "005930", 10000, 999)
     assert not check(valid, "005930", 10000, 1002.01)
-    for field, value in (("capacity_observed_at", "1970-01-01T00:16:40"),
-                         ("capacity_source_sha256", ""), ("return_code", 3),
-                         ("cash_orderable_contract_status", "missing"),
-                         ("requested_stock_code", "000660"), ("requested_unit_price", 10001)):
+    for field, value in (
+        ("capacity_observed_at", "1970-01-01T00:16:40"),
+        ("capacity_source_sha256", ""),
+        ("return_code", 3),
+        ("cash_orderable_contract_status", "missing"),
+        ("requested_stock_code", "000660"),
+        ("requested_unit_price", 10001),
+    ):
         assert not check({**valid, field: value}, "005930", 10000, 1001)
 
 
@@ -16994,8 +17232,6 @@ def test_resolve_scalp_cash_budget_context_preserves_operator_kt00001_floor(
     assert context["kt00001_minimum_floor_applied"] is True
 
 
-
-
 def test_calc_scale_in_qty_scalping_reversal_add_uses_configured_ratio():
     from src.utils.constants import TRADING_RULES as CONFIG
 
@@ -17015,12 +17251,6 @@ def test_calc_scale_in_qty_scalping_reversal_add_uses_configured_ratio():
         assert qty == 3
     finally:
         scale_in.TRADING_RULES = original
-
-
-
-
-
-
 
 
 def test_describe_scale_in_qty_applies_reversal_add_floor_for_two_share_cap():
@@ -17046,8 +17276,6 @@ def test_describe_scale_in_qty_applies_reversal_add_floor_for_two_share_cap():
         assert details["floor_applied"] is True
     finally:
         scale_in.TRADING_RULES = original
-
-
 
 
 def test_sell_priority_blocks_add(monkeypatch):
@@ -17113,8 +17341,6 @@ def test_sell_priority_blocks_add(monkeypatch):
     assert called["gate"] is False
     assert called["eval"] is False
     assert called["add"] is False
-
-
 
 
 def test_scalp_trailing_uses_peak_start_after_profit_falls_below_safe_profit(
@@ -17201,7 +17427,9 @@ def test_scalp_trailing_uses_peak_start_after_profit_falls_below_safe_profit(
                 "bids": [{"price": 10095, "volume": 1000}],
                 "asks": [{"price": 10100, "volume": 1000}],
             },
-            "last_ws_update_ts": datetime(2026, 7, 9, 12, 20, tzinfo=state_handlers._KST).timestamp(),
+            "last_ws_update_ts": datetime(
+                2026, 7, 9, 12, 20, tzinfo=state_handlers._KST
+            ).timestamp(),
         },
         admin_id=1,
         market_regime="BULL",
@@ -17565,10 +17793,6 @@ def test_protect_trailing_loss_floor_holds_near_flat_break(monkeypatch):
     assert calls[-1][0] == "protect_trailing_loss_floor_hold"
 
 
-
-
-
-
 def test_protect_trailing_confirms_sustained_smoothed_break(monkeypatch):
     from src.utils.constants import TRADING_RULES as CONFIG
 
@@ -17720,8 +17944,6 @@ def test_holding_flow_override_candidate_clears_when_exit_candidate_resolves(
         stage == "holding_flow_override_candidate_cleared"
         for stage, _ in calls["stages"]
     )
-
-
 
 
 @pytest.mark.parametrize(
@@ -18098,7 +18320,8 @@ def test_scale_in_split_residual_cancel_after_partial_fill_has_no_cancel_cooldow
     errors = []
     monkeypatch.setattr(state_handlers, "log_error", errors.append)
     monkeypatch.setattr(
-        state_handlers, "_log_holding_pipeline",
+        state_handlers,
+        "_log_holding_pipeline",
         lambda stock, code, stage, **fields: holding_logs.append((stage, fields)),
     )
 
@@ -18196,8 +18419,6 @@ def test_timeout_unfilled_late_loss_avg_down_restores_retry_count(monkeypatch):
         == "late_loss_avg_down_retry"
     )
     assert stock["last_defensive_avg_down_count_rollback_ord_no"] == "L1"
-
-
 
 
 def test_missing_pending_ordno_locks_scale_in(monkeypatch):
@@ -18556,8 +18777,6 @@ def test_scale_in_guard_ignores_nat_like_last_add_at(monkeypatch):
 
     assert result["allowed"] is True
     assert result["reason"] == "ok"
-
-
 
 
 def test_scale_in_guard_allows_reversal_add_without_pyramid(monkeypatch):
@@ -19817,7 +20036,8 @@ def test_watching_state_logs_latency_entry_price_guard(monkeypatch):
     # A refresh under suite load uses the metadata API, not the legacy
     # wrapper mocked below. Keep the same fixture bars on both paths.
     monkeypatch.setattr(
-        state_handlers.kiwoom_utils, "get_minute_candles_ka10080_with_meta",
+        state_handlers.kiwoom_utils,
+        "get_minute_candles_ka10080_with_meta",
         lambda _token, code, **kwargs: (
             _micro_vwap_candles(price=10_020),
             {"api_id": "ka10080", "entry_candle_request_code": code},
@@ -19827,7 +20047,8 @@ def test_watching_state_logs_latency_entry_price_guard(monkeypatch):
     # This synthetic fixture exercises latency price handling, independent
     # of the live dated machine bundle installed on the test host.
     monkeypatch.setattr(
-        mechanistic_entry_runtime_policy, "validate_attempt_generation",
+        mechanistic_entry_runtime_policy,
+        "validate_attempt_generation",
         lambda *args, **kwargs: {"allowed": True, "reason": "test_generation_current"},
     )
 
@@ -19883,8 +20104,11 @@ def test_watching_state_logs_latency_entry_price_guard(monkeypatch):
     sent_orders = []
     venue_eligibility = object()
     venue_reads = []
-    monkeypatch.setattr(state_handlers, "_entry_order_venue_eligibility",
-        lambda code: venue_reads.append(code) or venue_eligibility)
+    monkeypatch.setattr(
+        state_handlers,
+        "_entry_order_venue_eligibility",
+        lambda code: venue_reads.append(code) or venue_eligibility,
+    )
 
     def fake_log_entry_pipeline(stock, code, stage, **fields):
         logs.append((stage, fields))
@@ -20000,7 +20224,8 @@ def test_watching_state_logs_latency_entry_price_guard(monkeypatch):
     state_handlers.handle_watching_state(
         stock=stock,
         code="123456",
-        ws_data={"last_ws_update_ts": state_handlers.time.time(),
+        ws_data={
+            "last_ws_update_ts": state_handlers.time.time(),
             "curr": 10_020,
             "v_pw": 120.0,
             "ask_tot": 20_000,
@@ -20185,7 +20410,8 @@ def test_watching_state_blocks_quote_fresh_composite_negative_orderbook_micro(
     state_handlers.handle_watching_state(
         stock=stock,
         code="123456",
-        ws_data={"last_ws_update_ts": state_handlers.time.time(),
+        ws_data={
+            "last_ws_update_ts": state_handlers.time.time(),
             "curr": 10_020,
             "v_pw": 120.0,
             "ask_tot": 20_000,
@@ -20226,7 +20452,8 @@ def test_watching_state_blocks_quote_fresh_composite_negative_orderbook_micro(
 
 @pytest.mark.parametrize("source_wait", [False, "WAIT", "BUY"])
 def test_watching_state_reuses_cached_ai_action_during_cooldown_without_local_action(
-    monkeypatch, source_wait,
+    monkeypatch,
+    source_wait,
 ):
     from src.utils.constants import TRADING_RULES as CONFIG
 
@@ -20299,19 +20526,31 @@ def test_watching_state_reuses_cached_ai_action_during_cooldown_without_local_ac
         from src.engine.scalping import entry_machine_source_recovery as recovery
         from src.tests.test_entry_machine_source_recovery import source_failure
         from src.tests.test_entry_machine_observation import fixture, KEY
+
         source_ws, _ = fixture()
         for row in source_ws["realtime_type_snapshots_by_route"][KEY].values():
             row["item"] = "123456_AL"
         stamp = FixedDateTime.now().timestamp()
-        stock.update(last_watching_ai_action=source_wait, rt_ai_prob=.99,
-                     last_watching_ai_score=99.0)
+        stock.update(
+            last_watching_ai_action=source_wait,
+            rt_ai_prob=0.99,
+            last_watching_ai_score=99.0,
+        )
         stock[recovery.STATE_KEY] = recovery.pending_after_failure(
-            stock, source_failure(source_ws), now=stamp, cooldown_sec=90, stock_code="123456")
+            stock,
+            source_failure(source_ws),
+            now=stamp,
+            cooldown_sec=90,
+            stock_code="123456",
+        )
         state_handlers.LAST_AI_CALL_TIMES = {}
         monkeypatch.setattr(state_handlers.time, "time", lambda: stamp)
         monkeypatch.setattr(state_handlers, "WS_MANAGER", None)
-        monkeypatch.setattr(state_handlers.kiwoom_utils, "get_tick_history_ka10003",
-                            lambda *a, **kw: pytest.fail("source wait must not prepare REST/AI"))
+        monkeypatch.setattr(
+            state_handlers.kiwoom_utils,
+            "get_tick_history_ka10003",
+            lambda *a, **kw: pytest.fail("source wait must not prepare REST/AI"),
+        )
 
     state_handlers.handle_watching_state(
         stock=stock,
@@ -20473,7 +20712,8 @@ def test_first_ai_buy_action_no_longer_needs_score_prior_bridge(
     state_handlers.handle_watching_state(
         stock=stock,
         code="123456",
-        ws_data={"last_ws_update_ts": state_handlers.time.time(),
+        ws_data={
+            "last_ws_update_ts": state_handlers.time.time(),
             "curr": 10_020,
             "v_pw": 120.0,
             "ask_tot": 20_000,
@@ -20499,7 +20739,9 @@ def test_first_ai_buy_action_no_longer_needs_score_prior_bridge(
         assert code == "123456"
         assert "rising_missed_normal_buy_bridge_unlocked" not in by_stage
         assert "first_ai_wait" not in by_stage
-        assert submitted_stock.get("rising_missed_normal_buy_bridge_allowed") is not True
+        assert (
+            submitted_stock.get("rising_missed_normal_buy_bridge_allowed") is not True
+        )
         assert submitted_stock.get("rising_missed_one_share_entry_forced") is None
         assert submitted_stock.get("rising_missed_one_share_scout") is None
         assert submitted_stock.get("forced_entry_qty") is None
@@ -20721,9 +20963,7 @@ def test_ai_wait_rebound_recheck_uses_anchor_score_band_as_prior(monkeypatch):
     assert result["ai_wait_rebound_recheck_allowed"] is True
     assert result["ai_wait_rebound_recheck_reason"] == "price_rebound_after_wait"
     assert result["ai_wait_rebound_recheck_score_gate_converted_to_prior"] is False
-    assert (
-        result["ai_wait_rebound_recheck_score_prior_band"] == "diagnostic_only"
-    )
+    assert result["ai_wait_rebound_recheck_score_prior_band"] == "diagnostic_only"
     assert result["ai_wait_rebound_recheck_ai_score_prior_weight"] == 0.0
 
 
@@ -20947,7 +21187,8 @@ def test_ai_numeric_consistency_recheck_failed_attempt_consumes_symbol_budget(
     state_handlers.handle_watching_state(
         stock=stock,
         code="123456",
-        ws_data={"last_ws_update_ts": state_handlers.time.time(),
+        ws_data={
+            "last_ws_update_ts": state_handlers.time.time(),
             "curr": 10020,
             "v_pw": 120.0,
             "ask_tot": 20000,
@@ -21127,7 +21368,8 @@ def test_ai_numeric_consistency_recheck_corrected_updates_last_reason(monkeypatc
     state_handlers.handle_watching_state(
         stock=stock,
         code="123456",
-        ws_data={"last_ws_update_ts": state_handlers.time.time(),
+        ws_data={
+            "last_ws_update_ts": state_handlers.time.time(),
             "curr": 10020,
             "v_pw": 120.0,
             "ask_tot": 20000,
@@ -21147,7 +21389,10 @@ def test_ai_numeric_consistency_recheck_corrected_updates_last_reason(monkeypatc
     assert ai.calls == 2
     assert stock["ai_numeric_consistency_recheck_count"] == 1
     assert stock["last_watching_ai_reason"] == "clean wait due to weak follow through"
-    assert stock["last_watching_ai_machine_primary_fields"]["machine_observation_sha256"] == "b" * 64
+    assert (
+        stock["last_watching_ai_machine_primary_fields"]["machine_observation_sha256"]
+        == "b" * 64
+    )
 
 
 def test_ai_numeric_consistency_recheck_buy_below_min_score_does_not_arm_entry(
@@ -21305,7 +21550,8 @@ def test_ai_numeric_consistency_recheck_buy_below_min_score_does_not_arm_entry(
     state_handlers.handle_watching_state(
         stock=stock,
         code="123456",
-        ws_data={"last_ws_update_ts": state_handlers.time.time(),
+        ws_data={
+            "last_ws_update_ts": state_handlers.time.time(),
             "curr": 10020,
             "v_pw": 120.0,
             "ask_tot": 20000,
@@ -21326,7 +21572,9 @@ def test_ai_numeric_consistency_recheck_buy_below_min_score_does_not_arm_entry(
     assert sent_orders == []
     assert stock["last_watching_ai_action"] == "BUY"
     assert stock["last_watching_ai_score"] == 74
-    assert stock["last_watching_ai_reason"] == "corrected buy but score still below gate"
+    assert (
+        stock["last_watching_ai_reason"] == "corrected buy but score still below gate"
+    )
 
 
 def test_ai_numeric_consistency_recheck_does_not_count_untrusted_supply_axis(
@@ -21618,7 +21866,9 @@ def test_watching_state_blocks_deep_below_bid_pre_submit_price(monkeypatch):
     state_handlers.datetime = FixedDateTime
     # This test targets price distance, not elapsed quote age under suite load.
     # Keep the wall clock consistent with its fixed decision/session clock.
-    monkeypatch.setattr(state_handlers.time, "time", lambda: FixedDateTime.now().timestamp())
+    monkeypatch.setattr(
+        state_handlers.time, "time", lambda: FixedDateTime.now().timestamp()
+    )
     state_handlers.TRADING_RULES = replace(
         CONFIG,
         SCALE_IN_REQUIRE_HISTORY_TABLE=False,
@@ -21629,7 +21879,9 @@ def test_watching_state_blocks_deep_below_bid_pre_submit_price(monkeypatch):
     state_handlers.ALERTED_STOCKS = set()
     state_handlers.HIGHEST_PRICES = {}
     # The price guard is downstream of AI cooldown; start with an expired one.
-    state_handlers.LAST_AI_CALL_TIMES = {"001440": FixedDateTime.now().timestamp() - 3600}
+    state_handlers.LAST_AI_CALL_TIMES = {
+        "001440": FixedDateTime.now().timestamp() - 3600
+    }
     state_handlers.LAST_LOG_TIMES = {}
     state_handlers.DB = _DummyDB()
     state_handlers.KIWOOM_TOKEN = "token"
@@ -21764,7 +22016,8 @@ def test_watching_state_blocks_deep_below_bid_pre_submit_price(monkeypatch):
     state_handlers.handle_watching_state(
         stock=stock,
         code="001440",
-        ws_data={"last_ws_update_ts": state_handlers.time.time(),
+        ws_data={
+            "last_ws_update_ts": state_handlers.time.time(),
             "curr": 50_500,
             "v_pw": 120.0,
             "ask_tot": 20_000,
@@ -22193,12 +22446,14 @@ def test_weak_context_late_entry_guard_blocks_when_recent_block_history_and_weak
         "position_tag": "SCANNER",
         "trade_quality_block_history": [
             {
-                "stage": "blocked_strength_momentum", "gate_action": "baseline_block",
+                "stage": "blocked_strength_momentum",
+                "gate_action": "baseline_block",
                 "ts": now_ts - 120,
                 "risk_state": "weak_momentum_context",
             },
             {
-                "stage": "blocked_vpw", "gate_action": "baseline_block",
+                "stage": "blocked_vpw",
+                "gate_action": "baseline_block",
                 "ts": now_ts - 30,
                 "risk_state": "below_static_vpw_context",
             },
@@ -22251,12 +22506,14 @@ def test_weak_context_late_entry_guard_blocks_rising_missed_zero_mfe_proxy(monke
         "rising_missed_one_share_entry_forced": True,
         "trade_quality_block_history": [
             {
-                "stage": "blocked_strength_momentum", "gate_action": "baseline_block",
+                "stage": "blocked_strength_momentum",
+                "gate_action": "baseline_block",
                 "ts": now_ts - 120,
                 "risk_state": "weak_momentum_context",
             },
             {
-                "stage": "blocked_strength_momentum", "gate_action": "baseline_block",
+                "stage": "blocked_strength_momentum",
+                "gate_action": "baseline_block",
                 "ts": now_ts - 30,
                 "risk_state": "weak_momentum_context",
             },
@@ -22308,12 +22565,14 @@ def test_weak_context_late_entry_guard_blocks_general_buy_zero_mfe_proxy(monkeyp
         "position_tag": "SCANNER",
         "trade_quality_block_history": [
             {
-                "stage": "blocked_strength_momentum", "gate_action": "baseline_block",
+                "stage": "blocked_strength_momentum",
+                "gate_action": "baseline_block",
                 "ts": now_ts - 100,
                 "risk_state": "weak_momentum_context",
             },
             {
-                "stage": "blocked_strength_momentum", "gate_action": "baseline_block",
+                "stage": "blocked_strength_momentum",
+                "gate_action": "baseline_block",
                 "ts": now_ts - 20,
                 "risk_state": "weak_momentum_context",
             },
@@ -22366,12 +22625,14 @@ def test_weak_context_late_entry_guard_does_not_block_weak_strength_without_micr
             "position_tag": "SCANNER",
             "trade_quality_block_history": [
                 {
-                    "stage": "blocked_strength_momentum", "gate_action": "baseline_block",
+                    "stage": "blocked_strength_momentum",
+                    "gate_action": "baseline_block",
                     "ts": now_ts - 100,
                     "risk_state": "weak_momentum_context",
                 },
                 {
-                    "stage": "blocked_strength_momentum", "gate_action": "baseline_block",
+                    "stage": "blocked_strength_momentum",
+                    "gate_action": "baseline_block",
                     "ts": now_ts - 20,
                     "risk_state": "weak_momentum_context",
                 },
@@ -22415,12 +22676,14 @@ def test_weak_context_late_entry_guard_does_not_block_on_missing_micro_fields(
         "position_tag": "SCANNER",
         "trade_quality_block_history": [
             {
-                "stage": "blocked_strength_momentum", "gate_action": "baseline_block",
+                "stage": "blocked_strength_momentum",
+                "gate_action": "baseline_block",
                 "ts": now_ts - 120,
                 "risk_state": "weak_momentum_context",
             },
             {
-                "stage": "blocked_vpw", "gate_action": "baseline_block",
+                "stage": "blocked_vpw",
+                "gate_action": "baseline_block",
                 "ts": now_ts - 30,
                 "risk_state": "below_static_vpw_context",
             },
@@ -22463,12 +22726,14 @@ def test_weak_context_late_entry_guard_uses_late_drift_micro_fallback(monkeypatc
         "position_tag": "SCANNER",
         "trade_quality_block_history": [
             {
-                "stage": "blocked_strength_momentum", "gate_action": "baseline_block",
+                "stage": "blocked_strength_momentum",
+                "gate_action": "baseline_block",
                 "ts": now_ts - 120,
                 "risk_state": "weak_momentum_context",
             },
             {
-                "stage": "blocked_strength_momentum", "gate_action": "baseline_block",
+                "stage": "blocked_strength_momentum",
+                "gate_action": "baseline_block",
                 "ts": now_ts - 30,
                 "risk_state": "weak_momentum_context",
             },
@@ -22525,12 +22790,14 @@ def test_weak_context_late_entry_guard_uses_ai_source_quality_fallback(monkeypat
         },
         "trade_quality_block_history": [
             {
-                "stage": "blocked_strength_momentum", "gate_action": "baseline_block",
+                "stage": "blocked_strength_momentum",
+                "gate_action": "baseline_block",
                 "ts": now_ts - 120,
                 "risk_state": "weak_momentum_context",
             },
             {
-                "stage": "blocked_strength_momentum", "gate_action": "baseline_block",
+                "stage": "blocked_strength_momentum",
+                "gate_action": "baseline_block",
                 "ts": now_ts - 30,
                 "risk_state": "weak_momentum_context",
             },
@@ -22571,7 +22838,8 @@ def test_weak_context_late_entry_guard_does_not_block_with_insufficient_history(
             "position_tag": "SCANNER",
             "trade_quality_block_history": [
                 {
-                    "stage": "blocked_strength_momentum", "gate_action": "baseline_block",
+                    "stage": "blocked_strength_momentum",
+                    "gate_action": "baseline_block",
                     "ts": now_ts - 30,
                     "risk_state": "weak_momentum_context",
                 },
@@ -22842,7 +23110,8 @@ def test_scalping_pre_ai_context_reaches_ai_and_blocks_low_liquidity_at_submit(
     state_handlers.handle_watching_state(
         stock=stock,
         code="123123",
-        ws_data={"last_ws_update_ts": state_handlers.time.time(),
+        ws_data={
+            "last_ws_update_ts": state_handlers.time.time(),
             "curr": 10_000,
             "v_pw": 100.0,
             "ask_tot": 100,
@@ -22986,9 +23255,11 @@ def test_pre_submit_liquidity_relief_allows_strong_bundle_submit(
     # This test exercises the liquidity relief and broker identity contract;
     # its synthetic bundle must not depend on today's shared runtime bundle.
     monkeypatch.setattr(
-        mechanistic_entry_runtime_policy, "validate_attempt_generation",
+        mechanistic_entry_runtime_policy,
+        "validate_attempt_generation",
         lambda *args, **kwargs: {"allowed": True, "reason": "test_generation_current"},
     )
+
     class FixedDateTime(datetime):
         @classmethod
         def now(cls, tz=None):
@@ -23172,7 +23443,8 @@ def test_pre_submit_liquidity_relief_allows_strong_bundle_submit(
     state_handlers.handle_watching_state(
         stock=stock,
         code="555555",
-        ws_data={"last_ws_update_ts": state_handlers.time.time(),
+        ws_data={
+            "last_ws_update_ts": state_handlers.time.time(),
             "curr": 10_000,
             "v_pw": 100.0,
             "ask_tot": 100,
@@ -25857,7 +26129,8 @@ def test_pending_entry_cancel_logs_receipt_provenance(monkeypatch):
         lambda stock, code, stage, **fields: logs.append((stage, fields)),
     )
     monkeypatch.setattr(
-        state_handlers, "_log_holding_pipeline",
+        state_handlers,
+        "_log_holding_pipeline",
         lambda stock, code, stage, **fields: holding_logs.append((stage, fields)),
     )
     monkeypatch.setattr(
@@ -25920,12 +26193,16 @@ def test_pending_entry_cancel_logs_receipt_provenance(monkeypatch):
     assert terminal["order_filled_qty"] == 0
     assert terminal["terminal_reason"] == "terminal_absence_and_inventory_exact"
     monkeypatch.setattr(
-        state_handlers, "_log_holding_pipeline",
+        state_handlers,
+        "_log_holding_pipeline",
         lambda *args, **kwargs: (_ for _ in ()).throw(OSError("append failed")),
     )
-    assert state_handlers._cancel_pending_entry_orders(
-        stock_with_log_failure, "440110", force=True
-    ) == "cancelled"
+    assert (
+        state_handlers._cancel_pending_entry_orders(
+            stock_with_log_failure, "440110", force=True
+        )
+        == "cancelled"
+    )
 
 
 def test_split_entry_cancel_only_expired_leg_keeps_later_legs(monkeypatch):
@@ -26685,7 +26962,8 @@ def test_hard_stop_avg_down_attempt_runs_after_quote_revalidation(monkeypatch):
     monkeypatch.setattr(
         state_handlers,
         "_attempt_stop_line_touch_mandatory_avg_down",
-        lambda **kwargs: avg_down_calls.append(kwargs) or {"submitted": True}, raising=False,
+        lambda **kwargs: avg_down_calls.append(kwargs) or {"submitted": True},
+        raising=False,
     )
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
@@ -26765,7 +27043,8 @@ def test_hard_stop_manual_handoff_runs_before_avg_down_and_broker_sell(
     monkeypatch.setattr(
         state_handlers,
         "_attempt_stop_line_touch_mandatory_avg_down",
-        fail_avg_down, raising=False,
+        fail_avg_down,
+        raising=False,
     )
     monkeypatch.setattr(
         state_handlers.kiwoom_orders, "send_smart_sell_order", fail_sell
@@ -27685,7 +27964,8 @@ def test_entry_arm_skips_strength_recheck_after_ai_confirm(monkeypatch):
         "position_tag": "SCANNER",
         "prob": 0.7,
     }
-    ws_data = {"last_ws_update_ts": state_handlers.time.time(),
+    ws_data = {
+        "last_ws_update_ts": state_handlers.time.time(),
         "curr": 10000,
         "v_pw": 100.0,
         "ask_tot": 30000,
@@ -30485,55 +30765,100 @@ def test_reconcile_partial_fill_below_min_ratio_sends_exit_order(monkeypatch):
     assert fields["allowed_runtime_apply"] is False
 
 
-@pytest.mark.parametrize("phase,submitted_qty", [
-    ("residual_submitted", 9),
-    ("residual_partial_submitted", 5),
-])
-@pytest.mark.parametrize("code,venue,session", [
-    ("403870", "KRX", "krx_regular"),
-    ("123456", "NXT", "nxt_entry_window"),
-    ("654321", "NXT", "nxt_regular_overlap"),
-    ("234567", "NXT", "nxt_aftermarket"),
-    ("345678", "SOR", "krx_regular"),
-    ("456789", "SOR", "nxt_aftermarket"),
-])
+@pytest.mark.parametrize(
+    "phase,submitted_qty",
+    [
+        ("residual_submitted", 9),
+        ("residual_partial_submitted", 5),
+    ],
+)
+@pytest.mark.parametrize(
+    "code,venue,session",
+    [
+        ("403870", "KRX", "krx_regular"),
+        ("123456", "NXT", "nxt_entry_window"),
+        ("654321", "NXT", "nxt_regular_overlap"),
+        ("234567", "NXT", "nxt_aftermarket"),
+        ("345678", "SOR", "krx_regular"),
+        ("456789", "SOR", "nxt_aftermarket"),
+    ],
+)
 def test_reconcile_probe_partial_holding_is_not_ratio_liquidated(
-    monkeypatch, code, venue, session, phase, submitted_qty,
+    monkeypatch,
+    code,
+    venue,
+    session,
+    phase,
+    submitted_qty,
 ):
     """Cancel -> partial HOLDING must not fall through to a second exit owner."""
     _mock_exact_order_terminal(monkeypatch)
-    monkeypatch.setattr(state_handlers, "TRADING_RULES", replace(
-        constants.TRADING_RULES, SCALP_PARTIAL_FILL_RATIO_GUARD_ENABLED=True,
-        SCALP_PARTIAL_FILL_MIN_RATIO_DEFAULT=0.20,
-    ))
+    monkeypatch.setattr(
+        state_handlers,
+        "TRADING_RULES",
+        replace(
+            constants.TRADING_RULES,
+            SCALP_PARTIAL_FILL_RATIO_GUARD_ENABLED=True,
+            SCALP_PARTIAL_FILL_MIN_RATIO_DEFAULT=0.20,
+        ),
+    )
     monkeypatch.setattr(state_handlers.time, "time", lambda: 1000.0)
-    monkeypatch.setattr(state_handlers, "update_probe_runtime_bundle", lambda *a, **kw: None)
+    monkeypatch.setattr(
+        state_handlers, "update_probe_runtime_bundle", lambda *a, **kw: None
+    )
     logs = []
-    monkeypatch.setattr(state_handlers, "_log_entry_pipeline",
-                        lambda s, c, stage, **kw: logs.append((stage, kw)))
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda s, c, stage, **kw: logs.append((stage, kw)),
+    )
     cancels = []
-    monkeypatch.setattr(kiwoom_orders, "send_cancel_order",
-                        lambda **kw: cancels.append(kw) or {"return_code": "0", "ord_no": "C1"})
-    monkeypatch.setattr(kiwoom_orders, "send_sell_order_market",
-                        lambda **kw: pytest.fail("intentional probe ratio liquidation"))
+    monkeypatch.setattr(
+        kiwoom_orders,
+        "send_cancel_order",
+        lambda **kw: cancels.append(kw) or {"return_code": "0", "ord_no": "C1"},
+    )
+    monkeypatch.setattr(
+        kiwoom_orders,
+        "send_sell_order_market",
+        lambda **kw: pytest.fail("intentional probe ratio liquidation"),
+    )
     stock = {
-        "id": 1, "code": code, "name": "TEST", "strategy": "SCALPING",
-        "effective_venue": venue, "market_session_bucket": session,
-        "status": "HOLDING", "buy_qty": 1, "buy_price": 53700,
-        "entry_requested_qty": 9, "requested_buy_qty": 9, "entry_filled_qty": 1,
-        "order_time": 800.0, "entry_split_probe_phase": phase,
+        "id": 1,
+        "code": code,
+        "name": "TEST",
+        "strategy": "SCALPING",
+        "effective_venue": venue,
+        "market_session_bucket": session,
+        "status": "HOLDING",
+        "buy_qty": 1,
+        "buy_price": 53700,
+        "entry_requested_qty": 9,
+        "requested_buy_qty": 9,
+        "entry_filled_qty": 1,
+        "order_time": 800.0,
+        "entry_split_probe_phase": phase,
         "entry_split_probe_bundle_id": f"{code}-probe-terminal",
         "entry_bundle_id": f"{code}-probe-terminal",
-        "entry_split_probe_requested_qty": 9, "entry_split_probe_target_qty": 9,
-        "entry_split_probe_committed_qty": 1, "entry_split_probe_conditional_qty": 8,
+        "entry_split_probe_requested_qty": 9,
+        "entry_split_probe_target_qty": 9,
+        "entry_split_probe_committed_qty": 1,
+        "entry_split_probe_conditional_qty": 8,
         "entry_split_probe_actual_submitted_qty": submitted_qty,
         "entry_split_probe_scale_in_forbidden": phase == "residual_partial_submitted",
-        "pending_entry_orders": [{
-            "tag": "entry_split_passive_1", "ord_no": "B2", "status": "OPEN",
-            "qty": submitted_qty - 1, "filled_qty": 0, "sent_at": 800.0,
-            "split_leg_ttl_sec": 45, "split_bundle_hard_ttl_sec": 180,
-            "dmst_stex_tp": venue,
-        }],
+        "pending_entry_orders": [
+            {
+                "tag": "entry_split_passive_1",
+                "ord_no": "B2",
+                "status": "OPEN",
+                "qty": submitted_qty - 1,
+                "filled_qty": 0,
+                "sent_at": 800.0,
+                "split_leg_ttl_sec": 45,
+                "split_bundle_hard_ttl_sec": 180,
+                "dmst_stex_tp": venue,
+            }
+        ],
     }
     state_handlers._reconcile_pending_entry_orders(stock, code, "SCALPING")
     assert stock["status"] == "HOLDING"
@@ -30548,9 +30873,13 @@ def test_reconcile_probe_partial_holding_is_not_ratio_liquidated(
     assert len(cancels) == 1
     assert cancels[0]["code"] == code
     assert cancels[0]["orig_ord_no"] == "B2"
-    assert entry_state.TERMINAL_ENTRY_ORDERS["B2"]["bundle_id"] == f"{code}-probe-terminal"
+    assert (
+        entry_state.TERMINAL_ENTRY_ORDERS["B2"]["bundle_id"] == f"{code}-probe-terminal"
+    )
     assert entry_state.TERMINAL_ENTRY_ORDERS["B2"]["target_id"] == 1
-    terminal = [fields for stage, fields in logs if stage == "residual_partial_complete"]
+    terminal = [
+        fields for stage, fields in logs if stage == "residual_partial_complete"
+    ]
     assert len(terminal) == 1
     assert terminal[0]["requested_qty"] == 9
     assert terminal[0]["filled_qty"] == 1
@@ -30562,12 +30891,21 @@ def test_reconcile_probe_partial_holding_is_not_ratio_liquidated(
 
 @pytest.mark.parametrize("result", ["failed", "pending", "partial_cancelled"])
 def test_reconcile_probe_uncertain_cancel_keeps_bundle_open(monkeypatch, result):
-    monkeypatch.setattr(state_handlers, "_cancel_pending_entry_orders", lambda *a, **kw: result)
-    monkeypatch.setattr(kiwoom_orders, "send_sell_order_market",
-                        lambda **kw: pytest.fail("uncertain cancellation cannot sell"))
+    monkeypatch.setattr(
+        state_handlers, "_cancel_pending_entry_orders", lambda *a, **kw: result
+    )
+    monkeypatch.setattr(
+        kiwoom_orders,
+        "send_sell_order_market",
+        lambda **kw: pytest.fail("uncertain cancellation cannot sell"),
+    )
     stock = {
-        "id": 1, "strategy": "SCALPING", "status": "HOLDING", "buy_qty": 1,
-        "entry_requested_qty": 9, "order_time": time.time() - 3600,
+        "id": 1,
+        "strategy": "SCALPING",
+        "status": "HOLDING",
+        "buy_qty": 1,
+        "entry_requested_qty": 9,
+        "order_time": time.time() - 3600,
         "entry_split_probe_phase": "residual_submitted",
         "pending_entry_orders": [{"ord_no": "B2", "status": "OPEN", "qty": 8}],
     }
@@ -30578,27 +30916,44 @@ def test_reconcile_probe_uncertain_cancel_keeps_bundle_open(monkeypatch, result)
     assert "entry_split_probe_partial_complete_qty" not in stock
 
 
-@pytest.mark.parametrize("authority", [
-    {"exit_token": "stop-owner"}, {"exit_requested": True},
-    {"fast_exit_token": "fast-stop-owner"},
-    {"sell_odno": "S1"}, {"sell_ord_no": "S2"}, {"sell_order_time": 999.0},
-    {"pending_sell_msg": "sell awaiting receipt"},
-    {"entry_split_probe_exit_bundle_id": "exit-bundle"}, {"status": "SELL_ORDERED"},
-])
+@pytest.mark.parametrize(
+    "authority",
+    [
+        {"exit_token": "stop-owner"},
+        {"exit_requested": True},
+        {"fast_exit_token": "fast-stop-owner"},
+        {"sell_odno": "S1"},
+        {"sell_ord_no": "S2"},
+        {"sell_order_time": 999.0},
+        {"pending_sell_msg": "sell awaiting receipt"},
+        {"entry_split_probe_exit_bundle_id": "exit-bundle"},
+        {"status": "SELL_ORDERED"},
+    ],
+)
 def test_reconcile_partial_entry_cannot_overwrite_existing_exit(monkeypatch, authority):
-    monkeypatch.setattr(state_handlers, "_cancel_pending_entry_orders", lambda *a, **kw: "cancelled")
-    monkeypatch.setattr(kiwoom_orders, "send_sell_order_market",
-                        lambda **kw: pytest.fail("duplicate exit owner"))
+    monkeypatch.setattr(
+        state_handlers, "_cancel_pending_entry_orders", lambda *a, **kw: "cancelled"
+    )
+    monkeypatch.setattr(
+        kiwoom_orders,
+        "send_sell_order_market",
+        lambda **kw: pytest.fail("duplicate exit owner"),
+    )
     stock = {
-        "id": 1, "strategy": "SCALPING", "status": "HOLDING", "buy_qty": 1,
-        "entry_requested_qty": 9, "order_time": time.time() - 3600,
+        "id": 1,
+        "strategy": "SCALPING",
+        "status": "HOLDING",
+        "buy_qty": 1,
+        "entry_requested_qty": 9,
+        "order_time": time.time() - 3600,
         "entry_split_probe_phase": "residual_submitted",
         "pending_entry_orders": [{"ord_no": "B2", "status": "OPEN", "qty": 8}],
         **authority,
     }
     before = deepcopy(stock)
     assert not state_handlers._finalize_entry_split_probe_partial_position(
-        stock, "123456", reason="submitted_residual_orders_terminal")
+        stock, "123456", reason="submitted_residual_orders_terminal"
+    )
     state_handlers._reconcile_pending_entry_orders(stock, "123456", "SCALPING")
     assert {key: stock[key] for key in before} == before
     assert stock.get("sell_odno") == before.get("sell_odno")
@@ -30606,35 +30961,64 @@ def test_reconcile_partial_entry_cannot_overwrite_existing_exit(monkeypatch, aut
 
 
 def test_probe_terminal_fill_race_keeps_partial_holding_contract(monkeypatch):
-    monkeypatch.setattr(state_handlers, "update_probe_runtime_bundle", lambda *a, **kw: None)
+    monkeypatch.setattr(
+        state_handlers, "update_probe_runtime_bundle", lambda *a, **kw: None
+    )
     monkeypatch.setattr(state_handlers, "_log_entry_pipeline", lambda *a, **kw: None)
     stock = {
-        "id": 1, "strategy": "SCALPING", "status": "HOLDING", "buy_qty": 1,
-        "entry_requested_qty": 9, "entry_split_probe_requested_qty": 9,
+        "id": 1,
+        "strategy": "SCALPING",
+        "status": "HOLDING",
+        "buy_qty": 1,
+        "entry_requested_qty": 9,
+        "entry_split_probe_requested_qty": 9,
         "entry_split_probe_bundle_id": "123456-probe-terminal-race",
         "entry_split_probe_phase": "residual_submitted",
         "pending_entry_orders": [{"ord_no": "B2", "status": "CANCELLED", "qty": 8}],
     }
-    assert state_handlers._cancel_pending_entry_orders(stock, "123456", force=True) == "resolved"
+    assert (
+        state_handlers._cancel_pending_entry_orders(stock, "123456", force=True)
+        == "resolved"
+    )
     assert stock["entry_split_probe_phase"] == "partial_complete"
     assert stock["entry_split_probe_partial_complete_qty"] == 1
     assert stock["status"] == "HOLDING"
 
 
-@pytest.mark.parametrize("changes", [
-    {"pending_entry_orders": [{"ord_no": "B2", "status": "CANCEL_PENDING", "qty": 8}]},
-    {"pending_entry_orders": [{"ord_no": "B2", "status": "UNKNOWN", "qty": 8}]},
-    {"pending_entry_orders": []},
-    {"entry_cancel_terminal_reconciliation_required": True},
-    {"entry_cancel_reconciliation_required": True},
-    {"pending_entry_orders": [{"ord_no": "B2", "status": "CANCELLED", "cancel_terminal_pending": True}]},
-])
-def test_probe_partial_holding_preserves_unresolved_terminal_custody(monkeypatch, changes):
-    monkeypatch.setattr(state_handlers, "update_probe_runtime_bundle",
-                        lambda *a, **kw: pytest.fail("unconfirmed terminal finalized"))
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {
+            "pending_entry_orders": [
+                {"ord_no": "B2", "status": "CANCEL_PENDING", "qty": 8}
+            ]
+        },
+        {"pending_entry_orders": [{"ord_no": "B2", "status": "UNKNOWN", "qty": 8}]},
+        {"pending_entry_orders": []},
+        {"entry_cancel_terminal_reconciliation_required": True},
+        {"entry_cancel_reconciliation_required": True},
+        {
+            "pending_entry_orders": [
+                {"ord_no": "B2", "status": "CANCELLED", "cancel_terminal_pending": True}
+            ]
+        },
+    ],
+)
+def test_probe_partial_holding_preserves_unresolved_terminal_custody(
+    monkeypatch, changes
+):
+    monkeypatch.setattr(
+        state_handlers,
+        "update_probe_runtime_bundle",
+        lambda *a, **kw: pytest.fail("unconfirmed terminal finalized"),
+    )
     stock = {
-        "id": 1, "code": "123456", "strategy": "SCALPING",
-        "status": "HOLDING", "buy_qty": 1, "entry_requested_qty": 9,
+        "id": 1,
+        "code": "123456",
+        "strategy": "SCALPING",
+        "status": "HOLDING",
+        "buy_qty": 1,
+        "entry_requested_qty": 9,
         "entry_split_probe_requested_qty": 9,
         "entry_split_probe_bundle_id": "123456-probe-terminal-pending",
         "entry_bundle_id": "123456-probe-terminal-pending",
@@ -30644,38 +31028,63 @@ def test_probe_partial_holding_preserves_unresolved_terminal_custody(monkeypatch
     }
     before = deepcopy(stock)
     assert not state_handlers._finalize_entry_split_probe_partial_position(
-        stock, "123456", reason="submitted_residual_orders_terminal")
-    assert state_handlers._cancel_pending_entry_orders(stock, "123456", force=True) == "pending"
+        stock, "123456", reason="submitted_residual_orders_terminal"
+    )
+    assert (
+        state_handlers._cancel_pending_entry_orders(stock, "123456", force=True)
+        == "pending"
+    )
     assert stock == before
 
 
-@pytest.mark.parametrize("changes", [
-    {"status": "COMPLETED"}, {"status": "SOLD"}, {"status": "CLOSED"},
-    {"buy_qty": 0, "entry_filled_qty": 1},
-    {"buy_qty": 9}, {"entry_requested_qty": 0, "entry_split_probe_requested_qty": 0},
-    {"entry_split_probe_phase": "aborted"},
-    {"entry_split_probe_phase": "probe_recheck_pending"},
-    {"entry_split_probe_bundle_id": ""}, {"entry_bundle_id": "another-entry"},
-    {"initial_quantity_bundle": {"attempt_id": "separate-durable-owner"}},
-])
-def test_probe_partial_finalization_requires_live_partial_inventory(monkeypatch, changes):
-    monkeypatch.setattr(state_handlers, "update_probe_runtime_bundle",
-                        lambda *a, **kw: pytest.fail("invalid partial finalization"))
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"status": "COMPLETED"},
+        {"status": "SOLD"},
+        {"status": "CLOSED"},
+        {"buy_qty": 0, "entry_filled_qty": 1},
+        {"buy_qty": 9},
+        {"entry_requested_qty": 0, "entry_split_probe_requested_qty": 0},
+        {"entry_split_probe_phase": "aborted"},
+        {"entry_split_probe_phase": "probe_recheck_pending"},
+        {"entry_split_probe_bundle_id": ""},
+        {"entry_bundle_id": "another-entry"},
+        {"initial_quantity_bundle": {"attempt_id": "separate-durable-owner"}},
+    ],
+)
+def test_probe_partial_finalization_requires_live_partial_inventory(
+    monkeypatch, changes
+):
+    monkeypatch.setattr(
+        state_handlers,
+        "update_probe_runtime_bundle",
+        lambda *a, **kw: pytest.fail("invalid partial finalization"),
+    )
     stock = {
-        "id": 1, "strategy": "SCALPING", "status": "HOLDING", "buy_qty": 1,
-        "entry_requested_qty": 9, "entry_split_probe_requested_qty": 9,
+        "id": 1,
+        "strategy": "SCALPING",
+        "status": "HOLDING",
+        "buy_qty": 1,
+        "entry_requested_qty": 9,
+        "entry_split_probe_requested_qty": 9,
         "entry_split_probe_bundle_id": "123456-probe-terminal-invalid",
-        "entry_split_probe_phase": "residual_submitted", **changes,
+        "entry_split_probe_phase": "residual_submitted",
+        **changes,
     }
     before = deepcopy(stock)
     assert not state_handlers._finalize_entry_split_probe_partial_position(
-        stock, "123456", reason="submitted_residual_orders_terminal")
+        stock, "123456", reason="submitted_residual_orders_terminal"
+    )
     assert stock == before
 
 
 def test_probe_partial_finalization_rechecks_exit_after_lock_wait(monkeypatch):
     stock = {
-        "id": 1, "strategy": "SCALPING", "status": "HOLDING", "buy_qty": 1,
+        "id": 1,
+        "strategy": "SCALPING",
+        "status": "HOLDING",
+        "buy_qty": 1,
         "entry_split_probe_requested_qty": 9,
         "entry_split_probe_bundle_id": "123456-probe-terminal-race",
         "entry_split_probe_phase": "residual_submitted",
@@ -30692,13 +31101,19 @@ def test_probe_partial_finalization_rechecks_exit_after_lock_wait(monkeypatch):
             real_lock.release()
 
     monkeypatch.setattr(state_handlers, "ENTRY_LOCK", ContendedLock())
-    monkeypatch.setattr(state_handlers, "update_probe_runtime_bundle",
-                        lambda *a, **kw: pytest.fail("exit owner overwritten"))
+    monkeypatch.setattr(
+        state_handlers,
+        "update_probe_runtime_bundle",
+        lambda *a, **kw: pytest.fail("exit owner overwritten"),
+    )
     with ThreadPoolExecutor(max_workers=1) as executor:
         with real_lock:
             pending = executor.submit(
                 state_handlers._finalize_entry_split_probe_partial_position,
-                stock, "123456", reason="submitted_residual_orders_terminal")
+                stock,
+                "123456",
+                reason="submitted_residual_orders_terminal",
+            )
             assert acquired.wait(timeout=2)
             stock.update(status="SELL_ORDERED", exit_token="hard-stop-owner")
         assert pending.result(timeout=2) is False
@@ -30709,18 +31124,26 @@ def test_probe_partial_finalization_rechecks_exit_after_lock_wait(monkeypatch):
 
 @pytest.mark.parametrize("filled_qty", [1, 3])
 def test_terminal_partial_probe_deferred_notice_does_not_promise_residual(
-    monkeypatch, filled_qty,
+    monkeypatch,
+    filled_qty,
 ):
     events = []
-    monkeypatch.setattr(receipts, "event_bus", SimpleNamespace(
-        publish=lambda event, payload: events.append((event, payload))))
+    monkeypatch.setattr(
+        receipts,
+        "event_bus",
+        SimpleNamespace(publish=lambda event, payload: events.append((event, payload))),
+    )
     stock = {
-        "code": "403870", "name": "HPSP", "strategy": "SCALPING",
+        "code": "403870",
+        "name": "HPSP",
+        "strategy": "SCALPING",
         "entry_split_probe_phase": "partial_complete",
         "entry_split_probe_order_no": "B1",
         "entry_partial_fill_deferred_notice": {
-            "avg_buy_price": 53700, "cum_filled_qty": filled_qty,
-            "requested_entry_qty": 9, "remaining_qty": 9 - filled_qty,
+            "avg_buy_price": 53700,
+            "cum_filled_qty": filled_qty,
+            "requested_entry_qty": 9,
+            "remaining_qty": 9 - filled_qty,
         },
     }
     assert receipts.flush_deferred_entry_partial_fill_notice(stock)
@@ -31231,7 +31654,9 @@ def test_historical_pyramid_pending_lineage_requires_exact_scanner_position():
     action = {
         "add_type": "PYRAMID",
         "position_episode_id": main_lifecycle_journal.mint_main_lifecycle_id(
-            record_id=171, stock_code="123456", attempt_id="promotion-171",
+            record_id=171,
+            stock_code="123456",
+            attempt_id="promotion-171",
         ),
         "scale_in_decision_id": "pyr-decision-" + "a" * 32,
     }
@@ -31251,7 +31676,9 @@ def test_historical_pyramid_pending_lineage_requires_exact_scanner_position():
         action,
     )
     assert not state_handlers._scale_in_pending_lineage(
-        stock, "123456", {**action, "scale_in_decision_id": ""},
+        stock,
+        "123456",
+        {**action, "scale_in_decision_id": ""},
     )
 
 
@@ -33056,14 +33483,6 @@ def test_fast_exit_pre_call_custody_failure_rearms_after_safe_db_rollback(
     )
 
 
-
-
-
-
-
-
-
-
 def test_sell_reject_with_positive_sellable_qty_requires_exact_receipt(monkeypatch):
     from src.utils.constants import TRADING_RULES as CONFIG
 
@@ -33893,12 +34312,6 @@ def test_retired_bad_entry_score_observation_does_not_run(monkeypatch):
     assert stock["status"] == "HOLDING"
 
 
-
-
-
-
-
-
 def test_scalp_soft_stop_micro_grace_expires_to_soft_stop(monkeypatch):
     evaluation_time = datetime(2026, 7, 28, 10, 0, tzinfo=state_handlers._KST)
     evaluation_ts = evaluation_time.timestamp()
@@ -33968,8 +34381,6 @@ def test_scalp_soft_stop_micro_grace_expires_to_soft_stop(monkeypatch):
     assert exit_logs and exit_logs[-1]["exit_rule"] == "scalp_soft_stop_pct"
 
 
-
-
 def _dynamic_soft_stop_grace_config(**overrides):
     values = {
         "SCALE_IN_REQUIRE_HISTORY_TABLE": False,
@@ -34014,24 +34425,6 @@ def _dynamic_soft_stop_stock(**overrides):
     }
     stock.update(overrides)
     return stock
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 def test_holding_stale_ws_blocks_exit_and_requests_repair(monkeypatch):
@@ -34168,10 +34561,16 @@ def test_holding_stale_ws_rest_quote_recovery_allows_exit_evaluation(monkeypatch
     monkeypatch.setattr(
         state_handlers.kiwoom_utils,
         "fetch_kiwoom_api_continuous",
-        lambda *args, **kwargs: [{"cur_prc": "9,810", "_kiwoom_source_meta": {
-            "api_id": "ka10001", "request_code": args[3]["stk_cd"],
-            "rest_received_ts_ms": int(now_ts * 1000),
-        }}],
+        lambda *args, **kwargs: [
+            {
+                "cur_prc": "9,810",
+                "_kiwoom_source_meta": {
+                    "api_id": "ka10001",
+                    "request_code": args[3]["stk_cd"],
+                    "rest_received_ts_ms": int(now_ts * 1000),
+                },
+            }
+        ],
     )
     stock = _dynamic_soft_stop_stock()
     now_ts = datetime(2026, 8, 24, 10, 0, tzinfo=state_handlers._KST).timestamp()
@@ -34249,9 +34648,16 @@ def test_holding_rest_quote_recovery_uses_venue_qualified_premarket_code(
 
     def _fetch(*args, **kwargs):
         requested_payloads.append(args[3])
-        return [{"cur_prc": "9,810", "_kiwoom_source_meta": {
-            "api_id": "ka10001", "request_code": "123456_NX", "rest_received_ts_ms": 1_000_000,
-        }}]
+        return [
+            {
+                "cur_prc": "9,810",
+                "_kiwoom_source_meta": {
+                    "api_id": "ka10001",
+                    "request_code": "123456_NX",
+                    "rest_received_ts_ms": 1_000_000,
+                },
+            }
+        ]
 
     monkeypatch.setattr(
         state_handlers.kiwoom_utils,
@@ -34315,10 +34721,16 @@ def test_holding_rest_quote_only_recovery_does_not_inflate_peak(monkeypatch):
     monkeypatch.setattr(
         state_handlers.kiwoom_utils,
         "fetch_kiwoom_api_continuous",
-        lambda *args, **kwargs: [{"cur_prc": "10,500", "_kiwoom_source_meta": {
-            "api_id": "ka10001", "request_code": args[3]["stk_cd"],
-            "rest_received_ts_ms": int(state_handlers.time.time() * 1000),
-        }}],
+        lambda *args, **kwargs: [
+            {
+                "cur_prc": "10,500",
+                "_kiwoom_source_meta": {
+                    "api_id": "ka10001",
+                    "request_code": args[3]["stk_cd"],
+                    "rest_received_ts_ms": int(state_handlers.time.time() * 1000),
+                },
+            }
+        ],
     )
     stock = _dynamic_soft_stop_stock(**_fresh_holding_score_fields(90))
 
@@ -34606,7 +35018,10 @@ def test_entry_setup_exploration_defers_residual_decision_to_split_owner(
     assert aborts == [("123456", "probe_fill_submit_contract_missing", True)]
     probe_state = json.loads(probe_state_path.read_text(encoding="utf-8"))
     assert "circuit_open" not in probe_state
-    assert probe_state["last_probe_violation_reason"] == "probe_fill_submit_contract_missing"
+    assert (
+        probe_state["last_probe_violation_reason"]
+        == "probe_fill_submit_contract_missing"
+    )
 
 
 def test_entry_setup_exploration_micro_relief_is_bounded_and_source_qualified():
@@ -35151,10 +35566,16 @@ def test_holding_recent_ws_blocks_divergent_rest_quote_recovery(monkeypatch):
     monkeypatch.setattr(
         state_handlers.kiwoom_utils,
         "fetch_kiwoom_api_continuous",
-        lambda *args, **kwargs: [{"cur_prc": "8,800", "_kiwoom_source_meta": {
-            "api_id": "ka10001", "request_code": args[3]["stk_cd"],
-            "rest_received_ts_ms": int(state_handlers.time.time() * 1000),
-        }}],
+        lambda *args, **kwargs: [
+            {
+                "cur_prc": "8,800",
+                "_kiwoom_source_meta": {
+                    "api_id": "ka10001",
+                    "request_code": args[3]["stk_cd"],
+                    "rest_received_ts_ms": int(state_handlers.time.time() * 1000),
+                },
+            }
+        ],
     )
     monkeypatch.setattr(
         state_handlers,
@@ -36015,14 +36436,6 @@ def test_holding_flow_ofi_debounce_ignores_micro_vwap_without_provenance(monkeyp
     assert not any(stage == "holding_flow_override_defer_exit" for stage, _ in logs)
 
 
-
-
-
-
-
-
-
-
 def _install_soft_stop_expert_test_doubles(monkeypatch):
     monkeypatch.setattr(state_handlers, "COOLDOWNS", {})
     monkeypatch.setattr(state_handlers, "ALERTED_STOCKS", set())
@@ -36111,18 +36524,6 @@ def _soft_stop_expert_stock(**overrides):
     return stock
 
 
-
-
-
-
-
-
-
-
-
-
-
-
 def test_retired_open_reclaim_score_only_exit_does_not_run(monkeypatch):
     from src.utils.constants import TRADING_RULES as CONFIG
 
@@ -36189,8 +36590,10 @@ def test_retired_open_reclaim_score_only_exit_does_not_run(monkeypatch):
         for stage, fields in pipeline_logs
         if stage == "sell_order_blocked_market_closed"
     ]
-    assert not any(row.get("exit_rule") == "scalp_open_reclaim_never_green"
-                   for row in exit_logs + blocked_logs)
+    assert not any(
+        row.get("exit_rule") == "scalp_open_reclaim_never_green"
+        for row in exit_logs + blocked_logs
+    )
 
 
 def test_open_reclaim_never_green_ignores_stale_holding_score(monkeypatch):
@@ -36397,8 +36800,10 @@ def test_retired_open_reclaim_retrace_score_exit_does_not_run(monkeypatch):
         for stage, fields in pipeline_logs
         if stage == "sell_order_blocked_market_closed"
     ]
-    assert not any(row.get("exit_rule") == "scalp_open_reclaim_retrace_exit"
-                   for row in exit_logs + blocked_logs)
+    assert not any(
+        row.get("exit_rule") == "scalp_open_reclaim_retrace_exit"
+        for row in exit_logs + blocked_logs
+    )
 
 
 def test_common_hard_time_stop_stays_shadow_only(monkeypatch):
@@ -36454,8 +36859,9 @@ def test_common_hard_time_stop_stays_shadow_only(monkeypatch):
     )
 
     assert stock["status"] == "HOLDING"
-    assert stock['status']=='HOLDING'
-    assert not any(stage == 'scalp_hard_time_stop_shadow' for stage,_ in pipeline_logs)
+    assert stock["status"] == "HOLDING"
+    assert not any(stage == "scalp_hard_time_stop_shadow" for stage, _ in pipeline_logs)
+
 
 def test_holding_fast_reuse_band_logs_review_for_near_safe_profit(monkeypatch):
     from src.utils.constants import TRADING_RULES as CONFIG
@@ -36503,7 +36909,8 @@ def test_holding_fast_reuse_band_logs_review_for_near_safe_profit(monkeypatch):
         lambda *args, **kwargs: [{"Close": 10080}],
     )
     monkeypatch.setattr(
-        state_handlers, "_get_holding_minute_candles_with_meta",
+        state_handlers,
+        "_get_holding_minute_candles_with_meta",
         lambda *args, **kwargs: ([{"Close": 10080}], {}),
     )
 
@@ -36558,9 +36965,7 @@ def test_holding_fast_reuse_band_logs_review_for_near_safe_profit(monkeypatch):
     assert review_finished.wait(3), "asynchronous holding review did not finish"
 
     fast_reuse_logs = [
-        fields
-        for stage, fields in pipeline_logs
-        if stage == "holding_path_review"
+        fields for stage, fields in pipeline_logs if stage == "holding_path_review"
     ]
 
     assert fast_reuse_logs
@@ -36656,28 +37061,6 @@ def _reversal_add_rules(**kwargs):
 # TC-5: 수급 조건 2/4 충족 → 차단
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 def test_avg_down_runtime_config_default_fallback_not_pid_verified(monkeypatch):
     from types import SimpleNamespace
 
@@ -36691,8 +37074,6 @@ def test_avg_down_runtime_config_default_fallback_not_pid_verified(monkeypatch):
         state_handlers._avg_down_runtime_config_fields()["runtime_pid_value_verified"]
         is False
     )
-
-
 
 
 def test_avg_down_no_add_reason_difference_is_not_behavior_change():
@@ -36744,14 +37125,6 @@ def test_avg_down_route_observation_skips_outside_shallow_parent_scope(monkeypat
     )
 
     assert calls == []
-
-
-
-
-
-
-
-
 
 
 def _enable_shallow_source_gap_recheck(monkeypatch):
@@ -36831,10 +37204,6 @@ def _trusted_shallow_recheck_ws(observed_at, *, source="kiwoom_0b_signed_trade_v
             }
         )
     return {"recent_trade_ticks": ticks}
-
-
-
-
 
 
 def test_shallow_recheck_only_does_not_fall_through_to_regular_scale_in(monkeypatch):
@@ -36921,16 +37290,6 @@ def test_shallow_recheck_only_rechecks_ttl_after_feature_refresh(monkeypatch):
     assert stock.get("shallow_source_gap_recheck_armed") is None
 
 
-
-
-
-
-
-
-
-
-
-
 # TC-6: 정상 조건 모두 충족 → 트리거
 
 
@@ -36943,11 +37302,7 @@ def test_shallow_recheck_only_rechecks_ttl_after_feature_refresh(monkeypatch):
 # TC-9: hold_sec 범위 이탈 → 차단
 
 
-
-
 # TC-10: _extract_scalping_features 없는 엔진 → feature source-quality insufficient
-
-
 
 
 def test_resolve_sell_order_sign_trailing_negative_treated_as_loss():
@@ -37891,7 +38246,9 @@ def test_handle_holding_state_blocks_trailing_signal_when_bid_is_stale(
             "buy_price": 10_000,
             "buy_qty": 3,
             "rt_ai_prob": 0.75,
-            "buy_time": datetime(2026, 7, 13, 13, 0, tzinfo=state_handlers._KST).timestamp(),
+            "buy_time": datetime(
+                2026, 7, 13, 13, 0, tzinfo=state_handlers._KST
+            ).timestamp(),
             "trailing_shallow_loss_confirm_deferred": True,
             "scalp_trailing_trusted_peak_price": 10_080,
             "scalp_trailing_peak_basis_price": 10_000,
@@ -37904,7 +38261,9 @@ def test_handle_holding_state_blocks_trailing_signal_when_bid_is_stale(
             ws_data={"curr": 10_000},
             admin_id=1,
             market_regime="BULL",
-            now_ts=datetime(2026, 7, 13, 13, 4, 30, tzinfo=state_handlers._KST).timestamp(),
+            now_ts=datetime(
+                2026, 7, 13, 13, 4, 30, tzinfo=state_handlers._KST
+            ).timestamp(),
             now_dt=datetime(2026, 7, 13, 13, 4, 30),
             radar=None,
             ai_engine=None,
@@ -37923,8 +38282,6 @@ def test_handle_holding_state_blocks_trailing_signal_when_bid_is_stale(
     assert blocked, pipeline_events
     assert blocked[0]["armed"] is True
     assert blocked[0]["actual_order_submitted"] is False
-
-
 
 
 def test_scalping_discretionary_quote_revalidation_excludes_emergency_exits():
@@ -38135,8 +38492,6 @@ def test_handle_holding_state_cancels_soft_stop_when_fresh_quote_recovers(
         if stage == "smoothing_source_only_path_armed"
     ]
     assert not source_only_arms  # Whipsaw collection is permanently retired.
-
-
 
 
 def test_scalp_profit_stagnation_time_exit_skips_simulated_position(monkeypatch):
@@ -38571,18 +38926,6 @@ def test_late_loss_avg_down_retry_uses_reversal_qty_rule(monkeypatch):
     )
     assert stop_touch_mandatory["qty"] > 0
     assert stop_touch_mandatory["qty_reason"] != "reversal_probe_missing"
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 @pytest.mark.parametrize(
@@ -39451,18 +39794,6 @@ def test_first_touch_avgdown_decision_gate_context_micro_uses_stock_freshness(
     assert blocked["fields"]["first_touch_reversal_feature_source_quality"] == "stale"
 
 
-
-
-
-
-
-
-
-
-
-
-
-
 def test_first_touch_runtime_prior_blocks_source_quality_gap(monkeypatch, tmp_path):
     monkeypatch.setattr(
         state_handlers, "_FIRST_TOUCH_RUNTIME_PRIOR_REPORT_DIR", tmp_path
@@ -39500,36 +39831,6 @@ def test_first_touch_runtime_prior_blocks_source_quality_gap(monkeypatch, tmp_pa
         prior["reason"]
         == "prior_report_source_quality_first_touch_micro_provenance_unusable"
     )
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 def test_loss_fallback_ai_score_context_rejects_unusable_holding_ai_score():
@@ -39777,24 +40078,6 @@ def test_scalp_profit_stagnation_time_exit_has_no_holding_flow_override(monkeypa
     )
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 def test_runtime_action_now_ts_does_not_reuse_stale_loop_clock(monkeypatch):
     monkeypatch.setattr(state_handlers.time, "time", lambda: 2_000.0)
 
@@ -39964,110 +40247,232 @@ def test_scale_in_frozen_budget_never_fetches_and_preserves_zero_unknown(monkeyp
     stock = {"buy_price": 100, "buy_qty": 10, "code": "005930"}
     action = {"add_type": "PYRAMID", "reason": "test"}
     called = []
-    monkeypatch.setattr(state_handlers, "describe_dynamic_scale_in_qty", lambda **kwargs: called.append(kwargs) or {"qty": 0})
-    monkeypatch.setattr(state_handlers, "_scale_in_quantity_limit_decision", lambda *a, **kw: {"allowed_qty": kw["requested_qty"]})
-    assert state_handlers._scale_in_observation_sizing(stock, "005930", 101, action, {}, 1000) is None
+    monkeypatch.setattr(
+        state_handlers,
+        "describe_dynamic_scale_in_qty",
+        lambda **kwargs: called.append(kwargs) or {"qty": 0},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_scale_in_quantity_limit_decision",
+        lambda *a, **kw: {"allowed_qty": kw["requested_qty"]},
+    )
+    assert (
+        state_handlers._scale_in_observation_sizing(
+            stock, "005930", 101, action, {}, 1000
+        )
+        is None
+    )
     assert called == []
-    stock["_scale_in_observation_budget"] = {"code": "005930", "position_basis": [100, 10],
-        "resolved_price": 101, "observed_at": 1000, "budget": {"budget_base": 10000, "cash_orderable_qty_cap": 0}}
-    assert state_handlers._scale_in_observation_sizing(stock, "005930", 101, action, {}, 1001)["qty"] == 0
+    stock["_scale_in_observation_budget"] = {
+        "code": "005930",
+        "position_basis": [100, 10],
+        "resolved_price": 101,
+        "observed_at": 1000,
+        "budget": {"budget_base": 10000, "cash_orderable_qty_cap": 0},
+    }
+    assert (
+        state_handlers._scale_in_observation_sizing(
+            stock, "005930", 101, action, {}, 1001
+        )["qty"]
+        == 0
+    )
     assert len(called) == 1
-    assert state_handlers._scale_in_observation_sizing(stock, "005930", 101, action, {}, 1003) is None
-    assert state_handlers._scale_in_observation_sizing(stock, "005930", 102, action, {}, 1001) is None
-    assert state_handlers._scale_in_observation_sizing(stock, "005930", 101, action, {}, 999) is None
+    assert (
+        state_handlers._scale_in_observation_sizing(
+            stock, "005930", 101, action, {}, 1003
+        )
+        is None
+    )
+    assert (
+        state_handlers._scale_in_observation_sizing(
+            stock, "005930", 102, action, {}, 1001
+        )
+        is None
+    )
+    assert (
+        state_handlers._scale_in_observation_sizing(
+            stock, "005930", 101, action, {}, 999
+        )
+        is None
+    )
     assert len(called) == 1
 
 
 def test_scale_in_loaded_defaults_and_applied_lineage_are_independent(monkeypatch):
-    monkeypatch.setattr(state_handlers, "TRADING_RULES", SimpleNamespace(
-        SCALPING_PYRAMID_MIN_PROFIT_PCT=1.5, SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE=85))
+    monkeypatch.setattr(
+        state_handlers,
+        "TRADING_RULES",
+        SimpleNamespace(
+            SCALPING_PYRAMID_MIN_PROFIT_PCT=1.5,
+            SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE=85,
+        ),
+    )
     monkeypatch.delenv("KORSTOCKSCAN_SCALPING_PYRAMID_MIN_PROFIT_PCT", raising=False)
     assert state_handlers._avg_down_runtime_config_fields()["status"] == "retired"
     monkeypatch.setenv("KORSTOCKSCAN_SCALPING_PYRAMID_MIN_PROFIT_PCT", "1.6")
-    assert state_handlers._avg_down_runtime_config_fields()["runtime_pid_value_verified"] is False
+    assert (
+        state_handlers._avg_down_runtime_config_fields()["runtime_pid_value_verified"]
+        is False
+    )
     prefix = "KORSTOCKSCAN_SCALPING_PYRAMID_RUNTIME_"
-    for key, value in {"QUALITY_UPDATE_ID": "quality-1", "EVIDENCE_DIGEST": "a"*64,
-                       "EVIDENCE_CONTRACT_VERSION": "pyramid_paired_economics_v2"}.items():
-        monkeypatch.setenv(prefix+key, value)
+    for key, value in {
+        "QUALITY_UPDATE_ID": "quality-1",
+        "EVIDENCE_DIGEST": "a" * 64,
+        "EVIDENCE_CONTRACT_VERSION": "pyramid_paired_economics_v2",
+    }.items():
+        monkeypatch.setenv(prefix + key, value)
     stock = {}
-    state_handlers._record_scale_in_policy_lineage(stock, "PYRAMID", "episode", "first", "source")
-    state_handlers._record_scale_in_policy_lineage(stock, "PYRAMID", "episode", "later", "other")
+    state_handlers._record_scale_in_policy_lineage(
+        stock, "PYRAMID", "episode", "first", "source"
+    )
+    state_handlers._record_scale_in_policy_lineage(
+        stock, "PYRAMID", "episode", "later", "other"
+    )
     assert stock["_scale_in_applied_policy_lineage"]["decision_id"] == "first"
-    monkeypatch.setenv(prefix+"QUALITY_UPDATE_ID", "quality-2")
-    state_handlers._record_scale_in_policy_lineage(stock, "PYRAMID", "episode", "later", "other")
+    monkeypatch.setenv(prefix + "QUALITY_UPDATE_ID", "quality-2")
+    state_handlers._record_scale_in_policy_lineage(
+        stock, "PYRAMID", "episode", "later", "other"
+    )
     assert stock["_scale_in_applied_lineage_conflict"] is True
 
 
-
-
-
-
-
-
-@pytest.mark.parametrize("pending", ["pending_add_order", "pending_add_requested_at", "pending_add_ord_no"])
+@pytest.mark.parametrize(
+    "pending", ["pending_add_order", "pending_add_requested_at", "pending_add_ord_no"]
+)
 def test_scale_in_budget_source_never_enters_order_recovery(monkeypatch, pending):
-    stock = {"id": 1, "strategy": "SCALPING", "buy_price": 10000, "buy_qty": 10,
-             "last_entry_receipt_economics_complete": True,
-             "last_entry_receipt_quantity_contract_complete": True, pending: 1}
+    stock = {
+        "id": 1,
+        "strategy": "SCALPING",
+        "buy_price": 10000,
+        "buy_qty": 10,
+        "last_entry_receipt_economics_complete": True,
+        "last_entry_receipt_quantity_contract_complete": True,
+        pending: 1,
+    }
     monkeypatch.setattr(state_handlers, "KIWOOM_TOKEN", "fixture")
     monkeypatch.setattr(state_handlers, "_is_any_simulated_position", lambda *a: False)
-    monkeypatch.setattr(state_handlers, "_scale_in_exit_authority_block_reason", lambda *a: None)
+    monkeypatch.setattr(
+        state_handlers, "_scale_in_exit_authority_block_reason", lambda *a: None
+    )
+
     def forbidden(*args, **kwargs):
         pytest.fail("source-only observation entered live recovery or account lookup")
+
     monkeypatch.setattr(state_handlers, "can_consider_scale_in", forbidden)
     monkeypatch.setattr(state_handlers, "_resolve_scalp_cash_budget_context", forbidden)
-    assert state_handlers._prepare_scale_in_budget_source(
-        stock, "005930", {}, time.time(), family="PYRAMID") is None
+    assert (
+        state_handlers._prepare_scale_in_budget_source(
+            stock, "005930", {}, time.time(), family="PYRAMID"
+        )
+        is None
+    )
     assert "_scale_in_budget_source_epochs" not in stock
 
 
 @pytest.mark.parametrize("strategy", ["SCALPING", "KOSPI_ML", "KOSDAQ_ML"])
 @pytest.mark.parametrize("enabled", [False, True])
-def test_shared_rebound_retirement_pyramid_cannot_submit(monkeypatch, strategy, enabled):
-    for key in ("KORSTOCKSCAN_SCALPING_ENABLE_PYRAMID", "KORSTOCKSCAN_SWING_ENABLE_PYRAMID"):
+def test_shared_rebound_retirement_pyramid_cannot_submit(
+    monkeypatch, strategy, enabled
+):
+    for key in (
+        "KORSTOCKSCAN_SCALPING_ENABLE_PYRAMID",
+        "KORSTOCKSCAN_SWING_ENABLE_PYRAMID",
+    ):
         if enabled:
             monkeypatch.setenv(key, "true")
         else:
             monkeypatch.delenv(key, raising=False)
-    monkeypatch.setattr(state_handlers.kiwoom_orders, "send_buy_order",
-        lambda *a, **k: pytest.fail("retired PYRAMID cannot call broker"))
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_buy_order",
+        lambda *a, **k: pytest.fail("retired PYRAMID cannot call broker"),
+    )
     assert not scale_in.evaluate_scalping_pyramid({}, 10, 10, True)["should_add"]
     assert not scale_in.evaluate_swing_pyramid({}, 10, 10)["should_add"]
-    result = state_handlers.execute_scale_in_order(stock={"strategy": strategy},
-        code="005930", ws_data={}, action={"add_type": "PYRAMID"}, admin_id=None)
-    assert result == {"status": "blocked", "reason": "pyramid_permanently_retired", "qty": 0}
+    result = state_handlers.execute_scale_in_order(
+        stock={"strategy": strategy},
+        code="005930",
+        ws_data={},
+        action={"add_type": "PYRAMID"},
+        admin_id=None,
+    )
+    assert result == {
+        "status": "blocked",
+        "reason": "pyramid_permanently_retired",
+        "qty": 0,
+    }
 
 
 def _shared_rebound_fixture(monkeypatch):
     monkeypatch.setattr(state_handlers.time, "time", lambda: 2_000.0)
-    monkeypatch.setattr(state_handlers, "scalp_trailing_market_type_at", lambda _: "REGULAR")
+    monkeypatch.setattr(
+        state_handlers, "scalp_trailing_market_type_at", lambda _: "REGULAR"
+    )
     monkeypatch.setattr(state_handlers, "_is_any_simulated_position", lambda *a: False)
-    monkeypatch.setattr(state_handlers, "_scale_in_exit_authority_block_reason", lambda *a: None)
-    monkeypatch.setattr(state_handlers, "TRADING_RULES", SimpleNamespace(REVERSAL_ADD_ENABLED=True))
-    monkeypatch.setattr(state_handlers, "_holding_path_signal_decision", lambda *a, **k:
-        {"path_id": "ADD_REBOUND", "position_key": "record:100",
-         "decision": "PASS", "vote_count": 2, "signal_at": 2_000.0,
-         "policy_sha256": state_handlers.holding_path_policy_hash(
-             state_handlers.PATH_POLICY_BY_MARKET[("ADD_REBOUND", "REGULAR")])})
+    monkeypatch.setattr(
+        state_handlers, "_scale_in_exit_authority_block_reason", lambda *a: None
+    )
+    monkeypatch.setattr(
+        state_handlers, "TRADING_RULES", SimpleNamespace(REVERSAL_ADD_ENABLED=True)
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_holding_path_signal_decision",
+        lambda *a, **k: {
+            "path_id": "ADD_REBOUND",
+            "position_key": "record:100",
+            "decision": "PASS",
+            "vote_count": 2,
+            "signal_at": 2_000.0,
+            "policy_sha256": state_handlers.holding_path_policy_hash(
+                state_handlers.PATH_POLICY_BY_MARKET[("ADD_REBOUND", "REGULAR")]
+            ),
+        },
+    )
     monkeypatch.setattr(state_handlers, "_log_holding_pipeline", lambda *a, **k: None)
-    stock = {"id": 100, "code": "005930", "strategy": "SCALPING", "status": "HOLDING",
-        "buy_price": 10000, "buy_qty": 10}
-    state_handlers._record_main_rebound_entry_source(stock, "005930",
-        [{"completed": True}], {}, now_ts=2000)
-    signal = {"should_add": True, "source_signal_id": "natural-snapshot-1",
-        "machine_bundle_sha256": "a" * 64, "machine_policy_version": "shared-main-v1"}
+    stock = {
+        "id": 100,
+        "code": "005930",
+        "strategy": "SCALPING",
+        "status": "HOLDING",
+        "buy_price": 10000,
+        "buy_qty": 10,
+    }
+    state_handlers._record_main_rebound_entry_source(
+        stock, "005930", [{"completed": True}], {}, now_ts=2000
+    )
+    signal = {
+        "should_add": True,
+        "source_signal_id": "natural-snapshot-1",
+        "machine_bundle_sha256": "a" * 64,
+        "machine_policy_version": "shared-main-v1",
+    }
     engine = SimpleNamespace(evaluate_main_rebound_entry=lambda **kw: dict(signal))
-    kwargs = dict(stock=stock, code="005930", strategy="SCALPING", market_regime="NORMAL",
-        profit_rate=-0.6, peak_profit=0, curr_price=9950,
+    kwargs = dict(
+        stock=stock,
+        code="005930",
+        strategy="SCALPING",
+        market_regime="NORMAL",
+        profit_rate=-0.6,
+        peak_profit=0,
+        curr_price=9950,
         ws_data={"curr": 9950, "recent_trade_ticks": [{"price": 9950}]},
-        current_ai_score=70, held_sec=120, ai_engine=engine, now_ts=2000)
+        current_ai_score=70,
+        held_sec=120,
+        ai_engine=engine,
+        now_ts=2000,
+    )
     return stock, kwargs
 
 
 def test_shared_rebound_signal_has_episode_and_policy_without_budget_query(monkeypatch):
     stock, kwargs = _shared_rebound_fixture(monkeypatch)
-    monkeypatch.setattr(state_handlers.kiwoom_orders, "get_deposit",
-        lambda *a: pytest.fail("signal cannot query account"))
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "get_deposit",
+        lambda *a: pytest.fail("signal cannot query account"),
+    )
     action = state_handlers._evaluate_scale_in_signal(**kwargs)
     assert action["add_type"] == "AVG_DOWN"
     assert action["reason"] == "shared_main_rebound_entry"
@@ -40080,70 +40485,153 @@ def test_shared_rebound_signal_has_episode_and_policy_without_budget_query(monke
 
 def test_native_rebound_deadline_is_not_extended_by_holding_permit(monkeypatch):
     stock, kwargs = _shared_rebound_fixture(monkeypatch)
-    original = kwargs['ai_engine'].evaluate_main_rebound_entry
-    kwargs['ai_engine'].evaluate_main_rebound_entry = lambda **kw: dict(
-        original(**kw), native_signal_expires_at=2000.1)
+    original = kwargs["ai_engine"].evaluate_main_rebound_entry
+    kwargs["ai_engine"].evaluate_main_rebound_entry = lambda **kw: dict(
+        original(**kw), native_signal_expires_at=2000.1
+    )
     action = state_handlers._evaluate_scale_in_signal(**kwargs)
-    monkeypatch.setattr(state_handlers.time, 'time', lambda: 2000.2)
-    monkeypatch.setattr(state_handlers.kiwoom_orders, 'get_deposit',
-        lambda *a, **kw: pytest.fail('expired native signal reached account'))
-    result = state_handlers.execute_scale_in_order(stock=stock,code='005930',
-        ws_data=kwargs['ws_data'],action=action,admin_id='test')
-    assert result['reason']=='shared_rebound_permit_missing_or_stale'
+    monkeypatch.setattr(state_handlers.time, "time", lambda: 2000.2)
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "get_deposit",
+        lambda *a, **kw: pytest.fail("expired native signal reached account"),
+    )
+    result = state_handlers.execute_scale_in_order(
+        stock=stock,
+        code="005930",
+        ws_data=kwargs["ws_data"],
+        action=action,
+        admin_id="test",
+    )
+    assert result["reason"] == "shared_rebound_permit_missing_or_stale"
 
 
-@pytest.mark.parametrize("gap", ["position", "day", "source", "signal", "ai", "not_down", "sim", "exit"])
-def test_shared_rebound_signal_fails_closed_on_missing_current_authority(monkeypatch, gap):
+@pytest.mark.parametrize(
+    "gap", ["position", "day", "source", "signal", "ai", "not_down", "sim", "exit"]
+)
+def test_shared_rebound_signal_fails_closed_on_missing_current_authority(
+    monkeypatch, gap
+):
     stock, kwargs = _shared_rebound_fixture(monkeypatch)
-    if gap == "position": stock["buy_qty"] = 11
-    if gap == "day": stock["_main_rebound_entry_source"]["trade_date"] = "1999-01-01"
-    if gap == "source": stock.pop("_main_rebound_entry_source")
-    if gap == "signal": kwargs["ai_engine"].evaluate_main_rebound_entry = lambda **k: {"should_add": False}
-    if gap == "ai": monkeypatch.setattr(
-        state_handlers, "_holding_path_signal_decision", lambda *a, **k:
-        {"path_id": "ADD_REBOUND", "decision": "VETO", "vote_count": 2})
-    if gap == "not_down": kwargs["curr_price"] = 10001
-    if gap == "sim": monkeypatch.setattr(state_handlers, "_is_any_simulated_position", lambda *a: True)
-    if gap == "exit": monkeypatch.setattr(state_handlers, "_scale_in_exit_authority_block_reason", lambda *a: "exit_claimed")
+    if gap == "position":
+        stock["buy_qty"] = 11
+    if gap == "day":
+        stock["_main_rebound_entry_source"]["trade_date"] = "1999-01-01"
+    if gap == "source":
+        stock.pop("_main_rebound_entry_source")
+    if gap == "signal":
+        kwargs["ai_engine"].evaluate_main_rebound_entry = lambda **k: {
+            "should_add": False
+        }
+    if gap == "ai":
+        monkeypatch.setattr(
+            state_handlers,
+            "_holding_path_signal_decision",
+            lambda *a, **k: {
+                "path_id": "ADD_REBOUND",
+                "decision": "VETO",
+                "vote_count": 2,
+            },
+        )
+    if gap == "not_down":
+        kwargs["curr_price"] = 10001
+    if gap == "sim":
+        monkeypatch.setattr(
+            state_handlers, "_is_any_simulated_position", lambda *a: True
+        )
+    if gap == "exit":
+        monkeypatch.setattr(
+            state_handlers,
+            "_scale_in_exit_authority_block_reason",
+            lambda *a: "exit_claimed",
+        )
     assert state_handlers._evaluate_scale_in_signal(**kwargs) is None
 
 
-@pytest.mark.parametrize("gap", ["missing", "stale", "future", "position", "symbol", "duplicate", "guard", "hard_stop", "old_reason", "changed_source", "extra_authority"])
-def test_shared_rebound_execute_rejects_invalid_permits_before_account(monkeypatch, gap):
+@pytest.mark.parametrize(
+    "gap",
+    [
+        "missing",
+        "stale",
+        "future",
+        "position",
+        "symbol",
+        "duplicate",
+        "guard",
+        "hard_stop",
+        "old_reason",
+        "changed_source",
+        "extra_authority",
+    ],
+)
+def test_shared_rebound_execute_rejects_invalid_permits_before_account(
+    monkeypatch, gap
+):
     stock, kwargs = _shared_rebound_fixture(monkeypatch)
     action = state_handlers._evaluate_scale_in_signal(**kwargs)
     ws = kwargs["ws_data"]
-    monkeypatch.setattr(state_handlers, "can_consider_scale_in", lambda *a, **k:
-        {"allowed": gap != "guard", "reason": "pending_add_order"})
-    monkeypatch.setattr(state_handlers.kiwoom_orders, "get_deposit",
-        lambda *a: pytest.fail("invalid permit cannot reach account"))
+    monkeypatch.setattr(
+        state_handlers,
+        "can_consider_scale_in",
+        lambda *a, **k: {"allowed": gap != "guard", "reason": "pending_add_order"},
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "get_deposit",
+        lambda *a: pytest.fail("invalid permit cannot reach account"),
+    )
     code = "005930"
-    if gap == "missing": stock.pop("_main_rebound_entry_permit")
-    if gap == "stale": monkeypatch.setattr(state_handlers.time, "time", lambda: 2003)
-    if gap == "future": monkeypatch.setattr(state_handlers.time, "time", lambda: 1999)
-    if gap == "position": stock["buy_qty"] = 11
-    if gap == "symbol": code = "000001"
-    if gap == "duplicate": stock["last_avg_down_rebound_signal_id"] = action["source_signal_id"]
-    if gap == "hard_stop": ws["curr"] = 9500
-    if gap == "changed_source": ws["recent_trade_ticks"].append({"price": 9940})
-    if gap == "old_reason": action["reason"] = "deep_recovery_avg_down"
-    if gap == "extra_authority": action["stop_line_touched"] = True
-    result = state_handlers.execute_scale_in_order(stock=stock, code=code, ws_data=ws,
-        action=action, admin_id="fixture")
+    if gap == "missing":
+        stock.pop("_main_rebound_entry_permit")
+    if gap == "stale":
+        monkeypatch.setattr(state_handlers.time, "time", lambda: 2003)
+    if gap == "future":
+        monkeypatch.setattr(state_handlers.time, "time", lambda: 1999)
+    if gap == "position":
+        stock["buy_qty"] = 11
+    if gap == "symbol":
+        code = "000001"
+    if gap == "duplicate":
+        stock["last_avg_down_rebound_signal_id"] = action["source_signal_id"]
+    if gap == "hard_stop":
+        ws["curr"] = 9500
+    if gap == "changed_source":
+        ws["recent_trade_ticks"].append({"price": 9940})
+    if gap == "old_reason":
+        action["reason"] = "deep_recovery_avg_down"
+    if gap == "extra_authority":
+        action["stop_line_touched"] = True
+    result = state_handlers.execute_scale_in_order(
+        stock=stock, code=code, ws_data=ws, action=action, admin_id="fixture"
+    )
     assert result["status"] == "blocked" and result["qty"] == 0
 
 
+def test_shared_rebound_retirement_never_acquires_independent_budget_source(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        state_handlers.kiwoom_utils,
+        "fetch_kiwoom_api_continuous",
+        lambda *a, **k: pytest.fail("retired collector called API"),
+    )
+    assert (
+        state_handlers._prepare_scale_in_budget_source(
+            {}, "005930", {}, 2000, family="PYRAMID"
+        )
+        is None
+    )
+    assert (
+        state_handlers._prepare_scale_in_budget_source(
+            {}, "005930", {}, 2000, family="AVG_DOWN"
+        )
+        is None
+    )
 
 
-
-
-def test_shared_rebound_retirement_never_acquires_independent_budget_source(monkeypatch):
-    monkeypatch.setattr(state_handlers.kiwoom_utils, "fetch_kiwoom_api_continuous", lambda *a, **k: pytest.fail("retired collector called API"))
-    assert state_handlers._prepare_scale_in_budget_source({}, "005930", {}, 2000, family="PYRAMID") is None
-    assert state_handlers._prepare_scale_in_budget_source({}, "005930", {}, 2000, family="AVG_DOWN") is None
-
-
-def _execute_shared_rebound_guard_fixture(*, monkeypatch, stock, code, ws_data, action, admin_id):
+def _execute_shared_rebound_guard_fixture(
+    *, monkeypatch, stock, code, ws_data, action, admin_id
+):
     """Exercise downstream margin and quote guards in an eligible buy window."""
     monkeypatch.setattr(
         state_handlers, "is_scalping_buy_time_allowed", lambda _now: True
@@ -40154,87 +40642,160 @@ def _execute_shared_rebound_guard_fixture(*, monkeypatch, stock, code, ws_data, 
     stock["buy_price"] = float(ws_data["curr"]) * 1.005
     now = state_handlers.time.time()
     state_handlers._record_main_rebound_entry_source(stock, code, [], {}, now_ts=now)
-    monkeypatch.setattr(state_handlers, "scalp_trailing_market_type_at", lambda _: "REGULAR")
-    monkeypatch.setattr(state_handlers, "_holding_path_signal_decision", lambda *a, **k: {
-        "path_id": "ADD_REBOUND", "position_key": f"record:{stock['id']}",
-        "decision": "PASS", "vote_count": 2, "signal_at": now,
-        "policy_sha256": state_handlers.holding_path_policy_hash(
-            state_handlers.PATH_POLICY_BY_MARKET[("ADD_REBOUND", "REGULAR")]),
-    })
-    engine = SimpleNamespace(evaluate_main_rebound_entry=lambda **k:
-        {"should_add": True, "source_signal_id": "guard-fixture",
-         "machine_bundle_sha256": "a" * 64, "machine_policy_version": "shared-main-v1"})
-    permit = state_handlers._evaluate_scale_in_signal(stock=stock, code=code,
-        strategy="SCALPING", market_regime="NORMAL", profit_rate=-0.6,
-        peak_profit=0, curr_price=ws_data["curr"], ws_data=ws_data,
-        current_ai_score=80, held_sec=120, ai_engine=engine, now_ts=now)
+    monkeypatch.setattr(
+        state_handlers, "scalp_trailing_market_type_at", lambda _: "REGULAR"
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_holding_path_signal_decision",
+        lambda *a, **k: {
+            "path_id": "ADD_REBOUND",
+            "position_key": f"record:{stock['id']}",
+            "decision": "PASS",
+            "vote_count": 2,
+            "signal_at": now,
+            "policy_sha256": state_handlers.holding_path_policy_hash(
+                state_handlers.PATH_POLICY_BY_MARKET[("ADD_REBOUND", "REGULAR")]
+            ),
+        },
+    )
+    engine = SimpleNamespace(
+        evaluate_main_rebound_entry=lambda **k: {
+            "should_add": True,
+            "source_signal_id": "guard-fixture",
+            "machine_bundle_sha256": "a" * 64,
+            "machine_policy_version": "shared-main-v1",
+        }
+    )
+    permit = state_handlers._evaluate_scale_in_signal(
+        stock=stock,
+        code=code,
+        strategy="SCALPING",
+        market_regime="NORMAL",
+        profit_rate=-0.6,
+        peak_profit=0,
+        curr_price=ws_data["curr"],
+        ws_data=ws_data,
+        current_ai_score=80,
+        held_sec=120,
+        ai_engine=engine,
+        now_ts=now,
+    )
     assert permit is not None
-    return state_handlers.execute_scale_in_order(stock=stock, code=code,
-        ws_data=ws_data, action=permit, admin_id=admin_id)
+    return state_handlers.execute_scale_in_order(
+        stock=stock, code=code, ws_data=ws_data, action=permit, admin_id=admin_id
+    )
 
 
 @pytest.mark.parametrize("stop_guard_pct", [-0.5, float("nan")])
-def test_shared_rebound_source_does_not_mint_add_on_common_stop(monkeypatch, stop_guard_pct):
+def test_shared_rebound_source_does_not_mint_add_on_common_stop(
+    monkeypatch, stop_guard_pct
+):
     stock, kwargs = _shared_rebound_fixture(monkeypatch)
     kwargs["stop_guard_pct"] = stop_guard_pct
-    kwargs["ai_engine"].evaluate_main_rebound_entry = lambda **k: pytest.fail("stop must precede rebound assessment")
+    kwargs["ai_engine"].evaluate_main_rebound_entry = lambda **k: pytest.fail(
+        "stop must precede rebound assessment"
+    )
     assert state_handlers._evaluate_scale_in_signal(**kwargs) is None
-    assert stock["_main_rebound_entry_assessment"]["reason"] == "common_stop_has_priority"
+    assert (
+        stock["_main_rebound_entry_assessment"]["reason"] == "common_stop_has_priority"
+    )
     assert "_main_rebound_entry_permit" not in stock
 
 
-@pytest.mark.parametrize("intent", [
-    {"scout_upgrade_entry": True},
-    {"rising_missed_one_share_entry_forced": True},
-    {"forced_entry_reason": "rising_missed_one_share_entry"},
-])
+@pytest.mark.parametrize(
+    "intent",
+    [
+        {"scout_upgrade_entry": True},
+        {"rising_missed_one_share_entry_forced": True},
+        {"forced_entry_reason": "rising_missed_one_share_entry"},
+    ],
+)
 def test_retired_rising_missed_scout_intent_cannot_submit(intent, monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_RISING_MISSED_ONE_SHARE_ENTRY_ENABLED", "true")
+
     def forbidden(*args, **kwargs):
         pytest.fail("retired intent reached broker or budget")
+
     monkeypatch.setattr(state_handlers.kiwoom_orders, "get_deposit", forbidden)
-    assert state_handlers._submit_watching_triggered_entry({}, "005930", {}, None, intent) is False
+    assert (
+        state_handlers._submit_watching_triggered_entry({}, "005930", {}, None, intent)
+        is False
+    )
 
 
-def test_initial_bundle_restart_recovery_refreshes_without_buy_or_cancel(monkeypatch, tmp_path):
+def test_initial_bundle_restart_recovery_refreshes_without_buy_or_cancel(
+    monkeypatch, tmp_path
+):
     from src.engine.scalping.initial_quantity_bundle_state import (
-        bundle_state_path, create_indexed_bundle, new_bundle_state, next_bundle_state,
+        bundle_state_path,
+        create_indexed_bundle,
+        new_bundle_state,
+        next_bundle_state,
         save_bundle_state_cas,
     )
-    from src.engine.scalping.initial_quantity_timeout import build_bundle_timeout_schedule
+    from src.engine.scalping.initial_quantity_timeout import (
+        build_bundle_timeout_schedule,
+    )
 
     schedule = build_bundle_timeout_schedule(
-        quantity_type="KRX_PARENT", policy_sha256="a" * 64,
+        quantity_type="KRX_PARENT",
+        policy_sha256="a" * 64,
         decision_at="2026-09-28T09:29:50+09:00",
         order_start_at="2026-09-28T09:30:00+09:00",
-        total_wait_sec=60, leg_count=1, cancel_confirm_reserve_sec=5,
+        total_wait_sec=60,
+        leg_count=1,
+        cancel_confirm_reserve_sec=5,
     )
     initial = new_bundle_state(
-        attempt_id="recovery-attempt", code="005930", target_id="101",
-        schedule=schedule, requested_qty=1,
-        planned_legs=[{"leg_index": 0, "qty": 1, "price": 10000,
-                       "route": "KRX", "tag": "probe"}],
+        attempt_id="recovery-attempt",
+        code="005930",
+        target_id="101",
+        schedule=schedule,
+        requested_qty=1,
+        planned_legs=[
+            {"leg_index": 0, "qty": 1, "price": 10000, "route": "KRX", "tag": "probe"}
+        ],
     )
     root = tmp_path / "runtime" / "initial_quantity" / "bundles"
     path = bundle_state_path(root, initial["attempt_id"])
     assert create_indexed_bundle(root, initial) == path
-    intent = next_bundle_state(initial, 0, {
-        "state": "SUBMIT_INTENT",
-        "submit_intent_at_epoch": schedule["order_start_at_epoch"],
-    })
-    save_bundle_state_cas(path, intent,
-                          expected_parent_sha256=initial["bundle_content_sha256"])
+    intent = next_bundle_state(
+        initial,
+        0,
+        {
+            "state": "SUBMIT_INTENT",
+            "submit_intent_at_epoch": schedule["order_start_at_epoch"],
+        },
+    )
+    save_bundle_state_cas(
+        path, intent, expected_parent_sha256=initial["bundle_content_sha256"]
+    )
     monkeypatch.setattr(state_handlers, "DATA_DIR", tmp_path)
-    monkeypatch.setattr(state_handlers, "_request_broker_snapshot_refresh",
-                        lambda *args, **kwargs: refreshes.append((args, kwargs)))
-    monkeypatch.setattr(state_handlers, "_log_entry_pipeline", lambda *args, **kwargs: None)
-    monkeypatch.setattr(state_handlers, "_cancel_pending_entry_orders",
-                        lambda *args, **kwargs: pytest.fail("unexpected cancel"))
-    monkeypatch.setattr(state_handlers.kiwoom_orders, "send_buy_order",
-                        lambda **kwargs: pytest.fail("duplicate BUY"))
+    monkeypatch.setattr(
+        state_handlers,
+        "_request_broker_snapshot_refresh",
+        lambda *args, **kwargs: refreshes.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        state_handlers, "_log_entry_pipeline", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_cancel_pending_entry_orders",
+        lambda *args, **kwargs: pytest.fail("unexpected cancel"),
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_buy_order",
+        lambda **kwargs: pytest.fail("duplicate BUY"),
+    )
     refreshes = []
-    monkeypatch.setattr(state_handlers, "_manual_control_exclusion_blocked",
-                        lambda *args, **kwargs: False)
+    monkeypatch.setattr(
+        state_handlers,
+        "_manual_control_exclusion_blocked",
+        lambda *args, **kwargs: False,
+    )
     lost = {"id": 101, "strategy": "SCALPING", "status": "BUY_ORDERED"}
     state_handlers.handle_buy_ordered_state(lost, "005930")
     assert lost["initial_quantity_bundle"] == intent
@@ -40253,26 +40814,41 @@ def test_initial_bundle_restart_recovery_refreshes_without_buy_or_cancel(monkeyp
 
 def test_initial_bundle_missing_journal_blocks_cancel(monkeypatch, tmp_path):
     from src.engine.scalping.initial_quantity_bundle_state import new_bundle_state
-    from src.engine.scalping.initial_quantity_timeout import build_bundle_timeout_schedule
+    from src.engine.scalping.initial_quantity_timeout import (
+        build_bundle_timeout_schedule,
+    )
 
     schedule = build_bundle_timeout_schedule(
-        quantity_type="KRX_PARENT", policy_sha256="a" * 64,
+        quantity_type="KRX_PARENT",
+        policy_sha256="a" * 64,
         decision_at="2026-09-28T09:29:50+09:00",
         order_start_at="2026-09-28T09:30:00+09:00",
-        total_wait_sec=60, leg_count=1, cancel_confirm_reserve_sec=5,
+        total_wait_sec=60,
+        leg_count=1,
+        cancel_confirm_reserve_sec=5,
     )
     initial = new_bundle_state(
-        attempt_id="lost-attempt", code="005930", target_id="101",
-        schedule=schedule, requested_qty=1,
-        planned_legs=[{"leg_index": 0, "qty": 1, "price": 10000,
-                       "route": "KRX", "tag": "probe"}],
+        attempt_id="lost-attempt",
+        code="005930",
+        target_id="101",
+        schedule=schedule,
+        requested_qty=1,
+        planned_legs=[
+            {"leg_index": 0, "qty": 1, "price": 10000, "route": "KRX", "tag": "probe"}
+        ],
     )
     monkeypatch.setattr(state_handlers, "DATA_DIR", tmp_path)
-    monkeypatch.setattr(state_handlers, "_request_broker_snapshot_refresh",
-                        lambda *args, **kwargs: None)
-    monkeypatch.setattr(state_handlers, "_log_entry_pipeline", lambda *args, **kwargs: None)
-    monkeypatch.setattr(state_handlers, "_cancel_pending_entry_orders",
-                        lambda *args, **kwargs: pytest.fail("unexpected cancel"))
+    monkeypatch.setattr(
+        state_handlers, "_request_broker_snapshot_refresh", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(
+        state_handlers, "_log_entry_pipeline", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_cancel_pending_entry_orders",
+        lambda *args, **kwargs: pytest.fail("unexpected cancel"),
+    )
     stock = {"id": 101, "initial_quantity_bundle": initial}
     state_handlers._reconcile_pending_entry_orders(stock, "005930", "SCALPING")
     assert stock["initial_quantity_bundle"] == initial
@@ -40280,42 +40856,69 @@ def test_initial_bundle_missing_journal_blocks_cancel(monkeypatch, tmp_path):
 
 @pytest.mark.parametrize("memory_present", [False, True])
 def test_initial_bundle_corrupt_target_index_requests_snapshot_without_buy(
-        monkeypatch, tmp_path, memory_present):
+    monkeypatch, tmp_path, memory_present
+):
     from src.engine.scalping.initial_quantity_bundle_state import (
-        bundle_target_index_path, create_indexed_bundle, new_bundle_state,
+        bundle_target_index_path,
+        create_indexed_bundle,
+        new_bundle_state,
     )
-    from src.engine.scalping.initial_quantity_timeout import build_bundle_timeout_schedule
+    from src.engine.scalping.initial_quantity_timeout import (
+        build_bundle_timeout_schedule,
+    )
 
     schedule = build_bundle_timeout_schedule(
-        quantity_type="KRX_PARENT", policy_sha256="a" * 64,
+        quantity_type="KRX_PARENT",
+        policy_sha256="a" * 64,
         decision_at="2026-09-28T09:29:50+09:00",
         order_start_at="2026-09-28T09:30:00+09:00",
-        total_wait_sec=60, leg_count=1, cancel_confirm_reserve_sec=5,
+        total_wait_sec=60,
+        leg_count=1,
+        cancel_confirm_reserve_sec=5,
     )
     initial = new_bundle_state(
-        attempt_id="corrupt-index-attempt", code="005930", target_id="101",
-        schedule=schedule, requested_qty=1,
-        planned_legs=[{"leg_index": 0, "qty": 1, "price": 10000,
-                       "route": "KRX", "tag": "probe"}],
+        attempt_id="corrupt-index-attempt",
+        code="005930",
+        target_id="101",
+        schedule=schedule,
+        requested_qty=1,
+        planned_legs=[
+            {"leg_index": 0, "qty": 1, "price": 10000, "route": "KRX", "tag": "probe"}
+        ],
     )
     root = tmp_path / "runtime" / "initial_quantity" / "bundles"
     create_indexed_bundle(root, initial)
     bundle_target_index_path(root, "005930", "101").write_text("{broken")
     monkeypatch.setattr(state_handlers, "DATA_DIR", tmp_path)
-    monkeypatch.setattr(state_handlers, "_manual_control_exclusion_blocked",
-                        lambda *args, **kwargs: False)
-    monkeypatch.setattr(state_handlers, "_log_entry_pipeline", lambda *args, **kwargs: None)
-    monkeypatch.setattr(state_handlers, "_cancel_pending_entry_orders",
-                        lambda *args, **kwargs: pytest.fail("unexpected cancel"))
-    monkeypatch.setattr(state_handlers.kiwoom_orders, "send_buy_order",
-                        lambda **kwargs: pytest.fail("duplicate BUY"))
+    monkeypatch.setattr(
+        state_handlers,
+        "_manual_control_exclusion_blocked",
+        lambda *args, **kwargs: False,
+    )
+    monkeypatch.setattr(
+        state_handlers, "_log_entry_pipeline", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_cancel_pending_entry_orders",
+        lambda *args, **kwargs: pytest.fail("unexpected cancel"),
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_buy_order",
+        lambda **kwargs: pytest.fail("duplicate BUY"),
+    )
     refreshes = []
-    monkeypatch.setattr(state_handlers, "_request_broker_snapshot_refresh",
-                        lambda *args, **kwargs: refreshes.append((args, kwargs)))
+    monkeypatch.setattr(
+        state_handlers,
+        "_request_broker_snapshot_refresh",
+        lambda *args, **kwargs: refreshes.append((args, kwargs)),
+    )
     stock = {"id": 101, "strategy": "SCALPING", "status": "BUY_ORDERED"}
     if memory_present:
-        stock.update(initial_quantity_bundle=initial,
-                     initial_quantity_bundle_indexed=True)
+        stock.update(
+            initial_quantity_bundle=initial, initial_quantity_bundle_indexed=True
+        )
         state_handlers._reconcile_pending_entry_orders(stock, "005930", "SCALPING")
         state_handlers._reconcile_pending_entry_orders(stock, "005930", "SCALPING")
     else:
@@ -40328,131 +40931,228 @@ def test_initial_bundle_corrupt_target_index_requests_snapshot_without_buy(
 
 def test_initial_bundle_transition_rejects_foreign_local_order(monkeypatch, tmp_path):
     from src.engine.scalping.initial_quantity_bundle_state import (
-        bundle_state_path, new_bundle_state, next_bundle_state,
-        read_bundle_state, save_bundle_state_cas,
+        bundle_state_path,
+        new_bundle_state,
+        next_bundle_state,
+        read_bundle_state,
+        save_bundle_state_cas,
     )
-    from src.engine.scalping.initial_quantity_timeout import build_bundle_timeout_schedule
+    from src.engine.scalping.initial_quantity_timeout import (
+        build_bundle_timeout_schedule,
+    )
 
     schedule = build_bundle_timeout_schedule(
-        quantity_type="KRX_PARENT", policy_sha256="a" * 64,
+        quantity_type="KRX_PARENT",
+        policy_sha256="a" * 64,
         decision_at="2026-09-28T09:29:50+09:00",
         order_start_at="2026-09-28T09:30:00+09:00",
-        total_wait_sec=60, leg_count=1, cancel_confirm_reserve_sec=5,
+        total_wait_sec=60,
+        leg_count=1,
+        cancel_confirm_reserve_sec=5,
     )
     initial = new_bundle_state(
-        attempt_id="foreign-order-attempt", code="005930", target_id="101",
-        schedule=schedule, requested_qty=1,
-        planned_legs=[{"leg_index": 0, "qty": 1, "price": 10000,
-                       "route": "KRX", "tag": "probe"}],
+        attempt_id="foreign-order-attempt",
+        code="005930",
+        target_id="101",
+        schedule=schedule,
+        requested_qty=1,
+        planned_legs=[
+            {"leg_index": 0, "qty": 1, "price": 10000, "route": "KRX", "tag": "probe"}
+        ],
     )
-    path = bundle_state_path(tmp_path / "runtime" / "initial_quantity" / "bundles",
-                             initial["attempt_id"])
+    path = bundle_state_path(
+        tmp_path / "runtime" / "initial_quantity" / "bundles", initial["attempt_id"]
+    )
     save_bundle_state_cas(path, initial, expected_parent_sha256=None)
     start = schedule["order_start_at_epoch"]
-    intent = next_bundle_state(initial, 0, {
-        "state": "SUBMIT_INTENT", "submit_intent_at_epoch": start,
-    })
-    save_bundle_state_cas(path, intent,
-                          expected_parent_sha256=initial["bundle_content_sha256"])
-    opened = next_bundle_state(intent, 0, {
-        "state": "OPEN", "submit_intent_at_epoch": start,
-        "broker_order_no": "0000123",
-    })
-    save_bundle_state_cas(path, opened,
-                          expected_parent_sha256=intent["bundle_content_sha256"])
+    intent = next_bundle_state(
+        initial,
+        0,
+        {
+            "state": "SUBMIT_INTENT",
+            "submit_intent_at_epoch": start,
+        },
+    )
+    save_bundle_state_cas(
+        path, intent, expected_parent_sha256=initial["bundle_content_sha256"]
+    )
+    opened = next_bundle_state(
+        intent,
+        0,
+        {
+            "state": "OPEN",
+            "submit_intent_at_epoch": start,
+            "broker_order_no": "0000123",
+        },
+    )
+    save_bundle_state_cas(
+        path, opened, expected_parent_sha256=intent["bundle_content_sha256"]
+    )
     monkeypatch.setattr(state_handlers, "DATA_DIR", tmp_path)
     stock = {"id": 101, "initial_quantity_bundle": opened}
-    monkeypatch.setattr(state_handlers.kiwoom_orders, "send_cancel_order",
-                        lambda **kwargs: pytest.fail("foreign symbol cancel"))
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_cancel_order",
+        lambda **kwargs: pytest.fail("foreign symbol cancel"),
+    )
     assert state_handlers._cancel_pending_entry_orders(stock, "000660") == "failed"
-    foreign = {"initial_quantity_leg_index": 0, "ord_no": "0000999",
-               "entry_submit_attempt_id": opened["attempt_id"], "qty": 1,
-               "price": 10000, "tag": "probe", "dmst_stex_tp": "KRX"}
-    next_state = {"state": "CANCEL_REQUESTED", "broker_order_no": "0000999",
-                  "submit_intent_at_epoch": start}
+    foreign = {
+        "initial_quantity_leg_index": 0,
+        "ord_no": "0000999",
+        "entry_submit_attempt_id": opened["attempt_id"],
+        "qty": 1,
+        "price": 10000,
+        "tag": "probe",
+        "dmst_stex_tp": "KRX",
+    }
+    next_state = {
+        "state": "CANCEL_REQUESTED",
+        "broker_order_no": "0000999",
+        "submit_intent_at_epoch": start,
+    }
     accepted, reason = state_handlers._initial_quantity_persist_leg_transition(
-        stock, foreign, next_state,
+        stock,
+        foreign,
+        next_state,
     )
     assert not accepted and reason == "initial_quantity_local_order_plan_mismatch"
     assert read_bundle_state(path) == opened
 
 
 def test_initial_bundle_full_local_fill_waits_for_terminal_instead_of_cancel(
-        monkeypatch, tmp_path):
+    monkeypatch, tmp_path
+):
     from datetime import datetime as local_datetime
     from zoneinfo import ZoneInfo
     from src.engine.scalping.initial_quantity_bundle_state import (
-        bundle_state_path, new_bundle_state, next_bundle_state,
+        bundle_state_path,
+        new_bundle_state,
+        next_bundle_state,
         save_bundle_state_cas,
     )
-    from src.engine.scalping.initial_quantity_timeout import build_bundle_timeout_schedule
+    from src.engine.scalping.initial_quantity_timeout import (
+        build_bundle_timeout_schedule,
+    )
 
     now = time.time()
     kst = ZoneInfo("Asia/Seoul")
     start_at = local_datetime.fromtimestamp(now - 70, kst).isoformat()
     decision_at = local_datetime.fromtimestamp(now - 80, kst).isoformat()
     schedule = build_bundle_timeout_schedule(
-        quantity_type="KRX_PARENT", policy_sha256="a" * 64,
-        decision_at=decision_at, order_start_at=start_at,
-        total_wait_sec=60, leg_count=1, cancel_confirm_reserve_sec=5,
+        quantity_type="KRX_PARENT",
+        policy_sha256="a" * 64,
+        decision_at=decision_at,
+        order_start_at=start_at,
+        total_wait_sec=60,
+        leg_count=1,
+        cancel_confirm_reserve_sec=5,
     )
     initial = new_bundle_state(
-        attempt_id="full-fill-pending-proof", code="005930", target_id="101",
-        schedule=schedule, requested_qty=1,
-        planned_legs=[{"leg_index": 0, "qty": 1, "price": 10000,
-                       "route": "KRX", "tag": "probe"}],
+        attempt_id="full-fill-pending-proof",
+        code="005930",
+        target_id="101",
+        schedule=schedule,
+        requested_qty=1,
+        planned_legs=[
+            {"leg_index": 0, "qty": 1, "price": 10000, "route": "KRX", "tag": "probe"}
+        ],
     )
-    path = bundle_state_path(tmp_path / "runtime" / "initial_quantity" / "bundles",
-                             initial["attempt_id"])
+    path = bundle_state_path(
+        tmp_path / "runtime" / "initial_quantity" / "bundles", initial["attempt_id"]
+    )
     save_bundle_state_cas(path, initial, expected_parent_sha256=None)
     start = schedule["order_start_at_epoch"]
-    intent = next_bundle_state(initial, 0, {
-        "state": "SUBMIT_INTENT", "submit_intent_at_epoch": start,
-    })
-    save_bundle_state_cas(path, intent,
-                          expected_parent_sha256=initial["bundle_content_sha256"])
-    opened = next_bundle_state(intent, 0, {
-        "state": "OPEN", "submit_intent_at_epoch": start,
-        "broker_order_no": "0000123",
-    })
-    save_bundle_state_cas(path, opened,
-                          expected_parent_sha256=intent["bundle_content_sha256"])
+    intent = next_bundle_state(
+        initial,
+        0,
+        {
+            "state": "SUBMIT_INTENT",
+            "submit_intent_at_epoch": start,
+        },
+    )
+    save_bundle_state_cas(
+        path, intent, expected_parent_sha256=initial["bundle_content_sha256"]
+    )
+    opened = next_bundle_state(
+        intent,
+        0,
+        {
+            "state": "OPEN",
+            "submit_intent_at_epoch": start,
+            "broker_order_no": "0000123",
+        },
+    )
+    save_bundle_state_cas(
+        path, opened, expected_parent_sha256=intent["bundle_content_sha256"]
+    )
     monkeypatch.setattr(state_handlers, "DATA_DIR", tmp_path)
-    monkeypatch.setattr(state_handlers, "_initial_quantity_buy_leg_terminal_state",
-                        lambda *args, **kwargs: (None, "broker_terminal_pending"))
-    monkeypatch.setattr(state_handlers, "_request_broker_snapshot_refresh",
-                        lambda *args, **kwargs: refreshes.append((args, kwargs)))
-    monkeypatch.setattr(state_handlers, "_cancel_pending_entry_orders",
-                        lambda *args, **kwargs: pytest.fail("filled order cancelled"))
+    monkeypatch.setattr(
+        state_handlers,
+        "_initial_quantity_buy_leg_terminal_state",
+        lambda *args, **kwargs: (None, "broker_terminal_pending"),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_request_broker_snapshot_refresh",
+        lambda *args, **kwargs: refreshes.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_cancel_pending_entry_orders",
+        lambda *args, **kwargs: pytest.fail("filled order cancelled"),
+    )
     refreshes = []
-    stock = {"id": 101, "initial_quantity_bundle": opened,
-             "pending_entry_orders": [{"initial_quantity_leg_index": 0,
-                                        "ord_no": "0000123", "filled_qty": 1,
-                                        "status": "OPEN"}]}
+    stock = {
+        "id": 101,
+        "initial_quantity_bundle": opened,
+        "pending_entry_orders": [
+            {
+                "initial_quantity_leg_index": 0,
+                "ord_no": "0000123",
+                "filled_qty": 1,
+                "status": "OPEN",
+            }
+        ],
+    }
     state_handlers._reconcile_pending_entry_orders(stock, "005930", "SCALPING")
     assert stock["initial_quantity_bundle"] == opened
     assert len(refreshes) == 1
 
 
 def test_initial_dynamic_price_journal_rejects_local_order_price_drift(
-        monkeypatch, tmp_path):
+    monkeypatch, tmp_path
+):
     from src.engine.scalping.initial_quantity_bundle_state import (
-        SCHEMA_DYNAMIC_PRICE, bundle_state_path, new_bundle_state,
-        next_bundle_state, read_bundle_state, save_bundle_state_cas,
+        SCHEMA_DYNAMIC_PRICE,
+        bundle_state_path,
+        new_bundle_state,
+        next_bundle_state,
+        read_bundle_state,
+        save_bundle_state_cas,
     )
-    from src.engine.scalping.initial_quantity_timeout import build_bundle_timeout_schedule
+    from src.engine.scalping.initial_quantity_timeout import (
+        build_bundle_timeout_schedule,
+    )
 
     schedule = build_bundle_timeout_schedule(
-        quantity_type="KRX_PARENT", policy_sha256="a" * 64,
+        quantity_type="KRX_PARENT",
+        policy_sha256="a" * 64,
         decision_at="2026-09-28T09:29:50+09:00",
         order_start_at="2026-09-28T09:30:00+09:00",
-        total_wait_sec=60, leg_count=1, cancel_confirm_reserve_sec=5,
+        total_wait_sec=60,
+        leg_count=1,
+        cancel_confirm_reserve_sec=5,
     )
     initial = new_bundle_state(
-        attempt_id="dynamic-runtime-price", code="005930", target_id="101",
-        schedule=schedule, requested_qty=1, schema=SCHEMA_DYNAMIC_PRICE,
-        planned_legs=[{"leg_index": 0, "qty": 1, "price": 0,
-                       "route": "KRX", "tag": "probe"}],
+        attempt_id="dynamic-runtime-price",
+        code="005930",
+        target_id="101",
+        schedule=schedule,
+        requested_qty=1,
+        schema=SCHEMA_DYNAMIC_PRICE,
+        planned_legs=[
+            {"leg_index": 0, "qty": 1, "price": 0, "route": "KRX", "tag": "probe"}
+        ],
     )
     path = bundle_state_path(
         tmp_path / "runtime" / "initial_quantity" / "bundles",
@@ -40460,128 +41160,217 @@ def test_initial_dynamic_price_journal_rejects_local_order_price_drift(
     )
     save_bundle_state_cas(path, initial, expected_parent_sha256=None)
     start = schedule["order_start_at_epoch"]
-    intent = next_bundle_state(initial, 0, {
-        "state": "SUBMIT_INTENT", "submit_intent_at_epoch": start,
-        "submit_price": 10000, "owner_client_intent_id": "test:dynamic-runtime-price:leg0"})
-    save_bundle_state_cas(path, intent,
-                          expected_parent_sha256=initial["bundle_content_sha256"])
-    opened = next_bundle_state(intent, 0, {
-        "state": "OPEN", "submit_intent_at_epoch": start,
-        "submit_price": 10000, "owner_client_intent_id": "test:dynamic-runtime-price:leg0",
-        "broker_order_no": "0000123"})
-    save_bundle_state_cas(path, opened,
-                          expected_parent_sha256=intent["bundle_content_sha256"])
+    intent = next_bundle_state(
+        initial,
+        0,
+        {
+            "state": "SUBMIT_INTENT",
+            "submit_intent_at_epoch": start,
+            "submit_price": 10000,
+            "owner_client_intent_id": "test:dynamic-runtime-price:leg0",
+        },
+    )
+    save_bundle_state_cas(
+        path, intent, expected_parent_sha256=initial["bundle_content_sha256"]
+    )
+    opened = next_bundle_state(
+        intent,
+        0,
+        {
+            "state": "OPEN",
+            "submit_intent_at_epoch": start,
+            "submit_price": 10000,
+            "owner_client_intent_id": "test:dynamic-runtime-price:leg0",
+            "broker_order_no": "0000123",
+        },
+    )
+    save_bundle_state_cas(
+        path, opened, expected_parent_sha256=intent["bundle_content_sha256"]
+    )
     monkeypatch.setattr(state_handlers, "DATA_DIR", tmp_path)
     stock = {"id": 101, "initial_quantity_bundle": opened}
-    order = {"initial_quantity_leg_index": 0,
-             "entry_submit_attempt_id": initial["attempt_id"],
-             "ord_no": "0000123", "qty": 1, "price": 10010,
-             "tag": "probe", "dmst_stex_tp": "KRX",
-             "dmst_stex_tp_source": "request"}
-    next_leg_state = {"state": "PARTIAL", "submit_intent_at_epoch": start,
-                      "submit_price": 10000,
-                      "owner_client_intent_id": "test:dynamic-runtime-price:leg0",
-                      "broker_order_no": "0000123"}
+    order = {
+        "initial_quantity_leg_index": 0,
+        "entry_submit_attempt_id": initial["attempt_id"],
+        "ord_no": "0000123",
+        "qty": 1,
+        "price": 10010,
+        "tag": "probe",
+        "dmst_stex_tp": "KRX",
+        "dmst_stex_tp_source": "request",
+    }
+    next_leg_state = {
+        "state": "PARTIAL",
+        "submit_intent_at_epoch": start,
+        "submit_price": 10000,
+        "owner_client_intent_id": "test:dynamic-runtime-price:leg0",
+        "broker_order_no": "0000123",
+    }
     accepted, reason = state_handlers._initial_quantity_persist_leg_transition(
-        stock, order, next_leg_state)
+        stock, order, next_leg_state
+    )
     assert not accepted and reason == "initial_quantity_local_order_plan_mismatch"
     assert read_bundle_state(path) == opened
     order["price"] = 10000
     accepted, reason = state_handlers._initial_quantity_persist_leg_transition(
-        stock, order, next_leg_state)
+        stock, order, next_leg_state
+    )
     assert accepted, reason
     assert reason == "initial_quantity_bundle_transition_persisted"
     assert read_bundle_state(path) == stock["initial_quantity_bundle"]
 
 
 def test_initial_bundle_terminal_retires_index_and_hands_off_holding(
-        monkeypatch, tmp_path):
+    monkeypatch, tmp_path
+):
     from datetime import datetime as local_datetime
     from zoneinfo import ZoneInfo
     from src.engine.scalping.initial_quantity_bundle_state import (
-        create_indexed_bundle, new_bundle_state, next_bundle_state,
-        read_bundle_for_target, save_bundle_state_cas,
+        create_indexed_bundle,
+        new_bundle_state,
+        next_bundle_state,
+        read_bundle_for_target,
+        save_bundle_state_cas,
     )
-    from src.engine.scalping.initial_quantity_timeout import build_bundle_timeout_schedule
+    from src.engine.scalping.initial_quantity_timeout import (
+        build_bundle_timeout_schedule,
+    )
 
     now = time.time()
     kst = ZoneInfo("Asia/Seoul")
     schedule = build_bundle_timeout_schedule(
-        quantity_type="KRX_PARENT", policy_sha256="a" * 64,
+        quantity_type="KRX_PARENT",
+        policy_sha256="a" * 64,
         decision_at=local_datetime.fromtimestamp(now - 80, kst).isoformat(),
         order_start_at=local_datetime.fromtimestamp(now - 70, kst).isoformat(),
-        total_wait_sec=60, leg_count=1, cancel_confirm_reserve_sec=5,
+        total_wait_sec=60,
+        leg_count=1,
+        cancel_confirm_reserve_sec=5,
     )
     initial = new_bundle_state(
-        attempt_id="terminal-index-attempt", code="005930", target_id="101",
-        schedule=schedule, requested_qty=1,
-        planned_legs=[{"leg_index": 0, "qty": 1, "price": 10000,
-                       "route": "KRX", "tag": "probe"}],
+        attempt_id="terminal-index-attempt",
+        code="005930",
+        target_id="101",
+        schedule=schedule,
+        requested_qty=1,
+        planned_legs=[
+            {"leg_index": 0, "qty": 1, "price": 10000, "route": "KRX", "tag": "probe"}
+        ],
     )
     root = tmp_path / "runtime" / "initial_quantity" / "bundles"
     path = create_indexed_bundle(root, initial)
     start = schedule["order_start_at_epoch"]
-    intent = next_bundle_state(initial, 0, {
-        "state": "SUBMIT_INTENT", "submit_intent_at_epoch": start,
-    })
-    save_bundle_state_cas(path, intent,
-                          expected_parent_sha256=initial["bundle_content_sha256"])
-    opened = next_bundle_state(intent, 0, {
-        "state": "OPEN", "submit_intent_at_epoch": start,
-        "broker_order_no": "0000123",
-    })
-    save_bundle_state_cas(path, opened,
-                          expected_parent_sha256=intent["bundle_content_sha256"])
-    terminal = next_bundle_state(opened, 0, {
-        "state": "TERMINAL_FILLED", "submit_intent_at_epoch": start,
-        "broker_order_no": "0000123", "terminal_confirmed": True,
-        "terminal_confirmed_at_epoch": start + 10,
-        "broker_terminal_receipt_id": "broker-proof",
-        "owner_registry_receipt_id": "owner-proof",
-        "account_position_receipt_id": "account-proof",
-        "broker_unfilled_qty": 0, "owner_registry_terminal": True,
-        "account_position_reconciled": True, "ordered_qty": 1,
-        "filled_qty": 1, "cancelled_qty": 0,
-    })
-    save_bundle_state_cas(path, terminal,
-                          expected_parent_sha256=opened["bundle_content_sha256"])
+    intent = next_bundle_state(
+        initial,
+        0,
+        {
+            "state": "SUBMIT_INTENT",
+            "submit_intent_at_epoch": start,
+        },
+    )
+    save_bundle_state_cas(
+        path, intent, expected_parent_sha256=initial["bundle_content_sha256"]
+    )
+    opened = next_bundle_state(
+        intent,
+        0,
+        {
+            "state": "OPEN",
+            "submit_intent_at_epoch": start,
+            "broker_order_no": "0000123",
+        },
+    )
+    save_bundle_state_cas(
+        path, opened, expected_parent_sha256=intent["bundle_content_sha256"]
+    )
+    terminal = next_bundle_state(
+        opened,
+        0,
+        {
+            "state": "TERMINAL_FILLED",
+            "submit_intent_at_epoch": start,
+            "broker_order_no": "0000123",
+            "terminal_confirmed": True,
+            "terminal_confirmed_at_epoch": start + 10,
+            "broker_terminal_receipt_id": "broker-proof",
+            "owner_registry_receipt_id": "owner-proof",
+            "account_position_receipt_id": "account-proof",
+            "broker_unfilled_qty": 0,
+            "owner_registry_terminal": True,
+            "account_position_reconciled": True,
+            "ordered_qty": 1,
+            "filled_qty": 1,
+            "cancelled_qty": 0,
+        },
+    )
+    save_bundle_state_cas(
+        path, terminal, expected_parent_sha256=opened["bundle_content_sha256"]
+    )
     monkeypatch.setattr(state_handlers, "DATA_DIR", tmp_path)
-    stock = {"id": 101, "strategy": "SCALPING", "status": "BUY_ORDERED",
-             "buy_qty": 1, "entry_filled_qty": 1,
-             "initial_quantity_bundle": terminal,
-             "initial_quantity_bundle_indexed": True,
-             "pending_entry_orders": [{"ord_no": "0000123", "status": "FILLED",
-                                        "filled_qty": 1, "qty": 1}]}
+    stock = {
+        "id": 101,
+        "strategy": "SCALPING",
+        "status": "BUY_ORDERED",
+        "buy_qty": 1,
+        "entry_filled_qty": 1,
+        "initial_quantity_bundle": terminal,
+        "initial_quantity_bundle_indexed": True,
+        "pending_entry_orders": [
+            {"ord_no": "0000123", "status": "FILLED", "filled_qty": 1, "qty": 1}
+        ],
+    }
     state_handlers._reconcile_pending_entry_orders(stock, "005930", "SCALPING")
     assert stock["status"] == "HOLDING"
     assert "initial_quantity_bundle" not in stock
     assert stock["initial_quantity_last_terminal_bundle"] == terminal
     assert read_bundle_for_target(root, "005930", "101") == (
-        terminal, "target_bundle_terminal")
-    monkeypatch.setattr(state_handlers, "_manual_control_exclusion_blocked",
-                        lambda *args, **kwargs: False)
-    monkeypatch.setattr(state_handlers, "_request_broker_snapshot_refresh",
-                        lambda *args, **kwargs: None)
-    restored = {"id": 101, "strategy": "SCALPING", "status": "BUY_ORDERED",
-                "buy_qty": 1, "entry_filled_qty": 1,
-                "pending_entry_orders": [{"ord_no": "0000123", "status": "FILLED",
-                                           "filled_qty": 1, "qty": 1}]}
+        terminal,
+        "target_bundle_terminal",
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_manual_control_exclusion_blocked",
+        lambda *args, **kwargs: False,
+    )
+    monkeypatch.setattr(
+        state_handlers, "_request_broker_snapshot_refresh", lambda *args, **kwargs: None
+    )
+    restored = {
+        "id": 101,
+        "strategy": "SCALPING",
+        "status": "BUY_ORDERED",
+        "buy_qty": 1,
+        "entry_filled_qty": 1,
+        "pending_entry_orders": [
+            {"ord_no": "0000123", "status": "FILLED", "filled_qty": 1, "qty": 1}
+        ],
+    }
     state_handlers.handle_buy_ordered_state(restored, "005930")
     assert restored["initial_quantity_bundle"] == terminal
     state_handlers._reconcile_pending_entry_orders(restored, "005930", "SCALPING")
     assert restored["status"] == "HOLDING"
     assert "initial_quantity_bundle" not in restored
-    from src.engine.scalping.initial_quantity_bundle_state import bundle_target_index_path
+    from src.engine.scalping.initial_quantity_bundle_state import (
+        bundle_target_index_path,
+    )
+
     bundle_target_index_path(root, "005930", "101").unlink()
     refreshes = []
-    monkeypatch.setattr(state_handlers, "_request_broker_snapshot_refresh",
-                        lambda *args, **kwargs: refreshes.append((args, kwargs)))
-    missing_index = {"id": 101, "strategy": "SCALPING",
-                     "status": "BUY_ORDERED", "buy_qty": 1,
-                     "entry_filled_qty": 1, "initial_quantity_bundle": terminal,
-                     "initial_quantity_bundle_indexed": True}
-    state_handlers._reconcile_pending_entry_orders(
-        missing_index, "005930", "SCALPING")
+    monkeypatch.setattr(
+        state_handlers,
+        "_request_broker_snapshot_refresh",
+        lambda *args, **kwargs: refreshes.append((args, kwargs)),
+    )
+    missing_index = {
+        "id": 101,
+        "strategy": "SCALPING",
+        "status": "BUY_ORDERED",
+        "buy_qty": 1,
+        "entry_filled_qty": 1,
+        "initial_quantity_bundle": terminal,
+        "initial_quantity_bundle_indexed": True,
+    }
+    state_handlers._reconcile_pending_entry_orders(missing_index, "005930", "SCALPING")
     assert missing_index["status"] == "BUY_ORDERED"
     assert missing_index["initial_quantity_bundle"] == terminal
     assert len(refreshes) == 1
@@ -40590,27 +41379,44 @@ def test_initial_bundle_terminal_retires_index_and_hands_off_holding(
 def test_retired_rising_missed_restored_watching_intent_cannot_submit(monkeypatch):
     def forbidden(*args, **kwargs):
         pytest.fail("restored scout intent reached broker or budget")
+
     monkeypatch.setattr(state_handlers.kiwoom_orders, "get_deposit", forbidden)
     stock = {"status": "WATCHING", "rising_missed_one_share_entry_forced": True}
-    assert state_handlers._submit_watching_triggered_entry(stock, "005930", {}, None, {}) is False
+    assert (
+        state_handlers._submit_watching_triggered_entry(stock, "005930", {}, None, {})
+        is False
+    )
 
 
-@pytest.mark.parametrize("status", ["WATCHING", "WATCHING_AI", "HOLDING", "BUY_ORDERED"])
-@pytest.mark.parametrize("intent", [
-    {"rising_missed_one_share_entry_forced": "true"},
-    {"rising_missed_one_share_scout": True},
-    {"rising_missed_scout_upgrade_pending": True},
-    {"rising_missed_scout_upgrade_order_pending": True},
-    {"forced_entry_reason": " RISING_MISSED_ONE_SHARE_ENTRY "},
-])
-def test_retired_scout_restored_state_never_mints_new_entry(status, intent, monkeypatch):
+@pytest.mark.parametrize(
+    "status", ["WATCHING", "WATCHING_AI", "HOLDING", "BUY_ORDERED"]
+)
+@pytest.mark.parametrize(
+    "intent",
+    [
+        {"rising_missed_one_share_entry_forced": "true"},
+        {"rising_missed_one_share_scout": True},
+        {"rising_missed_scout_upgrade_pending": True},
+        {"rising_missed_scout_upgrade_order_pending": True},
+        {"forced_entry_reason": " RISING_MISSED_ONE_SHARE_ENTRY "},
+    ],
+)
+def test_retired_scout_restored_state_never_mints_new_entry(
+    status, intent, monkeypatch
+):
     def forbidden(*args, **kwargs):
         pytest.fail("retired scout reached shared entry lineage or broker budget")
-    monkeypatch.setattr(state_handlers, "bind_submit_attempt_machine_lineage", forbidden)
+
+    monkeypatch.setattr(
+        state_handlers, "bind_submit_attempt_machine_lineage", forbidden
+    )
     monkeypatch.setattr(state_handlers.kiwoom_orders, "get_deposit", forbidden)
     pending = [{"order_id": "historical", "status": "PARTIAL", "filled_qty": 1}]
     stock = {"status": status, "buy_qty": 1, "pending_entry_orders": pending, **intent}
-    assert state_handlers._submit_watching_triggered_entry(stock, "005930", {}, None, {}) is False
+    assert (
+        state_handlers._submit_watching_triggered_entry(stock, "005930", {}, None, {})
+        is False
+    )
     assert stock["status"] == status
     assert stock["buy_qty"] == 1
     assert stock["pending_entry_orders"] == pending
@@ -40620,146 +41426,312 @@ def test_retired_scout_restored_state_never_mints_new_entry(status, intent, monk
 def test_retired_scout_false_flags_keep_ordinary_submit_path(source, monkeypatch):
     def ordinary(*args, **kwargs):
         raise RuntimeError("ordinary_entry_reached")
+
     monkeypatch.setattr(state_handlers, "bind_submit_attempt_machine_lineage", ordinary)
-    flags = {"rising_missed_one_share_entry_forced": "false", "scout_upgrade_entry": "0"}
+    flags = {
+        "rising_missed_one_share_entry_forced": "false",
+        "scout_upgrade_entry": "0",
+    }
     stock = flags if source == "stock" else {}
     runtime = flags if source == "runtime" else {}
     with pytest.raises(RuntimeError, match="ordinary_entry_reached"):
-        state_handlers._submit_watching_triggered_entry(stock, "005930", {}, None, runtime)
+        state_handlers._submit_watching_triggered_entry(
+            stock, "005930", {}, None, runtime
+        )
 
 
 def test_normal_exploration_cap_does_not_need_retired_actor_flag(monkeypatch):
-    stock = {"entry_setup_bounded_exploration_probe_only": True, "entry_setup_live_policy_max_daily_exploration_probes": 3}
-    monkeypatch.setattr(state_handlers, "read_exploration_probe_submit_count", lambda day: 3)
-    result = state_handlers._entry_setup_exploration_submit_cap_guard(stock, qty=1, now_ts=1000)
+    stock = {
+        "entry_setup_bounded_exploration_probe_only": True,
+        "entry_setup_live_policy_max_daily_exploration_probes": 3,
+    }
+    monkeypatch.setattr(
+        state_handlers, "read_exploration_probe_submit_count", lambda day: 3
+    )
+    result = state_handlers._entry_setup_exploration_submit_cap_guard(
+        stock, qty=1, now_ts=1000
+    )
     assert result["allowed"] is False
     calls = []
-    monkeypatch.setattr(state_handlers, "record_exploration_probe_submission", lambda **kw: calls.append(kw) or 3)
+    monkeypatch.setattr(
+        state_handlers,
+        "record_exploration_probe_submission",
+        lambda **kw: calls.append(kw) or 3,
+    )
     monkeypatch.setattr(state_handlers, "_log_entry_pipeline", lambda *a, **kw: None)
-    assert state_handlers._commit_entry_setup_exploration_probe_cap(stock, "005930", "accepted-order", now_ts=1000)
+    assert state_handlers._commit_entry_setup_exploration_probe_cap(
+        stock, "005930", "accepted-order", now_ts=1000
+    )
     assert len(calls) == 1
 
 
-def test_weak_history_separates_context_confirmed_and_unclassified_without_rewriting(monkeypatch):
+def test_weak_history_separates_context_confirmed_and_unclassified_without_rewriting(
+    monkeypatch,
+):
     stock = {}
-    for action in ['risk_context_only', 'source_quality_block', 'baseline_block', 'legacy_unclassified']:
-        state_handlers._append_trade_quality_block_history(stock, stage='blocked_strength_momentum',
-            now_ts=1000, risk_state='weak', gate_action=action)
-    stock['trade_quality_block_history'].extend([
-        {'stage': 'blocked_vpw', 'ts': 999},
-        {'stage': 'blocked_vpw', 'ts': 999, 'observed_gate_action': 'risk_context_only'},
-    ])
+    for action in [
+        "risk_context_only",
+        "source_quality_block",
+        "baseline_block",
+        "legacy_unclassified",
+    ]:
+        state_handlers._append_trade_quality_block_history(
+            stock,
+            stage="blocked_strength_momentum",
+            now_ts=1000,
+            risk_state="weak",
+            gate_action=action,
+        )
+    stock["trade_quality_block_history"].extend(
+        [
+            {"stage": "blocked_vpw", "ts": 999},
+            {
+                "stage": "blocked_vpw",
+                "ts": 999,
+                "observed_gate_action": "risk_context_only",
+            },
+        ]
+    )
     original = deepcopy(stock)
-    counts = state_handlers._recent_trade_quality_block_counts(stock, now_ts=1001, confirmed_only=True)
-    assert counts['total_count'] == 2
-    assert counts['risk_context_only_count'] == 2
-    assert counts['unclassified_count'] == 2
+    counts = state_handlers._recent_trade_quality_block_counts(
+        stock, now_ts=1001, confirmed_only=True
+    )
+    assert counts["total_count"] == 2
+    assert counts["risk_context_only_count"] == 2
+    assert counts["unclassified_count"] == 2
     assert stock == original
 
 
-@pytest.mark.parametrize('origin', ['scanner', 'fixed'])
-@pytest.mark.parametrize('guard_name', ['real_weak_pullback', 'weak_context_late_entry'])
-@pytest.mark.parametrize('damage', [None, 'danger', 'no_normal_submit', 'source_gap', 'wrong_attempt',
-    'wrong_revision', 'invalid_capture', 'untrusted_ai', 'wrong_trace', 'ai_caution', 'ai_veto',
-    'machine_recheck', 'wrong_screen_status', 'wrong_owner', 'probe', 'no_call_context'])
-def test_main_approved_weak_veto_scope_preserves_exact_authority_and_hard_guards(monkeypatch, origin, guard_name, damage):
+@pytest.mark.parametrize("origin", ["scanner", "fixed"])
+@pytest.mark.parametrize(
+    "guard_name", ["real_weak_pullback", "weak_context_late_entry"]
+)
+@pytest.mark.parametrize(
+    "damage",
+    [
+        None,
+        "danger",
+        "no_normal_submit",
+        "source_gap",
+        "wrong_attempt",
+        "wrong_revision",
+        "invalid_capture",
+        "untrusted_ai",
+        "wrong_trace",
+        "ai_caution",
+        "ai_veto",
+        "machine_recheck",
+        "wrong_screen_status",
+        "wrong_owner",
+        "probe",
+        "no_call_context",
+    ],
+)
+def test_main_approved_weak_veto_scope_preserves_exact_authority_and_hard_guards(
+    monkeypatch, origin, guard_name, damage
+):
     from src.engine.monitoring import entry_attempt_identity as attempts
-    machine = dict(entry_primary_decision_owner='mechanistic_entry_adjudicator',
-        evaluation_attempt_id='attempt', scanner_promotion_id='promotion', effective_venue='KRX',
-        market_session_bucket='krx_regular', policy_bundle_hash='b'*64,
-        machine_capture_status='captured', machine_observation_sha256='a'*64,
-        entry_mechanistic_action='ENTER_NOW', entry_ai_screen_status='pass', entry_ai_screen_pass=True,
-        entry_ai_effective_assessment={'effective_verdict': 'PASS'})
-    stock = dict(id=7, code='036930', strategy='SCALPING', scanner_promotion_id='promotion',
-        last_watching_ai_action='BUY', last_watching_ai_result_source='live',
-        last_watching_ai_attempt_contract_status='pass', last_watching_ai_decision_trace_id='trace',
-        last_watching_ai_attempt_decision_trace_id='trace', last_watching_ai_snapshot_id='snapshot',
-        last_watching_ai_attempt_snapshot_id='snapshot',
+
+    machine = dict(
+        entry_primary_decision_owner="mechanistic_entry_adjudicator",
+        evaluation_attempt_id="attempt",
+        scanner_promotion_id="promotion",
+        effective_venue="KRX",
+        market_session_bucket="krx_regular",
+        policy_bundle_hash="b" * 64,
+        machine_capture_status="captured",
+        machine_observation_sha256="a" * 64,
+        entry_mechanistic_action="ENTER_NOW",
+        entry_ai_screen_status="pass",
+        entry_ai_screen_pass=True,
+        entry_ai_effective_assessment={"effective_verdict": "PASS"},
+    )
+    stock = dict(
+        id=7,
+        code="036930",
+        strategy="SCALPING",
+        scanner_promotion_id="promotion",
+        last_watching_ai_action="BUY",
+        last_watching_ai_result_source="live",
+        last_watching_ai_attempt_contract_status="pass",
+        last_watching_ai_decision_trace_id="trace",
+        last_watching_ai_attempt_decision_trace_id="trace",
+        last_watching_ai_snapshot_id="snapshot",
+        last_watching_ai_attempt_snapshot_id="snapshot",
         last_watching_ai_machine_primary_fields=deepcopy(machine),
-        _machine_observation_revision={'digest': 'a'*64, 'key': ['promotion', 'attempt']})
-    if origin == 'fixed':
-        watch = dict(watch_origin='MAIN_FIXED_WATCH',
-            watch_admission_id='FIXED-2026-10-15-036930-krx_regular-test', watch_generation_id='d'*64)
-        machine.pop('scanner_promotion_id')
-        stock.pop('scanner_promotion_id')
+        _machine_observation_revision={
+            "digest": "a" * 64,
+            "key": ["promotion", "attempt"],
+        },
+    )
+    if origin == "fixed":
+        watch = dict(
+            watch_origin="MAIN_FIXED_WATCH",
+            watch_admission_id="FIXED-2026-10-15-036930-krx_regular-test",
+            watch_generation_id="d" * 64,
+        )
+        machine.pop("scanner_promotion_id")
+        stock.pop("scanner_promotion_id")
         machine.update(watch)
-        stock.update(watch, effective_venue='KRX', market_session_bucket='krx_regular')
-        stock['last_watching_ai_machine_primary_fields'] = deepcopy(machine)
-        stock['_machine_observation_revision']['key'] = [watch['watch_admission_id'], 'attempt',
-            '036930', 'KRX', 'krx_regular', 'b'*64, __import__('os').getpid()]
-    authority = dict(blocked=False, entry_ai_submit_authority_action='BUY',
-        entry_ai_submit_authority_result_source='live', entry_ai_submit_authority_decision_trace_id='trace',
-        entry_ai_submit_authority_fresh_prior=True, entry_ai_submit_authority_latest_attempt_trusted=True)
-    latency = {'latency_state': 'CAUTION', 'decision': 'ALLOW_NORMAL'}
-    verdict = {'blocked': True, 'reason': 'weak_momentum_caution_without_micro_confirmation',
-               'fields': {'weak_context_late_entry_guard_blocked': True}}
-    monkeypatch.setattr(state_handlers, '_is_any_simulated_position', lambda *a: False)
-    monkeypatch.setattr(state_handlers, '_is_swing_live_order_dry_run', lambda *a: False)
-    monkeypatch.setattr(state_handlers, '_has_sim_probe_provenance', lambda *a: damage == 'probe')
+        stock.update(watch, effective_venue="KRX", market_session_bucket="krx_regular")
+        stock["last_watching_ai_machine_primary_fields"] = deepcopy(machine)
+        stock["_machine_observation_revision"]["key"] = [
+            watch["watch_admission_id"],
+            "attempt",
+            "036930",
+            "KRX",
+            "krx_regular",
+            "b" * 64,
+            __import__("os").getpid(),
+        ]
+    authority = dict(
+        blocked=False,
+        entry_ai_submit_authority_action="BUY",
+        entry_ai_submit_authority_result_source="live",
+        entry_ai_submit_authority_decision_trace_id="trace",
+        entry_ai_submit_authority_fresh_prior=True,
+        entry_ai_submit_authority_latest_attempt_trusted=True,
+    )
+    latency = {"latency_state": "CAUTION", "decision": "ALLOW_NORMAL"}
+    verdict = {
+        "blocked": True,
+        "reason": "weak_momentum_caution_without_micro_confirmation",
+        "fields": {"weak_context_late_entry_guard_blocked": True},
+    }
+    monkeypatch.setattr(state_handlers, "_is_any_simulated_position", lambda *a: False)
+    monkeypatch.setattr(
+        state_handlers, "_is_swing_live_order_dry_run", lambda *a: False
+    )
+    monkeypatch.setattr(
+        state_handlers, "_has_sim_probe_provenance", lambda *a: damage == "probe"
+    )
     events = []
-    monkeypatch.setattr(state_handlers, '_log_entry_pipeline', lambda *a, **kw: events.append((a, kw)))
-    if damage == 'danger': latency['latency_state'] = 'DANGER'
-    if damage == 'no_normal_submit': latency.update(decision='WAIT')
-    if damage == 'source_gap': verdict.update(reason='weak_pullback_micro_source_unavailable', metric_role='source_quality_gate')
-    if damage == 'wrong_attempt': stock['last_watching_ai_machine_primary_fields']['evaluation_attempt_id'] = 'other'
-    if damage == 'wrong_revision': stock['_machine_observation_revision']['digest'] = 'c'*64
-    if damage == 'invalid_capture': machine['machine_capture_status'] = 'missing'
-    if damage == 'untrusted_ai': authority['entry_ai_submit_authority_latest_attempt_trusted'] = False
-    if damage == 'wrong_trace': authority['entry_ai_submit_authority_decision_trace_id'] = 'other'
-    if damage in {'ai_caution', 'ai_veto'}:
-        stock['last_watching_ai_machine_primary_fields']['entry_ai_effective_assessment']['effective_verdict'] = 'CAUTION' if damage == 'ai_caution' else 'VETO'
-    if damage == 'machine_recheck': machine['entry_mechanistic_action'] = 'RECHECK'
-    if damage == 'wrong_screen_status': machine['entry_ai_screen_status'] = 'response_invalid'
-    if damage == 'wrong_owner': machine['entry_primary_decision_owner'] = 'other'
+    monkeypatch.setattr(
+        state_handlers, "_log_entry_pipeline", lambda *a, **kw: events.append((a, kw))
+    )
+    if damage == "danger":
+        latency["latency_state"] = "DANGER"
+    if damage == "no_normal_submit":
+        latency.update(decision="WAIT")
+    if damage == "source_gap":
+        verdict.update(
+            reason="weak_pullback_micro_source_unavailable",
+            metric_role="source_quality_gate",
+        )
+    if damage == "wrong_attempt":
+        stock["last_watching_ai_machine_primary_fields"][
+            "evaluation_attempt_id"
+        ] = "other"
+    if damage == "wrong_revision":
+        stock["_machine_observation_revision"]["digest"] = "c" * 64
+    if damage == "invalid_capture":
+        machine["machine_capture_status"] = "missing"
+    if damage == "untrusted_ai":
+        authority["entry_ai_submit_authority_latest_attempt_trusted"] = False
+    if damage == "wrong_trace":
+        authority["entry_ai_submit_authority_decision_trace_id"] = "other"
+    if damage in {"ai_caution", "ai_veto"}:
+        stock["last_watching_ai_machine_primary_fields"][
+            "entry_ai_effective_assessment"
+        ]["effective_verdict"] = ("CAUTION" if damage == "ai_caution" else "VETO")
+    if damage == "machine_recheck":
+        machine["entry_mechanistic_action"] = "RECHECK"
+    if damage == "wrong_screen_status":
+        machine["entry_ai_screen_status"] = "response_invalid"
+    if damage == "wrong_owner":
+        machine["entry_primary_decision_owner"] = "other"
     original = deepcopy(verdict)
+
     def invoke():
-        return state_handlers._scope_main_machine_ai_weak_veto(stock, '036930', strategy='SCALPING',
-            authority=authority, latency_gate=latency, guard_name=guard_name, verdict=verdict)
+        return state_handlers._scope_main_machine_ai_weak_veto(
+            stock,
+            "036930",
+            strategy="SCALPING",
+            authority=authority,
+            latency_gate=latency,
+            guard_name=guard_name,
+            verdict=verdict,
+        )
+
     @attempts.observe_submit_attempt
     def submit(stock, code):
         attempts.bind_submit_attempt_machine_lineage(stock, code, machine)
         return invoke()
-    result = invoke() if damage == 'no_call_context' else submit(stock, '036930')
-    assert result['blocked'] is (damage is not None)
+
+    result = invoke() if damage == "no_call_context" else submit(stock, "036930")
+    assert result["blocked"] is (damage is not None)
     assert verdict == original
     assert len(events) == (0 if damage else 1)
     if damage is None:
-        assert events[0][1]['gate_action'] == 'risk_context_only'
-        assert events[0][1]['evaluation_attempt_id'] == 'attempt'
-        assert events[0][1]['actual_order_submitted'] is False
+        assert events[0][1]["gate_action"] == "risk_context_only"
+        assert events[0][1]["evaluation_attempt_id"] == "attempt"
+        assert events[0][1]["actual_order_submitted"] is False
 
 
 def test_weak_context_observations_do_not_evict_confirmed_block_history():
     stock = {}
-    state_handlers._append_trade_quality_block_history(stock, stage='blocked_strength_momentum',
-        now_ts=1000, gate_action='source_quality_block')
+    state_handlers._append_trade_quality_block_history(
+        stock,
+        stage="blocked_strength_momentum",
+        now_ts=1000,
+        gate_action="source_quality_block",
+    )
     for i in range(40):
-        state_handlers._append_trade_quality_block_history(stock, stage='blocked_vpw',
-            now_ts=1001+i, gate_action='risk_context_only')
-    assert len(stock['trade_quality_block_history']) == 1
-    assert len(stock['trade_quality_risk_context_history']) == 32
-    stock['trade_quality_block_history'].extend([
-        {'stage': 'blocked_vpw', 'gate_action': 'baseline_block', 'ts': float('nan')},
-        {'stage': 'blocked_vpw', 'gate_action': 'baseline_block', 'ts': 2000},
-    ])
-    counts = state_handlers._recent_trade_quality_block_counts(stock, now_ts=1041, confirmed_only=True)
-    assert counts['total_count'] == 1
-    assert counts['risk_context_only_count'] == 32
+        state_handlers._append_trade_quality_block_history(
+            stock, stage="blocked_vpw", now_ts=1001 + i, gate_action="risk_context_only"
+        )
+    assert len(stock["trade_quality_block_history"]) == 1
+    assert len(stock["trade_quality_risk_context_history"]) == 32
+    stock["trade_quality_block_history"].extend(
+        [
+            {
+                "stage": "blocked_vpw",
+                "gate_action": "baseline_block",
+                "ts": float("nan"),
+            },
+            {"stage": "blocked_vpw", "gate_action": "baseline_block", "ts": 2000},
+        ]
+    )
+    counts = state_handlers._recent_trade_quality_block_counts(
+        stock, now_ts=1041, confirmed_only=True
+    )
+    assert counts["total_count"] == 1
+    assert counts["risk_context_only_count"] == 32
 
 
-@pytest.mark.parametrize('krx,nxt,route,blocked', [(True,True,'SOR',False), (True,False,'KRX',False),
-    (False,True,'NXT',False), (None,None,'SOR',True), (False,False,'SOR',True)])
-@pytest.mark.parametrize('hour', [17,19])
-def test_operator_sor_default_resolves_route_authority_without_inventing_eligibility(monkeypatch,krx,nxt,route,blocked,hour):
-    monkeypatch.setattr(state_handlers,'DB',None)
-    stock=dict(id=7,code='005930',name='TEST',status='HOLDING',buy_qty=1)
-    if krx is not None:stock['krx_aftermarket_eligible']=krx
-    if nxt is not None:stock['is_nxt']=nxt
-    result=state_handlers._resolve_holding_sell_dmst_stex_tp(stock,'005930',
-        observed_at=datetime(2026,10,21,hour,10,tzinfo=state_handlers._KST))
-    assert result['dmst_stex_tp']==route and result['blocked'] is blocked
-    if blocked:assert result['reason']=='holding_sell_route_eligibility_missing'
-    elif route=='SOR':assert result['reason']=='user_2026_10_21_unresolved_venue_krx_route_sor'
-    closed=state_handlers._resolve_holding_sell_dmst_stex_tp(stock,'005930',
-        observed_at=datetime(2026,10,21,20,1,tzinfo=state_handlers._KST))
-    assert closed['blocked'] is True
+@pytest.mark.parametrize(
+    "krx,nxt,route,blocked",
+    [
+        (True, True, "SOR", False),
+        (True, False, "KRX", False),
+        (False, True, "NXT", False),
+        (None, None, "SOR", True),
+        (False, False, "SOR", True),
+    ],
+)
+@pytest.mark.parametrize("hour", [17, 19])
+def test_operator_sor_default_resolves_route_authority_without_inventing_eligibility(
+    monkeypatch, krx, nxt, route, blocked, hour
+):
+    monkeypatch.setattr(state_handlers, "DB", None)
+    stock = dict(id=7, code="005930", name="TEST", status="HOLDING", buy_qty=1)
+    if krx is not None:
+        stock["krx_aftermarket_eligible"] = krx
+    if nxt is not None:
+        stock["is_nxt"] = nxt
+    result = state_handlers._resolve_holding_sell_dmst_stex_tp(
+        stock,
+        "005930",
+        observed_at=datetime(2026, 10, 21, hour, 10, tzinfo=state_handlers._KST),
+    )
+    assert result["dmst_stex_tp"] == route and result["blocked"] is blocked
+    if blocked:
+        assert result["reason"] == "holding_sell_route_eligibility_missing"
+    elif route == "SOR":
+        assert result["reason"] == "user_2026_10_21_unresolved_venue_krx_route_sor"
+    closed = state_handlers._resolve_holding_sell_dmst_stex_tp(
+        stock,
+        "005930",
+        observed_at=datetime(2026, 10, 21, 20, 1, tzinfo=state_handlers._KST),
+    )
+    assert closed["blocked"] is True

@@ -3274,8 +3274,6 @@ def test_pipeline_source_materializes_only_strict_explicit_identity_rows(
     assert clean_row["depth_coverage_pct"] == pytest.approx(100)
 
 
-
-
 def test_official_broker_execution_native_contract_is_strict_and_source_only() -> None:
     complete = _broker_execution_proof(
         order_no="0000901",

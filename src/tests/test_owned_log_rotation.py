@@ -176,26 +176,54 @@ def test_installed_log_writers_use_owner_wrapper(installer: str, owner: str):
 
 
 def test_stage2_cron_install_is_idempotent_and_preserves_unrelated_jobs(tmp_path):
-    project = tmp_path/'project'; project.mkdir()
-    binary = tmp_path/'bin'; binary.mkdir()
-    state = tmp_path/'crontab.txt'
-    unrelated = '1 2 * * * /original/other-job # KEEP\n'
-    state.write_text(unrelated+'*/30 7-23 * * * cat /dev/null > '+str(project)+'/logs/kiwoom_sniper_v2_info.log\n')
-    stub = binary/'crontab'
-    stub.write_text('#!/bin/bash\nif [[ "$1" == "-l" ]]; then cat "$TEST_CRON_STATE"; else cp "$1" "$TEST_CRON_STATE"; fi\n')
+    project = tmp_path / "project"
+    project.mkdir()
+    binary = tmp_path / "bin"
+    binary.mkdir()
+    state = tmp_path / "crontab.txt"
+    unrelated = "1 2 * * * /original/other-job # KEEP\n"
+    state.write_text(
+        unrelated
+        + "*/30 7-23 * * * cat /dev/null > "
+        + str(project)
+        + "/logs/kiwoom_sniper_v2_info.log\n"
+    )
+    stub = binary / "crontab"
+    stub.write_text(
+        '#!/bin/bash\nif [[ "$1" == "-l" ]]; then cat "$TEST_CRON_STATE"; else cp "$1" "$TEST_CRON_STATE"; fi\n'
+    )
     stub.chmod(0o755)
-    env = dict(os.environ, PROJECT_DIR=str(project), TEST_CRON_STATE=str(state), PATH=str(binary)+':'+os.environ['PATH'])
-    results=[]
+    env = dict(
+        os.environ,
+        PROJECT_DIR=str(project),
+        TEST_CRON_STATE=str(state),
+        PATH=str(binary) + ":" + os.environ["PATH"],
+    )
+    results = []
     for _ in range(2):
-        subprocess.run(['bash','deploy/install_stage2_ops_cron.sh'],cwd=REPO_ROOT,env=env,
-                       capture_output=True,text=True,check=True)
+        subprocess.run(
+            ["bash", "deploy/install_stage2_ops_cron.sh"],
+            cwd=REPO_ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
         results.append(state.read_text())
     assert results[0] == results[1]
-    assert unrelated in results[1] and 'cat /dev/null' not in results[1]
-    assert results[1].count('# LOG_RETENTION_DAILY') == 1
-    assert results[1].count('# INTRADAY_WS_FRESHNESS_MONITOR_AFTERMARKET_5MIN') == 2
+    assert unrelated in results[1] and "cat /dev/null" not in results[1]
+    assert results[1].count("# LOG_RETENTION_DAILY") == 1
+    assert results[1].count("# INTRADAY_WS_FRESHNESS_MONITOR_AFTERMARKET_5MIN") == 2
     for line in results[1].splitlines():
-        if any(marker in line for marker in ('# SYSTEM_METRIC_SAMPLER_','# BUY_FUNNEL_SENTINEL_',
-                                            '# HOLDING_EXIT_SENTINEL_','# PRE_SUBMIT_SOURCE_',
-                                            '# RUN_MONITOR_SNAPSHOT_','# INTRADAY_WS_FRESHNESS_')):
-            assert 'run_with_owned_log.sh --owner ' in line and ' >> ' not in line
+        if any(
+            marker in line
+            for marker in (
+                "# SYSTEM_METRIC_SAMPLER_",
+                "# BUY_FUNNEL_SENTINEL_",
+                "# HOLDING_EXIT_SENTINEL_",
+                "# PRE_SUBMIT_SOURCE_",
+                "# RUN_MONITOR_SNAPSHOT_",
+                "# INTRADAY_WS_FRESHNESS_",
+            )
+        ):
+            assert "run_with_owned_log.sh --owner " in line and " >> " not in line

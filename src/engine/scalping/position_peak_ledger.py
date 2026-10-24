@@ -124,14 +124,16 @@ class PositionPeakRuntimeLedger:
             }
             # First-BUY classification belongs to the position cycle, and ADD
             # must not replace it when the average cost changes.
-            if 'trailing_situation_pin' in previous:
-                row['trailing_situation_pin'] = previous['trailing_situation_pin']
-            if 'main_stop_policy_pin' in previous:
-                row['main_stop_policy_pin'] = previous['main_stop_policy_pin']
-                row['main_stop_touch_at'] = previous.get('main_stop_touch_at')
+            if "trailing_situation_pin" in previous:
+                row["trailing_situation_pin"] = previous["trailing_situation_pin"]
+            if "main_stop_policy_pin" in previous:
+                row["main_stop_policy_pin"] = previous["main_stop_policy_pin"]
+                row["main_stop_touch_at"] = previous.get("main_stop_touch_at")
             for key in (
-                "trailing_arm_at_epoch", "trailing_arm_market",
-                "trailing_arm_start_pct", "trailing_arm_policy_sha256",
+                "trailing_arm_at_epoch",
+                "trailing_arm_market",
+                "trailing_arm_start_pct",
+                "trailing_arm_policy_sha256",
             ):
                 if key in previous:
                     row[key] = previous[key]
@@ -142,8 +144,13 @@ class PositionPeakRuntimeLedger:
             return dict(row)
 
     def record_trailing_arm(
-        self, stock: dict[str, Any], *, observed_at: float,
-        market: str, start_pct: float, policy_sha256: str,
+        self,
+        stock: dict[str, Any],
+        *,
+        observed_at: float,
+        market: str,
+        start_pct: float,
+        policy_sha256: str,
     ) -> dict[str, Any] | None:
         """Latch an arm to the current position cost basis across restarts."""
 
@@ -153,7 +160,8 @@ class PositionPeakRuntimeLedger:
             row = dict(rows.get(cycle_id) or {})
             average = _safe_float(stock.get("buy_price"), 0.0)
             if (
-                not row or average <= 0
+                not row
+                or average <= 0
                 or _safe_int(row.get("target_id"), 0) != _safe_int(stock.get("id"), 0)
                 or str(row.get("code") or "")[:6] != str(stock.get("code") or "")[:6]
                 or abs(_safe_float(row.get("average_price"), 0.0) - average) > 0.01
@@ -162,20 +170,25 @@ class PositionPeakRuntimeLedger:
                 return None
             if row.get("trailing_arm_at_epoch") is not None:
                 return row
-            if not math.isfinite(float(start_pct)) or not math.isfinite(float(observed_at)):
+            if not math.isfinite(float(start_pct)) or not math.isfinite(
+                float(observed_at)
+            ):
                 return None
-            row.update({
-                "trailing_arm_at_epoch": float(observed_at),
-                "trailing_arm_market": str(market),
-                "trailing_arm_start_pct": float(start_pct),
-                "trailing_arm_policy_sha256": str(policy_sha256),
-            })
+            row.update(
+                {
+                    "trailing_arm_at_epoch": float(observed_at),
+                    "trailing_arm_market": str(market),
+                    "trailing_arm_start_pct": float(start_pct),
+                    "trailing_arm_policy_sha256": str(policy_sha256),
+                }
+            )
             rows[cycle_id] = row
             self._write(rows)
             return dict(row)
 
     def record_situation_pin(self, stock, pin):
         from .trailing_situation_policy import validate_pin
+
         cycle_id = position_cycle_id(stock)
         if not validate_pin(pin, cycle_id):
             return False
@@ -184,16 +197,17 @@ class PositionPeakRuntimeLedger:
             row = dict(rows.get(cycle_id) or {})
             if not row:
                 return False
-            previous = row.get('trailing_situation_pin')
+            previous = row.get("trailing_situation_pin")
             if previous is not None:
                 return previous == pin
-            row['trailing_situation_pin'] = pin
+            row["trailing_situation_pin"] = pin
             rows[cycle_id] = row
             self._write(rows)
             return True
 
     def record_stop_pin(self, stock, pin):
         from .main_stop_policy import pin_values
+
         cycle_id = position_cycle_id(stock)
         pin_values(pin, cycle_id)
         with self._lock:
@@ -201,24 +215,27 @@ class PositionPeakRuntimeLedger:
             row = dict(rows.get(cycle_id) or {})
             if not row:
                 return False
-            previous = row.get('main_stop_policy_pin')
+            previous = row.get("main_stop_policy_pin")
             if previous is not None:
                 return previous == pin
-            row['main_stop_policy_pin'] = pin
-            row['main_stop_touch_at'] = None
+            row["main_stop_policy_pin"] = pin
+            row["main_stop_touch_at"] = None
             rows[cycle_id] = row
             self._write(rows)
             return True
 
     def record_stop_clock(self, stock, touch):
         from .main_stop_policy import finite
+
         if touch is not None and (not finite(touch) or touch <= 0):
             raise ValueError("stop_touch_clock_invalid")
         key = position_cycle_id(stock)
         with self._lock:
             rows = self.load()
             row = rows.get(key)
-            if not row or row.get("main_stop_policy_pin") != stock.get("main_stop_policy_pin"):
+            if not row or row.get("main_stop_policy_pin") != stock.get(
+                "main_stop_policy_pin"
+            ):
                 return False
             if row.get("main_stop_touch_at") == touch:
                 return True

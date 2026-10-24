@@ -27,8 +27,10 @@ _SCALPING_AVG_DOWN_SPECIAL_REASONS = {
 }
 _SCALE_IN_RULES = {
     ("SCALPING", "AVG_DOWN", "shared_main_rebound_entry"): {
-        "ratio_rule": "REVERSAL_ADD_SIZE_RATIO", "default_ratio": 0.33,
-        "floor_rule": "REVERSAL_ADD_MIN_QTY_FLOOR_ENABLED", "floor_default": True,
+        "ratio_rule": "REVERSAL_ADD_SIZE_RATIO",
+        "default_ratio": 0.33,
+        "floor_rule": "REVERSAL_ADD_MIN_QTY_FLOOR_ENABLED",
+        "floor_default": True,
     },
     ("SCALPING", "AVG_DOWN", "reversal_add_ok"): {
         "ratio_rule": "REVERSAL_ADD_SIZE_RATIO",
@@ -195,8 +197,6 @@ def _ai_score_available_for_scale_in(stock, action=None, *, current_ai_score=Non
     if not _has_explicit_ai_score_provenance(stock, action):
         return False, source or "-"
     return True, source or "-"
-
-
 
 
 def _has_explicit_ai_score_provenance(stock, action=None):
@@ -438,16 +438,6 @@ def resolve_holding_elapsed_sec(stock, *, now_dt=None, now_ts=None):
     return 0
 
 
-
-
-
-
-
-
-
-
-
-
 def _unique_reasons(reasons):
     seen = set()
     unique = []
@@ -472,16 +462,6 @@ def _is_rising_missed_scout_lineage(stock):
     return False
 
 
-
-
-
-
-
-
-
-
-
-
 def evaluate_scalping_pyramid(
     stock,
     profit_rate,
@@ -492,12 +472,20 @@ def evaluate_scalping_pyramid(
     min_profit_override=None,
 ):
     """Historical import compatibility; PYRAMID has no executable decision path."""
-    return {**_base_result(), "reason": "pyramid_permanently_retired", "add_type": "PYRAMID"}
+    return {
+        **_base_result(),
+        "reason": "pyramid_permanently_retired",
+        "add_type": "PYRAMID",
+    }
 
 
 def evaluate_swing_pyramid(stock, profit_rate, peak_profit):
     """Historical import compatibility; PYRAMID has no executable decision path."""
-    return {**_base_result(), "reason": "pyramid_permanently_retired", "add_type": "PYRAMID"}
+    return {
+        **_base_result(),
+        "reason": "pyramid_permanently_retired",
+        "add_type": "PYRAMID",
+    }
 
 
 def evaluate_swing_avg_down(
@@ -1488,8 +1476,12 @@ def describe_dynamic_scale_in_qty(
 ):
     """추가매수 수량을 safety guard와 position cap 안에서 결정하고 provenance를 남긴다."""
     if str(add_type or "").upper() == "PYRAMID":
-        return {**_zero_scale_in_details(), "would_qty": 0, "effective_qty": 0,
-                "qty_reason": "pyramid_permanently_retired"}
+        return {
+            **_zero_scale_in_details(),
+            "would_qty": 0,
+            "effective_qty": 0,
+            "qty_reason": "pyramid_permanently_retired",
+        }
     legacy = describe_scale_in_qty(
         stock=stock,
         curr_price=resolved_price,

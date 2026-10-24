@@ -77,7 +77,9 @@ CONTRACT = {
 
 
 def load_auto_promotion(
-    *, now: datetime | None = None, env: dict[str, str] | None = None,
+    *,
+    now: datetime | None = None,
+    env: dict[str, str] | None = None,
     preparation_target_date: str | None = None,
 ) -> dict[str, Any] | None:
     """Load the immutable all-session V2.15+ promotion authority.
@@ -124,15 +126,28 @@ def load_auto_promotion(
             != "all_sessions_v2_15_plus_auto_promotion_2026_09_14"
         ):
             return result
-        return {"valid": True, "sha256": digest, "path": path, "payload": payload,
-                **({"preparation_target_date": preparation_target_date, "execution_authority": False}
-                   if preparation_target_date is not None else {})}
+        return {
+            "valid": True,
+            "sha256": digest,
+            "path": path,
+            "payload": payload,
+            **(
+                {
+                    "preparation_target_date": preparation_target_date,
+                    "execution_authority": False,
+                }
+                if preparation_target_date is not None
+                else {}
+            ),
+        }
     except (OSError, ValueError, TypeError, KeyError):
         return result
 
 
 def load_rollout(
-    *, now: datetime | None = None, env: dict[str, str] | None = None,
+    *,
+    now: datetime | None = None,
+    env: dict[str, str] | None = None,
     preparation_target_date: str | None = None,
 ) -> dict[str, Any] | None:
     """Read the pinned rollout; explicit preparation never grants execution."""
@@ -166,9 +181,20 @@ def load_rollout(
             return result
         if payload.get("operator_authority") != "all_scalping_v2_14_2026_09_11":
             return result
-        return {"valid": True, "sha256": digest, "path": path, "payload": payload,
-                **({"preparation_target_date": preparation_target_date, "execution_authority": False}
-                   if preparation_target_date is not None else {})}
+        return {
+            "valid": True,
+            "sha256": digest,
+            "path": path,
+            "payload": payload,
+            **(
+                {
+                    "preparation_target_date": preparation_target_date,
+                    "execution_authority": False,
+                }
+                if preparation_target_date is not None
+                else {}
+            ),
+        }
     except (OSError, ValueError, TypeError, KeyError):
         return result
 
@@ -207,10 +233,16 @@ def scope_authority_mode(venue: Any, session: Any) -> str:
 
 
 def authorized_scopes(
-    *, env: dict[str, str] | None = None, now: datetime | None = None,
+    *,
+    env: dict[str, str] | None = None,
+    now: datetime | None = None,
     preparation_target_date: str | None = None,
 ) -> frozenset[str]:
-    kwargs = ({"preparation_target_date": preparation_target_date} if preparation_target_date is not None else {})
+    kwargs = (
+        {"preparation_target_date": preparation_target_date}
+        if preparation_target_date is not None
+        else {}
+    )
     rollout = load_rollout(env=env, now=now, **kwargs)
     auto_promotion = load_auto_promotion(env=env, now=now, **kwargs)
 

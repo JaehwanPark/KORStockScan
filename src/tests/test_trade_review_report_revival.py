@@ -9,20 +9,31 @@ from src.engine import sniper_trade_review_report as report_mod
 def _isolate_saved_structured_partition(monkeypatch, request):
     """Unit builders must not absorb the host's preserved trading archive."""
 
-    if request.node.name == "test_structured_trailing_projection_flags_wrong_partition_and_missing_id":
+    if (
+        request.node.name
+        == "test_structured_trailing_projection_flags_wrong_partition_and_missing_id"
+    ):
         return
     monkeypatch.setattr(
-        report_mod, "_load_holding_projection_events_from_structured",
+        report_mod,
+        "_load_holding_projection_events_from_structured",
         lambda _date: ([], "source_gap_structured_partition_missing", []),
     )
 
 
 def test_retired_preset_profit_rule_keeps_historical_attribution():
-    assert report_mod._normalize_exit_rule("scalp_preset_protect_profit") == "scalp_preset_protect_profit"
-    assert report_mod._infer_exit_rule_from_reason("SCALP 출구엔진 보호선 이탈") == "scalp_preset_protect_profit"
-    assert report_mod._infer_exit_decision_source(
-        exit_rule="scalp_preset_protect_profit"
-    ) == "PRESET_PROTECT"
+    assert (
+        report_mod._normalize_exit_rule("scalp_preset_protect_profit")
+        == "scalp_preset_protect_profit"
+    )
+    assert (
+        report_mod._infer_exit_rule_from_reason("SCALP 출구엔진 보호선 이탈")
+        == "scalp_preset_protect_profit"
+    )
+    assert (
+        report_mod._infer_exit_decision_source(exit_rule="scalp_preset_protect_profit")
+        == "PRESET_PROTECT"
+    )
 
 
 def test_trailing_transitions_survive_timeline_and_projection():
@@ -49,34 +60,66 @@ def test_trailing_transitions_survive_timeline_and_projection():
 def test_shared_rebound_lineage_keeps_one_position_cost_and_exact_decision_join():
     def event(stage, **fields):
         return report_mod.HoldingEvent(
-            "2026-09-29 10:00:00", "TEST", "047040", stage,
-            {"id": "48376", **fields}, "",
+            "2026-09-29 10:00:00",
+            "TEST",
+            "047040",
+            stage,
+            {"id": "48376", **fields},
+            "",
         )
 
     events = [
-        event("avg_down_shared_rebound_blocked",
-              reason="shared_main_rebound_input_preflight_blocked",
-              preflight_primary_blocker="tick_context_stale"),
-        event("holding_path_signal_snapshot", path_id="ADD_REBOUND",
-              signal_id="signal-1", decision="PASS", buy_fill_identity="a" * 64,
-              policy_sha256="c" * 64, vote_count=2),
-        event("avg_down_shared_rebound_signal", source_signal_id="signal-1",
-              position_episode_id="episode-1", scale_in_decision_id="decision-1",
-              buy_fill_identity="a" * 64, machine_bundle_sha256="b" * 64,
-              holding_path_vote_policy_sha256="c" * 64),
-        event("scale_in_order_submitted", add_trigger="shared_main_rebound_entry",
-              actual_order_submitted=True, position_episode_id="episode-1",
-              scale_in_decision_id="decision-1", broker_order_no_list="0029199",
-              submitted_qty=1),
-        event("scale_in_executed", add_reason="shared_main_rebound_entry",
-              actual_order_submitted=True, position_episode_id="episode-1",
-              scale_in_decision_id="decision-1", order_no="0029199",
-              execution_no="131200", fill_qty=1),
+        event(
+            "avg_down_shared_rebound_blocked",
+            reason="shared_main_rebound_input_preflight_blocked",
+            preflight_primary_blocker="tick_context_stale",
+        ),
+        event(
+            "holding_path_signal_snapshot",
+            path_id="ADD_REBOUND",
+            signal_id="signal-1",
+            decision="PASS",
+            buy_fill_identity="a" * 64,
+            policy_sha256="c" * 64,
+            vote_count=2,
+        ),
+        event(
+            "avg_down_shared_rebound_signal",
+            source_signal_id="signal-1",
+            position_episode_id="episode-1",
+            scale_in_decision_id="decision-1",
+            buy_fill_identity="a" * 64,
+            machine_bundle_sha256="b" * 64,
+            holding_path_vote_policy_sha256="c" * 64,
+        ),
+        event(
+            "scale_in_order_submitted",
+            add_trigger="shared_main_rebound_entry",
+            actual_order_submitted=True,
+            position_episode_id="episode-1",
+            scale_in_decision_id="decision-1",
+            broker_order_no_list="0029199",
+            submitted_qty=1,
+        ),
+        event(
+            "scale_in_executed",
+            add_reason="shared_main_rebound_entry",
+            actual_order_submitted=True,
+            position_episode_id="episode-1",
+            scale_in_decision_id="decision-1",
+            order_no="0029199",
+            execution_no="131200",
+            fill_qty=1,
+        ),
     ]
     trade = {"id": 48376, "code": "047040", "strategy": "SCALPING"}
-    terminal = {"strict_completion_status": "eligible", "fill_cost_reconciled": True,
-                "realized_pnl_krw": 120, "profit_rate": 0.6,
-                "cost_basis": "broker_fill_prices_configured_cost_rate"}
+    terminal = {
+        "strict_completion_status": "eligible",
+        "fill_cost_reconciled": True,
+        "realized_pnl_krw": 120,
+        "profit_rate": 0.6,
+        "cost_basis": "broker_fill_prices_configured_cost_rate",
+    }
     result = report_mod._avg_down_rebound_lineage(trade, events, terminal)
     assert result["decision_rows"][0]["status"] == "completed_exact_cost"
     assert result["decision_rows"][0]["exact_fill_legs"] == [
@@ -84,28 +127,57 @@ def test_shared_rebound_lineage_keeps_one_position_cost_and_exact_decision_join(
     ]
     assert result["position_terminal"]["realized_pnl_krw"] == 120
     assert "realized_pnl_krw" not in result["decision_rows"][0]
-    assert result["incremental_add_effect_status"] == "unidentified_without_paired_no_add"
-    assert result["blocker_counts"] == [{"reason": "shared_main_rebound_input_preflight_blocked",
-                                          "primary_blocker": "tick_context_stale", "count": 1}]
+    assert (
+        result["incremental_add_effect_status"] == "unidentified_without_paired_no_add"
+    )
+    assert result["blocker_counts"] == [
+        {
+            "reason": "shared_main_rebound_input_preflight_blocked",
+            "primary_blocker": "tick_context_stale",
+            "count": 1,
+        }
+    ]
     json.dumps(result)
 
 
 def test_shared_rebound_lineage_does_not_join_unrelated_fill_or_invent_cost():
     def event(stage, **fields):
-        return report_mod.HoldingEvent("2026-09-29 10:00:00", "TEST", "047040",
-                                       stage, {"id": "48376", **fields}, "")
+        return report_mod.HoldingEvent(
+            "2026-09-29 10:00:00",
+            "TEST",
+            "047040",
+            stage,
+            {"id": "48376", **fields},
+            "",
+        )
+
     events = [
-        event("avg_down_shared_rebound_signal", source_signal_id="signal-1",
-              position_episode_id="episode-1", scale_in_decision_id="decision-1"),
-        event("scale_in_executed", add_reason="shared_main_rebound_entry",
-              actual_order_submitted=True, position_episode_id="episode-other",
-              scale_in_decision_id="decision-2", order_no="0029199",
-              execution_no="131200", fill_qty=1),
+        event(
+            "avg_down_shared_rebound_signal",
+            source_signal_id="signal-1",
+            position_episode_id="episode-1",
+            scale_in_decision_id="decision-1",
+        ),
+        event(
+            "scale_in_executed",
+            add_reason="shared_main_rebound_entry",
+            actual_order_submitted=True,
+            position_episode_id="episode-other",
+            scale_in_decision_id="decision-2",
+            order_no="0029199",
+            execution_no="131200",
+            fill_qty=1,
+        ),
     ]
     result = report_mod._avg_down_rebound_lineage(
-        {"id": 48376, "code": "047040", "strategy": "SCALPING"}, events,
-        {"strict_completion_status": "eligible", "fill_cost_reconciled": False,
-         "realized_pnl_krw": None, "profit_rate": None},
+        {"id": 48376, "code": "047040", "strategy": "SCALPING"},
+        events,
+        {
+            "strict_completion_status": "eligible",
+            "fill_cost_reconciled": False,
+            "realized_pnl_krw": None,
+            "profit_rate": None,
+        },
     )
     assert result["unjoined_fill_count"] == 1
     assert result["decision_rows"][0]["status"] == "lineage_gap_buy_fill_identity"
@@ -114,57 +186,145 @@ def test_shared_rebound_lineage_does_not_join_unrelated_fill_or_invent_cost():
 
 def test_shared_rebound_lineage_separates_partial_add_fill_from_full_fill():
     def event(stage, **fields):
-        return report_mod.HoldingEvent("2026-09-29 10:00:00", "TEST", "047040",
-                                       stage, {"id": "48376", **fields}, "")
+        return report_mod.HoldingEvent(
+            "2026-09-29 10:00:00",
+            "TEST",
+            "047040",
+            stage,
+            {"id": "48376", **fields},
+            "",
+        )
+
     events = [
-        event("holding_path_signal_snapshot", path_id="ADD_REBOUND",
-              signal_id="signal-1", decision="PASS", buy_fill_identity="a" * 64,
-              policy_sha256="c" * 64, vote_count=2),
-        event("avg_down_shared_rebound_signal", source_signal_id="signal-1",
-              position_episode_id="episode-1", scale_in_decision_id="decision-1",
-              buy_fill_identity="a" * 64, machine_bundle_sha256="b" * 64,
-              holding_path_vote_policy_sha256="c" * 64),
-        event("scale_in_order_submitted", add_trigger="shared_main_rebound_entry",
-              actual_order_submitted=True, position_episode_id="episode-1",
-              scale_in_decision_id="decision-1", broker_order_no_list="0029199",
-              submitted_qty=2),
-        event("scale_in_executed", add_reason="shared_main_rebound_entry",
-              actual_order_submitted=True, position_episode_id="episode-1",
-              scale_in_decision_id="decision-1", order_no="0029199",
-              execution_no="131200", fill_qty=1),
+        event(
+            "holding_path_signal_snapshot",
+            path_id="ADD_REBOUND",
+            signal_id="signal-1",
+            decision="PASS",
+            buy_fill_identity="a" * 64,
+            policy_sha256="c" * 64,
+            vote_count=2,
+        ),
+        event(
+            "avg_down_shared_rebound_signal",
+            source_signal_id="signal-1",
+            position_episode_id="episode-1",
+            scale_in_decision_id="decision-1",
+            buy_fill_identity="a" * 64,
+            machine_bundle_sha256="b" * 64,
+            holding_path_vote_policy_sha256="c" * 64,
+        ),
+        event(
+            "scale_in_order_submitted",
+            add_trigger="shared_main_rebound_entry",
+            actual_order_submitted=True,
+            position_episode_id="episode-1",
+            scale_in_decision_id="decision-1",
+            broker_order_no_list="0029199",
+            submitted_qty=2,
+        ),
+        event(
+            "scale_in_executed",
+            add_reason="shared_main_rebound_entry",
+            actual_order_submitted=True,
+            position_episode_id="episode-1",
+            scale_in_decision_id="decision-1",
+            order_no="0029199",
+            execution_no="131200",
+            fill_qty=1,
+        ),
     ]
-    terminal = {"strict_completion_status": "eligible", "fill_cost_reconciled": True,
-                "realized_pnl_krw": 120, "profit_rate": 0.6}
+    terminal = {
+        "strict_completion_status": "eligible",
+        "fill_cost_reconciled": True,
+        "realized_pnl_krw": 120,
+        "profit_rate": 0.6,
+    }
     result = report_mod._avg_down_rebound_lineage(
-        {"id": 48376, "code": "047040", "strategy": "SCALPING"}, events, terminal,
+        {"id": 48376, "code": "047040", "strategy": "SCALPING"},
+        events,
+        terminal,
     )
     decision = result["decision_rows"][0]
     assert decision["fill_quality"] == "partial"
     assert decision["exact_filled_qty"] == 1
     assert decision["status"] == "partial_fill_completed_exact_cost"
-    assert result["incremental_add_effect_status"] == "unidentified_without_paired_no_add"
+    assert (
+        result["incremental_add_effect_status"] == "unidentified_without_paired_no_add"
+    )
 
 
-@pytest.mark.parametrize("gap", [None, "missing_buy", "malformed_buy", "missing_bundle", "wrong_vote_policy", "one_vote"])
+@pytest.mark.parametrize(
+    "gap",
+    [
+        None,
+        "missing_buy",
+        "malformed_buy",
+        "missing_bundle",
+        "wrong_vote_policy",
+        "one_vote",
+    ],
+)
 def test_rebound_lineage_requires_bound_buy_and_policy_even_with_exact_fill(gap):
     def event(stage, **fields):
-        return report_mod.HoldingEvent("2026-10-16 10:00:00", "TEST", "005930", stage, fields, "")
-    identity = None if gap == "missing_buy" else "invalid" if gap == "malformed_buy" else "a" * 64
+        return report_mod.HoldingEvent(
+            "2026-10-16 10:00:00", "TEST", "005930", stage, fields, ""
+        )
+
+    identity = (
+        None
+        if gap == "missing_buy"
+        else "invalid" if gap == "malformed_buy" else "a" * 64
+    )
     events = [
-        event("avg_down_shared_rebound_signal", source_signal_id="s", scale_in_decision_id="d",
-              position_episode_id="p", buy_fill_identity=identity,
-              machine_bundle_sha256=None if gap == "missing_bundle" else "b" * 64,
-              holding_path_vote_policy_sha256="c" * 64),
-        event("holding_path_signal_snapshot", path_id="ADD_REBOUND", signal_id="s", decision="PASS",
-              buy_fill_identity=identity, policy_sha256="d" * 64 if gap == "wrong_vote_policy" else "c" * 64,
-              vote_count=1 if gap == "one_vote" else 2),
-        event("scale_in_order_submitted", add_trigger="shared_main_rebound_entry", actual_order_submitted=True,
-              position_episode_id="p", scale_in_decision_id="d", broker_order_no_list="100", submitted_qty=1),
-        event("scale_in_executed", add_reason="shared_main_rebound_entry", actual_order_submitted=True,
-              position_episode_id="p", scale_in_decision_id="d", order_no="100", execution_no="200", fill_qty=1),
+        event(
+            "avg_down_shared_rebound_signal",
+            source_signal_id="s",
+            scale_in_decision_id="d",
+            position_episode_id="p",
+            buy_fill_identity=identity,
+            machine_bundle_sha256=None if gap == "missing_bundle" else "b" * 64,
+            holding_path_vote_policy_sha256="c" * 64,
+        ),
+        event(
+            "holding_path_signal_snapshot",
+            path_id="ADD_REBOUND",
+            signal_id="s",
+            decision="PASS",
+            buy_fill_identity=identity,
+            policy_sha256="d" * 64 if gap == "wrong_vote_policy" else "c" * 64,
+            vote_count=1 if gap == "one_vote" else 2,
+        ),
+        event(
+            "scale_in_order_submitted",
+            add_trigger="shared_main_rebound_entry",
+            actual_order_submitted=True,
+            position_episode_id="p",
+            scale_in_decision_id="d",
+            broker_order_no_list="100",
+            submitted_qty=1,
+        ),
+        event(
+            "scale_in_executed",
+            add_reason="shared_main_rebound_entry",
+            actual_order_submitted=True,
+            position_episode_id="p",
+            scale_in_decision_id="d",
+            order_no="100",
+            execution_no="200",
+            fill_qty=1,
+        ),
     ]
-    result = report_mod._avg_down_rebound_lineage(dict(id=42, code="005930", strategy="SCALPING"), events,
-        dict(strict_completion_status="eligible", fill_cost_reconciled=True, realized_pnl_krw=100, profit_rate=.2))
+    result = report_mod._avg_down_rebound_lineage(
+        dict(id=42, code="005930", strategy="SCALPING"),
+        events,
+        dict(
+            strict_completion_status="eligible",
+            fill_cost_reconciled=True,
+            realized_pnl_krw=100,
+            profit_rate=0.2,
+        ),
+    )
     row = result["decision_rows"][0]
     assert (row["status"] == "completed_exact_cost") is (gap is None)
     assert row["valid_vote_count"] == (1 if gap is None else 0)
@@ -187,9 +347,9 @@ def test_structured_trailing_projection_flags_wrong_partition_and_missing_id(
     }
     wrong_partition = {**base, "storage_partition_date": "2026-09-23"}
     missing_id = {**base, "record_id": None}
-    path.write_text("\n".join(json.dumps(row) for row in (
-        base, wrong_partition, missing_id
-    )) + "\n")
+    path.write_text(
+        "\n".join(json.dumps(row) for row in (base, wrong_partition, missing_id)) + "\n"
+    )
 
     events, status, receipts = (
         report_mod._load_holding_projection_events_from_structured("2026-09-24")
@@ -201,7 +361,9 @@ def test_structured_trailing_projection_flags_wrong_partition_and_missing_id(
 
 
 @pytest.mark.parametrize("native_terminal", [False, True])
-def test_completed_projection_keeps_full_population_beyond_display_limit(monkeypatch, native_terminal):
+def test_completed_projection_keeps_full_population_beyond_display_limit(
+    monkeypatch, native_terminal
+):
     trades = [
         {
             "id": index,
@@ -222,10 +384,16 @@ def test_completed_projection_keeps_full_population_beyond_display_limit(monkeyp
         for index in range(1, 13)
     ]
     monkeypatch.setattr(report_mod, "_fetch_trade_rows", lambda *_: (trades, []))
-    terminal_lines = [f"[2026-09-23 09:10:00] [HOLDING_PIPELINE] test({index:06d}) "
-                      f"stage=sell_completed id={index} sell_price=10100" for index in range(1, 13)]
-    monkeypatch.setattr(report_mod, "_iter_target_lines",
-                        lambda *_args, **_kw: terminal_lines if native_terminal else [])
+    terminal_lines = [
+        f"[2026-09-23 09:10:00] [HOLDING_PIPELINE] test({index:06d}) "
+        f"stage=sell_completed id={index} sell_price=10100"
+        for index in range(1, 13)
+    ]
+    monkeypatch.setattr(
+        report_mod,
+        "_iter_target_lines",
+        lambda *_args, **_kw: terminal_lines if native_terminal else [],
+    )
     monkeypatch.setattr(
         report_mod, "find_gatekeeper_snapshot_for_trade", lambda *_args: None
     )
@@ -239,13 +407,22 @@ def test_completed_projection_keeps_full_population_beyond_display_limit(monkeyp
     assert result["metrics"]["canonical_completed_trades"] == 12
 
     assert report_mod.verify_completed_census_manifest(result, "2026-09-23") is None
-    assert result["metrics"]["native_sell_completed_trade_count"] == (12 if native_terminal else 0)
-    assert result["metrics"]["database_only_completed_trade_count"] == (0 if native_terminal else 12)
-    assert len(result["meta"]["sell_completed_event_ids"]) == (12 if native_terminal else 0)
+    assert result["metrics"]["native_sell_completed_trade_count"] == (
+        12 if native_terminal else 0
+    )
+    assert result["metrics"]["database_only_completed_trade_count"] == (
+        0 if native_terminal else 12
+    )
+    assert len(result["meta"]["sell_completed_event_ids"]) == (
+        12 if native_terminal else 0
+    )
     if not native_terminal:
         assert all(row["strict_completion_status"] == "excluded" for row in projection)
-        assert all("source_gap_native_sell_completed_event_missing" in row["strict_completion_reasons"]
-                   for row in projection)
+        assert all(
+            "source_gap_native_sell_completed_event_missing"
+            in row["strict_completion_reasons"]
+            for row in projection
+        )
 
 
 def test_completed_projection_requires_exact_receipt_for_cost_and_fill_time():
@@ -304,18 +481,27 @@ def test_completed_projection_requires_exact_receipt_for_cost_and_fill_time():
     )
     buy_event = report_mod.HoldingEvent(
         timestamp="2026-09-23 09:00:00",
-        name="test", code="123456", stage="position_rebased_after_fill",
+        name="test",
+        code="123456",
+        stage="position_rebased_after_fill",
         fields={
-            "id": "1", "order_no": "B1", "execution_no": "BE1",
-            "fill_qty": "1", "order_filled_qty": "1",
-            "order_requested_qty": "1", "order_remaining_qty": "0",
-            "fill_price": "10000", "fill_quality": "FULL_FILL",
+            "id": "1",
+            "order_no": "B1",
+            "execution_no": "BE1",
+            "fill_qty": "1",
+            "order_filled_qty": "1",
+            "order_requested_qty": "1",
+            "order_remaining_qty": "0",
+            "fill_price": "10000",
+            "fill_quality": "FULL_FILL",
             "receipt_economics_complete": "True",
             "receipt_quantity_contract_complete": "True",
             "receipt_unit_fill_consistent": "True",
-            "actual_order_submitted": "True", "broker_order_forbidden": "False",
+            "actual_order_submitted": "True",
+            "broker_order_forbidden": "False",
             "pipeline_lifecycle_population_scope": "real_record_bound",
-        }, raw_line="",
+        },
+        raw_line="",
     )
 
     direct = report_mod._completed_trade_projection(base, [buy_event, event], base)
@@ -333,14 +519,24 @@ def test_completed_projection_requires_exact_receipt_for_cost_and_fill_time():
     assert direct["configured_cost_estimated_pnl_krw"] == 40
     assert direct["realized_pnl_krw"] is None
     assert direct["strict_completion_status"] == "excluded"
-    assert "source_gap_broker_actual_cost_missing" in direct["strict_completion_reasons"]
+    assert (
+        "source_gap_broker_actual_cost_missing" in direct["strict_completion_reasons"]
+    )
 
     from dataclasses import replace
     from src.trading.market.execution_venue import SOR_KRX_AUTHORITY
-    sor = replace(event, timestamp="2026-10-16 09:23:49", fields={**event.fields,
-        "order_no": "0015649", "execution_no": "30414",
-        "main_lifecycle_execution_occurred_at": "2026-10-16T09:23:48+09:00",
-        "sell_execution_receipt_economics_complete": "False"})
+
+    sor = replace(
+        event,
+        timestamp="2026-10-16 09:23:49",
+        fields={
+            **event.fields,
+            "order_no": "0015649",
+            "execution_no": "30414",
+            "main_lifecycle_execution_occurred_at": "2026-10-16T09:23:48+09:00",
+            "sell_execution_receipt_economics_complete": "False",
+        },
+    )
     assigned = report_mod._completed_trade_projection(base, [buy_event, sor], base)
     assert assigned["exact_sell_fill_time"] == "2026-10-16T09:23:48+09:00"
     assert assigned["effective_venue"] == "KRX"
@@ -374,30 +570,56 @@ def test_completed_projection_requires_exact_receipt_for_cost_and_fill_time():
 
 
 def test_balance_reconciled_completion_preserves_missing_execution_and_cost():
-    trade = {"id": 47531, "rec_date": "2026-09-23", "code": "010060",
-             "status": "COMPLETED", "strategy": "SCALPING",
-             "buy_price": 195100, "buy_qty": 1, "sell_price": 201000,
-             "sell_time": "", "profit_rate": 2.79,
-             "realized_pnl_krw": 5438,
-             "realized_pnl_krw_source": "price_cost_model"}
+    trade = {
+        "id": 47531,
+        "rec_date": "2026-09-23",
+        "code": "010060",
+        "status": "COMPLETED",
+        "strategy": "SCALPING",
+        "buy_price": 195100,
+        "buy_qty": 1,
+        "sell_price": 201000,
+        "sell_time": "",
+        "profit_rate": 2.79,
+        "realized_pnl_krw": 5438,
+        "realized_pnl_krw_source": "price_cost_model",
+    }
     submitted = report_mod.HoldingEvent(
-        timestamp="2026-09-23 09:07:00", name="OCI", code="010060",
-        stage="sell_order_sent", fields={"id": "47531",
-            "broker_order_no": "0012375", "broker_route": "SOR",
-            "actual_order_submitted": "True", "broker_order_forbidden": "False",
-            "attempt_id": "A1", "main_lifecycle_id": "M1"}, raw_line="")
+        timestamp="2026-09-23 09:07:00",
+        name="OCI",
+        code="010060",
+        stage="sell_order_sent",
+        fields={
+            "id": "47531",
+            "broker_order_no": "0012375",
+            "broker_route": "SOR",
+            "actual_order_submitted": "True",
+            "broker_order_forbidden": "False",
+            "attempt_id": "A1",
+            "main_lifecycle_id": "M1",
+        },
+        raw_line="",
+    )
     reconciled = report_mod.HoldingEvent(
-        timestamp="2026-09-23 09:07:59", name="OCI", code="010060",
-        stage="sell_completed", fields={"id": "47531",
-            "sell_order_no": "0012375", "sell_qty": "1",
+        timestamp="2026-09-23 09:07:59",
+        name="OCI",
+        code="010060",
+        stage="sell_completed",
+        fields={
+            "id": "47531",
+            "sell_order_no": "0012375",
+            "sell_qty": "1",
             "decision_authority": "broker_balance_reconciliation_only",
             "reconciliation_result": "broker_exact_order_fill_recovered",
             "execution_match_reason": (
-                "unique_owner_cycle_kt00007_terminal_sell_execution"),
+                "unique_owner_cycle_kt00007_terminal_sell_execution"
+            ),
             "sell_time_precision": "order_second_not_fill_second",
-            "realized_pnl_krw": "5438"}, raw_line="")
-    row = report_mod._completed_trade_projection(
-        trade, [submitted, reconciled], trade)
+            "realized_pnl_krw": "5438",
+        },
+        raw_line="",
+    )
+    row = report_mod._completed_trade_projection(trade, [submitted, reconciled], trade)
     assert row["sell_terminal_source_status"] == "balance_reconciled_price_only"
     assert row["sell_reconciliation_order_no"] == "0012375"
     assert row["sell_submission_identity_status"] == "matched_source_only"
@@ -413,87 +635,116 @@ def test_balance_reconciled_completion_preserves_missing_execution_and_cost():
     assert "sell_completion_reconciliation_gap" in report_mod._PROJECTION_EVENT_STAGES
     assert "sell_cancel_reconciliation_deferred" in report_mod._PROJECTION_EVENT_STAGES
     deferred = report_mod.HoldingEvent(
-        timestamp="2026-09-23 09:07:49", name="OCI", code="010060",
-        stage="sell_cancel_reconciliation_deferred", fields={"id": "47531"},
-        raw_line="")
+        timestamp="2026-09-23 09:07:49",
+        name="OCI",
+        code="010060",
+        stage="sell_cancel_reconciliation_deferred",
+        fields={"id": "47531"},
+        raw_line="",
+    )
     pending = report_mod._completed_trade_projection(
-        trade, [submitted, deferred, reconciled], trade)
+        trade, [submitted, deferred, reconciled], trade
+    )
     assert pending["sell_cancel_deferred_event_count"] == 1
     assert pending["realized_pnl_krw"] is None
     contract = {
         "schema": "sell_balance_reconciliation_source_v1",
-        "source_api": "kt00007", "source_date": "2026-09-23",
-        "record_id": 47531, "stock_code": "010060",
-        "order_no": "0012375", "order_time": "090700",
-        "submitted_qty": 1, "filled_qty": 1, "remaining_qty": 0,
-        "execution_price": 201000, "broker_route": "SOR",
-        "broker_sor_flag": "Y", "owner_buy_time": "2026-09-23T08:38:32",
+        "source_api": "kt00007",
+        "source_date": "2026-09-23",
+        "record_id": 47531,
+        "stock_code": "010060",
+        "order_no": "0012375",
+        "order_time": "090700",
+        "submitted_qty": 1,
+        "filled_qty": 1,
+        "remaining_qty": 0,
+        "execution_price": 201000,
+        "broker_route": "SOR",
+        "broker_sor_flag": "Y",
+        "owner_buy_time": "2026-09-23T08:38:32",
         "broker_snapshot_at": "2026-09-23T09:07:59+09:00",
     }
     raw = json.dumps(contract, sort_keys=True, separators=(",", ":"))
     reconciled.fields.update(
-        sell_price="201000", sell_reconciliation_source_date="2026-09-23",
+        sell_price="201000",
+        sell_reconciliation_source_date="2026-09-23",
         sell_reconciliation_source_contract=raw,
-        sell_reconciliation_normalized_sha256=hashlib.sha256(
-            raw.encode()).hexdigest(),
+        sell_reconciliation_normalized_sha256=hashlib.sha256(raw.encode()).hexdigest(),
         configured_fee_estimate_krw="462",
     )
     bound = report_mod._completed_trade_projection(
-        trade, [submitted, reconciled], trade)
+        trade, [submitted, reconciled], trade
+    )
     assert bound["sell_reconciliation_generation_status"] == (
-        "normalized_contract_bound")
+        "normalized_contract_bound"
+    )
     assert bound["configured_fee_estimate_krw"] == 462
     assert bound["broker_actual_fees_taxes_krw"] is None
     assert bound["realized_pnl_krw"] is None
     reconciled.timestamp = "2026-09-24 00:00:02"
     after_midnight = report_mod._completed_trade_projection(
-        trade, [submitted, reconciled], trade)
+        trade, [submitted, reconciled], trade
+    )
     assert after_midnight["sell_reconciliation_generation_status"] == (
-        "normalized_contract_bound")
+        "normalized_contract_bound"
+    )
     assert after_midnight["completion_observed_date"] == "2026-09-24"
     reconciled.timestamp = "2026-09-23 09:07:59"
     reconciled.fields["sell_reconciliation_source_date"] = "2026-09-22"
     stale = report_mod._completed_trade_projection(
-        trade, [submitted, reconciled], trade)
+        trade, [submitted, reconciled], trade
+    )
     assert stale["sell_reconciliation_generation_status"] == "invalid"
     assert stale["configured_fee_estimate_krw"] is None
 
     reconciled.fields["sell_reconciliation_source_date"] = "2026-09-23"
     wrong_price = report_mod._completed_trade_projection(
-        {**trade, "sell_price": 202000}, [submitted, reconciled], trade)
+        {**trade, "sell_price": 202000}, [submitted, reconciled], trade
+    )
     assert wrong_price["sell_reconciliation_generation_status"] == "invalid"
     submitted.fields["broker_order_no"] = "OTHER"
     wrong_order = report_mod._completed_trade_projection(
-        trade, [submitted, reconciled], trade)
+        trade, [submitted, reconciled], trade
+    )
     assert wrong_order["sell_submission_identity_status"] == "missing"
     assert wrong_order["configured_fee_estimate_krw"] is None
     submitted.fields["broker_order_no"] = "0012375"
     submitted.fields["broker_route"] = "NXT"
     wrong_route = report_mod._completed_trade_projection(
-        trade, [submitted, reconciled], trade)
+        trade, [submitted, reconciled], trade
+    )
     assert wrong_route["sell_reconciliation_generation_status"] == (
-        "submission_route_conflict")
+        "submission_route_conflict"
+    )
     assert wrong_route["configured_fee_estimate_krw"] is None
     submitted.fields["broker_route"] = "SOR"
     conflicting_duplicate = report_mod.HoldingEvent(
-        timestamp="2026-09-23 09:07:01", name="OCI", code="010060",
-        stage="sell_order_sent", fields={**submitted.fields, "qty": "2"},
-        raw_line="")
+        timestamp="2026-09-23 09:07:01",
+        name="OCI",
+        code="010060",
+        stage="sell_order_sent",
+        fields={**submitted.fields, "qty": "2"},
+        raw_line="",
+    )
     conflicted = report_mod._completed_trade_projection(
-        trade, [submitted, conflicting_duplicate, reconciled], trade)
+        trade, [submitted, conflicting_duplicate, reconciled], trade
+    )
     assert conflicted["sell_submission_identity_status"] == "conflicting"
     assert conflicted["configured_fee_estimate_krw"] is None
 
     gap = report_mod.HoldingEvent(
-        timestamp="2026-09-23 09:08:00", name="OCI", code="010060",
+        timestamp="2026-09-23 09:08:00",
+        name="OCI",
+        code="010060",
         stage="sell_completion_reconciliation_gap",
-        fields={"id": "47531", "decision_authority": (
-            "broker_balance_reconciliation_only"),
-            "reconciliation_result": "broker_holding_absent_fill_receipt_missing"},
+        fields={
+            "id": "47531",
+            "decision_authority": ("broker_balance_reconciliation_only"),
+            "reconciliation_result": "broker_holding_absent_fill_receipt_missing",
+        },
         raw_line="",
     )
-    missing = report_mod._completed_trade_projection(
-        trade, [submitted, gap], trade)
+    missing = report_mod._completed_trade_projection(trade, [submitted, gap], trade)
     assert missing["sell_terminal_source_status"] == "balance_absent_receipt_missing"
     assert missing["realized_pnl_krw"] is None
 
@@ -501,38 +752,74 @@ def test_balance_reconciled_completion_preserves_missing_execution_and_cost():
 def test_completed_execution_ledger_requires_buy_fill_and_conserves_all_sell_legs():
     def event(stage, second, **fields):
         return report_mod.HoldingEvent(
-            timestamp=f"2026-09-24 09:00:{second:02d}", name="test",
-            code="123456", stage=stage,
-            fields={"pipeline_lifecycle_population_scope": "real_record_bound",
-                    "actual_order_submitted": "True",
-                    "broker_order_forbidden": "False",
-                    "sell_receipt_economics_complete": "True",
-                    "sell_receipt_quantity_contract_complete": "True",
-                    "sell_receipt_unit_fill_consistent": "True",
-                    "sell_execution_receipt_economics_complete": "True",
-                    "sell_execution_receipt_quantity_contract_complete": "True",
-                    "sell_execution_receipt_unit_fill_consistent": "True",
-                    "main_lifecycle_fees_taxes_krw": "10",
-                    "main_lifecycle_realized_net_pnl_krw": "40", **fields}, raw_line="",
+            timestamp=f"2026-09-24 09:00:{second:02d}",
+            name="test",
+            code="123456",
+            stage=stage,
+            fields={
+                "pipeline_lifecycle_population_scope": "real_record_bound",
+                "actual_order_submitted": "True",
+                "broker_order_forbidden": "False",
+                "sell_receipt_economics_complete": "True",
+                "sell_receipt_quantity_contract_complete": "True",
+                "sell_receipt_unit_fill_consistent": "True",
+                "sell_execution_receipt_economics_complete": "True",
+                "sell_execution_receipt_quantity_contract_complete": "True",
+                "sell_execution_receipt_unit_fill_consistent": "True",
+                "main_lifecycle_fees_taxes_krw": "10",
+                "main_lifecycle_realized_net_pnl_krw": "40",
+                **fields,
+            },
+            raw_line="",
         )
 
     buy_base = {
-        "order_no": "B1", "order_requested_qty": "2", "fill_price": "10000",
+        "order_no": "B1",
+        "order_requested_qty": "2",
+        "fill_price": "10000",
         "receipt_economics_complete": "True",
         "receipt_quantity_contract_complete": "True",
         "receipt_unit_fill_consistent": "True",
     }
     events = [
-        event("position_rebased_after_fill", 1, **buy_base, execution_no="BEX1",
-              fill_qty="1", order_filled_qty="1", order_remaining_qty="1"),
-        event("position_rebased_after_fill", 2, **buy_base, execution_no="BEX2",
-              fill_qty="1", order_filled_qty="2", order_remaining_qty="0"),
-        event("sell_partial_fill_progress", 3, order_no="S1", execution_no="SEX1",
-              main_lifecycle_exit_qty="1", main_lifecycle_exit_price="10050",
-              cumulative_sell_qty="1", remaining_sell_qty="1"),
-        event("sell_completed", 4, order_no="S1", execution_no="SEX2",
-              main_lifecycle_exit_qty="1", main_lifecycle_exit_price="10060",
-              cumulative_sell_qty="2", remaining_sell_qty="0"),
+        event(
+            "position_rebased_after_fill",
+            1,
+            **buy_base,
+            execution_no="BEX1",
+            fill_qty="1",
+            order_filled_qty="1",
+            order_remaining_qty="1",
+        ),
+        event(
+            "position_rebased_after_fill",
+            2,
+            **buy_base,
+            execution_no="BEX2",
+            fill_qty="1",
+            order_filled_qty="2",
+            order_remaining_qty="0",
+        ),
+        event(
+            "sell_partial_fill_progress",
+            3,
+            order_no="S1",
+            execution_no="SEX1",
+            main_lifecycle_exit_qty="1",
+            main_lifecycle_exit_price="10050",
+            cumulative_sell_qty="1",
+            remaining_sell_qty="1",
+        ),
+        event(
+            "sell_completed",
+            4,
+            order_no="S1",
+            execution_no="SEX2",
+            main_lifecycle_exit_qty="1",
+            main_lifecycle_exit_price="10060",
+            cumulative_sell_qty="2",
+            remaining_sell_qty="0",
+        ),
     ]
     trade = {"buy_qty": 2, "buy_price": 10000}
     ledger = report_mod._completed_execution_ledger(trade, events)
@@ -542,9 +829,14 @@ def test_completed_execution_ledger_requires_buy_fill_and_conserves_all_sell_leg
     assert ledger["sell_fill_fees_taxes_krw"] == 20
 
     second_order = event(
-        "sell_completed", 4, order_no="S2", execution_no="SEX2",
-        main_lifecycle_exit_qty="1", main_lifecycle_exit_price="10060",
-        cumulative_sell_qty="2", remaining_sell_qty="0",
+        "sell_completed",
+        4,
+        order_no="S2",
+        execution_no="SEX2",
+        main_lifecycle_exit_qty="1",
+        main_lifecycle_exit_price="10060",
+        cumulative_sell_qty="2",
+        remaining_sell_qty="0",
     )
     multi_order = report_mod._completed_execution_ledger(
         trade, events[:-1] + [second_order]
@@ -554,234 +846,560 @@ def test_completed_execution_ledger_requires_buy_fill_and_conserves_all_sell_leg
 
     no_buy = report_mod._completed_execution_ledger(trade, events[2:])
     assert "source_gap_buy_fill_missing" in no_buy["strict_completion_reasons"]
-    duplicate = report_mod._completed_execution_ledger(trade, events[:2] + [events[1]] + events[2:])
-    assert "source_gap_duplicate_buy_execution" in duplicate["strict_completion_reasons"]
+    duplicate = report_mod._completed_execution_ledger(
+        trade, events[:2] + [events[1]] + events[2:]
+    )
+    assert (
+        "source_gap_duplicate_buy_execution" in duplicate["strict_completion_reasons"]
+    )
     partial = report_mod._completed_execution_ledger(trade, events[:-1])
-    assert "source_gap_position_quantity_not_conserved" in partial["strict_completion_reasons"]
+    assert (
+        "source_gap_position_quantity_not_conserved"
+        in partial["strict_completion_reasons"]
+    )
 
     # A later BUY cannot retroactively fund an earlier SELL even when totals match.
-    late_buy = event("position_rebased_after_fill", 5, **buy_base,
-                     execution_no="BEX2", fill_qty="1", order_filled_qty="2",
-                     order_remaining_qty="0")
+    late_buy = event(
+        "position_rebased_after_fill",
+        5,
+        **buy_base,
+        execution_no="BEX2",
+        fill_qty="1",
+        order_filled_qty="2",
+        order_remaining_qty="0",
+    )
     out_of_order = report_mod._completed_execution_ledger(
         trade, [events[0], late_buy, events[2], events[3]]
     )
-    assert "source_gap_negative_position_balance" in out_of_order["strict_completion_reasons"]
+    assert (
+        "source_gap_negative_position_balance"
+        in out_of_order["strict_completion_reasons"]
+    )
 
 
 def test_split_buy_handoff_reconciles_whole_position_without_per_child_sell_allocation():
-    day='2026-10-15';events=[];journal=[];fills=[]
-    for index,qty in enumerate((1,8,12),1):
-        order=f'B{index}';intent=f'I{index}';execution=f'E{index}'
-        fields=dict(actual_order_submitted=True,broker_order_no=order,requested_qty=qty,
-            submitted_qty=qty,buy_planned_qty=21,buy_submit_attempt_id='attempt-42',
-            buy_parent_id='attempt-42',buy_child_id='attempt-42:'+order,
-            buy_position_cycle_id='42',owner_registry_intent_id=intent,
-            buy_owner_type='main_scalping',buy_owner_id='main_scalping:42',
-            buy_account_key='acct-a',broker_route='KRX')
-        events.append(dict(stage='order_leg_sent',emitted_date=day,record_id=42,stock_code='403870',fields=fields))
-        base=dict(intent_id=intent,owner_type='main_scalping',owner_id='main_scalping:42',
-            account_key='acct-a',order_date=day,side='BUY',action='NEW',broker_order_no=order,
-            symbol='403870',route='KRX',quantity=qty)
-        journal.extend([{**base,'event':'ORDER_BOUND','state':'ORDER_BOUND'},
-            {**base,'event':'FILL_RECORDED','state':'ORDER_TERMINAL','filled_qty':qty,'execution_no':execution}])
-        fills.append(report_mod.HoldingEvent(day+' 09:00:0'+str(index),'x','403870',
-            'position_rebased_after_fill',dict(id='42',order_no=order,execution_no=execution,
-            fill_qty=qty,order_filled_qty=qty,order_remaining_qty=0,fill_price=10000,
-            pipeline_lifecycle_population_scope='real_record_bound',actual_order_submitted=True,
-            broker_order_forbidden=False),''))
-    sale=report_mod.HoldingEvent(day+' 09:05:00','x','403870','sell_completed',dict(
-        id='42',order_no='S1',execution_no='SE1',main_lifecycle_exit_qty=21,cumulative_sell_qty=21,
-        pipeline_lifecycle_population_scope='real_record_bound',actual_order_submitted=True,broker_order_forbidden=False),'')
-    trade=dict(id=42,code='403870',status='COMPLETED',buy_qty=21)
-    result=report_mod._buy_parent_handoff_projection(day,events,journal,fills+[sale],[trade])
-    assert result['counts']['valid']==3
-    assert sum(r['filled_qty'] for r in result['rows'])==21
-    assert all(r['state']=='full' and r['position_sellable_qty']==0 and r['sellable_qty'] is None
-        and r['cost_krw'] is None for r in result['rows'])
-    missing=report_mod._buy_parent_handoff_projection(day,events[:-1],journal,fills+[sale],[trade])
-    assert missing['counts']['valid']==0
-    assert all(r['position_sellable_qty'] is None for r in missing['rows'])
-    events[-1]['fields']['buy_position_cycle_id']='another-cycle'
-    assert report_mod._buy_parent_handoff_projection(day,events,journal,fills+[sale],[trade])['counts']['valid']==0
+    day = "2026-10-15"
+    events = []
+    journal = []
+    fills = []
+    for index, qty in enumerate((1, 8, 12), 1):
+        order = f"B{index}"
+        intent = f"I{index}"
+        execution = f"E{index}"
+        fields = dict(
+            actual_order_submitted=True,
+            broker_order_no=order,
+            requested_qty=qty,
+            submitted_qty=qty,
+            buy_planned_qty=21,
+            buy_submit_attempt_id="attempt-42",
+            buy_parent_id="attempt-42",
+            buy_child_id="attempt-42:" + order,
+            buy_position_cycle_id="42",
+            owner_registry_intent_id=intent,
+            buy_owner_type="main_scalping",
+            buy_owner_id="main_scalping:42",
+            buy_account_key="acct-a",
+            broker_route="KRX",
+        )
+        events.append(
+            dict(
+                stage="order_leg_sent",
+                emitted_date=day,
+                record_id=42,
+                stock_code="403870",
+                fields=fields,
+            )
+        )
+        base = dict(
+            intent_id=intent,
+            owner_type="main_scalping",
+            owner_id="main_scalping:42",
+            account_key="acct-a",
+            order_date=day,
+            side="BUY",
+            action="NEW",
+            broker_order_no=order,
+            symbol="403870",
+            route="KRX",
+            quantity=qty,
+        )
+        journal.extend(
+            [
+                {**base, "event": "ORDER_BOUND", "state": "ORDER_BOUND"},
+                {
+                    **base,
+                    "event": "FILL_RECORDED",
+                    "state": "ORDER_TERMINAL",
+                    "filled_qty": qty,
+                    "execution_no": execution,
+                },
+            ]
+        )
+        fills.append(
+            report_mod.HoldingEvent(
+                day + " 09:00:0" + str(index),
+                "x",
+                "403870",
+                "position_rebased_after_fill",
+                dict(
+                    id="42",
+                    order_no=order,
+                    execution_no=execution,
+                    fill_qty=qty,
+                    order_filled_qty=qty,
+                    order_remaining_qty=0,
+                    fill_price=10000,
+                    pipeline_lifecycle_population_scope="real_record_bound",
+                    actual_order_submitted=True,
+                    broker_order_forbidden=False,
+                ),
+                "",
+            )
+        )
+    sale = report_mod.HoldingEvent(
+        day + " 09:05:00",
+        "x",
+        "403870",
+        "sell_completed",
+        dict(
+            id="42",
+            order_no="S1",
+            execution_no="SE1",
+            main_lifecycle_exit_qty=21,
+            cumulative_sell_qty=21,
+            pipeline_lifecycle_population_scope="real_record_bound",
+            actual_order_submitted=True,
+            broker_order_forbidden=False,
+        ),
+        "",
+    )
+    trade = dict(id=42, code="403870", status="COMPLETED", buy_qty=21)
+    result = report_mod._buy_parent_handoff_projection(
+        day, events, journal, fills + [sale], [trade]
+    )
+    assert result["counts"]["valid"] == 3
+    assert sum(r["filled_qty"] for r in result["rows"]) == 21
+    assert all(
+        r["state"] == "full"
+        and r["position_sellable_qty"] == 0
+        and r["sellable_qty"] is None
+        and r["cost_krw"] is None
+        for r in result["rows"]
+    )
+    missing = report_mod._buy_parent_handoff_projection(
+        day, events[:-1], journal, fills + [sale], [trade]
+    )
+    assert missing["counts"]["valid"] == 0
+    assert all(r["position_sellable_qty"] is None for r in missing["rows"])
+    events[-1]["fields"]["buy_position_cycle_id"] = "another-cycle"
+    assert (
+        report_mod._buy_parent_handoff_projection(
+            day, events, journal, fills + [sale], [trade]
+        )["counts"]["valid"]
+        == 0
+    )
 
 
 def test_buy_parent_handoff_requires_exact_owner_and_conserves_filled_not_planned_qty():
     day = "2026-09-28"
+
     def sent(order, intent, record=42, owner="main_scalping:42", account="acct-a"):
-        return {"stage": "order_leg_sent", "emitted_date": day,
-                "record_id": record, "stock_code": "123456",
-                "emitted_at": day + "T09:00:00+09:00", "fields": {
-                    "actual_order_submitted": "True", "broker_order_no": order,
-                    "requested_qty": "2", "submitted_qty": "2",
-                    "buy_planned_qty": "3",
-                    "entry_submit_attempt_id": "attempt-42", "buy_parent_id": "attempt-42",
-                    "buy_child_id": "attempt-42:probe", "owner_registry_intent_id": intent,
-                    "buy_owner_type": "main_scalping", "buy_owner_id": owner,
-                    "buy_account_key": account, "broker_route": "SOR",
-                    "market_session_bucket": "krx_regular"}}
+        return {
+            "stage": "order_leg_sent",
+            "emitted_date": day,
+            "record_id": record,
+            "stock_code": "123456",
+            "emitted_at": day + "T09:00:00+09:00",
+            "fields": {
+                "actual_order_submitted": "True",
+                "broker_order_no": order,
+                "requested_qty": "2",
+                "submitted_qty": "2",
+                "buy_planned_qty": "3",
+                "entry_submit_attempt_id": "attempt-42",
+                "buy_parent_id": "attempt-42",
+                "buy_child_id": "attempt-42:probe",
+                "owner_registry_intent_id": intent,
+                "buy_owner_type": "main_scalping",
+                "buy_owner_id": owner,
+                "buy_account_key": account,
+                "broker_route": "SOR",
+                "market_session_bucket": "krx_regular",
+            },
+        }
+
     def journal(intent="intent-1", owner="main_scalping:42", account="acct-a"):
-        return [{"event": "ORDER_BOUND", "intent_id": intent,
-                 "owner_type": "main_scalping", "owner_id": owner,
-                 "account_key": account, "order_date": day, "side": "BUY",
-                 "action": "NEW", "broker_order_no": "B1", "symbol": "123456",
-                 "route": "SOR", "quantity": 2, "state": "ORDER_BOUND"},
-                {"event": "FILL_RECORDED", "intent_id": intent,
-                 "owner_type": "main_scalping", "owner_id": owner,
-                 "account_key": account, "order_date": day, "side": "BUY",
-                 "action": "NEW", "broker_order_no": "B1", "symbol": "123456",
-                 "route": "SOR", "quantity": 2, "filled_qty": 1,
-                 "execution_no": "E1", "state": "ORDER_BOUND"}]
-    fill = report_mod.HoldingEvent(day + " 09:00:01", "x", "123456",
-        "position_rebased_after_fill", {"id": "42", "order_no": "B1",
-        "execution_no": "E1", "fill_qty": "1", "order_requested_qty": "2",
-        "order_filled_qty": "1", "order_remaining_qty": "1",
-        "pipeline_lifecycle_population_scope": "real_record_bound",
-        "actual_order_submitted": "True", "broker_order_forbidden": "False"}, "")
-    result = report_mod._buy_parent_handoff_projection(day, [sent("B1", "intent-1")],
-        journal(), [fill], [{"id": 42, "code": "123456", "buy_qty": 1,
-                            "status": "HOLDING"}])
-    assert result["counts"] == {"raw": 1, "valid": 1, "excluded": 0,
-                                "quarantined": 0, "unobserved": 0}
+        return [
+            {
+                "event": "ORDER_BOUND",
+                "intent_id": intent,
+                "owner_type": "main_scalping",
+                "owner_id": owner,
+                "account_key": account,
+                "order_date": day,
+                "side": "BUY",
+                "action": "NEW",
+                "broker_order_no": "B1",
+                "symbol": "123456",
+                "route": "SOR",
+                "quantity": 2,
+                "state": "ORDER_BOUND",
+            },
+            {
+                "event": "FILL_RECORDED",
+                "intent_id": intent,
+                "owner_type": "main_scalping",
+                "owner_id": owner,
+                "account_key": account,
+                "order_date": day,
+                "side": "BUY",
+                "action": "NEW",
+                "broker_order_no": "B1",
+                "symbol": "123456",
+                "route": "SOR",
+                "quantity": 2,
+                "filled_qty": 1,
+                "execution_no": "E1",
+                "state": "ORDER_BOUND",
+            },
+        ]
+
+    fill = report_mod.HoldingEvent(
+        day + " 09:00:01",
+        "x",
+        "123456",
+        "position_rebased_after_fill",
+        {
+            "id": "42",
+            "order_no": "B1",
+            "execution_no": "E1",
+            "fill_qty": "1",
+            "order_requested_qty": "2",
+            "order_filled_qty": "1",
+            "order_remaining_qty": "1",
+            "pipeline_lifecycle_population_scope": "real_record_bound",
+            "actual_order_submitted": "True",
+            "broker_order_forbidden": "False",
+        },
+        "",
+    )
+    result = report_mod._buy_parent_handoff_projection(
+        day,
+        [sent("B1", "intent-1")],
+        journal(),
+        [fill],
+        [{"id": 42, "code": "123456", "buy_qty": 1, "status": "HOLDING"}],
+    )
+    assert result["counts"] == {
+        "raw": 1,
+        "valid": 1,
+        "excluded": 0,
+        "quarantined": 0,
+        "unobserved": 0,
+    }
     row = result["rows"][0]
     assert row["filled_qty"] == row["sellable_qty"] == 1
     assert row["unsubmitted_qty"] == 1
     assert row["state"] == "partial_open"
     assert row["cost_krw"] is None
     assert row["execution_ids"] == ["E1"]
-    assert report_mod._buy_parent_handoff_projection(day, [sent("B1", "intent-1")],
-        journal(owner="episode:1"), [fill], [])["rows"][0]["sellable_qty"] is None
-    assert report_mod._buy_parent_handoff_projection(day, [sent("B1", "intent-1")],
-        journal(), [], [])["rows"][0]["sellable_qty"] is None
-    assert report_mod._buy_parent_handoff_projection(day, [sent("B1", "")],
-        journal(), [fill], [])["rows"][0]["parent_id"] is None
+    assert (
+        report_mod._buy_parent_handoff_projection(
+            day, [sent("B1", "intent-1")], journal(owner="episode:1"), [fill], []
+        )["rows"][0]["sellable_qty"]
+        is None
+    )
+    assert (
+        report_mod._buy_parent_handoff_projection(
+            day, [sent("B1", "intent-1")], journal(), [], []
+        )["rows"][0]["sellable_qty"]
+        is None
+    )
+    assert (
+        report_mod._buy_parent_handoff_projection(
+            day, [sent("B1", "")], journal(), [fill], []
+        )["rows"][0]["parent_id"]
+        is None
+    )
     duplicate = sent("B1", "intent-1")
     duplicate["fields"]["broker_route"] = "NXT"
-    conflict = report_mod._buy_parent_handoff_projection(day,
-        [sent("B1", "intent-1"), duplicate], journal(), [fill],
-        [{"id": 42, "code": "123456", "buy_qty": 1, "status": "HOLDING"}])
+    conflict = report_mod._buy_parent_handoff_projection(
+        day,
+        [sent("B1", "intent-1"), duplicate],
+        journal(),
+        [fill],
+        [{"id": 42, "code": "123456", "buy_qty": 1, "status": "HOLDING"}],
+    )
     assert conflict["counts"]["valid"] == 0
     assert conflict["counts"]["quarantined"] == 2
     assert all(row["sellable_qty"] is None for row in conflict["rows"])
 
-    terminal = report_mod.HoldingEvent(day + " 09:00:02", "x", "123456",
-        "entry_buy_order_terminal_confirmed", {"id": "42", "orig_ord_no": "B1",
-        "order_requested_qty": "2", "order_filled_qty": "1",
-        "terminal_reason": "terminal_absence_and_inventory_exact"}, "")
-    closed_journal = journal() + [{**journal()[0], "event": "STATE_TRANSITION",
-        "state": "ORDER_TERMINAL", "terminal_reconciliation": True}]
-    sale = report_mod.HoldingEvent(day + " 09:00:03", "x", "123456",
-        "sell_partial_fill_progress", {"id": "42", "order_no": "S1",
-        "execution_no": "SE1", "main_lifecycle_exit_qty": "1",
-        "cumulative_sell_qty": "1",
-        "pipeline_lifecycle_population_scope": "real_record_bound",
-        "actual_order_submitted": "True", "broker_order_forbidden": "False"}, "")
-    closed = report_mod._buy_parent_handoff_projection(day,
-        [sent("B1", "intent-1")], closed_journal, [fill, terminal, sale],
-        [{"id": 42, "code": "123456", "buy_qty": 1,
-          "status": "SELL_ORDERED"}])["rows"][0]
+    terminal = report_mod.HoldingEvent(
+        day + " 09:00:02",
+        "x",
+        "123456",
+        "entry_buy_order_terminal_confirmed",
+        {
+            "id": "42",
+            "orig_ord_no": "B1",
+            "order_requested_qty": "2",
+            "order_filled_qty": "1",
+            "terminal_reason": "terminal_absence_and_inventory_exact",
+        },
+        "",
+    )
+    closed_journal = journal() + [
+        {
+            **journal()[0],
+            "event": "STATE_TRANSITION",
+            "state": "ORDER_TERMINAL",
+            "terminal_reconciliation": True,
+        }
+    ]
+    sale = report_mod.HoldingEvent(
+        day + " 09:00:03",
+        "x",
+        "123456",
+        "sell_partial_fill_progress",
+        {
+            "id": "42",
+            "order_no": "S1",
+            "execution_no": "SE1",
+            "main_lifecycle_exit_qty": "1",
+            "cumulative_sell_qty": "1",
+            "pipeline_lifecycle_population_scope": "real_record_bound",
+            "actual_order_submitted": "True",
+            "broker_order_forbidden": "False",
+        },
+        "",
+    )
+    closed = report_mod._buy_parent_handoff_projection(
+        day,
+        [sent("B1", "intent-1")],
+        closed_journal,
+        [fill, terminal, sale],
+        [{"id": 42, "code": "123456", "buy_qty": 1, "status": "SELL_ORDERED"}],
+    )["rows"][0]
     assert closed["state"] == "partial_terminal"
     assert closed["sellable_qty"] == 0
-    pending = report_mod._buy_parent_handoff_projection(day,
-        [sent("B1", "intent-1")], journal(), [fill, sale],
-        [{"id": 42, "code": "123456", "buy_qty": 1,
-          "status": "SELL_ORDERED"}])["rows"][0]
+    pending = report_mod._buy_parent_handoff_projection(
+        day,
+        [sent("B1", "intent-1")],
+        journal(),
+        [fill, sale],
+        [{"id": 42, "code": "123456", "buy_qty": 1, "status": "SELL_ORDERED"}],
+    )["rows"][0]
     assert pending["state"] == "partial_open"
     assert pending["sellable_qty"] == 0
-    cancel = {"stage": "entry_order_cancel_requested", "emitted_date": day,
-        "record_id": 42, "fields": {"orig_ord_no": "B1"}}
+    cancel = {
+        "stage": "entry_order_cancel_requested",
+        "emitted_date": day,
+        "record_id": 42,
+        "fields": {"orig_ord_no": "B1"},
+    }
     cancel_ack = {**cancel, "stage": "entry_order_cancel_confirmed"}
-    cancel_pending = report_mod._buy_parent_handoff_projection(day,
-        [sent("B1", "intent-1"), cancel], journal(), [fill],
-        [{"id": 42, "code": "123456", "buy_qty": 1,
-          "status": "HOLDING"}])["rows"][0]
+    cancel_pending = report_mod._buy_parent_handoff_projection(
+        day,
+        [sent("B1", "intent-1"), cancel],
+        journal(),
+        [fill],
+        [{"id": 42, "code": "123456", "buy_qty": 1, "status": "HOLDING"}],
+    )["rows"][0]
     assert cancel_pending["state"] == "cancel_pending"
-    ack_pending = report_mod._buy_parent_handoff_projection(day,
-        [sent("B1", "intent-1"), cancel, cancel_ack], journal(), [fill],
-        [{"id": 42, "code": "123456", "buy_qty": 1,
-          "status": "HOLDING"}])["rows"][0]
+    ack_pending = report_mod._buy_parent_handoff_projection(
+        day,
+        [sent("B1", "intent-1"), cancel, cancel_ack],
+        journal(),
+        [fill],
+        [{"id": 42, "code": "123456", "buy_qty": 1, "status": "HOLDING"}],
+    )["rows"][0]
     assert ack_pending["state"] == "cancel_ack_terminal_pending"
-    simulated = report_mod.HoldingEvent(fill.timestamp, fill.name, fill.code,
-        fill.stage, {**fill.fields,
-        "pipeline_lifecycle_population_scope": "sim_observation_only"}, "")
-    assert report_mod._buy_parent_handoff_projection(day,
-        [sent("B1", "intent-1")], journal(), [simulated],
-        [{"id": 42, "code": "123456", "buy_qty": 1,
-          "status": "HOLDING"}])["rows"][0]["sellable_qty"] is None
+    simulated = report_mod.HoldingEvent(
+        fill.timestamp,
+        fill.name,
+        fill.code,
+        fill.stage,
+        {**fill.fields, "pipeline_lifecycle_population_scope": "sim_observation_only"},
+        "",
+    )
+    assert (
+        report_mod._buy_parent_handoff_projection(
+            day,
+            [sent("B1", "intent-1")],
+            journal(),
+            [simulated],
+            [{"id": 42, "code": "123456", "buy_qty": 1, "status": "HOLDING"}],
+        )["rows"][0]["sellable_qty"]
+        is None
+    )
     legacy = sent("B1", "")
-    legacy["fields"].update(buy_registry_mode="single_owner_unregistered",
-        buy_owner_policy_date=day, buy_owner_policy_selected=False,
+    legacy["fields"].update(
+        buy_registry_mode="single_owner_unregistered",
+        buy_owner_policy_date=day,
+        buy_owner_policy_selected=False,
         buy_owner_policy_coexistence=False,
         buy_owner_policy_reason="exact_date_policy_missing_legacy_exclusion_retained",
-        buy_owner_policy_hash="")
-    generation = {"123456": (
-        "exact_date_policy_missing_legacy_exclusion_retained", "")}
-    legacy_result = report_mod._buy_parent_handoff_projection(day, [legacy], [],
-        [fill], [{"id": 42, "code": "123456", "buy_qty": 1,
-                  "status": "HOLDING"}], generation)
+        buy_owner_policy_hash="",
+    )
+    generation = {"123456": ("exact_date_policy_missing_legacy_exclusion_retained", "")}
+    legacy_result = report_mod._buy_parent_handoff_projection(
+        day,
+        [legacy],
+        [],
+        [fill],
+        [{"id": 42, "code": "123456", "buy_qty": 1, "status": "HOLDING"}],
+        generation,
+    )
     assert legacy_result["rows"][0]["sellable_qty"] == 1
     assert legacy_result["rows"][0]["intent_id"] is None
     # A new reader process gets the same custody result from persisted rows.
     restored_sent = json.loads(json.dumps(legacy))
     restored_fill = report_mod.HoldingEvent(**json.loads(json.dumps(fill.__dict__)))
-    restarted = report_mod._buy_parent_handoff_projection(day,
-        [restored_sent], [], [restored_fill],
-        [{"id": 42, "code": "123456", "buy_qty": 1,
-          "status": "HOLDING"}], generation)
+    restarted = report_mod._buy_parent_handoff_projection(
+        day,
+        [restored_sent],
+        [],
+        [restored_fill],
+        [{"id": 42, "code": "123456", "buy_qty": 1, "status": "HOLDING"}],
+        generation,
+    )
     assert restarted["rows"][0]["sellable_qty"] == 1
-    full_fill = report_mod.HoldingEvent(fill.timestamp, fill.name, fill.code,
-        fill.stage, {**fill.fields, "fill_qty": "2",
-        "order_filled_qty": "2", "order_remaining_qty": "0"}, "")
-    full = report_mod._buy_parent_handoff_projection(day, [legacy], [],
-        [full_fill], [{"id": 42, "code": "123456", "buy_qty": 2,
-                     "status": "HOLDING"}], generation)["rows"][0]
+    full_fill = report_mod.HoldingEvent(
+        fill.timestamp,
+        fill.name,
+        fill.code,
+        fill.stage,
+        {
+            **fill.fields,
+            "fill_qty": "2",
+            "order_filled_qty": "2",
+            "order_remaining_qty": "0",
+        },
+        "",
+    )
+    full = report_mod._buy_parent_handoff_projection(
+        day,
+        [legacy],
+        [],
+        [full_fill],
+        [{"id": 42, "code": "123456", "buy_qty": 2, "status": "HOLDING"}],
+        generation,
+    )["rows"][0]
     assert full["state"] == "full" and full["sellable_qty"] == 2
-    early_fill = report_mod.HoldingEvent(day + " 08:59:59", fill.name,
-        fill.code, fill.stage, dict(fill.fields), "")
-    assert report_mod._buy_parent_handoff_projection(day, [legacy], [],
-        [early_fill], [{"id": 42, "code": "123456", "buy_qty": 1,
-                       "status": "HOLDING"}], generation)["rows"][0]["sellable_qty"] == 1
-    second_fill = report_mod.HoldingEvent(day + " 09:00:04", fill.name,
-        fill.code, fill.stage, {**fill.fields, "execution_no": "E2",
-        "order_filled_qty": "2", "order_remaining_qty": "0"}, "")
-    interleaved = report_mod._buy_parent_handoff_projection(day, [legacy], [],
-        [fill, sale, second_fill], [{"id": 42, "code": "123456",
-            "buy_qty": 2, "status": "HOLDING"}], generation)["rows"][0]
+    early_fill = report_mod.HoldingEvent(
+        day + " 08:59:59", fill.name, fill.code, fill.stage, dict(fill.fields), ""
+    )
+    assert (
+        report_mod._buy_parent_handoff_projection(
+            day,
+            [legacy],
+            [],
+            [early_fill],
+            [{"id": 42, "code": "123456", "buy_qty": 1, "status": "HOLDING"}],
+            generation,
+        )["rows"][0]["sellable_qty"]
+        == 1
+    )
+    second_fill = report_mod.HoldingEvent(
+        day + " 09:00:04",
+        fill.name,
+        fill.code,
+        fill.stage,
+        {
+            **fill.fields,
+            "execution_no": "E2",
+            "order_filled_qty": "2",
+            "order_remaining_qty": "0",
+        },
+        "",
+    )
+    interleaved = report_mod._buy_parent_handoff_projection(
+        day,
+        [legacy],
+        [],
+        [fill, sale, second_fill],
+        [{"id": 42, "code": "123456", "buy_qty": 2, "status": "HOLDING"}],
+        generation,
+    )["rows"][0]
     assert interleaved["filled_qty"] == 2
     assert interleaved["sellable_qty"] == 1
-    assert report_mod._buy_parent_handoff_projection(day, [legacy], journal(),
-        [fill], [{"id": 42, "code": "123456", "buy_qty": 1,
-                  "status": "HOLDING"}], generation)["rows"][0]["sellable_qty"] is None
-    stale = report_mod._buy_parent_handoff_projection(day, [legacy], [],
-        [fill], [{"id": 42, "code": "123456", "buy_qty": 1,
-                  "status": "HOLDING"}], {"123456": ("changed", "")})
+    assert (
+        report_mod._buy_parent_handoff_projection(
+            day,
+            [legacy],
+            journal(),
+            [fill],
+            [{"id": 42, "code": "123456", "buy_qty": 1, "status": "HOLDING"}],
+            generation,
+        )["rows"][0]["sellable_qty"]
+        is None
+    )
+    stale = report_mod._buy_parent_handoff_projection(
+        day,
+        [legacy],
+        [],
+        [fill],
+        [{"id": 42, "code": "123456", "buy_qty": 1, "status": "HOLDING"}],
+        {"123456": ("changed", "")},
+    )
     assert stale["rows"][0]["sellable_qty"] is None
-    extra_buy = report_mod.HoldingEvent(fill.timestamp, fill.name, fill.code,
-        fill.stage, {**fill.fields, "order_no": "B2"}, "")
-    assert report_mod._buy_parent_handoff_projection(day,
-        [sent("B1", "intent-1")], journal(), [fill, extra_buy],
-        [{"id": 42, "code": "123456", "buy_qty": 1,
-          "status": "HOLDING"}])["rows"][0]["sellable_qty"] is None
-    uncertain = {"stage": "order_leg_no_response", "emitted_date": day,
-        "record_id": 43, "fields": {"entry_submit_attempt_id": "attempt-43"}}
+    extra_buy = report_mod.HoldingEvent(
+        fill.timestamp,
+        fill.name,
+        fill.code,
+        fill.stage,
+        {**fill.fields, "order_no": "B2"},
+        "",
+    )
+    assert (
+        report_mod._buy_parent_handoff_projection(
+            day,
+            [sent("B1", "intent-1")],
+            journal(),
+            [fill, extra_buy],
+            [{"id": 42, "code": "123456", "buy_qty": 1, "status": "HOLDING"}],
+        )["rows"][0]["sellable_qty"]
+        is None
+    )
+    uncertain = {
+        "stage": "order_leg_no_response",
+        "emitted_date": day,
+        "record_id": 43,
+        "fields": {"entry_submit_attempt_id": "attempt-43"},
+    }
     result = report_mod._buy_parent_handoff_projection(day, [uncertain], [], [], [])
     assert result["counts"]["raw"] == 0
     assert result["response_uncertain_attempts"][0]["sellable_qty"] is None
 
 
-def test_buy_handoff_first_reader_keeps_source_gap_and_valid_empty_distinct(monkeypatch):
+def test_buy_handoff_first_reader_keeps_source_gap_and_valid_empty_distinct(
+    monkeypatch,
+):
     from src.engine.scalping import entry_split_order_plan as entry
-    monkeypatch.setattr(entry, "_execution_registry_snapshot", lambda: (
-        [], {"status": "verified", "tail_hash": "0" * 64}))
-    monkeypatch.setattr(entry, "_bounded_execution_projection", lambda *a, **k: (
-        [], {"status": "ready", "sources": []}))
+
+    monkeypatch.setattr(
+        entry,
+        "_execution_registry_snapshot",
+        lambda: ([], {"status": "verified", "tail_hash": "0" * 64}),
+    )
+    monkeypatch.setattr(
+        entry,
+        "_bounded_execution_projection",
+        lambda *a, **k: ([], {"status": "ready", "sources": []}),
+    )
     result = report_mod._load_buy_parent_handoff_projection(
-        "2026-09-28", [], [], "structured_partition_read")
+        "2026-09-28", [], [], "structured_partition_read"
+    )
     assert result["source_quality_status"] == "valid_empty"
-    monkeypatch.setattr(entry, "_bounded_execution_projection", lambda *a, **k: (
-        [], {"status": "source_gap", "reason": "missing"}))
+    monkeypatch.setattr(
+        entry,
+        "_bounded_execution_projection",
+        lambda *a, **k: ([], {"status": "source_gap", "reason": "missing"}),
+    )
     result = report_mod._load_buy_parent_handoff_projection(
-        "2026-09-28", [], [], "structured_partition_read")
+        "2026-09-28", [], [], "structured_partition_read"
+    )
     assert result["source_quality_status"] == "source_gap_buy_handoff_generation"
     assert result["counts"]["raw"] is None
 
@@ -789,27 +1407,42 @@ def test_buy_handoff_first_reader_keeps_source_gap_and_valid_empty_distinct(monk
 def test_completed_execution_ledger_rejects_unresolved_buy_order():
     trade = {"buy_qty": 1, "buy_price": 10000}
     buy = report_mod.HoldingEvent(
-        timestamp="2026-09-24 09:00:00", name="test", code="123456",
-        stage="position_rebased_after_fill", raw_line="",
+        timestamp="2026-09-24 09:00:00",
+        name="test",
+        code="123456",
+        stage="position_rebased_after_fill",
+        raw_line="",
         fields={
-            "order_no": "B1", "execution_no": "BE1", "fill_qty": "1",
-            "order_filled_qty": "1", "order_requested_qty": "2",
-            "order_remaining_qty": "1", "fill_price": "10000",
+            "order_no": "B1",
+            "execution_no": "BE1",
+            "fill_qty": "1",
+            "order_filled_qty": "1",
+            "order_requested_qty": "2",
+            "order_remaining_qty": "1",
+            "fill_price": "10000",
             "receipt_quantity_contract_complete": "True",
             "receipt_unit_fill_consistent": "True",
             "receipt_economics_complete": "True",
-            "actual_order_submitted": "True", "broker_order_forbidden": "False",
+            "actual_order_submitted": "True",
+            "broker_order_forbidden": "False",
             "pipeline_lifecycle_population_scope": "real_record_bound",
         },
     )
     sell = report_mod.HoldingEvent(
-        timestamp="2026-09-24 09:01:00", name="test", code="123456",
-        stage="sell_completed", raw_line="",
+        timestamp="2026-09-24 09:01:00",
+        name="test",
+        code="123456",
+        stage="sell_completed",
+        raw_line="",
         fields={
-            "order_no": "S1", "execution_no": "SE1",
-            "main_lifecycle_exit_qty": "1", "main_lifecycle_exit_price": "10050",
-            "cumulative_sell_qty": "1", "remaining_sell_qty": "0",
-            "actual_order_submitted": "True", "broker_order_forbidden": "False",
+            "order_no": "S1",
+            "execution_no": "SE1",
+            "main_lifecycle_exit_qty": "1",
+            "main_lifecycle_exit_price": "10050",
+            "cumulative_sell_qty": "1",
+            "remaining_sell_qty": "0",
+            "actual_order_submitted": "True",
+            "broker_order_forbidden": "False",
             "pipeline_lifecycle_population_scope": "real_record_bound",
             "sell_execution_receipt_economics_complete": "True",
             "sell_execution_receipt_quantity_contract_complete": "True",
@@ -820,17 +1453,24 @@ def test_completed_execution_ledger_rejects_unresolved_buy_order():
     )
     ledger = report_mod._completed_execution_ledger(trade, [buy, sell])
     assert ledger["position_residual_qty"] == 0
-    assert "source_gap_buy_order_terminal_missing" in ledger["strict_completion_reasons"]
+    assert (
+        "source_gap_buy_order_terminal_missing" in ledger["strict_completion_reasons"]
+    )
 
     terminal = report_mod.HoldingEvent(
-        timestamp="2026-09-24 09:00:30", name="test", code="123456",
-        stage="entry_buy_order_terminal_confirmed", raw_line="",
+        timestamp="2026-09-24 09:00:30",
+        name="test",
+        code="123456",
+        stage="entry_buy_order_terminal_confirmed",
+        raw_line="",
         fields={
-            "orig_ord_no": "B1", "order_filled_qty": "1",
+            "orig_ord_no": "B1",
+            "order_filled_qty": "1",
             "order_requested_qty": "2",
             "terminal_reason": "terminal_absence_and_inventory_exact",
             "pipeline_lifecycle_population_scope": "real_record_bound",
-            "actual_order_submitted": "True", "broker_order_forbidden": "False",
+            "actual_order_submitted": "True",
+            "broker_order_forbidden": "False",
         },
     )
     closed = report_mod._completed_execution_ledger(trade, [buy, terminal, sell])
@@ -839,42 +1479,59 @@ def test_completed_execution_ledger_rejects_unresolved_buy_order():
 
     terminal.fields["order_filled_qty"] = "2"
     mismatched = report_mod._completed_execution_ledger(trade, [buy, terminal, sell])
-    assert "source_gap_buy_order_terminal_missing" in mismatched["strict_completion_reasons"]
+    assert (
+        "source_gap_buy_order_terminal_missing"
+        in mismatched["strict_completion_reasons"]
+    )
 
 
 def test_carry_partial_sell_reconciles_prior_and_final_fill_legs():
     def event(stage, day, order, execution, quantity, cumulative, price, fee):
         fields = {
-            "id": "42", "order_no": order, "execution_no": execution,
-            "actual_order_submitted": "True", "broker_order_forbidden": "False",
+            "id": "42",
+            "order_no": order,
+            "execution_no": execution,
+            "actual_order_submitted": "True",
+            "broker_order_forbidden": "False",
             "pipeline_lifecycle_population_scope": "real_record_bound",
         }
         if stage == "position_rebased_after_fill":
-            fields.update({
-                "fill_qty": str(quantity), "order_filled_qty": str(cumulative),
-                "order_requested_qty": "2", "order_remaining_qty": str(2-cumulative),
-                "fill_price": str(price), "receipt_economics_complete": "True",
-                "receipt_quantity_contract_complete": "True",
-                "receipt_unit_fill_consistent": "True",
-            })
+            fields.update(
+                {
+                    "fill_qty": str(quantity),
+                    "order_filled_qty": str(cumulative),
+                    "order_requested_qty": "2",
+                    "order_remaining_qty": str(2 - cumulative),
+                    "fill_price": str(price),
+                    "receipt_economics_complete": "True",
+                    "receipt_quantity_contract_complete": "True",
+                    "receipt_unit_fill_consistent": "True",
+                }
+            )
         else:
-            fields.update({
-                "main_lifecycle_exit_qty": str(quantity),
-                "main_lifecycle_exit_price": str(price),
-                "cumulative_sell_qty": str(cumulative),
-                "remaining_sell_qty": str(2-cumulative),
-                "sell_receipt_economics_complete": "True",
-                "sell_receipt_quantity_contract_complete": "True",
-                "sell_receipt_unit_fill_consistent": "True",
-                "sell_execution_receipt_economics_complete": "True",
-                "sell_execution_receipt_quantity_contract_complete": "True",
-                "sell_execution_receipt_unit_fill_consistent": "True",
-                "main_lifecycle_fees_taxes_krw": str(fee),
-                "main_lifecycle_realized_net_pnl_krw": str(price-10000-fee),
-            })
+            fields.update(
+                {
+                    "main_lifecycle_exit_qty": str(quantity),
+                    "main_lifecycle_exit_price": str(price),
+                    "cumulative_sell_qty": str(cumulative),
+                    "remaining_sell_qty": str(2 - cumulative),
+                    "sell_receipt_economics_complete": "True",
+                    "sell_receipt_quantity_contract_complete": "True",
+                    "sell_receipt_unit_fill_consistent": "True",
+                    "sell_execution_receipt_economics_complete": "True",
+                    "sell_execution_receipt_quantity_contract_complete": "True",
+                    "sell_execution_receipt_unit_fill_consistent": "True",
+                    "main_lifecycle_fees_taxes_krw": str(fee),
+                    "main_lifecycle_realized_net_pnl_krw": str(price - 10000 - fee),
+                }
+            )
         return report_mod.HoldingEvent(
-            timestamp=f"{day} 09:00:00", name="test", code="123456",
-            stage=stage, fields=fields, raw_line="",
+            timestamp=f"{day} 09:00:00",
+            name="test",
+            code="123456",
+            stage=stage,
+            fields=fields,
+            raw_line="",
         )
 
     events = [
@@ -890,19 +1547,36 @@ def test_carry_partial_sell_reconciles_prior_and_final_fill_legs():
     assert ledger["sell_fill_fees_taxes_krw"] == 20
 
 
-def test_prior_entry_fill_events_require_sealed_same_id_snapshot(monkeypatch, unarchived_prior_snapshots):
+def test_prior_entry_fill_events_require_sealed_same_id_snapshot(
+    monkeypatch, unarchived_prior_snapshots
+):
     snapshot = {
-        "date": "2026-09-23", "meta": {"warnings": []},
-        "metrics": {"open_scalp_position_projection_status": "current_db_census",
-                    "open_scalp_position_projection_count": 1},
-        "sections": {"open_scalp_position_projection": [{
-            "id": 42, "code": "123456", "avg_down_rebound_blocker_summary": [],
-            "timeline": [{
-                "stage": "position_rebased_after_fill",
-                "timestamp": "2026-09-23 09:00:00",
-                "fields": {"id": "42", "order_no": "B1", "execution_no": "BE1"},
-            }],
-        }]},
+        "date": "2026-09-23",
+        "meta": {"warnings": []},
+        "metrics": {
+            "open_scalp_position_projection_status": "current_db_census",
+            "open_scalp_position_projection_count": 1,
+        },
+        "sections": {
+            "open_scalp_position_projection": [
+                {
+                    "id": 42,
+                    "code": "123456",
+                    "avg_down_rebound_blocker_summary": [],
+                    "timeline": [
+                        {
+                            "stage": "position_rebased_after_fill",
+                            "timestamp": "2026-09-23 09:00:00",
+                            "fields": {
+                                "id": "42",
+                                "order_no": "B1",
+                                "execution_no": "BE1",
+                            },
+                        }
+                    ],
+                }
+            ]
+        },
     }
     monkeypatch.setattr(report_mod, "load_monitor_snapshot", lambda *args: snapshot)
     trade = {"id": 42, "rec_date": "2026-09-23", "status": "COMPLETED"}
@@ -910,62 +1584,117 @@ def test_prior_entry_fill_events_require_sealed_same_id_snapshot(monkeypatch, un
     assert len(events["42"]) == 1
     assert receipts["2026-09-23"]["status"] == "sealed_entry_snapshot"
 
-    snapshot["sections"]["open_scalp_position_projection"][0]["timeline"][0]["fields"]["id"] = "99"
+    snapshot["sections"]["open_scalp_position_projection"][0]["timeline"][0]["fields"][
+        "id"
+    ] = "99"
     events, _ = report_mod._prior_entry_fill_events([trade], "2026-09-24")
     assert events == {}
 
 
-def test_prior_fill_events_include_intermediate_day_scale_in(monkeypatch, unarchived_prior_snapshots):
+def test_prior_fill_events_include_intermediate_day_scale_in(
+    monkeypatch, unarchived_prior_snapshots
+):
     def snapshot(day):
-        stage = "position_rebased_after_fill" if day == "2026-09-22" else "scale_in_executed"
+        stage = (
+            "position_rebased_after_fill"
+            if day == "2026-09-22"
+            else "scale_in_executed"
+        )
         return {
-            "date": day, "meta": {"warnings": []},
-            "metrics": {"open_scalp_position_projection_status": "current_db_census",
-                        "open_scalp_position_projection_count": 1},
-            "sections": {"open_scalp_position_projection": [{
-                "id": 42, "code": "123456", "avg_down_rebound_blocker_summary": [],
-                "timeline": [{
-                    "stage": stage, "timestamp": f"{day} 09:00:00",
-                    "fields": {"id": "42", "order_no": "B1" if day.endswith("22") else "B2",
-                               "execution_no": "BE1" if day.endswith("22") else "BE2"},
-                }],
-            }]},
+            "date": day,
+            "meta": {"warnings": []},
+            "metrics": {
+                "open_scalp_position_projection_status": "current_db_census",
+                "open_scalp_position_projection_count": 1,
+            },
+            "sections": {
+                "open_scalp_position_projection": [
+                    {
+                        "id": 42,
+                        "code": "123456",
+                        "avg_down_rebound_blocker_summary": [],
+                        "timeline": [
+                            {
+                                "stage": stage,
+                                "timestamp": f"{day} 09:00:00",
+                                "fields": {
+                                    "id": "42",
+                                    "order_no": "B1" if day.endswith("22") else "B2",
+                                    "execution_no": (
+                                        "BE1" if day.endswith("22") else "BE2"
+                                    ),
+                                },
+                            }
+                        ],
+                    }
+                ]
+            },
         }
 
-    monkeypatch.setattr(report_mod, "load_monitor_snapshot", lambda _, day: snapshot(day))
+    monkeypatch.setattr(
+        report_mod, "load_monitor_snapshot", lambda _, day: snapshot(day)
+    )
     events, receipts = report_mod._prior_entry_fill_events(
         [{"id": 42, "rec_date": "2026-09-22", "status": "COMPLETED"}],
         "2026-09-24",
     )
     assert [event.stage for event in events["42"]] == [
-        "position_rebased_after_fill", "scale_in_executed"
+        "position_rebased_after_fill",
+        "scale_in_executed",
     ]
     assert set(receipts) == {"2026-09-22", "2026-09-23"}
 
 
-def test_open_position_rebound_blockers_carry_as_bounded_prior_day_counts(monkeypatch, unarchived_prior_snapshots):
-    trade = {"id": 42, "rec_date": "2026-09-23", "status": "HOLDING",
-             "strategy": "SCALPING", "code": "123456", "buy_qty": 1}
-    blocked = [report_mod.HoldingEvent(
-        "2026-09-23 10:00:00", "TEST", "123456",
-        "avg_down_shared_rebound_blocked",
-        {"id": "42", "reason": "shared_main_rebound_input_preflight_blocked",
-         "preflight_primary_blocker": "tick_context_stale"}, "",
-    ) for _ in range(3)]
+def test_open_position_rebound_blockers_carry_as_bounded_prior_day_counts(
+    monkeypatch, unarchived_prior_snapshots
+):
+    trade = {
+        "id": 42,
+        "rec_date": "2026-09-23",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "code": "123456",
+        "buy_qty": 1,
+    }
+    blocked = [
+        report_mod.HoldingEvent(
+            "2026-09-23 10:00:00",
+            "TEST",
+            "123456",
+            "avg_down_shared_rebound_blocked",
+            {
+                "id": "42",
+                "reason": "shared_main_rebound_input_preflight_blocked",
+                "preflight_primary_blocker": "tick_context_stale",
+            },
+            "",
+        )
+        for _ in range(3)
+    ]
     projection = report_mod._open_scalp_position_projection(trade, blocked)
     assert projection["timeline"] == []
-    assert projection["avg_down_rebound_blocker_summary"] == [{
-        "reason": "shared_main_rebound_input_preflight_blocked",
-        "primary_blocker": "tick_context_stale", "machine_action": "-", "count": 3,
-    }]
-    snapshot = {"date": "2026-09-23", "meta": {"warnings": []},
-                "metrics": {"open_scalp_position_projection_status": "current_db_census",
-                            "open_scalp_position_projection_count": 1},
-                "sections": {"open_scalp_position_projection": [projection]}}
+    assert projection["avg_down_rebound_blocker_summary"] == [
+        {
+            "reason": "shared_main_rebound_input_preflight_blocked",
+            "primary_blocker": "tick_context_stale",
+            "machine_action": "-",
+            "count": 3,
+        }
+    ]
+    snapshot = {
+        "date": "2026-09-23",
+        "meta": {"warnings": []},
+        "metrics": {
+            "open_scalp_position_projection_status": "current_db_census",
+            "open_scalp_position_projection_count": 1,
+        },
+        "sections": {"open_scalp_position_projection": [projection]},
+    }
     monkeypatch.setattr(report_mod, "load_monitor_snapshot", lambda *_: snapshot)
     completed_trade = {**trade, "status": "COMPLETED"}
     prior, receipts = report_mod._prior_entry_fill_events(
-        [completed_trade], "2026-09-24",
+        [completed_trade],
+        "2026-09-24",
     )
     assert receipts["2026-09-23"]["status"] == "sealed_entry_snapshot"
     lineage = report_mod._avg_down_rebound_lineage(completed_trade, prior["42"], None)
@@ -974,26 +1703,49 @@ def test_open_position_rebound_blockers_carry_as_bounded_prior_day_counts(monkey
     assert lineage["prior_blocker_summary_gap_count"] == 0
 
 
-def test_prior_position_snapshot_without_rebound_summary_preserves_gap(monkeypatch, unarchived_prior_snapshots):
-    snapshot = {"date": "2026-09-23", "meta": {"warnings": []},
-                "metrics": {"open_scalp_position_projection_status": "current_db_census",
-                            "open_scalp_position_projection_count": 1},
-                "sections": {"open_scalp_position_projection": [
-                    {"id": 42, "code": "123456", "timeline": []},
-                ]}}
+def test_prior_position_snapshot_without_rebound_summary_preserves_gap(
+    monkeypatch, unarchived_prior_snapshots
+):
+    snapshot = {
+        "date": "2026-09-23",
+        "meta": {"warnings": []},
+        "metrics": {
+            "open_scalp_position_projection_status": "current_db_census",
+            "open_scalp_position_projection_count": 1,
+        },
+        "sections": {
+            "open_scalp_position_projection": [
+                {"id": 42, "code": "123456", "timeline": []},
+            ]
+        },
+    }
     monkeypatch.setattr(report_mod, "load_monitor_snapshot", lambda *_: snapshot)
-    trade = {"id": 42, "rec_date": "2026-09-23", "status": "COMPLETED",
-             "strategy": "SCALPING", "code": "123456"}
+    trade = {
+        "id": 42,
+        "rec_date": "2026-09-23",
+        "status": "COMPLETED",
+        "strategy": "SCALPING",
+        "code": "123456",
+    }
     prior, _ = report_mod._prior_entry_fill_events([trade], "2026-09-24")
     assert report_mod._avg_down_rebound_lineage(trade, prior["42"], None) is None
     current_signal = report_mod.HoldingEvent(
-        "2026-09-24 10:00:00", "TEST", "123456",
+        "2026-09-24 10:00:00",
+        "TEST",
+        "123456",
         "avg_down_shared_rebound_signal",
-        {"id": "42", "source_signal_id": "signal-1",
-         "position_episode_id": "episode-1", "scale_in_decision_id": "decision-1"}, "",
+        {
+            "id": "42",
+            "source_signal_id": "signal-1",
+            "position_episode_id": "episode-1",
+            "scale_in_decision_id": "decision-1",
+        },
+        "",
     )
     lineage = report_mod._avg_down_rebound_lineage(
-        trade, [*prior["42"], current_signal], None,
+        trade,
+        [*prior["42"], current_signal],
+        None,
     )
     assert lineage["prior_blocker_summary_gap_count"] == 1
     assert lineage["blocked_observation_count"] == 0
@@ -1197,42 +1949,61 @@ def test_explicit_exit_signal_precedes_later_terminal_inferred_rule():
 def test_exit_signal_requires_exact_submission_generation_and_order():
     contract = {
         "schema": "holding_exit_signal_receipt_v1",
-        "source_date": "2026-09-28", "signal_id": "decision-1",
+        "source_date": "2026-09-28",
+        "signal_id": "decision-1",
         "signal_at": "2026-09-28T09:10:00.500000+09:00",
-        "record_id": "42", "code": "123456",
-        "position_key": "record:42", "buy_fill_identity": "buy-generation-1",
-        "strategy": "SCALPING", "position_tag": "SCANNER",
+        "record_id": "42",
+        "code": "123456",
+        "position_key": "record:42",
+        "buy_fill_identity": "buy-generation-1",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
         "decision_owner_type": "main_scalping",
         "exit_rule": "scalp_trailing_take_profit",
         "policy_sha256": "a" * 64,
         "threshold_key": "SCALP_TRAILING_LIMIT_WEAK",
         "threshold_effective_pct": 0.4,
-        "context_venue": "KRX", "context_session": "krx_regular",
+        "context_venue": "KRX",
+        "context_session": "krx_regular",
         "decision_inputs": {
             "exit_threshold_key": "SCALP_TRAILING_LIMIT_WEAK",
             "exit_threshold_effective_pct": 0.4,
             "exit_threshold_executable_bid": 10060,
         },
     }
-    digest = hashlib.sha256(json.dumps(
-        contract, sort_keys=True, separators=(",", ":"),
-    ).encode()).hexdigest()
+    digest = hashlib.sha256(
+        json.dumps(
+            contract,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
     submit_contract = {
         "schema": "sell_submit_pending_context_v1",
-        "generation": "submit-1", "target_id": 42, "code": "123456",
-        "requested_qty": 1, "owner_position_qty": 1,
-        "started_at": 1790554201.0, "intended_route": "SOR",
+        "generation": "submit-1",
+        "target_id": 42,
+        "code": "123456",
+        "requested_qty": 1,
+        "owner_position_qty": 1,
+        "started_at": 1790554201.0,
+        "intended_route": "SOR",
         "intended_effective_venue": "KRX",
         "intended_session_bucket": "KRX_REGULAR",
     }
-    submit_sha = hashlib.sha256(json.dumps(
-        submit_contract, sort_keys=True, separators=(",", ":"),
-    ).encode()).hexdigest()
+    submit_sha = hashlib.sha256(
+        json.dumps(
+            submit_contract,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
     decision_fields = {
-        "id": "42", "exit_rule": contract["exit_rule"],
+        "id": "42",
+        "exit_rule": contract["exit_rule"],
         "exit_signal_id": contract["signal_id"],
-        "exit_signal_contract": json.dumps(contract, sort_keys=True,
-                                           separators=(",", ":")),
+        "exit_signal_contract": json.dumps(
+            contract, sort_keys=True, separators=(",", ":")
+        ),
         "exit_signal_contract_sha256": digest,
         "exit_signal_position_key": contract["position_key"],
         "exit_signal_buy_fill_identity": contract["buy_fill_identity"],
@@ -1246,8 +2017,10 @@ def test_exit_signal_requires_exact_submission_generation_and_order():
         "pipeline_lifecycle_population_scope": "real_record_bound",
     }
     submission_fields = {
-        "id": "42", "exit_rule": contract["exit_rule"],
-        "ord_no": "SELL-1", "exit_signal_id": "decision-1",
+        "id": "42",
+        "exit_rule": contract["exit_rule"],
+        "ord_no": "SELL-1",
+        "exit_signal_id": "decision-1",
         "exit_signal_contract_sha256": digest,
         "exit_signal_position_key": "record:42",
         "exit_signal_buy_fill_identity": "buy-generation-1",
@@ -1258,21 +2031,29 @@ def test_exit_signal_requires_exact_submission_generation_and_order():
         "sell_submit_generation": "submit-1",
         "sell_submit_context_sha256": submit_sha,
         "sell_submit_context_contract": json.dumps(
-            submit_contract, sort_keys=True, separators=(",", ":")),
-        "broker_route": "SOR", "market_session_bucket": "krx_regular",
-        "qty": "1", "actual_order_submitted": "True",
+            submit_contract, sort_keys=True, separators=(",", ":")
+        ),
+        "broker_route": "SOR",
+        "market_session_bucket": "krx_regular",
+        "qty": "1",
+        "actual_order_submitted": "True",
         "pipeline_lifecycle_population_scope": "real_record_bound",
     }
+
     def event(stage, timestamp, fields):
-        return report_mod.HoldingEvent(timestamp, "test", "123456", stage,
-                                       fields, "")
+        return report_mod.HoldingEvent(timestamp, "test", "123456", stage, fields, "")
+
     decision = event("exit_signal", "2026-09-28 09:10:00", decision_fields)
-    submission = event("sell_order_sent", "2026-09-28 09:10:01",
-                       submission_fields)
-    terminal = event("sell_completed", "2026-09-28 09:10:02", {
-        "id": "42", "exit_rule": contract["exit_rule"],
-        "order_no": "SELL-1",
-    })
+    submission = event("sell_order_sent", "2026-09-28 09:10:01", submission_fields)
+    terminal = event(
+        "sell_completed",
+        "2026-09-28 09:10:02",
+        {
+            "id": "42",
+            "exit_rule": contract["exit_rule"],
+            "order_no": "SELL-1",
+        },
+    )
 
     linked = report_mod._build_exit_signal([decision, submission, terminal])
     assert linked["inferred"] is False
@@ -1281,53 +2062,89 @@ def test_exit_signal_requires_exact_submission_generation_and_order():
     assert linked["submission"]["order_no"] == "SELL-1"
     assert linked["submission"]["sell_submit_context_sha256"] == submit_sha
     trade = {
-        "id": 42, "code": "123456", "strategy": "SCALPING",
-        "position_tag": "SCANNER", "buy_time": "2026-09-28 09:00:00",
+        "id": 42,
+        "code": "123456",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "buy_time": "2026-09-28 09:00:00",
         "sell_time": "2026-09-28 09:10:02",
     }
-    assert report_mod._build_exit_signal([
-        decision, submission, terminal
-    ], trade)["binding_status"] == "same_order_generation"
-    assert report_mod._build_exit_signal([
-        decision, submission, terminal
-    ], {**trade, "position_tag": "MANUAL"})["binding_status"] == (
-        "source_gap_trade_custody_mismatch"
+    assert (
+        report_mod._build_exit_signal([decision, submission, terminal], trade)[
+            "binding_status"
+        ]
+        == "same_order_generation"
     )
+    assert report_mod._build_exit_signal(
+        [decision, submission, terminal], {**trade, "position_tag": "MANUAL"}
+    )["binding_status"] == ("source_gap_trade_custody_mismatch")
 
     # The requested SOR route and broker-selected route are separate evidence.
-    broker_krx = event("sell_order_sent", submission.timestamp,
-                       {**submission_fields, "broker_route": "KRX"})
-    assert report_mod._build_exit_signal([
-        decision, broker_krx, terminal
-    ])["binding_status"] == "same_order_generation"
-    assert report_mod._build_exit_signal([
-        decision, submission, submission, terminal
-    ])["binding_status"] == "same_order_generation"
-    partial_context = {**submit_contract, "requested_qty": 2,
-                       "owner_position_qty": 2}
-    partial_sha = hashlib.sha256(json.dumps(
-        partial_context, sort_keys=True, separators=(",", ":"),
-    ).encode()).hexdigest()
-    partial_submission = event("sell_order_sent", submission.timestamp, {
-        **submission_fields, "qty": "2", "submitted_qty": "2",
-        "sell_submit_context_contract": json.dumps(
-            partial_context, sort_keys=True, separators=(",", ":")),
-        "sell_submit_context_sha256": partial_sha,
-    })
-    partial = event("sell_partial_fill_progress", "2026-09-28 09:10:01", {
-        "id": "42", "order_no": "SELL-1", "filled_qty": "1",
-        "remaining_qty": "1",
-    })
-    assert report_mod._build_exit_signal([
-        decision, partial_submission, partial, terminal
-    ])["binding_status"] == "same_order_generation"
-    cancel_pending = event("sell_cancel_reconciliation_deferred",
-                           "2026-09-28 09:10:02", {
-                               "id": "42", "order_no": "SELL-1",
-                           })
-    open_signal = report_mod._build_exit_signal([
-        decision, partial_submission, partial, cancel_pending
-    ])
+    broker_krx = event(
+        "sell_order_sent",
+        submission.timestamp,
+        {**submission_fields, "broker_route": "KRX"},
+    )
+    assert (
+        report_mod._build_exit_signal([decision, broker_krx, terminal])[
+            "binding_status"
+        ]
+        == "same_order_generation"
+    )
+    assert (
+        report_mod._build_exit_signal([decision, submission, submission, terminal])[
+            "binding_status"
+        ]
+        == "same_order_generation"
+    )
+    partial_context = {**submit_contract, "requested_qty": 2, "owner_position_qty": 2}
+    partial_sha = hashlib.sha256(
+        json.dumps(
+            partial_context,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+    partial_submission = event(
+        "sell_order_sent",
+        submission.timestamp,
+        {
+            **submission_fields,
+            "qty": "2",
+            "submitted_qty": "2",
+            "sell_submit_context_contract": json.dumps(
+                partial_context, sort_keys=True, separators=(",", ":")
+            ),
+            "sell_submit_context_sha256": partial_sha,
+        },
+    )
+    partial = event(
+        "sell_partial_fill_progress",
+        "2026-09-28 09:10:01",
+        {
+            "id": "42",
+            "order_no": "SELL-1",
+            "filled_qty": "1",
+            "remaining_qty": "1",
+        },
+    )
+    assert (
+        report_mod._build_exit_signal(
+            [decision, partial_submission, partial, terminal]
+        )["binding_status"]
+        == "same_order_generation"
+    )
+    cancel_pending = event(
+        "sell_cancel_reconciliation_deferred",
+        "2026-09-28 09:10:02",
+        {
+            "id": "42",
+            "order_no": "SELL-1",
+        },
+    )
+    open_signal = report_mod._build_exit_signal(
+        [decision, partial_submission, partial, cancel_pending]
+    )
     assert open_signal["binding_status"] == "same_order_generation"
     assert open_signal["submission"]["order_no"] == "SELL-1"
 
@@ -1340,30 +2157,43 @@ def test_exit_signal_requires_exact_submission_generation_and_order():
         {"broker_route": "UNKNOWN"},
         {"pipeline_lifecycle_population_scope": "sim_observation_only"},
     ):
-        invalid = event("sell_order_sent", submission.timestamp,
-                        {**submission_fields, **changed})
+        invalid = event(
+            "sell_order_sent", submission.timestamp, {**submission_fields, **changed}
+        )
         result = report_mod._build_exit_signal([decision, invalid, terminal])
         assert result["inferred"] is True
         assert result["binding_status"] != "same_order_generation"
-    changed_quote = event("exit_signal", decision.timestamp,
-                          {**decision_fields,
-                           "exit_threshold_executable_bid": 9999})
-    assert report_mod._build_exit_signal([
-        changed_quote, submission, terminal
-    ])["binding_status"] == "source_gap_decision_submit_contract_mismatch"
-    duplicate = event("exit_signal", decision.timestamp,
-                      {**decision_fields, "exit_signal_contract_sha256": "c" * 64})
-    result = report_mod._build_exit_signal([decision, duplicate, submission,
-                                            terminal])
+    changed_quote = event(
+        "exit_signal",
+        decision.timestamp,
+        {**decision_fields, "exit_threshold_executable_bid": 9999},
+    )
+    assert (
+        report_mod._build_exit_signal([changed_quote, submission, terminal])[
+            "binding_status"
+        ]
+        == "source_gap_decision_submit_contract_mismatch"
+    )
+    duplicate = event(
+        "exit_signal",
+        decision.timestamp,
+        {**decision_fields, "exit_signal_contract_sha256": "c" * 64},
+    )
+    result = report_mod._build_exit_signal([decision, duplicate, submission, terminal])
     assert result["inferred"] is True
-    conflicting_submit = event("sell_order_sent", submission.timestamp,
-                               {**submission_fields, "qty": "2"})
-    assert report_mod._build_exit_signal([
-        decision, submission, conflicting_submit, terminal
-    ])["binding_status"] == "source_gap_conflicting_submission"
-    assert report_mod._build_exit_signal([
-        submission, terminal
-    ])["binding_status"] == "source_gap_explicit_signal_missing"
+    conflicting_submit = event(
+        "sell_order_sent", submission.timestamp, {**submission_fields, "qty": "2"}
+    )
+    assert (
+        report_mod._build_exit_signal(
+            [decision, submission, conflicting_submit, terminal]
+        )["binding_status"]
+        == "source_gap_conflicting_submission"
+    )
+    assert (
+        report_mod._build_exit_signal([submission, terminal])["binding_status"]
+        == "source_gap_explicit_signal_missing"
+    )
 
 
 def test_trade_review_restores_completed_trade_from_holding_events(monkeypatch):
@@ -1826,32 +2656,70 @@ def test_trade_review_reconciles_completed_economics_without_losing_raw_event(
     assert "trade_review_economics_reconciled" not in sell_order_sent["fields"]
 
 
-@pytest.mark.parametrize("mutation", [None, "future_date", "missing_binding", "changed_db_witness",
-                                     "duplicate_db_id", "promoted_economics", "unclassified_source",
-                                     "foreign_db_id", "duplicate_native_id"])
-def test_database_completion_observation_cannot_forge_native_terminal_or_eligibility(mutation):
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        None,
+        "future_date",
+        "missing_binding",
+        "changed_db_witness",
+        "duplicate_db_id",
+        "promoted_economics",
+        "unclassified_source",
+        "foreign_db_id",
+        "duplicate_native_id",
+    ],
+)
+def test_database_completion_observation_cannot_forge_native_terminal_or_eligibility(
+    mutation,
+):
     day = "2026-10-19"
-    original = dict(id=49362, status="COMPLETED", sell_time=day + " 09:44:00", profit_rate=None)
-    witness = dict(id=49362, status="COMPLETED", sell_time=original["sell_time"],
-                   source_row_sha256=report_mod._completed_census_sha256(original))
-    row = dict(id=49362, status="COMPLETED", completion_observed_date=day, profit_rate=None,
-               completion_source_status="database_completed_native_terminal_unobserved",
-               database_completion_source_sha256=witness["source_row_sha256"],
-               strict_completion_status="excluded",
-               strict_completion_reasons=["source_gap_native_sell_completed_event_missing"])
-    report = dict(date=day, code=None, since=None,
-                  meta=dict(sell_completed_event_ids=[], database_completed_sources=[witness]),
-                  metrics=dict(canonical_completed_trades=1),
-                  sections=dict(completed_trade_projection=[row]))
-    if mutation == "future_date": witness["sell_time"] = "2026-10-20 09:44:00"
-    elif mutation == "missing_binding": row.pop("database_completion_source_sha256")
-    elif mutation == "changed_db_witness": witness["source_row_sha256"] = "f" * 64
-    elif mutation == "duplicate_db_id": report["meta"]["database_completed_sources"].append(dict(witness))
-    elif mutation == "promoted_economics": row["strict_completion_status"] = "eligible"
-    elif mutation == "unclassified_source": row.pop("completion_source_status")
-    elif mutation == "foreign_db_id": witness["id"] = 49363
-    elif mutation == "duplicate_native_id": report["meta"]["sell_completed_event_ids"] = [49362, 49362]
-    report["meta"]["completed_census_manifest"] = report_mod.completed_census_manifest(report)
+    original = dict(
+        id=49362, status="COMPLETED", sell_time=day + " 09:44:00", profit_rate=None
+    )
+    witness = dict(
+        id=49362,
+        status="COMPLETED",
+        sell_time=original["sell_time"],
+        source_row_sha256=report_mod._completed_census_sha256(original),
+    )
+    row = dict(
+        id=49362,
+        status="COMPLETED",
+        completion_observed_date=day,
+        profit_rate=None,
+        completion_source_status="database_completed_native_terminal_unobserved",
+        database_completion_source_sha256=witness["source_row_sha256"],
+        strict_completion_status="excluded",
+        strict_completion_reasons=["source_gap_native_sell_completed_event_missing"],
+    )
+    report = dict(
+        date=day,
+        code=None,
+        since=None,
+        meta=dict(sell_completed_event_ids=[], database_completed_sources=[witness]),
+        metrics=dict(canonical_completed_trades=1),
+        sections=dict(completed_trade_projection=[row]),
+    )
+    if mutation == "future_date":
+        witness["sell_time"] = "2026-10-20 09:44:00"
+    elif mutation == "missing_binding":
+        row.pop("database_completion_source_sha256")
+    elif mutation == "changed_db_witness":
+        witness["source_row_sha256"] = "f" * 64
+    elif mutation == "duplicate_db_id":
+        report["meta"]["database_completed_sources"].append(dict(witness))
+    elif mutation == "promoted_economics":
+        row["strict_completion_status"] = "eligible"
+    elif mutation == "unclassified_source":
+        row.pop("completion_source_status")
+    elif mutation == "foreign_db_id":
+        witness["id"] = 49363
+    elif mutation == "duplicate_native_id":
+        report["meta"]["sell_completed_event_ids"] = [49362, 49362]
+    report["meta"]["completed_census_manifest"] = report_mod.completed_census_manifest(
+        report
+    )
     issue = report_mod.verify_completed_census_manifest(report, day)
     assert (issue is None) is (mutation is None)
     assert report["sections"]["completed_trade_projection"][0]["profit_rate"] is None
@@ -1860,5 +2728,10 @@ def test_database_completion_observation_cannot_forge_native_terminal_or_eligibi
 @pytest.fixture
 def unarchived_prior_snapshots(monkeypatch):
     from src.engine import log_archive_service
-    monkeypatch.setattr(log_archive_service, "prior_entry_snapshot_rejection", lambda *a, **k: None)
-    monkeypatch.setattr(log_archive_service, "load_prior_entry_projection", lambda *a, **k: None)
+
+    monkeypatch.setattr(
+        log_archive_service, "prior_entry_snapshot_rejection", lambda *a, **k: None
+    )
+    monkeypatch.setattr(
+        log_archive_service, "load_prior_entry_projection", lambda *a, **k: None
+    )

@@ -43,6 +43,7 @@ def _depth_row(
         "trading_runtime_effect": False,
     }
 
+
 def _micro_row(
     symbol: str,
     at: str,

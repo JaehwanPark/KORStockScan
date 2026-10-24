@@ -4,6 +4,7 @@ Consumes bounded route-owned tick/depth projections. OHLC, unidentified AI or
 missing fill/cost evidence are censored, never invented terminal economics.
 The trading decision and M1 classifier are shared with runtime.
 """
+
 from collections import Counter
 from dataclasses import dataclass, asdict
 from datetime import date, datetime
@@ -16,9 +17,21 @@ from zoneinfo import ZoneInfo
 
 from src.trading.market.session_contract import resolve_market_session
 from .pre_submit_delay_initial_policy import digest, number
-from .trailing_exit_decision import evaluate_trailing_take_profit, evaluate_exit_deferral
-from .trailing_mechanical_strength import classify_ws_history, _rows_by_item, HISTORY_LIMIT
-from .trailing_mechanical_policy import normalize_values, START_MARKETS, market_values_hash, classifier_hash
+from .trailing_exit_decision import (
+    evaluate_trailing_take_profit,
+    evaluate_exit_deferral,
+)
+from .trailing_mechanical_strength import (
+    classify_ws_history,
+    _rows_by_item,
+    HISTORY_LIMIT,
+)
+from .trailing_mechanical_policy import (
+    normalize_values,
+    START_MARKETS,
+    market_values_hash,
+    classifier_hash,
+)
 from .trailing_threshold_policy import market_type_at, closed_exit_gap
 from .trailing_situation_policy import PreparedPin, pin_context, validate_pin
 from .main_stop_replay import cost_known_epoch
@@ -28,50 +41,65 @@ MAX_EVENTS = 100000
 MAX_POSITIONS = 20000
 SLIPPAGE_BPS = (0, 30, 100)
 MAX_QUOTE_ENVELOPE_BYTES = 12 * 1024
-WS_PROJECTION_SCHEMA = 'main_m1_route_touch_tape_projection_v1'
-QUOTE_STORAGE_CODEC = 'zlib_json_sha256_v1'
-OBSERVATION_STREAM = 'continuous_bounded_queue_v1'
+WS_PROJECTION_SCHEMA = "main_m1_route_touch_tape_projection_v1"
+QUOTE_STORAGE_CODEC = "zlib_json_sha256_v1"
+OBSERVATION_STREAM = "continuous_bounded_queue_v1"
 
 
 def encode_quote(source):
     """Lossless storage only; the original semantic quote hash is unchanged."""
-    raw = json.dumps(source, sort_keys=True, separators=(',', ':'), ensure_ascii=True,
-                     allow_nan=False).encode('ascii')
+    raw = json.dumps(
+        source,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    ).encode("ascii")
     if len(raw) > MAX_QUOTE_ENVELOPE_BYTES:
-        raise ValueError('trailing_quote_envelope_unbounded')
-    return dict(codec=QUOTE_STORAGE_CODEC, raw_bytes=len(raw),
-                raw_sha256=hashlib.sha256(raw).hexdigest(),
-                payload=base64.b64encode(zlib.compress(raw, 1)).decode('ascii'))
+        raise ValueError("trailing_quote_envelope_unbounded")
+    return dict(
+        codec=QUOTE_STORAGE_CODEC,
+        raw_bytes=len(raw),
+        raw_sha256=hashlib.sha256(raw).hexdigest(),
+        payload=base64.b64encode(zlib.compress(raw, 1)).decode("ascii"),
+    )
 
 
 def decode_quote(value):
     """Read legacy JSON/dicts and bounded compressed quotes with byte proof."""
     if isinstance(value, str):
         if len(value) > MAX_QUOTE_ENVELOPE_BYTES * 2:
-            raise ValueError('trailing_quote_encoding_unbounded')
+            raise ValueError("trailing_quote_encoding_unbounded")
         value = json.loads(value)
-    if not isinstance(value, dict) or 'codec' not in value:
+    if not isinstance(value, dict) or "codec" not in value:
         return value
-    if (value.get('codec') != QUOTE_STORAGE_CODEC
-            or type(value.get('raw_bytes')) is not int
-            or not 0 < value['raw_bytes'] <= MAX_QUOTE_ENVELOPE_BYTES
-            or not isinstance(value.get('payload'), str)
-            or len(value['payload']) > MAX_QUOTE_ENVELOPE_BYTES * 2):
-        raise ValueError('trailing_quote_encoding_invalid')
+    if (
+        value.get("codec") != QUOTE_STORAGE_CODEC
+        or type(value.get("raw_bytes")) is not int
+        or not 0 < value["raw_bytes"] <= MAX_QUOTE_ENVELOPE_BYTES
+        or not isinstance(value.get("payload"), str)
+        or len(value["payload"]) > MAX_QUOTE_ENVELOPE_BYTES * 2
+    ):
+        raise ValueError("trailing_quote_encoding_invalid")
     try:
         decoder = zlib.decompressobj()
-        raw = decoder.decompress(base64.b64decode(value['payload'], validate=True),
-                                 value['raw_bytes'] + 1)
-        if (len(raw) != value['raw_bytes'] or not decoder.eof
-                or decoder.unused_data or decoder.unconsumed_tail
-                or hashlib.sha256(raw).hexdigest() != value.get('raw_sha256')):
-            raise ValueError('trailing_quote_encoding_integrity')
+        raw = decoder.decompress(
+            base64.b64decode(value["payload"], validate=True), value["raw_bytes"] + 1
+        )
+        if (
+            len(raw) != value["raw_bytes"]
+            or not decoder.eof
+            or decoder.unused_data
+            or decoder.unconsumed_tail
+            or hashlib.sha256(raw).hexdigest() != value.get("raw_sha256")
+        ):
+            raise ValueError("trailing_quote_encoding_integrity")
         result = json.loads(raw)
         if not isinstance(result, dict):
-            raise ValueError('trailing_quote_encoding_object_required')
+            raise ValueError("trailing_quote_encoding_object_required")
         return result
     except (zlib.error, UnicodeError) as exc:
-        raise ValueError('trailing_quote_encoding_invalid') from exc
+        raise ValueError("trailing_quote_encoding_invalid") from exc
 
 
 class ObservationCoverage:
@@ -81,6 +109,7 @@ class ObservationCoverage:
     every attempted sequence and its matching native close watermark; enqueue
     alone cannot prove append. Neither this proof nor a quote grants a fill.
     """
+
     def __init__(self):
         self.count = 0
         self.identity = None
@@ -89,49 +118,76 @@ class ObservationCoverage:
         self.invalid = False
 
     def observe(self, event):
-        fields = event.get('fields') or {}
-        close = fields.get('trailing_observation_close')
-        if close is not None and event.get('stage') == 'sell_completed':
+        fields = event.get("fields") or {}
+        close = fields.get("trailing_observation_close")
+        if close is not None and event.get("stage") == "sell_completed":
             self.required = True
             if isinstance(close, str):
-                try:close = json.loads(close) if len(close) <= 2048 else None
-                except ValueError:close = None
-            if not isinstance(close, dict) or close.get('contract') != OBSERVATION_STREAM:
+                try:
+                    close = json.loads(close) if len(close) <= 2048 else None
+                except ValueError:
+                    close = None
+            if (
+                not isinstance(close, dict)
+                or close.get("contract") != OBSERVATION_STREAM
+            ):
                 self.invalid = True
             elif self.close is not None and self.close != close:
                 self.invalid = True
             else:
                 self.close = close
-        if (event.get('stage') != 'scalp_trailing_input_transition'
-                or fields.get('observation_stream_contract') != OBSERVATION_STREAM):
+        if (
+            event.get("stage") != "scalp_trailing_input_transition"
+            or fields.get("observation_stream_contract") != OBSERVATION_STREAM
+        ):
             return
         self.required = True
         self.count += 1
-        identity = (fields.get('position_key'), fields.get('observation_buy_fill_identity'))
+        identity = (
+            fields.get("position_key"),
+            fields.get("observation_buy_fill_identity"),
+        )
         if self.identity is None:
             self.identity = identity
-        sequence = fields.get('event_sequence')
-        if isinstance(sequence, str) and sequence.isascii() and sequence.isdigit() and len(sequence) <= 20:
+        sequence = fields.get("event_sequence")
+        if (
+            isinstance(sequence, str)
+            and sequence.isascii()
+            and sequence.isdigit()
+            and len(sequence) <= 20
+        ):
             sequence = int(sequence)
-        self.invalid |= (identity != self.identity or not all(identity)
-                         or type(sequence) is not int or sequence != self.count
-                         or fields.get('observation_telemetry_gap') not in (False, 'False', 'false'))
+        self.invalid |= (
+            identity != self.identity
+            or not all(identity)
+            or type(sequence) is not int
+            or sequence != self.count
+            or fields.get("observation_telemetry_gap") not in (False, "False", "false")
+        )
 
     def gap(self):
         if not self.required:
             return None
         close = self.close or {}
-        if (self.invalid or not self.close or self.count == 0
-                or type(close.get('expected_count')) is not int
-                or close['expected_count'] != self.count
-                or close.get('source_gap') is not False
-                or (close.get('position_key'), close.get('buy_fill_identity')) != self.identity):
-            return 'trailing_observation_stream_incomplete'
+        if (
+            self.invalid
+            or not self.close
+            or self.count == 0
+            or type(close.get("expected_count")) is not int
+            or close["expected_count"] != self.count
+            or close.get("source_gap") is not False
+            or (close.get("position_key"), close.get("buy_fill_identity"))
+            != self.identity
+        ):
+            return "trailing_observation_stream_incomplete"
         return None
 
     def quote(self, source):
-        if self.required and (not isinstance(source, dict)
-                or source.get('kind') != 'QUOTE' or source.get('coverage_complete') is not True):
+        if self.required and (
+            not isinstance(source, dict)
+            or source.get("kind") != "QUOTE"
+            or source.get("coverage_complete") is not True
+        ):
             self.invalid = True
 
 
@@ -142,54 +198,91 @@ def research_entry_window_start(consumed_dates):
     census evidence, not permission to tune on an entry before this window.
     """
     if not isinstance(consumed_dates, (list, tuple)) or not consumed_dates:
-        raise ValueError('research_entry_window_dates_invalid')
+        raise ValueError("research_entry_window_dates_invalid")
     try:
         dates = [date.fromisoformat(day) for day in consumed_dates]
         if any(day.isoformat() != raw for day, raw in zip(dates, consumed_dates)):
             raise ValueError
     except (TypeError, ValueError):
-        raise ValueError('research_entry_window_dates_invalid') from None
+        raise ValueError("research_entry_window_dates_invalid") from None
     start = max(min(dates), date(2026, 6, 5))
-    return datetime(start.year, start.month, start.day, tzinfo=ZoneInfo('Asia/Seoul')).timestamp()
+    return datetime(
+        start.year, start.month, start.day, tzinfo=ZoneInfo("Asia/Seoul")
+    ).timestamp()
 
 
 def apply_research_entry_window(position, *, window_start_at):
     """Keep original IDs, clocks and gaps while censoring pre-window entries."""
     if type(window_start_at) not in (int, float) or not math.isfinite(window_start_at):
-        raise ValueError('research_entry_window_start_invalid')
-    row = {**position, 'research_entry_window_start_at': window_start_at}
-    entry = number(position.get('entry_at'))
+        raise ValueError("research_entry_window_start_invalid")
+    row = {**position, "research_entry_window_start_at": window_start_at}
+    entry = number(position.get("entry_at"))
     if entry is not None and entry < window_start_at:
-        row['research_entry_window_exclusion'] = 'entry_before_research_window'
-        if not row.get('source_gap'):
-            row['source_gap'] = 'entry_before_research_window'
+        row["research_entry_window_exclusion"] = "entry_before_research_window"
+        if not row.get("source_gap"):
+            row["source_gap"] = "entry_before_research_window"
     return row
 
 
 def quote_source_digest(event):
     # The later AI receipt is an overlay on an already sealed quote. Including
     # its input hash in the quote hash would create a circular receipt.
-    return digest({key:value for key,value in event.items()
-                   if key not in {'source_sha256', 'holding_ai'}})
+    return digest(
+        {
+            key: value
+            for key, value in event.items()
+            if key not in {"source_sha256", "holding_ai"}
+        }
+    )
 
 
-def holding_ai_context_digest(*, identity, crossing_at, event, market, values,
-                              classifier_config, strength, pin, quantity, remaining,
-                              basis, allocated_cost, sell_rate, peak, profit,
-                              peak_profit, armed):
+def holding_ai_context_digest(
+    *,
+    identity,
+    crossing_at,
+    event,
+    market,
+    values,
+    classifier_config,
+    strength,
+    pin,
+    quantity,
+    remaining,
+    basis,
+    allocated_cost,
+    sell_rate,
+    peak,
+    profit,
+    peak_profit,
+    armed,
+):
     """Bind an observed vote to the candidate's exact first-crossing input.
 
     This diagnostic hash never substitutes for a recorded AI request/response.
     Missing original binding censors the candidate, even on the same quote.
     """
-    return digest(dict(schema='main_trailing_ai_crossing_context_v1',
-        position_key=identity, crossing_at=crossing_at,
-        quote_source_sha256=event['source_sha256'], market=market,
-        policy_values=dict(values), m1_classifier_sha256=classifier_hash(classifier_config),
-        strength=asdict(strength), situation_pin=asdict(pin),
-        quantity=quantity, remaining=remaining, basis=basis,
-        allocated_cost=allocated_cost, sell_rate=sell_rate, peak=peak,
-        profit=profit, peak_profit=peak_profit, armed=armed))
+    return digest(
+        dict(
+            schema="main_trailing_ai_crossing_context_v1",
+            position_key=identity,
+            crossing_at=crossing_at,
+            quote_source_sha256=event["source_sha256"],
+            market=market,
+            policy_values=dict(values),
+            m1_classifier_sha256=classifier_hash(classifier_config),
+            strength=asdict(strength),
+            situation_pin=asdict(pin),
+            quantity=quantity,
+            remaining=remaining,
+            basis=basis,
+            allocated_cost=allocated_cost,
+            sell_rate=sell_rate,
+            peak=peak,
+            profit=profit,
+            peak_profit=peak_profit,
+            armed=armed,
+        )
+    )
 
 
 def compact_ws(ws):
@@ -199,113 +292,249 @@ def compact_ws(ws):
     route's touch/tape arrays avoid repeating unrelated routes, raw payloads
     and ten-level books in every holding event. Invalid direction stays invalid.
     """
-    items = ws.get('last_realtime_type_item') or {}
-    routes = ws.get('last_realtime_type_market_route') or {}
-    suffixes = ws.get('last_realtime_type_market_suffix') or {}
-    item = str(items.get('0D') or '').strip().upper()
-    epoch = ws.get('market_data_transport_epoch')
-    route_key = str(suffixes.get('0D') or 'KRX') + '|' + str(routes.get('0D') or '')
-    depths = _rows_by_item(ws.get('recent_depth_ticks_by_route'), item, epoch, route_key)
-    trades = _rows_by_item(ws.get('recent_trade_ticks_by_route'), item, epoch, route_key)
+    items = ws.get("last_realtime_type_item") or {}
+    routes = ws.get("last_realtime_type_market_route") or {}
+    suffixes = ws.get("last_realtime_type_market_suffix") or {}
+    item = str(items.get("0D") or "").strip().upper()
+    epoch = ws.get("market_data_transport_epoch")
+    route_key = str(suffixes.get("0D") or "KRX") + "|" + str(routes.get("0D") or "")
+    depths = _rows_by_item(
+        ws.get("recent_depth_ticks_by_route"), item, epoch, route_key
+    )
+    trades = _rows_by_item(
+        ws.get("recent_trade_ticks_by_route"), item, epoch, route_key
+    )
+
     def touch(row, key):
         levels = row.get(key)
         first = levels[0] if isinstance(levels, list) and levels else None
-        return [first.get('price'), first.get('quantity')] if isinstance(first, dict) else [None, None]
+        return (
+            [first.get("price"), first.get("quantity")]
+            if isinstance(first, dict)
+            else [None, None]
+        )
+
     sources, qualities = [], []
-    def origin(rows,key):
-        return min((r[key] for r in rows),default=0) if all(type(r[key]) is int for r in rows) else 0
-    def shift(raw,base):
-        return raw-base if base else raw
-    clock_origin = origin(depths+trades,'received_at_ms')
-    depth_origin = origin(depths,'route_sequence')
-    trade_origin = origin(trades,'route_sequence')
+
+    def origin(rows, key):
+        return (
+            min((r[key] for r in rows), default=0)
+            if all(type(r[key]) is int for r in rows)
+            else 0
+        )
+
+    def shift(raw, base):
+        return raw - base if base else raw
+
+    clock_origin = origin(depths + trades, "received_at_ms")
+    depth_origin = origin(depths, "route_sequence")
+    trade_origin = origin(trades, "route_sequence")
+
     def intern(values, value):
         if value not in values:
             values.append(value)
         return values.index(value)
-    return {'schema':WS_PROJECTION_SCHEMA, 'item':item, 'epoch':epoch, 'route_key':route_key,
-        'items':{k:items.get(k) for k in ('0B','0D')},
-        'routes':{k:routes.get(k) for k in ('0B','0D')},
-        'suffixes':{k:suffixes.get(k) for k in ('0B','0D')},
-        'clock_origin_ms':clock_origin, 'depth_sequence_origin':depth_origin, 'trade_sequence_origin':trade_origin,
-        'depths':[[shift(r['route_sequence'],depth_origin), shift(r['received_at_ms'],clock_origin), *touch(r,'bid_levels'), *touch(r,'ask_levels')]
-                  for r in depths],
-        'trades':[[shift(r['route_sequence'],trade_origin), shift(r['received_at_ms'],clock_origin), r.get('price'), r.get('volume'), r.get('aggressor_side'),
-                   intern(sources, r.get('aggressor_source')), intern(qualities, r.get('aggressor_quality'))]
-                  for r in trades], 'sources':sources, 'qualities':qualities}
+
+    return {
+        "schema": WS_PROJECTION_SCHEMA,
+        "item": item,
+        "epoch": epoch,
+        "route_key": route_key,
+        "items": {k: items.get(k) for k in ("0B", "0D")},
+        "routes": {k: routes.get(k) for k in ("0B", "0D")},
+        "suffixes": {k: suffixes.get(k) for k in ("0B", "0D")},
+        "clock_origin_ms": clock_origin,
+        "depth_sequence_origin": depth_origin,
+        "trade_sequence_origin": trade_origin,
+        "depths": [
+            [
+                shift(r["route_sequence"], depth_origin),
+                shift(r["received_at_ms"], clock_origin),
+                *touch(r, "bid_levels"),
+                *touch(r, "ask_levels"),
+            ]
+            for r in depths
+        ],
+        "trades": [
+            [
+                shift(r["route_sequence"], trade_origin),
+                shift(r["received_at_ms"], clock_origin),
+                r.get("price"),
+                r.get("volume"),
+                r.get("aggressor_side"),
+                intern(sources, r.get("aggressor_source")),
+                intern(qualities, r.get("aggressor_quality")),
+            ]
+            for r in trades
+        ],
+        "sources": sources,
+        "qualities": qualities,
+    }
 
 
 def expand_ws(ws):
-    if ws.get('schema') != WS_PROJECTION_SCHEMA:
+    if ws.get("schema") != WS_PROJECTION_SCHEMA:
         return ws
-    clock_origin = ws.get('clock_origin_ms',0)
-    depth_origin = ws.get('depth_sequence_origin',0)
-    trade_origin = ws.get('trade_sequence_origin',0)
-    if any(type(value) is not int or value<0 for value in (clock_origin,depth_origin,trade_origin)):
-        raise ValueError('main_m1_compact_origin_invalid')
-    if (not isinstance(ws.get('depths'), list) or not isinstance(ws.get('trades'), list)
-            or len(ws['depths']) > HISTORY_LIMIT or len(ws['trades']) > HISTORY_LIMIT
-            or not isinstance(ws.get('sources'), list) or not isinstance(ws.get('qualities'), list)
-            or len(ws['sources']) > HISTORY_LIMIT or len(ws['qualities']) > HISTORY_LIMIT
-            or any(not isinstance(r, list) or len(r) != 6 for r in ws['depths'])
-            or any(not isinstance(r, list) or len(r) != 7 or type(r[5]) is not int or type(r[6]) is not int
-                   or not 0 <= r[5] < len(ws['sources']) or not 0 <= r[6] < len(ws['qualities'])
-                   for r in ws['trades'])):
-        raise ValueError('main_m1_compact_source_invalid')
-    def restore(raw,base):
-        return raw+base if base else raw
-    depths = [dict(item=ws['item'], transport_epoch=ws['epoch'], route_sequence=restore(r[0],depth_origin), received_at_ms=restore(r[1],clock_origin),
-                   bid_levels=[dict(price=r[2],quantity=r[3])], ask_levels=[dict(price=r[4],quantity=r[5])])
-              for r in ws['depths']]
-    trades = [dict(item=ws['item'], transport_epoch=ws['epoch'], route_sequence=restore(r[0],trade_origin), received_at_ms=restore(r[1],clock_origin),
-                   price=r[2],volume=r[3],aggressor_side=r[4],aggressor_source=ws['sources'][r[5]],
-                   aggressor_quality=ws['qualities'][r[6]]) for r in ws['trades']]
-    return dict(last_realtime_type_item=ws['items'], last_realtime_type_market_route=ws['routes'],
-                last_realtime_type_market_suffix=ws['suffixes'], market_data_transport_epoch=ws['epoch'],
-                recent_depth_ticks_by_route={ws['route_key']:depths}, recent_trade_ticks_by_route={ws['route_key']:trades})
+    clock_origin = ws.get("clock_origin_ms", 0)
+    depth_origin = ws.get("depth_sequence_origin", 0)
+    trade_origin = ws.get("trade_sequence_origin", 0)
+    if any(
+        type(value) is not int or value < 0
+        for value in (clock_origin, depth_origin, trade_origin)
+    ):
+        raise ValueError("main_m1_compact_origin_invalid")
+    if (
+        not isinstance(ws.get("depths"), list)
+        or not isinstance(ws.get("trades"), list)
+        or len(ws["depths"]) > HISTORY_LIMIT
+        or len(ws["trades"]) > HISTORY_LIMIT
+        or not isinstance(ws.get("sources"), list)
+        or not isinstance(ws.get("qualities"), list)
+        or len(ws["sources"]) > HISTORY_LIMIT
+        or len(ws["qualities"]) > HISTORY_LIMIT
+        or any(not isinstance(r, list) or len(r) != 6 for r in ws["depths"])
+        or any(
+            not isinstance(r, list)
+            or len(r) != 7
+            or type(r[5]) is not int
+            or type(r[6]) is not int
+            or not 0 <= r[5] < len(ws["sources"])
+            or not 0 <= r[6] < len(ws["qualities"])
+            for r in ws["trades"]
+        )
+    ):
+        raise ValueError("main_m1_compact_source_invalid")
+
+    def restore(raw, base):
+        return raw + base if base else raw
+
+    depths = [
+        dict(
+            item=ws["item"],
+            transport_epoch=ws["epoch"],
+            route_sequence=restore(r[0], depth_origin),
+            received_at_ms=restore(r[1], clock_origin),
+            bid_levels=[dict(price=r[2], quantity=r[3])],
+            ask_levels=[dict(price=r[4], quantity=r[5])],
+        )
+        for r in ws["depths"]
+    ]
+    trades = [
+        dict(
+            item=ws["item"],
+            transport_epoch=ws["epoch"],
+            route_sequence=restore(r[0], trade_origin),
+            received_at_ms=restore(r[1], clock_origin),
+            price=r[2],
+            volume=r[3],
+            aggressor_side=r[4],
+            aggressor_source=ws["sources"][r[5]],
+            aggressor_quality=ws["qualities"][r[6]],
+        )
+        for r in ws["trades"]
+    ]
+    return dict(
+        last_realtime_type_item=ws["items"],
+        last_realtime_type_market_route=ws["routes"],
+        last_realtime_type_market_suffix=ws["suffixes"],
+        market_data_transport_epoch=ws["epoch"],
+        recent_depth_ticks_by_route={ws["route_key"]: depths},
+        recent_trade_ticks_by_route={ws["route_key"]: trades},
+    )
 
 
 def _route_depths(ws, route, item, epoch):
     ws = expand_ws(ws)
-    suffix = (ws.get('last_realtime_type_market_suffix') or {}).get('0D')
-    route_key = str(suffix).upper() + '|' + str(route).upper()
-    return [row for key, rows in (ws.get('recent_depth_ticks_by_route') or {}).items()
-            if str(key).upper() == route_key for row in rows
-            if row.get('item') == item and row.get('transport_epoch') == epoch
-            and str(row.get('market_route', route)).upper() == str(route).upper()]
+    suffix = (ws.get("last_realtime_type_market_suffix") or {}).get("0D")
+    route_key = str(suffix).upper() + "|" + str(route).upper()
+    return [
+        row
+        for key, rows in (ws.get("recent_depth_ticks_by_route") or {}).items()
+        if str(key).upper() == route_key
+        for row in rows
+        if row.get("item") == item
+        and row.get("transport_epoch") == epoch
+        and str(row.get("market_route", route)).upper() == str(route).upper()
+    ]
 
 
-def _quote_projection(ws_data, *, known_at, event_at, route, item, transport_epoch,
-                     sequence, bid, ask, bid_qty, peak, quantity, coverage_complete, entry_cost_model=None):
+def _quote_projection(
+    ws_data,
+    *,
+    known_at,
+    event_at,
+    route,
+    item,
+    transport_epoch,
+    sequence,
+    bid,
+    ask,
+    bid_qty,
+    peak,
+    quantity,
+    coverage_complete,
+    entry_cost_model=None,
+):
     """Reuse Main's supplied snapshot; no WS getter or independent sampling."""
     import json
+
     if not isinstance(ws_data, dict) or coverage_complete is not True:
-        return {'status':'source_gap', 'reason':'shared_quote_coverage_unverified'}
+        return {"status": "source_gap", "reason": "shared_quote_coverage_unverified"}
     view = compact_ws(ws_data)
     depths = _route_depths(view, route, item, transport_epoch)
-    latest = max(depths, key=lambda row:number(row.get('received_at_ms')) or 0, default={})
-    native_sequence = latest.get('route_sequence')
+    latest = max(
+        depths, key=lambda row: number(row.get("received_at_ms")) or 0, default={}
+    )
+    native_sequence = latest.get("route_sequence")
     if type(native_sequence) is not int or native_sequence <= 0:
-        return {'status':'source_gap', 'reason':'shared_quote_native_depth_unobserved'}
+        return {
+            "status": "source_gap",
+            "reason": "shared_quote_native_depth_unobserved",
+        }
     try:
         sha = digest(view)
     except (ValueError, TypeError, OverflowError):
-        return {'status':'source_gap', 'reason':'shared_quote_serialization_invalid'}
-    quote = dict(kind='QUOTE', event_at=event_at, known_at=known_at, source_kind='tick_depth',
-        coverage_complete=True, route=route, item=item, transport_epoch=transport_epoch,
-        sequence=native_sequence, sample_sequence=sequence,
-        max_quote_age_sec=.7, bid=bid, ask=ask, bid_qty=bid_qty, trade_peak_price=peak,
-        ws_data=view, quote_snapshot_sha256=sha, sell_execution_plan={
-            'valid_until':number(event_at) + .7 if number(event_at) is not None else None,
-            'quote_source_sha256':sha, 'limit_price':bid, 'quantity':quantity})
-    quote['entry_cost_model'] = entry_cost_model
-    quote['source_sha256'] = digest(quote)
+        return {"status": "source_gap", "reason": "shared_quote_serialization_invalid"}
+    quote = dict(
+        kind="QUOTE",
+        event_at=event_at,
+        known_at=known_at,
+        source_kind="tick_depth",
+        coverage_complete=True,
+        route=route,
+        item=item,
+        transport_epoch=transport_epoch,
+        sequence=native_sequence,
+        sample_sequence=sequence,
+        max_quote_age_sec=0.7,
+        bid=bid,
+        ask=ask,
+        bid_qty=bid_qty,
+        trade_peak_price=peak,
+        ws_data=view,
+        quote_snapshot_sha256=sha,
+        sell_execution_plan={
+            "valid_until": (
+                number(event_at) + 0.7 if number(event_at) is not None else None
+            ),
+            "quote_source_sha256": sha,
+            "limit_price": bid,
+            "quantity": quantity,
+        },
+    )
+    quote["entry_cost_model"] = entry_cost_model
+    quote["source_sha256"] = digest(quote)
     try:
-        encoded = json.dumps(quote, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()
+        encoded = json.dumps(
+            quote, sort_keys=True, separators=(",", ":"), allow_nan=False
+        ).encode()
     except (ValueError, TypeError, OverflowError):
-        return {'status':'source_gap', 'reason':'shared_quote_serialization_invalid'}
+        return {"status": "source_gap", "reason": "shared_quote_serialization_invalid"}
     if len(encoded) > MAX_QUOTE_ENVELOPE_BYTES:
-        return {'status':'source_gap', 'reason':'shared_quote_envelope_budget_exceeded'}
+        return {
+            "status": "source_gap",
+            "reason": "shared_quote_envelope_budget_exceeded",
+        }
     return quote
 
 
@@ -314,53 +543,67 @@ def quote_projection(ws_data, **kwargs):
     try:
         return _quote_projection(ws_data, **kwargs)
     except (ValueError, TypeError, KeyError, AttributeError, OverflowError):
-        return {'status':'source_gap', 'reason':'shared_quote_projection_contract_invalid'}
+        return {
+            "status": "source_gap",
+            "reason": "shared_quote_projection_contract_invalid",
+        }
 
 
 def completed_sources(trades):
     """Normalize exact completed Main source; no replay or publication."""
     positions, paths = [], {}
     for trade in trades:
-        identity = str(trade.get('id') or trade.get('record_id') or '')
+        identity = str(trade.get("id") or trade.get("record_id") or "")
         if not identity:
-            raise ValueError('universal_completed_population_identity_missing')
-        events, entry_context, entry_pin = [], trade.get('trailing_entry_context'), trade.get('trailing_situation_pin')
+            raise ValueError("universal_completed_population_identity_missing")
+        events, entry_context, entry_pin = (
+            [],
+            trade.get("trailing_entry_context"),
+            trade.get("trailing_situation_pin"),
+        )
         coverage, encoding_gap = ObservationCoverage(), None
-        for event in trade.get('timeline') or []:
+        for event in trade.get("timeline") or []:
             if not isinstance(event, dict):
                 continue
             coverage.observe(event)
-            if event.get('stage') != 'scalp_trailing_input_transition':
+            if event.get("stage") != "scalp_trailing_input_transition":
                 continue
-            source = (event.get('fields') or {}).get('universal_trailing_quote')
+            source = (event.get("fields") or {}).get("universal_trailing_quote")
             try:
                 source = decode_quote(source)
             except (ValueError, TypeError):
                 source = None
-                encoding_gap = 'trailing_quote_encoding_invalid'
+                encoding_gap = "trailing_quote_encoding_invalid"
             coverage.quote(source)
-            if isinstance(source, dict) and source.get('kind') == 'QUOTE':
+            if isinstance(source, dict) and source.get("kind") == "QUOTE":
                 events.append(source)
-                for key in ('trailing_entry_context', 'trailing_situation_pin'):
-                    value = (event.get('fields') or {}).get(key)
+                for key in ("trailing_entry_context", "trailing_situation_pin"):
+                    value = (event.get("fields") or {}).get(key)
                     if isinstance(value, str) and len(value.encode()) <= 2048:
                         import json
+
                         try:
                             value = json.loads(value)
                         except ValueError:
                             value = None
                     if isinstance(value, dict):
-                        if key == 'trailing_entry_context' and entry_context is None:
+                        if key == "trailing_entry_context" and entry_context is None:
                             entry_context = value
-                        elif key == 'trailing_situation_pin' and entry_pin is None:
+                        elif key == "trailing_situation_pin" and entry_pin is None:
                             entry_pin = value
-        model = trade.get('trailing_replay_cost_model') or (events[0].get('entry_cost_model') if events else None) or {}
+        model = (
+            trade.get("trailing_replay_cost_model")
+            or (events[0].get("entry_cost_model") if events else None)
+            or {}
+        )
         first_quote = events[0] if events else {}
-        legs = trade.get('buy_fill_legs') or []
+        legs = trade.get("buy_fill_legs") or []
         # An identifiable malformed fill must remain a source-gap row; it
         # cannot abort the entire completed-position census or become a
         # partially reconstructed entry with invented quantity/cost.
-        valid_legs = isinstance(legs, list) and all(isinstance(leg, dict) for leg in legs)
+        valid_legs = isinstance(legs, list) and all(
+            isinstance(leg, dict) for leg in legs
+        )
         first_leg = legs[0] if valid_legs and legs else {}
         reconstructed_adds = []
         # Aggregate completed quantity is not the first BUY. Without its
@@ -370,50 +613,98 @@ def completed_sources(trades):
         if legs:
             try:
                 if not valid_legs:
-                    raise ValueError('buy_fill_legs_contract_invalid')
+                    raise ValueError("buy_fill_legs_contract_invalid")
                 first = first_leg
+
                 def stamp(text):
                     value = datetime.fromisoformat(text)
-                    return (value.replace(tzinfo=ZoneInfo('Asia/Seoul')) if value.tzinfo is None else value).timestamp()
-                entry = stamp(first['at'])
+                    return (
+                        value.replace(tzinfo=ZoneInfo("Asia/Seoul"))
+                        if value.tzinfo is None
+                        else value
+                    ).timestamp()
+
+                entry = stamp(first["at"])
                 for leg in legs[1:]:
-                    add_cost = leg.get('buy_cost_krw')
-                    if (add_cost is None and model.get('allocation') == 'frozen_configured_round_trip_rate_on_sell_model_only'
-                            and number(model.get('buy_cost_krw')) == 0):
+                    add_cost = leg.get("buy_cost_krw")
+                    if (
+                        add_cost is None
+                        and model.get("allocation")
+                        == "frozen_configured_round_trip_rate_on_sell_model_only"
+                        and number(model.get("buy_cost_krw")) == 0
+                    ):
                         add_cost = 0
-                    reconstructed_adds.append(dict(kind='ADD', event_at=stamp(leg['at']), known_at=stamp(leg['at']),
-                        qty=leg['qty'], buy_amount_krw=leg['amount_krw'], buy_cost_krw=add_cost,
-                        buy_generation_sha256=digest(leg)))
+                    reconstructed_adds.append(
+                        dict(
+                            kind="ADD",
+                            event_at=stamp(leg["at"]),
+                            known_at=stamp(leg["at"]),
+                            qty=leg["qty"],
+                            buy_amount_krw=leg["amount_krw"],
+                            buy_cost_krw=add_cost,
+                            buy_generation_sha256=digest(leg),
+                        )
+                    )
                 # Ordering is proven by the canonical fill/event timestamps.
-                events = sorted(events + reconstructed_adds, key=lambda row:row['known_at'])
+                events = sorted(
+                    events + reconstructed_adds, key=lambda row: row["known_at"]
+                )
             except (ValueError, TypeError, KeyError, AttributeError, OverflowError):
                 entry = None
         sell_clocks = []
         try:
-            for leg in trade.get('sell_fill_legs') or []:
-                value = datetime.fromisoformat(leg['at'])
-                sell_clocks.append((value.replace(tzinfo=ZoneInfo('Asia/Seoul')) if value.tzinfo is None else value).timestamp())
+            for leg in trade.get("sell_fill_legs") or []:
+                value = datetime.fromisoformat(leg["at"])
+                sell_clocks.append(
+                    (
+                        value.replace(tzinfo=ZoneInfo("Asia/Seoul"))
+                        if value.tzinfo is None
+                        else value
+                    ).timestamp()
+                )
         except (ValueError, TypeError, KeyError, AttributeError, OverflowError):
             sell_clocks = []
-        positions.append(dict(position_key=identity, evidence_kind='actual_completed', owner='main',
-            automatic_management_allowed=trade.get('main_automatic_management_allowed') is True,
-            entry_at=entry, qty=first_leg.get('qty'),
-            buy_basis_krw=first_leg.get('amount_krw'), cost_model=model,
-            route=trade.get('entry_quote_route') or first_quote.get('route'),
-            item=trade.get('entry_quote_item') or first_quote.get('item'),
-            terminal_status=trade.get('status'), actual_cost_reconciliation=trade.get('actual_cost_reconciliation'),
-            operating_ai_required=trade.get('holding_ai_required'),
-            holding_ai_policy_sha256=trade.get('holding_ai_policy_sha256')))
-        positions[-1].update(holding_vote_source=trade.get('holding_vote_source') or first_quote.get('holding_vote_source'),
-            entry_context=entry_context, situation_pin=entry_pin,
-                             completion_at=max(sell_clocks) if sell_clocks else None)
+        positions.append(
+            dict(
+                position_key=identity,
+                evidence_kind="actual_completed",
+                owner="main",
+                automatic_management_allowed=trade.get(
+                    "main_automatic_management_allowed"
+                )
+                is True,
+                entry_at=entry,
+                qty=first_leg.get("qty"),
+                buy_basis_krw=first_leg.get("amount_krw"),
+                cost_model=model,
+                route=trade.get("entry_quote_route") or first_quote.get("route"),
+                item=trade.get("entry_quote_item") or first_quote.get("item"),
+                terminal_status=trade.get("status"),
+                actual_cost_reconciliation=trade.get("actual_cost_reconciliation"),
+                operating_ai_required=trade.get("holding_ai_required"),
+                holding_ai_policy_sha256=trade.get("holding_ai_policy_sha256"),
+            )
+        )
+        positions[-1].update(
+            holding_vote_source=trade.get("holding_vote_source")
+            or first_quote.get("holding_vote_source"),
+            entry_context=entry_context,
+            situation_pin=entry_pin,
+            completion_at=max(sell_clocks) if sell_clocks else None,
+        )
         if not legs:
-            positions[-1].update(source_gap='completed_buy_fill_ledger_missing',
-                completed_buy_filled_qty=trade.get('buy_filled_qty'),
-                completed_buy_fill_amount=trade.get('buy_fill_amount'))
-        observation_gap = trade.get('trailing_observation_source_gap') or coverage.gap() or encoding_gap
+            positions[-1].update(
+                source_gap="completed_buy_fill_ledger_missing",
+                completed_buy_filled_qty=trade.get("buy_filled_qty"),
+                completed_buy_fill_amount=trade.get("buy_fill_amount"),
+            )
+        observation_gap = (
+            trade.get("trailing_observation_source_gap")
+            or coverage.gap()
+            or encoding_gap
+        )
         if observation_gap:
-            positions[-1].setdefault('source_gap', observation_gap)
+            positions[-1].setdefault("source_gap", observation_gap)
         paths[identity] = events
     return positions, paths
 
@@ -422,12 +713,24 @@ def completed_census(trades, *, incumbent):
     """Every completed Main ID remains visible, including unallocated costs."""
     positions, paths = completed_sources(trades)
     if incumbent is None:
-        body = {'schema':SCHEMA, 'status':'source_gap', 'reason':'approved_parent_receipt_missing',
-                'population_ids':sorted(row['position_key'] for row in positions),
-                'common_ids':[], 'actual_cost_status_counts':dict(Counter(
-                    (row.get('actual_cost_reconciliation') or {}).get('status', 'actual_cost_unallocated') for row in positions)),
-                'runtime_effect':False, 'allowed_runtime_apply':False}
-        return {**body, 'artifact_sha256':digest(body)}
+        body = {
+            "schema": SCHEMA,
+            "status": "source_gap",
+            "reason": "approved_parent_receipt_missing",
+            "population_ids": sorted(row["position_key"] for row in positions),
+            "common_ids": [],
+            "actual_cost_status_counts": dict(
+                Counter(
+                    (row.get("actual_cost_reconciliation") or {}).get(
+                        "status", "actual_cost_unallocated"
+                    )
+                    for row in positions
+                )
+            ),
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        }
+        return {**body, "artifact_sha256": digest(body)}
     return summarize_partitions(positions, paths, {}, incumbent=incumbent)
 
 
@@ -444,12 +747,17 @@ class PreparedPath:
         return len(self.events)
 
     def pairs(self):
-        return self.pair_stream() if self.pair_stream is not None else zip(self.events, self.features)
+        return (
+            self.pair_stream()
+            if self.pair_stream is not None
+            else zip(self.events, self.features)
+        )
 
 
 @dataclass(frozen=True)
 class PreparedVariants:
     """Source-verified feature projections, independent of numeric candidates."""
+
     paths: dict
 
 
@@ -457,42 +765,96 @@ def prepare_path(events, *, classifier_config=None):
     """M1 and session feature state is shared only within one position path."""
     state, features = {}, []
     for event in events:
-        known = number(event.get('known_at'))
+        known = number(event.get("known_at"))
         market = market_type_at(known) if known is not None else None
-        permission = resolve_market_session(datetime.fromtimestamp(known, ZoneInfo('Asia/Seoul'))) if known is not None else None
+        permission = (
+            resolve_market_session(
+                datetime.fromtimestamp(known, ZoneInfo("Asia/Seoul"))
+            )
+            if known is not None
+            else None
+        )
         strength = None
-        age = number(event.get('max_quote_age_sec'))
-        if event.get('kind') == 'QUOTE' and known is not None and age is not None and 0 < age <= .7 and event.get('ws_data') is not None:
+        age = number(event.get("max_quote_age_sec"))
+        if (
+            event.get("kind") == "QUOTE"
+            and known is not None
+            and age is not None
+            and 0 < age <= 0.7
+            and event.get("ws_data") is not None
+        ):
             try:
-                strength, state = classify_ws_history(expand_ws(event['ws_data']), state, now_ms=int(known * 1000),
-                    max_quote_age_ms=int(age * 1000), market=market, config=(classifier_config or {}).get(market))
+                strength, state = classify_ws_history(
+                    expand_ws(event["ws_data"]),
+                    state,
+                    now_ms=int(known * 1000),
+                    max_quote_age_ms=int(age * 1000),
+                    market=market,
+                    config=(classifier_config or {}).get(market),
+                )
             except (ValueError, TypeError, KeyError, AttributeError, OverflowError):
                 strength = None
         features.append((market, permission, strength))
-    return PreparedPath(tuple(events), tuple(features), classifier_hash(classifier_config),
-        last_add_known_at=max((number(e.get('known_at')) or 0 for e in events if e.get('kind')=='ADD'), default=0))
+    return PreparedPath(
+        tuple(events),
+        tuple(features),
+        classifier_hash(classifier_config),
+        last_add_known_at=max(
+            (number(e.get("known_at")) or 0 for e in events if e.get("kind") == "ADD"),
+            default=0,
+        ),
+    )
 
 
 def replay(position, events, vector, *, typed_policy=None, classifier_config=None):
     """Isolate a malformed identified row without dropping unrelated IDs."""
     try:
-        return _replay(position, events, vector, typed_policy=typed_policy, classifier_config=classifier_config)
+        return _replay(
+            position,
+            events,
+            vector,
+            typed_policy=typed_policy,
+            classifier_config=classifier_config,
+        )
     except (ValueError, TypeError, KeyError, AttributeError, OverflowError) as exc:
-        return dict(identity=str(position.get('position_key') or position.get('opportunity_id') or ''),
-                    evidence_kind=position.get('evidence_kind'), status='source_gap',
-                    reason='replay_row_contract_invalid:' + type(exc).__name__,
-                    actual_pnl_krw=None, modeled_net_pnl_krw=None,
-                    actual_order_submitted=False, allowed_runtime_apply=False)
+        return dict(
+            identity=str(
+                position.get("position_key") or position.get("opportunity_id") or ""
+            ),
+            evidence_kind=position.get("evidence_kind"),
+            status="source_gap",
+            reason="replay_row_contract_invalid:" + type(exc).__name__,
+            actual_pnl_krw=None,
+            modeled_net_pnl_krw=None,
+            actual_order_submitted=False,
+            allowed_runtime_apply=False,
+        )
 
 
 def _invalid_replay(position, exc):
-    return dict(identity=str(position.get('position_key') or position.get('opportunity_id') or ''),
-        evidence_kind=position.get('evidence_kind'), status='source_gap',
-        reason='replay_row_contract_invalid:' + type(exc).__name__, actual_pnl_krw=None,
-        modeled_net_pnl_krw=None, actual_order_submitted=False, allowed_runtime_apply=False)
+    return dict(
+        identity=str(
+            position.get("position_key") or position.get("opportunity_id") or ""
+        ),
+        evidence_kind=position.get("evidence_kind"),
+        status="source_gap",
+        reason="replay_row_contract_invalid:" + type(exc).__name__,
+        actual_pnl_krw=None,
+        modeled_net_pnl_krw=None,
+        actual_order_submitted=False,
+        allowed_runtime_apply=False,
+    )
 
 
-def replay_many(position, prepared, vectors, *, typed_policy=None, classifier_config=None, vote_policies=None):
+def replay_many(
+    position,
+    prepared,
+    vectors,
+    *,
+    typed_policy=None,
+    classifier_config=None,
+    vote_policies=None,
+):
     """One feature traversal with independent candidate state and bounded dedup.
 
     The disposable index remembers duplicate source keys across closed-session
@@ -502,57 +864,107 @@ def replay_many(position, prepared, vectors, *, typed_policy=None, classifier_co
     from contextlib import nullcontext
     from src.engine.lifecycle import research_storage as storage
     import tempfile
+
     results, cursors = {}, {}
-    with tempfile.TemporaryDirectory(prefix='trailing-seen-') as scratch:
-        manager = storage.index(scratch) if prepared.pair_stream is not None else nullcontext(None)
+    with tempfile.TemporaryDirectory(prefix="trailing-seen-") as scratch:
+        manager = (
+            storage.index(scratch)
+            if prepared.pair_stream is not None
+            else nullcontext(None)
+        )
         with manager as db:
             from src.engine.ai.holding_vote_replay_source import PreparedVotes
-            with_votes = PreparedVotes(position.get('holding_vote_replay_ref'), scratch)
-            position = {**position, '_prepared_holding_votes':with_votes}
+
+            with_votes = PreparedVotes(position.get("holding_vote_replay_ref"), scratch)
+            position = {**position, "_prepared_holding_votes": with_votes}
             memo = [None, None, False]
+
             def duplicate(ordinal, key):
                 if memo[0] == ordinal:
                     if memo[1] != key:
-                        raise ValueError('replay_shared_source_identity_changed')
+                        raise ValueError("replay_shared_source_identity_changed")
                     return memo[2]
-                identity = str(key[0])+':'+str(key[1])
-                existed = db.execute('SELECT 1 FROM records WHERE id=?',(identity,)).fetchone() is not None
-                if not existed: storage.put(db,identity,{})
-                memo[:] = [ordinal,key,existed]
+                identity = str(key[0]) + ":" + str(key[1])
+                existed = (
+                    db.execute(
+                        "SELECT 1 FROM records WHERE id=?", (identity,)
+                    ).fetchone()
+                    is not None
+                )
+                if not existed:
+                    storage.put(db, identity, {})
+                memo[:] = [ordinal, key, existed]
                 return existed
+
             def advance(name, cursor, pair, *, initial=False):
                 try:
                     next(cursor) if initial else cursor.send(pair)
                     return True
                 except StopIteration as stopped:
                     results[name] = stopped.value
-                except (ValueError,TypeError,KeyError,AttributeError,OverflowError) as exc:
-                    results[name] = _invalid_replay(position,exc)
+                except (
+                    ValueError,
+                    TypeError,
+                    KeyError,
+                    AttributeError,
+                    OverflowError,
+                ) as exc:
+                    results[name] = _invalid_replay(position, exc)
                 return False
+
             for name, vector in vectors.items():
-                arm_position={**position,"_candidate_vote_policy":(vote_policies or {}).get(name)}
-                cursor = _replay_cursor(arm_position,prepared,vector,typed_policy=typed_policy,
-                    classifier_config=classifier_config,duplicate=duplicate if db is not None else None)
-                if advance(name,cursor,None,initial=True): cursors[name]=cursor
+                arm_position = {
+                    **position,
+                    "_candidate_vote_policy": (vote_policies or {}).get(name),
+                }
+                cursor = _replay_cursor(
+                    arm_position,
+                    prepared,
+                    vector,
+                    typed_policy=typed_policy,
+                    classifier_config=classifier_config,
+                    duplicate=duplicate if db is not None else None,
+                )
+                if advance(name, cursor, None, initial=True):
+                    cursors[name] = cursor
             try:
                 for pair in prepared.pairs():
-                    for name,cursor in list(cursors.items()):
-                        if not advance(name,cursor,pair): cursors.pop(name)
-                    if not cursors: break
-                for name,cursor in cursors.items(): advance(name,cursor,None)
-            except (ValueError,TypeError,KeyError,AttributeError,OverflowError) as exc:
+                    for name, cursor in list(cursors.items()):
+                        if not advance(name, cursor, pair):
+                            cursors.pop(name)
+                    if not cursors:
+                        break
+                for name, cursor in cursors.items():
+                    advance(name, cursor, None)
+            except (
+                ValueError,
+                TypeError,
+                KeyError,
+                AttributeError,
+                OverflowError,
+            ) as exc:
                 for name in cursors:
-                    results[name] = _invalid_replay(position,exc)
+                    results[name] = _invalid_replay(position, exc)
             finally:
-                for cursor in cursors.values(): cursor.close()
+                for cursor in cursors.values():
+                    cursor.close()
                 with_votes.close()
     return results
 
 
 def _replay(position, events, vector, *, typed_policy=None, classifier_config=None):
-    prepared = events if isinstance(events,PreparedPath) else prepare_path(events,classifier_config=classifier_config)
-    return replay_many(position,prepared,{'one':vector},typed_policy=typed_policy,
-        classifier_config=classifier_config)['one']
+    prepared = (
+        events
+        if isinstance(events, PreparedPath)
+        else prepare_path(events, classifier_config=classifier_config)
+    )
+    return replay_many(
+        position,
+        prepared,
+        {"one": vector},
+        typed_policy=typed_policy,
+        classifier_config=classifier_config,
+    )["one"]
 
 
 def actual_cost_available_epoch(actual):
@@ -562,28 +974,36 @@ def actual_cost_available_epoch(actual):
     whole-position projections require both aware ISO settlement clocks; a
     missing/invalid native clock never falls back to the old optional alias.
     """
-    if (not isinstance(actual, dict) or actual.get('status') != 'actual_cost_reconciled'
-        or actual.get('actual_execution_cost') is False
-        or actual.get('economics_scope') is not None
-        or actual.get('cost_basis') == 'broker_confirmed_total_allocated'):
+    if (
+        not isinstance(actual, dict)
+        or actual.get("status") != "actual_cost_reconciled"
+        or actual.get("actual_execution_cost") is False
+        or actual.get("economics_scope") is not None
+        or actual.get("cost_basis") == "broker_confirmed_total_allocated"
+    ):
         return None
-    scope = actual.get('allocation_scope')
+    scope = actual.get("allocation_scope")
     if scope is not None and not isinstance(scope, str):
         return None
-    whole = scope in {'broker_settled_whole_position', 'broker_day_symbol_whole_position'}
-    if scope not in (None, 'exact_execution') and not whole:
+    whole = scope in {
+        "broker_settled_whole_position",
+        "broker_day_symbol_whole_position",
+    }
+    if scope not in (None, "exact_execution") and not whole:
         return None
-    native = ('cost_available_at', 'reconciled_at')
+    native = ("cost_available_at", "reconciled_at")
     if whole or any(key in actual for key in native):
         try:
             clocks = [datetime.fromisoformat(actual[key]) for key in native]
-            if any(clock.tzinfo is None or clock.utcoffset() is None for clock in clocks):
+            if any(
+                clock.tzinfo is None or clock.utcoffset() is None for clock in clocks
+            ):
                 return None
             available, reconciled = (clock.timestamp() for clock in clocks)
             return reconciled if 0 < available <= reconciled else None
         except (ValueError, TypeError, KeyError, OverflowError, OSError):
             return None
-    value = actual.get('known_at')
+    value = actual.get("known_at")
     return cost_known_epoch(value) if type(value) in (int, float) else None
 
 
@@ -595,16 +1015,20 @@ def training_cost_available(context, cutoff):
     """
     if not isinstance(context, dict):
         return False
-    if context.get('evidence_kind') != 'actual_completed':
+    if context.get("evidence_kind") != "actual_completed":
         return True
-    known = context.get('actual_cost_available_at')
+    known = context.get("actual_cost_available_at")
     try:
         if type(known) not in (int, float) or not math.isfinite(known) or known <= 0:
             return False
         if cutoff is None:
             return True
-        return (type(cutoff) in (int, float) and math.isfinite(cutoff)
-                and cutoff > 0 and known <= cutoff)
+        return (
+            type(cutoff) in (int, float)
+            and math.isfinite(cutoff)
+            and cutoff > 0
+            and known <= cutoff
+        )
     except OverflowError:
         return False
 
@@ -617,85 +1041,164 @@ def _actual_cost_provenance_valid(actual, *, completed_at=None):
     exposes source_sha256 and seals the complete projected result instead.
     Research allocation receipts never satisfy either actual-cost contract.
     """
-    def sha(value):
-        return isinstance(value, str) and len(value) == 64 and all(c in '0123456789abcdef' for c in value)
 
-    if (not isinstance(actual, dict) or actual.get('status') != 'actual_cost_reconciled'
-        or number(actual.get('exact_pnl_krw')) is None
-        or number(actual.get('exact_profit_rate')) is None
-        or not sha(actual.get('receipt_sha256'))
-        or actual.get('actual_execution_cost') is False
-        or actual.get('economics_scope') is not None
-        or actual.get('cost_basis') == 'broker_confirmed_total_allocated'):
+    def sha(value):
+        return (
+            isinstance(value, str)
+            and len(value) == 64
+            and all(c in "0123456789abcdef" for c in value)
+        )
+
+    if (
+        not isinstance(actual, dict)
+        or actual.get("status") != "actual_cost_reconciled"
+        or number(actual.get("exact_pnl_krw")) is None
+        or number(actual.get("exact_profit_rate")) is None
+        or not sha(actual.get("receipt_sha256"))
+        or actual.get("actual_execution_cost") is False
+        or actual.get("economics_scope") is not None
+        or actual.get("cost_basis") == "broker_confirmed_total_allocated"
+    ):
         return False
-    scope = actual.get('allocation_scope')
+    scope = actual.get("allocation_scope")
     if scope is not None and not isinstance(scope, str):
         return False
-    if scope in (None, 'exact_execution'):
-        return (sha(actual.get('raw_sha256'))
-                and (not any(key in actual for key in ('cost_available_at', 'reconciled_at'))
-                     or actual_cost_available_epoch(actual) is not None))
-    if scope not in {'broker_settled_whole_position', 'broker_day_symbol_whole_position'}:
+    if scope in (None, "exact_execution"):
+        return sha(actual.get("raw_sha256")) and (
+            not any(key in actual for key in ("cost_available_at", "reconciled_at"))
+            or actual_cost_available_epoch(actual) is not None
+        )
+    if scope not in {
+        "broker_settled_whole_position",
+        "broker_day_symbol_whole_position",
+    }:
         return False
-    if (not sha(actual.get('source_sha256')) or actual.get('reason') is not None
-        or number(actual.get('actual_fees_taxes_krw')) is None
-        or number(actual['actual_fees_taxes_krw']) < 0):
+    if (
+        not sha(actual.get("source_sha256"))
+        or actual.get("reason") is not None
+        or number(actual.get("actual_fees_taxes_krw")) is None
+        or number(actual["actual_fees_taxes_krw"]) < 0
+    ):
         return False
     try:
-        if digest({k:v for k,v in actual.items() if k != 'receipt_sha256'}) != actual['receipt_sha256']:
+        if (
+            digest({k: v for k, v in actual.items() if k != "receipt_sha256"})
+            != actual["receipt_sha256"]
+        ):
             return False
         # Official settlement timestamps are aware ISO, not entry-model clocks.
         known_at = actual_cost_available_epoch(actual)
-        available = cost_known_epoch(actual.get('cost_available_at'))
-        return (known_at is not None and available is not None
-                and completed_at is not None and completed_at > 0 and available >= completed_at)
+        available = cost_known_epoch(actual.get("cost_available_at"))
+        return (
+            known_at is not None
+            and available is not None
+            and completed_at is not None
+            and completed_at > 0
+            and available >= completed_at
+        )
     except (ValueError, TypeError, KeyError, OverflowError, OSError):
         return False
 
 
-def _replay_cursor(position, prepared, vector, *, typed_policy=None, classifier_config=None, duplicate=None):
+def _replay_cursor(
+    position,
+    prepared,
+    vector,
+    *,
+    typed_policy=None,
+    classifier_config=None,
+    duplicate=None,
+):
     """First crossing, current session permission, partial execution, censoring."""
     identity = str(position.get("position_key") or position.get("opportunity_id") or "")
     evidence = position.get("evidence_kind")
-    result = {"identity": identity, "evidence_kind": evidence, "status": "source_gap",
-              "reason": None, "actual_pnl_krw": None, "modeled_net_pnl_krw": None,
-              "actual_order_submitted": False, "allowed_runtime_apply": False}
+    result = {
+        "identity": identity,
+        "evidence_kind": evidence,
+        "status": "source_gap",
+        "reason": None,
+        "actual_pnl_krw": None,
+        "modeled_net_pnl_krw": None,
+        "actual_order_submitted": False,
+        "allowed_runtime_apply": False,
+    }
+
     def stop(reason, *, status="source_gap"):
         return {**result, "status": status, "reason": reason}
-    if (not identity or evidence not in {"actual_completed", "actual_entry_alternative_exit", "enter_pass_opportunity_cf"}
-        or position.get("owner") != "main" or position.get("automatic_management_allowed") is not True):
+
+    if (
+        not identity
+        or evidence
+        not in {
+            "actual_completed",
+            "actual_entry_alternative_exit",
+            "enter_pass_opportunity_cf",
+        }
+        or position.get("owner") != "main"
+        or position.get("automatic_management_allowed") is not True
+    ):
         return stop("position_identity_or_custody_unverified")
-    if position.get('source_gap'):
-        return stop(str(position['source_gap']))
+    if position.get("source_gap"):
+        return stop(str(position["source_gap"]))
     entry = number(position.get("entry_at"))
     qty, basis = number(position.get("qty")), number(position.get("buy_basis_krw"))
     model = position.get("cost_model") or {}
-    buy_cost, sell_rate = number(model.get("buy_cost_krw")), number(model.get("sell_cost_rate"))
-    if (entry is None or qty is None or basis is None or buy_cost is None or sell_rate is None
-        or entry <= 0 or qty <= 0 or not qty.is_integer() or basis <= 0 or buy_cost < 0 or not 0 <= sell_rate < .05
-        or not model.get("source_sha256")):
+    buy_cost, sell_rate = number(model.get("buy_cost_krw")), number(
+        model.get("sell_cost_rate")
+    )
+    if (
+        entry is None
+        or qty is None
+        or basis is None
+        or buy_cost is None
+        or sell_rate is None
+        or entry <= 0
+        or qty <= 0
+        or not qty.is_integer()
+        or basis <= 0
+        or buy_cost < 0
+        or not 0 <= sell_rate < 0.05
+        or not model.get("source_sha256")
+    ):
         return stop("execution_plan_or_cost_model_missing")
-    cost_known_at = cost_known_epoch(model.get('known_at'))
+    cost_known_at = cost_known_epoch(model.get("known_at"))
     if cost_known_at is None or cost_known_at > entry:
-        return stop('cost_model_not_known_at_entry')
+        return stop("cost_model_not_known_at_entry")
     if evidence == "enter_pass_opportunity_cf" and (
-        position.get("entry_action") != "ENTER_NOW" or position.get("auxiliary_effective_verdict") != "PASS"
-        or not position.get("machine_observation_sha256") or not position.get("native_evaluation_id")
-        or not position.get("execution_plan_sha256") or not position.get("entry_depth_verified")
+        position.get("entry_action") != "ENTER_NOW"
+        or position.get("auxiliary_effective_verdict") != "PASS"
+        or not position.get("machine_observation_sha256")
+        or not position.get("native_evaluation_id")
+        or not position.get("execution_plan_sha256")
+        or not position.get("entry_depth_verified")
     ):
         return stop("exact_enter_pass_plan_or_cf_entry_missing")
-    if (len(prepared) > MAX_EVENTS and prepared.pair_stream is None) or set(vector) != set(START_MARKETS):
+    if (len(prepared) > MAX_EVENTS and prepared.pair_stream is None) or set(
+        vector
+    ) != set(START_MARKETS):
         return stop("replay_input_budget_or_market_contract_invalid")
     vector = {market: normalize_values(vector[market]) for market in START_MARKETS}
     if evidence == "actual_completed":
         actual = position.get("actual_cost_reconciliation") or {}
-        if (position.get("terminal_status") != "COMPLETED"
-            or not _actual_cost_provenance_valid(actual, completed_at=number(position.get('completion_at')))):
+        if position.get(
+            "terminal_status"
+        ) != "COMPLETED" or not _actual_cost_provenance_valid(
+            actual, completed_at=number(position.get("completion_at"))
+        ):
             return stop("actual_completed_cost_or_terminal_unverified")
         result["actual_pnl_krw"] = number(actual["exact_pnl_krw"])
-    if 'operating_ai_required' in position and position['operating_ai_required'] is None:
-        return stop('original_holding_ai_mode_unobserved', status='censored')
-    remaining, proceeds, allocated_cost, peak, armed = qty, 0.0, buy_cost, basis / qty, False
+    if (
+        "operating_ai_required" in position
+        and position["operating_ai_required"] is None
+    ):
+        return stop("original_holding_ai_mode_unobserved", status="censored")
+    remaining, proceeds, allocated_cost, peak, armed = (
+        qty,
+        0.0,
+        buy_cost,
+        basis / qty,
+        False,
+    )
     crossing, deferred = None, None
     worst_profit = 0.0
     used, last_clock, last_sequence, last_epoch = set(), entry, None, None
@@ -706,7 +1209,7 @@ def _replay_cursor(position, prepared, vector, *, typed_policy=None, classifier_
     pin = PreparedPin.prepare(pin, identity)
     full_quantity, full_basis = qty, basis
     if prepared.classifier_sha256 != classifier_hash(classifier_config):
-        return stop('m1_prepared_classifier_generation_changed')
+        return stop("m1_prepared_classifier_generation_changed")
     last_quote_at = None
     ordinal = 0
     while True:
@@ -721,13 +1224,24 @@ def _replay_cursor(position, prepared, vector, *, typed_policy=None, classifier_
         if known < last_clock:
             return stop("source_clock_regression")
         last_clock = known
-        if event.get('kind') == 'SAFETY_EXIT':
-            return stop('higher_priority_safety_exit', status='censored')
+        if event.get("kind") == "SAFETY_EXIT":
+            return stop("higher_priority_safety_exit", status="censored")
         if event.get("kind") == "ADD":
-            add_qty, amount = number(event.get("qty")), number(event.get("buy_amount_krw"))
+            add_qty, amount = number(event.get("qty")), number(
+                event.get("buy_amount_krw")
+            )
             add_cost = number(event.get("buy_cost_krw"))
-            if (add_qty is None or amount is None or add_cost is None or add_qty <= 0 or not add_qty.is_integer() or amount <= 0
-                or add_cost < 0 or not event.get("buy_generation_sha256") or crossing is not None):
+            if (
+                add_qty is None
+                or amount is None
+                or add_cost is None
+                or add_qty <= 0
+                or not add_qty.is_integer()
+                or amount <= 0
+                or add_cost < 0
+                or not event.get("buy_generation_sha256")
+                or crossing is not None
+            ):
                 return stop("add_state_transition_unobserved", status="censored")
             remaining += add_qty
             full_quantity += add_qty
@@ -738,16 +1252,30 @@ def _replay_cursor(position, prepared, vector, *, typed_policy=None, classifier_
         if event.get("kind") != "QUOTE":
             continue
         if last_quote_at is None and known - entry > 2:
-            return stop('first_buy_forward_path_start_unobserved', status='censored')
+            return stop("first_buy_forward_path_start_unobserved", status="censored")
         if event.get("source_kind") != "tick_depth":
             return stop("bar_path_has_no_executable_ordering", status="censored")
-        if (event.get('source_sha256') != quote_source_digest(event)
-                or event.get("coverage_complete") is not True):
+        if (
+            event.get("source_sha256") != quote_source_digest(event)
+            or event.get("coverage_complete") is not True
+        ):
             return stop("route_path_coverage_unverified", status="censored")
-        route, item, epoch, sequence = (event.get(k) for k in ("route", "item", "transport_epoch", "sequence"))
-        expected_route = (position.get('routes_by_market') or {}).get(market, position.get('route'))
-        expected_item = (position.get('items_by_market') or {}).get(market, position.get('item'))
-        if route != expected_route or item != expected_item or not item or type(epoch) is not int or epoch < 0:
+        route, item, epoch, sequence = (
+            event.get(k) for k in ("route", "item", "transport_epoch", "sequence")
+        )
+        expected_route = (position.get("routes_by_market") or {}).get(
+            market, position.get("route")
+        )
+        expected_item = (position.get("items_by_market") or {}).get(
+            market, position.get("item")
+        )
+        if (
+            route != expected_route
+            or item != expected_item
+            or not item
+            or type(epoch) is not int
+            or epoch < 0
+        ):
             return stop("execution_route_or_item_changed", status="censored")
         if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence <= 0:
             return stop("source_sequence_invalid")
@@ -759,172 +1287,327 @@ def _replay_cursor(position, prepared, vector, *, typed_policy=None, classifier_
             used.add(source_key)
         if repeated:
             return stop("source_identity_duplicate")
-        closed_gap = (last_quote_at is not None and known - last_quote_at < 14 * 86400
-                      and closed_exit_gap(last_quote_at, known))
+        closed_gap = (
+            last_quote_at is not None
+            and known - last_quote_at < 14 * 86400
+            and closed_exit_gap(last_quote_at, known)
+        )
         if last_quote_at is not None and known - last_quote_at > 2 and not closed_gap:
-            return stop('open_session_forward_path_gap', status='censored')
+            return stop("open_session_forward_path_gap", status="censored")
         if last_epoch is not None and epoch != last_epoch and not closed_gap:
             return stop("transport_epoch_changed", status="censored")
-        if last_sequence is not None and sequence != last_sequence + 1 and not closed_gap:
+        if (
+            last_sequence is not None
+            and sequence != last_sequence + 1
+            and not closed_gap
+        ):
             return stop("source_sequence_gap", status="censored")
         last_epoch, last_sequence = epoch, sequence
         last_quote_at = known
         max_age = number(event.get("max_quote_age_sec"))
-        if max_age is None or not 0 < max_age <= .7 or known - at > max_age:
+        if max_age is None or not 0 < max_age <= 0.7 or known - at > max_age:
             return stop("quote_stale_or_freshness_contract_missing", status="censored")
         if market is None or permission.blocker or not permission.exit_allowed_by_clock:
             continue
-        bid, ask, depth, mark = (number(event.get(k)) for k in ("bid", "ask", "bid_qty", "trade_peak_price"))
-        if bid is None or ask is None or depth is None or not 0 < bid <= ask or depth < 0 or mark is None or mark <= 0:
+        bid, ask, depth, mark = (
+            number(event.get(k)) for k in ("bid", "ask", "bid_qty", "trade_peak_price")
+        )
+        if (
+            bid is None
+            or ask is None
+            or depth is None
+            or not 0 < bid <= ask
+            or depth < 0
+            or mark is None
+            or mark <= 0
+        ):
             return stop("executable_depth_or_peak_missing")
         peak = max(peak, mark)
-        profit = round(100 * ((bid * full_quantity * (1 - sell_rate) - full_basis - allocated_cost) / full_basis), 2)
+        profit = round(
+            100
+            * (
+                (bid * full_quantity * (1 - sell_rate) - full_basis - allocated_cost)
+                / full_basis
+            ),
+            2,
+        )
         worst_profit = min(worst_profit, profit)
-        peak_profit = round(100 * ((peak * full_quantity * (1 - sell_rate) - full_basis - allocated_cost) / full_basis), 2)
+        peak_profit = round(
+            100
+            * (
+                (peak * full_quantity * (1 - sell_rate) - full_basis - allocated_cost)
+                / full_basis
+            ),
+            2,
+        )
         if event.get("ws_data") is None:
             return stop("m1_raw_source_missing", status="censored")
-        if event.get('quote_snapshot_sha256') != digest(event['ws_data']):
-            return stop('m1_snapshot_hash_invalid', status='censored')
-        ws = expand_ws(event['ws_data'])
-        if (ws.get('market_data_transport_epoch') != epoch
-                or (ws.get('last_realtime_type_item') or {}).get('0D') != item
-                or str((ws.get('last_realtime_type_market_route') or {}).get('0D') or '').upper() != str(route).upper()):
-            return stop('m1_snapshot_route_or_epoch_invalid', status='censored')
+        if event.get("quote_snapshot_sha256") != digest(event["ws_data"]):
+            return stop("m1_snapshot_hash_invalid", status="censored")
+        ws = expand_ws(event["ws_data"])
+        if (
+            ws.get("market_data_transport_epoch") != epoch
+            or (ws.get("last_realtime_type_item") or {}).get("0D") != item
+            or str(
+                (ws.get("last_realtime_type_market_route") or {}).get("0D") or ""
+            ).upper()
+            != str(route).upper()
+        ):
+            return stop("m1_snapshot_route_or_epoch_invalid", status="censored")
         depths = _route_depths(ws, route, item, epoch)
-        latest = max(depths, key=lambda row:number(row.get('received_at_ms')) or 0, default={})
-        touch = (latest.get('bid_levels') or [{}])[0]
-        ask_touch = (latest.get('ask_levels') or [{}])[0]
-        if (latest.get('route_sequence') != sequence or number(touch.get('price')) != bid
-                or number(ask_touch.get('price')) != ask or number(touch.get('quantity')) != depth):
-            return stop('m1_snapshot_execution_touch_mismatch', status='censored')
+        latest = max(
+            depths, key=lambda row: number(row.get("received_at_ms")) or 0, default={}
+        )
+        touch = (latest.get("bid_levels") or [{}])[0]
+        ask_touch = (latest.get("ask_levels") or [{}])[0]
+        if (
+            latest.get("route_sequence") != sequence
+            or number(touch.get("price")) != bid
+            or number(ask_touch.get("price")) != ask
+            or number(touch.get("quantity")) != depth
+        ):
+            return stop("m1_snapshot_execution_touch_mismatch", status="censored")
         if strength is None:
-            return stop('m1_feature_path_missing', status='censored')
+            return stop("m1_feature_path_missing", status="censored")
         strength_counts[strength.state] += 1
         values = vector[market]
         if typed_policy is not None:
-            values = typed_policy.effective(market, pin, position_key=identity,
-                target_date=datetime.fromtimestamp(known, ZoneInfo("Asia/Seoul")).date().isoformat())
-        if position.get('original_trailing_source_required'):
-            original=event.get('original_trailing_source') or {}
-            if (original.get('schema')!='original_trailing_decision_source_v1'
-                or original.get('sha256')!=digest({k:v for k,v in original.items() if k!='sha256'})
-                or original.get('observed_at')!=known or original.get('market')!=market
-                or original.get('owner')!='scalp_trailing_take_profit'
-                or original.get('classifier_sha256')!=prepared.classifier_sha256):
-                return stop('original_trailing_decision_source_missing',status='censored')
-            values=normalize_values(original['values'])
-        decision = evaluate_trailing_take_profit(peak_price=peak, executable_bid=bid,
-            peak_profit_pct=peak_profit, start_pct=values["SCALP_TRAILING_START_PCT"],
-            strong=strength.state == "STRONG", weak_limit_pct=values["SCALP_TRAILING_LIMIT_WEAK"],
-            strong_limit_pct=values["SCALP_TRAILING_LIMIT_STRONG"], already_armed=armed)
+            values = typed_policy.effective(
+                market,
+                pin,
+                position_key=identity,
+                target_date=datetime.fromtimestamp(known, ZoneInfo("Asia/Seoul"))
+                .date()
+                .isoformat(),
+            )
+        if position.get("original_trailing_source_required"):
+            original = event.get("original_trailing_source") or {}
+            if (
+                original.get("schema") != "original_trailing_decision_source_v1"
+                or original.get("sha256")
+                != digest({k: v for k, v in original.items() if k != "sha256"})
+                or original.get("observed_at") != known
+                or original.get("market") != market
+                or original.get("owner") != "scalp_trailing_take_profit"
+                or original.get("classifier_sha256") != prepared.classifier_sha256
+            ):
+                return stop(
+                    "original_trailing_decision_source_missing", status="censored"
+                )
+            values = normalize_values(original["values"])
+        decision = evaluate_trailing_take_profit(
+            peak_price=peak,
+            executable_bid=bid,
+            peak_profit_pct=peak_profit,
+            start_pct=values["SCALP_TRAILING_START_PCT"],
+            strong=strength.state == "STRONG",
+            weak_limit_pct=values["SCALP_TRAILING_LIMIT_WEAK"],
+            strong_limit_pct=values["SCALP_TRAILING_LIMIT_STRONG"],
+            already_armed=armed,
+        )
         armed = decision.armed
         if crossing is None and decision.triggered:
-            crossing = {"at": known, "market": market, "profit": profit,
-                        "policy_values": dict(values), "source_sha256": event["source_sha256"],
-                        'holding_source':event.get('holding_vote_source')}
-            if position.get('operating_ai_required') and not position.get('holding_vote_replay_ref'):
-                crossing['input_context_sha256'] = holding_ai_context_digest(
-                    identity=identity, crossing_at=known, event=event, market=market,
-                    values=values, classifier_config=classifier_config, strength=strength,
-                    pin=pin, quantity=full_quantity, remaining=remaining, basis=full_basis,
-                    allocated_cost=allocated_cost, sell_rate=sell_rate, peak=peak,
-                    profit=profit, peak_profit=peak_profit, armed=armed)
+            crossing = {
+                "at": known,
+                "market": market,
+                "profit": profit,
+                "policy_values": dict(values),
+                "source_sha256": event["source_sha256"],
+                "holding_source": event.get("holding_vote_source"),
+            }
+            if position.get("operating_ai_required") and not position.get(
+                "holding_vote_replay_ref"
+            ):
+                crossing["input_context_sha256"] = holding_ai_context_digest(
+                    identity=identity,
+                    crossing_at=known,
+                    event=event,
+                    market=market,
+                    values=values,
+                    classifier_config=classifier_config,
+                    strength=strength,
+                    pin=pin,
+                    quantity=full_quantity,
+                    remaining=remaining,
+                    basis=full_basis,
+                    allocated_cost=allocated_cost,
+                    sell_rate=sell_rate,
+                    peak=peak,
+                    profit=profit,
+                    peak_profit=peak_profit,
+                    armed=armed,
+                )
             result["first_crossing"] = crossing
         if crossing is None:
             continue
-        if position.get('operating_ai_required') and position.get('holding_vote_replay_ref'):
-            source = crossing['holding_source']
+        if position.get("operating_ai_required") and position.get(
+            "holding_vote_replay_ref"
+        ):
+            source = crossing["holding_source"]
             try:
-                vote = position['_prepared_holding_votes'].snapshot(source, crossing['at'],
-                    market=crossing['market'], route=event['route'], epoch=event['transport_epoch'],entry_at=entry,
-                    candidate_policy=position.get('_candidate_vote_policy'))
+                vote = position["_prepared_holding_votes"].snapshot(
+                    source,
+                    crossing["at"],
+                    market=crossing["market"],
+                    route=event["route"],
+                    epoch=event["transport_epoch"],
+                    entry_at=entry,
+                    candidate_policy=position.get("_candidate_vote_policy"),
+                )
             except (ValueError, OSError, TypeError, KeyError):
-                return stop('pre_signal_holding_vote_source_unobserved', status='censored')
-            gate = evaluate_exit_deferral(decision=vote['decision'], now=known,
-                signal_at=crossing['at'], started_at=crossing['at'],
-                anchor_profit=crossing['profit'], profit=profit,
-                max_defer_sec=min(90., vote['max_defer_sec']), max_worsen_pct=.40,
-                same_market=market==crossing['market'])
+                return stop(
+                    "pre_signal_holding_vote_source_unobserved", status="censored"
+                )
+            gate = evaluate_exit_deferral(
+                decision=vote["decision"],
+                now=known,
+                signal_at=crossing["at"],
+                started_at=crossing["at"],
+                anchor_profit=crossing["profit"],
+                profit=profit,
+                max_defer_sec=min(90.0, vote["max_defer_sec"]),
+                max_worsen_pct=0.40,
+                same_market=market == crossing["market"],
+            )
             if not gate.proceeds:
                 deferred = gate.reason
                 continue
         elif position.get("operating_ai_required"):
             vote = event.get("holding_ai") or {}
-            if (vote.get("signal_at") != crossing["at"] or vote.get("input_source_sha256") != crossing["source_sha256"]
-                or vote.get('input_context_sha256') != crossing['input_context_sha256']
-                or vote.get('receipt_sha256') != digest({k:v for k,v in vote.items() if k != 'receipt_sha256'})
-                or number(vote.get("known_at")) is None or not crossing['at'] <= number(vote["known_at"]) <= known
-                or not isinstance(vote.get('policy_sha256'), str) or len(vote['policy_sha256']) != 64
-                or any(c not in '0123456789abcdef' for c in vote['policy_sha256'])
+            if (
+                vote.get("signal_at") != crossing["at"]
+                or vote.get("input_source_sha256") != crossing["source_sha256"]
+                or vote.get("input_context_sha256") != crossing["input_context_sha256"]
+                or vote.get("receipt_sha256")
+                != digest({k: v for k, v in vote.items() if k != "receipt_sha256"})
+                or number(vote.get("known_at")) is None
+                or not crossing["at"] <= number(vote["known_at"]) <= known
+                or not isinstance(vote.get("policy_sha256"), str)
+                or len(vote["policy_sha256"]) != 64
+                or any(c not in "0123456789abcdef" for c in vote["policy_sha256"])
                 or vote.get("policy_sha256") != position.get("holding_ai_policy_sha256")
-                or vote.get('decision') not in {'PASS', 'VETO'}):
+                or vote.get("decision") not in {"PASS", "VETO"}
+            ):
                 return stop("candidate_holding_ai_input_unobserved", status="censored")
-            if (any(number(vote.get(key)) is None for key in ('started_at', 'max_defer_sec', 'max_worsen_pct'))
-                    or number(vote['started_at']) > known or number(vote['max_defer_sec']) < 0 or number(vote['max_worsen_pct']) < 0):
-                return stop('candidate_holding_ai_deferral_contract_invalid', status='censored')
-            gate = evaluate_exit_deferral(decision=vote.get("decision"), now=known,
-                signal_at=crossing["at"], started_at=number(vote.get("started_at")),
-                anchor_profit=crossing["profit"], profit=profit,
-                max_defer_sec=number(vote.get("max_defer_sec")), max_worsen_pct=number(vote.get("max_worsen_pct")),
-                same_market=market == crossing["market"])
+            if (
+                any(
+                    number(vote.get(key)) is None
+                    for key in ("started_at", "max_defer_sec", "max_worsen_pct")
+                )
+                or number(vote["started_at"]) > known
+                or number(vote["max_defer_sec"]) < 0
+                or number(vote["max_worsen_pct"]) < 0
+            ):
+                return stop(
+                    "candidate_holding_ai_deferral_contract_invalid", status="censored"
+                )
+            gate = evaluate_exit_deferral(
+                decision=vote.get("decision"),
+                now=known,
+                signal_at=crossing["at"],
+                started_at=number(vote.get("started_at")),
+                anchor_profit=crossing["profit"],
+                profit=profit,
+                max_defer_sec=number(vote.get("max_defer_sec")),
+                max_worsen_pct=number(vote.get("max_worsen_pct")),
+                same_market=market == crossing["market"],
+            )
             if not gate.proceeds:
                 deferred = gate.reason
                 continue
         if depth <= 0:
             continue
-        execution = event.get('sell_execution_plan') or {}
-        if (number(execution.get('valid_until')) is None or number(execution['valid_until']) < known
-                or execution.get('quote_source_sha256') != event.get('quote_snapshot_sha256')
-                or number(execution.get('limit_price')) is None or number(execution['limit_price']) > bid
-                or execution.get('quantity') != remaining):
-            return stop('sell_execution_plan_unverified', status='censored')
+        execution = event.get("sell_execution_plan") or {}
+        if (
+            number(execution.get("valid_until")) is None
+            or number(execution["valid_until"]) < known
+            or execution.get("quote_source_sha256")
+            != event.get("quote_snapshot_sha256")
+            or number(execution.get("limit_price")) is None
+            or number(execution["limit_price"]) > bid
+            or execution.get("quantity") != remaining
+        ):
+            return stop("sell_execution_plan_unverified", status="censored")
         fill = min(remaining, depth)
         proceeds += bid * fill * (1 - sell_rate)
         remaining -= fill
-        result.update(modeled_sold_qty=full_quantity - remaining, modeled_residual_qty=remaining,
-                      modeled_partial_proceeds_krw=proceeds, last_sell_permission_at=known)
+        result.update(
+            modeled_sold_qty=full_quantity - remaining,
+            modeled_residual_qty=remaining,
+            modeled_partial_proceeds_krw=proceeds,
+            last_sell_permission_at=known,
+        )
         if remaining == 0:
             if prepared.last_add_known_at is None:
-                raise ValueError('streaming_future_add_census_missing')
+                raise ValueError("streaming_future_add_census_missing")
             if prepared.last_add_known_at > known:
-                return stop('candidate_exit_changes_observed_add_path', status='censored')
+                return stop(
+                    "candidate_exit_changes_observed_add_path", status="censored"
+                )
             modeled = proceeds - full_basis - allocated_cost
-            result.update(status="modeled_full_exit", reason=None, modeled_net_pnl_krw=modeled,
-                          mae_pct=worst_profit, exposure_sec=known-entry,
-                          strength_counts=dict(strength_counts), deferred_reason=deferred,
-                          modeled_profit_rate_pct=100 * modeled / full_basis,
-                          slippage_net_pnl_krw=[modeled - proceeds * bps / 10000 for bps in SLIPPAGE_BPS])
+            result.update(
+                status="modeled_full_exit",
+                reason=None,
+                modeled_net_pnl_krw=modeled,
+                mae_pct=worst_profit,
+                exposure_sec=known - entry,
+                strength_counts=dict(strength_counts),
+                deferred_reason=deferred,
+                modeled_profit_rate_pct=100 * modeled / full_basis,
+                slippage_net_pnl_krw=[
+                    modeled - proceeds * bps / 10000 for bps in SLIPPAGE_BPS
+                ],
+            )
             return result
         # A later quote is not evidence that the same displayed depth can be
         # consumed twice. Partial execution remains a separate censored row.
-        return stop('partial_depth_residual_unobserved', status='censored')
-    return stop("remaining_quantity_or_forward_path_unobserved" if crossing else "trailing_crossing_not_observed",
-                status="censored")
+        return stop("partial_depth_residual_unobserved", status="censored")
+    return stop(
+        (
+            "remaining_quantity_or_forward_path_unobserved"
+            if crossing
+            else "trailing_crossing_not_observed"
+        ),
+        status="censored",
+    )
 
 
 def summarize_partitions(positions, paths, candidates, *, incumbent, typed_policy=None):
     from src.engine.lifecycle.research_input_budget import Claim
+
     unique = set()
-    for candidate in [incumbent,*candidates.values()]:
-        values = candidate.get('market_values',candidate)
-        config = candidate.get('classifier_parameters') if 'market_values' in candidate else None
-        unique.add(market_values_hash(values,config))
+    for candidate in [incumbent, *candidates.values()]:
+        values = candidate.get("market_values", candidate)
+        config = (
+            candidate.get("classifier_parameters")
+            if "market_values" in candidate
+            else None
+        )
+        unique.add(market_values_hash(values, config))
     # Admit candidate result construction before allocating its dictionaries.
     # The source caller retains its separate raw/feature claim throughout.
-    with Claim(len(positions)*(4096+2048*len(unique))):
-        return _summarize_partitions(positions,paths,candidates,incumbent=incumbent,typed_policy=typed_policy)
+    with Claim(len(positions) * (4096 + 2048 * len(unique))):
+        return _summarize_partitions(
+            positions, paths, candidates, incumbent=incumbent, typed_policy=typed_policy
+        )
 
 
-def _summarize_partitions(positions, paths, candidates, *, incumbent, typed_policy=None):
+def _summarize_partitions(
+    positions, paths, candidates, *, incumbent, typed_policy=None
+):
     """Canonical candidates, per-position state isolation and common-ID metrics."""
-    if 'incumbent' in candidates:
-        raise ValueError('universal_candidate_cannot_replace_approved_parent')
+    if "incumbent" in candidates:
+        raise ValueError("universal_candidate_cannot_replace_approved_parent")
     if len(positions) > MAX_POSITIONS:
         raise ValueError("universal_replay_position_budget_exceeded")
     seen, vectors, aliases = set(), {}, {}
     for name, candidate in {"incumbent": incumbent, **candidates}.items():
-        values = candidate.get('market_values', candidate)
-        config = candidate.get('classifier_parameters') if 'market_values' in candidate else None
+        values = candidate.get("market_values", candidate)
+        config = (
+            candidate.get("classifier_parameters")
+            if "market_values" in candidate
+            else None
+        )
         sha = market_values_hash(values, config)
         aliases[name] = sha
         vectors.setdefault(sha, (values, config))
@@ -936,28 +1619,62 @@ def _summarize_partitions(positions, paths, candidates, *, incumbent, typed_poli
         seen.add(identity)
         events = paths.get(identity, [])
         variants = events.paths if isinstance(events, PreparedVariants) else None
-        invalid_path = (not variants if isinstance(events, PreparedVariants) else
-                        not isinstance(events, (list, tuple)) or any(not isinstance(event, dict) for event in events))
+        invalid_path = (
+            not variants
+            if isinstance(events, PreparedVariants)
+            else not isinstance(events, (list, tuple))
+            or any(not isinstance(event, dict) for event in events)
+        )
         if invalid_path:
             events, variants = [], None
         primary = next(iter(variants.values())) if variants else events
-        if len(primary) > MAX_EVENTS and not (isinstance(primary, PreparedPath) and primary.pair_stream is not None):
-            raise ValueError('universal_replay_path_budget_exceeded')
+        if len(primary) > MAX_EVENTS and not (
+            isinstance(primary, PreparedPath) and primary.pair_stream is not None
+        ):
+            raise ValueError("universal_replay_path_budget_exceeded")
         prepared_paths = {}
-        context[identity] = {key:position.get(key) for key in (
-            'entry_at', 'evidence_kind', 'symbol', 'buy_basis_krw', 'entry_context', 'completion_at',
-            'situation_pin', 'operating_ai_required', 'research_entry_window_start_at',
-            'research_entry_window_exclusion','holding_research_cost')}
-        if context[identity]['entry_context'] is not None:
+        context[identity] = {
+            key: position.get(key)
+            for key in (
+                "entry_at",
+                "evidence_kind",
+                "symbol",
+                "buy_basis_krw",
+                "entry_context",
+                "completion_at",
+                "situation_pin",
+                "operating_ai_required",
+                "research_entry_window_start_at",
+                "research_entry_window_exclusion",
+                "holding_research_cost",
+            )
+        }
+        if context[identity]["entry_context"] is not None:
             import json
-            if len(json.dumps(context[identity]['entry_context'], allow_nan=False).encode()) > 2048:
-                context[identity]['entry_context'] = None
-        context[identity]['entry_at'] = number(position.get('entry_at'))
-        context[identity]['actual_cost_available_at'] = (
-            actual_cost_available_epoch(position.get('actual_cost_reconciliation'))
-            if position.get('evidence_kind') == 'actual_completed' else None)
-        context[identity]['observation_end_at'] = (primary.observation_end_at if variants else max(
-            (number(event.get('known_at')) or 0 for event in events), default=number(position.get('entry_at')) or 0))
+
+            if (
+                len(
+                    json.dumps(
+                        context[identity]["entry_context"], allow_nan=False
+                    ).encode()
+                )
+                > 2048
+            ):
+                context[identity]["entry_context"] = None
+        context[identity]["entry_at"] = number(position.get("entry_at"))
+        context[identity]["actual_cost_available_at"] = (
+            actual_cost_available_epoch(position.get("actual_cost_reconciliation"))
+            if position.get("evidence_kind") == "actual_completed"
+            else None
+        )
+        context[identity]["observation_end_at"] = (
+            primary.observation_end_at
+            if variants
+            else max(
+                (number(event.get("known_at")) or 0 for event in events),
+                default=number(position.get("entry_at")) or 0,
+            )
+        )
         # No candidate x event details retained. Each candidate state is local.
         minimal[identity] = {}
         groups = {}
@@ -966,39 +1683,84 @@ def _summarize_partitions(positions, paths, candidates, *, incumbent, typed_poli
             if feature_sha not in prepared_paths:
                 if variants is not None:
                     if feature_sha not in variants:
-                        raise ValueError('universal_prepared_classifier_missing')
+                        raise ValueError("universal_prepared_classifier_missing")
                     prepared_paths[feature_sha] = variants[feature_sha]
                 else:
-                    prepared_paths[feature_sha] = prepare_path(events,classifier_config=config)
-            groups.setdefault(feature_sha,{'config':config,'vectors':{}})['vectors'][sha] = vector
+                    prepared_paths[feature_sha] = prepare_path(
+                        events, classifier_config=config
+                    )
+            groups.setdefault(feature_sha, {"config": config, "vectors": {}})[
+                "vectors"
+            ][sha] = vector
         for feature_sha, group in groups.items():
-            outcomes = replay_many(position,prepared_paths[feature_sha],group['vectors'],
-                typed_policy=typed_policy,classifier_config=group['config'])
-            for sha,outcome in outcomes.items():
+            outcomes = replay_many(
+                position,
+                prepared_paths[feature_sha],
+                group["vectors"],
+                typed_policy=typed_policy,
+                classifier_config=group["config"],
+            )
+            for sha, outcome in outcomes.items():
                 if invalid_path:
-                    outcome.update(status='source_gap',reason='identified_event_path_contract_invalid',
-                        modeled_net_pnl_krw=None,actual_pnl_krw=None)
-                minimal[identity][sha] = {key:outcome.get(key) for key in (
-                    'status','reason','evidence_kind','modeled_net_pnl_krw','modeled_profit_rate_pct',
-                    'actual_pnl_krw','slippage_net_pnl_krw','modeled_residual_qty')}
-                counters[outcome['status']] += 1
-    common = sorted(identity for identity, rows in minimal.items()
-                    if all(row["modeled_net_pnl_krw"] is not None for row in rows.values()))
-    body = {"schema": SCHEMA, "population_ids": sorted(seen), "common_ids": common,
-            "excluded_ids": sorted(seen - set(common)), "candidate_aliases": aliases,
-            "eligible_ids": sorted(i for i,r in minimal.items() if r[aliases["incumbent"]]["modeled_net_pnl_krw"] is not None),
-            "population_algorithm": "candidate_parent_pairs_v2",
-            "unique_candidate_count": len(vectors), "minimal_results": minimal,
-            'population_context':context,
-            "status_counts": dict(counters), "runtime_effect": False, "allowed_runtime_apply": False}
+                    outcome.update(
+                        status="source_gap",
+                        reason="identified_event_path_contract_invalid",
+                        modeled_net_pnl_krw=None,
+                        actual_pnl_krw=None,
+                    )
+                minimal[identity][sha] = {
+                    key: outcome.get(key)
+                    for key in (
+                        "status",
+                        "reason",
+                        "evidence_kind",
+                        "modeled_net_pnl_krw",
+                        "modeled_profit_rate_pct",
+                        "actual_pnl_krw",
+                        "slippage_net_pnl_krw",
+                        "modeled_residual_qty",
+                    )
+                }
+                counters[outcome["status"]] += 1
+    common = sorted(
+        identity
+        for identity, rows in minimal.items()
+        if all(row["modeled_net_pnl_krw"] is not None for row in rows.values())
+    )
+    body = {
+        "schema": SCHEMA,
+        "population_ids": sorted(seen),
+        "common_ids": common,
+        "excluded_ids": sorted(seen - set(common)),
+        "candidate_aliases": aliases,
+        "eligible_ids": sorted(
+            i
+            for i, r in minimal.items()
+            if r[aliases["incumbent"]]["modeled_net_pnl_krw"] is not None
+        ),
+        "population_algorithm": "candidate_parent_pairs_v2",
+        "unique_candidate_count": len(vectors),
+        "minimal_results": minimal,
+        "population_context": context,
+        "status_counts": dict(counters),
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+    }
     return {**body, "artifact_sha256": digest(body)}
 
 
 def _cohort_day(row, evidence):
-    completion = number(row.get('completion_at'))
-    verified = evidence != 'actual_completed' or (completion is not None and completion >= row['entry_at'])
-    clock = completion if evidence == 'actual_completed' and verified else row['entry_at']
-    return datetime.fromtimestamp(clock, ZoneInfo('Asia/Seoul')).date().isoformat(), verified
+    completion = number(row.get("completion_at"))
+    verified = evidence != "actual_completed" or (
+        completion is not None and completion >= row["entry_at"]
+    )
+    clock = (
+        completion if evidence == "actual_completed" and verified else row["entry_at"]
+    )
+    return (
+        datetime.fromtimestamp(clock, ZoneInfo("Asia/Seoul")).date().isoformat(),
+        verified,
+    )
 
 
 def common_evaluation(partitions):
@@ -1011,72 +1773,157 @@ def common_evaluation(partitions):
     if callable(partitions):
         return _stream_evaluation(partitions)
     if not partitions:
-        return {'status':'valid_empty', 'strata':{}, 'allowed_runtime_apply':False}
-    aliases = partitions[0]['candidate_aliases']
-    if any(part['candidate_aliases'] != aliases for part in partitions):
-        raise ValueError('universal_candidate_generation_changed_between_partitions')
+        return {"status": "valid_empty", "strata": {}, "allowed_runtime_apply": False}
+    aliases = partitions[0]["candidate_aliases"]
+    if any(part["candidate_aliases"] != aliases for part in partitions):
+        raise ValueError("universal_candidate_generation_changed_between_partitions")
     strata = {}
-    context = {identity:row for part in partitions for identity,row in part['population_context'].items()}
-    results = {identity:row for part in partitions for identity,row in part['minimal_results'].items()}
-    common = sorted(identity for part in partitions for identity in part.get('eligible_ids',part['common_ids']))
-    for evidence in ('actual_completed', 'actual_entry_alternative_exit', 'enter_pass_opportunity_cf'):
-        ids = sorted((identity for identity in common if context[identity]['evidence_kind'] == evidence),
-                     key=lambda identity:(context[identity]['entry_at'], identity))
-        day_receipts = {identity:_cohort_day(context[identity], evidence) for identity in ids}
-        days = {identity:receipt[0] for identity,receipt in day_receipts.items()}
+    context = {
+        identity: row
+        for part in partitions
+        for identity, row in part["population_context"].items()
+    }
+    results = {
+        identity: row
+        for part in partitions
+        for identity, row in part["minimal_results"].items()
+    }
+    common = sorted(
+        identity
+        for part in partitions
+        for identity in part.get("eligible_ids", part["common_ids"])
+    )
+    for evidence in (
+        "actual_completed",
+        "actual_entry_alternative_exit",
+        "enter_pass_opportunity_cf",
+    ):
+        ids = sorted(
+            (
+                identity
+                for identity in common
+                if context[identity]["evidence_kind"] == evidence
+            ),
+            key=lambda identity: (context[identity]["entry_at"], identity),
+        )
+        day_receipts = {
+            identity: _cohort_day(context[identity], evidence) for identity in ids
+        }
+        days = {identity: receipt[0] for identity, receipt in day_receipts.items()}
         ordered_days = sorted(set(days.values()))
-        split = max(1, min(len(ordered_days)-1, int(len(ordered_days)*.7))) if len(ordered_days)>1 else len(ordered_days)
+        split = (
+            max(1, min(len(ordered_days) - 1, int(len(ordered_days) * 0.7)))
+            if len(ordered_days) > 1
+            else len(ordered_days)
+        )
         train_days, holdout_days = ordered_days[:split], ordered_days[split:]
-        train, holdout = ([i for i in ids if days[i] in selected] for selected in (train_days, holdout_days))
-        cutoff = min((context[i]['entry_at'] for i in holdout), default=None)
-        cost_unavailable = [i for i in train if not training_cost_available(context[i], cutoff)]
+        train, holdout = (
+            [i for i in ids if days[i] in selected]
+            for selected in (train_days, holdout_days)
+        )
+        cutoff = min((context[i]["entry_at"] for i in holdout), default=None)
+        cost_unavailable = [
+            i for i in train if not training_cost_available(context[i], cutoff)
+        ]
         cost_unavailable_set = set(cost_unavailable)
-        purged = [i for i in train if i in cost_unavailable_set
-                  or cutoff is not None and context[i]['observation_end_at'] >= cutoff]
+        purged = [
+            i
+            for i in train
+            if i in cost_unavailable_set
+            or cutoff is not None
+            and context[i]["observation_end_at"] >= cutoff
+        ]
         purged_set = set(purged)
         train = [i for i in train if i not in purged_set]
         metrics = {}
         for name, sha in aliases.items():
+
             def metric(cohort):
                 values, adverse, loss, paired = [], [], [], []
-                stress = {str(bps):[] for bps in SLIPPAGE_BPS}
+                stress = {str(bps): [] for bps in SLIPPAGE_BPS}
                 for identity in cohort:
                     row = results[identity][sha]
-                    base = results[identity][aliases['incumbent']]
-                    if row['modeled_net_pnl_krw'] is None or base['modeled_net_pnl_krw'] is None:
+                    base = results[identity][aliases["incumbent"]]
+                    if (
+                        row["modeled_net_pnl_krw"] is None
+                        or base["modeled_net_pnl_krw"] is None
+                    ):
                         continue
                     paired.append(identity)
-                    notional = number(context[identity]['buy_basis_krw'])
+                    notional = number(context[identity]["buy_basis_krw"])
                     if notional is None or notional <= 0:
-                        raise ValueError('universal_notional_unverified')
-                    reference = max(base['modeled_net_pnl_krw'], row['actual_pnl_krw']) if evidence == 'actual_completed' else base['modeled_net_pnl_krw']
-                    delta = row['modeled_net_pnl_krw'] - reference
+                        raise ValueError("universal_notional_unverified")
+                    reference = (
+                        max(base["modeled_net_pnl_krw"], row["actual_pnl_krw"])
+                        if evidence == "actual_completed"
+                        else base["modeled_net_pnl_krw"]
+                    )
+                    delta = row["modeled_net_pnl_krw"] - reference
                     values.append(delta / notional * 100)
                     if delta < 0:
                         adverse.append(identity)
-                        if row['modeled_net_pnl_krw'] < 0: loss.append(identity)
-                    for index,bps in enumerate(SLIPPAGE_BPS):
-                        stress[str(bps)].append((row['slippage_net_pnl_krw'][index] - reference) / notional * 100)
-                return {'n':len(paired), 'paired_ids':paired, 'large_loss_worsened_ids':loss, 'paired_ev_pct':math.fsum(values)/len(values) if values else None,
-                        'worst_paired_delta_pct':min(values) if values else None,
-                        'worsened_ids':adverse, 'slippage_ev_pct':{key:math.fsum(v)/len(v) if v else None for key,v in stress.items()}}
-            metrics[name] = {'train':metric(train), 'holdout':metric(holdout)}
+                        if row["modeled_net_pnl_krw"] < 0:
+                            loss.append(identity)
+                    for index, bps in enumerate(SLIPPAGE_BPS):
+                        stress[str(bps)].append(
+                            (row["slippage_net_pnl_krw"][index] - reference)
+                            / notional
+                            * 100
+                        )
+                return {
+                    "n": len(paired),
+                    "paired_ids": paired,
+                    "large_loss_worsened_ids": loss,
+                    "paired_ev_pct": (
+                        math.fsum(values) / len(values) if values else None
+                    ),
+                    "worst_paired_delta_pct": min(values) if values else None,
+                    "worsened_ids": adverse,
+                    "slippage_ev_pct": {
+                        key: math.fsum(v) / len(v) if v else None
+                        for key, v in stress.items()
+                    },
+                }
+
+            metrics[name] = {"train": metric(train), "holdout": metric(holdout)}
         completion_verified = all(receipt[1] for receipt in day_receipts.values())
-        eligible = evidence == 'actual_completed' and completion_verified and len(ordered_days)>=7 and len(train)>=30 and len(holdout)>=10 and len(holdout_days)>=2
-        strata[evidence] = {'common_ids':ids, 'train_ids':train, 'holdout_ids':holdout, 'purged_ids':purged,
-                           'cost_unavailable_train_ids':cost_unavailable,
-                           'train_days':train_days, 'holdout_days':holdout_days, 'metrics':metrics,
-                           'completion_date_verified':completion_verified,
-                           'existing_selector_sample_floor_met':eligible,
-                           'candidate_review_required':True, 'allowed_runtime_apply':False}
-    return {'status':'evaluated' if common else 'source_gap', 'common_ids':common, 'eligible_ids':common,
-            'population_algorithm':'candidate_parent_pairs_v2', 'strata':strata,
-            'decision_authority':'research_only_existing_selector_review_required', 'allowed_runtime_apply':False}
+        eligible = (
+            evidence == "actual_completed"
+            and completion_verified
+            and len(ordered_days) >= 7
+            and len(train) >= 30
+            and len(holdout) >= 10
+            and len(holdout_days) >= 2
+        )
+        strata[evidence] = {
+            "common_ids": ids,
+            "train_ids": train,
+            "holdout_ids": holdout,
+            "purged_ids": purged,
+            "cost_unavailable_train_ids": cost_unavailable,
+            "train_days": train_days,
+            "holdout_days": holdout_days,
+            "metrics": metrics,
+            "completion_date_verified": completion_verified,
+            "existing_selector_sample_floor_met": eligible,
+            "candidate_review_required": True,
+            "allowed_runtime_apply": False,
+        }
+    return {
+        "status": "evaluated" if common else "source_gap",
+        "common_ids": common,
+        "eligible_ids": common,
+        "population_algorithm": "candidate_parent_pairs_v2",
+        "strata": strata,
+        "decision_authority": "research_only_existing_selector_review_required",
+        "allowed_runtime_apply": False,
+    }
 
 
 def _stream_evaluation(partitions):
     """Two passes of small checkpoints, never retained candidate event paths."""
     from src.engine.lifecycle.research_input_budget import Claim
+
     with Claim(0) as retained:
         return _stream_evaluation_bounded(partitions, retained)
 
@@ -1085,19 +1932,23 @@ def _stream_evaluation_bounded(partitions, retained):
     aliases, context, common = None, {}, set()
     for part in partitions():
         if aliases is None:
-            aliases = part['candidate_aliases']
-        if part['candidate_aliases'] != aliases:
-            raise ValueError('universal_candidate_generation_changed_between_partitions')
-        if set(context) & set(part['population_context']):
-            raise ValueError('universal_replay_population_identity_invalid')
-        retained.grow(len(part['population_context']) * 2560
-                      + len(part['common_ids']) * len(set(aliases.values())) * 160)
-        context.update(part['population_context'])
-        common.update(part.get('eligible_ids',part['common_ids']))
+            aliases = part["candidate_aliases"]
+        if part["candidate_aliases"] != aliases:
+            raise ValueError(
+                "universal_candidate_generation_changed_between_partitions"
+            )
+        if set(context) & set(part["population_context"]):
+            raise ValueError("universal_replay_population_identity_invalid")
+        retained.grow(
+            len(part["population_context"]) * 2560
+            + len(part["common_ids"]) * len(set(aliases.values())) * 160
+        )
+        context.update(part["population_context"])
+        common.update(part.get("eligible_ids", part["common_ids"]))
         if len(context) > MAX_POSITIONS:
-            raise ValueError('universal_replay_position_budget_exceeded')
+            raise ValueError("universal_replay_position_budget_exceeded")
     if aliases is None:
-        return {'status':'valid_empty', 'strata':{}, 'allowed_runtime_apply':False}
+        return {"status": "valid_empty", "strata": {}, "allowed_runtime_apply": False}
     unique = set(aliases.values())
     # The input and result allowance was admitted incrementally before keeping
     # each checkpoint's context, rather than after the whole population grew.
@@ -1106,72 +1957,139 @@ def _stream_evaluation_bounded(partitions, retained):
 
 def _aggregate_streamed_evaluation(partitions, aliases, context, common, unique):
     strata, membership, accumulators = {}, {}, {}
-    for evidence in ('actual_completed', 'actual_entry_alternative_exit', 'enter_pass_opportunity_cf'):
-        ids = sorted((i for i in common if context[i]['evidence_kind'] == evidence),
-                     key=lambda i:(context[i]['entry_at'], i))
-        day_receipts = {i:_cohort_day(context[i], evidence) for i in ids}
-        days = {i:receipt[0] for i,receipt in day_receipts.items()}
+    for evidence in (
+        "actual_completed",
+        "actual_entry_alternative_exit",
+        "enter_pass_opportunity_cf",
+    ):
+        ids = sorted(
+            (i for i in common if context[i]["evidence_kind"] == evidence),
+            key=lambda i: (context[i]["entry_at"], i),
+        )
+        day_receipts = {i: _cohort_day(context[i], evidence) for i in ids}
+        days = {i: receipt[0] for i, receipt in day_receipts.items()}
         ordered = sorted(set(days.values()))
-        split = max(1, min(len(ordered)-1, int(len(ordered)*.7))) if len(ordered)>1 else len(ordered)
+        split = (
+            max(1, min(len(ordered) - 1, int(len(ordered) * 0.7)))
+            if len(ordered) > 1
+            else len(ordered)
+        )
         train_days, holdout_days = ordered[:split], ordered[split:]
         train = [i for i in ids if days[i] in train_days]
         holdout = [i for i in ids if days[i] in holdout_days]
-        cutoff = min((context[i]['entry_at'] for i in holdout), default=None)
-        cost_unavailable = [i for i in train if not training_cost_available(context[i], cutoff)]
+        cutoff = min((context[i]["entry_at"] for i in holdout), default=None)
+        cost_unavailable = [
+            i for i in train if not training_cost_available(context[i], cutoff)
+        ]
         cost_unavailable_set = set(cost_unavailable)
-        purged = [i for i in train if i in cost_unavailable_set
-                  or cutoff is not None and context[i]['observation_end_at'] >= cutoff]
+        purged = [
+            i
+            for i in train
+            if i in cost_unavailable_set
+            or cutoff is not None
+            and context[i]["observation_end_at"] >= cutoff
+        ]
         purged_set = set(purged)
         train = [i for i in train if i not in purged_set]
-        for cohort, identities in (('train',train), ('holdout',holdout)):
+        for cohort, identities in (("train", train), ("holdout", holdout)):
             for i in identities:
                 membership[i] = (evidence, cohort)
             for sha in unique:
-                accumulators[evidence,cohort,sha] = {'values':[], 'adverse':[], 'loss':[], 'ids':[], 'stress':[[],[],[]]}
-        strata[evidence] = {'common_ids':ids, 'train_ids':train, 'holdout_ids':holdout,
-            'cost_unavailable_train_ids':cost_unavailable,
-            'purged_ids':purged, 'train_days':train_days, 'holdout_days':holdout_days,
-            'completion_date_verified':all(receipt[1] for receipt in day_receipts.values()),
-            'metrics':{}, 'existing_selector_sample_floor_met':evidence=='actual_completed'
-                and all(receipt[1] for receipt in day_receipts.values())
-                and len(ordered)>=7 and len(train)>=30 and len(holdout)>=10 and len(holdout_days)>=2,
-            'candidate_review_required':True, 'allowed_runtime_apply':False}
+                accumulators[evidence, cohort, sha] = {
+                    "values": [],
+                    "adverse": [],
+                    "loss": [],
+                    "ids": [],
+                    "stress": [[], [], []],
+                }
+        strata[evidence] = {
+            "common_ids": ids,
+            "train_ids": train,
+            "holdout_ids": holdout,
+            "cost_unavailable_train_ids": cost_unavailable,
+            "purged_ids": purged,
+            "train_days": train_days,
+            "holdout_days": holdout_days,
+            "completion_date_verified": all(
+                receipt[1] for receipt in day_receipts.values()
+            ),
+            "metrics": {},
+            "existing_selector_sample_floor_met": evidence == "actual_completed"
+            and all(receipt[1] for receipt in day_receipts.values())
+            and len(ordered) >= 7
+            and len(train) >= 30
+            and len(holdout) >= 10
+            and len(holdout_days) >= 2,
+            "candidate_review_required": True,
+            "allowed_runtime_apply": False,
+        }
     for part in partitions():
-        if part['candidate_aliases'] != aliases:
-            raise ValueError('universal_candidate_generation_changed_between_partitions')
-        for identity, rows in part['minimal_results'].items():
+        if part["candidate_aliases"] != aliases:
+            raise ValueError(
+                "universal_candidate_generation_changed_between_partitions"
+            )
+        for identity, rows in part["minimal_results"].items():
             if identity not in membership:
                 continue
             evidence, cohort = membership[identity]
-            notional = number(context[identity]['buy_basis_krw'])
+            notional = number(context[identity]["buy_basis_krw"])
             if notional is None or notional <= 0:
-                raise ValueError('universal_notional_unverified')
-            base = rows[aliases['incumbent']]
+                raise ValueError("universal_notional_unverified")
+            base = rows[aliases["incumbent"]]
             for sha in unique:
                 row = rows[sha]
-                if row['modeled_net_pnl_krw'] is None or base['modeled_net_pnl_krw'] is None: continue
-                reference = max(base['modeled_net_pnl_krw'], row['actual_pnl_krw']) if evidence=='actual_completed' else base['modeled_net_pnl_krw']
-                delta = row['modeled_net_pnl_krw'] - reference
-                acc = accumulators[evidence,cohort,sha]
-                acc['values'].append(delta / notional * 100)
-                acc['ids'].append(identity)
+                if (
+                    row["modeled_net_pnl_krw"] is None
+                    or base["modeled_net_pnl_krw"] is None
+                ):
+                    continue
+                reference = (
+                    max(base["modeled_net_pnl_krw"], row["actual_pnl_krw"])
+                    if evidence == "actual_completed"
+                    else base["modeled_net_pnl_krw"]
+                )
+                delta = row["modeled_net_pnl_krw"] - reference
+                acc = accumulators[evidence, cohort, sha]
+                acc["values"].append(delta / notional * 100)
+                acc["ids"].append(identity)
                 if delta < 0:
-                    acc['adverse'].append(identity)
-                    if row['modeled_net_pnl_krw'] < 0: acc['loss'].append(identity)
+                    acc["adverse"].append(identity)
+                    if row["modeled_net_pnl_krw"] < 0:
+                        acc["loss"].append(identity)
                 for index in range(3):
-                    acc['stress'][index].append((row['slippage_net_pnl_krw'][index]-reference)/notional*100)
+                    acc["stress"][index].append(
+                        (row["slippage_net_pnl_krw"][index] - reference)
+                        / notional
+                        * 100
+                    )
     for evidence, record in strata.items():
         for name, sha in aliases.items():
-            record['metrics'][name] = {}
-            for cohort in ('train','holdout'):
-                acc = accumulators[evidence,cohort,sha]
-                values = acc['values']
-                record['metrics'][name][cohort] = {'n':len(values), 'paired_ids':acc['ids'], 'large_loss_worsened_ids':acc['loss'],
-                    'paired_ev_pct':math.fsum(values)/len(values) if values else None,
-                    'worst_paired_delta_pct':min(values) if values else None,
-                    'worsened_ids':sorted(acc['adverse'], key=lambda i:(context[i]['entry_at'], i)),
-                    'slippage_ev_pct':{str(bps):math.fsum(v)/len(v) if v else None
-                                       for bps,v in zip(SLIPPAGE_BPS,acc['stress'])}}
-    return {'status':'evaluated' if common else 'source_gap', 'common_ids':sorted(common), 'eligible_ids':sorted(common),
-        'population_algorithm':'candidate_parent_pairs_v2', 'strata':strata,
-        'decision_authority':'research_only_existing_selector_review_required', 'allowed_runtime_apply':False}
+            record["metrics"][name] = {}
+            for cohort in ("train", "holdout"):
+                acc = accumulators[evidence, cohort, sha]
+                values = acc["values"]
+                record["metrics"][name][cohort] = {
+                    "n": len(values),
+                    "paired_ids": acc["ids"],
+                    "large_loss_worsened_ids": acc["loss"],
+                    "paired_ev_pct": (
+                        math.fsum(values) / len(values) if values else None
+                    ),
+                    "worst_paired_delta_pct": min(values) if values else None,
+                    "worsened_ids": sorted(
+                        acc["adverse"], key=lambda i: (context[i]["entry_at"], i)
+                    ),
+                    "slippage_ev_pct": {
+                        str(bps): math.fsum(v) / len(v) if v else None
+                        for bps, v in zip(SLIPPAGE_BPS, acc["stress"])
+                    },
+                }
+    return {
+        "status": "evaluated" if common else "source_gap",
+        "common_ids": sorted(common),
+        "eligible_ids": sorted(common),
+        "population_algorithm": "candidate_parent_pairs_v2",
+        "strata": strata,
+        "decision_authority": "research_only_existing_selector_review_required",
+        "allowed_runtime_apply": False,
+    }

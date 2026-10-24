@@ -1716,9 +1716,15 @@ def test_build_report_until_excludes_later_event_cache_submit(tmp_path):
     assert report["event_window"]["until"] == "2026-06-30T10:00:00"
 
 
-def test_compressed_canonical_precedes_old_sentinel_fallback(tmp_path,monkeypatch):
- import src.engine.monitoring.intraday_entry_flow_report as module
- monkeypatch.setattr(module,'PROJECT_ROOT',tmp_path)
- canonical=tmp_path/'data/pipeline_events/pipeline_events_2026-10-06.jsonl.gz';canonical.parent.mkdir(parents=True);canonical.write_bytes(b'compressed')
- assert module._default_event_cache_path('2026-10-06')==canonical
- assert module._default_event_cache_path('2026-10-07').name=='buy_funnel_sentinel_events_2026-10-07.jsonl'
+def test_compressed_canonical_precedes_old_sentinel_fallback(tmp_path, monkeypatch):
+    import src.engine.monitoring.intraday_entry_flow_report as module
+
+    monkeypatch.setattr(module, "PROJECT_ROOT", tmp_path)
+    canonical = tmp_path / "data/pipeline_events/pipeline_events_2026-10-06.jsonl.gz"
+    canonical.parent.mkdir(parents=True)
+    canonical.write_bytes(b"compressed")
+    assert module._default_event_cache_path("2026-10-06") == canonical
+    assert (
+        module._default_event_cache_path("2026-10-07").name
+        == "buy_funnel_sentinel_events_2026-10-07.jsonl"
+    )

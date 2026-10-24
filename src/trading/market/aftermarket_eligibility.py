@@ -9,7 +9,6 @@ from typing import Any
 
 from src.trading.market.session_contract import KST
 
-
 QUALITY_VALID = "VALID"
 QUALITY_PARTIAL = "PARTIAL"
 QUALITY_UNKNOWN = "UNKNOWN"
@@ -35,10 +34,22 @@ KRX_AFTERMARKET_LISTING_RULE = "krx_aftermarket_listing_scope_20260914_v1"
 # ETF/ETN and other product markets are not admitted by that request contract.
 _MAIN_STOCK_MARKETS = {"0", "10"}
 _KRX_EXCLUDED_STATES = (
-    "거래정지", "정리매매", "단기과열", "30분단위", "30분 단위",
-    "투자경고", "투자위험", "이상급등", "관리종목", "초저유동",
-    "투자주의환기", "투자유의", "정규장미거래", "정규장 미거래",
-    "당일미거래", "당일 미거래",
+    "거래정지",
+    "정리매매",
+    "단기과열",
+    "30분단위",
+    "30분 단위",
+    "투자경고",
+    "투자위험",
+    "이상급등",
+    "관리종목",
+    "초저유동",
+    "투자주의환기",
+    "투자유의",
+    "정규장미거래",
+    "정규장 미거래",
+    "당일미거래",
+    "당일 미거래",
 )
 
 
@@ -94,16 +105,31 @@ def official_listing_venue_fields(item: dict, *, trade_date, nxt_eligible) -> di
         blockers.append("krx_aftermarket_eligibility_unknown")
     return {
         "eligible": product_eligible,
-        "krx_regular_eligible": (True if day is not None and
-                                 (not current_rule or market in _MAIN_STOCK_MARKETS) else None),
+        "krx_regular_eligible": (
+            True
+            if day is not None and (not current_rule or market in _MAIN_STOCK_MARKETS)
+            else None
+        ),
         "nxt_eligible": nxt_eligible,
         "krx_aftermarket_eligible": krx,
-        "eligible_venues_json": [venue for venue, allowed in
-                                 ((VENUE_KRX, krx), (VENUE_NXT, nxt_eligible)) if allowed is True],
-        "quality_state": (QUALITY_UNKNOWN if krx is None and nxt_eligible is None else
-                          QUALITY_PARTIAL if krx is None or nxt_eligible is None else QUALITY_VALID),
+        "eligible_venues_json": [
+            venue
+            for venue, allowed in ((VENUE_KRX, krx), (VENUE_NXT, nxt_eligible))
+            if allowed is True
+        ],
+        "quality_state": (
+            QUALITY_UNKNOWN
+            if krx is None and nxt_eligible is None
+            else (
+                QUALITY_PARTIAL
+                if krx is None or nxt_eligible is None
+                else QUALITY_VALID
+            )
+        ),
         "blocked_reasons": list(dict.fromkeys(blockers)),
-        "krx_aftermarket_ruleset": KRX_AFTERMARKET_LISTING_RULE if current_rule else None,
+        "krx_aftermarket_ruleset": (
+            KRX_AFTERMARKET_LISTING_RULE if current_rule else None
+        ),
         "broker_dynamic_restrictions_verified": False,
     }
 
@@ -227,9 +253,10 @@ def resolve_symbol_venue_eligibility(
         blockers.append(BLOCKER_SOURCE_CONFLICT)
     if malformed:
         blockers.append(BLOCKER_SOURCE_INVALID)
-    incomplete = source_snapshot.get("complete") is False or str(
-        source_snapshot.get("status") or ""
-    ).strip().lower() == "partial"
+    incomplete = (
+        source_snapshot.get("complete") is False
+        or str(source_snapshot.get("status") or "").strip().lower() == "partial"
+    )
     if incomplete:
         blockers.append(BLOCKER_SOURCE_INCOMPLETE)
 
@@ -248,13 +275,16 @@ def resolve_symbol_venue_eligibility(
     )
     payload_sha256 = (
         _text(
-            source_snapshot.get(
-                "payload_sha256", source_snapshot.get("source_sha256")
-            )
+            source_snapshot.get("payload_sha256", source_snapshot.get("source_sha256"))
         )
         or None
     )
-    if not source_api_id or not source_revision or not payload_sha256 or observed_at_kst is None:
+    if (
+        not source_api_id
+        or not source_revision
+        or not payload_sha256
+        or observed_at_kst is None
+    ):
         blockers.append(BLOCKER_PROVENANCE_PARTIAL)
 
     aftermarket_unknown = nxt is None and krx_aftermarket is None

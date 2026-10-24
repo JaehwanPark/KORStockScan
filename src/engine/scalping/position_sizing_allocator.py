@@ -20,12 +20,26 @@ from pathlib import Path
 from typing import Any, Iterable
 from zoneinfo import ZoneInfo
 
-def describe_buy_capacity(current_price, total_deposit, ratio=0.1, safety_ratio=None,
-                          max_budget=None, allow_min_one_share_over_budget=False):
+
+def describe_buy_capacity(
+    current_price,
+    total_deposit,
+    ratio=0.1,
+    safety_ratio=None,
+    max_budget=None,
+    allow_min_one_share_over_budget=False,
+):
     """Keep policy loading pure; import broker infrastructure at allocation."""
     from src.engine.kiwoom_orders import describe_buy_capacity as describe
-    return describe(current_price, total_deposit, ratio, safety_ratio=safety_ratio,
-        max_budget=max_budget, allow_min_one_share_over_budget=allow_min_one_share_over_budget)
+
+    return describe(
+        current_price,
+        total_deposit,
+        ratio,
+        safety_ratio=safety_ratio,
+        max_budget=max_budget,
+        allow_min_one_share_over_budget=allow_min_one_share_over_budget,
+    )
 
 
 FORMULA_VERSION = "entry_type_5stage_cap25_v1"
@@ -226,37 +240,70 @@ def _runtime_position_sizing_policy(
     five-stage profile when no policy was selected.
     """
     from src.engine.scalping.initial_quantity_activation import (
-        ENV_FILE, ENV_SHA, load_pinned_initial_quantity_policy,
+        ENV_FILE,
+        ENV_SHA,
+        load_pinned_initial_quantity_policy,
     )
+
     baseline_file = str(os.getenv(ENV_FILE) or "").strip()
     baseline_sha = str(os.getenv(ENV_SHA) or "").strip().lower()
     if baseline_file or baseline_sha:
-        if (not baseline_file or not baseline_sha
-                or str(os.getenv("KORSTOCKSCAN_POSITION_SIZING_POLICY_ENABLED", "")
-                       ).strip().lower() in {"1", "true", "yes", "on"}):
-            return (ROLLBACK_FORMULA_VERSION, _FLAT_10_TIER_RATIOS,
-                    "initial_policy_identity_conflict_fallback", None, None)
+        if (
+            not baseline_file
+            or not baseline_sha
+            or str(os.getenv("KORSTOCKSCAN_POSITION_SIZING_POLICY_ENABLED", ""))
+            .strip()
+            .lower()
+            in {"1", "true", "yes", "on"}
+        ):
+            return (
+                ROLLBACK_FORMULA_VERSION,
+                _FLAT_10_TIER_RATIOS,
+                "initial_policy_identity_conflict_fallback",
+                None,
+                None,
+            )
         resolved = _coerce_reference_time(reference_time) or datetime.now(KST)
         baseline, status = load_pinned_initial_quantity_policy(
-            Path(baseline_file), baseline_sha, resolved.date())
+            Path(baseline_file), baseline_sha, resolved.date()
+        )
         if baseline is None:
-            return (ROLLBACK_FORMULA_VERSION, _FLAT_10_TIER_RATIOS,
-                    status + "_fallback", None, None)
+            return (
+                ROLLBACK_FORMULA_VERSION,
+                _FLAT_10_TIER_RATIOS,
+                status + "_fallback",
+                None,
+                None,
+            )
         selected_type = baseline["type_policies"].get(quantity_type)
-        if (selected_type is None
-                or selected_type["ratio_mode"] not in {
-                    "parent_5stage", "cap_10pct", "cap_15pct", "cap_20pct"}
-                or selected_type["timeout_mode"] not in {
-                    "existing_runtime_profile", "selected_total_wait_sec"}):
-            return (ROLLBACK_FORMULA_VERSION, _FLAT_10_TIER_RATIOS,
-                    "initial_policy_type_missing_fallback", None, None)
+        if (
+            selected_type is None
+            or selected_type["ratio_mode"]
+            not in {"parent_5stage", "cap_10pct", "cap_15pct", "cap_20pct"}
+            or selected_type["timeout_mode"]
+            not in {"existing_runtime_profile", "selected_total_wait_sec"}
+        ):
+            return (
+                ROLLBACK_FORMULA_VERSION,
+                _FLAT_10_TIER_RATIOS,
+                "initial_policy_type_missing_fallback",
+                None,
+                None,
+            )
         cap = {
-            "parent_5stage": MAX_RATIO, "cap_10pct": 0.10,
-            "cap_15pct": 0.15, "cap_20pct": 0.20,
+            "parent_5stage": MAX_RATIO,
+            "cap_10pct": 0.10,
+            "cap_15pct": 0.15,
+            "cap_20pct": 0.20,
         }[selected_type["ratio_mode"]]
         selected_ratios = tuple(min(value, cap) for value in DEFAULT_TIER_RATIOS)
-        return (FORMULA_VERSION, selected_ratios, status,
-                baseline["policy_version"], baseline_sha)
+        return (
+            FORMULA_VERSION,
+            selected_ratios,
+            status,
+            baseline["policy_version"],
+            baseline_sha,
+        )
     if str(
         os.getenv("KORSTOCKSCAN_POSITION_SIZING_POLICY_ENABLED", "")
     ).strip().lower() not in {"1", "true", "yes", "on"}:
@@ -315,8 +362,9 @@ def _runtime_position_sizing_policy(
         source_day = date.fromisoformat(expected_source_date)
         # Existing v1 files used active_date as their first effective day.
         # It is a lower bound only, never a same-day expiry or env gate.
-        effective_day = date.fromisoformat(str(
-            policy.get("effective_from") or policy.get("active_date") or ""))
+        effective_day = date.fromisoformat(
+            str(policy.get("effective_from") or policy.get("active_date") or "")
+        )
     except ValueError:
         source_day = None
         effective_day = None
@@ -324,7 +372,8 @@ def _runtime_position_sizing_policy(
         policy.get("schema_version") != POSITION_SIZING_POLICY_SCHEMA_VERSION
         or policy.get("policy_version") != expected_version
         or policy.get("source_date") != expected_source_date
-        or source_day is None or effective_day is None
+        or source_day is None
+        or effective_day is None
         or not source_day < effective_day <= resolved.date()
         or policy.get("runtime_apply_allowed") is not True
         or policy.get("policy_content_sha256") != _policy_content_sha256(policy)
@@ -492,9 +541,13 @@ class ScalpingSizingDecision:
             "quantity_type_classifier_version": self.quantity_type_classifier_version,
             "quantity_type_policy_row": (
                 self.quantity_type
-                if self.policy_status in {
-                    "initial_policy_loaded", "initial_policy_v2_loaded",
-                    "initial_policy_refresh_loaded"} else "-"
+                if self.policy_status
+                in {
+                    "initial_policy_loaded",
+                    "initial_policy_v2_loaded",
+                    "initial_policy_refresh_loaded",
+                }
+                else "-"
             ),
         }
 
@@ -611,28 +664,35 @@ def resolve_scalping_allocation(
     """Resolve the only supported scalping sizing decision."""
 
     from src.engine.scalping.initial_quantity_type import (
-        CLASSIFIER_VERSION, classify_quantity_type,
+        CLASSIFIER_VERSION,
+        classify_quantity_type,
     )
+
     quantity_type = (
         "NOT_APPLICABLE_SCALE_IN"
-        if str(context.allocation_stage or "").strip().lower() in _SCALE_IN_ALLOCATION_STAGES
-        else classify_quantity_type({
-            "effective_venue": infer_scalping_venue(context.reference_time, context.effective_venue),
-            "market_session_bucket": context.market_session_bucket,
-            "source_signature": context.source_signature,
-            "reference_time": context.reference_time,
-            "price_krw": context.price_krw,
-            "liquidity_band": context.liquidity_band,
-            "volatility_band": context.volatility_band,
-            "extension_band": context.extension_band,
-            "trusted_flow_state": context.trusted_flow_state,
-            "trusted_flow_fresh": context.trusted_flow_fresh,
-            "feature_snapshot_at": context.feature_snapshot_at,
-            "feature_route_key": context.feature_route_key,
-            "feature_transport_epoch": context.feature_transport_epoch,
-            "classifier_route_key": context.classifier_route_key,
-            "classifier_transport_epoch": context.classifier_transport_epoch,
-        })
+        if str(context.allocation_stage or "").strip().lower()
+        in _SCALE_IN_ALLOCATION_STAGES
+        else classify_quantity_type(
+            {
+                "effective_venue": infer_scalping_venue(
+                    context.reference_time, context.effective_venue
+                ),
+                "market_session_bucket": context.market_session_bucket,
+                "source_signature": context.source_signature,
+                "reference_time": context.reference_time,
+                "price_krw": context.price_krw,
+                "liquidity_band": context.liquidity_band,
+                "volatility_band": context.volatility_band,
+                "extension_band": context.extension_band,
+                "trusted_flow_state": context.trusted_flow_state,
+                "trusted_flow_fresh": context.trusted_flow_fresh,
+                "feature_snapshot_at": context.feature_snapshot_at,
+                "feature_route_key": context.feature_route_key,
+                "feature_transport_epoch": context.feature_transport_epoch,
+                "classifier_route_key": context.classifier_route_key,
+                "classifier_transport_epoch": context.classifier_transport_epoch,
+            }
+        )
     )
     formula_version, policy_ratios, policy_status, policy_version, policy_sha256 = (
         _position_sizing_policy_for_context(context, quantity_type)

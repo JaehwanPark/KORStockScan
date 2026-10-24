@@ -79,9 +79,13 @@ def _configure_telebot_http():
             # Supported final-consumer injection. Each polling/send thread
             # owns a plain session even if another import patches requests.
             ttl = apihelper.SESSION_TIME_TO_LIVE
-            current = getattr(local, 'session', None)
-            created = getattr(local, 'created', 0.0)
-            if current is None or ttl == 0 or (ttl and time.monotonic()-created > ttl):
+            current = getattr(local, "session", None)
+            created = getattr(local, "created", 0.0)
+            if (
+                current is None
+                or ttl == 0
+                or (ttl and time.monotonic() - created > ttl)
+            ):
                 if current is not None:
                     current.close()
                 current = local.session = OriginalSession()
@@ -97,10 +101,16 @@ def _configure_telebot_http():
             elif apihelper.RETRY_ON_ERROR and apihelper.RETRY_ENGINE == 2:
                 from requests.adapters import HTTPAdapter
                 from urllib3.util.retry import Retry
-                adapter = HTTPAdapter(max_retries=Retry(total=apihelper.MAX_RETRIES,
-                    allowed_methods=None, backoff_factor=apihelper.RETRY_TIMEOUT,
-                    backoff_max=apihelper.RETRY_TIMEOUT))
-                for prefix in ('http://', 'https://'):
+
+                adapter = HTTPAdapter(
+                    max_retries=Retry(
+                        total=apihelper.MAX_RETRIES,
+                        allowed_methods=None,
+                        backoff_factor=apihelper.RETRY_TIMEOUT,
+                        backoff_max=apihelper.RETRY_TIMEOUT,
+                    )
+                )
+                for prefix in ("http://", "https://"):
                     current.mount(prefix, adapter)
             return current.request(method, url, **kwargs)
 
@@ -518,9 +528,7 @@ def handle_start(message):
     except Exception as exc:
         # 소개 화면은 사용자 DB의 일시 장애와 분리한다. 권한은 승격하지 않고
         # 최소 메뉴만 표시하며, 원인은 서버 로그에 보존한다.
-        log_error(
-            f"[TELEGRAM_START_DB_DEGRADED] chat_id={message.chat.id}: {exc}"
-        )
+        log_error(f"[TELEGRAM_START_DB_DEGRADED] chat_id={message.chat.id}: {exc}")
     welcome_msg = (
         "🎯 <b>[KORStockScan] 스나이퍼 엔진 온라인</b>\n\n"
         "기계 진입 판정과 AI 리스크 보조 판정이 현재 운영 정책에 따라 작동합니다.\n\n"

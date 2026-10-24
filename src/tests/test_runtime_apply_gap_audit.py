@@ -185,7 +185,9 @@ def test_runtime_apply_gap_audit_surfaces_direct_preopen_policy_families(
     assert sizing["primary_ev"] == 0.18
     assert sizing["sample"] == 31
     assert sizing["preopen_apply_state"] == "consumed_by_next_preopen"
-    assert not any(row["family"] == "post_probe_winner_recovery" for row in rows.values())
+    assert not any(
+        row["family"] == "post_probe_winner_recovery" for row in rows.values()
+    )
     assert report["runtime_uptake_kpi"]["candidate_count"] == 2
     assert report["runtime_uptake_kpi"]["live_auto_apply_ready_count"] == 2
     assert report["runtime_uptake_kpi"]["preopen_selected_count"] == 2

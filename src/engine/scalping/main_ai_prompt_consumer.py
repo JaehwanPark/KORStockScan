@@ -377,8 +377,7 @@ def _entry_base_paths(
             row.update(
                 _blocked(
                     reason=str(
-                        batch_cohort.get("error_code")
-                        or "entry_batch_cohort_failed"
+                        batch_cohort.get("error_code") or "entry_batch_cohort_failed"
                     ),
                     owner="AIEntrySetupPairedReplayBatch",
                     acceptance_test=(
@@ -652,14 +651,6 @@ def _holding_base_paths(
     return paths, request_index
 
 
-
-
-
-
-
-
-
-
 def _render_markdown(report: Mapping[str, Any]) -> str:
     paths = report.get("request_paths") or {}
     factorial = paths.get("optional_micro_enriched_2x2") or {}
@@ -895,38 +886,54 @@ def build_report(target_date: str, *, write: bool = False) -> dict[str, Any]:
     if parsed_date < optimizer.CLEAN_BASELINE_DATE:
         raise ValueError("target_date_before_clean_tuning_baseline")
 
-    reversal_path = quality.DATA_DIR / 'report/continuous_reversal' / target_date / 'auxiliary.json'
+    reversal_path = (
+        quality.DATA_DIR / "report/continuous_reversal" / target_date / "auxiliary.json"
+    )
     if reversal_path.exists() or reversal_path.is_symlink():
         from src.engine.scalping.continuous_reversal_policy import direct_handoff
         from src.engine.scalping import mechanistic_entry_runtime_policy as native
+
         handoff = direct_handoff(quality.DATA_DIR, target_date)
-        bundle = native.load(data_root=quality.DATA_DIR, target_date=handoff['effective_date'])
-        body = dict(schema=SCHEMA, target_date=target_date,
-                    generated_at=datetime.now(ZoneInfo('Asia/Seoul')).isoformat(),
-                    status='ready_continuous_reversal_handoff', compact_auxiliary=handoff,
-                    policy_cells=bundle['continuous_reversal']['auxiliary_cells'],
-                    unclassified_request_path_count=None, entry_followup_terminal_ready=False,
-                    entry_followup_applicability='not_applicable_prior_submitted_cohort',
-                    actual_pid_consumed=False,
-                    performance_evidence=dict(profit_improvement_demonstrated=False,
-                        future_profit_improving_output_likelihood='not_assessed_cumulative_winrate_research_only'),
-                    **SOURCE_ONLY_CONTRACT)
-        body.update(metric_role='cumulative_winrate_research_consumer', sample_floor=None,
-                    primary_decision_metric='actual_raw_PASS_win_fraction')
-        report = {**body, 'artifact_content_sha256': optimizer._canonical_sha256(body)}
+        bundle = native.load(
+            data_root=quality.DATA_DIR, target_date=handoff["effective_date"]
+        )
+        body = dict(
+            schema=SCHEMA,
+            target_date=target_date,
+            generated_at=datetime.now(ZoneInfo("Asia/Seoul")).isoformat(),
+            status="ready_continuous_reversal_handoff",
+            compact_auxiliary=handoff,
+            policy_cells=bundle["continuous_reversal"]["auxiliary_cells"],
+            unclassified_request_path_count=None,
+            entry_followup_terminal_ready=False,
+            entry_followup_applicability="not_applicable_prior_submitted_cohort",
+            actual_pid_consumed=False,
+            performance_evidence=dict(
+                profit_improvement_demonstrated=False,
+                future_profit_improving_output_likelihood="not_assessed_cumulative_winrate_research_only",
+            ),
+            **SOURCE_ONLY_CONTRACT,
+        )
+        body.update(
+            metric_role="cumulative_winrate_research_consumer",
+            sample_floor=None,
+            primary_decision_metric="actual_raw_PASS_win_fraction",
+        )
+        report = {**body, "artifact_content_sha256": optimizer._canonical_sha256(body)}
         if write:
             json_path, markdown_path = report_paths(target_date)
             _atomic_write_json(json_path, report)
             markdown_path.parent.mkdir(parents=True, exist_ok=True)
             markdown_path.write_text(
-                '# Main AI continuous reversal consumer\n\n'
-                f'- Source date: `{target_date}`\n'
+                "# Main AI continuous reversal consumer\n\n"
+                f"- Source date: `{target_date}`\n"
                 f'- Effective date: `{handoff["effective_date"]}`\n'
                 f'- Policy bundle: `{handoff["policy_bundle_sha256"]}`\n'
-                '- Machine cells: `12`; auxiliary cells: `12`\n'
-                '- Selection: cumulative raw PASS win fraction\n'
-                '- Provider call, runtime activation, orders and PID consumption: `false`\n',
-                encoding='utf-8')
+                "- Machine cells: `12`; auxiliary cells: `12`\n"
+                "- Selection: cumulative raw PASS win fraction\n"
+                "- Provider call, runtime activation, orders and PID consumption: `false`\n",
+                encoding="utf-8",
+            )
         return report
 
     optimizer_path, _ = optimizer.report_paths(target_date)
@@ -1000,11 +1007,14 @@ def build_report(target_date: str, *, write: bool = False) -> dict[str, Any]:
         else {}
     )
     compact_contract_connected = bool(
-        compact_economic.get("schema") in {"compact_auxiliary_economic_selection_v2", "compact_auxiliary_router_economic_selection_v3"}
+        compact_economic.get("schema")
+        in {
+            "compact_auxiliary_economic_selection_v2",
+            "compact_auxiliary_router_economic_selection_v3",
+        }
         and compact_selection.get("recommendation_id")
         == "compact_auxiliary_prompt_automatic_successor_v2"
-        and compact_selection.get("contract_version")
-        == compact_economic.get("schema")
+        and compact_selection.get("contract_version") == compact_economic.get("schema")
         and isinstance(compact_source.get("source_manifest_sha256"), str)
         and len(compact_source.get("source_manifest_sha256") or "") == 64
         and compact_selection.get("source_manifest_sha256")
@@ -1014,12 +1024,19 @@ def build_report(target_date: str, *, write: bool = False) -> dict[str, Any]:
         and compact_economic.get("verdict_x_action_neutral_outcome_counts_sha256")
         == optimizer._canonical_sha256(compact_economic_counts)
     )
-    if compact_contract_connected and compact_economic.get("schema") == "compact_auxiliary_router_economic_selection_v3":
-        from src.engine.scalping.mechanistic_entry_runtime_policy import compact_outcome_counts_valid
+    if (
+        compact_contract_connected
+        and compact_economic.get("schema")
+        == "compact_auxiliary_router_economic_selection_v3"
+    ):
+        from src.engine.scalping.mechanistic_entry_runtime_policy import (
+            compact_outcome_counts_valid,
+        )
 
         compact_contract_connected = bool(
             compact_outcome_counts_valid(compact_economic)
-            and compact_selection.get("economic_direction_rule") == "cost_weighted_nonentry_router_feedback_v2"
+            and compact_selection.get("economic_direction_rule")
+            == "cost_weighted_nonentry_router_feedback_v2"
         )
     if compact_contract_connected and optimizer_report.get(
         "compact_auxiliary_evaluation"
@@ -1229,10 +1246,17 @@ def build_report(target_date: str, *, write: bool = False) -> dict[str, Any]:
         },
         **SOURCE_ONLY_CONTRACT,
     }
-    reversal_path=quality.DATA_DIR/'report'/'continuous_reversal'/target_date/'auxiliary.json'
+    reversal_path = (
+        quality.DATA_DIR
+        / "report"
+        / "continuous_reversal"
+        / target_date
+        / "auxiliary.json"
+    )
     if reversal_path.is_file():
         from src.engine.scalping.continuous_reversal_policy import direct_handoff
-        body['compact_auxiliary']=direct_handoff(quality.DATA_DIR,target_date)
+
+        body["compact_auxiliary"] = direct_handoff(quality.DATA_DIR, target_date)
     report = {**body, "artifact_content_sha256": optimizer._canonical_sha256(body)}
     if write:
         json_path, markdown_path = report_paths(target_date)
@@ -1242,7 +1266,9 @@ def build_report(target_date: str, *, write: bool = False) -> dict[str, Any]:
     return report
 
 
-def frozen_compact_policy_source(data_root: Path, bundle: dict, paired: dict, source_day: str) -> dict | None:
+def frozen_compact_policy_source(
+    data_root: Path, bundle: dict, paired: dict, source_day: str
+) -> dict | None:
     """Verify the retained policy source when a closed-date replay is later than PREOPEN."""
     from src.engine.scalping import compact_auxiliary_paired_replay as compact
     from src.engine.scalping import mechanistic_entry_runtime_policy as policy
@@ -1257,23 +1283,31 @@ def frozen_compact_policy_source(data_root: Path, bundle: dict, paired: dict, so
     publication = bundle.get("publication_date")
     try:
         date_contract_valid = (
-            isinstance(target, str) and isinstance(publication, str)
+            isinstance(target, str)
+            and isinstance(publication, str)
             and policy.next_target(publication) == target
-            and datetime.now(compact.KST) >= datetime.fromisoformat(target + "T07:35:00+09:00")
+            and datetime.now(compact.KST)
+            >= datetime.fromisoformat(target + "T07:35:00+09:00")
         )
     except (ValueError, TypeError):
         return None
-    if (not isinstance(source_hash, str) or len(source_hash) != 64
-            or any(char not in "0123456789abcdef" for char in source_hash)
-            or not date_contract_valid
-            or paired.get("evaluation_state") != "blocked_source"
-            or paired.get("status") != "source_contract_blocked"
-            or paired.get("candidate_improvement_proven") is not False
-            or bundle.get("compact_evaluation_source_date") != source_day
-            or source.get("source_date") != source_day
-            or source.get("artifact_content_sha256") != bundle.get("compact_paired_artifact_sha256")
-            or source.get("evaluation_fingerprint") != bundle.get("compact_evaluation_fingerprint")
-            or bundle.get("compact_paired_artifact_sha256") == paired.get("artifact_content_sha256")):
+    if (
+        not isinstance(source_hash, str)
+        or len(source_hash) != 64
+        or any(char not in "0123456789abcdef" for char in source_hash)
+        or not date_contract_valid
+        or paired.get("evaluation_state") != "blocked_source"
+        or paired.get("status") != "source_contract_blocked"
+        or paired.get("candidate_improvement_proven") is not False
+        or bundle.get("compact_evaluation_source_date") != source_day
+        or source.get("source_date") != source_day
+        or source.get("artifact_content_sha256")
+        != bundle.get("compact_paired_artifact_sha256")
+        or source.get("evaluation_fingerprint")
+        != bundle.get("compact_evaluation_fingerprint")
+        or bundle.get("compact_paired_artifact_sha256")
+        == paired.get("artifact_content_sha256")
+    ):
         return None
     path = policy.root(Path(data_root)) / "sources" / f"{source_hash}.json"
     try:
@@ -1282,21 +1316,40 @@ def frozen_compact_policy_source(data_root: Path, bundle: dict, paired: dict, so
         frozen = compact.read(path)
     except OSError:
         return None
-    if (not compact.valid(frozen) or frozen.get("target_date") != source_day
-            or frozen.get("artifact_content_sha256") != source["artifact_content_sha256"]
-            or frozen.get("evaluation_fingerprint") != source["evaluation_fingerprint"]):
+    if (
+        not compact.valid(frozen)
+        or frozen.get("target_date") != source_day
+        or frozen.get("artifact_content_sha256") != source["artifact_content_sha256"]
+        or frozen.get("evaluation_fingerprint") != source["evaluation_fingerprint"]
+    ):
         return None
-    return {"policy_source_mode": "verified_frozen_preopen_source",
-            "policy_source_artifact_sha256": source["artifact_content_sha256"],
-            "policy_source_file_sha256": source_hash}
+    return {
+        "policy_source_mode": "verified_frozen_preopen_source",
+        "policy_source_artifact_sha256": source["artifact_content_sha256"],
+        "policy_source_file_sha256": source_hash,
+    }
 
 
-def verify_compact_handoff(data_root: Path, source_day: str, *, effective_date: str | None = None, publication_date: str | None = None) -> dict:
+def verify_compact_handoff(
+    data_root: Path,
+    source_day: str,
+    *,
+    effective_date: str | None = None,
+    publication_date: str | None = None,
+) -> dict:
     """Verify paired evidence, dated policy, consumer and checklist directly."""
-    if (data_root/'report'/'continuous_reversal'/source_day/'auxiliary.json').is_file():
+    if (
+        data_root / "report" / "continuous_reversal" / source_day / "auxiliary.json"
+    ).is_file():
         from src.engine.scalping.continuous_reversal_policy import scoped_verification
-        return scoped_verification(data_root,source_day,effective_date=effective_date,
-                                   publication_date=publication_date,require_consumer=True)
+
+        return scoped_verification(
+            data_root,
+            source_day,
+            effective_date=effective_date,
+            publication_date=publication_date,
+            require_consumer=True,
+        )
     from src.engine.scalping import compact_auxiliary_paired_replay as compact
     from src.engine.scalping import mechanistic_entry_runtime_policy as policy
 
@@ -1319,14 +1372,15 @@ def verify_compact_handoff(data_root: Path, source_day: str, *, effective_date: 
         issues.append("compact_paired_evaluation_invalid")
     policies = []
     for path in sorted(
-        (data_root / "runtime/mechanistic_entry_policy").glob(
-            "policy_????-??-??.json"
-        )
+        (data_root / "runtime/mechanistic_entry_policy").glob("policy_????-??-??.json")
     ):
         value = compact.read(path)
         if (
             (not effective_date or value.get("target_date") == effective_date)
-            and (not publication_date or value.get("publication_date") == publication_date)
+            and (
+                not publication_date
+                or value.get("publication_date") == publication_date
+            )
             and value.get("compact_evaluation_source_date") == source_day
             and value.get("compact_paired_artifact_sha256")
             == paired.get("artifact_content_sha256")
@@ -1335,16 +1389,27 @@ def verify_compact_handoff(data_root: Path, source_day: str, *, effective_date: 
     frozen_receipt = None
     if len(policies) == 0:
         frozen_policies = []
-        for path in sorted((data_root / "runtime/mechanistic_entry_policy").glob("policy_????-??-??.json")):
+        for path in sorted(
+            (data_root / "runtime/mechanistic_entry_policy").glob(
+                "policy_????-??-??.json"
+            )
+        ):
             value = compact.read(path)
-            if (isinstance(value, dict)
-                    and (not effective_date or value.get("target_date") == effective_date)
-                    and (not publication_date or value.get("publication_date") == publication_date)
-                    and value.get("compact_evaluation_source_date") == source_day):
+            if (
+                isinstance(value, dict)
+                and (not effective_date or value.get("target_date") == effective_date)
+                and (
+                    not publication_date
+                    or value.get("publication_date") == publication_date
+                )
+                and value.get("compact_evaluation_source_date") == source_day
+            ):
                 frozen_policies.append((path, value))
         if len(frozen_policies) == 1:
             candidate_path, candidate_bundle = frozen_policies[0]
-            frozen_receipt = frozen_compact_policy_source(data_root, candidate_bundle, paired, source_day)
+            frozen_receipt = frozen_compact_policy_source(
+                data_root, candidate_bundle, paired, source_day
+            )
             if frozen_receipt is not None:
                 policies = [(candidate_path, candidate_bundle)]
     if len(policies) != 1:
@@ -1353,12 +1418,16 @@ def verify_compact_handoff(data_root: Path, source_day: str, *, effective_date: 
     else:
         policy_path, bundle = policies[0]
         try:
-            if (
-                policy.load(data_root=data_root, target_date=bundle["target_date"])
-                != bundle
-                or (frozen_receipt is None and (
-                    bundle.get("compact_paired_artifact_sha256") != paired.get("artifact_content_sha256")
-                    or bundle.get("compact_evaluation_fingerprint") != paired.get("evaluation_fingerprint")))
+            if policy.load(
+                data_root=data_root, target_date=bundle["target_date"]
+            ) != bundle or (
+                frozen_receipt is None
+                and (
+                    bundle.get("compact_paired_artifact_sha256")
+                    != paired.get("artifact_content_sha256")
+                    or bundle.get("compact_evaluation_fingerprint")
+                    != paired.get("evaluation_fingerprint")
+                )
             ):
                 issues.append("compact_dated_policy_direct_binding_invalid")
         except (OSError, ValueError, KeyError):
@@ -1389,8 +1458,11 @@ def verify_compact_handoff(data_root: Path, source_day: str, *, effective_date: 
         or consumer_report.get("target_date") != publication_day
         or view.get("schema") != "compact_auxiliary_consumer_handoff_v3"
         or any(view.get(key) != value for key, value in expected_view.items())
-        or (frozen_receipt is not None and view.get("selection_disposition")
-            != "incumbent_preserved_after_preopen_recovery")
+        or (
+            frozen_receipt is not None
+            and view.get("selection_disposition")
+            != "incumbent_preserved_after_preopen_recovery"
+        )
         or any(view.get(key) is not value for key, value in compact.AUTHORITY.items())
     ):
         issues.append("compact_direct_consumer_invalid")
@@ -1412,7 +1484,10 @@ def verify_compact_handoff(data_root: Path, source_day: str, *, effective_date: 
     marker = f"<!-- compact_auxiliary_direct_sha256:{compact.digest(view)} -->"
     try:
         text = checklist_path.read_text(encoding="utf-8")
-        if marker not in text or compact.checklist_projection_block(view, consumer_path) not in text:
+        if (
+            marker not in text
+            or compact.checklist_projection_block(view, consumer_path) not in text
+        ):
             issues.append("compact_direct_checklist_projection_invalid")
     except (OSError, KeyError, TypeError):
         issues.append("compact_direct_checklist_projection_invalid")
@@ -1427,6 +1502,7 @@ def verify_compact_handoff(data_root: Path, source_day: str, *, effective_date: 
         "checklist_path": str(checklist_path),
         "whole_native_chain_done_claimed": False,
     }
+
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)

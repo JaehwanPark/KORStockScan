@@ -8,7 +8,9 @@ from src.engine.risk import manual_control_exclusion
 
 @pytest.fixture(autouse=True)
 def _isolate_symbol_owner_policy(monkeypatch, tmp_path):
-    monkeypatch.setenv("KORSTOCKSCAN_ORDER_OWNER_REGISTRY_PATH", str(tmp_path / "registry.jsonl"))
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_ORDER_OWNER_REGISTRY_PATH", str(tmp_path / "registry.jsonl")
+    )
     monkeypatch.setenv(
         "KORSTOCKSCAN_SYMBOL_OWNER_POLICY_FILE",
         str(tmp_path / "missing-symbol-owner-policy.json"),
@@ -1273,8 +1275,6 @@ def test_open_loss_session_resolves_nxt_and_krx_windows(monkeypatch):
         )
         == "KRX_OPEN"
     )
-
-
 
 
 def test_hard_stop_manual_handoff_registers_and_blocks_real_sell(monkeypatch, tmp_path):

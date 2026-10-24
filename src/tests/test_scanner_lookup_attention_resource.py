@@ -394,7 +394,10 @@ def test_marginal_experiment_binds_one_pair_without_promotion_id(
             },
         }
 
-    targets = [target("100000", 1000.0, 1000.0, 0.0), target("200000", 990.0, 1190.0, 0.9)]
+    targets = [
+        target("100000", 1000.0, 1000.0, 0.0),
+        target("200000", 990.0, 1190.0, 0.9),
+    ]
     result = scanner._prepare_lookup_selection_pair(
         targets,
         scan_generation_id="SCANGEN-fixture",
@@ -404,8 +407,16 @@ def test_marginal_experiment_binds_one_pair_without_promotion_id(
     assert [row["Code"] for row in result] == expected_codes
     incoming = next(row for row in targets if row["Code"] == "200000")
     outgoing = next(row for row in targets if row["Code"] == "100000")
-    assert incoming["_LookupSelectionPairEvidence"]["scanner_selection_pair_id"] == outgoing["_LookupSelectionPairEvidence"]["scanner_selection_pair_id"]
-    assert incoming["_LookupSelectionPairEvidence"]["scanner_selection_pair_runtime_effect"] is runtime_effect
+    assert (
+        incoming["_LookupSelectionPairEvidence"]["scanner_selection_pair_id"]
+        == outgoing["_LookupSelectionPairEvidence"]["scanner_selection_pair_id"]
+    )
+    assert (
+        incoming["_LookupSelectionPairEvidence"][
+            "scanner_selection_pair_runtime_effect"
+        ]
+        is runtime_effect
+    )
     assert "scanner_promotion_id" not in incoming["_LookupSelectionPairEvidence"]
 
 
@@ -456,8 +467,11 @@ def test_builder_to_preopen_auto_apply_requires_real_and_marginal_economics(
     observations = [
         {
             "observation_date": row["rec_date"],
-            "recommendation_id": row["recommendation_id"], "scanner_promotion_id": row.get("scanner_promotion_id", "SCANPROM-fixture"),
-            "stock_code": row.get("stock_code", "100000"), "effective_venue": "KRX", "market_session_bucket": "krx_regular",
+            "recommendation_id": row["recommendation_id"],
+            "scanner_promotion_id": row.get("scanner_promotion_id", "SCANPROM-fixture"),
+            "stock_code": row.get("stock_code", "100000"),
+            "effective_venue": "KRX",
+            "market_session_bucket": "krx_regular",
             "lookup_attention_snapshot_score": (
                 0.9 if row["cohort"] == "candidate" else 0.4
             ),
@@ -525,93 +539,166 @@ def test_builder_to_preopen_auto_apply_requires_real_and_marginal_economics(
 
 def integrated_fixture(monkeypatch):
     from src.engine.monitoring import scanner_lookup_attention_tuning as tuning
+
     monkeypatch.setattr(tuning, "load_completed_facts", lambda *args: [])
-    monkeypatch.setattr(tuning, "_latest_symbol_master", lambda *args: (set(), {"status": "pass"}))
+    monkeypatch.setattr(
+        tuning, "_latest_symbol_master", lambda *args: (set(), {"status": "pass"})
+    )
     monkeypatch.setattr(tuning, "_source_quality", lambda *args: {"status": "pass"})
     monkeypatch.setattr(tuning, "_latest_prior_policy", lambda *args: {})
-    monkeypatch.setattr(tuning, "_event_path", lambda *args: pytest.fail("rolling raw scan forbidden"))
+    monkeypatch.setattr(
+        tuning, "_event_path", lambda *args: pytest.fail("rolling raw scan forbidden")
+    )
     return tuning
 
 
 @pytest.mark.parametrize("report_day", ["2026-09-28", "2026-10-01"])
-def test_refresh_rejects_old_learning_and_migration_without_fabricating_ev(monkeypatch, tmp_path, report_day):
+def test_refresh_rejects_old_learning_and_migration_without_fabricating_ev(
+    monkeypatch, tmp_path, report_day
+):
     import json
+
     integrated_fixture(monkeypatch)
     monkeypatch.setattr(policy, "SOURCE_REPORT_DIR", tmp_path)
-    prior = {"contract_version": resource.INTEGRATED_CONTRACT,
-             "target_date": report_day, "evaluation_phase": "postclose_final",
-             "independent_holdout": {"learning_cutoff": "2026-09-28",
-                 "learning_rows": [{"observation_date": "2026-09-28"}],
-                 "learning_outcomes": [{"rec_date": "2026-09-28"}]}}
+    prior = {
+        "contract_version": resource.INTEGRATED_CONTRACT,
+        "target_date": report_day,
+        "evaluation_phase": "postclose_final",
+        "independent_holdout": {
+            "learning_cutoff": "2026-09-28",
+            "learning_rows": [{"observation_date": "2026-09-28"}],
+            "learning_outcomes": [{"rec_date": "2026-09-28"}],
+        },
+    }
     prior["artifact_sha256"] = resource.canonical_sha256(prior)
-    (tmp_path / f"intraday_ws_freshness_monitor_{report_day}.json").write_text(json.dumps({
-        "scanner_unique_funnel": {"economic_cohorts": {"lookup_attention_selection": prior}}}))
+    (tmp_path / f"intraday_ws_freshness_monitor_{report_day}.json").write_text(
+        json.dumps(
+            {
+                "scanner_unique_funnel": {
+                    "economic_cohorts": {"lookup_attention_selection": prior}
+                }
+            }
+        )
+    )
     assert resource.previous_learning_section(date(2026, 10, 23)) is None
     seen = []
     original = resource.selection_policy_status
+
     def evaluate(*args, **kwargs):
         seen.append(args[5])
         return original(*args, **kwargs)
+
     monkeypatch.setattr(resource, "selection_policy_status", evaluate)
-    result = resource.integrated_selection_evaluation(date(2026, 10, 23), {}, predecessor=prior,
-        migration={"resource_pair_rows": ready_resource_rows()})
+    result = resource.integrated_selection_evaluation(
+        date(2026, 10, 23),
+        {},
+        predecessor=prior,
+        migration={"resource_pair_rows": ready_resource_rows()},
+    )
     assert not (seen[0] or {}).get("independent_holdout", {}).get("learning_cutoff")
     assert result["primary_economics"]["paired_delta_ev_pct"] is None
     assert result["status"] != "live_auto_apply_ready"
 
 
-@pytest.mark.parametrize("old_field", [None, "learning_rows", "learning_outcomes", "learning_inputs"])
-def test_previous_learning_checks_source_dates_inside_newer_report(monkeypatch, tmp_path, old_field):
+@pytest.mark.parametrize(
+    "old_field", [None, "learning_rows", "learning_outcomes", "learning_inputs"]
+)
+def test_previous_learning_checks_source_dates_inside_newer_report(
+    monkeypatch, tmp_path, old_field
+):
     import json
+
     monkeypatch.setattr(policy, "SOURCE_REPORT_DIR", tmp_path)
-    proof = {"learning_cutoff": "2026-10-01",
-             "learning_rows": [{"observation_date": "2026-09-29"}],
-             "learning_outcomes": [{"rec_date": "2026-09-29"}],
-             "learning_inputs": [{"row": {"source_date": "2026-09-29"}}]}
+    proof = {
+        "learning_cutoff": "2026-10-01",
+        "learning_rows": [{"observation_date": "2026-09-29"}],
+        "learning_outcomes": [{"rec_date": "2026-09-29"}],
+        "learning_inputs": [{"row": {"source_date": "2026-09-29"}}],
+    }
     if old_field:
         row = proof[old_field][0]
-        if old_field == "learning_inputs": row = row["row"]
+        if old_field == "learning_inputs":
+            row = row["row"]
         row[next(iter(row))] = "2026-09-28"
-    section = {"contract_version": resource.INTEGRATED_CONTRACT,
-               "evaluation_phase": "postclose_final", "independent_holdout": proof}
+    section = {
+        "contract_version": resource.INTEGRATED_CONTRACT,
+        "evaluation_phase": "postclose_final",
+        "independent_holdout": proof,
+    }
     section["artifact_sha256"] = resource.canonical_sha256(section)
-    (tmp_path / "intraday_ws_freshness_monitor_2026-10-01.json").write_text(json.dumps({
-        "scanner_unique_funnel": {"economic_cohorts": {"lookup_attention_selection": section}}}))
+    (tmp_path / "intraday_ws_freshness_monitor_2026-10-01.json").write_text(
+        json.dumps(
+            {
+                "scanner_unique_funnel": {
+                    "economic_cohorts": {"lookup_attention_selection": section}
+                }
+            }
+        )
+    )
     result = resource.previous_learning_section(date(2026, 10, 23))
     assert result == (None if old_field else section)
 
 
-def test_native_capture_decoder_preserves_full_partial_and_conflicting_mirrors(monkeypatch):
-    from src.tests.test_scanner_lookup_attention_tuning import _observation_event, _receipt_event
+def test_native_capture_decoder_preserves_full_partial_and_conflicting_mirrors(
+    monkeypatch,
+):
+    from src.tests.test_scanner_lookup_attention_tuning import (
+        _observation_event,
+        _receipt_event,
+    )
+
     tuning = integrated_fixture(monkeypatch)
     state = {}
     for event in (_observation_event(), _receipt_event(), _receipt_event()):
         resource.capture_native_event(state, event)
     assert len(state["lookup_attention_native_events"]) == 2
     events = list(state["lookup_attention_native_events"].values())
-    observations, lineage = tuning.collect_lineage(date(2026, 9, 2), events_by_date={"2026-09-02": events})
+    observations, lineage = tuning.collect_lineage(
+        date(2026, 9, 2), events_by_date={"2026-09-02": events}
+    )
     assert observations[0]["fill_class"] == "full_fill"
     conflict = _observation_event()
     conflict["fields"]["lookup_attention_snapshot_score"] = 0.1
     resource.capture_native_event(state, conflict)
-    observations, lineage = tuning.collect_lineage(date(2026, 9, 2), events_by_date={"2026-09-02": list(state["lookup_attention_native_events"].values())})
+    observations, lineage = tuning.collect_lineage(
+        date(2026, 9, 2),
+        events_by_date={
+            "2026-09-02": list(state["lookup_attention_native_events"].values())
+        },
+    )
     assert observations == []
     assert lineage["invalid_observation_count"] == 1
 
 
-def test_positive_snapshot_and_completed_cohorts_never_replace_executable_portfolio_ev(monkeypatch, tmp_path):
+def test_positive_snapshot_and_completed_cohorts_never_replace_executable_portfolio_ev(
+    monkeypatch, tmp_path
+):
     tuning = integrated_fixture(monkeypatch)
     from src.tests.test_scanner_lookup_attention_tuning import _passing_rows
-    monkeypatch.setattr(tuning, "join_completed_outcomes", lambda *args, **kwargs: (_passing_rows(date(2026, 9, 2)), {}))
-    section = resource.integrated_selection_evaluation(date(2026, 9, 17), {}, migration={"resource_pair_rows": ready_resource_rows()})
+
+    monkeypatch.setattr(
+        tuning,
+        "join_completed_outcomes",
+        lambda *args, **kwargs: (_passing_rows(date(2026, 9, 2)), {}),
+    )
+    section = resource.integrated_selection_evaluation(
+        date(2026, 9, 17), {}, migration={"resource_pair_rows": ready_resource_rows()}
+    )
     assert section["snapshot_proxy"]["diagnostic_snapshot_gate_pass"]
     assert section["actual_completed"]["book"]["candidate_control_ev_uplift_pct"] > 0
     assert section["primary_economics"]["paired_delta_ev_pct"] is None
-    assert section["selection_opportunity_economics"]["selection_opportunity_ev_pct"] > 0
+    assert (
+        section["selection_opportunity_economics"]["selection_opportunity_ev_pct"] > 0
+    )
     assert section["selection_opportunity_economics"]["daily_net_profit_krw"] is None
     assert section["status"] == "source_gap"
-    report = {"target_date": "2026-09-17", "evaluation_phase": "postclose_final",
-              "scanner_unique_funnel": {"economic_cohorts": {"lookup_attention_selection": section}}}
+    report = {
+        "target_date": "2026-09-17",
+        "evaluation_phase": "postclose_final",
+        "scanner_unique_funnel": {
+            "economic_cohorts": {"lookup_attention_selection": section}
+        },
+    }
     policies = tmp_path / "policies"
     reports = tmp_path / "reports"
     reports.mkdir()
@@ -619,7 +706,9 @@ def test_positive_snapshot_and_completed_cohorts_never_replace_executable_portfo
         __import__("json").dumps(report)
     )
     payload = policy.publish_integrated_policy(report, policy_dir=policies)
-    assert not resource.validate_integrated_selection(section, payload, target=date(2026, 9, 17))
+    assert not resource.validate_integrated_selection(
+        section, payload, target=date(2026, 9, 17)
+    )
     receipt = policy.freeze_preopen_policy(
         "2026-09-18",
         write=True,
@@ -629,160 +718,301 @@ def test_positive_snapshot_and_completed_cohorts_never_replace_executable_portfo
         applied_dir=tmp_path / "applied",
     )
     assert not receipt["active"]
-    loaded = policy.load_active_policy(
-        "2026-09-18", applied_dir=tmp_path / "applied"
-    )
+    loaded = policy.load_active_policy("2026-09-18", applied_dir=tmp_path / "applied")
     assert not loaded["active"]
     assert policy.bounded_bonus(0.9, loaded)["bonus_points"] == 0.0
     fabricated = {**payload, "status": "live_auto_apply_ready"}
-    fabricated["artifact_sha256"] = policy.canonical_sha256({k:v for k,v in fabricated.items() if k != "artifact_sha256"})
-    assert "integrated_disposition_invalid" in resource.validate_integrated_selection(section, fabricated, target=date(2026, 9, 17))
+    fabricated["artifact_sha256"] = policy.canonical_sha256(
+        {k: v for k, v in fabricated.items() if k != "artifact_sha256"}
+    )
+    assert "integrated_disposition_invalid" in resource.validate_integrated_selection(
+        section, fabricated, target=date(2026, 9, 17)
+    )
 
 
-def test_integrated_zero_policy_next_open_source_dates_cache_and_preopen_window(monkeypatch, tmp_path):
+def test_integrated_zero_policy_next_open_source_dates_cache_and_preopen_window(
+    monkeypatch, tmp_path
+):
     import json
+
     integrated_fixture(monkeypatch)
     section = resource.integrated_selection_evaluation(date(2026, 9, 17), {})
-    report = {"target_date": "2026-09-17", "evaluation_phase": "postclose_final",
-              "scanner_unique_funnel": {"economic_cohorts": {"lookup_attention_selection": section}}}
+    report = {
+        "target_date": "2026-09-17",
+        "evaluation_phase": "postclose_final",
+        "scanner_unique_funnel": {
+            "economic_cohorts": {"lookup_attention_selection": section}
+        },
+    }
     reports = tmp_path / "reports"
     policies = tmp_path / "policies"
     reports.mkdir()
     source_path = reports / "intraday_ws_freshness_monitor_2026-09-17.json"
     source_path.write_text(json.dumps(report))
-    payload = policy.publish_integrated_policy(report, publication_date="2026-09-18", effective_date="2026-09-21", policy_dir=policies)
+    payload = policy.publish_integrated_policy(
+        report,
+        publication_date="2026-09-18",
+        effective_date="2026-09-21",
+        policy_dir=policies,
+    )
     assert payload["source_evaluation_date"] == "2026-09-17"
-    candidate = policy.load_candidate_policy("2026-09-21", policy_dir=policies, report_dir=reports)
+    candidate = policy.load_candidate_policy(
+        "2026-09-21", policy_dir=policies, report_dir=reports
+    )
     assert candidate["reason"] == "prior_policy_not_live_auto_apply_ready"
     # Cache invalidates on the actual observation source, not publication date.
-    report["scanner_unique_funnel"]["economic_cohorts"]["lookup_attention_selection"]["primary_economics"]["paired_delta_ev_pct"] = 100
+    report["scanner_unique_funnel"]["economic_cohorts"]["lookup_attention_selection"][
+        "primary_economics"
+    ]["paired_delta_ev_pct"] = 100
     source_path.write_text(json.dumps(report))
-    assert policy.load_candidate_policy("2026-09-21", policy_dir=policies, report_dir=reports)["reason"] == "prior_policy_contract_invalid"
+    assert (
+        policy.load_candidate_policy(
+            "2026-09-21", policy_dir=policies, report_dir=reports
+        )["reason"]
+        == "prior_policy_contract_invalid"
+    )
     with pytest.raises(ValueError, match="outside_target_date_window"):
-        policy.freeze_preopen_policy("2026-09-21", write=True,
+        policy.freeze_preopen_policy(
+            "2026-09-21",
+            write=True,
             now=datetime(2026, 9, 18, 8, tzinfo=ZoneInfo("Asia/Seoul")),
-            policy_dir=policies, report_dir=reports, applied_dir=tmp_path / "applied")
+            policy_dir=policies,
+            report_dir=reports,
+            applied_dir=tmp_path / "applied",
+        )
 
 
 def test_identical_final_input_reuses_result_and_cost_revision_invalidates(monkeypatch):
     tuning = integrated_fixture(monkeypatch)
     section = resource.integrated_selection_evaluation(date(2026, 9, 17), {})
-    monkeypatch.setattr(tuning, "_resource_allocation_pair_book", lambda *args, **kwargs: pytest.fail("unchanged input re-evaluated"))
-    assert resource.integrated_selection_evaluation(date(2026, 9, 17), {}, predecessor=section) is section
+    monkeypatch.setattr(
+        tuning,
+        "_resource_allocation_pair_book",
+        lambda *args, **kwargs: pytest.fail("unchanged input re-evaluated"),
+    )
+    assert (
+        resource.integrated_selection_evaluation(
+            date(2026, 9, 17), {}, predecessor=section
+        )
+        is section
+    )
 
 
-def test_native_validator_uses_section_and_policy_without_daily_copy(monkeypatch, tmp_path):
+def test_native_validator_uses_section_and_policy_without_daily_copy(
+    monkeypatch, tmp_path
+):
     import json
+
     integrated_fixture(monkeypatch)
     root = tmp_path / "data" / "report"
     root.mkdir(parents=True)
     section = resource.integrated_selection_evaluation(date(2026, 9, 17), {})
-    report = {"target_date": "2026-09-17", "evaluation_phase": "intraday",
-              "scanner_unique_funnel": {"economic_cohorts": {"lookup_attention_selection": section}}}
+    report = {
+        "target_date": "2026-09-17",
+        "evaluation_phase": "intraday",
+        "scanner_unique_funnel": {
+            "economic_cohorts": {"lookup_attention_selection": section}
+        },
+    }
     monitor = root / "intraday_ws_freshness_monitor"
     monitor.mkdir()
-    (monitor / "intraday_ws_freshness_monitor_2026-09-17.json").write_text(json.dumps(report))
-    payload = policy.publish_integrated_policy(report, policy_dir=root.parent / "threshold_cycle" / "scanner_lookup_attention_policy")
-    assert resource.validate_integrated_selection(
-        section, payload, target=date(2026, 9, 17)
-    ) == []
+    (monitor / "intraday_ws_freshness_monitor_2026-09-17.json").write_text(
+        json.dumps(report)
+    )
+    payload = policy.publish_integrated_policy(
+        report,
+        policy_dir=root.parent / "threshold_cycle" / "scanner_lookup_attention_policy",
+    )
+    assert (
+        resource.validate_integrated_selection(
+            section, payload, target=date(2026, 9, 17)
+        )
+        == []
+    )
     payload["artifact_sha256"] = "0" * 64
-    assert "integrated_artifact_hash_mismatch" in resource.validate_integrated_selection(
-        section, payload, target=date(2026, 9, 17)
+    assert (
+        "integrated_artifact_hash_mismatch"
+        in resource.validate_integrated_selection(
+            section, payload, target=date(2026, 9, 17)
+        )
     )
 
 
-
-def test_production_native_decoder_has_no_dependency_on_retired_reports(monkeypatch, tmp_path):
+def test_production_native_decoder_has_no_dependency_on_retired_reports(
+    monkeypatch, tmp_path
+):
     from src.tests.test_scanner_lookup_attention_tuning import _observation_event
+
     tuning = integrated_fixture(monkeypatch)
     monkeypatch.setattr(tuning, "PREOPEN_DIR", tmp_path / "applied")
-    monkeypatch.setattr(tuning, "_latest_prior_policy", lambda *args: pytest.fail("retired campaign read"))
+    monkeypatch.setattr(
+        tuning,
+        "_latest_prior_policy",
+        lambda *args: pytest.fail("retired campaign read"),
+    )
     original = tuning._load_json
+
     def no_retired_report(path):
         assert "scanner_lookup_attention_tuning_" not in str(path)
         return original(path)
+
     monkeypatch.setattr(tuning, "_load_json", no_retired_report)
-    section = resource.integrated_selection_evaluation(date(2026, 9, 2), {"2026-09-02": [_observation_event()]})
+    section = resource.integrated_selection_evaluation(
+        date(2026, 9, 2), {"2026-09-02": [_observation_event()]}
+    )
     assert section["lineage"]["valid_observation_count"] == 1
     assert section["lineage"]["invalid_runtime_policy_provenance_count"] == 0
     assert section["status"] == "source_gap"
 
 
-
-def test_final_native_resource_export_is_bounded_but_preserves_exact_receipts(monkeypatch):
+def test_final_native_resource_export_is_bounded_but_preserves_exact_receipts(
+    monkeypatch,
+):
     tuning = integrated_fixture(monkeypatch)
     target = date(2026, 9, 17)
     _, lineage = tuning.collect_lineage(target, events_by_date={})
     rows = pair_rows(day=target)
     lineage["_resource_pair_rows"] = rows
-    lineage["resource_capture_diagnostics"] = {target.isoformat(): {"raw_row_count": 58_532}}
-    monkeypatch.setattr(tuning, "collect_lineage", lambda *args, **kwargs: ([], deepcopy(lineage)))
+    lineage["resource_capture_diagnostics"] = {
+        target.isoformat(): {"raw_row_count": 58_532}
+    }
+    monkeypatch.setattr(
+        tuning, "collect_lineage", lambda *args, **kwargs: ([], deepcopy(lineage))
+    )
+
     def event(generation, code="100000"):
-        return {"stage": "scalping_scanner_candidate_pruned", "emitted_date": target.isoformat(),
-                "stock_code": code, "fields": {"scanner_scan_generation_id": generation}}
+        return {
+            "stage": "scalping_scanner_candidate_pruned",
+            "emitted_date": target.isoformat(),
+            "stock_code": code,
+            "fields": {"scanner_scan_generation_id": generation},
+        }
+
     proof = event(rows[0]["scan_generation_id"])
-    receipt = {"stage": "position_rebased_after_fill", "emitted_date": target.isoformat(), "fields": {}}
+    receipt = {
+        "stage": "position_rebased_after_fill",
+        "emitted_date": target.isoformat(),
+        "fields": {},
+    }
     events = [event(f"unused-{index}") for index in range(200)] + [proof, receipt]
-    section = resource.integrated_selection_evaluation(target, {target.isoformat(): events})
+    section = resource.integrated_selection_evaluation(
+        target, {target.isoformat(): events}
+    )
     assert section["native_events"] == [proof, receipt]
-    assert section["lineage"]["resource_capture_diagnostics"][target.isoformat()]["raw_row_count"] == 58_532
+    assert (
+        section["lineage"]["resource_capture_diagnostics"][target.isoformat()][
+            "raw_row_count"
+        ]
+        == 58_532
+    )
     assert section["snapshot_proxy"]["pairs"] == book(rows)["pairs"]
 
 
-
-@pytest.mark.parametrize("field", ["baseline_budget_ev_pct", "candidate_net_pnl_krw", "tail", "model_error"])
-def test_source_gap_policy_rejects_self_hashed_zero_or_fabricated_primary_metrics(monkeypatch, tmp_path, field):
+@pytest.mark.parametrize(
+    "field", ["baseline_budget_ev_pct", "candidate_net_pnl_krw", "tail", "model_error"]
+)
+def test_source_gap_policy_rejects_self_hashed_zero_or_fabricated_primary_metrics(
+    monkeypatch, tmp_path, field
+):
     integrated_fixture(monkeypatch)
     section = resource.integrated_selection_evaluation(date(2026, 9, 17), {})
     section["primary_economics"][field] = 0
-    section["artifact_sha256"] = policy.canonical_sha256({k:v for k,v in section.items() if k != "artifact_sha256"})
-    report = {"target_date": "2026-09-17", "scanner_unique_funnel": {"economic_cohorts": {"lookup_attention_selection": section}}}
+    section["artifact_sha256"] = policy.canonical_sha256(
+        {k: v for k, v in section.items() if k != "artifact_sha256"}
+    )
+    report = {
+        "target_date": "2026-09-17",
+        "scanner_unique_funnel": {
+            "economic_cohorts": {"lookup_attention_selection": section}
+        },
+    }
     with pytest.raises(ValueError, match="integrated_disposition_invalid"):
         policy.publish_integrated_policy(report, policy_dir=tmp_path)
 
 
-def execution_frame(day, ordinal=0, *, outgoing=.2, incoming=1.):
+def execution_frame(day, ordinal=0, *, outgoing=0.2, incoming=1.0):
     """Existing synthetic owner witnesses; no market or economic acceptance."""
-    from src.tests.test_entry_setup_paired_replay_batch import operating_compact_row, full_compact_proof
+    from src.tests.test_entry_setup_paired_replay_batch import (
+        operating_compact_row,
+        full_compact_proof,
+    )
     from src.engine.scalping import compact_auxiliary_paired_replay as compact
+
     proof = full_compact_proof()
     inputs, rows = {}, []
     source = operating_compact_row(day, ordinal)
-    epoch = datetime.fromisoformat(source["owner_replay"]["seed"]["observed_at"]).timestamp()
+    epoch = datetime.fromisoformat(
+        source["owner_replay"]["seed"]["observed_at"]
+    ).timestamp()
     for index, rate in enumerate((outgoing, incoming)):
         row = deepcopy(source)
-        row.update(stock_code=f"00593{index}", incumbent_verdict="PASS",
+        row.update(
+            stock_code=f"00593{index}",
+            incumbent_verdict="PASS",
             scanner_promotion_id=source["scanner_promotion_id"] + f"-{index}",
             evaluation_attempt_id=source["evaluation_attempt_id"] + f"-{index}",
-            natural_contract_evidence=dict(model="gpt-5.4-nano",provider_actual="openai",
-                semantic_validation_status="pass",decision_quality_contract_status="pass"))
+            natural_contract_evidence=dict(
+                model="gpt-5.4-nano",
+                provider_actual="openai",
+                semantic_validation_status="pass",
+                decision_quality_contract_status="pass",
+            ),
+        )
         replay = row["owner_replay"]
         seed = replay["seed"]
-        seed.update({k: row[k] for k in ("stock_code", "scanner_promotion_id", "evaluation_attempt_id")})
-        context = seed['operating_contract']
-        decision = context['entry_decision_version_receipt']
-        decision['evaluation_attempt_id'] = seed['evaluation_attempt_id']
-        decision['sha256'] = compact.digest({k:v for k,v in decision.items() if k != 'sha256'})
-        context['sha256'] = compact.digest({k:v for k,v in context.items() if k != 'sha256'})
-        seed["seed_sha256"] = compact.digest({k:v for k,v in seed.items() if k != "seed_sha256"})
+        seed.update(
+            {
+                k: row[k]
+                for k in ("stock_code", "scanner_promotion_id", "evaluation_attempt_id")
+            }
+        )
+        context = seed["operating_contract"]
+        decision = context["entry_decision_version_receipt"]
+        decision["evaluation_attempt_id"] = seed["evaluation_attempt_id"]
+        decision["sha256"] = compact.digest(
+            {k: v for k, v in decision.items() if k != "sha256"}
+        )
+        context["sha256"] = compact.digest(
+            {k: v for k, v in context.items() if k != "sha256"}
+        )
+        seed["seed_sha256"] = compact.digest(
+            {k: v for k, v in seed.items() if k != "seed_sha256"}
+        )
         for arm in replay["operating_arms"].values():
-            arm.update(net_return_pct=rate, stress_net_return_pct=rate-.05,
-                contract_sha256=context['sha256'],
-                net_pnl_krw=rate / 100 * arm["budget_krw"],stress_net_pnl_krw=(rate-.05) / 100 * arm["budget_krw"])
-            arm["sha256"] = compact.digest({k:v for k,v in arm.items() if k != "sha256"})
-        replay["replay_sha256"] = compact.digest({k:v for k,v in replay.items() if k != "replay_sha256"})
+            arm.update(
+                net_return_pct=rate,
+                stress_net_return_pct=rate - 0.05,
+                contract_sha256=context["sha256"],
+                net_pnl_krw=rate / 100 * arm["budget_krw"],
+                stress_net_pnl_krw=(rate - 0.05) / 100 * arm["budget_krw"],
+            )
+            arm["sha256"] = compact.digest(
+                {k: v for k, v in arm.items() if k != "sha256"}
+            )
+        replay["replay_sha256"] = compact.digest(
+            {k: v for k, v in replay.items() if k != "replay_sha256"}
+        )
         assert compact.owner_operating_arm(replay, row)
-        assert compact.owner_model_scope_valid(proof["owner_execution_model_validation"], row)
+        assert compact.owner_model_scope_valid(
+            proof["owner_execution_model_validation"], row
+        )
         native = pair_rows(date.fromisoformat(day))[:2][index]
-        native.update(stock_code=row["stock_code"],scanner_promotion_id=row["scanner_promotion_id"],
-            observation_date=day,scan_generation_id=f"SCANGEN-{day}-{ordinal}",
-            observed_epoch=epoch,price_observed_epoch=epoch-1,
-            partition_codes_sha256=policy.canonical_sha256(["005930", "005931"]))
+        native.update(
+            stock_code=row["stock_code"],
+            scanner_promotion_id=row["scanner_promotion_id"],
+            observation_date=day,
+            scan_generation_id=f"SCANGEN-{day}-{ordinal}",
+            observed_epoch=epoch,
+            price_observed_epoch=epoch - 1,
+            partition_codes_sha256=policy.canonical_sha256(["005930", "005931"]),
+        )
         rows.append(native)
-        inputs[(day,row["scanner_promotion_id"],row["stock_code"])] = dict(row=row,
-            model=proof["owner_execution_model_validation"],source_projection_sha256="a"*64,
-            pricing=proof["runtime_inference_cost_receipt"])
+        inputs[(day, row["scanner_promotion_id"], row["stock_code"])] = dict(
+            row=row,
+            model=proof["owner_execution_model_validation"],
+            source_projection_sha256="a" * 64,
+            pricing=proof["runtime_inference_cost_receipt"],
+        )
     return rows, inputs
 
 
@@ -799,96 +1029,177 @@ def test_supported_small_sample_measures_same_frozen_budget_and_holds(monkeypatc
     integrated_fixture(monkeypatch)
     rows, inputs = execution_frame("2026-09-17")
     monkeypatch.setattr(resource, "execution_inputs", lambda *args: inputs)
-    section = resource.integrated_selection_evaluation(date(2026,9,17),{},migration={"resource_pair_rows":rows})
+    section = resource.integrated_selection_evaluation(
+        date(2026, 9, 17), {}, migration={"resource_pair_rows": rows}
+    )
     assert section["status"] == "hold_sample"
     book = section["primary_economics"]
-    assert book["baseline_budget_ev_pct"] == pytest.approx(.2)
-    assert book["candidate_budget_ev_pct"] == pytest.approx(1.)
-    assert book["paired_delta_ev_pct"] == pytest.approx(.8)
-    assert book["daily_net_delta_krw"] == {"2026-09-17":pytest.approx(960.)}
-    assert book["exposure"]["budget_krw"] == 120000.
+    assert book["baseline_budget_ev_pct"] == pytest.approx(0.2)
+    assert book["candidate_budget_ev_pct"] == pytest.approx(1.0)
+    assert book["paired_delta_ev_pct"] == pytest.approx(0.8)
+    assert book["daily_net_delta_krw"] == {"2026-09-17": pytest.approx(960.0)}
+    assert book["exposure"]["budget_krw"] == 120000.0
     assert book["counterfactual_not_realized_pnl"] is True
     assert all(p["filter_role"] == "scanner_selection_not_ai" for p in book["pairs"])
 
 
 def test_no_effect_skips_execution_and_missing_changed_arm_stays_null():
     rows, inputs = execution_frame("2026-09-17")
-    broken = resource.selection_execution_book(rows, {next(iter(inputs)):next(iter(inputs.values()))})
+    broken = resource.selection_execution_book(
+        rows, {next(iter(inputs)): next(iter(inputs.values()))}
+    )
     assert broken["status"] == "unsupported_scope"
     assert broken["paired_delta_ev_pct"] is None
     for row in rows:
-        row.update(candidate_priority_score=row["base_priority_score"],counterfactual_bonus_points=0.,lookup_attention_snapshot_score=0.)
-    same = resource.selection_execution_book(rows,{})
-    assert same["status"] == "no_effect" and same["paired_delta_ev_pct"] == 0.
+        row.update(
+            candidate_priority_score=row["base_priority_score"],
+            counterfactual_bonus_points=0.0,
+            lookup_attention_snapshot_score=0.0,
+        )
+    same = resource.selection_execution_book(rows, {})
+    assert same["status"] == "no_effect" and same["paired_delta_ev_pct"] == 0.0
     assert same["baseline_budget_ev_pct"] is None
 
 
-def test_ready_native_proof_publication_source_date_preopen_and_scanner_bonus(monkeypatch,tmp_path):
+def test_ready_native_proof_publication_source_date_preopen_and_scanner_bonus(
+    monkeypatch, tmp_path
+):
     import json
+
     # Archived promotion fixture predates the configured forward refresh.
     from src.engine.automation import source_quality_clean_baseline as baseline
-    monkeypatch.setattr(baseline, "_load_policy_file", lambda: {"policy_refresh_start_date": "2026-09-30"})
+
+    monkeypatch.setattr(
+        baseline,
+        "_load_policy_file",
+        lambda: {"policy_refresh_start_date": "2026-09-30"},
+    )
+
     class FrozenDatetime(datetime):
         @classmethod
         def now(cls, tz=None):
-            return cls(2026,9,18,21,0,tzinfo=ZoneInfo('Asia/Seoul')).astimezone(tz)
-    monkeypatch.setattr(resource,'datetime',FrozenDatetime)
+            return cls(2026, 9, 18, 21, 0, tzinfo=ZoneInfo("Asia/Seoul")).astimezone(tz)
+
+    monkeypatch.setattr(resource, "datetime", FrozenDatetime)
     from src.tests.test_scanner_lookup_attention_tuning import _passing_rows
+
     tuning = integrated_fixture(monkeypatch)
-    rows, inputs = execution_population([("2026-09-14",0),("2026-09-14",2),("2026-09-16",0)])
-    monkeypatch.setattr(resource,"execution_inputs",lambda *args: inputs)
-    outcomes = _passing_rows(date(2026,9,14))
-    monkeypatch.setattr(tuning,"join_completed_outcomes",lambda *args,**kwargs: (outcomes,{}))
-    learning = resource.integrated_selection_evaluation(date(2026,9,18),{},migration={"resource_pair_rows":rows})
+    rows, inputs = execution_population(
+        [("2026-09-14", 0), ("2026-09-14", 2), ("2026-09-16", 0)]
+    )
+    monkeypatch.setattr(resource, "execution_inputs", lambda *args: inputs)
+    outcomes = _passing_rows(date(2026, 9, 14))
+    monkeypatch.setattr(
+        tuning, "join_completed_outcomes", lambda *args, **kwargs: (outcomes, {})
+    )
+    learning = resource.integrated_selection_evaluation(
+        date(2026, 9, 18), {}, migration={"resource_pair_rows": rows}
+    )
     assert learning["status"] == "forward_holdout_armed"
-    assert learning["independent_holdout"]["learning_cutoff"] == '2026-09-18'
-    assert resource.integrated_selection_evaluation(date(2026,9,18),{},predecessor=learning,
-        migration={"resource_pair_rows":rows}) is learning
-    future, values = execution_population([("2026-09-21",0),("2026-09-21",2),("2026-09-22",0)])
+    assert learning["independent_holdout"]["learning_cutoff"] == "2026-09-18"
+    assert (
+        resource.integrated_selection_evaluation(
+            date(2026, 9, 18),
+            {},
+            predecessor=learning,
+            migration={"resource_pair_rows": rows},
+        )
+        is learning
+    )
+    future, values = execution_population(
+        [("2026-09-21", 0), ("2026-09-21", 2), ("2026-09-22", 0)]
+    )
     rows += future
     inputs.update(values)
-    outcomes += _passing_rows(date(2026,9,21),id_start=10000)
-    ready = resource.integrated_selection_evaluation(date(2026,9,29),{},predecessor=learning,migration={"resource_pair_rows":rows})
+    outcomes += _passing_rows(date(2026, 9, 21), id_start=10000)
+    ready = resource.integrated_selection_evaluation(
+        date(2026, 9, 29),
+        {},
+        predecessor=learning,
+        migration={"resource_pair_rows": rows},
+    )
     assert ready["status"] == "live_auto_apply_ready"
-    report = {"target_date":"2026-09-29","evaluation_phase":"intraday",
-        "scanner_unique_funnel":{"economic_cohorts":{"lookup_attention_selection":ready}}}
-    published = policy.publish_integrated_policy(report,publication_date="2026-09-30",policy_date="2026-09-30",
-        effective_date="2026-10-01",policy_dir=tmp_path / "policies")
-    assert resource.validate_integrated_selection(ready,published,target=date(2026,9,29)) == []
+    report = {
+        "target_date": "2026-09-29",
+        "evaluation_phase": "intraday",
+        "scanner_unique_funnel": {
+            "economic_cohorts": {"lookup_attention_selection": ready}
+        },
+    }
+    published = policy.publish_integrated_policy(
+        report,
+        publication_date="2026-09-30",
+        policy_date="2026-09-30",
+        effective_date="2026-10-01",
+        policy_dir=tmp_path / "policies",
+    )
+    assert (
+        resource.validate_integrated_selection(
+            ready, published, target=date(2026, 9, 29)
+        )
+        == []
+    )
     reports = tmp_path / "reports"
     reports.mkdir()
     source = reports / "intraday_ws_freshness_monitor_2026-09-29.json"
     source.write_text(json.dumps(report))
-    receipt = policy.freeze_preopen_policy("2026-10-01",write=True,
-        now=datetime(2026,10,1,8,tzinfo=ZoneInfo("Asia/Seoul")),policy_dir=tmp_path / "policies",
-        report_dir=reports,applied_dir=tmp_path / "applied")
+    receipt = policy.freeze_preopen_policy(
+        "2026-10-01",
+        write=True,
+        now=datetime(2026, 10, 1, 8, tzinfo=ZoneInfo("Asia/Seoul")),
+        policy_dir=tmp_path / "policies",
+        report_dir=reports,
+        applied_dir=tmp_path / "applied",
+    )
     assert receipt["active"]
-    loaded = policy.load_active_policy("2026-10-01",applied_dir=tmp_path / "applied")
-    assert policy.bounded_bonus(.9,loaded)["bonus_points"] == 150.
+    loaded = policy.load_active_policy("2026-10-01", applied_dir=tmp_path / "applied")
+    assert policy.bounded_bonus(0.9, loaded)["bonus_points"] == 150.0
     source.write_text("{}")
     policy.clear_policy_cache()
-    assert policy.load_active_policy("2026-10-01",applied_dir=tmp_path / "applied") == loaded
+    assert (
+        policy.load_active_policy("2026-10-01", applied_dir=tmp_path / "applied")
+        == loaded
+    )
     forged = deepcopy(receipt)
-    forged["source_report"]["scanner_unique_funnel"]["economic_cohorts"]["lookup_attention_selection"]["primary_economics"]["paired_delta_ev_pct"] = 100.
-    section = forged["source_report"]["scanner_unique_funnel"]["economic_cohorts"]["lookup_attention_selection"]
-    section["artifact_sha256"] = policy.canonical_sha256({k:v for k,v in section.items() if k != "artifact_sha256"})
-    forged["source_policy"]["source_report_artifact_sha256"] = section["artifact_sha256"]
-    forged["source_policy"]["artifact_sha256"] = policy.canonical_sha256({k:v for k,v in forged["source_policy"].items() if k != "artifact_sha256"})
-    forged["artifact_sha256"] = policy.canonical_sha256({k:v for k,v in forged.items() if k != "artifact_sha256"})
-    assert not policy.validate_preopen_receipt(forged,date(2026,10,1))
+    forged["source_report"]["scanner_unique_funnel"]["economic_cohorts"][
+        "lookup_attention_selection"
+    ]["primary_economics"]["paired_delta_ev_pct"] = 100.0
+    section = forged["source_report"]["scanner_unique_funnel"]["economic_cohorts"][
+        "lookup_attention_selection"
+    ]
+    section["artifact_sha256"] = policy.canonical_sha256(
+        {k: v for k, v in section.items() if k != "artifact_sha256"}
+    )
+    forged["source_policy"]["source_report_artifact_sha256"] = section[
+        "artifact_sha256"
+    ]
+    forged["source_policy"]["artifact_sha256"] = policy.canonical_sha256(
+        {k: v for k, v in forged["source_policy"].items() if k != "artifact_sha256"}
+    )
+    forged["artifact_sha256"] = policy.canonical_sha256(
+        {k: v for k, v in forged.items() if k != "artifact_sha256"}
+    )
+    assert not policy.validate_preopen_receipt(forged, date(2026, 10, 1))
 
 
-@pytest.mark.parametrize("defect", ["partial_fill", "natural_contract", "pricing_expiry", "future_model"])
+@pytest.mark.parametrize(
+    "defect", ["partial_fill", "natural_contract", "pricing_expiry", "future_model"]
+)
 def test_execution_preflight_does_not_impute_unsupported_inputs(defect):
     from src.engine.scalping import compact_auxiliary_paired_replay as compact
+
     rows, inputs = execution_frame("2026-09-17")
     value = list(inputs.values())[1]
     if defect == "partial_fill":
         replay = value["row"]["owner_replay"]
         for arm in replay["operating_arms"].values():
             arm["modeled_filled_qty"] -= 1
-            arm["sha256"] = compact.digest({k:v for k,v in arm.items() if k != "sha256"})
-        replay["replay_sha256"] = compact.digest({k:v for k,v in replay.items() if k != "replay_sha256"})
+            arm["sha256"] = compact.digest(
+                {k: v for k, v in arm.items() if k != "sha256"}
+            )
+        replay["replay_sha256"] = compact.digest(
+            {k: v for k, v in replay.items() if k != "replay_sha256"}
+        )
     elif defect == "natural_contract":
         value["row"]["natural_contract_evidence"]["semantic_validation_status"] = "fail"
     elif defect == "pricing_expiry":
@@ -896,7 +1207,9 @@ def test_execution_preflight_does_not_impute_unsupported_inputs(defect):
     else:
         proof = value["model"]["validated_scopes"][0]
         proof["available_after_date"] = "2026-09-17"
-        proof["sha256"] = compact.digest({k:v for k,v in proof.items() if k != "sha256"})
+        proof["sha256"] = compact.digest(
+            {k: v for k, v in proof.items() if k != "sha256"}
+        )
     result = resource.selection_execution_book(rows, inputs)
     assert result["paired_delta_ev_pct"] is None
     assert result["status"] == "source_gap"
@@ -907,12 +1220,15 @@ def test_overlapping_capital_and_incomplete_partition_cannot_promote():
     duplicate = deepcopy(rows)
     for row in duplicate:
         row["scan_generation_id"] += "-overlap"
-    assert "overlapping_owner_capital_allocation_unsupported" in resource.selection_execution_book(rows+duplicate,inputs)["source_gaps"]
+    assert (
+        "overlapping_owner_capital_allocation_unsupported"
+        in resource.selection_execution_book(rows + duplicate, inputs)["source_gaps"]
+    )
     supported = resource.selection_execution_book(rows, inputs)
     broken = deepcopy(rows)
     for index, row in enumerate(broken):
         row["scan_generation_id"] += f"-incomplete-{index}"
-    result = resource.selection_execution_book(rows+broken, inputs)
+    result = resource.selection_execution_book(rows + broken, inputs)
     assert result["status"] == "supported_operating_comparison"
     assert result["paired_delta_ev_pct"] == supported["paired_delta_ev_pct"]
     assert result["complete_coverage"] is False
@@ -921,37 +1237,77 @@ def test_overlapping_capital_and_incomplete_partition_cannot_promote():
 
 def test_prior_model_lookup_uses_independently_valid_proof_for_each_pair():
     from src.engine.scalping import compact_auxiliary_paired_replay as compact
+
     rows, inputs = execution_frame("2026-09-17")
     baseline = resource.selection_execution_book(rows, inputs)
     for value in inputs.values():
         model = value["model"]
         future = deepcopy(model["validated_scopes"][0])
         future["available_after_date"] = "2026-09-17"
-        future["optimistic_net_error_budget_pct"] = 100.
-        future["sha256"] = compact.digest({k:v for k,v in future.items() if k != "sha256"})
-        model["validated_scopes"].insert(0,future)
-    assert resource.selection_execution_book(rows,inputs)["robust_delta_ev_lower_bound_pct"] == baseline["robust_delta_ev_lower_bound_pct"]
+        future["optimistic_net_error_budget_pct"] = 100.0
+        future["sha256"] = compact.digest(
+            {k: v for k, v in future.items() if k != "sha256"}
+        )
+        model["validated_scopes"].insert(0, future)
+    assert (
+        resource.selection_execution_book(rows, inputs)[
+            "robust_delta_ev_lower_bound_pct"
+        ]
+        == baseline["robust_delta_ev_lower_bound_pct"]
+    )
 
 
-def test_late_intraday_writer_preserves_final_economics_and_publication(monkeypatch,tmp_path):
+def test_late_intraday_writer_preserves_final_economics_and_publication(
+    monkeypatch, tmp_path
+):
     import json
     from src.engine.monitoring import intraday_ws_freshness_monitor as monitor
+
     integrated_fixture(monkeypatch)
-    section = resource.integrated_selection_evaluation(date(2026,9,17),{})
-    report = {"target_date":"2026-09-17","evaluation_phase":"intraday", "summary":{"quality_revision":1},
-        "scanner_unique_funnel":{"economic_cohorts":{"lookup_attention_selection":section}}}
-    monkeypatch.setattr(monitor,"REPORT_DIR",tmp_path / "report")
-    monkeypatch.setattr(monitor,"_render_monitor_markdown",lambda *args: "fixture")
+    section = resource.integrated_selection_evaluation(date(2026, 9, 17), {})
+    report = {
+        "target_date": "2026-09-17",
+        "evaluation_phase": "intraday",
+        "summary": {"quality_revision": 1},
+        "scanner_unique_funnel": {
+            "economic_cohorts": {"lookup_attention_selection": section}
+        },
+    }
+    monkeypatch.setattr(monitor, "REPORT_DIR", tmp_path / "report")
+    monkeypatch.setattr(monitor, "_render_monitor_markdown", lambda *args: "fixture")
     publish = policy.publish_integrated_policy
-    monkeypatch.setattr(policy,"publish_integrated_policy",lambda report,**kwargs:publish(report,policy_dir=tmp_path / "policies",**kwargs))
-    monitor.write_report(report,monitor_only=True,publication={"publication_date":"2026-09-19","policy_date":"2026-09-18","effective_date":"2026-09-21"})
+    monkeypatch.setattr(
+        policy,
+        "publish_integrated_policy",
+        lambda report, **kwargs: publish(
+            report, policy_dir=tmp_path / "policies", **kwargs
+        ),
+    )
+    monitor.write_report(
+        report,
+        monitor_only=True,
+        publication={
+            "publication_date": "2026-09-19",
+            "policy_date": "2026-09-18",
+            "effective_date": "2026-09-21",
+        },
+    )
     initial = deepcopy(report["scanner_lookup_attention_publication"])
     late = deepcopy(report)
-    late["scanner_unique_funnel"]["economic_cohorts"]["lookup_attention_selection"] = {"status":"intraday_capture_only"}
+    late["scanner_unique_funnel"]["economic_cohorts"]["lookup_attention_selection"] = {
+        "status": "intraday_capture_only"
+    }
     late["summary"]["quality_revision"] = 2
-    monitor.write_report(late,monitor_only=True)
-    stored = json.loads((tmp_path / "report/intraday_ws_freshness_monitor_2026-09-17.json").read_text())
-    assert stored["scanner_unique_funnel"]["economic_cohorts"]["lookup_attention_selection"] == section
+    monitor.write_report(late, monitor_only=True)
+    stored = json.loads(
+        (tmp_path / "report/intraday_ws_freshness_monitor_2026-09-17.json").read_text()
+    )
+    assert (
+        stored["scanner_unique_funnel"]["economic_cohorts"][
+            "lookup_attention_selection"
+        ]
+        == section
+    )
     assert stored["scanner_lookup_attention_publication"] == initial
     assert stored["summary"]["quality_revision"] == 2
     assert stored["evaluation_phase"] == "intraday"
@@ -960,28 +1316,50 @@ def test_late_intraday_writer_preserves_final_economics_and_publication(monkeypa
 def test_post_apply_requires_exact_immutable_policy_receipt_hash(monkeypatch):
     from src.engine.monitoring.scanner_lookup_attention_tuning import _cohort_book
     from src.tests.test_scanner_lookup_attention_tuning import _passing_rows
-    rows = _passing_rows(date(2026,9,14))
+
+    rows = _passing_rows(date(2026, 9, 14))
     for row in rows:
-        row.update(lookup_attention_weight_runtime_policy_eligible=True,
-            lookup_attention_weight_policy_artifact_sha256="b"*64,
+        row.update(
+            lookup_attention_weight_runtime_policy_eligible=True,
+            lookup_attention_weight_policy_artifact_sha256="b" * 64,
             lookup_attention_weight_policy_version=policy.POLICY_VERSION,
-            lookup_attention_weight_policy_source_date="2026-09-11")
-    monkeypatch.setattr(policy,"load_active_policy",lambda *args: {"active":False})
-    assert resource.post_apply_inputs(date(2026,9,18),rows)[1] == []
-    monkeypatch.setattr(policy,"load_active_policy",lambda *args: dict(active=True,policy_source_date="2026-09-11",
-        policy_artifact_sha256="a"*64,preopen_artifact_sha256="c"*64,policy_version=policy.POLICY_VERSION))
-    assert resource.post_apply_inputs(date(2026,9,18),rows)[1] == []
+            lookup_attention_weight_policy_source_date="2026-09-11",
+        )
+    monkeypatch.setattr(policy, "load_active_policy", lambda *args: {"active": False})
+    assert resource.post_apply_inputs(date(2026, 9, 18), rows)[1] == []
+    monkeypatch.setattr(
+        policy,
+        "load_active_policy",
+        lambda *args: dict(
+            active=True,
+            policy_source_date="2026-09-11",
+            policy_artifact_sha256="a" * 64,
+            preopen_artifact_sha256="c" * 64,
+            policy_version=policy.POLICY_VERSION,
+        ),
+    )
+    assert resource.post_apply_inputs(date(2026, 9, 18), rows)[1] == []
     for row in rows:
-        row["lookup_attention_weight_policy_artifact_sha256"] = "a"*64
-    incumbent, selected, receipts = resource.post_apply_inputs(date(2026,9,18),rows)
+        row["lookup_attention_weight_policy_artifact_sha256"] = "a" * 64
+    incumbent, selected, receipts = resource.post_apply_inputs(date(2026, 9, 18), rows)
     assert incumbent["status"] == "live_auto_apply_ready"
     assert len(selected) == 20 and len(receipts) == 5
-    assert _cohort_book(selected)["all"]["notional_weighted_ev_pct"] == .3
+    assert _cohort_book(selected)["all"]["notional_weighted_ev_pct"] == 0.3
 
-    monkeypatch.setattr(policy,"load_active_policy",lambda *args: dict(active=True,policy_source_date="2026-09-11",
-        policy_artifact_sha256="a"*64,preopen_artifact_sha256="c"*64,policy_version=policy.POLICY_VERSION,
-        experiment_mode=True,experiment_arm="baseline"))
-    incumbent, selected, _ = resource.post_apply_inputs(date(2026,9,18),rows)
+    monkeypatch.setattr(
+        policy,
+        "load_active_policy",
+        lambda *args: dict(
+            active=True,
+            policy_source_date="2026-09-11",
+            policy_artifact_sha256="a" * 64,
+            preopen_artifact_sha256="c" * 64,
+            policy_version=policy.POLICY_VERSION,
+            experiment_mode=True,
+            experiment_arm="baseline",
+        ),
+    )
+    incumbent, selected, _ = resource.post_apply_inputs(date(2026, 9, 18), rows)
     assert incumbent["status"] == "experiment_ready"
     assert len(selected) == 20
 
@@ -989,6 +1367,7 @@ def test_post_apply_requires_exact_immutable_policy_receipt_hash(monkeypatch):
 def test_supported_sor_scope_and_unselected_ai_are_separate_contracts():
     from src.engine.scalping import compact_auxiliary_paired_replay as compact
     from src.engine.scalping import entry_split_order_plan as split
+
     rows, inputs = execution_frame("2026-09-17")
     for value in inputs.values():
         row = value["row"]
@@ -997,23 +1376,37 @@ def test_supported_sor_scope_and_unselected_ai_are_separate_contracts():
         seed = replay["seed"]
         context = seed["operating_contract"]
         context["broker_route"] = "SOR"
-        context["sha256"] = compact.digest({k:v for k,v in context.items() if k != "sha256"})
-        seed["seed_sha256"] = compact.digest({k:v for k,v in seed.items() if k != "seed_sha256"})
+        context["sha256"] = compact.digest(
+            {k: v for k, v in context.items() if k != "sha256"}
+        )
+        seed["seed_sha256"] = compact.digest(
+            {k: v for k, v in seed.items() if k != "seed_sha256"}
+        )
         for arm in replay["operating_arms"].values():
             arm["contract_sha256"] = context["sha256"]
-            arm["sha256"] = compact.digest({k:v for k,v in arm.items() if k != "sha256"})
-        replay["replay_sha256"] = compact.digest({k:v for k,v in replay.items() if k != "replay_sha256"})
+            arm["sha256"] = compact.digest(
+                {k: v for k, v in arm.items() if k != "sha256"}
+            )
+        replay["replay_sha256"] = compact.digest(
+            {k: v for k, v in replay.items() if k != "replay_sha256"}
+        )
         proof = value["model"]["validated_scopes"][0]
         scope = split._entry_operating_scope(seed)
         proof["scope_sha256"] = scope
         for actual in proof["calibration_rows"] + proof["holdout_rows"]:
             actual["scope_sha256"] = scope
-        proof["actual_rows_sha256"] = compact.digest(proof["calibration_rows"] + proof["holdout_rows"])
-        proof["sha256"] = compact.digest({k:v for k,v in proof.items() if k != "sha256"})
+        proof["actual_rows_sha256"] = compact.digest(
+            proof["calibration_rows"] + proof["holdout_rows"]
+        )
+        proof["sha256"] = compact.digest(
+            {k: v for k, v in proof.items() if k != "sha256"}
+        )
     book = resource.selection_execution_book(rows, inputs)
     assert book["status"] == "supported_operating_comparison", book["source_gaps"]
-    assert book["paired_delta_ev_pct"] == pytest.approx(.8)
-    selected = {key:value for key,value in inputs.items() if key[2] == rows[0]["stock_code"]}
+    assert book["paired_delta_ev_pct"] == pytest.approx(0.8)
+    selected = {
+        key: value for key, value in inputs.items() if key[2] == rows[0]["stock_code"]
+    }
     book = resource.selection_execution_book(rows, selected)
     assert book["status"] == "unsupported_scope"
     assert book["excluded_partition_counts"] == {"unselected_downstream_unobserved": 1}
@@ -1022,34 +1415,60 @@ def test_supported_sor_scope_and_unselected_ai_are_separate_contracts():
     assert book["excluded_partition_counts"] == {"selected_source_gap": 1}
     # SOR is not permission to change the original observation venue.
     inputs[next(iter(inputs))]["row"]["effective_venue"] = "NXT"
-    assert resource.selection_execution_book(rows, inputs)["paired_delta_ev_pct"] is None
+    assert (
+        resource.selection_execution_book(rows, inputs)["paired_delta_ev_pct"] is None
+    )
 
 
-def test_native_source_gap_remains_visible_in_summary_and_late_capture(monkeypatch, tmp_path):
+def test_native_source_gap_remains_visible_in_summary_and_late_capture(
+    monkeypatch, tmp_path
+):
     from src.engine import runtime_approval_summary as summary
     from src.engine.scalping import scanner_lookup_attention_resource as resource
-    section=dict(target_date='2026-10-12',status='source_gap',selection_disposition='source_gap',
-        primary_economics=dict(status='source_gap',paired_ev_krw=None),
-        source_quality=dict(status='gap'),official_symbol_master=dict(status='pass'),
-        first_blocker='partition_member_missing',source_gap_owner='scanner_selection_pair_source')
-    section['artifact_sha256']=resource.canonical_sha256(section)
-    projection=resource.summary_projection(section)
-    assert projection['status']=='source_gap'
-    assert projection['primary_economics']['paired_ev_krw'] is None
-    assert projection['source_section_sha256']==section['artifact_sha256']
-    assert projection['allowed_runtime_apply'] is False
-    monkeypatch.setattr(summary,'DATA_DIR',tmp_path)
-    monkeypatch.setattr(summary,'REPORT_DIR',tmp_path/'report/runtime_approval_summary')
-    original_write=summary._atomic_write
+
+    section = dict(
+        target_date="2026-10-12",
+        status="source_gap",
+        selection_disposition="source_gap",
+        primary_economics=dict(status="source_gap", paired_ev_krw=None),
+        source_quality=dict(status="gap"),
+        official_symbol_master=dict(status="pass"),
+        first_blocker="partition_member_missing",
+        source_gap_owner="scanner_selection_pair_source",
+    )
+    section["artifact_sha256"] = resource.canonical_sha256(section)
+    projection = resource.summary_projection(section)
+    assert projection["status"] == "source_gap"
+    assert projection["primary_economics"]["paired_ev_krw"] is None
+    assert projection["source_section_sha256"] == section["artifact_sha256"]
+    assert projection["allowed_runtime_apply"] is False
+    monkeypatch.setattr(summary, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(
+        summary, "REPORT_DIR", tmp_path / "report/runtime_approval_summary"
+    )
+    original_write = summary._atomic_write
+
     def isolated_write(path, content):
         assert path.resolve().is_relative_to(tmp_path.resolve())
         original_write(path, content)
-    monkeypatch.setattr(summary,'_atomic_write',isolated_write)
-    monkeypatch.setattr(summary,'_owner_requirements',lambda _:({},{}))
-    path=summary._paths('2026-10-12')['ws_freshness'];path.parent.mkdir(parents=True)
+
+    monkeypatch.setattr(summary, "_atomic_write", isolated_write)
+    monkeypatch.setattr(summary, "_owner_requirements", lambda _: ({}, {}))
+    path = summary._paths("2026-10-12")["ws_freshness"]
+    path.parent.mkdir(parents=True)
     import json
-    path.write_text(json.dumps(dict(target_date='2026-10-12',lookup_attention_generation=projection)))
-    result=summary.build_runtime_approval_summary('2026-10-12',include_swing=False,include_producer_gap=False)
-    assert result['sources']['ws_freshness']['lookup_attention_generation']['status']=='source_gap'
-    section['first_blocker']='changed_without_reseal'
-    assert resource.summary_projection(section)['status']=='unobservable'
+
+    path.write_text(
+        json.dumps(
+            dict(target_date="2026-10-12", lookup_attention_generation=projection)
+        )
+    )
+    result = summary.build_runtime_approval_summary(
+        "2026-10-12", include_swing=False, include_producer_gap=False
+    )
+    assert (
+        result["sources"]["ws_freshness"]["lookup_attention_generation"]["status"]
+        == "source_gap"
+    )
+    section["first_blocker"] = "changed_without_reseal"
+    assert resource.summary_projection(section)["status"] == "unobservable"

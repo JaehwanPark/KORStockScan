@@ -13,31 +13,52 @@ from pathlib import Path
 from typing import Any, Mapping
 
 RETIREMENT_ID = "scalping_adm_ldm_retirement_20260906"
-INDEPENDENT_AUTOMATION_RETIRED_REPORTS = frozenset({
-    "low_price_two_leg_tuning", "low_price_two_leg_expanded_candidate_research",
-    "samsung_machine_entry_tuning", "machine_microstructure_attribution",
-    "machine_entry_timing_tuning", "machine_microstructure_policy_approval",
-    "market_weakness_hysteresis_tuning", "research_native_capacity",
-    "machine_research_closed_loop", "episode_policy_refresh", "episode_policy",
-    "research_capacity", "research_allocation", "machine_adaptive_exit",
-    "episode_source_research", "episode_prospective_research",
-})
+INDEPENDENT_AUTOMATION_RETIRED_REPORTS = frozenset(
+    {
+        "low_price_two_leg_tuning",
+        "low_price_two_leg_expanded_candidate_research",
+        "samsung_machine_entry_tuning",
+        "machine_microstructure_attribution",
+        "machine_entry_timing_tuning",
+        "machine_microstructure_policy_approval",
+        "market_weakness_hysteresis_tuning",
+        "research_native_capacity",
+        "machine_research_closed_loop",
+        "episode_policy_refresh",
+        "episode_policy",
+        "research_capacity",
+        "research_allocation",
+        "machine_adaptive_exit",
+        "episode_source_research",
+        "episode_prospective_research",
+    }
+)
 SCALP_OVERNIGHT_RETIREMENT_ID = "scalping_overnight_retirement_20260906"
 LATENCY_RECOMMENDATION_RETIREMENT_ID = "latency_recommendation_retirement_20260906"
 LATENCY_RECOMMENDATION_RETIRED_REPORTS = frozenset(
     {"latency_classifier_recommendation"}
 )
 RISING_MISSED_SCOUT_RETIREMENT_ID = "rising_missed_scout_retirement_20260918"
-RISING_MISSED_SCOUT_RETIRED_REPORTS = frozenset({"one_share_threshold_opportunity", "rising_missed_scout_workorder"})
+RISING_MISSED_SCOUT_RETIRED_REPORTS = frozenset(
+    {"one_share_threshold_opportunity", "rising_missed_scout_workorder"}
+)
 SCALE_IN_RETIREMENT_ID = "pyramid_retirement_avg_down_shared_rebound_20260918"
-SCALE_IN_RETIRED_REPORTS = frozenset({
-    "scalping_pyramid_intraday_feedback", "scalping_pyramid_quality_calibration",
-    "scalping_avg_down_recovery_calibration",
-})
-SCALE_IN_RETIRED_CALIBRATION_FAMILIES = frozenset({
-    "scalping_pyramid_quality_gate", "scalping_avg_down_recovery_quality_gate",
-    "post_probe_winner_recovery", "reversal_add", "shallow_avg_down_source_gap_recheck",
-})
+SCALE_IN_RETIRED_REPORTS = frozenset(
+    {
+        "scalping_pyramid_intraday_feedback",
+        "scalping_pyramid_quality_calibration",
+        "scalping_avg_down_recovery_calibration",
+    }
+)
+SCALE_IN_RETIRED_CALIBRATION_FAMILIES = frozenset(
+    {
+        "scalping_pyramid_quality_gate",
+        "scalping_avg_down_recovery_quality_gate",
+        "post_probe_winner_recovery",
+        "reversal_add",
+        "shallow_avg_down_source_gap_recheck",
+    }
+)
 ENTRY_RECHECK_RETIREMENT_ID = "entry_recheck_drought_retirement_20260918"
 ENTRY_RECHECK_RETIRED_REPORTS = frozenset({"entry_recheck_drought_controller"})
 ENTRY_RECHECK_RETIRED_FAMILIES = frozenset({"entry_opportunity_recheck_runtime"})
@@ -66,14 +87,26 @@ SCALP_OVERNIGHT_RETIRED_FAMILIES = (
     | SCALP_OVERNIGHT_RETIRED_STAGES
 )
 CLAUDE_LAB_RETIREMENT_ID = "claude_scalping_pattern_lab_retirement_20260918"
-CLAUDE_LAB_RETIRED_REPORTS = frozenset({"claude_scalping_pattern_lab", "scalping_pattern_lab_automation", "pattern_lab_automation"})
+CLAUDE_LAB_RETIRED_REPORTS = frozenset(
+    {
+        "claude_scalping_pattern_lab",
+        "scalping_pattern_lab_automation",
+        "pattern_lab_automation",
+    }
+)
 LIMIT_DOWN_RETIREMENT_ID = "limit_down_watch_retirement_20260919"
-LIMIT_DOWN_RETIRED_REPORTS = frozenset({
-    "limit_down_watch", "limit_down_watch_report", "limit_down_watch_candidate_source",
-    "limit_down_watch_counterfactual", "limit_down_watch_sim_policy_catalog",
-    "limit_down_watch_post_sim_attribution", "limit_down_watch_real_post_apply_attribution",
-    "limit_down_watch_bounded_live_candidate",
-})
+LIMIT_DOWN_RETIRED_REPORTS = frozenset(
+    {
+        "limit_down_watch",
+        "limit_down_watch_report",
+        "limit_down_watch_candidate_source",
+        "limit_down_watch_counterfactual",
+        "limit_down_watch_sim_policy_catalog",
+        "limit_down_watch_post_sim_attribution",
+        "limit_down_watch_real_post_apply_attribution",
+        "limit_down_watch_bounded_live_candidate",
+    }
+)
 RETIRED_REPORTS = (
     frozenset(
         {
@@ -173,7 +206,6 @@ RETIRED_ENV_PREFIXES = (
     "KORSTOCKSCAN_DEEP_RECOVERY_AVG_DOWN_",
     "KORSTOCKSCAN_SCALP_LATE_LOSS_AVG_DOWN_",
     "KORSTOCKSCAN_SCALP_STOP_LINE_TOUCH_AVG_DOWN_",
-
     "KORSTOCKSCAN_SCALP_ENTRY_ADM_",
     "KORSTOCKSCAN_HOLDING_EXIT_MATRIX_",
     "KORSTOCKSCAN_LIFECYCLE_DECISION_MATRIX_",
@@ -215,20 +247,33 @@ def retired_status(report_type: str = "adm_ldm") -> dict[str, Any]:
     retirement_id = (
         LIMIT_DOWN_RETIREMENT_ID
         if report_type in LIMIT_DOWN_RETIRED_REPORTS
-        else CLAUDE_LAB_RETIREMENT_ID
-        if report_type in CLAUDE_LAB_RETIRED_REPORTS
-        else ENTRY_RECHECK_RETIREMENT_ID
-        if report_type in ENTRY_RECHECK_RETIRED_REPORTS | ENTRY_RECHECK_RETIRED_FAMILIES
-        else RISING_MISSED_SCOUT_RETIREMENT_ID
-        if report_type in RISING_MISSED_SCOUT_RETIRED_REPORTS
-        else SCALE_IN_RETIREMENT_ID
-        if report_type in SCALE_IN_RETIRED_REPORTS | SCALE_IN_RETIRED_CALIBRATION_FAMILIES
-        else LATENCY_RECOMMENDATION_RETIREMENT_ID
-        if report_type in LATENCY_RECOMMENDATION_RETIRED_REPORTS
         else (
-            SCALP_OVERNIGHT_RETIREMENT_ID
-            if report_type in SCALP_OVERNIGHT_RETIRED_FAMILIES
-            else RETIREMENT_ID
+            CLAUDE_LAB_RETIREMENT_ID
+            if report_type in CLAUDE_LAB_RETIRED_REPORTS
+            else (
+                ENTRY_RECHECK_RETIREMENT_ID
+                if report_type
+                in ENTRY_RECHECK_RETIRED_REPORTS | ENTRY_RECHECK_RETIRED_FAMILIES
+                else (
+                    RISING_MISSED_SCOUT_RETIREMENT_ID
+                    if report_type in RISING_MISSED_SCOUT_RETIRED_REPORTS
+                    else (
+                        SCALE_IN_RETIREMENT_ID
+                        if report_type
+                        in SCALE_IN_RETIRED_REPORTS
+                        | SCALE_IN_RETIRED_CALIBRATION_FAMILIES
+                        else (
+                            LATENCY_RECOMMENDATION_RETIREMENT_ID
+                            if report_type in LATENCY_RECOMMENDATION_RETIRED_REPORTS
+                            else (
+                                SCALP_OVERNIGHT_RETIREMENT_ID
+                                if report_type in SCALP_OVERNIGHT_RETIRED_FAMILIES
+                                else RETIREMENT_ID
+                            )
+                        )
+                    )
+                )
+            )
         )
     )
     return {
@@ -282,14 +327,16 @@ def retirement_env() -> dict[str, str]:
             ("KORSTOCKSCAN_OVERNIGHT_CONTEXT_", "ENABLED", "false"),
         )
     }
-    result.update({
-        "KORSTOCKSCAN_LIMIT_DOWN_WATCH_ENABLED": "false",
-        "KORSTOCKSCAN_LIMIT_DOWN_SIM_POLICY_ENABLED": "false",
-        "KORSTOCKSCAN_LIMIT_DOWN_LIVE_POLICY_ENABLED": "false",
-        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ENABLED": "false",
-        "KORSTOCKSCAN_SCALPING_ENABLE_PYRAMID": "false",
-        "KORSTOCKSCAN_SWING_ENABLE_PYRAMID": "false",
-    })
+    result.update(
+        {
+            "KORSTOCKSCAN_LIMIT_DOWN_WATCH_ENABLED": "false",
+            "KORSTOCKSCAN_LIMIT_DOWN_SIM_POLICY_ENABLED": "false",
+            "KORSTOCKSCAN_LIMIT_DOWN_LIVE_POLICY_ENABLED": "false",
+            "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ENABLED": "false",
+            "KORSTOCKSCAN_SCALPING_ENABLE_PYRAMID": "false",
+            "KORSTOCKSCAN_SWING_ENABLE_PYRAMID": "false",
+        }
+    )
     return result
 
 
@@ -298,7 +345,9 @@ def retirement_shell_commands(environ: Mapping[str, str] | None = None) -> str:
 
     source = os.environ if environ is None else environ
     retired_keys = sorted(
-        key for key in source if str(key).startswith(RETIRED_ENV_PREFIXES + RETIRED_STOP_ENV_PREFIXES)
+        key
+        for key in source
+        if str(key).startswith(RETIRED_ENV_PREFIXES + RETIRED_STOP_ENV_PREFIXES)
     )
     commands = [f"unset -- {shlex.quote(key)}" for key in retired_keys]
     commands.extend(
@@ -308,10 +357,31 @@ def retirement_shell_commands(environ: Mapping[str, str] | None = None) -> str:
     return "\n".join(commands)
 
 
-RETIRED_STOP_ENV_PREFIXES = ('KORSTOCKSCAN_SCALP_SOFT_STOP_SAME_SYMBOL_COOLDOWN_SHADOW_', 'KORSTOCKSCAN_SCALP_PARTIAL_ONLY_TIMEOUT_SHADOW_', 'KORSTOCKSCAN_SCALP_TIME_LIMIT_MIN', 'KORSTOCKSCAN_MIN_PROFIT_PRESERVE', 'KORSTOCKSCAN_SCALP_COMMON_HARD_TIME_STOP_SHADOW_', 'KORSTOCKSCAN_SCALP_DEFENSIVE_AVG_DOWN_UNFILLED_RECHECK_', 'KORSTOCKSCAN_SCALP_PROFIT_STAGNATION_MIN_AI_SCORE', 'KORSTOCKSCAN_SCALP_STOP_LINE_TOUCH_AVG_DOWN_', 'KORSTOCKSCAN_SCALP_LATE_LOSS_AVG_DOWN_', 'KORSTOCKSCAN_SCALP_SOFT_STOP_WHIPSAW_', 'KORSTOCKSCAN_SCALP_SOFT_STOP_EXPERT_', 'KORSTOCKSCAN_SCALP_SOFT_STOP_DYNAMIC_', 'KORSTOCKSCAN_SCALP_SOFT_STOP_ABSORPTION_', 'KORSTOCKSCAN_SCALP_SOFT_STOP_MICRO_GRACE_EXTEND_', 'KORSTOCKSCAN_SCALP_BAD_ENTRY_REFINED_')
+RETIRED_STOP_ENV_PREFIXES = (
+    "KORSTOCKSCAN_SCALP_SOFT_STOP_SAME_SYMBOL_COOLDOWN_SHADOW_",
+    "KORSTOCKSCAN_SCALP_PARTIAL_ONLY_TIMEOUT_SHADOW_",
+    "KORSTOCKSCAN_SCALP_TIME_LIMIT_MIN",
+    "KORSTOCKSCAN_MIN_PROFIT_PRESERVE",
+    "KORSTOCKSCAN_SCALP_COMMON_HARD_TIME_STOP_SHADOW_",
+    "KORSTOCKSCAN_SCALP_DEFENSIVE_AVG_DOWN_UNFILLED_RECHECK_",
+    "KORSTOCKSCAN_SCALP_PROFIT_STAGNATION_MIN_AI_SCORE",
+    "KORSTOCKSCAN_SCALP_STOP_LINE_TOUCH_AVG_DOWN_",
+    "KORSTOCKSCAN_SCALP_LATE_LOSS_AVG_DOWN_",
+    "KORSTOCKSCAN_SCALP_SOFT_STOP_WHIPSAW_",
+    "KORSTOCKSCAN_SCALP_SOFT_STOP_EXPERT_",
+    "KORSTOCKSCAN_SCALP_SOFT_STOP_DYNAMIC_",
+    "KORSTOCKSCAN_SCALP_SOFT_STOP_ABSORPTION_",
+    "KORSTOCKSCAN_SCALP_SOFT_STOP_MICRO_GRACE_EXTEND_",
+    "KORSTOCKSCAN_SCALP_BAD_ENTRY_REFINED_",
+)
+
 
 def without_retired_env(values: dict[str, Any]) -> dict[str, Any]:
-    return {k: v for k, v in values.items() if not k.startswith(RETIRED_ENV_PREFIXES + RETIRED_STOP_ENV_PREFIXES)}
+    return {
+        k: v
+        for k, v in values.items()
+        if not k.startswith(RETIRED_ENV_PREFIXES + RETIRED_STOP_ENV_PREFIXES)
+    }
 
 
 def main(argv: list[str] | None = None) -> int:

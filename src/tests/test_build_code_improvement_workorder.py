@@ -7,10 +7,23 @@ from src.engine.lifecycle.archive import lifecycle_decision_matrix_readers as ld
 
 def test_retired_recheck_order_repetition_cannot_restore_implementation():
     item = mod.ClassifiedOrder(
-        order={"order_id": "order_entry_recheck_source_repair", "source_report_type": "entry_recheck_drought_controller", "implementation_status": "source_gap", "runtime_effect": False, "allowed_runtime_apply": False},
-        decision="defer_evidence", reason="historical", mapped_family="entry_opportunity_recheck_runtime", route="maintenance_review", confidence="historical", automation_reentry="retired",
+        order={
+            "order_id": "order_entry_recheck_source_repair",
+            "source_report_type": "entry_recheck_drought_controller",
+            "implementation_status": "source_gap",
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        },
+        decision="defer_evidence",
+        reason="historical",
+        mapped_family="entry_opportunity_recheck_runtime",
+        route="maintenance_review",
+        confidence="historical",
+        automation_reentry="retired",
     )
-    result, ids = mod._escalate_repeated_unresolved_orders([item], repeat_counts={"order_entry_recheck_source_repair": {"count": 3}})
+    result, ids = mod._escalate_repeated_unresolved_orders(
+        [item], repeat_counts={"order_entry_recheck_source_repair": {"count": 3}}
+    )
     assert ids == []
     assert result == []
 
@@ -209,9 +222,7 @@ def test_direct_family_mode_drops_retired_owner_and_stale_file_references():
             },
         }
     )
-    assert sanitized["files_likely_touched"] == [
-        "src/engine/buy_funnel_sentinel.py"
-    ]
+    assert sanitized["files_likely_touched"] == ["src/engine/buy_funnel_sentinel.py"]
     assert sanitized["acceptance_tests"] == [
         "pytest src/tests/test_buy_funnel_sentinel.py"
     ]
@@ -241,8 +252,6 @@ def test_generation_identity_binds_direct_family_mode():
     assert direct["inputs"]["source_hash_contract"] == "logical_source_content_v2"
 
 
-
-
 def test_source_hash_ignores_managed_release_root_alias(tmp_path):
     source = tmp_path / "canonical" / "source.json"
     source.parent.mkdir()
@@ -255,9 +264,9 @@ def test_source_hash_ignores_managed_release_root_alias(tmp_path):
     first_fingerprint = mod._source_fingerprint({"source": first})
     second_fingerprint = mod._source_fingerprint({"source": second})
 
-    assert first_fingerprint["files"][0]["path"] != second_fingerprint["files"][0][
-        "path"
-    ]
+    assert (
+        first_fingerprint["files"][0]["path"] != second_fingerprint["files"][0]["path"]
+    )
     assert first_fingerprint["source_hash"] == second_fingerprint["source_hash"]
 
 
@@ -346,8 +355,6 @@ def test_buy_funnel_workorder_uses_selected_venue_session_summary():
     assert "ai_confirmed_unique=999" not in evidence
 
 
-
-
 def test_generation_fingerprint_binds_producer_contract_and_selection_scope():
     source_hash = "a" * 64
 
@@ -374,14 +381,6 @@ def test_generation_fingerprint_binds_producer_contract_and_selection_scope():
     assert base["generation_id"] == base["generation_hash"][:12]
     assert base["generation_hash"] != different_limit["generation_hash"]
     assert base["generation_hash"] != different_scope["generation_hash"]
-
-
-
-
-
-
-
-
 
 
 def test_intraday_ws_directive_state_mapping_does_not_close_pending_code_gap():
@@ -456,24 +455,6 @@ def test_intraday_ws_directive_state_mapping_does_not_close_pending_code_gap():
     assert serialized["root_cause_closure_status"] == "needs_followup_workorder"
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 @pytest.mark.parametrize("source_gap", [False, True])
 def test_repeated_one_share_evidence_is_not_a_new_code_defect(source_gap):
     order = {
@@ -507,46 +488,6 @@ def test_repeated_one_share_evidence_is_not_a_new_code_defect(source_gap):
     )
     assert ids == []
     assert result == []
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 def test_lifecycle_bucket_discovery_source_dimension_gap_groups_same_bucket():
@@ -587,8 +528,6 @@ def test_lifecycle_bucket_discovery_source_dimension_gap_groups_same_bucket():
     ]
 
     assert orders == []
-
-
 
 
 def test_lifecycle_bucket_discovery_greenfield_source_only_exclusion_is_not_active_workorder():
@@ -1680,14 +1619,6 @@ def test_swing_lifecycle_bucket_discovery_ai_review_rollup_order_carries_impleme
     )
 
 
-
-
-
-
-
-
-
-
 def test_pattern_lab_ai_review_without_code_contract_is_not_implement_now():
     classified = mod._classify_order(
         {
@@ -1758,20 +1689,6 @@ def test_pattern_lab_ai_review_automation_handoff_gap_is_evidence_not_duplicate_
     assert classified.decision == "attach_existing_family"
     assert classified.route == "pattern_lab_ai_review_handoff_evidence"
     assert classified.mapped_family == "pattern_lab_feedback_handoff"
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 def test_submit_drought_marker_keeps_exact_source_quality_gap_open():
@@ -1854,11 +1771,10 @@ def test_submit_drought_marker_routes_legacy_superseded_rows_to_natural_receipt(
     assert marker["resolution_mode"] == "natural_maturity"
     assert marker["economic_eligibility"] == "pending_maturity"
     assert marker["implementation_provenance"]["historical_superseded_only"] is True
-    assert marker["implementation_provenance"][
-        "root_cause_closure_status_hint"
-    ] == "implementation_done"
-
-
+    assert (
+        marker["implementation_provenance"]["root_cause_closure_status_hint"]
+        == "implementation_done"
+    )
 
 
 def test_buy_funnel_submit_drought_workorder_uses_matches_when_primary_runtime_ops():
@@ -1945,14 +1861,6 @@ def test_buy_funnel_submit_drought_creates_source_taxonomy_gap_workorder():
     assert "SOURCE_TAXONOMY_LEAKAGE" in taxonomy_order["weak_contract_matches"]
 
 
-
-
-
-
-
-
-
-
 def test_lifecycle_submit_attribution_marks_no_gap_resolution_when_broker_key_present():
     report = ldm_mod._submit_bucket_attribution(
         [
@@ -2002,8 +1910,6 @@ def test_lifecycle_submit_attribution_marks_no_gap_resolution_when_broker_key_pr
     )
 
 
-
-
 def test_lifecycle_child_bucket_not_applicable_evidence_is_existing_family():
     classified = mod._classify_order(
         {
@@ -2036,38 +1942,6 @@ def test_lifecycle_child_bucket_not_applicable_evidence_is_existing_family():
     assert classified.decision == "attach_existing_family"
     assert classified.route == "existing_family"
     assert "not_applicable" in classified.reason
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 def test_followup_order_ids_keep_hash_for_long_source_keys():
@@ -2123,14 +1997,6 @@ def test_followup_order_ids_keep_hash_for_long_source_keys():
     assert len({item["order_id"] for item in conversion_orders}) == 2
 
 
-
-
-
-
-
-
-
-
 def test_latency_diagnostic_consolidation_does_not_accept_runtime_mutation():
     for runtime_effect, expected in [
         (False, "attach_existing_family"),
@@ -2163,16 +2029,6 @@ def test_latency_diagnostic_consolidation_does_not_accept_runtime_mutation():
             target_date="2026-09-04",
         )
     )
-
-
-
-
-
-
-
-
-
-
 
 
 def test_sim_fill_canonical_price_gap_fires_only_for_unpriced_no_canonical():
@@ -2443,41 +2299,92 @@ def test_workorder_swing_scope_classifier_is_explicit():
     )
 
 
-
-
 def test_scale_in_conditioned_no_fill_is_normal_but_source_gap_is_actionable():
-    from src.engine.lifecycle.archive.build_code_improvement_workorder_readers import _scale_in_split_order_plan_followup_orders
-    summary = {"available": True, "schema_version": "scale_in_split_order_plan_v4",
-               "status": "skipped_no_actual_fill", "evaluation_state": {"status": "skipped_no_actual_fill", "reason": None}}
-    assert _scale_in_split_order_plan_followup_orders({"scale_in_split_order_plan": summary}) == []
-    summary.update(status="pending_filled_outcome", evaluation_state={"status": "pending_filled_outcome", "reason": "filled_outcome_receipt_price_or_lot_basis_incomplete"})
-    assert _scale_in_split_order_plan_followup_orders({"scale_in_split_order_plan": summary})
+    from src.engine.lifecycle.archive.build_code_improvement_workorder_readers import (
+        _scale_in_split_order_plan_followup_orders,
+    )
+
+    summary = {
+        "available": True,
+        "schema_version": "scale_in_split_order_plan_v4",
+        "status": "skipped_no_actual_fill",
+        "evaluation_state": {"status": "skipped_no_actual_fill", "reason": None},
+    }
+    assert (
+        _scale_in_split_order_plan_followup_orders(
+            {"scale_in_split_order_plan": summary}
+        )
+        == []
+    )
+    summary.update(
+        status="pending_filled_outcome",
+        evaluation_state={
+            "status": "pending_filled_outcome",
+            "reason": "filled_outcome_receipt_price_or_lot_basis_incomplete",
+        },
+    )
+    assert _scale_in_split_order_plan_followup_orders(
+        {"scale_in_split_order_plan": summary}
+    )
 
 
 def test_unknown_provenance_handoff_keeps_native_id_and_field_scope():
-    report = {"target_date": "2026-09-17", "status": "warning", "summary": {"tuning_input_allowed": True},
-        "unknown_token_findings": [{"stage": "scalping_scanner_candidate_pruned", "event_count": 10,
-            "fields": [{"field": "actual_execution_venue", "count": 5, "rate": 0.5},
-                       {"field": "market_data_route", "count": 3, "rate": 0.3}]}]}
-    order = next(row for row in mod._observation_source_quality_followup_orders(report)
-        if row["order_id"] == "order_observation_source_quality_unknown_token_provenance_gap")
-    classified = mod._classify_order(order, finding_by_order_id={}, finding_by_title_slug={},
-        auto_family_order_ids=set(), closed_instrumentation_order_families={})
+    report = {
+        "target_date": "2026-09-17",
+        "status": "warning",
+        "summary": {"tuning_input_allowed": True},
+        "unknown_token_findings": [
+            {
+                "stage": "scalping_scanner_candidate_pruned",
+                "event_count": 10,
+                "fields": [
+                    {"field": "actual_execution_venue", "count": 5, "rate": 0.5},
+                    {"field": "market_data_route", "count": 3, "rate": 0.3},
+                ],
+            }
+        ],
+    }
+    order = next(
+        row
+        for row in mod._observation_source_quality_followup_orders(report)
+        if row["order_id"]
+        == "order_observation_source_quality_unknown_token_provenance_gap"
+    )
+    classified = mod._classify_order(
+        order,
+        finding_by_order_id={},
+        finding_by_title_slug={},
+        auto_family_order_ids=set(),
+        closed_instrumentation_order_families={},
+    )
     published = mod._serialize_classified_order(classified)
     receipt = published["implementation_provenance"]
     assert receipt["remaining_unknown_fields"] == ["market_data_route"]
     assert receipt["source_target_date"] == "2026-09-17"
-    assert receipt["field_provenance_review"][0]["disposition"] == "reviewed_not_available_before_broker_execution"
-    assert receipt["field_provenance_review"][1]["producer"] == "src/scanners/scalping_scanner.py"
+    assert (
+        receipt["field_provenance_review"][0]["disposition"]
+        == "reviewed_not_available_before_broker_execution"
+    )
+    assert (
+        receipt["field_provenance_review"][1]["producer"]
+        == "src/scanners/scalping_scanner.py"
+    )
     assert published["runtime_effect"] is False
 
 
-def test_retired_current_producer_preserves_prior_and_has_no_authority(tmp_path,monkeypatch):
+def test_retired_current_producer_preserves_prior_and_has_no_authority(
+    tmp_path, monkeypatch
+):
     import importlib
-    current=importlib.import_module('src.engine.build_code_improvement_workorder')
-    prior=tmp_path/"prior.json";prior.write_text("original")
-    def forbidden(*a,**kw):raise AssertionError("retired producer accessed storage")
-    monkeypatch.setattr(type(prior),"write_text",forbidden)
-    monkeypatch.setattr(type(prior),"read_text",forbidden)
-    result=current.build_code_improvement_workorder("2026-10-12")
-    assert result["status"]=="retired" and result["allowed_runtime_apply"] is False
+
+    current = importlib.import_module("src.engine.build_code_improvement_workorder")
+    prior = tmp_path / "prior.json"
+    prior.write_text("original")
+
+    def forbidden(*a, **kw):
+        raise AssertionError("retired producer accessed storage")
+
+    monkeypatch.setattr(type(prior), "write_text", forbidden)
+    monkeypatch.setattr(type(prior), "read_text", forbidden)
+    result = current.build_code_improvement_workorder("2026-10-12")
+    assert result["status"] == "retired" and result["allowed_runtime_apply"] is False

@@ -1481,7 +1481,8 @@ def test_performance_tuning_html_renders_new_sections(monkeypatch):
     # This rendering test consumes saved reports; background dispatch has its
     # own route tests and must not write outside this test's private fixtures.
     monkeypatch.setattr(
-        web_app, "_load_or_build_post_sell_feedback_report",
+        web_app,
+        "_load_or_build_post_sell_feedback_report",
         lambda **_kwargs: {"status": "no_data", "items": [], "summary": {}},
     )
 

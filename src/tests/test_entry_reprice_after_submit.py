@@ -117,7 +117,9 @@ def test_helper_requires_frozen_parent_and_ignores_ai_score():
         orderbook_micro_state="neutral",
     )
     low = evaluate_entry_reprice_after_submit(order=_base_order(ai_score=0.0), **kwargs)
-    high = evaluate_entry_reprice_after_submit(order=_base_order(ai_score=99.0), **kwargs)
+    high = evaluate_entry_reprice_after_submit(
+        order=_base_order(ai_score=99.0), **kwargs
+    )
     assert low.allowed and high.allowed
     assert low.target_price == high.target_price
 
@@ -150,9 +152,12 @@ def test_parent_receipt_requires_same_trusted_attempt():
     receipt = state_handlers._entry_reprice_parent_ai_receipt(stock, authority)
     assert receipt["entry_reprice_parent_ai_trusted_at_submit"] is True
     assert receipt["entry_reprice_parent_ai_decision_trace_id"] == "trace-parent"
-    assert state_handlers._entry_reprice_parent_ai_receipt(
-        {**stock, "last_watching_ai_attempt_snapshot_id": "other"}, authority
-    ) == {}
+    assert (
+        state_handlers._entry_reprice_parent_ai_receipt(
+            {**stock, "last_watching_ai_attempt_snapshot_id": "other"}, authority
+        )
+        == {}
+    )
 
 
 def test_helper_uses_frozen_scout_parent_not_latency_feature_score():
@@ -201,7 +206,9 @@ def test_helper_blocks_incomplete_frozen_scout_parent_as_source_quality_gap():
 
     assert decision.allowed is False
     assert decision.reason == "source_quality_blocked"
-    assert decision.fields["reprice_parent_authority_status"] == "source_quality_blocked"
+    assert (
+        decision.fields["reprice_parent_authority_status"] == "source_quality_blocked"
+    )
 
 
 def test_helper_keeps_explicit_scout_parent_veto_blocked():

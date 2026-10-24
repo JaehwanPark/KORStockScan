@@ -164,7 +164,8 @@ def threshold_family_for_stage(stage: str, fields: dict | None = None) -> str:
     normalized_stage = str(stage or "").strip()
     if normalized_stage.startswith("entry_opportunity_recheck_") or (
         isinstance(fields, dict)
-        and _clean_family(fields.get("threshold_family")) == "entry_opportunity_recheck_runtime"
+        and _clean_family(fields.get("threshold_family"))
+        == "entry_opportunity_recheck_runtime"
     ):
         # Original pipeline/custody receipts survive; no retired tuning partition.
         return ""

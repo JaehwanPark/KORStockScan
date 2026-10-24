@@ -103,13 +103,18 @@ def _read_machine_funnel(path: Path) -> tuple[dict, str]:
             if collecting:
                 section.append(line)
                 if line.startswith(b"    }"):
-                    sections.append(json.loads(b"".join(section).rstrip().rstrip(b",") + b"}"))
+                    sections.append(
+                        json.loads(b"".join(section).rstrip().rstrip(b",") + b"}")
+                    )
                     collecting = False
             if line.startswith(b"  }"):
                 parent = False
     if collecting or len(sections) != 1:
         raise ValueError("native_machine_funnel_section_missing_or_invalid")
-    return {"target_date": target_date, "entry_submit_drought_contract": sections[0]}, digest.hexdigest()
+    return {
+        "target_date": target_date,
+        "entry_submit_drought_contract": sections[0],
+    }, digest.hexdigest()
 
 
 def _machine_terminal_tuning_gate(
@@ -169,7 +174,11 @@ def _machine_terminal_tuning_gate(
             str(row.get("evaluation_key") or "")
             for row in ledger
             if isinstance(row, dict)
-            and row.get("final_state") in {"lineage_gap_superseded_without_terminal", "lineage_gap_conflicting_terminals"}
+            and row.get("final_state")
+            in {
+                "lineage_gap_superseded_without_terminal",
+                "lineage_gap_conflicting_terminals",
+            }
             and str(row.get("evaluation_key") or "")
         }
     )
@@ -207,7 +216,8 @@ def _machine_terminal_tuning_gate(
         {
             str(row.get("evaluation_key") or "")
             for row in ledger
-            if isinstance(row, dict) and row.get("final_state") in {"pending", "pending_broker_reconciliation"}
+            if isinstance(row, dict)
+            and row.get("final_state") in {"pending", "pending_broker_reconciliation"}
         }
     )
     pending_keys_complete = bool(
@@ -230,13 +240,21 @@ def _machine_terminal_tuning_gate(
     input_valid = bool(
         payload.get("target_date") == target_date
         and all(name in conservation for name in values)
-        and denominator_preserved and exact_keys_complete and pending_keys_complete
+        and denominator_preserved
+        and exact_keys_complete
+        and pending_keys_complete
     )
-    operational_keys = {str(row.get("evaluation_key") or "") for row in ledger
-        if isinstance(row, dict) and row.get("final_state") in
-        {"submit_pipeline_reached", "final_guard_blocked", "broker_rejected"}}
-    operational_keys_complete = bool(len(operational_keys) == terminal_admitted
-        and all(exact_key_pattern.fullmatch(key) for key in operational_keys))
+    operational_keys = {
+        str(row.get("evaluation_key") or "")
+        for row in ledger
+        if isinstance(row, dict)
+        and row.get("final_state")
+        in {"submit_pipeline_reached", "final_guard_blocked", "broker_rejected"}
+    }
+    operational_keys_complete = bool(
+        len(operational_keys) == terminal_admitted
+        and all(exact_key_pattern.fullmatch(key) for key in operational_keys)
+    )
     allowed = bool(input_valid and operational_keys_complete and terminal_admitted)
     base.update(
         source_sha256=source_sha256,
@@ -249,7 +267,12 @@ def _machine_terminal_tuning_gate(
         pending_maturity_count=values["pending"],
         denominator_preserved=denominator_preserved,
         exclusion_applied=exact_keys_complete,
-        operational_terminal_reconciled=bool(input_valid and operational_keys_complete and not values["lineage_gap"] and not values["pending"]),
+        operational_terminal_reconciled=bool(
+            input_valid
+            and operational_keys_complete
+            and not values["lineage_gap"]
+            and not values["pending"]
+        ),
         operational_terminal_input_allowed=allowed,
         # This audit has no completed trade, exit or effective-cost evidence.
         economic_tuning_input_allowed=False,
@@ -305,30 +328,46 @@ def _audited_jsonl(path: Path, receipt: dict[str, Any]):
 
 def _verified_machine_completion_capture(row: dict, day: str) -> dict | None:
     """Keep a bounded identity only after verifying the original capture bytes."""
-    if (row.get("schema") != "mechanistic_entry_observation_v1"
-            or row.get("evaluation_role") != "main_live"):
+    if (
+        row.get("schema") != "mechanistic_entry_observation_v1"
+        or row.get("evaluation_role") != "main_live"
+    ):
         return None
-    digest = lambda value: hashlib.sha256(json.dumps(
-        value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str
-    ).encode()).hexdigest()
+    digest = lambda value: hashlib.sha256(
+        json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode()
+    ).hexdigest()
     expected = row.get("machine_observation_sha256")
     body = {k: v for k, v in row.items() if k != "machine_observation_sha256"}
-    if not re.fullmatch(r"[0-9a-f]{64}", str(expected or "")) or digest(body) != expected:
+    if (
+        not re.fullmatch(r"[0-9a-f]{64}", str(expected or ""))
+        or digest(body) != expected
+    ):
         return None
-    source, context, runtime = (row.get(k) for k in ("source", "label_context", "runtime_consumption"))
+    source, context, runtime = (
+        row.get(k) for k in ("source", "label_context", "runtime_consumption")
+    )
     if not all(isinstance(v, dict) for v in (source, context, runtime)):
         return None
     native = runtime.get("continuous_reversal")
     assessment = source.get("assessment")
-    if (not isinstance(native, dict) or not isinstance(assessment, dict)
-            or assessment.get("action") != "ENTER_NOW"
-            or native.get("schema") != "continuous_reversal_consumption_v1"
-            or native.get("assessment_sha256") != digest(assessment)
-            or native.get("exact_payload_sha256") != digest(source.get("exact_payload"))
-            or native.get("bundle_sha256") != row.get("bundle_sha256")
-            or native.get("pid") != runtime.get("pid")
-            or native.get("process_start_ticks") != runtime.get("process_start_ticks")
-            or native.get("captured_at") != row.get("captured_at")):
+    if (
+        not isinstance(native, dict)
+        or not isinstance(assessment, dict)
+        or assessment.get("action") != "ENTER_NOW"
+        or native.get("schema") != "continuous_reversal_consumption_v1"
+        or native.get("assessment_sha256") != digest(assessment)
+        or native.get("exact_payload_sha256") != digest(source.get("exact_payload"))
+        or native.get("bundle_sha256") != row.get("bundle_sha256")
+        or native.get("pid") != runtime.get("pid")
+        or native.get("process_start_ticks") != runtime.get("process_start_ticks")
+        or native.get("captured_at") != row.get("captured_at")
+    ):
         return None
     try:
         captured = datetime.fromisoformat(row["captured_at"])
@@ -336,47 +375,78 @@ def _verified_machine_completion_capture(row: dict, day: str) -> dict | None:
             return None
     except (KeyError, TypeError, ValueError):
         return None
-    return dict(context=context, pid=runtime.get("pid"),
+    return dict(
+        context=context,
+        pid=runtime.get("pid"),
         process_start_ticks=runtime.get("process_start_ticks"),
         source_event_stage=row.get("source_event_stage"),
-        bundle_sha256=row.get("bundle_sha256"), captured_at=row["captured_at"],
+        bundle_sha256=row.get("bundle_sha256"),
+        captured_at=row["captured_at"],
         machine_observation_sha256=expected,
-        machine_capture_status="redacted_ineligible" if row.get("redacted") else "captured")
+        machine_capture_status=(
+            "redacted_ineligible" if row.get("redacted") else "captured"
+        ),
+    )
 
 
-def _recover_machine_completion(trace: dict, candidates: list[dict], day: str) -> dict | None:
+def _recover_machine_completion(
+    trace: dict, candidates: list[dict], day: str
+) -> dict | None:
     """Repair a report projection; never rewrite a trace or infer an AI outcome."""
-    if (trace.get("machine_evaluation_status") != "assessment_pending"
-            or trace.get("machine_evaluation_expected") is not True
-            or not isinstance(trace.get("decision_trace_id"), str) or not trace["decision_trace_id"]
-            or trace.get("provider_called") is not False
-            or trace.get("result_source") not in {"entry_circuit_open", "engine_disabled", "lock_contention"}
-            or trace.get("entry_mechanistic_action") not in (None, "")):
+    if (
+        trace.get("machine_evaluation_status") != "assessment_pending"
+        or trace.get("machine_evaluation_expected") is not True
+        or not isinstance(trace.get("decision_trace_id"), str)
+        or not trace["decision_trace_id"]
+        or trace.get("provider_called") is not False
+        or trace.get("result_source")
+        not in {"entry_circuit_open", "engine_disabled", "lock_contention"}
+        or trace.get("entry_mechanistic_action") not in (None, "")
+    ):
         return None
     matches = {}
     for capture in candidates:
         context = capture["context"]
-        if (trace.get("machine_observation_sha256") not in (None, "", capture["machine_observation_sha256"])
-                or trace.get("machine_capture_status") not in (None, "", "captured", "redacted_ineligible")
-                or type(trace.get("async_producer_pid")) is not int
-                or type(capture.get("pid")) is not int):
+        if (
+            trace.get("machine_observation_sha256")
+            not in (None, "", capture["machine_observation_sha256"])
+            or trace.get("machine_capture_status")
+            not in (None, "", "captured", "redacted_ineligible")
+            or type(trace.get("async_producer_pid")) is not int
+            or type(capture.get("pid")) is not int
+        ):
             continue
-        pairs = [(trace.get("snapshot_id"), context.get("snapshot_id")),
+        pairs = [
+            (trace.get("snapshot_id"), context.get("snapshot_id")),
             (trace.get("stock_code"), context.get("stock_code")),
             (trace.get("record_id"), context.get("record_id")),
             (trace.get("machine_bundle_sha256"), capture.get("bundle_sha256")),
             (trace.get("async_producer_pid"), capture.get("pid")),
-            (trace.get("async_producer_start_ticks"), capture.get("process_start_ticks")),
-            (trace.get("source_event_stage"), capture.get("source_event_stage"))]
-        if any(a in (None, "", False) or b in (None, "", False) or str(a) != str(b) for a, b in pairs):
+            (
+                trace.get("async_producer_start_ticks"),
+                capture.get("process_start_ticks"),
+            ),
+            (trace.get("source_event_stage"), capture.get("source_event_stage")),
+        ]
+        if any(
+            a in (None, "", False) or b in (None, "", False) or str(a) != str(b)
+            for a, b in pairs
+        ):
             continue
-        if any(not trace.get(k) or str(trace[k]).upper() != str(context.get(k) or "").upper()
-               for k in ("effective_venue", "session_bucket", "broker_route")):
+        if any(
+            not trace.get(k)
+            or str(trace[k]).upper() != str(context.get(k) or "").upper()
+            for k in ("effective_venue", "session_bucket", "broker_route")
+        ):
             continue
         try:
             terminal = datetime.fromisoformat(trace["decision_ts"])
             captured = datetime.fromisoformat(capture["captured_at"])
-            if terminal.tzinfo is None or terminal.date().isoformat() != day or captured > terminal:
+            if (
+                terminal.tzinfo is None
+                or terminal.date().isoformat() != day
+                or captured > terminal
+            ):
                 continue
         except (KeyError, TypeError, ValueError):
             continue
@@ -384,12 +454,17 @@ def _recover_machine_completion(trace: dict, candidates: list[dict], day: str) -
     if len(matches) != 1:
         return None
     capture = next(iter(matches.values()))
-    return dict(decision_trace_id=trace["decision_trace_id"],
-        original_status="assessment_pending", status="assessed",
+    return dict(
+        decision_trace_id=trace["decision_trace_id"],
+        original_status="assessment_pending",
+        status="assessed",
         machine_observation_sha256=capture["machine_observation_sha256"],
         machine_capture_status=capture["machine_capture_status"],
         binding="exact_snapshot_bundle_record_route_pid_verified_native_capture",
-        original_trace_preserved=True, provider_outcome_inferred=False, economic_eligibility_granted=False)
+        original_trace_preserved=True,
+        provider_outcome_inferred=False,
+        economic_eligibility_granted=False,
+    )
 
 
 def _machine_ai_natural_source_consumption(
@@ -422,28 +497,62 @@ def _machine_ai_natural_source_consumption(
             if name == "ai_decision_payloads":
                 completion = _verified_machine_completion_capture(row, target_date)
                 if completion:
-                    completion_captures[str(completion["context"].get("snapshot_id"))].append(completion)
+                    completion_captures[
+                        str(completion["context"].get("snapshot_id"))
+                    ].append(completion)
                 source = row.get("source")
                 source = source if isinstance(source, dict) else {}
                 exact = source.get("exact_payload")
                 exact = exact if isinstance(exact, dict) else {}
-                row = {key: row.get(key) for key in ("schema", "bundle_sha256", "label_context")} | {
-                    "source": {"assessment": source.get("assessment"),
-                               "exact_payload": {"mechanistic_micro_window": exact.get("mechanistic_micro_window")}}
+                row = {
+                    key: row.get(key)
+                    for key in ("schema", "bundle_sha256", "label_context")
+                } | {
+                    "source": {
+                        "assessment": source.get("assessment"),
+                        "exact_payload": {
+                            "mechanistic_micro_window": exact.get(
+                                "mechanistic_micro_window"
+                            )
+                        },
+                    }
                 }
             elif name == "ai_decision_trace":
-                row = {key: row.get(key) for key in (
-                    "schema", "decision_stage", "snapshot_id", "machine_bundle_sha256",
-                    "entry_mechanistic_action", "result_source", "machine_evaluation_expected",
-                    "machine_evaluation_status", "machine_source_invalid_receipt",
-                    "machine_required_feature_receipt", "provider_called", "entry_required_feature_blockers",
-                    "machine_capture_status", "machine_observation_sha256", "request_id",
-                    "decision_trace_id", "prompt_sha256", "prompt_version", "effective_venue",
-                    "session_bucket", "auxiliary_system_prompt_sha256", "entry_ai_prompt_variant",
-                    "market_data_health",
-                    "decision_ts", "stock_code", "record_id", "broker_route", "source_event_stage",
-                    "async_producer_pid", "async_producer_start_ticks",
-                )}
+                row = {
+                    key: row.get(key)
+                    for key in (
+                        "schema",
+                        "decision_stage",
+                        "snapshot_id",
+                        "machine_bundle_sha256",
+                        "entry_mechanistic_action",
+                        "result_source",
+                        "machine_evaluation_expected",
+                        "machine_evaluation_status",
+                        "machine_source_invalid_receipt",
+                        "machine_required_feature_receipt",
+                        "provider_called",
+                        "entry_required_feature_blockers",
+                        "machine_capture_status",
+                        "machine_observation_sha256",
+                        "request_id",
+                        "decision_trace_id",
+                        "prompt_sha256",
+                        "prompt_version",
+                        "effective_venue",
+                        "session_bucket",
+                        "auxiliary_system_prompt_sha256",
+                        "entry_ai_prompt_variant",
+                        "market_data_health",
+                        "decision_ts",
+                        "stock_code",
+                        "record_id",
+                        "broker_route",
+                        "source_event_stage",
+                        "async_producer_pid",
+                        "async_producer_start_ticks",
+                    )
+                }
             parsed.append(row)
         after = _raw_generation(path)
         receipt["generation"] = after
@@ -466,20 +575,29 @@ def _machine_ai_natural_source_consumption(
     ]
     completion_recoveries = []
     proposals = []
-    capture_uses = Counter(str(trace.get("machine_observation_sha256") or "") for trace in traces
-        if trace.get("machine_evaluation_status") != "assessment_pending")
+    capture_uses = Counter(
+        str(trace.get("machine_observation_sha256") or "")
+        for trace in traces
+        if trace.get("machine_evaluation_status") != "assessment_pending"
+    )
     for trace in traces:
-        recovery = _recover_machine_completion(trace,
-            completion_captures.get(str(trace.get("snapshot_id")), []), target_date)
+        recovery = _recover_machine_completion(
+            trace,
+            completion_captures.get(str(trace.get("snapshot_id")), []),
+            target_date,
+        )
         if recovery:
             proposals.append((trace, recovery))
             capture_uses[recovery["machine_observation_sha256"]] += 1
     for trace, recovery in proposals:
         if capture_uses[recovery["machine_observation_sha256"]] == 1:
             completion_recoveries.append(recovery)
-            trace.update(machine_evaluation_status="assessed", entry_mechanistic_action="ENTER_NOW",
+            trace.update(
+                machine_evaluation_status="assessed",
+                entry_mechanistic_action="ENTER_NOW",
                 machine_capture_status=recovery["machine_capture_status"],
-                machine_observation_sha256=recovery["machine_observation_sha256"])
+                machine_observation_sha256=recovery["machine_observation_sha256"],
+            )
     requests = [
         row
         for row in rows["ai_decision_requests"]
@@ -873,15 +991,18 @@ def _machine_ai_natural_source_consumption(
             "sample_floor": "not_applicable_contract_validation",
             "trace_count": len(traces),
             "companion_mapping_present_count": sum(
-                isinstance(trace.get("market_data_health"), dict)
-                for trace in traces
+                isinstance(trace.get("market_data_health"), dict) for trace in traces
             ),
             "companion_missing_or_nonmapping_count": sum(
                 not isinstance(trace.get("market_data_health"), dict)
                 for trace in traces
             ),
             "source_quality_gate": "original_trace_and_source_manifest_digest_only",
-            "forbidden_uses": ["economic_eligibility", "policy_promotion", "order_authority"],
+            "forbidden_uses": [
+                "economic_eligibility",
+                "policy_promotion",
+                "order_authority",
+            ],
             "missing_values_imputed": False,
         },
         "machine_evaluation_population": {
@@ -922,8 +1043,10 @@ def _machine_ai_natural_source_consumption(
             "missing_economics_imputed": False,
         },
         "machine_trace_completion_recovery": {
-            "count": len(completion_recoveries), "receipts": completion_recoveries,
-            "original_trace_bytes_changed": False, "runtime_effect": False,
+            "count": len(completion_recoveries),
+            "receipts": completion_recoveries,
+            "original_trace_bytes_changed": False,
+            "runtime_effect": False,
         },
         "ai_screen_population": {
             "count": len(traces),
@@ -1457,7 +1580,17 @@ SIM_SUBMIT_GUARD_STAGE_ACTIONS = {
 
 STAGE_CONTRACTS: dict[str, StageContract] = {
     "low_price_actual_economic_observation": StageContract(
-        required_fields=("logical_date", "profile_id", "owner", "session", "observation_schema", "observation_sha256", "observation_json", "policy_hash", "action"),
+        required_fields=(
+            "logical_date",
+            "profile_id",
+            "owner",
+            "session",
+            "observation_schema",
+            "observation_sha256",
+            "observation_json",
+            "policy_hash",
+            "action",
+        ),
         decision_authority="low_price_actual_economic_lineage_only",
     ),
     "scalp_entry_action_decision_snapshot": StageContract(
@@ -3035,13 +3168,33 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
         decision_authority="source_only_route_sizing_observation",
     ),
     "pyramid_lifecycle_replay_observed": StageContract(
-        required_fields=("pyramid_lifecycle_schema", "source_event_id", "position_episode_id",
-            "scale_in_decision_id", "configured_min_profit_pct", "effective_min_profit_pct",
-            "runtime_value_source", "runtime_pid_value_verified", "pyramid_policy_version",
-            "sizing_policy_version", "cost_policy_version", "route_replay", "pre_add_buy_price", "pre_add_buy_qty",
-            "metric_role", "decision_authority", "window_policy", "sample_floor", "primary_decision_metric",
-            "source_quality_gate", "forbidden_uses", "runtime_effect", "allowed_runtime_apply",
-            "actual_order_submitted", "broker_order_forbidden"),
+        required_fields=(
+            "pyramid_lifecycle_schema",
+            "source_event_id",
+            "position_episode_id",
+            "scale_in_decision_id",
+            "configured_min_profit_pct",
+            "effective_min_profit_pct",
+            "runtime_value_source",
+            "runtime_pid_value_verified",
+            "pyramid_policy_version",
+            "sizing_policy_version",
+            "cost_policy_version",
+            "route_replay",
+            "pre_add_buy_price",
+            "pre_add_buy_qty",
+            "metric_role",
+            "decision_authority",
+            "window_policy",
+            "sample_floor",
+            "primary_decision_metric",
+            "source_quality_gate",
+            "forbidden_uses",
+            "runtime_effect",
+            "allowed_runtime_apply",
+            "actual_order_submitted",
+            "broker_order_forbidden",
+        ),
         decision_authority="source_only_route_arbitration_observation",
     ),
     "avg_down_runtime_config_observed": StageContract(
@@ -3643,8 +3796,13 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
         decision_authority="source_quality_only",
     ),
     "main_stop_source": StageContract(
-        required_fields=("main_stop_source", "threshold_family",
-            "actual_order_submitted", "allowed_runtime_apply", "broker_order_forbidden"),
+        required_fields=(
+            "main_stop_source",
+            "threshold_family",
+            "actual_order_submitted",
+            "allowed_runtime_apply",
+            "broker_order_forbidden",
+        ),
         decision_authority="source_quality_only",
     ),
     # Historical attribution only. The runtime emitter, family collection and
@@ -6436,14 +6594,19 @@ def _row_contract_violations(
         current = _safe_float(fields.get("effective_min_profit_pct"))
         configured = _safe_float(fields.get("configured_min_profit_pct"))
         arms = _safe_dict(fields.get("route_replay"))
-        if (fields.get("pyramid_lifecycle_schema") != "pyramid_lifecycle_replay_v1"
-            or current is None or configured != current or not 0.2 <= current <= 2.5
+        if (
+            fields.get("pyramid_lifecycle_schema") != "pyramid_lifecycle_replay_v1"
+            or current is None
+            or configured != current
+            or not 0.2 <= current <= 2.5
             or f"{current:g}" not in arms
-            or fields.get("decision_authority") != "source_only_route_arbitration_observation"
+            or fields.get("decision_authority")
+            != "source_only_route_arbitration_observation"
             or not _contract_bool(fields.get("runtime_effect"), False)
             or not _contract_bool(fields.get("allowed_runtime_apply"), False)
             or not _contract_bool(fields.get("actual_order_submitted"), False)
-            or not _contract_bool(fields.get("broker_order_forbidden"), True)):
+            or not _contract_bool(fields.get("broker_order_forbidden"), True)
+        ):
             invalid.append("pyramid_lifecycle_replay_source_contract")
     if stage == "avg_down_route_arbitration_observed" and (
         _avg_down_route_contract_violated(fields)
@@ -8098,40 +8261,76 @@ def _streaming_contract_audit(
     return event_count, stage_counts, contract_result, exclusions
 
 
-def _raw_semantic_digest(source_path: Path, observed_stages: set[str] | None = None,
-                         entry_points: tuple[str, ...] = ("_streaming_contract_audit", "STAGE_CONTRACTS", "SOURCE_LIKE_TOKENS")) -> str:
+def _raw_semantic_digest(
+    source_path: Path,
+    observed_stages: set[str] | None = None,
+    entry_points: tuple[str, ...] = (
+        "_streaming_contract_audit",
+        "STAGE_CONTRACTS",
+        "SOURCE_LIKE_TOKENS",
+    ),
+) -> str:
     """Bind reachable raw validators, excluding the independent final census."""
     tree = ast.parse(source_path.read_text(encoding="utf-8"))
     if observed_stages is not None:
+
         class ObservedStageScope(ast.NodeTransformer):
             def visit_If(self, node):
                 test = node.test
                 if isinstance(test, ast.BoolOp) and isinstance(test.op, ast.And):
-                    test = next((part for part in test.values if isinstance(part, ast.Compare)
-                        and isinstance(part.left, ast.Name) and part.left.id == "stage"), test)
-                if (isinstance(test, ast.Compare) and isinstance(test.left, ast.Name)
-                        and test.left.id == "stage" and len(test.ops) == 1
-                        and isinstance(test.ops[0], ast.Eq) and isinstance(test.comparators[0], ast.Constant)
-                        and isinstance(test.comparators[0].value, str)
-                        and test.comparators[0].value not in observed_stages and not node.orelse):
+                    test = next(
+                        (
+                            part
+                            for part in test.values
+                            if isinstance(part, ast.Compare)
+                            and isinstance(part.left, ast.Name)
+                            and part.left.id == "stage"
+                        ),
+                        test,
+                    )
+                if (
+                    isinstance(test, ast.Compare)
+                    and isinstance(test.left, ast.Name)
+                    and test.left.id == "stage"
+                    and len(test.ops) == 1
+                    and isinstance(test.ops[0], ast.Eq)
+                    and isinstance(test.comparators[0], ast.Constant)
+                    and isinstance(test.comparators[0].value, str)
+                    and test.comparators[0].value not in observed_stages
+                    and not node.orelse
+                ):
                     return None
                 return self.generic_visit(node)
 
             def visit_AnnAssign(self, node):
-                if isinstance(node.target, ast.Name) and node.target.id == "STAGE_CONTRACTS":
-                    pairs = [(key, value) for key, value in zip(node.value.keys, node.value.values)
-                             if not isinstance(key, ast.Constant) or key.value in observed_stages]
+                if (
+                    isinstance(node.target, ast.Name)
+                    and node.target.id == "STAGE_CONTRACTS"
+                ):
+                    pairs = [
+                        (key, value)
+                        for key, value in zip(node.value.keys, node.value.values)
+                        if not isinstance(key, ast.Constant)
+                        or key.value in observed_stages
+                    ]
                     node.value.keys = [pair[0] for pair in pairs]
                     node.value.values = [pair[1] for pair in pairs]
                 return self.generic_visit(node)
+
         tree = ObservedStageScope().visit(tree)
     nodes = {}
     for node in tree.body:
         if isinstance(node, (ast.FunctionDef, ast.ClassDef)):
             names = [node.name]
         elif isinstance(node, (ast.Assign, ast.AnnAssign)):
-            names = [part.id for target in (node.targets if isinstance(node, ast.Assign) else [node.target])
-                     for part in ast.walk(target) if isinstance(part, ast.Name)]
+            names = [
+                part.id
+                for target in (
+                    node.targets if isinstance(node, ast.Assign) else [node.target]
+                )
+                for part in ast.walk(target)
+                if isinstance(part, ast.Name)
+            ]
         elif isinstance(node, (ast.Import, ast.ImportFrom)):
             names = [alias.asname or alias.name.split(".")[0] for alias in node.names]
         else:
@@ -8154,8 +8353,11 @@ def _raw_contract_projection_key(target_date, raw_path, generation):
     """Bind only the raw aggregate; external machine/AI receipts stay fresh."""
     try:
         parent = raw_path.parent.lstat()
-        if (not generation or not stat.S_ISREG(raw_path.lstat().st_mode)
-                or not stat.S_ISDIR(parent.st_mode)):
+        if (
+            not generation
+            or not stat.S_ISREG(raw_path.lstat().st_mode)
+            or not stat.S_ISDIR(parent.st_mode)
+        ):
             return None
         paths = {
             *(
@@ -8266,7 +8468,8 @@ def _read_raw_contract_projection(target_date, key):
                 type(value) is not int or value < 0
                 for _, value in result["stage_counts"]
             )
-            or sum(value for _, value in result["stage_counts"]) != result["event_count"]
+            or sum(value for _, value in result["stage_counts"])
+            != result["event_count"]
         ):
             return None
         return result, receipt["audited_at"]
@@ -8274,8 +8477,9 @@ def _read_raw_contract_projection(target_date, key):
         return None
 
 
-def _verified_legacy_projection(target_date: str, raw_path: Path, generation: dict,
-                                producer_source: Path):
+def _verified_legacy_projection(
+    target_date: str, raw_path: Path, generation: dict, producer_source: Path
+):
     """Migrate only byte-verified original receipts with identical raw semantics."""
     try:
         path, _ = report_paths(target_date)
@@ -8291,71 +8495,146 @@ def _verified_legacy_projection(target_date: str, raw_path: Path, generation: di
             # migrate without reopening the raw population.
             final = json.loads(Path(str(path) + ".final-contract.json").read_bytes())
             original_tree = ast.parse(producer_source.read_text())
-            owner = next(node for node in original_tree.body if isinstance(node, ast.FunctionDef) and node.name == "_final_implementation_digest")
-            names = next(node for node in ast.walk(owner) if isinstance(node, ast.Tuple) and all(isinstance(part, ast.Constant) and isinstance(part.value, str) for part in node.elts))
+            owner = next(
+                node
+                for node in original_tree.body
+                if isinstance(node, ast.FunctionDef)
+                and node.name == "_final_implementation_digest"
+            )
+            names = next(
+                node
+                for node in ast.walk(owner)
+                if isinstance(node, ast.Tuple)
+                and all(
+                    isinstance(part, ast.Constant) and isinstance(part.value, str)
+                    for part in node.elts
+                )
+            )
             root = producer_source.parents[2]
-            implementation = _canonical_digest({part.value: hashlib.sha256((root / part.value).read_bytes()).hexdigest() for part in names.elts})
-            if (final.get("schema") != "observation_source_quality_final_binding_v1"
-                    or final.get("target_date") != target_date or final.get("audit_phase") != "final"
-                    or final.get("artifact_sha256") != hashlib.sha256(raw_report).hexdigest()
-                    or final.get("implementation_sha256") != implementation
-                    or report.get("consumer_implementation_sha256") != implementation
-                    or report["source"]["generation"] != generation
-                    or _raw_semantic_digest(producer_source, set(report["source"]["audited_stage_counts"]))
-                    != _raw_semantic_digest(Path(__file__), set(report["source"]["audited_stage_counts"]))):
+            implementation = _canonical_digest(
+                {
+                    part.value: hashlib.sha256(
+                        (root / part.value).read_bytes()
+                    ).hexdigest()
+                    for part in names.elts
+                }
+            )
+            if (
+                final.get("schema") != "observation_source_quality_final_binding_v1"
+                or final.get("target_date") != target_date
+                or final.get("audit_phase") != "final"
+                or final.get("artifact_sha256")
+                != hashlib.sha256(raw_report).hexdigest()
+                or final.get("implementation_sha256") != implementation
+                or report.get("consumer_implementation_sha256") != implementation
+                or report["source"]["generation"] != generation
+                or _raw_semantic_digest(
+                    producer_source, set(report["source"]["audited_stage_counts"])
+                )
+                != _raw_semantic_digest(
+                    Path(__file__), set(report["source"]["audited_stage_counts"])
+                )
+            ):
                 return None
-            for function in (normalize_flow_state_label, normalize_gatekeeper_action_key, runtime_config_valid):
+            for function in (
+                normalize_flow_state_label,
+                normalize_gatekeeper_action_key,
+                runtime_config_valid,
+            ):
                 current = Path(function.__globals__["__file__"])
                 original = root / current.relative_to(PROJECT_ROOT)
-                if _raw_semantic_digest(original, entry_points=(function.__name__,)) != _raw_semantic_digest(current, entry_points=(function.__name__,)):
+                if _raw_semantic_digest(
+                    original, entry_points=(function.__name__,)
+                ) != _raw_semantic_digest(current, entry_points=(function.__name__,)):
                     return None
-            projected = _read_raw_contract_projection(target_date, report["source"]["contract_projection"]["key"])
-            if projected is None or _canonical_digest(projected[0]) != report["source"]["contract_projection"]["body_sha256"]:
+            projected = _read_raw_contract_projection(
+                target_date, report["source"]["contract_projection"]["key"]
+            )
+            if (
+                projected is None
+                or _canonical_digest(projected[0])
+                != report["source"]["contract_projection"]["body_sha256"]
+            ):
                 return None
             return projected
-        original_hash = receipt["aftermarket_contract_sha256s"]["src/engine/observation_source_quality_audit.py"]
-        if (receipt["target_date"] != target_date
-                or receipt["artifact_sha256"] != hashlib.sha256(raw_report).hexdigest()
-                or original_hash != hashlib.sha256(producer_source.read_bytes()).hexdigest()
-                or _raw_semantic_digest(producer_source, set(report["source"]["audited_stage_counts"]))
-                != _raw_semantic_digest(Path(__file__), set(report["source"]["audited_stage_counts"]))
-                or report["source"]["generation"] != generation):
+        original_hash = receipt["aftermarket_contract_sha256s"][
+            "src/engine/observation_source_quality_audit.py"
+        ]
+        if (
+            receipt["target_date"] != target_date
+            or receipt["artifact_sha256"] != hashlib.sha256(raw_report).hexdigest()
+            or original_hash != hashlib.sha256(producer_source.read_bytes()).hexdigest()
+            or _raw_semantic_digest(
+                producer_source, set(report["source"]["audited_stage_counts"])
+            )
+            != _raw_semantic_digest(
+                Path(__file__), set(report["source"]["audited_stage_counts"])
+            )
+            or report["source"]["generation"] != generation
+        ):
             return None
         root = producer_source.parents[2]
         code = {str(producer_source): original_hash}
-        for function in (normalize_flow_state_label, normalize_gatekeeper_action_key, runtime_config_valid):
+        for function in (
+            normalize_flow_state_label,
+            normalize_gatekeeper_action_key,
+            runtime_config_valid,
+        ):
             current = Path(function.__globals__["__file__"])
             original = root / current.relative_to(PROJECT_ROOT)
-            if _raw_semantic_digest(original, entry_points=(function.__name__,)) != _raw_semantic_digest(current, entry_points=(function.__name__,)):
+            if _raw_semantic_digest(
+                original, entry_points=(function.__name__,)
+            ) != _raw_semantic_digest(current, entry_points=(function.__name__,)):
                 return None
             code[str(original)] = hashlib.sha256(original.read_bytes()).hexdigest()
         original_tree = ast.parse(producer_source.read_text())
-        contract_node = next(node.value for node in original_tree.body
-            if isinstance(node, ast.AnnAssign) and getattr(node.target, "id", "") == "STAGE_CONTRACTS")
-        original_contracts = eval(compile(ast.Expression(contract_node), str(producer_source), "eval"), globals())
+        contract_node = next(
+            node.value
+            for node in original_tree.body
+            if isinstance(node, ast.AnnAssign)
+            and getattr(node.target, "id", "") == "STAGE_CONTRACTS"
+        )
+        original_contracts = eval(
+            compile(ast.Expression(contract_node), str(producer_source), "eval"),
+            globals(),
+        )
         parent = raw_path.parent.lstat()
-        key = _canonical_digest({
-            "schema": RAW_CONTRACT_PROJECTION_SCHEMA, "target_date": target_date,
-            "raw_path": str(raw_path.absolute()), "generation": generation,
-            "parent_identity": [parent.st_dev, parent.st_ino], "code": code,
-            "contracts": {key: asdict(value) for key, value in original_contracts.items()},
-            "source_like_tokens": SOURCE_LIKE_TOKENS})
+        key = _canonical_digest(
+            {
+                "schema": RAW_CONTRACT_PROJECTION_SCHEMA,
+                "target_date": target_date,
+                "raw_path": str(raw_path.absolute()),
+                "generation": generation,
+                "parent_identity": [parent.st_dev, parent.st_ino],
+                "code": code,
+                "contracts": {
+                    key: asdict(value) for key, value in original_contracts.items()
+                },
+                "source_like_tokens": SOURCE_LIKE_TOKENS,
+            }
+        )
         return _read_raw_contract_projection(target_date, key)
     except (OSError, ValueError, KeyError, TypeError):
         return None
 
 
 def _final_implementation_digest() -> str:
-    return _canonical_digest({name: hashlib.sha256((PROJECT_ROOT / name).read_bytes()).hexdigest()
-        for name in ("src/engine/observation_source_quality_audit.py",
-                     "src/engine/buy_funnel_sentinel.py",
-                     "src/engine/sentinel_event_cache.py",
-                     "src/engine/automation/source_quality_hard_gate.py",
-                     "src/utils/jsonl_io.py",
-                     "src/engine/monitoring/entry_attempt_identity.py",
-                     "src/engine/sniper_state_handlers.py",
-                     "src/engine/ai_prompt_contracts.py",
-                     "src/engine/scalping/mechanistic_entry_runtime_policy.py")})
+    return _canonical_digest(
+        {
+            name: hashlib.sha256((PROJECT_ROOT / name).read_bytes()).hexdigest()
+            for name in (
+                "src/engine/observation_source_quality_audit.py",
+                "src/engine/buy_funnel_sentinel.py",
+                "src/engine/sentinel_event_cache.py",
+                "src/engine/automation/source_quality_hard_gate.py",
+                "src/utils/jsonl_io.py",
+                "src/engine/monitoring/entry_attempt_identity.py",
+                "src/engine/sniper_state_handlers.py",
+                "src/engine/ai_prompt_contracts.py",
+                "src/engine/scalping/mechanistic_entry_runtime_policy.py",
+            )
+        }
+    )
 
 
 def _logical_file_digest(path: Path) -> str:
@@ -8369,17 +8648,29 @@ def _logical_file_digest(path: Path) -> str:
 
 def _final_dependencies(report: dict) -> list[dict]:
     census = report["machine_ai_natural_source_consumption"]
-    dependencies = [{key: receipt.get(key) for key in
-        ("path", "exists", "generation", "logical_content_sha256")}
-        for receipt in census.get("sources", {}).values()]
+    dependencies = [
+        {
+            key: receipt.get(key)
+            for key in ("path", "exists", "generation", "logical_content_sha256")
+        }
+        for receipt in census.get("sources", {}).values()
+    ]
     gate = census.get("machine_terminal_tuning_gate") or {}
     if gate.get("source_path"):
-        dependencies.append({"path": gate["source_path"], "exists": bool(gate.get("source_sha256")),
-            "generation": gate.get("source_generation"), "logical_content_sha256": gate.get("source_sha256")})
+        dependencies.append(
+            {
+                "path": gate["source_path"],
+                "exists": bool(gate.get("source_sha256")),
+                "generation": gate.get("source_generation"),
+                "logical_content_sha256": gate.get("source_sha256"),
+            }
+        )
     return dependencies
 
 
-def check_audit_reusable(target_date: str, *, audit_phase: str = "final", artifact_path: Path | None = None) -> dict:
+def check_audit_reusable(
+    target_date: str, *, audit_phase: str = "final", artifact_path: Path | None = None
+) -> dict:
     """Pure phase/implementation/content check; never creates locks or reports."""
     path = artifact_path or report_paths(target_date)[0]
     try:
@@ -8392,43 +8683,76 @@ def check_audit_reusable(target_date: str, *, audit_phase: str = "final", artifa
         binding_path = Path(str(path) + ".final-contract.json")
         binding_before = _raw_generation(binding_path)
         receipt = json.loads(binding_path.read_bytes())
-        if (report["target_date"] != target_date or report["audit_phase"] != audit_phase
-                or receipt["schema"] != "observation_source_quality_final_binding_v1"
-                or receipt["artifact_sha256"] != hashlib.sha256(raw).hexdigest()
-                or receipt["markdown_sha256"] != hashlib.sha256(path.with_suffix(".md").read_bytes()).hexdigest()
-                or receipt["implementation_sha256"] != report["consumer_implementation_sha256"]
-                or receipt["implementation_sha256"] != _final_implementation_digest()
-                or receipt["dependencies"] != _final_dependencies(report)
-                or report["summary"]["tuning_input_allowed"] is not True):
+        if (
+            report["target_date"] != target_date
+            or report["audit_phase"] != audit_phase
+            or receipt["schema"] != "observation_source_quality_final_binding_v1"
+            or receipt["artifact_sha256"] != hashlib.sha256(raw).hexdigest()
+            or receipt["markdown_sha256"]
+            != hashlib.sha256(path.with_suffix(".md").read_bytes()).hexdigest()
+            or receipt["implementation_sha256"]
+            != report["consumer_implementation_sha256"]
+            or receipt["implementation_sha256"] != _final_implementation_digest()
+            or receipt["dependencies"] != _final_dependencies(report)
+            or report["summary"]["tuning_input_allowed"] is not True
+        ):
             raise ValueError("audit_phase_implementation_or_publication_invalid")
         source = report["source"]
-        if (source["generation"] != _raw_generation(Path(source["pipeline_events"]))
-                or source["contract_projection"]["key"] != _raw_contract_projection_key(
-                    target_date, Path(source["pipeline_events"]), source["generation"])
-                or _read_raw_contract_projection(target_date, source["contract_projection"]["key"]) is None):
+        if (
+            source["generation"] != _raw_generation(Path(source["pipeline_events"]))
+            or source["contract_projection"]["key"]
+            != _raw_contract_projection_key(
+                target_date, Path(source["pipeline_events"]), source["generation"]
+            )
+            or _read_raw_contract_projection(
+                target_date, source["contract_projection"]["key"]
+            )
+            is None
+        ):
             raise ValueError("raw_contract_projection_invalid")
         for dependency in receipt["dependencies"]:
             dependency_path = Path(dependency["path"])
             before = _raw_generation(dependency_path)
             if dependency["exists"] is False and not before:
                 continue
-            if (before != dependency["generation"]
-                    or _logical_file_digest(dependency_path) != dependency["logical_content_sha256"]
-                    or before != _raw_generation(dependency_path)):
-                raise ValueError("final_dependency_content_changed:" + dependency_path.name)
-        if (publication_before != _raw_generation(path) or binding_before != _raw_generation(binding_path)
-                or markdown_before != _raw_generation(path.with_suffix(".md"))
-                or receipt["implementation_sha256"] != _final_implementation_digest()
-                or any(dependency["generation"] != _raw_generation(Path(dependency["path"]))
-                    for dependency in receipt["dependencies"])):
+            if (
+                before != dependency["generation"]
+                or _logical_file_digest(dependency_path)
+                != dependency["logical_content_sha256"]
+                or before != _raw_generation(dependency_path)
+            ):
+                raise ValueError(
+                    "final_dependency_content_changed:" + dependency_path.name
+                )
+        if (
+            publication_before != _raw_generation(path)
+            or binding_before != _raw_generation(binding_path)
+            or markdown_before != _raw_generation(path.with_suffix(".md"))
+            or receipt["implementation_sha256"] != _final_implementation_digest()
+            or any(
+                dependency["generation"] != _raw_generation(Path(dependency["path"]))
+                for dependency in receipt["dependencies"]
+            )
+        ):
             raise ValueError("final_publication_or_dependency_changed_during_check")
-        return {"reusable": True, "reason": "verified_final_dependency_binding", "raw_read_bytes": 0}
+        return {
+            "reusable": True,
+            "reason": "verified_final_dependency_binding",
+            "raw_read_bytes": 0,
+        }
     except (OSError, ValueError, KeyError, TypeError):
-        return {"reusable": False, "reason": "audit_phase_implementation_dependency_or_receipt_invalid", "raw_read_bytes": 0}
+        return {
+            "reusable": False,
+            "reason": "audit_phase_implementation_dependency_or_receipt_invalid",
+            "raw_read_bytes": 0,
+        }
 
 
 def build_observation_source_quality_audit(
-    target_date: str, *, audit_phase: str = "manual", verified_projection_source: Path | None = None
+    target_date: str,
+    *,
+    audit_phase: str = "manual",
+    verified_projection_source: Path | None = None,
 ) -> dict[str, Any]:
     consumer_implementation_before = _final_implementation_digest()
     raw_path = existing_or_gzip_path(_pipeline_events_path(target_date))
@@ -8438,11 +8762,17 @@ def build_observation_source_quality_audit(
     )
     projection = _read_raw_contract_projection(target_date, projection_key)
     if projection is None and verified_projection_source is not None:
-        projection = _verified_legacy_projection(target_date, raw_path, generation_before, verified_projection_source)
+        projection = _verified_legacy_projection(
+            target_date, raw_path, generation_before, verified_projection_source
+        )
         if projection is None:
-            raise ValueError("verified_raw_projection_migration_failed_no_automatic_bootstrap")
+            raise ValueError(
+                "verified_raw_projection_migration_failed_no_automatic_bootstrap"
+            )
     if audit_phase == "final" and projection is None:
-        raise ValueError("final_verified_raw_projection_required_no_automatic_bootstrap")
+        raise ValueError(
+            "final_verified_raw_projection_required_no_automatic_bootstrap"
+        )
     source_receipt: dict[str, Any] = {}
     audited_at = datetime.now().astimezone().isoformat(timespec="seconds")
     if projection is None:
@@ -8488,8 +8818,11 @@ def build_observation_source_quality_audit(
             else (
                 "source_quality_audit_contract_changed_during_audit"
                 if projection_key and not projection_contract_stable
-                else ("source_quality_raw_invalid_json"
-                      if source_receipt.get("invalid_json_line_count") else None)
+                else (
+                    "source_quality_raw_invalid_json"
+                    if source_receipt.get("invalid_json_line_count")
+                    else None
+                )
             )
         )
     )
@@ -8501,7 +8834,9 @@ def build_observation_source_quality_audit(
     if consumer_implementation_before != _final_implementation_digest():
         status = "fail"
         hard_gate["tuning_input_allowed"] = False
-        hard_gate["blocked_reason"] = "source_quality_consumer_implementation_changed_during_audit"
+        hard_gate["blocked_reason"] = (
+            "source_quality_consumer_implementation_changed_during_audit"
+        )
     return {
         "consumer_implementation_sha256": consumer_implementation_before,
         "schema_version": AUDIT_SCHEMA_VERSION,
@@ -8547,7 +8882,8 @@ def build_observation_source_quality_audit(
                 "key": projection_key,
                 "audited_at": audited_at,
                 "reusable": bool(
-                    projection_key and projection_contract_stable
+                    projection_key
+                    and projection_contract_stable
                     and generation_before == generation_after
                     and source_receipt.get("logical_content_sha256")
                 ),
@@ -8605,12 +8941,20 @@ def build_observation_source_quality_audit(
         "machine_ai_natural_source_consumption": machine_ai_consumption,
         "evaluation_roles": {
             "source_input_allowed": hard_gate["tuning_input_allowed"],
-            "decision_counterfactual_input_allowed": bool(machine_ai_consumption.get("tuning_input_allowed")
-                and machine_ai_consumption.get("machine_terminal_tuning_gate", {}).get("decision_counterfactual_tuning_input_allowed")),
+            "decision_counterfactual_input_allowed": bool(
+                machine_ai_consumption.get("tuning_input_allowed")
+                and machine_ai_consumption.get("machine_terminal_tuning_gate", {}).get(
+                    "decision_counterfactual_tuning_input_allowed"
+                )
+            ),
             "decision_cf_measurable": None,
-            "operational_terminal_reconciled": machine_ai_consumption.get("machine_terminal_tuning_gate", {}).get("operational_terminal_reconciled", False),
-            "economic_comparison_eligible": False, "cost_adjusted_ev": None,
-            "economic_owner": "existing_paired_economic_evaluators_not_source_audit"},
+            "operational_terminal_reconciled": machine_ai_consumption.get(
+                "machine_terminal_tuning_gate", {}
+            ).get("operational_terminal_reconciled", False),
+            "economic_comparison_eligible": False,
+            "cost_adjusted_ev": None,
+            "economic_owner": "existing_paired_economic_evaluators_not_source_audit",
+        },
         **contract_result,
     }
 
@@ -9077,12 +9421,16 @@ def _raw_source_writer_active(target_date: str, raw_path: Path) -> bool:
 
 def _raw_exclusion_source_snapshot(path: Path) -> dict[str, int]:
     stat = path.stat()
-    return {name: getattr(stat, f'st_{name}') for name in
-            ('dev', 'ino', 'size', 'mtime_ns', 'ctime_ns')}
+    return {
+        name: getattr(stat, f"st_{name}")
+        for name in ("dev", "ino", "size", "mtime_ns", "ctime_ns")
+    }
 
 
 def _fresh_exclusion_still_owns_source(
-    target_date: str, raw_path: Path, manifest: dict[str, Any] | None,
+    target_date: str,
+    raw_path: Path,
+    manifest: dict[str, Any] | None,
 ) -> bool:
     """A fresh quarantine replacement is not evidence of a live append.
 
@@ -9090,17 +9438,21 @@ def _fresh_exclusion_still_owns_source(
     same-size correction, or missing ownership evidence keeps the writer guard.
     The producer sealer independently checks its full input generation.
     """
-    if (not isinstance(manifest, dict)
-            or manifest.get('target_date') != target_date
-            or manifest.get('source_path') != str(raw_path)
-            or manifest.get('audit_contract_version') != RAW_ROW_EXCLUSION_CONTRACT_VERSION
-            or manifest.get('application_state') != 'applied'
-            or manifest.get('raw_mutation_applied') is not True):
+    if (
+        not isinstance(manifest, dict)
+        or manifest.get("target_date") != target_date
+        or manifest.get("source_path") != str(raw_path)
+        or manifest.get("audit_contract_version") != RAW_ROW_EXCLUSION_CONTRACT_VERSION
+        or manifest.get("application_state") != "applied"
+        or manifest.get("raw_mutation_applied") is not True
+    ):
         return False
-    expected = manifest.get('applied_source_snapshot')
-    if (not isinstance(expected, dict)
-            or set(expected) != {'dev', 'ino', 'size', 'mtime_ns', 'ctime_ns'}
-            or any(type(value) is not int for value in expected.values())):
+    expected = manifest.get("applied_source_snapshot")
+    if (
+        not isinstance(expected, dict)
+        or set(expected) != {"dev", "ino", "size", "mtime_ns", "ctime_ns"}
+        or any(type(value) is not int for value in expected.values())
+    ):
         return False
     try:
         return expected == _raw_exclusion_source_snapshot(raw_path)
@@ -9290,8 +9642,10 @@ def _exclude_hard_blocking_rows_from_raw(
     replacement_snapshot = _raw_exclusion_source_snapshot(tmp_path)
     tmp_path.replace(raw_path)
     applied_snapshot = _raw_exclusion_source_snapshot(raw_path)
-    if any(applied_snapshot[key] != replacement_snapshot[key]
-           for key in ('dev', 'ino', 'size', 'mtime_ns')):
+    if any(
+        applied_snapshot[key] != replacement_snapshot[key]
+        for key in ("dev", "ino", "size", "mtime_ns")
+    ):
         applied_snapshot = None
     manifest = {
         "report_type": "raw_row_exclusion",
@@ -9424,10 +9778,17 @@ def _attach_raw_row_exclusion(
     summary["raw_row_exclusion_manifest"] = manifest.get("manifest_path")
 
 
-def write_report(target_date: str, *, audit_phase: str = "manual", verified_projection_source: Path | None = None) -> dict[str, Any]:
+def write_report(
+    target_date: str,
+    *,
+    audit_phase: str = "manual",
+    verified_projection_source: Path | None = None,
+) -> dict[str, Any]:
     previous_applied_exclusion = _existing_applied_raw_row_exclusion(target_date)
     report = build_observation_source_quality_audit(
-        target_date, audit_phase=audit_phase, verified_projection_source=verified_projection_source
+        target_date,
+        audit_phase=audit_phase,
+        verified_projection_source=verified_projection_source,
     )
     raw_path = existing_or_gzip_path(_pipeline_events_path(target_date))
     writer_active = bool(
@@ -9486,35 +9847,56 @@ def write_report(target_date: str, *, audit_phase: str = "manual", verified_proj
             report["status"] = "warning"
     if audit_phase == "preflight" and raw_path.exists():
         from src.engine.pipeline_event_summary import (
-            seal_producer_summary_source, rebuild_producer_summary_source,
+            seal_producer_summary_source,
+            rebuild_producer_summary_source,
             producer_summary_paths,
         )
+
         # This existing source owner runs after native bot isolation and raw-row
         # quarantine, before atomic sizing readers require a sealed generation.
         try:
             owns_fresh_exclusion = (
                 not writer_active
-                and _fresh_exclusion_still_owns_source(target_date, raw_path, exclusion_manifest)
+                and _fresh_exclusion_still_owns_source(
+                    target_date, raw_path, exclusion_manifest
+                )
             )
-            if _raw_source_writer_active(target_date, raw_path) and not owns_fresh_exclusion:
+            if (
+                _raw_source_writer_active(target_date, raw_path)
+                and not owns_fresh_exclusion
+            ):
                 raise ValueError("producer_source_writer_active")
             seal_options = {}
             if owns_fresh_exclusion:
-                snapshot = exclusion_manifest['applied_source_snapshot']
-                seal_options['expected_raw_generation'] = {
-                    'path': str(raw_path),
-                    'stamp': [snapshot[key] for key in ('dev', 'ino', 'size', 'mtime_ns', 'ctime_ns')],
+                snapshot = exclusion_manifest["applied_source_snapshot"]
+                seal_options["expected_raw_generation"] = {
+                    "path": str(raw_path),
+                    "stamp": [
+                        snapshot[key]
+                        for key in ("dev", "ino", "size", "mtime_ns", "ctime_ns")
+                    ],
                 }
             try:
-                producer = seal_producer_summary_source(DATA_DIR, target_date, **seal_options)
+                producer = seal_producer_summary_source(
+                    DATA_DIR, target_date, **seal_options
+                )
             except ValueError as exc:
-                if not str(exc).startswith(("producer_raw_summary_count_mismatch",
-                                            "producer_raw_summary_identity_mismatch")):
+                if not str(exc).startswith(
+                    (
+                        "producer_raw_summary_count_mismatch",
+                        "producer_raw_summary_identity_mismatch",
+                    )
+                ):
                     raise
-                producer = rebuild_producer_summary_source(DATA_DIR, target_date, **seal_options)
-            _, producer_path = producer_summary_paths(DATA_DIR / "pipeline_event_summaries", target_date)
+                producer = rebuild_producer_summary_source(
+                    DATA_DIR, target_date, **seal_options
+                )
+            _, producer_path = producer_summary_paths(
+                DATA_DIR / "pipeline_event_summaries", target_date
+            )
             report["producer_source_ledger"] = {
-                "status": "ready", "path": str(producer_path),
+                "status": "ready",
+                "path": str(producer_path),
                 "sha256": hashlib.sha256(producer_path.read_bytes()).hexdigest(),
                 "ledger_sha256": producer["raw_source_ledger"]["ledger_sha256"],
                 "source_reconstructed": bool(producer.get("source_reconstruction")),
@@ -9523,19 +9905,28 @@ def write_report(target_date: str, *, audit_phase: str = "manual", verified_proj
         except (OSError, ValueError, TypeError, KeyError) as exc:
             # Preserve independent usable cohorts. Exact source-dependent
             # consumers keep their own strict ledger and economic guards.
-            report["producer_source_ledger"] = {"status": "source_gap", "reason": str(exc),
-                                                "runtime_effect": False}
+            report["producer_source_ledger"] = {
+                "status": "source_gap",
+                "reason": str(exc),
+                "runtime_effect": False,
+            }
     json_path, md_path = report_paths(target_date)
     json_path.parent.mkdir(parents=True, exist_ok=True)
     write_json_object_generation_safe(json_path, report)
     _write_markdown(report, md_path)
     dependencies = _final_dependencies(report)
-    binding = {"schema": "observation_source_quality_final_binding_v1",
-        "target_date": target_date, "audit_phase": audit_phase,
+    binding = {
+        "schema": "observation_source_quality_final_binding_v1",
+        "target_date": target_date,
+        "audit_phase": audit_phase,
         "artifact_sha256": hashlib.sha256(json_path.read_bytes()).hexdigest(),
         "markdown_sha256": hashlib.sha256(md_path.read_bytes()).hexdigest(),
-        "implementation_sha256": report["consumer_implementation_sha256"], "dependencies": dependencies}
-    write_json_object_generation_safe(Path(str(json_path) + ".final-contract.json"), binding)
+        "implementation_sha256": report["consumer_implementation_sha256"],
+        "dependencies": dependencies,
+    }
+    write_json_object_generation_safe(
+        Path(str(json_path) + ".final-contract.json"), binding
+    )
     return report
 
 
@@ -9611,10 +10002,16 @@ def main() -> int:
             )
         else:
             report = (
-                write_report(args.target_date, audit_phase=args.audit_phase, verified_projection_source=args.verified_projection_source)
+                write_report(
+                    args.target_date,
+                    audit_phase=args.audit_phase,
+                    verified_projection_source=args.verified_projection_source,
+                )
                 if args.write
                 else build_observation_source_quality_audit(
-                    args.target_date, audit_phase=args.audit_phase, verified_projection_source=args.verified_projection_source
+                    args.target_date,
+                    audit_phase=args.audit_phase,
+                    verified_projection_source=args.verified_projection_source,
                 )
             )
         stdout_payload = _stdout_report_payload(

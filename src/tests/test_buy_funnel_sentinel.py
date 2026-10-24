@@ -12,104 +12,232 @@ def _private_compact_fields(fields):
     """Use the native field encoding without touching any runtime cache."""
     import hashlib
     from src.engine.monitoring import sentinel_compact_store as store
-    header, payload = store._pack({'fields': fields})
+
+    header, payload = store._pack({"fields": fields})
     _, size, digest, hot = json.loads(header)
+
     class Reader:
         def read(self, offset, expected):
             assert offset == 0 and hashlib.sha256(payload).hexdigest() == expected
             return payload
+
     return store.CompactFields(Reader(), 0, digest, size, hot)
 
 
-@pytest.mark.parametrize('stage', ['blocked_strength_momentum', 'budget_pass', 'latency_block', 'order_bundle_submitted'])
+@pytest.mark.parametrize(
+    "stage",
+    [
+        "blocked_strength_momentum",
+        "budget_pass",
+        "latency_block",
+        "order_bundle_submitted",
+    ],
+)
 def test_non_ai_trace_stage_never_reads_lazy_payload(stage):
     from collections.abc import Mapping
     from datetime import datetime
+
     class Unreadable(Mapping):
-        def __getitem__(self, key): raise AssertionError('irrelevant trace payload read')
-        def __iter__(self): raise AssertionError('irrelevant trace payload iterated')
-        def __len__(self): raise AssertionError('irrelevant trace payload measured')
-    event = sentinel.PipelineEvent(datetime(2026,10,14,10), 'ENTRY_PIPELINE', stage,
-                                   'fixture', '005930', '1', Unreadable())
+        def __getitem__(self, key):
+            raise AssertionError("irrelevant trace payload read")
+
+        def __iter__(self):
+            raise AssertionError("irrelevant trace payload iterated")
+
+        def __len__(self):
+            raise AssertionError("irrelevant trace payload measured")
+
+    event = sentinel.PipelineEvent(
+        datetime(2026, 10, 14, 10),
+        "ENTRY_PIPELINE",
+        stage,
+        "fixture",
+        "005930",
+        "1",
+        Unreadable(),
+    )
     assert sentinel._trusted_ai_trace_result(event) is False
 
 
-@pytest.mark.parametrize('compact', [False, True])
-@pytest.mark.parametrize('stage,trace,parse_ok,expected', [
-    ('ai_confirmed', 'trace-1', 'False', True),
-    ('ai_confirmed', 'unknown', 'True', False),
-    ('early_accel_strong_bundle_recheck_failed', 'trace-1', 'True', True),
-    ('early_accel_strong_bundle_recheck_failed', 'trace-1', 'False', False),
-    ('early_accel_strong_bundle_recheck_failed', '', 'True', False),
-])
-def test_trace_stage_shortcut_preserves_required_proof(compact, stage, trace, parse_ok, expected):
+@pytest.mark.parametrize("compact", [False, True])
+@pytest.mark.parametrize(
+    "stage,trace,parse_ok,expected",
+    [
+        ("ai_confirmed", "trace-1", "False", True),
+        ("ai_confirmed", "unknown", "True", False),
+        ("early_accel_strong_bundle_recheck_failed", "trace-1", "True", True),
+        ("early_accel_strong_bundle_recheck_failed", "trace-1", "False", False),
+        ("early_accel_strong_bundle_recheck_failed", "", "True", False),
+    ],
+)
+def test_trace_stage_shortcut_preserves_required_proof(
+    compact, stage, trace, parse_ok, expected
+):
     from datetime import datetime
-    fields = dict(ai_decision_trace_id=trace, ai_parse_ok=parse_ok, ai_result_source='live',
-                  ai_decision_evaluation_status='evaluated', decision_quality_contract_status='pass')
-    event = sentinel.PipelineEvent(datetime(2026,10,14,10), 'ENTRY_PIPELINE', stage,
-                                   'fixture', '005930', '1', _private_compact_fields(fields) if compact else fields)
+
+    fields = dict(
+        ai_decision_trace_id=trace,
+        ai_parse_ok=parse_ok,
+        ai_result_source="live",
+        ai_decision_evaluation_status="evaluated",
+        decision_quality_contract_status="pass",
+    )
+    event = sentinel.PipelineEvent(
+        datetime(2026, 10, 14, 10),
+        "ENTRY_PIPELINE",
+        stage,
+        "fixture",
+        "005930",
+        "1",
+        _private_compact_fields(fields) if compact else fields,
+    )
     assert sentinel._trusted_ai_trace_result(event) is expected
 
 
-@pytest.mark.parametrize('compact', [False, True])
-@pytest.mark.parametrize('case', ['absent', 'outside_window', 'retry_only', 'summary_only',
-                                 'terminal', 'duplicate_terminal', 'recovered', 'unproven'])
-def test_cash_ledger_shortcut_preserves_exact_terminal_population(monkeypatch, compact, case):
+@pytest.mark.parametrize("compact", [False, True])
+@pytest.mark.parametrize(
+    "case",
+    [
+        "absent",
+        "outside_window",
+        "retry_only",
+        "summary_only",
+        "terminal",
+        "duplicate_terminal",
+        "recovered",
+        "unproven",
+    ],
+)
+def test_cash_ledger_shortcut_preserves_exact_terminal_population(
+    monkeypatch, compact, case
+):
     from dataclasses import replace
     from datetime import datetime, timedelta
-    start, end = datetime(2026,9,11,10), datetime(2026,9,11,10,3)
+
+    start, end = datetime(2026, 9, 11, 10), datetime(2026, 9, 11, 10, 3)
     events = _cash_exclusion_events(
-        {'kt00011_cash_orderable_contract_status':'missing'} if case == 'unproven' else None,
-        recovered=case == 'recovered')
+        (
+            {"kt00011_cash_orderable_contract_status": "missing"}
+            if case == "unproven"
+            else None
+        ),
+        recovered=case == "recovered",
+    )
     summaries = None
-    if case in {'absent', 'summary_only'}:
-        events = [e for e in events if e.stage != 'blocked_zero_qty']
-    elif case == 'outside_window':
-        events = [replace(e, emitted_at=end+timedelta(seconds=1)) if e.stage=='blocked_zero_qty' else e for e in events]
-    elif case == 'retry_only':
-        events = [replace(e, fields={**e.fields,'ai_call_trigger_reason':'early_accel_recheck'}) if e.stage=='blocked_zero_qty' else e for e in events]
-    elif case == 'duplicate_terminal':
+    if case in {"absent", "summary_only"}:
+        events = [e for e in events if e.stage != "blocked_zero_qty"]
+    elif case == "outside_window":
+        events = [
+            (
+                replace(e, emitted_at=end + timedelta(seconds=1))
+                if e.stage == "blocked_zero_qty"
+                else e
+            )
+            for e in events
+        ]
+    elif case == "retry_only":
+        events = [
+            (
+                replace(
+                    e,
+                    fields={
+                        **e.fields,
+                        "ai_call_trigger_reason": "early_accel_recheck",
+                    },
+                )
+                if e.stage == "blocked_zero_qty"
+                else e
+            )
+            for e in events
+        ]
+    elif case == "duplicate_terminal":
         events += [replace(e) for e in events]
-    if case == 'summary_only':
-        summaries = [dict(stage='blocked_zero_qty', pipeline='ENTRY_PIPELINE', stock_code='005930',
-            bucket_start=start.isoformat(), first_seen=start.isoformat(), last_seen=start.isoformat(),
-            event_count=20, reason_label='blocked_zero_qty:diagnostic_only')]
+    if case == "summary_only":
+        summaries = [
+            dict(
+                stage="blocked_zero_qty",
+                pipeline="ENTRY_PIPELINE",
+                stock_code="005930",
+                bucket_start=start.isoformat(),
+                first_seen=start.isoformat(),
+                last_seen=start.isoformat(),
+                event_count=20,
+                reason_label="blocked_zero_qty:diagnostic_only",
+            )
+        ]
     if compact:
-        events = [replace(e,fields=_private_compact_fields(e.fields)) for e in events]
+        events = [replace(e, fields=_private_compact_fields(e.fields)) for e in events]
     original = sentinel._exact_submit_drought_axis_summary
     calls = []
+
     def count(population, **kwargs):
-        calls.append(tuple((e.stage,e.record_id) for e in population))
+        calls.append(tuple((e.stage, e.record_id) for e in population))
         return original(population, **kwargs)
-    raw = sentinel._summarize_events_included(events,start_at=start,end_at=end,summary_rows=summaries)
-    monkeypatch.setattr(sentinel,'_exact_submit_drought_axis_summary',count)
-    result = sentinel._calculate_event_summary(events,start_at=start,end_at=end,summary_rows=summaries)
-    if case in {'terminal','duplicate_terminal'}:
+
+    raw = sentinel._summarize_events_included(
+        events, start_at=start, end_at=end, summary_rows=summaries
+    )
+    monkeypatch.setattr(sentinel, "_exact_submit_drought_axis_summary", count)
+    result = sentinel._calculate_event_summary(
+        events, start_at=start, end_at=end, summary_rows=summaries
+    )
+    if case in {"terminal", "duplicate_terminal"}:
         assert len(calls) == 3
-        assert result['cash_shortfall_exclusion']['excluded_attempt_count'] == 20
-        assert result['cash_shortfall_exclusion']['raw_exact_attempt_contract'] == raw['exact_attempt_contract']
+        assert result["cash_shortfall_exclusion"]["excluded_attempt_count"] == 20
+        assert (
+            result["cash_shortfall_exclusion"]["raw_exact_attempt_contract"]
+            == raw["exact_attempt_contract"]
+        )
     else:
         assert result == raw
-        assert 'cash_shortfall_exclusion' not in result
-        assert len(calls) == (2 if case in {'recovered','unproven'} else 1)
-    if case == 'summary_only':
-        assert result['exact_attempt_contract']['summary_terminal_identity_gap_events'] == 20
+        assert "cash_shortfall_exclusion" not in result
+        assert len(calls) == (2 if case in {"recovered", "unproven"} else 1)
+    if case == "summary_only":
+        assert (
+            result["exact_attempt_contract"]["summary_terminal_identity_gap_events"]
+            == 20
+        )
 
 
-@pytest.mark.parametrize('token', ['latency_state_danger', 'ai_score_50_buy_hold_override'])
-@pytest.mark.parametrize('variant,expected', [('key',True),('value',True),('unicode',True),
-    ('split',False),('literal_escape',False),('actual_escape',True),('nested_text',True),('long',True),('none',False)])
-def test_token_detection_preserves_logical_dict_fields_for_compact_mapping(token, variant, expected):
+@pytest.mark.parametrize(
+    "token", ["latency_state_danger", "ai_score_50_buy_hold_override"]
+)
+@pytest.mark.parametrize(
+    "variant,expected",
+    [
+        ("key", True),
+        ("value", True),
+        ("unicode", True),
+        ("split", False),
+        ("literal_escape", False),
+        ("actual_escape", True),
+        ("nested_text", True),
+        ("long", True),
+        ("none", False),
+    ],
+)
+def test_token_detection_preserves_logical_dict_fields_for_compact_mapping(
+    token, variant, expected
+):
     from collections import UserDict
-    fields = {'x': token}
-    if variant=='key':fields={token:'yes'}
-    elif variant=='unicode':fields={'x':'한글 '+token}
-    elif variant=='split':fields={token[:5]:token[5:]}
-    elif variant=='literal_escape':fields={'x':'\\u0061'+token[1:]}
-    elif variant=='actual_escape':fields={'x':chr(ord(token[0]))+token[1:]}
-    elif variant=='nested_text':fields={'x':{'nested':token}}
-    elif variant=='long':fields={'x':'z'*100000+token}
-    elif variant=='none':fields={'x':None}
+
+    fields = {"x": token}
+    if variant == "key":
+        fields = {token: "yes"}
+    elif variant == "unicode":
+        fields = {"x": "한글 " + token}
+    elif variant == "split":
+        fields = {token[:5]: token[5:]}
+    elif variant == "literal_escape":
+        fields = {"x": "\\u0061" + token[1:]}
+    elif variant == "actual_escape":
+        fields = {"x": chr(ord(token[0])) + token[1:]}
+    elif variant == "nested_text":
+        fields = {"x": {"nested": token}}
+    elif variant == "long":
+        fields = {"x": "z" * 100000 + token}
+    elif variant == "none":
+        fields = {"x": None}
     compact = _private_compact_fields(fields)
     logical = dict(compact.items())
     assert sentinel._contains_text_token(logical, token) is expected
@@ -121,132 +249,196 @@ def test_compact_token_scan_rejects_malformed_payload():
     import hashlib
     import zlib
     from src.engine.monitoring.sentinel_compact_store import CompactFields
-    body = zlib.compress(b'not-valid-json')
+
+    body = zlib.compress(b"not-valid-json")
+
     class Reader:
-        def read(self,offset,expected):
-            assert hashlib.sha256(body).hexdigest()==expected
+        def read(self, offset, expected):
+            assert hashlib.sha256(body).hexdigest() == expected
             return body
-    fields=CompactFields(Reader(),0,hashlib.sha256(body).hexdigest(),14,{})
-    with pytest.raises(ValueError):sentinel._contains_text_token(fields,'latency_state_danger')
+
+    fields = CompactFields(Reader(), 0, hashlib.sha256(body).hexdigest(), 14, {})
+    with pytest.raises(ValueError):
+        sentinel._contains_text_token(fields, "latency_state_danger")
 
 
-@pytest.mark.parametrize('stage,token,counter', [
-    ('latency_block','latency_state_danger','latency_state_danger_events'),
-    ('custom_observation','ai_score_50_buy_hold_override','upstream_block_events'),
-])
+@pytest.mark.parametrize(
+    "stage,token,counter",
+    [
+        ("latency_block", "latency_state_danger", "latency_state_danger_events"),
+        (
+            "custom_observation",
+            "ai_score_50_buy_hold_override",
+            "upstream_block_events",
+        ),
+    ],
+)
 def test_token_only_evidence_survives_compact_full_summary(stage, token, counter):
     from dataclasses import replace
     from datetime import datetime, timedelta
-    start=datetime(2026,10,14,10)
+
+    start = datetime(2026, 10, 14, 10)
     # The canonical cache stores nested diagnostics as strings. No dedicated
     # reason, decision, or explicit override field supplies a second route.
-    fields={'diagnostic':json.dumps({'nested':{'marker':token}})}
-    event=sentinel.PipelineEvent(start,'ENTRY_PIPELINE',stage,'fixture','005930','1',fields)
-    options=dict(start_at=start-timedelta(seconds=1),end_at=start+timedelta(seconds=1))
-    logical=sentinel._calculate_event_summary([event],**options)
-    compact=sentinel._calculate_event_summary([replace(event,fields=_private_compact_fields(fields))],**options)
+    fields = {"diagnostic": json.dumps({"nested": {"marker": token}})}
+    event = sentinel.PipelineEvent(
+        start, "ENTRY_PIPELINE", stage, "fixture", "005930", "1", fields
+    )
+    options = dict(
+        start_at=start - timedelta(seconds=1), end_at=start + timedelta(seconds=1)
+    )
+    logical = sentinel._calculate_event_summary([event], **options)
+    compact = sentinel._calculate_event_summary(
+        [replace(event, fields=_private_compact_fields(fields))], **options
+    )
     assert logical[counter] == 1
     assert compact == logical
 
 
-@pytest.mark.parametrize('override,skipped', [(None, False), ('240', True)])
-def test_periodic_wrapper_runs_next_tick_and_preserves_explicit_cooldown(tmp_path, override, skipped):
+@pytest.mark.parametrize("override,skipped", [(None, False), ("240", True)])
+def test_periodic_wrapper_runs_next_tick_and_preserves_explicit_cooldown(
+    tmp_path, override, skipped
+):
     import os
     import shutil
     import subprocess
+
     root = Path(__file__).resolve().parents[2]
-    deploy = tmp_path/'deploy'; deploy.mkdir()
-    script = deploy/'run_buy_funnel_sentinel_intraday.sh'
-    shutil.copyfile(root/'deploy'/script.name, script)
-    shutil.copyfile(root/'deploy/cpu_affinity_profile.sh', deploy/'cpu_affinity_profile.sh')
-    python = tmp_path/'.venv/bin/python'; python.parent.mkdir(parents=True)
+    deploy = tmp_path / "deploy"
+    deploy.mkdir()
+    script = deploy / "run_buy_funnel_sentinel_intraday.sh"
+    shutil.copyfile(root / "deploy" / script.name, script)
+    shutil.copyfile(
+        root / "deploy/cpu_affinity_profile.sh", deploy / "cpu_affinity_profile.sh"
+    )
+    python = tmp_path / ".venv/bin/python"
+    python.parent.mkdir(parents=True)
     python.write_text('#!/bin/bash\ntouch "$PROJECT_DIR/called"\n')
     python.chmod(0o755)
-    state = tmp_path/'recent-success'; state.touch()
-    env = dict(os.environ, PROJECT_DIR=str(tmp_path), BUY_FUNNEL_SENTINEL_DRY_RUN='1',
-               BUY_FUNNEL_SENTINEL_COOLDOWN_STATE_FILE=str(state), KORSTOCKSCAN_NPROC_OVERRIDE='1')
-    env.pop('BUY_FUNNEL_SENTINEL_COOLDOWN_SEC', None)
-    if override is not None: env['BUY_FUNNEL_SENTINEL_COOLDOWN_SEC'] = override
-    result = subprocess.run(['bash', str(script), '2026-10-13'], env=env, capture_output=True, text=True, timeout=10)
+    state = tmp_path / "recent-success"
+    state.touch()
+    env = dict(
+        os.environ,
+        PROJECT_DIR=str(tmp_path),
+        BUY_FUNNEL_SENTINEL_DRY_RUN="1",
+        BUY_FUNNEL_SENTINEL_COOLDOWN_STATE_FILE=str(state),
+        KORSTOCKSCAN_NPROC_OVERRIDE="1",
+    )
+    env.pop("BUY_FUNNEL_SENTINEL_COOLDOWN_SEC", None)
+    if override is not None:
+        env["BUY_FUNNEL_SENTINEL_COOLDOWN_SEC"] = override
+    result = subprocess.run(
+        ["bash", str(script), "2026-10-13"],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
     assert result.returncode == 0, result.stderr
-    assert (tmp_path/'called').exists() is not skipped
-    assert ('cooldown active' in result.stdout) is skipped
+    assert (tmp_path / "called").exists() is not skipped
+    assert ("cooldown active" in result.stdout) is skipped
 
 
 @pytest.mark.parametrize(
-    'first_exit,after_first,monitor_exit,dry_run,expected_exit,monitor_budget',
-    [(0, 2, 0, False, 0, 120),
-     (0, 130, 0, False, 0, 45),
-     (124, 135, 0, False, 124, 40),
-     (137, 135, 0, False, 137, 40),
-     (7, 2, 0, False, 7, 120),
-     (0, 130, 75, False, 75, 45),
-     (0, 130, 1, False, 1, 45),
-     (124, 135, 75, False, 124, 40),
-     (0, 130, 0, True, 0, None)],
+    "first_exit,after_first,monitor_exit,dry_run,expected_exit,monitor_budget",
+    [
+        (0, 2, 0, False, 0, 120),
+        (0, 130, 0, False, 0, 45),
+        (124, 135, 0, False, 124, 40),
+        (137, 135, 0, False, 137, 40),
+        (7, 2, 0, False, 7, 120),
+        (0, 130, 75, False, 75, 45),
+        (0, 130, 1, False, 1, 45),
+        (124, 135, 75, False, 124, 40),
+        (0, 130, 0, True, 0, None),
+    ],
 )
 def test_wrapper_reserves_observer_time_and_preserves_stage_terminals(
-    tmp_path, first_exit, after_first, monitor_exit, dry_run, expected_exit, monitor_budget
+    tmp_path,
+    first_exit,
+    after_first,
+    monitor_exit,
+    dry_run,
+    expected_exit,
+    monitor_budget,
 ):
     import os
     import subprocess
 
     project = Path(__file__).resolve().parents[2]
-    clock = tmp_path / 'clock'
-    clock.write_text('0\n')
+    clock = tmp_path / "clock"
+    clock.write_text("0\n")
     # Bash's existing SECONDS clock advances at owned-child completion. No real
     # trading/report process or long wall-clock sleep is needed for the boundary.
-    environment = tmp_path / 'bash-clock'
+    environment = tmp_path / "bash-clock"
     environment.write_text(
-        'set -T\n'
+        "set -T\n"
         '__test_clock_tick() { local value; read -r value < "$TEST_CLOCK"; SECONDS="$value"; }\n'
-        'trap __test_clock_tick DEBUG\n'
+        "trap __test_clock_tick DEBUG\n"
     )
-    executable = tmp_path / 'bin/timeout'
+    executable = tmp_path / "bin/timeout"
     executable.parent.mkdir()
     executable.write_text(
-        '#!/bin/bash\n'
+        "#!/bin/bash\n"
         'printf "%s\\n" "$*" >> "$TEST_TIMEOUT_CALLS"\n'
         'if [[ "$*" == *"src.engine.buy_funnel_sentinel"* ]]; then\n'
         '  printf "%s\\n" "$TEST_AFTER_FIRST" > "$TEST_CLOCK"\n'
         '  exit "$TEST_FIRST_EXIT"\n'
-        'fi\n'
+        "fi\n"
         'exit "$TEST_MONITOR_EXIT"\n'
     )
     executable.chmod(0o755)
-    calls = tmp_path / 'timeout-calls'
-    env = {**os.environ, 'PROJECT_DIR': str(tmp_path),
-           'PATH': str(executable.parent) + os.pathsep + os.environ['PATH'],
-           'BASH_ENV': str(environment), 'TEST_CLOCK': str(clock),
-           'TEST_TIMEOUT_CALLS': str(calls), 'TEST_AFTER_FIRST': str(after_first),
-           'TEST_FIRST_EXIT': str(first_exit), 'TEST_MONITOR_EXIT': str(monitor_exit),
-           'BUY_FUNNEL_SENTINEL_DRY_RUN': str(int(dry_run)),
-           'BUY_FUNNEL_SENTINEL_COOLDOWN_SEC': '0', 'KORSTOCKSCAN_NPROC_OVERRIDE': '1'}
+    calls = tmp_path / "timeout-calls"
+    env = {
+        **os.environ,
+        "PROJECT_DIR": str(tmp_path),
+        "PATH": str(executable.parent) + os.pathsep + os.environ["PATH"],
+        "BASH_ENV": str(environment),
+        "TEST_CLOCK": str(clock),
+        "TEST_TIMEOUT_CALLS": str(calls),
+        "TEST_AFTER_FIRST": str(after_first),
+        "TEST_FIRST_EXIT": str(first_exit),
+        "TEST_MONITOR_EXIT": str(monitor_exit),
+        "BUY_FUNNEL_SENTINEL_DRY_RUN": str(int(dry_run)),
+        "BUY_FUNNEL_SENTINEL_COOLDOWN_SEC": "0",
+        "KORSTOCKSCAN_NPROC_OVERRIDE": "1",
+    }
     result = subprocess.run(
-        ['bash', str(project / 'deploy/run_buy_funnel_sentinel_intraday.sh'), '2026-10-14'],
-        env=env, capture_output=True, text=True, timeout=10,
+        [
+            "bash",
+            str(project / "deploy/run_buy_funnel_sentinel_intraday.sh"),
+            "2026-10-14",
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=10,
     )
     assert result.returncode == expected_exit, result.stdout + result.stderr
     invocations = calls.read_text().splitlines()
-    assert '--signal=TERM --kill-after=5s 130s ' in invocations[0]
-    assert 'src.engine.buy_funnel_sentinel' in invocations[0]
+    assert "--signal=TERM --kill-after=5s 130s " in invocations[0]
+    assert "src.engine.buy_funnel_sentinel" in invocations[0]
     assert len(invocations) == (1 if dry_run else 2)
     if not dry_run:
         monitor = invocations[1]
-        assert 'src.engine.monitoring.submission_bottleneck_monitor' in monitor
-        assert f'--budget-seconds {monitor_budget}' in monitor
-        assert ('--source-only' in monitor) is bool(first_exit)
-        assert f'--kill-after=5s {175-after_first}s ' in monitor
-    assert (tmp_path / 'tmp/run_buy_funnel_sentinel_success.state').exists() is (expected_exit == 0)
-    assert ('[DONE]' in result.stdout) is (expected_exit == 0)
+        assert "src.engine.monitoring.submission_bottleneck_monitor" in monitor
+        assert f"--budget-seconds {monitor_budget}" in monitor
+        assert ("--source-only" in monitor) is bool(first_exit)
+        assert f"--kill-after=5s {175-after_first}s " in monitor
+    assert (tmp_path / "tmp/run_buy_funnel_sentinel_success.state").exists() is (
+        expected_exit == 0
+    )
+    assert ("[DONE]" in result.stdout) is (expected_exit == 0)
     if first_exit:
-        assert f'exit_code={first_exit}' in result.stdout
+        assert f"exit_code={first_exit}" in result.stdout
     elif monitor_exit and not dry_run:
         if monitor_exit == 75:
-            assert 'reason=monitor_deferred exit_code=75' in result.stdout
-            assert '[FAIL]' not in result.stdout
+            assert "reason=monitor_deferred exit_code=75" in result.stdout
+            assert "[FAIL]" not in result.stdout
         else:
-            assert f'reason=monitor_incomplete exit_code={monitor_exit}' in result.stdout
+            assert (
+                f"reason=monitor_incomplete exit_code={monitor_exit}" in result.stdout
+            )
 
 
 def _event(
@@ -450,10 +642,6 @@ def test_exact_refresh_diagnostics_separate_recovery_from_terminal_and_keep_ai_t
     assert contract["entry_ai_authority_diagnostics"] == ai
 
 
-
-
-
-
 def test_machine_primary_funnel_keeps_ai_screen_and_broker_receipt_separate():
     from datetime import datetime, timedelta
 
@@ -510,8 +698,6 @@ def test_machine_primary_funnel_keeps_ai_screen_and_broker_receipt_separate():
     assert result["legacy_recheck_runtime_eligible_count"] == 0
     assert result["evaluation_ledger"][0]["final_state"] == "submit_pipeline_reached"
     assert result["count_conservation"]["identified_plus_identity_missing_equals_raw"]
-
-
 
 
 def test_machine_primary_transport_screen_is_nonexposure_not_contract_gap():
@@ -1214,8 +1400,12 @@ def test_effective_nxt_scope_overrides_legacy_entry_venue_and_uses_time_phase():
     event = sentinel._event_from_cache_row(sentinel._payload_to_cache_row(payload))
 
     assert event is not None
-    assert event_scope.explicit_event_scope(event.fields, event.emitted_at,
-            venue_keys=sentinel.VENUE_SCOPE_FIELD_KEYS, session_keys=sentinel.SESSION_SCOPE_FIELD_KEYS) == (
+    assert event_scope.explicit_event_scope(
+        event.fields,
+        event.emitted_at,
+        venue_keys=sentinel.VENUE_SCOPE_FIELD_KEYS,
+        session_keys=sentinel.SESSION_SCOPE_FIELD_KEYS,
+    ) == (
         "NXT",
         "NXT_AFTERMARKET",
         "pass",
@@ -1237,8 +1427,12 @@ def test_dual_aftermarket_scope_preserves_unknown_and_actual_execution_venue():
     event = sentinel._event_from_cache_row(sentinel._payload_to_cache_row(payload))
 
     assert event is not None
-    assert event_scope.explicit_event_scope(event.fields, event.emitted_at,
-            venue_keys=sentinel.VENUE_SCOPE_FIELD_KEYS, session_keys=sentinel.SESSION_SCOPE_FIELD_KEYS) == (
+    assert event_scope.explicit_event_scope(
+        event.fields,
+        event.emitted_at,
+        venue_keys=sentinel.VENUE_SCOPE_FIELD_KEYS,
+        session_keys=sentinel.SESSION_SCOPE_FIELD_KEYS,
+    ) == (
         "KRX_NXT_INTEGRATED",
         "KRX_NXT_AFTERMARKET",
         "pass",
@@ -1262,8 +1456,12 @@ def test_solo_aftermarket_scope_is_not_folded_into_dual():
     event = sentinel._event_from_cache_row(sentinel._payload_to_cache_row(payload))
 
     assert event is not None
-    assert event_scope.explicit_event_scope(event.fields, event.emitted_at,
-            venue_keys=sentinel.VENUE_SCOPE_FIELD_KEYS, session_keys=sentinel.SESSION_SCOPE_FIELD_KEYS) == (
+    assert event_scope.explicit_event_scope(
+        event.fields,
+        event.emitted_at,
+        venue_keys=sentinel.VENUE_SCOPE_FIELD_KEYS,
+        session_keys=sentinel.SESSION_SCOPE_FIELD_KEYS,
+    ) == (
         "NXT",
         "NXT_AFTERMARKET_SOLO",
         "pass",
@@ -1283,8 +1481,12 @@ def test_premarket_venue_rejects_regular_krx_session():
     event = sentinel._event_from_cache_row(sentinel._payload_to_cache_row(payload))
 
     assert event is not None
-    assert event_scope.explicit_event_scope(event.fields, event.emitted_at,
-            venue_keys=sentinel.VENUE_SCOPE_FIELD_KEYS, session_keys=sentinel.SESSION_SCOPE_FIELD_KEYS) == (
+    assert event_scope.explicit_event_scope(
+        event.fields,
+        event.emitted_at,
+        venue_keys=sentinel.VENUE_SCOPE_FIELD_KEYS,
+        session_keys=sentinel.SESSION_SCOPE_FIELD_KEYS,
+    ) == (
         "CONFLICT",
         "CONFLICT",
         "conflict",
@@ -1304,8 +1506,12 @@ def test_runtime_krx_like_premarket_session_token_is_preserved():
     event = sentinel._event_from_cache_row(sentinel._payload_to_cache_row(payload))
 
     assert event is not None
-    assert event_scope.explicit_event_scope(event.fields, event.emitted_at,
-            venue_keys=sentinel.VENUE_SCOPE_FIELD_KEYS, session_keys=sentinel.SESSION_SCOPE_FIELD_KEYS) == (
+    assert event_scope.explicit_event_scope(
+        event.fields,
+        event.emitted_at,
+        venue_keys=sentinel.VENUE_SCOPE_FIELD_KEYS,
+        session_keys=sentinel.SESSION_SCOPE_FIELD_KEYS,
+    ) == (
         "PREMARKET_KRX_LIKE",
         "PREMARKET_KRX_LIKE",
         "pass",
@@ -1322,26 +1528,44 @@ def _write_events(tmp_path, target_date: str, rows: list[dict]) -> None:
             handle.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
-@pytest.mark.parametrize("clock,scope,expected", [
-    ("08:03:00", "PREMARKET_KRX_LIKE", "NOT_YET_DUE"),
-    ("08:10:00", "PREMARKET_KRX_LIKE", "SUBMIT_DROUGHT_CRITICAL"),
-    ("09:03:00", "KRX", "NOT_YET_DUE"),
-    ("09:10:00", "KRX", "SUBMIT_DROUGHT_CRITICAL"),
-])
-def test_premarket_and_regular_have_separate_due_windows(monkeypatch, tmp_path, clock, scope, expected):
+@pytest.mark.parametrize(
+    "clock,scope,expected",
+    [
+        ("08:03:00", "PREMARKET_KRX_LIKE", "NOT_YET_DUE"),
+        ("08:10:00", "PREMARKET_KRX_LIKE", "SUBMIT_DROUGHT_CRITICAL"),
+        ("09:03:00", "KRX", "NOT_YET_DUE"),
+        ("09:10:00", "KRX", "SUBMIT_DROUGHT_CRITICAL"),
+    ],
+)
+def test_premarket_and_regular_have_separate_due_windows(
+    monkeypatch, tmp_path, clock, scope, expected
+):
     monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
     day = "2026-10-23"
     rows = []
-    for venue, session, hour in [("PREMARKET_KRX_LIKE", "premarket_krx_like", "08"),
-                                 ("KRX", "krx_regular", "09")]:
+    for venue, session, hour in [
+        ("PREMARKET_KRX_LIKE", "premarket_krx_like", "08"),
+        ("KRX", "krx_regular", "09"),
+    ]:
         for index in range(3):
             for second, stage in [(0, "ai_confirmed"), (1, "budget_pass")]:
-                rows.append(_event(day, f"{hour}:01:{index * 2 + second:02}", stage,
-                    record_id=f"{venue}-{index}", fields={"effective_venue": venue,
-                    "market_session_bucket": session, "evaluation_attempt_id": f"{venue}-{index}"}))
+                rows.append(
+                    _event(
+                        day,
+                        f"{hour}:01:{index * 2 + second:02}",
+                        stage,
+                        record_id=f"{venue}-{index}",
+                        fields={
+                            "effective_venue": venue,
+                            "market_session_bucket": session,
+                            "evaluation_attempt_id": f"{venue}-{index}",
+                        },
+                    )
+                )
     _write_events(tmp_path, day, rows)
-    report = sentinel.build_buy_funnel_sentinel_report(day,
-        as_of=sentinel._parse_as_of(day, clock))
+    report = sentinel.build_buy_funnel_sentinel_report(
+        day, as_of=sentinel._parse_as_of(day, clock)
+    )
     key = f"{scope}|{'PREMARKET_KRX_LIKE' if scope.startswith('PREMARKET') else 'KRX_REGULAR'}"
     scoped = report["current"]["by_venue_session"][key]
     assert scoped["summary"]["stage_unique"]["budget_pass"] == 3
@@ -1349,70 +1573,131 @@ def test_premarket_and_regular_have_separate_due_windows(monkeypatch, tmp_path, 
     assert report["policy"]["live_runtime_effect"] is False
 
 
-@pytest.mark.parametrize('clock', ['2026-10-12T10:00:00.933801', '2026-10-12T10:00:00.933801+09:00', '2026-10-12T01:00:00.933801+00:00'])
+@pytest.mark.parametrize(
+    "clock",
+    [
+        "2026-10-12T10:00:00.933801",
+        "2026-10-12T10:00:00.933801+09:00",
+        "2026-10-12T01:00:00.933801+00:00",
+    ],
+)
 def test_submission_monitor_export_preserves_native_clock_and_attempt(clock):
     from datetime import datetime, timedelta
+
     value = datetime.fromisoformat(clock)
-    fields = dict(async_producer_pid=123, async_producer_start_ticks=456, async_request_id='exact-request',
-        async_disposition='accepted_to_entry_path', async_disposition_event_id='exact-terminal',
-        async_machine_action='ENTER_NOW', async_auxiliary_status='pass', async_auxiliary_verdict='PASS',
-        async_provider_called=True, async_origin_deadline_epoch=value.timestamp()+5)
-    event = sentinel.PipelineEvent(value, 'ENTRY_PIPELINE', 'entry_async_disposition', 'test', '005930', '1', fields)
-    result = sentinel._submission_monitor_report_snapshot([event], value+timedelta(seconds=1))
-    coverage = json.loads(json.dumps(result))['async_disposition_coverage']
-    assert coverage['attempt_projection'][0]['emitted_at'] == clock
-    assert coverage['attempt_projection'][0]['fields']['async_request_id'] == 'exact-request'
-    assert coverage['by_producer']['123:456']['accepted'] == 1
+    fields = dict(
+        async_producer_pid=123,
+        async_producer_start_ticks=456,
+        async_request_id="exact-request",
+        async_disposition="accepted_to_entry_path",
+        async_disposition_event_id="exact-terminal",
+        async_machine_action="ENTER_NOW",
+        async_auxiliary_status="pass",
+        async_auxiliary_verdict="PASS",
+        async_provider_called=True,
+        async_origin_deadline_epoch=value.timestamp() + 5,
+    )
+    event = sentinel.PipelineEvent(
+        value,
+        "ENTRY_PIPELINE",
+        "entry_async_disposition",
+        "test",
+        "005930",
+        "1",
+        fields,
+    )
+    result = sentinel._submission_monitor_report_snapshot(
+        [event], value + timedelta(seconds=1)
+    )
+    coverage = json.loads(json.dumps(result))["async_disposition_coverage"]
+    assert coverage["attempt_projection"][0]["emitted_at"] == clock
+    assert (
+        coverage["attempt_projection"][0]["fields"]["async_request_id"]
+        == "exact-request"
+    )
+    assert coverage["by_producer"]["123:456"]["accepted"] == 1
     assert event.emitted_at is value
 
 
-def test_actual_report_with_async_datetime_publishes_full_and_bounded_json(monkeypatch, tmp_path):
-    monkeypatch.setattr(sentinel, 'DATA_DIR', tmp_path)
-    day = '2026-10-12'
-    fields = dict(async_producer_pid=123, async_producer_start_ticks=456, async_request_id='exact-request',
-        async_disposition='accepted_to_entry_path', async_disposition_event_id='exact-terminal',
-        async_machine_action='ENTER_NOW', async_auxiliary_status='pass', async_auxiliary_verdict='PASS',
-        async_provider_called=True, async_origin_deadline_epoch=1791766805)
-    _write_events(tmp_path, day, [_event(day, '10:00:00.933801', 'entry_async_disposition', fields=fields)])
-    report = sentinel.build_buy_funnel_sentinel_report(day, as_of=sentinel._parse_as_of(day, '10:00:03'))
+def test_actual_report_with_async_datetime_publishes_full_and_bounded_json(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
+    day = "2026-10-12"
+    fields = dict(
+        async_producer_pid=123,
+        async_producer_start_ticks=456,
+        async_request_id="exact-request",
+        async_disposition="accepted_to_entry_path",
+        async_disposition_event_id="exact-terminal",
+        async_machine_action="ENTER_NOW",
+        async_auxiliary_status="pass",
+        async_auxiliary_verdict="PASS",
+        async_provider_called=True,
+        async_origin_deadline_epoch=1791766805,
+    )
+    _write_events(
+        tmp_path,
+        day,
+        [_event(day, "10:00:00.933801", "entry_async_disposition", fields=fields)],
+    )
+    report = sentinel.build_buy_funnel_sentinel_report(
+        day, as_of=sentinel._parse_as_of(day, "10:00:03")
+    )
     paths = sentinel.save_report_artifacts(report)
-    full = json.loads(Path(paths['json']).read_text())
-    bounded = json.loads(Path(paths['submission_monitor']).read_text())
+    full = json.loads(Path(paths["json"]).read_text())
+    bounded = json.loads(Path(paths["submission_monitor"]).read_text())
     assert full == report
-    assert bounded['submission_monitor'] == full['submission_monitor']
-    projection = bounded['submission_monitor']['async_disposition_coverage']['attempt_projection'][0]
-    assert projection['emitted_at'] == '2026-10-12T10:00:00.933801'
-    assert bounded['dry_run'] is False
-    assert not list(sentinel._report_dir().glob('.*.tmp'))
+    assert bounded["submission_monitor"] == full["submission_monitor"]
+    projection = bounded["submission_monitor"]["async_disposition_coverage"][
+        "attempt_projection"
+    ][0]
+    assert projection["emitted_at"] == "2026-10-12T10:00:00.933801"
+    assert bounded["dry_run"] is False
+    assert not list(sentinel._report_dir().glob(".*.tmp"))
 
 
 def test_report_validation_failure_keeps_published_predecessor(monkeypatch, tmp_path):
-    monkeypatch.setattr(sentinel, 'DATA_DIR', tmp_path)
-    day = '2026-10-12'
+    monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
+    day = "2026-10-12"
     _write_events(tmp_path, day, [])
-    report = sentinel.build_buy_funnel_sentinel_report(day, as_of=sentinel._parse_as_of(day, '10:00:03'))
+    report = sentinel.build_buy_funnel_sentinel_report(
+        day, as_of=sentinel._parse_as_of(day, "10:00:03")
+    )
     paths = sentinel.save_report_artifacts(report)
     from pathlib import Path
+
     before = {name: Path(path).read_bytes() for name, path in paths.items()}
-    report['unknown_object'] = object()
-    with pytest.raises(TypeError): sentinel.save_report_artifacts(report)
+    report["unknown_object"] = object()
+    with pytest.raises(TypeError):
+        sentinel.save_report_artifacts(report)
     assert {name: Path(path).read_bytes() for name, path in paths.items()} == before
 
 
-def test_atomic_report_write_failure_keeps_predecessor_and_removes_temp(monkeypatch, tmp_path):
-    path = tmp_path / 'report.json'; path.write_text('previous')
-    def fail(*args): raise OSError('publication failed')
-    monkeypatch.setattr(sentinel.os, 'replace', fail)
-    with pytest.raises(OSError): sentinel._write_report_text_atomic(path, 'next')
-    assert path.read_text() == 'previous'
-    assert not list(tmp_path.glob('.*.tmp'))
+def test_atomic_report_write_failure_keeps_predecessor_and_removes_temp(
+    monkeypatch, tmp_path
+):
+    path = tmp_path / "report.json"
+    path.write_text("previous")
+
+    def fail(*args):
+        raise OSError("publication failed")
+
+    monkeypatch.setattr(sentinel.os, "replace", fail)
+    with pytest.raises(OSError):
+        sentinel._write_report_text_atomic(path, "next")
+    assert path.read_text() == "previous"
+    assert not list(tmp_path.glob(".*.tmp"))
 
 
 def test_atomic_report_replacement_preserves_reader_permissions(tmp_path):
     import stat
-    path = tmp_path / 'report.json'; path.write_text('previous'); path.chmod(0o640)
-    sentinel._write_report_text_atomic(path, 'next')
-    assert path.read_text() == 'next'
+
+    path = tmp_path / "report.json"
+    path.write_text("previous")
+    path.chmod(0o640)
+    sentinel._write_report_text_atomic(path, "next")
+    assert path.read_text() == "next"
     assert stat.S_IMODE(path.stat().st_mode) == 0o640
 
 
@@ -1680,7 +1965,6 @@ def test_latency_drought_when_budget_pass_exists_but_no_submitted(
     breakdown = contract["observation_breakdown"]
     assert breakdown["decision_authority"] == "submit_drought_attribution_only"
     assert breakdown["runtime_effect"] is False
-
 
     assert breakdown["allowed_runtime_apply"] is False
     assert breakdown["broker_order_submit_allowed"] is False
@@ -4702,10 +4986,14 @@ def test_invalid_native_summary_keeps_authoritative_raw_fallback(monkeypatch, tm
     day = "2026-09-18"
     _write_events(tmp_path, day, [_event(day, "10:00:00", "blocked_strength_momentum")])
     monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
+
     def invalid(*args, **kwargs):
         raise ValueError("raw_summary_checkpoint_digest_invalid")
+
     monkeypatch.setattr(sentinel, "load_pipeline_event_summaries", invalid)
-    events, summaries, meta = sentinel._load_event_sources(day, use_cache=False, use_summary=True)
+    events, summaries, meta = sentinel._load_event_sources(
+        day, use_cache=False, use_summary=True
+    )
     assert len(events) == 1 and events[0].stage == "blocked_strength_momentum"
     assert summaries == []
     assert meta["summary_status"] == "invalid"
@@ -4714,20 +5002,46 @@ def test_invalid_native_summary_keeps_authoritative_raw_fallback(monkeypatch, tm
     assert meta["summary_blocker"] == "raw_summary_checkpoint_digest_invalid"
 
 
-@pytest.mark.parametrize("stages,expected", [
-    (["order_leg_no_response"], "pending_broker_reconciliation"),
-    (["latency_block", "order_bundle_submitted"], "lineage_gap_conflicting_terminals"),
-    (["order_bundle_submitted", "order_bundle_submitted"], "submit_pipeline_reached"),
-])
+@pytest.mark.parametrize(
+    "stages,expected",
+    [
+        (["order_leg_no_response"], "pending_broker_reconciliation"),
+        (
+            ["latency_block", "order_bundle_submitted"],
+            "lineage_gap_conflicting_terminals",
+        ),
+        (
+            ["order_bundle_submitted", "order_bundle_submitted"],
+            "submit_pipeline_reached",
+        ),
+    ],
+)
 def test_machine_terminal_ambiguity_conflict_and_duplicate_conserve(stages, expected):
     from datetime import datetime, timedelta
-    common = {"entry_primary_decision_owner": "mechanistic_entry_adjudicator",
-        "evaluation_attempt_id": "eval-original", "scanner_promotion_id": "promotion-original",
-        "effective_venue": "KRX_NXT_INTEGRATED", "market_session_bucket": "KRX_NXT_AFTERMARKET",
-        "policy_bundle_hash": "a" * 64, "entry_mechanistic_action": "ENTER_NOW", "entry_ai_screen_status": "pass"}
+
+    common = {
+        "entry_primary_decision_owner": "mechanistic_entry_adjudicator",
+        "evaluation_attempt_id": "eval-original",
+        "scanner_promotion_id": "promotion-original",
+        "effective_venue": "KRX_NXT_INTEGRATED",
+        "market_session_bucket": "KRX_NXT_AFTERMARKET",
+        "policy_bundle_hash": "a" * 64,
+        "entry_mechanistic_action": "ENTER_NOW",
+        "entry_ai_screen_status": "pass",
+    }
     start = datetime(2026, 9, 17, 17)
-    rows = [sentinel.PipelineEvent(start + timedelta(seconds=index), "ENTRY_PIPELINE", stage,
-        "fixture", "031330", "9", dict(common)) for index, stage in enumerate(["ai_confirmed", *stages])]
+    rows = [
+        sentinel.PipelineEvent(
+            start + timedelta(seconds=index),
+            "ENTRY_PIPELINE",
+            stage,
+            "fixture",
+            "031330",
+            "9",
+            dict(common),
+        )
+        for index, stage in enumerate(["ai_confirmed", *stages])
+    ]
     result = sentinel._machine_primary_entry_funnel(rows)
     assert result["evaluation_ledger"][0]["final_state"] == expected
     assert result["ai_pass_terminal_conservation"]["ai_pass"] == 1
@@ -4736,61 +5050,123 @@ def test_machine_terminal_ambiguity_conflict_and_duplicate_conserve(stages, expe
 
 def test_late_leg_ack_matches_original_call_and_tag():
     from datetime import datetime, timedelta
-    common = {"entry_primary_decision_owner": "mechanistic_entry_adjudicator", "evaluation_attempt_id": "original",
-        "scanner_promotion_id": "original-promotion", "effective_venue": "KRX_NXT_INTEGRATED",
-        "market_session_bucket": "KRX_NXT_AFTERMARKET", "policy_bundle_hash": "a" * 64,
-        "entry_mechanistic_action": "ENTER_NOW", "entry_ai_screen_status": "pass",
-        "entry_submit_attempt_id": "call-original", "tag": "ENTRY-L1"}
+
+    common = {
+        "entry_primary_decision_owner": "mechanistic_entry_adjudicator",
+        "evaluation_attempt_id": "original",
+        "scanner_promotion_id": "original-promotion",
+        "effective_venue": "KRX_NXT_INTEGRATED",
+        "market_session_bucket": "KRX_NXT_AFTERMARKET",
+        "policy_bundle_hash": "a" * 64,
+        "entry_mechanistic_action": "ENTER_NOW",
+        "entry_ai_screen_status": "pass",
+        "entry_submit_attempt_id": "call-original",
+        "tag": "ENTRY-L1",
+    }
     start = datetime(2026, 9, 17, 17)
-    rows = [sentinel.PipelineEvent(start+timedelta(seconds=index), "ENTRY_PIPELINE", stage, "fixture", "031330", "9",
-        {**common, **extra}) for index, (stage, extra) in enumerate([
-            ("ai_confirmed", {}), ("order_leg_no_response", {}),
-            ("order_leg_sent", {"broker_order_no": "ack-original"}),
-            ("order_bundle_submitted", {"broker_order_no": "ack-original"})])]
+    rows = [
+        sentinel.PipelineEvent(
+            start + timedelta(seconds=index),
+            "ENTRY_PIPELINE",
+            stage,
+            "fixture",
+            "031330",
+            "9",
+            {**common, **extra},
+        )
+        for index, (stage, extra) in enumerate(
+            [
+                ("ai_confirmed", {}),
+                ("order_leg_no_response", {}),
+                ("order_leg_sent", {"broker_order_no": "ack-original"}),
+                ("order_bundle_submitted", {"broker_order_no": "ack-original"}),
+            ]
+        )
+    ]
     result = sentinel._machine_primary_entry_funnel(rows)
     assert result["evaluation_ledger"][0]["final_state"] == "submit_pipeline_reached"
     assert result["evaluation_ledger"][0]["evaluation_attempt_id"] == "original"
     assert result["ai_pass_terminal_conservation"]["difference"] == 0
     rows[2].fields["entry_submit_attempt_id"] = "different-call"
     result = sentinel._machine_primary_entry_funnel(rows)
-    assert result["evaluation_ledger"][0]["final_state"] == "pending_broker_reconciliation"
+    assert (
+        result["evaluation_ledger"][0]["final_state"] == "pending_broker_reconciliation"
+    )
 
 
-def _scoped_funnel_event(stage="entry_async_disposition", *, origin="fixed_watch", **extra):
+def _scoped_funnel_event(
+    stage="entry_async_disposition", *, origin="fixed_watch", **extra
+):
     import hashlib
     from datetime import datetime
-    day, symbol, bucket, route = "2026-10-16", "403870", "krx_regular", "krx_nxt_integrated"
+
+    day, symbol, bucket, route = (
+        "2026-10-16",
+        "403870",
+        "krx_regular",
+        "krx_nxt_integrated",
+    )
     fields = {
-        "evaluation_attempt_id": "eval-native", "ai_decision_trace_id": "trace-native",
-        "async_request_id": "request-native", "async_disposition": "worker_completed",
-        "async_machine_action": "ENTER_NOW", "async_auxiliary_status": "pass",
-        "effective_venue": "KRX", "market_session_bucket": bucket,
+        "evaluation_attempt_id": "eval-native",
+        "ai_decision_trace_id": "trace-native",
+        "async_request_id": "request-native",
+        "async_disposition": "worker_completed",
+        "async_machine_action": "ENTER_NOW",
+        "async_auxiliary_status": "pass",
+        "effective_venue": "KRX",
+        "market_session_bucket": bucket,
         "entry_machine_bundle_sha256": "b" * 64,
-        "async_producer_pid": "123", "async_producer_start_ticks": "456",
+        "async_producer_pid": "123",
+        "async_producer_start_ticks": "456",
     }
     if origin == "fixed_watch":
-        fields.update(watch_origin="MAIN_FIXED_WATCH", scanner_promotion_id="None",
+        fields.update(
+            watch_origin="MAIN_FIXED_WATCH",
+            scanner_promotion_id="None",
             watch_admission_id=f"FIXED-{day}-{symbol}-{bucket}-{route}-abcdef123456",
-            watch_generation_id=hashlib.sha256(f"{day}|{symbol}|{bucket}|{route}".encode()).hexdigest())
+            watch_generation_id=hashlib.sha256(
+                f"{day}|{symbol}|{bucket}|{route}".encode()
+            ).hexdigest(),
+        )
     elif origin == "scanner":
-        fields.update(scanner_promotion_id="promotion-native", policy_bundle_hash="b" * 64)
+        fields.update(
+            scanner_promotion_id="promotion-native", policy_bundle_hash="b" * 64
+        )
     fields.update(extra)
-    return sentinel.PipelineEvent(datetime(2026, 10, 16, 10), "ENTRY_PIPELINE", stage,
-                                  "fixture", symbol, "1", fields)
+    return sentinel.PipelineEvent(
+        datetime(2026, 10, 16, 10),
+        "ENTRY_PIPELINE",
+        stage,
+        "fixture",
+        symbol,
+        "1",
+        fields,
+    )
 
 
 def test_main_scoped_funnel_preserves_scanner_scope_and_observes_fixed_watch_send():
     worker = _scoped_funnel_event()
     main = _scoped_funnel_event(async_disposition="accepted_to_entry_path")
-    sent = _scoped_funnel_event("order_leg_sent", broker_order_no="order-native",
-        entry_mechanistic_action="ENTER_NOW", entry_ai_screen_status="pass",
+    sent = _scoped_funnel_event(
+        "order_leg_sent",
+        broker_order_no="order-native",
+        entry_mechanistic_action="ENTER_NOW",
+        entry_ai_screen_status="pass",
         entry_primary_decision_owner="mechanistic_entry_adjudicator",
-        policy_bundle_hash="b" * 64, entry_submit_attempt_id="call-native",
-        pipeline_lifecycle_population_scope="real_record_bound")
-    scanner = _scoped_funnel_event(origin="scanner", evaluation_attempt_id="eval-scanner")
-    result = sentinel._machine_primary_entry_funnel([worker, worker, main, sent, sent, scanner])
+        policy_bundle_hash="b" * 64,
+        entry_submit_attempt_id="call-native",
+        pipeline_lifecycle_population_scope="real_record_bound",
+    )
+    scanner = _scoped_funnel_event(
+        origin="scanner", evaluation_attempt_id="eval-scanner"
+    )
+    result = sentinel._machine_primary_entry_funnel(
+        [worker, worker, main, sent, sent, scanner]
+    )
     assert result["metric_scope"] == "scanner_only_legacy_compatibility"
-    assert result["ai_pass_count"] == 0  # Existing scanner-only contract remains unchanged.
+    assert (
+        result["ai_pass_count"] == 0
+    )  # Existing scanner-only contract remains unchanged.
     scoped = result["main_scoped_funnel"]
     assert scoped["overall"]["pass_returned_observed_count"] == 2
     assert scoped["cohorts"]["fixed_watch"]["pass_returned_observed_count"] == 1
@@ -4804,7 +5180,9 @@ def test_main_scoped_funnel_preserves_scanner_scope_and_observes_fixed_watch_sen
 
 
 def test_main_scoped_returned_only_unknown_identity_stays_unobservable():
-    result = sentinel._main_scoped_entry_funnel([_scoped_funnel_event(origin="unknown")])
+    result = sentinel._main_scoped_entry_funnel(
+        [_scoped_funnel_event(origin="unknown")]
+    )
     assert result["overall"]["pass_returned_observed_count"] == 1
     assert result["cohorts"]["unknown"]["pass_returned_observed_count"] == 1
     row = result["evaluation_ledger"][0]
@@ -4813,22 +5191,31 @@ def test_main_scoped_returned_only_unknown_identity_stays_unobservable():
     assert row["main_accepted_observed"] is False
     assert result["overall"]["source_status"] == "source_gap"
     assert result["full_denominator_proven"] is False
-    assert sentinel._main_scoped_entry_funnel([])["overall"]["source_status"] == "unobservable"
+    assert (
+        sentinel._main_scoped_entry_funnel([])["overall"]["source_status"]
+        == "unobservable"
+    )
 
 
 def test_main_scoped_same_evaluation_with_both_origins_is_one_conflicting_cohort():
-    result = sentinel._main_scoped_entry_funnel([
-        _scoped_funnel_event(), _scoped_funnel_event(origin="scanner")])
+    result = sentinel._main_scoped_entry_funnel(
+        [_scoped_funnel_event(), _scoped_funnel_event(origin="scanner")]
+    )
     assert result["overall"]["evaluation_count"] == 1
     assert result["cohorts"]["unknown"]["evaluation_count"] == 1
-    assert "evaluation_native_identity_conflict" in result["evaluation_ledger"][0]["identity_issues"]
+    assert (
+        "evaluation_native_identity_conflict"
+        in result["evaluation_ledger"][0]["identity_issues"]
+    )
     assert result["cohorts"]["fixed_watch"]["evaluation_count"] == 0
     assert result["cohorts"]["scanner"]["evaluation_count"] == 0
 
 
 def test_main_scoped_missing_id_never_joins_neighbouring_pass_or_order():
     worker = _scoped_funnel_event()
-    missing = _scoped_funnel_event("order_leg_sent", evaluation_attempt_id="", broker_order_no="wrong-order")
+    missing = _scoped_funnel_event(
+        "order_leg_sent", evaluation_attempt_id="", broker_order_no="wrong-order"
+    )
     result = sentinel._main_scoped_entry_funnel([worker, missing])
     assert result["overall"]["pass_physical_send_observed_count"] == 0
     assert result["evaluation_ledger"][0]["physical_send_observed"] is None
@@ -4836,18 +5223,34 @@ def test_main_scoped_missing_id_never_joins_neighbouring_pass_or_order():
 
 
 def test_main_scoped_retry_trace_and_adapter_counter_are_not_new_physical_orders():
-    rows = [_scoped_funnel_event(), _scoped_funnel_event(ai_decision_trace_id="trace-retry",
-             async_entry_broker_attempts="3", broker_order_attempted="false")]
+    rows = [
+        _scoped_funnel_event(),
+        _scoped_funnel_event(
+            ai_decision_trace_id="trace-retry",
+            async_entry_broker_attempts="3",
+            broker_order_attempted="false",
+        ),
+    ]
     result = sentinel._main_scoped_entry_funnel(rows)
     assert result["overall"]["pass_returned_observed_count"] == 1
-    assert result["evaluation_ledger"][0]["ai_decision_trace_ids"] == ["trace-native", "trace-retry"]
+    assert result["evaluation_ledger"][0]["ai_decision_trace_ids"] == [
+        "trace-native",
+        "trace-retry",
+    ]
     assert result["evaluation_ledger"][0]["physical_send_observed"] is None
-    assert result["evaluation_ledger"][0]["pass_binding_issues"] == ["pass_trace_ambiguous"]
+    assert result["evaluation_ledger"][0]["pass_binding_issues"] == [
+        "pass_trace_ambiguous"
+    ]
 
 
 def test_main_scoped_different_trace_cannot_link_pass_to_another_response_submission():
-    sent = _scoped_funnel_event("order_leg_sent", ai_decision_trace_id="trace-other",
-        async_machine_action="BLOCK", async_auxiliary_status="veto", broker_order_no="order-other")
+    sent = _scoped_funnel_event(
+        "order_leg_sent",
+        ai_decision_trace_id="trace-other",
+        async_machine_action="BLOCK",
+        async_auxiliary_status="veto",
+        broker_order_no="order-other",
+    )
     result = sentinel._main_scoped_entry_funnel([_scoped_funnel_event(), sent])
     assert result["overall"]["evaluation_count"] == 1
     assert result["cohorts"]["fixed_watch"]["evaluation_count"] == 1
@@ -4859,76 +5262,144 @@ def test_main_scoped_different_trace_cannot_link_pass_to_another_response_submis
 
 
 def test_main_scoped_absent_trace_and_runtime_are_unobservable_not_exact():
-    event = _scoped_funnel_event(ai_decision_trace_id="", async_producer_pid="", async_producer_start_ticks="")
+    event = _scoped_funnel_event(
+        ai_decision_trace_id="", async_producer_pid="", async_producer_start_ticks=""
+    )
     result = sentinel._main_scoped_entry_funnel([event])
     row = result["evaluation_ledger"][0]
     assert row["runtime_identity_status"] == "unobservable"
     assert row["runtime_identities"] == []
-    assert row["pass_binding_issues"] == ["pass_trace_unobserved", "runtime_identity_unobserved"]
+    assert row["pass_binding_issues"] == [
+        "pass_trace_unobserved",
+        "runtime_identity_unobserved",
+    ]
 
 
 def test_main_scoped_missing_runtime_preserves_independent_receipt_without_pass_causality():
     worker = _scoped_funnel_event(async_producer_pid="", async_producer_start_ticks="")
-    event = _scoped_funnel_event("order_leg_sent", broker_order_no="order-native",
-        async_producer_pid="", async_producer_start_ticks="")
+    event = _scoped_funnel_event(
+        "order_leg_sent",
+        broker_order_no="order-native",
+        async_producer_pid="",
+        async_producer_start_ticks="",
+    )
     result = sentinel._main_scoped_entry_funnel([worker, event])
     assert result["overall"]["pass_returned_observed_count"] == 1
     assert result["overall"]["pass_broker_acceptance_observed_count"] == 0
     assert result["overall"]["phase_broker_acceptance_observed_count"] == 1
-    assert result["evaluation_ledger"][0]["pass_binding_issues"] == ["runtime_identity_unobserved"]
-    assert all(result.get(key) for key in ("window_policy", "sample_floor",
-        "primary_decision_metric", "source_quality_gate", "forbidden_uses"))
+    assert result["evaluation_ledger"][0]["pass_binding_issues"] == [
+        "runtime_identity_unobserved"
+    ]
+    assert all(
+        result.get(key)
+        for key in (
+            "window_policy",
+            "sample_floor",
+            "primary_decision_metric",
+            "source_quality_gate",
+            "forbidden_uses",
+        )
+    )
 
 
 def test_main_scoped_census_keeps_cash_excluded_evaluations():
     from datetime import datetime
+
     events = _cash_exclusion_events()
     for event in events:
-        event.fields.update(evaluation_attempt_id=f"eval-{event.record_id}",
+        event.fields.update(
+            evaluation_attempt_id=f"eval-{event.record_id}",
             ai_decision_trace_id=f"trace-{event.record_id}",
             entry_primary_decision_owner="mechanistic_entry_adjudicator",
-            entry_mechanistic_action="ENTER_NOW", entry_ai_screen_status="pass",
-            effective_venue="KRX", market_session_bucket="KRX_REGULAR", policy_bundle_hash="b" * 64)
-    result = sentinel._calculate_event_summary(events,
-        start_at=datetime(2026, 9, 11, 10), end_at=datetime(2026, 9, 11, 10, 3))
+            entry_mechanistic_action="ENTER_NOW",
+            entry_ai_screen_status="pass",
+            effective_venue="KRX",
+            market_session_bucket="KRX_REGULAR",
+            policy_bundle_hash="b" * 64,
+        )
+    result = sentinel._calculate_event_summary(
+        events, start_at=datetime(2026, 9, 11, 10), end_at=datetime(2026, 9, 11, 10, 3)
+    )
     assert result["cash_shortfall_exclusion"]["excluded_attempt_count"] == 20
     legacy = result["machine_primary_entry_funnel"]
     assert legacy["ai_pass_count"] == 0
     assert legacy["main_scoped_funnel"]["overall"]["pass_returned_observed_count"] == 20
-    assert legacy["main_scoped_funnel"]["decision_population"] == "loaded_events_before_cash_shortfall_exclusion"
+    assert (
+        legacy["main_scoped_funnel"]["decision_population"]
+        == "loaded_events_before_cash_shortfall_exclusion"
+    )
 
 
 def test_main_scoped_native_zero_wire_terminal_does_not_hide_another_unknown_call():
-    zero = _scoped_funnel_event("entry_submit_attempt_finished", entry_submit_attempt_id="call-zero",
-        local_not_sent_contract="main_initial_entry_not_sent_v1", known_local_not_sent="true",
-        physical_send_attempt_count="0", broker_order_attempted="false")
+    zero = _scoped_funnel_event(
+        "entry_submit_attempt_finished",
+        entry_submit_attempt_id="call-zero",
+        local_not_sent_contract="main_initial_entry_not_sent_v1",
+        known_local_not_sent="true",
+        physical_send_attempt_count="0",
+        broker_order_attempted="false",
+    )
     result = sentinel._main_scoped_entry_funnel([_scoped_funnel_event(), zero])
     assert result["evaluation_ledger"][0]["physical_send_observed"] is False
     assert result["overall"]["pass_known_not_sent_count"] == 1
-    unknown = _scoped_funnel_event("order_leg_no_response", entry_submit_attempt_id="call-uncertain")
+    unknown = _scoped_funnel_event(
+        "order_leg_no_response", entry_submit_attempt_id="call-uncertain"
+    )
     result = sentinel._main_scoped_entry_funnel([_scoped_funnel_event(), zero, unknown])
     assert result["evaluation_ledger"][0]["physical_send_observed"] is None
-    sent = _scoped_funnel_event("entry_submit_attempt_finished", entry_submit_attempt_id="call-sent",
-                               physical_send_attempt_count="1")
-    assert sentinel._main_scoped_entry_funnel([_scoped_funnel_event(), zero, sent])["evaluation_ledger"][0]["physical_send_observed"] is True
+    sent = _scoped_funnel_event(
+        "entry_submit_attempt_finished",
+        entry_submit_attempt_id="call-sent",
+        physical_send_attempt_count="1",
+    )
+    assert (
+        sentinel._main_scoped_entry_funnel([_scoped_funnel_event(), zero, sent])[
+            "evaluation_ledger"
+        ][0]["physical_send_observed"]
+        is True
+    )
 
 
 def test_main_scoped_uncontracted_start_stage_does_not_prove_physical_send():
-    start = _scoped_funnel_event("order_api_start", entry_submit_attempt_id="call-start")
+    start = _scoped_funnel_event(
+        "order_api_start", entry_submit_attempt_id="call-start"
+    )
     result = sentinel._main_scoped_entry_funnel([_scoped_funnel_event(), start])
     assert result["evaluation_ledger"][0]["physical_send_observed"] is None
 
 
-@pytest.mark.parametrize("stage", ["initial_entry_known_not_sent", "entry_local_not_sent", "entry_physical_send_guard_block",
-    "original_async_result_not_sent_terminal", "entry_physical_send_context_block"])
+@pytest.mark.parametrize(
+    "stage",
+    [
+        "initial_entry_known_not_sent",
+        "entry_local_not_sent",
+        "entry_physical_send_guard_block",
+        "original_async_result_not_sent_terminal",
+        "entry_physical_send_context_block",
+    ],
+)
 def test_main_scoped_native_zero_wire_stages_survive_source_cache(stage):
     from dataclasses import replace
-    event = _scoped_funnel_event(stage, entry_submit_attempt_id="local-call",
-        local_not_sent_contract="main_initial_entry_not_sent_v1", known_local_not_sent=True,
-        physical_send_attempt_count=0)
-    row = sentinel._payload_to_cache_row(dict(event_type="pipeline_event", emitted_at=event.emitted_at.isoformat(),
-        pipeline=event.pipeline, stage=stage, stock_name=event.stock_name, stock_code=event.stock_code,
-        record_id=event.record_id, fields=event.fields))
+
+    event = _scoped_funnel_event(
+        stage,
+        entry_submit_attempt_id="local-call",
+        local_not_sent_contract="main_initial_entry_not_sent_v1",
+        known_local_not_sent=True,
+        physical_send_attempt_count=0,
+    )
+    row = sentinel._payload_to_cache_row(
+        dict(
+            event_type="pipeline_event",
+            emitted_at=event.emitted_at.isoformat(),
+            pipeline=event.pipeline,
+            stage=stage,
+            stock_name=event.stock_name,
+            stock_code=event.stock_code,
+            record_id=event.record_id,
+            fields=event.fields,
+        )
+    )
     assert row is not None
     event = replace(event, fields=row["fields"])
     result = sentinel._main_scoped_entry_funnel([_scoped_funnel_event(), event, event])
@@ -4936,12 +5407,17 @@ def test_main_scoped_native_zero_wire_stages_survive_source_cache(stage):
 
 
 def test_main_scoped_conflicting_evaluation_alias_cannot_attach_a_broker_receipt():
-    sent = _scoped_funnel_event("order_leg_sent", entry_evaluation_attempt_id="unrelated-eval",
-                               broker_order_no="wrong-order")
+    sent = _scoped_funnel_event(
+        "order_leg_sent",
+        entry_evaluation_attempt_id="unrelated-eval",
+        broker_order_no="wrong-order",
+    )
     result = sentinel._main_scoped_entry_funnel([_scoped_funnel_event(), sent])
     assert result["overall"]["pass_broker_acceptance_observed_count"] == 0
     assert result["evaluation_ledger"][0]["physical_send_observed"] is None
-    assert result["identity_rejection_reason_counts"] == {"evaluation_alias_conflict": 1}
+    assert result["identity_rejection_reason_counts"] == {
+        "evaluation_alias_conflict": 1
+    }
     assert result["overall"]["source_status"] == "source_gap"
 
 
@@ -4953,8 +5429,11 @@ def test_main_scoped_identity_and_missing_physical_contract_fail_closed(tamper):
     elif tamper == "actor":
         event = _scoped_funnel_event(async_producer_pid="another-pid")
     else:
-        event.fields.update(known_local_not_sent="true", physical_send_attempt_count="0",
-                            entry_submit_attempt_id="call-fake")
+        event.fields.update(
+            known_local_not_sent="true",
+            physical_send_attempt_count="0",
+            entry_submit_attempt_id="call-fake",
+        )
     result = sentinel._main_scoped_entry_funnel([_scoped_funnel_event(), event])
     assert result["evaluation_ledger"][0]["physical_send_observed"] is None
     if tamper != "fake_zero":
@@ -4964,15 +5443,30 @@ def test_main_scoped_identity_and_missing_physical_contract_fail_closed(tamper):
 def test_main_scoped_markdown_uses_overall_and_labels_scanner_compatibility():
     from datetime import timedelta
     from src.tests.submit_drought_fixtures import make_report
+
     event = _scoped_funnel_event()
     report = make_report("2026-10-16", events=[event])
-    summary = sentinel._summarize_events([event], start_at=event.emitted_at-timedelta(seconds=1),
-                                         end_at=event.emitted_at+timedelta(seconds=1))
-    report.update(current={"session": summary, "windows": {}},
+    summary = sentinel._summarize_events(
+        [event],
+        start_at=event.emitted_at - timedelta(seconds=1),
+        end_at=event.emitted_at + timedelta(seconds=1),
+    )
+    report.update(
+        current={"session": summary, "windows": {}},
         baseline={"date": None, "same_time_summary": None},
-        policy={"report_only": True, "live_runtime_effect": False, "forbidden_automations": []},
-        followup={"operator_action_required": False, "route": "report", "owner": "sentinel", "runtime_effect": False},
-        recommended_actions=[])
+        policy={
+            "report_only": True,
+            "live_runtime_effect": False,
+            "forbidden_automations": [],
+        },
+        followup={
+            "operator_action_required": False,
+            "route": "report",
+            "owner": "sentinel",
+            "runtime_effect": False,
+        },
+        recommended_actions=[],
+    )
     rendered = sentinel.build_markdown(report)
     assert "Main 전체 정확 평가 합집합" in rendered
     assert "PASS반환=1" in rendered
@@ -4980,87 +5474,180 @@ def test_main_scoped_markdown_uses_overall_and_labels_scanner_compatibility():
     assert "scanner_only_legacy_compatibility" in rendered
 
 
-@pytest.mark.parametrize('bad', [None, 'unknown_reason', 'wrong_parent', 'broker_accepted', 'raised', 'missing_start'])
+@pytest.mark.parametrize(
+    "bad",
+    [
+        None,
+        "unknown_reason",
+        "wrong_parent",
+        "broker_accepted",
+        "raised",
+        "missing_start",
+    ],
+)
 def test_native_route_guard_completion_closes_only_its_exact_call(bad):
     from datetime import datetime, timedelta
     from src.engine.monitoring import entry_attempt_identity as identity
+
     events = []
-    stock = {'id': 17, 'scanner_promotion_id': 'ZBPROM-exact'}
+    stock = {"id": 17, "scanner_promotion_id": "ZBPROM-exact"}
     start = datetime(2026, 10, 23, 8, 5)
-    common = dict(entry_primary_decision_owner='mechanistic_entry_adjudicator',
-        evaluation_attempt_id='aims-exact', scanner_promotion_id='ZBPROM-exact',
-        effective_venue='PREMARKET_KRX_LIKE', market_session_bucket='premarket_krx_like',
-        policy_bundle_hash='b'*64, entry_mechanistic_action='ENTER_NOW', entry_ai_screen_status='pass')
+    common = dict(
+        entry_primary_decision_owner="mechanistic_entry_adjudicator",
+        evaluation_attempt_id="aims-exact",
+        scanner_promotion_id="ZBPROM-exact",
+        effective_venue="PREMARKET_KRX_LIKE",
+        market_session_bucket="premarket_krx_like",
+        policy_bundle_hash="b" * 64,
+        entry_mechanistic_action="ENTER_NOW",
+        entry_ai_screen_status="pass",
+    )
+
     def emit(stage, fields):
-        events.append(sentinel.PipelineEvent(start + timedelta(milliseconds=len(events)),
-            'ENTRY_PIPELINE', stage, 'Fixture', '053800', '17', {**common, **fields}))
+        events.append(
+            sentinel.PipelineEvent(
+                start + timedelta(milliseconds=len(events)),
+                "ENTRY_PIPELINE",
+                stage,
+                "Fixture",
+                "053800",
+                "17",
+                {**common, **fields},
+            )
+        )
+
     def finish(s, code, outcome):
         fields = identity.submit_attempt_fields(s, code)
-        fields.update(submit_call_outcome=outcome, submit_call_return_outcome=outcome,
-            submit_call_broker_accepted=False)
-        if bad == 'wrong_parent': fields['entry_submit_attempt_parent_promotion_id']='other'
-        if bad == 'broker_accepted': fields['entry_submit_attempt_broker_accepted']=True
-        if bad == 'raised': fields['submit_call_return_outcome']='raised'
-        emit('entry_submit_attempt_finished', fields)
+        fields.update(
+            submit_call_outcome=outcome,
+            submit_call_return_outcome=outcome,
+            submit_call_broker_accepted=False,
+        )
+        if bad == "wrong_parent":
+            fields["entry_submit_attempt_parent_promotion_id"] = "other"
+        if bad == "broker_accepted":
+            fields["entry_submit_attempt_broker_accepted"] = True
+        if bad == "raised":
+            fields["submit_call_return_outcome"] = "raised"
+        emit("entry_submit_attempt_finished", fields)
+
     @identity.observe_submit_attempt(on_finish=finish)
     def submit(s, code):
-        if bad != 'missing_start': emit('budget_pass', identity.submit_attempt_fields(s, code))
-        identity.record_submit_attempt_terminal(s,
-            'unknown_guard' if bad == 'unknown_reason' else 'main_entry_order_route_invalid')
+        if bad != "missing_start":
+            emit("budget_pass", identity.submit_attempt_fields(s, code))
+        identity.record_submit_attempt_terminal(
+            s,
+            (
+                "unknown_guard"
+                if bad == "unknown_reason"
+                else "main_entry_order_route_invalid"
+            ),
+        )
         return False
-    emit('ai_confirmed', {})
-    assert submit(stock, '053800') is False
+
+    emit("ai_confirmed", {})
+    assert submit(stock, "053800") is False
     # Use native cache normalization, as scheduled consumers do.
-    events = [sentinel._event_from_cache_row(sentinel._payload_to_cache_row(dict(
-        event_type='pipeline_event', emitted_at=e.emitted_at.isoformat(), pipeline=e.pipeline,
-        stage=e.stage, stock_name=e.stock_name, stock_code=e.stock_code,
-        record_id=e.record_id, fields=e.fields))) for e in events]
+    events = [
+        sentinel._event_from_cache_row(
+            sentinel._payload_to_cache_row(
+                dict(
+                    event_type="pipeline_event",
+                    emitted_at=e.emitted_at.isoformat(),
+                    pipeline=e.pipeline,
+                    stage=e.stage,
+                    stock_name=e.stock_name,
+                    stock_code=e.stock_code,
+                    record_id=e.record_id,
+                    fields=e.fields,
+                )
+            )
+        )
+        for e in events
+    ]
     result = sentinel._machine_primary_entry_funnel(events)
-    row = result['evaluation_ledger'][0]
-    assert row['final_guard_blocked'] is (bad is None)
-    assert not row['broker_acceptance_observed'] and not row['submit_pipeline_reached']
-    assert result['ai_pass_terminal_conservation']['difference'] == 0
+    row = result["evaluation_ledger"][0]
+    assert row["final_guard_blocked"] is (bad is None)
+    assert not row["broker_acceptance_observed"] and not row["submit_pipeline_reached"]
+    assert result["ai_pass_terminal_conservation"]["difference"] == 0
 
 
-@pytest.mark.parametrize('day', ['2026-09-13', '2026-09-14'])
-@pytest.mark.parametrize('clock,phase', [('08:59:59', 'UNKNOWN'), ('09:00:00', 'UNKNOWN'),
-    ('15:30:00', 'UNKNOWN'), ('15:30:01', 'UNKNOWN'), ('15:59:59', 'UNKNOWN'),
-    ('16:00:00', 'KRX_NXT_AFTERMARKET'), ('19:39:59', 'KRX_NXT_AFTERMARKET'),
-    ('19:40:00', 'KRX_NXT_AFTERMARKET_CLOSE_ONLY'),
-    ('19:44:59', 'KRX_NXT_AFTERMARKET_CLOSE_ONLY'),
-    ('19:45:00', 'KRX_NXT_AFTERMARKET_TERMINAL_EXIT'),
-    ('19:59:59', 'KRX_NXT_AFTERMARKET_TERMINAL_EXIT'), ('20:00:00', 'UNKNOWN')])
+@pytest.mark.parametrize("day", ["2026-09-13", "2026-09-14"])
+@pytest.mark.parametrize(
+    "clock,phase",
+    [
+        ("08:59:59", "UNKNOWN"),
+        ("09:00:00", "UNKNOWN"),
+        ("15:30:00", "UNKNOWN"),
+        ("15:30:01", "UNKNOWN"),
+        ("15:59:59", "UNKNOWN"),
+        ("16:00:00", "KRX_NXT_AFTERMARKET"),
+        ("19:39:59", "KRX_NXT_AFTERMARKET"),
+        ("19:40:00", "KRX_NXT_AFTERMARKET_CLOSE_ONLY"),
+        ("19:44:59", "KRX_NXT_AFTERMARKET_CLOSE_ONLY"),
+        ("19:45:00", "KRX_NXT_AFTERMARKET_TERMINAL_EXIT"),
+        ("19:59:59", "KRX_NXT_AFTERMARKET_TERMINAL_EXIT"),
+        ("20:00:00", "UNKNOWN"),
+    ],
+)
 def test_shared_scope_keeps_both_owner_clock_boundaries(day, clock, phase):
     from datetime import datetime
     from src.engine import holding_exit_sentinel as holding
-    at = datetime.fromisoformat(day+'T'+clock)
+
+    at = datetime.fromisoformat(day + "T" + clock)
     for owner in (sentinel, holding):
-        fields = {'market_data_route': 'SOR'}
-        result = event_scope.explicit_event_scope(fields, at,
-            venue_keys=owner.VENUE_SCOPE_FIELD_KEYS, session_keys=owner.SESSION_SCOPE_FIELD_KEYS)
-        expected_scope = (('CONFLICT', 'CONFLICT', 'conflict')
-            if phase == 'UNKNOWN' or day < '2026-09-14' else ('KRX_NXT_INTEGRATED', phase, 'pass'))
+        fields = {"market_data_route": "SOR"}
+        result = event_scope.explicit_event_scope(
+            fields,
+            at,
+            venue_keys=owner.VENUE_SCOPE_FIELD_KEYS,
+            session_keys=owner.SESSION_SCOPE_FIELD_KEYS,
+        )
+        expected_scope = (
+            ("CONFLICT", "CONFLICT", "conflict")
+            if phase == "UNKNOWN" or day < "2026-09-14"
+            else ("KRX_NXT_INTEGRATED", phase, "pass")
+        )
         assert result == expected_scope
-        expected = 'NXT_PREMARKET' if clock < '09:00:00' else 'NXT_AFTERMARKET' if clock > '15:30:00' else 'NXT_REGULAR'
-        assert event_scope.session_for_venue('NXT', at) == expected
+        expected = (
+            "NXT_PREMARKET"
+            if clock < "09:00:00"
+            else "NXT_AFTERMARKET" if clock > "15:30:00" else "NXT_REGULAR"
+        )
+        assert event_scope.session_for_venue("NXT", at) == expected
 
 
 def test_shared_scope_preserves_priority_lazy_reads_and_removed_private_paths():
     from datetime import datetime
     from collections.abc import Mapping
     from src.engine import holding_exit_sentinel as holding
+
     class Lazy(Mapping):
         def __getitem__(self, key):
-            if key in {'effective_venue', 'holding_context_venue'}:
-                return {'effective_venue':'NXT', 'holding_context_venue':'KRX'}[key]
+            if key in {"effective_venue", "holding_context_venue"}:
+                return {"effective_venue": "NXT", "holding_context_venue": "KRX"}[key]
             raise KeyError(key)
-        def __iter__(self): raise AssertionError('full field materialization forbidden')
-        def __len__(self): raise AssertionError('full field materialization forbidden')
-    for owner, venue in ((sentinel, 'NXT'), (holding, 'KRX')):
+
+        def __iter__(self):
+            raise AssertionError("full field materialization forbidden")
+
+        def __len__(self):
+            raise AssertionError("full field materialization forbidden")
+
+    for owner, venue in ((sentinel, "NXT"), (holding, "KRX")):
         at = datetime(2026, 10, 23, 10)
-        result = event_scope.explicit_event_scope(Lazy(), at,
-            venue_keys=owner.VENUE_SCOPE_FIELD_KEYS, session_keys=owner.SESSION_SCOPE_FIELD_KEYS)
-        assert result == (venue, venue+'_REGULAR', 'pass')
-        for name in ('_canonical_venue', '_canonical_session', '_session_for_venue',
-                     '_explicit_event_scope', '_actual_execution_venue'):
+        result = event_scope.explicit_event_scope(
+            Lazy(),
+            at,
+            venue_keys=owner.VENUE_SCOPE_FIELD_KEYS,
+            session_keys=owner.SESSION_SCOPE_FIELD_KEYS,
+        )
+        assert result == (venue, venue + "_REGULAR", "pass")
+        for name in (
+            "_canonical_venue",
+            "_canonical_session",
+            "_session_for_venue",
+            "_explicit_event_scope",
+            "_actual_execution_venue",
+        ):
             assert not hasattr(owner, name)

@@ -804,8 +804,6 @@ def _active_scanner_watching_count(db):
         return 0
 
 
-
-
 def _active_scanner_watching_owner_counts(db):
     counts = {
         GENERAL_SCALPING: 0,
@@ -1618,7 +1616,6 @@ def _scanner_rate_from_field(target, field_name):
 def _scanner_flu_metric(target):
     source_set = set(_source_signature(target))
 
-
     if LOW_REBOUND_RISING_MISSED_SOURCE in source_set:
         rate, has_rate = _scanner_rate_from_field(target, "LowReboundDisplayChangeRate")
         if has_rate:
@@ -2072,9 +2069,9 @@ def _scanner_priority_profile(target, previous=None):
             MARKET_GAINER_SOURCE in source_set
         ),
         "scanner_priority_reserved_partition": (
-                "low_rebound"
-                if LOW_REBOUND_RISING_MISSED_SOURCE in source_set
-                else "general"
+            "low_rebound"
+            if LOW_REBOUND_RISING_MISSED_SOURCE in source_set
+            else "general"
         ),
         "scanner_priority_reason": reason,
         "scanner_demoted_reason": demoted_reason,
@@ -2144,14 +2141,10 @@ def _scanner_priority_profile(target, previous=None):
             lookup_policy_for_candidate.get("experiment_arm") or ""
         ),
         "lookup_attention_weight_experiment_allocation_seed_sha256": str(
-            lookup_policy_for_candidate.get(
-                "experiment_allocation_seed_sha256"
-            )
-            or ""
+            lookup_policy_for_candidate.get("experiment_allocation_seed_sha256") or ""
         ),
         "lookup_attention_weight_experiment_max_marginal_slots": int(
-            lookup_policy_for_candidate.get("experiment_max_marginal_slots")
-            or 0
+            lookup_policy_for_candidate.get("experiment_max_marginal_slots") or 0
         ),
         "lookup_attention_weight_forbidden_uses": (
             "priority_tier_or_slot_ownership_change,"
@@ -2890,8 +2883,6 @@ def _scanner_candidate_pre_filter_reason(target):
     return ""
 
 
-
-
 def _filter_picks_within_cooldown(recent_picks, now_ts, reentry_cooldown_sec):
     max_probe_sec = int(
         getattr(TRADING_RULES, "SCALP_SCANNER_PROBE_MAX_SEC", 300) or 300
@@ -3060,7 +3051,11 @@ def _should_promote_candidate(target, recent_picks, now_ts, reentry_cooldown_sec
 def _scanner_real_source_guard_decision(target, recent_picks, now_ts):
     source_signature = _source_signature(target)
     if "LIMIT_DOWN_LIVE_UNLOCK" in source_signature:
-        return {"blocked": True, "reason": "retired_entry_source", "source_signature": ",".join(source_signature)}
+        return {
+            "blocked": True,
+            "reason": "retired_entry_source",
+            "source_signature": ",".join(source_signature),
+        }
     raw_previous = (recent_picks or {}).get(target.get("Code")) or {}
     anchor_reset = _scanner_anchor_reset_context(target, raw_previous)
     previous = {} if anchor_reset["reset"] else raw_previous
@@ -4415,9 +4410,7 @@ def _scanner_runtime_target_payload(
             "lookup_attention_weight_experiment_max_marginal_slots"
         ),
         "scanner_selection_pair_id": fields.get("scanner_selection_pair_id", ""),
-        "scanner_selection_pair_role": fields.get(
-            "scanner_selection_pair_role", ""
-        ),
+        "scanner_selection_pair_role": fields.get("scanner_selection_pair_role", ""),
         "scanner_selection_pair_assignment": fields.get(
             "scanner_selection_pair_assignment", ""
         ),
@@ -4704,9 +4697,7 @@ def _prepare_lookup_selection_pair(
                     8,
                 ),
                 *same_tier_key(
-                    (target.get("_ScannerRankPriorityProfile") or {}).get(
-                        field, 0.0
-                    ),
+                    (target.get("_ScannerRankPriorityProfile") or {}).get(field, 0.0),
                     _source_priority(target.get("Source")),
                     _safe_float(target.get("FluRate")),
                     target.get("ScannerScanRank") or 0,
@@ -4717,9 +4708,7 @@ def _prepare_lookup_selection_pair(
     baseline = ordered("scanner_priority_score_without_lookup_attention")[:k]
     candidate = ordered("scanner_priority_score_with_lookup_attention")[:k]
     baseline_by_code = {str(target.get("Code") or ""): target for target in baseline}
-    candidate_by_code = {
-        str(target.get("Code") or ""): target for target in candidate
-    }
+    candidate_by_code = {str(target.get("Code") or ""): target for target in candidate}
     incoming_codes = sorted(candidate_by_code.keys() - baseline_by_code.keys())
     outgoing_codes = sorted(baseline_by_code.keys() - candidate_by_code.keys())
     if len(incoming_codes) != 1 or len(outgoing_codes) != 1:
@@ -4728,11 +4717,12 @@ def _prepare_lookup_selection_pair(
     outgoing = baseline_by_code[outgoing_codes[0]]
     incoming_profile = incoming.get("_ScannerRankPriorityProfile") or {}
     outgoing_profile = outgoing.get("_ScannerRankPriorityProfile") or {}
-    if (
-        incoming_profile.get("scanner_priority_tier")
-        != outgoing_profile.get("scanner_priority_tier")
-        or incoming_profile.get("scanner_priority_rank_partition")
-        != outgoing_profile.get("scanner_priority_rank_partition")
+    if incoming_profile.get("scanner_priority_tier") != outgoing_profile.get(
+        "scanner_priority_tier"
+    ) or incoming_profile.get(
+        "scanner_priority_rank_partition"
+    ) != outgoing_profile.get(
+        "scanner_priority_rank_partition"
     ):
         return targets
     allocation_seed = str(
@@ -4766,9 +4756,7 @@ def _prepare_lookup_selection_pair(
             "incoming_code": incoming_codes[0],
             "outgoing_code": outgoing_codes[0],
             "priority_tier": incoming_profile.get("scanner_priority_tier"),
-            "rank_partition": incoming_profile.get(
-                "scanner_priority_rank_partition"
-            ),
+            "rank_partition": incoming_profile.get("scanner_priority_rank_partition"),
             "allocation_seed_sha256": allocation_seed,
         }
     )
@@ -4788,14 +4776,13 @@ def _prepare_lookup_selection_pair(
         "scanner_selection_pair_actual_order_submitted": False,
         "scanner_selection_pair_broker_order_forbidden": True,
     }
+
     def arm_weight_fields(target):
         profile = target.get("_ScannerRankPriorityProfile") or {}
         if not experiment_mode:
             return {}
         bonus = (
-            _safe_float(
-                profile.get("lookup_attention_counterfactual_bonus_points")
-            )
+            _safe_float(profile.get("lookup_attention_counterfactual_bonus_points"))
             if experiment_mode and assigned_arm == "candidate"
             else 0.0
         )
@@ -4815,6 +4802,7 @@ def _prepare_lookup_selection_pair(
             "lookup_attention_weight_policy_applied": applied,
             "lookup_attention_weight_runtime_effect": applied,
         }
+
     incoming["_LookupSelectionPairEvidence"] = {
         **common,
         **arm_weight_fields(incoming),
@@ -4828,7 +4816,9 @@ def _prepare_lookup_selection_pair(
         "scanner_selection_pair_peer_code": incoming_codes[0],
     }
     if experiment_mode and assigned_arm == "candidate":
-        incoming_index, outgoing_index = targets.index(incoming), targets.index(outgoing)
+        incoming_index, outgoing_index = targets.index(incoming), targets.index(
+            outgoing
+        )
         targets[incoming_index], targets[outgoing_index] = (
             targets[outgoing_index],
             targets[incoming_index],
@@ -5037,8 +5027,7 @@ def promote_candidates(
     market_gainer_replacement_needed = market_gainer_replacement_count(
         available_open_slots=max(
             0,
-            max_active
-            - active_count,
+            max_active - active_count,
         ),
         owner_available=rising_owner_available,
     )
@@ -5074,8 +5063,7 @@ def promote_candidates(
     if low_rebound_candidates_present and low_rebound_floor_shortfall > 0:
         open_slots = max(
             0,
-            max_active
-            - active_count,
+            max_active - active_count,
         )
         replacement_needed = max(0, low_rebound_floor_shortfall - open_slots)
         replacement_needed = min(
@@ -5807,9 +5795,8 @@ def _scan_source_status(targets, source_meta=None):
         source_meta.get("read_rate_control_status") or ""
     ) in {"deferred", "rejected"}:
         return "source_deferred_or_rate_limited"
-    if (
-        source_meta.get("continuous_page_limit_reached")
-        or source_meta.get("continuous_next_key_missing")
+    if source_meta.get("continuous_page_limit_reached") or source_meta.get(
+        "continuous_next_key_missing"
     ):
         return "partial_adapter_return"
     status_code = source_meta.get("last_http_status_code")
@@ -6749,15 +6736,23 @@ def run_scalper_iteration(
 
 
 def _zero_base_scanner_enabled():
-    return str(os.getenv("KORSTOCKSCAN_ZERO_BASE_SCANNER_ENABLED", "false")).strip().lower() in {
-        "1", "true", "yes", "on",
+    return str(
+        os.getenv("KORSTOCKSCAN_ZERO_BASE_SCANNER_ENABLED", "false")
+    ).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
     }
 
 
 def _zero_base_log_event(stage, *, code="", name="", fields=None):
     try:
         emit_pipeline_event(
-            "ENTRY_PIPELINE", name or "-", code or "-", stage,
+            "ENTRY_PIPELINE",
+            name or "-",
+            code or "-",
+            stage,
             fields={
                 "metric_role": "funnel_count",
                 "decision_authority": "zero_base_discovery_probe_no_order_authority",
@@ -6799,7 +6794,9 @@ def run_zero_base_scanner(*, token, event_bus, is_test_mode=False):
                 session_date=session_date,
                 claim_receipt_emitter=_zero_base_log_event,
                 state_path=(
-                    DATA_DIR / "runtime" / "zero_base_discovery_queue_integrated_v2"
+                    DATA_DIR
+                    / "runtime"
+                    / "zero_base_discovery_queue_integrated_v2"
                     / f"{session_date}.json"
                 ),
             )
@@ -6816,48 +6813,102 @@ def run_zero_base_scanner(*, token, event_bus, is_test_mode=False):
                     "zero_base_source_sha256": claim.get("source_sha256"),
                     "zero_base_source_kind": claim.get("source_kind") or "unknown",
                     "zero_base_claim_count": claim.get("claim_count"),
-                    "native_observation_receipt": result.get('native_observation_receipt'),
-                    "native_history_summary": result.get('native_history_summary'),
-                    "zero_base_observation_requirements": result.get('observation_requirements'),
-                    "zero_base_branch_readiness": result.get('branch_readiness'),
-                    "zero_base_first_data_branch_readiness": result.get('first_data_branch_readiness'),
-                    "zero_base_consumer_readiness": result.get('consumer_readiness'),
-                    "zero_base_consumer_readiness_at_callback": result.get('consumer_readiness_at_callback'),
-                    "zero_base_consumer_readiness_at_worker": result.get('consumer_readiness_at_worker'),
-                    "zero_base_residence_wait_seconds": claim.get('residence_wait_seconds'),
-                    "zero_base_source_diagnostic_error": result.get('source_diagnostic_error'),
-                    "zero_base_ws_registration": result.get('ws_registration'),
-                    "zero_base_ws_source_trace": result.get('ws_source_trace'),
-                    "zero_base_ws_source_trace_error": result.get('source_trace_error'),
-                    "zero_base_residence_reserved_epoch": result.get('residence_reserved_epoch'),
-                    "zero_base_residence_deadline_epoch": result.get('residence_deadline_epoch'),
-                    "zero_base_residence_remaining_seconds": result.get('residence_remaining_seconds'),
+                    "native_observation_receipt": result.get(
+                        "native_observation_receipt"
+                    ),
+                    "native_history_summary": result.get("native_history_summary"),
+                    "zero_base_observation_requirements": result.get(
+                        "observation_requirements"
+                    ),
+                    "zero_base_branch_readiness": result.get("branch_readiness"),
+                    "zero_base_first_data_branch_readiness": result.get(
+                        "first_data_branch_readiness"
+                    ),
+                    "zero_base_consumer_readiness": result.get("consumer_readiness"),
+                    "zero_base_consumer_readiness_at_callback": result.get(
+                        "consumer_readiness_at_callback"
+                    ),
+                    "zero_base_consumer_readiness_at_worker": result.get(
+                        "consumer_readiness_at_worker"
+                    ),
+                    "zero_base_residence_wait_seconds": claim.get(
+                        "residence_wait_seconds"
+                    ),
+                    "zero_base_source_diagnostic_error": result.get(
+                        "source_diagnostic_error"
+                    ),
+                    "zero_base_ws_registration": result.get("ws_registration"),
+                    "zero_base_ws_source_trace": result.get("ws_source_trace"),
+                    "zero_base_ws_source_trace_error": result.get("source_trace_error"),
+                    "zero_base_residence_reserved_epoch": result.get(
+                        "residence_reserved_epoch"
+                    ),
+                    "zero_base_residence_deadline_epoch": result.get(
+                        "residence_deadline_epoch"
+                    ),
+                    "zero_base_residence_remaining_seconds": result.get(
+                        "residence_remaining_seconds"
+                    ),
                     "native_observation_reference": {
-                        key: value for key, value in (result.get('native_observation') or {}).items()
-                        if key != 'snapshot'},
-                    "physical_probe_lease_id": result.get('physical_probe_lease_id'),
+                        key: value
+                        for key, value in (
+                            result.get("native_observation") or {}
+                        ).items()
+                        if key != "snapshot"
+                    },
+                    "physical_probe_lease_id": result.get("physical_probe_lease_id"),
                     "zero_base_probe_result": result.get("result"),
-                    "zero_base_probe_result_schema": result.get('schema'),
+                    "zero_base_probe_result_schema": result.get("schema"),
                     "zero_base_probe_reason": result.get("reason"),
-                    "zero_base_rest_source_gap_detail": result.get("rest_source_gap_detail"),
+                    "zero_base_rest_source_gap_detail": result.get(
+                        "rest_source_gap_detail"
+                    ),
                     "zero_base_tick_read_source": result.get("tick_read_source") or "-",
-                    "zero_base_tick_read_selection_reason": result.get("tick_read_selection_reason") or "-",
-                    "zero_base_machine_contract_error": result.get("machine_contract_error") or "-",
-                    "continuous_reversal_rejected_claim_receipt": result.get("continuous_reversal_rejected_claim_receipt"),
+                    "zero_base_tick_read_selection_reason": result.get(
+                        "tick_read_selection_reason"
+                    )
+                    or "-",
+                    "zero_base_machine_contract_error": result.get(
+                        "machine_contract_error"
+                    )
+                    or "-",
+                    "continuous_reversal_rejected_claim_receipt": result.get(
+                        "continuous_reversal_rejected_claim_receipt"
+                    ),
                     "provider_called": result.get("provider_called"),
                     "zero_base_machine_input_trace": result.get("machine_input_trace"),
-                    "zero_base_machine_source_gap_kind": result.get("machine_source_gap_kind") or "-",
-                    "zero_base_machine_evaluation_status": result.get("machine_evaluation_status") or "-",
-                    "zero_base_machine_preflight_artifact_status": result.get("machine_preflight_artifact_status") or "-",
+                    "zero_base_machine_source_gap_kind": result.get(
+                        "machine_source_gap_kind"
+                    )
+                    or "-",
+                    "zero_base_machine_evaluation_status": result.get(
+                        "machine_evaluation_status"
+                    )
+                    or "-",
+                    "zero_base_machine_preflight_artifact_status": result.get(
+                        "machine_preflight_artifact_status"
+                    )
+                    or "-",
                     "evaluation_attempt_id": result.get("evaluation_attempt_id") or "-",
                     "zero_base_recheck_attempts": result.get("recheck_attempts") or 1,
-                    "zero_base_recheck_first_reason": result.get("recheck_first_reason") or "-",
-                    "zero_base_recheck_first_ws_wait_ms": result.get("recheck_first_ws_wait_ms"),
-                    "zero_base_recheck_followup_result": result.get("recheck_followup_result") or "-",
-                    "zero_base_recheck_followup_reason": result.get("recheck_followup_reason") or "-",
+                    "zero_base_recheck_first_reason": result.get("recheck_first_reason")
+                    or "-",
+                    "zero_base_recheck_first_ws_wait_ms": result.get(
+                        "recheck_first_ws_wait_ms"
+                    ),
+                    "zero_base_recheck_followup_result": result.get(
+                        "recheck_followup_result"
+                    )
+                    or "-",
+                    "zero_base_recheck_followup_reason": result.get(
+                        "recheck_followup_reason"
+                    )
+                    or "-",
                     **{
                         "zero_base_recheck_followup_ws_" + key: value
-                        for key, value in (result.get("recheck_followup_ws_observation") or {}).items()
+                        for key, value in (
+                            result.get("recheck_followup_ws_observation") or {}
+                        ).items()
                     },
                     **{
                         "zero_base_ws_" + key: value
@@ -6865,22 +6916,31 @@ def run_zero_base_scanner(*, token, event_bus, is_test_mode=False):
                     },
                     **{
                         "zero_base_ws_pre_machine_" + key: value
-                        for key, value in (result.get("ws_observation_pre_machine") or {}).items()
+                        for key, value in (
+                            result.get("ws_observation_pre_machine") or {}
+                        ).items()
                     },
                     **{
                         "zero_base_ws_terminal_" + key: value
-                        for key, value in (result.get("ws_observation_terminal") or {}).items()
+                        for key, value in (
+                            result.get("ws_observation_terminal") or {}
+                        ).items()
                     },
                     "entry_mechanistic_action": result.get("machine_action") or "-",
                     "machine_bundle_sha256": result.get("machine_bundle_sha256") or "-",
                     "machine_capture_status": result.get("machine_capture_status"),
-                    "machine_observation_sha256": result.get("machine_observation_sha256"),
+                    "machine_observation_sha256": result.get(
+                        "machine_observation_sha256"
+                    ),
                     "recheck_first_machine_observation_sha256": result.get(
-                        "recheck_first_machine_observation_sha256"),
+                        "recheck_first_machine_observation_sha256"
+                    ),
                 },
             )
         active_window = _active_scalping_buy_window(now)
-        if (active_window is not None or is_test_mode) and time.time() >= next_scan_epoch:
+        if (
+            active_window is not None or is_test_mode
+        ) and time.time() >= next_scan_epoch:
             if runtime.start_scan(token):
                 next_scan_epoch = time.time() + _resolve_scan_interval_sec(now.time())
         try:
@@ -6893,19 +6953,43 @@ def run_zero_base_scanner(*, token, event_bus, is_test_mode=False):
                 _zero_base_log_event(
                     "zero_base_discovery_cycle",
                     fields={
-                        "zero_base_observed_generation_count": summary["observed_new_generation_count"],
-                        "zero_base_probe_requested_count": summary["probe_requested_count"],
-                        "zero_base_probe_consumer_ready": summary["probe_consumer_ready"],
-                        "zero_base_probe_no_consumer_count": summary["probe_no_consumer_count"],
-                        "zero_base_probe_capacity_limit": summary["probe_capacity_limit"],
-                        "zero_base_probe_claim_eligibility": summary["probe_claim_eligibility"],
-                        "zero_base_probe_residence_deferred": summary["probe_residence_deferred"],
-                        "zero_base_probe_active_target_snapshot_status": summary["probe_active_target_snapshot_status"],
-                        "zero_base_probe_active_target_snapshot_generation": summary["probe_active_target_snapshot_generation"],
-                        "zero_base_queue_restored_candidate_count": summary["queue_restored_candidate_count"],
-                        "zero_base_probe_claims_in_flight_count": summary["probe_claims_in_flight_count"],
+                        "zero_base_observed_generation_count": summary[
+                            "observed_new_generation_count"
+                        ],
+                        "zero_base_probe_requested_count": summary[
+                            "probe_requested_count"
+                        ],
+                        "zero_base_probe_consumer_ready": summary[
+                            "probe_consumer_ready"
+                        ],
+                        "zero_base_probe_no_consumer_count": summary[
+                            "probe_no_consumer_count"
+                        ],
+                        "zero_base_probe_capacity_limit": summary[
+                            "probe_capacity_limit"
+                        ],
+                        "zero_base_probe_claim_eligibility": summary[
+                            "probe_claim_eligibility"
+                        ],
+                        "zero_base_probe_residence_deferred": summary[
+                            "probe_residence_deferred"
+                        ],
+                        "zero_base_probe_active_target_snapshot_status": summary[
+                            "probe_active_target_snapshot_status"
+                        ],
+                        "zero_base_probe_active_target_snapshot_generation": summary[
+                            "probe_active_target_snapshot_generation"
+                        ],
+                        "zero_base_queue_restored_candidate_count": summary[
+                            "queue_restored_candidate_count"
+                        ],
+                        "zero_base_probe_claims_in_flight_count": summary[
+                            "probe_claims_in_flight_count"
+                        ],
                         "zero_base_probe_timeout_count": summary["probe_timeout_count"],
-                        "zero_base_stale_candidate_count": summary["stale_candidate_count"],
+                        "zero_base_stale_candidate_count": summary[
+                            "stale_candidate_count"
+                        ],
                         "zero_base_queue_count": summary["queue_count"],
                         "zero_base_panels": summary["panels"],
                     },
@@ -6914,29 +6998,57 @@ def run_zero_base_scanner(*, token, event_bus, is_test_mode=False):
                 log_error("[ZERO_BASE_SCANNER] cycle failed: " + type(exc).__name__)
             next_scan_epoch = time.time() + _resolve_scan_interval_sec(now.time())
             next_probe_epoch = time.time() + 10
-        elif (active_window is not None or is_test_mode) and time.time() >= next_probe_epoch:
+        elif (
+            active_window is not None or is_test_mode
+        ) and time.time() >= next_probe_epoch:
             try:
                 dispatch = runtime.dispatch_due_probes()
                 _zero_base_log_event(
                     "zero_base_probe_dispatch_cycle",
                     fields={
-                        "zero_base_probe_requested_count": dispatch["probe_requested_count"],
-                        "zero_base_probe_consumer_ready": dispatch["probe_consumer_ready"],
-                        "zero_base_probe_no_consumer_count": dispatch["probe_no_consumer_count"],
-                        "zero_base_probe_capacity_limit": dispatch["probe_capacity_limit"],
-                        "zero_base_probe_claim_eligibility": dispatch["probe_claim_eligibility"],
-                        "zero_base_probe_residence_deferred": dispatch["probe_residence_deferred"],
-                        "zero_base_probe_active_target_snapshot_status": dispatch["probe_active_target_snapshot_status"],
-                        "zero_base_probe_active_target_snapshot_generation": dispatch["probe_active_target_snapshot_generation"],
-                        "zero_base_queue_restored_candidate_count": dispatch["queue_restored_candidate_count"],
-                        "zero_base_probe_claims_in_flight_count": dispatch["probe_claims_in_flight_count"],
-                        "zero_base_probe_timeout_count": dispatch["probe_timeout_count"],
-                        "zero_base_stale_candidate_count": dispatch["stale_candidate_count"],
+                        "zero_base_probe_requested_count": dispatch[
+                            "probe_requested_count"
+                        ],
+                        "zero_base_probe_consumer_ready": dispatch[
+                            "probe_consumer_ready"
+                        ],
+                        "zero_base_probe_no_consumer_count": dispatch[
+                            "probe_no_consumer_count"
+                        ],
+                        "zero_base_probe_capacity_limit": dispatch[
+                            "probe_capacity_limit"
+                        ],
+                        "zero_base_probe_claim_eligibility": dispatch[
+                            "probe_claim_eligibility"
+                        ],
+                        "zero_base_probe_residence_deferred": dispatch[
+                            "probe_residence_deferred"
+                        ],
+                        "zero_base_probe_active_target_snapshot_status": dispatch[
+                            "probe_active_target_snapshot_status"
+                        ],
+                        "zero_base_probe_active_target_snapshot_generation": dispatch[
+                            "probe_active_target_snapshot_generation"
+                        ],
+                        "zero_base_queue_restored_candidate_count": dispatch[
+                            "queue_restored_candidate_count"
+                        ],
+                        "zero_base_probe_claims_in_flight_count": dispatch[
+                            "probe_claims_in_flight_count"
+                        ],
+                        "zero_base_probe_timeout_count": dispatch[
+                            "probe_timeout_count"
+                        ],
+                        "zero_base_stale_candidate_count": dispatch[
+                            "stale_candidate_count"
+                        ],
                         "zero_base_queue_count": dispatch["queue_count"],
                     },
                 )
             except Exception as exc:
-                log_error("[ZERO_BASE_SCANNER] probe dispatch failed: " + type(exc).__name__)
+                log_error(
+                    "[ZERO_BASE_SCANNER] probe dispatch failed: " + type(exc).__name__
+                )
             next_probe_epoch = time.time() + 10
         runtime.wait(0.5)
 
@@ -6988,7 +7100,9 @@ def run_scalper(is_test_mode=False):
 
     if _zero_base_scanner_enabled():
         run_zero_base_scanner(
-            token=token, event_bus=event_bus, is_test_mode=is_test_mode,
+            token=token,
+            event_bus=event_bus,
+            is_test_mode=is_test_mode,
         )
         return
 

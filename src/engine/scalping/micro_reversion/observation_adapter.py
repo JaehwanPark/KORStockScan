@@ -165,7 +165,9 @@ class RawMarketObservation:
         if self.sequence_epoch <= 0:
             raise ValueError("sequence_epoch must be positive")
         # Parse strict aware strings once instead of reparsing for the delta.
-        exchange_at = _validate_aware_timestamp(self.exchange_timestamp, "exchange_timestamp")
+        exchange_at = _validate_aware_timestamp(
+            self.exchange_timestamp, "exchange_timestamp"
+        )
         receive_at = _validate_aware_timestamp(
             self.local_receive_timestamp, "local_receive_timestamp"
         )
@@ -189,7 +191,10 @@ class RawMarketObservation:
             value = getattr(self, name)
             if value is not None and value < 0:
                 raise ValueError(f"{name} must not be negative")
-        if self.source_item and registration_item_identity(self.source_item) != (symbol, venue):
+        if self.source_item and registration_item_identity(self.source_item) != (
+            symbol,
+            venue,
+        ):
             raise ValueError("trade source item conflicts with symbol or venue")
         for name in ("cumulative_volume_raw", "trade_volume_raw"):
             value = getattr(self, name)
@@ -443,7 +448,7 @@ class ObservationAdapter:
 def _validate_aware_timestamp(value: str, field_name: str):
     from datetime import datetime
 
-    if not isinstance(value,str):
+    if not isinstance(value, str):
         raise ValueError(f"{field_name} must be an ISO-8601 string")
     text = value
     if text.endswith("Z"):
@@ -471,9 +476,13 @@ def _percentile(values: tuple[float, ...], percentile: int) -> float:
     return _percentiles(values, (percentile,))[0]
 
 
-def _percentiles(values: tuple[float, ...], percentiles: tuple[int, ...]) -> tuple[float, ...]:
+def _percentiles(
+    values: tuple[float, ...], percentiles: tuple[int, ...]
+) -> tuple[float, ...]:
     """Sort a bounded snapshot once, retaining the original rank and rounding."""
     if not values:
         return (0.0,) * len(percentiles)
     ordered = sorted(values)
-    return tuple(round(ordered[round((len(ordered)-1)*p/100)], 6) for p in percentiles)
+    return tuple(
+        round(ordered[round((len(ordered) - 1) * p / 100)], 6) for p in percentiles
+    )

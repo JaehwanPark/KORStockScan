@@ -2411,16 +2411,24 @@ def _retired_lab_conclusion(item: dict[str, Any]) -> bool:
             for owner in CLAUDE_LAB_RETIRED_REPORTS
         )
 
-    if any(lab_owner(item.get(key)) for key in (
-        "review_id", "source_report_type", "source_id", "family", "mapped_family",
-    )):
+    if any(
+        lab_owner(item.get(key))
+        for key in (
+            "review_id",
+            "source_report_type",
+            "source_id",
+            "family",
+            "mapped_family",
+        )
+    ):
         return True
     paths = item.get("source_paths")
     return isinstance(paths, list) and any(
         lab_owner(path)
         or lab_owner(Path(path).stem)
         or any(part in CLAUDE_LAB_RETIRED_REPORTS for part in Path(path).parts)
-        for path in paths if isinstance(path, str)
+        for path in paths
+        if isinstance(path, str)
     )
 
 
@@ -3710,6 +3718,7 @@ def build_pattern_lab_ai_review_report(
 ) -> dict[str, Any]:
     if not include_swing:
         from src.engine.lifecycle.retirement import retired_status
+
         return retired_status("claude_scalping_pattern_lab")
     target_date = str(target_date).strip()
     resolved_provider = (
@@ -3817,7 +3826,8 @@ def build_pattern_lab_ai_review_report(
             ai_status = "unavailable_deterministic_review"
     original_response = copy.deepcopy(ai_payload)
     ai_payload["final_conclusions"] = [
-        item for item in ai_payload.get("final_conclusions", [])
+        item
+        for item in ai_payload.get("final_conclusions", [])
         if isinstance(item, dict) and not _retired_lab_conclusion(item)
     ]
     # These fields are deterministic reconciler outputs, never provider
@@ -3965,9 +3975,7 @@ def build_pattern_lab_ai_review_report(
         "response_source": (
             "provided_response"
             if provided_ai_response
-            else "provider_call"
-            if ai_status == "parsed"
-            else "deterministic_fallback"
+            else "provider_call" if ai_status == "parsed" else "deterministic_fallback"
         ),
     }
     report = {
@@ -4073,6 +4081,7 @@ def refresh_pattern_lab_ai_review_source_provenance(
 
     if not include_swing:
         from src.engine.lifecycle.retirement import retired_status
+
         return retired_status("claude_scalping_pattern_lab")
     json_path, md_path = report_paths(str(target_date).strip())
     # The saved provider response is immutable evidence, including retired
@@ -4308,6 +4317,7 @@ def review_current_generation(target_date, *, provider="openai", include_swing=T
     """
     if not include_swing:
         from src.engine.lifecycle.retirement import retired_status
+
         return retired_status("claude_scalping_pattern_lab")
     from datetime import date
 
@@ -4620,6 +4630,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.exclude_swing:
         from src.engine.lifecycle.retirement import retired_status
+
         print(json.dumps(retired_status("claude_scalping_pattern_lab")))
         return 0
     report = (

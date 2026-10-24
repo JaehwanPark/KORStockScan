@@ -21,7 +21,6 @@ from typing import Any
 
 from src.utils.jsonl_io import iter_jsonl
 
-
 PIPELINE_EVENTS_DIR = Path(__file__).resolve().parents[4] / "data" / "pipeline_events"
 
 
@@ -176,9 +175,7 @@ def normalize_institutional_flow_context(
         status = (
             "OK"
             if {"ka10059", "ka10061"} <= set(sources)
-            else "PARTIAL"
-            if sources
-            else "MISSING"
+            else "PARTIAL" if sources else "MISSING"
         )
 
     return {

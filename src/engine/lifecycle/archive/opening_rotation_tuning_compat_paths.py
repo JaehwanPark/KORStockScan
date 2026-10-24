@@ -22,7 +22,6 @@ from src.engine.scalping.opening_rotation import (
 
 from src.utils.constants import DATA_DIR
 
-
 REPORT_TYPE = "opening_rotation_profile_tuning"
 
 

@@ -76,9 +76,13 @@ def _aftermarket_eligibility(*, krx=True, nxt=True, target_date=date(2026, 9, 14
             "source_revision": "a" * 40,
             "source_sha256": "b" * 64,
             "quality_state": "PARTIAL" if krx is None or nxt is None else "VALID",
-            "blocked_reasons_json": (["krx_aftermarket_eligibility_unknown"] if krx is None else []) +
-                (["nxt_enable_unknown"] if nxt is None else []),
-            "observed_at_kst": datetime.combine(target_date, datetime.min.time(), tzinfo=session_contract.KST).replace(hour=15, minute=59),
+            "blocked_reasons_json": (
+                ["krx_aftermarket_eligibility_unknown"] if krx is None else []
+            )
+            + (["nxt_enable_unknown"] if nxt is None else []),
+            "observed_at_kst": datetime.combine(
+                target_date, datetime.min.time(), tzinfo=session_contract.KST
+            ).replace(hour=15, minute=59),
             "krx_regular_eligible": True,
             "krx_aftermarket_eligible": krx,
             "nxt_eligible": nxt,
@@ -93,10 +97,6 @@ def _main_owner_context(action="ENTRY_BUY"):
         position_id="main_scalping:test-target",
         client_intent_id=f"main_scalping:test-target:cycle:{action}:1:test",
     )
-
-
-
-
 
 
 def _allow_buy_time_guards(monkeypatch):
@@ -566,9 +566,7 @@ def test_send_sell_order_market_uses_requested_exchange(monkeypatch):
     assert "cancel_request_api_id" not in result
 
 
-def test_aftermarket_sor_buy_market_remaps_before_single_submit(
-    monkeypatch, tmp_path
-):
+def test_aftermarket_sor_buy_market_remaps_before_single_submit(monkeypatch, tmp_path):
     _allow_buy_time_guards(monkeypatch)
     calls = []
 
@@ -637,8 +635,6 @@ def test_aftermarket_native_eligibility_preserves_central_quantity(
     assert result["return_code"] == "0"
 
 
-
-
 def test_aftermarket_existing_holding_sell_market_remaps_before_single_submit(
     monkeypatch,
 ):
@@ -702,17 +698,29 @@ def test_aftermarket_unsupported_type_is_blocked_before_broker(monkeypatch, side
 
 def test_owner_registry_sell_block_attests_no_transport(monkeypatch):
     calls = []
-    monkeypatch.setattr(kiwoom_orders, "is_sell_side_open_time_blocked", lambda **kwargs: False)
     monkeypatch.setattr(
-        kiwoom_orders, "_reserve_owner_registry_intent",
-        lambda **kwargs: (None, None, kiwoom_orders._owner_registry_block_response("owner_veto")),
+        kiwoom_orders, "is_sell_side_open_time_blocked", lambda **kwargs: False
     )
     monkeypatch.setattr(
-        kiwoom_orders, "_post_kiwoom_with_auth_retry",
+        kiwoom_orders,
+        "_reserve_owner_registry_intent",
+        lambda **kwargs: (
+            None,
+            None,
+            kiwoom_orders._owner_registry_block_response("owner_veto"),
+        ),
+    )
+    monkeypatch.setattr(
+        kiwoom_orders,
+        "_post_kiwoom_with_auth_retry",
         lambda *args, **kwargs: calls.append((args, kwargs)),
     )
     response = kiwoom_orders.send_sell_order_market(
-        "425040", 10, "TEST_TOKEN", order_type="6", dmst_stex_tp="SOR",
+        "425040",
+        10,
+        "TEST_TOKEN",
+        order_type="6",
+        dmst_stex_tp="SOR",
         now=datetime(2026, 9, 16, 16, 1, 12, tzinfo=session_contract.KST),
     )
     assert calls == []
@@ -740,7 +748,9 @@ def test_aftermarket_buy_requires_explicit_route_before_broker(monkeypatch):
 
     assert calls == []
     assert result["return_code"] == "ORDER_TYPE_PREFLIGHT_BLOCKED"
-    assert result["return_msg"] == session_contract.ORDER_TYPE_PREFLIGHT_ROUTE_UNSUPPORTED
+    assert (
+        result["return_msg"] == session_contract.ORDER_TYPE_PREFLIGHT_ROUTE_UNSUPPORTED
+    )
     assert result["requested_dmst_stex_tp"] == "AUTO"
 
 
@@ -764,27 +774,43 @@ def test_aftermarket_buy_unknown_eligibility_blocks_before_broker(monkeypatch):
 
     assert calls == []
     assert result["return_code"] == "ORDER_TYPE_PREFLIGHT_BLOCKED"
-    assert result["return_msg"] == session_contract.ORDER_TYPE_PREFLIGHT_ELIGIBILITY_UNKNOWN
+    assert (
+        result["return_msg"]
+        == session_contract.ORDER_TYPE_PREFLIGHT_ELIGIBILITY_UNKNOWN
+    )
     assert result["broker_order_attempted"] is False
 
 
-@pytest.mark.parametrize("failure", [None, "missing", "wrong_symbol", "stale", "nxt_false"])
+@pytest.mark.parametrize(
+    "failure", [None, "missing", "wrong_symbol", "stale", "nxt_false"]
+)
 def test_explicit_nxt_uses_own_eligibility_without_sor_approval(monkeypatch, failure):
     _allow_buy_time_guards(monkeypatch)
     calls = []
-    monkeypatch.setattr(kiwoom_orders, "_post_kiwoom_with_auth_retry",
+    monkeypatch.setattr(
+        kiwoom_orders,
+        "_post_kiwoom_with_auth_retry",
         lambda _url, _headers, payload, _api_id, timeout=5: (
             calls.append(dict(payload)) or types.SimpleNamespace(status_code=200),
-            {"return_code": "0", "ord_no": "NXT1"}))
+            {"return_code": "0", "ord_no": "NXT1"},
+        ),
+    )
     source = session_contract.resolve_symbol_venue_eligibility(
-        "005930", date(2026, 9, 14), {
-            "trade_date": "2026-09-14", "source_id": "ka10099",
-            "source_revision": "a" * 40, "payload_sha256": "b" * 64,
+        "005930",
+        date(2026, 9, 14),
+        {
+            "trade_date": "2026-09-14",
+            "source_id": "ka10099",
+            "source_revision": "a" * 40,
+            "payload_sha256": "b" * 64,
             "observed_at_kst": datetime(2026, 9, 14, 8, tzinfo=session_contract.KST),
-            "krx_regular_eligible": True, "nxt_eligible": True,
-            "krx_aftermarket_eligible": None, "quality_state": "PARTIAL",
+            "krx_regular_eligible": True,
+            "nxt_eligible": True,
+            "krx_aftermarket_eligible": None,
+            "quality_state": "PARTIAL",
             "blocked_reasons_json": ["krx_aftermarket_eligibility_unknown"],
-        })
+        },
+    )
     if failure == "missing":
         source = None
     elif failure == "wrong_symbol":
@@ -794,10 +820,15 @@ def test_explicit_nxt_uses_own_eligibility_without_sor_approval(monkeypatch, fai
     elif failure == "nxt_false":
         source = replace(source, nxt_eligible=False)
     result = kiwoom_orders.send_buy_order_market(
-        "005930", 2, "TOKEN", order_type="3", dmst_stex_tp="NXT",
+        "005930",
+        2,
+        "TOKEN",
+        order_type="3",
+        dmst_stex_tp="NXT",
         owner_context=_main_owner_context(),
         now=datetime(2026, 9, 14, 18, tzinfo=session_contract.KST),
-        venue_eligibility=source)
+        venue_eligibility=source,
+    )
     if failure:
         assert calls == []
         assert result["return_code"] == "ORDER_TYPE_PREFLIGHT_BLOCKED"
@@ -1774,49 +1805,73 @@ def test_get_deposit_returns_auth_failure_when_token_refresh_raises(
     assert kiwoom_orders.is_auth_failure_error(errors[-1]) is True
 
 
-
 def test_deposit_original_receipt_survives_cache_diagnostics(monkeypatch):
     orders = kiwoom_orders
     orders.reset_orderable_amount_cache()
-    monkeypatch.setattr(orders,"_LAST_SUCCESSFUL_DEPOSIT_BY_KEY",{})
-    monkeypatch.setattr(orders.time,"time",lambda:1000.0)
-    key=orders._deposit_cache_key("fixture-token")
-    orders._remember_successful_deposit(10000,cache_key=key,loop_cache_source="api_fresh")
-    receipt=orders._deposit_source_receipt(key)
-    assert receipt["observed_epoch"]==1000
-    orders._apply_kt00001_orderable_amount_floor(10000,source="api_fresh",source_receipt=receipt)
-    identity=orders.entry_capacity_deposit_identity("fixture-token")
-    orders._apply_kt00001_orderable_amount_floor(10000,source="loop_cache",source_receipt=receipt,age_sec=.5,cache_hit=True)
-    assert orders.entry_capacity_deposit_identity("fixture-token")==identity
-    assert orders.entry_capacity_deposit_identity("different-token")!=identity
-    orders._remember_successful_deposit(10000,cache_key=key,loop_cache_source="api_fresh")
-    updated=orders._deposit_source_receipt(key)
-    assert updated["generation"]!=receipt["generation"]
-    orders._apply_kt00001_orderable_amount_floor(10000,source="api_fresh",source_receipt=updated)
-    assert orders.entry_capacity_deposit_identity("fixture-token")!=identity
+    monkeypatch.setattr(orders, "_LAST_SUCCESSFUL_DEPOSIT_BY_KEY", {})
+    monkeypatch.setattr(orders.time, "time", lambda: 1000.0)
+    key = orders._deposit_cache_key("fixture-token")
+    orders._remember_successful_deposit(
+        10000, cache_key=key, loop_cache_source="api_fresh"
+    )
+    receipt = orders._deposit_source_receipt(key)
+    assert receipt["observed_epoch"] == 1000
+    orders._apply_kt00001_orderable_amount_floor(
+        10000, source="api_fresh", source_receipt=receipt
+    )
+    identity = orders.entry_capacity_deposit_identity("fixture-token")
+    orders._apply_kt00001_orderable_amount_floor(
+        10000, source="loop_cache", source_receipt=receipt, age_sec=0.5, cache_hit=True
+    )
+    assert orders.entry_capacity_deposit_identity("fixture-token") == identity
+    assert orders.entry_capacity_deposit_identity("different-token") != identity
+    orders._remember_successful_deposit(
+        10000, cache_key=key, loop_cache_source="api_fresh"
+    )
+    updated = orders._deposit_source_receipt(key)
+    assert updated["generation"] != receipt["generation"]
+    orders._apply_kt00001_orderable_amount_floor(
+        10000, source="api_fresh", source_receipt=updated
+    )
+    assert orders.entry_capacity_deposit_identity("fixture-token") != identity
     orders.reset_orderable_amount_cache()
 
 
 def test_unknown_or_fallback_deposit_metadata_keeps_conservative_identity(monkeypatch):
-    orders=kiwoom_orders
-    meta={"source":"loop_cache","age_sec":.5,"cache_hit":True,"fallback_used":False,"amount":10000}
-    monkeypatch.setattr(orders,"get_last_deposit_meta",lambda:meta)
-    assert orders.entry_capacity_deposit_identity("fixture-token")==meta
-    meta.update(source="cooldown_fallback",fallback_used=True)
-    assert orders.entry_capacity_deposit_identity("fixture-token")==meta
+    orders = kiwoom_orders
+    meta = {
+        "source": "loop_cache",
+        "age_sec": 0.5,
+        "cache_hit": True,
+        "fallback_used": False,
+        "amount": 10000,
+    }
+    monkeypatch.setattr(orders, "get_last_deposit_meta", lambda: meta)
+    assert orders.entry_capacity_deposit_identity("fixture-token") == meta
+    meta.update(source="cooldown_fallback", fallback_used=True)
+    assert orders.entry_capacity_deposit_identity("fixture-token") == meta
 
 
 def test_real_deposit_cache_retains_its_own_receipt_and_original_clock(monkeypatch):
     clock = [1000.0]
     monkeypatch.setattr(kiwoom_orders.time, "time", lambda: clock[0])
     monkeypatch.setattr(sniper_config, "CONF", {"VIRTUAL_ORDERABLE_AMOUNT": 0})
-    monkeypatch.setattr(kiwoom_orders.kiwoom_utils, "get_api_url", lambda path: "https://example.test" + path)
+    monkeypatch.setattr(
+        kiwoom_orders.kiwoom_utils,
+        "get_api_url",
+        lambda path: "https://example.test" + path,
+    )
     posts = []
+
     class Response:
         status_code = 200
+
         def json(self):
             return {"return_code": 0, "ord_alow_amt": "10000"}
-    monkeypatch.setattr(kiwoom_orders.requests, "post", lambda *a, **kw: posts.append(kw) or Response())
+
+    monkeypatch.setattr(
+        kiwoom_orders.requests, "post", lambda *a, **kw: posts.append(kw) or Response()
+    )
     assert kiwoom_orders.get_deposit("fixture-token") == 10000
     first = kiwoom_orders.get_last_deposit_meta()["deposit_source_receipt"]
     exposed = kiwoom_orders.get_last_deposit_meta()
@@ -1824,7 +1879,7 @@ def test_real_deposit_cache_retains_its_own_receipt_and_original_clock(monkeypat
     assert kiwoom_orders.get_last_deposit_meta()["deposit_source_receipt"] == first
     # A separate known-success record must not relabel an older cached value.
     kiwoom_orders._remember_successful_deposit(10000, cache_key="token:fixture-token")
-    clock[0] += .5
+    clock[0] += 0.5
     assert kiwoom_orders.get_deposit("fixture-token") == 10000
     cached = kiwoom_orders.get_last_deposit_meta()
     assert cached["source"] == "loop_cache"
@@ -1833,109 +1888,208 @@ def test_real_deposit_cache_retains_its_own_receipt_and_original_clock(monkeypat
     assert len(posts) == 1
 
 
-@pytest.mark.parametrize("krx,nxt,allowed", [
-    (True, False, True), (False, True, True), (False, False, False),
-    (None, True, True), (True, None, True), (None, False, False),
-    (False, None, False), (None, None, False),
-])
-def test_sor_uses_supported_venue_without_legacy_trial_approval(monkeypatch, krx, nxt, allowed):
+@pytest.mark.parametrize(
+    "krx,nxt,allowed",
+    [
+        (True, False, True),
+        (False, True, True),
+        (False, False, False),
+        (None, True, True),
+        (True, None, True),
+        (None, False, False),
+        (False, None, False),
+        (None, None, False),
+    ],
+)
+def test_sor_uses_supported_venue_without_legacy_trial_approval(
+    monkeypatch, krx, nxt, allowed
+):
     _allow_buy_time_guards(monkeypatch)
     calls = []
     monkeypatch.setenv("KORSTOCKSCAN_KRX_AFTERMARKET_SOR_POLICY_APPROVED", "1")
+
     def post(url, headers, payload, api_id, timeout=5):
         calls.append(dict(payload))
-        return types.SimpleNamespace(status_code=200), {"return_code": "0", "ord_no": "B-SOR"}
+        return types.SimpleNamespace(status_code=200), {
+            "return_code": "0",
+            "ord_no": "B-SOR",
+        }
+
     monkeypatch.setattr(kiwoom_orders, "_post_kiwoom_with_auth_retry", post)
-    result = kiwoom_orders.send_buy_order_market("005930", 2, "fixture",
-        order_type="00", price=10000, dmst_stex_tp="SOR", owner_context=_main_owner_context(),
+    result = kiwoom_orders.send_buy_order_market(
+        "005930",
+        2,
+        "fixture",
+        order_type="00",
+        price=10000,
+        dmst_stex_tp="SOR",
+        owner_context=_main_owner_context(),
         now=datetime(2026, 9, 15, 17, tzinfo=session_contract.KST),
-        venue_eligibility=_aftermarket_eligibility(krx=krx, nxt=nxt, target_date=date(2026, 9, 15)))
+        venue_eligibility=_aftermarket_eligibility(
+            krx=krx, nxt=nxt, target_date=date(2026, 9, 15)
+        ),
+    )
     assert bool(calls) is allowed
     if allowed:
-        assert calls == [dict(dmst_stex_tp="SOR", stk_cd="005930", ord_qty="2",
-                              ord_uv="10000", trde_tp="00", cond_uv="")]
+        assert calls == [
+            dict(
+                dmst_stex_tp="SOR",
+                stk_cd="005930",
+                ord_qty="2",
+                ord_uv="10000",
+                trde_tp="00",
+                cond_uv="",
+            )
+        ]
         assert result["return_code"] == "0"
     else:
         assert not result.get("ord_no")
         assert result["broker_order_attempted"] is False
 
 
-@pytest.mark.parametrize('hour', [8, 10, 17, 19])
-@pytest.mark.parametrize('requested', [None, '', 'UNKNOWN', '-', 'SOR', 'NXT', 'KRX', 'CONFLICT'])
-def test_operator_default_route_is_sor_with_explicit_routes_and_preflight_preserved(hour, requested):
+@pytest.mark.parametrize("hour", [8, 10, 17, 19])
+@pytest.mark.parametrize(
+    "requested", [None, "", "UNKNOWN", "-", "SOR", "NXT", "KRX", "CONFLICT"]
+)
+def test_operator_default_route_is_sor_with_explicit_routes_and_preflight_preserved(
+    hour, requested
+):
     from src.trading.market.execution_venue import MARKET_DEFAULT_AUTHORITY
+
     at = datetime(2026, 10, 21, hour, 10, tzinfo=kiwoom_orders.KST)
     result = kiwoom_orders.describe_order_route_resolution(requested, now=at)
-    missing = requested in (None, '', 'UNKNOWN', '-')
-    assert result['effective_dmst_stex_tp'] == ('SOR' if missing else requested)
-    assert result['broker_route_override'] == (MARKET_DEFAULT_AUTHORITY if missing else None)
+    missing = requested in (None, "", "UNKNOWN", "-")
+    assert result["effective_dmst_stex_tp"] == ("SOR" if missing else requested)
+    assert result["broker_route_override"] == (
+        MARKET_DEFAULT_AUTHORITY if missing else None
+    )
     if missing:
-        assert result['broker_route_resolution'] == MARKET_DEFAULT_AUTHORITY
+        assert result["broker_route_resolution"] == MARKET_DEFAULT_AUTHORITY
     context = session_contract.resolve_market_session(at)
     checked = session_contract.resolve_order_type_preflight(
-        context, result['effective_dmst_stex_tp'], 'buy', '0')
-    if hour >= 17 or requested == 'CONFLICT':
-        assert checked.allowed is False  # Missing eligibility/closed entry clock/invalid route.
+        context, result["effective_dmst_stex_tp"], "buy", "0"
+    )
+    if hour >= 17 or requested == "CONFLICT":
+        assert (
+            checked.allowed is False
+        )  # Missing eligibility/closed entry clock/invalid route.
     closed = session_contract.resolve_order_type_preflight(
         session_contract.resolve_market_session(at.replace(hour=20)),
-        result['effective_dmst_stex_tp'], 'sell', '0', existing_holding=True)
+        result["effective_dmst_stex_tp"],
+        "sell",
+        "0",
+        existing_holding=True,
+    )
     assert closed.allowed is False
 
 
-@pytest.mark.parametrize('failure', [None, 'excluded', 'incomplete', 'wrong_symbol', 'stale', 'future'])
-def test_official_non_nxt_listing_persists_to_main_sor_submit(monkeypatch, tmp_path, failure):
+@pytest.mark.parametrize(
+    "failure", [None, "excluded", "incomplete", "wrong_symbol", "stale", "future"]
+)
+def test_official_non_nxt_listing_persists_to_main_sor_submit(
+    monkeypatch, tmp_path, failure
+):
     """Exercise collection -> ORM row -> Main adapter -> native order preflight."""
     from contextlib import contextmanager
     from src.engine.infrastructure import market_eligibility_source as listing
     from src.engine import sniper_state_handlers as handlers
+
     records = {}
+
     def merge(model):
         records[model.stock_code] = {
-            column.name: getattr(model, column.name) for column in model.__table__.columns}
+            column.name: getattr(model, column.name)
+            for column in model.__table__.columns
+        }
+
     @contextmanager
     def session():
-        yield types.SimpleNamespace(merge=merge, query=lambda *_: types.SimpleNamespace(
-            filter=lambda *_: types.SimpleNamespace(all=lambda: [])))
-    db = types.SimpleNamespace(get_session=session,
-        get_security_market_eligibility=lambda code, day: records.get(code))
+        yield types.SimpleNamespace(
+            merge=merge,
+            query=lambda *_: types.SimpleNamespace(
+                filter=lambda *_: types.SimpleNamespace(all=lambda: [])
+            ),
+        )
+
+    db = types.SimpleNamespace(
+        get_session=session,
+        get_security_market_eligibility=lambda code, day: records.get(code),
+    )
     now = datetime(2026, 10, 23, 17, tzinfo=session_contract.KST)
+
     def fetch(**kwargs):
-        row = dict(code='005930' if kwargs['payload']['mrkt_tp'] == '0' else '036930',
-            nxtEnable='N', auditInfo='정상', state='투자경고' if failure == 'excluded' else '증거금30%',
-            orderWarning='0', marketCode=kwargs['payload']['mrkt_tp'])
-        return [dict(return_code=0, list=[row])], dict(last_http_status_code=200,
-            continuous_next_key_missing=False, continuous_page_limit_reached=failure == 'incomplete')
-    monkeypatch.setattr(kiwoom_orders.kiwoom_utils, 'fetch_kiwoom_api_continuous', fetch)
-    owner = listing.RuntimeMarketEligibilitySource(tmp_path / 'listing', now=lambda: now,
-        calendar=lambda day: True, token=lambda: 'fixture', log=lambda message: None)
+        row = dict(
+            code="005930" if kwargs["payload"]["mrkt_tp"] == "0" else "036930",
+            nxtEnable="N",
+            auditInfo="정상",
+            state="투자경고" if failure == "excluded" else "증거금30%",
+            orderWarning="0",
+            marketCode=kwargs["payload"]["mrkt_tp"],
+        )
+        return [dict(return_code=0, list=[row])], dict(
+            last_http_status_code=200,
+            continuous_next_key_missing=False,
+            continuous_page_limit_reached=failure == "incomplete",
+        )
+
+    monkeypatch.setattr(
+        kiwoom_orders.kiwoom_utils, "fetch_kiwoom_api_continuous", fetch
+    )
+    owner = listing.RuntimeMarketEligibilitySource(
+        tmp_path / "listing",
+        now=lambda: now,
+        calendar=lambda day: True,
+        token=lambda: "fixture",
+        log=lambda message: None,
+    )
     owner.tick(db)
-    original = dict(records['005930'])
-    if failure == 'wrong_symbol':
-        records['005930']['stock_code'] = '036930'
-    elif failure == 'stale':
-        records['005930']['trade_date'] = date(2026, 10, 22)
-    elif failure == 'future':
-        records['005930']['observed_at_kst'] = now.replace(hour=18)
-    monkeypatch.setattr(handlers, 'DB', db)
-    evidence = handlers._entry_order_venue_eligibility('005930', now=now)
+    original = dict(records["005930"])
+    if failure == "wrong_symbol":
+        records["005930"]["stock_code"] = "036930"
+    elif failure == "stale":
+        records["005930"]["trade_date"] = date(2026, 10, 22)
+    elif failure == "future":
+        records["005930"]["observed_at_kst"] = now.replace(hour=18)
+    monkeypatch.setattr(handlers, "DB", db)
+    evidence = handlers._entry_order_venue_eligibility("005930", now=now)
     _allow_buy_time_guards(monkeypatch)
     calls = []
-    monkeypatch.setattr(kiwoom_orders, '_post_kiwoom_with_auth_retry',
+    monkeypatch.setattr(
+        kiwoom_orders,
+        "_post_kiwoom_with_auth_retry",
         lambda url, headers, payload, api_id, timeout=5: (
             calls.append(dict(payload)) or types.SimpleNamespace(status_code=200),
-            dict(return_code='0', ord_no='KRX-SOR')))
-    result = kiwoom_orders.send_buy_order_market('005930', 2, 'fixture', order_type='00',
-        price=10000, dmst_stex_tp='SOR', owner_context=_main_owner_context(),
-        now=now, venue_eligibility=evidence)
+            dict(return_code="0", ord_no="KRX-SOR"),
+        ),
+    )
+    result = kiwoom_orders.send_buy_order_market(
+        "005930",
+        2,
+        "fixture",
+        order_type="00",
+        price=10000,
+        dmst_stex_tp="SOR",
+        owner_context=_main_owner_context(),
+        now=now,
+        venue_eligibility=evidence,
+    )
     if failure:
         assert calls == []
-        assert result['return_code'] == 'ORDER_TYPE_PREFLIGHT_BLOCKED'
-        assert result['broker_order_attempted'] is False
+        assert result["return_code"] == "ORDER_TYPE_PREFLIGHT_BLOCKED"
+        assert result["broker_order_attempted"] is False
     else:
-        assert original['krx_aftermarket_eligible'] is True
-        assert original['nxt_eligible'] is False
-        assert original['quality_state'] == 'VALID'
-        assert evidence.source_sha256 == original['payload_sha256']
-        assert calls == [dict(dmst_stex_tp='SOR', stk_cd='005930', ord_qty='2',
-                              ord_uv='10000', trde_tp='00', cond_uv='')]
-        assert result['return_code'] == '0'
+        assert original["krx_aftermarket_eligible"] is True
+        assert original["nxt_eligible"] is False
+        assert original["quality_state"] == "VALID"
+        assert evidence.source_sha256 == original["payload_sha256"]
+        assert calls == [
+            dict(
+                dmst_stex_tp="SOR",
+                stk_cd="005930",
+                ord_qty="2",
+                ord_uv="10000",
+                trde_tp="00",
+                cond_uv="",
+            )
+        ]
+        assert result["return_code"] == "0"

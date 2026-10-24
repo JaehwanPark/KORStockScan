@@ -249,9 +249,9 @@ def evaluate(setup, parent, *, baseline, situation_veto):
             dict(
                 original=deepcopy(risk),
                 existing_resolved=existing,
-                proposed_counterweight="trusted_buy_flow_at_or_below_vwap"
-                if proposed
-                else None,
+                proposed_counterweight=(
+                    "trusted_buy_flow_at_or_below_vwap" if proposed else None
+                ),
                 resolved=existing or proposed,
             )
         )

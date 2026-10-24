@@ -857,7 +857,7 @@ def _default_event_cache_path(target_date: str) -> Path:
     )
     if pipeline_path.exists():
         return pipeline_path
-    compressed=pipeline_path.with_suffix(pipeline_path.suffix+".gz")
+    compressed = pipeline_path.with_suffix(pipeline_path.suffix + ".gz")
     if compressed.exists():
         return compressed
     return (

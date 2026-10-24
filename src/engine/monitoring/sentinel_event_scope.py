@@ -3,6 +3,7 @@
 Observation routes do not establish actual execution venue. Each caller owns
 its field precedence; Mapping access preserves lazy compact-field reads.
 """
+
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -87,8 +88,11 @@ def session_for_venue(venue: str, emitted_at: datetime) -> str:
 
 
 def explicit_event_scope(
-    fields: Mapping[str, Any], emitted_at: datetime, *,
-    venue_keys: tuple[str, ...], session_keys: tuple[str, ...],
+    fields: Mapping[str, Any],
+    emitted_at: datetime,
+    *,
+    venue_keys: tuple[str, ...],
+    session_keys: tuple[str, ...],
 ) -> tuple[str, str, str] | None:
     venue = next(
         (
@@ -107,9 +111,7 @@ def explicit_event_scope(
         ),
         None,
     )
-    fallback_session = canonical_session(
-        fields.get(session_keys[-1])
-    )
+    fallback_session = canonical_session(fields.get(session_keys[-1]))
     venue = venue or fallback_venue
     session = session or fallback_session
     if venue is None and session is not None:
@@ -128,10 +130,7 @@ def explicit_event_scope(
     elif (
         venue == "NXT"
         and session == "NXT_REGULAR"
-        and (
-            emitted_at.time() < time(9, 0)
-            or emitted_at.time() > time(15, 30)
-        )
+        and (emitted_at.time() < time(9, 0) or emitted_at.time() > time(15, 30))
     ):
         session = session_for_venue(venue, emitted_at)
     if (

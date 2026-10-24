@@ -149,18 +149,26 @@ class MarketDataCache:
             return
         key = symbol if scope is None else (symbol, *scope)
         quote = self._quotes.setdefault(key, _SymbolQuote())
-        if (source_identity is not None and quote.source_identity is not None
-                and source_identity[0] == quote.source_identity[0]
-                and source_identity[1] <= quote.source_identity[1]
-                and now != quote.last_packet_ts):
+        if (
+            source_identity is not None
+            and quote.source_identity is not None
+            and source_identity[0] == quote.source_identity[0]
+            and source_identity[1] <= quote.source_identity[1]
+            and now != quote.last_packet_ts
+        ):
             return
         advanced_identity = bool(
-            source_identity is not None and quote.source_identity is not None
+            source_identity is not None
+            and quote.source_identity is not None
             and source_identity != quote.source_identity
-            and (source_identity[0] != quote.source_identity[0]
-                 or source_identity[1] > quote.source_identity[1])
+            and (
+                source_identity[0] != quote.source_identity[0]
+                or source_identity[1] > quote.source_identity[1]
+            )
         )
-        if now < quote.last_packet_ts or (now == quote.last_packet_ts and not advanced_identity):
+        if now < quote.last_packet_ts or (
+            now == quote.last_packet_ts and not advanced_identity
+        ):
             if now == quote.last_packet_ts and (
                 (best_ask is not None and int(best_ask) != quote.best_ask)
                 or (best_bid is not None and int(best_bid) != quote.best_bid)
@@ -202,7 +210,10 @@ class MarketDataCache:
         return self._quotes.get(key, _SymbolQuote()).best_bid
 
     def get_quote_health(
-        self, symbol: str, *, scope: tuple | None = None,
+        self,
+        symbol: str,
+        *,
+        scope: tuple | None = None,
         source_frame: Mapping | None = None,
     ) -> QuoteHealth:
         key = symbol if scope is None else (symbol, *scope)
@@ -223,24 +234,32 @@ class MarketDataCache:
         return QuoteHealth(
             ws_age_ms=ws_age_ms,
             ws_jitter_ms=ws_jitter_ms,
-            quote_stale=(quote.receipt_conflict or quote.last_packet_ts > now
-                         or not 0 <= ws_age_ms <= self._stale_after_ms),
+            quote_stale=(
+                quote.receipt_conflict
+                or quote.last_packet_ts > now
+                or not 0 <= ws_age_ms <= self._stale_after_ms
+            ),
             spread_ratio=spread_ratio,
             best_ask=quote.best_ask,
             best_bid=quote.best_bid,
             last_price=quote.last_price,
-            quote_received_epoch=(quote.last_packet_ts if quote.source_clock_proven else None),
+            quote_received_epoch=(
+                quote.last_packet_ts if quote.source_clock_proven else None
+            ),
             quote_receive_age_ms=(
                 (now - quote.last_packet_ts) * 1000.0
-                if quote.source_clock_proven else None
+                if quote.source_clock_proven
+                else None
             ),
             source_scope=scope,
             source_identity=quote.source_identity,
             # Current raw receipts only: no stored companion, history copy,
             # activity counter or freshness renewal in this getter.
             market_data_health=(
-                build_market_data_health(source_frame, now_ts=now,
-                                         quote_max_age_ms=self._stale_after_ms)
-                if isinstance(source_frame, Mapping) else None
+                build_market_data_health(
+                    source_frame, now_ts=now, quote_max_age_ms=self._stale_after_ms
+                )
+                if isinstance(source_frame, Mapping)
+                else None
             ),
         )

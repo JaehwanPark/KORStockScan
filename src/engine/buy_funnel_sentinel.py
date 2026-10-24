@@ -246,7 +246,7 @@ class PipelineEvent:
     stock_code: str
     record_id: str
     fields: dict[str, str]
-    cache_digest: str = field(default='', compare=False, repr=False)
+    cache_digest: str = field(default="", compare=False, repr=False)
 
 
 def _pipeline_events_path(target_date: str) -> Path:
@@ -370,13 +370,27 @@ def _payload_to_cache_row(
 ) -> dict[str, Any] | None:
     if _safe_str(payload.get("event_type")) != "pipeline_event":
         return None
-    if (payload.get('pipeline') == 'ENTRY_PIPELINE' and payload.get('stage') in {
-            'zero_base_probe_result', 'main_fixed_watch_observation_wait'}):
+    if payload.get("pipeline") == "ENTRY_PIPELINE" and payload.get("stage") in {
+        "zero_base_probe_result",
+        "main_fixed_watch_observation_wait",
+    }:
         # Source-health rows bypass funnel exclusions and retain native field
         # types. They feed only the forward source window, never the funnel.
-        return {**{key: payload.get(key) for key in ('emitted_at', 'pipeline', 'stage',
-                    'stock_name', 'stock_code', 'record_id', 'fields')},
-                '_source_window_only': True}
+        return {
+            **{
+                key: payload.get(key)
+                for key in (
+                    "emitted_at",
+                    "pipeline",
+                    "stage",
+                    "stock_name",
+                    "stock_code",
+                    "record_id",
+                    "fields",
+                )
+            },
+            "_source_window_only": True,
+        }
     if _is_ignored_event(payload):
         return None
     stage = _safe_str(payload.get("stage"))
@@ -401,7 +415,12 @@ def _payload_to_cache_row(
         or stage in AI_TERMINAL_ATTRIBUTION_STAGES
         or stage in AI_TRACE_RESULT_STAGES
         or stage in ENTRY_ASYNC_WAIT_STAGES
-        or stage in {"entry_ai_economic_plan_observed", "entry_ai_economic_source_gap", "entry_async_disposition"}
+        or stage
+        in {
+            "entry_ai_economic_plan_observed",
+            "entry_ai_economic_source_gap",
+            "entry_async_disposition",
+        }
         or stage in ENTRY_CALL_FINISH_STAGES
         or stage in BLOCKER_STAGES
         or stage in UPSTREAM_BLOCK_STAGES
@@ -414,27 +433,45 @@ def _payload_to_cache_row(
     if emitted_at is None:
         return None
     if stage in {"entry_ai_economic_plan_observed", "entry_ai_economic_source_gap"}:
-        from src.engine.monitoring.submission_bottleneck_monitor import economic_evidence
+        from src.engine.monitoring.submission_bottleneck_monitor import (
+            economic_evidence,
+        )
+
         # Keep the proof diagnosis, not entire account/policy snapshots, in this slim cache.
-        projection = economic_evidence(raw_field_dict, _safe_str(payload.get("stock_code"))[:6])
-        raw_fields = {k: v for k, v in raw_field_dict.items() if k not in {
-            "entry_opportunity_replay_seed", "entry_execution_sizing_plan",
-            "entry_economic_capacity_receipt", "entry_price_plan",
-            "entry_economic_conditional_seed", "entry_economic_operating_context"}}
-        raw_fields["economic_source_monitor_projection"] = json.dumps(projection, sort_keys=True)
+        projection = economic_evidence(
+            raw_field_dict, _safe_str(payload.get("stock_code"))[:6]
+        )
+        raw_fields = {
+            k: v
+            for k, v in raw_field_dict.items()
+            if k
+            not in {
+                "entry_opportunity_replay_seed",
+                "entry_execution_sizing_plan",
+                "entry_economic_capacity_receipt",
+                "entry_price_plan",
+                "entry_economic_conditional_seed",
+                "entry_economic_operating_context",
+            }
+        }
+        raw_fields["economic_source_monitor_projection"] = json.dumps(
+            projection, sort_keys=True
+        )
     fields = {str(k): _safe_str(v) for k, v in raw_fields.items()}
     record_id = payload.get("record_id")
     if record_id in (None, "", 0):
         record_id = fields.get("id") or ""
-    return _slim_economic_cache_row({
-        "emitted_at": emitted_at.isoformat(),
-        "pipeline": _safe_str(payload.get("pipeline")),
-        "stage": stage,
-        "stock_name": _safe_str(payload.get("stock_name")),
-        "stock_code": _safe_str(payload.get("stock_code"))[:6],
-        "record_id": _safe_str(record_id),
-        "fields": fields,
-    })
+    return _slim_economic_cache_row(
+        {
+            "emitted_at": emitted_at.isoformat(),
+            "pipeline": _safe_str(payload.get("pipeline")),
+            "stage": stage,
+            "stock_name": _safe_str(payload.get("stock_name")),
+            "stock_code": _safe_str(payload.get("stock_code"))[:6],
+            "record_id": _safe_str(record_id),
+            "fields": fields,
+        }
+    )
 
 
 def _slim_economic_cache_row(row):
@@ -443,16 +480,31 @@ def _slim_economic_cache_row(row):
     Canonical economic plans stay in the raw economic event and AI trace.
     Their verified monitor projection already owns this cache's diagnosis.
     """
-    if row.get('stage') not in {'scalp_entry_action_decision_snapshot',
-                               'entry_ai_economic_plan_observed', 'entry_ai_economic_source_gap'}:
+    if row.get("stage") not in {
+        "scalp_entry_action_decision_snapshot",
+        "entry_ai_economic_plan_observed",
+        "entry_ai_economic_source_gap",
+    }:
         return row
-    fields = row.get('fields')
+    fields = row.get("fields")
     if not isinstance(fields, dict):
         return row
-    if row.get('stage') != 'scalp_entry_action_decision_snapshot' and not fields.get('economic_source_monitor_projection'):
+    if row.get("stage") != "scalp_entry_action_decision_snapshot" and not fields.get(
+        "economic_source_monitor_projection"
+    ):
         return row  # Legacy/unverified economic diagnosis cannot lose its inputs.
-    return dict(row, fields={k: v for k, v in fields.items() if k not in {
-        'entry_economic_conditional_seed', 'entry_economic_operating_context'}})
+    return dict(
+        row,
+        fields={
+            k: v
+            for k, v in fields.items()
+            if k
+            not in {
+                "entry_economic_conditional_seed",
+                "entry_economic_operating_context",
+            }
+        },
+    )
 
 
 def _blocker_label_from_stage_fields(stage: str, fields: dict[str, str]) -> str:
@@ -472,12 +524,16 @@ def _event_from_cache_row(row: dict[str, Any]) -> PipelineEvent | None:
     if emitted_at is None:
         return None
     from src.engine.monitoring.sentinel_compact_store import CompactFields
+
     raw_fields = row.get("fields") or {}
     fields = (
-        raw_fields if isinstance(raw_fields, CompactFields) else
-        {str(k): _safe_str(v) for k, v in raw_fields.items()}
-        if isinstance(raw_fields, dict)
-        else {}
+        raw_fields
+        if isinstance(raw_fields, CompactFields)
+        else (
+            {str(k): _safe_str(v) for k, v in raw_fields.items()}
+            if isinstance(raw_fields, dict)
+            else {}
+        )
     )
     return PipelineEvent(
         emitted_at=emitted_at,
@@ -487,13 +543,14 @@ def _event_from_cache_row(row: dict[str, Any]) -> PipelineEvent | None:
         stock_code=_safe_str(row.get("stock_code"))[:6],
         record_id=_safe_str(row.get("record_id")),
         fields=fields,
-        cache_digest=row.get('_sentinel_index_sha', ''),
+        cache_digest=row.get("_sentinel_index_sha", ""),
     )
 
 
 def _previous_cache_schema_proof(target_date, raw_path, previous_schema):
     """A native stage census can prove that newly retained stages were absent."""
     from src.engine import observation_source_quality_audit as audit
+
     if previous_schema not in {11, 13, 15, 16, 17, 18, 19, 20}:
         return None
     try:
@@ -502,42 +559,80 @@ def _previous_cache_schema_proof(target_date, raw_path, previous_schema):
         actual_schema = meta.get("schema_version")
         if previous_schema >= 15:
             stat = raw_path.stat()
-            if (actual_schema not in range(15 + int(previous_schema % 2 == 0), previous_schema + 1, 2)
-                    or str(meta.get('raw_path')) != str(raw_path)
-                    or meta.get('raw_inode') != stat.st_ino
-                    or not 0 <= int(meta.get('raw_offset', -1)) <= stat.st_size):
+            if (
+                actual_schema
+                not in range(15 + int(previous_schema % 2 == 0), previous_schema + 1, 2)
+                or str(meta.get("raw_path")) != str(raw_path)
+                or meta.get("raw_inode") != stat.st_ino
+                or not 0 <= int(meta.get("raw_offset", -1)) <= stat.st_size
+            ):
                 return None
             admissions = (
-                (17, ['pre_submit_weak_context_late_entry_guard_block', 'real_weak_pullback_entry_block']),
-                (19, ['zero_base_probe_result', 'main_fixed_watch_observation_wait']),
-                (21, ['pre_submit_liquidity_guard_block']),
+                (
+                    17,
+                    [
+                        "pre_submit_weak_context_late_entry_guard_block",
+                        "real_weak_pullback_entry_block",
+                    ],
+                ),
+                (19, ["zero_base_probe_result", "main_fixed_watch_observation_wait"]),
+                (21, ["pre_submit_liquidity_guard_block"]),
             )
-            stages = [stage for version, values in admissions
-                      if actual_schema < version <= previous_schema + 2 for stage in values]
-            return dict(from_schema=actual_schema, to_schema=previous_schema+2,
-                raw_generation=audit._raw_generation(raw_path), raw_offset=int(meta['raw_offset']),
-                newly_admitted_stages=stages, population_proof='forward_only_stage_extension',
-                historical_stage_coverage='not_backfilled_before_raw_offset')
+            stages = [
+                stage
+                for version, values in admissions
+                if actual_schema < version <= previous_schema + 2
+                for stage in values
+            ]
+            return dict(
+                from_schema=actual_schema,
+                to_schema=previous_schema + 2,
+                raw_generation=audit._raw_generation(raw_path),
+                raw_offset=int(meta["raw_offset"]),
+                newly_admitted_stages=stages,
+                population_proof="forward_only_stage_extension",
+                historical_stage_coverage="not_backfilled_before_raw_offset",
+            )
         if actual_schema not in ({12, 13} if previous_schema == 13 else {10, 11}):
             return None
         previous_schema = actual_schema
-        path = _report_dir().parent / "observation_source_quality_audit" / f"observation_source_quality_audit_{target_date}.json"
+        path = (
+            _report_dir().parent
+            / "observation_source_quality_audit"
+            / f"observation_source_quality_audit_{target_date}.json"
+        )
         raw_report = path.read_bytes()
         payload = json.loads(raw_report)
         source = payload["source"]
         stages = {"entry_ai_economic_plan_observed", "entry_ai_economic_source_gap"}
         if previous_schema in {10, 12}:
-            stages.update({"order_leg_no_response", "order_leg_fail", "order_leg_sent",
-                           "order_leg_owner_registry_reconciliation_required", "entry_submit_identity_reconciliation_blocked"})
-        projection = audit._read_raw_contract_projection(target_date, source["contract_projection"]["key"])
-        if (payload["target_date"] != target_date or projection is None
-                or source["generation"] != audit._raw_generation(raw_path)
-                or source["invalid_json_line_count"] != 0
-                or any(source["audited_stage_counts"].get(stage, 0) for stage in stages)):
+            stages.update(
+                {
+                    "order_leg_no_response",
+                    "order_leg_fail",
+                    "order_leg_sent",
+                    "order_leg_owner_registry_reconciliation_required",
+                    "entry_submit_identity_reconciliation_blocked",
+                }
+            )
+        projection = audit._read_raw_contract_projection(
+            target_date, source["contract_projection"]["key"]
+        )
+        if (
+            payload["target_date"] != target_date
+            or projection is None
+            or source["generation"] != audit._raw_generation(raw_path)
+            or source["invalid_json_line_count"] != 0
+            or any(source["audited_stage_counts"].get(stage, 0) for stage in stages)
+        ):
             return None
-        return {"from_schema": previous_schema, "raw_generation": source["generation"],
-                "raw_audit_sha256": audit.hashlib.sha256(raw_report).hexdigest(),
-                "newly_admitted_stages": sorted(stages), "population_proof": "verified_zero_stage_census"}
+        return {
+            "from_schema": previous_schema,
+            "raw_generation": source["generation"],
+            "raw_audit_sha256": audit.hashlib.sha256(raw_report).hexdigest(),
+            "newly_admitted_stages": sorted(stages),
+            "population_proof": "verified_zero_stage_census",
+        }
     except (OSError, KeyError, ValueError, TypeError):
         return None
 
@@ -564,17 +659,20 @@ def load_pipeline_events(
             target_date=target_date,
             schema_version=cache_schema_version,
             verified_schema_migration=_previous_cache_schema_proof(
-                target_date, path, 20 if exclude_summary_stages else 19),
+                target_date, path, 20 if exclude_summary_stages else 19
+            ),
             parse_payload=lambda payload: _payload_to_cache_row(
                 payload,
                 exclude_summary_stages=exclude_summary_stages,
             ),
             project_loaded_payload=_slim_economic_cache_row,
-            cache_projection_version='economic_source_refs_v1',
+            cache_projection_version="economic_source_refs_v1",
             compact_index=True,
         )
         events = [
-            event for row in rows if not row.get('_source_window_only')
+            event
+            for row in rows
+            if not row.get("_source_window_only")
             and (event := _event_from_cache_row(row)) is not None
         ]
         events.sort(key=lambda event: event.emitted_at)
@@ -646,11 +744,18 @@ def _load_event_sources(
     exclude_summary_stages = False
     if use_summary:
         try:
-            loaded_summary_rows, loaded_summary_meta = load_pipeline_event_summaries(target_date)
+            loaded_summary_rows, loaded_summary_meta = load_pipeline_event_summaries(
+                target_date
+            )
         except (ValueError, OSError) as exc:
             loaded_summary_rows = []
-            loaded_summary_meta = {"enabled": True, "status": "invalid", "blocker": str(exc),
-                                   "owner": "order_pipeline_event_compaction_v2_shadow", "raw_suppression_enabled": False}
+            loaded_summary_meta = {
+                "enabled": True,
+                "status": "invalid",
+                "blocker": str(exc),
+                "owner": "order_pipeline_event_compaction_v2_shadow",
+                "raw_suppression_enabled": False,
+            }
             # Retained raw is authoritative when the optional native summary fails.
         summary_meta = loaded_summary_meta
         if loaded_summary_meta.get("status") == "ok":
@@ -747,8 +852,11 @@ def _partition_events_by_venue_session(
     )
     for event in events:
         scope = event_scope.explicit_event_scope(
-            event.fields, event.emitted_at, venue_keys=VENUE_SCOPE_FIELD_KEYS,
-            session_keys=SESSION_SCOPE_FIELD_KEYS)
+            event.fields,
+            event.emitted_at,
+            venue_keys=VENUE_SCOPE_FIELD_KEYS,
+            session_keys=SESSION_SCOPE_FIELD_KEYS,
+        )
         exact_key = _exact_attempt_key(event)
         if scope and scope[2] == "pass" and exact_key:
             explicit_by_attempt[exact_key].append(
@@ -759,8 +867,11 @@ def _partition_events_by_venue_session(
     quality_counts: Counter[str] = Counter()
     for event in events:
         explicit = event_scope.explicit_event_scope(
-            event.fields, event.emitted_at, venue_keys=VENUE_SCOPE_FIELD_KEYS,
-            session_keys=SESSION_SCOPE_FIELD_KEYS)
+            event.fields,
+            event.emitted_at,
+            venue_keys=VENUE_SCOPE_FIELD_KEYS,
+            session_keys=SESSION_SCOPE_FIELD_KEYS,
+        )
         if explicit is not None:
             venue, session, quality = explicit
         else:
@@ -873,7 +984,10 @@ def _submit_drought_axis_for_event(event: PipelineEvent) -> str | None:
         if mode != expected:
             return None
         return "BROKER_RECEIPT" if attempts else "UPSTREAM_GATE"
-    if event.stage in UPSTREAM_BLOCK_STAGES or event.stage == "pre_submit_liquidity_guard_block":
+    if (
+        event.stage in UPSTREAM_BLOCK_STAGES
+        or event.stage == "pre_submit_liquidity_guard_block"
+    ):
         return "UPSTREAM_GATE"
     if event.stage == "latency_block" and (
         _field_first(event.fields, ("reason", "latency_danger_reasons", "decision"))
@@ -1958,7 +2072,8 @@ def _economic_submit_participation(events: list[PipelineEvent]) -> dict[str, Any
         fallback_venue_values = {
             _safe_str(event.fields.get("venue")).upper()
             for event in attempt_events
-            if _safe_str(event.fields.get("venue")).upper() in event_scope.EXPLICIT_TRADABLE_VENUES
+            if _safe_str(event.fields.get("venue")).upper()
+            in event_scope.EXPLICIT_TRADABLE_VENUES
         }
         if len(authoritative_venue_values) == 1:
             effective_venue = next(iter(authoritative_venue_values))
@@ -2236,42 +2351,58 @@ def _cash_shortfall_attempt_exclusions(exact, bindings):
 
 def _summarize_events(events, *, start_at, end_at, summary_rows=None):
     if not events or any(not e.cache_digest for e in events):
-        return _calculate_event_summary(events, start_at=start_at, end_at=end_at,
-                                        summary_rows=summary_rows)
-    from src.engine.monitoring.sentinel_compact_store import report_code_contract, summary_memo
+        return _calculate_event_summary(
+            events, start_at=start_at, end_at=end_at, summary_rows=summary_rows
+        )
+    from src.engine.monitoring.sentinel_compact_store import (
+        report_code_contract,
+        summary_memo,
+    )
     import hashlib
     import subprocess
+
     # Boundaries outside the complete input extent only change display clocks.
     # Within the extent retain exact microseconds (second-count cutoffs matter).
     clocks = [e.emitted_at for e in events]
     for row in summary_rows or []:
-        for key in ('first_seen', 'last_seen', 'bucket_start', 'bucket_end'):
+        for key in ("first_seen", "last_seen", "bucket_start", "bucket_end"):
             at = _parse_iso_datetime(_safe_str(row.get(key)))
             if at is not None:
                 clocks.append(at)
-        for second in row.get('second_counts', {}) or {}:
+        for second in row.get("second_counts", {}) or {}:
             at = _parse_iso_datetime(_safe_str(second))
             if at is not None:
                 clocks.append(at)
     lower, upper = min(clocks), max(clocks)
-    normalized_start = start_at if start_at > lower else lower - timedelta(microseconds=1)
+    normalized_start = (
+        start_at if start_at > lower else lower - timedelta(microseconds=1)
+    )
     normalized_end = end_at if end_at <= upper else upper + timedelta(microseconds=1)
     digest = hashlib.sha256()
     try:
         digest.update(report_code_contract().encode())
     except (OSError, ValueError, subprocess.SubprocessError):
-        return _calculate_event_summary(events, start_at=start_at, end_at=end_at,
-                                        summary_rows=summary_rows)
+        return _calculate_event_summary(
+            events, start_at=start_at, end_at=end_at, summary_rows=summary_rows
+        )
     digest.update(str(DATA_DIR.resolve()).encode())
-    digest.update((normalized_start.isoformat() + '/' + normalized_end.isoformat()).encode())
+    digest.update(
+        (normalized_start.isoformat() + "/" + normalized_end.isoformat()).encode()
+    )
     for event in events:
         digest.update(event.cache_digest.encode())
-    digest.update(json.dumps(summary_rows or [], sort_keys=True, separators=(',', ':')).encode())
-    result = summary_memo(_event_cache_dir() / 'summary-results', digest.hexdigest(),
-        lambda: _calculate_event_summary(events, start_at=start_at, end_at=end_at,
-                                         summary_rows=summary_rows))
-    result['start_at'] = start_at.isoformat(timespec='seconds')
-    result['end_at'] = end_at.isoformat(timespec='seconds')
+    digest.update(
+        json.dumps(summary_rows or [], sort_keys=True, separators=(",", ":")).encode()
+    )
+    result = summary_memo(
+        _event_cache_dir() / "summary-results",
+        digest.hexdigest(),
+        lambda: _calculate_event_summary(
+            events, start_at=start_at, end_at=end_at, summary_rows=summary_rows
+        ),
+    )
+    result["start_at"] = start_at.isoformat(timespec="seconds")
+    result["end_at"] = end_at.isoformat(timespec="seconds")
     return result
 
 
@@ -2345,6 +2476,7 @@ def _calculate_event_summary(events, *, start_at, end_at, summary_rows=None):
 
 def _machine_primary_identity_components(event: PipelineEvent) -> dict[str, str]:
     """Shared identity aliases for exact joins and missing-field diagnostics."""
+
     def identity_first(names: tuple[str, ...]) -> str:
         # Wire fields may contain the literal "None" alongside the concrete
         # machine receipt. An absent higher-priority alias must not mask it.
@@ -2365,11 +2497,7 @@ def _machine_primary_identity_components(event: PipelineEvent) -> dict[str, str]
             evaluation_attempt_id = value
             break
     scanner_promotion_id = _safe_str(event.fields.get("scanner_promotion_id")).strip()
-    venue = (
-        _safe_str(identity_first(("effective_venue", "venue")))
-        .strip()
-        .upper()
-    )
+    venue = _safe_str(identity_first(("effective_venue", "venue"))).strip().upper()
     session = (
         _safe_str(
             identity_first(
@@ -2393,9 +2521,14 @@ def _machine_primary_identity_components(event: PipelineEvent) -> dict[str, str]
         )
     ).strip()
     symbol = _safe_str(event.stock_code).strip()
-    return dict(scanner_promotion_id=scanner_promotion_id,
-                evaluation_attempt_id=evaluation_attempt_id, stock_code=symbol,
-                effective_venue=venue, session_bucket=session, policy_bundle_hash=bundle_hash)
+    return dict(
+        scanner_promotion_id=scanner_promotion_id,
+        evaluation_attempt_id=evaluation_attempt_id,
+        stock_code=symbol,
+        effective_venue=venue,
+        session_bucket=session,
+        policy_bundle_hash=bundle_hash,
+    )
 
 
 def _machine_primary_evaluation_key(event: PipelineEvent) -> str:
@@ -2409,13 +2542,21 @@ def _machine_primary_evaluation_key(event: PipelineEvent) -> str:
     return "machine:" + "|".join(components)
 
 
-def _machine_primary_fixed_watch_identity_components(event: PipelineEvent) -> dict[str, str]:
+def _machine_primary_fixed_watch_identity_components(
+    event: PipelineEvent,
+) -> dict[str, str]:
     """Fixed watch has an admission identity, never a scanner promotion."""
     machine = _machine_primary_identity_components(event)
     return {
         "watch_admission_id": _safe_str(event.fields.get("watch_admission_id")).strip(),
-        "watch_generation_id": _safe_str(event.fields.get("watch_generation_id")).strip(),
-        **{key: value for key, value in machine.items() if key != "scanner_promotion_id"},
+        "watch_generation_id": _safe_str(
+            event.fields.get("watch_generation_id")
+        ).strip(),
+        **{
+            key: value
+            for key, value in machine.items()
+            if key != "scanner_promotion_id"
+        },
     }
 
 
@@ -2424,26 +2565,39 @@ def _machine_primary_fixed_watch_identity_valid(event: PipelineEvent) -> bool:
         return False
     components = _machine_primary_fixed_watch_identity_components(event)
     promotion = _machine_primary_identity_components(event)["scanner_promotion_id"]
-    if (promotion.lower() not in {"", "none", "null", "unknown", "-", "0"}
-        or not all(value and value.lower() not in {"none", "null", "unknown", "-", "0"}
-                   for value in components.values())):
+    if promotion.lower() not in {"", "none", "null", "unknown", "-", "0"} or not all(
+        value and value.lower() not in {"none", "null", "unknown", "-", "0"}
+        for value in components.values()
+    ):
         return False
     day = event.emitted_at.date().isoformat()
     prefix = f"FIXED-{day}-{event.stock_code}-"
     admission = components["watch_admission_id"]
     if not admission.startswith(prefix):
         return False
-    parts = admission[len(prefix):].rsplit("-", 2)
+    parts = admission[len(prefix) :].rsplit("-", 2)
     if len(parts) != 3:
         return False
     bucket, route, suffix = parts
-    if (not bucket or not route or len(suffix) != 12
-        or any(char not in "0123456789abcdef" for char in suffix)):
+    if (
+        not bucket
+        or not route
+        or len(suffix) != 12
+        or any(char not in "0123456789abcdef" for char in suffix)
+    ):
         return False
-    admitted_bucket = "PREMARKET_KRX_LIKE" if bucket.upper() == "KRX_LIKE_PREMARKET" else bucket.upper()
-    expected = hashlib.sha256(f"{day}|{event.stock_code}|{bucket}|{route}".encode()).hexdigest()
-    return (admitted_bucket == components["session_bucket"]
-            and components["watch_generation_id"] == expected)
+    admitted_bucket = (
+        "PREMARKET_KRX_LIKE"
+        if bucket.upper() == "KRX_LIKE_PREMARKET"
+        else bucket.upper()
+    )
+    expected = hashlib.sha256(
+        f"{day}|{event.stock_code}|{bucket}|{route}".encode()
+    ).hexdigest()
+    return (
+        admitted_bucket == components["session_bucket"]
+        and components["watch_generation_id"] == expected
+    )
 
 
 def _is_machine_primary_event(event: PipelineEvent) -> bool:
@@ -2780,33 +2934,54 @@ def _machine_revision_rows(rows):
         parent = _safe_str(fields.get("machine_revision_parent_sha256"))
         # Downstream echoes can retain the exact observation hash while
         # omitting the revision envelope. They cannot establish a new revision.
-        if (previous and digest == previous and not fields.get("machine_revision_schema")
-                and "machine_revision_parent_sha256" not in fields):
+        if (
+            previous
+            and digest == previous
+            and not fields.get("machine_revision_schema")
+            and "machine_revision_parent_sha256" not in fields
+        ):
             prior = revisions[previous][-1].fields
-            if (fields.get("entry_primary_decision_owner") != MACHINE_PRIMARY_DECISION_OWNER
-                    or _safe_str(fields.get("entry_mechanistic_action")).upper() != _safe_str(prior.get("entry_mechanistic_action")).upper()
-                    or _safe_str(fields.get("entry_ai_screen_status")).lower() != _safe_str(prior.get("entry_ai_screen_status")).lower()):
+            if (
+                fields.get("entry_primary_decision_owner")
+                != MACHINE_PRIMARY_DECISION_OWNER
+                or _safe_str(fields.get("entry_mechanistic_action")).upper()
+                != _safe_str(prior.get("entry_mechanistic_action")).upper()
+                or _safe_str(fields.get("entry_ai_screen_status")).lower()
+                != _safe_str(prior.get("entry_ai_screen_status")).lower()
+            ):
                 return rows, "invalid", ["machine_echo_revision_binding_unproven"]
             revisions[previous].append(event)
             continue
         # This terminal summarizes the same attempt; it is not a fresh machine
         # decision. Older producers omit revision fields here. Bind only to an
         # already witnessed revision with an identical action/screen.
-        if (event.stage == "entry_submit_attempt_finished" and not digest
-                and not fields.get("machine_revision_schema")
-                and "machine_revision_parent_sha256" not in fields):
+        if (
+            event.stage == "entry_submit_attempt_finished"
+            and not digest
+            and not fields.get("machine_revision_schema")
+            and "machine_revision_parent_sha256" not in fields
+        ):
             prior = revisions.get(previous, [])
-            if (not prior
-                    or fields.get("entry_primary_decision_owner") != MACHINE_PRIMARY_DECISION_OWNER
-                    or _safe_str(fields.get("entry_mechanistic_action")).upper() != _safe_str(prior[-1].fields.get("entry_mechanistic_action")).upper()
-                    or _safe_str(fields.get("entry_ai_screen_status")).lower() != _safe_str(prior[-1].fields.get("entry_ai_screen_status")).lower()):
+            if (
+                not prior
+                or fields.get("entry_primary_decision_owner")
+                != MACHINE_PRIMARY_DECISION_OWNER
+                or _safe_str(fields.get("entry_mechanistic_action")).upper()
+                != _safe_str(prior[-1].fields.get("entry_mechanistic_action")).upper()
+                or _safe_str(fields.get("entry_ai_screen_status")).lower()
+                != _safe_str(prior[-1].fields.get("entry_ai_screen_status")).lower()
+            ):
                 return rows, "invalid", ["machine_terminal_revision_binding_unproven"]
             prior.append(event)
             continue
-        if (fields.get("machine_revision_schema") != "exact_machine_revision_v1"
-                or fields.get("entry_primary_decision_owner") != MACHINE_PRIMARY_DECISION_OWNER
-                or "machine_revision_parent_sha256" not in fields
-                or len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest)):
+        if (
+            fields.get("machine_revision_schema") != "exact_machine_revision_v1"
+            or fields.get("entry_primary_decision_owner")
+            != MACHINE_PRIMARY_DECISION_OWNER
+            or "machine_revision_parent_sha256" not in fields
+            or len(digest) != 64
+            or any(c not in "0123456789abcdef" for c in digest)
+        ):
             return rows, "invalid", ["machine_revision_receipt_missing_or_invalid"]
         if digest != previous:
             if digest in revisions or parent != previous:
@@ -2816,29 +2991,66 @@ def _machine_revision_rows(rows):
             revisions[digest] = []
             previous = digest
         group = revisions[digest]
-        if group and parent != _safe_str(group[0].fields.get("machine_revision_parent_sha256")):
+        if group and parent != _safe_str(
+            group[0].fields.get("machine_revision_parent_sha256")
+        ):
             return rows, "invalid", ["machine_revision_parent_or_order_conflict"]
         group.append(event)
     for group in revisions.values():
-        actions = {_safe_str(r.fields.get("entry_mechanistic_action")).upper() for r in group}
-        screens = {_safe_str(r.fields.get("entry_ai_screen_status")).lower() for r in group
-                   if r.fields.get("entry_ai_screen_status")}
-        if len(actions) != 1 or not actions <= MACHINE_PRIMARY_ENTRY_ACTIONS or len(screens) > 1:
+        actions = {
+            _safe_str(r.fields.get("entry_mechanistic_action")).upper() for r in group
+        }
+        screens = {
+            _safe_str(r.fields.get("entry_ai_screen_status")).lower()
+            for r in group
+            if r.fields.get("entry_ai_screen_status")
+        }
+        if (
+            len(actions) != 1
+            or not actions <= MACHINE_PRIMARY_ENTRY_ACTIONS
+            or len(screens) > 1
+        ):
             return rows, "invalid", ["machine_revision_decision_conflict"]
         action = next(iter(actions))
         screen = next(iter(screens), "")
-        if (not screens <= MACHINE_PRIMARY_AI_SCREEN_STATUSES
-                or action == "ENTER_NOW" and screen not in {"pass", "veto", "caution", "insufficient",
-                    "response_invalid", "not_evaluated_transport", "not_evaluated_local"}
-                or action == "BLOCK" and screen not in {"", "not_requested_machine_nonentry"}
-                or action == "RECHECK" and screen not in {"", "not_requested_machine_nonentry", "not_requested_required_feature_insufficient"}
-                or action == "SOURCE_INVALID" and screen not in {"", "not_requested_machine_source_invalid"}):
+        if (
+            not screens <= MACHINE_PRIMARY_AI_SCREEN_STATUSES
+            or action == "ENTER_NOW"
+            and screen
+            not in {
+                "pass",
+                "veto",
+                "caution",
+                "insufficient",
+                "response_invalid",
+                "not_evaluated_transport",
+                "not_evaluated_local",
+            }
+            or action == "BLOCK"
+            and screen not in {"", "not_requested_machine_nonentry"}
+            or action == "RECHECK"
+            and screen
+            not in {
+                "",
+                "not_requested_machine_nonentry",
+                "not_requested_required_feature_insufficient",
+            }
+            or action == "SOURCE_INVALID"
+            and screen not in {"", "not_requested_machine_source_invalid"}
+        ):
             return rows, "invalid", ["machine_revision_screen_contract_invalid"]
     if len(revisions) > 1:
         latest = set(id(r) for r in revisions[previous])
-        if any(id(r) not in latest and (r.stage.startswith("order_")
+        if any(
+            id(r) not in latest
+            and (
+                r.stage.startswith("order_")
                 or r.stage in BROKER_SUBMIT_FAILURE_STAGES
-                or r.stage in {"budget_pass", "entry_armed", "entry_submit_attempt_finished"}) for r in rows):
+                or r.stage
+                in {"budget_pass", "entry_armed", "entry_submit_attempt_finished"}
+            )
+            for r in rows
+        ):
             return rows, "invalid", ["machine_revision_prior_execution_unresolved"]
     return revisions[previous], "valid" if len(revisions) > 1 else "single_revision", []
 
@@ -2851,23 +3063,41 @@ def _auxiliary_ai_semantics(rows, action: str, screen: str) -> dict[str, Any]:
         ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION,
         ENTRY_MACHINE_AUXILIARY_COMPACT_CONTRACT_PROMPT_VERSION,
     )
-    current_prompts = {ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION,
-                       ENTRY_MACHINE_AUXILIARY_COMPACT_CONTRACT_PROMPT_VERSION}
-    versioned = [row for row in rows if row.fields.get("entry_ai_auxiliary_contract_version")]
+
+    current_prompts = {
+        ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION,
+        ENTRY_MACHINE_AUXILIARY_COMPACT_CONTRACT_PROMPT_VERSION,
+    }
+    versioned = [
+        row for row in rows if row.fields.get("entry_ai_auxiliary_contract_version")
+    ]
     if not versioned:
         # The current compact prompts always emit an effective assessment for
         # a completed screen. Keep older uninstrumented rows distinguishable.
-        if screen in {"pass", "veto", "caution", "insufficient", "response_invalid"} and any(
+        if screen in {
+            "pass",
+            "veto",
+            "caution",
+            "insufficient",
+            "response_invalid",
+        } and any(
             row.fields.get("ai_prompt_version") in current_prompts for row in rows
         ):
-            return {"status": "review_required", "issues": ["auxiliary_current_receipt_missing"],
-                    "runtime_effect": False, "decision_authority": "report_only_semantic_receipt_check"}
+            return {
+                "status": "review_required",
+                "issues": ["auxiliary_current_receipt_missing"],
+                "runtime_effect": False,
+                "decision_authority": "report_only_semantic_receipt_check",
+            }
         return {"status": "legacy_uninstrumented", "issues": []}
     issues: list[str] = []
     latest = versioned[-1].fields
-    versions = {str(row.fields.get("entry_ai_auxiliary_contract_version")) for row in versioned}
+    versions = {
+        str(row.fields.get("entry_ai_auxiliary_contract_version")) for row in versioned
+    }
     if len(versions) != 1 or not versions <= {
-        "auxiliary_effective_assessment_v1", "auxiliary_effective_assessment_v2"
+        "auxiliary_effective_assessment_v1",
+        "auxiliary_effective_assessment_v2",
     }:
         issues.append("auxiliary_contract_version_missing_or_conflicting")
     prompt_version = latest.get("ai_prompt_version")
@@ -2882,22 +3112,32 @@ def _auxiliary_ai_semantics(rows, action: str, screen: str) -> dict[str, Any]:
             # an unparseable receipt as a valid AI assessment.
             try:
                 import ast
-                assessment = (ast.literal_eval(assessment)
-                              if len(assessment) <= 8192 else None)
+
+                assessment = (
+                    ast.literal_eval(assessment) if len(assessment) <= 8192 else None
+                )
             except (ValueError, SyntaxError, TypeError, RecursionError, OverflowError):
                 assessment = None
     if screen in {"not_evaluated_transport", "not_evaluated_local"}:
         if isinstance(assessment, dict) and (
-            assessment.get("effective_verdict") in {"PASS", "VETO", "CAUTION", "INSUFFICIENT"}
+            assessment.get("effective_verdict")
+            in {"PASS", "VETO", "CAUTION", "INSUFFICIENT"}
             and not assessment.get("validation_errors")
         ):
             issues.append("auxiliary_unevaluated_has_valid_verdict")
-        return {"status": "review_required" if issues else "not_evaluated",
-                "contract_version": next(iter(versions)) if len(versions) == 1 else "conflicting",
-                "screen_status": screen, "issues": sorted(set(issues)),
-                "runtime_effect": False, "decision_authority": "report_only_semantic_receipt_check"}
+        return {
+            "status": "review_required" if issues else "not_evaluated",
+            "contract_version": (
+                next(iter(versions)) if len(versions) == 1 else "conflicting"
+            ),
+            "screen_status": screen,
+            "issues": sorted(set(issues)),
+            "runtime_effect": False,
+            "decision_authority": "report_only_semantic_receipt_check",
+        }
     if prompt_version in current_prompts and (
-        not isinstance(prompt_hash, str) or len(prompt_hash) != 64
+        not isinstance(prompt_hash, str)
+        or len(prompt_hash) != 64
         or any(c not in "0123456789abcdef" for c in prompt_hash)
     ):
         issues.append("auxiliary_current_prompt_hash_missing_or_invalid")
@@ -2922,17 +3162,25 @@ def _auxiliary_ai_semantics(rows, action: str, screen: str) -> dict[str, Any]:
         issues.append("auxiliary_assessment_schema_invalid")
     if assessment.get("schema") == "auxiliary_effective_assessment_v2":
         profile = assessment.get("selected_profile")
-        if (not isinstance(profile, str) or not profile
-            or profile != latest.get("entry_ai_selected_profile")):
+        if (
+            not isinstance(profile, str)
+            or not profile
+            or profile != latest.get("entry_ai_selected_profile")
+        ):
             issues.append("auxiliary_selected_profile_mismatch")
         profile_hash = assessment.get("selected_profile_sha256")
-        if (not isinstance(profile_hash, str) or len(profile_hash) != 64
-            or any(c not in "0123456789abcdef" for c in profile_hash)):
+        if (
+            not isinstance(profile_hash, str)
+            or len(profile_hash) != 64
+            or any(c not in "0123456789abcdef" for c in profile_hash)
+        ):
             issues.append("auxiliary_selected_profile_hash_invalid")
         if not assessment.get("soft_policy_sha256"):
             issues.append("auxiliary_v2_soft_policy_missing")
     response_hash = str(assessment.get("validated_response_sha256") or "")
-    if len(response_hash) != 64 or any(c not in "0123456789abcdef" for c in response_hash):
+    if len(response_hash) != 64 or any(
+        c not in "0123456789abcdef" for c in response_hash
+    ):
         issues.append("auxiliary_validated_response_hash_invalid")
     policy_hash = assessment.get("soft_policy_sha256")
     event_policy_hash = latest.get("entry_ai_soft_policy_sha256")
@@ -2941,20 +3189,26 @@ def _auxiliary_ai_semantics(rows, action: str, screen: str) -> dict[str, Any]:
     if policy_hash != event_policy_hash:
         issues.append("auxiliary_soft_policy_hash_mismatch")
     if policy_hash is not None and (
-        not isinstance(policy_hash, str) or len(policy_hash) != 64
+        not isinstance(policy_hash, str)
+        or len(policy_hash) != 64
         or any(c not in "0123456789abcdef" for c in policy_hash)
     ):
         issues.append("auxiliary_soft_policy_hash_invalid")
     if not errors and effective in {"PASS", "VETO", "CAUTION", "INSUFFICIENT"}:
         transitions = {
-            ("PASS", "CAUTION"): {"pass_positive_evidence_below_policy",
-                                    "pass_soft_risk_materiality_exceeded"},
+            ("PASS", "CAUTION"): {
+                "pass_positive_evidence_below_policy",
+                "pass_soft_risk_materiality_exceeded",
+            },
             ("VETO", "PASS"): {"soft_veto_evidence_below_policy"},
         }
         if raw_verdict == effective:
             if reason != "raw_verdict_preserved":
                 issues.append("auxiliary_transition_reason_invalid")
-        elif reason not in transitions.get((raw_verdict, effective), set()) or not policy_hash:
+        elif (
+            reason not in transitions.get((raw_verdict, effective), set())
+            or not policy_hash
+        ):
             issues.append("auxiliary_raw_effective_transition_invalid")
     recorded_raw = str(latest.get("entry_ai_advisory_verdict") or "").upper()
     if recorded_raw and raw_verdict != recorded_raw:
@@ -2964,11 +3218,15 @@ def _auxiliary_ai_semantics(rows, action: str, screen: str) -> dict[str, Any]:
         normalized_valid = _safe_str(recorded_valid).strip().lower()
         if normalized_valid not in {"true", "false", "1", "0"}:
             issues.append("auxiliary_contract_validity_invalid")
-        elif (normalized_valid in {"true", "1"}) != bool(errors is not None and not errors):
+        elif (normalized_valid in {"true", "1"}) != bool(
+            errors is not None and not errors
+        ):
             issues.append("auxiliary_contract_validity_mismatch")
     return {
         "status": "review_required" if issues else "receipt_match",
-        "contract_version": next(iter(versions)) if len(versions) == 1 else "conflicting",
+        "contract_version": (
+            next(iter(versions)) if len(versions) == 1 else "conflicting"
+        ),
         "screen_status": screen,
         "prompt_version": prompt_version,
         "prompt_sha256": prompt_hash,
@@ -3008,27 +3266,44 @@ def _main_scoped_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]:
         if event.pipeline != "ENTRY_PIPELINE":
             continue
         fields = event.fields
-        relevant = (_is_machine_primary_event(event)
-                    or event.stage == "entry_async_disposition")
+        relevant = (
+            _is_machine_primary_event(event) or event.stage == "entry_async_disposition"
+        )
         # Historical sim/CF and retired-owner observations cannot become Main.
         population = value(fields, "pipeline_lifecycle_population_scope").lower()
-        if population and any(part in population for part in ("sim", "counterfactual", "episode", "widget")):
+        if population and any(
+            part in population
+            for part in ("sim", "counterfactual", "episode", "widget")
+        ):
             continue
-        aliases = {value(fields, name) for name in ("evaluation_attempt_id", "entry_evaluation_attempt_id",
-                                                  "entry_mechanistic_evaluation_id")} - {""}
+        aliases = {
+            value(fields, name)
+            for name in (
+                "evaluation_attempt_id",
+                "entry_evaluation_attempt_id",
+                "entry_mechanistic_evaluation_id",
+            )
+        } - {""}
         if len(aliases) > 1:
             missing_identity += 1
             identity_rejection_reasons["evaluation_alias_conflict"] += 1
             continue
-        evaluation = value(fields, "evaluation_attempt_id", "entry_evaluation_attempt_id",
-                           "entry_mechanistic_evaluation_id")
+        evaluation = value(
+            fields,
+            "evaluation_attempt_id",
+            "entry_evaluation_attempt_id",
+            "entry_mechanistic_evaluation_id",
+        )
         if not relevant and not evaluation:
             continue
         if not evaluation or not event.stock_code:
             missing_identity += int(relevant)
             identity_rejection_reasons["evaluation_or_symbol_missing"] += int(relevant)
             continue
-        source_day = value(fields, "async_request_source_date") or event.emitted_at.date().isoformat()
+        source_day = (
+            value(fields, "async_request_source_date")
+            or event.emitted_at.date().isoformat()
+        )
         try:
             if date.fromisoformat(source_day).isoformat() != source_day:
                 raise ValueError("noncanonical_source_date")
@@ -3042,12 +3317,20 @@ def _main_scoped_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]:
     for (day, evaluation, symbol), rows in sorted(grouped.items()):
         # Include downstream rows only when the exact evaluation has a machine
         # or async receipt. Never borrow a neighbouring symbol/time attempt.
-        if not any(_is_machine_primary_event(e) or e.stage == "entry_async_disposition" for e in rows):
+        if not any(
+            _is_machine_primary_event(e) or e.stage == "entry_async_disposition"
+            for e in rows
+        ):
             continue
         identities = set()
         issues = set()
         traces, requests, actors, records = set(), set(), set(), set()
-        pass_evidence, accepted_evidence, physical_evidence, broker_evidence = set(), set(), set(), set()
+        pass_evidence, accepted_evidence, physical_evidence, broker_evidence = (
+            set(),
+            set(),
+            set(),
+            set(),
+        )
         known_not_sent_calls, submit_calls = set(), set()
         dispositions = set()
         record_bound = False
@@ -3060,31 +3343,65 @@ def _main_scoped_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]:
                 traces.add(trace)
             if request:
                 requests.add(request)
-            pid, start = value(fields, "async_producer_pid"), value(fields, "async_producer_start_ticks")
+            pid, start = value(fields, "async_producer_pid"), value(
+                fields, "async_producer_start_ticks"
+            )
             if pid and start:
                 actors.add((pid, start))
             if event.record_id and str(event.record_id).isdigit():
                 records.add(str(event.record_id))
-            record_bound |= fields.get("pipeline_lifecycle_population_scope") == "real_record_bound"
+            record_bound |= (
+                fields.get("pipeline_lifecycle_population_scope") == "real_record_bound"
+            )
             # The async producer names its exact policy hash differently. This
             # is a declared alias, not an identity inferred from symbol/time.
             native_fields = fields
-            if not value(fields, "policy_bundle_hash", "machine_bundle_sha256",
-                         "entry_setup_live_policy_candidate_contract_sha256"):
-                native_fields = ChainMap({"policy_bundle_hash": value(fields, "entry_machine_bundle_sha256")}, fields)
-            native = PipelineEvent(event.emitted_at, event.pipeline, event.stage,
-                                   event.stock_name, event.stock_code, event.record_id, native_fields)
+            if not value(
+                fields,
+                "policy_bundle_hash",
+                "machine_bundle_sha256",
+                "entry_setup_live_policy_candidate_contract_sha256",
+            ):
+                native_fields = ChainMap(
+                    {
+                        "policy_bundle_hash": value(
+                            fields, "entry_machine_bundle_sha256"
+                        )
+                    },
+                    fields,
+                )
+            native = PipelineEvent(
+                event.emitted_at,
+                event.pipeline,
+                event.stage,
+                event.stock_name,
+                event.stock_code,
+                event.record_id,
+                native_fields,
+            )
             fixed = value(fields, "watch_origin") == "MAIN_FIXED_WATCH"
-            components = (_machine_primary_fixed_watch_identity_components(native) if fixed
-                          else _machine_primary_identity_components(native))
-            valid = (_machine_primary_fixed_watch_identity_valid(native) if fixed
-                     else bool(_machine_primary_evaluation_key(native)))
+            components = (
+                _machine_primary_fixed_watch_identity_components(native)
+                if fixed
+                else _machine_primary_identity_components(native)
+            )
+            valid = (
+                _machine_primary_fixed_watch_identity_valid(native)
+                if fixed
+                else bool(_machine_primary_evaluation_key(native))
+            )
             if valid:
-                identities.add(("fixed_watch" if fixed else "scanner", tuple(components.items())))
+                identities.add(
+                    ("fixed_watch" if fixed else "scanner", tuple(components.items()))
+                )
             elif fixed and all(value(components, key) for key in components):
                 issues.add("fixed_watch_identity_invalid")
-            action = value(fields, "async_machine_action", "entry_mechanistic_action").upper()
-            screen = value(fields, "async_auxiliary_status", "entry_ai_screen_status").lower()
+            action = value(
+                fields, "async_machine_action", "entry_mechanistic_action"
+            ).upper()
+            screen = value(
+                fields, "async_auxiliary_status", "entry_ai_screen_status"
+            ).lower()
             if action == "ENTER_NOW" and screen == "pass":
                 pass_evidence.add(event.stage)
             if event.stage == "entry_async_disposition":
@@ -3093,13 +3410,19 @@ def _main_scoped_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]:
                     dispositions.add(disposition)
                 if disposition == "accepted_to_entry_path":
                     accepted_evidence.add("async_accepted_to_entry_path")
-            order = value(fields, "broker_order_no", "entry_submit_broker_order_no", "order_no")
+            order = value(
+                fields, "broker_order_no", "entry_submit_broker_order_no", "order_no"
+            )
             if event.stage in {"order_leg_sent", "order_bundle_submitted"} and order:
-                broker_evidence.add("successful_submission_response_with_order_identity")
+                broker_evidence.add(
+                    "successful_submission_response_with_order_identity"
+                )
                 order_numbers.add(order)
-            if (event.stage == "entry_submit_attempt_finished"
-                    and value(fields, "entry_submit_attempt_id")
-                    and truth(fields.get("submit_call_broker_accepted"))):
+            if (
+                event.stage == "entry_submit_attempt_finished"
+                and value(fields, "entry_submit_attempt_id")
+                and truth(fields.get("submit_call_broker_accepted"))
+            ):
                 broker_evidence.add("submit_call_broker_accepted_receipt")
             # Generic actual_order_submitted and async broker-attempt counters
             # are report/adapter fields, not proof of a physical HTTP call.
@@ -3109,8 +3432,13 @@ def _main_scoped_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]:
             call = value(fields, "entry_submit_attempt_id")
             if call:
                 submit_calls.add(call)
-            if (call and fields.get("local_not_sent_contract") == "main_initial_entry_not_sent_v1"
-                    and truth(fields.get("known_local_not_sent")) and count == 0):
+            if (
+                call
+                and fields.get("local_not_sent_contract")
+                == "main_initial_entry_not_sent_v1"
+                and truth(fields.get("known_local_not_sent"))
+                and count == 0
+            ):
                 known_not_sent_calls.add(call)
         if len(actors) > 1:
             issues.add("evaluation_runtime_identity_conflict")
@@ -3118,7 +3446,11 @@ def _main_scoped_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]:
             issues.add("evaluation_native_identity_conflict")
         if not identities:
             issues.add("native_cohort_identity_unobserved")
-        cohort = next(iter(identities))[0] if len(identities) == 1 and not issues else "unknown"
+        cohort = (
+            next(iter(identities))[0]
+            if len(identities) == 1 and not issues
+            else "unknown"
+        )
         if broker_evidence:
             physical_evidence.add("broker_acceptance_proves_send")
         # One zero-wire retry does not prove another call on this evaluation
@@ -3131,33 +3463,55 @@ def _main_scoped_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]:
         if pass_evidence and not actors:
             binding_issues.add("runtime_identity_unobserved")
         if pass_evidence and len(traces) != 1:
-            binding_issues.add("pass_trace_ambiguous" if traces else "pass_trace_unobserved")
-        ledger.append({
-            "evaluation_key": "|".join((day, evaluation, symbol)),
-            "source_date": day, "evaluation_attempt_id": evaluation, "stock_code": symbol,
-            "cohort": cohort, "identity_issues": sorted(issues),
-            "native_identities": [{"cohort": origin, **dict(parts)} for origin, parts in sorted(identities)],
-            "ai_decision_trace_ids": sorted(traces), "async_request_ids": sorted(requests),
-            "runtime_identities": [list(actor) for actor in sorted(actors)],
-            "runtime_identity_status": "conflicting" if len(actors) > 1 else "observed" if actors else "unobservable",
-            "record_ids": sorted(records), "real_record_bound_observed": record_bound,
-            "auxiliary_pass_returned_observed": bool(pass_evidence),
-            "pass_evidence": sorted(pass_evidence),
-            "pass_to_submission_binding": "source_gap" if binding_issues else "exact" if pass_evidence else "not_applicable",
-            "pass_binding_issues": sorted(binding_issues),
-            "main_accepted_observed": bool(accepted_evidence),
-            "main_acceptance_evidence": sorted(accepted_evidence),
-            "main_dispositions": sorted(dispositions),
-            "physical_send_observed": True if physical_evidence else False if known_not_sent else None,
-            "physical_send_evidence": sorted(physical_evidence),
-            "known_not_sent_submit_call_ids": sorted(known_not_sent_calls),
-            "submit_call_ids": sorted(submit_calls),
-            "broker_acceptance_observed": True if broker_evidence else None,
-            "broker_acceptance_evidence": sorted(broker_evidence),
-            "broker_order_numbers": sorted(order_numbers),
-            "first_observed_at": min(e.emitted_at for e in rows).isoformat(),
-            "last_observed_at": max(e.emitted_at for e in rows).isoformat(),
-        })
+            binding_issues.add(
+                "pass_trace_ambiguous" if traces else "pass_trace_unobserved"
+            )
+        ledger.append(
+            {
+                "evaluation_key": "|".join((day, evaluation, symbol)),
+                "source_date": day,
+                "evaluation_attempt_id": evaluation,
+                "stock_code": symbol,
+                "cohort": cohort,
+                "identity_issues": sorted(issues),
+                "native_identities": [
+                    {"cohort": origin, **dict(parts)}
+                    for origin, parts in sorted(identities)
+                ],
+                "ai_decision_trace_ids": sorted(traces),
+                "async_request_ids": sorted(requests),
+                "runtime_identities": [list(actor) for actor in sorted(actors)],
+                "runtime_identity_status": (
+                    "conflicting"
+                    if len(actors) > 1
+                    else "observed" if actors else "unobservable"
+                ),
+                "record_ids": sorted(records),
+                "real_record_bound_observed": record_bound,
+                "auxiliary_pass_returned_observed": bool(pass_evidence),
+                "pass_evidence": sorted(pass_evidence),
+                "pass_to_submission_binding": (
+                    "source_gap"
+                    if binding_issues
+                    else "exact" if pass_evidence else "not_applicable"
+                ),
+                "pass_binding_issues": sorted(binding_issues),
+                "main_accepted_observed": bool(accepted_evidence),
+                "main_acceptance_evidence": sorted(accepted_evidence),
+                "main_dispositions": sorted(dispositions),
+                "physical_send_observed": (
+                    True if physical_evidence else False if known_not_sent else None
+                ),
+                "physical_send_evidence": sorted(physical_evidence),
+                "known_not_sent_submit_call_ids": sorted(known_not_sent_calls),
+                "submit_call_ids": sorted(submit_calls),
+                "broker_acceptance_observed": True if broker_evidence else None,
+                "broker_acceptance_evidence": sorted(broker_evidence),
+                "broker_order_numbers": sorted(order_numbers),
+                "first_observed_at": min(e.emitted_at for e in rows).isoformat(),
+                "last_observed_at": max(e.emitted_at for e in rows).isoformat(),
+            }
+        )
 
     def summarize(rows):
         passed = [r for r in rows if r["auxiliary_pass_returned_observed"]]
@@ -3169,7 +3523,9 @@ def _main_scoped_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]:
         return {
             "evaluation_count": len(rows),
             "pass_returned_observed_count": len(passed),
-            "pass_real_record_bound_observed_count": sum(r["real_record_bound_observed"] for r in passed),
+            "pass_real_record_bound_observed_count": sum(
+                r["real_record_bound_observed"] for r in passed
+            ),
             "pass_binding_source_gap_count": len(passed) - len(bound),
             "pass_main_accepted_observed_count": accepted,
             "pass_main_acceptance_unobserved_count": len(passed) - accepted,
@@ -3180,20 +3536,35 @@ def _main_scoped_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]:
             "pass_broker_acceptance_unobserved_count": len(passed) - broker_accepted,
             # Independent phase observations remain visible when a causal
             # PASS -> submission association is unproven.
-            "phase_main_accepted_observed_count": sum(r["main_accepted_observed"] for r in rows),
-            "phase_physical_send_observed_count": sum(r["physical_send_observed"] is True for r in rows),
-            "phase_broker_acceptance_observed_count": sum(r["broker_acceptance_observed"] is True for r in rows),
-            "source_status": "source_gap" if any(r["identity_issues"] or r["pass_binding_issues"] for r in rows) else "observed" if rows else "unobservable",
+            "phase_main_accepted_observed_count": sum(
+                r["main_accepted_observed"] for r in rows
+            ),
+            "phase_physical_send_observed_count": sum(
+                r["physical_send_observed"] is True for r in rows
+            ),
+            "phase_broker_acceptance_observed_count": sum(
+                r["broker_acceptance_observed"] is True for r in rows
+            ),
+            "source_status": (
+                "source_gap"
+                if any(r["identity_issues"] or r["pass_binding_issues"] for r in rows)
+                else "observed" if rows else "unobservable"
+            ),
         }
 
-    cohorts = {cohort: summarize([r for r in ledger if r["cohort"] == cohort])
-               for cohort in ("scanner", "fixed_watch", "unknown")}
+    cohorts = {
+        cohort: summarize([r for r in ledger if r["cohort"] == cohort])
+        for cohort in ("scanner", "fixed_watch", "unknown")
+    }
     overall = summarize(ledger)
     if missing_identity:
         overall["source_status"] = "source_gap"
     return {
-        "schema": "main_scoped_entry_funnel_v1", "metric_scope": "scanner_fixed_watch_exact_evaluation_union",
-        "metric_role": "funnel_count", "decision_authority": "source_only_attribution", "runtime_effect": False,
+        "schema": "main_scoped_entry_funnel_v1",
+        "metric_scope": "scanner_fixed_watch_exact_evaluation_union",
+        "metric_role": "funnel_count",
+        "decision_authority": "source_only_attribution",
+        "runtime_effect": False,
         "window_policy": "caller_loaded_source_window_not_full_history",
         "sample_floor": "not_applicable_observed_counts_only",
         "primary_decision_metric": "exact_evaluation_phase_counts_with_unobservable_remainder",
@@ -3202,13 +3573,29 @@ def _main_scoped_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]:
         "count_semantics": "distinct_evaluations_not_provider_calls_orders_fills_or_pnl",
         "source_coverage": "loaded_events_only_full_historical_denominator_unproven",
         "decision_population": "loaded_events_before_cash_shortfall_exclusion",
-        "full_denominator_proven": False, "identity_missing_event_count": missing_identity,
-        "identity_rejection_reason_counts": dict(sorted(identity_rejection_reasons.items())),
-        "overall": overall, "cohorts": cohorts,
-        "cohort_count_conservation": sum(c["evaluation_count"] for c in cohorts.values()) == len(ledger),
-        "pass_count_conservation": sum(c["pass_returned_observed_count"] for c in cohorts.values()) == overall["pass_returned_observed_count"],
-        "evaluation_ledger": ledger[-1024:], "ledger_omitted_evaluation_count": max(0, len(ledger)-1024),
-        "forbidden_uses": ["runtime_apply", "broker_order", "fill_proof", "realized_economics"],
+        "full_denominator_proven": False,
+        "identity_missing_event_count": missing_identity,
+        "identity_rejection_reason_counts": dict(
+            sorted(identity_rejection_reasons.items())
+        ),
+        "overall": overall,
+        "cohorts": cohorts,
+        "cohort_count_conservation": sum(
+            c["evaluation_count"] for c in cohorts.values()
+        )
+        == len(ledger),
+        "pass_count_conservation": sum(
+            c["pass_returned_observed_count"] for c in cohorts.values()
+        )
+        == overall["pass_returned_observed_count"],
+        "evaluation_ledger": ledger[-1024:],
+        "ledger_omitted_evaluation_count": max(0, len(ledger) - 1024),
+        "forbidden_uses": [
+            "runtime_apply",
+            "broker_order",
+            "fill_proof",
+            "realized_economics",
+        ],
     }
 
 
@@ -3323,22 +3710,37 @@ def _machine_primary_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]
         identity_parts = key.removeprefix("machine:").split("|")
         decision_history = []
         for event in rows:
-            observed_action = _safe_str(event.fields.get("entry_mechanistic_action")).upper()
+            observed_action = _safe_str(
+                event.fields.get("entry_mechanistic_action")
+            ).upper()
             if observed_action not in MACHINE_PRIMARY_ENTRY_ACTIONS:
                 continue
-            if (event.stage == "entry_submit_attempt_finished"
-                    and not event.fields.get("machine_observation_sha256")
-                    and not event.fields.get("machine_revision_schema")
-                    and "machine_revision_parent_sha256" not in event.fields):
+            if (
+                event.stage == "entry_submit_attempt_finished"
+                and not event.fields.get("machine_observation_sha256")
+                and not event.fields.get("machine_revision_schema")
+                and "machine_revision_parent_sha256" not in event.fields
+            ):
                 continue
             observation = {
                 "action": observed_action,
-                "ai_screen_status": _safe_str(event.fields.get("entry_ai_screen_status")),
-                "machine_observation_sha256": _safe_str(event.fields.get("machine_observation_sha256")),
+                "ai_screen_status": _safe_str(
+                    event.fields.get("entry_ai_screen_status")
+                ),
+                "machine_observation_sha256": _safe_str(
+                    event.fields.get("machine_observation_sha256")
+                ),
             }
-            if not decision_history or any(decision_history[-1][k] != v for k, v in observation.items()):
-                decision_history.append({**observation, "observed_at": event.emitted_at.isoformat(),
-                                         "stage": event.stage})
+            if not decision_history or any(
+                decision_history[-1][k] != v for k, v in observation.items()
+            ):
+                decision_history.append(
+                    {
+                        **observation,
+                        "observed_at": event.emitted_at.isoformat(),
+                        "stage": event.stage,
+                    }
+                )
         decision_rows, revision_status, revision_errors = _machine_revision_rows(rows)
         observed_actions = {item["action"] for item in decision_history}
         actions = {
@@ -3374,10 +3776,18 @@ def _machine_primary_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]
             conflict_reasons.append("ai_screen_status_missing_or_conflicting")
         action = next(iter(actions), "UNKNOWN") if len(actions) == 1 else "UNKNOWN"
         screen = next(iter(screens), "") if len(screens) == 1 else ""
-        if action in {"RECHECK", "BLOCK"} and screen not in {
-            "",
-            "not_requested_machine_nonentry",
-        } and not (action == "RECHECK" and screen == "not_requested_required_feature_insufficient"):
+        if (
+            action in {"RECHECK", "BLOCK"}
+            and screen
+            not in {
+                "",
+                "not_requested_machine_nonentry",
+            }
+            and not (
+                action == "RECHECK"
+                and screen == "not_requested_required_feature_insufficient"
+            )
+        ):
             conflict_reasons.append("machine_nonentry_ai_screen_contract_invalid")
         if action == "SOURCE_INVALID" and screen not in {
             "",
@@ -3387,7 +3797,8 @@ def _machine_primary_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]
         if action == "ENTER_NOW" and not screen:
             conflict_reasons.append("machine_enter_ai_screen_missing")
         if action == "ENTER_NOW" and screen in {
-            "not_requested_machine_nonentry", "not_requested_required_feature_insufficient"
+            "not_requested_machine_nonentry",
+            "not_requested_required_feature_insufficient",
         }:
             conflict_reasons.append("machine_enter_ai_screen_not_requested")
         auxiliary_semantics = _auxiliary_ai_semantics(decision_rows, action, screen)
@@ -3419,6 +3830,7 @@ def _machine_primary_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]
         ]
         if invalid_broker_failure_rows:
             conflict_reasons.append("broker_failure_contract_invalid")
+
         def call_local_guard_terminal(row):
             # Nonterminal CompactFields may hold a large lazy replay capsule.
             # Do not request absent completion fields and decode that payload.
@@ -3427,59 +3839,114 @@ def _machine_primary_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]
             fields = row.fields
             call = _safe_str(fields.get("entry_submit_attempt_id"))
             reason = _safe_str(fields.get("entry_submit_attempt_terminal_reason"))
-            guard_reasons = (BLOCKER_STAGES - BROKER_SUBMIT_FAILURE_STAGES
-                - AI_TERMINAL_ATTRIBUTION_STAGES - {"blocked_ai_score"}) | {
-                "entry_split_probe_first_deferred", "pre_submit_delay_pending",
-                "pre_submit_delay_due_recheck_blocked", "pre_submit_delay_intent_invalid",
-                "pre_submit_delay_observation_unavailable", "initial_quantity_sequential_plan_block",
+            guard_reasons = (
+                BLOCKER_STAGES
+                - BROKER_SUBMIT_FAILURE_STAGES
+                - AI_TERMINAL_ATTRIBUTION_STAGES
+                - {"blocked_ai_score"}
+            ) | {
+                "entry_split_probe_first_deferred",
+                "pre_submit_delay_pending",
+                "pre_submit_delay_due_recheck_blocked",
+                "pre_submit_delay_intent_invalid",
+                "pre_submit_delay_observation_unavailable",
+                "initial_quantity_sequential_plan_block",
                 # Native plan route binding returns before sequential/broker submission.
                 "main_entry_order_route_invalid",
             }
             # A local return is not a broker receipt. Only an exact known
             # return-site guard can close the single observed invocation.
-            if (not call or reason not in guard_reasons
-                    or fields.get("entry_submit_attempt_schema") != "call_local_submit_attempt_v1"
-                    or fields.get("entry_submit_attempt_authority") != "observation_only"
-                    or fields.get("entry_submit_attempt_terminal_schema") != "call_local_terminal_v1"
-                    or _safe_str(row.record_id).strip().lower() in {"", "0", "none", "null"}
-                    or _safe_str(fields.get("entry_submit_attempt_parent_promotion_id")) != identity_parts[0]
-                    or any(_safe_str(fields.get(k)).lower() != "false" for k in (
-                        "entry_submit_attempt_broker_accepted", "submit_call_broker_accepted"))
-                    or any(fields.get(k) != "returned_false" for k in (
-                        "entry_submit_attempt_return_outcome", "submit_call_return_outcome", "submit_call_outcome"))):
+            if (
+                not call
+                or reason not in guard_reasons
+                or fields.get("entry_submit_attempt_schema")
+                != "call_local_submit_attempt_v1"
+                or fields.get("entry_submit_attempt_authority") != "observation_only"
+                or fields.get("entry_submit_attempt_terminal_schema")
+                != "call_local_terminal_v1"
+                or _safe_str(row.record_id).strip().lower() in {"", "0", "none", "null"}
+                or _safe_str(fields.get("entry_submit_attempt_parent_promotion_id"))
+                != identity_parts[0]
+                or any(
+                    _safe_str(fields.get(k)).lower() != "false"
+                    for k in (
+                        "entry_submit_attempt_broker_accepted",
+                        "submit_call_broker_accepted",
+                    )
+                )
+                or any(
+                    fields.get(k) != "returned_false"
+                    for k in (
+                        "entry_submit_attempt_return_outcome",
+                        "submit_call_return_outcome",
+                        "submit_call_outcome",
+                    )
+                )
+            ):
                 return False
-            calls = {_safe_str(r.fields.get("entry_submit_attempt_id")) for r in rows
-                     if r.fields.get("entry_submit_attempt_id")}
+            calls = {
+                _safe_str(r.fields.get("entry_submit_attempt_id"))
+                for r in rows
+                if r.fields.get("entry_submit_attempt_id")
+            }
             finishes = [r for r in rows if r.stage == "entry_submit_attempt_finished"]
-            return (calls == {call}
-                and all(r.record_id == row.record_id
-                    and all(_safe_str(r.fields.get(k)) == _safe_str(fields.get(k)) for k in (
-                        "entry_submit_attempt_terminal_reason", "entry_submit_attempt_terminal_schema",
-                        "entry_submit_attempt_schema", "entry_submit_attempt_authority",
-                        "entry_submit_attempt_parent_promotion_id", "entry_submit_attempt_return_outcome",
-                        "submit_call_outcome", "submit_call_return_outcome",
-                        "entry_submit_attempt_broker_accepted", "submit_call_broker_accepted")) for r in finishes)
-                and any(r.stage != "entry_submit_attempt_finished" and r.emitted_at <= row.emitted_at
-                    and r.record_id == row.record_id and r.fields.get("entry_submit_attempt_id") == call for r in rows))
+            return (
+                calls == {call}
+                and all(
+                    r.record_id == row.record_id
+                    and all(
+                        _safe_str(r.fields.get(k)) == _safe_str(fields.get(k))
+                        for k in (
+                            "entry_submit_attempt_terminal_reason",
+                            "entry_submit_attempt_terminal_schema",
+                            "entry_submit_attempt_schema",
+                            "entry_submit_attempt_authority",
+                            "entry_submit_attempt_parent_promotion_id",
+                            "entry_submit_attempt_return_outcome",
+                            "submit_call_outcome",
+                            "submit_call_return_outcome",
+                            "entry_submit_attempt_broker_accepted",
+                            "submit_call_broker_accepted",
+                        )
+                    )
+                    for r in finishes
+                )
+                and any(
+                    r.stage != "entry_submit_attempt_finished"
+                    and r.emitted_at <= row.emitted_at
+                    and r.record_id == row.record_id
+                    and r.fields.get("entry_submit_attempt_id") == call
+                    for r in rows
+                )
+            )
 
         final_guard_block_rows = [
             row
             for row in rows
-            if call_local_guard_terminal(row) or row.stage
-            in (BLOCKER_STAGES - BROKER_SUBMIT_FAILURE_STAGES
-                - AI_TERMINAL_ATTRIBUTION_STAGES - {"blocked_ai_score"})
+            if call_local_guard_terminal(row)
+            or row.stage
+            in (
+                BLOCKER_STAGES
+                - BROKER_SUBMIT_FAILURE_STAGES
+                - AI_TERMINAL_ATTRIBUTION_STAGES
+                - {"blocked_ai_score"}
+            )
             or (
                 row.stage == "ai_confirmed_terminal_no_budget"
                 and (
                     _safe_str(row.fields.get("terminal_reason")),
                     _safe_str(row.fields.get("source_stage")),
-                ) in {
+                )
+                in {
                     ("first_ai_wait_big_bite_not_confirmed", "first_ai_wait"),
                     ("entry_policy_no_buy_score_prior", "blocked_ai_score"),
                 }
-                and _safe_str(row.fields.get("actual_order_submitted")).lower() == "false"
-                and _safe_str(row.fields.get("broker_order_forbidden")).lower() == "true"
-                and _safe_str(row.fields.get("allowed_runtime_apply")).lower() == "false"
+                and _safe_str(row.fields.get("actual_order_submitted")).lower()
+                == "false"
+                and _safe_str(row.fields.get("broker_order_forbidden")).lower()
+                == "true"
+                and _safe_str(row.fields.get("allowed_runtime_apply")).lower()
+                == "false"
             )
         ] + [
             row
@@ -3491,31 +3958,55 @@ def _machine_primary_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]
             for row in broker_failure_rows
             if _submit_drought_axis_for_event(row) == "BROKER_RECEIPT"
         ]
+
         def same_call(left, right):
             left_id = _safe_str(left.fields.get("entry_submit_attempt_id"))
             right_id = _safe_str(right.fields.get("entry_submit_attempt_id"))
             return not (left_id and right_id and left_id != right_id)
-        terminal_conflict = any(same_call(left, right)
-            for left_rows, right_rows in ((submitted_rows, broker_rejected_rows + final_guard_block_rows),
-                                         (broker_rejected_rows, final_guard_block_rows))
-            for left in left_rows for right in right_rows)
+
+        terminal_conflict = any(
+            same_call(left, right)
+            for left_rows, right_rows in (
+                (submitted_rows, broker_rejected_rows + final_guard_block_rows),
+                (broker_rejected_rows, final_guard_block_rows),
+            )
+            for left in left_rows
+            for right in right_rows
+        )
+
         def unresolved_dispatch(row):
             if row.stage == "order_leg_owner_registry_reconciliation_required":
                 return True
             if row.stage == "order_leg_fail":
-                return _safe_str(row.fields.get("broker_submission_reconciliation_required")).lower() == "true"
+                return (
+                    _safe_str(
+                        row.fields.get("broker_submission_reconciliation_required")
+                    ).lower()
+                    == "true"
+                )
             if row.stage != "order_leg_no_response":
                 return False
             call = _safe_str(row.fields.get("entry_submit_attempt_id"))
             tag = _safe_str(row.fields.get("tag"))
-            return not (call and tag and any(later.stage == "order_leg_sent"
-                and later.emitted_at > row.emitted_at
-                and _safe_str(later.fields.get("entry_submit_attempt_id")) == call
-                and _safe_str(later.fields.get("tag")) == tag
-                and _safe_str(later.fields.get("broker_order_no")) for later in rows))
+            return not (
+                call
+                and tag
+                and any(
+                    later.stage == "order_leg_sent"
+                    and later.emitted_at > row.emitted_at
+                    and _safe_str(later.fields.get("entry_submit_attempt_id")) == call
+                    and _safe_str(later.fields.get("tag")) == tag
+                    and _safe_str(later.fields.get("broker_order_no"))
+                    for later in rows
+                )
+            )
+
         ambiguous_dispatch = any(unresolved_dispatch(row) for row in rows)
-        call_exception = any(row.stage == "entry_submit_attempt_finished"
-            and row.fields.get("submit_call_return_outcome") == "raised" for row in rows)
+        call_exception = any(
+            row.stage == "entry_submit_attempt_finished"
+            and row.fields.get("submit_call_return_outcome") == "raised"
+            for row in rows
+        )
         sizing_projection = _entry_execution_sizing_projection(rows)
         if conflict_reasons:
             final_state = "identity_or_contract_gap"
@@ -3600,8 +4091,12 @@ def _machine_primary_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]
             "mechanistic_action": action,
             "revision_chain_status": revision_status,
             "decision_history": decision_history,
-            "initial_observed_action": decision_history[0]["action"] if decision_history else "UNKNOWN",
-            "latest_observed_action": decision_history[-1]["action"] if decision_history else "UNKNOWN",
+            "initial_observed_action": (
+                decision_history[0]["action"] if decision_history else "UNKNOWN"
+            ),
+            "latest_observed_action": (
+                decision_history[-1]["action"] if decision_history else "UNKNOWN"
+            ),
             "enter_now_observed": "ENTER_NOW" in observed_actions,
             "ai_screen_status": screen or "not_reported",
             "auxiliary_ai_semantics": auxiliary_semantics,
@@ -3614,13 +4109,28 @@ def _machine_primary_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]
             "ambiguous_dispatch_observed": ambiguous_dispatch,
             "submit_call_exception_observed": call_exception,
             "final_guard_blocked": bool(final_guard_block_rows),
-            "final_guard_evidence": [{
-                "stage": event.stage, "observed_at": event.emitted_at.isoformat(),
-                "submit_attempt_id": _safe_str(event.fields.get("entry_submit_attempt_id")),
-                "reason": _safe_str(_field_first(event.fields, (
-                    "entry_submit_attempt_terminal_reason", "weak_context_guard_reason", "weak_pullback_entry_block_reason",
-                    "reason", "order_bundle_failure_mode"))),
-            } for event in final_guard_block_rows[:3]],
+            "final_guard_evidence": [
+                {
+                    "stage": event.stage,
+                    "observed_at": event.emitted_at.isoformat(),
+                    "submit_attempt_id": _safe_str(
+                        event.fields.get("entry_submit_attempt_id")
+                    ),
+                    "reason": _safe_str(
+                        _field_first(
+                            event.fields,
+                            (
+                                "entry_submit_attempt_terminal_reason",
+                                "weak_context_guard_reason",
+                                "weak_pullback_entry_block_reason",
+                                "reason",
+                                "order_bundle_failure_mode",
+                            ),
+                        )
+                    ),
+                }
+                for event in final_guard_block_rows[:3]
+            ],
             "broker_rejected": bool(broker_rejected_rows),
             "final_state": final_state,
             "entry_execution_sizing_plan": sizing_projection,
@@ -3706,9 +4216,16 @@ def _machine_primary_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]
     ai_pass_broker_rejected = sum(
         row["final_state"] == "broker_rejected" for row in ai_pass_rows
     )
-    ai_pass_pending = sum(row["final_state"] in {"pending", "pending_broker_reconciliation"} for row in ai_pass_rows)
+    ai_pass_pending = sum(
+        row["final_state"] in {"pending", "pending_broker_reconciliation"}
+        for row in ai_pass_rows
+    )
     ai_pass_lineage_gap = sum(
-        row["final_state"] in {"lineage_gap_superseded_without_terminal", "lineage_gap_conflicting_terminals"}
+        row["final_state"]
+        in {
+            "lineage_gap_superseded_without_terminal",
+            "lineage_gap_conflicting_terminals",
+        }
         for row in ai_pass_rows
     )
     sizing_chain_counts = Counter(row["sizing_chain_state"] for row in ai_pass_rows)
@@ -3794,8 +4311,12 @@ def _machine_primary_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]
             "allowed_runtime_apply": False,
         },
         "ai_screen_status_counts": dict(sorted(screen_counts.items())),
-        "auxiliary_ai_semantic_status_counts": dict(sorted(auxiliary_ai_status_counts.items())),
-        "auxiliary_ai_semantic_issue_counts": dict(sorted(auxiliary_ai_issue_counts.items())),
+        "auxiliary_ai_semantic_status_counts": dict(
+            sorted(auxiliary_ai_status_counts.items())
+        ),
+        "auxiliary_ai_semantic_issue_counts": dict(
+            sorted(auxiliary_ai_issue_counts.items())
+        ),
         "final_state_counts": dict(sorted(final_counts.items())),
         "machine_enter_count": machine_enter,
         "ai_pass_count": ai_pass,
@@ -4510,7 +5031,6 @@ def _terminal_attempt_diagnostics(exact, events_by_key):
     return {
         "entry_ai_authority_diagnostics": bundle(ai_rows),
         "zero_qty_diagnostics": bundle(cash_rows),
-
     }
 
 
@@ -4809,7 +5329,9 @@ def _classify(
     stale_sec = int((as_of - latest).total_seconds()) if latest else None
     if _safe_str(scope_key).startswith("PREMARKET_KRX_LIKE|"):
         before_sentinel_hours = as_of.time() < PREMARKET_SENTINEL_START
-        during_sentinel_hours = PREMARKET_SENTINEL_START <= as_of.time() < PREMARKET_SENTINEL_END
+        during_sentinel_hours = (
+            PREMARKET_SENTINEL_START <= as_of.time() < PREMARKET_SENTINEL_END
+        )
     elif _safe_str(scope_key).startswith("NXT|"):
         before_sentinel_hours = as_of.time() < NXT_SENTINEL_START
         during_sentinel_hours = NXT_SENTINEL_START <= as_of.time() <= NXT_SENTINEL_END
@@ -5617,7 +6139,9 @@ def _submission_monitor_report_snapshot(events, as_of):
     from src.engine.monitoring.submission_bottleneck_monitor import snapshot
 
     result = snapshot(events, as_of)
-    for row in (result.get("async_disposition_coverage") or {}).get("attempt_projection", []):
+    for row in (result.get("async_disposition_coverage") or {}).get(
+        "attempt_projection", []
+    ):
         if isinstance(row.get("emitted_at"), datetime):
             row["emitted_at"] = row["emitted_at"].isoformat()
     return result
@@ -5732,7 +6256,8 @@ def build_buy_funnel_sentinel_report(
             "actual_execution_venue_counts": dict(
                 sorted(
                     Counter(
-                        event_scope.actual_execution_venue(event.fields) for event in source_events
+                        event_scope.actual_execution_venue(event.fields)
+                        for event in source_events
                     ).items()
                 )
             ),
@@ -6041,14 +6566,21 @@ def save_report_artifacts(report: dict[str, Any]) -> dict[str, str]:
     markdown = build_markdown(report)
     # The notification consumer must never reload the large diagnostic report.
     monitor_path = report_dir / f"submission_bottleneck_source_{target_date}.json"
-    monitor_text = json.dumps({k: report.get(k) for k in (
-        "target_date", "dry_run", "submission_monitor")}, ensure_ascii=False, indent=2)
+    monitor_text = json.dumps(
+        {k: report.get(k) for k in ("target_date", "dry_run", "submission_monitor")},
+        ensure_ascii=False,
+        indent=2,
+    )
     _write_report_text_atomic(json_path, json_text)
     _write_report_text_atomic(md_path, markdown)
     # The bounded consumer projection is the last publication, not a success
     # receipt for a partially written diagnostic artifact.
     _write_report_text_atomic(monitor_path, monitor_text)
-    return {"json": str(json_path), "markdown": str(md_path), "submission_monitor": str(monitor_path)}
+    return {
+        "json": str(json_path),
+        "markdown": str(md_path),
+        "submission_monitor": str(monitor_path),
+    }
 
 
 def build_parser() -> argparse.ArgumentParser:

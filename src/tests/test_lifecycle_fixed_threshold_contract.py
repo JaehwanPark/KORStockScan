@@ -1,4 +1,6 @@
-from src.engine.lifecycle.archive.lifecycle_decision_matrix_readers import fixed_threshold_contract
+from src.engine.lifecycle.archive.lifecycle_decision_matrix_readers import (
+    fixed_threshold_contract,
+)
 
 
 def test_fixed_threshold_contract_classifies_threshold_roles():

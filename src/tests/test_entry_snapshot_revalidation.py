@@ -20,39 +20,72 @@ from src.engine.scalping.entry_candle_context import (
 NOW = datetime(2026, 9, 10, 14, 0, 25, tzinfo=ZoneInfo("Asia/Seoul")).timestamp()
 
 
-def _chart_route_ws(suffix, *, at=NOW - .1):
+def _chart_route_ws(suffix, *, at=NOW - 0.1):
     route = "krx_nxt_integrated" if suffix else "krx_only"
     ws = _ws(at)
-    ws.update(market_data_transport_epoch=1, market_suffix=suffix, market_route=route,
-              last_realtime_type_item={k: f"123456{suffix}" for k in ("0B", "0D")},
-              last_realtime_type_market_suffix={k: suffix for k in ("0B", "0D")},
-              last_realtime_type_market_route={k: route for k in ("0B", "0D")})
+    ws.update(
+        market_data_transport_epoch=1,
+        market_suffix=suffix,
+        market_route=route,
+        last_realtime_type_item={k: f"123456{suffix}" for k in ("0B", "0D")},
+        last_realtime_type_market_suffix={k: suffix for k in ("0B", "0D")},
+        last_realtime_type_market_route={k: route for k in ("0B", "0D")},
+    )
     key = f"{suffix or 'KRX'}|{route}"
-    common = dict(item=f"123456{suffix}", market_suffix=suffix,
-                  market_route=route, observed_epoch=at, transport_epoch=1)
-    ws["realtime_type_snapshots_by_route"] = {key: {
-        "0B": {**common, "current_price": 10000},
-        "0D": {**common, "orderbook": deepcopy(ws["orderbook"])},
-    }}
-    ws["recent_trade_ticks_by_route"] = {key: [
-        dict(price=10000, received_ts=at, item=f"123456{suffix}",
-             market_suffix=suffix, market_route=route),
-    ]}
+    common = dict(
+        item=f"123456{suffix}",
+        market_suffix=suffix,
+        market_route=route,
+        observed_epoch=at,
+        transport_epoch=1,
+    )
+    ws["realtime_type_snapshots_by_route"] = {
+        key: {
+            "0B": {**common, "current_price": 10000},
+            "0D": {**common, "orderbook": deepcopy(ws["orderbook"])},
+        }
+    }
+    ws["recent_trade_ticks_by_route"] = {
+        key: [
+            dict(
+                price=10000,
+                received_ts=at,
+                item=f"123456{suffix}",
+                market_suffix=suffix,
+                market_route=route,
+            ),
+        ]
+    }
     return ws
 
 
 def _fetched_chart(monkeypatch, suffix):
     from src.utils import kiwoom_utils
+
     requests = []
+
     def fetch(_token, request_code, **kwargs):
         requests.append((request_code, kwargs))
-        return [dict(source_timestamp="20260910135900", 시가=10000,
-                     고가=10010, 저가=9990, 현재가=10000, 거래량=100)], {
-                         "api_id": "ka10080"}
+        return [
+            dict(
+                source_timestamp="20260910135900",
+                시가=10000,
+                고가=10010,
+                저가=9990,
+                현재가=10000,
+                거래량=100,
+            )
+        ], {"api_id": "ka10080"}
+
     monkeypatch.setattr(kiwoom_utils, "get_minute_candles_ka10080_with_meta", fetch)
     bars, meta = fetch_entry_candles_with_meta(
-        None, "123456", _chart_route_ws(suffix), venue="KRX",
-        session="krx_regular", now_ts=NOW, broker_route="SOR",
+        None,
+        "123456",
+        _chart_route_ws(suffix),
+        venue="KRX",
+        session="krx_regular",
+        now_ts=NOW,
+        broker_route="SOR",
         allow_integrated_sor_execution_view=True,
     )
     assert requests[0][0] == f"123456{suffix}"
@@ -63,49 +96,81 @@ def _fetched_chart(monkeypatch, suffix):
 
 def test_chart_request_binding_keeps_epoch_before_slow_rest(monkeypatch):
     from src.utils import kiwoom_utils
+
     ws = _chart_route_ws("_AL")
+
     def fetch(*args, **kwargs):
         ws["market_data_transport_epoch"] = 2
         return [], {"api_id": "ka10080"}
+
     monkeypatch.setattr(kiwoom_utils, "get_minute_candles_ka10080_with_meta", fetch)
     _, meta = fetch_entry_candles_with_meta(
-        None, "123456", ws, venue="KRX", session="krx_regular", now_ts=NOW,
-        broker_route="SOR", allow_integrated_sor_execution_view=True,
+        None,
+        "123456",
+        ws,
+        venue="KRX",
+        session="krx_regular",
+        now_ts=NOW,
+        broker_route="SOR",
+        allow_integrated_sor_execution_view=True,
     )
     assert meta["entry_candle_route_binding"]["transport_epoch"] == 1
 
 
 def test_chart_route_binding_preserves_probe_registration_filter(monkeypatch):
-    from src.engine.scalping.entry_candle_context import _bind_entry_candle_request_route
+    from src.engine.scalping.entry_candle_context import (
+        _bind_entry_candle_request_route,
+    )
+
     _, meta = _fetched_chart(monkeypatch, "_AL")
     ws = _chart_route_ws("_AL")
-    ws["zero_base_probe_registered_epoch"] = NOW - .2
+    ws["zero_base_probe_registered_epoch"] = NOW - 0.2
     ws["recent_trade_ticks"] = []
     before = deepcopy(ws)
     selected, receipt = _bind_entry_candle_request_route(
-        ws, meta, code="123456", venue="KRX", session="krx_regular",
-        broker_route="SOR", allow_integrated_sor_execution_view=True,
+        ws,
+        meta,
+        code="123456",
+        venue="KRX",
+        session="krx_regular",
+        broker_route="SOR",
+        allow_integrated_sor_execution_view=True,
     )
     assert receipt["status"] == "not_applicable"
     assert selected == before
 
 
 @pytest.mark.parametrize("suffix", ["", "_AL"])
-def test_fetched_chart_survives_concurrent_route_change_without_relabel(monkeypatch, suffix):
+def test_fetched_chart_survives_concurrent_route_change_without_relabel(
+    monkeypatch, suffix
+):
     bars, meta = _fetched_chart(monkeypatch, suffix)
-    opposite = _chart_route_ws("" if suffix else "_AL", at=NOW - .05)
+    opposite = _chart_route_ws("" if suffix else "_AL", at=NOW - 0.05)
     frozen = _chart_route_ws(suffix)
-    opposite["realtime_type_snapshots_by_route"].update(frozen["realtime_type_snapshots_by_route"])
-    opposite["recent_trade_ticks_by_route"].update(frozen["recent_trade_ticks_by_route"])
+    opposite["realtime_type_snapshots_by_route"].update(
+        frozen["realtime_type_snapshots_by_route"]
+    )
+    opposite["recent_trade_ticks_by_route"].update(
+        frozen["recent_trade_ticks_by_route"]
+    )
     before = deepcopy((opposite, meta, bars))
     context = build_entry_candle_context(
-        None, "123456", opposite, "KRX", "krx_regular", now_ts=NOW,
-        recent_candles=bars, source_meta=meta, broker_route="SOR",
+        None,
+        "123456",
+        opposite,
+        "KRX",
+        "krx_regular",
+        now_ts=NOW,
+        recent_candles=bars,
+        source_meta=meta,
+        broker_route="SOR",
     )
     assert context["request_code"] == f"123456{suffix}"
     assert context["source_quality"]["status"] == "fresh_consistent"
     assert context["source_quality"]["request_route_binding"]["status"] == "bound"
-    assert context["ai_market_snapshot_v1"]["sources"]["bbo"]["age_ms"] == pytest.approx(100, abs=1)
+    assert context["ai_market_snapshot_v1"]["sources"]["bbo"][
+        "age_ms"
+    ] == pytest.approx(100, abs=1)
     assert snapshot_module.ai_input_preflight(context)["source_allowed"] is True
     assert (opposite, meta, bars) == before
     candle = context["ai_market_snapshot_v1"]["sources"]["candle"]["value"]
@@ -113,34 +178,67 @@ def test_fetched_chart_survives_concurrent_route_change_without_relabel(monkeypa
     assert candle["request_route_binding"]["transport_epoch"] == 1
 
 
-@pytest.mark.parametrize("damage", ["missing", "epoch", "bool_epoch", "row_epoch", "item",
-                                    "route", "stale", "future", "missing_depth", "metadata",
-                                    "other_symbol", "malformed_partitions"])
+@pytest.mark.parametrize(
+    "damage",
+    [
+        "missing",
+        "epoch",
+        "bool_epoch",
+        "row_epoch",
+        "item",
+        "route",
+        "stale",
+        "future",
+        "missing_depth",
+        "metadata",
+        "other_symbol",
+        "malformed_partitions",
+    ],
+)
 def test_fetched_chart_binding_cannot_bypass_bad_source(monkeypatch, damage):
     bars, meta = _fetched_chart(monkeypatch, "_AL")
     ws = _chart_route_ws("")
     exact = _chart_route_ws("_AL")
-    ws["realtime_type_snapshots_by_route"].update(exact["realtime_type_snapshots_by_route"])
+    ws["realtime_type_snapshots_by_route"].update(
+        exact["realtime_type_snapshots_by_route"]
+    )
     ws["recent_trade_ticks_by_route"].update(exact["recent_trade_ticks_by_route"])
     rows = ws["realtime_type_snapshots_by_route"]["_AL|krx_nxt_integrated"]
-    if damage == "missing": rows.pop("0D")
-    elif damage == "epoch": ws["market_data_transport_epoch"] = 2
-    elif damage == "bool_epoch": meta["entry_candle_route_binding"]["transport_epoch"] = True
-    elif damage == "row_epoch": rows["0D"]["transport_epoch"] = 2
-    elif damage == "item": rows["0D"]["item"] = "654321_AL"
-    elif damage == "route": rows["0D"]["market_route"] = "nxt_only"
+    if damage == "missing":
+        rows.pop("0D")
+    elif damage == "epoch":
+        ws["market_data_transport_epoch"] = 2
+    elif damage == "bool_epoch":
+        meta["entry_candle_route_binding"]["transport_epoch"] = True
+    elif damage == "row_epoch":
+        rows["0D"]["transport_epoch"] = 2
+    elif damage == "item":
+        rows["0D"]["item"] = "654321_AL"
+    elif damage == "route":
+        rows["0D"]["market_route"] = "nxt_only"
     elif damage in {"stale", "future"}:
-        for row in rows.values(): row["observed_epoch"] = NOW + (10 if damage == "future" else -5)
-    elif damage == "missing_depth": rows["0D"]["orderbook"] = {}
-    elif damage == "metadata": meta["entry_candle_request_code"] = "123456"
-    elif damage == "other_symbol": meta["entry_candle_route_binding"]["request_code"] = "654321_AL"
-    elif damage == "malformed_partitions": ws["realtime_type_snapshots_by_route"] = [rows]
+        for row in rows.values():
+            row["observed_epoch"] = NOW + (10 if damage == "future" else -5)
+    elif damage == "missing_depth":
+        rows["0D"]["orderbook"] = {}
+    elif damage == "metadata":
+        meta["entry_candle_request_code"] = "123456"
+    elif damage == "other_symbol":
+        meta["entry_candle_route_binding"]["request_code"] = "654321_AL"
+    elif damage == "malformed_partitions":
+        ws["realtime_type_snapshots_by_route"] = [rows]
     context = build_entry_candle_context(
-        None, "123456", ws, "KRX", "krx_regular", now_ts=NOW,
-        recent_candles=bars, source_meta=meta, broker_route="SOR",
+        None,
+        "123456",
+        ws,
+        "KRX",
+        "krx_regular",
+        now_ts=NOW,
+        recent_candles=bars,
+        source_meta=meta,
+        broker_route="SOR",
     )
     assert snapshot_module.ai_input_preflight(context)["source_allowed"] is False
-
 
 
 def _ws(at, *, price=10000):
@@ -162,10 +260,6 @@ def _ws(at, *, price=10000):
             "asks": [{"price": price + 10, "volume": 100}],
         },
     }
-
-
-
-
 
 
 def _context():
@@ -193,40 +287,71 @@ def _context():
 
 
 def _inline_quote_ws():
-    ws = _ws(NOW - .1)
-    ws["last_realtime_type_ts"]["0D"] = NOW - .8
+    ws = _ws(NOW - 0.1)
+    ws["last_realtime_type_ts"]["0D"] = NOW - 0.8
     ws["market_data_transport_epoch"] = 2
-    common = dict(item="123456", market_route="krx_regular", market_suffix="",
-                  effective_venue="KRX", transport_epoch=2, route_sequence=3)
-    ws["realtime_type_snapshots_by_route"] = {"KRX|krx_regular": {
-        "0D": {**common, "observed_epoch": NOW - .8, "orderbook": deepcopy(ws["orderbook"])},
-        "0B": {**common, "observed_epoch": NOW - .1, "current_price": 10000,
-               "inline_best_bid": 10000, "inline_best_ask": 10010},
-    }}
+    common = dict(
+        item="123456",
+        market_route="krx_regular",
+        market_suffix="",
+        effective_venue="KRX",
+        transport_epoch=2,
+        route_sequence=3,
+    )
+    ws["realtime_type_snapshots_by_route"] = {
+        "KRX|krx_regular": {
+            "0D": {
+                **common,
+                "observed_epoch": NOW - 0.8,
+                "orderbook": deepcopy(ws["orderbook"]),
+            },
+            "0B": {
+                **common,
+                "observed_epoch": NOW - 0.1,
+                "current_price": 10000,
+                "inline_best_bid": 10000,
+                "inline_best_ask": 10010,
+            },
+        }
+    }
     return ws
 
 
 def test_final_quote_clock_binds_same_bbo_without_renewing_depth(monkeypatch):
     from src.engine import ai_engine_openai as eng
+
     monkeypatch.setattr(eng.time, "time", lambda: NOW)
     original = _inline_quote_ws()
     before = deepcopy(original)
     _, _, context, fields = eng._final_entry_machine_inputs(
-        original, [], _context(), refresher=lambda w, t, c: (w, t, c, {}))
+        original, [], _context(), refresher=lambda w, t, c: (w, t, c, {})
+    )
     assert "entry_machine_input_error" not in fields
     bbo = context["ai_market_snapshot_v1"]["sources"]["bbo"]
     assert bbo["source"] == "ws_0B_inline_quote"
     assert bbo["age_ms"] == pytest.approx(100, abs=1)
-    assert datetime.fromisoformat(bbo["depth_observed_at"]).timestamp() == NOW - .8
+    assert datetime.fromisoformat(bbo["depth_observed_at"]).timestamp() == NOW - 0.8
     comparison = fields["entry_machine_input_quote_clock_comparison"]
     assert comparison["feature_receipt"]["item"] == "123456"
     assert comparison["feature_age_ms"] == pytest.approx(bbo["age_ms"], abs=1)
     assert original == before
 
 
-@pytest.mark.parametrize("damage", ["inline_value", "book_value", "old_depth", "other_item", "other_epoch", "old_depth_epoch", "boolean_depth_epoch"])
+@pytest.mark.parametrize(
+    "damage",
+    [
+        "inline_value",
+        "book_value",
+        "old_depth",
+        "other_item",
+        "other_epoch",
+        "old_depth_epoch",
+        "boolean_depth_epoch",
+    ],
+)
 def test_quote_clock_binding_does_not_bypass_conflicts(monkeypatch, damage):
     from src.engine import ai_engine_openai as eng
+
     monkeypatch.setattr(eng.time, "time", lambda: NOW)
     ws = _inline_quote_ws()
     rows = ws["realtime_type_snapshots_by_route"]["KRX|krx_regular"]
@@ -246,13 +371,25 @@ def test_quote_clock_binding_does_not_bypass_conflicts(monkeypatch, damage):
     else:
         rows["0B"]["transport_epoch"] = 1
     _, _, context, fields = eng._final_entry_machine_inputs(
-        ws, [], _context(), refresher=lambda w, t, c: (w, t, c, {}))
+        ws, [], _context(), refresher=lambda w, t, c: (w, t, c, {})
+    )
     bbo = context["ai_market_snapshot_v1"]["sources"]["bbo"]
     if damage == "book_value":
-        assert fields["entry_machine_input_error"] == "entry_machine_quote_value_conflict"
-        assert fields["entry_machine_input_quote_clock_comparison"]["canonical_value"]["best_bid"] == 10000
+        assert (
+            fields["entry_machine_input_error"] == "entry_machine_quote_value_conflict"
+        )
+        assert (
+            fields["entry_machine_input_quote_clock_comparison"]["canonical_value"][
+                "best_bid"
+            ]
+            == 10000
+        )
     elif damage == "old_depth":
-        assert fields.get("entry_machine_input_error") or context["ai_market_snapshot_v1"]["ai_input_preflight_v1"]["allowed"] is False
+        assert (
+            fields.get("entry_machine_input_error")
+            or context["ai_market_snapshot_v1"]["ai_input_preflight_v1"]["allowed"]
+            is False
+        )
     else:
         assert bbo["source"] != "ws_0B_inline_quote"
 
@@ -267,17 +404,25 @@ def test_holding_snapshot_does_not_adopt_entry_quote_clock():
 def test_deadline_expiry_during_canonical_revalidation_is_not_cleared(monkeypatch):
     from src.engine import ai_engine_openai as eng
     from src.engine.scalping import entry_candle_context as candle
+
     context = _context()
     clock = [NOW]
     original = candle.revalidate_entry_candle_snapshot
+
     def delayed(*args, **kwargs):
         result = original(*args, **kwargs)
         clock[0] += 10
         return result
+
     monkeypatch.setattr(eng.time, "time", lambda: clock[0])
     monkeypatch.setattr(candle, "revalidate_entry_candle_snapshot", delayed)
     *_, fields = eng._final_entry_machine_inputs(
-        _ws(NOW), [], context, refresher=lambda w, t, c: (w, t, c, {}), deadline_epoch=NOW + 5)
+        _ws(NOW),
+        [],
+        context,
+        refresher=lambda w, t, c: (w, t, c, {}),
+        deadline_epoch=NOW + 5,
+    )
     assert fields["entry_machine_input_error"] == "entry_machine_input_deadline_expired"
     assert fields["entry_machine_input_quote_clock_comparison"]["as_of"] == NOW
 
@@ -287,17 +432,25 @@ def test_final_machine_refresh_single_clock_and_frozen_old_source(monkeypatch, d
     from src.engine import ai_engine_openai as engine_module
     from src.engine.scalping_feature_packet import extract_scalping_feature_packet
     from src.tests.test_ai_engine_openai_transport import _build_engine
+
     now = NOW + delay
     monkeypatch.setattr(engine_module.time, "time", lambda: now)
-    original = _ws(NOW - .1)
+    original = _ws(NOW - 0.1)
     original["quote_stale"] = False
     ws, ticks, context, fields = engine_module._final_entry_machine_inputs(
-        original, [], _context(), refresher=lambda w, t, c: (w, t, c, {}))
+        original, [], _context(), refresher=lambda w, t, c: (w, t, c, {})
+    )
     assert "entry_machine_input_error" not in fields
-    assert context["ai_market_snapshot_v1"]["sources"]["bbo"]["age_ms"] == pytest.approx((delay + .1) * 1000, abs=1)
-    features = extract_scalping_feature_packet(ws, ticks, [], now=datetime.fromtimestamp(now))
+    assert context["ai_market_snapshot_v1"]["sources"]["bbo"][
+        "age_ms"
+    ] == pytest.approx((delay + 0.1) * 1000, abs=1)
+    features = extract_scalping_feature_packet(
+        ws, ticks, [], now=datetime.fromtimestamp(now)
+    )
     features["evaluation_as_of"] = now
-    payload = _build_engine()._build_entry_screen_hot_payload(ws, ticks, [], feature_packet=features)
+    payload = _build_engine()._build_entry_screen_hot_payload(
+        ws, ticks, [], feature_packet=features
+    )
     assert payload["quote"]["quote_stale"] is True
     assert payload["quote"]["quote_stale"] == payload["features"]["quote_stale"]
     assert payload["quote"]["quote_age_ms"] == payload["features"]["quote_age_ms"]
@@ -308,65 +461,106 @@ def test_final_machine_refresh_single_clock_and_frozen_old_source(monkeypatch, d
 @pytest.mark.parametrize("expired_before", [True, False])
 def test_final_machine_refresh_preserves_attempt_deadline(monkeypatch, expired_before):
     from src.engine import ai_engine_openai as engine_module
+
     now = [NOW + (10 if expired_before else 0)]
     calls = []
     monkeypatch.setattr(engine_module.time, "time", lambda: now[0])
+
     def refresh(w, t, c):
         calls.append(True)
         now[0] += 10
         return w, t, c, {}
+
     *_, fields = engine_module._final_entry_machine_inputs(
-        _ws(NOW), [], _context(), refresher=refresh, deadline_epoch=NOW + 5)
+        _ws(NOW), [], _context(), refresher=refresh, deadline_epoch=NOW + 5
+    )
     assert fields["entry_machine_input_error"] == "entry_machine_input_deadline_expired"
     assert len(calls) == (0 if expired_before else 1)
 
 
 def test_final_machine_refresh_does_not_clear_refresh_failure(monkeypatch):
     from src.engine import ai_engine_openai as engine_module
+
     monkeypatch.setattr(engine_module.time, "time", lambda: NOW)
     *_, fields = engine_module._final_entry_machine_inputs(
-        _ws(NOW), [], _context(), refresher=lambda w, t, c: (
-            w, t, c, {"entry_ai_final_snapshot_revalidation_error": "route_changed"}))
+        _ws(NOW),
+        [],
+        _context(),
+        refresher=lambda w, t, c: (
+            w,
+            t,
+            c,
+            {"entry_ai_final_snapshot_revalidation_error": "route_changed"},
+        ),
+    )
     assert fields["entry_machine_input_error"] == "route_changed"
 
 
 def test_final_machine_refresh_rejects_epoch_change(monkeypatch):
     from src.engine import ai_engine_openai as engine_module
+
     monkeypatch.setattr(engine_module.time, "time", lambda: NOW)
     ws = {**_ws(NOW), "market_data_transport_epoch": 1}
     *_, fields = engine_module._final_entry_machine_inputs(
-        ws, [], _context(), refresher=lambda w, t, c: (
-            {**w, "market_data_transport_epoch": 2}, t, c, {}))
-    assert fields["entry_machine_input_error"] == "entry_machine_transport_epoch_changed"
+        ws,
+        [],
+        _context(),
+        refresher=lambda w, t, c: ({**w, "market_data_transport_epoch": 2}, t, c, {}),
+    )
+    assert (
+        fields["entry_machine_input_error"] == "entry_machine_transport_epoch_changed"
+    )
 
 
 def test_final_machine_refresh_uses_new_bbo_after_slow_preparation(monkeypatch):
     from src.engine import ai_engine_openai as engine_module
+
     monkeypatch.setattr(engine_module.time, "time", lambda: NOW + 58)
     *_, context, fields = engine_module._final_entry_machine_inputs(
-        _ws(NOW), [], _context(), refresher=lambda w, t, c: (_ws(NOW + 57.9), [], c, {}))
+        _ws(NOW), [], _context(), refresher=lambda w, t, c: (_ws(NOW + 57.9), [], c, {})
+    )
     assert "entry_machine_input_error" not in fields
-    assert context["ai_market_snapshot_v1"]["sources"]["bbo"]["age_ms"] == pytest.approx(100, abs=1)
+    assert context["ai_market_snapshot_v1"]["sources"]["bbo"][
+        "age_ms"
+    ] == pytest.approx(100, abs=1)
 
 
 @pytest.mark.parametrize("malformed_snapshot", [False, True])
-def test_final_machine_refresh_failure_stops_engine_before_provider(monkeypatch, malformed_snapshot):
+def test_final_machine_refresh_failure_stops_engine_before_provider(
+    monkeypatch, malformed_snapshot
+):
     from src.engine import ai_engine_openai as engine_module
-    from src.tests.test_ai_engine_openai_transport import _build_engine, _allowed_entry_candle_context
+    from src.tests.test_ai_engine_openai_transport import (
+        _build_engine,
+        _allowed_entry_candle_context,
+    )
+
     engine = _build_engine()
     monkeypatch.setattr(engine_module, "resolve_live_prompt_policy", lambda **kw: {})
     monkeypatch.setattr(engine_module, "runtime_preflight_required", lambda: False)
-    monkeypatch.setattr(engine, "_call_openai_safe", lambda *a, **kw: pytest.fail("refresh failure must not call provider"))
+    monkeypatch.setattr(
+        engine,
+        "_call_openai_safe",
+        lambda *a, **kw: pytest.fail("refresh failure must not call provider"),
+    )
+
     def broken(*args):
         if malformed_snapshot:
             return (*args, {})
         raise ValueError("test_clock_conflict")
+
     context = _allowed_entry_candle_context()
     if malformed_snapshot:
         context["ai_market_snapshot_v1"] = "invalid_storage"
     result = engine.analyze_target(
-        "test", _ws(NOW), [], [], prompt_profile="watching",
-        candle_context=context, entry_input_refresher=broken)
+        "test",
+        _ws(NOW),
+        [],
+        [],
+        prompt_profile="watching",
+        candle_context=context,
+        entry_input_refresher=broken,
+    )
     assert result["ai_result_source"] == "input_preflight_blocked"
     assert result["entry_machine_input_error"]
     if not malformed_snapshot:
@@ -436,30 +630,51 @@ def test_watching_final_acquisition_recovers_prepared_stale_input_without_io(
 
 
 @pytest.mark.parametrize(
-    "route_state", [
-        "fresh", "stale", "missing", "wrong_item", "wrong_epoch",
-        "boolean_epoch", "split_epoch", "missing_depth",
+    "route_state",
+    [
+        "fresh",
+        "stale",
+        "missing",
+        "wrong_item",
+        "wrong_epoch",
+        "boolean_epoch",
+        "split_epoch",
+        "missing_depth",
     ],
 )
 def test_watching_final_refresh_reuses_only_prepared_exact_route(
-    monkeypatch, route_state,
+    monkeypatch,
+    route_state,
 ):
     prepared = _ws(NOW - 0.1)
     prepared.update(
-        market_suffix="_AL", market_route="krx_nxt_integrated",
+        market_suffix="_AL",
+        market_route="krx_nxt_integrated",
         market_data_transport_epoch=1,
         last_realtime_type_item={"0B": "123456_AL", "0D": "123456_AL"},
         last_realtime_type_market_suffix={"0B": "_AL", "0D": "_AL"},
         last_realtime_type_market_route={
-            "0B": "krx_nxt_integrated", "0D": "krx_nxt_integrated",
+            "0B": "krx_nxt_integrated",
+            "0D": "krx_nxt_integrated",
         },
     )
     context = build_entry_candle_context(
-        None, "123456", prepared, "KRX", "krx_regular", now_ts=NOW,
-        recent_candles=[{
-            "source_timestamp": "20260910135900", "시가": 10000,
-            "고가": 10010, "저가": 9990, "현재가": 10000, "거래량": 100,
-        }],
+        None,
+        "123456",
+        prepared,
+        "KRX",
+        "krx_regular",
+        now_ts=NOW,
+        recent_candles=[
+            {
+                "source_timestamp": "20260910135900",
+                "시가": 10000,
+                "고가": 10010,
+                "저가": 9990,
+                "현재가": 10000,
+                "거래량": 100,
+            }
+        ],
         broker_route="SOR",
     )
     # The aggregate KRX tick is newer than the prepared integrated route.
@@ -467,8 +682,10 @@ def test_watching_final_refresh_reuses_only_prepared_exact_route(
     latest["market_data_transport_epoch"] = 1
     observed = NOW + (1 if route_state == "stale" else 4.9)
     common = {
-        "item": "123456_AL", "market_suffix": "_AL",
-        "market_route": "krx_nxt_integrated", "transport_epoch": 1,
+        "item": "123456_AL",
+        "market_suffix": "_AL",
+        "market_route": "krx_nxt_integrated",
+        "transport_epoch": 1,
         "observed_epoch": observed,
     }
     if route_state == "wrong_item":
@@ -478,10 +695,14 @@ def test_watching_final_refresh_reuses_only_prepared_exact_route(
     if route_state == "boolean_epoch":
         common["transport_epoch"] = True
     if route_state != "missing":
-        depth_book = {} if route_state == "missing_depth" else {
-            "bids": [{"price": 10020, "volume": 100}],
-            "asks": [{"price": 10030, "volume": 100}],
-        }
+        depth_book = (
+            {}
+            if route_state == "missing_depth"
+            else {
+                "bids": [{"price": 10020, "volume": 100}],
+                "asks": [{"price": 10030, "volume": 100}],
+            }
+        )
         depth_row = {**common, "orderbook": depth_book}
         if route_state == "split_epoch":
             depth_row["transport_epoch"] = 2
@@ -499,12 +720,16 @@ def test_watching_final_refresh_reuses_only_prepared_exact_route(
     monkeypatch.setattr(handlers.time, "time", lambda: NOW + 5)
     monkeypatch.setenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_QUOTE_REFRESH_ENABLED", "true")
     monkeypatch.setattr(
-        handlers, "WS_MANAGER",
+        handlers,
+        "WS_MANAGER",
         SimpleNamespace(get_latest_data=lambda _code: latest),
     )
 
     ws, ticks, refreshed, fields = handlers._refresh_prepared_entry_inputs(
-        "123456", prepared, [], context,
+        "123456",
+        prepared,
+        [],
+        context,
     )
     preflight = snapshot_module.ai_input_preflight(refreshed)
     if route_state == "fresh":
@@ -512,18 +737,21 @@ def test_watching_final_refresh_reuses_only_prepared_exact_route(
         assert ws["curr"] == 10020
         assert ws["best_bid"] == 10020
         assert ws["best_ask"] == 10030
-        assert ticks == latest["recent_trade_ticks_by_route"][
-            "_AL|krx_nxt_integrated"
-        ]
+        assert ticks == latest["recent_trade_ticks_by_route"]["_AL|krx_nxt_integrated"]
         assert preflight["source_allowed"] is True
         assert "entry_ai_final_snapshot_revalidation_error" not in fields
         from src.engine import ai_engine_openai as engine_module
+
         *_, machine_fields = engine_module._final_entry_machine_inputs(
-            prepared, [], context,
-            refresher=lambda ws_data, recent_ticks, candle_context:
-                handlers._refresh_prepared_entry_inputs(
-                    "123456", ws_data, recent_ticks, candle_context,
-                ),
+            prepared,
+            [],
+            context,
+            refresher=lambda ws_data, recent_ticks, candle_context: handlers._refresh_prepared_entry_inputs(
+                "123456",
+                ws_data,
+                recent_ticks,
+                candle_context,
+            ),
         )
         assert "entry_machine_input_error" not in machine_fields
     else:
@@ -541,35 +769,48 @@ def test_watching_final_refresh_rebinds_krx_after_integrated_aggregate(
     prepared["market_data_transport_epoch"] = 1
     latest = _ws(NOW + 4.9, price=10050)
     latest.update(
-        market_suffix="_AL", market_route="krx_nxt_integrated",
+        market_suffix="_AL",
+        market_route="krx_nxt_integrated",
         market_data_transport_epoch=1,
         last_realtime_type_item={"0B": "123456_AL", "0D": "123456_AL"},
         last_realtime_type_market_suffix={"0B": "_AL", "0D": "_AL"},
         last_realtime_type_market_route={
-            "0B": "krx_nxt_integrated", "0D": "krx_nxt_integrated",
+            "0B": "krx_nxt_integrated",
+            "0D": "krx_nxt_integrated",
         },
     )
     common = {
-        "item": "123456", "market_suffix": "",
-        "market_route": "krx_regular", "transport_epoch": 1,
+        "item": "123456",
+        "market_suffix": "",
+        "market_route": "krx_regular",
+        "transport_epoch": 1,
         "observed_epoch": NOW + 4.9,
     }
-    latest["realtime_type_snapshots_by_route"] = {"KRX|krx_regular": {
-        "0B": {**common, "current_price": 10020},
-        "0D": {**common, "orderbook": {
-            "bids": [{"price": 10020, "volume": 100}],
-            "asks": [{"price": 10030, "volume": 100}],
-        }},
-    }}
+    latest["realtime_type_snapshots_by_route"] = {
+        "KRX|krx_regular": {
+            "0B": {**common, "current_price": 10020},
+            "0D": {
+                **common,
+                "orderbook": {
+                    "bids": [{"price": 10020, "volume": 100}],
+                    "asks": [{"price": 10030, "volume": 100}],
+                },
+            },
+        }
+    }
     monkeypatch.setattr(handlers.time, "time", lambda: NOW + 5)
     monkeypatch.setenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_QUOTE_REFRESH_ENABLED", "true")
     monkeypatch.setattr(
-        handlers, "WS_MANAGER",
+        handlers,
+        "WS_MANAGER",
         SimpleNamespace(get_latest_data=lambda _code: latest),
     )
 
     ws, _, context, fields = handlers._refresh_prepared_entry_inputs(
-        "123456", prepared, [], _context(),
+        "123456",
+        prepared,
+        [],
+        _context(),
     )
     assert ws["curr"] == 10020
     assert ws["best_ask"] == 10030
@@ -623,7 +864,10 @@ def test_watching_final_revalidation_errors_fail_closed(monkeypatch, broken):
     assert not snapshot_module.ai_input_preflight(refreshed)["allowed"]
     assert "entry_ai_final_snapshot_revalidation_error" in fields
     if broken == "route":
-        assert fields["entry_ai_final_expected_ws_route"] != fields["entry_ai_final_observed_ws_route"]
+        assert (
+            fields["entry_ai_final_expected_ws_route"]
+            != fields["entry_ai_final_observed_ws_route"]
+        )
 
 
 def test_watching_final_refresh_is_wired_before_provider():
@@ -642,9 +886,22 @@ def test_watching_final_refresh_is_wired_before_provider():
 @pytest.mark.parametrize("mode", ["missing_manager", "disabled", "stale_manager"])
 def test_watching_final_refresh_failure_rechecks_original_clock(monkeypatch, mode):
     monkeypatch.setattr(handlers.time, "time", lambda: NOW + 5)
-    monkeypatch.setenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_QUOTE_REFRESH_ENABLED", "false" if mode == "disabled" else "true")
-    monkeypatch.setattr(handlers, "WS_MANAGER", None if mode == "missing_manager" else SimpleNamespace(get_latest_data=lambda _: _ws(NOW)))
-    _, _, context, fields = handlers._refresh_prepared_entry_inputs("123456", _ws(NOW), [], _context())
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_PRE_SUBMIT_QUOTE_REFRESH_ENABLED",
+        "false" if mode == "disabled" else "true",
+    )
+    monkeypatch.setattr(
+        handlers,
+        "WS_MANAGER",
+        (
+            None
+            if mode == "missing_manager"
+            else SimpleNamespace(get_latest_data=lambda _: _ws(NOW))
+        ),
+    )
+    _, _, context, fields = handlers._refresh_prepared_entry_inputs(
+        "123456", _ws(NOW), [], _context()
+    )
     assert fields["entry_ai_final_ws_snapshot_refresh_applied"] is False
     preflight = snapshot_module.ai_input_preflight(context)
     assert preflight["allowed"] is False
@@ -1173,217 +1430,417 @@ def test_entry_price_refreshes_after_auxiliary_reads_without_submit_relaxation(
 
 
 def test_owned_final_revalidation_has_same_values_and_default_keeps_caller_isolation():
-    ws=_inline_quote_ws();context=_context();before=deepcopy((ws,context))
-    context['strategy_completed_bars']=[{'close':10000+i} for i in range(430)]
-    default=revalidate_entry_candle_snapshot(context,ws,now_ts=NOW+.01)
-    owned_ws,owned_context=deepcopy((ws,context))
-    result=revalidate_entry_candle_snapshot(owned_context,owned_ws,now_ts=NOW+.01,_owned_inputs=True)
+    ws = _inline_quote_ws()
+    context = _context()
+    before = deepcopy((ws, context))
+    context["strategy_completed_bars"] = [{"close": 10000 + i} for i in range(430)]
+    default = revalidate_entry_candle_snapshot(context, ws, now_ts=NOW + 0.01)
+    owned_ws, owned_context = deepcopy((ws, context))
+    result = revalidate_entry_candle_snapshot(
+        owned_context, owned_ws, now_ts=NOW + 0.01, _owned_inputs=True
+    )
     assert result is owned_context and result == default
     assert owned_ws == ws == before[0]
-    result['strategy_completed_bars'][0]['close']=1
-    assert context['strategy_completed_bars'][0]['close']==10000
-    default['strategy_completed_bars'][0]['close']=2
-    assert context['strategy_completed_bars'][0]['close']==10000
+    result["strategy_completed_bars"][0]["close"] = 1
+    assert context["strategy_completed_bars"][0]["close"] == 10000
+    default["strategy_completed_bars"][0]["close"] = 2
+    assert context["strategy_completed_bars"][0]["close"] == 10000
 
 
 def test_final_freeze_isolates_both_mutating_refresher_and_borrowed_return(monkeypatch):
     from src.engine import ai_engine_openai as eng
-    original=(_inline_quote_ws(),[{'price':10000,'quantity':10}],_context())
-    before=deepcopy(original);borrowed=deepcopy(original);borrowed_before=deepcopy(borrowed)
-    monkeypatch.setattr(eng.time,'time',lambda:NOW)
-    def refresh(w,t,c):
-        w['orderbook']['bids'][0]['price']=1;t[0]['quantity']=0
-        c['ai_market_snapshot_v1']['sources'].clear()
-        return (*borrowed,{})
-    ws,ticks,context,fields=eng._final_entry_machine_inputs(*original,refresher=refresh,deadline_epoch=NOW+5)
-    assert 'entry_machine_input_error' not in fields and original==before and borrowed==borrowed_before
-    ws['orderbook']['asks'][0]['price']=1;ticks[0]['quantity']=0
-    context['ai_market_snapshot_v1']['sources'].clear()
-    assert original==before and borrowed==borrowed_before
-    assert fields['entry_machine_input_budget_at_freeze_ms']==5000
-    assert fields['entry_machine_input_budget_after_freeze_ms']==5000
+
+    original = (_inline_quote_ws(), [{"price": 10000, "quantity": 10}], _context())
+    before = deepcopy(original)
+    borrowed = deepcopy(original)
+    borrowed_before = deepcopy(borrowed)
+    monkeypatch.setattr(eng.time, "time", lambda: NOW)
+
+    def refresh(w, t, c):
+        w["orderbook"]["bids"][0]["price"] = 1
+        t[0]["quantity"] = 0
+        c["ai_market_snapshot_v1"]["sources"].clear()
+        return (*borrowed, {})
+
+    ws, ticks, context, fields = eng._final_entry_machine_inputs(
+        *original, refresher=refresh, deadline_epoch=NOW + 5
+    )
+    assert (
+        "entry_machine_input_error" not in fields
+        and original == before
+        and borrowed == borrowed_before
+    )
+    ws["orderbook"]["asks"][0]["price"] = 1
+    ticks[0]["quantity"] = 0
+    context["ai_market_snapshot_v1"]["sources"].clear()
+    assert original == before and borrowed == borrowed_before
+    assert fields["entry_machine_input_budget_at_freeze_ms"] == 5000
+    assert fields["entry_machine_input_budget_after_freeze_ms"] == 5000
 
 
 def test_copy_consuming_original_budget_does_not_start_local_refresh(monkeypatch):
     from src.engine import ai_engine_openai as eng
-    original=(_ws(NOW),[],_context())
-    clock=[NOW];copy=eng.copy.deepcopy;calls=[]
-    monkeypatch.setattr(eng.time,'time',lambda:clock[0])
-    def slow_copy(*a,**kw):
-        result=copy(*a,**kw);clock[0]=NOW+5.083;return result
-    monkeypatch.setattr(eng.copy,'deepcopy',slow_copy)
-    *_,fields=eng._final_entry_machine_inputs(*original,
-        refresher=lambda *a:calls.append(True),deadline_epoch=NOW+5)
-    assert not calls and fields['entry_machine_input_error']=='entry_machine_input_deadline_expired'
-    assert fields['entry_machine_input_failure_phase']=='after_input_copy'
-    assert fields['entry_machine_input_budget_after_freeze_ms']==pytest.approx(-83,abs=.01)
+
+    original = (_ws(NOW), [], _context())
+    clock = [NOW]
+    copy = eng.copy.deepcopy
+    calls = []
+    monkeypatch.setattr(eng.time, "time", lambda: clock[0])
+
+    def slow_copy(*a, **kw):
+        result = copy(*a, **kw)
+        clock[0] = NOW + 5.083
+        return result
+
+    monkeypatch.setattr(eng.copy, "deepcopy", slow_copy)
+    *_, fields = eng._final_entry_machine_inputs(
+        *original, refresher=lambda *a: calls.append(True), deadline_epoch=NOW + 5
+    )
+    assert (
+        not calls
+        and fields["entry_machine_input_error"]
+        == "entry_machine_input_deadline_expired"
+    )
+    assert fields["entry_machine_input_failure_phase"] == "after_input_copy"
+    assert fields["entry_machine_input_budget_after_freeze_ms"] == pytest.approx(
+        -83, abs=0.01
+    )
 
 
 def test_refresh_error_still_records_elapsed_phase_and_keeps_original(monkeypatch):
     from src.engine import ai_engine_openai as eng
-    monkeypatch.setattr(eng.time,'time',lambda:NOW)
-    def failed(w,t,c):
-        c.clear();raise ValueError('source_changed')
-    original=(_ws(NOW),[],_context());before=deepcopy(original)
-    *_,fields=eng._final_entry_machine_inputs(*original,refresher=failed,deadline_epoch=NOW+5)
-    assert original==before and fields['entry_machine_input_failure_phase']=='local_refresh'
-    assert fields['entry_machine_input_local_refresh_ms']>=0
-    assert fields['entry_machine_input_error']=='source_changed'
+
+    monkeypatch.setattr(eng.time, "time", lambda: NOW)
+
+    def failed(w, t, c):
+        c.clear()
+        raise ValueError("source_changed")
+
+    original = (_ws(NOW), [], _context())
+    before = deepcopy(original)
+    *_, fields = eng._final_entry_machine_inputs(
+        *original, refresher=failed, deadline_epoch=NOW + 5
+    )
+    assert (
+        original == before
+        and fields["entry_machine_input_failure_phase"] == "local_refresh"
+    )
+    assert fields["entry_machine_input_local_refresh_ms"] >= 0
+    assert fields["entry_machine_input_error"] == "source_changed"
 
 
-@pytest.fixture(params=['regular', 'aftermarket', 'regular_rollover'])
+@pytest.fixture(params=["regular", "aftermarket", "regular_rollover"])
 def pending_ws_candle(tmp_path, monkeypatch, request):
     """A real native projection, missing only the latest completed minute."""
-    from src.tests.test_micro_reversion_completed_bars import BASE, INTEGRITY, point, bind
-    BASE = BASE.replace(hour=9) if request.param.startswith('regular') else BASE
-    session = 'krx_regular' if request.param.startswith('regular') else 'krx_nxt_aftermarket'
-    venue = 'KRX' if request.param.startswith('regular') else 'KRX_NXT_INTEGRATED'
-    native_session = 'SOR_REGULAR' if request.param.startswith('regular') else 'SOR_AFTERMARKET'
-    from src.engine.scalping.micro_reversion.completed_bars import CompletedBarProjection
+    from src.tests.test_micro_reversion_completed_bars import (
+        BASE,
+        INTEGRITY,
+        point,
+        bind,
+    )
+
+    BASE = BASE.replace(hour=9) if request.param.startswith("regular") else BASE
+    session = (
+        "krx_regular" if request.param.startswith("regular") else "krx_nxt_aftermarket"
+    )
+    venue = "KRX" if request.param.startswith("regular") else "KRX_NXT_INTEGRATED"
+    native_session = (
+        "SOR_REGULAR" if request.param.startswith("regular") else "SOR_AFTERMARKET"
+    )
+    from src.engine.scalping.micro_reversion.completed_bars import (
+        CompletedBarProjection,
+    )
     from src.trading.market import shared_ws_snapshot as shared
     from src.engine.scalping.entry_candle_context import _completed_ws_rows
     import json
-    clock = [899.9 if request.param == 'regular_rollover' else 901.1]
-    monkeypatch.setattr(handlers.time, 'time', lambda: BASE.timestamp()+clock[0])
-    monkeypatch.setattr(handlers.time, 'perf_counter', lambda: clock[0])
-    monkeypatch.setattr(shared, 'COMPLETED_BARS_ROOT', tmp_path)
+
+    clock = [899.9 if request.param == "regular_rollover" else 901.1]
+    monkeypatch.setattr(handlers.time, "time", lambda: BASE.timestamp() + clock[0])
+    monkeypatch.setattr(handlers.time, "perf_counter", lambda: clock[0])
+    monkeypatch.setattr(shared, "COMPLETED_BARS_ROOT", tmp_path)
     projection = CompletedBarProjection(tmp_path)
+
     def pt(seq, seconds):
-        stamp = (BASE+timedelta(seconds=seconds)).isoformat()
-        return replace(point(seq, seconds), symbol='123456', source_item='123456_AL',
-                       session_bucket=native_session, exchange_timestamp=stamp, local_receive_timestamp=stamp)
-    projection.consume([pt(1, 10)] + [pt(i, (i-1)*60+1) for i in range(2, 16)],
-        integrity=INTEGRITY, journal_path='offline.jsonl', now_ts=BASE.timestamp()+841.1)
+        stamp = (BASE + timedelta(seconds=seconds)).isoformat()
+        return replace(
+            point(seq, seconds),
+            symbol="123456",
+            source_item="123456_AL",
+            session_bucket=native_session,
+            exchange_timestamp=stamp,
+            local_receive_timestamp=stamp,
+        )
+
+    projection.consume(
+        [pt(1, 10)] + [pt(i, (i - 1) * 60 + 1) for i in range(2, 16)],
+        integrity=INTEGRITY,
+        journal_path="offline.jsonl",
+        now_ts=BASE.timestamp() + 841.1,
+    )
+
     def snapshot():
-        now = BASE+timedelta(seconds=clock[0])
+        now = BASE + timedelta(seconds=clock[0])
         p = bind(tmp_path, projection, now)
         value = json.loads(p.read_text())
-        value['shared_transport_producer']['registered_items'] = ['123456_AL']
+        value["shared_transport_producer"]["registered_items"] = ["123456_AL"]
         p.write_text(json.dumps(value))
-        monkeypatch.setattr(shared, 'SNAPSHOT_PATH', p)
+        monkeypatch.setattr(shared, "SNAPSHOT_PATH", p)
         return now
+
     now = snapshot()
-    selected = shared.read_shared_completed_bars('123456_AL', now=now,
-        allow_partial_history=True, require_fresh_snapshot=True)
+    selected = shared.read_shared_completed_bars(
+        "123456_AL", now=now, allow_partial_history=True, require_fresh_snapshot=True
+    )
+
     def ws():
-        return _chart_route_ws('_AL', at=BASE.timestamp()+clock[0]-.01)
+        return _chart_route_ws("_AL", at=BASE.timestamp() + clock[0] - 0.01)
+
     current = ws()
-    current['evaluation_attempt_id'] = 'original-attempt'
-    meta = dict(api_id='WS_0B_completed_1m', decision_input_profile='reduced_completed_v1',
-        completed_only=True, explicit_request_code=True, request_code='123456_AL', entry_candle_request_code='123456_AL',
-        multi_timeframe_auxiliary_fetch=False, completed_bar_source=selected['_completed_bar_source'],
-        entry_candle_route_binding=dict(schema='entry_candle_request_route_binding_v1',
-            request_code='123456_AL', session=session, broker_route='SOR', transport_epoch=2))
+    current["evaluation_attempt_id"] = "original-attempt"
+    meta = dict(
+        api_id="WS_0B_completed_1m",
+        decision_input_profile="reduced_completed_v1",
+        completed_only=True,
+        explicit_request_code=True,
+        request_code="123456_AL",
+        entry_candle_request_code="123456_AL",
+        multi_timeframe_auxiliary_fetch=False,
+        completed_bar_source=selected["_completed_bar_source"],
+        entry_candle_route_binding=dict(
+            schema="entry_candle_request_route_binding_v1",
+            request_code="123456_AL",
+            session=session,
+            broker_route="SOR",
+            transport_epoch=2,
+        ),
+    )
+
     # The chart fixture's transport is 1; the native writer fixture owns 2.
     def native_ws():
-        value = ws(); value['market_data_transport_epoch'] = 2
-        for row in value['realtime_type_snapshots_by_route']['_AL|krx_nxt_integrated'].values():
-            row['transport_epoch'] = 2
-        value['evaluation_attempt_id'] = 'original-attempt'
+        value = ws()
+        value["market_data_transport_epoch"] = 2
+        for row in value["realtime_type_snapshots_by_route"][
+            "_AL|krx_nxt_integrated"
+        ].values():
+            row["transport_epoch"] = 2
+        value["evaluation_attempt_id"] = "original-attempt"
         return value
+
     current = native_ws()
-    context = build_entry_candle_context(None, '123456', current, venue,
-        session, now_ts=now, recent_candles=_completed_ws_rows(selected, limit=13, observed=True),
-        source_meta=meta, broker_route='SOR')
-    expected = [] if request.param == 'regular_rollover' else ['candle_latest_completed_missing']
-    assert context['completed_candle_timing']['blockers'] == expected
+    context = build_entry_candle_context(
+        None,
+        "123456",
+        current,
+        venue,
+        session,
+        now_ts=now,
+        recent_candles=_completed_ws_rows(selected, limit=13, observed=True),
+        source_meta=meta,
+        broker_route="SOR",
+    )
+    expected = (
+        []
+        if request.param == "regular_rollover"
+        else ["candle_latest_completed_missing"]
+    )
+    assert context["completed_candle_timing"]["blockers"] == expected
     clock[0] = 901.1
+
     def publish():
-        projection.consume([pt(16, 901)], integrity=INTEGRITY,
-            journal_path='offline.jsonl', now_ts=BASE.timestamp()+clock[0])
+        projection.consume(
+            [pt(16, 901)],
+            integrity=INTEGRITY,
+            journal_path="offline.jsonl",
+            now_ts=BASE.timestamp() + clock[0],
+        )
         snapshot()
+
     return clock, current, context, native_ws, publish
 
 
-@pytest.mark.parametrize('mode', ['ready', 'expired', 'stale_quote', 'transport_changed', 'clock_rollback', 'corrupt_publication', 'source_epoch_changed'])
-def test_final_freeze_waits_for_native_publication_with_original_budget(pending_ws_candle, monkeypatch, mode):
+@pytest.mark.parametrize(
+    "mode",
+    [
+        "ready",
+        "expired",
+        "stale_quote",
+        "transport_changed",
+        "clock_rollback",
+        "corrupt_publication",
+        "source_epoch_changed",
+    ],
+)
+def test_final_freeze_waits_for_native_publication_with_original_budget(
+    pending_ws_candle, monkeypatch, mode
+):
     from src.engine import ai_engine_openai as engine
     from src.engine.scalping.entry_deadline import EntryDeadline
+
     clock, ws, context, latest, publish = pending_ws_candle
-    original = deepcopy((ws, context)); epoch = engine.time.time()+.2
-    perf = clock[0]+.2; budget = EntryDeadline(epoch, perf)
+    original = deepcopy((ws, context))
+    epoch = engine.time.time() + 0.2
+    perf = clock[0] + 0.2
+    budget = EntryDeadline(epoch, perf)
     sleeps, refreshes, reads = [], [], []
     from src.trading.market import shared_ws_snapshot as shared
     from src.engine.scalping import entry_candle_context as candle
+
     native_sleep = engine.time.sleep
     native_read = shared.read_shared_completed_bars
+
     def read(*args, **kwargs):
         reads.append(True)
         return native_read(*args, **kwargs)
-    monkeypatch.setattr(shared, 'read_shared_completed_bars', read)
+
+    monkeypatch.setattr(shared, "read_shared_completed_bars", read)
+
     def sleep(seconds):
-        sleeps.append(seconds); clock[0] += seconds
-        if len(sleeps) == 1 and mode not in {'expired', 'clock_rollback'}:
+        sleeps.append(seconds)
+        clock[0] += seconds
+        if len(sleeps) == 1 and mode not in {"expired", "clock_rollback"}:
             publish()
-            if mode in {'corrupt_publication', 'source_epoch_changed'}:
+            if mode in {"corrupt_publication", "source_epoch_changed"}:
                 import json
                 from src.trading.market import shared_ws_snapshot as shared
                 from src.engine.scalping.micro_reversion.completed_bars import digest
-                path = shared.COMPLETED_BARS_ROOT/'2026-09-21/123456_AL'/(context['completed_candle_timing']['source_proof']['session']+'.json')
+
+                path = (
+                    shared.COMPLETED_BARS_ROOT
+                    / "2026-09-21/123456_AL"
+                    / (
+                        context["completed_candle_timing"]["source_proof"]["session"]
+                        + ".json"
+                    )
+                )
                 value = json.loads(path.read_text())
-                if mode == 'corrupt_publication':
-                    value['bars'][-2]['close'] += 1  # Leave the original hash invalid.
+                if mode == "corrupt_publication":
+                    value["bars"][-2]["close"] += 1  # Leave the original hash invalid.
                 else:
-                    value.pop('content_sha256')
-                    value['source_epoch'] = value['integrity']['observer_epoch'] = 8
-                    value['content_sha256'] = digest(value)
+                    value.pop("content_sha256")
+                    value["source_epoch"] = value["integrity"]["observer_epoch"] = 8
+                    value["content_sha256"] = digest(value)
                     frame = json.loads(shared.SNAPSHOT_PATH.read_text())
-                    frame['shared_transport_producer']['completed_bar_integrity']['observer_epoch'] = 8
+                    frame["shared_transport_producer"]["completed_bar_integrity"][
+                        "observer_epoch"
+                    ] = 8
                     shared.SNAPSHOT_PATH.write_text(json.dumps(frame))
                 path.write_text(json.dumps(value))
+
     # Other tests can leave bounded background workers alive. Their sleeps
     # must not publish this fixture's bars or advance its original deadline.
-    monkeypatch.setattr(candle, 'time', SimpleNamespace(sleep=sleep,
-        time=lambda: engine.time.time(), perf_counter=lambda: engine.time.perf_counter()))
+    monkeypatch.setattr(
+        candle,
+        "time",
+        SimpleNamespace(
+            sleep=sleep,
+            time=lambda: engine.time.time(),
+            perf_counter=lambda: engine.time.perf_counter(),
+        ),
+    )
     assert engine.time.sleep is native_sleep
-    if mode == 'clock_rollback':
+    if mode == "clock_rollback":
         wall = engine.time.time
-        monkeypatch.setattr(engine.time, 'time', lambda: wall()-(10 if sleeps else 0))
+        monkeypatch.setattr(engine.time, "time", lambda: wall() - (10 if sleeps else 0))
+
     def refresh(w, ticks, c):
         refreshes.append(True)
         value = latest()
-        if len(refreshes) > 1 and mode == 'transport_changed':
-            value['market_data_transport_epoch'] = 3
-        if len(refreshes) > 1 and mode == 'stale_quote':
+        if len(refreshes) > 1 and mode == "transport_changed":
+            value["market_data_transport_epoch"] = 3
+        if len(refreshes) > 1 and mode == "stale_quote":
             value = deepcopy(ws)
-            for row in value['realtime_type_snapshots_by_route']['_AL|krx_nxt_integrated'].values():
-                row['observed_epoch'] -= 5
+            for row in value["realtime_type_snapshots_by_route"][
+                "_AL|krx_nxt_integrated"
+            ].values():
+                row["observed_epoch"] -= 5
         return value, ticks, c, {}
-    frozen, _, result, fields = engine._final_entry_machine_inputs(ws, [], context,
-        refresher=refresh, deadline_epoch=epoch, entry_budget=budget)
+
+    frozen, _, result, fields = engine._final_entry_machine_inputs(
+        ws, [], context, refresher=refresh, deadline_epoch=epoch, entry_budget=budget
+    )
     assert (ws, context) == original
     assert budget == EntryDeadline(epoch, perf)
-    if mode == 'ready':
-        assert snapshot_module.ai_input_preflight(result)['source_allowed'] is True, (snapshot_module.ai_input_preflight(result), fields, result.get('source_quality'))
-    assert fields['entry_machine_input_candle_wait_deadline_epoch'] == epoch
-    if mode in {'expired', 'clock_rollback'}:
-        assert fields['entry_machine_input_error'] == 'entry_machine_input_deadline_expired'
+    if mode == "ready":
+        assert snapshot_module.ai_input_preflight(result)["source_allowed"] is True, (
+            snapshot_module.ai_input_preflight(result),
+            fields,
+            result.get("source_quality"),
+        )
+    assert fields["entry_machine_input_candle_wait_deadline_epoch"] == epoch
+    if mode in {"expired", "clock_rollback"}:
+        assert (
+            fields["entry_machine_input_error"]
+            == "entry_machine_input_deadline_expired"
+        )
         assert len(refreshes) == 1 and len(reads) == 1
-    elif mode in {'corrupt_publication', 'source_epoch_changed'}:
-        expected = 'completed_bar_source_contract_invalid' if mode == 'corrupt_publication' else 'candle_ws_publication_generation_changed'
-        assert fields['entry_machine_input_error'] == expected
+    elif mode in {"corrupt_publication", "source_epoch_changed"}:
+        expected = (
+            "completed_bar_source_contract_invalid"
+            if mode == "corrupt_publication"
+            else "candle_ws_publication_generation_changed"
+        )
+        assert fields["entry_machine_input_error"] == expected
         assert len(refreshes) == 1
-    elif mode == 'transport_changed':
-        assert fields['entry_machine_input_error'] == 'entry_machine_transport_epoch_changed'
+    elif mode == "transport_changed":
+        assert (
+            fields["entry_machine_input_error"]
+            == "entry_machine_transport_epoch_changed"
+        )
     else:
-        assert len(refreshes) == 2 and frozen['evaluation_attempt_id'] == 'original-attempt'
-        assert fields['entry_machine_input_candle_wait_state'] == 'ready'
+        assert (
+            len(refreshes) == 2
+            and frozen["evaluation_attempt_id"] == "original-attempt"
+        )
+        assert fields["entry_machine_input_candle_wait_state"] == "ready"
         preflight = snapshot_module.ai_input_preflight(result)
-        assert preflight['source_allowed'] is (mode == 'ready'), preflight
-        assert result['completed_candle_timing']['status'] == 'validated'
-        assert fields.get('entry_machine_input_error') is None
+        assert preflight["source_allowed"] is (mode == "ready"), preflight
+        assert result["completed_candle_timing"]["status"] == "validated"
+        assert fields.get("entry_machine_input_error") is None
 
 
-@pytest.mark.parametrize('fault', ['no_deadline', 'rest', 'other_blocker', 'bad_provenance', 'damaged_timing', 'bad_binding'])
-def test_publication_wait_does_not_recover_unrelated_source_failures(pending_ws_candle, monkeypatch, fault):
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "no_deadline",
+        "rest",
+        "other_blocker",
+        "bad_provenance",
+        "damaged_timing",
+        "bad_binding",
+    ],
+)
+def test_publication_wait_does_not_recover_unrelated_source_failures(
+    pending_ws_candle, monkeypatch, fault
+):
     from src.engine.scalping import entry_candle_context as candle
     from src.engine.scalping.entry_deadline import EntryDeadline
+
     clock, ws, context, _, _ = pending_ws_candle
-    if fault == 'damaged_timing': context['completed_candle_timing']['sha256'] = '0'*64
-    if fault == 'bad_binding': context['source_quality']['blockers'].append('candle_request_route_binding_invalid')
-    if fault == 'rest': context['completed_candle_timing']['source_proof']['source'] = 'ka10080'
-    if fault == 'other_blocker': context['completed_candle_timing']['blockers'].append('candle_completed_ws_clock_invalid')
-    if fault == 'bad_provenance': context['ai_market_snapshot_v1']['ai_input_preflight_v1']['source_blockers'].append('bbo_stale')
-    monkeypatch.setattr(candle.time, 'sleep', lambda _: pytest.fail('unrelated failure must not wait'))
-    budget = None if fault == 'no_deadline' else EntryDeadline(candle.time.time()+.2, clock[0]+.2)
-    assert candle.wait_for_completed_entry_candle(context, ws, budget=budget, fields={}) is context
+    if fault == "damaged_timing":
+        context["completed_candle_timing"]["sha256"] = "0" * 64
+    if fault == "bad_binding":
+        context["source_quality"]["blockers"].append(
+            "candle_request_route_binding_invalid"
+        )
+    if fault == "rest":
+        context["completed_candle_timing"]["source_proof"]["source"] = "ka10080"
+    if fault == "other_blocker":
+        context["completed_candle_timing"]["blockers"].append(
+            "candle_completed_ws_clock_invalid"
+        )
+    if fault == "bad_provenance":
+        context["ai_market_snapshot_v1"]["ai_input_preflight_v1"][
+            "source_blockers"
+        ].append("bbo_stale")
+    monkeypatch.setattr(
+        candle.time, "sleep", lambda _: pytest.fail("unrelated failure must not wait")
+    )
+    budget = (
+        None
+        if fault == "no_deadline"
+        else EntryDeadline(candle.time.time() + 0.2, clock[0] + 0.2)
+    )
+    assert (
+        candle.wait_for_completed_entry_candle(context, ws, budget=budget, fields={})
+        is context
+    )

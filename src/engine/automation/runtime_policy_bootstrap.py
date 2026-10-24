@@ -74,16 +74,21 @@ PRE_SUBMIT_DELAY_ENV_KEYS = (
     "KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_ACTIVE_DATE",
     "KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_MANIFEST_SHA256",
 )
-HOLDING_VOTE_ENV_KEYS = (HOLDING_VOTE_ENV_PATH, HOLDING_VOTE_ENV_SHA,
-                         HOLDING_VOTE_ENV_DATE)
+HOLDING_VOTE_ENV_KEYS = (
+    HOLDING_VOTE_ENV_PATH,
+    HOLDING_VOTE_ENV_SHA,
+    HOLDING_VOTE_ENV_DATE,
+)
 
 
 def _holding_vote_handoff(target_date: str) -> tuple[dict[str, str], dict[str, Any]]:
     """Bind the exact target-date bundle to its postclose report bytes."""
     policy_file = holding_vote_policy_path(DATA_DIR, target_date)
     receipt: dict[str, Any] = {
-        "status": "baseline_policy_not_published", "target_date": target_date,
-        "path": str(policy_file), "allowed_runtime_apply": False,
+        "status": "baseline_policy_not_published",
+        "target_date": target_date,
+        "path": str(policy_file),
+        "allowed_runtime_apply": False,
     }
     if not policy_file.exists():
         return {}, receipt
@@ -95,17 +100,27 @@ def _holding_vote_handoff(target_date: str) -> tuple[dict[str, str], dict[str, A
         receipt["status"] = "baseline_policy_rejected"
         receipt["reason"] = str(exc)
         return {}, receipt
-    receipt.update({
-        "status": ("validated_successor_verified" if bundle.get("selection_mode")=="validated_successor" else "verified_incumbent_carried" if bundle.get("schema")=="holding_path_vote_selected_policy_v2" else "estimated_provisional_verified"),
-        "source_date": source_date,
-        "source_report_sha256": bundle["source_report_sha256"],
-        "bundle_sha256": bundle["bundle_sha256"],
-        "policy_set_sha256": bundle["policy_set_sha256"],
-        "cell_count": len(bundle["cells"]),
-        "evidence_grade": bundle["evidence_grade"],
-        "realized_paired_ev_krw": None,
-        "allowed_runtime_apply": True,
-    })
+    receipt.update(
+        {
+            "status": (
+                "validated_successor_verified"
+                if bundle.get("selection_mode") == "validated_successor"
+                else (
+                    "verified_incumbent_carried"
+                    if bundle.get("schema") == "holding_path_vote_selected_policy_v2"
+                    else "estimated_provisional_verified"
+                )
+            ),
+            "source_date": source_date,
+            "source_report_sha256": bundle["source_report_sha256"],
+            "bundle_sha256": bundle["bundle_sha256"],
+            "policy_set_sha256": bundle["policy_set_sha256"],
+            "cell_count": len(bundle["cells"]),
+            "evidence_grade": bundle["evidence_grade"],
+            "realized_paired_ev_krw": None,
+            "allowed_runtime_apply": True,
+        }
+    )
     return {
         HOLDING_VOTE_ENV_PATH: str(policy_file),
         HOLDING_VOTE_ENV_SHA: bundle["bundle_sha256"],
@@ -120,8 +135,13 @@ _DELAY_OBSERVER_METRICS: dict = {}
 
 def _observer_thread_io():
     try:
-        values = dict(line.split(':', 1) for line in Path('/proc/thread-self/io').read_text().splitlines())
-        return {k: int(values[k]) for k in ('rchar', 'wchar', 'read_bytes', 'write_bytes')}
+        values = dict(
+            line.split(":", 1)
+            for line in Path("/proc/thread-self/io").read_text().splitlines()
+        )
+        return {
+            k: int(values[k]) for k in ("rchar", "wchar", "read_bytes", "write_bytes")
+        }
     except (OSError, KeyError, ValueError):
         return None
 
@@ -136,54 +156,73 @@ def _delay_observer_signature(source_day, target_date):
     """
     from src.engine.scalping import pre_submit_delay_initial_policy as initial
     from src.engine.scalping.pre_submit_delay_tuning import family_source_ledger_path
+
     root = DATA_DIR.resolve()
-    directory = root / 'threshold_cycle/pre_submit_delay_policy'
-    pointer = directory / f'committed_{source_day}.json'
+    directory = root / "threshold_cycle/pre_submit_delay_policy"
+    pointer = directory / f"committed_{source_day}.json"
     manifest = initial._read(pointer)
-    generation = str(manifest.get('generation', ''))
-    if len(generation) != 64 or any(c not in '0123456789abcdef' for c in generation):
-        raise ValueError('observer_delay_generation_invalid')
-    base = directory / 'generations' / generation
-    report = initial._read(base / 'report.json')
-    receipt = report.get('source_receipt') or {}
-    paths = {pointer, base, base.parent, directory, base / 'report.json', base / 'policy.json'}
-    paths.update(base.glob('shards/*.json'))
-    for name in receipt.get('partition_generations', {}):
+    generation = str(manifest.get("generation", ""))
+    if len(generation) != 64 or any(c not in "0123456789abcdef" for c in generation):
+        raise ValueError("observer_delay_generation_invalid")
+    base = directory / "generations" / generation
+    report = initial._read(base / "report.json")
+    receipt = report.get("source_receipt") or {}
+    paths = {
+        pointer,
+        base,
+        base.parent,
+        directory,
+        base / "report.json",
+        base / "policy.json",
+    }
+    paths.update(base.glob("shards/*.json"))
+    for name in receipt.get("partition_generations", {}):
         paths.add(Path(name))
-    for family in (root / 'threshold_cycle').glob('date=*/family=pre_submit_delay'):
-        if '2026-09-29' <= family.parent.name.removeprefix('date=') <= source_day:
+    for family in (root / "threshold_cycle").glob("date=*/family=pre_submit_delay"):
+        if "2026-09-29" <= family.parent.name.removeprefix("date=") <= source_day:
             paths.add(family)
-            paths.update(family.glob('part-execution-*.jsonl'))
-    for day in receipt.get('ledger_generations', {}):
+            paths.update(family.glob("part-execution-*.jsonl"))
+    for day in receipt.get("ledger_generations", {}):
         path = family_source_ledger_path(root, day)
         paths.add(path)
         ledger = initial._read(path)
-        for part in ledger.get('raw_parts', []):
-            for representation in part.get('representations', []):
-                paths.add(Path(representation['path']))
+        for part in ledger.get("raw_parts", []):
+            for representation in part.get("representations", []):
+                paths.add(Path(representation["path"]))
         # Include absent aliases and late files: appearance invalidates reuse.
         from src.engine.pipeline_event_summary import _source_part_path
-        for partition in ('base', 'late'):
-            raw = _source_part_path(root / 'pipeline_events', day, partition)
-            paths.update((raw, Path(str(raw) + '.gz')))
-        if ledger.get('matched_event_ids_ref'):
-            paths.update((path.parent / 'shards').glob('*.json'))
+
+        for partition in ("base", "late"):
+            raw = _source_part_path(root / "pipeline_events", day, partition)
+            paths.update((raw, Path(str(raw) + ".gz")))
+        if ledger.get("matched_event_ids_ref"):
+            paths.update((path.parent / "shards").glob("*.json"))
     code_root = Path(__file__).resolve().parents[3]
     paths.update(code_root / name for name in initial.CONTRACT_PATHS)
     if len(paths) > 20000:
-        raise ValueError('observer_delay_inventory_budget')
+        raise ValueError("observer_delay_inventory_budget")
     stamps = []
     for path in sorted(paths):
         try:
             st = path.stat()
             lst = path.lstat()
             is_dir = stat_module.S_ISDIR(st.st_mode)
-            stamps.append((str(path), str(path.resolve()), st.st_dev, st.st_ino,
-                           None if is_dir else st.st_size,
-                           None if is_dir else st.st_mtime_ns,
-                           None if is_dir else st.st_ctime_ns, st.st_mode,
-                           st.st_uid, st.st_gid, lst.st_ino,
-                           None if is_dir else lst.st_ctime_ns))
+            stamps.append(
+                (
+                    str(path),
+                    str(path.resolve()),
+                    st.st_dev,
+                    st.st_ino,
+                    None if is_dir else st.st_size,
+                    None if is_dir else st.st_mtime_ns,
+                    None if is_dir else st.st_ctime_ns,
+                    st.st_mode,
+                    st.st_uid,
+                    st.st_gid,
+                    lst.st_ino,
+                    None if is_dir else lst.st_ctime_ns,
+                )
+            )
         except FileNotFoundError:
             stamps.append((str(path), None))
     return os.getpid(), str(root), source_day, target_date, tuple(stamps)
@@ -193,58 +232,84 @@ def _observer_delay_generation(source_day, target_date):
     """Single-flight, process-local native success reuse for health only."""
     from src.engine.scalping import pre_submit_delay_initial_policy as initial
     from src.engine.infrastructure.research_release_transition import assert_readable
+
     started = time.monotonic()
     io_before = _observer_thread_io()
     if not _DELAY_OBSERVER_LOCK.acquire(timeout=1):
-        raise ValueError('observer_delay_validation_in_progress')
+        raise ValueError("observer_delay_validation_in_progress")
     try:
         assert_readable(DATA_DIR)
-        _DELAY_OBSERVER_METRICS.update(mode='inventory', full_validation=False)
+        _DELAY_OBSERVER_METRICS.update(mode="inventory", full_validation=False)
         before = _delay_observer_signature(source_day, target_date)
-        cached = _DELAY_OBSERVER_CACHE.get('entry')
-        if cached and cached['signature'] == before:
-            if 'error' in cached:
-                if time.monotonic() < cached['retry_after']:
-                    _DELAY_OBSERVER_METRICS.update(mode='failed_generation_backoff', full_validation=False)
-                    raise ValueError(cached['error'])
+        cached = _DELAY_OBSERVER_CACHE.get("entry")
+        if cached and cached["signature"] == before:
+            if "error" in cached:
+                if time.monotonic() < cached["retry_after"]:
+                    _DELAY_OBSERVER_METRICS.update(
+                        mode="failed_generation_backoff", full_validation=False
+                    )
+                    raise ValueError(cached["error"])
             else:
-                _DELAY_OBSERVER_METRICS.update(mode='reuse', source_date=source_day,
-                    target_date=target_date, full_validation=False)
-                _DELAY_OBSERVER_METRICS['reuse_count'] = _DELAY_OBSERVER_METRICS.get('reuse_count', 0) + 1
-                return copy.deepcopy(cached['value'])
+                _DELAY_OBSERVER_METRICS.update(
+                    mode="reuse",
+                    source_date=source_day,
+                    target_date=target_date,
+                    full_validation=False,
+                )
+                _DELAY_OBSERVER_METRICS["reuse_count"] = (
+                    _DELAY_OBSERVER_METRICS.get("reuse_count", 0) + 1
+                )
+                return copy.deepcopy(cached["value"])
         _DELAY_OBSERVER_CACHE.clear()
-        _DELAY_OBSERVER_METRICS.update(mode='full', source_date=source_day,
-            target_date=target_date, full_validation=True)
-        _DELAY_OBSERVER_METRICS['full_count'] = _DELAY_OBSERVER_METRICS.get('full_count', 0) + 1
+        _DELAY_OBSERVER_METRICS.update(
+            mode="full",
+            source_date=source_day,
+            target_date=target_date,
+            full_validation=True,
+        )
+        _DELAY_OBSERVER_METRICS["full_count"] = (
+            _DELAY_OBSERVER_METRICS.get("full_count", 0) + 1
+        )
         try:
             report_path, policy_path, _, manifest = initial.committed_paths(
-                DATA_DIR, source_day, validate_selection=False)
+                DATA_DIR, source_day, validate_selection=False
+            )
             report, policy = initial._read(report_path), initial._read(policy_path)
             initial.validate(policy, report)
             initial.verify_source(DATA_DIR, report, pipeline_reference_only=True)
             value = (report_path, policy_path, manifest, policy, report)
-            cacheable = _observer_canonical_tree_layout(report_path.parent, report, policy)
+            cacheable = _observer_canonical_tree_layout(
+                report_path.parent, report, policy
+            )
             if before != _delay_observer_signature(source_day, target_date):
-                raise ValueError('observer_delay_generation_changed_during_validation')
+                raise ValueError("observer_delay_generation_changed_during_validation")
         except (OSError, ValueError, TypeError, KeyError) as exc:
             # A repeated failure remains a failure, never a cached success.
-            _DELAY_OBSERVER_CACHE['entry'] = dict(signature=before,
-                error='observer_delay_validation_failed:' + type(exc).__name__,
-                retry_after=time.monotonic() + 300)
+            _DELAY_OBSERVER_CACHE["entry"] = dict(
+                signature=before,
+                error="observer_delay_validation_failed:" + type(exc).__name__,
+                retry_after=time.monotonic() + 300,
+            )
             raise
         if cacheable:
-            _DELAY_OBSERVER_CACHE['entry'] = dict(signature=before, value=copy.deepcopy(value))
+            _DELAY_OBSERVER_CACHE["entry"] = dict(
+                signature=before, value=copy.deepcopy(value)
+            )
         else:
-            _DELAY_OBSERVER_METRICS['mode'] = 'full_noncanonical_tree'
+            _DELAY_OBSERVER_METRICS["mode"] = "full_noncanonical_tree"
         return value
     finally:
-        _DELAY_OBSERVER_METRICS['wall_ms'] = round((time.monotonic() - started) * 1000, 3)
+        _DELAY_OBSERVER_METRICS["wall_ms"] = round(
+            (time.monotonic() - started) * 1000, 3
+        )
         io_after = _observer_thread_io()
-        _DELAY_OBSERVER_METRICS['thread_io_delta'] = (
+        _DELAY_OBSERVER_METRICS["thread_io_delta"] = (
             {k: io_after[k] - io_before[k] for k in io_before}
-            if io_before and io_after else None)
-        _DELAY_OBSERVER_METRICS['pid'] = os.getpid()
-        _DELAY_OBSERVER_METRICS['thread_id'] = threading.get_native_id()
+            if io_before and io_after
+            else None
+        )
+        _DELAY_OBSERVER_METRICS["pid"] = os.getpid()
+        _DELAY_OBSERVER_METRICS["thread_id"] = threading.get_native_id()
         _DELAY_OBSERVER_LOCK.release()
 
 
@@ -260,8 +325,8 @@ def _observer_canonical_tree_layout(base, report, policy):
 
     def canonical(value):
         if isinstance(value, dict):
-            if {'path', 'sha256', 'size', 'count'} <= value.keys():
-                if value['path'] != 'shards/' + str(value['sha256']) + '.json':
+            if {"path", "sha256", "size", "count"} <= value.keys():
+                if value["path"] != "shards/" + str(value["sha256"]) + ".json":
                     return False
             return all(canonical(v) for v in value.values())
         if isinstance(value, list):
@@ -270,31 +335,51 @@ def _observer_canonical_tree_layout(base, report, policy):
 
     roots = {base}
     documents = [report, policy]
-    for day in (report.get('source_receipt') or {}).get('ledger_generations', {}):
+    for day in (report.get("source_receipt") or {}).get("ledger_generations", {}):
         path = family_source_ledger_path(DATA_DIR.resolve(), day)
         ledger = initial._read(path)
-        if ledger.get('matched_event_ids_ref'):
-            documents.append(ledger['matched_event_ids_ref'])
+        if ledger.get("matched_event_ids_ref"):
+            documents.append(ledger["matched_event_ids_ref"])
             roots.add(path.parent)
     if not all(canonical(value) for value in documents):
         return False
-    return all(canonical(initial._read(path)) for root in roots
-               for path in (root / 'shards').glob('*.json'))
+    return all(
+        canonical(initial._read(path))
+        for root in roots
+        for path in (root / "shards").glob("*.json")
+    )
 
 
-def _pre_submit_delay_handoff(target_date: str, *, observer_reuse=False) -> tuple[dict[str, str], dict[str, Any]]:
+def _pre_submit_delay_handoff(
+    target_date: str, *, observer_reuse=False
+) -> tuple[dict[str, str], dict[str, Any]]:
     """Carry the newest validated positive delay policy until superseded."""
     from src.engine.scalping.pre_submit_delay_tuning import (
-        DELAYS_SEC, _digest, _number, _validated_candidate, report_path,
+        DELAYS_SEC,
+        _digest,
+        _number,
+        _validated_candidate,
+        report_path,
     )
     from src.engine.infrastructure.research_release_transition import assert_readable
+
     assert_readable(DATA_DIR)
 
     directory = DATA_DIR / "threshold_cycle" / "pre_submit_delay_policy"
-    from src.engine.scalping.pre_submit_delay_initial_policy import committed_paths, validate as validate_initial, code_contract, verify_source, _read
+    from src.engine.scalping.pre_submit_delay_initial_policy import (
+        committed_paths,
+        validate as validate_initial,
+        code_contract,
+        verify_source,
+        _read,
+    )
+
     committed = sorted(directory.glob("committed_????-??-??.json"), reverse=True)
     if len(committed) > 370:
-        return {}, {"status": "invalid_generation_inventory", "target_date": target_date}
+        return {}, {
+            "status": "invalid_generation_inventory",
+            "target_date": target_date,
+        }
     for pointer in committed:
         source_day = pointer.stem.removeprefix("committed_")
         if source_day >= target_date:
@@ -302,31 +387,57 @@ def _pre_submit_delay_handoff(target_date: str, *, observer_reuse=False) -> tupl
         try:
             if observer_reuse:
                 report_file, policy_file, manifest, initial_policy, initial_report = (
-                    _observer_delay_generation(source_day, target_date))
+                    _observer_delay_generation(source_day, target_date)
+                )
             else:
-                report_file, policy_file, _, manifest = committed_paths(DATA_DIR, source_day)
-                verify_source(DATA_DIR, _read(report_file), pipeline_reference_only=True)
+                report_file, policy_file, _, manifest = committed_paths(
+                    DATA_DIR, source_day
+                )
+                verify_source(
+                    DATA_DIR, _read(report_file), pipeline_reference_only=True
+                )
                 initial_policy, initial_report = _read(policy_file), _read(report_file)
-            if manifest.get('code_contract_sha256') != code_contract():
-                from src.engine.scalping.pre_submit_delay_tuning import _verify_runtime_code_contract
+            if manifest.get("code_contract_sha256") != code_contract():
+                from src.engine.scalping.pre_submit_delay_tuning import (
+                    _verify_runtime_code_contract,
+                )
+
                 _verify_runtime_code_contract(_read(policy_file), target_date)
-            if not initial_policy["effective_from"] <= target_date <= initial_policy["expires_on"]:
+            if (
+                not initial_policy["effective_from"]
+                <= target_date
+                <= initial_policy["expires_on"]
+            ):
                 continue
             if not observer_reuse:
-                validate_initial(initial_policy, initial_report, target_date=target_date)
-            return {"KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_ENABLED": "true",
-                    "KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_FILE": str(policy_file.resolve()),
-                    "KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_MANIFEST_SHA256": manifest["manifest_sha256"],
-                    "KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_ACTIVE_DATE": target_date}, {
-                    "status": "verified_initial_timing_policy", "target_date": target_date,
-                    "source_date": source_day, "effective_from": initial_policy["effective_from"],
-                    "policy_sha256": initial_policy["policy_sha256"],
-                    "manifest_sha256": manifest["manifest_sha256"],
-                    "code_contract_sha256": initial_policy["code_contract_sha256"],
-                    "policy_path": str(policy_file.resolve()), "source_report": str(report_file.resolve()),
-                    "evidence_grade": "estimated_provisional", "actual_pid_consumed": False}
+                validate_initial(
+                    initial_policy, initial_report, target_date=target_date
+                )
+            return {
+                "KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_ENABLED": "true",
+                "KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_FILE": str(policy_file.resolve()),
+                "KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_MANIFEST_SHA256": manifest[
+                    "manifest_sha256"
+                ],
+                "KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_ACTIVE_DATE": target_date,
+            }, {
+                "status": "verified_initial_timing_policy",
+                "target_date": target_date,
+                "source_date": source_day,
+                "effective_from": initial_policy["effective_from"],
+                "policy_sha256": initial_policy["policy_sha256"],
+                "manifest_sha256": manifest["manifest_sha256"],
+                "code_contract_sha256": initial_policy["code_contract_sha256"],
+                "policy_path": str(policy_file.resolve()),
+                "source_report": str(report_file.resolve()),
+                "evidence_grade": "estimated_provisional",
+                "actual_pid_consumed": False,
+            }
         except (OSError, ValueError, TypeError, KeyError):
-            return {}, {"status": "invalid_committed_generation", "target_date": target_date}
+            return {}, {
+                "status": "invalid_committed_generation",
+                "target_date": target_date,
+            }
     matches: list[tuple[str, str, Path, dict[str, Any]]] = []
     for path in directory.glob("pre_submit_delay_policy_????-??-??.json"):
         if path.is_symlink() or path.stat().st_size > 1024 * 1024:
@@ -338,7 +449,9 @@ def _pre_submit_delay_handoff(target_date: str, *, observer_reuse=False) -> tupl
         effective_from = str(policy.get("effective_from") or "")
         expires_on = str(policy.get("expires_on") or "")
         if effective_from <= target_date <= expires_on:
-            matches.append((effective_from, str(policy.get("source_date") or ""), path, policy))
+            matches.append(
+                (effective_from, str(policy.get("source_date") or ""), path, policy)
+            )
     if not matches:
         return {}, {"status": "not_published", "target_date": target_date}
     saw_source_gap = False
@@ -355,13 +468,20 @@ def _pre_submit_delay_handoff(target_date: str, *, observer_reuse=False) -> tupl
             policy.get("schema") == "pre_submit_delay_policy_v1"
             and report.get("schema") == "pre_submit_delay_tuning_v1"
             and policy.get("source_date") == report.get("source_date") == source_date
-            and policy.get("effective_from") == report.get("effective_date") == effective_from
+            and policy.get("effective_from")
+            == report.get("effective_date")
+            == effective_from
             and source_date < effective_from <= target_date
             and policy.get("expires_on", "") >= target_date
-            and digest == _digest({key: value for key, value in policy.items() if key != "policy_sha256"})
+            and digest
+            == _digest(
+                {key: value for key, value in policy.items() if key != "policy_sha256"}
+            )
             and report.get("policy_sha256") == digest
             and policy.get("report_sha256")
-            == _digest({key: value for key, value in report.items() if key != "policy_sha256"})
+            == _digest(
+                {key: value for key, value in report.items() if key != "policy_sha256"}
+            )
         )
         selected = _number(policy.get("selected_delay_sec"))
         selector_only = (
@@ -376,20 +496,29 @@ def _pre_submit_delay_handoff(target_date: str, *, observer_reuse=False) -> tupl
             "model_not_validated": "unselected_model_not_validated",
         }.get(report.get("status"))
         if unresolved:
-            valid = bool(valid
-                         and policy.get("selection_status") == unresolved_selection
-                         and unresolved_selection is not None
-                         and policy.get("runtime_apply_allowed") is False
-                         and policy.get("carry_forward_until_superseded") is False
-                         and policy.get("expires_on") == effective_from
-                         and report.get("runtime_effect") is False
-                         and report.get("selected_delay_sec") is None)
+            valid = bool(
+                valid
+                and policy.get("selection_status") == unresolved_selection
+                and unresolved_selection is not None
+                and policy.get("runtime_apply_allowed") is False
+                and policy.get("carry_forward_until_superseded") is False
+                and policy.get("expires_on") == effective_from
+                and report.get("runtime_effect") is False
+                and report.get("selected_delay_sec") is None
+            )
         else:
-            valid = bool(valid and policy.get("runtime_apply_allowed") is True
-                         and policy.get("carry_forward_until_superseded") is True)
+            valid = bool(
+                valid
+                and policy.get("runtime_apply_allowed") is True
+                and policy.get("carry_forward_until_superseded") is True
+            )
         if selected is not None:
-            valid = bool(valid and selected in DELAYS_SEC and selected > 0
-                         and _validated_candidate(policy, report))
+            valid = bool(
+                valid
+                and selected in DELAYS_SEC
+                and selected > 0
+                and _validated_candidate(policy, report)
+            )
         branch_delays = []
         for family, evidence_key, key_name in (
             ("scope_policies", "scope_census", "scope_key"),
@@ -401,18 +530,30 @@ def _pre_submit_delay_handoff(target_date: str, *, observer_reuse=False) -> tupl
                 valid = False
                 continue
             for key, branch in branches.items():
-                delay_sec = _number(branch.get("selected_delay_sec")) if isinstance(branch, dict) else None
+                delay_sec = (
+                    _number(branch.get("selected_delay_sec"))
+                    if isinstance(branch, dict)
+                    else None
+                )
                 branch_delays.append(delay_sec)
                 unresolved_branch = (
-                    delay_sec is None and unresolved and isinstance(branch, dict)
+                    delay_sec is None
+                    and unresolved
+                    and isinstance(branch, dict)
                     and branch.get("selection_status") == unresolved_selection
                     and branch.get("runtime_apply_allowed") is False
                 )
                 if unresolved_branch:
                     continue
-                if (delay_sec not in DELAYS_SEC or delay_sec <= 0
-                        or not any(isinstance(row, dict) and row.get(key_name) == key for row in evidence_rows)
-                        or not _validated_candidate(policy, report, **{key_name: key})):
+                if (
+                    delay_sec not in DELAYS_SEC
+                    or delay_sec <= 0
+                    or not any(
+                        isinstance(row, dict) and row.get(key_name) == key
+                        for row in evidence_rows
+                    )
+                    or not _validated_candidate(policy, report, **{key_name: key})
+                ):
                     valid = False
         if not valid:
             saw_invalid = True
@@ -430,7 +571,11 @@ def _pre_submit_delay_handoff(target_date: str, *, observer_reuse=False) -> tupl
             "KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_FILE": str(path.resolve()),
             "KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_ACTIVE_DATE": target_date,
         }, {
-            "status": "verified_candidate" if effective_from == target_date else "verified_carried_candidate",
+            "status": (
+                "verified_candidate"
+                if effective_from == target_date
+                else "verified_carried_candidate"
+            ),
             "target_date": target_date,
             "source_date": source_date,
             "effective_from": effective_from,
@@ -440,10 +585,13 @@ def _pre_submit_delay_handoff(target_date: str, *, observer_reuse=False) -> tupl
         }
     return {}, {
         "status": (
-            "no_validated_candidate_source_gap" if saw_source_gap
-            else "no_validated_candidate_not_evaluated" if saw_not_evaluated
-            else "binding_invalid" if saw_invalid
-            else "not_published"
+            "no_validated_candidate_source_gap"
+            if saw_source_gap
+            else (
+                "no_validated_candidate_not_evaluated"
+                if saw_not_evaluated
+                else "binding_invalid" if saw_invalid else "not_published"
+            )
         ),
         "target_date": target_date,
         "runtime_policy_bound": False,
@@ -451,38 +599,67 @@ def _pre_submit_delay_handoff(target_date: str, *, observer_reuse=False) -> tupl
 
 
 def env_path(target_date: str, *, output_dir: Path | None = None) -> Path:
-    return (BOOTSTRAP_DIR if output_dir is None else Path(output_dir)) / f"runtime_policy_bootstrap_{target_date}.env"
+    return (
+        BOOTSTRAP_DIR if output_dir is None else Path(output_dir)
+    ) / f"runtime_policy_bootstrap_{target_date}.env"
 
 
 def manifest_path(target_date: str, *, output_dir: Path | None = None) -> Path:
-    return (BOOTSTRAP_DIR if output_dir is None else Path(output_dir)) / f"runtime_policy_bootstrap_{target_date}.json"
+    return (
+        BOOTSTRAP_DIR if output_dir is None else Path(output_dir)
+    ) / f"runtime_policy_bootstrap_{target_date}.json"
 
 
 def verify_path(target_date: str, *, output_dir: Path | None = None) -> Path:
-    return (BOOTSTRAP_DIR if output_dir is None else Path(output_dir)) / f"runtime_policy_bootstrap_verify_{target_date}.json"
+    return (
+        BOOTSTRAP_DIR if output_dir is None else Path(output_dir)
+    ) / f"runtime_policy_bootstrap_verify_{target_date}.json"
 
 
-def _archive_holding_profit_pid_verification(target_date: str, verification: dict, manifest: dict) -> Path:
+def _archive_holding_profit_pid_verification(
+    target_date: str, verification: dict, manifest: dict
+) -> Path:
     """Retain the first proven TP generation per PID across same-day restarts."""
-    if (verification.get("passed") is not True or verification.get("pid_passed") is not True
-            or verification.get("pid_env_available") is not True
-            or type(verification.get("pid")) is not int or verification["pid"] <= 0
-            or verification.get("target_date") != target_date
-            or verification.get("manifest_sha256") != manifest.get("manifest_sha256")
-            or manifest.get("target_date") != target_date):
+    if (
+        verification.get("passed") is not True
+        or verification.get("pid_passed") is not True
+        or verification.get("pid_env_available") is not True
+        or type(verification.get("pid")) is not int
+        or verification["pid"] <= 0
+        or verification.get("target_date") != target_date
+        or verification.get("manifest_sha256") != manifest.get("manifest_sha256")
+        or manifest.get("target_date") != target_date
+    ):
         raise ValueError("holding_profit_pid_archive_source_mismatch")
-    body = {"schema": "holding_profit_pid_verification_v1", "target_date": target_date,
-            "pid": verification["pid"], "verified_at": verification["verified_at"],
-            "manifest_sha256": manifest["manifest_sha256"],
-            "mechanical_policy_receipt": {**manifest["scalp_trailing_mechanical_policy_receipt"],
-                'situation_policy':json.loads((manifest.get('env_overrides') or {}).get(
-                    'KORSTOCKSCAN_TRAILING_SITUATION_POLICY_JSON', 'null'))}}
+    body = {
+        "schema": "holding_profit_pid_verification_v1",
+        "target_date": target_date,
+        "pid": verification["pid"],
+        "verified_at": verification["verified_at"],
+        "manifest_sha256": manifest["manifest_sha256"],
+        "mechanical_policy_receipt": {
+            **manifest["scalp_trailing_mechanical_policy_receipt"],
+            "situation_policy": json.loads(
+                (manifest.get("env_overrides") or {}).get(
+                    "KORSTOCKSCAN_TRAILING_SITUATION_POLICY_JSON", "null"
+                )
+            ),
+        },
+    }
     receipt = {**body, "receipt_sha256": _digest_json(body)}
-    path = BOOTSTRAP_DIR / "verified_holding_profit_pid" / target_date / (
-        f"holding_profit_pid_{body['pid']}_{body['manifest_sha256']}.json")
+    path = (
+        BOOTSTRAP_DIR
+        / "verified_holding_profit_pid"
+        / target_date
+        / (f"holding_profit_pid_{body['pid']}_{body['manifest_sha256']}.json")
+    )
     path.parent.mkdir(parents=True, exist_ok=True)
-    encoded = (json.dumps(receipt, sort_keys=True, separators=(",", ":")) + "\n").encode()
-    descriptor, temporary_name = tempfile.mkstemp(prefix=".holding-profit-pid-", dir=path.parent)
+    encoded = (
+        json.dumps(receipt, sort_keys=True, separators=(",", ":")) + "\n"
+    ).encode()
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=".holding-profit-pid-", dir=path.parent
+    )
     try:
         with os.fdopen(descriptor, "wb") as handle:
             handle.write(encoded)
@@ -496,9 +673,9 @@ def _archive_holding_profit_pid_verification(target_date: str, verification: dic
                 raise ValueError("holding_profit_pid_archive_path_or_size_invalid")
             prior = _load_json(path)
             prior_body = {k: v for k, v in prior.items() if k != "receipt_sha256"}
-            if (prior.get("receipt_sha256") != _digest_json(prior_body)
-                    or {k: v for k, v in prior_body.items() if k != "verified_at"}
-                       != {k: v for k, v in body.items() if k != "verified_at"}):
+            if prior.get("receipt_sha256") != _digest_json(prior_body) or {
+                k: v for k, v in prior_body.items() if k != "verified_at"
+            } != {k: v for k, v in body.items() if k != "verified_at"}:
                 raise ValueError("holding_profit_pid_archive_conflict")
     finally:
         Path(temporary_name).unlink(missing_ok=True)
@@ -506,30 +683,38 @@ def _archive_holding_profit_pid_verification(target_date: str, verification: dic
 
 
 def _archive_initial_quantity_pid_verification(
-    target_date: str, verification: dict[str, Any], manifest: dict[str, Any],
+    target_date: str,
+    verification: dict[str, Any],
+    manifest: dict[str, Any],
 ) -> Path | None:
     """Keep successful Main PID policy proof across same-day restarts."""
     policy = manifest.get("initial_quantity_policy_receipt")
     env = manifest.get("env_overrides") or {}
-    if (verification.get("pid_passed") is not True
-            or verification.get("status") != "pass"
-            or verification.get("passed") is not True
-            or verification.get("pid_env_available") is not True
-            or verification.get("findings") != []
-            or verification.get("pid_mismatches") != []
-            or type(verification.get("pid")) is not int
-            or verification["pid"] <= 0
-            or not isinstance(policy, dict)):
+    if (
+        verification.get("pid_passed") is not True
+        or verification.get("status") != "pass"
+        or verification.get("passed") is not True
+        or verification.get("pid_env_available") is not True
+        or verification.get("findings") != []
+        or verification.get("pid_mismatches") != []
+        or type(verification.get("pid")) is not int
+        or verification["pid"] <= 0
+        or not isinstance(policy, dict)
+    ):
         return None
-    if (policy.get("policy_file_sha256") != env.get(INITIAL_QUANTITY_ENV_SHA)
-            or policy.get("current_file") != str(INITIAL_QUANTITY_CURRENT.resolve())
-            or verification.get("target_date") != target_date
-            or verification.get("manifest_sha256") != manifest.get("manifest_sha256")):
+    if (
+        policy.get("policy_file_sha256") != env.get(INITIAL_QUANTITY_ENV_SHA)
+        or policy.get("current_file") != str(INITIAL_QUANTITY_CURRENT.resolve())
+        or verification.get("target_date") != target_date
+        or verification.get("manifest_sha256") != manifest.get("manifest_sha256")
+    ):
         raise ValueError("initial_quantity_pid_archive_source_mismatch")
     policy_file = Path(str(env.get(INITIAL_QUANTITY_ENV_FILE) or ""))
-    if (not policy_file.is_absolute() or not policy_file.is_file()
-            or _digest_bytes(policy_file.read_bytes()) !=
-            policy["policy_file_sha256"]):
+    if (
+        not policy_file.is_absolute()
+        or not policy_file.is_file()
+        or _digest_bytes(policy_file.read_bytes()) != policy["policy_file_sha256"]
+    ):
         raise ValueError("initial_quantity_pid_archive_policy_file_mismatch")
     body = {
         "schema_version": "initial_quantity_pid_verification_v1",
@@ -538,18 +723,22 @@ def _archive_initial_quantity_pid_verification(
         "verified_at": verification["verified_at"],
         "manifest_sha256": manifest["manifest_sha256"],
         "policy_file_sha256": policy["policy_file_sha256"],
-        "policy_content_sha256": _load_json(policy_file)[
-            "policy_content_sha256"],
+        "policy_content_sha256": _load_json(policy_file)["policy_content_sha256"],
         "policy_file": str(policy_file.resolve()),
         "verification": verification,
     }
     receipt = {**body, "receipt_content_sha256": _digest_json(body)}
-    path = (BOOTSTRAP_DIR / "verified_initial_quantity_pid" / target_date /
-            f"initial_quantity_pid_{verification['pid']}_"
-            f"{receipt['receipt_content_sha256'][:12]}.json")
+    path = (
+        BOOTSTRAP_DIR
+        / "verified_initial_quantity_pid"
+        / target_date
+        / f"initial_quantity_pid_{verification['pid']}_"
+        f"{receipt['receipt_content_sha256'][:12]}.json"
+    )
     path.parent.mkdir(parents=True, exist_ok=True)
-    encoded = (json.dumps(receipt, ensure_ascii=False, sort_keys=True,
-                          indent=2) + "\n").encode()
+    encoded = (
+        json.dumps(receipt, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+    ).encode()
     try:
         with path.open("xb") as handle:
             handle.write(encoded)
@@ -595,10 +784,16 @@ def _file_receipt(path: Path) -> dict[str, Any]:
 
 def _publish(path: Path, content: str) -> None:
     from src.engine.infrastructure.research_release_transition import journal_write
-    if journal_write(path,content.encode('utf-8')):return
+
+    if journal_write(path, content.encode("utf-8")):
+        return
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(
-        mode="w", encoding="utf-8", dir=path.parent, prefix=f".{path.name}.", delete=False
+        mode="w",
+        encoding="utf-8",
+        dir=path.parent,
+        prefix=f".{path.name}.",
+        delete=False,
     ) as handle:
         temporary = Path(handle.name)
         try:
@@ -697,22 +892,23 @@ def _load_incumbent(target_date: str) -> tuple[dict[str, Any], Path, str]:
         if path.parent == BOOTSTRAP_DIR:
             try:
                 verification = _load_json(
-                    BOOTSTRAP_DIR / f"runtime_policy_bootstrap_verify_{source_date}.json"
+                    BOOTSTRAP_DIR
+                    / f"runtime_policy_bootstrap_verify_{source_date}.json"
                 )
             except (OSError, ValueError, json.JSONDecodeError):
                 verification = {}
             unsigned = {
                 key: value for key, value in payload.items() if key != "manifest_sha256"
             }
-            verified = (
-                verification.get("status") == "pass"
-                and payload.get("manifest_sha256") == _digest_json(unsigned)
-            )
+            verified = verification.get("status") == "pass" and payload.get(
+                "manifest_sha256"
+            ) == _digest_json(unsigned)
             verification_basis = "bootstrap_self_hash_and_verify_pass"
         else:
             try:
                 verification = _load_json(
-                    LEGACY_RUNTIME_DIR / f"threshold_runtime_env_verify_{source_date}.json"
+                    LEGACY_RUNTIME_DIR
+                    / f"threshold_runtime_env_verify_{source_date}.json"
                 )
             except (OSError, ValueError, json.JSONDecodeError):
                 verification = {}
@@ -793,9 +989,7 @@ def _load_locks(target_date: str) -> tuple[list[dict[str, Any]], list[dict[str, 
 def _receipt_date_state(payload: dict[str, Any], target_date: str) -> tuple[bool, str]:
     target = str(payload.get("target_date") or "").strip()
     effective = str(
-        payload.get("effective_date")
-        or payload.get("prepared_effective_date")
-        or ""
+        payload.get("effective_date") or payload.get("prepared_effective_date") or ""
     ).strip()
     publication = str(payload.get("publication_date") or "").strip()
     source = str(payload.get("source_date") or payload.get("date") or "").strip()
@@ -832,9 +1026,10 @@ def _receipt_family(payload: dict[str, Any], path: Path) -> str:
 
 
 def _receipt_runtime_apply_allowed(payload: dict[str, Any]) -> bool:
-    if payload.get("allowed_runtime_apply") is True or payload.get(
-        "runtime_apply_allowed"
-    ) is True:
+    if (
+        payload.get("allowed_runtime_apply") is True
+        or payload.get("runtime_apply_allowed") is True
+    ):
         return True
     if payload.get("report_type") == "scanner_lookup_attention_preopen":
         source_policy = (
@@ -842,9 +1037,10 @@ def _receipt_runtime_apply_allowed(payload: dict[str, Any]) -> bool:
             if isinstance(payload.get("source_policy"), dict)
             else {}
         )
-        return payload.get("active") is True and source_policy.get(
-            "allowed_runtime_apply"
-        ) is True
+        return (
+            payload.get("active") is True
+            and source_policy.get("allowed_runtime_apply") is True
+        )
     return False
 
 
@@ -867,11 +1063,7 @@ def validate_rising_missed_policy_binding(
     ):
         return "source_report_contract_invalid"
     report_semantic_sha = _digest_json(
-        {
-            key: value
-            for key, value in source_report.items()
-            if key != "artifact_sha256"
-        }
+        {key: value for key, value in source_report.items() if key != "artifact_sha256"}
     )
     if (
         source_report.get("artifact_sha256") != report_semantic_sha
@@ -918,10 +1110,12 @@ def _direct_runtime_env(
         return {}, "legacy_ai_tp_policy_retired"
     if family == "scalp_trailing_mechanical_three_axis_selector":
         if not isinstance(raw, dict) or set(raw) != {
-            env_key for markets in SCALP_TRAILING_MARKET_ENV_KEYS.values()
+            env_key
+            for markets in SCALP_TRAILING_MARKET_ENV_KEYS.values()
             for env_key in markets.values()
         } | {
-            env_key for markets in SCALP_TRAILING_CLASSIFIER_MARKET_ENV_KEYS.values()
+            env_key
+            for markets in SCALP_TRAILING_CLASSIFIER_MARKET_ENV_KEYS.values()
             for env_key in markets.values()
         }:
             return {}, "scalp_trailing_market_env_keys_invalid"
@@ -969,7 +1163,9 @@ def _direct_runtime_env(
         ):
             raise ValueError
         if "KORSTOCKSCAN_RISING_MISSED_TP1_CHASE_DELTA_PCT" in values and not (
-            2.5 <= float(values["KORSTOCKSCAN_RISING_MISSED_TP1_CHASE_DELTA_PCT"]) <= 3.5
+            2.5
+            <= float(values["KORSTOCKSCAN_RISING_MISSED_TP1_CHASE_DELTA_PCT"])
+            <= 3.5
         ):
             raise ValueError
     except ValueError:
@@ -977,9 +1173,9 @@ def _direct_runtime_env(
     digest = values.get("KORSTOCKSCAN_RISING_MISSED_TP1_POLICY_SHA256", "")
     if len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
         return {}, "policy_sha256_invalid"
-    if payload.get("policy_sha256") != direct_policy_digest(payload) or digest != payload.get(
-        "policy_sha256"
-    ):
+    if payload.get("policy_sha256") != direct_policy_digest(
+        payload
+    ) or digest != payload.get("policy_sha256"):
         return {}, "policy_sha256_mismatch"
     return values, None
 
@@ -1034,35 +1230,65 @@ def _load_direct_receipts(
                 source_binding_error = validate_rising_missed_policy_receipt(
                     payload, source_report, target_date
                 )
-        if family == "scalp_trailing_mechanical_three_axis_selector" and runtime_env_error is None:
+        if (
+            family == "scalp_trailing_mechanical_three_axis_selector"
+            and runtime_env_error is None
+        ):
             source_date = str(payload.get("source_date") or "")
             try:
                 if date.fromisoformat(source_date).isoformat() != source_date:
                     raise ValueError("source_date_format")
-                source_path = (DATA_DIR / "report" / "monitor_snapshots"
-                               / f"holding_exit_observation_{source_date}.json")
+                source_path = (
+                    DATA_DIR
+                    / "report"
+                    / "monitor_snapshots"
+                    / f"holding_exit_observation_{source_date}.json"
+                )
                 from src.engine.lifecycle.snapshot_archive import read_bytes
-                source_bytes = read_bytes(source_path, maximum=64*1024*1024)
+
+                source_bytes = read_bytes(source_path, maximum=64 * 1024 * 1024)
                 source_report = json.loads(source_bytes)
-                manifest_path = (DATA_DIR / "report" / "monitor_snapshots" / "manifests"
-                                 / f"monitor_snapshot_manifest_{source_date}_postclose_exit.json")
+                manifest_path = (
+                    DATA_DIR
+                    / "report"
+                    / "monitor_snapshots"
+                    / "manifests"
+                    / f"monitor_snapshot_manifest_{source_date}_postclose_exit.json"
+                )
                 manifest_bytes = manifest_path.read_bytes()
                 source_manifest = json.loads(manifest_bytes)
-                if (source_manifest.get("profile") != "postclose_exit"
-                        or source_manifest.get("target_date") != source_date
-                        or source_manifest.get("snapshot_sha256", {}).get(
-                            "holding_exit_observation") != _digest_bytes(source_bytes)
-                        or Path(source_manifest.get("snapshot_paths", {}).get(
-                            "holding_exit_observation", "")).resolve() != source_path.resolve()
-                        or payload.get("source_manifest_sha256") != _digest_bytes(manifest_bytes)):
+                if (
+                    source_manifest.get("profile") != "postclose_exit"
+                    or source_manifest.get("target_date") != source_date
+                    or source_manifest.get("snapshot_sha256", {}).get(
+                        "holding_exit_observation"
+                    )
+                    != _digest_bytes(source_bytes)
+                    or Path(
+                        source_manifest.get("snapshot_paths", {}).get(
+                            "holding_exit_observation", ""
+                        )
+                    ).resolve()
+                    != source_path.resolve()
+                    or payload.get("source_manifest_sha256")
+                    != _digest_bytes(manifest_bytes)
+                ):
                     raise ValueError("postclose_exit_manifest_binding_invalid")
                 expected_env = scalp_trailing_selected_policy_env(
-                    payload, source_report, target_date=target_date,
+                    payload,
+                    source_report,
+                    target_date=target_date,
                     report_sha256=_digest_bytes(source_bytes),
                 )
                 if runtime_env != expected_env:
                     raise ValueError("selected_env_mismatch")
-            except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
+            except (
+                OSError,
+                ValueError,
+                TypeError,
+                KeyError,
+                json.JSONDecodeError,
+            ) as exc:
                 source_binding_error = f"scalp_trailing_selection_invalid:{exc}"
         row = {
             "family": family,
@@ -1094,7 +1320,9 @@ def _load_direct_receipts(
     return accepted, rejected
 
 
-def _operator_overrides(target_date: str) -> tuple[dict[str, str], list[dict[str, Any]]]:
+def _operator_overrides(
+    target_date: str,
+) -> tuple[dict[str, str], list[dict[str, Any]]]:
     values: dict[str, str] = {}
     receipts: list[dict[str, Any]] = []
     for name in (
@@ -1147,9 +1375,11 @@ def build_manifest(
     direct_receipts, rejected_receipts = _load_direct_receipts(
         target_date, receipt_paths
     )
-    if any(row.get("family") == "scalp_trailing_mechanical_three_axis_selector"
-           and row.get("allowed_runtime_apply") is True
-           for row in rejected_receipts):
+    if any(
+        row.get("family") == "scalp_trailing_mechanical_three_axis_selector"
+        and row.get("allowed_runtime_apply") is True
+        for row in rejected_receipts
+    ):
         raise ValueError("selected_scalp_trailing_policy_invalid_fail_closed")
     delay_env, delay_handoff = _pre_submit_delay_handoff(target_date)
     locks, invalid_locks = _load_locks(target_date)
@@ -1168,33 +1398,40 @@ def build_manifest(
         current = _load_json(INITIAL_QUANTITY_CURRENT)
         initial_effective = date.fromisoformat(str(current["effective_from"]))
         if date.fromisoformat(target_date) >= initial_effective:
-            if any(key.startswith("KORSTOCKSCAN_POSITION_SIZING_POLICY_")
-                   or key in (INITIAL_QUANTITY_ENV_FILE, INITIAL_QUANTITY_ENV_SHA)
-                   for key in operator_values):
-                raise ValueError("operator_position_sizing_policy_conflicts_with_initial_baseline")
+            if any(
+                key.startswith("KORSTOCKSCAN_POSITION_SIZING_POLICY_")
+                or key in (INITIAL_QUANTITY_ENV_FILE, INITIAL_QUANTITY_ENV_SHA)
+                for key in operator_values
+            ):
+                raise ValueError(
+                    "operator_position_sizing_policy_conflicts_with_initial_baseline"
+                )
             for key in tuple(values):
                 if key.startswith("KORSTOCKSCAN_POSITION_SIZING_POLICY_"):
                     values.pop(key)
                     env_owners.pop(key, None)
             initial_env = selected_initial_quantity_env(
-                INITIAL_QUANTITY_CURRENT, target_date)
+                INITIAL_QUANTITY_CURRENT, target_date
+            )
             values.update(initial_env)
-            env_owners.update({
-                key: "initial_quantity_current_verified" for key in initial_env
-            })
+            env_owners.update(
+                {key: "initial_quantity_current_verified" for key in initial_env}
+            )
             initial_quantity_receipt = {
                 "current_file": str(INITIAL_QUANTITY_CURRENT.resolve()),
                 "current_file_sha256": _digest_bytes(
-                    INITIAL_QUANTITY_CURRENT.read_bytes()),
+                    INITIAL_QUANTITY_CURRENT.read_bytes()
+                ),
                 "current_content_sha256": current["current_content_sha256"],
                 "policy_file_sha256": initial_env[INITIAL_QUANTITY_ENV_SHA],
                 "source_date": current["source_date"],
                 "effective_from": current["effective_from"],
             }
     incumbent_trailing = incumbent.get("scalp_trailing_mechanical_policy_receipt") or {}
-    prior_selected_trailing = (
-        incumbent_trailing.get("source") == "reviewed_selected_candidate"
-        and isinstance(incumbent_trailing.get("market_values_sha256"), str)
+    prior_selected_trailing = incumbent_trailing.get(
+        "source"
+    ) == "reviewed_selected_candidate" and isinstance(
+        incumbent_trailing.get("market_values_sha256"), str
     )
     # The 2026-09-25 operator direction supersedes the inherited 0.6% baseline.
     # A later reviewed selector may replace it through an exact rollback parent.
@@ -1210,55 +1447,79 @@ def build_manifest(
     accepted_direct_receipts = []
     for receipt in direct_receipts:
         if receipt["family"] in {
-            "nxt_rising_missed_tp1_partial_runner", "scalp_mfe_protect_exit"
+            "nxt_rising_missed_tp1_partial_runner",
+            "scalp_mfe_protect_exit",
         }:
             rejected_receipts.append({**receipt, "reason": "exit_owner_retired"})
             continue
         if receipt["family"] == "scalp_trailing_mechanical_three_axis_selector":
-            if any(row["family"] == receipt["family"] for row in accepted_direct_receipts):
-                rejected_receipts.append({**receipt, "reason": "multiple_same_stage_candidates"})
+            if any(
+                row["family"] == receipt["family"] for row in accepted_direct_receipts
+            ):
+                rejected_receipts.append(
+                    {**receipt, "reason": "multiple_same_stage_candidates"}
+                )
                 continue
             selected_env = receipt["runtime_env_overrides"]
             operator_conflicts = sorted(
-                key for key, value in selected_env.items()
-                if key in operator_values and operator_values[key] != value
+                key
+                for key, value in selected_env.items()
+                if key in operator_values
+                and operator_values[key] != value
                 and not (start_directive_active and key in start_keys)
             )
-            lock_conflicts = sorted({
-                key for lock in locks
-                if operator_policy_succession.classify(lock) != "inactive_archive"
-                for key, value in operator_policy_succession.lock_values(lock).items()
-                if key in selected_env and str(value) != selected_env[key]
-                and not (start_directive_active and key in start_keys)
-            })
+            lock_conflicts = sorted(
+                {
+                    key
+                    for lock in locks
+                    if operator_policy_succession.classify(lock) != "inactive_archive"
+                    for key, value in operator_policy_succession.lock_values(
+                        lock
+                    ).items()
+                    if key in selected_env
+                    and str(value) != selected_env[key]
+                    and not (start_directive_active and key in start_keys)
+                }
+            )
             if operator_conflicts or lock_conflicts:
-                rejected_receipts.append({
-                    **receipt, "reason": "operator_or_lock_veto_conflict",
-                    "env_keys": sorted(set(operator_conflicts + lock_conflicts)),
-                })
+                rejected_receipts.append(
+                    {
+                        **receipt,
+                        "reason": "operator_or_lock_veto_conflict",
+                        "env_keys": sorted(set(operator_conflicts + lock_conflicts)),
+                    }
+                )
                 continue
             parent_values = {
-                key: value for key, value in values.items()
-                if key not in {
+                key: value
+                for key, value in values.items()
+                if key
+                not in {
                     f"KORSTOCKSCAN_SCALP_TRAILING_STRONG_AI_SCORE_{market}"
                     for market in ("PREMARKET", "REGULAR", "INTEGRATED_AFTERMARKET")
-                } and key not in {
+                }
+                and key
+                not in {
                     "KORSTOCKSCAN_SCALP_TRAILING_MARKET_VECTOR_SHA256",
                     "KORSTOCKSCAN_SCALP_TRAILING_VALUE_SHA256",
                     "KORSTOCKSCAN_SCALP_TRAILING_START_BY_MARKET_SHA256",
                     SCALP_TRAILING_MARKET_VECTOR_SHA_ENV_KEY,
                 }
             }
-            parent = scalp_trailing_bootstrap_receipt(parent_values, source="rollback_incumbent")[
-                "market_values_sha256"
-            ]
+            parent = scalp_trailing_bootstrap_receipt(
+                parent_values, source="rollback_incumbent"
+            )["market_values_sha256"]
             try:
                 policy = _load_json(Path(receipt["source_receipt"]["path"]))
             except (OSError, ValueError, json.JSONDecodeError):
-                rejected_receipts.append({**receipt, "reason": "selected_receipt_unreadable"})
+                rejected_receipts.append(
+                    {**receipt, "reason": "selected_receipt_unreadable"}
+                )
                 continue
             if policy.get("rollback_market_values_sha256") != parent:
-                raise ValueError("selected_scalp_trailing_rollback_parent_hash_mismatch")
+                raise ValueError(
+                    "selected_scalp_trailing_rollback_parent_hash_mismatch"
+                )
             candidate_receipt = scalp_trailing_bootstrap_receipt(
                 {**parent_values, **selected_env}, source="reviewed_selected_candidate"
             )
@@ -1266,13 +1527,19 @@ def build_manifest(
                 parent_values, source="rollback_incumbent"
             )
             changed_markets = [
-                market for market in candidate_receipt["market_values"]
-                if (candidate_receipt["market_values"][market]
+                market
+                for market in candidate_receipt["market_values"]
+                if (
+                    candidate_receipt["market_values"][market]
                     != parent_receipt["market_values"][market]
                     or candidate_receipt["classifier_parameters"][market]
-                    != parent_receipt["classifier_parameters"][market])
+                    != parent_receipt["classifier_parameters"][market]
+                )
             ]
-            if len(changed_markets) != 1 or policy.get("changed_market") != changed_markets[0]:
+            if (
+                len(changed_markets) != 1
+                or policy.get("changed_market") != changed_markets[0]
+            ):
                 raise ValueError("selected_scalp_trailing_one_market_canary_invalid")
         for key, value in receipt.get("runtime_env_overrides", {}).items():
             values[key] = str(value)
@@ -1295,28 +1562,38 @@ def build_manifest(
             rejected_locks.append({**row, "reason": "inactive_archive"})
             continue
         lock_env = without_retired_env(operator_policy_succession.lock_values(lock))
-        if any(key in lock_env for key in (
-            INITIAL_QUANTITY_ENV_FILE, INITIAL_QUANTITY_ENV_SHA
-        )) and INITIAL_QUANTITY_ENV_FILE in values:
+        if (
+            any(
+                key in lock_env
+                for key in (INITIAL_QUANTITY_ENV_FILE, INITIAL_QUANTITY_ENV_SHA)
+            )
+            and INITIAL_QUANTITY_ENV_FILE in values
+        ):
             raise ValueError("operator_lock_conflicts_with_initial_quantity_current")
         superseded_start_keys = (
             sorted(set(lock_env).intersection(start_keys))
-            if start_directive_active else []
+            if start_directive_active
+            else []
         )
         for key in superseded_start_keys:
             lock_env.pop(key, None)
         if superseded_start_keys and not lock_env:
-            rejected_locks.append({
-                **row, "reason": "superseded_start_0p4_directive",
-                "env_keys": superseded_start_keys,
-            })
+            rejected_locks.append(
+                {
+                    **row,
+                    "reason": "superseded_start_0p4_directive",
+                    "env_keys": superseded_start_keys,
+                }
+            )
             continue
         legacy_tp_score_keys = {
             f"KORSTOCKSCAN_SCALP_TRAILING_STRONG_AI_SCORE_{market}"
             for market in ("PREMARKET", "REGULAR", "INTEGRATED_AFTERMARKET")
         }
         if legacy_tp_score_keys.intersection(lock_env):
-            rejected_locks.append({**row, "reason": "legacy_ai_tp_market_override_retired"})
+            rejected_locks.append(
+                {**row, "reason": "legacy_ai_tp_market_override_retired"}
+            )
             continue
         conflicts = sorted(
             key
@@ -1332,11 +1609,16 @@ def build_manifest(
             continue
         for key, value in lock_env.items():
             values[key] = str(value)
-            env_owners[key] = f"operator_lock:{lock.get('lock_id') or lock.get('family')}"
-        applied_locks.append({
-            **row, "env_keys": sorted(lock_env),
-            "superseded_env_keys": superseded_start_keys,
-        })
+            env_owners[key] = (
+                f"operator_lock:{lock.get('lock_id') or lock.get('family')}"
+            )
+        applied_locks.append(
+            {
+                **row,
+                "env_keys": sorted(lock_env),
+                "superseded_env_keys": superseded_start_keys,
+            }
+        )
     # Retired exit deferrals must not return through operator or direct receipts.
     retired_keys = set(values) - set(without_retired_env(values))
     values = without_retired_env(values)
@@ -1344,8 +1626,10 @@ def build_manifest(
     off_values = retirement_env()
     values.update(off_values)
     env_owners.update({key: "explicit_retirement_off" for key in off_values})
-    if any(f"KORSTOCKSCAN_SCALP_TRAILING_STRONG_AI_SCORE_{market}" in operator_values
-           for market in ("PREMARKET", "REGULAR", "INTEGRATED_AFTERMARKET")):
+    if any(
+        f"KORSTOCKSCAN_SCALP_TRAILING_STRONG_AI_SCORE_{market}" in operator_values
+        for market in ("PREMARKET", "REGULAR", "INTEGRATED_AFTERMARKET")
+    ):
         raise ValueError("operator_legacy_ai_tp_market_override_requires_removal")
     for market in ("PREMARKET", "REGULAR", "INTEGRATED_AFTERMARKET"):
         legacy_score = f"KORSTOCKSCAN_SCALP_TRAILING_STRONG_AI_SCORE_{market}"
@@ -1359,15 +1643,20 @@ def build_manifest(
     ):
         values.pop(legacy_hash, None)
         env_owners.pop(legacy_hash, None)
-    selected_direct = next((
-        row for row in direct_receipts
-        if row["family"] == "scalp_trailing_mechanical_three_axis_selector"
-    ), None)
+    selected_direct = next(
+        (
+            row
+            for row in direct_receipts
+            if row["family"] == "scalp_trailing_mechanical_three_axis_selector"
+        ),
+        None,
+    )
     current_trailing_hash = scalp_trailing_bootstrap_receipt(
         values, source="rollback_incumbent"
     )["market_values_sha256"]
     carried_selection = bool(
-        not selected_direct and prior_selected_trailing
+        not selected_direct
+        and prior_selected_trailing
         and current_trailing_hash == incumbent_trailing["market_values_sha256"]
     )
     trailing_source = (
@@ -1380,43 +1669,77 @@ def build_manifest(
             values[key] = "0.4"
             env_owners[key] = "operator_directed_2026_09_25"
     trailing_receipt = scalp_trailing_bootstrap_receipt(values, source=trailing_source)
-    from src.engine.scalping.trailing_situation_policy import initial_bundle, ENV_KEY as TRAILING_SITUATION_ENV, PreparedTrailingPolicy
-    typed_parent = initial_bundle(trailing_receipt['market_values'],
-        parent_sha256=trailing_receipt['market_values_sha256'], source_date=target_date, target_date=target_date,
-        parent_classifier_parameters=trailing_receipt['classifier_parameters'])
-    typed_path = DATA_DIR / 'threshold_cycle/scalp_trailing_situation' / f'initial_policy_{target_date}.json'
-    typed_publication = typed_path.with_suffix('.publication.json')
+    from src.engine.scalping.trailing_situation_policy import (
+        initial_bundle,
+        ENV_KEY as TRAILING_SITUATION_ENV,
+        PreparedTrailingPolicy,
+    )
+
+    typed_parent = initial_bundle(
+        trailing_receipt["market_values"],
+        parent_sha256=trailing_receipt["market_values_sha256"],
+        source_date=target_date,
+        target_date=target_date,
+        parent_classifier_parameters=trailing_receipt["classifier_parameters"],
+    )
+    typed_path = (
+        DATA_DIR
+        / "threshold_cycle/scalp_trailing_situation"
+        / f"initial_policy_{target_date}.json"
+    )
+    typed_publication = typed_path.with_suffix(".publication.json")
     if typed_publication.exists():
         from .main_trailing_all_scope_research import _sealed
+
         publication = _sealed(typed_publication)
-        if publication.get('state') != 'verified' or not typed_path.exists():
-            raise ValueError('main_trailing_initial_publication_incomplete')
+        if publication.get("state") != "verified" or not typed_path.exists():
+            raise ValueError("main_trailing_initial_publication_incomplete")
     if typed_path.exists():
         if typed_path.is_symlink() or typed_path.stat().st_size > 64 * 1024:
-            raise ValueError('trailing_situation_initial_policy_path_invalid')
+            raise ValueError("trailing_situation_initial_policy_path_invalid")
         candidate_typed = _load_json(typed_path)
-        PreparedTrailingPolicy.prepare(candidate_typed, target_date=target_date,
-            parent_sha256=trailing_receipt['market_values_sha256'])
-        typed_receipt = typed_path.with_suffix('.receipt.json')
-        if typed_receipt.exists() or typed_path.with_suffix('.publication.json').exists():
+        PreparedTrailingPolicy.prepare(
+            candidate_typed,
+            target_date=target_date,
+            parent_sha256=trailing_receipt["market_values_sha256"],
+        )
+        typed_receipt = typed_path.with_suffix(".receipt.json")
+        if (
+            typed_receipt.exists()
+            or typed_path.with_suffix(".publication.json").exists()
+        ):
             from .main_trailing_research_handoff import verify_initial
-            verify_initial(DATA_DIR,candidate_typed,target_date=target_date,
-                parent_sha256=trailing_receipt['market_values_sha256'])
+
+            verify_initial(
+                DATA_DIR,
+                candidate_typed,
+                target_date=target_date,
+                parent_sha256=trailing_receipt["market_values_sha256"],
+            )
         typed_parent = candidate_typed
     # This baseline is an exact parent-equivalence expansion, not a tuning
     # approval. A qualified override requires the existing real selector.
-    values[TRAILING_SITUATION_ENV] = json.dumps(typed_parent, sort_keys=True, separators=(',', ':'))
-    env_owners[TRAILING_SITUATION_ENV] = 'scalp_trailing_mechanical_policy_receipt'
+    values[TRAILING_SITUATION_ENV] = json.dumps(
+        typed_parent, sort_keys=True, separators=(",", ":")
+    )
+    env_owners[TRAILING_SITUATION_ENV] = "scalp_trailing_mechanical_policy_receipt"
     trailing_selection_lineage = (
-        {"origin_target_date": target_date,
-         "origin_receipt": selected_direct["source_receipt"],
-         "market_values_sha256": trailing_receipt["market_values_sha256"],
-         "status": "newly_selected"}
-        if selected_direct else
-        {**(incumbent.get("scalp_trailing_selection_lineage") or {}),
-         "market_values_sha256": trailing_receipt["market_values_sha256"],
-         "status": "carried_selected"}
-        if carried_selection else None
+        {
+            "origin_target_date": target_date,
+            "origin_receipt": selected_direct["source_receipt"],
+            "market_values_sha256": trailing_receipt["market_values_sha256"],
+            "status": "newly_selected",
+        }
+        if selected_direct
+        else (
+            {
+                **(incumbent.get("scalp_trailing_selection_lineage") or {}),
+                "market_values_sha256": trailing_receipt["market_values_sha256"],
+                "status": "carried_selected",
+            }
+            if carried_selection
+            else None
+        )
     )
     for key in SCALP_TRAILING_THRESHOLD_KEYS:
         env_key = f"KORSTOCKSCAN_{key}"
@@ -1426,17 +1749,23 @@ def build_manifest(
     for threshold, markets in SCALP_TRAILING_MARKET_ENV_KEYS.items():
         for market, env_key in markets.items():
             if env_key not in values:
-                values[env_key] = str(trailing_receipt["market_values"][market][threshold])
+                values[env_key] = str(
+                    trailing_receipt["market_values"][market][threshold]
+                )
                 env_owners[env_key] = env_owners.get(
                     f"KORSTOCKSCAN_{threshold}", "code_default"
                 )
     for axis, markets in SCALP_TRAILING_CLASSIFIER_MARKET_ENV_KEYS.items():
         for market, env_key in markets.items():
             if env_key not in values:
-                values[env_key] = str(trailing_receipt["classifier_parameters"][market][axis])
+                values[env_key] = str(
+                    trailing_receipt["classifier_parameters"][market][axis]
+                )
                 env_owners[env_key] = "scalp_trailing_mechanical_policy_receipt"
     values[SCALP_TRAILING_CLASSIFIER_ENV_KEY] = trailing_receipt["classifier_version"]
-    env_owners[SCALP_TRAILING_CLASSIFIER_ENV_KEY] = "scalp_trailing_mechanical_policy_receipt"
+    env_owners[SCALP_TRAILING_CLASSIFIER_ENV_KEY] = (
+        "scalp_trailing_mechanical_policy_receipt"
+    )
     values[SCALP_TRAILING_MARKET_VECTOR_SHA_ENV_KEY] = trailing_receipt[
         "market_values_sha256"
     ]
@@ -1451,20 +1780,27 @@ def build_manifest(
     env_owners.update({key: "holding_path_vote_policy" for key in holding_vote_env})
     from src.engine.automation.main_stop_postclose import handoff as stop_handoff
     from src.engine.scalping.main_stop_policy import ENV_FILE, ENV_SHA, ENV_DATE
+
     for key in (ENV_FILE, ENV_SHA, ENV_DATE):
-        values.pop(key, None); env_owners.pop(key, None)
-    stop_env, stop_receipt = stop_handoff(DATA_DIR, target_date, effective_env=values, require_terminal=True)
-    if stop_receipt.get('status') == 'policy_selected' and trailing_selection_lineage and trailing_selection_lineage.get('status') == 'newly_selected':
-        raise ValueError('holding_exit_stage_multiple_new_axes')
+        values.pop(key, None)
+        env_owners.pop(key, None)
+    stop_env, stop_receipt = stop_handoff(
+        DATA_DIR, target_date, effective_env=values, require_terminal=True
+    )
+    if (
+        stop_receipt.get("status") == "policy_selected"
+        and trailing_selection_lineage
+        and trailing_selection_lineage.get("status") == "newly_selected"
+    ):
+        raise ValueError("holding_exit_stage_multiple_new_axes")
     values.update(stop_env)
     env_owners.update({key: "main_stop_confirmation" for key in stop_env})
     selected_families = sorted(
         str(item)
         for item in incumbent.get("selected_families") or []
         if str(item) not in RETIRED_FAMILIES
-        and str(item) not in {
-            "nxt_rising_missed_tp1_partial_runner", "scalp_mfe_protect_exit"
-        }
+        and str(item)
+        not in {"nxt_rising_missed_tp1_partial_runner", "scalp_mfe_protect_exit"}
         and str(item) != "scalp_trailing_four_axis_selector"
     )
     return {
@@ -1517,7 +1853,8 @@ def build_manifest(
         "main_stop_confirmation_receipt": stop_receipt,
         "env_overrides": dict(sorted(values.items())),
         "retired_key_scrubbed": sorted(
-            retired_keys | (set(incumbent_values) - set(without_retired_env(incumbent_values)))
+            retired_keys
+            | (set(incumbent_values) - set(without_retired_env(incumbent_values)))
         ),
         "assertions": {
             "provider_called": False,
@@ -1529,7 +1866,9 @@ def build_manifest(
 
 
 def write_bootstrap(
-    target_date: str, *, receipt_paths: Iterable[Path] = (),
+    target_date: str,
+    *,
+    receipt_paths: Iterable[Path] = (),
     output_dir: Path | None = None,
 ) -> dict[str, Any]:
     manifest = build_manifest(target_date, receipt_paths=receipt_paths)
@@ -1558,15 +1897,28 @@ FUTURE_TRANSITION_SCHEMA = "direct_family_future_handoff_transition_v1"
 
 
 def future_handoff_transition_path(
-    source_date: str, target_date: str, summary_sha: str,
-    manifest_sha: str, verification_sha: str, *, data_dir: Path | None = None,
+    source_date: str,
+    target_date: str,
+    summary_sha: str,
+    manifest_sha: str,
+    verification_sha: str,
+    *,
+    data_dir: Path | None = None,
 ) -> Path:
-    if (date.fromisoformat(source_date).isoformat() != source_date
-            or date.fromisoformat(target_date).isoformat() != target_date):
+    if (
+        date.fromisoformat(source_date).isoformat() != source_date
+        or date.fromisoformat(target_date).isoformat() != target_date
+    ):
         raise ValueError("future_transition_date_invalid")
     root = Path(DATA_DIR if data_dir is None else data_dir).resolve()
-    return (root / "runtime" / "policy_bootstrap" / "future_handoff_transitions"
-            / target_date / f"{source_date}_{summary_sha[:16]}_{manifest_sha[:16]}_{verification_sha[:16]}.json")
+    return (
+        root
+        / "runtime"
+        / "policy_bootstrap"
+        / "future_handoff_transitions"
+        / target_date
+        / f"{source_date}_{summary_sha[:16]}_{manifest_sha[:16]}_{verification_sha[:16]}.json"
+    )
 
 
 def release_selection_for_generation(
@@ -1587,22 +1939,33 @@ def release_selection_for_generation(
         current = json.loads(current_raw)
     except (OSError, ValueError, TypeError):
         return {"status": "invalid", "issues": ["release_selection_unreadable"]}
-    if not isinstance(current, dict) or current.get("schema") != "runtime_release_selection_v1":
+    if (
+        not isinstance(current, dict)
+        or current.get("schema") != "runtime_release_selection_v1"
+    ):
         return {"status": "invalid", "issues": ["release_selection_invalid"]}
     selected = manifest.get("selected_release_sha")
 
     def valid_identity(value: dict[str, Any]) -> bool:
         commit = value.get("git_commit")
-        return (value.get("schema") == "runtime_release_selection_v1"
-                and isinstance(commit, str) and len(commit) == 40
-                and all(char in "0123456789abcdef" for char in commit)
-                and Path(str(value.get("release_root") or "")).is_absolute())
+        return (
+            value.get("schema") == "runtime_release_selection_v1"
+            and isinstance(commit, str)
+            and len(commit) == 40
+            and all(char in "0123456789abcdef" for char in commit)
+            and Path(str(value.get("release_root") or "")).is_absolute()
+        )
+
     if not valid_identity(current):
         return {"status": "invalid", "issues": ["release_selection_invalid"]}
     if selected == current["git_commit"]:
-        return {"status": "current", "selection": current,
-                "selection_path": str(current_path),
-                "selection_sha256": _digest_bytes(current_raw), "issues": []}
+        return {
+            "status": "current",
+            "selection": current,
+            "selection_path": str(current_path),
+            "selection_sha256": _digest_bytes(current_raw),
+            "issues": [],
+        }
     # A policy-preserving intraday deployment retains the original PREOPEN
     # manifest while its canonical verification belongs to the new Main PID.
     # The old selector interval cannot authenticate that newer verification.
@@ -1613,52 +1976,81 @@ def release_selection_for_generation(
         valid_target = date.fromisoformat(target).isoformat() == target
     except (TypeError, ValueError):
         valid_target = False
-    if (data_dir == Path(DATA_DIR).resolve() and valid_target
-            and target == verification.get("target_date")):
+    if (
+        data_dir == Path(DATA_DIR).resolve()
+        and valid_target
+        and target == verification.get("target_date")
+    ):
         from src.engine.automation import intraday_release_handoff as handoff
+
         handoff_path, consumed_path = handoff._paths(target, current["git_commit"])
         if handoff_path.exists():
             try:
                 check = handoff.verify(target, current["git_commit"])
                 consumed = handoff._read(consumed_path)
                 pid = verification.get("pid")
-                if (check.get("status") != "pass" or type(pid) is not int or pid <= 0
-                        or verification.get("status") != "pass"
-                        or verification.get("passed") is not True
-                        or verification.get("pid_passed") is not True
-                        or verification.get("pid_env_available") is not True
-                        or consumed.get("schema") != "intraday_policy_preserving_consumption_v1"
-                        or consumed.get("status") != "pass"
-                        or consumed.get("target_date") != target
-                        or consumed.get("selected_release_commit") != current["git_commit"]
-                        or consumed.get("actual_pid_consumed") is not True
-                        or consumed.get("handoff_sha256") != handoff._sha(handoff_path)
-                        or consumed.get("pid_identity") != handoff._identity(pid)
-                        or consumed.get("manifest_sha256") != manifest.get("manifest_sha256")
-                        or handoff._read(manifest_path(target)) != manifest
-                        or handoff._read(verify_path(target)) != verification
-                        or current_path.read_bytes() != current_raw):
+                if (
+                    check.get("status") != "pass"
+                    or type(pid) is not int
+                    or pid <= 0
+                    or verification.get("status") != "pass"
+                    or verification.get("passed") is not True
+                    or verification.get("pid_passed") is not True
+                    or verification.get("pid_env_available") is not True
+                    or consumed.get("schema")
+                    != "intraday_policy_preserving_consumption_v1"
+                    or consumed.get("status") != "pass"
+                    or consumed.get("target_date") != target
+                    or consumed.get("selected_release_commit") != current["git_commit"]
+                    or consumed.get("actual_pid_consumed") is not True
+                    or consumed.get("handoff_sha256") != handoff._sha(handoff_path)
+                    or consumed.get("pid_identity") != handoff._identity(pid)
+                    or consumed.get("manifest_sha256")
+                    != manifest.get("manifest_sha256")
+                    or handoff._read(manifest_path(target)) != manifest
+                    or handoff._read(verify_path(target)) != verification
+                    or current_path.read_bytes() != current_raw
+                ):
                     raise ValueError("intraday_generation_or_pid_unbound")
-                return {"status": "intraday_preserved", "selection": current,
-                        "selection_path": str(current_path),
-                        "selection_sha256": _digest_bytes(current_raw),
-                        "original_manifest_release_commit": selected,
-                        "handoff_path": str(handoff_path),
-                        "handoff_sha256": handoff._sha(handoff_path),
-                        "consumption_path": str(consumed_path),
-                        "consumption_sha256": handoff._sha(consumed_path),
-                        "issues": []}
-            except (OSError, ValueError, KeyError, TypeError, subprocess.CalledProcessError):
-                return {"status": "invalid", "issues": ["intraday_generation_or_pid_unbound"]}
+                return {
+                    "status": "intraday_preserved",
+                    "selection": current,
+                    "selection_path": str(current_path),
+                    "selection_sha256": _digest_bytes(current_raw),
+                    "original_manifest_release_commit": selected,
+                    "handoff_path": str(handoff_path),
+                    "handoff_sha256": handoff._sha(handoff_path),
+                    "consumption_path": str(consumed_path),
+                    "consumption_sha256": handoff._sha(consumed_path),
+                    "issues": [],
+                }
+            except (
+                OSError,
+                ValueError,
+                KeyError,
+                TypeError,
+                subprocess.CalledProcessError,
+            ):
+                return {
+                    "status": "invalid",
+                    "issues": ["intraday_generation_or_pid_unbound"],
+                }
     try:
         generated = datetime.fromisoformat(manifest["generated_at"])
         verified = datetime.fromisoformat(verification["verified_at"])
         successor_at = datetime.fromisoformat(current["selected_at_kst"])
-        if (generated.tzinfo is None or verified.tzinfo is None
-                or successor_at.tzinfo is None or generated > verified):
+        if (
+            generated.tzinfo is None
+            or verified.tzinfo is None
+            or successor_at.tzinfo is None
+            or generated > verified
+        ):
             raise ValueError("generation_time_invalid")
     except (KeyError, TypeError, ValueError):
-        return {"status": "invalid", "issues": ["release_selection_history_time_invalid"]}
+        return {
+            "status": "invalid",
+            "issues": ["release_selection_history_time_invalid"],
+        }
     workspace = data_dir.parent
     backup_dir = workspace / "tmp"
     managed_dir = workspace.parent / f"{workspace.name}-runtime-releases"
@@ -1669,8 +2061,12 @@ def release_selection_for_generation(
         if not isinstance(backup_name, str):
             break
         backup = Path(backup_name)
-        if (not backup.is_absolute() or backup.parent != backup_dir
-                or backup in visited or backup.is_symlink()):
+        if (
+            not backup.is_absolute()
+            or backup.parent != backup_dir
+            or backup in visited
+            or backup.is_symlink()
+        ):
             break
         visited.add(backup)
         try:
@@ -1682,77 +2078,126 @@ def release_selection_for_generation(
             next_at = datetime.fromisoformat(successor["selected_at_kst"])
         except (OSError, ValueError, TypeError, KeyError):
             break
-        if (not isinstance(prior, dict) or not valid_identity(prior)
-                or prior_at.tzinfo is None or next_at.tzinfo is None
-                or prior_at >= next_at
-                or successor.get("previous_git_commit") != prior["git_commit"]
-                or successor.get("previous_release_root") != prior["release_root"]):
+        if (
+            not isinstance(prior, dict)
+            or not valid_identity(prior)
+            or prior_at.tzinfo is None
+            or next_at.tzinfo is None
+            or prior_at >= next_at
+            or successor.get("previous_git_commit") != prior["git_commit"]
+            or successor.get("previous_release_root") != prior["release_root"]
+        ):
             break
         if prior["git_commit"] == selected:
             release = Path(prior["release_root"])
-            if (release.parent != managed_dir or not release.is_dir()
-                    or not (release / ".git").exists()
-                    or not prior_at <= generated <= verified < next_at):
+            if (
+                release.parent != managed_dir
+                or not release.is_dir()
+                or not (release / ".git").exists()
+                or not prior_at <= generated <= verified < next_at
+            ):
                 break
             try:
                 head = subprocess.check_output(
                     ["git", "-C", str(release), "rev-parse", "HEAD"],
-                    text=True, timeout=5,
+                    text=True,
+                    timeout=5,
                 ).strip()
                 dirty = subprocess.check_output(
-                    ["git", "-C", str(release), "status", "--porcelain",
-                     "--untracked-files=all", "--", "src", "deploy", "restart.sh"],
-                    text=True, timeout=5,
+                    [
+                        "git",
+                        "-C",
+                        str(release),
+                        "status",
+                        "--porcelain",
+                        "--untracked-files=all",
+                        "--",
+                        "src",
+                        "deploy",
+                        "restart.sh",
+                    ],
+                    text=True,
+                    timeout=5,
                 )
             except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
                 break
             if head == selected and not dirty:
-                return {"status": "historical", "selection": prior,
-                        "selection_path": str(backup),
-                        "selection_sha256": _digest_bytes(raw), "issues": []}
+                return {
+                    "status": "historical",
+                    "selection": prior,
+                    "selection_path": str(backup),
+                    "selection_sha256": _digest_bytes(raw),
+                    "issues": [],
+                }
             break
         successor = prior
     return {"status": "invalid", "issues": ["release_selection_generation_unproven"]}
 
 
 def future_handoff_transition_contract(
-    source_date: str, target_date: str, *, data_dir: Path | None = None,
+    source_date: str,
+    target_date: str,
+    *,
+    data_dir: Path | None = None,
     allow_pid_receipt: bool = False,
 ) -> dict[str, Any]:
     """Bind an immutable postclose summary to a later bootstrap generation."""
     try:
-        if (date.fromisoformat(source_date).isoformat() != source_date
-                or date.fromisoformat(target_date).isoformat() != target_date
-                or source_date >= target_date):
+        if (
+            date.fromisoformat(source_date).isoformat() != source_date
+            or date.fromisoformat(target_date).isoformat() != target_date
+            or source_date >= target_date
+        ):
             raise ValueError("invalid_date_order")
     except (TypeError, ValueError):
         return {"status": "blocked", "issues": ["future_transition_date_invalid"]}
     data_dir = Path(DATA_DIR if data_dir is None else data_dir).resolve()
     root = data_dir / "runtime" / "policy_bootstrap"
-    summary_path = data_dir / "report" / "runtime_approval_summary" / f"runtime_approval_summary_{source_date}.json"
+    summary_path = (
+        data_dir
+        / "report"
+        / "runtime_approval_summary"
+        / f"runtime_approval_summary_{source_date}.json"
+    )
     manifest_file = root / f"runtime_policy_bootstrap_{target_date}.json"
     verification_file = root / f"runtime_policy_bootstrap_verify_{target_date}.json"
     env_file = root / f"runtime_policy_bootstrap_{target_date}.env"
     try:
-        raw = {label: path.read_bytes() for label, path in (
-            ("summary", summary_path), ("manifest", manifest_file),
-            ("verification", verification_file), ("env", env_file),
-        )}
+        raw = {
+            label: path.read_bytes()
+            for label, path in (
+                ("summary", summary_path),
+                ("manifest", manifest_file),
+                ("verification", verification_file),
+                ("env", env_file),
+            )
+        }
         summary, manifest, verification = (
             json.loads(raw[label]) for label in ("summary", "manifest", "verification")
         )
     except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
-        return {"status": "blocked", "issues": [f"future_transition_source_missing_or_invalid:{type(exc).__name__}"]}
+        return {
+            "status": "blocked",
+            "issues": [
+                f"future_transition_source_missing_or_invalid:{type(exc).__name__}"
+            ],
+        }
     if not all(isinstance(value, dict) for value in (summary, manifest, verification)):
         return {"status": "blocked", "issues": ["future_transition_object_required"]}
-    selection_binding = release_selection_for_generation(data_dir, manifest, verification)
+    selection_binding = release_selection_for_generation(
+        data_dir, manifest, verification
+    )
     selection = selection_binding.get("selection") or {}
     prior = summary.get("preopen_consumption_receipt") or {}
     issues = []
-    if (summary.get("date") != source_date or not isinstance(prior, dict)
-            or prior.get("source_date") != source_date or prior.get("apply_date") != target_date
-            or prior.get("manifest_path") != str(manifest_file)
-            or prior.get("verification_path") != str(verification_file)):
+    if (
+        summary.get("date") != source_date
+        or not isinstance(prior, dict)
+        or prior.get("source_date") != source_date
+        or prior.get("apply_date") != target_date
+        or prior.get("manifest_path") != str(manifest_file)
+        or prior.get("verification_path") != str(verification_file)
+    ):
         issues.append("future_transition_summary_pointer_invalid")
     if summary.get("preopen_consumption_state") == "off":
         issues.append("future_transition_source_off")
@@ -1765,32 +2210,44 @@ def future_handoff_transition_contract(
         )
     except ValueError:
         valid_incumbent_date = False
-    if (manifest.get("target_date") != target_date
-            or not valid_incumbent_date
-            or not isinstance(manifest.get("selected_families"), list)
-            or not isinstance(manifest.get("direct_family_receipts", []), list)
-            or manifest.get("manifest_sha256") != _digest_json({
-                key: value for key, value in manifest.items() if key != "manifest_sha256"
-            })):
+    if (
+        manifest.get("target_date") != target_date
+        or not valid_incumbent_date
+        or not isinstance(manifest.get("selected_families"), list)
+        or not isinstance(manifest.get("direct_family_receipts", []), list)
+        or manifest.get("manifest_sha256")
+        != _digest_json(
+            {key: value for key, value in manifest.items() if key != "manifest_sha256"}
+        )
+    ):
         issues.append("future_transition_manifest_invalid")
-    if (manifest.get("env_file") != str(env_file)
-            or manifest.get("env_sha256") != _digest_bytes(raw["env"])):
+    if manifest.get("env_file") != str(env_file) or manifest.get(
+        "env_sha256"
+    ) != _digest_bytes(raw["env"]):
         issues.append("future_transition_env_invalid")
     pid = verification.get("pid")
     pid_receipt_present = (
-        type(pid) is int and pid > 0 and verification.get("pid_passed") is True
+        type(pid) is int
+        and pid > 0
+        and verification.get("pid_passed") is True
         and verification.get("pid_env_available") is True
     )
-    if (verification.get("target_date") != target_date
-            or verification.get("status") != "pass" or verification.get("passed") is not True
-            or verification.get("manifest_file") not in (None, str(manifest_file))
-            or verification.get("env_file") not in (None, str(env_file))
-            or verification.get("manifest_sha256") != manifest.get("manifest_sha256")
-            or (not pid_receipt_present and (pid is not None or verification.get("pid_passed") is not None))
-            or (pid_receipt_present and not allow_pid_receipt)
-            or verification.get("pid_env_available") is not True
-            or verification.get("findings", []) != []
-            or verification.get("pid_mismatches", []) != []):
+    if (
+        verification.get("target_date") != target_date
+        or verification.get("status") != "pass"
+        or verification.get("passed") is not True
+        or verification.get("manifest_file") not in (None, str(manifest_file))
+        or verification.get("env_file") not in (None, str(env_file))
+        or verification.get("manifest_sha256") != manifest.get("manifest_sha256")
+        or (
+            not pid_receipt_present
+            and (pid is not None or verification.get("pid_passed") is not None)
+        )
+        or (pid_receipt_present and not allow_pid_receipt)
+        or verification.get("pid_env_available") is not True
+        or verification.get("findings", []) != []
+        or verification.get("pid_mismatches", []) != []
+    ):
         issues.append("future_transition_verification_invalid")
     commit = selection.get("git_commit")
     if selection_binding["status"] == "invalid":
@@ -1822,7 +2279,9 @@ def future_handoff_transition_contract(
         "release_selection_sha256": selection_binding["selection_sha256"],
         "release_selection_status": selection_binding["status"],
         "selected_release_commit": commit,
-        "policy_receipts_sha256": _digest_json(manifest.get("direct_family_receipts") or []),
+        "policy_receipts_sha256": _digest_json(
+            manifest.get("direct_family_receipts") or []
+        ),
         "valid_empty": manifest.get("selected_families") == [],
         "pid_receipt_present": pid_receipt_present,
         "runtime_effect": False,
@@ -1834,7 +2293,9 @@ def future_handoff_transition_contract(
 
 
 def publish_future_handoff_transition(
-    target_date: str, *, data_dir: Path | None = None,
+    target_date: str,
+    *,
+    data_dir: Path | None = None,
     source_date: str | None = None,
 ) -> dict[str, Any]:
     """Write a content-addressed transition after a source-only bootstrap verify."""
@@ -1844,7 +2305,12 @@ def publish_future_handoff_transition(
     except (TypeError, ValueError):
         return {"status": "blocked", "issues": ["future_transition_date_invalid"]}
     data_dir = Path(DATA_DIR if data_dir is None else data_dir).resolve()
-    manifest_file = data_dir / "runtime" / "policy_bootstrap" / f"runtime_policy_bootstrap_{target_date}.json"
+    manifest_file = (
+        data_dir
+        / "runtime"
+        / "policy_bootstrap"
+        / f"runtime_policy_bootstrap_{target_date}.json"
+    )
     try:
         _load_json(manifest_file)
     except (OSError, ValueError, json.JSONDecodeError):
@@ -1855,53 +2321,95 @@ def publish_future_handoff_transition(
         for summary_path in sorted(summary_dir.glob("runtime_approval_summary_*.json")):
             candidate = summary_path.stem.removeprefix("runtime_approval_summary_")
             try:
-                if (date.fromisoformat(candidate).isoformat() != candidate
-                        or candidate >= target_date):
+                if (
+                    date.fromisoformat(candidate).isoformat() != candidate
+                    or candidate >= target_date
+                ):
                     continue
                 summary = _load_json(summary_path)
             except (OSError, ValueError, json.JSONDecodeError):
                 continue
             prior = summary.get("preopen_consumption_receipt") or {}
-            if (summary.get("date") == candidate and isinstance(prior, dict)
-                    and prior.get("source_date") == candidate
-                    and prior.get("apply_date") == target_date):
+            if (
+                summary.get("date") == candidate
+                and isinstance(prior, dict)
+                and prior.get("source_date") == candidate
+                and prior.get("apply_date") == target_date
+            ):
                 candidates.append(candidate)
         if not candidates:
             return {"status": "not_applicable", "reason": "source_summary_missing"}
-        results = [publish_future_handoff_transition(
-            target_date, data_dir=data_dir, source_date=candidate,
-        ) for candidate in candidates]
+        results = [
+            publish_future_handoff_transition(
+                target_date,
+                data_dir=data_dir,
+                source_date=candidate,
+            )
+            for candidate in candidates
+        ]
         if len(results) == 1:
             return results[0]
         statuses = {row.get("status") for row in results}
-        overall = ("off" if statuses == {"off"} else "linked"
-                   if statuses <= {"linked", "off"} else "blocked")
-        return {"status": overall,
-                "source_date": None, "apply_date": target_date, "transitions": results}
-    summary_path = (data_dir / "report" / "runtime_approval_summary"
-                    / f"runtime_approval_summary_{source_date}.json")
+        overall = (
+            "off"
+            if statuses == {"off"}
+            else "linked" if statuses <= {"linked", "off"} else "blocked"
+        )
+        return {
+            "status": overall,
+            "source_date": None,
+            "apply_date": target_date,
+            "transitions": results,
+        }
+    summary_path = (
+        data_dir
+        / "report"
+        / "runtime_approval_summary"
+        / f"runtime_approval_summary_{source_date}.json"
+    )
     try:
         source_summary = _load_json(summary_path)
     except (OSError, ValueError, json.JSONDecodeError):
         source_summary = {}
     prior = source_summary.get("preopen_consumption_receipt") or {}
-    if (source_summary.get("date") == source_date and isinstance(prior, dict)
-            and prior.get("source_date") == source_date
-            and prior.get("apply_date") == target_date
-            and source_summary.get("preopen_consumption_state") == "off"):
-        return {"status": "off", "source_date": source_date,
-                "apply_date": target_date, "reason": "source_summary_explicit_off"}
-    transition = future_handoff_transition_contract(source_date, target_date, data_dir=data_dir)
+    if (
+        source_summary.get("date") == source_date
+        and isinstance(prior, dict)
+        and prior.get("source_date") == source_date
+        and prior.get("apply_date") == target_date
+        and source_summary.get("preopen_consumption_state") == "off"
+    ):
+        return {
+            "status": "off",
+            "source_date": source_date,
+            "apply_date": target_date,
+            "reason": "source_summary_explicit_off",
+        }
+    transition = future_handoff_transition_contract(
+        source_date, target_date, data_dir=data_dir
+    )
     if transition.get("status") != "linked":
         return transition
-    if future_handoff_transition_contract(source_date, target_date, data_dir=data_dir) != transition:
-        return {"status": "blocked", "issues": ["future_transition_source_changed_during_publish"]}
+    if (
+        future_handoff_transition_contract(source_date, target_date, data_dir=data_dir)
+        != transition
+    ):
+        return {
+            "status": "blocked",
+            "issues": ["future_transition_source_changed_during_publish"],
+        }
     path = future_handoff_transition_path(
-        source_date, target_date, transition["source_summary_sha256"],
-        transition["manifest_sha256"], transition["verification_sha256"], data_dir=data_dir,
+        source_date,
+        target_date,
+        transition["source_summary_sha256"],
+        transition["manifest_sha256"],
+        transition["verification_sha256"],
+        data_dir=data_dir,
     )
     path.parent.mkdir(parents=True, exist_ok=True)
-    content = json.dumps(transition, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+    content = (
+        json.dumps(transition, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+    )
     try:
         with path.open("x", encoding="utf-8") as handle:
             handle.write(content)
@@ -1933,7 +2441,9 @@ def _launcher_ai_context_overlay(target_date: str) -> dict[str, str]:
     return authoritative_runtime_env(target_date)
 
 
-def bootstrap_source_receipt_issues(manifest: dict[str, Any], *, max_source_bytes: int | None = None) -> list[str]:
+def bootstrap_source_receipt_issues(
+    manifest: dict[str, Any], *, max_source_bytes: int | None = None
+) -> list[str]:
     """Check source bytes shared by full verification and report-only monitoring."""
     findings = []
     receipt_rows = [manifest.get("source_incumbent")]
@@ -1954,7 +2464,10 @@ def bootstrap_source_receipt_issues(manifest: dict[str, Any], *, max_source_byte
             continue
         source_path = Path(str(receipt["path"]))
         try:
-            if max_source_bytes is not None and source_path.stat().st_size > max_source_bytes:
+            if (
+                max_source_bytes is not None
+                and source_path.stat().st_size > max_source_bytes
+            ):
                 findings.append(f"source_receipt_size_exceeded:{source_path}")
                 continue
             current = _file_receipt(source_path)
@@ -1967,11 +2480,15 @@ def bootstrap_source_receipt_issues(manifest: dict[str, Any], *, max_source_byte
 
 
 def verify_bootstrap(
-    target_date: str, *, pid: int | None = None, write: bool = True,
-    output_dir: Path | None = None, observer_reuse: bool = False,
+    target_date: str,
+    *,
+    pid: int | None = None,
+    write: bool = True,
+    output_dir: Path | None = None,
+    observer_reuse: bool = False,
 ) -> dict[str, Any]:
     if observer_reuse and (write or output_dir is not None):
-        raise ValueError('observer_reuse_is_read_only_current_bootstrap_only')
+        raise ValueError("observer_reuse_is_read_only_current_bootstrap_only")
     if output_dir is not None and pid is not None:
         raise ValueError("prepared_bootstrap_cannot_claim_pid")
     findings: list[str] = []
@@ -1990,8 +2507,12 @@ def verify_bootstrap(
         findings.append("report_type_mismatch")
     if manifest.get("env_file") != str(runtime_file):
         findings.append("env_file_path_mismatch")
-    unsigned = {key: value for key, value in manifest.items() if key != "manifest_sha256"}
-    if not manifest.get("manifest_sha256") or manifest.get("manifest_sha256") != _digest_json(unsigned):
+    unsigned = {
+        key: value for key, value in manifest.items() if key != "manifest_sha256"
+    }
+    if not manifest.get("manifest_sha256") or manifest.get(
+        "manifest_sha256"
+    ) != _digest_json(unsigned):
         findings.append("manifest_hash_mismatch")
     try:
         raw_env = runtime_file.read_bytes()
@@ -2017,50 +2538,72 @@ def verify_bootstrap(
             initial_effective = date.fromisoformat(str(current["effective_from"]))
             if date.fromisoformat(target_date) >= initial_effective:
                 expected_initial_env = selected_initial_quantity_env(
-                    INITIAL_QUANTITY_CURRENT, target_date)
-                if any(manifest_env.get(key) != value
-                       for key, value in expected_initial_env.items()):
+                    INITIAL_QUANTITY_CURRENT, target_date
+                )
+                if any(
+                    manifest_env.get(key) != value
+                    for key, value in expected_initial_env.items()
+                ):
                     findings.append("initial_quantity_policy_env_mismatch")
-                if any((manifest.get("env_key_owners") or {}).get(key)
-                       != "initial_quantity_current_verified"
-                       for key in expected_initial_env):
+                if any(
+                    (manifest.get("env_key_owners") or {}).get(key)
+                    != "initial_quantity_current_verified"
+                    for key in expected_initial_env
+                ):
                     findings.append("initial_quantity_policy_owner_mismatch")
                 expected_initial_receipt = {
                     "current_file": str(INITIAL_QUANTITY_CURRENT.resolve()),
                     "current_file_sha256": _digest_bytes(
-                        INITIAL_QUANTITY_CURRENT.read_bytes()),
+                        INITIAL_QUANTITY_CURRENT.read_bytes()
+                    ),
                     "current_content_sha256": current["current_content_sha256"],
                     "policy_file_sha256": expected_initial_env[
-                        INITIAL_QUANTITY_ENV_SHA],
+                        INITIAL_QUANTITY_ENV_SHA
+                    ],
                     "source_date": current["source_date"],
                     "effective_from": current["effective_from"],
                 }
-                if manifest.get("initial_quantity_policy_receipt") != expected_initial_receipt:
+                if (
+                    manifest.get("initial_quantity_policy_receipt")
+                    != expected_initial_receipt
+                ):
                     findings.append("initial_quantity_policy_receipt_mismatch")
         except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
             findings.append(f"initial_quantity_current_invalid:{type(exc).__name__}")
-    elif (manifest.get("initial_quantity_policy_receipt") is not None
-          or any(key in manifest_env for key in (
-              INITIAL_QUANTITY_ENV_FILE, INITIAL_QUANTITY_ENV_SHA))):
+    elif manifest.get("initial_quantity_policy_receipt") is not None or any(
+        key in manifest_env
+        for key in (INITIAL_QUANTITY_ENV_FILE, INITIAL_QUANTITY_ENV_SHA)
+    ):
         findings.append("initial_quantity_current_missing")
     trailing_receipt = manifest.get("scalp_trailing_mechanical_policy_receipt")
-    if manifest.get("holding_path_vote_baseline_receipt") != path_policy_baseline_receipt():
+    if (
+        manifest.get("holding_path_vote_baseline_receipt")
+        != path_policy_baseline_receipt()
+    ):
         findings.append("holding_path_vote_baseline_receipt_mismatch")
     expected_vote_env, expected_vote_receipt = _holding_vote_handoff(target_date)
     if manifest.get("holding_path_vote_policy_receipt") != expected_vote_receipt:
         findings.append("holding_path_vote_policy_receipt_mismatch")
     if any(manifest_env.get(key) != value for key, value in expected_vote_env.items()):
         findings.append("holding_path_vote_policy_env_mismatch")
-    if not expected_vote_env and any(key in manifest_env for key in HOLDING_VOTE_ENV_KEYS):
+    if not expected_vote_env and any(
+        key in manifest_env for key in HOLDING_VOTE_ENV_KEYS
+    ):
         findings.append("holding_path_vote_policy_stale_env")
     from src.engine.automation.main_stop_postclose import handoff as stop_handoff
     from src.engine.scalping.main_stop_policy import ENV_FILE, ENV_SHA, ENV_DATE
+
     try:
-        stop_env, stop_receipt = stop_handoff(DATA_DIR, target_date, effective_env=manifest_env, require_terminal=True)
+        stop_env, stop_receipt = stop_handoff(
+            DATA_DIR, target_date, effective_env=manifest_env, require_terminal=True
+        )
         if stop_env or manifest.get("main_stop_confirmation_receipt"):
             if manifest.get("main_stop_confirmation_receipt") != stop_receipt:
                 findings.append("main_stop_confirmation_receipt_mismatch")
-        if any(manifest_env.get(k) != stop_env.get(k) for k in (ENV_FILE, ENV_SHA, ENV_DATE)):
+        if any(
+            manifest_env.get(k) != stop_env.get(k)
+            for k in (ENV_FILE, ENV_SHA, ENV_DATE)
+        ):
             findings.append("main_stop_confirmation_env_mismatch")
     except (ValueError, OSError, TypeError, KeyError):
         findings.append("main_stop_confirmation_invalid")
@@ -2070,64 +2613,88 @@ def verify_bootstrap(
         owners = manifest.get("env_key_owners")
         trailing_keys = [f"KORSTOCKSCAN_{key}" for key in SCALP_TRAILING_THRESHOLD_KEYS]
         trailing_keys.extend(
-            env_key for markets in SCALP_TRAILING_MARKET_ENV_KEYS.values()
+            env_key
+            for markets in SCALP_TRAILING_MARKET_ENV_KEYS.values()
             for env_key in markets.values()
         )
         trailing_keys.extend(
-            env_key for markets in SCALP_TRAILING_CLASSIFIER_MARKET_ENV_KEYS.values()
+            env_key
+            for markets in SCALP_TRAILING_CLASSIFIER_MARKET_ENV_KEYS.values()
             for env_key in markets.values()
         )
-        trailing_keys.extend((SCALP_TRAILING_CLASSIFIER_ENV_KEY,
-                              SCALP_TRAILING_MARKET_VECTOR_SHA_ENV_KEY))
-        if (
-            not isinstance(owners, dict)
-            or any(key not in manifest_env or not owners.get(key) for key in trailing_keys)
+        trailing_keys.extend(
+            (
+                SCALP_TRAILING_CLASSIFIER_ENV_KEY,
+                SCALP_TRAILING_MARKET_VECTOR_SHA_ENV_KEY,
+            )
+        )
+        if not isinstance(owners, dict) or any(
+            key not in manifest_env or not owners.get(key) for key in trailing_keys
         ):
             findings.append("scalp_trailing_mechanical_env_or_owner_missing")
             owners = {}
         try:
             source = (
                 "reviewed_selected_candidate"
-                if any(isinstance(row, dict) and row.get("family")
-                       == "scalp_trailing_mechanical_three_axis_selector"
-                       for row in manifest.get("direct_family_receipts") or [])
+                if any(
+                    isinstance(row, dict)
+                    and row.get("family")
+                    == "scalp_trailing_mechanical_three_axis_selector"
+                    for row in manifest.get("direct_family_receipts") or []
+                )
                 else "operator_directed_m1_baseline"
             )
-            expected_trailing = scalp_trailing_bootstrap_receipt(manifest_env, source=source)
+            expected_trailing = scalp_trailing_bootstrap_receipt(
+                manifest_env, source=source
+            )
         except (KeyError, TypeError, ValueError):
             findings.append("scalp_trailing_mechanical_policy_receipt_invalid")
         else:
-            if trailing_receipt != expected_trailing or manifest_env.get(
-                SCALP_TRAILING_MARKET_VECTOR_SHA_ENV_KEY
-            ) != expected_trailing["market_values_sha256"] or manifest_env.get(
-                SCALP_TRAILING_CLASSIFIER_ENV_KEY
-            ) != expected_trailing["classifier_version"]:
+            if (
+                trailing_receipt != expected_trailing
+                or manifest_env.get(SCALP_TRAILING_MARKET_VECTOR_SHA_ENV_KEY)
+                != expected_trailing["market_values_sha256"]
+                or manifest_env.get(SCALP_TRAILING_CLASSIFIER_ENV_KEY)
+                != expected_trailing["classifier_version"]
+            ):
                 findings.append("scalp_trailing_mechanical_policy_receipt_mismatch")
-        if any(f"KORSTOCKSCAN_SCALP_TRAILING_STRONG_AI_SCORE_{market}" in manifest_env
-               for market in ("PREMARKET", "REGULAR", "INTEGRATED_AFTERMARKET")):
+        if any(
+            f"KORSTOCKSCAN_SCALP_TRAILING_STRONG_AI_SCORE_{market}" in manifest_env
+            for market in ("PREMARKET", "REGULAR", "INTEGRATED_AFTERMARKET")
+        ):
             findings.append("legacy_ai_tp_market_override_present")
-        from src.engine.scalping.trailing_situation_policy import ENV_KEY as TYPED_ENV, PreparedTrailingPolicy
+        from src.engine.scalping.trailing_situation_policy import (
+            ENV_KEY as TYPED_ENV,
+            PreparedTrailingPolicy,
+        )
+
         if TYPED_ENV in manifest_env:
             try:
-                PreparedTrailingPolicy.prepare(json.loads(manifest_env[TYPED_ENV]), target_date=target_date,
-                    parent_sha256=trailing_receipt['market_values_sha256'])
+                PreparedTrailingPolicy.prepare(
+                    json.loads(manifest_env[TYPED_ENV]),
+                    target_date=target_date,
+                    parent_sha256=trailing_receipt["market_values_sha256"],
+                )
             except (ValueError, KeyError, TypeError):
-                findings.append('trailing_situation_policy_generation_invalid')
+                findings.append("trailing_situation_policy_generation_invalid")
     if target_date >= "2026-09-23":
         current_delay_env, current_delay_handoff = (
             _pre_submit_delay_handoff(target_date, observer_reuse=True)
-            if observer_reuse else _pre_submit_delay_handoff(target_date))
+            if observer_reuse
+            else _pre_submit_delay_handoff(target_date)
+        )
         if manifest.get("pre_submit_delay_handoff") != current_delay_handoff:
             findings.append("pre_submit_delay_generation_changed")
         for key, value in current_delay_env.items():
-            if (manifest.get("env_key_owners") or {}).get(key) == "pre_submit_delay_exact_date_policy" and manifest_env.get(key) != value:
+            if (manifest.get("env_key_owners") or {}).get(
+                key
+            ) == "pre_submit_delay_exact_date_policy" and manifest_env.get(
+                key
+            ) != value:
                 findings.append(f"pre_submit_delay_env_mismatch:{key}")
     if (
         str(
-            manifest_env.get(
-                "KORSTOCKSCAN_THRESHOLD_RUNTIME_AUTO_APPLY_ENABLED"
-            )
-            or ""
+            manifest_env.get("KORSTOCKSCAN_THRESHOLD_RUNTIME_AUTO_APPLY_ENABLED") or ""
         ).lower()
         != "true"
     ):
@@ -2140,7 +2707,8 @@ def verify_bootstrap(
     findings.extend(bootstrap_source_receipt_issues(manifest))
     for row in manifest.get("direct_family_receipts") or []:
         if not isinstance(row, dict) or row.get("family") not in {
-            "rising_missed_tp1_selector", "scalp_trailing_mechanical_three_axis_selector"
+            "rising_missed_tp1_selector",
+            "scalp_trailing_mechanical_three_axis_selector",
         }:
             continue
         receipt = row.get("source_receipt") or {}
@@ -2169,7 +2737,9 @@ def verify_bootstrap(
             findings.append(f"pid_env_unreadable:{type(exc).__name__}")
         else:
             pid_env_available = True
-            missing = sorted(key for key, value in expected.items() if actual.get(key) != value)
+            missing = sorted(
+                key for key, value in expected.items() if actual.get(key) != value
+            )
             if missing:
                 pid_mismatches.extend(missing)
                 findings.append("pid_env_mismatch:" + ",".join(missing))
@@ -2195,9 +2765,12 @@ def verify_bootstrap(
         "verified_at": datetime.now().astimezone().isoformat(timespec="seconds"),
     }
     if observer_reuse:
-        result['delay_observer_validation'] = dict(_DELAY_OBSERVER_METRICS)
+        result["delay_observer_validation"] = dict(_DELAY_OBSERVER_METRICS)
     if write:
-        _publish(verify_path(target_date, output_dir=output_dir), json.dumps(result, ensure_ascii=False, indent=2) + "\n")
+        _publish(
+            verify_path(target_date, output_dir=output_dir),
+            json.dumps(result, ensure_ascii=False, indent=2) + "\n",
+        )
         if passed and pid is not None:
             _archive_initial_quantity_pid_verification(target_date, result, manifest)
             _archive_holding_profit_pid_verification(target_date, result, manifest)
@@ -2214,7 +2787,10 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="persist the explicit verification result as the current receipt",
     )
-    parser.add_argument("--validation-session", help="internal transition digest scope; all native checks still run")
+    parser.add_argument(
+        "--validation-session",
+        help="internal transition digest scope; all native checks still run",
+    )
     parser.add_argument("--pid", type=int)
     parser.add_argument("--receipt", action="append", type=Path, default=[])
     args = parser.parse_args(argv)
@@ -2234,22 +2810,37 @@ def main(argv: list[str] | None = None) -> int:
             else {"status": "blocked", "reason": "bootstrap_verification_failed"}
         )
         print(json.dumps(result, ensure_ascii=False))
-        return 0 if (verification["status"] == "pass"
-                     and result["future_handoff_transition"]["status"] in {
-                         "linked", "not_applicable", "off"
-                     }) else 1
-    from src.engine.infrastructure.validation_digest_session import transition_session, ValidationDeferred
+        return (
+            0
+            if (
+                verification["status"] == "pass"
+                and result["future_handoff_transition"]["status"]
+                in {"linked", "not_applicable", "off"}
+            )
+            else 1
+        )
+    from src.engine.infrastructure.validation_digest_session import (
+        transition_session,
+        ValidationDeferred,
+    )
+
     session = None
     try:
-        with transition_session(DATA_DIR, args.target_date, args.validation_session, args.pid) as session:
+        with transition_session(
+            DATA_DIR, args.target_date, args.validation_session, args.pid
+        ) as session:
             result = verify_bootstrap(
                 args.target_date,
                 pid=args.pid,
                 write=args.write_verify_artifact,
             )
     except (OSError, ValueError, ValidationDeferred) as exc:
-        result = dict(status='fail', passed=False, target_date=args.target_date,
-                      findings=[str(exc)])
+        result = dict(
+            status="fail",
+            passed=False,
+            target_date=args.target_date,
+            findings=[str(exc)],
+        )
     if session is not None:
         result["validation_io"] = session.stats
     print(json.dumps(result, ensure_ascii=False))

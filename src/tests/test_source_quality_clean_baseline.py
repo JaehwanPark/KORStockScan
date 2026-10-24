@@ -4,8 +4,10 @@ from src.engine.automation import source_quality_clean_baseline as baseline
 
 
 def test_policy_refresh_window_starts_with_current_postclose_day():
-    policy = {"clean_tuning_baseline_date": "2026-06-05",
-              "policy_refresh_start_date": "2026-09-29"}
+    policy = {
+        "clean_tuning_baseline_date": "2026-06-05",
+        "policy_refresh_start_date": "2026-09-29",
+    }
     assert baseline.policy_refresh_start_date("2026-09-28", policy) == "2026-06-05"
     assert baseline.policy_refresh_start_date("2026-09-29", policy) == "2026-09-29"
     assert baseline.policy_refresh_start_date("2026-10-01", policy) == "2026-09-29"

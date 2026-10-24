@@ -1,4 +1,6 @@
-from src.engine.lifecycle.archive import scale_in_incremental_counterfactual_readers as mod
+from src.engine.lifecycle.archive import (
+    scale_in_incremental_counterfactual_readers as mod,
+)
 
 
 def _event(stage, emitted_at, **fields):
@@ -498,11 +500,14 @@ def test_backfill_uses_available_clean_sources_and_preserves_daily_states(
     assert report["allowed_runtime_apply"] is False
 
 
-def test_window_output_path_does_not_overwrite_daily_report(tmp_path,monkeypatch):
+def test_window_output_path_does_not_overwrite_daily_report(tmp_path, monkeypatch):
     from src.engine.lifecycle import scale_in_incremental_counterfactual as retired
-    def forbidden(*args,**kwargs):raise AssertionError("retired publisher performed I/O")
-    monkeypatch.setattr(type(tmp_path),"write_text",forbidden)
-    assert retired.write_outputs({})["status"]=="retired"
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("retired publisher performed I/O")
+
+    monkeypatch.setattr(type(tmp_path), "write_text", forbidden)
+    assert retired.write_outputs({})["status"] == "retired"
 
 
 def test_marketable_shadow_with_terminal_control_remains_runtime_blocked(monkeypatch):

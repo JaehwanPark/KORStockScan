@@ -840,8 +840,6 @@ def _validate_immutable_source_artifact(
     return payload, raw_sha256
 
 
-
-
 def _checkpoint_paths(record_dir: Path) -> tuple[Path, Path]:
     checkpoint_path = record_dir.with_name(record_dir.name.removesuffix(".records"))
     result_path = record_dir.with_name(
@@ -1769,9 +1767,13 @@ def _maintain_provider_budget_ledger_storage(
             # The runtime trade date is mutable and its summary may not be
             # published yet. Storage maintenance owns closed generations only.
             if trade_date == datetime.now(KST).date() and trade_date in protected_dates:
-                if (not ledger_path.is_file()
-                        or ledger_path.with_suffix(f"{ledger_path.suffix}.gz").exists()):
-                    raise ValueError("current_provider_budget_storage_generation_invalid")
+                if (
+                    not ledger_path.is_file()
+                    or ledger_path.with_suffix(f"{ledger_path.suffix}.gz").exists()
+                ):
+                    raise ValueError(
+                        "current_provider_budget_storage_generation_invalid"
+                    )
                 census["current_date_deferred_count"] += 1
                 continue
             ledger_actions, failure, physical_bytes, age_days = (
@@ -1933,12 +1935,17 @@ def validate_exact_ai_artifact_source(
         raise ValueError(f"exact_ai_artifact_date_path_invalid:{logical}")
     validation = (
         _validate_exact_ai_jsonl(
-            logical, trade_date=expected_date, expected_schema=schema,
-            timestamp_field=timestamp_field, generation=generation,
+            logical,
+            trade_date=expected_date,
+            expected_schema=schema,
+            timestamp_field=timestamp_field,
+            generation=generation,
         )
         if kind == "jsonl"
         else _validate_exact_ai_json(
-            logical, trade_date=expected_date, expected_schema=schema,
+            logical,
+            trade_date=expected_date,
+            expected_schema=schema,
             generation=generation,
         )
     )
@@ -2136,7 +2143,9 @@ def _maintain_exact_ai_artifact_storage(
                     else logical
                 )
                 validation = validate_exact_ai_artifact_source(
-                    logical, expected_date=trade_date, generation=pinned_generation,
+                    logical,
+                    expected_date=trade_date,
+                    generation=pinned_generation,
                 )
                 physical_receipts = list(validation.pop("physical_representations", []))
                 if not physical_receipts:
@@ -2200,23 +2209,33 @@ def _maintain_exact_ai_artifact_storage(
                         )
                     )
                     continue
-                native_archive = artifact_kind == 'jsonl' and logical.parent.name in {
-                    'ai_decision_payloads','ai_decision_trace','ai_decision_prompts','ai_decision_requests'}
+                native_archive = artifact_kind == "jsonl" and logical.parent.name in {
+                    "ai_decision_payloads",
+                    "ai_decision_trace",
+                    "ai_decision_prompts",
+                    "ai_decision_requests",
+                }
                 indexed = None
                 if native_archive:
-                    from src.engine.automation.main_trailing_source_store import generation as index_generation, InputPending
+                    from src.engine.automation.main_trailing_source_store import (
+                        generation as index_generation,
+                        InputPending,
+                    )
                     from src.engine.lifecycle.snapshot_archive import file_identity
+
                     source_identity = file_identity(plain_metadata)
-                    receipt_path = Path(str(owned_logical)+'.gz.archive_receipt.json')
+                    receipt_path = Path(str(owned_logical) + ".gz.archive_receipt.json")
                     if receipt_path.exists() or receipt_path.is_symlink():
-                        raise ValueError('exact_ai_original_archive_receipt_preserved')
+                        raise ValueError("exact_ai_original_archive_receipt_preserved")
                     try:
                         indexed = index_generation(logical.parent.parent, logical)
                     except InputPending:
                         pass  # Native gzip SHA remains available for explicit offline enrollment.
-                    if indexed is not None and indexed['source_stat'] != [source_identity[k]
-                            for k in ('device','inode','size','mtime_ns','ctime_ns')]:
-                        raise ValueError('exact_ai_index_source_changed')
+                    if indexed is not None and indexed["source_stat"] != [
+                        source_identity[k]
+                        for k in ("device", "inode", "size", "mtime_ns", "ctime_ns")
+                    ]:
+                        raise ValueError("exact_ai_index_source_changed")
                 group_actions, failure = _compress_group_verified(
                     [owned_logical],
                     manifest_path=None,
@@ -2227,23 +2246,37 @@ def _maintain_exact_ai_artifact_storage(
                     },
                 )
                 if native_archive and failure is None:
-                    from src.engine.compress_db_backfilled_files import native_raw_archive_receipt
-                    archive = Path(str(owned_logical)+'.gz')
+                    from src.engine.compress_db_backfilled_files import (
+                        native_raw_archive_receipt,
+                    )
+
+                    archive = Path(str(owned_logical) + ".gz")
                     identity = file_identity(archive.stat())
-                    receipt = native_raw_archive_receipt(logical,
-                        logical_sha256=str(validation['decoded_content_sha256']),
-                        logical_size=source_identity['size'], source_identity=source_identity,
-                        archive_identity=identity, indexed=indexed)
+                    receipt = native_raw_archive_receipt(
+                        logical,
+                        logical_sha256=str(validation["decoded_content_sha256"]),
+                        logical_size=source_identity["size"],
+                        source_identity=source_identity,
+                        archive_identity=identity,
+                        indexed=indexed,
+                    )
                     from dataclasses import replace
                     from src.utils.jsonl_io import write_json_object_generation_safe
-                    receipt_logical = Path(str(logical)+'.gz.archive_receipt.json')
+
+                    receipt_logical = Path(str(logical) + ".gz.archive_receipt.json")
                     # The source generation lease also owns its archive proof;
                     # retain the pinned parent across source pathname removal.
-                    write_json_object_generation_safe(receipt_logical, receipt,
-                        generation=replace(pinned_generation, logical=receipt_logical)
-                        if pinned_generation is not None else None)
+                    write_json_object_generation_safe(
+                        receipt_logical,
+                        receipt,
+                        generation=(
+                            replace(pinned_generation, logical=receipt_logical)
+                            if pinned_generation is not None
+                            else None
+                        ),
+                    )
                     if file_identity(archive.stat()) != identity:
-                        raise ValueError('exact_ai_archive_changed_during_publication')
+                        raise ValueError("exact_ai_archive_changed_during_publication")
                 remapped_actions = _remap_actions(
                     group_actions,
                     names={

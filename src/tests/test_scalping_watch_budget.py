@@ -122,14 +122,14 @@ def test_watch_budget_limits_release_retired_opening_capacity_to_rising():
     )
 
 
-
-
 def test_retired_limit_down_env_does_not_reserve_runtime_capacity(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_LIMIT_DOWN_WATCH_ENABLED", "true")
     policy = limits(16, opening_window_active=True)
     assert policy.general_max == 1
     assert policy.rising_guaranteed == 15
-    fields = kiwoom_sniper_v2._scalping_watch_budget_policy_fields([], datetime(2026, 9, 21, 10).timestamp())
+    fields = kiwoom_sniper_v2._scalping_watch_budget_policy_fields(
+        [], datetime(2026, 9, 21, 10).timestamp()
+    )
     assert "limit_down_rotation" not in fields["scanner_watch_budget_owner_counts"]
 
 
@@ -139,7 +139,6 @@ def test_market_gainer_reservation_is_six_inside_rising_guaranteed_budget():
             16,
             requested_slots=6,
             opening_window_active=True,
-
         )
         == 6
     )
@@ -148,12 +147,9 @@ def test_market_gainer_reservation_is_six_inside_rising_guaranteed_budget():
             3,
             requested_slots=6,
             opening_window_active=True,
-
         )
         == 3
     )
-
-
 
 
 def test_runtime_budget_reclassifies_retired_opening_owner(monkeypatch):

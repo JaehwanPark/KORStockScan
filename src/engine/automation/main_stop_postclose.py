@@ -3,6 +3,7 @@
 Consumes existing pipeline receipts, never calls a model/broker or invents
 numerical selection authority. Missing cells retain their verified parent.
 """
+
 from __future__ import annotations
 import argparse
 from collections import Counter
@@ -20,7 +21,13 @@ import time
 from pathlib import Path
 
 from src.engine.scalping import main_stop_policy as policy
-from src.engine.scalping.main_stop_replay import candidates, replay, choose, validate_experiment, holding_contracts
+from src.engine.scalping.main_stop_replay import (
+    candidates,
+    replay,
+    choose,
+    validate_experiment,
+    holding_contracts,
+)
 from src.engine.lifecycle import research_storage as storage
 from src.engine.lifecycle.holding_window_generation import byte_generation, source_stat
 from src.engine.lifecycle.research_admission import direct_job
@@ -28,43 +35,50 @@ from src.engine.scalping.pre_submit_delay_initial_policy import _atomic
 from src.utils.jsonl_io import open_text_auto
 from . import main_stop_source_index as source_index
 
-STAGE = 'main_stop_confirmation'
-START_DATE = '2026-10-12'
-_DEADLINE = ContextVar('main_stop_research_deadline',default=None)
+STAGE = "main_stop_confirmation"
+START_DATE = "2026-10-12"
+_DEADLINE = ContextVar("main_stop_research_deadline", default=None)
 MAX_RESEARCH_SECONDS = 14400  # Same upper bound as the native stage dispatcher.
 
 
 def checkpoint():
-    deadline=_DEADLINE.get()
-    if deadline is not None and time.monotonic()>=deadline:
-        raise ValueError('stop_research_deadline_exceeded')
+    deadline = _DEADLINE.get()
+    if deadline is not None and time.monotonic() >= deadline:
+        raise ValueError("stop_research_deadline_exceeded")
 
 
 def report_path(root, day):
-    return Path(root)/'report/main_stop_confirmation'/f'main_stop_research_{day}.json'
+    return (
+        Path(root) / "report/main_stop_confirmation" / f"main_stop_research_{day}.json"
+    )
 
 
 def committed_path(root, day):
-    return Path(root)/'threshold_cycle/main_stop_confirmation'/f'committed_{day}.json'
+    return (
+        Path(root) / "threshold_cycle/main_stop_confirmation" / f"committed_{day}.json"
+    )
 
 
-def bounded(path, limit=1024*1024):
-    return policy.bounded_object(path,limit)
+def bounded(path, limit=1024 * 1024):
+    return policy.bounded_object(path, limit)
 
 
 def dependency_stat(path):
     path = Path(path)
-    if path.parent.name == 'monitor_snapshots':
+    if path.parent.name == "monitor_snapshots":
         from src.engine.lifecycle.snapshot_archive import snapshot_identity
+
         identity = snapshot_identity(path)
-        return [identity[key] for key in ('device','inode','size','mtime_ns','ctime_ns')]
+        return [
+            identity[key] for key in ("device", "inode", "size", "mtime_ns", "ctime_ns")
+        ]
     return list(source_stat(path.stat()))
 
 
 def _indexed_vote_generation(expected):
-    return expected.get('schema') in {
-        'main_trailing_indexed_source_v1:generation',
-        'main_trailing_historical_vote_inventory_v1',
+    return expected.get("schema") in {
+        "main_trailing_indexed_source_v1:generation",
+        "main_trailing_historical_vote_inventory_v1",
     }
 
 
@@ -73,10 +87,11 @@ def _dependency_generation_matches(path, expected, *, root=None, day=None):
         return byte_generation(path) == expected
     if root is None or day is None:
         return False
-    source_day = expected.get('source_date', day)
+    source_day = expected.get("source_date", day)
     if date.fromisoformat(source_day).isoformat() != source_day or source_day > day:
         return False
     from .main_trailing_source_assembler import source_generation_matches
+
     return source_generation_matches(root, source_day, path, expected)
 
 
@@ -86,27 +101,35 @@ def verified_dependency_stats(inventory, *, root=None, day=None):
     for name, expected in inventory.items():
         path = Path(name)
         before = dependency_stat(path)
-        if (not _dependency_generation_matches(path, expected, root=root, day=day)
-                or dependency_stat(path) != before):
-            raise ValueError('stop_source_changed_during_read:' + name)
+        if (
+            not _dependency_generation_matches(path, expected, root=root, day=day)
+            or dependency_stat(path) != before
+        ):
+            raise ValueError("stop_source_changed_during_read:" + name)
         result[name] = before
     return result
 
 
 def census_dependencies(directory, reference):
     """Seal shard identities after native tree validation, including children."""
-    result={}
-    def visit(ref,depth=0):
-        if 'rows' in ref:return
-        if depth>16:raise ValueError('stop_census_depth_invalid')
-        path=storage.safe_path(directory,ref['path'])
-        before=list(source_stat(path.stat()))
-        value,sha=bounded(path,4*1024*1024)
-        if sha!=ref['sha256'] or before!=list(source_stat(path.stat())):
-            raise ValueError('stop_census_generation_changed')
-        result[ref['path']]=before
-        if len(result)>8192:raise ValueError('stop_census_dependency_manifest_unbounded')
-        for child in value.get('children',[]):visit(child,depth+1)
+    result = {}
+
+    def visit(ref, depth=0):
+        if "rows" in ref:
+            return
+        if depth > 16:
+            raise ValueError("stop_census_depth_invalid")
+        path = storage.safe_path(directory, ref["path"])
+        before = list(source_stat(path.stat()))
+        value, sha = bounded(path, 4 * 1024 * 1024)
+        if sha != ref["sha256"] or before != list(source_stat(path.stat())):
+            raise ValueError("stop_census_generation_changed")
+        result[ref["path"]] = before
+        if len(result) > 8192:
+            raise ValueError("stop_census_dependency_manifest_unbounded")
+        for child in value.get("children", []):
+            visit(child, depth + 1)
+
     visit(reference)
     return result
 
@@ -117,17 +140,26 @@ def code_sha():
 
 def operator_sources(root, target):
     from .operator_policy_succession import source_snapshot
-    return source_snapshot(Path(root)/'runtime', Path(root)/'threshold_cycle/operator_runtime_env_locks',
-                           {'KORSTOCKSCAN_'+policy.KEYS[k] for k in policy.TUNABLE}, target)
+
+    return source_snapshot(
+        Path(root) / "runtime",
+        Path(root) / "threshold_cycle/operator_runtime_env_locks",
+        {"KORSTOCKSCAN_" + policy.KEYS[k] for k in policy.TUNABLE},
+        target,
+    )
 
 
 def _vote_watch_metadata(root, path):
     """Native synchronization and archive receipts are not research inputs."""
     import re
     from src.engine.ai.holding_vote_replay_source import request_source_metadata
+
     path = Path(path)
-    return (path.parent.parent == Path(root) and request_source_metadata(path)) or (path.parent == Path(root)/'runtime/holding_path_votes'
-            and re.fullmatch(r'[0-9a-f]{64}(?:\.claims\.jsonl|\.jsonl\.lock)', path.name) is not None)
+    return (path.parent.parent == Path(root) and request_source_metadata(path)) or (
+        path.parent == Path(root) / "runtime/holding_path_votes"
+        and re.fullmatch(r"[0-9a-f]{64}(?:\.claims\.jsonl|\.jsonl\.lock)", path.name)
+        is not None
+    )
 
 
 def vote_watch(root, day):
@@ -136,42 +168,70 @@ def vote_watch(root, day):
     This is an invalidation hint. Consumed originals still receive independent
     byte hashes; a directory/file stat is never economic proof.
     """
-    digest=hashlib.sha256()
-    directories=[Path(root)/'runtime/holding_path_votes']
-    directories.extend(Path(root)/name for name in (
-        'ai_decision_payloads','ai_decision_prompts','ai_decision_requests'))
+    digest = hashlib.sha256()
+    directories = [Path(root) / "runtime/holding_path_votes"]
+    directories.extend(
+        Path(root) / name
+        for name in (
+            "ai_decision_payloads",
+            "ai_decision_prompts",
+            "ai_decision_requests",
+        )
+    )
     for directory in directories:
         # scandir keeps enumeration bounded; filesystem order is made irrelevant
         # with an integer multiset digest rather than retaining every pathname.
         import os
-        total=0;count=0
+
+        total = 0
+        count = 0
         if directory.exists():
             with os.scandir(directory) as entries:
                 for entry in entries:
-                    if not entry.is_file(follow_symlinks=False):continue
-                    if _vote_watch_metadata(root, entry.path):continue
-                    if directory.name!='holding_path_votes':
-                        stem=entry.name[len(directory.name)+1:][:10]
-                        if not '2026-09-29'<=stem<=day:continue
-                        if entry.name.endswith('.jsonl.gz'):
+                    if not entry.is_file(follow_symlinks=False):
+                        continue
+                    if _vote_watch_metadata(root, entry.path):
+                        continue
+                    if directory.name != "holding_path_votes":
+                        stem = entry.name[len(directory.name) + 1 :][:10]
+                        if not "2026-09-29" <= stem <= day:
+                            continue
+                        if entry.name.endswith(".jsonl.gz"):
                             # The request reader prefers the surviving original.
                             # Cleanup may add an unused gzip companion without
                             # changing any consumed source. A gzip-only source,
                             # original mutation or removal still invalidates.
-                            from src.engine.ai.holding_vote_replay_source import request_source_shadowed
-                            if request_source_shadowed(Path(entry.path)):continue
-                    value=policy.digest([entry.name,list(source_stat(entry.stat(follow_symlinks=False)))])
-                    total=(total+int(value,16))%(1<<256);count+=1
-        digest.update(policy.digest([str(directory),count,f'{total:064x}']).encode())
+                            from src.engine.ai.holding_vote_replay_source import (
+                                request_source_shadowed,
+                            )
+
+                            if request_source_shadowed(Path(entry.path)):
+                                continue
+                    value = policy.digest(
+                        [
+                            entry.name,
+                            list(source_stat(entry.stat(follow_symlinks=False))),
+                        ]
+                    )
+                    total = (total + int(value, 16)) % (1 << 256)
+                    count += 1
+        digest.update(policy.digest([str(directory), count, f"{total:064x}"]).encode())
     return digest.hexdigest()
 
 
 def _vote_watch_files(root, day):
     """Use the same preferred representations as the original watch/reader."""
     import os
+
     result = {}
-    directories = [Path(root)/'runtime/holding_path_votes'] + [Path(root)/name for name in (
-        'ai_decision_payloads', 'ai_decision_prompts', 'ai_decision_requests')]
+    directories = [Path(root) / "runtime/holding_path_votes"] + [
+        Path(root) / name
+        for name in (
+            "ai_decision_payloads",
+            "ai_decision_prompts",
+            "ai_decision_requests",
+        )
+    ]
     for directory in directories:
         if not directory.exists():
             continue
@@ -182,16 +242,25 @@ def _vote_watch_files(root, day):
                 path = Path(entry.path)
                 if _vote_watch_metadata(root, path):
                     continue
-                if directory.name != 'holding_path_votes':
-                    if not '2026-09-29' <= entry.name[len(directory.name)+1:][:10] <= day:
+                if directory.name != "holding_path_votes":
+                    if (
+                        not "2026-09-29"
+                        <= entry.name[len(directory.name) + 1 :][:10]
+                        <= day
+                    ):
                         continue
-                    if entry.name.endswith('.jsonl.gz'):
-                        from src.engine.ai.holding_vote_replay_source import request_source_shadowed
+                    if entry.name.endswith(".jsonl.gz"):
+                        from src.engine.ai.holding_vote_replay_source import (
+                            request_source_shadowed,
+                        )
+
                         if request_source_shadowed(path):
                             continue
-                logical = path.with_suffix('') if path.name.endswith('.jsonl.gz') else path
+                logical = (
+                    path.with_suffix("") if path.name.endswith(".jsonl.gz") else path
+                )
                 if str(logical) in result:
-                    raise ValueError('stop_vote_watch_logical_collision')
+                    raise ValueError("stop_vote_watch_logical_collision")
                 result[str(logical)] = path
     return result
 
@@ -200,27 +269,37 @@ def _vote_watch_content(path, *, max_bytes=None):
     """Bind decoded bytes in a stable read; reject truncation and expansion."""
     import os
     import stat
+
     before = list(source_stat(path.lstat()))
     sha = hashlib.sha256()
     size = 0
-    with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), 'rb') as raw:
-        if not stat.S_ISREG(os.fstat(raw.fileno()).st_mode) or before != list(source_stat(os.fstat(raw.fileno()))):
-            raise ValueError('stop_vote_source_changed_during_read')
+    with os.fdopen(
+        os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), "rb"
+    ) as raw:
+        if not stat.S_ISREG(os.fstat(raw.fileno()).st_mode) or before != list(
+            source_stat(os.fstat(raw.fileno()))
+        ):
+            raise ValueError("stop_vote_source_changed_during_read")
         from contextlib import nullcontext
-        with (gzip.GzipFile(fileobj=raw) if path.name.endswith('.jsonl.gz') else nullcontext(raw)) as handle:
+
+        with (
+            gzip.GzipFile(fileobj=raw)
+            if path.name.endswith(".jsonl.gz")
+            else nullcontext(raw)
+        ) as handle:
             try:
-                for block in iter(lambda: handle.read(64*1024), b''):
+                for block in iter(lambda: handle.read(64 * 1024), b""):
                     checkpoint()
                     size += len(block)
                     if max_bytes is not None and size > max_bytes:
-                        raise ValueError('stop_vote_compressed_content_changed')
+                        raise ValueError("stop_vote_compressed_content_changed")
                     sha.update(block)
             except (EOFError, gzip.BadGzipFile) as exc:
-                raise ValueError('stop_vote_compressed_content_invalid') from exc
+                raise ValueError("stop_vote_compressed_content_invalid") from exc
         if before != list(source_stat(os.fstat(raw.fileno()))):
-            raise ValueError('stop_vote_source_changed_during_read')
+            raise ValueError("stop_vote_source_changed_during_read")
     if path.is_symlink() or before != list(source_stat(path.lstat())):
-        raise ValueError('stop_vote_source_changed_during_read')
+        raise ValueError("stop_vote_source_changed_during_read")
     return sha.hexdigest(), size, before
 
 
@@ -231,14 +310,17 @@ def capture_vote_watch_binding(root, day):
     for logical, path in files.items():
         identity = list(source_stat(path.stat()))
         row = dict(path=str(path), stat=identity)
-        if path.name.endswith('.jsonl'):
+        if path.name.endswith(".jsonl"):
             sha, size, identity = _vote_watch_content(path)
             row.update(stat=identity, decoded_sha256=sha, decoded_bytes=size)
         binding[logical] = row
     if files != _vote_watch_files(root, day):
-        raise ValueError('stop_vote_source_set_changed')
-    if any(row['stat'] != list(source_stat(Path(row['path']).stat())) for row in binding.values()):
-        raise ValueError('stop_vote_source_changed_during_read')
+        raise ValueError("stop_vote_source_set_changed")
+    if any(
+        row["stat"] != list(source_stat(Path(row["path"]).stat()))
+        for row in binding.values()
+    ):
+        raise ValueError("stop_vote_source_changed_during_read")
     return binding
 
 
@@ -247,37 +329,51 @@ def _future_unconsumed_vote_tail(root, day, path, row):
     import fcntl
     import os
     import stat
-    if (path.parent != Path(root)/'runtime/holding_path_votes' or path.suffix != '.jsonl'
-            or len(path.stem) != 64 or any(c not in '0123456789abcdef' for c in path.stem)):
-        raise ValueError('stop_vote_source_set_changed')
-    from src.engine.infrastructure.startup_validation_code_context import validation_future_vote_snapshot
+
+    if (
+        path.parent != Path(root) / "runtime/holding_path_votes"
+        or path.suffix != ".jsonl"
+        or len(path.stem) != 64
+        or any(c not in "0123456789abcdef" for c in path.stem)
+    ):
+        raise ValueError("stop_vote_source_set_changed")
+    from src.engine.infrastructure.startup_validation_code_context import (
+        validation_future_vote_snapshot,
+    )
+
     if validation_future_vote_snapshot(root, day):
         # The child cannot acquire operational locks. This same native reader
         # rejects partial tails, changed inode/stat and any non-future row.
         return _future_unconsumed_vote_tail_snapshot(root, day, path, row)
-    lock_path = Path(str(path)+'.lock')
+    lock_path = Path(str(path) + ".lock")
     fd = os.open(lock_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
-    with os.fdopen(fd, 'rb') as lock:
+    with os.fdopen(fd, "rb") as lock:
         identity = os.fstat(lock.fileno())
         if not stat.S_ISREG(identity.st_mode):
-            raise ValueError('stop_vote_writer_lock_invalid')
-        deadline = time.monotonic()+0.25
+            raise ValueError("stop_vote_writer_lock_invalid")
+        deadline = time.monotonic() + 0.25
         while True:
             try:
                 fcntl.flock(lock.fileno(), fcntl.LOCK_SH | fcntl.LOCK_NB)
                 break
             except BlockingIOError:
                 if time.monotonic() >= deadline:
-                    raise ValueError('stop_vote_writer_busy')
+                    raise ValueError("stop_vote_writer_busy")
                 time.sleep(0.005)
+
         def same_lock():
             current = lock_path.lstat()
-            return (stat.S_ISREG(current.st_mode)
-                    and (current.st_dev,current.st_ino)==(identity.st_dev,identity.st_ino))
+            return stat.S_ISREG(current.st_mode) and (
+                current.st_dev,
+                current.st_ino,
+            ) == (identity.st_dev, identity.st_ino)
+
         try:
-            if not same_lock():raise ValueError('stop_vote_writer_lock_changed')
+            if not same_lock():
+                raise ValueError("stop_vote_writer_lock_changed")
             result = _future_unconsumed_vote_tail_snapshot(root, day, path, row)
-            if not same_lock():raise ValueError('stop_vote_writer_lock_changed')
+            if not same_lock():
+                raise ValueError("stop_vote_writer_lock_changed")
             return result
         finally:
             fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
@@ -296,158 +392,241 @@ def _future_unconsumed_vote_tail_snapshot(root, day, path, row):
     from zoneinfo import ZoneInfo
     from src.engine.ai.holding_exit_vote import path_vote_store_path
 
-    if (path.parent != Path(root)/'runtime/holding_path_votes' or path.suffix != '.jsonl'
-            or len(path.stem) != 64 or any(c not in '0123456789abcdef' for c in path.stem)):
-        raise ValueError('stop_vote_source_set_changed')
-    with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), 'rb') as stream:
+    if (
+        path.parent != Path(root) / "runtime/holding_path_votes"
+        or path.suffix != ".jsonl"
+        or len(path.stem) != 64
+        or any(c not in "0123456789abcdef" for c in path.stem)
+    ):
+        raise ValueError("stop_vote_source_set_changed")
+    with os.fdopen(
+        os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), "rb"
+    ) as stream:
         before = os.fstat(stream.fileno())
         current = list(source_stat(before))
         offset = 0
         if row is not None:
-            original = row.get('stat')
-            if (row.get('path') != str(path) or not isinstance(original, list) or len(original) != 5
-                    or original[:2] != current[:2] or type(original[2]) is not int
-                    or not 0 <= original[2] < before.st_size):
-                raise ValueError('stop_vote_source_set_changed')
+            original = row.get("stat")
+            if (
+                row.get("path") != str(path)
+                or not isinstance(original, list)
+                or len(original) != 5
+                or original[:2] != current[:2]
+                or type(original[2]) is not int
+                or not 0 <= original[2] < before.st_size
+            ):
+                raise ValueError("stop_vote_source_set_changed")
             offset = original[2]
-            if 'decoded_sha256' in row:
-                if row.get('decoded_bytes') != offset or offset > 8*1024*1024:
-                    raise ValueError('stop_vote_original_prefix_invalid')
+            if "decoded_sha256" in row:
+                if row.get("decoded_bytes") != offset or offset > 8 * 1024 * 1024:
+                    raise ValueError("stop_vote_original_prefix_invalid")
                 prefix = stream.read(offset)
-                if len(prefix) != offset or hashlib.sha256(prefix).hexdigest() != row['decoded_sha256']:
-                    raise ValueError('stop_vote_original_prefix_changed')
-        if not stat.S_ISREG(before.st_mode) or before.st_size-offset > 8*1024*1024:
-            raise ValueError('stop_vote_future_tail_invalid')
+                if (
+                    len(prefix) != offset
+                    or hashlib.sha256(prefix).hexdigest() != row["decoded_sha256"]
+                ):
+                    raise ValueError("stop_vote_original_prefix_changed")
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_size - offset > 8 * 1024 * 1024
+        ):
+            raise ValueError("stop_vote_future_tail_invalid")
         if offset:
-            stream.seek(offset-1)
-            if stream.read(1) != b'\n':
-                raise ValueError('stop_vote_future_tail_boundary_invalid')
+            stream.seek(offset - 1)
+            if stream.read(1) != b"\n":
+                raise ValueError("stop_vote_future_tail_boundary_invalid")
         stream.seek(offset)
-        raw = stream.read(before.st_size-offset+1)
-        if len(raw) != before.st_size-offset or not raw or not raw.endswith(b'\n'):
-            raise ValueError('stop_vote_future_tail_invalid')
+        raw = stream.read(before.st_size - offset + 1)
+        if len(raw) != before.st_size - offset or not raw or not raw.endswith(b"\n"):
+            raise ValueError("stop_vote_future_tail_invalid")
         for line in raw.splitlines():
             value = json.loads(line)
             if not isinstance(value, dict):
-                raise ValueError('stop_vote_future_tail_invalid')
-            at = value.get('requested_at')
-            if (value.get('schema') != 'holding_path_vote_v10' or type(at) not in (int, float)
-                    or not math.isfinite(at)):
-                raise ValueError('stop_vote_future_tail_invalid')
+                raise ValueError("stop_vote_future_tail_invalid")
+            at = value.get("requested_at")
+            if (
+                value.get("schema") != "holding_path_vote_v10"
+                or type(at) not in (int, float)
+                or not math.isfinite(at)
+            ):
+                raise ValueError("stop_vote_future_tail_invalid")
             try:
-                source_day = datetime.fromtimestamp(at, ZoneInfo('Asia/Seoul')).date().isoformat()
+                source_day = (
+                    datetime.fromtimestamp(at, ZoneInfo("Asia/Seoul"))
+                    .date()
+                    .isoformat()
+                )
             except (OSError, ValueError, OverflowError) as exc:
-                raise ValueError('stop_vote_future_tail_invalid') from exc
-            if (source_day <= day or value.get('session_key') != source_day
-                    or not isinstance(value.get('position_key'), str) or not value['position_key']
-                    or path_vote_store_path(root, value['position_key']) != path):
-                raise ValueError('stop_vote_future_tail_scope_invalid')
-        if (current != list(source_stat(os.fstat(stream.fileno())))
-                or path.is_symlink() or current != list(source_stat(path.stat()))):
-            raise ValueError('stop_vote_source_changed_during_read')
+                raise ValueError("stop_vote_future_tail_invalid") from exc
+            if (
+                source_day <= day
+                or value.get("session_key") != source_day
+                or not isinstance(value.get("position_key"), str)
+                or not value["position_key"]
+                or path_vote_store_path(root, value["position_key"]) != path
+            ):
+                raise ValueError("stop_vote_future_tail_scope_invalid")
+        if (
+            current != list(source_stat(os.fstat(stream.fileno())))
+            or path.is_symlink()
+            or current != list(source_stat(path.stat()))
+        ):
+            raise ValueError("stop_vote_source_changed_during_read")
     return current
 
 
 def verify_vote_watch_binding(root, day, binding, *, future_unconsumed=False):
     """Only decoded equality permits a sealed original's compression."""
     if not isinstance(binding, dict):
-        raise ValueError('stop_vote_source_set_changed')
+        raise ValueError("stop_vote_source_set_changed")
     files = _vote_watch_files(root, day)
     # Older publishers sealed native synchronization files in the watch. Keep
     # those original receipts, but validate only actual vote/request inputs.
-    binding = {k:v for k,v in binding.items() if not _vote_watch_metadata(root, k)}
-    if set(binding)-set(files) or (not future_unconsumed and set(files) != set(binding)):
-        raise ValueError('stop_vote_source_set_changed')
+    binding = {k: v for k, v in binding.items() if not _vote_watch_metadata(root, k)}
+    if set(binding) - set(files) or (
+        not future_unconsumed and set(files) != set(binding)
+    ):
+        raise ValueError("stop_vote_source_set_changed")
     observed = {}
     for logical, path in files.items():
         row = binding.get(logical)
         observed[logical] = list(source_stat(path.stat()))
-        if row and str(path) == row['path'] and observed[logical] == row['stat']:
+        if row and str(path) == row["path"] and observed[logical] == row["stat"]:
             continue
-        if future_unconsumed and path.parent == Path(root)/'runtime/holding_path_votes':
+        if (
+            future_unconsumed
+            and path.parent == Path(root) / "runtime/holding_path_votes"
+        ):
             observed[logical] = _future_unconsumed_vote_tail(root, day, path, row)
             continue
         if row is None:
-            raise ValueError('stop_vote_source_set_changed')
-        if (row['path'] != logical or not logical.endswith('.jsonl')
-                or path.parent == Path(root)/'runtime/holding_path_votes'
-                or str(path) != logical+'.gz'
-                or Path(logical).exists() or Path(logical).is_symlink()
-                or not isinstance(row.get('decoded_bytes'), int)):
-            raise ValueError('stop_vote_source_set_changed')
-        sha, size, identity = _vote_watch_content(path, max_bytes=row['decoded_bytes'])
+            raise ValueError("stop_vote_source_set_changed")
+        if (
+            row["path"] != logical
+            or not logical.endswith(".jsonl")
+            or path.parent == Path(root) / "runtime/holding_path_votes"
+            or str(path) != logical + ".gz"
+            or Path(logical).exists()
+            or Path(logical).is_symlink()
+            or not isinstance(row.get("decoded_bytes"), int)
+        ):
+            raise ValueError("stop_vote_source_set_changed")
+        sha, size, identity = _vote_watch_content(path, max_bytes=row["decoded_bytes"])
         observed[logical] = identity
-        if sha != row.get('decoded_sha256') or size != row['decoded_bytes']:
-            raise ValueError('stop_vote_compressed_content_changed')
+        if sha != row.get("decoded_sha256") or size != row["decoded_bytes"]:
+            raise ValueError("stop_vote_compressed_content_changed")
     if files != _vote_watch_files(root, day):
-        raise ValueError('stop_vote_source_set_changed')
+        raise ValueError("stop_vote_source_set_changed")
     for key, path in files.items():
         current = list(source_stat(path.lstat()))
         if observed[key] == current:
             continue
-        if (future_unconsumed and path.parent == Path(root)/'runtime/holding_path_votes'
-                and observed[key][:2] == current[:2] and current[2] > observed[key][2]):
+        if (
+            future_unconsumed
+            and path.parent == Path(root) / "runtime/holding_path_votes"
+            and observed[key][:2] == current[:2]
+            and current[2] > observed[key][2]
+        ):
             # A later unconsumed append does not invalidate a historical carry.
             # Recheck the original prefix AND every later row under the native
             # writer lock once. These are per-file snapshots, not a global freeze
             # of live observations. Consumed/full-publication sources stay strict.
-            observed[key] = _future_unconsumed_vote_tail(root, day, path, binding.get(key))
+            observed[key] = _future_unconsumed_vote_tail(
+                root, day, path, binding.get(key)
+            )
         else:
-            raise ValueError('stop_vote_source_changed_during_read')
+            raise ValueError("stop_vote_source_changed_during_read")
     return observed
 
 
 def baseline(root, target):
     # Reuse the verified incumbent owner; do not rebuild or mutate PREOPEN.
     from src.engine.automation import runtime_policy_bootstrap as boot
-    incumbent,path,basis=boot._load_incumbent(target)
-    if Path(root).resolve()!=Path(boot.DATA_DIR).resolve():raise ValueError('stop_incumbent_root_mismatch')
-    env=incumbent['env_overrides']
+
+    incumbent, path, basis = boot._load_incumbent(target)
+    if Path(root).resolve() != Path(boot.DATA_DIR).resolve():
+        raise ValueError("stop_incumbent_root_mismatch")
+    env = incumbent["env_overrides"]
+
     def read(key):
-        value=env.get('KORSTOCKSCAN_'+key)
-        if value is None:return None
-        return int(value) if key in {policy.KEYS[k] for k in ('grace_sec','window_sec','min_span_sec','min_samples')} else float(value)
-    value=policy.StopValues.from_rules(read)
-    parents = {f'{r}|{m}':value for r in policy.ROLES for m in policy.MARKETS}
+        value = env.get("KORSTOCKSCAN_" + key)
+        if value is None:
+            return None
+        return (
+            int(value)
+            if key
+            in {
+                policy.KEYS[k]
+                for k in ("grace_sec", "window_sec", "min_span_sec", "min_samples")
+            }
+            else float(value)
+        )
+
+    value = policy.StopValues.from_rules(read)
+    parents = {f"{r}|{m}": value for r in policy.ROLES for m in policy.MARKETS}
     if env.get(policy.ENV_FILE):
         # The incumbent receipt already verifies historical custody. Read its
         # exact values as a migration parent, never as current executable code.
-        previous = policy.load_bundle(env[policy.ENV_FILE],env[policy.ENV_SHA],env[policy.ENV_DATE],require_current_code=False)
-        policy.validate_runtime_environment(previous,env)
+        previous = policy.load_bundle(
+            env[policy.ENV_FILE],
+            env[policy.ENV_SHA],
+            env[policy.ENV_DATE],
+            require_current_code=False,
+        )
+        policy.validate_runtime_environment(previous, env)
         # A new operator instruction outranks a carried numerical challenger.
-        current_sources = operator_sources(root,target)
-        prior_sources = [row for row in previous.get('operator_sources',[]) if not (
-            Path(row['path']).name.startswith('operator_runtime_overrides_')
-            and Path(row['path']).stem[-10:] < target)]
+        current_sources = operator_sources(root, target)
+        prior_sources = [
+            row
+            for row in previous.get("operator_sources", [])
+            if not (
+                Path(row["path"]).name.startswith("operator_runtime_overrides_")
+                and Path(row["path"]).stem[-10:] < target
+            )
+        ]
         if current_sources != prior_sources:
-            raise ValueError('stop_new_operator_instruction_requires_reconciliation')
-        parents = {key:policy.StopValues.parse(cell['values']) for key,cell in previous['cells'].items()}
-    return parents,dict(
-        path=str(path),sha256=hashlib.sha256(path.read_bytes()).hexdigest(),verification=basis,
-        effective_values=asdict(value))
+            raise ValueError("stop_new_operator_instruction_requires_reconciliation")
+        parents = {
+            key: policy.StopValues.parse(cell["values"])
+            for key, cell in previous["cells"].items()
+        }
+    return parents, dict(
+        path=str(path),
+        sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+        verification=basis,
+        effective_values=asdict(value),
+    )
 
 
 def sources(root, day):
-    result=[];d=date.fromisoformat('2026-09-29')
-    while d<=date.fromisoformat(day):
-        base=Path(root)/'pipeline_events'/f'pipeline_events_{d.isoformat()}.jsonl'
-        for logical in (base,base.with_name(base.stem+'.late.jsonl')):
-            path=logical if logical.exists() else logical.with_suffix('.jsonl.gz')
-            if path.exists():result.append(path)
-        d+=timedelta(days=1)
+    result = []
+    d = date.fromisoformat("2026-09-29")
+    while d <= date.fromisoformat(day):
+        base = Path(root) / "pipeline_events" / f"pipeline_events_{d.isoformat()}.jsonl"
+        for logical in (base, base.with_name(base.stem + ".late.jsonl")):
+            path = logical if logical.exists() else logical.with_suffix(".jsonl.gz")
+            if path.exists():
+                result.append(path)
+        d += timedelta(days=1)
     return result
 
 
 def source_dates(root, paths, day):
     """Inverse of the native daily/late catalog, not an arbitrary basename."""
-    expected=Path(root).resolve()/'pipeline_events';result=set()
+    expected = Path(root).resolve() / "pipeline_events"
+    result = set()
     for value in paths:
-        path=Path(value)
-        match=re.fullmatch(r'pipeline_events_(\d{4}-\d{2}-\d{2})(?:\.late)?\.jsonl(?:\.gz)?',path.name)
-        if (path.parent.resolve()!=expected or not match
-                or not '2026-09-29'<=match[1]<=day
-                or date.fromisoformat(match[1]).isoformat()!=match[1]):
-            raise ValueError('stop_native_source_partition_invalid')
+        path = Path(value)
+        match = re.fullmatch(
+            r"pipeline_events_(\d{4}-\d{2}-\d{2})(?:\.late)?\.jsonl(?:\.gz)?", path.name
+        )
+        if (
+            path.parent.resolve() != expected
+            or not match
+            or not "2026-09-29" <= match[1] <= day
+            or date.fromisoformat(match[1]).isoformat() != match[1]
+        ):
+            raise ValueError("stop_native_source_partition_invalid")
         result.add(match[1])
     return sorted(result)
 
@@ -460,193 +639,309 @@ def _archived_pipeline_source(path, expected, *, verify_full=False):
     This does not reseal a report or accept new/missing logical sources.
     """
     import stat
-    archive = Path(str(path) + '.gz')
+
+    archive = Path(str(path) + ".gz")
     before = archive.lstat()
     if path.is_symlink() or path.exists() or not stat.S_ISREG(before.st_mode):
-        raise ValueError('stop_pipeline_archive_not_regular')
-    receipt_path = Path(str(archive) + '.archive_receipt.json')
+        raise ValueError("stop_pipeline_archive_not_regular")
+    receipt_path = Path(str(archive) + ".archive_receipt.json")
     if receipt_path.is_symlink():
-        raise ValueError('stop_pipeline_archive_receipt_invalid')
+        raise ValueError("stop_pipeline_archive_receipt_invalid")
     receipt, receipt_sha = bounded(receipt_path, 128 * 1024)
-    generation = receipt.get('archive_generation') or {}
-    observed = dict(device=before.st_dev, inode=before.st_ino,
-                    size_bytes=before.st_size, mtime_ns=before.st_mtime_ns,
-                    ctime_ns=before.st_ctime_ns)
+    generation = receipt.get("archive_generation") or {}
+    observed = dict(
+        device=before.st_dev,
+        inode=before.st_ino,
+        size_bytes=before.st_size,
+        mtime_ns=before.st_mtime_ns,
+        ctime_ns=before.st_ctime_ns,
+    )
     from src.engine.automation.source_quality_hard_gate import _generation_matches
-    if (receipt.get('schema') != 'pipeline_raw_archive_identity_v1'
-            or receipt.get('logical_path') != str(path)
-            or receipt.get('logical_content_sha256') != expected.get('sha256')
-            or receipt.get('logical_size_bytes') != expected.get('size')
-            or receipt.get('runtime_effect') is not False
-            or receipt.get('allowed_runtime_apply') is not False
-            or not _generation_matches(generation, observed)):
-        raise ValueError('stop_pipeline_archive_receipt_invalid')
-    if 'ctime_ns' in generation:
-        from src.engine.scalping.micro_reversion.economic_reference import content_sha256
-        if (receipt.get('verification_contract') != 'logical_sha256_size_crc_to_eof_v1'
-                or receipt.get('artifact_content_sha256') != content_sha256({
-                    k:v for k,v in receipt.items() if k != 'artifact_content_sha256'})):
-            raise ValueError('stop_pipeline_archive_receipt_invalid')
+
+    if (
+        receipt.get("schema") != "pipeline_raw_archive_identity_v1"
+        or receipt.get("logical_path") != str(path)
+        or receipt.get("logical_content_sha256") != expected.get("sha256")
+        or receipt.get("logical_size_bytes") != expected.get("size")
+        or receipt.get("runtime_effect") is not False
+        or receipt.get("allowed_runtime_apply") is not False
+        or not _generation_matches(generation, observed)
+    ):
+        raise ValueError("stop_pipeline_archive_receipt_invalid")
+    if "ctime_ns" in generation:
+        from src.engine.scalping.micro_reversion.economic_reference import (
+            content_sha256,
+        )
+
+        if receipt.get(
+            "verification_contract"
+        ) != "logical_sha256_size_crc_to_eof_v1" or receipt.get(
+            "artifact_content_sha256"
+        ) != content_sha256(
+            {k: v for k, v in receipt.items() if k != "artifact_content_sha256"}
+        ):
+            raise ValueError("stop_pipeline_archive_receipt_invalid")
     if verify_full:
-        sha, size, _ = _vote_watch_content(archive, max_bytes=expected['size'])
-        if sha != expected['sha256'] or size != expected['size']:
-            raise ValueError('stop_pipeline_archive_bytes_changed')
-    if (list(source_stat(archive.lstat())) != list(source_stat(before))
-            or path.exists() or path.is_symlink()
-            or bounded(receipt_path, 128 * 1024)[1] != receipt_sha):
-        raise ValueError('stop_pipeline_archive_changed_during_read')
+        sha, size, _ = _vote_watch_content(archive, max_bytes=expected["size"])
+        if sha != expected["sha256"] or size != expected["size"]:
+            raise ValueError("stop_pipeline_archive_bytes_changed")
+    if (
+        list(source_stat(archive.lstat())) != list(source_stat(before))
+        or path.exists()
+        or path.is_symlink()
+        or bounded(receipt_path, 128 * 1024)[1] != receipt_sha
+    ):
+        raise ValueError("stop_pipeline_archive_changed_during_read")
 
 
 def source_events(path, census, *, references=False):
     """Bound each line and expose undecodable source instead of dropping it."""
     isolation_digest = hashlib.sha256()
     isolated = 0
-    with open_text_auto(path, errors='strict') as handle:
+    with open_text_auto(path, errors="strict") as handle:
         while True:
             checkpoint()
-            offset=handle.tell()
-            line=handle.readline(2*1024*1024+1)
-            if not line:break
-            if len(line.encode())>2*1024*1024:
+            offset = handle.tell()
+            line = handle.readline(2 * 1024 * 1024 + 1)
+            if not line:
+                break
+            if len(line.encode()) > 2 * 1024 * 1024:
                 # A private spool validates the entire record without making
                 # the mixed event resident. Only a proven disjoint producer
                 # stage can be excluded; unknown/damaged stop scope still blocks.
-                from .main_stop_source_projection import classify_disjoint_event, SPOOL_LIMIT
+                from .main_stop_source_projection import (
+                    classify_disjoint_event,
+                    SPOOL_LIMIT,
+                )
                 from src.engine.lifecycle.research_disk_budget import temporary
+
                 spool_limit = SPOOL_LIMIT
-                digest=hashlib.sha256(line.encode());size=len(line.encode())
-                complete=line.endswith('\n');disjoint=None
-                with temporary(spool_limit), tempfile.TemporaryFile(mode='w+t', encoding='utf-8') as spool:
+                digest = hashlib.sha256(line.encode())
+                size = len(line.encode())
+                complete = line.endswith("\n")
+                disjoint = None
+                with (
+                    temporary(spool_limit),
+                    tempfile.TemporaryFile(mode="w+t", encoding="utf-8") as spool,
+                ):
                     spool.write(line)
                     while not complete:
                         checkpoint()
-                        tail=handle.readline(65536)
-                        if not tail:break
-                        raw=tail.encode();digest.update(raw);size+=len(raw)
-                        if size <= spool_limit:spool.write(tail)
-                        complete=tail.endswith('\n')
+                        tail = handle.readline(65536)
+                        if not tail:
+                            break
+                        raw = tail.encode()
+                        digest.update(raw)
+                        size += len(raw)
+                        if size <= spool_limit:
+                            spool.write(tail)
+                        complete = tail.endswith("\n")
                     if complete and size <= spool_limit:
                         spool.seek(0)
-                        try:disjoint=classify_disjoint_event(spool, checkpoint=checkpoint)
+                        try:
+                            disjoint = classify_disjoint_event(
+                                spool, checkpoint=checkpoint
+                            )
                         except (ValueError, RecursionError):
                             # A persistent deadline failure is not malformed
                             # JSON and must preserve the native resume path.
                             checkpoint()
-                census['oversized_raw_rows']+=1
-                census['oversized_raw_bytes']+=size
+                census["oversized_raw_rows"] += 1
+                census["oversized_raw_bytes"] += size
                 if disjoint:
                     isolated += 1
-                    census['isolated_disjoint_oversized_rows'] += 1
-                    census['isolated_disjoint_oversized_bytes'] += size
-                    census['isolated_disjoint_stage:'+disjoint] += 1
-                    identity = dict(offset=offset, size_bytes=size, line_sha256=digest.hexdigest(),stage=disjoint)
-                    isolation_digest.update(storage.encoded(identity)+b'\n')
+                    census["isolated_disjoint_oversized_rows"] += 1
+                    census["isolated_disjoint_oversized_bytes"] += size
+                    census["isolated_disjoint_stage:" + disjoint] += 1
+                    identity = dict(
+                        offset=offset,
+                        size_bytes=size,
+                        line_sha256=digest.hexdigest(),
+                        stage=disjoint,
+                    )
+                    isolation_digest.update(storage.encoded(identity) + b"\n")
                 else:
-                    census['unidentifiable_raw_rows']+=1
-                if not complete:census['oversized_unterminated_raw_rows']+=1
-                if census['oversized_raw_rows']<=8:
-                    census[f'oversized_raw_record:{path}:{offset}:{digest.hexdigest()}']+=1
+                    census["unidentifiable_raw_rows"] += 1
+                if not complete:
+                    census["oversized_unterminated_raw_rows"] += 1
+                if census["oversized_raw_rows"] <= 8:
+                    census[
+                        f"oversized_raw_record:{path}:{offset}:{digest.hexdigest()}"
+                    ] += 1
                 continue
-            if not line.strip():continue
-            try:row=json.loads(line)
+            if not line.strip():
+                continue
+            try:
+                row = json.loads(line)
             except ValueError:
-                census['unidentifiable_raw_rows']+=1
+                census["unidentifiable_raw_rows"] += 1
                 continue
-            if not isinstance(row,dict):
-                census['unidentifiable_raw_rows']+=1
+            if not isinstance(row, dict):
+                census["unidentifiable_raw_rows"] += 1
                 continue
-            yield (row,offset,hashlib.sha256(line.encode()).hexdigest()) if references else row
+            yield (
+                (row, offset, hashlib.sha256(line.encode()).hexdigest())
+                if references
+                else row
+            )
     if isolated:
-        census[f'isolated_oversized_set_sha256:{path}:{isolation_digest.hexdigest()}'] += 1
+        census[
+            f"isolated_oversized_set_sha256:{path}:{isolation_digest.hexdigest()}"
+        ] += 1
 
 
 def read_committed(root, day, *, pointer=None, verify_full=False):
-    if pointer is None: pointer,_=bounded(committed_path(root,day))
-    if pointer.get('schema')!='main_stop_committed_v1' or pointer.get('source_date')!=day:
-        raise ValueError('stop_commit_identity_invalid')
-    directory=Path(root)/'threshold_cycle/main_stop_confirmation/generations'/pointer['generation']
-    if len(pointer['generation'])!=64 or any(c not in '0123456789abcdef' for c in pointer['generation']):
-        raise ValueError('stop_commit_generation_invalid')
-    bundle,sha=bounded(directory/'policy.json')
-    report,rsha=bounded(directory/'report.json')
-    if (sha!=pointer['policy_byte_sha256'] or rsha!=pointer['report_byte_sha256']
-            or report.get('report_sha256')!=policy.digest({k:v for k,v in report.items() if k!='report_sha256'})
-            or report.get('source_date')!=day or report.get('target_date')!=bundle.get('target_date')
-            or report.get('policy_sha256')!=bundle.get('policy_sha256')
-            or bundle.get('research_sha256')!=report.get('research_sha256')):
-        raise ValueError('stop_commit_binding_invalid')
-    research = {k:v for k,v in report.items() if k not in {
-        'research_sha256','status','policy_sha256','report_sha256'}}
-    if policy.digest(research) != report['research_sha256']:
-        raise ValueError('stop_research_binding_invalid')
-    if bundle.get('code_sha256')!=report['code_sha256']:
-        raise ValueError('stop_code_generation_changed')
-    if report.get('code_sha256')!=code_sha():
+    if pointer is None:
+        pointer, _ = bounded(committed_path(root, day))
+    if (
+        pointer.get("schema") != "main_stop_committed_v1"
+        or pointer.get("source_date") != day
+    ):
+        raise ValueError("stop_commit_identity_invalid")
+    directory = (
+        Path(root)
+        / "threshold_cycle/main_stop_confirmation/generations"
+        / pointer["generation"]
+    )
+    if len(pointer["generation"]) != 64 or any(
+        c not in "0123456789abcdef" for c in pointer["generation"]
+    ):
+        raise ValueError("stop_commit_generation_invalid")
+    bundle, sha = bounded(directory / "policy.json")
+    report, rsha = bounded(directory / "report.json")
+    if (
+        sha != pointer["policy_byte_sha256"]
+        or rsha != pointer["report_byte_sha256"]
+        or report.get("report_sha256")
+        != policy.digest({k: v for k, v in report.items() if k != "report_sha256"})
+        or report.get("source_date") != day
+        or report.get("target_date") != bundle.get("target_date")
+        or report.get("policy_sha256") != bundle.get("policy_sha256")
+        or bundle.get("research_sha256") != report.get("research_sha256")
+    ):
+        raise ValueError("stop_commit_binding_invalid")
+    research = {
+        k: v
+        for k, v in report.items()
+        if k not in {"research_sha256", "status", "policy_sha256", "report_sha256"}
+    }
+    if policy.digest(research) != report["research_sha256"]:
+        raise ValueError("stop_research_binding_invalid")
+    if bundle.get("code_sha256") != report["code_sha256"]:
+        raise ValueError("stop_code_generation_changed")
+    if report.get("code_sha256") != code_sha():
         if verify_full:
-            raise ValueError('stop_code_generation_changed')
-    if bundle.get('operator_sources') != operator_sources(root,bundle['target_date']):
-        raise ValueError('stop_operator_sources_changed')
+            raise ValueError("stop_code_generation_changed")
+    if bundle.get("operator_sources") != operator_sources(root, bundle["target_date"]):
+        raise ValueError("stop_operator_sources_changed")
     observed_votes = {}
     sealed_sources = False
-    if report.get('vote_watch_sha256')!=vote_watch(root,day):
-        vote_sources = report.get('vote_source_inventory', {})
-        binding = report.get('vote_watch_binding') or {}
+    if report.get("vote_watch_sha256") != vote_watch(root, day):
+        vote_sources = report.get("vote_source_inventory", {})
+        binding = report.get("vote_watch_binding") or {}
         # A carried policy may still have read historical votes. Preserve every
         # consumed byte: only a publisher-sealed exact prefix can admit a later
         # native observation tail. Full research and selected cells stay strict.
         sealed_sources = all(
-            (ref := binding.get(name, {})).get('path') == name
-            and ref.get('stat') == report['dependency_stats'].get(name)
-            and (bool(ref.get('decoded_sha256')) and type(ref.get('decoded_bytes')) is int
-                 if _indexed_vote_generation(source) else
-                 ref.get('decoded_sha256') == source.get('sha256')
-                 and ref.get('decoded_bytes') == source.get('size'))
-            for name, source in vote_sources.items())
-        observed_votes = verify_vote_watch_binding(root, day, report.get('vote_watch_binding'),
-            future_unconsumed=(not verify_full and sealed_sources
-                and all(cell['status'] != 'selected' for cell in bundle['cells'].values())))
-    inventory = report.get('source_inventory', {})
+            (ref := binding.get(name, {})).get("path") == name
+            and ref.get("stat") == report["dependency_stats"].get(name)
+            and (
+                bool(ref.get("decoded_sha256"))
+                and type(ref.get("decoded_bytes")) is int
+                if _indexed_vote_generation(source)
+                else ref.get("decoded_sha256") == source.get("sha256")
+                and ref.get("decoded_bytes") == source.get("size")
+            )
+            for name, source in vote_sources.items()
+        )
+        observed_votes = verify_vote_watch_binding(
+            root,
+            day,
+            report.get("vote_watch_binding"),
+            future_unconsumed=(
+                not verify_full
+                and sealed_sources
+                and all(
+                    cell["status"] != "selected" for cell in bundle["cells"].values()
+                )
+            ),
+        )
+    inventory = report.get("source_inventory", {})
     catalog = []
     for physical in sources(root, day):
-        logical = str(physical)[:-3] if str(physical).endswith('.jsonl.gz') else str(physical)
-        catalog.append(logical if logical in inventory and not Path(logical).exists() else str(physical))
-    if report.get('source_catalog_sha256') != policy.digest(catalog):
-        raise ValueError('stop_raw_source_set_changed')
-    for label in ('parent_receipt','snapshot_receipt'):
-        ref=report.get(label) or {}
-        if not ref.get('path') or bounded(ref['path'],8*1024*1024)[1]!=ref.get('sha256'):
-            raise ValueError('stop_native_source_changed:'+label)
+        logical = (
+            str(physical)[:-3] if str(physical).endswith(".jsonl.gz") else str(physical)
+        )
+        catalog.append(
+            logical
+            if logical in inventory and not Path(logical).exists()
+            else str(physical)
+        )
+    if report.get("source_catalog_sha256") != policy.digest(catalog):
+        raise ValueError("stop_raw_source_set_changed")
+    for label in ("parent_receipt", "snapshot_receipt"):
+        ref = report.get(label) or {}
+        if not ref.get("path") or bounded(ref["path"], 8 * 1024 * 1024)[1] != ref.get(
+            "sha256"
+        ):
+            raise ValueError("stop_native_source_changed:" + label)
     # The native publisher hashes all bytes once. Routine semantic monitoring
     # checks its sealed dependency identities without rescanning raw ledgers.
-    expected_files = {**report.get('source_inventory', {}), **report.get('vote_source_inventory', {}),
-                      **(report.get('economic_sources') or {}).get('files', {})}
-    verified_stats = dict(report['dependency_stats'])
+    expected_files = {
+        **report.get("source_inventory", {}),
+        **report.get("vote_source_inventory", {}),
+        **(report.get("economic_sources") or {}).get("files", {}),
+    }
+    verified_stats = dict(report["dependency_stats"])
     for path, expected in expected_files.items():
-        before = report['dependency_stats'].get(path)
+        before = report["dependency_stats"].get(path)
         physical = Path(path)
-        indexed_vote = path in report.get('vote_source_inventory', {}) and _indexed_vote_generation(expected)
-        if indexed_vote and not _dependency_generation_matches(physical, expected, root=root, day=day):
-            raise ValueError('stop_native_source_bytes_changed')
-        if physical.parent == Path(root)/'report/monitor_snapshots' and not physical.exists():
-            if dependency_stat(physical) != before or byte_generation(physical) != expected:
-                raise ValueError('stop_native_source_bytes_changed')
+        indexed_vote = path in report.get(
+            "vote_source_inventory", {}
+        ) and _indexed_vote_generation(expected)
+        if indexed_vote and not _dependency_generation_matches(
+            physical, expected, root=root, day=day
+        ):
+            raise ValueError("stop_native_source_bytes_changed")
+        if (
+            physical.parent == Path(root) / "report/monitor_snapshots"
+            and not physical.exists()
+        ):
+            if (
+                dependency_stat(physical) != before
+                or byte_generation(physical) != expected
+            ):
+                raise ValueError("stop_native_source_bytes_changed")
             continue
-        if (path in inventory and physical.parent == Path(root)/'pipeline_events'
-                and physical.name.endswith('.jsonl') and not physical.exists()):
+        if (
+            path in inventory
+            and physical.parent == Path(root) / "pipeline_events"
+            and physical.name.endswith(".jsonl")
+            and not physical.exists()
+        ):
             _archived_pipeline_source(physical, expected, verify_full=verify_full)
             continue
-        if path in report.get('vote_source_inventory', {}) and not physical.exists():
-            ref = (report.get('vote_watch_binding') or {}).get(path) or {}
-            raw_sha = ref.get('decoded_sha256') if indexed_vote else expected.get('sha256')
-            raw_size = ref.get('decoded_bytes') if indexed_vote else expected.get('size')
-            if (physical.is_symlink() or ref.get('path') != path or ref.get('stat') != before
-                    or not raw_sha or type(raw_size) is not int
-                    or ref.get('decoded_sha256') != raw_sha
-                    or ref.get('decoded_bytes') != raw_size):
-                raise ValueError('stop_native_source_generation_changed')
-            sha, size, _ = _vote_watch_content(Path(path+'.gz'), max_bytes=raw_size)
+        if path in report.get("vote_source_inventory", {}) and not physical.exists():
+            ref = (report.get("vote_watch_binding") or {}).get(path) or {}
+            raw_sha = (
+                ref.get("decoded_sha256") if indexed_vote else expected.get("sha256")
+            )
+            raw_size = (
+                ref.get("decoded_bytes") if indexed_vote else expected.get("size")
+            )
+            if (
+                physical.is_symlink()
+                or ref.get("path") != path
+                or ref.get("stat") != before
+                or not raw_sha
+                or type(raw_size) is not int
+                or ref.get("decoded_sha256") != raw_sha
+                or ref.get("decoded_bytes") != raw_size
+            ):
+                raise ValueError("stop_native_source_generation_changed")
+            sha, size, _ = _vote_watch_content(Path(path + ".gz"), max_bytes=raw_size)
             if sha != raw_sha or size != raw_size:
-                raise ValueError('stop_native_source_bytes_changed')
+                raise ValueError("stop_native_source_bytes_changed")
             continue
         current_stat = list(source_stat(physical.stat()))
         if before != current_stat:
@@ -654,95 +949,185 @@ def read_committed(root, day, *, pointer=None, verify_full=False):
             # ctime while leaving every source byte and mtime intact. Require
             # the complete originally sealed hash before admitting that sole
             # metadata difference; replacement, content and clock changes fail.
-            if (physical.parent == Path(root)/'report/monitor_snapshots'
-                    and isinstance(before, list) and len(before) == 5
-                    and current_stat[:4] == before[:4]
-                    and not physical.is_symlink()
-                    and byte_generation(physical) == expected
-                    and list(source_stat(physical.stat())) == current_stat):
+            if (
+                physical.parent == Path(root) / "report/monitor_snapshots"
+                and isinstance(before, list)
+                and len(before) == 5
+                and current_stat[:4] == before[:4]
+                and not physical.is_symlink()
+                and byte_generation(physical) == expected
+                and list(source_stat(physical.stat())) == current_stat
+            ):
                 verified_stats[path] = current_stat
-            elif (path not in report.get('vote_source_inventory', {})
-                    or observed_votes.get(path) != list(source_stat(Path(path).stat()))
-                    or not sealed_sources or verify_full):
-                raise ValueError('stop_native_source_generation_changed')
+            elif (
+                path not in report.get("vote_source_inventory", {})
+                or observed_votes.get(path) != list(source_stat(Path(path).stat()))
+                or not sealed_sources
+                or verify_full
+            ):
+                raise ValueError("stop_native_source_generation_changed")
         if verify_full and not indexed_vote and byte_generation(Path(path)) != expected:
-            raise ValueError('stop_native_source_bytes_changed')
-    economic = report.get('economic_sources') or {}
-    if economic.get('native_selection'):
-        from src.engine.lifecycle.main_stop_research_cost import verify_selection_source_generation
-        verify_selection_source_generation(root,economic['native_selection'],verify_full=verify_full)
+            raise ValueError("stop_native_source_bytes_changed")
+    economic = report.get("economic_sources") or {}
+    if economic.get("native_selection"):
+        from src.engine.lifecycle.main_stop_research_cost import (
+            verify_selection_source_generation,
+        )
+
+        verify_selection_source_generation(
+            root, economic["native_selection"], verify_full=verify_full
+        )
     from src.engine.lifecycle.broker_cost_reconciliation import source_generation
-    for cost_day, expected in economic.get('cost_generations', {}).items():
+
+    for cost_day, expected in economic.get("cost_generations", {}).items():
         if source_generation(Path(root), cost_day) != expected:
-            declared = expected.get('quantity_research_cost_generation')
-            if (verify_full or any(c['status'] == 'selected' for c in bundle['cells'].values())
-                    or source_generation(Path(root), cost_day,
-                        declared_research=declared if declared is not None else False) != expected):
-                raise ValueError('stop_native_cost_generation_changed')
-    for cell in bundle['cells'].values():
-        if cell['status'] == 'selected':
+            declared = expected.get("quantity_research_cost_generation")
+            if (
+                verify_full
+                or any(c["status"] == "selected" for c in bundle["cells"].values())
+                or source_generation(
+                    Path(root),
+                    cost_day,
+                    declared_research=declared if declared is not None else False,
+                )
+                != expected
+            ):
+                raise ValueError("stop_native_cost_generation_changed")
+    for cell in bundle["cells"].values():
+        if cell["status"] == "selected":
             from .operator_policy_succession import stop_key_authority
-            auth = stop_key_authority(root, bundle['target_date'], cell['authority']['allowed_keys'])
-            if auth['sha256'] != cell['authority']['operator_lock_sha256']:
-                raise ValueError('stop_operator_sources_changed')
-    ref = report['opportunity_census']
-    for name,expected in report['census_dependencies'].items():
-        if list(source_stat(storage.safe_path(directory,name).stat()))!=expected:
-            raise ValueError('stop_census_shard_generation_changed')
-    if verify_full or 'rows' in ref:
-        for _ in storage.iter_tree(directory, ref): pass
-    elif byte_generation(storage.safe_path(directory, ref['path']))['sha256'] != ref['sha256']:
-        raise ValueError('stop_census_manifest_changed')
+
+            auth = stop_key_authority(
+                root, bundle["target_date"], cell["authority"]["allowed_keys"]
+            )
+            if auth["sha256"] != cell["authority"]["operator_lock_sha256"]:
+                raise ValueError("stop_operator_sources_changed")
+    ref = report["opportunity_census"]
+    for name, expected in report["census_dependencies"].items():
+        if list(source_stat(storage.safe_path(directory, name).stat())) != expected:
+            raise ValueError("stop_census_shard_generation_changed")
+    if verify_full or "rows" in ref:
+        for _ in storage.iter_tree(directory, ref):
+            pass
+    elif (
+        byte_generation(storage.safe_path(directory, ref["path"]))["sha256"]
+        != ref["sha256"]
+    ):
+        raise ValueError("stop_census_manifest_changed")
     from src.engine.scalping.main_stop_experiment import published_source_context
+
     # All bytes were verified above in full mode. Routine mode uses the native
     # publisher's exact identities/archive custody. Both avoid a second raw
     # scan during semantic validation and approved consumer-code handoff.
-    with published_source_context(inventory,verified_stats):
-        if report.get('code_sha256')!=code_sha():
-            from src.engine.automation.intraday_release_handoff import consumed_observation_scope
+    with published_source_context(inventory, verified_stats):
+        if report.get("code_sha256") != code_sha():
+            from src.engine.automation.intraday_release_handoff import (
+                consumed_observation_scope,
+            )
+
             with consumed_observation_scope(data_root=root):
-                policy.verify_runtime_code_contract(bundle,bundle['target_date'])
-        policy.validate_bundle(bundle,bundle['target_date'])
-    return bundle,report,pointer,directory
+                policy.verify_runtime_code_contract(bundle, bundle["target_date"])
+        policy.validate_bundle(bundle, bundle["target_date"])
+    return bundle, report, pointer, directory
 
 
 def completed_evidence(root, days):
     """Stream only metadata from native verified projections; never clone paths."""
-    from src.engine.holding_exit_observation_report import _verified_trade_review_projection
+    from src.engine.holding_exit_observation_report import (
+        _verified_trade_review_projection,
+    )
     from src.engine.lifecycle.research_json_stream import Reader
-    fields={'id','record_id','status','main_automatic_management_allowed','actual_cost_reconciliation'}
+
+    fields = {
+        "id",
+        "record_id",
+        "status",
+        "main_automatic_management_allowed",
+        "actual_cost_reconciliation",
+    }
     for day in days:
-        snapshot=Path(root)/'report/monitor_snapshots'/f'trade_review_{day}.json'
-        if _verified_trade_review_projection(snapshot,day,data_root=Path(root),metadata_only=True) is None:
+        snapshot = Path(root) / "report/monitor_snapshots" / f"trade_review_{day}.json"
+        if (
+            _verified_trade_review_projection(
+                snapshot, day, data_root=Path(root), metadata_only=True
+            )
+            is None
+        ):
             continue
-        sidecar=snapshot.with_suffix('.completed_projection.json')
-        before=byte_generation(sidecar)
+        sidecar = snapshot.with_suffix(".completed_projection.json")
+        before = byte_generation(sidecar)
+
         def project(reader):
-            row={}
-            def visit(key,r):
-                if key in fields:row[key]=r.value(storage.RECORD_BYTES)
-                else:r.skip()
+            row = {}
+
+            def visit(key, r):
+                if key in fields:
+                    row[key] = r.value(storage.RECORD_BYTES)
+                else:
+                    r.skip()
                 return iter(())
-            for _ in reader.fields(visit):pass
-            row['source_date']=day;row['source_sha256']=before['sha256']
+
+            for _ in reader.fields(visit):
+                pass
+            row["source_date"] = day
+            row["source_sha256"] = before["sha256"]
             return row
+
         # byte_generation and the native projection verifier above retain the
         # logical source contract when the archive owner removes plain bytes.
-        with (sidecar.open(encoding='utf-8') if sidecar.exists() else
-                gzip.open(Path(str(sidecar)+'.gz'),'rt',encoding='utf-8')) as handle:
-            yield from Reader(handle).target(('sections','completed_trade_projection'),project)
-        if byte_generation(sidecar)!=before:raise ValueError('stop_cost_projection_changed')
+        with (
+            sidecar.open(encoding="utf-8")
+            if sidecar.exists()
+            else gzip.open(Path(str(sidecar) + ".gz"), "rt", encoding="utf-8")
+        ) as handle:
+            yield from Reader(handle).target(
+                ("sections", "completed_trade_projection"), project
+            )
+        if byte_generation(sidecar) != before:
+            raise ValueError("stop_cost_projection_changed")
 
 
-def publish(root, day, target, *, parents, parent_receipt, source_paths, snapshot_receipt,
-            experiments=None, completed=(), economic_sources=None):
-    return _run_publication(root,day,target,parents=parents,parent_receipt=parent_receipt,
-        source_paths=source_paths,snapshot_receipt=snapshot_receipt,experiments=experiments,
-        completed=completed,economic_sources=economic_sources)
+def publish(
+    root,
+    day,
+    target,
+    *,
+    parents,
+    parent_receipt,
+    source_paths,
+    snapshot_receipt,
+    experiments=None,
+    completed=(),
+    economic_sources=None,
+):
+    return _run_publication(
+        root,
+        day,
+        target,
+        parents=parents,
+        parent_receipt=parent_receipt,
+        source_paths=source_paths,
+        snapshot_receipt=snapshot_receipt,
+        experiments=experiments,
+        completed=completed,
+        economic_sources=economic_sources,
+    )
 
 
-def prepare_policy_candidate(root, day, target, *, output_root, parents, parent_receipt,
-                             source_paths, snapshot_receipt, experiments, completed=(),economic_sources=None):
+def prepare_policy_candidate(
+    root,
+    day,
+    target,
+    *,
+    output_root,
+    parents,
+    parent_receipt,
+    source_paths,
+    snapshot_receipt,
+    experiments,
+    completed=(),
+    economic_sources=None,
+):
     """Run the native expensive evaluation before performance is available.
 
     Output has a preparation schema and no policy/key/order authority. It is
@@ -750,367 +1135,793 @@ def prepare_policy_candidate(root, day, target, *, output_root, parents, parent_
     aggregates only after validating finalized prospective experiments.
     """
     from src.engine.scalping.main_stop_experiment import _safe_path
-    destination=_safe_path(output_root).resolve();source_root=_safe_path(root).resolve()
-    if destination==source_root or source_root in destination.parents or destination in source_root.parents:
-        raise ValueError('stop_preparation_output_scope_invalid')
-    return _run_publication(root,day,target,parents=parents,parent_receipt=parent_receipt,
-        source_paths=source_paths,snapshot_receipt=snapshot_receipt,experiments=experiments,
-        completed=completed,economic_sources=economic_sources,preparation_root=destination)
+
+    destination = _safe_path(output_root).resolve()
+    source_root = _safe_path(root).resolve()
+    if (
+        destination == source_root
+        or source_root in destination.parents
+        or destination in source_root.parents
+    ):
+        raise ValueError("stop_preparation_output_scope_invalid")
+    return _run_publication(
+        root,
+        day,
+        target,
+        parents=parents,
+        parent_receipt=parent_receipt,
+        source_paths=source_paths,
+        snapshot_receipt=snapshot_receipt,
+        experiments=experiments,
+        completed=completed,
+        economic_sources=economic_sources,
+        preparation_root=destination,
+    )
 
 
-def _run_publication(root, day, target, *, parents, parent_receipt, source_paths, snapshot_receipt,
-                     experiments=None, completed=(),economic_sources=None,preparation_root=None):
+def _run_publication(
+    root,
+    day,
+    target,
+    *,
+    parents,
+    parent_receipt,
+    source_paths,
+    snapshot_receipt,
+    experiments=None,
+    completed=(),
+    economic_sources=None,
+    preparation_root=None,
+):
     from src.engine.lifecycle.research_disk_budget import use
     from src.engine.infrastructure.validation_digest_session import postclose_session
-    token=_DEADLINE.set(time.monotonic()+MAX_RESEARCH_SECONDS)
-    owned_completed=None
+
+    token = _DEADLINE.set(time.monotonic() + MAX_RESEARCH_SECONDS)
+    owned_completed = None
     try:
-        work_root=Path(preparation_root) if preparation_root else Path(root)/'threshold_cycle/main_stop_confirmation'
-        with postclose_session(root,day), use(work_root,
-                 durable_limit=2*1024**3,temp_limit=2*1024**3):
+        work_root = (
+            Path(preparation_root)
+            if preparation_root
+            else Path(root) / "threshold_cycle/main_stop_confirmation"
+        )
+        with (
+            postclose_session(root, day),
+            use(work_root, durable_limit=2 * 1024**3, temp_limit=2 * 1024**3),
+        ):
             # New grade-aware reservations consume the native cost producer,
             # never caller-injected allocation dictionaries. Legacy contracts
             # keep their exact-cost input contract without acquiring a grade.
-            if any('selection_cost_grade' in c for c in (experiments or {}).values()):
+            if any("selection_cost_grade" in c for c in (experiments or {}).values()):
                 from src.engine.lifecycle.main_stop_research_cost import (
-                    selection_source_generation, selection_completed_evidence)
-                days=source_dates(root,source_paths,day)
-                native=selection_source_generation(root,days)
-                economic_sources=deepcopy(economic_sources or {})
-                economic_sources['native_selection']=native
-                economic_sources['files']={**economic_sources.get('files',{}),**native['files']}
-                economic_sources['cost_generations']=native['cost_generations']
-                completed=selection_completed_evidence(root,days)
-                owned_completed=completed
-            return _publish(root,day,target,parents=parents,parent_receipt=parent_receipt,
-                source_paths=source_paths,snapshot_receipt=snapshot_receipt,
-                experiments=experiments,completed=completed,economic_sources=economic_sources,
-                preparation_root=preparation_root)
-    except (ValueError,MemoryError) as exc:
-        if isinstance(exc,MemoryError) or any(word in str(exc) for word in ('budget','deadline','unbounded')):
+                    selection_source_generation,
+                    selection_completed_evidence,
+                )
+
+                days = source_dates(root, source_paths, day)
+                native = selection_source_generation(root, days)
+                economic_sources = deepcopy(economic_sources or {})
+                economic_sources["native_selection"] = native
+                economic_sources["files"] = {
+                    **economic_sources.get("files", {}),
+                    **native["files"],
+                }
+                economic_sources["cost_generations"] = native["cost_generations"]
+                completed = selection_completed_evidence(root, days)
+                owned_completed = completed
+            return _publish(
+                root,
+                day,
+                target,
+                parents=parents,
+                parent_receipt=parent_receipt,
+                source_paths=source_paths,
+                snapshot_receipt=snapshot_receipt,
+                experiments=experiments,
+                completed=completed,
+                economic_sources=economic_sources,
+                preparation_root=preparation_root,
+            )
+    except (ValueError, MemoryError) as exc:
+        if isinstance(exc, MemoryError) or any(
+            word in str(exc) for word in ("budget", "deadline", "unbounded")
+        ):
             # Preserve the incumbent/pointers and completed per-position caches.
             # This bounded failure receipt is not a successful target policy.
-            failure_root=Path(preparation_root) if preparation_root else Path(root)/'report/main_stop_confirmation'
-            _atomic(failure_root/f'resume_{day}.json',dict(
-                schema='main_stop_resume_v1',source_date=day,target_date=target,status='incomplete',
-                reason=str(exc),parent_receipt=parent_receipt,policy_mutated=False,
-                target_policy_published=False,resume_root=str(Path(root)/'threshold_cycle/main_stop_confirmation'),
-                next_action='repair_budget_or_source_then_resume_same_verified_dependencies'))
+            failure_root = (
+                Path(preparation_root)
+                if preparation_root
+                else Path(root) / "report/main_stop_confirmation"
+            )
+            _atomic(
+                failure_root / f"resume_{day}.json",
+                dict(
+                    schema="main_stop_resume_v1",
+                    source_date=day,
+                    target_date=target,
+                    status="incomplete",
+                    reason=str(exc),
+                    parent_receipt=parent_receipt,
+                    policy_mutated=False,
+                    target_policy_published=False,
+                    resume_root=str(
+                        Path(root) / "threshold_cycle/main_stop_confirmation"
+                    ),
+                    next_action="repair_budget_or_source_then_resume_same_verified_dependencies",
+                ),
+            )
         raise
     finally:
-        if owned_completed is not None:owned_completed.close()
+        if owned_completed is not None:
+            owned_completed.close()
         _DEADLINE.reset(token)
 
 
-def _publish(root, day, target, *, parents, parent_receipt, source_paths, snapshot_receipt,
-             experiments=None, completed=(), economic_sources=None,preparation_root=None):
-    root=Path(root)
+def _publish(
+    root,
+    day,
+    target,
+    *,
+    parents,
+    parent_receipt,
+    source_paths,
+    snapshot_receipt,
+    experiments=None,
+    completed=(),
+    economic_sources=None,
+    preparation_root=None,
+):
+    root = Path(root)
     checkpoint()
-    algorithm_sha=code_sha()
-    if not '2026-09-29'<=day<target:raise ValueError('stop_publication_date_invalid')
-    if set(parents)!={f'{r}|{m}' for r in policy.ROLES for m in policy.MARKETS}:raise ValueError('stop_parent_cells_invalid')
-    if not parent_receipt.get('sha256') or not snapshot_receipt.get('sha256'):raise ValueError('stop_parent_or_snapshot_unverified')
+    algorithm_sha = code_sha()
+    if not "2026-09-29" <= day < target:
+        raise ValueError("stop_publication_date_invalid")
+    if set(parents) != {f"{r}|{m}" for r in policy.ROLES for m in policy.MARKETS}:
+        raise ValueError("stop_parent_cells_invalid")
+    if not parent_receipt.get("sha256") or not snapshot_receipt.get("sha256"):
+        raise ValueError("stop_parent_or_snapshot_unverified")
     economic_sources = economic_sources or dict(files={}, cost_generations={})
-    authority_sources = operator_sources(root,target)
-    vote_watch_sha=vote_watch(root,day)
-    vote_watch_binding=capture_vote_watch_binding(root,day)
-    source_catalog=[str(p) for p in sources(root,day)]
-    source_catalog_sha=policy.digest(source_catalog)
-    inventory={str(p):byte_generation(p) for p in source_paths}
-    if not set(source_catalog)<=set(inventory):
-        raise ValueError('stop_source_catalog_not_consumed')
-    input_stat_identity={name:dependency_stat(name)
-                         for name in {**inventory,**economic_sources.get('files',{})}}
-    generation=policy.digest(dict(inventory=inventory,snapshot=snapshot_receipt,parent=parent_receipt,
-        parents={k:asdict(v) for k,v in parents.items()},code=algorithm_sha,source_date=day,target_date=target,
-        experiments=experiments or {},economic_sources=economic_sources,operator_sources=authority_sources,
-        vote_watch_sha256=vote_watch_sha,vote_watch_binding=vote_watch_binding,
-        source_catalog_sha256=source_catalog_sha,
-        input_stat_identity=input_stat_identity))
-    pointer_path=committed_path(root,day)
+    authority_sources = operator_sources(root, target)
+    vote_watch_sha = vote_watch(root, day)
+    vote_watch_binding = capture_vote_watch_binding(root, day)
+    source_catalog = [str(p) for p in sources(root, day)]
+    source_catalog_sha = policy.digest(source_catalog)
+    inventory = {str(p): byte_generation(p) for p in source_paths}
+    if not set(source_catalog) <= set(inventory):
+        raise ValueError("stop_source_catalog_not_consumed")
+    input_stat_identity = {
+        name: dependency_stat(name)
+        for name in {**inventory, **economic_sources.get("files", {})}
+    }
+    generation = policy.digest(
+        dict(
+            inventory=inventory,
+            snapshot=snapshot_receipt,
+            parent=parent_receipt,
+            parents={k: asdict(v) for k, v in parents.items()},
+            code=algorithm_sha,
+            source_date=day,
+            target_date=target,
+            experiments=experiments or {},
+            economic_sources=economic_sources,
+            operator_sources=authority_sources,
+            vote_watch_sha256=vote_watch_sha,
+            vote_watch_binding=vote_watch_binding,
+            source_catalog_sha256=source_catalog_sha,
+            input_stat_identity=input_stat_identity,
+        )
+    )
+    pointer_path = committed_path(root, day)
     if preparation_root is None and pointer_path.exists():
-        pointer,_=bounded(pointer_path)
-        if pointer['generation']==generation:
-            previous,report,_,_=read_committed(root,day)
-            return previous,report
-    work_root=Path(preparation_root) if preparation_root else root/'threshold_cycle/main_stop_confirmation'
-    directory=work_root/'generations'/generation
-    source_sha=policy.digest(inventory)
-    if len(experiments or {}) > 1:raise ValueError("stop_one_cell_experiment_required")
-    census=Counter();cells={};evidence=[]
-    vote_sources={}
+        pointer, _ = bounded(pointer_path)
+        if pointer["generation"] == generation:
+            previous, report, _, _ = read_committed(root, day)
+            return previous, report
+    work_root = (
+        Path(preparation_root)
+        if preparation_root
+        else root / "threshold_cycle/main_stop_confirmation"
+    )
+    directory = work_root / "generations" / generation
+    source_sha = policy.digest(inventory)
+    if len(experiments or {}) > 1:
+        raise ValueError("stop_one_cell_experiment_required")
+    census = Counter()
+    cells = {}
+    evidence = []
+    vote_sources = {}
     with storage.index(directory) as db, ExitStack() as position_sources:
-        db.execute('CREATE TABLE census (id TEXT PRIMARY KEY, body TEXT)')
-        db.execute('CREATE TABLE actual (id TEXT PRIMARY KEY, body TEXT, day TEXT)')
+        db.execute("CREATE TABLE census (id TEXT PRIMARY KEY, body TEXT)")
+        db.execute("CREATE TABLE actual (id TEXT PRIMARY KEY, body TEXT, day TEXT)")
         for row in completed:
             checkpoint()
-            if row.get('native_batch_diagnostic'):
-                issue=row['native_batch_diagnostic']
-                census['economic_source:'+str(issue.get('status'))+':'+str(issue.get('reason'))]+=1
+            if row.get("native_batch_diagnostic"):
+                issue = row["native_batch_diagnostic"]
+                census[
+                    "economic_source:"
+                    + str(issue.get("status"))
+                    + ":"
+                    + str(issue.get("reason"))
+                ] += 1
                 continue
-            if not economic_sources.get('files'):raise ValueError('stop_completed_source_inventory_missing')
-            key=str(row.get('id') or row.get('record_id') or '')
-            if not key:raise ValueError('stop_completed_identity_missing')
-            raw=storage.encoded(row)
-            if len(raw)>storage.RECORD_BYTES:raise ValueError('stop_completed_record_unbounded')
-            db.execute('INSERT INTO actual VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body, day=excluded.day WHERE excluded.day>=day',
-                (key,raw.decode(),row['source_date']))
-        prepared_sources=source_index.prepare(work_root,inventory,source_events,census)
-        work={}
-        for cell,parent in parents.items():
-            grid=candidates(parent);counts=Counter();stats={name:dict(train_n=0,train_total=0,train_delta=0.,train_delta_sq=0.,holdout_n=0,holdout_total=0,holdout_delta=0.,holdout_delta_sq=0.,train_safety_regressions=0,holdout_safety_regressions=0) for name in grid if name!='parent'}
-            contract=(experiments or {}).get(cell)
+            if not economic_sources.get("files"):
+                raise ValueError("stop_completed_source_inventory_missing")
+            key = str(row.get("id") or row.get("record_id") or "")
+            if not key:
+                raise ValueError("stop_completed_identity_missing")
+            raw = storage.encoded(row)
+            if len(raw) > storage.RECORD_BYTES:
+                raise ValueError("stop_completed_record_unbounded")
+            db.execute(
+                "INSERT INTO actual VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body, day=excluded.day WHERE excluded.day>=day",
+                (key, raw.decode(), row["source_date"]),
+            )
+        prepared_sources = source_index.prepare(
+            work_root, inventory, source_events, census
+        )
+        work = {}
+        for cell, parent in parents.items():
+            grid = candidates(parent)
+            counts = Counter()
+            stats = {
+                name: dict(
+                    train_n=0,
+                    train_total=0,
+                    train_delta=0.0,
+                    train_delta_sq=0.0,
+                    holdout_n=0,
+                    holdout_total=0,
+                    holdout_delta=0.0,
+                    holdout_delta_sq=0.0,
+                    train_safety_regressions=0,
+                    holdout_safety_regressions=0,
+                )
+                for name in grid
+                if name != "parent"
+            }
+            contract = (experiments or {}).get(cell)
             if contract:
-                validator=validate_experiment
+                validator = validate_experiment
                 if preparation_root is not None:
-                    from src.engine.scalping.main_stop_experiment import validate_preparation
-                    validator=validate_preparation
-                validator(contract,parent_sha=policy.digest(asdict(parent)),source_sha=source_sha,code_sha=algorithm_sha)
+                    from src.engine.scalping.main_stop_experiment import (
+                        validate_preparation,
+                    )
+
+                    validator = validate_preparation
+                validator(
+                    contract,
+                    parent_sha=policy.digest(asdict(parent)),
+                    source_sha=source_sha,
+                    code_sha=algorithm_sha,
+                )
                 from .operator_policy_succession import stop_key_authority
-                if stop_key_authority(root,target,contract['allowed_keys'])['sha256'] != contract['operator_lock_sha256']:
-                    raise ValueError('stop_operator_sources_changed')
+
+                if (
+                    stop_key_authority(root, target, contract["allowed_keys"])["sha256"]
+                    != contract["operator_lock_sha256"]
+                ):
+                    raise ValueError("stop_operator_sources_changed")
                 # A research reservation narrows the simultaneous comparison;
                 # unsupported sensitivity axes cannot censor an eligible axis.
-                grid = {k:v for k,v in grid.items() if k=='parent' or (k.split(':')[0] in contract['allowed_keys']
-                    and abs(getattr(v,k.split(':')[0])-getattr(parent,k.split(':')[0]))<=contract['max_daily_change'][k.split(':')[0]])}
-                stats = {k:v for k,v in stats.items() if k in grid}
-                if contract.get('schema') in {'main_stop_experiment_v2','main_stop_experiment_preparation_v1'}:
-                    if (contract['cell'] != cell or contract['candidate_grid'] !=
-                            {name:asdict(value) for name,value in grid.items()}):
-                        raise ValueError('stop_experiment_registered_grid_or_cell_changed')
+                grid = {
+                    k: v
+                    for k, v in grid.items()
+                    if k == "parent"
+                    or (
+                        k.split(":")[0] in contract["allowed_keys"]
+                        and abs(
+                            getattr(v, k.split(":")[0])
+                            - getattr(parent, k.split(":")[0])
+                        )
+                        <= contract["max_daily_change"][k.split(":")[0]]
+                    )
+                }
+                stats = {k: v for k, v in stats.items() if k in grid}
+                if contract.get("schema") in {
+                    "main_stop_experiment_v2",
+                    "main_stop_experiment_preparation_v1",
+                }:
+                    if contract["cell"] != cell or contract["candidate_grid"] != {
+                        name: asdict(value) for name, value in grid.items()
+                    }:
+                        raise ValueError(
+                            "stop_experiment_registered_grid_or_cell_changed"
+                        )
             from src.engine.scalping.main_stop_experiment import COST_GRADES
-            grade_stats={grade:deepcopy(stats) for grade in COST_GRADES}
-            work[cell]=(grid,counts,stats,contract,grade_stats)
+
+            grade_stats = {grade: deepcopy(stats) for grade in COST_GRADES}
+            work[cell] = (grid, counts, stats, contract, grade_stats)
         observed_bounds = {}
-        for position in source_index.positions(prepared_sources,directory,census,checkpoint=checkpoint):
+        for position in source_index.positions(
+            prepared_sources, directory, census, checkpoint=checkpoint
+        ):
             position_sources.close()
             checkpoint()
-            cell,key,first,last=position.cell,position.key,position.first,position.last
+            cell, key, first, last = (
+                position.cell,
+                position.key,
+                position.first,
+                position.last,
+            )
             if cell not in work:
-                census['unmapped_positions']+=1
-                row=dict(position_key=key,cell=cell,status='source_gap',reason='scope_unmapped')
-                db.execute('INSERT INTO census VALUES (?,?)',(key,storage.encoded(row).decode()))
+                census["unmapped_positions"] += 1
+                row = dict(
+                    position_key=key,
+                    cell=cell,
+                    status="source_gap",
+                    reason="scope_unmapped",
+                )
+                db.execute(
+                    "INSERT INTO census VALUES (?,?)",
+                    (key, storage.encoded(row).decode()),
+                )
                 continue
-            grid,counts,stats,contract,grade_stats=work[cell]
-            counts['positions']+=1
+            grid, counts, stats, contract, grade_stats = work[cell]
+            counts["positions"] += 1
             in_experiment_window = True
-            if contract and contract.get('schema') in {'main_stop_experiment_v2','main_stop_experiment_preparation_v1'}:
-                in_experiment_window = contract['source_start_at'] <= first <= last <= contract['source_end_at']
+            if contract and contract.get("schema") in {
+                "main_stop_experiment_v2",
+                "main_stop_experiment_preparation_v1",
+            }:
+                in_experiment_window = (
+                    contract["source_start_at"]
+                    <= first
+                    <= last
+                    <= contract["source_end_at"]
+                )
                 if in_experiment_window:
-                    previous_bounds = observed_bounds.get(cell, (first,last))
-                    observed_bounds[cell] = (min(first,previous_bounds[0]),max(last,previous_bounds[1]))
-                else:counts['outside_registered_experiment_window'] += 1
+                    previous_bounds = observed_bounds.get(cell, (first, last))
+                    observed_bounds[cell] = (
+                        min(first, previous_bounds[0]),
+                        max(last, previous_bounds[1]),
+                    )
+                else:
+                    counts["outside_registered_experiment_window"] += 1
             # Terminal, votes and candidate replay share the same validated
             # bounded position; gzip offsets are decoded only once.
-            path_rows=position_sources.enter_context(position.materialized(directory))
-            from src.engine.ai.holding_vote_replay_source import assemble_votes, PreparedVotes
+            path_rows = position_sources.enter_context(position.materialized(directory))
+            from src.engine.ai.holding_vote_replay_source import (
+                assemble_votes,
+                PreparedVotes,
+            )
+
             first_row = next(path_rows(), {})
-            actual_row=db.execute('SELECT body FROM actual WHERE id=?',(str(first_row.get('record_id')),)).fetchone()
-            actual=json.loads(actual_row[0]) if actual_row else {}
-            economic=actual.get('main_stop_economic_source') or {}
+            actual_row = db.execute(
+                "SELECT body FROM actual WHERE id=?", (str(first_row.get("record_id")),)
+            ).fetchone()
+            actual = json.loads(actual_row[0]) if actual_row else {}
+            economic = actual.get("main_stop_economic_source") or {}
             from src.engine.scalping.main_stop_replay import prepare_terminal_prefix
-            support_soft_threshold=max(value.soft_stop_pct for value in grid.values())
-            _,terminal,terminal_diagnostics=prepare_terminal_prefix(path_rows,economic,parent=parents[cell],
-                support_soft_threshold=support_soft_threshold)
+
+            support_soft_threshold = max(value.soft_stop_pct for value in grid.values())
+            _, terminal, terminal_diagnostics = prepare_terminal_prefix(
+                path_rows,
+                economic,
+                parent=parents[cell],
+                support_soft_threshold=support_soft_threshold,
+            )
             from src.engine.scalping.main_stop_replay import vote_assembly_source
-            source=vote_assembly_source(path_rows())
-            reference = assemble_votes(root, directory, source, vote_sources) if source else None
-            logical_votes = ({k:v for k,v in reference.items() if k!='root'} if reference else None)
-            cache_key=policy.digest(dict(code=algorithm_sha,position=key,source=position.source_sha256,
-                votes=storage.logical_value(logical_votes),grid={k:asdict(v) for k,v in grid.items()},
-                terminal=terminal))
-            cache=work_root/'replay_cache'/f'{cache_key}.json'
-            outcomes=None
-            operating_contract=None
+
+            source = vote_assembly_source(path_rows())
+            reference = (
+                assemble_votes(root, directory, source, vote_sources)
+                if source
+                else None
+            )
+            logical_votes = (
+                {k: v for k, v in reference.items() if k != "root"}
+                if reference
+                else None
+            )
+            cache_key = policy.digest(
+                dict(
+                    code=algorithm_sha,
+                    position=key,
+                    source=position.source_sha256,
+                    votes=storage.logical_value(logical_votes),
+                    grid={k: asdict(v) for k, v in grid.items()},
+                    terminal=terminal,
+                )
+            )
+            cache = work_root / "replay_cache" / f"{cache_key}.json"
+            outcomes = None
+            operating_contract = None
             if cache.exists():
-                cached,_=bounded(cache)
-                if (cached.get('cache_key')!=cache_key or cached.get('sha256')!=policy.digest({k:v for k,v in cached.items() if k!='sha256'})
-                        or set(cached.get('outcomes',{}))!=set(grid)
-                        or not isinstance(cached.get('operating_contract'),dict)):
-                    raise ValueError('stop_replay_checkpoint_invalid')
-                outcomes=cached['outcomes']
-                operating_contract=cached['operating_contract']
+                cached, _ = bounded(cache)
+                if (
+                    cached.get("cache_key") != cache_key
+                    or cached.get("sha256")
+                    != policy.digest({k: v for k, v in cached.items() if k != "sha256"})
+                    or set(cached.get("outcomes", {})) != set(grid)
+                    or not isinstance(cached.get("operating_contract"), dict)
+                ):
+                    raise ValueError("stop_replay_checkpoint_invalid")
+                outcomes = cached["outcomes"]
+                operating_contract = cached["operating_contract"]
             if outcomes is None:
-                with tempfile.TemporaryDirectory(prefix='.votes-', dir=directory) as scratch:
+                with tempfile.TemporaryDirectory(
+                    prefix=".votes-", dir=directory
+                ) as scratch:
                     prepared = PreparedVotes(reference, scratch)
                     try:
+
                         def vote_reader(row, at):
                             try:
-                                snap = prepared.snapshot(row.get('holding_vote_source'), at,
-                                    market=row['market'],route=row['route'],epoch=row['transport_epoch'],entry_at=first)
-                                return dict(snap,source_verified=True)
+                                snap = prepared.snapshot(
+                                    row.get("holding_vote_source"),
+                                    at,
+                                    market=row["market"],
+                                    route=row["route"],
+                                    epoch=row["transport_epoch"],
+                                    entry_at=first,
+                                )
+                                return dict(snap, source_verified=True)
                             except (ValueError, OSError, TypeError, KeyError):
                                 return dict(source_verified=False)
+
                         # Prefix selection uses an original exact decision
                         # row; no post-terminal quotes or interpolation.
                         from src.engine.scalping.main_stop_replay import terminal_prefix
-                        def replay_rows():return terminal_prefix(path_rows(),terminal)
-                        operating_contract=holding_contracts(replay_rows())
-                        outcomes={name:replay(replay_rows(),value, vote_reader=vote_reader,
-                            terminal_outcome=terminal,support_soft_threshold=support_soft_threshold)
-                            for name,value in grid.items()}
-                    finally:prepared.close()
-                cached=dict(cache_key=cache_key,outcomes=outcomes,operating_contract=operating_contract)
-                cached['sha256']=policy.digest(cached)
-                _atomic(cache,cached)
 
-            incumbent=outcomes['parent'];counts[incumbent['status']+':'+str(incumbent['reason'])]+=1
+                        def replay_rows():
+                            return terminal_prefix(path_rows(), terminal)
+
+                        operating_contract = holding_contracts(replay_rows())
+                        outcomes = {
+                            name: replay(
+                                replay_rows(),
+                                value,
+                                vote_reader=vote_reader,
+                                terminal_outcome=terminal,
+                                support_soft_threshold=support_soft_threshold,
+                            )
+                            for name, value in grid.items()
+                        }
+                    finally:
+                        prepared.close()
+                cached = dict(
+                    cache_key=cache_key,
+                    outcomes=outcomes,
+                    operating_contract=operating_contract,
+                )
+                cached["sha256"] = policy.digest(cached)
+                _atomic(cache, cached)
+
+            incumbent = outcomes["parent"]
+            counts[incumbent["status"] + ":" + str(incumbent["reason"])] += 1
             # Entire positions are split. No samples from one holding cross
             # train/holdout, and the full max grace horizon is embargoed.
-            split=None
+            split = None
             if contract and in_experiment_window:
-                if last<contract['split_at']-contract['embargo_sec']:split='train'
-                elif first>contract['split_at']+contract['embargo_sec']:split='holdout'
-            cost=actual.get('actual_cost_reconciliation') or {}
-            economic_source=(actual.get('status')=='COMPLETED'
-                and actual.get('main_automatic_management_allowed') is True
-                and cost.get('status')=='actual_cost_reconciled'
-                and all(policy.finite(cost.get(k)) for k in ('exact_pnl_krw','exact_profit_rate'))
-                and bool(cost.get('receipt_sha256') and cost.get('raw_sha256')))
-            from src.engine.scalping.main_stop_experiment import selection_cost_grade,selection_quantity_status
+                if last < contract["split_at"] - contract["embargo_sec"]:
+                    split = "train"
+                elif first > contract["split_at"] + contract["embargo_sec"]:
+                    split = "holdout"
+            cost = actual.get("actual_cost_reconciliation") or {}
+            economic_source = (
+                actual.get("status") == "COMPLETED"
+                and actual.get("main_automatic_management_allowed") is True
+                and cost.get("status") == "actual_cost_reconciled"
+                and all(
+                    policy.finite(cost.get(k))
+                    for k in ("exact_pnl_krw", "exact_profit_rate")
+                )
+                and bool(cost.get("receipt_sha256") and cost.get("raw_sha256"))
+            )
+            from src.engine.scalping.main_stop_experiment import (
+                selection_cost_grade,
+                selection_quantity_status,
+            )
             from src.engine.lifecycle.main_stop_research_cost import selection_grade
+
             # Quantity may become settled after the shared quote was captured.
             # Bind economics to the first verified actual soft evaluation,
             # retaining that evaluation's own clock and quantity receipt.
-            economic_binding=terminal_diagnostics.get('economic_binding_source')
-            native_grade=selection_grade(economic,economic_binding) if economic and economic_binding else None
-            selected_grade=selection_cost_grade(contract)
-            grade_aware=bool(contract and 'selection_cost_grade' in contract)
-            if grade_aware:economic_source=native_grade==selected_grade
-            quantity_status=selection_quantity_status(contract)
-            same_quantity_population=all(x.get('quantity_status')==quantity_status for x in outcomes.values())
-            counts['actual_cost_verified' if economic_source and selected_grade=='exact_execution'
-                   else 'cost_grade_verified:'+str(native_grade) if native_grade else 'actual_cost_or_terminal_gap']+=1
-            common=economic_source and all(x['status']=='modeled' for x in outcomes.values())
-            if grade_aware:common=common and same_quantity_population
-            populations=[(stats,common,True)]
+            economic_binding = terminal_diagnostics.get("economic_binding_source")
+            native_grade = (
+                selection_grade(economic, economic_binding)
+                if economic and economic_binding
+                else None
+            )
+            selected_grade = selection_cost_grade(contract)
+            grade_aware = bool(contract and "selection_cost_grade" in contract)
             if grade_aware:
-                populations=[(group,native_grade==grade and same_quantity_population and all(x['status']=='modeled' for x in outcomes.values()),
-                              True) for grade,group in grade_stats.items()]
-            for grouped,admitted,in_population in populations:
+                economic_source = native_grade == selected_grade
+            quantity_status = selection_quantity_status(contract)
+            same_quantity_population = all(
+                x.get("quantity_status") == quantity_status for x in outcomes.values()
+            )
+            counts[
+                (
+                    "actual_cost_verified"
+                    if economic_source and selected_grade == "exact_execution"
+                    else (
+                        "cost_grade_verified:" + str(native_grade)
+                        if native_grade
+                        else "actual_cost_or_terminal_gap"
+                    )
+                )
+            ] += 1
+            common = economic_source and all(
+                x["status"] == "modeled" for x in outcomes.values()
+            )
+            if grade_aware:
+                common = common and same_quantity_population
+            populations = [(stats, common, True)]
+            if grade_aware:
+                populations = [
+                    (
+                        group,
+                        native_grade == grade
+                        and same_quantity_population
+                        and all(x["status"] == "modeled" for x in outcomes.values()),
+                        True,
+                    )
+                    for grade, group in grade_stats.items()
+                ]
+            for grouped, admitted, in_population in populations:
                 if split and in_population:
-                    for stat in grouped.values():stat[split+'_total']+=1
+                    for stat in grouped.values():
+                        stat[split + "_total"] += 1
                 if split and admitted:
-                    for name,row in outcomes.items():
-                        if name=='parent':continue
-                        stat=grouped[name];stat[split+'_n']+=1
-                        delta=row['modeled_net_krw']-incumbent['modeled_net_krw']
-                        stat[split+'_delta']+=delta
-                        stat[split+'_delta_sq']+=delta*delta
-                        stat[split+'_safety_regressions']+=int(row['mae_pct']<incumbent['mae_pct'] or row['exposure_sec']>incumbent['exposure_sec'])
-            summary=dict(position_key=key,cell=cell,status=incumbent['status'],reason=incumbent['reason'],
-                actual_cost_verified=economic_source and selected_grade=='exact_execution', split=split, common=common,
-                economic_grade=native_grade, economic_artifact_sha256=economic.get('artifact_sha256'),
-                economic_source_status=economic.get('status'),economic_source_reason=economic.get('reason'),
-                quantity_status=incumbent.get('quantity_status'),same_quantity_population=same_quantity_population,
-                original_economics_scope=economic.get('original_economics_scope'),
-                actual_execution_cost=economic.get('actual_execution_cost') is True,
-                terminal_reason=terminal_diagnostics.get('terminal_reason'),
-                excluded_tail=terminal_diagnostics.get('excluded_tail'), operating_contract=operating_contract)
-            db.execute('INSERT INTO census VALUES (?,?)',(key,storage.encoded(summary).decode()))
+                    for name, row in outcomes.items():
+                        if name == "parent":
+                            continue
+                        stat = grouped[name]
+                        stat[split + "_n"] += 1
+                        delta = row["modeled_net_krw"] - incumbent["modeled_net_krw"]
+                        stat[split + "_delta"] += delta
+                        stat[split + "_delta_sq"] += delta * delta
+                        stat[split + "_safety_regressions"] += int(
+                            row["mae_pct"] < incumbent["mae_pct"]
+                            or row["exposure_sec"] > incumbent["exposure_sec"]
+                        )
+            summary = dict(
+                position_key=key,
+                cell=cell,
+                status=incumbent["status"],
+                reason=incumbent["reason"],
+                actual_cost_verified=economic_source
+                and selected_grade == "exact_execution",
+                split=split,
+                common=common,
+                economic_grade=native_grade,
+                economic_artifact_sha256=economic.get("artifact_sha256"),
+                economic_source_status=economic.get("status"),
+                economic_source_reason=economic.get("reason"),
+                quantity_status=incumbent.get("quantity_status"),
+                same_quantity_population=same_quantity_population,
+                original_economics_scope=economic.get("original_economics_scope"),
+                actual_execution_cost=economic.get("actual_execution_cost") is True,
+                terminal_reason=terminal_diagnostics.get("terminal_reason"),
+                excluded_tail=terminal_diagnostics.get("excluded_tail"),
+                operating_contract=operating_contract,
+            )
+            db.execute(
+                "INSERT INTO census VALUES (?,?)",
+                (key, storage.encoded(summary).decode()),
+            )
             evidence.append(summary)
-            if len(evidence)>64:evidence.pop(0)
+            if len(evidence) > 64:
+                evidence.pop(0)
         position_sources.close()
-        for cell,parent in parents.items():
-            grid,counts,stats,contract,grade_stats=work[cell]
-            cost_selection=None
-            if contract and 'selection_cost_grade' in contract:
-                grade=selection_cost_grade(contract);stats=grade_stats[grade]
-                cost_selection=dict(schema='main_stop_cost_selection_v1',selection_cost_grade=grade,
+        for cell, parent in parents.items():
+            grid, counts, stats, contract, grade_stats = work[cell]
+            cost_selection = None
+            if contract and "selection_cost_grade" in contract:
+                grade = selection_cost_grade(contract)
+                stats = grade_stats[grade]
+                cost_selection = dict(
+                    schema="main_stop_cost_selection_v1",
+                    selection_cost_grade=grade,
                     selection_quantity_status=selection_quantity_status(contract),
-                    comparison_metric='causal_modeled_exit_net_krw',actual_cost_usage='source_eligibility_only',
-                    denominator_policy='all_registered_positions_including_unknown_cost_or_source',
-                    actual_profit_claimed=False,aggregates_by_grade=grade_stats)
-                cost_selection['cost_selection_sha256']=policy.digest(cost_selection)
-            if contract and contract.get('schema') in {'main_stop_experiment_v2','main_stop_experiment_preparation_v1'}:
-                source_seal,_=bounded(contract['source_seal']['path'])
-                if observed_bounds.get(cell) != (source_seal['observed_start_at'],source_seal['observed_end_at']):
-                    raise ValueError('stop_experiment_observed_window_unverified')
-            winner,status=choose(stats,contract)
-            if census.get('unidentifiable_raw_rows') or census.get('unidentifiable'):
-                winner,status=None,'source_gap'
-            selected=grid[winner] if winner else parent
-            authority={} if not winner or preparation_root is not None else dict(allowed_keys=[winner.split(':')[0]],
-                operator_lock_sha256=contract['operator_lock_sha256'],experiment_sha256=contract['experiment_sha256'],
-                source_sha256=source_sha,code_sha256=algorithm_sha,target_date=target,
-                parent_values_sha256=policy.digest(asdict(parent)))
-            cells[cell]=dict(status=status,values=asdict(selected),parent_values=asdict(parent),authority=authority,
-                source_census=dict(counts),selection_evidence=dict(holdout_verified=bool(winner),
-                    comparison_kind='modeled_alternative_exit_not_actual_profit',selected_candidate=winner,
-                    aggregates=stats,experiment=contract,cost_selection=cost_selection),rollback_values=asdict(parent))
-        opportunity_census=storage.write_tree(directory,(json.loads(body) for body, in db.execute('SELECT body FROM census ORDER BY id')))
-    if code_sha()!=algorithm_sha:raise ValueError('stop_code_changed_during_research')
+                    comparison_metric="causal_modeled_exit_net_krw",
+                    actual_cost_usage="source_eligibility_only",
+                    denominator_policy="all_registered_positions_including_unknown_cost_or_source",
+                    actual_profit_claimed=False,
+                    aggregates_by_grade=grade_stats,
+                )
+                cost_selection["cost_selection_sha256"] = policy.digest(cost_selection)
+            if contract and contract.get("schema") in {
+                "main_stop_experiment_v2",
+                "main_stop_experiment_preparation_v1",
+            }:
+                source_seal, _ = bounded(contract["source_seal"]["path"])
+                if observed_bounds.get(cell) != (
+                    source_seal["observed_start_at"],
+                    source_seal["observed_end_at"],
+                ):
+                    raise ValueError("stop_experiment_observed_window_unverified")
+            winner, status = choose(stats, contract)
+            if census.get("unidentifiable_raw_rows") or census.get("unidentifiable"):
+                winner, status = None, "source_gap"
+            selected = grid[winner] if winner else parent
+            authority = (
+                {}
+                if not winner or preparation_root is not None
+                else dict(
+                    allowed_keys=[winner.split(":")[0]],
+                    operator_lock_sha256=contract["operator_lock_sha256"],
+                    experiment_sha256=contract["experiment_sha256"],
+                    source_sha256=source_sha,
+                    code_sha256=algorithm_sha,
+                    target_date=target,
+                    parent_values_sha256=policy.digest(asdict(parent)),
+                )
+            )
+            cells[cell] = dict(
+                status=status,
+                values=asdict(selected),
+                parent_values=asdict(parent),
+                authority=authority,
+                source_census=dict(counts),
+                selection_evidence=dict(
+                    holdout_verified=bool(winner),
+                    comparison_kind="modeled_alternative_exit_not_actual_profit",
+                    selected_candidate=winner,
+                    aggregates=stats,
+                    experiment=contract,
+                    cost_selection=cost_selection,
+                ),
+                rollback_values=asdict(parent),
+            )
+        opportunity_census = storage.write_tree(
+            directory,
+            (
+                json.loads(body)
+                for body, in db.execute("SELECT body FROM census ORDER BY id")
+            ),
+        )
+    if code_sha() != algorithm_sha:
+        raise ValueError("stop_code_changed_during_research")
     checkpoint()
-    if economic_sources.get('native_selection'):
-        from src.engine.lifecycle.main_stop_research_cost import selection_source_generation
-        if selection_source_generation(root,economic_sources['native_selection']['source_dates']) != economic_sources['native_selection']:
-            raise ValueError('stop_native_selection_cost_generation_changed')
-    if vote_watch(root,day)!=vote_watch_sha:raise ValueError('stop_vote_source_set_changed')
-    if policy.digest([str(p) for p in sources(root,day)])!=source_catalog_sha:
-        raise ValueError('stop_raw_source_set_changed')
-    dependency_stats = verified_dependency_stats({**inventory, **vote_sources,
-                                                  **economic_sources.get('files',{})}, root=root, day=day)
-    if any(dependency_stats[name]!=value for name,value in input_stat_identity.items()):
-        raise ValueError('stop_source_changed_during_research')
-    research=dict(schema='main_stop_research_v1',source_date=day,target_date=target,source_sha256=source_sha,
-        auxiliary_research_reference=dict(owner='scalping.reversal_auxiliary_contract.build_input',
-            evidence_kind='reference_contract_not_actual_ai_input',
-            target_net_pct=.4,stop_net_pct=-3.,horizon_sec=1800,cost_rate=.0023,
-            changes_original_labels=False,changes_runtime_stop=False),
-        vote_selection_mode='separate_holding_vote_family_parent_carry',
-        protect_line_generator_status='conditional_existing_line_provenance_only',
-        protect_line_authority='existing_main_trailing_owner_no_new_line_strategy',
-        parent_receipt=parent_receipt,snapshot_receipt=snapshot_receipt,code_sha256=algorithm_sha,
-        source_inventory=inventory,source_catalog_sha256=source_catalog_sha,
-        vote_source_inventory=vote_sources,vote_watch_sha256=vote_watch_sha,
+    if economic_sources.get("native_selection"):
+        from src.engine.lifecycle.main_stop_research_cost import (
+            selection_source_generation,
+        )
+
+        if (
+            selection_source_generation(
+                root, economic_sources["native_selection"]["source_dates"]
+            )
+            != economic_sources["native_selection"]
+        ):
+            raise ValueError("stop_native_selection_cost_generation_changed")
+    if vote_watch(root, day) != vote_watch_sha:
+        raise ValueError("stop_vote_source_set_changed")
+    if policy.digest([str(p) for p in sources(root, day)]) != source_catalog_sha:
+        raise ValueError("stop_raw_source_set_changed")
+    dependency_stats = verified_dependency_stats(
+        {**inventory, **vote_sources, **economic_sources.get("files", {})},
+        root=root,
+        day=day,
+    )
+    if any(
+        dependency_stats[name] != value for name, value in input_stat_identity.items()
+    ):
+        raise ValueError("stop_source_changed_during_research")
+    research = dict(
+        schema="main_stop_research_v1",
+        source_date=day,
+        target_date=target,
+        source_sha256=source_sha,
+        auxiliary_research_reference=dict(
+            owner="scalping.reversal_auxiliary_contract.build_input",
+            evidence_kind="reference_contract_not_actual_ai_input",
+            target_net_pct=0.4,
+            stop_net_pct=-3.0,
+            horizon_sec=1800,
+            cost_rate=0.0023,
+            changes_original_labels=False,
+            changes_runtime_stop=False,
+        ),
+        vote_selection_mode="separate_holding_vote_family_parent_carry",
+        protect_line_generator_status="conditional_existing_line_provenance_only",
+        protect_line_authority="existing_main_trailing_owner_no_new_line_strategy",
+        parent_receipt=parent_receipt,
+        snapshot_receipt=snapshot_receipt,
+        code_sha256=algorithm_sha,
+        source_inventory=inventory,
+        source_catalog_sha256=source_catalog_sha,
+        vote_source_inventory=vote_sources,
+        vote_watch_sha256=vote_watch_sha,
         vote_watch_binding=vote_watch_binding,
-        economic_sources=economic_sources, opportunity_census=opportunity_census,
-        census_dependencies=census_dependencies(directory,opportunity_census),
+        economic_sources=economic_sources,
+        opportunity_census=opportunity_census,
+        census_dependencies=census_dependencies(directory, opportunity_census),
         dependency_stats=dependency_stats,
-        census=dict(census),examples=evidence,actual_order_submitted=False,actual_profit_verified=False)
+        census=dict(census),
+        examples=evidence,
+        actual_order_submitted=False,
+        actual_profit_verified=False,
+    )
     if preparation_root is not None:
         from src.engine.scalping.main_stop_experiment import _write_immutable
-        prepared=dict(schema='main_stop_policy_preparation_v1',status='prepared_report_only',
-            data_root=str(root.absolute()),research=research,cells=cells,operator_sources=authority_sources,
-            allowed_runtime_apply=False,policy_mutated=False,target_policy_published=False,
-            required_next='finalized_prospective_experiment_and_full_performance_before_commit')
-        prepared['preparation_sha256']=policy.digest(prepared)
-        ref=_write_immutable(directory/'preparation.json',prepared,'preparation_sha256')
-        return prepared,ref
-    return _commit_candidate(root,day,target,directory,generation,research,cells,authority_sources)
+
+        prepared = dict(
+            schema="main_stop_policy_preparation_v1",
+            status="prepared_report_only",
+            data_root=str(root.absolute()),
+            research=research,
+            cells=cells,
+            operator_sources=authority_sources,
+            allowed_runtime_apply=False,
+            policy_mutated=False,
+            target_policy_published=False,
+            required_next="finalized_prospective_experiment_and_full_performance_before_commit",
+        )
+        prepared["preparation_sha256"] = policy.digest(prepared)
+        ref = _write_immutable(
+            directory / "preparation.json", prepared, "preparation_sha256"
+        )
+        return prepared, ref
+    return _commit_candidate(
+        root, day, target, directory, generation, research, cells, authority_sources
+    )
 
 
-def _commit_candidate(root,day,target,directory,generation,research,cells,authority_sources):
+def _commit_candidate(
+    root, day, target, directory, generation, research, cells, authority_sources
+):
     """Small authority boundary; expensive preparation never enters this early."""
-    from src.engine.scalping.main_stop_experiment import require_native_publication_performance
+    from src.engine.scalping.main_stop_experiment import (
+        require_native_publication_performance,
+    )
+
     for cell in cells.values():
-        if cell.get('status')=='selected':
-            evidence=cell.get('selection_evidence')
-            require_native_publication_performance(evidence.get('experiment') if isinstance(evidence,dict) else None,
-                selected_values=cell.get('values'))
-    research_sha=policy.digest(research)
-    bundle=dict(schema=policy.SCHEMA,source_date=day,target_date=target,valid_until=target,
-        research_sha256=research_sha,cells=cells,parent_receipt=research['parent_receipt'],operator_sources=authority_sources,
-        code_sha256=research['code_sha256'])
-    bundle['policy_sha256']=policy.digest(bundle);policy.validate_bundle(bundle,target)
-    report=dict(research,research_sha256=research_sha,status='published_policy',policy_sha256=bundle['policy_sha256'])
-    report['report_sha256']=policy.digest(report)
-    for name,value in (('policy.json',bundle),('report.json',report)):
-        path=directory/name
-        if path.exists() and bounded(path)[0]!=value:raise ValueError('stop_immutable_generation_collision')
-        _atomic(path,value)
-    pointer=dict(schema='main_stop_committed_v1',source_date=day,target_date=target,generation=generation,
-        policy_byte_sha256=hashlib.sha256((directory/'policy.json').read_bytes()).hexdigest(),
-        report_byte_sha256=hashlib.sha256((directory/'report.json').read_bytes()).hexdigest())
+        if cell.get("status") == "selected":
+            evidence = cell.get("selection_evidence")
+            require_native_publication_performance(
+                evidence.get("experiment") if isinstance(evidence, dict) else None,
+                selected_values=cell.get("values"),
+            )
+    research_sha = policy.digest(research)
+    bundle = dict(
+        schema=policy.SCHEMA,
+        source_date=day,
+        target_date=target,
+        valid_until=target,
+        research_sha256=research_sha,
+        cells=cells,
+        parent_receipt=research["parent_receipt"],
+        operator_sources=authority_sources,
+        code_sha256=research["code_sha256"],
+    )
+    bundle["policy_sha256"] = policy.digest(bundle)
+    policy.validate_bundle(bundle, target)
+    report = dict(
+        research,
+        research_sha256=research_sha,
+        status="published_policy",
+        policy_sha256=bundle["policy_sha256"],
+    )
+    report["report_sha256"] = policy.digest(report)
+    for name, value in (("policy.json", bundle), ("report.json", report)):
+        path = directory / name
+        if path.exists() and bounded(path)[0] != value:
+            raise ValueError("stop_immutable_generation_collision")
+        _atomic(path, value)
+    pointer = dict(
+        schema="main_stop_committed_v1",
+        source_date=day,
+        target_date=target,
+        generation=generation,
+        policy_byte_sha256=hashlib.sha256(
+            (directory / "policy.json").read_bytes()
+        ).hexdigest(),
+        report_byte_sha256=hashlib.sha256(
+            (directory / "report.json").read_bytes()
+        ).hexdigest(),
+    )
     # Verify the new immutable generation before changing any native alias or
     # committed pointer. A failed final source check preserves the incumbent.
-    read_committed(root,day,pointer=pointer,verify_full=True)
+    read_committed(root, day, pointer=pointer, verify_full=True)
     # Aliases are compatibility surfaces; readers use the single atomic pointer.
-    _atomic(policy.policy_path(root,target),bundle);_atomic(report_path(root,day),report)
-    pointer_path=committed_path(root,day)
-    _atomic(pointer_path,pointer)
-    _atomic(pointer_path.with_name('target_'+target+'.json'),pointer)
-    return bundle,report
+    _atomic(policy.policy_path(root, target), bundle)
+    _atomic(report_path(root, day), report)
+    pointer_path = committed_path(root, day)
+    _atomic(pointer_path, pointer)
+    _atomic(pointer_path.with_name("target_" + target + ".json"), pointer)
+    return bundle, report
 
 
 def commit_prepared_policy(root, preparation, *, experiments):
@@ -1121,214 +1932,427 @@ def commit_prepared_policy(root, preparation, *, experiments):
     decoding are reused from the immutable native preparation generation.
     """
     from src.engine.scalping.main_stop_experiment import (
-        _read_reference,prepare_experiment,validate_cost_selection)
+        _read_reference,
+        prepare_experiment,
+        validate_cost_selection,
+    )
     from src.engine.infrastructure.validation_digest_session import postclose_session
     from src.engine.lifecycle.research_disk_budget import use
-    from src.engine.lifecycle.main_stop_research_cost import verify_selection_source_generation
+    from src.engine.lifecycle.main_stop_research_cost import (
+        verify_selection_source_generation,
+    )
     from src.engine.lifecycle.broker_cost_reconciliation import source_generation
     from .operator_policy_succession import stop_key_authority
-    root=Path(root).absolute()
-    prepared=_read_reference(preparation,'main_stop_policy_preparation_v1','preparation_sha256')
-    if (prepared.get('status')!='prepared_report_only' or prepared.get('data_root')!=str(root)
-            or any(prepared.get(key) is not False for key in
-                   ('allowed_runtime_apply','policy_mutated','target_policy_published'))):
-        raise ValueError('stop_preparation_binding_invalid')
-    research=deepcopy(prepared['research']);cells=deepcopy(prepared['cells'])
-    day=research['source_date'];target=research['target_date'];algorithm=research['code_sha256']
-    inputs={key:cell['selection_evidence']['experiment'] for key,cell in cells.items()
-            if cell['selection_evidence'].get('experiment')}
-    if (set(cells)!={f'{r}|{m}' for r in policy.ROLES for m in policy.MARKETS}
-            or not isinstance(experiments,dict) or set(experiments)!=set(inputs) or len(inputs)!=1
-            or algorithm!=code_sha() or not '2026-09-29'<=day<target):
-        raise ValueError('stop_preparation_contract_set_changed')
-    token=_DEADLINE.set(time.monotonic()+MAX_RESEARCH_SECONDS)
+
+    root = Path(root).absolute()
+    prepared = _read_reference(
+        preparation, "main_stop_policy_preparation_v1", "preparation_sha256"
+    )
+    if (
+        prepared.get("status") != "prepared_report_only"
+        or prepared.get("data_root") != str(root)
+        or any(
+            prepared.get(key) is not False
+            for key in (
+                "allowed_runtime_apply",
+                "policy_mutated",
+                "target_policy_published",
+            )
+        )
+    ):
+        raise ValueError("stop_preparation_binding_invalid")
+    research = deepcopy(prepared["research"])
+    cells = deepcopy(prepared["cells"])
+    day = research["source_date"]
+    target = research["target_date"]
+    algorithm = research["code_sha256"]
+    inputs = {
+        key: cell["selection_evidence"]["experiment"]
+        for key, cell in cells.items()
+        if cell["selection_evidence"].get("experiment")
+    }
+    if (
+        set(cells) != {f"{r}|{m}" for r in policy.ROLES for m in policy.MARKETS}
+        or not isinstance(experiments, dict)
+        or set(experiments) != set(inputs)
+        or len(inputs) != 1
+        or algorithm != code_sha()
+        or not "2026-09-29" <= day < target
+    ):
+        raise ValueError("stop_preparation_contract_set_changed")
+    token = _DEADLINE.set(time.monotonic() + MAX_RESEARCH_SECONDS)
     try:
-        with postclose_session(root,day),use(root/'threshold_cycle/main_stop_confirmation',
-                durable_limit=2*1024**3,temp_limit=2*1024**3):
-            inventory=research['source_inventory']
-            catalog=[]
-            for path in sources(root,day):
-                logical=str(path)[:-3] if str(path).endswith('.jsonl.gz') else str(path)
-                catalog.append(logical if logical in inventory and not Path(logical).exists() else str(path))
-            if (research['source_sha256']!=policy.digest(inventory)
-                    or research['source_catalog_sha256']!=policy.digest(catalog)
-                    or research['vote_watch_sha256']!=vote_watch(root,day)
-                    or prepared['operator_sources']!=operator_sources(root,target)):
-                raise ValueError('stop_preparation_source_set_changed')
-            expected_files={**inventory,**research.get('vote_source_inventory',{}),
-                            **research.get('economic_sources',{}).get('files',{})}
-            observed={}
-            for name,expected in expected_files.items():
-                path=Path(name)
-                if (name in inventory and path.parent==root/'pipeline_events'
-                        and path.name.endswith('.jsonl') and not path.exists()):
-                    _archived_pipeline_source(path,expected,verify_full=True)
-                    observed[name]=research['dependency_stats'][name]
-                else:observed.update(verified_dependency_stats({name:expected}, root=root, day=day))
-            if observed!=research['dependency_stats']:
-                raise ValueError('stop_preparation_dependency_changed')
-            for key in ('parent_receipt','snapshot_receipt'):
-                ref=research[key]
-                if bounded(ref['path'],8*1024*1024)[1]!=ref['sha256']:
-                    raise ValueError('stop_preparation_native_source_changed')
-            economic=research.get('economic_sources') or {}
-            if economic.get('native_selection'):
-                verify_selection_source_generation(root,economic['native_selection'],verify_full=True)
-            for cost_day,expected in economic.get('cost_generations',{}).items():
-                if source_generation(root,cost_day)!=expected:
-                    raise ValueError('stop_preparation_cost_source_changed')
-            for key,cell in cells.items():
+        with (
+            postclose_session(root, day),
+            use(
+                root / "threshold_cycle/main_stop_confirmation",
+                durable_limit=2 * 1024**3,
+                temp_limit=2 * 1024**3,
+            ),
+        ):
+            inventory = research["source_inventory"]
+            catalog = []
+            for path in sources(root, day):
+                logical = (
+                    str(path)[:-3] if str(path).endswith(".jsonl.gz") else str(path)
+                )
+                catalog.append(
+                    logical
+                    if logical in inventory and not Path(logical).exists()
+                    else str(path)
+                )
+            if (
+                research["source_sha256"] != policy.digest(inventory)
+                or research["source_catalog_sha256"] != policy.digest(catalog)
+                or research["vote_watch_sha256"] != vote_watch(root, day)
+                or prepared["operator_sources"] != operator_sources(root, target)
+            ):
+                raise ValueError("stop_preparation_source_set_changed")
+            expected_files = {
+                **inventory,
+                **research.get("vote_source_inventory", {}),
+                **research.get("economic_sources", {}).get("files", {}),
+            }
+            observed = {}
+            for name, expected in expected_files.items():
+                path = Path(name)
+                if (
+                    name in inventory
+                    and path.parent == root / "pipeline_events"
+                    and path.name.endswith(".jsonl")
+                    and not path.exists()
+                ):
+                    _archived_pipeline_source(path, expected, verify_full=True)
+                    observed[name] = research["dependency_stats"][name]
+                else:
+                    observed.update(
+                        verified_dependency_stats({name: expected}, root=root, day=day)
+                    )
+            if observed != research["dependency_stats"]:
+                raise ValueError("stop_preparation_dependency_changed")
+            for key in ("parent_receipt", "snapshot_receipt"):
+                ref = research[key]
+                if bounded(ref["path"], 8 * 1024 * 1024)[1] != ref["sha256"]:
+                    raise ValueError("stop_preparation_native_source_changed")
+            economic = research.get("economic_sources") or {}
+            if economic.get("native_selection"):
+                verify_selection_source_generation(
+                    root, economic["native_selection"], verify_full=True
+                )
+            for cost_day, expected in economic.get("cost_generations", {}).items():
+                if source_generation(root, cost_day) != expected:
+                    raise ValueError("stop_preparation_cost_source_changed")
+            for key, cell in cells.items():
                 checkpoint()
-                if cell.get('authority')!={}:raise ValueError('stop_preparation_has_authority')
-                before=policy.StopValues.parse(cell['parent_values'])
+                if cell.get("authority") != {}:
+                    raise ValueError("stop_preparation_has_authority")
+                before = policy.StopValues.parse(cell["parent_values"])
                 if key not in inputs:
-                    expected_status=('source_gap' if research['census'].get('unidentifiable_raw_rows')
-                        or research['census'].get('unidentifiable') else 'baseline_carry')
-                    if cell['values']!=cell['parent_values'] or cell['status']!=expected_status:
-                        raise ValueError('stop_preparation_unregistered_change')
+                    expected_status = (
+                        "source_gap"
+                        if research["census"].get("unidentifiable_raw_rows")
+                        or research["census"].get("unidentifiable")
+                        else "baseline_carry"
+                    )
+                    if (
+                        cell["values"] != cell["parent_values"]
+                        or cell["status"] != expected_status
+                    ):
+                        raise ValueError("stop_preparation_unregistered_change")
                     continue
-                contract=validate_experiment(experiments[key],parent_sha=policy.digest(asdict(before)),
-                    source_sha=research['source_sha256'],code_sha=algorithm)
+                contract = validate_experiment(
+                    experiments[key],
+                    parent_sha=policy.digest(asdict(before)),
+                    source_sha=research["source_sha256"],
+                    code_sha=algorithm,
+                )
                 # Exact source seal, original registration and every parameter
                 # must match the computation performed before measurement.
-                if prepare_experiment(contract['preregistration'],contract['source_seal'])!=inputs[key]:
-                    raise ValueError('stop_preparation_experiment_changed')
-                auth=stop_key_authority(root,target,contract['allowed_keys'])
-                if auth['sha256']!=contract['operator_lock_sha256']:
-                    raise ValueError('stop_operator_sources_changed')
-                evidence=cell['selection_evidence']
-                validate_cost_selection(evidence,contract)
-                winner,status=choose(evidence['aggregates'],contract)
-                if research['census'].get('unidentifiable_raw_rows') or research['census'].get('unidentifiable'):
-                    winner,status=None,'source_gap'
-                values=asdict(candidates(before)[winner]) if winner else asdict(before)
-                if (status!=cell['status'] or winner!=evidence['selected_candidate'] or values!=cell['values']
-                        or evidence['holdout_verified'] is not bool(winner)):
-                    raise ValueError('stop_preparation_result_changed')
-                evidence['experiment']=contract
+                if (
+                    prepare_experiment(
+                        contract["preregistration"], contract["source_seal"]
+                    )
+                    != inputs[key]
+                ):
+                    raise ValueError("stop_preparation_experiment_changed")
+                auth = stop_key_authority(root, target, contract["allowed_keys"])
+                if auth["sha256"] != contract["operator_lock_sha256"]:
+                    raise ValueError("stop_operator_sources_changed")
+                evidence = cell["selection_evidence"]
+                validate_cost_selection(evidence, contract)
+                winner, status = choose(evidence["aggregates"], contract)
+                if research["census"].get("unidentifiable_raw_rows") or research[
+                    "census"
+                ].get("unidentifiable"):
+                    winner, status = None, "source_gap"
+                values = (
+                    asdict(candidates(before)[winner]) if winner else asdict(before)
+                )
+                if (
+                    status != cell["status"]
+                    or winner != evidence["selected_candidate"]
+                    or values != cell["values"]
+                    or evidence["holdout_verified"] is not bool(winner)
+                ):
+                    raise ValueError("stop_preparation_result_changed")
+                evidence["experiment"] = contract
                 if winner:
-                    cell['authority']=dict(allowed_keys=[winner.split(':')[0]],
-                        operator_lock_sha256=contract['operator_lock_sha256'],
-                        experiment_sha256=contract['experiment_sha256'],source_sha256=research['source_sha256'],
-                        code_sha256=algorithm,target_date=target,parent_values_sha256=policy.digest(asdict(before)))
-            origin=Path(preparation['path']).parent
-            if census_dependencies(origin,research['opportunity_census'])!=research['census_dependencies']:
-                raise ValueError('stop_preparation_census_changed')
+                    cell["authority"] = dict(
+                        allowed_keys=[winner.split(":")[0]],
+                        operator_lock_sha256=contract["operator_lock_sha256"],
+                        experiment_sha256=contract["experiment_sha256"],
+                        source_sha256=research["source_sha256"],
+                        code_sha256=algorithm,
+                        target_date=target,
+                        parent_values_sha256=policy.digest(asdict(before)),
+                    )
+            origin = Path(preparation["path"]).parent
+            if (
+                census_dependencies(origin, research["opportunity_census"])
+                != research["census_dependencies"]
+            ):
+                raise ValueError("stop_preparation_census_changed")
             # A final generation names both native preparation and finalized
             # contracts. Its terminal receipt refers one-way to these inputs.
-            generation=policy.digest(dict(preparation=preparation,experiments=experiments,
-                                         source_date=day,target_date=target,code=algorithm))
-            directory=root/'threshold_cycle/main_stop_confirmation/generations'/generation
-            storage.copy_tree(origin,directory,research['opportunity_census'])
-            research['census_dependencies']=census_dependencies(directory,research['opportunity_census'])
-            research['preparation_receipt']=deepcopy(preparation)
-            if algorithm!=code_sha():raise ValueError('stop_code_changed_during_research')
+            generation = policy.digest(
+                dict(
+                    preparation=preparation,
+                    experiments=experiments,
+                    source_date=day,
+                    target_date=target,
+                    code=algorithm,
+                )
+            )
+            directory = (
+                root / "threshold_cycle/main_stop_confirmation/generations" / generation
+            )
+            storage.copy_tree(origin, directory, research["opportunity_census"])
+            research["census_dependencies"] = census_dependencies(
+                directory, research["opportunity_census"]
+            )
+            research["preparation_receipt"] = deepcopy(preparation)
+            if algorithm != code_sha():
+                raise ValueError("stop_code_changed_during_research")
             checkpoint()
-            return _commit_candidate(root,day,target,directory,generation,research,cells,prepared['operator_sources'])
-    finally:_DEADLINE.reset(token)
+            return _commit_candidate(
+                root,
+                day,
+                target,
+                directory,
+                generation,
+                research,
+                cells,
+                prepared["operator_sources"],
+            )
+    finally:
+        _DEADLINE.reset(token)
 
 
-def handoff(root,target, *, effective_env=None, require_terminal=False):
-    target_pointer=committed_path(root,target).with_name('target_'+target+'.json')
-    if not target_pointer.exists():return {},dict(status='not_installed',target_date=target)
-    pointer,_=bounded(target_pointer)
-    bundle,report,pointer,directory=read_committed(root,pointer['source_date'],pointer=pointer)
-    if bundle['target_date']!=target:raise ValueError('stop_handoff_target_invalid')
+def handoff(root, target, *, effective_env=None, require_terminal=False):
+    target_pointer = committed_path(root, target).with_name(
+        "target_" + target + ".json"
+    )
+    if not target_pointer.exists():
+        return {}, dict(status="not_installed", target_date=target)
+    pointer, _ = bounded(target_pointer)
+    bundle, report, pointer, directory = read_committed(
+        root, pointer["source_date"], pointer=pointer
+    )
+    if bundle["target_date"] != target:
+        raise ValueError("stop_handoff_target_invalid")
     if effective_env is not None:
-        policy.validate_runtime_environment(bundle,effective_env)
+        policy.validate_runtime_environment(bundle, effective_env)
     if require_terminal:
         from .postclose_summary_handoff import stage_receipt_issues
-        issues = stage_receipt_issues(Path(root)/'report',bundle['source_date'],STAGE)
-        if issues:raise ValueError('stop_terminal_handoff_unverified:' + ','.join(issues))
-    env={policy.ENV_FILE:str(directory/'policy.json'),policy.ENV_SHA:pointer['policy_byte_sha256'],policy.ENV_DATE:target}
-    return env,dict(status='verified_carried' if all(c['status']!='selected' for c in bundle['cells'].values()) else 'policy_selected',
-        source_date=bundle['source_date'],target_date=target,policy_sha256=bundle['policy_sha256'],
-        generation=pointer['generation'],report_sha256=report['report_sha256'],actual_pid_consumed=False)
+
+        issues = stage_receipt_issues(
+            Path(root) / "report", bundle["source_date"], STAGE
+        )
+        if issues:
+            raise ValueError("stop_terminal_handoff_unverified:" + ",".join(issues))
+    env = {
+        policy.ENV_FILE: str(directory / "policy.json"),
+        policy.ENV_SHA: pointer["policy_byte_sha256"],
+        policy.ENV_DATE: target,
+    }
+    return env, dict(
+        status=(
+            "verified_carried"
+            if all(c["status"] != "selected" for c in bundle["cells"].values())
+            else "policy_selected"
+        ),
+        source_date=bundle["source_date"],
+        target_date=target,
+        policy_sha256=bundle["policy_sha256"],
+        generation=pointer["generation"],
+        report_sha256=report["report_sha256"],
+        actual_pid_consumed=False,
+    )
 
 
 def runtime_consumption(root, bundle):
     """Read the native loader and durable pins; never run trading evaluation."""
     from src.engine.lifecycle.research_admission import start_ticks
     from src.engine.scalping.position_peak_ledger import DEFAULT_LEDGER_PATH
-    directory=Path(root)/'runtime/main_stop_confirmation'/bundle['target_date']
-    result=dict(status='not_observed',actual_pid_consumed=False,pin_count=0,findings=[])
-    files=sorted(directory.glob('pid_*.json')) if directory.exists() else []
-    if len(files)>64:raise ValueError('stop_pid_archive_unbounded')
-    current=[]
+
+    directory = Path(root) / "runtime/main_stop_confirmation" / bundle["target_date"]
+    result = dict(
+        status="not_observed", actual_pid_consumed=False, pin_count=0, findings=[]
+    )
+    files = sorted(directory.glob("pid_*.json")) if directory.exists() else []
+    if len(files) > 64:
+        raise ValueError("stop_pid_archive_unbounded")
+    current = []
     for path in files:
-        receipt,_=bounded(path,32768)
-        if (receipt.get('schema')!='main_stop_loaded_policy_v1'
-                or receipt.get('receipt_sha256')!=policy.digest({k:v for k,v in receipt.items() if k!='receipt_sha256'})
-                or receipt.get('target_date')!=bundle['target_date']):
-            raise ValueError('stop_pid_receipt_invalid')
-        pid=receipt.get('pid')
-        if type(pid) is not int or pid<=0:raise ValueError('stop_pid_receipt_invalid')
+        receipt, _ = bounded(path, 32768)
+        if (
+            receipt.get("schema") != "main_stop_loaded_policy_v1"
+            or receipt.get("receipt_sha256")
+            != policy.digest(
+                {k: v for k, v in receipt.items() if k != "receipt_sha256"}
+            )
+            or receipt.get("target_date") != bundle["target_date"]
+        ):
+            raise ValueError("stop_pid_receipt_invalid")
+        pid = receipt.get("pid")
+        if type(pid) is not int or pid <= 0:
+            raise ValueError("stop_pid_receipt_invalid")
         try:
-            live=start_ticks(pid)==receipt['start_ticks'] and str(Path(f'/proc/{pid}/cwd').resolve(strict=True))==receipt['process_cwd']
-        except (OSError,ValueError):live=False
-        if not live:continue
-        if len(current)>=8:raise ValueError('stop_live_loader_census_unbounded')
-        loaded,loaded_sha=bounded(receipt['policy_file'])
-        policy.load_bundle(receipt['policy_file'],loaded_sha,bundle['target_date'])
-        if (loaded_sha!=receipt['policy_byte_sha256']
-                or loaded['policy_sha256']!=receipt['policy_sha256']
-                or policy.digest({k:c['values'] for k,c in loaded['cells'].items()})!=receipt.get('loaded_cells_sha256')):
-            raise ValueError('stop_pid_loaded_map_invalid')
+            live = (
+                start_ticks(pid) == receipt["start_ticks"]
+                and str(Path(f"/proc/{pid}/cwd").resolve(strict=True))
+                == receipt["process_cwd"]
+            )
+        except (OSError, ValueError):
+            live = False
+        if not live:
+            continue
+        if len(current) >= 8:
+            raise ValueError("stop_live_loader_census_unbounded")
+        loaded, loaded_sha = bounded(receipt["policy_file"])
+        policy.load_bundle(receipt["policy_file"], loaded_sha, bundle["target_date"])
+        if (
+            loaded_sha != receipt["policy_byte_sha256"]
+            or loaded["policy_sha256"] != receipt["policy_sha256"]
+            or policy.digest({k: c["values"] for k, c in loaded["cells"].items()})
+            != receipt.get("loaded_cells_sha256")
+        ):
+            raise ValueError("stop_pid_loaded_map_invalid")
         current.append(receipt)
     if not current:
-        expected=Path(root)/'runtime/policy_bootstrap'/f"runtime_policy_bootstrap_verify_{bundle['target_date']}.json"
+        expected = (
+            Path(root)
+            / "runtime/policy_bootstrap"
+            / f"runtime_policy_bootstrap_verify_{bundle['target_date']}.json"
+        )
         if expected.exists():
-            verification,_=bounded(expected)
-            if verification.get('target_date')==bundle['target_date'] and verification.get('pid_passed') is True:
-                result['findings'].append('main_stop_verified_pid_loader_not_observed')
+            verification, _ = bounded(expected)
+            if (
+                verification.get("target_date") == bundle["target_date"]
+                and verification.get("pid_passed") is True
+            ):
+                result["findings"].append("main_stop_verified_pid_loader_not_observed")
         return result
-    result.update(status='loader_observed',actual_pid_consumed=True,
-        current_pids=[row['pid'] for row in current],loaded_generations=[row['policy_sha256'] for row in current])
-    if bundle['policy_sha256'] not in result['loaded_generations']:
-        result['findings'].append('main_stop_current_pid_policy_mismatch')
-        result['actual_pid_consumed']=False
-    ledger_path=Path(root)/'runtime'/DEFAULT_LEDGER_PATH.name
+    result.update(
+        status="loader_observed",
+        actual_pid_consumed=True,
+        current_pids=[row["pid"] for row in current],
+        loaded_generations=[row["policy_sha256"] for row in current],
+    )
+    if bundle["policy_sha256"] not in result["loaded_generations"]:
+        result["findings"].append("main_stop_current_pid_policy_mismatch")
+        result["actual_pid_consumed"] = False
+    ledger_path = Path(root) / "runtime" / DEFAULT_LEDGER_PATH.name
     if ledger_path.exists():
-        ledger,_=bounded(ledger_path,8*1024*1024)
-        for key,row in (ledger.get('positions') or {}).items():
-            pin=row.get('main_stop_policy_pin')
-            if pin is None:continue
-            policy.pin_values(pin,key)
-            if pin['policy_sha256']==bundle['policy_sha256'] and pin['values']!=bundle['cells'][pin['role']+'|'+pin['market']]['values']:
-                result['findings'].append('main_stop_position_pin_mismatch')
-            result['pin_count']+=1
+        ledger, _ = bounded(ledger_path, 8 * 1024 * 1024)
+        for key, row in (ledger.get("positions") or {}).items():
+            pin = row.get("main_stop_policy_pin")
+            if pin is None:
+                continue
+            policy.pin_values(pin, key)
+            if (
+                pin["policy_sha256"] == bundle["policy_sha256"]
+                and pin["values"]
+                != bundle["cells"][pin["role"] + "|" + pin["market"]]["values"]
+            ):
+                result["findings"].append("main_stop_position_pin_mismatch")
+            result["pin_count"] += 1
     return result
 
 
 def main():
-    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--date',required=True);parser.add_argument('--target',required=True);parser.add_argument('--publication-date')
-    args=parser.parse_args()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--date", required=True)
+    parser.add_argument("--target", required=True)
+    parser.add_argument("--publication-date")
+    args = parser.parse_args()
     from src.utils.constants import DATA_DIR
     from src.engine.log_archive_service import verified_postclose_exit_snapshot_manifest
     from src.engine.build_next_stage2_checklist import _next_krx_trading_day
     from src.engine.infrastructure.validation_digest_session import postclose_session
-    if args.target!=_next_krx_trading_day(args.publication_date or args.date):raise ValueError('stop_next_session_target_invalid')
-    with direct_job(DATA_DIR,STAGE,args.date), postclose_session(DATA_DIR,args.date) as validation:
-        snapshot=verified_postclose_exit_snapshot_manifest(args.date,data_root=DATA_DIR)
-        if snapshot is None:raise ValueError('stop_exit_snapshot_unverified')
-        parents,receipt=baseline(DATA_DIR,args.target)
-        experiment_path=Path(DATA_DIR)/'runtime/research/main_stop_confirmation'/f'experiments_{args.date}.json'
-        experiments=bounded(experiment_path)[0] if experiment_path.exists() else {}
-        paths=sources(DATA_DIR,args.date)
-        days=source_dates(DATA_DIR,paths,args.date)
+
+    if args.target != _next_krx_trading_day(args.publication_date or args.date):
+        raise ValueError("stop_next_session_target_invalid")
+    with (
+        direct_job(DATA_DIR, STAGE, args.date),
+        postclose_session(DATA_DIR, args.date) as validation,
+    ):
+        snapshot = verified_postclose_exit_snapshot_manifest(
+            args.date, data_root=DATA_DIR
+        )
+        if snapshot is None:
+            raise ValueError("stop_exit_snapshot_unverified")
+        parents, receipt = baseline(DATA_DIR, args.target)
+        experiment_path = (
+            Path(DATA_DIR)
+            / "runtime/research/main_stop_confirmation"
+            / f"experiments_{args.date}.json"
+        )
+        experiments = bounded(experiment_path)[0] if experiment_path.exists() else {}
+        paths = sources(DATA_DIR, args.date)
+        days = source_dates(DATA_DIR, paths, args.date)
         from src.engine.lifecycle.broker_cost_reconciliation import source_generation
-        files={}
+
+        files = {}
         for day in days:
-            path=Path(DATA_DIR)/'report/monitor_snapshots'/f'trade_review_{day}.json'
-            for item in (path,path.with_suffix('.completed_projection.json')):
+            path = (
+                Path(DATA_DIR) / "report/monitor_snapshots" / f"trade_review_{day}.json"
+            )
+            for item in (path, path.with_suffix(".completed_projection.json")):
                 from src.engine.lifecycle.snapshot_archive import identity_available
-                if identity_available(item):files[str(item)]=byte_generation(item)
-        economic_sources=dict(files=files,cost_generations={day:source_generation(DATA_DIR,day) for day in days})
-        publish(DATA_DIR,args.date,args.target,parents=parents,parent_receipt=receipt,
-            source_paths=sources(DATA_DIR,args.date),snapshot_receipt=dict(path=str(snapshot),sha256=hashlib.sha256(snapshot.read_bytes()).hexdigest()),experiments=experiments,
-            completed=completed_evidence(DATA_DIR, days),economic_sources=economic_sources)
-    print(json.dumps(dict(source_date=args.date,validation_io=validation.stats,runtime_effect=False)))
+
+                if identity_available(item):
+                    files[str(item)] = byte_generation(item)
+        economic_sources = dict(
+            files=files,
+            cost_generations={day: source_generation(DATA_DIR, day) for day in days},
+        )
+        publish(
+            DATA_DIR,
+            args.date,
+            args.target,
+            parents=parents,
+            parent_receipt=receipt,
+            source_paths=sources(DATA_DIR, args.date),
+            snapshot_receipt=dict(
+                path=str(snapshot),
+                sha256=hashlib.sha256(snapshot.read_bytes()).hexdigest(),
+            ),
+            experiments=experiments,
+            completed=completed_evidence(DATA_DIR, days),
+            economic_sources=economic_sources,
+        )
+    print(
+        json.dumps(
+            dict(
+                source_date=args.date,
+                validation_io=validation.stats,
+                runtime_effect=False,
+            )
+        )
+    )
     return 0
 
 
-if __name__=='__main__':raise SystemExit(main())
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -10,7 +10,6 @@ import math
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-
 VERSION = "mechanical_strength_v2"
 TRADE_WINDOW_MS = 1_000
 HISTORY_LIMIT = 120
@@ -35,7 +34,11 @@ def normalize_config(raw: Mapping[str, Any]) -> dict[str, int | float]:
     result: dict[str, int | float] = {}
     for key, default in CONFIG_DEFAULTS.items():
         value = raw[key]
-        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+        ):
             raise ValueError(f"classifier_config_{key}_type_invalid")
         if isinstance(default, int):
             if not float(value).is_integer():
@@ -48,11 +51,18 @@ def normalize_config(raw: Mapping[str, Any]) -> dict[str, int | float]:
         raise ValueError("classifier_trade_window_out_of_range")
     if result["adverse_updates_required"] not in (2, 3):
         raise ValueError("classifier_adverse_updates_out_of_range")
-    if any(result[key] not in (0.0, 0.1) for key in (
-        "strong_queue_min", "strong_ofi_min", "weak_queue_negative_min", "weak_ofi_negative_min"
-    )) or any(result[key] not in (0, 10) for key in (
-        "strong_signed_qty_min", "weak_signed_qty_negative_min"
-    )):
+    if any(
+        result[key] not in (0.0, 0.1)
+        for key in (
+            "strong_queue_min",
+            "strong_ofi_min",
+            "weak_queue_negative_min",
+            "weak_ofi_negative_min",
+        )
+    ) or any(
+        result[key] not in (0, 10)
+        for key in ("strong_signed_qty_min", "weak_signed_qty_negative_min")
+    ):
         raise ValueError("classifier_threshold_out_of_range")
     return result
 
@@ -109,7 +119,9 @@ def _touch(row: Mapping[str, Any]) -> tuple[int, int, int, int] | None:
     return bp, bq, ap, aq
 
 
-def _ofi(previous: tuple[int, int, int, int], current: tuple[int, int, int, int]) -> float:
+def _ofi(
+    previous: tuple[int, int, int, int], current: tuple[int, int, int, int]
+) -> float:
     bp0, bq0, ap0, aq0 = previous
     bp1, bq1, ap1, aq1 = current
     bid = bq1 if bp1 > bp0 else bq1 - bq0 if bp1 == bp0 else -bq0
@@ -117,7 +129,9 @@ def _ofi(previous: tuple[int, int, int, int], current: tuple[int, int, int, int]
     return (bid - ask) / max(1, bq0 + aq0)
 
 
-def _rows_by_item(source: Any, item: str, epoch: int, route_key: str) -> list[dict[str, Any]]:
+def _rows_by_item(
+    source: Any, item: str, epoch: int, route_key: str
+) -> list[dict[str, Any]]:
     rows = []
     if not isinstance(source, Mapping):
         return rows
@@ -142,15 +156,20 @@ def _rows_by_item(source: Any, item: str, epoch: int, route_key: str) -> list[di
 
 
 def _signed_tape(
-    trades: list[dict[str, Any]], *, at_ms: int, min_sequence_exclusive: int,
+    trades: list[dict[str, Any]],
+    *,
+    at_ms: int,
+    min_sequence_exclusive: int,
     window_ms: int = TRADE_WINDOW_MS,
 ) -> tuple[int | None, int | None, list[dict[str, Any]], str | None]:
     net = 0
     latest = None
     receipts = []
-    if (len(trades) >= HISTORY_LIMIT
-            and _positive_int(trades[0].get("received_at_ms")) is not None
-            and int(trades[0]["received_at_ms"]) > at_ms - window_ms):
+    if (
+        len(trades) >= HISTORY_LIMIT
+        and _positive_int(trades[0].get("received_at_ms")) is not None
+        and int(trades[0]["received_at_ms"]) > at_ms - window_ms
+    ):
         return None, None, [], "trade_window_capacity_gap"
     previous_sequence = None
     previous_at = None
@@ -161,31 +180,42 @@ def _signed_tape(
             continue
         if received is None or not at_ms - window_ms <= received <= at_ms:
             continue
-        if (previous_sequence is not None
-                and (sequence != previous_sequence + 1 or received < previous_at)):
+        if previous_sequence is not None and (
+            sequence != previous_sequence + 1 or received < previous_at
+        ):
             return None, None, [], "trade_sequence_or_time_gap"
         previous_sequence, previous_at = sequence, received
         if row.get("aggressor_source") != "kiwoom_0b_signed_trade_volume":
             return None, None, [], "trade_direction_unverified"
         if row.get("aggressor_quality") not in {
-            "signed_trade_volume_positive", "signed_trade_volume_negative"
+            "signed_trade_volume_positive",
+            "signed_trade_volume_negative",
         }:
             return None, None, [], "trade_direction_unverified"
         qty = _positive_int(row.get("volume"))
         side = str(row.get("aggressor_side") or "")
         if qty is None or side not in {"BUY", "SELL"}:
             return None, None, [], "trade_quantity_or_side_invalid"
-        receipts.append({"sequence": sequence, "received_at_ms": received,
-                         "side": side, "qty": qty,
-                         "source": row["aggressor_source"],
-                         "quality": row["aggressor_quality"]})
+        receipts.append(
+            {
+                "sequence": sequence,
+                "received_at_ms": received,
+                "side": side,
+                "qty": qty,
+                "source": row["aggressor_source"],
+                "quality": row["aggressor_quality"],
+            }
+        )
         net += qty if side == "BUY" else -qty
         latest = received
     return (net if receipts else None), latest, receipts, None
 
 
 def _trade_peak_since(
-    trades: list[dict[str, Any]], *, after_sequence: int, at_ms: int,
+    trades: list[dict[str, Any]],
+    *,
+    after_sequence: int,
+    at_ms: int,
 ) -> tuple[int | None, int, list[dict[str, int]], str | None]:
     """Advance a separate 0B price cursor without filling missing messages."""
 
@@ -196,21 +226,32 @@ def _trade_peak_since(
     for row in trades:
         sequence = _positive_int(row.get("route_sequence"))
         received = _positive_int(row.get("received_at_ms"))
-        if sequence is None or received is None or sequence <= cursor or received > at_ms:
+        if (
+            sequence is None
+            or received is None
+            or sequence <= cursor
+            or received > at_ms
+        ):
             continue
         price = _positive_int(row.get("price"))
-        if (sequence != cursor + 1 or price is None
-                or (previous_at is not None and received < previous_at)):
+        if (
+            sequence != cursor + 1
+            or price is None
+            or (previous_at is not None and received < previous_at)
+        ):
             return None, cursor, [], "trade_peak_sequence_price_or_time_gap"
         peak = max(peak, price)
-        receipts.append({"sequence": sequence, "received_at_ms": received,
-                         "price": price})
+        receipts.append(
+            {"sequence": sequence, "received_at_ms": received, "price": price}
+        )
         cursor, previous_at = sequence, received
     return peak, cursor, receipts, None
 
 
 def validate_replay_trade_peak(
-    observation: Mapping[str, Any], *, after_ms: int,
+    observation: Mapping[str, Any],
+    *,
+    after_ms: int,
     prior_sequence: int | None,
 ) -> tuple[int, int | None]:
     """Validate the producer's same-route 0B receipts before promoting a peak."""
@@ -218,8 +259,12 @@ def validate_replay_trade_peak(
     receipts = observation.get("trade_peak_receipts")
     at_ms = _positive_int(observation.get("at_ms"))
     declared = _nonnegative_int(observation.get("trade_peak_price_since_prior_depth"))
-    if (not isinstance(receipts, list) or at_ms is None or declared is None
-            or observation.get("trade_peak_gap")):
+    if (
+        not isinstance(receipts, list)
+        or at_ms is None
+        or declared is None
+        or observation.get("trade_peak_gap")
+    ):
         raise ValueError("event_trade_peak_unproven")
     peak, previous_at = 0, after_ms
     cursor = prior_sequence
@@ -229,9 +274,14 @@ def validate_replay_trade_peak(
         sequence = _positive_int(receipt.get("sequence"))
         received = _positive_int(receipt.get("received_at_ms"))
         price = _positive_int(receipt.get("price"))
-        if (sequence is None or received is None or price is None
-                or not after_ms <= received <= at_ms or received < previous_at
-                or (cursor is not None and sequence != cursor + 1)):
+        if (
+            sequence is None
+            or received is None
+            or price is None
+            or not after_ms <= received <= at_ms
+            or received < previous_at
+            or (cursor is not None and sequence != cursor + 1)
+        ):
             raise ValueError("event_trade_peak_receipt_invalid")
         cursor, previous_at, peak = sequence, received, max(peak, price)
     if peak != declared:
@@ -240,8 +290,12 @@ def validate_replay_trade_peak(
 
 
 def classify_ws_history(
-    ws_data: Mapping[str, Any], previous_state: Mapping[str, Any] | None,
-    *, now_ms: int, max_quote_age_ms: int, market: str | None = None,
+    ws_data: Mapping[str, Any],
+    previous_state: Mapping[str, Any] | None,
+    *,
+    now_ms: int,
+    max_quote_age_ms: int,
+    market: str | None = None,
     config: Mapping[str, Any] | None = None,
 ) -> tuple[StrengthDecision, dict[str, Any]]:
     """Advance once per unseen 0D event; never fill a missing event or trade.
@@ -253,32 +307,84 @@ def classify_ws_history(
 
     params = normalize_config(config if config is not None else CONFIG_DEFAULTS)
     type_items = ws_data.get("last_realtime_type_item") or {}
-    item = str(type_items.get("0D") or "").strip().upper() if isinstance(type_items, Mapping) else ""
+    item = (
+        str(type_items.get("0D") or "").strip().upper()
+        if isinstance(type_items, Mapping)
+        else ""
+    )
     epoch = _nonnegative_int(ws_data.get("market_data_transport_epoch"))
     type_routes = ws_data.get("last_realtime_type_market_route") or {}
     type_suffixes = ws_data.get("last_realtime_type_market_suffix") or {}
-    route = str(type_routes.get("0D") or "").strip() if isinstance(type_routes, Mapping) else ""
-    trade_route = str(type_routes.get("0B") or "").strip() if isinstance(type_routes, Mapping) else ""
-    suffix = str(type_suffixes.get("0D") or "KRX").strip() if isinstance(type_suffixes, Mapping) else ""
-    trade_suffix = str(type_suffixes.get("0B") or "KRX").strip() if isinstance(type_suffixes, Mapping) else ""
-    if (not item or epoch is None or not route or route != trade_route
-            or suffix != trade_suffix
-            or str(type_items.get("0B") or "").strip().upper() != item):
-        return StrengthDecision("UNKNOWN", "source_identity_missing", None, None, None,
-                                None, None, None, item or None, epoch), {}
+    route = (
+        str(type_routes.get("0D") or "").strip()
+        if isinstance(type_routes, Mapping)
+        else ""
+    )
+    trade_route = (
+        str(type_routes.get("0B") or "").strip()
+        if isinstance(type_routes, Mapping)
+        else ""
+    )
+    suffix = (
+        str(type_suffixes.get("0D") or "KRX").strip()
+        if isinstance(type_suffixes, Mapping)
+        else ""
+    )
+    trade_suffix = (
+        str(type_suffixes.get("0B") or "KRX").strip()
+        if isinstance(type_suffixes, Mapping)
+        else ""
+    )
+    if (
+        not item
+        or epoch is None
+        or not route
+        or route != trade_route
+        or suffix != trade_suffix
+        or str(type_items.get("0B") or "").strip().upper() != item
+    ):
+        return (
+            StrengthDecision(
+                "UNKNOWN",
+                "source_identity_missing",
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                item or None,
+                epoch,
+            ),
+            {},
+        )
     route_key = f"{suffix}|{route}"
     old = dict(previous_state or {})
-    reset = (old.get("item") != item or old.get("epoch") != epoch
-             or old.get("route_key") != route_key
-             or old.get("market") != market
-             or old.get("config") != params)
+    reset = (
+        old.get("item") != item
+        or old.get("epoch") != epoch
+        or old.get("route_key") != route_key
+        or old.get("market") != market
+        or old.get("config") != params
+    )
     if reset:
-        old = {"item": item, "epoch": epoch, "route_key": route_key,
-               "market": market, "strong": False,
-               "config": params, "last_depth_seq": None, "last_touch": None,
-               "adverse_count": 0}
-    depths = _rows_by_item(ws_data.get("recent_depth_ticks_by_route"), item, epoch, route_key)
-    trades = _rows_by_item(ws_data.get("recent_trade_ticks_by_route"), item, epoch, route_key)
+        old = {
+            "item": item,
+            "epoch": epoch,
+            "route_key": route_key,
+            "market": market,
+            "strong": False,
+            "config": params,
+            "last_depth_seq": None,
+            "last_touch": None,
+            "adverse_count": 0,
+        }
+    depths = _rows_by_item(
+        ws_data.get("recent_depth_ticks_by_route"), item, epoch, route_key
+    )
+    trades = _rows_by_item(
+        ws_data.get("recent_trade_ticks_by_route"), item, epoch, route_key
+    )
     if reset:
         # The buffer may predate this position or this process. Take a baseline
         # and wait for fresh events instead of promoting from pre-entry history.
@@ -292,11 +398,21 @@ def classify_ws_history(
             default=0,
         )
         old["last_peak_trade_seq"] = old["first_trade_seq"]
-        return StrengthDecision(
-            "UNKNOWN", "position_or_transport_baseline", None, None, None,
-            old.get("last_depth_seq"), old.get("last_depth_at_ms"), None,
-            item, epoch,
-        ), old
+        return (
+            StrengthDecision(
+                "UNKNOWN",
+                "position_or_transport_baseline",
+                None,
+                None,
+                None,
+                old.get("last_depth_seq"),
+                old.get("last_depth_at_ms"),
+                None,
+                item,
+                epoch,
+            ),
+            old,
+        )
     last_seq = _positive_int(old.get("last_depth_seq"))
     last_touch = old.get("last_touch")
     if not isinstance(last_touch, tuple) or len(last_touch) != 4:
@@ -333,7 +449,9 @@ def classify_ws_history(
         prior_touch = last_touch
         prior_quote_at = quote_at
         trade_peak, peak_trade_cursor, peak_receipts, peak_gap = _trade_peak_since(
-            trades, after_sequence=peak_trade_cursor, at_ms=at,
+            trades,
+            after_sequence=peak_trade_cursor,
+            at_ms=at,
         )
         if touch is None:
             strength, adverse, last_touch = False, 0, None
@@ -341,73 +459,127 @@ def classify_ws_history(
         else:
             imbalance = (touch[1] - touch[3]) / (touch[1] + touch[3])
             _, _, trade_receipts, trade_gap = _signed_tape(
-                trades, at_ms=at,
+                trades,
+                at_ms=at,
                 min_sequence_exclusive=int(old.get("first_trade_seq") or 0),
                 window_ms=TRADE_WINDOW_MS,
             )
-            selected_receipts = [receipt for receipt in trade_receipts
-                                 if receipt["received_at_ms"] >= at - params["trade_window_ms"]]
-            net = (sum(receipt["qty"] * (1 if receipt["side"] == "BUY" else -1)
-                       for receipt in selected_receipts)
-                   if selected_receipts else None)
-            trade_at = (selected_receipts[-1]["received_at_ms"]
-                        if selected_receipts else None)
+            selected_receipts = [
+                receipt
+                for receipt in trade_receipts
+                if receipt["received_at_ms"] >= at - params["trade_window_ms"]
+            ]
+            net = (
+                sum(
+                    receipt["qty"] * (1 if receipt["side"] == "BUY" else -1)
+                    for receipt in selected_receipts
+                )
+                if selected_receipts
+                else None
+            )
+            trade_at = (
+                selected_receipts[-1]["received_at_ms"] if selected_receipts else None
+            )
             if net is None:
                 strength, adverse = False, 0
             if last_touch is None:
                 reason = "first_depth_baseline"
             else:
                 ofi = _ofi(last_touch, touch)
-                book_positive = (ofi > params["strong_ofi_min"]
-                                 and imbalance > params["strong_queue_min"])
-                book_negative = (ofi < -params["weak_ofi_negative_min"]
-                                 and imbalance < -params["weak_queue_negative_min"])
-                if (book_positive and net is not None
-                        and net > params["strong_signed_qty_min"]):
+                book_positive = (
+                    ofi > params["strong_ofi_min"]
+                    and imbalance > params["strong_queue_min"]
+                )
+                book_negative = (
+                    ofi < -params["weak_ofi_negative_min"]
+                    and imbalance < -params["weak_queue_negative_min"]
+                )
+                if (
+                    book_positive
+                    and net is not None
+                    and net > params["strong_signed_qty_min"]
+                ):
                     strength, adverse, reason = True, 0, "book_and_trade_support"
-                elif (strength and book_negative and net is not None
-                      and net < -params["weak_signed_qty_negative_min"]):
+                elif (
+                    strength
+                    and book_negative
+                    and net is not None
+                    and net < -params["weak_signed_qty_negative_min"]
+                ):
                     adverse += 1
                     reason = "adverse_evidence_pending"
                     if adverse >= params["adverse_updates_required"]:
-                        strength, adverse, reason = False, 0, "sustained_adverse_evidence"
+                        strength, adverse, reason = (
+                            False,
+                            0,
+                            "sustained_adverse_evidence",
+                        )
                 elif strength:
                     adverse = 0
                     reason = "strong_retained"
                 else:
                     adverse = 0
-                    reason = ("valid_weak_evidence" if net is not None
-                              else trade_gap or "trade_source_missing")
+                    reason = (
+                        "valid_weak_evidence"
+                        if net is not None
+                        else trade_gap or "trade_source_missing"
+                    )
             last_touch = touch
         last_seq, quote_at = seq, at
-        observations.append({"at_ms": at, "sequence": seq,
-                             "state": ("STRONG" if strength else "WEAK")
-                             if touch is not None and net is not None else "UNKNOWN",
-                             "reason": reason, "ofi_proxy": ofi, "queue_imbalance": imbalance,
-                             "signed_trade_qty": net, "trade_received_at_ms": trade_at,
-                             "trade_receipts": trade_receipts,
-                             "trade_window_ms": params["trade_window_ms"],
-                             "trade_gap": trade_gap,
-                             "trade_peak_price_since_prior_depth": trade_peak,
-                             "trade_peak_receipts": peak_receipts,
-                             "trade_peak_gap": peak_gap,
-                             "previous_quote_at_ms": prior_quote_at,
-                             "touch": touch, "previous_touch": prior_touch,
-                             "best_bid": touch[0] if touch else None})
-    old.update({"item": item, "epoch": epoch, "strong": strength,
-                "last_depth_seq": last_seq, "last_depth_at_ms": quote_at,
-                "last_touch": last_touch, "adverse_count": adverse,
-                "last_peak_trade_seq": peak_trade_cursor,
-                "last_ofi_proxy": ofi, "last_queue_imbalance": imbalance})
+        observations.append(
+            {
+                "at_ms": at,
+                "sequence": seq,
+                "state": (
+                    ("STRONG" if strength else "WEAK")
+                    if touch is not None and net is not None
+                    else "UNKNOWN"
+                ),
+                "reason": reason,
+                "ofi_proxy": ofi,
+                "queue_imbalance": imbalance,
+                "signed_trade_qty": net,
+                "trade_received_at_ms": trade_at,
+                "trade_receipts": trade_receipts,
+                "trade_window_ms": params["trade_window_ms"],
+                "trade_gap": trade_gap,
+                "trade_peak_price_since_prior_depth": trade_peak,
+                "trade_peak_receipts": peak_receipts,
+                "trade_peak_gap": peak_gap,
+                "previous_quote_at_ms": prior_quote_at,
+                "touch": touch,
+                "previous_touch": prior_touch,
+                "best_bid": touch[0] if touch else None,
+            }
+        )
+    old.update(
+        {
+            "item": item,
+            "epoch": epoch,
+            "strong": strength,
+            "last_depth_seq": last_seq,
+            "last_depth_at_ms": quote_at,
+            "last_touch": last_touch,
+            "adverse_count": adverse,
+            "last_peak_trade_seq": peak_trade_cursor,
+            "last_ofi_proxy": ofi,
+            "last_queue_imbalance": imbalance,
+        }
+    )
     if quote_at is not None:
         net, trade_at, _, trade_gap = _signed_tape(
-            trades, at_ms=now_ms,
+            trades,
+            at_ms=now_ms,
             min_sequence_exclusive=int(old.get("first_trade_seq") or 0),
             window_ms=int(params["trade_window_ms"]),
         )
     if quote_at is None or now_ms < quote_at or now_ms - quote_at > max_quote_age_ms:
         state, reason = "UNKNOWN", "depth_expired_or_missing"
-    elif trade_at is None or now_ms < trade_at or now_ms - trade_at > params["trade_window_ms"]:
+    elif (
+        trade_at is None
+        or now_ms < trade_at
+        or now_ms - trade_at > params["trade_window_ms"]
+    ):
         state, reason = "UNKNOWN", trade_gap or "trade_expired_or_missing"
     elif last_touch is None:
         state, reason = "UNKNOWN", "depth_touch_invalid"
@@ -416,5 +588,19 @@ def classify_ws_history(
     if state == "UNKNOWN":
         old["strong"] = False
         old["adverse_count"] = 0
-    return StrengthDecision(state, reason, ofi, imbalance, net, last_seq, quote_at,
-                            trade_at, item, epoch, tuple(observations)), old
+    return (
+        StrengthDecision(
+            state,
+            reason,
+            ofi,
+            imbalance,
+            net,
+            last_seq,
+            quote_at,
+            trade_at,
+            item,
+            epoch,
+            tuple(observations),
+        ),
+        old,
+    )

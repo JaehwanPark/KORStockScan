@@ -83,12 +83,18 @@ def _extract_openai_response_text(response: Any) -> str:
         return raw_text
     fragments: list[str] = []
     for item in list(getattr(response, "output", []) or []):
-        content_items = item.get("content", []) if isinstance(item, dict) else getattr(item, "content", [])
+        content_items = (
+            item.get("content", [])
+            if isinstance(item, dict)
+            else getattr(item, "content", [])
+        )
         for content in list(content_items or []):
             if isinstance(content, dict):
                 value = content.get("text") or content.get("value")
             else:
-                value = getattr(content, "text", None) or getattr(content, "value", None)
+                value = getattr(content, "text", None) or getattr(
+                    content, "value", None
+                )
             if value:
                 fragments.append(str(value))
     return "\n".join(value.strip() for value in fragments if value.strip()).strip()

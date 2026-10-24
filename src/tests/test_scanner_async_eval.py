@@ -19,32 +19,56 @@ from src.engine.scalping.scanner_runtime_scheduler import ScannerGeneration
 
 def test_exact_fixed_watch_completion_can_be_consumed_in_current_main_pass(monkeypatch):
     from src.engine.scalping import scanner_async_eval as M
-    monkeypatch.setattr(M, 'record_async_disposition', lambda *a, **k: True)
-    dispatcher=HotPathAIDispatcher(loaded_key_count=1)
-    coordinator=ScannerAsyncEvalCoordinator(ai_dispatcher=dispatcher)
-    now=time.time()
-    generation=M.FixedWatchGeneration('036930', 'SOR', 'fixed:g', 'source', now)
-    context=ScannerAsyncEvalContext.create(generation=generation, cache_key='original',
-        submitted_epoch=now, deadline_epoch=now+2., stock_snapshot={'status':'WATCHING'},
-        ws_snapshot={'curr':1000}, state_version='WATCHING:0:0')
+
+    monkeypatch.setattr(M, "record_async_disposition", lambda *a, **k: True)
+    dispatcher = HotPathAIDispatcher(loaded_key_count=1)
+    coordinator = ScannerAsyncEvalCoordinator(ai_dispatcher=dispatcher)
+    now = time.time()
+    generation = M.FixedWatchGeneration("036930", "SOR", "fixed:g", "source", now)
+    context = ScannerAsyncEvalContext.create(
+        generation=generation,
+        cache_key="original",
+        submitted_epoch=now,
+        deadline_epoch=now + 2.0,
+        stock_snapshot={"status": "WATCHING"},
+        ws_snapshot={"curr": 1000},
+        state_version="WATCHING:0:0",
+    )
     try:
-        assert coordinator.submit(ScannerAsyncEvalRequest(context=context,
-            prepare=lambda ctx:{'ready':True}, evaluate=lambda ctx,prepared:{'action':'WAIT'})).accepted
-        deadline=time.time()+1.
-        while not coordinator.has_undrained_result() and time.time()<deadline:
-            time.sleep(.005)
+        assert coordinator.submit(
+            ScannerAsyncEvalRequest(
+                context=context,
+                prepare=lambda ctx: {"ready": True},
+                evaluate=lambda ctx, prepared: {"action": "WAIT"},
+            )
+        ).accepted
+        deadline = time.time() + 1.0
+        while not coordinator.has_undrained_result() and time.time() < deadline:
+            time.sleep(0.005)
         assert coordinator.has_undrained_result()
-        keys=coordinator.fixed_watch_ready_requests()
-        assert list(keys)==[('fixed:g','original')]
-        assert keys['fixed:g','original']>0
-        assert not coordinator.has_undrained_result(direct_fixed_requests={('fixed:g','original')})
-        assert coordinator.has_undrained_result(direct_fixed_requests={('fixed:g','different')})
+        keys = coordinator.fixed_watch_ready_requests()
+        assert list(keys) == [("fixed:g", "original")]
+        assert keys["fixed:g", "original"] > 0
+        assert not coordinator.has_undrained_result(
+            direct_fixed_requests={("fixed:g", "original")}
+        )
+        assert coordinator.has_undrained_result(
+            direct_fixed_requests={("fixed:g", "different")}
+        )
         # Notification drain does not destroy the retained original identity.
-        result=coordinator.drain_completed()[0]
-        assert coordinator.fixed_watch_ready_requests()==keys
-        assert result.deadline_epoch==context.deadline_epoch
-        assert result.ai_payload['entry_local_stage_clocks']['async_evaluation_completed_perf'] <= result.coordinator_ready_perf
-        assert coordinator.take_completed(generation_id='fixed:g',cache_key='original') is result
+        result = coordinator.drain_completed()[0]
+        assert coordinator.fixed_watch_ready_requests() == keys
+        assert result.deadline_epoch == context.deadline_epoch
+        assert (
+            result.ai_payload["entry_local_stage_clocks"][
+                "async_evaluation_completed_perf"
+            ]
+            <= result.coordinator_ready_perf
+        )
+        assert (
+            coordinator.take_completed(generation_id="fixed:g", cache_key="original")
+            is result
+        )
         assert not coordinator.fixed_watch_ready_requests()
         assert not coordinator.has_undrained_result()
     finally:
@@ -53,47 +77,84 @@ def test_exact_fixed_watch_completion_can_be_consumed_in_current_main_pass(monke
 
 def test_scanner_completion_still_requires_scheduler_drain(monkeypatch):
     from src.engine.scalping import scanner_async_eval as M
-    monkeypatch.setattr(M, 'record_async_disposition', lambda *a, **k: True)
-    dispatcher=HotPathAIDispatcher(loaded_key_count=1)
-    coordinator=ScannerAsyncEvalCoordinator(ai_dispatcher=dispatcher)
-    now=time.time()
-    context=ScannerAsyncEvalContext.create(generation=_generation(),cache_key='scanner',
-        submitted_epoch=now,deadline_epoch=now+2.,stock_snapshot={'status':'WATCHING'},
-        ws_snapshot={'curr':1000},state_version='WATCHING:0:0')
+
+    monkeypatch.setattr(M, "record_async_disposition", lambda *a, **k: True)
+    dispatcher = HotPathAIDispatcher(loaded_key_count=1)
+    coordinator = ScannerAsyncEvalCoordinator(ai_dispatcher=dispatcher)
+    now = time.time()
+    context = ScannerAsyncEvalContext.create(
+        generation=_generation(),
+        cache_key="scanner",
+        submitted_epoch=now,
+        deadline_epoch=now + 2.0,
+        stock_snapshot={"status": "WATCHING"},
+        ws_snapshot={"curr": 1000},
+        state_version="WATCHING:0:0",
+    )
     try:
-        assert coordinator.submit(ScannerAsyncEvalRequest(context=context,
-            prepare=lambda ctx:{},evaluate=lambda ctx,prepared:{'action':'WAIT'})).accepted
-        deadline=time.time()+1.
-        while not coordinator.has_undrained_result() and time.time()<deadline:
-            time.sleep(.005)
-        assert coordinator.has_undrained_result(direct_fixed_requests={('unused','scanner')})
-        assert coordinator.fixed_watch_ready_requests()=={}
+        assert coordinator.submit(
+            ScannerAsyncEvalRequest(
+                context=context,
+                prepare=lambda ctx: {},
+                evaluate=lambda ctx, prepared: {"action": "WAIT"},
+            )
+        ).accepted
+        deadline = time.time() + 1.0
+        while not coordinator.has_undrained_result() and time.time() < deadline:
+            time.sleep(0.005)
+        assert coordinator.has_undrained_result(
+            direct_fixed_requests={("unused", "scanner")}
+        )
+        assert coordinator.fixed_watch_ready_requests() == {}
     finally:
         coordinator.shutdown()
 
 
 def test_coordinator_ready_clock_is_stamped_only_at_locked_publication(monkeypatch):
     from src.engine.scalping import scanner_async_eval as M
-    monkeypatch.setattr(M, 'record_async_disposition', lambda *a, **k: True)
-    coordinator=ScannerAsyncEvalCoordinator(ai_dispatcher=HotPathAIDispatcher(loaded_key_count=1))
-    now=time.time()
-    context=ScannerAsyncEvalContext.create(generation=_generation(),cache_key='publish',
-        submitted_epoch=now,deadline_epoch=now+2.,stock_snapshot={'status':'WATCHING'},
-        ws_snapshot={},state_version='WATCHING:0:0')
-    request=ScannerAsyncEvalRequest(context=context,prepare=lambda ctx:{},evaluate=lambda ctx,p:{})
-    coordinator._requests[context.request_id]=request
-    calls=[]
-    original_replace=M.replace
+
+    monkeypatch.setattr(M, "record_async_disposition", lambda *a, **k: True)
+    coordinator = ScannerAsyncEvalCoordinator(
+        ai_dispatcher=HotPathAIDispatcher(loaded_key_count=1)
+    )
+    now = time.time()
+    context = ScannerAsyncEvalContext.create(
+        generation=_generation(),
+        cache_key="publish",
+        submitted_epoch=now,
+        deadline_epoch=now + 2.0,
+        stock_snapshot={"status": "WATCHING"},
+        ws_snapshot={},
+        state_version="WATCHING:0:0",
+    )
+    request = ScannerAsyncEvalRequest(
+        context=context, prepare=lambda ctx: {}, evaluate=lambda ctx, p: {}
+    )
+    coordinator._requests[context.request_id] = request
+    calls = []
+    original_replace = M.replace
+
     def recorded_replace(result, **fields):
         calls.append(coordinator._lock._is_owned())
         return original_replace(result, **fields)
-    monkeypatch.setattr(M, 'replace', recorded_replace)
+
+    monkeypatch.setattr(M, "replace", recorded_replace)
     try:
-        coordinator._finish(request,status='completed',preparation_started_epoch=now,
-            preparation_completed_epoch=now,completed_epoch=now,observation_only=False)
-        assert calls==[True]
-        assert coordinator.peek_completed(generation_id=context.generation.generation_id,
-            cache_key='publish').coordinator_ready_perf>0
+        coordinator._finish(
+            request,
+            status="completed",
+            preparation_started_epoch=now,
+            preparation_completed_epoch=now,
+            completed_epoch=now,
+            observation_only=False,
+        )
+        assert calls == [True]
+        assert (
+            coordinator.peek_completed(
+                generation_id=context.generation.generation_id, cache_key="publish"
+            ).coordinator_ready_perf
+            > 0
+        )
     finally:
         coordinator.shutdown()
 
@@ -114,73 +175,124 @@ def _generation(*, promotion_id="PROMO-1", revision=1, venue="KRX"):
 
 def test_worker_completion_publishes_original_result_without_main_poll(monkeypatch):
     from src.engine.scalping import scanner_async_eval as M
-    monkeypatch.setattr(M, 'record_async_disposition', lambda *a, **k: True)
+
+    monkeypatch.setattr(M, "record_async_disposition", lambda *a, **k: True)
     dispatcher = HotPathAIDispatcher(loaded_key_count=1)
     coordinator = ScannerAsyncEvalCoordinator(ai_dispatcher=dispatcher)
     now = time.time()
     generation = _generation()
-    context = ScannerAsyncEvalContext.create(generation=generation, cache_key='direct',
-        submitted_epoch=now, deadline_epoch=now+2, stock_snapshot={}, ws_snapshot={}, state_version='original')
+    context = ScannerAsyncEvalContext.create(
+        generation=generation,
+        cache_key="direct",
+        submitted_epoch=now,
+        deadline_epoch=now + 2,
+        stock_snapshot={},
+        ws_snapshot={},
+        state_version="original",
+    )
     try:
-        assert coordinator.submit(ScannerAsyncEvalRequest(context=context,
-            prepare=lambda ctx: {'snapshot': {'price': 100}},
-            evaluate=lambda ctx, prepared: {'action': 'BUY'})).accepted
-        deadline = time.time()+1
+        assert coordinator.submit(
+            ScannerAsyncEvalRequest(
+                context=context,
+                prepare=lambda ctx: {"snapshot": {"price": 100}},
+                evaluate=lambda ctx, prepared: {"action": "BUY"},
+            )
+        ).accepted
+        deadline = time.time() + 1
         while time.time() < deadline:
             with coordinator._lock:
                 published = list(coordinator._ready.values())
             if published:
                 break
-            time.sleep(.001)
+            time.sleep(0.001)
         assert len(published) == 1
         result = published[0]
-        assert result.original_generation is generation and result.deadline_epoch == context.deadline_epoch
-        assert result.prepared_context['snapshot']['price'] == 100
+        assert (
+            result.original_generation is generation
+            and result.deadline_epoch == context.deadline_epoch
+        )
+        assert result.prepared_context["snapshot"]["price"] == 100
         assert result.request_id == context.request_id
         # Immediate publication still has no authority to skip Main guards.
-        decision = validate_scanner_async_commit(result, current_generation=generation,
-            current_status='WATCHING', current_venue='KRX', current_source_signature='VALUE_TOP',
-            venue_resolution_valid=True, current_state_version='original', quote_fresh=False,
-            position_or_pending_order_present=False, cooldown_active=False, now_epoch=time.time())
+        decision = validate_scanner_async_commit(
+            result,
+            current_generation=generation,
+            current_status="WATCHING",
+            current_venue="KRX",
+            current_source_signature="VALUE_TOP",
+            venue_resolution_valid=True,
+            current_state_version="original",
+            quote_fresh=False,
+            position_or_pending_order_present=False,
+            cooldown_active=False,
+            now_epoch=time.time(),
+        )
         assert not decision.allowed
-        assert coordinator.take_completed(generation_id=generation.generation_id, cache_key='direct') is result
-        assert coordinator.take_completed(generation_id=generation.generation_id, cache_key='direct') is None
+        assert (
+            coordinator.take_completed(
+                generation_id=generation.generation_id, cache_key="direct"
+            )
+            is result
+        )
+        assert (
+            coordinator.take_completed(
+                generation_id=generation.generation_id, cache_key="direct"
+            )
+            is None
+        )
     finally:
         coordinator.shutdown()
 
 
 def test_failed_immediate_completion_retains_result_and_prepared_source(monkeypatch):
     from src.engine.scalping import scanner_async_eval as M
-    monkeypatch.setattr(M, 'record_async_disposition', lambda *a, **k: True)
+
+    monkeypatch.setattr(M, "record_async_disposition", lambda *a, **k: True)
     dispatcher = HotPathAIDispatcher(loaded_key_count=1)
     coordinator = ScannerAsyncEvalCoordinator(ai_dispatcher=dispatcher)
     now = time.time()
-    context = ScannerAsyncEvalContext.create(generation=_generation(), cache_key='retained',
-        submitted_epoch=now, deadline_epoch=now+2, stock_snapshot={}, ws_snapshot={}, state_version='original')
+    context = ScannerAsyncEvalContext.create(
+        generation=_generation(),
+        cache_key="retained",
+        submitted_epoch=now,
+        deadline_epoch=now + 2,
+        stock_snapshot={},
+        ws_snapshot={},
+        state_version="original",
+    )
     original = coordinator._finish
     failed = threading.Event()
+
     def fail_once(*args, **kwargs):
         if not failed.is_set():
             failed.set()
-            raise ValueError('diagnostic_projection_failed')
+            raise ValueError("diagnostic_projection_failed")
         return original(*args, **kwargs)
-    monkeypatch.setattr(coordinator, '_finish', fail_once)
+
+    monkeypatch.setattr(coordinator, "_finish", fail_once)
     try:
-        assert coordinator.submit(ScannerAsyncEvalRequest(context=context,
-            prepare=lambda ctx: {'source': 'original'}, evaluate=lambda ctx, p: {'action': 'WAIT'})).accepted
+        assert coordinator.submit(
+            ScannerAsyncEvalRequest(
+                context=context,
+                prepare=lambda ctx: {"source": "original"},
+                evaluate=lambda ctx, p: {"action": "WAIT"},
+            )
+        ).accepted
         assert failed.wait(1)
         # The callback publishes its failure before requeueing the same result.
-        deadline=time.time()+1
-        while time.time()<deadline:
+        deadline = time.time() + 1
+        while time.time() < deadline:
             with dispatcher._lock:
-                restored=bool(dispatcher._completed)
+                restored = bool(dispatcher._completed)
             if restored:
                 break
-            time.sleep(.001)
+            time.sleep(0.001)
         assert restored
         assert coordinator.poll() == 1
-        result=coordinator.take_completed(generation_id=context.generation.generation_id, cache_key='retained')
-        assert result.prepared_context['source'] == 'original'
+        result = coordinator.take_completed(
+            generation_id=context.generation.generation_id, cache_key="retained"
+        )
+        assert result.prepared_context["source"] == "original"
         assert result.deadline_epoch == context.deadline_epoch
         assert coordinator.poll() == 0
     finally:
@@ -190,40 +302,47 @@ def test_failed_immediate_completion_retains_result_and_prepared_source(monkeypa
 def test_owned_async_snapshot_shares_only_proven_immutable_children(monkeypatch):
     from types import MappingProxyType, SimpleNamespace
     from src.engine.scalping import scanner_async_eval as M
-    raw = {'quote': {'bid': 99}, 'rows': [{'price': 100}], 'tags': {'source'}}
+
+    raw = {"quote": {"bid": 99}, "rows": [{"price": 100}], "tags": {"source"}}
     frozen = M._immutable_mapping(MappingProxyType(raw))
-    raw['quote']['bid'] = 1
-    raw['rows'][0]['price'] = 2
-    assert frozen['quote']['bid'] == 99 and frozen['rows'][0]['price'] == 100
+    raw["quote"]["bid"] = 1
+    raw["rows"][0]["price"] = 2
+    assert frozen["quote"]["bid"] == 99 and frozen["rows"][0]["price"] == 100
     assert M._immutable_mapping(frozen) is frozen
     with pytest.raises(TypeError):
-        frozen['quote']['bid'] = 3
+        frozen["quote"]["bid"] = 3
     with pytest.raises(TypeError):
         frozen._values = {}
     thawed = M.thaw_scanner_async_value(frozen)
-    thawed['rows'][0]['price'] = 4
-    assert frozen['rows'][0]['price'] == 100
+    thawed["rows"][0]["price"] = 4
+    assert frozen["rows"][0]["price"] == 100
     # Read-only mapping views and copied custom objects are not proof that
     # their backing objects are immutable at the next ownership boundary.
     box = SimpleNamespace(value=[1])
-    first = M._immutable_mapping({'box': box, 'quote': frozen['quote']})
+    first = M._immutable_mapping({"box": box, "quote": frozen["quote"]})
     second = M._immutable_mapping(first)
-    first['box'].value.append(2)
-    assert second['box'].value == [1]
-    assert second['quote'] is first['quote']
+    first["box"].value.append(2)
+    assert second["box"].value == [1]
+    assert second["quote"] is first["quote"]
     box.value.append(9)
-    assert first['box'].value == [1, 2]
+    assert first["box"].value == [1, 2]
 
 
 def test_async_scalar_snapshot_does_not_invoke_custom_copy_protocol(monkeypatch):
     from src.engine.scalping import scanner_async_eval as M
+
     def unexpected(value):
-        raise AssertionError('atomic deepcopy')
+        raise AssertionError("atomic deepcopy")
+
     from src.engine.infrastructure import snapshot_copy as snapshots
-    monkeypatch.setattr(snapshots.copy, 'deepcopy', unexpected)
-    original = {'price': 100, 'rows': [{'source': '0B', 'ok': True, 'age': .5, 'missing': None}]}
+
+    monkeypatch.setattr(snapshots.copy, "deepcopy", unexpected)
+    original = {
+        "price": 100,
+        "rows": [{"source": "0B", "ok": True, "age": 0.5, "missing": None}],
+    }
     frozen = M._immutable_mapping(original)
-    assert frozen['price'] == 100 and frozen['rows'][0]['missing'] is None
+    assert frozen["price"] == 100 and frozen["rows"][0]["missing"] is None
 
 
 def _wait_for_result(coordinator, timeout=1.0):
@@ -236,22 +355,43 @@ def _wait_for_result(coordinator, timeout=1.0):
     raise AssertionError("async result did not complete")
 
 
-@pytest.mark.parametrize('expired', [False, True])
+@pytest.mark.parametrize("expired", [False, True])
 def test_native_invalidation_keeps_cause_without_bypassing_deadline(expired):
     from types import SimpleNamespace
+
     generation = _generation()
-    result = SimpleNamespace(status='completed', observation_only=False,
-        deadline_epoch=104 if expired else 106, deadline_perf=0,
-        completed_epoch=103, generation_id=generation.generation_id,
-        venue='SOR', state_version='WATCHING:0:0')
-    decision = validate_scanner_async_commit(result, current_generation=generation,
-        current_status='WATCHING', current_venue='KRX', current_source_signature='VALUE_TOP',
-        venue_resolution_valid=False, current_state_version='WATCHING:0:0',
-        quote_fresh=True, position_or_pending_order_present=False, cooldown_active=False,
-        now_epoch=105, native_validation_error='reversal_signal_path_changed')
+    result = SimpleNamespace(
+        status="completed",
+        observation_only=False,
+        deadline_epoch=104 if expired else 106,
+        deadline_perf=0,
+        completed_epoch=103,
+        generation_id=generation.generation_id,
+        venue="SOR",
+        state_version="WATCHING:0:0",
+    )
+    decision = validate_scanner_async_commit(
+        result,
+        current_generation=generation,
+        current_status="WATCHING",
+        current_venue="KRX",
+        current_source_signature="VALUE_TOP",
+        venue_resolution_valid=False,
+        current_state_version="WATCHING:0:0",
+        quote_fresh=True,
+        position_or_pending_order_present=False,
+        cooldown_active=False,
+        now_epoch=105,
+        native_validation_error="reversal_signal_path_changed",
+    )
     assert not decision.allowed
-    assert decision.reason == ('result_deadline_expired' if expired else 'reversal_signal_path_changed')
-    assert decision.fields['scanner_async_native_validation_error'] == 'reversal_signal_path_changed'
+    assert decision.reason == (
+        "result_deadline_expired" if expired else "reversal_signal_path_changed"
+    )
+    assert (
+        decision.fields["scanner_async_native_validation_error"]
+        == "reversal_signal_path_changed"
+    )
 
 
 def test_async_execution_refresh_is_immutable_and_retained_for_commit():
@@ -589,7 +729,11 @@ def test_async_eval_superseded_result_is_observation_only():
     result = _wait_for_result(coordinator)
     coordinator.shutdown()
 
-    assert result.status in {"superseded_before_preparation", "superseded_before_ai", "superseded_result"}
+    assert result.status in {
+        "superseded_before_preparation",
+        "superseded_before_ai",
+        "superseded_result",
+    }
     assert result.observation_only is True
 
 
@@ -838,35 +982,53 @@ def test_async_eval_stress_16_promotions_and_superseded_generation():
 def _bounded_request(key, prepare=None, *, generation=None):
     now = time.time()
     context = ScannerAsyncEvalContext.create(
-        generation=generation or _generation(), cache_key=key,
-        submitted_epoch=now, deadline_epoch=now + 5,
-        stock_snapshot={}, ws_snapshot={}, state_version="WATCHING:0:0",
+        generation=generation or _generation(),
+        cache_key=key,
+        submitted_epoch=now,
+        deadline_epoch=now + 5,
+        stock_snapshot={},
+        ws_snapshot={},
+        state_version="WATCHING:0:0",
     )
     return ScannerAsyncEvalRequest(
-        context=context, prepare=prepare or (lambda _ctx: {}),
-        evaluate=lambda _ctx, _prepared: {}, requires_ai_dispatch=False,
+        context=context,
+        prepare=prepare or (lambda _ctx: {}),
+        evaluate=lambda _ctx, _prepared: {},
+        requires_ai_dispatch=False,
     )
 
 
-@pytest.mark.parametrize("submitted,deadline", [(True, 2), (1, True), (float("nan"), 2), (1, float("inf")), (float("-inf"), 2)])
+@pytest.mark.parametrize(
+    "submitted,deadline",
+    [(True, 2), (1, True), (float("nan"), 2), (1, float("inf")), (float("-inf"), 2)],
+)
 def test_context_rejects_invalid_clock_values(submitted, deadline):
     with pytest.raises(ValueError):
         ScannerAsyncEvalContext.create(
-            generation=_generation(), cache_key="invalid-clock",
-            submitted_epoch=submitted, deadline_epoch=deadline,
-            stock_snapshot={}, ws_snapshot={}, state_version="WATCHING",
+            generation=_generation(),
+            cache_key="invalid-clock",
+            submitted_epoch=submitted,
+            deadline_epoch=deadline,
+            stock_snapshot={},
+            ws_snapshot={},
+            state_version="WATCHING",
         )
 
 
 def test_preparation_capacity_preserves_pending_and_commit_results(monkeypatch):
     from src.engine.scalping import scanner_async_eval as module
+
     monkeypatch.setattr(module, "_MAX_READY_RESULTS", 3)
-    coordinator = ScannerAsyncEvalCoordinator(ai_dispatcher=HotPathAIDispatcher(loaded_key_count=1))
+    coordinator = ScannerAsyncEvalCoordinator(
+        ai_dispatcher=HotPathAIDispatcher(loaded_key_count=1)
+    )
     entered, release = threading.Event(), threading.Event()
+
     def prepare(_ctx):
         entered.set()
         assert release.wait(2)
         return {}
+
     requests = [_bounded_request(str(i), prepare if i == 0 else None) for i in range(4)]
     try:
         assert coordinator.submit(requests[0]).accepted
@@ -874,17 +1036,25 @@ def test_preparation_capacity_preserves_pending_and_commit_results(monkeypatch):
         assert coordinator.submit(requests[1]).accepted
         assert coordinator.submit(requests[2]).accepted
         assert not coordinator.submit(requests[0]).accepted
-        assert coordinator.submit(requests[3]).reason == "market_preparation_capacity_deferred"
+        assert (
+            coordinator.submit(requests[3]).reason
+            == "market_preparation_capacity_deferred"
+        )
         release.set()
         deadline = time.time() + 1
         while coordinator.pending_count() and time.time() < deadline:
-            time.sleep(.005)
+            time.sleep(0.005)
         assert coordinator.pending_count() == 0
         # Notification drain alone cannot discard output needed for COMMIT.
         assert len(coordinator.drain_completed()) == 3
-        assert coordinator.submit(requests[3]).reason == "market_preparation_capacity_deferred"
+        assert (
+            coordinator.submit(requests[3]).reason
+            == "market_preparation_capacity_deferred"
+        )
         first = requests[0].context
-        assert coordinator.take_completed(generation_id=first.generation.generation_id, cache_key=first.cache_key)
+        assert coordinator.take_completed(
+            generation_id=first.generation.generation_id, cache_key=first.cache_key
+        )
         assert coordinator.submit(requests[3]).accepted
     finally:
         release.set()
@@ -892,11 +1062,15 @@ def test_preparation_capacity_preserves_pending_and_commit_results(monkeypatch):
 
 
 def test_preparation_enqueue_failure_does_not_leave_pending(monkeypatch):
-    coordinator = ScannerAsyncEvalCoordinator(ai_dispatcher=HotPathAIDispatcher(loaded_key_count=1))
+    coordinator = ScannerAsyncEvalCoordinator(
+        ai_dispatcher=HotPathAIDispatcher(loaded_key_count=1)
+    )
     request = _bounded_request("enqueue-failure")
     original = coordinator._preparation_executor.submit
+
     def fail(*args, **kwargs):
         raise RuntimeError("executor unavailable")
+
     try:
         monkeypatch.setattr(coordinator._preparation_executor, "submit", fail)
         assert coordinator.submit(request).reason == "market_preparation_enqueue_failed"
@@ -911,16 +1085,25 @@ def test_preparation_enqueue_failure_does_not_leave_pending(monkeypatch):
 
 def test_cancelled_queued_preparation_never_calls_source(monkeypatch):
     from src.engine.scalping import scanner_async_eval as module
+
     monkeypatch.setattr(module, "_MAX_CANCELLED_GENERATIONS", 2)
-    coordinator = ScannerAsyncEvalCoordinator(ai_dispatcher=HotPathAIDispatcher(loaded_key_count=1))
+    coordinator = ScannerAsyncEvalCoordinator(
+        ai_dispatcher=HotPathAIDispatcher(loaded_key_count=1)
+    )
     entered, release = threading.Event(), threading.Event()
     calls = []
+
     def prepare(_ctx):
         entered.set()
         assert release.wait(2)
         return {}
+
     first = _bounded_request("running", prepare)
-    second = _bounded_request("queued", lambda _ctx: calls.append(True) or {}, generation=_generation(promotion_id="PROMO-2"))
+    second = _bounded_request(
+        "queued",
+        lambda _ctx: calls.append(True) or {},
+        generation=_generation(promotion_id="PROMO-2"),
+    )
     try:
         assert coordinator.submit(first).accepted
         assert entered.wait(1)
@@ -933,8 +1116,12 @@ def test_cancelled_queued_preparation_never_calls_source(monkeypatch):
         coordinator.invalidate_generation(first.context.generation.generation_id)
         for i in range(5):
             coordinator.invalidate_generation(f"quiescent-{i}")
-        assert first.context.generation.generation_id in coordinator._cancelled_generations
-        assert not coordinator.reactivate_generation(first.context.generation.generation_id)
+        assert (
+            first.context.generation.generation_id in coordinator._cancelled_generations
+        )
+        assert not coordinator.reactivate_generation(
+            first.context.generation.generation_id
+        )
         release.set()
         result = _wait_for_result(coordinator)
         assert result.observation_only and result.status == "superseded_before_ai"
@@ -943,19 +1130,26 @@ def test_cancelled_queued_preparation_never_calls_source(monkeypatch):
         coordinator.shutdown(wait=True)
 
 
-def test_consumed_result_releases_notification_capacity_and_prevents_duplicate(monkeypatch):
+def test_consumed_result_releases_notification_capacity_and_prevents_duplicate(
+    monkeypatch,
+):
     from src.engine.scalping import scanner_async_eval as module
+
     monkeypatch.setattr(module, "_MAX_READY_RESULTS", 2)
-    coordinator = ScannerAsyncEvalCoordinator(ai_dispatcher=HotPathAIDispatcher(loaded_key_count=1))
+    coordinator = ScannerAsyncEvalCoordinator(
+        ai_dispatcher=HotPathAIDispatcher(loaded_key_count=1)
+    )
     try:
         requests = [_bounded_request(str(i)) for i in range(3)]
         for request in requests[:2]:
             assert coordinator.submit(request).accepted
             deadline = time.time() + 1
             while coordinator.pending_count() and time.time() < deadline:
-                time.sleep(.005)
+                time.sleep(0.005)
             ctx = request.context
-            assert coordinator.take_completed(generation_id=ctx.generation.generation_id, cache_key=ctx.cache_key)
+            assert coordinator.take_completed(
+                generation_id=ctx.generation.generation_id, cache_key=ctx.cache_key
+            )
         assert coordinator.submit(requests[0]).reason == "result_already_consumed"
         assert coordinator.drain_completed(limit=1) == []
         assert coordinator.submit(requests[2]).accepted
@@ -964,11 +1158,20 @@ def test_consumed_result_releases_notification_capacity_and_prevents_duplicate(m
 
 
 def test_ai_dispatch_exception_closes_pending_as_observation(monkeypatch):
-    coordinator = ScannerAsyncEvalCoordinator(ai_dispatcher=HotPathAIDispatcher(loaded_key_count=1))
+    coordinator = ScannerAsyncEvalCoordinator(
+        ai_dispatcher=HotPathAIDispatcher(loaded_key_count=1)
+    )
     request = _bounded_request("ai-enqueue-failure")
-    request = ScannerAsyncEvalRequest(context=request.context, prepare=request.prepare, evaluate=request.evaluate, requires_ai_dispatch=True)
+    request = ScannerAsyncEvalRequest(
+        context=request.context,
+        prepare=request.prepare,
+        evaluate=request.evaluate,
+        requires_ai_dispatch=True,
+    )
+
     def fail(*args, **kwargs):
         raise RuntimeError("dispatcher unavailable")
+
     try:
         monkeypatch.setattr(coordinator.ai_dispatcher, "submit", fail)
         assert coordinator.submit(request).accepted
@@ -979,44 +1182,58 @@ def test_ai_dispatch_exception_closes_pending_as_observation(monkeypatch):
         coordinator.shutdown(wait=True)
 
 
-def test_poll_publication_failure_retains_all_drained_results_in_original_order(monkeypatch):
+def test_poll_publication_failure_retains_all_drained_results_in_original_order(
+    monkeypatch,
+):
     from dataclasses import replace
     from src.engine.scalping import scanner_async_eval as M
-    monkeypatch.setattr(M, 'record_async_disposition', lambda *a, **k: True)
+
+    monkeypatch.setattr(M, "record_async_disposition", lambda *a, **k: True)
     dispatcher = HotPathAIDispatcher(loaded_key_count=1)
     coordinator = ScannerAsyncEvalCoordinator(ai_dispatcher=dispatcher)
-    requests = [replace(_bounded_request('retain-'+str(i), prepare=lambda ctx: {'source': ctx.cache_key}),
-                        requires_ai_dispatch=True) for i in range(2)]
+    requests = [
+        replace(
+            _bounded_request(
+                "retain-" + str(i), prepare=lambda ctx: {"source": ctx.cache_key}
+            ),
+            requires_ai_dispatch=True,
+        )
+        for i in range(2)
+    ]
     coordinator._poll_lock.acquire()
     try:
         for request in requests:
             assert coordinator.submit(request).accepted
-        deadline = time.time()+1
-        while time.time()<deadline:
+        deadline = time.time() + 1
+        while time.time() < deadline:
             with dispatcher._lock:
                 original = list(dispatcher._completed)
-            if len(original)==2:
+            if len(original) == 2:
                 break
-            time.sleep(.001)
-        assert len(original)==2
+            time.sleep(0.001)
+        assert len(original) == 2
     finally:
         coordinator._poll_lock.release()
     finish = coordinator._finish
+
     def failure(*args, **kwargs):
-        raise ValueError('publication_failed')
-    monkeypatch.setattr(coordinator, '_finish', failure)
+        raise ValueError("publication_failed")
+
+    monkeypatch.setattr(coordinator, "_finish", failure)
     try:
-        with pytest.raises(ValueError, match='publication_failed'):
+        with pytest.raises(ValueError, match="publication_failed"):
             coordinator.poll()
         with dispatcher._lock:
-            assert list(dispatcher._completed)==original
-        monkeypatch.setattr(coordinator, '_finish', finish)
-        assert coordinator.poll()==2
+            assert list(dispatcher._completed) == original
+        monkeypatch.setattr(coordinator, "_finish", finish)
+        assert coordinator.poll() == 2
         for request in requests:
-            result=coordinator.take_completed(generation_id=request.context.generation.generation_id,
-                                              cache_key=request.context.cache_key)
-            assert result.deadline_epoch==request.context.deadline_epoch
-            assert result.prepared_context['source']==request.context.cache_key
-        assert coordinator.poll()==0
+            result = coordinator.take_completed(
+                generation_id=request.context.generation.generation_id,
+                cache_key=request.context.cache_key,
+            )
+            assert result.deadline_epoch == request.context.deadline_epoch
+            assert result.prepared_context["source"] == request.context.cache_key
+        assert coordinator.poll() == 0
     finally:
         coordinator.shutdown()

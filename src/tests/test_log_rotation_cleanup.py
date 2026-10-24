@@ -97,7 +97,9 @@ def _generation_gzip(source: Path) -> Path:
 
 
 @pytest.mark.parametrize("unreadable_source", [False, True])
-def test_cache_census_preserves_evidence_and_rejects_source_read_failure(tmp_path, unreadable_source):
+def test_cache_census_preserves_evidence_and_rejects_source_read_failure(
+    tmp_path, unreadable_source
+):
     if os.geteuid() == 0:
         pytest.skip("Permission semantics require an unprivileged cleanup owner")
     project = tmp_path / "project"
@@ -111,21 +113,34 @@ def test_cache_census_preserves_evidence_and_rejects_source_read_failure(tmp_pat
         cache.mkdir(parents=True)
         (cache / "evidence.pyc").write_bytes(b"sealed evidence")
         preserved.append(cache)
-    blocked = project / ("src/unreadable" if unreadable_source else "data/report/deployment/work")
+    blocked = project / (
+        "src/unreadable" if unreadable_source else "data/report/deployment/work"
+    )
     blocked.mkdir(parents=True)
     blocked.chmod(0)
     try:
         result = subprocess.run(
             ["bash", "deploy/run_logs_rotation_cleanup_cron.sh", "30"],
             cwd=Path(__file__).resolve().parents[2],
-            env={**os.environ, "PROJECT_DIR": str(project), "TARGET_DATE": "2026-10-16"},
-            text=True, capture_output=True, timeout=40,
+            env={
+                **os.environ,
+                "PROJECT_DIR": str(project),
+                "TARGET_DATE": "2026-10-16",
+            },
+            text=True,
+            capture_output=True,
+            timeout=40,
         )
         assert blocked.stat().st_mode & 0o777 == 0
-        assert all((p / "evidence.pyc").read_bytes() == b"sealed evidence" for p in preserved)
+        assert all(
+            (p / "evidence.pyc").read_bytes() == b"sealed evidence" for p in preserved
+        )
         if unreadable_source:
             assert result.returncode == 1, result.stdout + result.stderr
-            assert "[CLEANUP_ENUMERATION_FAIL] lane=cache_retention_census" in result.stdout
+            assert (
+                "[CLEANUP_ENUMERATION_FAIL] lane=cache_retention_census"
+                in result.stdout
+            )
             assert disposable.exists()  # A partial enumeration cannot delete.
         else:
             assert result.returncode == 0, result.stdout + result.stderr
@@ -1047,7 +1062,9 @@ def test_log_rotation_cleanup_defers_conflicting_gzip_and_finishes_micro_lane(
     assert not list(log_dir.glob("*.tmp.*"))
     assert not micro_source.exists()
     assert micro_source.with_suffix(".jsonl.gz").exists()
-    assert stale_tmp.exists()  # Unknown temporary evidence has no owner expiry manifest.
+    assert (
+        stale_tmp.exists()
+    )  # Unknown temporary evidence has no owner expiry manifest.
     assert "micro_reversion_storage_status=pass" in result.stdout
     assert "archive_compressed=2" in result.stdout
     assert "archive_generation_compressed=2" in result.stdout
@@ -2139,8 +2156,6 @@ def test_log_rotation_cleanup_critical_capacity_fails_after_peer_lanes_continue(
     assert "generic_cleanup_will_continue=true" in result.stdout
     assert _generation_gzip(peer_archive).exists()
     assert "[FAIL] log_rotation_cleanup" in result.stdout
-
-
 
 
 def test_log_rotation_cleanup_compresses_closed_provider_budget_ledger(

@@ -47,7 +47,6 @@ from src.engine.lifecycle.greenfield_authority import (
     validate_greenfield_policy_contract,
 )
 
-
 LDM_REPORT_DIR = DATA_DIR / "report" / "lifecycle_decision_matrix"
 
 

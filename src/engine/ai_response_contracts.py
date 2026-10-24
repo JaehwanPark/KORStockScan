@@ -544,11 +544,15 @@ AI_RESPONSE_SCHEMA_REGISTRY = {
                 "items": {
                     "type": "object",
                     "properties": {
-                        "path_id": {"type": "string", "enum": [
-                            "EXIT_TRAILING_TP", "EXIT_SOFT_STOP",
-                            "EXIT_POST_ADD_FAIL",
-                            "ADD_REBOUND",
-                        ]},
+                        "path_id": {
+                            "type": "string",
+                            "enum": [
+                                "EXIT_TRAILING_TP",
+                                "EXIT_SOFT_STOP",
+                                "EXIT_POST_ADD_FAIL",
+                                "ADD_REBOUND",
+                            ],
+                        },
                         "verdict": {"type": "string", "enum": ["PASS", "VETO"]},
                         "conviction": {"type": "string", "enum": ["FIRM", "TENTATIVE"]},
                         "reason_codes": {"type": "array", "items": {"type": "string"}},
@@ -567,14 +571,14 @@ AI_RESPONSE_SCHEMA_REGISTRY = {
             "verdict": {"type": "string", "enum": ["PASS", "VETO"]},
             "conviction": {"type": "string", "enum": ["FIRM", "TENTATIVE"]},
             "reason_codes": {
-                "type": "array", "items": {"type": "string"},
-                "minItems": 1, "maxItems": 6,
+                "type": "array",
+                "items": {"type": "string"},
+                "minItems": 1,
+                "maxItems": 6,
             },
             "input_snapshot_id": {"type": "string"},
         },
-        "required": [
-            "verdict", "conviction", "reason_codes", "input_snapshot_id"
-        ],
+        "required": ["verdict", "conviction", "reason_codes", "input_snapshot_id"],
         "additionalProperties": False,
     },
     "holding_score_v2": {

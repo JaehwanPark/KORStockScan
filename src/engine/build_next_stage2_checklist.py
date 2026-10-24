@@ -157,8 +157,6 @@ def _canonical_sha256(value: Any) -> str:
     ).hexdigest()
 
 
-
-
 def _machine_microstructure_predecessor_errors(
     *,
     approval_path: Path,
@@ -572,8 +570,7 @@ def _validate_direct_summary(
         == DIRECT_SUMMARY_AUTHORITY,
         "daily_threshold_cycle_retired": payload.get("daily_threshold_cycle_retired")
         is True,
-        "threshold_cycle_ev_retired": payload.get("threshold_cycle_ev_retired")
-        is True,
+        "threshold_cycle_ev_retired": payload.get("threshold_cycle_ev_retired") is True,
         "runtime_effect": payload.get("runtime_effect") is False,
         "allowed_runtime_apply": payload.get("allowed_runtime_apply") is False,
         "actual_order_submitted": payload.get("actual_order_submitted") is False,
@@ -645,9 +642,7 @@ def _validate_direct_summary(
             or len(digest) != 64
             or any(character not in "0123456789abcdef" for character in digest.lower())
         ):
-            raise RuntimeError(
-                f"direct runtime summary source sha256 invalid: {owner}"
-            )
+            raise RuntimeError(f"direct runtime summary source sha256 invalid: {owner}")
         evidence = row.get("economic_evidence")
         if not isinstance(evidence, dict):
             raise RuntimeError(
@@ -662,19 +657,16 @@ def _validate_direct_summary(
                 f"direct runtime summary resolution mode invalid: {owner}"
             )
         if not isinstance(evidence.get("closure_owner"), str):
-            raise RuntimeError(
-                f"direct runtime summary closure owner invalid: {owner}"
-            )
-        if not isinstance(row.get("applicability"), str) or not row[
-            "applicability"
-        ].strip():
+            raise RuntimeError(f"direct runtime summary closure owner invalid: {owner}")
+        if (
+            not isinstance(row.get("applicability"), str)
+            or not row["applicability"].strip()
+        ):
             raise RuntimeError(
                 f"direct runtime summary source applicability invalid: {owner}"
             )
         if row.get("error") is not None and not isinstance(row.get("error"), str):
-            raise RuntimeError(
-                f"direct runtime summary source error invalid: {owner}"
-            )
+            raise RuntimeError(f"direct runtime summary source error invalid: {owner}")
         handoff_state = evidence.get("policy_handoff_state")
         if handoff_state not in {
             "blocked",
@@ -716,12 +708,15 @@ def _validate_direct_summary(
                 or evidence.get("metric_role") != "initial_entry_price_timing_estimate"
                 or evidence.get("policy_apply_allowed") is not False
                 or initial.get("schema") != "pre_submit_delay_tuning_v2"
-                or (handoff_state == "initial_quote_timing_policy_published" and (
-                    initial.get("runtime_contract_validated") is not True
-                    or not isinstance(receipt, dict)
-                    or receipt.get("valid") is not True
-                    or receipt.get("target_date_matches") is not True
-                ))
+                or (
+                    handoff_state == "initial_quote_timing_policy_published"
+                    and (
+                        initial.get("runtime_contract_validated") is not True
+                        or not isinstance(receipt, dict)
+                        or receipt.get("valid") is not True
+                        or receipt.get("target_date_matches") is not True
+                    )
+                )
             ):
                 raise RuntimeError(
                     f"direct runtime summary initial timing handoff contract invalid: {owner}"
@@ -748,9 +743,10 @@ def _validate_direct_summary(
                 raise RuntimeError(
                     f"direct runtime summary validated edge contract invalid: {owner}"
                 )
-        elif handoff_state in {"candidate_published", "verified"} or evidence.get(
-            "policy_apply_allowed"
-        ) is True:
+        elif (
+            handoff_state in {"candidate_published", "verified"}
+            or evidence.get("policy_apply_allowed") is True
+        ):
             raise RuntimeError(
                 f"direct runtime summary non-edge apply contract invalid: {owner}"
             )
@@ -821,9 +817,7 @@ def _validate_direct_summary(
         if preopen.get(pid_field) is not None and not isinstance(
             preopen.get(pid_field), bool
         ):
-            raise RuntimeError(
-                f"direct runtime summary {pid_field} invalid"
-            )
+            raise RuntimeError(f"direct runtime summary {pid_field} invalid")
     if preopen["actual_pid_consumed"] and (
         payload.get("preopen_consumption_state") != "verified"
         or payload.get("natural_acceptance_state") != "pending"
@@ -836,7 +830,9 @@ def _validate_direct_summary(
         payload.get("natural_acceptance_state") == "pending"
         and preopen["actual_pid_consumed"] is not True
     ):
-        raise RuntimeError("direct runtime summary natural acceptance lacks PID receipt")
+        raise RuntimeError(
+            "direct runtime summary natural acceptance lacks PID receipt"
+        )
     if preopen.get("apply_date"):
         apply_date = str(preopen["apply_date"]).strip()
         try:
@@ -870,20 +866,16 @@ def _validate_direct_summary(
                 not isinstance(digest, str)
                 or len(digest) != 64
                 or any(
-                    character not in "0123456789abcdef"
-                    for character in digest.lower()
+                    character not in "0123456789abcdef" for character in digest.lower()
                 )
             ):
                 raise RuntimeError(
                     f"direct runtime summary preopen {digest_field} invalid"
                 )
         if payload.get("preopen_consumption_state") == "verified" and (
-            not preopen.get("manifest_sha256")
-            or not preopen.get("verification_sha256")
+            not preopen.get("manifest_sha256") or not preopen.get("verification_sha256")
         ):
-            raise RuntimeError(
-                "direct runtime summary verified PREOPEN hashes missing"
-            )
+            raise RuntimeError("direct runtime summary verified PREOPEN hashes missing")
     elif payload.get("preopen_consumption_state") != "not_due":
         raise RuntimeError("direct runtime summary pending preopen apply date missing")
     return payload
@@ -1133,8 +1125,6 @@ def _quiet_gap_summary(runtime_gap_report: dict[str, Any]) -> str:
         f"observation_source_quality_warning_count=`{summary.get('observation_source_quality_warning_count') or 0}`, "
         f"quiet_gap_type_counts=`{type_counts}`"
     )
-
-
 
 
 def _machine_microstructure_approval_pending_summary(
@@ -1782,7 +1772,10 @@ def _existing_manual_task_ids(existing: str) -> set[str]:
 
 
 def _carry_open_semantic_owners(
-    source: str, existing: str, source_date: str, target_date: str,
+    source: str,
+    existing: str,
+    source_date: str,
+    target_date: str,
     projected_tasks: list[GeneratedTask],
 ) -> str:
     """Preserve ongoing diagnostic acceptance absent from direct-family summaries.
@@ -1791,10 +1784,15 @@ def _carry_open_semantic_owners(
     is never recreated because economics are unavailable, and a target-day
     operator disposition takes precedence. Keep the original body verbatim.
     """
-    owners = {"HoldingProfitExitSourceContractRepair", "InitialQuantityProducerConsumerRepair1010",
-              "MainMarketWeaknessPostcloseObservation1008"}
+    owners = {
+        "HoldingProfitExitSourceContractRepair",
+        "InitialQuantityProducerConsumerRepair1010",
+        "MainMarketWeaknessPostcloseObservation1008",
+    }
     target_ids = _task_ids_from_text(existing)
-    target_matches = re.findall(r"^- \[[ xX]\] `\[([A-Za-z0-9_:-]+)\]", existing, re.MULTILINE)
+    target_matches = re.findall(
+        r"^- \[[ xX]\] `\[([A-Za-z0-9_:-]+)\]", existing, re.MULTILINE
+    )
     if any(target_matches.count(owner) > 1 for owner in owners):
         raise RuntimeError("duplicate target semantic owner")
     projected = {task.task_id: task for task in projected_tasks}
@@ -1812,14 +1810,20 @@ def _carry_open_semantic_owners(
         if state != " " or owner in target_ids:
             continue
         due = re.search(r"`Due: (\d{4}-\d{2}-\d{2})`", line)
-        if not due or not all(f"`{field}: " in line for field in ("Slot", "TimeWindow", "Track")):
+        if not due or not all(
+            f"`{field}: " in line for field in ("Slot", "TimeWindow", "Track")
+        ):
             raise RuntimeError(f"source semantic owner schedule missing: {owner}")
         date.fromisoformat(due[1])
-        header = line.replace(f"`Due: {due[1]}`", f"`Due: {target_date}`") if due[1] <= source_date else line
+        header = (
+            line.replace(f"`Due: {due[1]}`", f"`Due: {target_date}`")
+            if due[1] <= source_date
+            else line
+        )
         end = index + 1
         while end < len(lines) and (not lines[end].strip() or lines[end][0].isspace()):
             end += 1
-        body = "".join(lines[index + 1:end])
+        body = "".join(lines[index + 1 : end])
         if owner in projected:
             rendered = _render_task(projected[owner], target_date)
             header = rendered[0] + "\n"
@@ -1827,7 +1831,11 @@ def _carry_open_semantic_owners(
         carried.append(header + body)
     if not carried:
         return existing
-    return (existing or _render_new_document(target_date, "")) + "\n\n## 미완료 원천 진단 인계\n\n" + "\n".join(carried)
+    return (
+        (existing or _render_new_document(target_date, ""))
+        + "\n\n## 미완료 원천 진단 인계\n\n"
+        + "\n".join(carried)
+    )
 
 
 def _remove_direct_generation_markers(existing: str) -> str:
@@ -1837,7 +1845,9 @@ def _remove_direct_generation_markers(existing: str) -> str:
     )
 
     for marker in (MARKER, FUTURE_HANDOFF_MARKER):
-        existing = re.sub(rf"^<!-- {marker} .+? -->\s*$\n?", "", existing, flags=re.MULTILINE)
+        existing = re.sub(
+            rf"^<!-- {marker} .+? -->\s*$\n?", "", existing, flags=re.MULTILINE
+        )
     return existing
 
 
@@ -1858,9 +1868,13 @@ def _task_slot_from_block(block: str, fallback_slot: str) -> str:
 
 
 def _is_builder_owned_conditional_task(task_id: str, block: str = "") -> bool:
-    return "<!-- POLICY_GENERATION_CAPABILITY_TASK -->" in block or task_id.startswith(
-        MACHINE_MICROSTRUCTURE_BUILDER_OWNED_CONDITIONAL_TASK_PREFIXES
-    ) or task_id.startswith("DirectFamily")
+    return (
+        "<!-- POLICY_GENERATION_CAPABILITY_TASK -->" in block
+        or task_id.startswith(
+            MACHINE_MICROSTRUCTURE_BUILDER_OWNED_CONDITIONAL_TASK_PREFIXES
+        )
+        or task_id.startswith("DirectFamily")
+    )
 
 
 def _preserved_auto_task_blocks(
@@ -1931,11 +1945,15 @@ def _preserved_auto_task_blocks(
 def _merge_preserved_auto_tasks(existing: str, auto_block: str) -> str:
     preserved = _preserved_auto_task_blocks(existing, _task_ids_from_text(auto_block))
     preserved = {
-        slot: [block for block in blocks if not (
-            "claude_scalping_pattern_lab/" in block
-            or "scalping_pattern_lab_automation/" in block
-            or "src.engine.scalping_pattern_lab_automation" in block
-        )]
+        slot: [
+            block
+            for block in blocks
+            if not (
+                "claude_scalping_pattern_lab/" in block
+                or "scalping_pattern_lab_automation/" in block
+                or "src.engine.scalping_pattern_lab_automation" in block
+            )
+        ]
         for slot, blocks in preserved.items()
     }
     if not preserved:
@@ -1993,7 +2011,9 @@ def _checklist_write_lock(target_path: Path) -> Iterator[None]:
 
 def _atomic_write_checklist(path: Path, content: str) -> None:
     from src.engine.infrastructure.research_release_transition import journal_write
-    if journal_write(path,content.encode('utf-8')):return
+
+    if journal_write(path, content.encode("utf-8")):
+        return
     path.parent.mkdir(parents=True, exist_ok=True)
     existing_mode = path.stat().st_mode & 0o777 if path.exists() else 0o664
     temporary_path: Path | None = None
@@ -2070,9 +2090,7 @@ def _direct_task(
         if isinstance(source.get("economic_evidence"), dict)
         else {}
     )
-    prospective_resolution = str(
-        evidence.get("prospective_resolution_mode") or ""
-    )
+    prospective_resolution = str(evidence.get("prospective_resolution_mode") or "")
     role_contract = {
         "SourceRepair": (
             "직접 family 원천·경제성 계약 수리",
@@ -2104,9 +2122,7 @@ def _direct_task(
         evidence.get("first_blocker") or source.get("error"),
         fallback="contract_state_requires_followup",
     )
-    closure_owner = _compact_inline_value(
-        evidence.get("closure_owner"), fallback=owner
-    )
+    closure_owner = _compact_inline_value(evidence.get("closure_owner"), fallback=owner)
     closure_test = _compact_inline_value(
         evidence.get("closure_test"), fallback="missing", max_length=240
     )
@@ -2175,11 +2191,12 @@ def _project_direct_tasks(
             role = (
                 "NaturalEvidence"
                 if resolution == "historical_unrecoverable"
-                and evidence.get("prospective_resolution_mode")
-                == "natural_maturity"
-                else "ScopeDecision"
-                if resolution == "historical_unrecoverable"
-                else "SourceRepair"
+                and evidence.get("prospective_resolution_mode") == "natural_maturity"
+                else (
+                    "ScopeDecision"
+                    if resolution == "historical_unrecoverable"
+                    else "SourceRepair"
+                )
             )
         elif status == "unsupported_scope":
             role = "ScopeDecision"
@@ -2241,11 +2258,19 @@ def _project_direct_tasks(
             continue
         family = capability.get("family")
         task_id = OWNERS.get(family)
-        if (not task_id or capability.get("source_date") != source_date
-                or capability.get("repair_owner", task_id) != task_id):
+        if (
+            not task_id
+            or capability.get("source_date") != source_date
+            or capability.get("repair_owner", task_id) != task_id
+        ):
             raise RuntimeError("policy generation capability owner/date mismatch")
-        from src.engine.monitoring.policy_generation_code_handoff import current_fixture_observation
-        capability = current_fixture_observation(capability, EV_REPORT_DIR.parent.parent.resolve())
+        from src.engine.monitoring.policy_generation_code_handoff import (
+            current_fixture_observation,
+        )
+
+        capability = current_fixture_observation(
+            capability, EV_REPORT_DIR.parent.parent.resolve()
+        )
         findings = capability.get("findings") or []
         if not findings:
             continue
@@ -2282,18 +2307,25 @@ def _project_direct_tasks(
             tasks_by_owner[f"__policy_generation__{task_id}"] = GeneratedTask(
                 task_id=task_id,
                 title=f"{family} 정책 생성 코드·원천 세대 계약 검증",
-                slot="POSTCLOSE", time_window="16:30~21:40", track="RuntimeStability",
+                slot="POSTCLOSE",
+                time_window="16:30~21:40",
+                track="RuntimeStability",
                 source=f"[{summary_path.name}](/home/ubuntu/KORStockScan/{_rel(summary_path)})",
                 lines=lines,
             )
         action_by_owner[f"policy_generation:{family}"] = "producer_contract_repair"
 
-    holding_repair = ((summary.get("holding_exit_threshold_lineage") or {}).get("source_contract_repair") or {})
+    holding_repair = (summary.get("holding_exit_threshold_lineage") or {}).get(
+        "source_contract_repair"
+    ) or {}
     if holding_repair.get("repair_required") is True:
         task_id = "HoldingProfitExitSourceContractRepair"
         tasks_by_owner[task_id] = GeneratedTask(
-            task_id=task_id, title="Main 보유 익절 원천·재생·의미 계약 수리",
-            slot="IMPLEMENTATION", time_window="09:00~23:59", track="RuntimeStability",
+            task_id=task_id,
+            title="Main 보유 익절 원천·재생·의미 계약 수리",
+            slot="IMPLEMENTATION",
+            time_window="09:00~23:59",
+            track="RuntimeStability",
             source=f"[{summary_path.name}](/home/ubuntu/KORStockScan/{_rel(summary_path)})",
             lines=(
                 f"식별 결함: {json.dumps(holding_repair.get('identified_defects') or [], ensure_ascii=False)}",
@@ -2308,9 +2340,10 @@ def _project_direct_tasks(
         else {}
     )
     preopen_state = summary.get("preopen_consumption_state")
-    if preopen_state in {"pending", "rejected"} and preopen.get(
-        "apply_date"
-    ) == target_date:
+    if (
+        preopen_state in {"pending", "rejected"}
+        and preopen.get("apply_date") == target_date
+    ):
         due: list[str] = []
         for owner, source in sorted(sources.items()):
             if not isinstance(source, dict) or source.get("required") is not True:
@@ -2326,9 +2359,16 @@ def _project_direct_tasks(
                     f"{owner}(valid={receipt.get('valid') is True}, "
                     f"handoff={evidence.get('policy_handoff_state')})"
                 )
-        stop_receipt = summary.get('main_stop_confirmation') or {}
-        if stop_receipt.get('target_date') == target_date and stop_receipt.get('status') == 'published_policy':
-            due.append('main_stop_confirmation(policy=' + str(stop_receipt.get('policy_sha256')) + ', pid_unobserved)')
+        stop_receipt = summary.get("main_stop_confirmation") or {}
+        if (
+            stop_receipt.get("target_date") == target_date
+            and stop_receipt.get("status") == "published_policy"
+        ):
+            due.append(
+                "main_stop_confirmation(policy="
+                + str(stop_receipt.get("policy_sha256"))
+                + ", pid_unobserved)"
+            )
         tasks_by_owner["__preopen__"] = GeneratedTask(
             task_id="DirectFamilyPreopenPolicyHandoff",
             title="direct family 날짜별 정책·bootstrap 장전 소비 확인",
@@ -2414,7 +2454,12 @@ def _build_direct_family_checklist(
             pass
         if source_checklist_bytes is not None:
             existing = _carry_open_semantic_owners(
-                source_checklist_bytes.decode("utf-8"), existing, source_date, target_date, projected_tasks)
+                source_checklist_bytes.decode("utf-8"),
+                existing,
+                source_date,
+                target_date,
+                projected_tasks,
+            )
     existing = _remove_direct_generation_markers(existing)
     manual_ids = _existing_manual_task_ids(existing) if existing else set()
     tasks_to_render = [
@@ -2459,7 +2504,9 @@ def _build_direct_family_checklist(
         )
         lines.append("")
     else:
-        lines.append("- 신규 실행 항목 없음. terminal family 상태와 incumbent를 유지한다.")
+        lines.append(
+            "- 신규 실행 항목 없음. terminal family 상태와 incumbent를 유지한다."
+        )
         lines.append("")
     lines.append(AUTO_END)
     auto_block = "\n".join(lines) + "\n"
@@ -2471,10 +2518,16 @@ def _build_direct_family_checklist(
         else _render_new_document(target_date, auto_block)
     )
     from src.engine.automation.entry_cancel_wait_tuning import upsert_checklist_handoff
-    if source_date >= '2026-09-17':
-        content = upsert_checklist_handoff(content, source_date, target_date, EV_REPORT_DIR.parent)
+
+    if source_date >= "2026-09-17":
+        content = upsert_checklist_handoff(
+            content, source_date, target_date, EV_REPORT_DIR.parent
+        )
     assert_sources_unchanged(handoff_receipt, handoff_paths)
-    if source_checklist_bytes is not None and source_checklist.read_bytes() != source_checklist_bytes:
+    if (
+        source_checklist_bytes is not None
+        and source_checklist.read_bytes() != source_checklist_bytes
+    ):
         raise RuntimeError("source semantic owner checklist changed during generation")
     _atomic_write_checklist(target_path, content)
     return {
@@ -2569,8 +2622,11 @@ def _build_next_stage2_checklist_locked(
         created = True
 
     from src.engine.automation.entry_cancel_wait_tuning import upsert_checklist_handoff
-    if source_date >= '2026-09-17':
-        content = upsert_checklist_handoff(content, source_date, target_date, EV_REPORT_DIR.parent)
+
+    if source_date >= "2026-09-17":
+        content = upsert_checklist_handoff(
+            content, source_date, target_date, EV_REPORT_DIR.parent
+        )
     assert_sources_unchanged(handoff_receipt, handoff_paths)
     _atomic_write_checklist(target_path, content)
     tasks = _build_tasks(

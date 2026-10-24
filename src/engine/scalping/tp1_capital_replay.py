@@ -245,8 +245,8 @@ def replay(rows):
         gaps=gaps,
         rows=details,
         daily_net_profit_krw=dict(daily) if rows and not gaps else None,
-        baseline_daily_net_profit_krw={d: 0.0 for d in daily}
-        if rows and not gaps
-        else None,
+        baseline_daily_net_profit_krw=(
+            {d: 0.0 for d in daily} if rows and not gaps else None
+        ),
         actual_profit_verified=False,
     )

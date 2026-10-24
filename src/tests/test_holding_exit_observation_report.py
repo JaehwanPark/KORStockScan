@@ -156,8 +156,9 @@ def test_full_completed_projection_is_not_capped_by_recent_trades():
 
     rows, gaps = report_mod._collect_completed_trade_rows([snapshot])
 
-    assert gaps == [{"date": "2026-09-23",
-                     "reason": "legacy_completion_census_unsealed"}]
+    assert gaps == [
+        {"date": "2026-09-23", "reason": "legacy_completion_census_unsealed"}
+    ]
     assert {row["id"] for row in rows} == set(range(1, 13))
 
 
@@ -166,20 +167,28 @@ def test_new_completed_census_rejects_stale_rows_and_cross_date_duplicate():
 
     def snapshot(day, row):
         result = {
-            "date": day, "code": None, "since": None,
-            "meta": {"warnings": [], "snapshot_profile": "postclose_exit",
-                     "sell_completed_event_ids": [row["id"]],
-                     "trailing_event_source_receipts": []},
+            "date": day,
+            "code": None,
+            "since": None,
+            "meta": {
+                "warnings": [],
+                "snapshot_profile": "postclose_exit",
+                "sell_completed_event_ids": [row["id"]],
+                "trailing_event_source_receipts": [],
+            },
             "metrics": {"canonical_completed_trades": 1},
             "sections": {"completed_trade_projection": [row]},
         }
         result["meta"]["completed_census_manifest"] = completed_census_manifest(result)
         return result
 
-    first = snapshot("2026-09-28", {
-        **_trade(1, rec_date="2026-09-28", sell_time="2026-09-28 09:40:00"),
-        "completion_observed_date": "2026-09-28",
-    })
+    first = snapshot(
+        "2026-09-28",
+        {
+            **_trade(1, rec_date="2026-09-28", sell_time="2026-09-28 09:40:00"),
+            "completion_observed_date": "2026-09-28",
+        },
+    )
     rows, gaps = report_mod._collect_completed_trade_rows([first])
     assert [row["id"] for row in rows] == [1]
     assert gaps == []
@@ -199,45 +208,55 @@ def test_new_completed_census_rejects_stale_rows_and_cross_date_duplicate():
 
     wrong_profile = json.loads(json.dumps(first))
     wrong_profile["meta"]["snapshot_profile"] = "intraday_light"
-    wrong_profile["meta"]["completed_census_manifest"] = (
-        completed_census_manifest(wrong_profile)
+    wrong_profile["meta"]["completed_census_manifest"] = completed_census_manifest(
+        wrong_profile
     )
     rows, gaps = report_mod._collect_completed_trade_rows([wrong_profile])
     assert rows == []
     assert gaps[0]["reason"] == "completed_census_profile_not_postclose_exit"
 
-    second = snapshot("2026-09-29", {
-        **_trade(1, rec_date="2026-09-28", sell_time="2026-09-29 09:40:00"),
-        "completion_observed_date": "2026-09-29",
-    })
+    second = snapshot(
+        "2026-09-29",
+        {
+            **_trade(1, rec_date="2026-09-28", sell_time="2026-09-29 09:40:00"),
+            "completion_observed_date": "2026-09-29",
+        },
+    )
     rows, gaps = report_mod._collect_completed_trade_rows([first, second])
     assert rows == []
     assert any(gap["reason"] == "duplicate_completed_trade_conflict" for gap in gaps)
 
 
-def test_cost_subset_without_direct_exit_signal_is_not_policy_economics(monkeypatch, tmp_path):
+def test_cost_subset_without_direct_exit_signal_is_not_policy_economics(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
     trade = _trade(7, rec_date="2026-09-24", sell_time="2026-09-24 09:40:00")
-    trade.update({
-        "completion_observed_date": "2026-09-24",
-        "strict_completion_status": "eligible",
-        "strict_completion_reasons": [],
-        "terminal_population_scope": "real_record_bound",
-        "sell_quantity_conserved": True,
-        "terminal_profit_rate_reconciled": True,
-        "realized_pnl_krw_source": "broker_fill_prices_fee_aware",
-        "exit_signal": {"exit_rule": "scalp_trailing_take_profit",
-                        "binding_status": "legacy_unbound", "inferred": True},
-    })
+    trade.update(
+        {
+            "completion_observed_date": "2026-09-24",
+            "strict_completion_status": "eligible",
+            "strict_completion_reasons": [],
+            "terminal_population_scope": "real_record_bound",
+            "sell_quantity_conserved": True,
+            "terminal_profit_rate_reconciled": True,
+            "realized_pnl_krw_source": "broker_fill_prices_fee_aware",
+            "exit_signal": {
+                "exit_rule": "scalp_trailing_take_profit",
+                "binding_status": "legacy_unbound",
+                "inferred": True,
+            },
+        }
+    )
     from src.engine.sniper_trade_review_report import completed_census_manifest
+
     snapshot = {
-        "date": "2026-09-24", "meta": {"sell_completed_event_ids": [7]},
+        "date": "2026-09-24",
+        "meta": {"sell_completed_event_ids": [7]},
         "metrics": {"canonical_completed_trades": 1},
         "sections": {"completed_trade_projection": [trade]},
     }
-    snapshot["meta"]["completed_census_manifest"] = (
-        completed_census_manifest(snapshot)
-    )
+    snapshot["meta"]["completed_census_manifest"] = completed_census_manifest(snapshot)
     _write_json(
         tmp_path / "report" / "monitor_snapshots" / "trade_review_2026-09-24.json",
         snapshot,
@@ -248,7 +267,9 @@ def test_cost_subset_without_direct_exit_signal_is_not_policy_economics(monkeypa
     assert result["cost_input_complete"] is True
     assert result["economic_input_complete"] is False
     assert result["position_outcome_coverage"]["whole_cohort_pnl_krw"] is None
-    assert result["completed_population_quality"]["decision_economic_eligible_ids"] == []
+    assert (
+        result["completed_population_quality"]["decision_economic_eligible_ids"] == []
+    )
 
 
 def test_completed_projection_rejects_terminal_event_id_mismatch():
@@ -263,30 +284,47 @@ def test_completed_projection_rejects_terminal_event_id_mismatch():
 
     assert rows == []
     assert {gap["reason"] for gap in gaps} == {
-        "legacy_completion_census_unsealed", "sell_completed_id_census_mismatch"
+        "legacy_completion_census_unsealed",
+        "sell_completed_id_census_mismatch",
     }
 
 
 def test_mechanical_cohort_isolated_from_pre_generation_legacy_gap():
-    from src.engine.scalping.trailing_mechanical_strength import VERSION as CLASSIFIER_VERSION
+    from src.engine.scalping.trailing_mechanical_strength import (
+        VERSION as CLASSIFIER_VERSION,
+    )
 
     old = {**_trade(1, rec_date="2026-09-20"), "strict_completion_status": "eligible"}
-    current = {**_trade(2, rec_date="2026-09-25"),
-               "strict_completion_status": "eligible"}
-    current["timeline"].append({
-        "stage": "scalp_trailing_input_transition",
-        "fields": {"classifier_version": CLASSIFIER_VERSION},
-    })
-    other_rule = {**_trade(3, rec_date="2026-09-26", exit_rule="scalp_soft_stop_pct"),
-                  "strict_completion_status": "eligible"}
-    bad_cost = {**_trade(4, rec_date="2026-09-26"),
-                "strict_completion_status": "source_gap_exact_cost_missing"}
+    current = {
+        **_trade(2, rec_date="2026-09-25"),
+        "strict_completion_status": "eligible",
+    }
+    current["timeline"].append(
+        {
+            "stage": "scalp_trailing_input_transition",
+            "fields": {"classifier_version": CLASSIFIER_VERSION},
+        }
+    )
+    other_rule = {
+        **_trade(3, rec_date="2026-09-26", exit_rule="scalp_soft_stop_pct"),
+        "strict_completion_status": "eligible",
+    }
+    bad_cost = {
+        **_trade(4, rec_date="2026-09-26"),
+        "strict_completion_status": "source_gap_exact_cost_missing",
+    }
     rows = [old, current, other_rule, bad_cost]
     strict = [old, current, other_rule]
     cohort, quality = report_mod._mechanical_completed_cohort(
-        rows, strict,
-        [{"date": "2026-09-20", "reason": "legacy_completion_census_unsealed"},
-         {"date": "2026-09-26", "reason": "completed_position_id_partition_mismatch"}],
+        rows,
+        strict,
+        [
+            {"date": "2026-09-20", "reason": "legacy_completion_census_unsealed"},
+            {
+                "date": "2026-09-26",
+                "reason": "completed_position_id_partition_mismatch",
+            },
+        ],
     )
     assert quality["complete"] is True
     assert quality["start_entry_day"] == "2026-09-25"
@@ -294,14 +332,22 @@ def test_mechanical_cohort_isolated_from_pre_generation_legacy_gap():
     assert quality["excluded_completed_ids"] == ["4"]
     assert {_trade_id["id"] for _trade_id in cohort} == {2, 3}
     _, blocked = report_mod._mechanical_completed_cohort(
-        rows, strict, [{"date": "2026-09-26", "reason": "snapshot_missing"}],
+        rows,
+        strict,
+        [{"date": "2026-09-26", "reason": "snapshot_missing"}],
     )
     assert blocked["complete"] is False
     assert blocked["source_gap_dates"][0]["date"] == "2026-09-26"
     _, unplaced = report_mod._mechanical_completed_cohort(
-        [*rows, {**_trade(5, rec_date="", sell_time="2026-09-26 10:00:00"),
-                 "completion_observed_date": "2026-09-26"}],
-        strict, [],
+        [
+            *rows,
+            {
+                **_trade(5, rec_date="", sell_time="2026-09-26 10:00:00"),
+                "completion_observed_date": "2026-09-26",
+            },
+        ],
+        strict,
+        [],
     )
     assert unplaced["complete"] is False
     assert unplaced["unplaced_completed_ids"] == ["5"]
@@ -338,19 +384,21 @@ def test_trade_review_source_warning_cannot_become_valid_empty_population():
 
 def test_strict_completed_population_requires_each_prior_fill_snapshot():
     trade = _trade(42, rec_date="2026-09-22", sell_time="2026-09-24 09:40:00")
-    trade.update({
-        "completion_observed_date": "2026-09-24",
-        "strict_completion_status": "eligible",
-        "strict_completion_reasons": [],
-        "terminal_population_scope": "real_record_bound",
-        "sell_quantity_conserved": True,
-        "terminal_profit_rate_reconciled": True,
-        "realized_pnl_krw_source": "broker_fill_prices_fee_aware",
-        "prior_entry_snapshot_receipt": {"status": "sealed_entry_snapshot"},
-        "prior_fill_snapshot_receipts": {
-            "2026-09-22": {"status": "sealed_entry_snapshot"},
-        },
-    })
+    trade.update(
+        {
+            "completion_observed_date": "2026-09-24",
+            "strict_completion_status": "eligible",
+            "strict_completion_reasons": [],
+            "terminal_population_scope": "real_record_bound",
+            "sell_quantity_conserved": True,
+            "terminal_profit_rate_reconciled": True,
+            "realized_pnl_krw_source": "broker_fill_prices_fee_aware",
+            "prior_entry_snapshot_receipt": {"status": "sealed_entry_snapshot"},
+            "prior_fill_snapshot_receipts": {
+                "2026-09-22": {"status": "sealed_entry_snapshot"},
+            },
+        }
+    )
     reasons = report_mod._strict_completed_reasons(trade, clean_start="2026-06-05")
     assert reasons == ["source_gap_prior_fill_snapshot_unsealed"]
     trade["prior_fill_snapshot_receipts"]["2026-09-23"] = {
@@ -359,37 +407,64 @@ def test_strict_completed_population_requires_each_prior_fill_snapshot():
     assert report_mod._strict_completed_reasons(trade, clean_start="2026-06-05") == []
 
 
-def test_strict_completed_population_partitions_exit_and_forward_layers(monkeypatch, tmp_path):
+def test_strict_completed_population_partitions_exit_and_forward_layers(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
     trades = [
-        _trade(1, rec_date="2026-09-24", buy_time="2026-09-24 09:00:00",
-               sell_time="2026-09-24 09:10:00", realized_pnl_krw=40),
-        _trade(2, rec_date="2026-09-24", buy_time="2026-09-24 09:20:00",
-               sell_time="2026-09-24 09:30:00", exit_rule="scalp_soft_stop_pct",
-               realized_pnl_krw=-20),
-        _trade(3, rec_date="2026-09-24", buy_time="2026-09-24 10:00:00",
-               sell_time="2026-09-24 10:10:00", realized_pnl_krw=100),
-        _trade(4, rec_date="2026-09-24", buy_time="2026-09-24 10:20:00",
-               sell_time="2026-09-24 10:30:00", profit_rate=None,
-               realized_pnl_krw=200),
+        _trade(
+            1,
+            rec_date="2026-09-24",
+            buy_time="2026-09-24 09:00:00",
+            sell_time="2026-09-24 09:10:00",
+            realized_pnl_krw=40,
+        ),
+        _trade(
+            2,
+            rec_date="2026-09-24",
+            buy_time="2026-09-24 09:20:00",
+            sell_time="2026-09-24 09:30:00",
+            exit_rule="scalp_soft_stop_pct",
+            realized_pnl_krw=-20,
+        ),
+        _trade(
+            3,
+            rec_date="2026-09-24",
+            buy_time="2026-09-24 10:00:00",
+            sell_time="2026-09-24 10:10:00",
+            realized_pnl_krw=100,
+        ),
+        _trade(
+            4,
+            rec_date="2026-09-24",
+            buy_time="2026-09-24 10:20:00",
+            sell_time="2026-09-24 10:30:00",
+            profit_rate=None,
+            realized_pnl_krw=200,
+        ),
     ]
     for trade in trades:
-        trade.update({
-            "completion_observed_date": "2026-09-24",
-            "strict_completion_status": "eligible",
-            "strict_completion_reasons": [],
-            "terminal_population_scope": "real_record_bound",
-            "sell_quantity_conserved": True,
-            "terminal_profit_rate_reconciled": True,
-            "realized_pnl_krw_source": "broker_fill_prices_fee_aware",
-        })
+        trade.update(
+            {
+                "completion_observed_date": "2026-09-24",
+                "strict_completion_status": "eligible",
+                "strict_completion_reasons": [],
+                "terminal_population_scope": "real_record_bound",
+                "sell_quantity_conserved": True,
+                "terminal_profit_rate_reconciled": True,
+                "realized_pnl_krw_source": "broker_fill_prices_fee_aware",
+            }
+        )
     trades[2]["strict_completion_status"] = "excluded"
     trades[2]["strict_completion_reasons"] = ["source_gap_buy_fill_missing"]
     _write_json(
         tmp_path / "report" / "monitor_snapshots" / "trade_review_2026-09-24.json",
-        {"date": "2026-09-24", "meta": {"sell_completed_event_ids": [1, 2, 3, 4]},
-         "metrics": {"canonical_completed_trades": 4},
-         "sections": {"completed_trade_projection": trades}},
+        {
+            "date": "2026-09-24",
+            "meta": {"sell_completed_event_ids": [1, 2, 3, 4]},
+            "metrics": {"canonical_completed_trades": 4},
+            "sections": {"completed_trade_projection": trades},
+        },
     )
 
     report = report_mod.build_holding_exit_observation_report(
@@ -405,12 +480,17 @@ def test_strict_completed_population_partitions_exit_and_forward_layers(monkeypa
     assert [row["record_id"] for row in report["position_outcomes"]] == ["1", "2"]
     operational = report["trailing_operational_input_replay"]
     assert operational["strict_completed_position_ids"] == ["1", "2"]
-    assert operational["decision_authority"] == "report_only_shared_owner_review_required"
+    assert (
+        operational["decision_authority"] == "report_only_shared_owner_review_required"
+    )
     assert operational["research_candidate"] is None
     coverage = report["position_outcome_coverage"]
     assert coverage["exit_class_ids"]["trailing_observed"] == ["1"]
     assert coverage["exit_class_ids"]["other_exit_observed"] == ["2"]
-    assert coverage["post_sell_layer_ids"]["not_observable_no_exact_fill_time"] == ["1", "2"]
+    assert coverage["post_sell_layer_ids"]["not_observable_no_exact_fill_time"] == [
+        "1",
+        "2",
+    ]
     assert coverage["whole_cohort_pnl_krw"] is None
     funnel = report["trailing_threshold_readiness"]["funnel_ids"]
     assert funnel["completed_valid_ids"] == ["1", "2", "3"]
@@ -476,9 +556,11 @@ def test_position_outcome_distinguishes_exact_cost_ai_and_post_sell_quality():
             "signal_date": "2026-09-23",
             "sell_time": "09:40:00",
             "exact_sell_fill_time": "2026-09-23T09:40:00+09:00",
-            "sell_order_no": "S1", "sell_execution_no": "SE1",
+            "sell_order_no": "S1",
+            "sell_execution_no": "SE1",
             "market_axes_source_quality_status": "route_contract_ready",
-            "actual_execution_venue": "KRX", "broker_route_requested": "KRX",
+            "actual_execution_venue": "KRX",
+            "broker_route_requested": "KRX",
             "minute_candle_source_quality": "partial_window",
             "metrics_10m": {"mfe_pct": 0.5},
             "outcome": "MISSED_UPSIDE",
@@ -521,9 +603,11 @@ def test_post_sell_pass_requires_mature_horizons_and_matching_anchor():
         "signal_date": "2026-09-23",
         "sell_time": "09:40:00",
         "exact_sell_fill_time": "2026-09-23T09:40:00+09:00",
-        "sell_order_no": "S1", "sell_execution_no": "SE1",
+        "sell_order_no": "S1",
+        "sell_execution_no": "SE1",
         "market_axes_source_quality_status": "route_contract_ready",
-        "actual_execution_venue": "KRX", "broker_route_requested": "KRX",
+        "actual_execution_venue": "KRX",
+        "broker_route_requested": "KRX",
         "evaluated_at": "2026-09-23T09:45:00",
         "minute_candle_source_quality": "pass",
         **{f"metrics_{minute}m": {"bars": 1} for minute in (1, 3, 5, 10)},
@@ -559,22 +643,24 @@ def test_sor_krx_user_override_keeps_real_fill_in_postclose_without_fake_venue()
         buy_time="2026-09-23 09:30:00",
         sell_time="2026-09-23 09:40:00",
     )
-    trade.update({
-        "exact_sell_fill_time": "2026-09-23T09:40:00+09:00",
-        "market_session_bucket": "krx_regular",
-        "exit_execution_broker_route": "SOR",
-        "terminal_population_scope": "real_record_bound",
-        "terminal_decision_authority": "broker_sell_fill_observation_only",
-        "sell_quantity_conserved": True,
-        "realized_pnl_krw_source": "broker_fill_prices_fee_aware",
-        "broker_actual_execution_venue": "UNKNOWN",
-        "broker_actual_execution_venue_source": (
-            "official_exchange_fields_ambiguous_or_missing"
-        ),
-        "broker_actual_exchange_code": "0",
-        "broker_actual_exchange_name": "SOR",
-        "broker_sor_flag": "Y",
-    })
+    trade.update(
+        {
+            "exact_sell_fill_time": "2026-09-23T09:40:00+09:00",
+            "market_session_bucket": "krx_regular",
+            "exit_execution_broker_route": "SOR",
+            "terminal_population_scope": "real_record_bound",
+            "terminal_decision_authority": "broker_sell_fill_observation_only",
+            "sell_quantity_conserved": True,
+            "realized_pnl_krw_source": "broker_fill_prices_fee_aware",
+            "broker_actual_execution_venue": "UNKNOWN",
+            "broker_actual_execution_venue_source": (
+                "official_exchange_fields_ambiguous_or_missing"
+            ),
+            "broker_actual_exchange_code": "0",
+            "broker_actual_exchange_name": "SOR",
+            "broker_sor_flag": "Y",
+        }
+    )
     candidate = {
         "post_sell_id": "sor-1",
         "recommendation_id": 1,
@@ -609,8 +695,11 @@ def test_sor_krx_user_override_keeps_real_fill_in_postclose_without_fake_venue()
     assert coverage["full_post_sell_user_override_trades"] == 1
     assert coverage["sor_krx_reference_user_override_ids"] == ["1"]
 
-    cost_unknown = {**trade, "realized_pnl_krw": None,
-                    "realized_pnl_krw_source": "missing_exact_cost"}
+    cost_unknown = {
+        **trade,
+        "realized_pnl_krw": None,
+        "realized_pnl_krw_source": "missing_exact_cost",
+    }
     retained, retained_coverage = report_mod._build_position_outcomes(
         [cost_unknown], [candidate]
     )
@@ -700,11 +789,11 @@ def test_trailing_direct_input_receipt_preserves_trigger_and_source_gap():
     trade["timeline"].append(
         {
             "stage": "scalp_trailing_input_transition",
-                "fields": {
-                    "armed": True,
-                    "triggered": True,
-                    "classifier_version": "mechanical_strength_v1",
-                    "classifier_state": "WEAK",
+            "fields": {
+                "armed": True,
+                "triggered": True,
+                "classifier_version": "mechanical_strength_v1",
+                "classifier_state": "WEAK",
                 "source_gap": False,
                 "evaluation_at_epoch": 1780000001.0,
                 "bid_source_received_at_epoch": 1780000000.9,
@@ -738,9 +827,7 @@ def test_trailing_direct_input_receipt_preserves_trigger_and_source_gap():
     assert outcomes[0]["exit_threshold_peak_price"] == 10110
     assert outcomes[0]["exit_threshold_executable_bid"] == 10060
     assert outcomes[0]["exit_threshold_ai_score_usable"] is False
-    assert outcomes[0]["tp_alternative_observed_rules"] == [
-        "scalp_ai_momentum_decay"
-    ]
+    assert outcomes[0]["tp_alternative_observed_rules"] == ["scalp_ai_momentum_decay"]
     readiness = report_mod._build_trailing_threshold_readiness(outcomes)
     assert readiness["funnel_ids"]["direct_signal_ids"] == []
     assert readiness["funnel_ids"]["terminal_custody_unproven_ids"] == ["1"]
@@ -748,10 +835,11 @@ def test_trailing_direct_input_receipt_preserves_trigger_and_source_gap():
     assert readiness["axes"]["SCALP_TRAILING_START_PCT"]["qualified_input_count"] == 0
     assert "AI_HOLDING_FAST_REUSE_CRITICAL_SEC" not in readiness["operational_axes"]
     assert "AI_HOLDING_FAST_REUSE_NORMAL_SEC" not in readiness["operational_axes"]
-    assert "KORSTOCKSCAN_QUOTE_CONSISTENCY_OK_GAP_BPS" not in readiness["operational_axes"]
+    assert (
+        "KORSTOCKSCAN_QUOTE_CONSISTENCY_OK_GAP_BPS" not in readiness["operational_axes"]
+    )
     assert all(
-        axis["candidate_value"] is None
-        and axis["eligible_for_live_review"] is False
+        axis["candidate_value"] is None and axis["eligible_for_live_review"] is False
         for axis in readiness["axes"].values()
     )
 
@@ -759,7 +847,8 @@ def test_trailing_direct_input_receipt_preserves_trigger_and_source_gap():
 def test_trailing_market_vector_payload_change_cannot_share_one_claimed_hash():
     from src.engine.scalping.trailing_four_axis_replay import DEFAULT_VECTOR
     from src.engine.scalping.trailing_threshold_policy import (
-        START_MARKETS, market_values_hash,
+        START_MARKETS,
+        market_values_hash,
     )
 
     trade = _trade(1)
@@ -768,15 +857,17 @@ def test_trailing_market_vector_payload_change_cannot_share_one_claimed_hash():
     altered["REGULAR"]["SCALP_TRAILING_LIMIT_STRONG"] = 0.9
     claimed_hash = market_values_hash(vector)
     for sequence, payload in enumerate((vector, altered), 1):
-        trade["timeline"].append({
-            "stage": "scalp_trailing_input_transition",
-            "fields": {
-                "event_sequence": sequence,
-                "position_key": "record:1",
-                "scalp_trailing_market_values": payload,
-                "scalp_trailing_market_values_sha256": claimed_hash,
-            },
-        })
+        trade["timeline"].append(
+            {
+                "stage": "scalp_trailing_input_transition",
+                "fields": {
+                    "event_sequence": sequence,
+                    "position_key": "record:1",
+                    "scalp_trailing_market_values": payload,
+                    "scalp_trailing_market_values_sha256": claimed_hash,
+                },
+            }
+        )
 
     outcomes, _ = report_mod._build_position_outcomes([trade], [])
     assert outcomes[0]["trailing_market_values"] is None
@@ -967,9 +1058,12 @@ def test_holding_exit_observation_report_splits_required_cohorts(monkeypatch, tm
         "source_gap_paired_replay_unavailable"
     )
     assert report["economic_input_complete"] is False
-    assert report["trailing_threshold_readiness"]["axes"][
-        "SCALP_TRAILING_LIMIT_WEAK"
-    ]["candidate_value"] is None
+    assert (
+        report["trailing_threshold_readiness"]["axes"]["SCALP_TRAILING_LIMIT_WEAK"][
+            "candidate_value"
+        ]
+        is None
+    )
     assert report["soft_stop_rebound"]["cooldown_live_allowed"] is False
     assert report["same_symbol_reentry"]["after_soft_stop_next_loss_count"] == 0
     assert report["opportunity_cost"]["outcome_counts"]["MISSED_WINNER"] == 3
@@ -1057,7 +1151,9 @@ def test_holding_exit_observation_defaults_to_clean_baseline_window(
     assert {
         item["date"]
         for item in report["completed_population_quality"]["source_gap_dates"]
-    } == {"2026-06-05"}  # Missing closed Saturday is not a trading census gap.
+    } == {
+        "2026-06-05"
+    }  # Missing closed Saturday is not a trading census gap.
 
 
 def test_holding_exit_observation_uses_calendar_month_when_baseline_disabled(
@@ -1126,19 +1222,38 @@ def test_target_pipeline_summary_streams_large_rows(monkeypatch, tmp_path):
 
 def test_forward_refresh_window_excludes_old_generation_without_erasing_old_cost_rows():
     from src.engine.scalping.trailing_mechanical_strength import VERSION
-    start, window = report_mod._analysis_window_start(target_date="2026-10-08", month_start=None)
+
+    start, window = report_mod._analysis_window_start(
+        target_date="2026-10-08", month_start=None
+    )
     assert start == "2026-09-29"
     assert window["evaluation_start_date"] == "2026-09-29"
-    _, audit = report_mod._analysis_window_start(target_date="2026-10-08", month_start="2026-09-01")
+    _, audit = report_mod._analysis_window_start(
+        target_date="2026-10-08", month_start="2026-09-01"
+    )
     assert audit["start_date"] == "2026-09-01"
     assert audit["evaluation_start_date"] == "2026-09-29"
     assert audit["eligible_for_successor_selection"] is False
     old = _trade(1, rec_date="2026-09-23", sell_time="2026-10-08 10:00:00")
-    old["timeline"].append({"stage": "scalp_trailing_input_transition", "fields": {"classifier_version": VERSION}})
+    old["timeline"].append(
+        {
+            "stage": "scalp_trailing_input_transition",
+            "fields": {"classifier_version": VERSION},
+        }
+    )
     current = _trade(2, rec_date="2026-10-08")
-    current["timeline"].append({"stage": "scalp_trailing_input_transition", "fields": {"classifier_version": VERSION}})
-    rows, quality = report_mod._mechanical_completed_cohort([old, current], [old, current],
-        [{"date": "2026-09-28", "reason": "legacy_missing"}], target_date="2026-10-08")
+    current["timeline"].append(
+        {
+            "stage": "scalp_trailing_input_transition",
+            "fields": {"classifier_version": VERSION},
+        }
+    )
+    rows, quality = report_mod._mechanical_completed_cohort(
+        [old, current],
+        [old, current],
+        [{"date": "2026-09-28", "reason": "legacy_missing"}],
+        target_date="2026-10-08",
+    )
     assert quality["complete"] is True
     assert quality["start_entry_day"] == "2026-09-29"
     assert [row["id"] for row in rows] == [2]
@@ -1147,44 +1262,101 @@ def test_forward_refresh_window_excludes_old_generation_without_erasing_old_cost
 
 
 def test_publisher_and_bootstrap_share_forward_window_guard():
-    from src.engine.scalping.trailing_mechanical_policy import verify_forward_window, CLASSIFIER_VERSION
+    from src.engine.scalping.trailing_mechanical_policy import (
+        verify_forward_window,
+        CLASSIFIER_VERSION,
+    )
     import pytest
-    report = {"analysis_window": report_mod._analysis_window_start(target_date="2026-10-08", month_start=None)[1],
-              "mechanical_population_quality": {"policy_refresh_start_date": "2026-09-29",
-                 "start_entry_day": "2026-09-29", "classifier_version": CLASSIFIER_VERSION}}
+
+    report = {
+        "analysis_window": report_mod._analysis_window_start(
+            target_date="2026-10-08", month_start=None
+        )[1],
+        "mechanical_population_quality": {
+            "policy_refresh_start_date": "2026-09-29",
+            "start_entry_day": "2026-09-29",
+            "classifier_version": CLASSIFIER_VERSION,
+        },
+    }
     verify_forward_window(report, "2026-10-08")
     report["analysis_window"]["start_date"] = "2026-06-05"
     with pytest.raises(ValueError, match="selection_forward_window_invalid"):
         verify_forward_window(report, "2026-10-08")
-    report["analysis_window"] = report_mod._analysis_window_start(target_date="2026-10-08", month_start="2026-09-01")[1]
+    report["analysis_window"] = report_mod._analysis_window_start(
+        target_date="2026-10-08", month_start="2026-09-01"
+    )[1]
     with pytest.raises(ValueError, match="selection_forward_window_invalid"):
         verify_forward_window(report, "2026-10-08")
 
 
-@pytest.mark.parametrize('hour', [10, 17])
-@pytest.mark.parametrize('route', ['KRX', 'NXT', 'SOR'])
-@pytest.mark.parametrize('fault', [None, 'order', 'execution', 'clock', 'route', 'authority', 'fake_verified', 'custody'])
+@pytest.mark.parametrize("hour", [10, 17])
+@pytest.mark.parametrize("route", ["KRX", "NXT", "SOR"])
+@pytest.mark.parametrize(
+    "fault",
+    [
+        None,
+        "order",
+        "execution",
+        "clock",
+        "route",
+        "authority",
+        "fake_verified",
+        "custody",
+    ],
+)
 def test_operator_krx_sor_defaults_close_only_attribution_gap(hour, route, fault):
-    from src.trading.market.execution_venue import execution_venue_fields, MARKET_DEFAULT_AUTHORITY
-    at = f'2026-10-21T{hour}:10:00+09:00'
-    native = dict(broker_actual_execution_venue='UNKNOWN',
-                  broker_actual_execution_venue_source='official_exchange_fields_ambiguous_or_missing')
+    from src.trading.market.execution_venue import (
+        execution_venue_fields,
+        MARKET_DEFAULT_AUTHORITY,
+    )
+
+    at = f"2026-10-21T{hour}:10:00+09:00"
+    native = dict(
+        broker_actual_execution_venue="UNKNOWN",
+        broker_actual_execution_venue_source="official_exchange_fields_ambiguous_or_missing",
+    )
     assignment = execution_venue_fields(native, observed_at=at)
-    trade = dict(native, **assignment, effective_venue='KRX', exact_sell_fill_time=at,
-        sell_order_no='1', sell_execution_no='2', exit_execution_broker_route=route,
-        terminal_population_scope='real_record_bound',
-        terminal_decision_authority='broker_sell_fill_observation_only', sell_quantity_conserved=True,
-        realized_pnl_krw=None)
-    candidate = dict(native, **assignment, exact_sell_fill_time=at, sell_order_no='1', sell_execution_no='2',
-        market_axes_source_quality_status='route_contract_ready', broker_route_requested=route)
-    assert assignment['execution_venue_override'] == MARKET_DEFAULT_AUTHORITY
-    changes = dict(order=('sell_order_no','other'), execution=('sell_execution_no','other'),
-                   clock=('exact_sell_fill_time',at.replace(':10:',':11:')), route=('broker_route_requested','CONFLICT'),
-                   authority=('execution_venue_override','unapproved'), fake_verified=('actual_execution_venue_verified',True))
+    trade = dict(
+        native,
+        **assignment,
+        effective_venue="KRX",
+        exact_sell_fill_time=at,
+        sell_order_no="1",
+        sell_execution_no="2",
+        exit_execution_broker_route=route,
+        terminal_population_scope="real_record_bound",
+        terminal_decision_authority="broker_sell_fill_observation_only",
+        sell_quantity_conserved=True,
+        realized_pnl_krw=None,
+    )
+    candidate = dict(
+        native,
+        **assignment,
+        exact_sell_fill_time=at,
+        sell_order_no="1",
+        sell_execution_no="2",
+        market_axes_source_quality_status="route_contract_ready",
+        broker_route_requested=route,
+    )
+    assert assignment["execution_venue_override"] == MARKET_DEFAULT_AUTHORITY
+    changes = dict(
+        order=("sell_order_no", "other"),
+        execution=("sell_execution_no", "other"),
+        clock=("exact_sell_fill_time", at.replace(":10:", ":11:")),
+        route=("broker_route_requested", "CONFLICT"),
+        authority=("execution_venue_override", "unapproved"),
+        fake_verified=("actual_execution_venue_verified", True),
+    )
     if fault in changes:
-        key, value = changes[fault]; candidate[key] = value
-    if fault == 'custody':trade['sell_quantity_conserved'] = False
-    gap = report_mod._post_sell_binding_gap(trade,candidate)
+        key, value = changes[fault]
+        candidate[key] = value
+    if fault == "custody":
+        trade["sell_quantity_conserved"] = False
+    gap = report_mod._post_sell_binding_gap(trade, candidate)
     assert (gap is None) is (fault is None)
-    assert trade['broker_actual_execution_venue'] == candidate['broker_actual_execution_venue'] == 'UNKNOWN'
-    assert trade['realized_pnl_krw'] is None
+    assert (
+        trade["broker_actual_execution_venue"]
+        == candidate["broker_actual_execution_venue"]
+        == "UNKNOWN"
+    )
+    assert trade["realized_pnl_krw"] is None

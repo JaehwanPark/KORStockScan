@@ -3,6 +3,7 @@
 Scalping validates policy sources; deployment owns the dated receipt. This
 never selects a policy or changes thresholds, memberships, or order authority.
 """
+
 from __future__ import annotations
 import json
 import subprocess
@@ -11,101 +12,170 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from src.engine.scalping import continuous_reversal_postclose as P
 
-SCHEMA='main_active_policy_code_handoff_v1'
-AUTHORITY='APPROVED_REVIEWED_ACTIVE_POLICY_CODE_HANDOFF'
+SCHEMA = "main_active_policy_code_handoff_v1"
+AUTHORITY = "APPROVED_REVIEWED_ACTIVE_POLICY_CODE_HANDOFF"
 
 
 def code_hashes():
     from src.engine.scalping.continuous_reversal_policy_v6 import contract_modules
-    return {str(Path(m.__file__).resolve()):P.file_hash(m.__file__) for m in contract_modules()} | {
-        str(Path(__file__).resolve()):P.file_hash(__file__)}
+
+    return {
+        str(Path(m.__file__).resolve()): P.file_hash(m.__file__)
+        for m in contract_modules()
+    } | {str(Path(__file__).resolve()): P.file_hash(__file__)}
 
 
-def path(data_root,day,commit,bundle_sha):
-    return Path(data_root)/'runtime/mechanistic_entry_policy/code_handoffs'/day/commit/(bundle_sha+'.json')
+def path(data_root, day, commit, bundle_sha):
+    return (
+        Path(data_root)
+        / "runtime/mechanistic_entry_policy/code_handoffs"
+        / day
+        / commit
+        / (bundle_sha + ".json")
+    )
 
 
 def validate_receipt(receipt, *, day, commit, root, bundle_sha, pointer_sha):
-    if (receipt.get('schema')!=SCHEMA or receipt.get('authority')!=AUTHORITY
-            or receipt.get('artifact_content_sha256')!=P.seal(receipt)['artifact_content_sha256']
-            or receipt.get('target_date')!=day or receipt.get('release_commit')!=commit
-            or receipt.get('release_root')!=str(root) or receipt.get('bundle_sha256')!=bundle_sha
-            or receipt.get('current_pointer_sha256')!=pointer_sha
-            or receipt.get('policy_reselected') is not False
-            or receipt.get('provider_called') is not False
-            or not receipt.get('source_hashes') or not receipt.get('code_hashes')):
-        raise ValueError('active_policy_code_handoff_invalid')
+    if (
+        receipt.get("schema") != SCHEMA
+        or receipt.get("authority") != AUTHORITY
+        or receipt.get("artifact_content_sha256")
+        != P.seal(receipt)["artifact_content_sha256"]
+        or receipt.get("target_date") != day
+        or receipt.get("release_commit") != commit
+        or receipt.get("release_root") != str(root)
+        or receipt.get("bundle_sha256") != bundle_sha
+        or receipt.get("current_pointer_sha256") != pointer_sha
+        or receipt.get("policy_reselected") is not False
+        or receipt.get("provider_called") is not False
+        or not receipt.get("source_hashes")
+        or not receipt.get("code_hashes")
+    ):
+        raise ValueError("active_policy_code_handoff_invalid")
     return receipt
 
 
-def _validated_origin_receipt(data_root, day, origin_root, origin_commit, bundle_sha, pointer_sha):
+def _validated_origin_receipt(
+    data_root, day, origin_root, origin_commit, bundle_sha, pointer_sha
+):
     """Reuse native sealed ancestry under the approved pipeline-reference scope."""
     from src.engine.scalping import mechanistic_entry_runtime_policy as N
+
     source = path(data_root, day, origin_commit, bundle_sha)
     if not source.exists():
         return None
     receipt = N._read(source)
-    validate_receipt(receipt, day=day, commit=origin_commit, root=origin_root,
-                     bundle_sha=bundle_sha, pointer_sha=pointer_sha)
-    for name, expected in {**receipt['source_hashes'], **receipt['code_hashes']}.items():
-        if not N.source_receipt_matches(dict(path=name, sha256=expected), data_root=data_root):
-            raise ValueError('active_policy_origin_receipt_source_changed:' + name)
-    refs = {**receipt['source_hashes'], **receipt['code_hashes']}
+    validate_receipt(
+        receipt,
+        day=day,
+        commit=origin_commit,
+        root=origin_root,
+        bundle_sha=bundle_sha,
+        pointer_sha=pointer_sha,
+    )
+    for name, expected in {
+        **receipt["source_hashes"],
+        **receipt["code_hashes"],
+    }.items():
+        if not N.source_receipt_matches(
+            dict(path=name, sha256=expected), data_root=data_root
+        ):
+            raise ValueError("active_policy_origin_receipt_source_changed:" + name)
+    refs = {**receipt["source_hashes"], **receipt["code_hashes"]}
     refs[str(source.resolve())] = P.file_hash(source)
-    return dict(bundle_sha256=bundle_sha, source_hashes=refs,
-                verification_basis='native_sealed_code_handoff_pipeline_references')
+    return dict(
+        bundle_sha256=bundle_sha,
+        source_hashes=refs,
+        verification_basis="native_sealed_code_handoff_pipeline_references",
+    )
 
 
-def validate(bundle,data_root,*,original_error):
+def validate(bundle, data_root, *, original_error):
     from src.engine.scalping import mechanistic_entry_runtime_policy as N
     from src.engine.infrastructure.runtime_release_router import selected_release
-    day=datetime.now(P.KST).date().isoformat();root,commit=selected_release(Path(data_root).resolve().parent)
+
+    day = datetime.now(P.KST).date().isoformat()
+    root, commit = selected_release(Path(data_root).resolve().parent)
     # Include the selector in the native dependency cache; a later selection
     # cannot keep the preceding compatibility result alive.
-    selection=N._read(Path(data_root)/'runtime/runtime_release_selection.json')
-    if selection.get('git_commit')!=commit or selection.get('release_root')!=str(root):
-        raise ValueError('active_policy_code_selection_changed')
+    selection = N._read(Path(data_root) / "runtime/runtime_release_selection.json")
+    if selection.get("git_commit") != commit or selection.get("release_root") != str(
+        root
+    ):
+        raise ValueError("active_policy_code_selection_changed")
     selected_root, selected_commit = root, commit
     review = None
     if root != Path(__file__).resolve().parents[3]:
         from src.engine.automation import intraday_release_handoff as handoff
+
         review = handoff._PREDECESSOR_REVIEW.get()
-        if not handoff.predecessor_review_matches(review, day, root, commit, Path(__file__).resolve().parents[3]):
-            raise ValueError('active_policy_code_reader_root_changed')
-        root, commit = review['code_root'], review['code_commit']
+        if not handoff.predecessor_review_matches(
+            review, day, root, commit, Path(__file__).resolve().parents[3]
+        ):
+            raise ValueError("active_policy_code_reader_root_changed")
+        root, commit = review["code_root"], review["code_commit"]
     # The authenticated review uses its own dated receipt. Requiring a second
     # receipt for the unchanged selected code would prevent a midnight review.
-    receipt_path=path(data_root,day,commit,bundle['bundle_sha256'])
+    receipt_path = path(data_root, day, commit, bundle["bundle_sha256"])
     # Preserve the native reason for unregistered code and tomorrow's parent
     # transition. There is no generic historical-loader fallback.
-    if not receipt_path.exists():raise original_error
-    if root!=Path(__file__).resolve().parents[3]:raise ValueError('active_policy_code_reader_root_changed')
-    pointer=N.root(Path(data_root))/'current.json'
-    pointer_sha=N._source_hash(str(pointer),N._signature(pointer))
-    r=N._read(receipt_path)
-    validate_receipt(r,day=day,commit=commit,root=root,bundle_sha=bundle['bundle_sha256'],pointer_sha=pointer_sha)
-    if review is not None and (r.get('origin_root') != str(selected_root)
-            or r.get('origin_commit') != selected_commit
-            or r.get('origin_selection_sha256') != P.file_hash(Path(data_root)/'runtime/runtime_release_selection.json')
-            or r.get('actual_pid_consumed') is not False):
-        raise ValueError('active_policy_predecessor_review_unbound')
-    current={str(Path(m.__file__).resolve()) for m in __import__(
-        'src.engine.scalping.continuous_reversal_policy_v6',fromlist=['contract_modules']).contract_modules()} | {str(Path(__file__).resolve())}
-    if set(r['code_hashes'])!=current:raise ValueError('active_policy_code_membership_changed')
-    for name,expected in {**r['source_hashes'],**r['code_hashes']}.items():
-        if not N.source_receipt_matches(dict(path=name,sha256=expected),data_root=data_root):
-            raise ValueError('active_policy_code_handoff_source_changed:'+name)
-    if N._read(pointer)['bundle_sha256']!=bundle['bundle_sha256']:
-        raise ValueError('active_policy_code_handoff_pointer_changed')
-    if review is not None and (selected_release(Path(data_root).resolve().parent) != (selected_root, selected_commit)
-            or N._read(Path(data_root)/'runtime/runtime_release_selection.json') != selection
-            or not handoff.predecessor_review_matches(review, day, selected_root, selected_commit,
-                Path(__file__).resolve().parents[3])):
-        raise ValueError('active_policy_predecessor_review_changed')
+    if not receipt_path.exists():
+        raise original_error
+    if root != Path(__file__).resolve().parents[3]:
+        raise ValueError("active_policy_code_reader_root_changed")
+    pointer = N.root(Path(data_root)) / "current.json"
+    pointer_sha = N._source_hash(str(pointer), N._signature(pointer))
+    r = N._read(receipt_path)
+    validate_receipt(
+        r,
+        day=day,
+        commit=commit,
+        root=root,
+        bundle_sha=bundle["bundle_sha256"],
+        pointer_sha=pointer_sha,
+    )
+    if review is not None and (
+        r.get("origin_root") != str(selected_root)
+        or r.get("origin_commit") != selected_commit
+        or r.get("origin_selection_sha256")
+        != P.file_hash(Path(data_root) / "runtime/runtime_release_selection.json")
+        or r.get("actual_pid_consumed") is not False
+    ):
+        raise ValueError("active_policy_predecessor_review_unbound")
+    current = {
+        str(Path(m.__file__).resolve())
+        for m in __import__(
+            "src.engine.scalping.continuous_reversal_policy_v6",
+            fromlist=["contract_modules"],
+        ).contract_modules()
+    } | {str(Path(__file__).resolve())}
+    if set(r["code_hashes"]) != current:
+        raise ValueError("active_policy_code_membership_changed")
+    for name, expected in {**r["source_hashes"], **r["code_hashes"]}.items():
+        if not N.source_receipt_matches(
+            dict(path=name, sha256=expected), data_root=data_root
+        ):
+            raise ValueError("active_policy_code_handoff_source_changed:" + name)
+    if N._read(pointer)["bundle_sha256"] != bundle["bundle_sha256"]:
+        raise ValueError("active_policy_code_handoff_pointer_changed")
+    if review is not None and (
+        selected_release(Path(data_root).resolve().parent)
+        != (selected_root, selected_commit)
+        or N._read(Path(data_root) / "runtime/runtime_release_selection.json")
+        != selection
+        or not handoff.predecessor_review_matches(
+            review,
+            day,
+            selected_root,
+            selected_commit,
+            Path(__file__).resolve().parents[3],
+        )
+    ):
+        raise ValueError("active_policy_predecessor_review_changed")
     return bundle
 
 
-_ORIGIN_SCRIPT = r'''
+_ORIGIN_SCRIPT = r"""
 import sys,json,hashlib
 from pathlib import Path
 from src.engine.scalping import mechanistic_entry_runtime_policy as N
@@ -167,297 +237,576 @@ for name,identity in (list(opened.items()) if prepared_refs is None else []):
     if identity!=(st.st_dev,st.st_ino,st.st_size,st.st_mtime_ns):raise ValueError('origin_source_changed_during_validation')
     refs[name]=N._source_hash(name,N._signature(p))
 print(json.dumps(dict(bundle_sha256=b['bundle_sha256'],source_hashes=refs)))
-'''
+"""
 
 
-def _stopped_origin_receipt(data_root, day, origin_root, origin_commit, bundle_sha, pointer_sha):
+def _stopped_origin_receipt(
+    data_root, day, origin_root, origin_commit, bundle_sha, pointer_sha
+):
     """Recover only the native ancestry of an exact failed selected transition."""
     from src.engine.automation import ordered_intraday_deploy as D
+
     workspace = Path(data_root).resolve().parent
-    selected, selected_raw, _ = D._owned_metadata(Path(data_root)/'runtime/runtime_release_selection.json')
-    failed_path = Path(data_root)/'runtime/release_transitions'/day/origin_commit/'status.json'
+    selected, selected_raw, _ = D._owned_metadata(
+        Path(data_root) / "runtime/runtime_release_selection.json"
+    )
+    failed_path = (
+        Path(data_root)
+        / "runtime/release_transitions"
+        / day
+        / origin_commit
+        / "status.json"
+    )
     failed, failed_raw, _ = D._owned_metadata(failed_path)
-    prior_path = failed_path.with_name('selection-before.json')
+    prior_path = failed_path.with_name("selection-before.json")
     prior, prior_raw, _ = D._owned_metadata(prior_path)
-    hold, hold_raw, _ = D._owned_metadata(Path(data_root)/'runtime/operator_startup_hold.json')
-    identity = failed.get('predecessor_identity')
+    hold, hold_raw, _ = D._owned_metadata(
+        Path(data_root) / "runtime/operator_startup_hold.json"
+    )
+    identity = failed.get("predecessor_identity")
     preparation_sources = D.stopped_preparation_failure_sources(failed, failed_path)
-    expected_hold = dict(schema='ordered_deployment_startup_hold_v1',authority=D.CONFIRM,
-        transition=str(failed_path),target_date=day,candidate_commit=origin_commit,old_pid_identity=identity)
-    if (selected.get('actual_pid_consumed') is not False
-            or selected.get('git_commit') != origin_commit or selected.get('release_root') != str(origin_root)
-            or selected.get('deployment_transition') != str(failed_path)
-            or selected.get('approval_scope') != 'ordered_intraday_deploy_and_restart'
-            or selected.get('approved_by') != 'user' or hold != expected_hold
-            or failed.get('schema') != 'ordered_intraday_deployment_v1' or failed.get('authority') != D.CONFIRM
-            or failed.get('phase') != 'failed' or failed.get('status') != 'fail'
-            or (failed.get('failed_phase') != 'selected' and not preparation_sources) or failed.get('target_date') != day
-            or failed.get('candidate_commit') != origin_commit or failed.get('candidate_root') != str(origin_root)
-            or (failed.get('error') != 'deployment_validation_failed:src.engine.automation.intraday_release_handoff'
-                and not preparation_sources)
-            or failed.get('policy_effect') != 'unchanged'
-            or failed.get('original_selection_sha256') != D._digest(prior_raw)
-            or prior.get('actual_pid_consumed') is not True
-            or prior.get('git_commit') != failed.get('previous_commit')
-            or prior.get('release_root') != failed.get('previous_root')
-            or not isinstance(identity,dict) or (prior.get('actual_pid_receipt') or {}).get('pid') != identity.get('pid')
-            or D._main_pids() or not D._session_absent()
-            or (workspace/'restart.flag').exists() or (workspace/'restart.flag').is_symlink()):
-        raise ValueError('active_policy_stopped_origin_invalid')
+    expected_hold = dict(
+        schema="ordered_deployment_startup_hold_v1",
+        authority=D.CONFIRM,
+        transition=str(failed_path),
+        target_date=day,
+        candidate_commit=origin_commit,
+        old_pid_identity=identity,
+    )
+    if (
+        selected.get("actual_pid_consumed") is not False
+        or selected.get("git_commit") != origin_commit
+        or selected.get("release_root") != str(origin_root)
+        or selected.get("deployment_transition") != str(failed_path)
+        or selected.get("approval_scope") != "ordered_intraday_deploy_and_restart"
+        or selected.get("approved_by") != "user"
+        or hold != expected_hold
+        or failed.get("schema") != "ordered_intraday_deployment_v1"
+        or failed.get("authority") != D.CONFIRM
+        or failed.get("phase") != "failed"
+        or failed.get("status") != "fail"
+        or (failed.get("failed_phase") != "selected" and not preparation_sources)
+        or failed.get("target_date") != day
+        or failed.get("candidate_commit") != origin_commit
+        or failed.get("candidate_root") != str(origin_root)
+        or (
+            failed.get("error")
+            != "deployment_validation_failed:src.engine.automation.intraday_release_handoff"
+            and not preparation_sources
+        )
+        or failed.get("policy_effect") != "unchanged"
+        or failed.get("original_selection_sha256") != D._digest(prior_raw)
+        or prior.get("actual_pid_consumed") is not True
+        or prior.get("git_commit") != failed.get("previous_commit")
+        or prior.get("release_root") != failed.get("previous_root")
+        or not isinstance(identity, dict)
+        or (prior.get("actual_pid_receipt") or {}).get("pid") != identity.get("pid")
+        or D._main_pids()
+        or not D._session_absent()
+        or (workspace / "restart.flag").exists()
+        or (workspace / "restart.flag").is_symlink()
+    ):
+        raise ValueError("active_policy_stopped_origin_invalid")
     previous, previous_commit = D.R.validate_release(workspace, prior)
-    proof = D._stopped_intraday_predecessor(day, previous, previous_commit, identity, failed_path)
-    checked = _validated_origin_receipt(data_root,day,previous,previous_commit,bundle_sha,pointer_sha)
+    proof = D._stopped_intraday_predecessor(
+        day, previous, previous_commit, identity, failed_path
+    )
+    checked = _validated_origin_receipt(
+        data_root, day, previous, previous_commit, bundle_sha, pointer_sha
+    )
     if checked is None:
-        raise ValueError('active_policy_stopped_native_ancestry_missing')
+        raise ValueError("active_policy_stopped_native_ancestry_missing")
     # The hold and selector are observed transition state, never frozen policy inputs.
-    if (D._owned_metadata(Path(data_root)/'runtime/runtime_release_selection.json')[1] != selected_raw
-            or D._owned_metadata(Path(data_root)/'runtime/operator_startup_hold.json')[1] != hold_raw
-            or failed_path.read_bytes() != failed_raw or prior_path.read_bytes() != prior_raw
-            or D._main_pids() or not D._session_absent()):
-        raise ValueError('active_policy_stopped_origin_changed')
+    if (
+        D._owned_metadata(Path(data_root) / "runtime/runtime_release_selection.json")[1]
+        != selected_raw
+        or D._owned_metadata(Path(data_root) / "runtime/operator_startup_hold.json")[1]
+        != hold_raw
+        or failed_path.read_bytes() != failed_raw
+        or prior_path.read_bytes() != prior_raw
+        or D._main_pids()
+        or not D._session_absent()
+    ):
+        raise ValueError("active_policy_stopped_origin_changed")
     if any(D.H._sha(path) != sha for path, sha in preparation_sources.items()):
-        raise ValueError('active_policy_stopped_preparation_changed')
-    checked['source_hashes'].update(preparation_sources)
-    checked['source_hashes'].update(proof['frozen_files'])
-    checked['source_hashes'].update({str(failed_path):D._digest(failed_raw),str(prior_path):D._digest(prior_raw)})
-    checked['verification_basis'] = 'verified_stopped_transition_original_native_code_ancestry'
+        raise ValueError("active_policy_stopped_preparation_changed")
+    checked["source_hashes"].update(preparation_sources)
+    checked["source_hashes"].update(proof["frozen_files"])
+    checked["source_hashes"].update(
+        {str(failed_path): D._digest(failed_raw), str(prior_path): D._digest(prior_raw)}
+    )
+    checked["verification_basis"] = (
+        "verified_stopped_transition_original_native_code_ancestry"
+    )
     return checked
 
 
-def _postclose_origin_receipt(data_root,day,source_date,origin_root,origin_commit,bundle_sha,pointer_sha,release_commit):
+def _postclose_origin_receipt(
+    data_root,
+    day,
+    source_date,
+    origin_root,
+    origin_commit,
+    bundle_sha,
+    pointer_sha,
+    release_commit,
+):
     """Bridge one midnight using exact stopped postclose/native ancestry.
 
     This is code-only custody for the unchanged active parent. It neither
     requires nor fabricates the downstream next-session policy/PREOPEN.
     """
     from src.engine.automation import ordered_intraday_deploy as D
-    root=Path(data_root).resolve();workspace=root.parent
-    if source_date!=(datetime.fromisoformat(day).date()-timedelta(days=1)).isoformat():
-        raise ValueError('active_policy_postclose_source_date_invalid')
-    selected,selected_raw,_=D._owned_metadata(root/'runtime/runtime_release_selection.json')
-    next_day=selected.get('next_operating_date')
+
+    root = Path(data_root).resolve()
+    workspace = root.parent
+    if (
+        source_date
+        != (datetime.fromisoformat(day).date() - timedelta(days=1)).isoformat()
+    ):
+        raise ValueError("active_policy_postclose_source_date_invalid")
+    selected, selected_raw, _ = D._owned_metadata(
+        root / "runtime/runtime_release_selection.json"
+    )
+    next_day = selected.get("next_operating_date")
     try:
-        canonical=datetime.fromisoformat(next_day).date().isoformat()
-    except (TypeError,ValueError):
-        raise ValueError('active_policy_postclose_next_date_invalid') from None
+        canonical = datetime.fromisoformat(next_day).date().isoformat()
+    except (TypeError, ValueError):
+        raise ValueError("active_policy_postclose_next_date_invalid") from None
+
     def stopped():
-        return (not D._main_pids() and D._session_absent()
-                and not (workspace/'restart.flag').exists() and not (workspace/'restart.flag').is_symlink()
-                and not (root/'runtime/operator_startup_hold.json').exists()
-                and not (root/'runtime/operator_startup_hold.json').is_symlink())
-    scope=selected.get('approval_scope')
-    transition_refs={}
-    if scope=='postclose_recovery_before_next_regular_start':
+        return (
+            not D._main_pids()
+            and D._session_absent()
+            and not (workspace / "restart.flag").exists()
+            and not (workspace / "restart.flag").is_symlink()
+            and not (root / "runtime/operator_startup_hold.json").exists()
+            and not (root / "runtime/operator_startup_hold.json").is_symlink()
+        )
+
+    scope = selected.get("approval_scope")
+    transition_refs = {}
+    if scope == "postclose_recovery_before_next_regular_start":
         # The original cold caller used this label before the midnight bridge.
         # Authenticate its native committed transaction, original consumption
         # and original candidate P5; never rewrite that historical selector.
         from src.engine.infrastructure import research_release_transition as T
-        backup=Path(selected.get('previous_selection_backup',''))
-        directory=backup.parent
-        if (not backup.is_absolute() or directory.parent!=root/'runtime/research_release_transition'
-                or directory.resolve()!=directory or backup.is_symlink()):
-            raise ValueError('active_policy_postclose_transition_path_invalid')
-        transition_path=directory/'transition.json'
-        transition,transition_raw,transition_identity=D._owned_metadata(transition_path)
-        if T._record(transition_path)!=transition:
-            raise ValueError('active_policy_postclose_transition_changed')
-        entries=transition.get('entries') or []
-        if (transition.get('state')!='verified' or transition.get('transition_id')!=directory.name
-                or len(entries)!=1 or transition.get('written')!=[str(root/'runtime/runtime_release_selection.json')]):
-            raise ValueError('active_policy_postclose_transition_invalid')
-        entry=entries[0];before,before_raw,before_identity=D._owned_metadata(backup)
-        after_path=directory/str(entry.get('after_snapshot',''))
-        if (entry.get('path')!=str(root/'runtime/runtime_release_selection.json')
-                or entry.get('before_snapshot')!=backup.name
-                or entry.get('before_sha256')!=D._digest(before_raw)
-                or selected.get('predecessor_selection_sha256')!=D._digest(before_raw)
-                or entry.get('after_sha256')!=D._digest(selected_raw)
-                or set(entry.get('accepted_sha256') or [])!={D._digest(before_raw),D._digest(selected_raw)}
-                or after_path.parent!=directory or after_path.name!='after-'+D._digest(selected_raw)+'.bytes'
-                or before.get('actual_pid_consumed') is not True
-                or before.get('git_commit')!=selected.get('previous_git_commit')
-                or before.get('release_root')!=selected.get('previous_release_root')):
-            raise ValueError('active_policy_postclose_transition_binding_invalid')
-        after,after_raw,after_identity=D._owned_metadata(after_path)
-        proof_path=Path(selected.get('candidate_p5_path',''))
-        if (not proof_path.is_absolute() or proof_path.resolve()!=proof_path
-                or proof_path.parent.parent!=root/'report/main_startup_validation'/source_date
-                or proof_path.name!='final.json'):
-            raise ValueError('active_policy_postclose_original_p5_path_invalid')
-        proof,proof_raw,proof_identity=D._owned_metadata(proof_path)
-        if (after_raw!=selected_raw or D._digest(proof_raw)!=selected.get('candidate_p5_sha256')
-                or proof.get('schema')!='main_policy_load_exit_validation_v1'
-                or proof.get('status')!='passed' or proof.get('findings')!=[]
-                or proof.get('target_date')!=source_date or proof.get('execution_release_root')!=str(origin_root)
-                or proof.get('execution_release_commit')!=origin_commit
-                or any(proof.get(k) is not True for k in ('child_terminated','load_check_passed','protected_sources_unchanged'))):
-            raise ValueError('active_policy_postclose_original_p5_invalid')
-        for p,raw,identity in ((transition_path,transition_raw,transition_identity),
-                (backup,before_raw,before_identity),(after_path,after_raw,after_identity),(proof_path,proof_raw,proof_identity)):
-            if D._owned_metadata(p)[1:]!=(raw,identity):
-                raise ValueError('active_policy_postclose_transition_changed')
-            transition_refs[str(p)]=D._digest(raw)
-        scope='after_postclose_deploy_for_next_regular_start'
-    if (not stopped() or selected.get('git_commit')!=origin_commit
-            or selected.get('release_root')!=str(origin_root)
-            or selected.get('source_date')!=source_date or selected.get('approved_by')!='user'
-            or scope!='after_postclose_deploy_for_next_regular_start'
-            or selected.get('actual_pid_consumed') is not False
-            or next_day!=canonical or next_day<day):
-        raise ValueError('active_policy_postclose_stopped_origin_invalid')
-    paths=[root/'runtime/update_kospi_status'/('update_kospi_'+source_date+'.json'),
-           root/'report/threshold_cycle_postclose_status'/('threshold_cycle_postclose_'+source_date+'.status.json')]
-    observed=[D._owned_metadata(p) for p in paths];eod,failed=(v[0] for v in observed)
-    state=eod.get('db_state') or {}
+
+        backup = Path(selected.get("previous_selection_backup", ""))
+        directory = backup.parent
+        if (
+            not backup.is_absolute()
+            or directory.parent != root / "runtime/research_release_transition"
+            or directory.resolve() != directory
+            or backup.is_symlink()
+        ):
+            raise ValueError("active_policy_postclose_transition_path_invalid")
+        transition_path = directory / "transition.json"
+        transition, transition_raw, transition_identity = D._owned_metadata(
+            transition_path
+        )
+        if T._record(transition_path) != transition:
+            raise ValueError("active_policy_postclose_transition_changed")
+        entries = transition.get("entries") or []
+        if (
+            transition.get("state") != "verified"
+            or transition.get("transition_id") != directory.name
+            or len(entries) != 1
+            or transition.get("written")
+            != [str(root / "runtime/runtime_release_selection.json")]
+        ):
+            raise ValueError("active_policy_postclose_transition_invalid")
+        entry = entries[0]
+        before, before_raw, before_identity = D._owned_metadata(backup)
+        after_path = directory / str(entry.get("after_snapshot", ""))
+        if (
+            entry.get("path") != str(root / "runtime/runtime_release_selection.json")
+            or entry.get("before_snapshot") != backup.name
+            or entry.get("before_sha256") != D._digest(before_raw)
+            or selected.get("predecessor_selection_sha256") != D._digest(before_raw)
+            or entry.get("after_sha256") != D._digest(selected_raw)
+            or set(entry.get("accepted_sha256") or [])
+            != {D._digest(before_raw), D._digest(selected_raw)}
+            or after_path.parent != directory
+            or after_path.name != "after-" + D._digest(selected_raw) + ".bytes"
+            or before.get("actual_pid_consumed") is not True
+            or before.get("git_commit") != selected.get("previous_git_commit")
+            or before.get("release_root") != selected.get("previous_release_root")
+        ):
+            raise ValueError("active_policy_postclose_transition_binding_invalid")
+        after, after_raw, after_identity = D._owned_metadata(after_path)
+        proof_path = Path(selected.get("candidate_p5_path", ""))
+        if (
+            not proof_path.is_absolute()
+            or proof_path.resolve() != proof_path
+            or proof_path.parent.parent
+            != root / "report/main_startup_validation" / source_date
+            or proof_path.name != "final.json"
+        ):
+            raise ValueError("active_policy_postclose_original_p5_path_invalid")
+        proof, proof_raw, proof_identity = D._owned_metadata(proof_path)
+        if (
+            after_raw != selected_raw
+            or D._digest(proof_raw) != selected.get("candidate_p5_sha256")
+            or proof.get("schema") != "main_policy_load_exit_validation_v1"
+            or proof.get("status") != "passed"
+            or proof.get("findings") != []
+            or proof.get("target_date") != source_date
+            or proof.get("execution_release_root") != str(origin_root)
+            or proof.get("execution_release_commit") != origin_commit
+            or any(
+                proof.get(k) is not True
+                for k in (
+                    "child_terminated",
+                    "load_check_passed",
+                    "protected_sources_unchanged",
+                )
+            )
+        ):
+            raise ValueError("active_policy_postclose_original_p5_invalid")
+        for p, raw, identity in (
+            (transition_path, transition_raw, transition_identity),
+            (backup, before_raw, before_identity),
+            (after_path, after_raw, after_identity),
+            (proof_path, proof_raw, proof_identity),
+        ):
+            if D._owned_metadata(p)[1:] != (raw, identity):
+                raise ValueError("active_policy_postclose_transition_changed")
+            transition_refs[str(p)] = D._digest(raw)
+        scope = "after_postclose_deploy_for_next_regular_start"
+    if (
+        not stopped()
+        or selected.get("git_commit") != origin_commit
+        or selected.get("release_root") != str(origin_root)
+        or selected.get("source_date") != source_date
+        or selected.get("approved_by") != "user"
+        or scope != "after_postclose_deploy_for_next_regular_start"
+        or selected.get("actual_pid_consumed") is not False
+        or next_day != canonical
+        or next_day < day
+    ):
+        raise ValueError("active_policy_postclose_stopped_origin_invalid")
+    paths = [
+        root
+        / "runtime/update_kospi_status"
+        / ("update_kospi_" + source_date + ".json"),
+        root
+        / "report/threshold_cycle_postclose_status"
+        / ("threshold_cycle_postclose_" + source_date + ".status.json"),
+    ]
+    observed = [D._owned_metadata(p) for p in paths]
+    eod, failed = (v[0] for v in observed)
+    state = eod.get("db_state") or {}
     import re
-    if (eod.get('schema_version')!=1 or eod.get('target_date')!=source_date
-            or eod.get('status') not in {'completed','completed_with_warnings'}
-            or eod.get('failed_steps')!=[] or state.get('latest_quote_date')!=source_date
-            or type(state.get('rows_on_latest_date')) is not int or state['rows_on_latest_date']<=0
-            or failed.get('report_type')!='threshold_cycle_postclose_status'
-            or failed.get('target_date')!=source_date
-            or failed.get('schema_version')!=2
-            or not isinstance(failed.get('run_id'),str) or re.fullmatch('[0-9a-f]{32}',failed['run_id']) is None
-            or type(failed.get('exit_code')) is not int
-            or failed.get('runtime_effect') is not False):
-        raise ValueError('active_policy_postclose_terminal_evidence_invalid')
-    terminal_refs={}
-    if failed.get('status')=='failed':
-        if failed['exit_code']==0 or failed.get('code_commit')!=origin_commit:
-            raise ValueError('active_policy_postclose_terminal_evidence_invalid')
-    elif failed.get('status')=='succeeded' and failed['exit_code']==0:
+
+    if (
+        eod.get("schema_version") != 1
+        or eod.get("target_date") != source_date
+        or eod.get("status") not in {"completed", "completed_with_warnings"}
+        or eod.get("failed_steps") != []
+        or state.get("latest_quote_date") != source_date
+        or type(state.get("rows_on_latest_date")) is not int
+        or state["rows_on_latest_date"] <= 0
+        or failed.get("report_type") != "threshold_cycle_postclose_status"
+        or failed.get("target_date") != source_date
+        or failed.get("schema_version") != 2
+        or not isinstance(failed.get("run_id"), str)
+        or re.fullmatch("[0-9a-f]{32}", failed["run_id"]) is None
+        or type(failed.get("exit_code")) is not int
+        or failed.get("runtime_effect") is not False
+    ):
+        raise ValueError("active_policy_postclose_terminal_evidence_invalid")
+    terminal_refs = {}
+    if failed.get("status") == "failed":
+        if failed["exit_code"] == 0 or failed.get("code_commit") != origin_commit:
+            raise ValueError("active_policy_postclose_terminal_evidence_invalid")
+    elif failed.get("status") == "succeeded" and failed["exit_code"] == 0:
         # A completed calculation may still require a detector-only code repair.
         # Authenticate its existing workflow and whole-chain owner; never turn
         # a stored success string into a new completion or PID observation.
-        workflow=failed.get('workflow_source') or {}
-        script=origin_root/'deploy/run_threshold_cycle_postclose.sh'
-        report_path=root/'report/postclose_done_controller'/('postclose_done_controller_'+source_date+'.json')
-        if (failed.get('reason')!='verified_main_completed'
-                or workflow.get('root')!=str(origin_root) or workflow.get('commit')!=origin_commit
-                or workflow.get('script')!=str(script) or workflow.get('sha256')!=P.file_hash(script)):
-            raise ValueError('active_policy_postclose_workflow_evidence_invalid')
-        report,report_raw,report_identity=D._owned_metadata(report_path)
+        workflow = failed.get("workflow_source") or {}
+        script = origin_root / "deploy/run_threshold_cycle_postclose.sh"
+        report_path = (
+            root
+            / "report/postclose_done_controller"
+            / ("postclose_done_controller_" + source_date + ".json")
+        )
+        if (
+            failed.get("reason") != "verified_main_completed"
+            or workflow.get("root") != str(origin_root)
+            or workflow.get("commit") != origin_commit
+            or workflow.get("script") != str(script)
+            or workflow.get("sha256") != P.file_hash(script)
+        ):
+            raise ValueError("active_policy_postclose_workflow_evidence_invalid")
+        report, report_raw, report_identity = D._owned_metadata(report_path)
         # The selected predecessor owns this terminal. Running its verification
         # in candidate code would demand the successor receipt being issued.
-        script_code = '''from pathlib import Path
+        script_code = """from pathlib import Path
 import json,sys
 from src.engine.automation.postclose_done_controller import done_terminal_receipt_issues
 from src.engine.infrastructure.validation_digest_session import postclose_session
 with postclose_session(Path(sys.argv[1]),sys.argv[2]):
     print(json.dumps(done_terminal_receipt_issues(Path(sys.argv[3]),sys.argv[2],started_after_ns=0)))
-'''
-        issues=json.loads(subprocess.check_output(
-            [str(origin_root/'.venv/bin/python'),'-B','-c',script_code,str(root),source_date,str(report_path)],
-            cwd=origin_root,env={**os.environ,'PYTHONPATH':str(origin_root)},text=True,timeout=300))
-        if (report.get('main_run_id')!=failed['run_id'] or issues!=[]
-                or D._owned_metadata(report_path)[1:]!=(report_raw,report_identity)):
-            raise ValueError('active_policy_postclose_completed_evidence_invalid')
-        for name in (Path(report['attempt_path']),Path(report['verification_attempt_path']),script):
-            terminal_refs[str(name)]=P.file_hash(name)
+"""
+        issues = json.loads(
+            subprocess.check_output(
+                [
+                    str(origin_root / ".venv/bin/python"),
+                    "-B",
+                    "-c",
+                    script_code,
+                    str(root),
+                    source_date,
+                    str(report_path),
+                ],
+                cwd=origin_root,
+                env={**os.environ, "PYTHONPATH": str(origin_root)},
+                text=True,
+                timeout=300,
+            )
+        )
+        if (
+            report.get("main_run_id") != failed["run_id"]
+            or issues != []
+            or D._owned_metadata(report_path)[1:] != (report_raw, report_identity)
+        ):
+            raise ValueError("active_policy_postclose_completed_evidence_invalid")
+        for name in (
+            Path(report["attempt_path"]),
+            Path(report["verification_attempt_path"]),
+            script,
+        ):
+            terminal_refs[str(name)] = P.file_hash(name)
     else:
-        raise ValueError('active_policy_postclose_terminal_evidence_invalid')
-    checked=_validated_origin_receipt(root,source_date,origin_root,origin_commit,bundle_sha,pointer_sha)
-    if checked is None:raise ValueError('active_policy_postclose_native_ancestry_missing')
+        raise ValueError("active_policy_postclose_terminal_evidence_invalid")
+    checked = _validated_origin_receipt(
+        root, source_date, origin_root, origin_commit, bundle_sha, pointer_sha
+    )
+    if checked is None:
+        raise ValueError("active_policy_postclose_native_ancestry_missing")
     # Mutable observed aliases must not invalidate the issued code handoff when
     # the repaired postclose producer naturally publishes its next attempt.
-    frozen=path(root,day,release_commit,bundle_sha).with_suffix('')/'postclose_origin'
-    if any(p.is_symlink() for p in (frozen,*frozen.parents)):
-        raise ValueError('active_policy_postclose_evidence_path_invalid')
-    frozen.mkdir(parents=True,exist_ok=True)
-    refs={}
-    for original,(_,raw,identity) in zip(paths,observed):
-        destination=frozen/original.name
+    frozen = (
+        path(root, day, release_commit, bundle_sha).with_suffix("") / "postclose_origin"
+    )
+    if any(p.is_symlink() for p in (frozen, *frozen.parents)):
+        raise ValueError("active_policy_postclose_evidence_path_invalid")
+    frozen.mkdir(parents=True, exist_ok=True)
+    refs = {}
+    for original, (_, raw, identity) in zip(paths, observed):
+        destination = frozen / original.name
         if destination.exists() or destination.is_symlink():
-            if D._owned_metadata(destination)[1]!=raw:
-                raise ValueError('active_policy_postclose_frozen_evidence_conflict')
+            if D._owned_metadata(destination)[1] != raw:
+                raise ValueError("active_policy_postclose_frozen_evidence_conflict")
         else:
-            with destination.open('xb') as handle:
-                os.fchmod(handle.fileno(),0o600);handle.write(raw);handle.flush();os.fsync(handle.fileno())
-        if D._owned_metadata(original)[1:]!=(raw,identity):
-            raise ValueError('active_policy_postclose_evidence_changed')
-        refs[str(destination)]=D._digest(raw)
-    if D._owned_metadata(root/'runtime/runtime_release_selection.json')[1]!=selected_raw or not stopped():
-        raise ValueError('active_policy_postclose_origin_changed')
-    checked['source_hashes'].update(refs|transition_refs|terminal_refs)
-    checked['verification_basis']='verified_previous_day_postclose_native_code_ancestry'
+            with destination.open("xb") as handle:
+                os.fchmod(handle.fileno(), 0o600)
+                handle.write(raw)
+                handle.flush()
+                os.fsync(handle.fileno())
+        if D._owned_metadata(original)[1:] != (raw, identity):
+            raise ValueError("active_policy_postclose_evidence_changed")
+        refs[str(destination)] = D._digest(raw)
+    if (
+        D._owned_metadata(root / "runtime/runtime_release_selection.json")[1]
+        != selected_raw
+        or not stopped()
+    ):
+        raise ValueError("active_policy_postclose_origin_changed")
+    checked["source_hashes"].update(refs | transition_refs | terminal_refs)
+    checked["verification_basis"] = (
+        "verified_previous_day_postclose_native_code_ancestry"
+    )
     return checked
 
 
-def issue(data_root,day,*,origin_root,release_root,parity_path,confirm,recover_stopped_origin=False,postclose_source_date=None):
+def issue(
+    data_root,
+    day,
+    *,
+    origin_root,
+    release_root,
+    parity_path,
+    confirm,
+    recover_stopped_origin=False,
+    postclose_source_date=None,
+):
     from src.engine.scalping import mechanistic_entry_runtime_policy as N
     from src.engine.scalping import continuous_reversal_policy_v6 as V
     from src.engine.scalping import reversal_extended_catalog as C
-    from src.engine.infrastructure.runtime_release_router import selected_release,validate_release,git
-    if (confirm!=AUTHORITY or day!=datetime.now(P.KST).date().isoformat()
-            or postclose_source_date is not None and recover_stopped_origin is not False):
-        raise ValueError('active_policy_code_handoff_authority_required')
-    workspace=Path(data_root).resolve().parent;origin_root=Path(origin_root).resolve();release_root=Path(release_root).resolve()
-    selected,previous=selected_release(workspace)
-    if selected!=origin_root or release_root!=Path(__file__).resolve().parents[3]:
-        raise ValueError('active_policy_code_handoff_origin_changed')
-    selection_path=workspace/'data/runtime/runtime_release_selection.json'
-    selection_before=selection_path.read_bytes()
-    selection_sha=P.file_hash(selection_path)
-    commit=git(release_root,'rev-parse','HEAD')
-    validate_release(workspace,dict(schema='runtime_release_selection_v1',workspace=str(workspace),release_root=str(release_root),git_commit=commit))
-    pointer=N.root(Path(data_root))/'current.json';before=pointer.read_bytes();ptr=json.loads(before)
-    bundle=N._read(N.root(Path(data_root))/'generations'/(ptr['bundle_sha256']+'.json'));N.validate(bundle,target_date=bundle['target_date'])
-    parity=json.loads(Path(parity_path).read_text());codes=code_hashes()
-    expected={Path(m.__file__).name:P.file_hash(m.__file__) for m in V.contract_modules()}
-    if (parity.get('status')!='pass' or parity.get('mismatches')!=0
-            or parity.get('parent_bundle_sha256')!=bundle['bundle_sha256']
-            or parity.get('contract_file_sha256')!=expected
-            or not parity.get('confirmation_parity',{}).get('hits')):
-        raise ValueError('active_policy_code_handoff_parity_invalid')
-    if any(d!=C.definition(b) for b,d in bundle['continuous_reversal']['operating_manifest']['definitions'].items()):
-        raise ValueError('active_policy_code_handoff_definition_changed')
-    checked=_validated_origin_receipt(data_root,day,origin_root,previous,bundle['bundle_sha256'],P.file_hash(pointer))
+    from src.engine.infrastructure.runtime_release_router import (
+        selected_release,
+        validate_release,
+        git,
+    )
+
+    if (
+        confirm != AUTHORITY
+        or day != datetime.now(P.KST).date().isoformat()
+        or postclose_source_date is not None
+        and recover_stopped_origin is not False
+    ):
+        raise ValueError("active_policy_code_handoff_authority_required")
+    workspace = Path(data_root).resolve().parent
+    origin_root = Path(origin_root).resolve()
+    release_root = Path(release_root).resolve()
+    selected, previous = selected_release(workspace)
+    if selected != origin_root or release_root != Path(__file__).resolve().parents[3]:
+        raise ValueError("active_policy_code_handoff_origin_changed")
+    selection_path = workspace / "data/runtime/runtime_release_selection.json"
+    selection_before = selection_path.read_bytes()
+    selection_sha = P.file_hash(selection_path)
+    commit = git(release_root, "rev-parse", "HEAD")
+    validate_release(
+        workspace,
+        dict(
+            schema="runtime_release_selection_v1",
+            workspace=str(workspace),
+            release_root=str(release_root),
+            git_commit=commit,
+        ),
+    )
+    pointer = N.root(Path(data_root)) / "current.json"
+    before = pointer.read_bytes()
+    ptr = json.loads(before)
+    bundle = N._read(
+        N.root(Path(data_root)) / "generations" / (ptr["bundle_sha256"] + ".json")
+    )
+    N.validate(bundle, target_date=bundle["target_date"])
+    parity = json.loads(Path(parity_path).read_text())
+    codes = code_hashes()
+    expected = {
+        Path(m.__file__).name: P.file_hash(m.__file__) for m in V.contract_modules()
+    }
+    if (
+        parity.get("status") != "pass"
+        or parity.get("mismatches") != 0
+        or parity.get("parent_bundle_sha256") != bundle["bundle_sha256"]
+        or parity.get("contract_file_sha256") != expected
+        or not parity.get("confirmation_parity", {}).get("hits")
+    ):
+        raise ValueError("active_policy_code_handoff_parity_invalid")
+    if any(
+        d != C.definition(b)
+        for b, d in bundle["continuous_reversal"]["operating_manifest"][
+            "definitions"
+        ].items()
+    ):
+        raise ValueError("active_policy_code_handoff_definition_changed")
+    checked = _validated_origin_receipt(
+        data_root,
+        day,
+        origin_root,
+        previous,
+        bundle["bundle_sha256"],
+        P.file_hash(pointer),
+    )
     if recover_stopped_origin is True:
-        checked = _stopped_origin_receipt(data_root,day,origin_root,previous,bundle['bundle_sha256'],P.file_hash(pointer))
+        checked = _stopped_origin_receipt(
+            data_root,
+            day,
+            origin_root,
+            previous,
+            bundle["bundle_sha256"],
+            P.file_hash(pointer),
+        )
     elif recover_stopped_origin is not False:
-        raise ValueError('active_policy_stopped_recovery_flag_invalid')
+        raise ValueError("active_policy_stopped_recovery_flag_invalid")
     if postclose_source_date is not None:
-        checked=_postclose_origin_receipt(data_root,day,postclose_source_date,origin_root,previous,
-            bundle['bundle_sha256'],P.file_hash(pointer),commit)
+        checked = _postclose_origin_receipt(
+            data_root,
+            day,
+            postclose_source_date,
+            origin_root,
+            previous,
+            bundle["bundle_sha256"],
+            P.file_hash(pointer),
+            commit,
+        )
     if checked is None:
-        output=subprocess.check_output([str(origin_root/'.venv/bin/python'),'-B','-c',_ORIGIN_SCRIPT,str(Path(data_root).resolve()),day],
-            cwd=origin_root,env={**os.environ,'PYTHONPATH':str(origin_root)},text=True,timeout=120)
-        checked=json.loads(output)
-    if (checked['bundle_sha256']!=bundle['bundle_sha256'] or pointer.read_bytes()!=before
-            or selection_path.read_bytes()!=selection_before):
-        raise ValueError('active_policy_code_handoff_parent_changed')
-    sources=dict(checked['source_hashes'])
+        output = subprocess.check_output(
+            [
+                str(origin_root / ".venv/bin/python"),
+                "-B",
+                "-c",
+                _ORIGIN_SCRIPT,
+                str(Path(data_root).resolve()),
+                day,
+            ],
+            cwd=origin_root,
+            env={**os.environ, "PYTHONPATH": str(origin_root)},
+            text=True,
+            timeout=120,
+        )
+        checked = json.loads(output)
+    if (
+        checked["bundle_sha256"] != bundle["bundle_sha256"]
+        or pointer.read_bytes() != before
+        or selection_path.read_bytes() != selection_before
+    ):
+        raise ValueError("active_policy_code_handoff_parent_changed")
+    sources = dict(checked["source_hashes"])
     # A successor of a code-only release observes its predecessor selector.
     # This is transition provenance, not an immutable policy input: validate()
     # independently binds the current selector to this exact candidate root
     # and commit. All policy/source and prior receipt hashes remain frozen.
-    observed_selection=sources.pop(str(selection_path.resolve()),None)
-    if observed_selection is not None and observed_selection!=selection_sha:
-        raise ValueError('active_policy_code_handoff_selection_changed')
-    sources[str(Path(parity_path).resolve())]=P.file_hash(parity_path)
-    for row in parity.get('targeted_validation',[]):
-        if P.file_hash(row['path'])!=row['sha256']:raise ValueError('active_policy_code_handoff_test_evidence_changed')
-        sources[row['path']]=row['sha256']
-    r=P.seal(dict(schema=SCHEMA,authority=confirm,target_date=day,release_commit=commit,release_root=str(release_root),
-        origin_root=str(origin_root),origin_commit=previous,bundle_sha256=bundle['bundle_sha256'],
-        origin_selection_sha256=selection_sha,
-        current_pointer_sha256=P.file_hash(pointer),source_hashes=sources,code_hashes=codes,
-        pipeline_source_validation=N.PIPELINE_REFERENCE_VALIDATION,
-        origin_verification_basis=checked.get('verification_basis','native_origin_validator'),
-        pipeline_source_reference_count=sum(N.is_pipeline_source_reference(p,data_root=data_root) for p in sources),
-        policy_reselected=False,provider_called=False,actual_pid_consumed=False,source_semantics_repair=True,
-        **({'postclose_source_date':postclose_source_date} if postclose_source_date is not None else {})))
-    dest=path(data_root,day,commit,bundle['bundle_sha256']);dest.parent.mkdir(parents=True,exist_ok=True)
-    if dest.exists() and N._read(dest)!=r:raise ValueError('active_policy_code_handoff_receipt_conflict')
-    N._atomic_write_json(dest,r)
+    observed_selection = sources.pop(str(selection_path.resolve()), None)
+    if observed_selection is not None and observed_selection != selection_sha:
+        raise ValueError("active_policy_code_handoff_selection_changed")
+    sources[str(Path(parity_path).resolve())] = P.file_hash(parity_path)
+    for row in parity.get("targeted_validation", []):
+        if P.file_hash(row["path"]) != row["sha256"]:
+            raise ValueError("active_policy_code_handoff_test_evidence_changed")
+        sources[row["path"]] = row["sha256"]
+    r = P.seal(
+        dict(
+            schema=SCHEMA,
+            authority=confirm,
+            target_date=day,
+            release_commit=commit,
+            release_root=str(release_root),
+            origin_root=str(origin_root),
+            origin_commit=previous,
+            bundle_sha256=bundle["bundle_sha256"],
+            origin_selection_sha256=selection_sha,
+            current_pointer_sha256=P.file_hash(pointer),
+            source_hashes=sources,
+            code_hashes=codes,
+            pipeline_source_validation=N.PIPELINE_REFERENCE_VALIDATION,
+            origin_verification_basis=checked.get(
+                "verification_basis", "native_origin_validator"
+            ),
+            pipeline_source_reference_count=sum(
+                N.is_pipeline_source_reference(p, data_root=data_root) for p in sources
+            ),
+            policy_reselected=False,
+            provider_called=False,
+            actual_pid_consumed=False,
+            source_semantics_repair=True,
+            **(
+                {"postclose_source_date": postclose_source_date}
+                if postclose_source_date is not None
+                else {}
+            ),
+        )
+    )
+    dest = path(data_root, day, commit, bundle["bundle_sha256"])
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if dest.exists() and N._read(dest) != r:
+        raise ValueError("active_policy_code_handoff_receipt_conflict")
+    N._atomic_write_json(dest, r)
     return r
 
 
-LEGACY_PREPARED_PARENT_SCOPE_CODE = '8681d10376f4228bbe5b9d1d012d3510e8abd89470036077c3c0bc69fad63471'
+LEGACY_PREPARED_PARENT_SCOPE_CODE = (
+    "8681d10376f4228bbe5b9d1d012d3510e8abd89470036077c3c0bc69fad63471"
+)
 
 
-def repair_prepared_parent_scope(data_root, day, *, consumer_root,
-                                 expected_receipt_sha256, confirm):
+def repair_prepared_parent_scope(
+    data_root, day, *, consumer_root, expected_receipt_sha256, confirm
+):
     """Migrate the exact unconsumed legacy receipt to its native parent scope.
 
     The reviewed immutable workflow is separate from unchanged consumer code.
@@ -470,94 +819,262 @@ def repair_prepared_parent_scope(data_root, day, *, consumer_root,
     from src.engine.automation import ordered_intraday_deploy as D
     from src.engine.scalping import mechanistic_entry_runtime_policy as N
     from src.engine.scalping import continuous_reversal_policy_v6 as V
-    data=Path(data_root).resolve();workspace=data.parent;consumer=Path(consumer_root).resolve()
-    workflow=Path(__file__).resolve().parents[3]
-    sha=lambda raw:hashlib.sha256(raw).hexdigest()
-    def require(ok,reason):
-        if not ok:raise ValueError('active_parent_scope_repair_'+reason)
-    require(confirm==AUTHORITY,'authority_required')
-    workflow_commit=R.git(workflow,'rev-parse','HEAD')
-    R.validate_release(workspace,dict(schema='runtime_release_selection_v1',workspace=str(workspace),release_root=str(workflow),git_commit=workflow_commit))
-    pointer=N.root(data)/'current.json';selector=data/'runtime/runtime_release_selection.json'
-    with R.runtime_release_set_lock(workspace), (N.root(data)/'publisher.lock').open('a') as lock:
+
+    data = Path(data_root).resolve()
+    workspace = data.parent
+    consumer = Path(consumer_root).resolve()
+    workflow = Path(__file__).resolve().parents[3]
+    sha = lambda raw: hashlib.sha256(raw).hexdigest()
+
+    def require(ok, reason):
+        if not ok:
+            raise ValueError("active_parent_scope_repair_" + reason)
+
+    require(confirm == AUTHORITY, "authority_required")
+    workflow_commit = R.git(workflow, "rev-parse", "HEAD")
+    R.validate_release(
+        workspace,
+        dict(
+            schema="runtime_release_selection_v1",
+            workspace=str(workspace),
+            release_root=str(workflow),
+            git_commit=workflow_commit,
+        ),
+    )
+    pointer = N.root(data) / "current.json"
+    selector = data / "runtime/runtime_release_selection.json"
+    with (
+        R.runtime_release_set_lock(workspace),
+        (N.root(data) / "publisher.lock").open("a") as lock,
+    ):
         import fcntl
-        fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
-        selection,selection_raw,_=D._owned_metadata(selector)
-        ptr,pointer_raw,_=D._owned_metadata(pointer);source=ptr['effective_date'];bundle=ptr['bundle_sha256']
-        selected,commit=R.selected_release(workspace)
+
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        selection, selection_raw, _ = D._owned_metadata(selector)
+        ptr, pointer_raw, _ = D._owned_metadata(pointer)
+        source = ptr["effective_date"]
+        bundle = ptr["bundle_sha256"]
+        selected, commit = R.selected_release(workspace)
+
         def stopped():
-            require(selected==consumer and R.selected_release(workspace)==(consumer,commit),'selection_changed')
-            require(not D._main_pids() and D._session_absent(),'main_or_supervisor_present')
-            require(not (data/'runtime/operator_startup_hold.json').exists() and not (data/'runtime/operator_startup_hold.json').is_symlink(),'startup_hold_present')
-            require(not (workspace/'restart.flag').exists() and not (workspace/'restart.flag').is_symlink(),'restart_present')
-            require(selector.read_bytes()==selection_raw and pointer.read_bytes()==pointer_raw,'protected_generation_changed')
-            require(day==datetime.now(P.KST).date().isoformat(),'target_date_invalid')
-            V._require_closed_postclose_window(data,source,day,datetime.now(P.KST))
+            require(
+                selected == consumer
+                and R.selected_release(workspace) == (consumer, commit),
+                "selection_changed",
+            )
+            require(
+                not D._main_pids() and D._session_absent(), "main_or_supervisor_present"
+            )
+            require(
+                not (data / "runtime/operator_startup_hold.json").exists()
+                and not (data / "runtime/operator_startup_hold.json").is_symlink(),
+                "startup_hold_present",
+            )
+            require(
+                not (workspace / "restart.flag").exists()
+                and not (workspace / "restart.flag").is_symlink(),
+                "restart_present",
+            )
+            require(
+                selector.read_bytes() == selection_raw
+                and pointer.read_bytes() == pointer_raw,
+                "protected_generation_changed",
+            )
+            require(
+                day == datetime.now(P.KST).date().isoformat(), "target_date_invalid"
+            )
+            V._require_closed_postclose_window(data, source, day, datetime.now(P.KST))
+
         stopped()
-        require(selection.get('approved_by')=='user' and selection.get('approval_scope')=='after_postclose_deploy_for_next_regular_start'
-            and selection.get('actual_pid_consumed') is False and not selection.get('actual_pid_receipt')
-            and not selection.get('deployment_transition') and selection.get('source_date')==source
-            and selection.get('next_operating_date')==day,'stopped_cold_selection_required')
-        require(P.file_hash(consumer/'src/engine/scalping/reversal_code_handoff.py')==LEGACY_PREPARED_PARENT_SCOPE_CODE,'legacy_producer_required')
-        current_path=path(data,day,commit,bundle);old,old_raw,_=D._owned_metadata(current_path)
-        require(sha(old_raw)==expected_receipt_sha256,'receipt_changed')
-        validate_receipt(old,day=day,commit=commit,root=consumer,bundle_sha=bundle,pointer_sha=sha(pointer_raw))
-        actual={str(consumer/Path(name).relative_to(workflow)):P.file_hash(consumer/Path(name).relative_to(workflow)) for name in code_hashes()}
-        require(old['code_hashes']==actual,'consumer_code_changed')
-        backup=Path(selection.get('previous_selection_backup',''));directory=backup.parent
-        require(backup.is_absolute() and directory.parent==data/'runtime/research_release_transition'
-            and directory.resolve()==directory and not backup.is_symlink(),'transition_path_invalid')
-        transition_path=directory/'transition.json';transition_raw=D._owned_metadata(transition_path)[1];transition=T._record(transition_path)
-        entries=transition.get('entries') or []
-        require(transition.get('state')=='verified' and transition.get('transition_id')==directory.name and len(entries)==1
-            and transition.get('written')==[str(selector)],'verified_transition_required')
-        entry=entries[0];prior,prior_raw,_=D._owned_metadata(backup)
-        after=directory/str(entry.get('after_snapshot',''));after_raw=D._owned_metadata(after)[1]
-        require(entry.get('path')==str(selector) and entry.get('before_snapshot')==backup.name
-            and entry.get('before_sha256')==sha(prior_raw)==selection.get('predecessor_selection_sha256')
-            and set(entry.get('accepted_sha256') or [entry.get('before_sha256'),entry.get('after_sha256')])=={sha(prior_raw),sha(selection_raw)}
-            and entry.get('after_sha256')==sha(selection_raw) and after.parent==directory
-            and after.name=='after-'+sha(selection_raw)+'.bytes'
-            and after_raw==selection_raw and transition_path.read_bytes()==transition_raw,'transition_binding_invalid')
-        origin=Path(prior['release_root']);origin_commit=prior['git_commit']
-        require(old.get('origin_root')==str(origin) and old.get('origin_commit')==origin_commit
-            and old.get('origin_selection_sha256')==sha(prior_raw),'origin_binding_invalid')
-        R.validate_release(workspace,prior)
-        p5_path=Path(selection.get('candidate_p5_path',''));p5,p5_raw,_=D._owned_metadata(p5_path)
+        require(
+            selection.get("approved_by") == "user"
+            and selection.get("approval_scope")
+            == "after_postclose_deploy_for_next_regular_start"
+            and selection.get("actual_pid_consumed") is False
+            and not selection.get("actual_pid_receipt")
+            and not selection.get("deployment_transition")
+            and selection.get("source_date") == source
+            and selection.get("next_operating_date") == day,
+            "stopped_cold_selection_required",
+        )
+        require(
+            P.file_hash(consumer / "src/engine/scalping/reversal_code_handoff.py")
+            == LEGACY_PREPARED_PARENT_SCOPE_CODE,
+            "legacy_producer_required",
+        )
+        current_path = path(data, day, commit, bundle)
+        old, old_raw, _ = D._owned_metadata(current_path)
+        require(sha(old_raw) == expected_receipt_sha256, "receipt_changed")
+        validate_receipt(
+            old,
+            day=day,
+            commit=commit,
+            root=consumer,
+            bundle_sha=bundle,
+            pointer_sha=sha(pointer_raw),
+        )
+        actual = {
+            str(consumer / Path(name).relative_to(workflow)): P.file_hash(
+                consumer / Path(name).relative_to(workflow)
+            )
+            for name in code_hashes()
+        }
+        require(old["code_hashes"] == actual, "consumer_code_changed")
+        backup = Path(selection.get("previous_selection_backup", ""))
+        directory = backup.parent
+        require(
+            backup.is_absolute()
+            and directory.parent == data / "runtime/research_release_transition"
+            and directory.resolve() == directory
+            and not backup.is_symlink(),
+            "transition_path_invalid",
+        )
+        transition_path = directory / "transition.json"
+        transition_raw = D._owned_metadata(transition_path)[1]
+        transition = T._record(transition_path)
+        entries = transition.get("entries") or []
+        require(
+            transition.get("state") == "verified"
+            and transition.get("transition_id") == directory.name
+            and len(entries) == 1
+            and transition.get("written") == [str(selector)],
+            "verified_transition_required",
+        )
+        entry = entries[0]
+        prior, prior_raw, _ = D._owned_metadata(backup)
+        after = directory / str(entry.get("after_snapshot", ""))
+        after_raw = D._owned_metadata(after)[1]
+        require(
+            entry.get("path") == str(selector)
+            and entry.get("before_snapshot") == backup.name
+            and entry.get("before_sha256")
+            == sha(prior_raw)
+            == selection.get("predecessor_selection_sha256")
+            and set(
+                entry.get("accepted_sha256")
+                or [entry.get("before_sha256"), entry.get("after_sha256")]
+            )
+            == {sha(prior_raw), sha(selection_raw)}
+            and entry.get("after_sha256") == sha(selection_raw)
+            and after.parent == directory
+            and after.name == "after-" + sha(selection_raw) + ".bytes"
+            and after_raw == selection_raw
+            and transition_path.read_bytes() == transition_raw,
+            "transition_binding_invalid",
+        )
+        origin = Path(prior["release_root"])
+        origin_commit = prior["git_commit"]
+        require(
+            old.get("origin_root") == str(origin)
+            and old.get("origin_commit") == origin_commit
+            and old.get("origin_selection_sha256") == sha(prior_raw),
+            "origin_binding_invalid",
+        )
+        R.validate_release(workspace, prior)
+        p5_path = Path(selection.get("candidate_p5_path", ""))
+        p5, p5_raw, _ = D._owned_metadata(p5_path)
         import re
-        require(p5_path.parent.parent==data/'report/main_startup_validation'/day and p5_path.name=='final.json'
-            and re.fullmatch('[0-9a-f]{32}',p5_path.parent.name) is not None
-            and sha(p5_raw)==selection.get('candidate_p5_sha256') and p5.get('schema')=='main_policy_load_exit_validation_v1'
-            and p5.get('status')=='passed' and p5.get('findings')==[] and p5.get('target_date')==day
-            and p5.get('execution_release_root')==str(consumer) and p5.get('execution_release_commit')==commit
-            and all(p5.get(k) is True for k in ('child_terminated','load_check_passed','protected_sources_unchanged')),'historical_candidate_p5_invalid')
+
+        require(
+            p5_path.parent.parent == data / "report/main_startup_validation" / day
+            and p5_path.name == "final.json"
+            and re.fullmatch("[0-9a-f]{32}", p5_path.parent.name) is not None
+            and sha(p5_raw) == selection.get("candidate_p5_sha256")
+            and p5.get("schema") == "main_policy_load_exit_validation_v1"
+            and p5.get("status") == "passed"
+            and p5.get("findings") == []
+            and p5.get("target_date") == day
+            and p5.get("execution_release_root") == str(consumer)
+            and p5.get("execution_release_commit") == commit
+            and all(
+                p5.get(k) is True
+                for k in (
+                    "child_terminated",
+                    "load_check_passed",
+                    "protected_sources_unchanged",
+                )
+            ),
+            "historical_candidate_p5_invalid",
+        )
         # Revalidate the actual active parent in its original native release.
         # The failed future cache is neither repaired nor granted authority.
-        parent=V._attested_activation_parent(data,day,origin_root=origin,origin_commit=origin_commit)
-        require(parent is not None and parent['bundle_sha256']==bundle and parent['target_date']==source,'parent_changed')
-        checked=_validated_origin_receipt(data,source,origin,origin_commit,bundle,sha(pointer_raw))
-        require(checked is not None,'native_parent_receipt_missing')
-        stopped();require(current_path.read_bytes()==old_raw,'receipt_changed')
-        snapshots=current_path.with_suffix('')/'attempts';snapshots.mkdir(parents=True,exist_ok=True)
-        require(not snapshots.is_symlink() and not any(p.is_symlink() for p in snapshots.parents),'snapshot_alias')
-        original=snapshots/('before-parent-scope-'+sha(old_raw)+'.json')
-        require(not original.is_symlink(),'snapshot_alias')
-        if original.exists():require(original.read_bytes()==old_raw,'snapshot_changed')
+        parent = V._attested_activation_parent(
+            data, day, origin_root=origin, origin_commit=origin_commit
+        )
+        require(
+            parent is not None
+            and parent["bundle_sha256"] == bundle
+            and parent["target_date"] == source,
+            "parent_changed",
+        )
+        checked = _validated_origin_receipt(
+            data, source, origin, origin_commit, bundle, sha(pointer_raw)
+        )
+        require(checked is not None, "native_parent_receipt_missing")
+        stopped()
+        require(current_path.read_bytes() == old_raw, "receipt_changed")
+        snapshots = current_path.with_suffix("") / "attempts"
+        snapshots.mkdir(parents=True, exist_ok=True)
+        require(
+            not snapshots.is_symlink()
+            and not any(p.is_symlink() for p in snapshots.parents),
+            "snapshot_alias",
+        )
+        original = snapshots / ("before-parent-scope-" + sha(old_raw) + ".json")
+        require(not original.is_symlink(), "snapshot_alias")
+        if original.exists():
+            require(original.read_bytes() == old_raw, "snapshot_changed")
         else:
-            with original.open('xb') as out:out.write(old_raw)
-        refs={**checked['source_hashes'],**{str(p):P.file_hash(p) for p in (original,transition_path,backup,after,p5_path,Path(__file__).resolve())}}
-        repaired=P.seal(dict(old,source_hashes=refs,origin_verification_basis='native_parent_scope_repaired',
-            pipeline_source_reference_count=sum(N.is_pipeline_source_reference(p,data_root=data) for p in refs),
-            source_scope_repair=dict(schema='main_active_parent_source_scope_repair_v1',authority=confirm,
-                workflow_root=str(workflow),workflow_commit=workflow_commit,
-                original_receipt=dict(path=str(original),sha256=sha(old_raw)),
-                native_parent_receipt=str(path(data,source,origin_commit,bundle)),
-                historical_candidate_p5=str(p5_path),future_policy_validated=False,
-                policy_reselected=False,actual_pid_consumed=False)))
-        for name,expected in refs.items():
-            require(N.source_receipt_matches(dict(path=name,sha256=expected),data_root=data),'parent_source_changed')
-        stopped();require(current_path.read_bytes()==old_raw,'receipt_changed')
-        N._atomic_write_json(current_path,repaired)
-        require(N._read(current_path)==repaired,'publication_readback_changed')
+            with original.open("xb") as out:
+                out.write(old_raw)
+        refs = {
+            **checked["source_hashes"],
+            **{
+                str(p): P.file_hash(p)
+                for p in (
+                    original,
+                    transition_path,
+                    backup,
+                    after,
+                    p5_path,
+                    Path(__file__).resolve(),
+                )
+            },
+        }
+        repaired = P.seal(
+            dict(
+                old,
+                source_hashes=refs,
+                origin_verification_basis="native_parent_scope_repaired",
+                pipeline_source_reference_count=sum(
+                    N.is_pipeline_source_reference(p, data_root=data) for p in refs
+                ),
+                source_scope_repair=dict(
+                    schema="main_active_parent_source_scope_repair_v1",
+                    authority=confirm,
+                    workflow_root=str(workflow),
+                    workflow_commit=workflow_commit,
+                    original_receipt=dict(path=str(original), sha256=sha(old_raw)),
+                    native_parent_receipt=str(
+                        path(data, source, origin_commit, bundle)
+                    ),
+                    historical_candidate_p5=str(p5_path),
+                    future_policy_validated=False,
+                    policy_reselected=False,
+                    actual_pid_consumed=False,
+                ),
+            )
+        )
+        for name, expected in refs.items():
+            require(
+                N.source_receipt_matches(
+                    dict(path=name, sha256=expected), data_root=data
+                ),
+                "parent_source_changed",
+            )
+        stopped()
+        require(current_path.read_bytes() == old_raw, "receipt_changed")
+        N._atomic_write_json(current_path, repaired)
+        require(N._read(current_path) == repaired, "publication_readback_changed")
         stopped()
         return repaired

@@ -30,7 +30,6 @@ from typing import Any
 
 from src.utils.constants import DATA_DIR
 
-
 REPORT_TYPE = "ldm_hypothesis_parent_refinement"
 
 

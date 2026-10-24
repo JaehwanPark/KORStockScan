@@ -48,7 +48,8 @@ def test_resolve_market_session_after_effective_date_preserves_premarket():
     assert context.exit_allowed_by_clock is True
     for hour, minute, allowed in ((8, 49, True), (8, 50, False), (8, 55, False)):
         boundary = contract.resolve_market_session(
-            _kst_datetime(2026, 9, 14, hour, minute))
+            _kst_datetime(2026, 9, 14, hour, minute)
+        )
         assert boundary.exit_allowed_by_clock is allowed
 
 
@@ -58,12 +59,20 @@ def test_resolve_market_session_after_effective_date_preserves_premarket():
         (("15:30", "00"), contract.MARKET_SESSION_REGIME_SESSION_TRANSITION),
         (("15:40", "00"), contract.MARKET_SESSION_REGIME_SESSION_TRANSITION),
         (("16:00", "00"), contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET),
-        (("19:40", "00"), contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET_CLOSE_ONLY),
-        (("19:45", "00"), contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET_TERMINAL_EXIT),
+        (
+            ("19:40", "00"),
+            contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET_CLOSE_ONLY,
+        ),
+        (
+            ("19:45", "00"),
+            contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET_TERMINAL_EXIT,
+        ),
         (("20:00", "00"), contract.MARKET_SESSION_REGIME_CLOSED),
     ],
 )
-def test_resolve_market_session_after_effective_date_boundary_windows(clock_time, expected):
+def test_resolve_market_session_after_effective_date_boundary_windows(
+    clock_time, expected
+):
     clock_raw, second_raw = clock_time
     hour, minute = map(int, clock_raw.split(":"))
     second = int(second_raw)
@@ -90,7 +99,9 @@ def test_resolve_symbol_venue_eligibility_projects_known_fields():
             "nxt_eligible": False,
             "krx_aftermarket_eligible": None,
             "quality_state": contract.SOURCE_QUALITY_VALID,
-            "observed_at_kst": datetime(2026, 9, 14, 9, 0, tzinfo=contract.KST).isoformat(),
+            "observed_at_kst": datetime(
+                2026, 9, 14, 9, 0, tzinfo=contract.KST
+            ).isoformat(),
             "payload_sha256": "abc",
             "blocked_reasons_json": ["known_ok"],
         },
@@ -128,8 +139,10 @@ def _eligibility(*, krx: bool | None = True, nxt: bool | None = True):
             "krx_aftermarket_eligible": krx,
             "nxt_eligible": nxt,
             "quality_state": "PARTIAL" if krx is None or nxt is None else "VALID",
-            "blocked_reasons_json": (["krx_aftermarket_eligibility_unknown"] if krx is None else []) +
-                (["nxt_enable_unknown"] if nxt is None else []),
+            "blocked_reasons_json": (
+                ["krx_aftermarket_eligibility_unknown"] if krx is None else []
+            )
+            + (["nxt_enable_unknown"] if nxt is None else []),
             "observed_at_kst": _kst_datetime(2026, 9, 14, 15, 55),
             "payload_sha256": "b" * 64,
         },
@@ -138,22 +151,35 @@ def _eligibility(*, krx: bool | None = True, nxt: bool | None = True):
 
 def _nxt_listing_eligibility():
     return contract.resolve_symbol_venue_eligibility(
-        "005930", date(2026, 9, 14), {
-            "trade_date": "2026-09-14", "source_id": "ka10099",
-            "source_revision": "a" * 40, "payload_sha256": "b" * 64,
+        "005930",
+        date(2026, 9, 14),
+        {
+            "trade_date": "2026-09-14",
+            "source_id": "ka10099",
+            "source_revision": "a" * 40,
+            "payload_sha256": "b" * 64,
             "observed_at_kst": _kst_datetime(2026, 9, 14, 8),
-            "krx_regular_eligible": True, "nxt_eligible": True,
-            "krx_aftermarket_eligible": None, "quality_state": "PARTIAL",
+            "krx_regular_eligible": True,
+            "nxt_eligible": True,
+            "krx_aftermarket_eligible": None,
+            "quality_state": "PARTIAL",
             "blocked_reasons_json": ["krx_aftermarket_eligibility_unknown"],
-        })
+        },
+    )
 
 
-@pytest.mark.parametrize("route,allowed", [("NXT", True), ("SOR", True), ("KRX", False)])
+@pytest.mark.parametrize(
+    "route,allowed", [("NXT", True), ("SOR", True), ("KRX", False)]
+)
 def test_official_nxt_axis_preserves_unknown_krx(route, allowed):
     source = _nxt_listing_eligibility()
     result = contract.resolve_order_type_preflight(
         contract.resolve_market_session(_kst_datetime(2026, 9, 14, 18)),
-        route, "buy", "3", eligibility=source)
+        route,
+        "buy",
+        "3",
+        eligibility=source,
+    )
     assert result.allowed is allowed
     assert source.quality_state == "PARTIAL"
     assert source.krx_aftermarket_eligible is None
@@ -162,42 +188,69 @@ def test_official_nxt_axis_preserves_unknown_krx(route, allowed):
         assert result.effective_order_type == "6"
 
 
-@pytest.mark.parametrize("changed", [
-    {"trade_date": date(2026, 9, 13)},
-    {"source_trade_date": "2026-09-13"},
-    {"observed_at_kst": _kst_datetime(2026, 9, 13, 8)},
-    {"observed_at_kst": _kst_datetime(2026, 9, 14, 19)},
-    {"observed_at_kst": None}, {"source_revision": ""},
-    {"source_revision": "g" * 40}, {"source_sha256": ""},
-    {"source_id": "ws_quote"}, {"quality_state": "CONFLICT"},
-    {"krx_regular_eligible": None}, {"nxt_eligible": None},
-    {"nxt_eligible": False}, {"blockers": ()},
-    {"blockers": ("krx_aftermarket_eligibility_unknown", "order_warning_excluded")},
-    {"blockers": ("krx_aftermarket_eligibility_unknown", "official_source_snapshot_incomplete")},
-])
+@pytest.mark.parametrize(
+    "changed",
+    [
+        {"trade_date": date(2026, 9, 13)},
+        {"source_trade_date": "2026-09-13"},
+        {"observed_at_kst": _kst_datetime(2026, 9, 13, 8)},
+        {"observed_at_kst": _kst_datetime(2026, 9, 14, 19)},
+        {"observed_at_kst": None},
+        {"source_revision": ""},
+        {"source_revision": "g" * 40},
+        {"source_sha256": ""},
+        {"source_id": "ws_quote"},
+        {"quality_state": "CONFLICT"},
+        {"krx_regular_eligible": None},
+        {"nxt_eligible": None},
+        {"nxt_eligible": False},
+        {"blockers": ()},
+        {"blockers": ("krx_aftermarket_eligibility_unknown", "order_warning_excluded")},
+        {
+            "blockers": (
+                "krx_aftermarket_eligibility_unknown",
+                "official_source_snapshot_incomplete",
+            )
+        },
+    ],
+)
 def test_nxt_axis_rejects_every_other_source_gap(changed):
     result = contract.resolve_order_type_preflight(
         contract.resolve_market_session(_kst_datetime(2026, 9, 14, 18)),
-        "NXT", "buy", "6", eligibility=replace(_nxt_listing_eligibility(), **changed))
+        "NXT",
+        "buy",
+        "6",
+        eligibility=replace(_nxt_listing_eligibility(), **changed),
+    )
     assert result.allowed is False
 
 
 def test_nxt_listing_normalizes_utc_observation_to_exact_kst_day():
     source = _nxt_listing_eligibility()
     normalized = contract.resolve_symbol_venue_eligibility(
-        source.stock_code, source.trade_date, {
-            "trade_date": source.source_trade_date, "source_id": source.source_id,
+        source.stock_code,
+        source.trade_date,
+        {
+            "trade_date": source.source_trade_date,
+            "source_id": source.source_id,
             "source_revision": source.source_revision,
             "payload_sha256": source.source_sha256,
             "observed_at_kst": datetime(2026, 9, 13, 23, tzinfo=timezone.utc),
-            "krx_regular_eligible": True, "nxt_eligible": True,
-            "krx_aftermarket_eligible": None, "quality_state": "PARTIAL",
+            "krx_regular_eligible": True,
+            "nxt_eligible": True,
+            "krx_aftermarket_eligible": None,
+            "quality_state": "PARTIAL",
             "blocked_reasons_json": list(source.blockers),
-        })
+        },
+    )
     assert normalized.observed_at_kst == _kst_datetime(2026, 9, 14, 8)
     assert contract.resolve_order_type_preflight(
         contract.resolve_market_session(_kst_datetime(2026, 9, 14, 18)),
-        "NXT", "buy", "6", eligibility=normalized).allowed
+        "NXT",
+        "buy",
+        "6",
+        eligibility=normalized,
+    ).allowed
 
 
 @pytest.mark.parametrize("route", ["KRX", "NXT", "SOR"])
@@ -304,9 +357,7 @@ def test_aftermarket_buy_blocks_route_ineligible_symbol(route, eligibility):
 def test_aftermarket_after_1940_blocks_buy_and_requires_existing_holding_for_sell(
     hour, minute
 ):
-    context = contract.resolve_market_session(
-        _kst_datetime(2026, 9, 14, hour, minute)
-    )
+    context = contract.resolve_market_session(_kst_datetime(2026, 9, 14, hour, minute))
 
     buy = contract.resolve_order_type_preflight(
         context,
@@ -366,17 +417,31 @@ def test_order_type_preflight_rejects_unknown_route_and_closed_session():
     assert closed.reason == contract.ORDER_TYPE_PREFLIGHT_SESSION_BLOCKED
 
 
-@pytest.mark.parametrize("krx,nxt,allowed", [
-    (True, False, True), (False, True, True), (True, True, True),
-    (False, False, False), (None, False, False), (False, None, False),
-    (True, None, True), (None, True, True),
-])
-def test_sor_aftermarket_preserves_verified_single_venue_and_unknown_guard(krx, nxt, allowed):
+@pytest.mark.parametrize(
+    "krx,nxt,allowed",
+    [
+        (True, False, True),
+        (False, True, True),
+        (True, True, True),
+        (False, False, False),
+        (None, False, False),
+        (False, None, False),
+        (True, None, True),
+        (None, True, True),
+    ],
+)
+def test_sor_aftermarket_preserves_verified_single_venue_and_unknown_guard(
+    krx, nxt, allowed
+):
     context = contract.resolve_market_session(_kst_datetime(2026, 9, 14, 17, 30))
     evidence = _eligibility(krx=krx, nxt=nxt)
-    result = contract.resolve_order_type_preflight(context, "SOR", "buy", "00", eligibility=evidence)
+    result = contract.resolve_order_type_preflight(
+        context, "SOR", "buy", "00", eligibility=evidence
+    )
     assert result.allowed is allowed
     # The SOR repair must not widen either direct venue's eligibility.
     for route, flag in (("KRX", krx), ("NXT", nxt)):
-        direct = contract.resolve_order_type_preflight(context, route, "buy", "00", eligibility=evidence)
+        direct = contract.resolve_order_type_preflight(
+            context, route, "buy", "00", eligibility=evidence
+        )
         assert direct.allowed is (flag is True)

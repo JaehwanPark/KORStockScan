@@ -17,10 +17,15 @@ from src.utils.constants import DATA_DIR
 
 REPORT_DIR = DATA_DIR / "report"
 OUTPUT_DIR = REPORT_DIR / "threshold_cycle_postclose_verification"
-EXPLICIT_DISABLED_STAGE_ALLOWLIST = frozenset({
-    "swing_lifecycle", "swing_strategy_discovery", "swing_lifecycle_matrix",
-    "swing_lifecycle_bucket_discovery", "deepseek_swing_lab",
-})
+EXPLICIT_DISABLED_STAGE_ALLOWLIST = frozenset(
+    {
+        "swing_lifecycle",
+        "swing_strategy_discovery",
+        "swing_lifecycle_matrix",
+        "swing_lifecycle_bucket_discovery",
+        "deepseek_swing_lab",
+    }
+)
 
 
 def _load(path: Path) -> dict[str, Any]:
@@ -44,14 +49,26 @@ def _sha(path: Path) -> str | None:
 
 def _artifact_paths(target_date: str) -> dict[str, Path]:
     return {
-        "runtime_summary": REPORT_DIR / "runtime_approval_summary" / f"runtime_approval_summary_{target_date}.json",
-        "postclose_status": REPORT_DIR / "threshold_cycle_postclose_status" / f"threshold_cycle_postclose_{target_date}.status.json",
-        "scanner_lookup_attention_selection": DATA_DIR / "threshold_cycle" / "scanner_lookup_attention_preopen" / f"scanner_lookup_attention_preopen_{target_date}.json",
-        "scanner_lookup_attention_policy": DATA_DIR / "threshold_cycle" / "scanner_lookup_attention_policy" / f"scanner_lookup_attention_policy_{target_date}.json",
+        "runtime_summary": REPORT_DIR
+        / "runtime_approval_summary"
+        / f"runtime_approval_summary_{target_date}.json",
+        "postclose_status": REPORT_DIR
+        / "threshold_cycle_postclose_status"
+        / f"threshold_cycle_postclose_{target_date}.status.json",
+        "scanner_lookup_attention_selection": DATA_DIR
+        / "threshold_cycle"
+        / "scanner_lookup_attention_preopen"
+        / f"scanner_lookup_attention_preopen_{target_date}.json",
+        "scanner_lookup_attention_policy": DATA_DIR
+        / "threshold_cycle"
+        / "scanner_lookup_attention_policy"
+        / f"scanner_lookup_attention_policy_{target_date}.json",
     }
 
 
-def _direct_source_checks(summary: dict[str, Any]) -> tuple[list[dict[str, Any]], list[str]]:
+def _direct_source_checks(
+    summary: dict[str, Any],
+) -> tuple[list[dict[str, Any]], list[str]]:
     checks: list[dict[str, Any]] = []
     issues: list[str] = []
     sources = summary.get("sources") if isinstance(summary.get("sources"), dict) else {}
@@ -73,13 +90,27 @@ def _direct_source_checks(summary: dict[str, Any]) -> tuple[list[dict[str, Any]]
             "current_sha256": _sha(Path(str(source.get("path") or ""))),
         }
         checks.append(check)
-        evidence = check["economic_evidence"] if isinstance(check["economic_evidence"], dict) else {}
+        evidence = (
+            check["economic_evidence"]
+            if isinstance(check["economic_evidence"], dict)
+            else {}
+        )
         comparison_status = evidence.get("comparison_status")
-        if comparison_status in {"source_gap", "unsupported_scope", "mixed"} and evidence.get("policy_apply_allowed") is True:
+        if (
+            comparison_status in {"source_gap", "unsupported_scope", "mixed"}
+            and evidence.get("policy_apply_allowed") is True
+        ):
             issues.append(f"blocked_economic_source_marked_applyable:{owner}")
         if comparison_status == "validated_edge":
-            policy_receipt = source.get("policy_receipt") if isinstance(source.get("policy_receipt"), dict) else {}
-            if evidence.get("policy_handoff_state") != "candidate_published" or policy_receipt.get("valid") is not True:
+            policy_receipt = (
+                source.get("policy_receipt")
+                if isinstance(source.get("policy_receipt"), dict)
+                else {}
+            )
+            if (
+                evidence.get("policy_handoff_state") != "candidate_published"
+                or policy_receipt.get("valid") is not True
+            ):
                 issues.append(f"validated_edge_policy_handoff_missing:{owner}")
         if check["required"] and check["error"]:
             issues.append(f"direct_source_contract_error:{owner}:{check['error']}")
@@ -97,7 +128,10 @@ def _direct_source_checks(summary: dict[str, Any]) -> tuple[list[dict[str, Any]]
 def _direct_checklist_checks(
     target_date: str, summary: dict[str, Any], summary_path: Path
 ) -> tuple[dict[str, Any], list[str]]:
-    from src.engine.automation.postclose_summary_handoff import direct_tower_required, verify_summary_handoff
+    from src.engine.automation.postclose_summary_handoff import (
+        direct_tower_required,
+        verify_summary_handoff,
+    )
     from src.engine.build_next_stage2_checklist import (
         AUTO_START,
         AUTO_END,
@@ -136,11 +170,13 @@ def _direct_checklist_checks(
         checklist_text = checklist_path.read_text(encoding="utf-8")
     except OSError:
         checklist_text = ""
-    task_matches = list(re.finditer(
+    task_matches = list(
+        re.finditer(
             r"^- \[[ xX]\] `\[([A-Za-z0-9_:-]+)\]",
             checklist_text,
             re.MULTILINE,
-        ))
+        )
+    )
     # The operator expanded these existing owners to the complete reversal
     # implementation and next-session workflow. A resolved source does not
     # retire their remaining PREOPEN/PID work. Keep only one manual occurrence,
@@ -148,32 +184,50 @@ def _direct_checklist_checks(
     retained_workflow_ids = set()
     try:
         from src.engine.scalping import mechanistic_entry_runtime_policy as native
+
         bundle = native.load(data_root=DATA_DIR, target_date=apply_date)
-        if (bundle and bundle.get('continuous_reversal')
-                and bundle.get('source_date') == target_date
-                and bundle.get('target_date') == apply_date):
+        if (
+            bundle
+            and bundle.get("continuous_reversal")
+            and bundle.get("source_date") == target_date
+            and bundle.get("target_date") == apply_date
+        ):
             retained_workflow_ids = {
-                'DirectFamilySourceRepairMainMechanisticEntry',
-                'DirectFamilySourceRepairCompactAuxiliary',
+                "DirectFamilySourceRepairMainMechanisticEntry",
+                "DirectFamilySourceRepairCompactAuxiliary",
             }
     except (OSError, ValueError, TypeError, KeyError):
         pass
-    counts = {name: sum(m.group(1) == name for m in task_matches)
-              for name in retained_workflow_ids}
+    counts = {
+        name: sum(m.group(1) == name for m in task_matches)
+        for name in retained_workflow_ids
+    }
     auto_start = checklist_text.find(AUTO_START)
     auto_end = checklist_text.find(AUTO_END, max(0, auto_start))
     retained = []
     actual_ids = []
     for match in task_matches:
         name = match.group(1)
-        generated = auto_start >= 0 and auto_end >= auto_start and auto_start <= match.start() <= auto_end
+        generated = (
+            auto_start >= 0
+            and auto_end >= auto_start
+            and auto_start <= match.start() <= auto_end
+        )
         # The native projection also owns holding/source repair tasks whose
         # IDs do not use the DirectFamily prefix. Unrelated manual owners stay
         # outside this projection, while every generated task is checked.
-        if name not in expected_ids and not name.startswith('DirectFamily') and not generated:
+        if (
+            name not in expected_ids
+            and not name.startswith("DirectFamily")
+            and not generated
+        ):
             continue
-        if (name in retained_workflow_ids and name not in expected_ids
-                and counts[name] == 1 and not generated):
+        if (
+            name in retained_workflow_ids
+            and name not in expected_ids
+            and counts[name] == 1
+            and not generated
+        ):
             retained.append(name)
         else:
             actual_ids.append(name)
@@ -181,7 +235,9 @@ def _direct_checklist_checks(
     if actual_ids != expected_ids:
         issues.append("direct_checklist_task_projection_mismatch")
     normalized = checklist_text.replace("- [x]", "- [ ]").replace("- [X]", "- [ ]")
-    if any(_render_task(task, apply_date)[0] not in normalized for task in expected_tasks):
+    if any(
+        _render_task(task, apply_date)[0] not in normalized for task in expected_tasks
+    ):
         issues.append("direct_checklist_schedule_contract_mismatch")
     if checklist_sha256 != _sha(checklist_path):
         issues.append("direct_checklist_changed_during_verification")
@@ -199,23 +255,37 @@ def _direct_checklist_checks(
 
 def _stage_generation(target_date: str) -> dict[str, dict[str, Any]]:
     """Snapshot stage terminal bytes and identity without including the summary/controller."""
-    from src.engine.automation.postclose_summary_handoff import active_stage_names, stage_path
+    from src.engine.automation.postclose_summary_handoff import (
+        active_stage_names,
+        stage_path,
+    )
 
     result = {}
     names = list(active_stage_names(target_date))
     # Preserve byte-for-byte verification of previously sealed stages. These
     # archive readers cannot dispatch a retired producer or satisfy a new run.
-    if target_date < '2026-10-08':
-        for retired in ('episode_policy', 'machine_attribution', 'machine_timing',
-                        'market_weakness', 'research_capacity', 'research_allocation',
-                        'legacy_policy_approval'):
-            historical = REPORT_DIR / 'postclose_stage_terminal' / target_date / (retired + '.json')
+    if target_date < "2026-10-08":
+        for retired in (
+            "episode_policy",
+            "machine_attribution",
+            "machine_timing",
+            "market_weakness",
+            "research_capacity",
+            "research_allocation",
+            "legacy_policy_approval",
+        ):
+            historical = (
+                REPORT_DIR
+                / "postclose_stage_terminal"
+                / target_date
+                / (retired + ".json")
+            )
             if historical.is_file():
                 names.append(retired)
     for stage in names:
         if stage == "summary_handoff":
             continue
-        path = REPORT_DIR / 'postclose_stage_terminal' / target_date / (stage + '.json')
+        path = REPORT_DIR / "postclose_stage_terminal" / target_date / (stage + ".json")
         value = _load(path)
         result[stage] = {
             "sha256": _sha(path),
@@ -234,8 +304,12 @@ def _stage_generation(target_date: str) -> dict[str, dict[str, Any]]:
 
 
 def current_strict_receipt_issues(
-    attempt_path: Path, target_date: str, *, require_whole_native_chain: bool = False,
-    generation_only: bool = False, checklist_snapshot: Path | None = None,
+    attempt_path: Path,
+    target_date: str,
+    *,
+    require_whole_native_chain: bool = False,
+    generation_only: bool = False,
+    checklist_snapshot: Path | None = None,
 ) -> list[str]:
     """Check a stored strict attempt against the current generation, read only.
 
@@ -244,15 +318,18 @@ def current_strict_receipt_issues(
     """
     report = _load(Path(attempt_path))
     binding = report.get("generation_binding")
-    if (report.get("date") != target_date or report.get("status") != "pass"
-            or not isinstance(binding, dict)):
+    if (
+        report.get("date") != target_date
+        or report.get("status") != "pass"
+        or not isinstance(binding, dict)
+    ):
         return ["strict_receipt_missing_or_invalid_generation"]
     issues = []
     attempt = report.get("verification_attempt") or {}
     try:
-        if (attempt.get("immutable") is not True
-                or Path(str(attempt.get("path") or "")).resolve(strict=True)
-                != Path(attempt_path).resolve(strict=True)):
+        if attempt.get("immutable") is not True or Path(
+            str(attempt.get("path") or "")
+        ).resolve(strict=True) != Path(attempt_path).resolve(strict=True):
             issues.append("strict_attempt_identity_invalid")
     except OSError:
         issues.append("strict_attempt_identity_invalid")
@@ -263,12 +340,17 @@ def current_strict_receipt_issues(
         issues.append("strict_whole_chain_scope_missing")
     if binding.get("source_date") != target_date:
         issues.append("strict_source_date_mismatch")
-    if binding.get("summary_sha256") != _sha(_artifact_paths(target_date)["runtime_summary"]):
+    if binding.get("summary_sha256") != _sha(
+        _artifact_paths(target_date)["runtime_summary"]
+    ):
         issues.append("strict_summary_generation_stale")
     terminal = _load(_artifact_paths(target_date)["postclose_status"])
-    if (binding.get("main_terminal_sha256") != _sha(_artifact_paths(target_date)["postclose_status"])
-            or binding.get("main_run_id") != terminal.get("run_id")
-            or report.get("run_id") != terminal.get("run_id")):
+    if (
+        binding.get("main_terminal_sha256")
+        != _sha(_artifact_paths(target_date)["postclose_status"])
+        or binding.get("main_run_id") != terminal.get("run_id")
+        or report.get("run_id") != terminal.get("run_id")
+    ):
         issues.append("strict_main_terminal_generation_stale")
     checklist = (report.get("checklist_handoff") or {}).get("path")
     if checklist_snapshot is not None:
@@ -281,7 +363,9 @@ def current_strict_receipt_issues(
         issues.append("strict_checklist_generation_stale")
     expected_stages = binding.get("stages")
     current_stages = _stage_generation(target_date)
-    if not isinstance(expected_stages, dict) or set(expected_stages) != set(current_stages):
+    if not isinstance(expected_stages, dict) or set(expected_stages) != set(
+        current_stages
+    ):
         issues.append("strict_stage_set_stale")
     else:
         for stage, current in current_stages.items():
@@ -292,16 +376,25 @@ def current_strict_receipt_issues(
             target_date, require_summary_handoff=True, require_whole_native_chain=True
         )
         issues.extend(f"strict_current_contract:{issue}" for issue in fresh["issues"])
-    if (binding.get("summary_sha256") != _sha(_artifact_paths(target_date)["runtime_summary"])
-            or binding.get("main_terminal_sha256") != _sha(_artifact_paths(target_date)["postclose_status"])
-            or binding.get("checklist_sha256") != _sha(Path(checklist or ""))
-            or expected_stages != _stage_generation(target_date)):
+    if (
+        binding.get("summary_sha256")
+        != _sha(_artifact_paths(target_date)["runtime_summary"])
+        or binding.get("main_terminal_sha256")
+        != _sha(_artifact_paths(target_date)["postclose_status"])
+        or binding.get("checklist_sha256") != _sha(Path(checklist or ""))
+        or expected_stages != _stage_generation(target_date)
+    ):
         issues.append("strict_generation_changed_during_recheck")
     return issues
 
 
-def _terminal_issues(target_date: str, terminal: dict, *, seal: bool = False,
-                     expected_run_id: str | None = None) -> list[str]:
+def _terminal_issues(
+    target_date: str,
+    terminal: dict,
+    *,
+    seal: bool = False,
+    expected_run_id: str | None = None,
+) -> list[str]:
     issues = []
     expected_status = "producers_completed" if seal else "succeeded"
     if terminal.get("status") != expected_status:
@@ -310,7 +403,9 @@ def _terminal_issues(target_date: str, terminal: dict, *, seal: bool = False,
         issues.append("postclose_terminal_date_mismatch")
     if type(terminal.get("exit_code")) is not int or terminal["exit_code"] != 0:
         issues.append("postclose_terminal_exit_code_invalid")
-    if not terminal.get("run_id") or (expected_run_id and terminal.get("run_id") != expected_run_id):
+    if not terminal.get("run_id") or (
+        expected_run_id and terminal.get("run_id") != expected_run_id
+    ):
         issues.append("postclose_terminal_run_mismatch")
     if not re.fullmatch(r"[0-9a-f]{40}", str(terminal.get("code_commit") or "")):
         issues.append("postclose_terminal_code_missing")
@@ -327,12 +422,15 @@ def _terminal_issues(target_date: str, terminal: dict, *, seal: bool = False,
         receipt = terminal.get("verification_receipt") or {}
         path = Path(str(receipt.get("path") or ""))
         proof = _load(path)
-        if (not receipt.get("sha256") or _sha(path) != receipt.get("sha256")
+        if (
+            not receipt.get("sha256")
+            or _sha(path) != receipt.get("sha256")
             or proof.get("status") != "pass"
             or proof.get("verification_scope") != "main_precommit"
             or proof.get("date") != target_date
             or proof.get("run_id") != terminal.get("run_id")
-            or proof.get("code_commit") != terminal.get("code_commit")):
+            or proof.get("code_commit") != terminal.get("code_commit")
+        ):
             issues.append("postclose_terminal_verification_binding_invalid")
     return issues
 
@@ -357,11 +455,17 @@ def build_threshold_cycle_postclose_verification(
     expected_run_id: str | None = None,
     effective_date: str | None = None,
 ) -> dict[str, Any]:
-    if require_whole_native_chain and (not require_summary_handoff or seal_main_run or not require_done_marker):
+    if require_whole_native_chain and (
+        not require_summary_handoff or seal_main_run or not require_done_marker
+    ):
         raise ValueError("whole_native_chain_requires_terminal_and_summary_handoff")
     paths = _artifact_paths(target_date)
-    initial_summary_sha = _sha(paths["runtime_summary"]) if require_summary_handoff else None
-    initial_terminal_sha = _sha(paths["postclose_status"]) if require_summary_handoff else None
+    initial_summary_sha = (
+        _sha(paths["runtime_summary"]) if require_summary_handoff else None
+    )
+    initial_terminal_sha = (
+        _sha(paths["postclose_status"]) if require_summary_handoff else None
+    )
     initial_stages = _stage_generation(target_date) if require_summary_handoff else {}
     summary = _load(paths["runtime_summary"])
     postclose = _load(paths["postclose_status"])
@@ -390,11 +494,21 @@ def build_threshold_cycle_postclose_verification(
     if summary.get("threshold_cycle_ev_retired") is not True:
         issues.append("ev_retirement_contract_missing")
     if require_done_marker or seal_main_run:
-        issues.extend(_terminal_issues(target_date, postclose, seal=seal_main_run,
-                                      expected_run_id=expected_run_id))
+        issues.extend(
+            _terminal_issues(
+                target_date,
+                postclose,
+                seal=seal_main_run,
+                expected_run_id=expected_run_id,
+            )
+        )
     for stage in sorted((disabled_stages or set()) - EXPLICIT_DISABLED_STAGE_ALLOWLIST):
         issues.append(f"disabled_stage_not_allowed:{stage}")
-    if effective_date and (summary.get("preopen_consumption_receipt") or {}).get("apply_date") != effective_date:
+    if (
+        effective_date
+        and (summary.get("preopen_consumption_receipt") or {}).get("apply_date")
+        != effective_date
+    ):
         issues.append("runtime_summary_effective_date_mismatch")
     if require_summary_handoff and not paths["runtime_summary"].exists():
         issues.append("summary_handoff_missing")
@@ -420,15 +534,20 @@ def build_threshold_cycle_postclose_verification(
         initial_summary_sha != _sha(paths["runtime_summary"])
         or initial_terminal_sha != _sha(paths["postclose_status"])
         or initial_stages != stages
-        or (checklist_handoff.get("path") is not None
-            and checklist_handoff.get("verified_sha256") != _sha(Path(checklist_handoff["path"])))
+        or (
+            checklist_handoff.get("path") is not None
+            and checklist_handoff.get("verified_sha256")
+            != _sha(Path(checklist_handoff["path"]))
+        )
     ):
         issues.append("strict_source_generation_changed_during_verification")
     if require_whole_native_chain:
         from src.engine.automation.postclose_summary_handoff import stage_receipt_issues
+
         for stage in stages:
-            if stage_receipt_issues(REPORT_DIR, target_date, stage,
-                                   allow_historical_terminal=True):
+            if stage_receipt_issues(
+                REPORT_DIR, target_date, stage, allow_historical_terminal=True
+            ):
                 issues.append(f"postclose_stage_invalid:{stage}")
     binding = (
         {
@@ -439,17 +558,39 @@ def build_threshold_cycle_postclose_verification(
             "checklist_sha256": checklist_handoff.get("verified_sha256"),
             "stages": stages,
         }
-        if require_summary_handoff else None
+        if require_summary_handoff
+        else None
     )
     status = "pass" if not issues else "fail"
     return {
         "schema_version": 3,
         "report_type": "threshold_cycle_postclose_verification",
-        "verification_scope": "main_precommit" if seal_main_run else ("whole_native_chain" if require_whole_native_chain else ("main_terminal" if require_done_marker else "preterminal")),
-        "whole_native_chain_done_claimed": require_whole_native_chain and status == "pass",
+        "verification_scope": (
+            "main_precommit"
+            if seal_main_run
+            else (
+                "whole_native_chain"
+                if require_whole_native_chain
+                else ("main_terminal" if require_done_marker else "preterminal")
+            )
+        ),
+        "whole_native_chain_done_claimed": require_whole_native_chain
+        and status == "pass",
         "run_id": postclose.get("run_id"),
         "code_commit": postclose.get("code_commit"),
-        "completion_state": "failed" if issues else ("whole_chain_verified" if require_whole_native_chain else ("preterminal_verified" if not require_done_marker else "main_verified")),
+        "completion_state": (
+            "failed"
+            if issues
+            else (
+                "whole_chain_verified"
+                if require_whole_native_chain
+                else (
+                    "preterminal_verified"
+                    if not require_done_marker
+                    else "main_verified"
+                )
+            )
+        ),
         "generation_binding": binding,
         "date": target_date,
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
@@ -465,7 +606,9 @@ def build_threshold_cycle_postclose_verification(
         },
         "checklist_handoff": checklist_handoff,
         "retired_common_layers": [
-            "daily_threshold_cycle_report", "threshold_cycle_ev_report", "threshold_cycle_preopen_apply"
+            "daily_threshold_cycle_report",
+            "threshold_cycle_ev_report",
+            "threshold_cycle_preopen_apply",
         ],
         "disabled_stages": sorted(disabled_stages or set()),
         "allow_pending_entry_replay": allow_pending_entry_replay,
@@ -476,10 +619,13 @@ def build_threshold_cycle_postclose_verification(
 
 def _render(report: dict[str, Any]) -> str:
     lines = [
-        f"# Direct postclose verification - {report['date']}", "",
+        f"# Direct postclose verification - {report['date']}",
+        "",
         f"- status: `{report['status']}`",
         "- common Daily/EV/PREOPEN selector: `retired`",
-        f"- issue_count: `{len(report['issues'])}`", "", "## Direct sources",
+        f"- issue_count: `{len(report['issues'])}`",
+        "",
+        "## Direct sources",
     ]
     lines.extend(
         f"- `{row['owner']}`: exists=`{row['exists']}` date_match=`{row['target_date_matches']}`"
@@ -492,9 +638,13 @@ def _render(report: dict[str, Any]) -> str:
 
 def _atomic_write(path: Path, content: str) -> None:
     from src.engine.infrastructure.research_release_transition import journal_write
-    if journal_write(path,content.encode('utf-8')):return
+
+    if journal_write(path, content.encode("utf-8")):
+        return
     path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, delete=False) as handle:
+    with tempfile.NamedTemporaryFile(
+        "w", encoding="utf-8", dir=path.parent, delete=False
+    ) as handle:
         temporary = Path(handle.name)
         handle.write(content)
         handle.flush()
@@ -505,7 +655,9 @@ def _atomic_write(path: Path, content: str) -> None:
 def _write_verification_receipts(
     target_date: str, report: dict[str, Any], *, invocation: dict[str, Any]
 ) -> tuple[dict[str, Any], Path, Path, Path]:
-    json_path = OUTPUT_DIR / f"threshold_cycle_postclose_verification_{target_date}.json"
+    json_path = (
+        OUTPUT_DIR / f"threshold_cycle_postclose_verification_{target_date}.json"
+    )
     md_path = OUTPUT_DIR / f"threshold_cycle_postclose_verification_{target_date}.md"
     attempt_path = OUTPUT_DIR / "attempts" / target_date / f"{uuid.uuid4().hex}.json"
     report = dict(report)
@@ -533,20 +685,46 @@ def _write_verification_receipts(
 
 def _scanner_scope(target_date: str) -> dict[str, Any]:
     paths = _artifact_paths(target_date)
-    issues = [name for name in ("scanner_lookup_attention_selection", "scanner_lookup_attention_policy") if not paths[name].exists()]
-    return {"status": "pass" if not issues else "fail", "scope": "scanner_lookup_attention_only", "issues": issues, "whole_native_chain_done_claimed": False}
+    issues = [
+        name
+        for name in (
+            "scanner_lookup_attention_selection",
+            "scanner_lookup_attention_policy",
+        )
+        if not paths[name].exists()
+    ]
+    return {
+        "status": "pass" if not issues else "fail",
+        "scope": "scanner_lookup_attention_only",
+        "issues": issues,
+        "whole_native_chain_done_claimed": False,
+    }
 
 
-def _selected_strategy_requires_runtime_activation(selected_strategy: tuple | None) -> bool:
-    if not selected_strategy or selected_strategy[1].get('promotion_pass') is not True:
+def _selected_strategy_requires_runtime_activation(
+    selected_strategy: tuple | None,
+) -> bool:
+    if not selected_strategy or selected_strategy[1].get("promotion_pass") is not True:
         return False
-    return bool(selected_strategy[1].get('candidate'))
+    return bool(selected_strategy[1].get("candidate"))
 
 
-def _main_mechanistic_scope(target_date: str, effective_date: str | None = None, publication_date: str | None = None) -> dict[str, Any]:
-    if (DATA_DIR/'report'/'continuous_reversal'/target_date/'machine.json').is_file():
+def _main_mechanistic_scope(
+    target_date: str,
+    effective_date: str | None = None,
+    publication_date: str | None = None,
+) -> dict[str, Any]:
+    if (
+        DATA_DIR / "report" / "continuous_reversal" / target_date / "machine.json"
+    ).is_file():
         from src.engine.scalping.continuous_reversal_policy import scoped_verification
-        return scoped_verification(DATA_DIR,target_date,effective_date=effective_date,publication_date=publication_date)
+
+        return scoped_verification(
+            DATA_DIR,
+            target_date,
+            effective_date=effective_date,
+            publication_date=publication_date,
+        )
     from src.engine.scalping import ai_action_outcome_calibration as calibration
     from src.engine.scalping import mechanistic_entry_runtime_policy as policy
 
@@ -570,24 +748,35 @@ def _main_mechanistic_scope(target_date: str, effective_date: str | None = None,
     if (
         refinement.get("schema") != calibration.MECHANISTIC_REFINEMENT_SCHEMA
         or refinement.get("target_date") != target_date
-        or source_contract.get("schema")
-        != "machine_common_refinement_population_v1"
-        or terminal.get("full_population_count") != source_contract.get(
-            "structure_contract_population_count", source_contract.get("accepted_unique_trace_count"))
-        or ("structure_contract_population_count" in source_contract and (
-            terminal.get("current_structure_eligible_count") != source_contract.get("accepted_unique_trace_count")
-            or type(source_contract.get("accepted_unique_trace_count")) is not int
-            or type(source_contract.get("structure_contract_population_count")) is not int
-            or not 0 <= source_contract["accepted_unique_trace_count"] <= source_contract["structure_contract_population_count"]
-            or source_contract["structure_contract_population_count"] - source_contract["accepted_unique_trace_count"]
-                != (source_contract.get("row_exclusion_reason_counts") or {}).get("structure_contract_version_mismatch", 0)
-        ))
+        or source_contract.get("schema") != "machine_common_refinement_population_v1"
+        or terminal.get("full_population_count")
+        != source_contract.get(
+            "structure_contract_population_count",
+            source_contract.get("accepted_unique_trace_count"),
+        )
+        or (
+            "structure_contract_population_count" in source_contract
+            and (
+                terminal.get("current_structure_eligible_count")
+                != source_contract.get("accepted_unique_trace_count")
+                or type(source_contract.get("accepted_unique_trace_count")) is not int
+                or type(source_contract.get("structure_contract_population_count"))
+                is not int
+                or not 0
+                <= source_contract["accepted_unique_trace_count"]
+                <= source_contract["structure_contract_population_count"]
+                or source_contract["structure_contract_population_count"]
+                - source_contract["accepted_unique_trace_count"]
+                != (source_contract.get("row_exclusion_reason_counts") or {}).get(
+                    "structure_contract_version_mismatch", 0
+                )
+            )
+        )
     ):
         issues.append("main_machine_refinement_contract_invalid")
-    if (
-        not isinstance(hierarchy.get("runtime_extensions_by_scope"), dict)
-        or not isinstance(hierarchy.get("machine_decision_case_table"), dict)
-    ):
+    if not isinstance(
+        hierarchy.get("runtime_extensions_by_scope"), dict
+    ) or not isinstance(hierarchy.get("machine_decision_case_table"), dict):
         issues.append("main_machine_hierarchy_or_case_table_missing")
     if terminal.get("state") not in {
         "source_gap",
@@ -602,9 +791,14 @@ def _main_mechanistic_scope(target_date: str, effective_date: str | None = None,
     ):
         bundle = _load(candidate)
         machine_source = bundle.get("machine_evaluation_source") or {}
-        if (machine_source.get("source_date") == target_date
+        if (
+            machine_source.get("source_date") == target_date
             and (not effective_date or bundle.get("target_date") == effective_date)
-            and (not publication_date or bundle.get("publication_date") == publication_date)):
+            and (
+                not publication_date
+                or bundle.get("publication_date") == publication_date
+            )
+        ):
             matching.append((candidate, bundle))
     if len(matching) != 1:
         issues.append("main_machine_future_policy_missing_or_ambiguous")
@@ -616,27 +810,40 @@ def _main_mechanistic_scope(target_date: str, effective_date: str | None = None,
                 data_root=DATA_DIR,
                 target_date=str(bundle.get("target_date") or ""),
             )
-            if not loaded or loaded.get("bundle_sha256") != bundle.get(
-                "bundle_sha256"
-            ):
+            if not loaded or loaded.get("bundle_sha256") != bundle.get("bundle_sha256"):
                 raise ValueError("main_machine_loaded_bundle_mismatch")
         except (OSError, ValueError):
             issues.append("main_machine_future_policy_invalid")
-        if bundle.get('winrate_selection'):
-            winrate = _load(REPORT_DIR / 'ai_decision_action_outcome_calibration' /
-                            f'winrate_policy_{target_date}.json')
-            proof = bundle['winrate_selection']
+        if bundle.get("winrate_selection"):
+            winrate = _load(
+                REPORT_DIR
+                / "ai_decision_action_outcome_calibration"
+                / f"winrate_policy_{target_date}.json"
+            )
+            proof = bundle["winrate_selection"]
             designated_bound = False
-            if proof.get('schema') == 'main_machine_designated_selection_v1':
+            if proof.get("schema") == "main_machine_designated_selection_v1":
                 from src.engine.scalping.entry_designated_policy import binding_valid
+
                 designated_bound = binding_valid(winrate, bundle, DATA_DIR)
-            if (machine_source.get('report_scope') != 'main_entry_winrate'
-                or (not designated_bound and machine_source.get('artifact_content_sha256') != winrate.get('artifact_content_sha256'))
-                or (not designated_bound and proof.get('report_sha256') != winrate.get('artifact_content_sha256'))
-                or proof.get('machine_policy_sha256') != policy.digest(bundle['machine_policy'])
-                or proof.get('disposition') != bundle.get('machine_disposition')
-                or winrate.get('selection_basis') != 'win_rate_only'):
-                issues.append('main_machine_winrate_selection_binding_invalid')
+            if (
+                machine_source.get("report_scope") != "main_entry_winrate"
+                or (
+                    not designated_bound
+                    and machine_source.get("artifact_content_sha256")
+                    != winrate.get("artifact_content_sha256")
+                )
+                or (
+                    not designated_bound
+                    and proof.get("report_sha256")
+                    != winrate.get("artifact_content_sha256")
+                )
+                or proof.get("machine_policy_sha256")
+                != policy.digest(bundle["machine_policy"])
+                or proof.get("disposition") != bundle.get("machine_disposition")
+                or winrate.get("selection_basis") != "win_rate_only"
+            ):
+                issues.append("main_machine_winrate_selection_binding_invalid")
         else:
             if (
                 machine_source.get("report_scope") != "main_mechanistic_entry"
@@ -665,16 +872,21 @@ def _main_mechanistic_scope(target_date: str, effective_date: str | None = None,
     try:
         current_strategy = policy.current_strategy_receipt(data_root=DATA_DIR)
         from src.engine.scalping.entry_strategy_policy import select_report_candidate
+
         selected_strategy = select_report_candidate(source)
         if _selected_strategy_requires_runtime_activation(selected_strategy):
-            active_candidate_sha256 = policy.active_candidate_sha256_for_scope(current_strategy, selected_strategy[0])
-            if active_candidate_sha256 != policy.digest(selected_strategy[1]['candidate']):
-                issues.append('main_machine_qualified_strategy_not_current')
+            active_candidate_sha256 = policy.active_candidate_sha256_for_scope(
+                current_strategy, selected_strategy[0]
+            )
+            if active_candidate_sha256 != policy.digest(
+                selected_strategy[1]["candidate"]
+            ):
+                issues.append("main_machine_qualified_strategy_not_current")
     except (OSError, ValueError, TypeError, KeyError) as exc:
-        current_strategy = dict(status='active_generation_invalid', reason=str(exc))
-        issues.append('main_machine_current_strategy_invalid')
+        current_strategy = dict(status="active_generation_invalid", reason=str(exc))
+        issues.append("main_machine_current_strategy_invalid")
     return {
-        'current_strategy_generation': current_strategy,
+        "current_strategy_generation": current_strategy,
         "status": "pass" if not issues else "fail",
         "scope": "main_mechanistic_entry_only",
         "issues": issues,
@@ -699,8 +911,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--allow-pending-entry-replay", action="store_true")
     parser.add_argument("--disabled-stage", action="append", default=[])
     args = parser.parse_args(argv)
-    if args.seal_main_run and (not args.expected_run_id or args.allow_pending_done_marker
-        or not args.require_summary_handoff):
+    if args.seal_main_run and (
+        not args.expected_run_id
+        or args.allow_pending_done_marker
+        or not args.require_summary_handoff
+    ):
         parser.error("seal requires expected run identity and strict summary handoff")
     if args.scanner_lookup_summary_only:
         report = _scanner_scope(args.date)
@@ -708,30 +923,49 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if report["status"] == "pass" else 2
     if args.entry_cancel_wait_summary_only:
         from src.engine.automation.entry_cancel_wait_tuning import verify_handoff
+
         report = verify_handoff(args.date)
         print(json.dumps(report, ensure_ascii=False))
         return 0 if report.get("status") == "PASS" else 2
     if args.compact_summary_only or args.main_mechanistic_summary_only:
         effective = _effective_date(args.date, args.effective_date)
         if args.compact_summary_only:
-            from src.engine.scalping.main_ai_prompt_consumer import verify_compact_handoff
-            report = verify_compact_handoff(DATA_DIR, args.date, effective_date=effective,
-                                            publication_date=args.publication_date)
+            from src.engine.scalping.main_ai_prompt_consumer import (
+                verify_compact_handoff,
+            )
+
+            report = verify_compact_handoff(
+                DATA_DIR,
+                args.date,
+                effective_date=effective,
+                publication_date=args.publication_date,
+            )
         else:
-            report = _main_mechanistic_scope(args.date, effective, args.publication_date)
+            report = _main_mechanistic_scope(
+                args.date, effective, args.publication_date
+            )
         if args.require_summary_handoff:
             handoff = build_threshold_cycle_postclose_verification(
-                args.date, require_done_marker=False, require_summary_handoff=True,
-                effective_date=effective)
+                args.date,
+                require_done_marker=False,
+                require_summary_handoff=True,
+                effective_date=effective,
+            )
             report["issues"].extend(handoff["issues"])
             report["summary_handoff"] = handoff["checklist_handoff"]
-        report.update(status="fail" if report["issues"] else "pass", date=args.date,
-                      direct_source_checks=[], effective_date=effective,
-                      failure_summary={"issues": report["issues"]})
+        report.update(
+            status="fail" if report["issues"] else "pass",
+            date=args.date,
+            direct_source_checks=[],
+            effective_date=effective,
+            failure_summary={"issues": report["issues"]},
+        )
         original_output = globals()["OUTPUT_DIR"]
         try:
             globals()["OUTPUT_DIR"] = original_output / "scoped" / report["scope"]
-            report, *_ = _write_verification_receipts(args.date, report, invocation=vars(args))
+            report, *_ = _write_verification_receipts(
+                args.date, report, invocation=vars(args)
+            )
         finally:
             globals()["OUTPUT_DIR"] = original_output
         print(json.dumps(report, ensure_ascii=False))
@@ -747,7 +981,8 @@ def main(argv: list[str] | None = None) -> int:
         effective_date=args.effective_date,
     )
     report, json_path, md_path, attempt_path = _write_verification_receipts(
-        args.date, report,
+        args.date,
+        report,
         invocation={
             "require_done_marker": not args.allow_pending_done_marker,
             "require_summary_handoff": args.require_summary_handoff,
@@ -757,12 +992,33 @@ def main(argv: list[str] | None = None) -> int:
     if args.seal_main_run and report["status"] == "pass":
         status_path = _artifact_paths(args.date)["postclose_status"]
         terminal = _load(status_path)
-        if _terminal_issues(args.date, terminal, seal=True, expected_run_id=report["run_id"]):
+        if _terminal_issues(
+            args.date, terminal, seal=True, expected_run_id=report["run_id"]
+        ):
             raise RuntimeError("postclose_terminal_changed_during_seal")
-        terminal.update(status="succeeded", reason="verified_main_completed",
-                        verification_receipt={"path": str(attempt_path.resolve()), "sha256": _sha(attempt_path)})
-        _atomic_write(status_path, json.dumps(terminal, ensure_ascii=False, indent=2) + "\n")
-    print(json.dumps({"status": report["status"], "json": str(json_path), "md": str(md_path), "attempt_json": str(attempt_path), "failure_summary": report["failure_summary"]}, ensure_ascii=False))
+        terminal.update(
+            status="succeeded",
+            reason="verified_main_completed",
+            verification_receipt={
+                "path": str(attempt_path.resolve()),
+                "sha256": _sha(attempt_path),
+            },
+        )
+        _atomic_write(
+            status_path, json.dumps(terminal, ensure_ascii=False, indent=2) + "\n"
+        )
+    print(
+        json.dumps(
+            {
+                "status": report["status"],
+                "json": str(json_path),
+                "md": str(md_path),
+                "attempt_json": str(attempt_path),
+                "failure_summary": report["failure_summary"],
+            },
+            ensure_ascii=False,
+        )
+    )
     return 0 if report["status"] == "pass" else 1
 
 

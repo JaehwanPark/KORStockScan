@@ -3,6 +3,7 @@
 Owns normalized all-turn population and cumulative raw win-fraction selection.
 No broker, provider routing changes, trade execution or legacy trace selection.
 """
+
 from __future__ import annotations
 import argparse
 import concurrent.futures
@@ -20,161 +21,321 @@ from zoneinfo import ZoneInfo
 
 from src.engine.scalping import continuous_reversal as kernel
 from src.engine.scalping.reversal_auxiliary_contract import (
-    ARMS, TIE_ORDER, PRODUCTION_VERSION, production_request, validate_response,
+    ARMS,
+    TIE_ORDER,
+    PRODUCTION_VERSION,
+    production_request,
+    validate_response,
 )
 
-KST = ZoneInfo('Asia/Seoul')
-SCHEMA = 'continuous_reversal_research_v1'
-AUTH = dict(runtime_effect=False, allowed_runtime_apply=False,
-            actual_order_submitted=False, broker_order_forbidden=True)
+KST = ZoneInfo("Asia/Seoul")
+SCHEMA = "continuous_reversal_research_v1"
+AUTH = dict(
+    runtime_effect=False,
+    allowed_runtime_apply=False,
+    actual_order_submitted=False,
+    broker_order_forbidden=True,
+)
 
 
 def digest(value):
-    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=True, allow_nan=False).encode()).hexdigest()
+    return hashlib.sha256(
+        json.dumps(
+            value,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+            allow_nan=False,
+        ).encode()
+    ).hexdigest()
 
 
 def file_hash(path):
     from src.engine.infrastructure.validation_digest_session import reused_digest
+
     reused = reused_digest(path)
     if reused is not None:
         return reused
-    with Path(path).open('rb') as handle:
-        return hashlib.file_digest(handle, 'sha256').hexdigest()
+    with Path(path).open("rb") as handle:
+        return hashlib.file_digest(handle, "sha256").hexdigest()
 
 
 def write(path, value):
     from src.engine.scalping.mechanistic_entry_runtime_policy import _atomic_write_json
+
     _atomic_write_json(Path(path), value)
 
 
 def seal(value):
-    value = {k: v for k, v in value.items() if k != 'artifact_content_sha256'}
-    value['artifact_content_sha256'] = digest(value)
+    value = {k: v for k, v in value.items() if k != "artifact_content_sha256"}
+    value["artifact_content_sha256"] = digest(value)
     return value
 
 
 def append(path, value):
-    with Path(path).open('a') as handle:
-        handle.write(json.dumps(value, ensure_ascii=True, allow_nan=False, separators=(',', ':'))+'\n')
+    with Path(path).open("a") as handle:
+        handle.write(
+            json.dumps(value, ensure_ascii=True, allow_nan=False, separators=(",", ":"))
+            + "\n"
+        )
         handle.flush()
         os.fsync(handle.fileno())
 
 
 def directory(data_root, day):
-    return Path(data_root)/'report'/'continuous_reversal'/day
+    return Path(data_root) / "report" / "continuous_reversal" / day
 
 
-def result_paths(data_root,day,name='provider-results.jsonl'):
-    root=Path(data_root)/'report'/'continuous_reversal'
-    return [p for p in sorted(root.glob('????-??-??/'+name)) if '2026-06-05'<=p.parent.name<=day]
+def result_paths(data_root, day, name="provider-results.jsonl"):
+    root = Path(data_root) / "report" / "continuous_reversal"
+    return [
+        p
+        for p in sorted(root.glob("????-??-??/" + name))
+        if "2026-06-05" <= p.parent.name <= day
+    ]
 
 
-def completed_bars(data_root,day,*,snapshot_sink=None,source=None):
+def completed_bars(data_root, day, *, snapshot_sink=None, source=None):
     """Freeze or resume exact-item outcome sources, including preserved REST.
 
     Each REST-adjusted revision remains an independent label series. Frozen
     generations never consult a later database pointer or mutable checkpoint.
     """
     from src.trading.market import completed_history as H
-    sources=defaultdict(dict);native=set();receipts=[];alternatives=defaultdict(list)
-    def freeze(original,raw):
-        if snapshot_sink:return Path(snapshot_sink(original,raw))
-        dst=directory(data_root,day)/'completed-source-snapshots'/(hashlib.sha256(raw).hexdigest()+'.json')
-        dst.parent.mkdir(parents=True,exist_ok=True)
+
+    sources = defaultdict(dict)
+    native = set()
+    receipts = []
+    alternatives = defaultdict(list)
+
+    def freeze(original, raw):
+        if snapshot_sink:
+            return Path(snapshot_sink(original, raw))
+        dst = (
+            directory(data_root, day)
+            / "completed-source-snapshots"
+            / (hashlib.sha256(raw).hexdigest() + ".json")
+        )
+        dst.parent.mkdir(parents=True, exist_ok=True)
         if dst.exists():
-            if dst.read_bytes()!=raw:raise ValueError('completed_source_snapshot_changed')
+            if dst.read_bytes() != raw:
+                raise ValueError("completed_source_snapshot_changed")
         else:
             import tempfile
-            fd,name=tempfile.mkstemp(dir=dst.parent,prefix='.completed-')
+
+            fd, name = tempfile.mkstemp(dir=dst.parent, prefix=".completed-")
             try:
-                with os.fdopen(fd,'wb') as out:out.write(raw);out.flush();os.fsync(out.fileno())
-                try:os.link(name,dst)
+                with os.fdopen(fd, "wb") as out:
+                    out.write(raw)
+                    out.flush()
+                    os.fsync(out.fileno())
+                try:
+                    os.link(name, dst)
                 except FileExistsError:
-                    if dst.read_bytes()!=raw:raise ValueError('completed_source_snapshot_changed')
-            finally:os.unlink(name)
+                    if dst.read_bytes() != raw:
+                        raise ValueError("completed_source_snapshot_changed")
+            finally:
+                os.unlink(name)
         return dst
-    frozen=(source or {}).get('completed_bar_sources',{}).get(day)
+
+    frozen = (source or {}).get("completed_bar_sources", {}).get(day)
+
     def inputs():
         if frozen is not None:
             for rec in frozen:
-                raw=Path(rec['path']).read_bytes()
-                if hashlib.sha256(raw).hexdigest()!=rec['sha256']:raise ValueError('completed_source_snapshot_changed')
-                yield Path(rec['path']),raw,rec['kind'],rec.get('origin_path',rec['path'])
+                raw = Path(rec["path"]).read_bytes()
+                if hashlib.sha256(raw).hexdigest() != rec["sha256"]:
+                    raise ValueError("completed_source_snapshot_changed")
+                yield Path(rec["path"]), raw, rec["kind"], rec.get(
+                    "origin_path", rec["path"]
+                )
             return
-        paths=[Path(data_root)/'report'/'machine_completed_price_source'/f'machine_completed_price_source_{day}.json']
-        paths+=sorted((Path(data_root)/'runtime'/'shared_ws_completed_bars'/day).glob('*/*.json'))
+        paths = [
+            Path(data_root)
+            / "report"
+            / "machine_completed_price_source"
+            / f"machine_completed_price_source_{day}.json"
+        ]
+        paths += sorted(
+            (Path(data_root) / "runtime" / "shared_ws_completed_bars" / day).glob(
+                "*/*.json"
+            )
+        )
         for path in paths:
-            if path.is_file():yield path,path.read_bytes(),'broker' if path.name.startswith('machine_completed_price_source_') else 'ws',str(path.resolve())
-        for value in H.outcome_revisions(data_root,day):
-            raw=json.dumps(seal(value),sort_keys=True,separators=(',',':'),ensure_ascii=True,allow_nan=False).encode()
-            origin=Path(data_root)/'runtime/main_minute_history'/day.replace('-','')/'completed.sqlite3'
-            yield origin,raw,'rest_history',str(origin.resolve())
-    for path,raw_bytes,kind,origin in inputs():
-        value=json.loads(raw_bytes)
-        if value.get('source_date',value.get('trade_date'))!=day:raise ValueError('completed_source_date_conflict')
-        broker=kind=='broker'
-        if (broker or kind=='rest_history') and value.get('artifact_content_sha256')!=seal(value)['artifact_content_sha256']:
-            if frozen is not None:raise ValueError('completed_source_seal_invalid')
+            if path.is_file():
+                yield path, path.read_bytes(), (
+                    "broker"
+                    if path.name.startswith("machine_completed_price_source_")
+                    else "ws"
+                ), str(path.resolve())
+        for value in H.outcome_revisions(data_root, day):
+            raw = json.dumps(
+                seal(value),
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+                allow_nan=False,
+            ).encode()
+            origin = (
+                Path(data_root)
+                / "runtime/main_minute_history"
+                / day.replace("-", "")
+                / "completed.sqlite3"
+            )
+            yield origin, raw, "rest_history", str(origin.resolve())
+
+    for path, raw_bytes, kind, origin in inputs():
+        value = json.loads(raw_bytes)
+        if value.get("source_date", value.get("trade_date")) != day:
+            raise ValueError("completed_source_date_conflict")
+        broker = kind == "broker"
+        if (broker or kind == "rest_history") and value.get(
+            "artifact_content_sha256"
+        ) != seal(value)["artifact_content_sha256"]:
+            if frozen is not None:
+                raise ValueError("completed_source_seal_invalid")
             continue
-        receipt_path=freeze(path,raw_bytes)
-        if file_hash(receipt_path)!=hashlib.sha256(raw_bytes).hexdigest():raise ValueError('completed_source_snapshot_changed')
-        receipts.append(dict(path=str(receipt_path.resolve()),sha256=hashlib.sha256(raw_bytes).hexdigest(),kind=kind,source_date=day,origin_path=origin,**(dict(consumer_code_sha256=file_hash(H.__file__)) if kind=='rest_history' else {})))
-        if kind=='rest_history':
-            if value.get('status')!='verified':continue
-            rows=H.outcome_rows(value,day=day)
-            records=[dict(t=datetime.strptime(r['source_timestamp'],'%Y%m%d%H%M%S').replace(tzinfo=KST).timestamp(),h=r['고가'],l=r['저가']) for r in rows if r['source_timestamp'].startswith(day.replace('-',''))]
-            alternatives[day,value['source_item']].append(kernel.Bars(records,revision=value['revision']))
+        receipt_path = freeze(path, raw_bytes)
+        if file_hash(receipt_path) != hashlib.sha256(raw_bytes).hexdigest():
+            raise ValueError("completed_source_snapshot_changed")
+        receipts.append(
+            dict(
+                path=str(receipt_path.resolve()),
+                sha256=hashlib.sha256(raw_bytes).hexdigest(),
+                kind=kind,
+                source_date=day,
+                origin_path=origin,
+                **(
+                    dict(consumer_code_sha256=file_hash(H.__file__))
+                    if kind == "rest_history"
+                    else {}
+                ),
+            )
+        )
+        if kind == "rest_history":
+            if value.get("status") != "verified":
+                continue
+            rows = H.outcome_rows(value, day=day)
+            records = [
+                dict(
+                    t=datetime.strptime(r["source_timestamp"], "%Y%m%d%H%M%S")
+                    .replace(tzinfo=KST)
+                    .timestamp(),
+                    h=r["고가"],
+                    l=r["저가"],
+                )
+                for r in rows
+                if r["source_timestamp"].startswith(day.replace("-", ""))
+            ]
+            alternatives[day, value["source_item"]].append(
+                kernel.Bars(records, revision=value["revision"])
+            )
             continue
-        for bar in value.get('prices',[]) if broker else value.get('bars',[]):
+        for bar in value.get("prices", []) if broker else value.get("bars", []):
             if broker:
-                if bar.get('completed_bar_only') is not True or bar.get('source_quality')!='pass_completed_ka10080_bar':continue
-                item=bar.get('source_request_code');stamp=datetime.fromisoformat(bar['timestamp'])
-                if stamp.tzinfo is None:continue
-                t=stamp.timestamp()
+                if (
+                    bar.get("completed_bar_only") is not True
+                    or bar.get("source_quality") != "pass_completed_ka10080_bar"
+                ):
+                    continue
+                item = bar.get("source_request_code")
+                stamp = datetime.fromisoformat(bar["timestamp"])
+                if stamp.tzinfo is None:
+                    continue
+                t = stamp.timestamp()
             else:
-                if bar.get('status')!='complete' or bar.get('issues') or bar.get('source_item')!=value.get('source_item'):continue
-                item=value.get('source_item');t=bar.get('minute_epoch')
-            prices=[bar.get(k) for k in ['open','high','low','close']]
-            if not item or any(type(p) not in {int,float} or not __import__('math').isfinite(p) or p<=0 for p in prices):continue
-            if not bar['low']<=min(bar['open'],bar['close'])<=max(bar['open'],bar['close'])<=bar['high']:continue
-            if type(t) not in {int,float} or datetime.fromtimestamp(t,KST).date().isoformat()!=day:continue
-            key=(day,item)
-            if not broker and (key,t) in native:continue
-            record=dict(t=t,h=bar['high'],l=bar['low'])
-            old=sources[key].get(t)
-            if old is not None and old!=record:record['invalid']=True
-            sources[key][t]=record
-            if broker:native.add((key,t))
-    return {key:kernel.Bars(list(sources[key].values()),alternatives=alternatives[key]) for key in sources.keys()|alternatives.keys()},receipts
+                if (
+                    bar.get("status") != "complete"
+                    or bar.get("issues")
+                    or bar.get("source_item") != value.get("source_item")
+                ):
+                    continue
+                item = value.get("source_item")
+                t = bar.get("minute_epoch")
+            prices = [bar.get(k) for k in ["open", "high", "low", "close"]]
+            if not item or any(
+                type(p) not in {int, float}
+                or not __import__("math").isfinite(p)
+                or p <= 0
+                for p in prices
+            ):
+                continue
+            if (
+                not bar["low"]
+                <= min(bar["open"], bar["close"])
+                <= max(bar["open"], bar["close"])
+                <= bar["high"]
+            ):
+                continue
+            if (
+                type(t) not in {int, float}
+                or datetime.fromtimestamp(t, KST).date().isoformat() != day
+            ):
+                continue
+            key = (day, item)
+            if not broker and (key, t) in native:
+                continue
+            record = dict(t=t, h=bar["high"], l=bar["low"])
+            old = sources[key].get(t)
+            if old is not None and old != record:
+                record["invalid"] = True
+            sources[key][t] = record
+            if broker:
+                native.add((key, t))
+    return {
+        key: kernel.Bars(list(sources[key].values()), alternatives=alternatives[key])
+        for key in sources.keys() | alternatives.keys()
+    }, receipts
 
 
 def _validated_population(path, *, day, expected_sha256=None):
-    content=Path(path).read_bytes();source=json.loads(content)
-    if (source.get('source_date')!=day or source.get('artifact_content_sha256')!=seal(source)['artifact_content_sha256']
-        or expected_sha256 is not None and source.get('artifact_content_sha256')!=expected_sha256):
-        raise ValueError('continuous_reversal_source_manifest_invalid')
-    for field in ('normalized_sources','reviewed_events'):
-        records=source[field].get('partitions',[]) if field=='normalized_sources' else source[field]
+    content = Path(path).read_bytes()
+    source = json.loads(content)
+    if (
+        source.get("source_date") != day
+        or source.get("artifact_content_sha256")
+        != seal(source)["artifact_content_sha256"]
+        or expected_sha256 is not None
+        and source.get("artifact_content_sha256") != expected_sha256
+    ):
+        raise ValueError("continuous_reversal_source_manifest_invalid")
+    for field in ("normalized_sources", "reviewed_events"):
+        records = (
+            source[field].get("partitions", [])
+            if field == "normalized_sources"
+            else source[field]
+        )
         for record in records:
-            if file_hash(record['path'])!=record['sha256']:raise ValueError('continuous_reversal_frozen_source_changed')
-    for records in source.get('completed_bar_sources',{}).values():
+            if file_hash(record["path"]) != record["sha256"]:
+                raise ValueError("continuous_reversal_frozen_source_changed")
+    for records in source.get("completed_bar_sources", {}).values():
         for rec in records:
-            if file_hash(rec['path'])!=rec['sha256']:raise ValueError('completed_source_snapshot_changed')
+            if file_hash(rec["path"]) != rec["sha256"]:
+                raise ValueError("completed_source_snapshot_changed")
     return source
 
 
 def population_receipt(source):
     """Bind a selected immutable generation to a run without resealing it."""
-    path=source.get('source_manifest_path')
-    if not path:return None  # Historical/synthetic manifests retain their pins.
-    verified=_validated_population(path,day=source['source_date'],expected_sha256=source['artifact_content_sha256'])
-    if verified!=source:raise ValueError('continuous_reversal_selected_source_changed')
-    return dict(path=str(Path(path).resolve()),sha256=file_hash(path),
-                artifact_content_sha256=source['artifact_content_sha256'],
-                source_generation=source.get('source_generation'))
+    path = source.get("source_manifest_path")
+    if not path:
+        return None  # Historical/synthetic manifests retain their pins.
+    verified = _validated_population(
+        path,
+        day=source["source_date"],
+        expected_sha256=source["artifact_content_sha256"],
+    )
+    if verified != source:
+        raise ValueError("continuous_reversal_selected_source_changed")
+    return dict(
+        path=str(Path(path).resolve()),
+        sha256=file_hash(path),
+        artifact_content_sha256=source["artifact_content_sha256"],
+        source_generation=source.get("source_generation"),
+    )
 
 
-def ensure_population(data_root,day, *, source_generation=None, expected_sha256=None):
+def ensure_population(data_root, day, *, source_generation=None, expected_sha256=None):
     """Resume one immutable source; explicit generations never fall back.
 
     An explicit missing generation with an expected hash is a read-only resume
@@ -182,95 +343,238 @@ def ensure_population(data_root,day, *, source_generation=None, expected_sha256=
     Already published source bytes/Provider identities are never overwritten.
     """
     import re
-    base=directory(data_root,day)
-    if source_generation is not None and not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}',source_generation):
-        raise ValueError('continuous_reversal_source_generation_invalid')
-    out=base if source_generation is None else base/'source-generations'/source_generation
-    path=out/'source.json'
-    if expected_sha256 is not None and not path.is_file():raise ValueError('continuous_reversal_source_generation_missing')
-    out.mkdir(parents=True,exist_ok=True)
-    with (out/'source-generation.lock').open('a') as handle:
-        fcntl.flock(handle,fcntl.LOCK_EX)
-        if path.is_file():return _validated_population(path,day=day,expected_sha256=expected_sha256)
-        return _build_population(data_root,day,out)
+
+    base = directory(data_root, day)
+    if source_generation is not None and not re.fullmatch(
+        r"[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}", source_generation
+    ):
+        raise ValueError("continuous_reversal_source_generation_invalid")
+    out = (
+        base
+        if source_generation is None
+        else base / "source-generations" / source_generation
+    )
+    path = out / "source.json"
+    if expected_sha256 is not None and not path.is_file():
+        raise ValueError("continuous_reversal_source_generation_missing")
+    out.mkdir(parents=True, exist_ok=True)
+    with (out / "source-generation.lock").open("a") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        if path.is_file():
+            return _validated_population(path, day=day, expected_sha256=expected_sha256)
+        return _build_population(data_root, day, out)
 
 
-def _build_population(data_root,day,out):
-    path=out/'source.json'
+def _build_population(data_root, day, out):
+    path = out / "source.json"
 
-    from src.engine.scalping.continuous_reversal_source import freeze_normalized_sources, iter_normalized_symbols
-    out.mkdir(parents=True,exist_ok=True)
-    previous=[p for p in sorted(directory(data_root,day).parent.glob('????-??-??/source.json')) if '2026-06-05'<=p.parent.name<day]
-    parent=json.loads(previous[-1].read_text()) if previous else None
-    if parent and parent['artifact_content_sha256']!=digest({k:v for k,v in parent.items() if k!='artifact_content_sha256'}):
-        raise ValueError('cumulative_reversal_parent_invalid')
-    normalized=freeze_normalized_sources(data_root,day,out/'normalized')
-    events=[];selected={};bars,bar_receipts=completed_bars(data_root,day)
+    from src.engine.scalping.continuous_reversal_source import (
+        freeze_normalized_sources,
+        iter_normalized_symbols,
+    )
+
+    out.mkdir(parents=True, exist_ok=True)
+    previous = [
+        p
+        for p in sorted(directory(data_root, day).parent.glob("????-??-??/source.json"))
+        if "2026-06-05" <= p.parent.name < day
+    ]
+    parent = json.loads(previous[-1].read_text()) if previous else None
+    if parent and parent["artifact_content_sha256"] != digest(
+        {k: v for k, v in parent.items() if k != "artifact_content_sha256"}
+    ):
+        raise ValueError("cumulative_reversal_parent_invalid")
+    normalized = freeze_normalized_sources(data_root, day, out / "normalized")
+    events = []
+    selected = {}
+    bars, bar_receipts = completed_bars(data_root, day)
     for source in normalized:
-        output=out/f"events-{source['venue']}-{source['session']}.jsonl.gz"
-        count=0
-        with gzip.open(output,'wt') as handle:
-            for symbol,rows in iter_normalized_symbols(source['path']):
-                turns,coverage=kernel.analyze_symbol(rows,day,source['venue'],source['session'],symbol)
-                market=kernel.market_bucket(source['session']);key='|'.join((day,symbol,market))
-                rank=(coverage['valid_price_rows'],{'SOR':2,'NXT':1,'KRX':0}[source['venue']])
-                if key not in selected or tuple(selected[key]['rank'])<rank:
-                    selected[key]=dict(rank=rank,venue=source['venue'],session=source['session'])
+        output = out / f"events-{source['venue']}-{source['session']}.jsonl.gz"
+        count = 0
+        with gzip.open(output, "wt") as handle:
+            for symbol, rows in iter_normalized_symbols(source["path"]):
+                turns, coverage = kernel.analyze_symbol(
+                    rows, day, source["venue"], source["session"], symbol
+                )
+                market = kernel.market_bucket(source["session"])
+                key = "|".join((day, symbol, market))
+                rank = (
+                    coverage["valid_price_rows"],
+                    {"SOR": 2, "NXT": 1, "KRX": 0}[source["venue"]],
+                )
+                if key not in selected or tuple(selected[key]["rank"]) < rank:
+                    selected[key] = dict(
+                        rank=rank, venue=source["venue"], session=source["session"]
+                    )
                 for event in turns:
-                    supplement=bars.get((day,event['source_item']))
-                    if event['outcome']['status']=='UNRESOLVED' and supplement:
-                        label=supplement.label(event['epoch'],event['entry_ask'],1800)
-                        if label['status']!='UNRESOLVED':
-                            event['raw_outcome']=event['outcome']
-                            event['outcome']={**label,'source':'same_item_completed_bar_backfill'}
-                    if event['outcome']['status']=='FAIL_TIMEOUT':
-                        if supplement and (event.get('late_outcome') or {}).get('status') == 'UNRESOLVED':
-                            event['late_outcome']=supplement.label(event['epoch'],event['entry_ask'],3600)
-                    handle.write(json.dumps(event,allow_nan=False,separators=(',',':'))+'\n');count+=1
-        events.append(dict(day=day,venue=source['venue'],session=source['session'],path=str(output.resolve()),sha256=file_hash(output),events=count))
-    manifest=seal(dict(schema=SCHEMA,source_date=day,generated_at=datetime.now(KST).isoformat(),
-        source_manifest_path=str(path.resolve()),source_generation=out.name if out.parent.name=='source-generations' else None,
-        normalized_sources=dict(partitions=(parent or {}).get('normalized_sources',{}).get('partitions',[])+normalized),
-        reviewed_events=(parent or {}).get('reviewed_events',[])+events,
-        selected_routes={**(parent or {}).get('selected_routes',{}),**selected},
-        completed_bar_receipts=bar_receipts,completed_bar_sources={**(parent or {}).get('completed_bar_sources',{}),day:bar_receipts},parent_manifest_sha256=(parent or {}).get('artifact_content_sha256'),
-        code_sha256=file_hash(kernel.__file__),machine_decisions_used=False,new_raw_partition_count=len(normalized),**AUTH))
-    write(path,manifest)
-    return _validated_population(path,day=day)
+                    supplement = bars.get((day, event["source_item"]))
+                    if event["outcome"]["status"] == "UNRESOLVED" and supplement:
+                        label = supplement.label(
+                            event["epoch"], event["entry_ask"], 1800
+                        )
+                        if label["status"] != "UNRESOLVED":
+                            event["raw_outcome"] = event["outcome"]
+                            event["outcome"] = {
+                                **label,
+                                "source": "same_item_completed_bar_backfill",
+                            }
+                    if event["outcome"]["status"] == "FAIL_TIMEOUT":
+                        if (
+                            supplement
+                            and (event.get("late_outcome") or {}).get("status")
+                            == "UNRESOLVED"
+                        ):
+                            event["late_outcome"] = supplement.label(
+                                event["epoch"], event["entry_ask"], 3600
+                            )
+                    handle.write(
+                        json.dumps(event, allow_nan=False, separators=(",", ":")) + "\n"
+                    )
+                    count += 1
+        events.append(
+            dict(
+                day=day,
+                venue=source["venue"],
+                session=source["session"],
+                path=str(output.resolve()),
+                sha256=file_hash(output),
+                events=count,
+            )
+        )
+    manifest = seal(
+        dict(
+            schema=SCHEMA,
+            source_date=day,
+            generated_at=datetime.now(KST).isoformat(),
+            source_manifest_path=str(path.resolve()),
+            source_generation=(
+                out.name if out.parent.name == "source-generations" else None
+            ),
+            normalized_sources=dict(
+                partitions=(parent or {})
+                .get("normalized_sources", {})
+                .get("partitions", [])
+                + normalized
+            ),
+            reviewed_events=(parent or {}).get("reviewed_events", []) + events,
+            selected_routes={**(parent or {}).get("selected_routes", {}), **selected},
+            completed_bar_receipts=bar_receipts,
+            completed_bar_sources={
+                **(parent or {}).get("completed_bar_sources", {}),
+                day: bar_receipts,
+            },
+            parent_manifest_sha256=(parent or {}).get("artifact_content_sha256"),
+            code_sha256=file_hash(kernel.__file__),
+            machine_decisions_used=False,
+            new_raw_partition_count=len(normalized),
+            **AUTH,
+        )
+    )
+    write(path, manifest)
+    return _validated_population(path, day=day)
 
 
-def prepare_auxiliary_points(data_root,day):
-    out=directory(data_root,day)
-    if (out/'provider-inputs.json').is_file() and (out/'evaluation-labels-private.json').is_file():return
-    previous=[p for p in sorted(out.parent.glob('????-??-??/provider-inputs.json')) if p.parent.name<day]
-    inputs=json.loads(previous[-1].read_text()) if previous else []
-    labels=json.loads(previous[-1].with_name('evaluation-labels-private.json').read_text()) if previous else []
-    source=json.loads((out/'source.json').read_text());machine=json.loads((out/'machine.json').read_text())
-    rules={c['key']:c['payload']['rule'] for c in machine['cells']};pools=defaultdict(list)
-    for record in source['reviewed_events']:
-        if record['day']!=day:continue
-        with gzip.open(record['path'],'rt') as handle:
+def prepare_auxiliary_points(data_root, day):
+    out = directory(data_root, day)
+    if (out / "provider-inputs.json").is_file() and (
+        out / "evaluation-labels-private.json"
+    ).is_file():
+        return
+    previous = [
+        p
+        for p in sorted(out.parent.glob("????-??-??/provider-inputs.json"))
+        if p.parent.name < day
+    ]
+    inputs = json.loads(previous[-1].read_text()) if previous else []
+    labels = (
+        json.loads(previous[-1].with_name("evaluation-labels-private.json").read_text())
+        if previous
+        else []
+    )
+    source = json.loads((out / "source.json").read_text())
+    machine = json.loads((out / "machine.json").read_text())
+    rules = {c["key"]: c["payload"]["rule"] for c in machine["cells"]}
+    pools = defaultdict(list)
+    for record in source["reviewed_events"]:
+        if record["day"] != day:
+            continue
+        with gzip.open(record["path"], "rt") as handle:
             for line in handle:
-                event=json.loads(line);route=source['selected_routes']['|'.join((day,event['symbol'],event['market']))]
-                if (event['venue'],event['session'])!=(route['venue'],route['session']) or event['outcome']['status']=='UNRESOLVED':continue
-                key=kernel.cell_key(event['symbol'],event['market'],event['confirmation_price'])
-                if kernel.conditions(event)[rules[key]]:pools[key].append(event)
-    chosen=[e for pool in pools.values() for e in sorted(pool,key=lambda e:digest(e['event_id']))[:24]]
-    partitions={(p['venue'],p['session']):p for p in source['normalized_sources']['partitions'] if p['day']==day}
-    for route in sorted({(e['venue'],e['session']) for e in chosen}):
-        raw=json.loads(gzip.decompress(Path(partitions[route]['path']).read_bytes()))['symbols'];features={}
-        for event in [e for e in chosen if (e['venue'],e['session'])==route]:
-            symbol=event['symbol'];rows=raw[symbol]
-            if symbol not in features:features[symbol]=kernel.build_features(rows)
-            i=event['entry_index']
-            values={k:float(v[i]) if __import__('math').isfinite(v[i]) else None for k,v in features[symbol].items()}
-            values.update({k:event[k] for k in kernel.INPUT_FEATURES[4:]})
-            inputs.append(dict(event_id=event['event_id'],input=kernel.make_input(event,rows,values)))
-            labels.append({k:event[k] for k in ['event_id','day','symbol','group','market','price_band','outcome']})
-    write(out/'provider-inputs.json',inputs);write(out/'evaluation-labels-private.json',labels)
-    write(out/'sample-selection.json',seal(dict(schema=SCHEMA,source_date=day,new_points=len(chosen),
-        selection='date and cell then stable event hash, up to 24; outcome value never ranks',
-        machine_report_sha256=machine['artifact_content_sha256'],**AUTH)))
+                event = json.loads(line)
+                route = source["selected_routes"][
+                    "|".join((day, event["symbol"], event["market"]))
+                ]
+                if (event["venue"], event["session"]) != (
+                    route["venue"],
+                    route["session"],
+                ) or event["outcome"]["status"] == "UNRESOLVED":
+                    continue
+                key = kernel.cell_key(
+                    event["symbol"], event["market"], event["confirmation_price"]
+                )
+                if kernel.conditions(event)[rules[key]]:
+                    pools[key].append(event)
+    chosen = [
+        e
+        for pool in pools.values()
+        for e in sorted(pool, key=lambda e: digest(e["event_id"]))[:24]
+    ]
+    partitions = {
+        (p["venue"], p["session"]): p
+        for p in source["normalized_sources"]["partitions"]
+        if p["day"] == day
+    }
+    for route in sorted({(e["venue"], e["session"]) for e in chosen}):
+        raw = json.loads(gzip.decompress(Path(partitions[route]["path"]).read_bytes()))[
+            "symbols"
+        ]
+        features = {}
+        for event in [e for e in chosen if (e["venue"], e["session"]) == route]:
+            symbol = event["symbol"]
+            rows = raw[symbol]
+            if symbol not in features:
+                features[symbol] = kernel.build_features(rows)
+            i = event["entry_index"]
+            values = {
+                k: float(v[i]) if __import__("math").isfinite(v[i]) else None
+                for k, v in features[symbol].items()
+            }
+            values.update({k: event[k] for k in kernel.INPUT_FEATURES[4:]})
+            inputs.append(
+                dict(
+                    event_id=event["event_id"],
+                    input=kernel.make_input(event, rows, values),
+                )
+            )
+            labels.append(
+                {
+                    k: event[k]
+                    for k in [
+                        "event_id",
+                        "day",
+                        "symbol",
+                        "group",
+                        "market",
+                        "price_band",
+                        "outcome",
+                    ]
+                }
+            )
+    write(out / "provider-inputs.json", inputs)
+    write(out / "evaluation-labels-private.json", labels)
+    write(
+        out / "sample-selection.json",
+        seal(
+            dict(
+                schema=SCHEMA,
+                source_date=day,
+                new_points=len(chosen),
+                selection="date and cell then stable event hash, up to 24; outcome value never ranks",
+                machine_report_sha256=machine["artifact_content_sha256"],
+                **AUTH,
+            )
+        ),
+    )
 
 
 def prepare_research(data_root, day, seed):
@@ -278,428 +582,929 @@ def prepare_research(data_root, day, seed):
     out = directory(data_root, day)
     out.mkdir(parents=True, exist_ok=True)
     seed = Path(seed)
-    source = json.loads((seed/'source-manifest.json').read_text())
-    events = json.loads((seed/'reviewed-events-manifest.json').read_text())
-    selected = json.loads((seed/'selected-sources.json').read_text())
-    for record in source['partitions'] + events:
-        if record['day'] > day or record['day'] < '2026-06-05' or file_hash(record['path']) != record['sha256']:
-            raise ValueError('frozen_reversal_source_invalid')
-        original=Path(record['path'])
-        owned=out/'frozen-research-source'/original.name
-        owned.parent.mkdir(parents=True,exist_ok=True)
+    source = json.loads((seed / "source-manifest.json").read_text())
+    events = json.loads((seed / "reviewed-events-manifest.json").read_text())
+    selected = json.loads((seed / "selected-sources.json").read_text())
+    for record in source["partitions"] + events:
+        if (
+            record["day"] > day
+            or record["day"] < "2026-06-05"
+            or file_hash(record["path"]) != record["sha256"]
+        ):
+            raise ValueError("frozen_reversal_source_invalid")
+        original = Path(record["path"])
+        owned = out / "frozen-research-source" / original.name
+        owned.parent.mkdir(parents=True, exist_ok=True)
         if not owned.exists():
-            shutil.copy2(original,owned)
-        if file_hash(owned)!=record['sha256']:
-            raise ValueError('owned_reversal_source_hash_invalid')
-        record['research_origin_path']=str(original)
-        record['path']=str(owned.resolve())
-    manifest = seal(dict(schema=SCHEMA, source_date=day, generated_at=datetime.now(KST).isoformat(),
-                         normalized_sources=source, reviewed_events=events,
-                         selected_routes=selected, code_sha256=file_hash(kernel.__file__),
-                         machine_decisions_used=False, **AUTH))
-    write(out/'source.json', manifest)
-    auxiliary=seed.parent/'auxiliary-reversal-phase-repair-20261006'
-    old=seed.parent/'auxiliary-reversal-zero-base-20261006'
+            shutil.copy2(original, owned)
+        if file_hash(owned) != record["sha256"]:
+            raise ValueError("owned_reversal_source_hash_invalid")
+        record["research_origin_path"] = str(original)
+        record["path"] = str(owned.resolve())
+    manifest = seal(
+        dict(
+            schema=SCHEMA,
+            source_date=day,
+            generated_at=datetime.now(KST).isoformat(),
+            normalized_sources=source,
+            reviewed_events=events,
+            selected_routes=selected,
+            code_sha256=file_hash(kernel.__file__),
+            machine_decisions_used=False,
+            **AUTH,
+        )
+    )
+    write(out / "source.json", manifest)
+    auxiliary = seed.parent / "auxiliary-reversal-phase-repair-20261006"
+    old = seed.parent / "auxiliary-reversal-zero-base-20261006"
     if auxiliary.is_dir():
-        write(out/'provider-inputs.json',json.loads((auxiliary/'combined-inputs.json').read_text()))
-        labels=json.loads((old/'evaluation-labels-private.json').read_text())+json.loads((auxiliary/'expansion-labels-private.json').read_text())
-        write(out/'evaluation-labels-private.json',labels)
+        write(
+            out / "provider-inputs.json",
+            json.loads((auxiliary / "combined-inputs.json").read_text()),
+        )
+        labels = json.loads(
+            (old / "evaluation-labels-private.json").read_text()
+        ) + json.loads((auxiliary / "expansion-labels-private.json").read_text())
+        write(out / "evaluation-labels-private.json", labels)
     return manifest
 
 
 def machine_report(data_root, day, publication, *, source=None):
     from src.engine.scalping import continuous_reversal_operating_postclose as operating
-    current=operating.active(data_root,publication)
+
+    current = operating.active(data_root, publication)
     if current:
-        return operating.machine_report(data_root,day,publication,current,source=source)
-    from src.engine.scalping import continuous_reversal_registered_postclose as registered
+        return operating.machine_report(
+            data_root, day, publication, current, source=source
+        )
+    from src.engine.scalping import (
+        continuous_reversal_registered_postclose as registered,
+    )
     from src.engine.scalping import continuous_reversal_path_postclose as paths
-    if paths.active(data_root,publication):registered=paths
-    current=registered.active(data_root,publication)
-    if current:return registered.machine_report(data_root,day,publication,current,source=source)
+
+    if paths.active(data_root, publication):
+        registered = paths
+    current = registered.active(data_root, publication)
+    if current:
+        return registered.machine_report(
+            data_root, day, publication, current, source=source
+        )
     from src.engine.scalping import continuous_reversal_branch_postclose as branch
-    parent=branch.active_v2(data_root,publication)
+
+    parent = branch.active_v2(data_root, publication)
     if parent:
-        if source is not None:raise ValueError("explicit_source_generation_requires_registered_family")
-        return branch.machine_report(data_root,day,publication,parent)
+        if source is not None:
+            raise ValueError("explicit_source_generation_requires_registered_family")
+        return branch.machine_report(data_root, day, publication, parent)
     out = directory(data_root, day)
-    source = source if source is not None else ensure_population(data_root,day)
-    if source['artifact_content_sha256'] != digest({k:v for k,v in source.items() if k != 'artifact_content_sha256'}):
-        raise ValueError('reversal_manifest_changed')
+    source = source if source is not None else ensure_population(data_root, day)
+    if source["artifact_content_sha256"] != digest(
+        {k: v for k, v in source.items() if k != "artifact_content_sha256"}
+    ):
+        raise ValueError("reversal_manifest_changed")
     agg = defaultdict(Counter)
     total = 0
-    for record in source['reviewed_events']:
-        if file_hash(record['path']) != record['sha256']:
-            raise ValueError('reversal_events_changed')
-        with gzip.open(record['path'], 'rt') as handle:
+    for record in source["reviewed_events"]:
+        if file_hash(record["path"]) != record["sha256"]:
+            raise ValueError("reversal_events_changed")
+        with gzip.open(record["path"], "rt") as handle:
             for line in handle:
                 event = json.loads(line)
-                chosen = source['selected_routes']['|'.join((event['day'], event['symbol'], event['market']))]
-                if (event['venue'], event['session']) != (chosen['venue'], chosen['session']):
+                chosen = source["selected_routes"][
+                    "|".join((event["day"], event["symbol"], event["market"]))
+                ]
+                if (event["venue"], event["session"]) != (
+                    chosen["venue"],
+                    chosen["session"],
+                ):
                     continue
                 total += 1
-                key = kernel.cell_key(event['symbol'], event['market'], event['confirmation_price'])
+                key = kernel.cell_key(
+                    event["symbol"], event["market"], event["confirmation_price"]
+                )
                 for rule, matched in kernel.conditions(event).items():
                     if matched:
-                        agg[key,rule][event['outcome']['status']] += 1
+                        agg[key, rule][event["outcome"]["status"]] += 1
     cells = []
     for key in expected_cells():
         candidates = {}
         for rule in kernel.RULES:
-            c = agg[key,rule]
-            n = c['WIN']+c['FAIL_STOP']+c['FAIL_TIMEOUT']
-            candidates[rule] = dict(wins=c['WIN'], resolved=n, excluded=c['UNRESOLVED'], counts=dict(c))
-        rules = [rule for rule in kernel.RULES if candidates[rule]['resolved']]
-        selected = max(rules, key=lambda rule: (Fraction(candidates[rule]['wins'],candidates[rule]['resolved']),
-                      -condition_count(rule), -kernel.RULES.index(rule))) if rules else None
-        cells.append(dict(key=key, payload=dict(rule=selected) if selected else None,
-                          local_metrics=candidates.get(selected), candidates=candidates, inherited_from=None))
-    inherit(cells, previous_cells(data_root, day, 'machine'))
-    manifest_receipt=population_receipt(source)
-    report = seal(dict(schema=SCHEMA, report_scope='main_mechanistic_entry', source_date=day,
-        target_date=day, publication_date=publication, generated_at=datetime.now(KST).isoformat(),
-        status='completed', selection_basis='cumulative_raw_win_fraction', population='all_continuous_price_turns',
-        input_turn_count=total, source_manifest_sha256=source['artifact_content_sha256'],source_manifest_receipt=manifest_receipt,
-        source_receipts=[manifest_receipt] if manifest_receipt else [],
-        kernel_sha256=file_hash(kernel.__file__), cells=cells,
-        label_contract=dict(target_net_pct=.4, stop_net_pct=-3., cost_rate=.0023, horizon_seconds=1800), **AUTH))
-    write(out/'machine.json',report)
-    standard=Path(data_root)/'report'/'ai_decision_action_outcome_calibration'
-    write(standard/f'winrate_policy_{day}.json',report)
-    write(standard/f'winrate_policy_terminal_{day}.json',seal(dict(schema=SCHEMA,source_date=day,target_date=day,
-        status='completed',selection_basis=report['selection_basis'],report_sha256=report['artifact_content_sha256'],
-        disposition='continuous_reversal_selected',policy_sha256=digest(cells),
-        staged=dict(status='machine_component_prepared'),**AUTH)))
+            c = agg[key, rule]
+            n = c["WIN"] + c["FAIL_STOP"] + c["FAIL_TIMEOUT"]
+            candidates[rule] = dict(
+                wins=c["WIN"], resolved=n, excluded=c["UNRESOLVED"], counts=dict(c)
+            )
+        rules = [rule for rule in kernel.RULES if candidates[rule]["resolved"]]
+        selected = (
+            max(
+                rules,
+                key=lambda rule: (
+                    Fraction(candidates[rule]["wins"], candidates[rule]["resolved"]),
+                    -condition_count(rule),
+                    -kernel.RULES.index(rule),
+                ),
+            )
+            if rules
+            else None
+        )
+        cells.append(
+            dict(
+                key=key,
+                payload=dict(rule=selected) if selected else None,
+                local_metrics=candidates.get(selected),
+                candidates=candidates,
+                inherited_from=None,
+            )
+        )
+    inherit(cells, previous_cells(data_root, day, "machine"))
+    manifest_receipt = population_receipt(source)
+    report = seal(
+        dict(
+            schema=SCHEMA,
+            report_scope="main_mechanistic_entry",
+            source_date=day,
+            target_date=day,
+            publication_date=publication,
+            generated_at=datetime.now(KST).isoformat(),
+            status="completed",
+            selection_basis="cumulative_raw_win_fraction",
+            population="all_continuous_price_turns",
+            input_turn_count=total,
+            source_manifest_sha256=source["artifact_content_sha256"],
+            source_manifest_receipt=manifest_receipt,
+            source_receipts=[manifest_receipt] if manifest_receipt else [],
+            kernel_sha256=file_hash(kernel.__file__),
+            cells=cells,
+            label_contract=dict(
+                target_net_pct=0.4,
+                stop_net_pct=-3.0,
+                cost_rate=0.0023,
+                horizon_seconds=1800,
+            ),
+            **AUTH,
+        )
+    )
+    write(out / "machine.json", report)
+    standard = Path(data_root) / "report" / "ai_decision_action_outcome_calibration"
+    write(standard / f"winrate_policy_{day}.json", report)
+    write(
+        standard / f"winrate_policy_terminal_{day}.json",
+        seal(
+            dict(
+                schema=SCHEMA,
+                source_date=day,
+                target_date=day,
+                status="completed",
+                selection_basis=report["selection_basis"],
+                report_sha256=report["artifact_content_sha256"],
+                disposition="continuous_reversal_selected",
+                policy_sha256=digest(cells),
+                staged=dict(status="machine_component_prepared"),
+                **AUTH,
+            )
+        ),
+    )
     return report
 
 
 def condition_count(rule):
-    return 2 if rule in {'DROP_0_4_REBOUND_LE_0_3','DD5_0_8_REBOUND_LE_0_3','DROP_0_4_VOL_UP','DD5_0_8_VOL_UP'} else 0 if rule=='ALL' else 1
+    return (
+        2
+        if rule
+        in {
+            "DROP_0_4_REBOUND_LE_0_3",
+            "DD5_0_8_REBOUND_LE_0_3",
+            "DROP_0_4_VOL_UP",
+            "DD5_0_8_VOL_UP",
+        }
+        else 0 if rule == "ALL" else 1
+    )
 
 
 def expected_cells():
-    return ['|'.join((g,m,b)) for g,bands in [('samsung',['ALL']),('other',['LT_20000','20000_TO_100000','GE_100000'])]
-            for m in ['PRE','REGULAR','AFTER'] for b in bands]
+    return [
+        "|".join((g, m, b))
+        for g, bands in [
+            ("samsung", ["ALL"]),
+            ("other", ["LT_20000", "20000_TO_100000", "GE_100000"]),
+        ]
+        for m in ["PRE", "REGULAR", "AFTER"]
+        for b in bands
+    ]
 
 
 def previous_cells(data_root, day, name):
-    paths = sorted(directory(data_root,day).parent.glob('????-??-??/'+name+'.json'))
+    paths = sorted(
+        directory(data_root, day).parent.glob("????-??-??/" + name + ".json")
+    )
     for path in reversed(paths):
-        if not '2026-06-05' <= path.parent.name < day:
+        if not "2026-06-05" <= path.parent.name < day:
             continue
         report = json.loads(path.read_text())
-        if report.get('source_date') != path.parent.name or report.get('artifact_content_sha256') != digest(
-                {k:v for k,v in report.items() if k != 'artifact_content_sha256'}):
-            raise ValueError('previous_reversal_report_invalid')
-        return {c['key']:{**c,'previous_report_sha256':report['artifact_content_sha256'],
-                         'previous_report_path':str(path.resolve()),'previous_source_date':report['source_date']}
-                for c in report['cells']}
+        if report.get("source_date") != path.parent.name or report.get(
+            "artifact_content_sha256"
+        ) != digest(
+            {k: v for k, v in report.items() if k != "artifact_content_sha256"}
+        ):
+            raise ValueError("previous_reversal_report_invalid")
+        return {
+            c["key"]: {
+                **c,
+                "previous_report_sha256": report["artifact_content_sha256"],
+                "previous_report_path": str(path.resolve()),
+                "previous_source_date": report["source_date"],
+            }
+            for c in report["cells"]
+        }
     return {}
 
 
 def inherit(cells, previous=None):
-    index = {c['key']:c for c in cells}
+    index = {c["key"]: c for c in cells}
     previous = previous or {}
     # Resolve REGULAR parents first; no undefined n=0 win rate is fabricated.
-    for key in sorted(expected_cells(),key=lambda k: '|REGULAR|' not in k):
+    for key in sorted(expected_cells(), key=lambda k: "|REGULAR|" not in k):
         cell = index[key]
-        if cell['payload'] is not None:
-            cell['payload_sha256'] = digest(cell['payload'])
+        if cell["payload"] is not None:
+            cell["payload_sha256"] = digest(cell["payload"])
             continue
-        g,m,b = key.split('|')
-        parent_key = '|'.join((g,'REGULAR',b))
-        parent = index[parent_key] if m != 'REGULAR' else None
-        if parent is not None and parent['payload'] is not None:
-            cell.update(payload=parent['payload'].copy(), inherited_from=parent_key,
-                        parent_payload_sha256=digest(parent['payload']))
-        elif previous.get(parent_key,{}).get('payload'):
-            cell.update(payload=previous[parent_key]['payload'].copy(), inherited_from='previous:'+parent_key,
-                        parent_payload_sha256=digest(previous[parent_key]['payload']))
-            for field in ('previous_report_sha256','previous_report_path','previous_source_date'):
-                if field in previous[parent_key]:cell[field]=previous[parent_key][field]
+        g, m, b = key.split("|")
+        parent_key = "|".join((g, "REGULAR", b))
+        parent = index[parent_key] if m != "REGULAR" else None
+        if parent is not None and parent["payload"] is not None:
+            cell.update(
+                payload=parent["payload"].copy(),
+                inherited_from=parent_key,
+                parent_payload_sha256=digest(parent["payload"]),
+            )
+        elif previous.get(parent_key, {}).get("payload"):
+            cell.update(
+                payload=previous[parent_key]["payload"].copy(),
+                inherited_from="previous:" + parent_key,
+                parent_payload_sha256=digest(previous[parent_key]["payload"]),
+            )
+            for field in (
+                "previous_report_sha256",
+                "previous_report_path",
+                "previous_source_date",
+            ):
+                if field in previous[parent_key]:
+                    cell[field] = previous[parent_key][field]
         else:
-            raise ValueError('verified_regular_parent_missing:'+parent_key)
-        cell['local_metrics'] = None
-        cell['payload_sha256'] = digest(cell['payload'])
+            raise ValueError("verified_regular_parent_missing:" + parent_key)
+        cell["local_metrics"] = None
+        cell["payload_sha256"] = digest(cell["payload"])
 
 
-def auxiliary_report(data_root,day,publication,*,publish_policy=True):
+def auxiliary_report(data_root, day, publication, *, publish_policy=True):
     from src.engine.scalping import continuous_reversal_operating_postclose as operating
-    current=operating.active(data_root,publication)
+
+    current = operating.active(data_root, publication)
     if current:
-        return operating.auxiliary_report(data_root,day,publication,current,publish_policy=publish_policy)
-    from src.engine.scalping import continuous_reversal_registered_postclose as registered
+        return operating.auxiliary_report(
+            data_root, day, publication, current, publish_policy=publish_policy
+        )
+    from src.engine.scalping import (
+        continuous_reversal_registered_postclose as registered,
+    )
     from src.engine.scalping import continuous_reversal_path_postclose as paths
-    if paths.active(data_root,publication):registered=paths
-    current=registered.active(data_root,publication)
+
+    if paths.active(data_root, publication):
+        registered = paths
+    current = registered.active(data_root, publication)
     if current:
         from src.engine.scalping.continuous_reversal_shared_ledger import adapt
-        return adapt(registered,data_root).auxiliary_report(data_root,day,publication,current,publish_policy=publish_policy)
+
+        return adapt(registered, data_root).auxiliary_report(
+            data_root, day, publication, current, publish_policy=publish_policy
+        )
     from src.engine.scalping import continuous_reversal_branch_postclose as branch
-    parent=branch.active_v2(data_root,publication)
-    if parent:return branch.auxiliary_report(data_root,day,publication,parent,publish_policy=publish_policy)
-    out=directory(data_root,day)
-    machine=json.loads((out/'machine.json').read_text())
-    inputs=json.loads((out/'provider-inputs.json').read_text())
-    labels={r['event_id']:r for r in json.loads((out/'evaluation-labels-private.json').read_text())}
-    results={}
-    for path in result_paths(data_root,day):
+
+    parent = branch.active_v2(data_root, publication)
+    if parent:
+        return branch.auxiliary_report(
+            data_root, day, publication, parent, publish_policy=publish_policy
+        )
+    out = directory(data_root, day)
+    machine = json.loads((out / "machine.json").read_text())
+    inputs = json.loads((out / "provider-inputs.json").read_text())
+    labels = {
+        r["event_id"]: r
+        for r in json.loads((out / "evaluation-labels-private.json").read_text())
+    }
+    results = {}
+    for path in result_paths(data_root, day):
         for line in path.read_text().splitlines():
-            record=json.loads(line)
-            old=results.get(record['request_identity'])
-            if old is not None and old!=record:raise ValueError('conflicting_cached_provider_response')
-            results[record['request_identity']]=record
-    index={};excluded=Counter();ids=set()
+            record = json.loads(line)
+            old = results.get(record["request_identity"])
+            if old is not None and old != record:
+                raise ValueError("conflicting_cached_provider_response")
+            results[record["request_identity"]] = record
+    index = {}
+    excluded = Counter()
+    ids = set()
     for row in inputs:
-        expected={arm:actual_request(row,arm) for arm in ARMS}
-        records={arm:results.get(request['paired_replay_id']) for arm,request in expected.items()}
-        if any(not r or not (r.get('result') or {}).get('provider_provenance',{}).get('response_id') for r in records.values()):
-            excluded['incomplete_actual_five_arm_point']+=1
+        expected = {arm: actual_request(row, arm) for arm in ARMS}
+        records = {
+            arm: results.get(request["paired_replay_id"])
+            for arm, request in expected.items()
+        }
+        if any(
+            not r
+            or not (r.get("result") or {})
+            .get("provider_provenance", {})
+            .get("response_id")
+            for r in records.values()
+        ):
+            excluded["incomplete_actual_five_arm_point"] += 1
             continue
-        label=labels[row['event_id']]
-        if label['outcome']['status']=='UNRESOLVED':
-            excluded['unresolved_outcome']+=1
+        label = labels[row["event_id"]]
+        if label["outcome"]["status"] == "UNRESOLVED":
+            excluded["unresolved_outcome"] += 1
             continue
-        source=row['input'];f=source['entry_setup_evidence_v1']['facts']
-        key='|'.join((source['symbol_group'],source['market'],'ALL' if source['symbol_group']=='samsung' else source['price_band']))
-        rule=next(c['payload']['rule'] for c in machine['cells'] if c['key']==key)
+        source = row["input"]
+        f = source["entry_setup_evidence_v1"]["facts"]
+        key = "|".join(
+            (
+                source["symbol_group"],
+                source["market"],
+                "ALL" if source["symbol_group"] == "samsung" else source["price_band"],
+            )
+        )
+        rule = next(c["payload"]["rule"] for c in machine["cells"] if c["key"] == key)
         if not kernel.conditions(f)[rule]:
-            excluded['outside_selected_machine_cell']+=1
+            excluded["outside_selected_machine_cell"] += 1
             continue
-        for arm,r in records.items():
-            if r['request']!=expected[arm]:raise ValueError('actual_request_identity_binding_invalid')
-            rid=r['result']['provider_provenance']['response_id']
-            if rid in ids:raise ValueError('duplicate_actual_response_id')
+        for arm, r in records.items():
+            if r["request"] != expected[arm]:
+                raise ValueError("actual_request_identity_binding_invalid")
+            rid = r["result"]["provider_provenance"]["response_id"]
+            if rid in ids:
+                raise ValueError("duplicate_actual_response_id")
             ids.add(rid)
-            index[row['event_id'],arm]=dict(key=key,win=label['outcome']['status']=='WIN',
-                verdict=r['result']['candidate_response'].get('risk_verdict'),errors=r['validation_errors'],response_id=rid)
-    cells=[]
+            index[row["event_id"], arm] = dict(
+                key=key,
+                win=label["outcome"]["status"] == "WIN",
+                verdict=r["result"]["candidate_response"].get("risk_verdict"),
+                errors=r["validation_errors"],
+                response_id=rid,
+            )
+    cells = []
     for key in expected_cells():
-        metrics={}
+        metrics = {}
         for arm in ARMS:
-            rs=[r for (event,a),r in index.items() if a==arm and r['key']==key]
-            passed=[r for r in rs if r['verdict']=='PASS']
-            metrics[arm]=dict(points=len(rs),pass_count=len(passed),pass_wins=sum(r['win'] for r in passed),
-                invalid_count=sum(bool(r['errors']) for r in rs),invalid_pass_count=sum(bool(r['errors']) for r in passed),
-                raw_verdicts=dict(Counter(r['verdict'] for r in rs)))
-        candidates=[arm for arm in TIE_ORDER if metrics[arm]['pass_count']]
-        selected=max(candidates,key=lambda arm:(Fraction(metrics[arm]['pass_wins'],metrics[arm]['pass_count']),
-                                                 metrics[arm]['pass_wins'])) if candidates else None
-        cells.append(dict(key=key,payload=dict(arm=selected) if selected else None,
-                          local_metrics=metrics.get(selected),candidates=metrics,inherited_from=None))
-    inherit(cells, previous_cells(data_root, day, 'auxiliary'))
-    report=seal(dict(schema=SCHEMA,source_date=day,target_date=day,publication_date=publication,status='completed',
-        generated_at=datetime.now(KST).isoformat(),version=PRODUCTION_VERSION,cells=cells,
-        primary_metric='actual_raw_PASS_wins_over_all_actual_raw_PASS',
-        points=len(inputs),machine_eligible_complete_points=len(index)//len(ARMS),excluded_points=dict(excluded),
-        machine_report_sha256=machine['artifact_content_sha256'],results_sources=[dict(path=str(p.resolve()),sha256=file_hash(p)) for p in result_paths(data_root,day)],
-        input_sha256=digest(inputs),call_freeze_sha256=json.loads((out/'call-freeze.json').read_text())['artifact_content_sha256'],
-        validity_adjustment_in_rank=False,holdout_gate=False,ev_gate=False,call_limit=None,spend_limit=None,**AUTH))
-    write(out/'auxiliary.json',report)
+            rs = [r for (event, a), r in index.items() if a == arm and r["key"] == key]
+            passed = [r for r in rs if r["verdict"] == "PASS"]
+            metrics[arm] = dict(
+                points=len(rs),
+                pass_count=len(passed),
+                pass_wins=sum(r["win"] for r in passed),
+                invalid_count=sum(bool(r["errors"]) for r in rs),
+                invalid_pass_count=sum(bool(r["errors"]) for r in passed),
+                raw_verdicts=dict(Counter(r["verdict"] for r in rs)),
+            )
+        candidates = [arm for arm in TIE_ORDER if metrics[arm]["pass_count"]]
+        selected = (
+            max(
+                candidates,
+                key=lambda arm: (
+                    Fraction(metrics[arm]["pass_wins"], metrics[arm]["pass_count"]),
+                    metrics[arm]["pass_wins"],
+                ),
+            )
+            if candidates
+            else None
+        )
+        cells.append(
+            dict(
+                key=key,
+                payload=dict(arm=selected) if selected else None,
+                local_metrics=metrics.get(selected),
+                candidates=metrics,
+                inherited_from=None,
+            )
+        )
+    inherit(cells, previous_cells(data_root, day, "auxiliary"))
+    report = seal(
+        dict(
+            schema=SCHEMA,
+            source_date=day,
+            target_date=day,
+            publication_date=publication,
+            status="completed",
+            generated_at=datetime.now(KST).isoformat(),
+            version=PRODUCTION_VERSION,
+            cells=cells,
+            primary_metric="actual_raw_PASS_wins_over_all_actual_raw_PASS",
+            points=len(inputs),
+            machine_eligible_complete_points=len(index) // len(ARMS),
+            excluded_points=dict(excluded),
+            machine_report_sha256=machine["artifact_content_sha256"],
+            results_sources=[
+                dict(path=str(p.resolve()), sha256=file_hash(p))
+                for p in result_paths(data_root, day)
+            ],
+            input_sha256=digest(inputs),
+            call_freeze_sha256=json.loads((out / "call-freeze.json").read_text())[
+                "artifact_content_sha256"
+            ],
+            validity_adjustment_in_rank=False,
+            holdout_gate=False,
+            ev_gate=False,
+            call_limit=None,
+            spend_limit=None,
+            **AUTH,
+        )
+    )
+    write(out / "auxiliary.json", report)
     if not publish_policy:
         return report
     from src.engine.scalping.continuous_reversal_policy import publish
-    staged=publish(data_root,day,publication,machine,report)
-    output={**report,'staged':staged}
-    output=seal(output)
+
+    staged = publish(data_root, day, publication, machine, report)
+    output = {**report, "staged": staged}
+    output = seal(output)
     # The paired report keeps the native auxiliary evidence hash, and exposes
     # staging separately. The family snapshot binds auxiliary.json itself.
-    write(Path(data_root)/'report'/'ai_entry_setup_paired_replay_batch'/f'compact_auxiliary_paired_economic_{day}.json',output)
+    write(
+        Path(data_root)
+        / "report"
+        / "ai_entry_setup_paired_replay_batch"
+        / f"compact_auxiliary_paired_economic_{day}.json",
+        output,
+    )
     return output
 
 
 def actual_request(row, arm):
     from src.engine.scalping.ai_decision_quality import _sha256
-    inp,prompt,schema = production_request(row['input'],arm)
-    key = _sha256([PRODUCTION_VERSION,row['event_id'],inp,prompt,schema])
-    return dict(paired_replay_id=key, paired_replay_parent_id=row['event_id'],
-        micro_reversion_replay_arm=arm, offline_provider_attempt_number=1, stage='entry',
-        candidate_input=inp,candidate_input_sha256=_sha256(inp),control=dict(provider='openai',model='gpt-5.4-nano'),
-        candidate=dict(provider='openai',model='gpt-5.4-nano',prompt_version=PRODUCTION_VERSION+':'+arm,
-            system_prompt=prompt,response_schema=schema,response_schema_sha256=_sha256(schema),
-            schema_name='entry_setup_risk_adjudication_v1',max_output_tokens=512,reasoning_effort='none'),**AUTH)
+
+    inp, prompt, schema = production_request(row["input"], arm)
+    key = _sha256([PRODUCTION_VERSION, row["event_id"], inp, prompt, schema])
+    return dict(
+        paired_replay_id=key,
+        paired_replay_parent_id=row["event_id"],
+        micro_reversion_replay_arm=arm,
+        offline_provider_attempt_number=1,
+        stage="entry",
+        candidate_input=inp,
+        candidate_input_sha256=_sha256(inp),
+        control=dict(provider="openai", model="gpt-5.4-nano"),
+        candidate=dict(
+            provider="openai",
+            model="gpt-5.4-nano",
+            prompt_version=PRODUCTION_VERSION + ":" + arm,
+            system_prompt=prompt,
+            response_schema=schema,
+            response_schema_sha256=_sha256(schema),
+            schema_name="entry_setup_risk_adjudication_v1",
+            max_output_tokens=512,
+            reasoning_effort="none",
+        ),
+        **AUTH,
+    )
 
 
 def call(request):
-    from src.engine.scalping.ai_decision_quality import execute_openai_prompt_v2_candidate
+    from src.engine.scalping.ai_decision_quality import (
+        execute_openai_prompt_v2_candidate,
+    )
+
     try:
-        result = execute_openai_prompt_v2_candidate(request,timeout_sec=30)
-        errors = validate_response(result['candidate_response'],request['candidate_input'],
-                                   complete_source_only=request['micro_reversion_replay_arm']==ARMS[-1])
-        return dict(result=result,validation_errors=errors)
+        result = execute_openai_prompt_v2_candidate(request, timeout_sec=30)
+        errors = validate_response(
+            result["candidate_response"],
+            request["candidate_input"],
+            complete_source_only=request["micro_reversion_replay_arm"] == ARMS[-1],
+        )
+        return dict(result=result, validation_errors=errors)
     except Exception as exc:
-        return dict(error_type=type(exc).__name__,validation_errors=['provider_attempt_failed'])
+        return dict(
+            error_type=type(exc).__name__, validation_errors=["provider_attempt_failed"]
+        )
 
 
 def execute_calls(data_root, day, inputs):
-    out = directory(data_root,day)
-    out.mkdir(parents=True,exist_ok=True)
-    rows=json.loads(Path(inputs).read_text())
-    write(out/'provider-inputs.json',rows)
-    requests=[(row,arm,actual_request(row,arm)) for row in rows for arm in ARMS]
-    freeze=seal(dict(schema=SCHEMA,source_date=day,version=PRODUCTION_VERSION,inputs_sha256=digest(rows),
-                     request_hashes=[digest(req) for _,_,req in requests],call_limit=None,spend_limit=None,
-                     expires_at=None,concurrency=4,points=len(rows),planned_calls=len(requests),**AUTH))
-    write(out/'call-freeze.json',freeze)
-    with (out/'provider-worker.lock').open('a') as lock:
-        fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
-        results=out/'provider-results.jsonl';attempts=out/'provider-attempts.jsonl'
-        cached={json.loads(line)['request_identity'] for path in result_paths(data_root,day) for line in path.read_text().splitlines()}
-        reserved={json.loads(line)['request_identity'] for path in result_paths(data_root,day,'provider-attempts.jsonl') for line in path.read_text().splitlines()}
-        pending=[]
-        for row,arm,req in requests:
-            key=req['paired_replay_id']
-            if key in cached: continue
-            if key in reserved: raise ValueError('uncertain_provider_attempt_requires_reconciliation')
-            pending.append((row,arm,req))
-        print('Frozen',len(requests),'requests; new',len(pending),flush=True)
-        completed=0
+    out = directory(data_root, day)
+    out.mkdir(parents=True, exist_ok=True)
+    rows = json.loads(Path(inputs).read_text())
+    write(out / "provider-inputs.json", rows)
+    requests = [(row, arm, actual_request(row, arm)) for row in rows for arm in ARMS]
+    freeze = seal(
+        dict(
+            schema=SCHEMA,
+            source_date=day,
+            version=PRODUCTION_VERSION,
+            inputs_sha256=digest(rows),
+            request_hashes=[digest(req) for _, _, req in requests],
+            call_limit=None,
+            spend_limit=None,
+            expires_at=None,
+            concurrency=4,
+            points=len(rows),
+            planned_calls=len(requests),
+            **AUTH,
+        )
+    )
+    write(out / "call-freeze.json", freeze)
+    with (out / "provider-worker.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        results = out / "provider-results.jsonl"
+        attempts = out / "provider-attempts.jsonl"
+        cached = {
+            json.loads(line)["request_identity"]
+            for path in result_paths(data_root, day)
+            for line in path.read_text().splitlines()
+        }
+        reserved = {
+            json.loads(line)["request_identity"]
+            for path in result_paths(data_root, day, "provider-attempts.jsonl")
+            for line in path.read_text().splitlines()
+        }
+        pending = []
+        for row, arm, req in requests:
+            key = req["paired_replay_id"]
+            if key in cached:
+                continue
+            if key in reserved:
+                raise ValueError("uncertain_provider_attempt_requires_reconciliation")
+            pending.append((row, arm, req))
+        print("Frozen", len(requests), "requests; new", len(pending), flush=True)
+        completed = 0
         with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
-            running={};iterator=iter(pending)
+            running = {}
+            iterator = iter(pending)
+
             def submit():
-                item=next(iterator,None)
-                if item is None:return
-                row,arm,req=item
-                record=dict(event_id=row['event_id'],arm=arm,request_identity=req['paired_replay_id'],request=req,
-                            called_at=datetime.now(KST).isoformat(),freeze_sha256=freeze['artifact_content_sha256'],**AUTH)
-                append(attempts,record)
-                running[pool.submit(call,req)]=record
-            for _ in range(4):submit()
+                item = next(iterator, None)
+                if item is None:
+                    return
+                row, arm, req = item
+                record = dict(
+                    event_id=row["event_id"],
+                    arm=arm,
+                    request_identity=req["paired_replay_id"],
+                    request=req,
+                    called_at=datetime.now(KST).isoformat(),
+                    freeze_sha256=freeze["artifact_content_sha256"],
+                    **AUTH,
+                )
+                append(attempts, record)
+                running[pool.submit(call, req)] = record
+
+            for _ in range(4):
+                submit()
             while running:
-                done,_=concurrent.futures.wait(running,return_when=concurrent.futures.FIRST_COMPLETED)
+                done, _ = concurrent.futures.wait(
+                    running, return_when=concurrent.futures.FIRST_COMPLETED
+                )
                 for future in done:
-                    record=running.pop(future);record.update(future.result());append(results,record)
-                    completed+=1
-                    if completed%40==0 or record.get('error_type'):
-                        print('Completed',completed,'/',len(pending),'errors',record['validation_errors'],flush=True)
+                    record = running.pop(future)
+                    record.update(future.result())
+                    append(results, record)
+                    completed += 1
+                    if completed % 40 == 0 or record.get("error_type"):
+                        print(
+                            "Completed",
+                            completed,
+                            "/",
+                            len(pending),
+                            "errors",
+                            record["validation_errors"],
+                            flush=True,
+                        )
                     submit()
-        write(out/'call-completion.json',seal(dict(schema=SCHEMA,source_date=day,status='completed',new_calls=completed,
-              freeze_sha256=freeze['artifact_content_sha256'],results_sources=[dict(path=str(p.resolve()),sha256=file_hash(p)) for p in result_paths(data_root,day)],**AUTH)))
+        write(
+            out / "call-completion.json",
+            seal(
+                dict(
+                    schema=SCHEMA,
+                    source_date=day,
+                    status="completed",
+                    new_calls=completed,
+                    freeze_sha256=freeze["artifact_content_sha256"],
+                    results_sources=[
+                        dict(path=str(p.resolve()), sha256=file_hash(p))
+                        for p in result_paths(data_root, day)
+                    ],
+                    **AUTH,
+                )
+            ),
+        )
 
 
 def main(argv=None):
-    parser=argparse.ArgumentParser()
-    parser.add_argument('--date',required=True)
-    parser.add_argument('--publication-date')
-    parser.add_argument('--data-root',type=Path,default=Path('data'))
-    parser.add_argument('--source-generation')
-    parser.add_argument('--source-sha256')
-    parser.add_argument('--seed-research',type=Path)
-    parser.add_argument('--actual-inputs',type=Path)
-    parser.add_argument('--evaluate-only',action='store_true')
-    parser.add_argument('--mode',choices=['machine','prepare-inputs','auxiliary','calls'],default='machine')
-    args=parser.parse_args(argv)
-    if (args.source_generation or args.source_sha256) and args.mode != 'machine':
-        parser.error('source selection is only valid at the machine run boundary')
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--date", required=True)
+    parser.add_argument("--publication-date")
+    parser.add_argument("--data-root", type=Path, default=Path("data"))
+    parser.add_argument("--source-generation")
+    parser.add_argument("--source-sha256")
+    parser.add_argument("--seed-research", type=Path)
+    parser.add_argument("--actual-inputs", type=Path)
+    parser.add_argument("--evaluate-only", action="store_true")
+    parser.add_argument(
+        "--mode",
+        choices=["machine", "prepare-inputs", "auxiliary", "calls"],
+        default="machine",
+    )
+    args = parser.parse_args(argv)
+    if (args.source_generation or args.source_sha256) and args.mode != "machine":
+        parser.error("source selection is only valid at the machine run boundary")
     if args.source_sha256 and not args.source_generation:
-        parser.error('explicit source hash requires source generation')
-    if args.evaluate_only and args.mode != 'auxiliary':
-        parser.error('--evaluate-only is supported only for auxiliary; use an isolated data root for machine research')
+        parser.error("explicit source hash requires source generation")
+    if args.evaluate_only and args.mode != "auxiliary":
+        parser.error(
+            "--evaluate-only is supported only for auxiliary; use an isolated data root for machine research"
+        )
     if args.source_generation and args.seed_research:
-        parser.error('source generation cannot be combined with mutable research seeding')
-    selected_source = (ensure_population(args.data_root,args.date,source_generation=args.source_generation,expected_sha256=args.source_sha256)
-                       if args.source_generation else None)
+        parser.error(
+            "source generation cannot be combined with mutable research seeding"
+        )
+    selected_source = (
+        ensure_population(
+            args.data_root,
+            args.date,
+            source_generation=args.source_generation,
+            expected_sha256=args.source_sha256,
+        )
+        if args.source_generation
+        else None
+    )
     from src.engine.scalping import continuous_reversal_operating_postclose as operating
-    publication=args.publication_date or args.date
+
+    publication = args.publication_date or args.date
     from src.engine.scalping import reversal_cumulative_registration as cumulative
+
     if cumulative.pending_path(args.data_root).is_file():
-        registration=cumulative.validate_request(json.loads(cumulative.pending_path(args.data_root).read_text()))
-        if registration['publication_date']==publication and not cumulative.consumed(args.data_root,registration):
+        registration = cumulative.validate_request(
+            json.loads(cumulative.pending_path(args.data_root).read_text())
+        )
+        if registration["publication_date"] == publication and not cumulative.consumed(
+            args.data_root, registration
+        ):
             if args.actual_inputs or args.seed_research:
-                raise ValueError('cumulative_registration_input_override_forbidden')
-            parent=cumulative.load_offline_parent(args.data_root,publication)
-            if cumulative.pending(args.data_root,parent,registration['target_date']) is not None:
+                raise ValueError("cumulative_registration_input_override_forbidden")
+            parent = cumulative.load_offline_parent(args.data_root, publication)
+            if (
+                cumulative.pending(args.data_root, parent, registration["target_date"])
+                is not None
+            ):
                 if args.evaluate_only:
-                    print(json.dumps(dict(status='registered_pending',provider_calls=0,runtime_effect=False)))
+                    print(
+                        json.dumps(
+                            dict(
+                                status="registered_pending",
+                                provider_calls=0,
+                                runtime_effect=False,
+                            )
+                        )
+                    )
                     return 0
-                print(json.dumps(cumulative.run_postclose(args.data_root,args.date,publication,args.mode,source=selected_source)))
+                print(
+                    json.dumps(
+                        cumulative.run_postclose(
+                            args.data_root,
+                            args.date,
+                            publication,
+                            args.mode,
+                            source=selected_source,
+                        )
+                    )
+                )
                 return 0
     from src.engine.scalping import reversal_joint_registration as joint
+
     if joint.pending_path(args.data_root).is_file():
-        registration=joint.validate_request(json.loads(joint.pending_path(args.data_root).read_text()))
-        if registration['publication_date']==publication:
-            parent=joint.load_offline_parent(args.data_root,publication)
-            if joint.pending(args.data_root,parent,registration['target_date']) is not None:
+        registration = joint.validate_request(
+            json.loads(joint.pending_path(args.data_root).read_text())
+        )
+        if registration["publication_date"] == publication:
+            parent = joint.load_offline_parent(args.data_root, publication)
+            if (
+                joint.pending(args.data_root, parent, registration["target_date"])
+                is not None
+            ):
                 if args.actual_inputs or args.seed_research or args.source_generation:
-                    raise ValueError('joint_registration_frozen_input_override_forbidden')
+                    raise ValueError(
+                        "joint_registration_frozen_input_override_forbidden"
+                    )
                 if args.evaluate_only:
-                    print(json.dumps(dict(status='registered_pending',request_sha256=registration['artifact_content_sha256'],
-                        provider_calls=0,runtime_effect=False)))
+                    print(
+                        json.dumps(
+                            dict(
+                                status="registered_pending",
+                                request_sha256=registration["artifact_content_sha256"],
+                                provider_calls=0,
+                                runtime_effect=False,
+                            )
+                        )
+                    )
                     return 0
-                print(json.dumps(joint.run_postclose(args.data_root,args.date,publication,args.mode)))
+                print(
+                    json.dumps(
+                        joint.run_postclose(
+                            args.data_root, args.date, publication, args.mode
+                        )
+                    )
+                )
                 return 0
     from src.engine.scalping import reversal_manual_registration as manual
+
     if manual.pending_path(args.data_root).is_file():
-        registration=manual.validate_request(json.loads(manual.pending_path(args.data_root).read_text()))
-        if registration['publication_date']==publication:
+        registration = manual.validate_request(
+            json.loads(manual.pending_path(args.data_root).read_text())
+        )
+        if registration["publication_date"] == publication:
             if args.evaluate_only:
-                print(json.dumps(dict(status='registered_pending',request_sha256=registration['artifact_content_sha256'],
-                    target_date=registration['target_date'],provider_calls=0,runtime_effect=False)))
+                print(
+                    json.dumps(
+                        dict(
+                            status="registered_pending",
+                            request_sha256=registration["artifact_content_sha256"],
+                            target_date=registration["target_date"],
+                            provider_calls=0,
+                            runtime_effect=False,
+                        )
+                    )
+                )
                 return 0
             if args.actual_inputs or args.seed_research or args.source_generation:
-                raise ValueError('residual_registration_frozen_input_override_forbidden')
-            print(json.dumps(manual.run_postclose(args.data_root,args.date,publication,args.mode)))
+                raise ValueError(
+                    "residual_registration_frozen_input_override_forbidden"
+                )
+            print(
+                json.dumps(
+                    manual.run_postclose(
+                        args.data_root, args.date, publication, args.mode
+                    )
+                )
+            )
             return 0
-    current=operating.active(args.data_root,publication)
-    if args.seed_research:prepare_research(args.data_root,args.date,args.seed_research)
+    current = operating.active(args.data_root, publication)
+    if args.seed_research:
+        prepare_research(args.data_root, args.date, args.seed_research)
     if current:
-        if args.mode=='machine':
-            result=operating.machine_report(args.data_root,args.date,publication,current,source=selected_source)
+        if args.mode == "machine":
+            result = operating.machine_report(
+                args.data_root, args.date, publication, current, source=selected_source
+            )
         else:
-            machine=json.loads((operating.directory(args.data_root,args.date)/'machine-comparison.json').read_text())
-            if args.mode in {'prepare-inputs','auxiliary'} and not args.evaluate_only:
-                result=operating.prepare_inputs(args.data_root,args.date,machine,current)
-            if args.mode in {'calls','auxiliary'} and not args.evaluate_only:
-                deadline=os.environ.get('POSTCLOSE_STAGE_DEADLINE_EPOCH')
-                result=operating.calls(args.data_root,args.date,stop_epoch=float(deadline)-120 if deadline else None)
-            if args.mode=='auxiliary':
-                result=operating.auxiliary_report(args.data_root,args.date,publication,current,publish_policy=not args.evaluate_only)
-        print(json.dumps(result));return 0
-    if args.mode in {'prepare-inputs','calls'}:
-        from src.engine.scalping import continuous_reversal_registered_postclose as registered
+            machine = json.loads(
+                (
+                    operating.directory(args.data_root, args.date)
+                    / "machine-comparison.json"
+                ).read_text()
+            )
+            if args.mode in {"prepare-inputs", "auxiliary"} and not args.evaluate_only:
+                result = operating.prepare_inputs(
+                    args.data_root, args.date, machine, current
+                )
+            if args.mode in {"calls", "auxiliary"} and not args.evaluate_only:
+                deadline = os.environ.get("POSTCLOSE_STAGE_DEADLINE_EPOCH")
+                result = operating.calls(
+                    args.data_root,
+                    args.date,
+                    stop_epoch=float(deadline) - 120 if deadline else None,
+                )
+            if args.mode == "auxiliary":
+                result = operating.auxiliary_report(
+                    args.data_root,
+                    args.date,
+                    publication,
+                    current,
+                    publish_policy=not args.evaluate_only,
+                )
+        print(json.dumps(result))
+        return 0
+    if args.mode in {"prepare-inputs", "calls"}:
+        from src.engine.scalping import (
+            continuous_reversal_registered_postclose as registered,
+        )
         from src.engine.scalping import continuous_reversal_path_postclose as paths
-        if paths.active(args.data_root,args.publication_date or args.date):registered=paths
+
+        if paths.active(args.data_root, args.publication_date or args.date):
+            registered = paths
         from src.engine.scalping.continuous_reversal_shared_ledger import adapt
-        registered=adapt(registered,args.data_root)
-        if registered.active(args.data_root,args.publication_date or args.date):
-            if args.mode=='prepare-inputs':
-                machine=json.loads((registered.directory(args.data_root,args.date)/'machine-comparison.json').read_text())
-                print(json.dumps(registered.prepare_inputs(args.data_root,args.date,machine)))
-            else:registered.calls(args.data_root,args.date)
-        elif args.mode=='prepare-inputs':
-            parser.error('--mode prepare-inputs requires an active v3/v4 family')
-        else:execute_calls(args.data_root,args.date,args.actual_inputs)
-    elif args.mode=='machine':print(json.dumps(machine_report(args.data_root,args.date,args.publication_date or args.date,source=selected_source)))
+
+        registered = adapt(registered, args.data_root)
+        if registered.active(args.data_root, args.publication_date or args.date):
+            if args.mode == "prepare-inputs":
+                machine = json.loads(
+                    (
+                        registered.directory(args.data_root, args.date)
+                        / "machine-comparison.json"
+                    ).read_text()
+                )
+                print(
+                    json.dumps(
+                        registered.prepare_inputs(args.data_root, args.date, machine)
+                    )
+                )
+            else:
+                registered.calls(args.data_root, args.date)
+        elif args.mode == "prepare-inputs":
+            parser.error("--mode prepare-inputs requires an active v3/v4 family")
+        else:
+            execute_calls(args.data_root, args.date, args.actual_inputs)
+    elif args.mode == "machine":
+        print(
+            json.dumps(
+                machine_report(
+                    args.data_root,
+                    args.date,
+                    args.publication_date or args.date,
+                    source=selected_source,
+                )
+            )
+        )
     else:
-        from src.engine.scalping import continuous_reversal_registered_postclose as registered
+        from src.engine.scalping import (
+            continuous_reversal_registered_postclose as registered,
+        )
         from src.engine.scalping import continuous_reversal_path_postclose as paths
-        if paths.active(args.data_root,args.publication_date or args.date):registered=paths
-        current=registered.active(args.data_root,args.publication_date or args.date)
+
+        if paths.active(args.data_root, args.publication_date or args.date):
+            registered = paths
+        current = registered.active(args.data_root, args.publication_date or args.date)
         if current:
             from src.engine.scalping.continuous_reversal_shared_ledger import adapt
-            registered=adapt(registered,args.data_root)
-            machine=json.loads((registered.directory(args.data_root,args.date)/'machine-comparison.json').read_text())
+
+            registered = adapt(registered, args.data_root)
+            machine = json.loads(
+                (
+                    registered.directory(args.data_root, args.date)
+                    / "machine-comparison.json"
+                ).read_text()
+            )
             if not args.evaluate_only:
-                registered.prepare_inputs(args.data_root,args.date,machine)
-                deadline=__import__('os').environ.get('POSTCLOSE_STAGE_DEADLINE_EPOCH')
-                registered.calls(args.data_root,args.date,stop_epoch=float(deadline)-120 if deadline else None)
-            print(json.dumps(registered.auxiliary_report(args.data_root,args.date,args.publication_date or args.date,current,publish_policy=not args.evaluate_only)))
+                registered.prepare_inputs(args.data_root, args.date, machine)
+                deadline = __import__("os").environ.get(
+                    "POSTCLOSE_STAGE_DEADLINE_EPOCH"
+                )
+                registered.calls(
+                    args.data_root,
+                    args.date,
+                    stop_epoch=float(deadline) - 120 if deadline else None,
+                )
+            print(
+                json.dumps(
+                    registered.auxiliary_report(
+                        args.data_root,
+                        args.date,
+                        args.publication_date or args.date,
+                        current,
+                        publish_policy=not args.evaluate_only,
+                    )
+                )
+            )
             return 0
         from src.engine.scalping import continuous_reversal_branch_postclose as branch
-        parent=branch.active_v2(args.data_root,args.publication_date or args.date)
+
+        parent = branch.active_v2(args.data_root, args.publication_date or args.date)
         if parent:
-            machine=json.loads((directory(args.data_root,args.date)/'machine.json').read_text())
+            machine = json.loads(
+                (directory(args.data_root, args.date) / "machine.json").read_text()
+            )
             if not args.evaluate_only:
-                branch.prepare_daily_inputs(args.data_root,args.date,machine)
-                branch.calls(args.data_root,args.date,inputs_path=branch.directory(args.data_root,args.date)/'daily-provider-inputs.json')
-            print(json.dumps(branch.auxiliary_report(args.data_root,args.date,args.publication_date or args.date,parent,publish_policy=not args.evaluate_only)))
+                branch.prepare_daily_inputs(args.data_root, args.date, machine)
+                branch.calls(
+                    args.data_root,
+                    args.date,
+                    inputs_path=branch.directory(args.data_root, args.date)
+                    / "daily-provider-inputs.json",
+                )
+            print(
+                json.dumps(
+                    branch.auxiliary_report(
+                        args.data_root,
+                        args.date,
+                        args.publication_date or args.date,
+                        parent,
+                        publish_policy=not args.evaluate_only,
+                    )
+                )
+            )
             return 0
         if not args.evaluate_only:
-            prepare_auxiliary_points(args.data_root,args.date)
-            execute_calls(args.data_root,args.date,directory(args.data_root,args.date)/'provider-inputs.json')
-        print(json.dumps(auxiliary_report(args.data_root,args.date,args.publication_date or args.date,
-                                         publish_policy=not args.evaluate_only)))
+            prepare_auxiliary_points(args.data_root, args.date)
+            execute_calls(
+                args.data_root,
+                args.date,
+                directory(args.data_root, args.date) / "provider-inputs.json",
+            )
+        print(
+            json.dumps(
+                auxiliary_report(
+                    args.data_root,
+                    args.date,
+                    args.publication_date or args.date,
+                    publish_policy=not args.evaluate_only,
+                )
+            )
+        )
     return 0
 
 
-if __name__=='__main__':raise SystemExit(main())
+if __name__ == "__main__":
+    raise SystemExit(main())

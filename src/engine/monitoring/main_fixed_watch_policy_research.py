@@ -4,6 +4,7 @@ Initial Main fixed-watch adoption follows the operator's designated non-Samsung 
 research support does not veto that initial adoption. This producer cannot
 publish/activate policies or create admissions, broker calls or orders.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -18,16 +19,21 @@ from zoneinfo import ZoneInfo
 from src.engine.scalping import entry_policy_hypothesis_research as replay
 from src.engine.scalping import entry_strategy_policy as strategy
 from src.engine.scalping import mechanistic_entry_runtime_policy as runtime
-from src.engine.scalping.postclose_entry_validation import opportunity_identity, decision_time
-from src.engine.scalping.mechanistic_entry_runtime_policy import _atomic_write_json as atomic_write_json
+from src.engine.scalping.postclose_entry_validation import (
+    opportunity_identity,
+    decision_time,
+)
+from src.engine.scalping.mechanistic_entry_runtime_policy import (
+    _atomic_write_json as atomic_write_json,
+)
 
 SCHEMA = "main_fixed_watch_policy_research_v1"
 SYMBOL = "034020"
 SOURCE_START = "2026-09-29"
 FAMILIES = {
-    "continuous_flow": ("trigger_buy_pressure", (55., 60., 65.)),
-    "pullback_resume": ("recovery_tick_acceleration", (.8, 1., 1.2)),
-    "range_overheat_avoidance": ("overextension_vwap_bp", (60., 80., 100.)),
+    "continuous_flow": ("trigger_buy_pressure", (55.0, 60.0, 65.0)),
+    "pullback_resume": ("recovery_tick_acceleration", (0.8, 1.0, 1.2)),
+    "range_overheat_avoidance": ("overextension_vwap_bp", (60.0, 80.0, 100.0)),
 }
 KST = ZoneInfo("Asia/Seoul")
 
@@ -42,6 +48,7 @@ def file_sha(path):
 
 def _validate_symbol(symbol):
     from src.engine.scalping.main_fixed_watch import spec_for
+
     if spec_for(symbol).initial_policy_scope != "non_samsung":
         raise ValueError("fixed_watch_research_non_samsung_scope_required")
 
@@ -63,14 +70,24 @@ def freeze(parent, files, *, source_date, publication_date, target_date, symbol=
             policy = strategy._mutate_tree(base, {name: value}, None)
             if "entry_admission_recipe" in policy:
                 from src.engine.scalping.entry_admission_recipe import candidate_policy
+
                 policy = candidate_policy(policy)
             if strategy.validate(policy["strategy"]):
                 raise ValueError("fixed_watch_candidate_strategy_invalid")
-            from src.engine.scalping.entry_setup_evidence import validate_mechanistic_entry_threshold_policy
+            from src.engine.scalping.entry_setup_evidence import (
+                validate_mechanistic_entry_threshold_policy,
+            )
+
             if validate_mechanistic_entry_threshold_policy(policy):
                 raise ValueError("fixed_watch_candidate_policy_invalid")
-            candidates.append({"id": f"{family}:{value}", "family": family,
-                               "parameters": {name: value}, "policy": policy})
+            candidates.append(
+                {
+                    "id": f"{family}:{value}",
+                    "family": family,
+                    "parameters": {name: value},
+                    "policy": policy,
+                }
+            )
     manifest = []
     for path in files:
         path = Path(path).resolve(strict=True)
@@ -80,18 +97,41 @@ def freeze(parent, files, *, source_date, publication_date, target_date, symbol=
         if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
             raise ValueError("fixed_watch_source_changed_while_freezing")
         manifest.append({"path": str(path), "bytes": after.st_size, "sha256": sha})
-    return dict(schema=SCHEMA, symbol=symbol, owner_type="main_scalping",
-        watch_origin="MAIN_FIXED_WATCH", source_date=source_date,
-        publication_date=publication_date, target_date=target_date,
-        venue="KRX", session="KRX_REGULAR", parent_policy_sha256=strategy.digest(parent),
-        rollback_parent_sha256=strategy.digest(parent), candidates=candidates,
-        source_manifest=manifest, source_manifest_sha256=strategy.digest(manifest),
-        kernel_sha256=strategy.digest({str(Path(p).resolve()): file_sha(p)
-            for p in (strategy.__file__, replay.calibration.__file__, replay.evidence.__file__,
-                      runtime.__file__, replay.__file__, __file__)}),
+    return dict(
+        schema=SCHEMA,
+        symbol=symbol,
+        owner_type="main_scalping",
+        watch_origin="MAIN_FIXED_WATCH",
+        source_date=source_date,
+        publication_date=publication_date,
+        target_date=target_date,
+        venue="KRX",
+        session="KRX_REGULAR",
+        parent_policy_sha256=strategy.digest(parent),
+        rollback_parent_sha256=strategy.digest(parent),
+        candidates=candidates,
+        source_manifest=manifest,
+        source_manifest_sha256=strategy.digest(manifest),
+        kernel_sha256=strategy.digest(
+            {
+                str(Path(p).resolve()): file_sha(p)
+                for p in (
+                    strategy.__file__,
+                    replay.calibration.__file__,
+                    replay.evidence.__file__,
+                    runtime.__file__,
+                    replay.__file__,
+                    __file__,
+                )
+            }
+        ),
         initial_policy_designation="current_main_non_samsung",
-        initial_policy_preproof_required=False, success_retention_veto=False,
-        runtime_effect=False, allowed_runtime_apply=False, actual_order_submitted=False)
+        initial_policy_preproof_required=False,
+        success_retention_veto=False,
+        runtime_effect=False,
+        allowed_runtime_apply=False,
+        actual_order_submitted=False,
+    )
 
 
 def evaluate(frozen):
@@ -99,12 +139,28 @@ def evaluate(frozen):
     _validate_symbol(symbol)
     if frozen.get("schema") != SCHEMA:
         raise ValueError("fixed_watch_research_identity_invalid")
-    if len(frozen["candidates"]) != 10 or frozen["source_manifest_sha256"] != strategy.digest(frozen["source_manifest"]):
+    if len(frozen["candidates"]) != 10 or frozen[
+        "source_manifest_sha256"
+    ] != strategy.digest(frozen["source_manifest"]):
         raise ValueError("fixed_watch_research_freeze_invalid")
-    expected = freeze(frozen["candidates"][0]["policy"], [], source_date=frozen["source_date"],
-                      publication_date=frozen["publication_date"], target_date=frozen["target_date"], symbol=symbol)
-    for field in ("owner_type", "watch_origin", "candidates", "parent_policy_sha256", "kernel_sha256",
-                  "initial_policy_preproof_required", "runtime_effect", "allowed_runtime_apply"):
+    expected = freeze(
+        frozen["candidates"][0]["policy"],
+        [],
+        source_date=frozen["source_date"],
+        publication_date=frozen["publication_date"],
+        target_date=frozen["target_date"],
+        symbol=symbol,
+    )
+    for field in (
+        "owner_type",
+        "watch_origin",
+        "candidates",
+        "parent_policy_sha256",
+        "kernel_sha256",
+        "initial_policy_preproof_required",
+        "runtime_effect",
+        "allowed_runtime_apply",
+    ):
         if frozen.get(field) != expected[field]:
             raise ValueError("fixed_watch_frozen_contract_invalid:" + field)
     census, exclusions, native, scanner, seen = Counter(), Counter(), [], [], {}
@@ -121,11 +177,20 @@ def evaluate(frozen):
             try:
                 if not SOURCE_START <= row["source_date"] <= frozen["source_date"]:
                     raise ValueError("source_date_outside_study")
-                if (row.get("effective_venue"), row.get("session_bucket")) != ("KRX", "KRX_REGULAR"):
+                if (row.get("effective_venue"), row.get("session_bucket")) != (
+                    "KRX",
+                    "KRX_REGULAR",
+                ):
                     raise ValueError("scope_not_supported")
                 if not replay.calibration._machine_source_contract_valid(row):
                     raise ValueError("source_provenance_unverified")
-                if row.get("watch_origin") not in {"MAIN_FIXED_WATCH", "ZERO_BASE_DISCOVERY", "SCANNER_PROMOTION", None, ""}:
+                if row.get("watch_origin") not in {
+                    "MAIN_FIXED_WATCH",
+                    "ZERO_BASE_DISCOVERY",
+                    "SCANNER_PROMOTION",
+                    None,
+                    "",
+                }:
                     raise ValueError("non_main_watch_origin")
                 identity = opportunity_identity(row)
                 decision_time(row)
@@ -148,18 +213,24 @@ def evaluate(frozen):
                 if value is None:
                     raise ValueError("cost_or_path_unresolved:" + str(reason))
                 costs.append(row.get("comparison", {}).get("entry_cost_contract"))
-                (native if row.get("watch_origin") == "MAIN_FIXED_WATCH" else scanner).append(row)
+                (
+                    native if row.get("watch_origin") == "MAIN_FIXED_WATCH" else scanner
+                ).append(row)
             except (KeyError, TypeError, ValueError) as exc:
                 exclusions[str(exc)] += 1
         if file_sha(path) != item["sha256"]:
             raise ValueError("fixed_watch_source_changed_during_evaluation")
+
     def earliest(rows):
         result = {}
-        for row in sorted(rows, key=lambda r: (decision_time(r), r["decision_trace_id"])):
+        for row in sorted(
+            rows, key=lambda r: (decision_time(r), r["decision_trace_id"])
+        ):
             identity = opportunity_identity(row)
             if identity not in conflicts:
                 result.setdefault(identity, row)
         return list(result.values())
+
     native, scanner = earliest(native), earliest(scanner)
     days = sorted({row["source_date"] for row in native})
     training = [r for r in native if days and r["source_date"] < days[-1]]
@@ -167,48 +238,136 @@ def evaluate(frozen):
     results = []
     for candidate in frozen["candidates"]:
         metrics = {}
-        for label, rows in (("training", training), ("validation", validation), ("scanner_diagnostic", scanner)):
-            metrics[label] = replay.economy(rows, replay.decision_vector(rows, candidate["policy"])) if rows else None
-        results.append(dict(id=candidate["id"], family=candidate["family"],
-                            policy_sha256=strategy.digest(candidate["policy"]), **metrics))
+        for label, rows in (
+            ("training", training),
+            ("validation", validation),
+            ("scanner_diagnostic", scanner),
+        ):
+            metrics[label] = (
+                replay.economy(rows, replay.decision_vector(rows, candidate["policy"]))
+                if rows
+                else None
+            )
+        results.append(
+            dict(
+                id=candidate["id"],
+                family=candidate["family"],
+                policy_sha256=strategy.digest(candidate["policy"]),
+                **metrics,
+            )
+        )
     baseline = results[0]
-    improving = [r for r in results[1:] if r["training"]
-        and strategy.machine_winrate_improves(r["training"], baseline["training"])]
-    chosen = max(improving, key=lambda r: strategy.machine_admission_rank(r["training"])) if improving else None
-    selected = (chosen if chosen and chosen["validation"]
-        and strategy.machine_winrate_improves(chosen["validation"], baseline["validation"]) else None)
-    status = ("source_gap" if not native else "insufficient_sample" if not training or not validation
-              else "candidate_ready" if selected else "measured_no_improvement")
-    return dict(schema=SCHEMA, symbol=symbol, owner_type="main_scalping", watch_origin="MAIN_FIXED_WATCH",
-        source_date=frozen["source_date"], source_target_date=frozen["source_date"],
-        publication_date=frozen["publication_date"], target_date=frozen["target_date"],
-        venue="KRX", session="KRX_REGULAR", parent_policy_sha256=frozen["parent_policy_sha256"],
+    improving = [
+        r
+        for r in results[1:]
+        if r["training"]
+        and strategy.machine_winrate_improves(r["training"], baseline["training"])
+    ]
+    chosen = (
+        max(improving, key=lambda r: strategy.machine_admission_rank(r["training"]))
+        if improving
+        else None
+    )
+    selected = (
+        chosen
+        if chosen
+        and chosen["validation"]
+        and strategy.machine_winrate_improves(
+            chosen["validation"], baseline["validation"]
+        )
+        else None
+    )
+    status = (
+        "source_gap"
+        if not native
+        else (
+            "insufficient_sample"
+            if not training or not validation
+            else "candidate_ready" if selected else "measured_no_improvement"
+        )
+    )
+    return dict(
+        schema=SCHEMA,
+        symbol=symbol,
+        owner_type="main_scalping",
+        watch_origin="MAIN_FIXED_WATCH",
+        source_date=frozen["source_date"],
+        source_target_date=frozen["source_date"],
+        publication_date=frozen["publication_date"],
+        target_date=frozen["target_date"],
+        venue="KRX",
+        session="KRX_REGULAR",
+        parent_policy_sha256=frozen["parent_policy_sha256"],
         candidate_policy_sha256=selected["policy_sha256"] if selected else None,
-        source_manifest_sha256=frozen["source_manifest_sha256"], kernel_sha256=frozen["kernel_sha256"],
+        source_manifest_sha256=frozen["source_manifest_sha256"],
+        kernel_sha256=frozen["kernel_sha256"],
         cost_model_sha256=strategy.digest(costs) if costs else None,
-        rollback_parent_sha256=frozen["rollback_parent_sha256"], selection_status=status,
-        training_scope=sorted({r["source_date"] for r in training}), validation_scope=days[-1:] if days else [],
-        native_support={"fixed_watch_opportunities": len(native), "scanner_diagnostic_opportunities": len(scanner)},
-        validation_role="historical_chronological_replay", independent_postfreeze_support=0,
-        census=dict(census), exclusions=dict(exclusions), candidates=results,
-        entry_runtime_eligible=True, initial_policy_designation="current_main_non_samsung",
-        initial_policy_preproof_required=False, initial_designation_is_profitability_proof=False,
-        runtime_effect=False, allowed_runtime_apply=False, actual_order_submitted=False,
-        actual_completed_net_profit_krw=None, research_profit_is_broker_pnl=False)
+        rollback_parent_sha256=frozen["rollback_parent_sha256"],
+        selection_status=status,
+        training_scope=sorted({r["source_date"] for r in training}),
+        validation_scope=days[-1:] if days else [],
+        native_support={
+            "fixed_watch_opportunities": len(native),
+            "scanner_diagnostic_opportunities": len(scanner),
+        },
+        validation_role="historical_chronological_replay",
+        independent_postfreeze_support=0,
+        census=dict(census),
+        exclusions=dict(exclusions),
+        candidates=results,
+        entry_runtime_eligible=True,
+        initial_policy_designation="current_main_non_samsung",
+        initial_policy_preproof_required=False,
+        initial_designation_is_profitability_proof=False,
+        runtime_effect=False,
+        allowed_runtime_apply=False,
+        actual_order_submitted=False,
+        actual_completed_net_profit_krw=None,
+        research_profit_is_broker_pnl=False,
+    )
 
 
-def run(data_root, *, source_date, publication_date, target_date, output_dir=None, symbol=SYMBOL):
+def run(
+    data_root,
+    *,
+    source_date,
+    publication_date,
+    target_date,
+    output_dir=None,
+    symbol=SYMBOL,
+):
     data_root = Path(data_root).resolve()
-    bundle = runtime.for_cohort(runtime.load_effective(data_root=data_root, target_date=source_date), ("KRX", "KRX_REGULAR"))
+    bundle = runtime.for_cohort(
+        runtime.load_effective(data_root=data_root, target_date=source_date),
+        ("KRX", "KRX_REGULAR"),
+    )
     if bundle is None:
         raise ValueError("main_fixed_watch_parent_policy_missing")
-    files = sorted((data_root / "report/machine_observation_projection").glob("machine_observation_projection_????-??-??_*.json"))
-    gzip_only = sorted((data_root / "report/machine_observation_projection").glob("machine_observation_projection_????-??-??_*.json.gz"))
+    files = sorted(
+        (data_root / "report/machine_observation_projection").glob(
+            "machine_observation_projection_????-??-??_*.json"
+        )
+    )
+    gzip_only = sorted(
+        (data_root / "report/machine_observation_projection").glob(
+            "machine_observation_projection_????-??-??_*.json.gz"
+        )
+    )
     files += [p for p in gzip_only if not p.with_suffix("").exists()]
     files = [p for p in files if SOURCE_START <= p.name.split("_")[-3] <= source_date]
-    output = Path(output_dir) if output_dir else data_root / "report/main_fixed_watch_policy_research"
-    frozen = freeze(bundle["machine_policy"], files, source_date=source_date,
-                    publication_date=publication_date, target_date=target_date, symbol=symbol)
+    output = (
+        Path(output_dir)
+        if output_dir
+        else data_root / "report/main_fixed_watch_policy_research"
+    )
+    frozen = freeze(
+        bundle["machine_policy"],
+        files,
+        source_date=source_date,
+        publication_date=publication_date,
+        target_date=target_date,
+        symbol=symbol,
+    )
     frozen["parent_bundle_sha256"] = bundle["bundle_sha256"]
     contract_path = output / "frozen" / f"{strategy.digest(frozen)}.json"
     if contract_path.exists():
@@ -222,41 +381,69 @@ def run(data_root, *, source_date, publication_date, target_date, output_dir=Non
     result["parent_bundle_sha256"] = bundle["bundle_sha256"]
     result["report_sha256"] = strategy.digest(result)
     suffix = "" if symbol == SYMBOL else "_" + symbol
-    atomic_write_json(output / f"main_fixed_watch_policy_research{suffix}_{source_date}.json", result)
+    atomic_write_json(
+        output / f"main_fixed_watch_policy_research{suffix}_{source_date}.json", result
+    )
     return result
 
 
 def validate_report(result, *, source_date):
     _validate_symbol(result.get("symbol"))
-    if (result.get("schema") != SCHEMA or result.get("source_date") != source_date
+    if (
+        result.get("schema") != SCHEMA
+        or result.get("source_date") != source_date
         or result.get("source_target_date") != source_date
         or result.get("owner_type") != "main_scalping"
         or result.get("watch_origin") != "MAIN_FIXED_WATCH"
-        or result.get("runtime_effect") is not False or result.get("allowed_runtime_apply") is not False
+        or result.get("runtime_effect") is not False
+        or result.get("allowed_runtime_apply") is not False
         or result.get("actual_order_submitted") is not False
         or result.get("initial_policy_preproof_required") is not False
         or result.get("initial_policy_designation") != "current_main_non_samsung"
-        or result.get("selection_status") not in {"source_gap", "insufficient_sample", "candidate_ready", "measured_no_improvement"}):
+        or result.get("selection_status")
+        not in {
+            "source_gap",
+            "insufficient_sample",
+            "candidate_ready",
+            "measured_no_improvement",
+        }
+    ):
         raise ValueError("fixed_watch_report_contract_invalid")
-    if result.get("report_sha256") != strategy.digest({k: v for k, v in result.items() if k != "report_sha256"}):
+    if result.get("report_sha256") != strategy.digest(
+        {k: v for k, v in result.items() if k != "report_sha256"}
+    ):
         raise ValueError("fixed_watch_report_hash_invalid")
     path = Path(result["frozen_contract_path"])
     if file_sha(path) != result["frozen_contract_sha256"]:
         raise ValueError("fixed_watch_report_frozen_hash_invalid")
     frozen = json.loads(path.read_text())
-    for field in ("symbol", "source_date", "publication_date", "target_date",
-                  "parent_policy_sha256", "parent_bundle_sha256", "source_manifest_sha256", "kernel_sha256"):
+    for field in (
+        "symbol",
+        "source_date",
+        "publication_date",
+        "target_date",
+        "parent_policy_sha256",
+        "parent_bundle_sha256",
+        "source_manifest_sha256",
+        "kernel_sha256",
+    ):
         if result.get(field) != frozen.get(field):
             raise ValueError("fixed_watch_report_binding_invalid:" + field)
-    if not isinstance(result.get("candidates"), list) or len(result["candidates"]) != 10:
+    if (
+        not isinstance(result.get("candidates"), list)
+        or len(result["candidates"]) != 10
+    ):
         raise ValueError("fixed_watch_report_candidate_budget_invalid")
     for candidate, definition in zip(result["candidates"], frozen["candidates"]):
-        if (candidate.get("id") != definition["id"]
-            or candidate.get("policy_sha256") != strategy.digest(definition["policy"])):
+        if candidate.get("id") != definition["id"] or candidate.get(
+            "policy_sha256"
+        ) != strategy.digest(definition["policy"]):
             raise ValueError("fixed_watch_report_candidate_binding_invalid")
-    if (result.get("entry_runtime_eligible") is not True
+    if (
+        result.get("entry_runtime_eligible") is not True
         or result.get("actual_completed_net_profit_krw") is not None
-        or result.get("initial_designation_is_profitability_proof") is not False):
+        or result.get("initial_designation_is_profitability_proof") is not False
+    ):
         raise ValueError("fixed_watch_report_authority_invalid")
     return result
 
@@ -270,10 +457,29 @@ def main():
     parser.add_argument("--output-dir", type=Path)
     args = parser.parse_args()
     from src.engine.build_next_stage2_checklist import _next_krx_trading_day
+
     publication = args.publication_date or args.source_date
-    result = run(args.data_root, source_date=args.source_date, publication_date=publication,
-                 target_date=_next_krx_trading_day(publication), output_dir=args.output_dir, symbol=args.symbol)
-    print(json.dumps({k: result[k] for k in ("symbol", "selection_status", "native_support", "initial_policy_designation")}))
+    result = run(
+        args.data_root,
+        source_date=args.source_date,
+        publication_date=publication,
+        target_date=_next_krx_trading_day(publication),
+        output_dir=args.output_dir,
+        symbol=args.symbol,
+    )
+    print(
+        json.dumps(
+            {
+                k: result[k]
+                for k in (
+                    "symbol",
+                    "selection_status",
+                    "native_support",
+                    "initial_policy_designation",
+                )
+            }
+        )
+    )
     return 0
 
 

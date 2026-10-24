@@ -27,7 +27,6 @@ from src.engine.trade_profit import (
     get_trade_cost_rate,
 )
 
-
 KST = timezone(timedelta(hours=9))
 
 

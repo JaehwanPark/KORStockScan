@@ -909,7 +909,8 @@ class _DigestingReader:
 def _read_json_object_strict_pinned(
     logical: Path,
     generation: ArtifactGenerationLease,
-    *, receipt: bool = False,
+    *,
+    receipt: bool = False,
 ) -> dict[str, Any] | JsonObjectReadReceipt:
     candidate_names = (logical.name, f"{logical.name}.gz")
 
@@ -977,8 +978,11 @@ def _read_json_object_strict_pinned(
     if receipt:
         name, payload, content = decoded[0]
         return JsonObjectReadReceipt(
-            logical_path=logical, physical_path=logical.parent / name, payload=payload,
-            raw_sha256=stored_digests[name], decoded_sha256=hashlib.sha256(content).hexdigest(),
+            logical_path=logical,
+            physical_path=logical.parent / name,
+            payload=payload,
+            raw_sha256=stored_digests[name],
+            decoded_sha256=hashlib.sha256(content).hexdigest(),
             physical_identity=initial_census[name],
             generation_census=tuple(sorted(initial_census.items())),
             parent_identity=generation.parent_identity,
@@ -1167,7 +1171,6 @@ def _iter_jsonl_objects_strict_pinned(
             ):
                 raise ValueError(f"jsonl_artifact_changed_during_read:{item}")
 
-
         def stream(
             name: str,
             descriptor: int,
@@ -1200,13 +1203,19 @@ def _iter_jsonl_objects_strict_pinned(
                             )
                             if not raw_line:
                                 break
-                            if max_line_bytes is not None and len(raw_line) > max_line_bytes:
+                            if (
+                                max_line_bytes is not None
+                                and len(raw_line) > max_line_bytes
+                            ):
                                 raise ValueError(f"jsonl_artifact_line_limit:{item}")
                             if not name.endswith(".gz"):
                                 stored_digest.update(raw_line)
                             decoded_digest.update(raw_line)
                             decoded_bytes += len(raw_line)
-                            if max_decoded_bytes is not None and decoded_bytes > max_decoded_bytes:
+                            if (
+                                max_decoded_bytes is not None
+                                and decoded_bytes > max_decoded_bytes
+                            ):
                                 raise ValueError(f"jsonl_artifact_decoded_limit:{item}")
                             line_count += 1
                             if not raw_line.strip():
@@ -1301,8 +1310,8 @@ def _iter_jsonl_objects_strict_pinned(
                             ),
                             "stored_bytes": scans[name]["stored_size_bytes"],
                             "stored_sha256": scans[name]["stored_sha256"],
-                            "file_identity": list(initial_census[name]) + [
-                                generation.stat_name(name).st_ctime_ns],
+                            "file_identity": list(initial_census[name])
+                            + [generation.stat_name(name).st_ctime_ns],
                         }
                         for name in candidate_names
                         if name in scans

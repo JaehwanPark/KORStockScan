@@ -3,6 +3,7 @@
 Ownership: infrastructure copy primitive, not a quote parser or projection.
 Unknown objects retain their own deepcopy protocol and cycles/aliases are kept.
 """
+
 import copy
 from collections import deque
 from dataclasses import dataclass
@@ -22,6 +23,7 @@ class FrozenSnapshotList(tuple):
 @dataclass(frozen=True, slots=True)
 class FrozenSnapshotDeque:
     """Preserve the full tape's container contract and original capacity."""
+
     rows: tuple
     maxlen: int | None
 
@@ -31,9 +33,13 @@ class FrozenSnapshotDeque:
 
 class FrozenSnapshotDict(dict):
     """Ingress-owned immutable history row; consumers receive mutable copies."""
+
     def _immutable(self, *args, **kwargs):
-        raise TypeError('immutable_snapshot_record')
-    __setitem__ = __delitem__ = clear = pop = popitem = setdefault = update = __ior__ = _immutable
+        raise TypeError("immutable_snapshot_record")
+
+    __setitem__ = __delitem__ = clear = pop = popitem = setdefault = update = (
+        __ior__
+    ) = _immutable
 
     def __deepcopy__(self, memo):
         return materialize_history(self)
@@ -42,12 +48,18 @@ class FrozenSnapshotDict(dict):
 def freeze_history(value):
     """Freeze under the owner lock; only already immutable records are shared."""
     kind = type(value)
-    if kind in _ATOMIC or kind in (FrozenSnapshotDict, FrozenSnapshotList, FrozenSnapshotDeque):
+    if kind in _ATOMIC or kind in (
+        FrozenSnapshotDict,
+        FrozenSnapshotList,
+        FrozenSnapshotDeque,
+    ):
         return value
     if kind is dict:
         return FrozenSnapshotDict({k: freeze_history(v) for k, v in value.items()})
     if kind is deque:
-        return FrozenSnapshotDeque(tuple(freeze_history(v) for v in value), value.maxlen)
+        return FrozenSnapshotDeque(
+            tuple(freeze_history(v) for v in value), value.maxlen
+        )
     if kind is list:
         return FrozenSnapshotList(freeze_history(v) for v in value)
     if kind is tuple:
@@ -95,8 +107,10 @@ def snapshot_copy(value, memo=None):
     if kind is list or kind is deque:
         result = [] if kind is list else deque(maxlen=value.maxlen)
         memo[ident] = result
-        result.extend(item if type(item) in _ATOMIC else snapshot_copy(item, memo)
-                      for item in value)
+        result.extend(
+            item if type(item) in _ATOMIC else snapshot_copy(item, memo)
+            for item in value
+        )
         return result
     return copy.deepcopy(value, memo)
 
@@ -123,19 +137,25 @@ def snapshot_without_fields(value, fields):
 
 class FrozenMapping(_Mapping):
     """Owned recursive snapshot; foreign read-only views remain untrusted."""
-    __slots__ = ('_values', '_shareable')
+
+    __slots__ = ("_values", "_shareable")
 
     def __init__(self, values):
         children = {str(key): _freeze_owned(item) for key, item in values.items()}
-        object.__setattr__(self, '_values', _MappingProxyType(
-            {key: item for key, (item, _) in children.items()}))
-        object.__setattr__(self, '_shareable', all(owned for _, owned in children.values()))
+        object.__setattr__(
+            self,
+            "_values",
+            _MappingProxyType({key: item for key, (item, _) in children.items()}),
+        )
+        object.__setattr__(
+            self, "_shareable", all(owned for _, owned in children.values())
+        )
 
     def __setattr__(self, name, value):
-        raise TypeError('immutable_async_snapshot')
+        raise TypeError("immutable_async_snapshot")
 
     def __delattr__(self, name):
-        raise TypeError('immutable_async_snapshot')
+        raise TypeError("immutable_async_snapshot")
 
     def __getitem__(self, key):
         return self._values[key]
@@ -158,7 +178,9 @@ def _freeze_owned(value):
     if isinstance(value, (list, tuple, set, frozenset)):
         children = [_freeze_owned(item) for item in value]
         items = (item for item, _ in children)
-        frozen = frozenset(items) if isinstance(value, (set, frozenset)) else tuple(items)
+        frozen = (
+            frozenset(items) if isinstance(value, (set, frozenset)) else tuple(items)
+        )
         return frozen, all(owned for _, owned in children)
     # A copied custom object can still be mutable. Copy it again at each
     # ownership boundary; it must never mark its parent safe for sharing.

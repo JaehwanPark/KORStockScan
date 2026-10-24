@@ -16,105 +16,191 @@ def compact_row(day="2026-09-17", ordinal=0, verdict="VETO", net=0.5):
     from src.tests.test_strategy_owner_replay import entry_seed, entry_native_path
     from src.engine.scalping.strategy_owner_replay import replay_entry_opportunity
     from src.engine.scalping import mechanistic_entry_runtime_policy as policy
+
     seed = entry_seed(day, ordinal)
     depths, trades = entry_native_path(seed)
     for d in depths[:30]:
-        d.update(best_bid=9990, best_ask=10000, bid_levels=[[1,9990,1000]], ask_levels=[[1,10000,800]])
+        d.update(
+            best_bid=9990,
+            best_ask=10000,
+            bid_levels=[[1, 9990, 1000]],
+            ask_levels=[[1, 10000, 800]],
+        )
     for t in trades:
         t["trade_price"] = 10000
-    replay = replay_entry_opportunity(seed, depths, trades, source_ready=True, evaluated_at=datetime.fromisoformat(seed["observed_at"]).timestamp()+181)
-    return {"evaluation_key": f"compact-{day}-{ordinal}", "source_date": day,
-            "evaluation_attempt_id": seed["evaluation_attempt_id"],
-            "entry_economic_plan_sha256": seed["plan_sha256"],
-            "entry_economic_writer_plan_sha256": seed["plan_sha256"],
-            "entry_economic_source_status": "recorded_source_only",
-            "scanner_promotion_id": seed["scanner_promotion_id"],
-            "stock_code": seed["stock_code"], "effective_venue": "KRX",
-            "session_bucket": "KRX_REGULAR", "broker_route": "KRX",
-            "incumbent_prompt_version": policy.AI_VERSION,
-            "incumbent_verdict": verdict, "input": {"entry_setup_evidence_v1": {}},
-            "payload_sha256": "a"*64, "issued_prompt_sha256": "b"*64,
-            "entry_quality_path": {"status": "evaluable", "first_hit": "net_target_first",
-                                   "gross_net_target_pct": net+0.23,
-                                   "conservative_execution_cost_pct": 0.23},
-            "owner_replay": replay, "exclusion_reason": None}
+    replay = replay_entry_opportunity(
+        seed,
+        depths,
+        trades,
+        source_ready=True,
+        evaluated_at=datetime.fromisoformat(seed["observed_at"]).timestamp() + 181,
+    )
+    return {
+        "evaluation_key": f"compact-{day}-{ordinal}",
+        "source_date": day,
+        "evaluation_attempt_id": seed["evaluation_attempt_id"],
+        "entry_economic_plan_sha256": seed["plan_sha256"],
+        "entry_economic_writer_plan_sha256": seed["plan_sha256"],
+        "entry_economic_source_status": "recorded_source_only",
+        "scanner_promotion_id": seed["scanner_promotion_id"],
+        "stock_code": seed["stock_code"],
+        "effective_venue": "KRX",
+        "session_bucket": "KRX_REGULAR",
+        "broker_route": "KRX",
+        "incumbent_prompt_version": policy.AI_VERSION,
+        "incumbent_verdict": verdict,
+        "input": {"entry_setup_evidence_v1": {}},
+        "payload_sha256": "a" * 64,
+        "issued_prompt_sha256": "b" * 64,
+        "entry_quality_path": {
+            "status": "evaluable",
+            "first_hit": "net_target_first",
+            "gross_net_target_pct": net + 0.23,
+            "conservative_execution_cost_pct": 0.23,
+        },
+        "owner_replay": replay,
+        "exclusion_reason": None,
+    }
 
 
 def compact_result(row, verdict="PASS"):
-    return compact.sealed({"candidate_response": {"risk_verdict": verdict},
-                           "input_sha256": compact.input_identity(row), "validation_errors": [], "runtime_inference_cost_delta_krw": 0.0})
+    return compact.sealed(
+        {
+            "candidate_response": {"risk_verdict": verdict},
+            "input_sha256": compact.input_identity(row),
+            "validation_errors": [],
+            "runtime_inference_cost_delta_krw": 0.0,
+        }
+    )
 
 
-def test_compact_cli_reports_both_command_durations_without_provider_work(monkeypatch, tmp_path, capsys):
-    monkeypatch.setattr(compact, "run", lambda **_: {
-        "status": "incumbent_preserved", "provider_calls_this_run": 0,
-        "auxiliary_prompt_provider_calls_this_run": 0,
-    })
-    monkeypatch.setattr(compact, "finalize", lambda **_: {
-        "status": "compact_direct_policy_and_consumer_complete",
-        "selection_disposition": "incumbent_preserved",
-    })
-    assert batch.main(["--date", "2026-09-23", "--write", "--compact-only",
-                       "--execute-compact-candidate", "--finalize-compact",
-                       "--data-root", str(tmp_path)]) == 0
+def test_compact_cli_reports_both_command_durations_without_provider_work(
+    monkeypatch, tmp_path, capsys
+):
+    monkeypatch.setattr(
+        compact,
+        "run",
+        lambda **_: {
+            "status": "incumbent_preserved",
+            "provider_calls_this_run": 0,
+            "auxiliary_prompt_provider_calls_this_run": 0,
+        },
+    )
+    monkeypatch.setattr(
+        compact,
+        "finalize",
+        lambda **_: {
+            "status": "compact_direct_policy_and_consumer_complete",
+            "selection_disposition": "incumbent_preserved",
+        },
+    )
+    assert (
+        batch.main(
+            [
+                "--date",
+                "2026-09-23",
+                "--write",
+                "--compact-only",
+                "--execute-compact-candidate",
+                "--finalize-compact",
+                "--data-root",
+                str(tmp_path),
+            ]
+        )
+        == 0
+    )
     metrics = json.loads(capsys.readouterr().out)["compact_command_metrics"]
-    assert [item["command"] for item in metrics] == ["execute_compact_candidate", "finalize_compact"]
-    assert all(item["elapsed_ms"] >= 0 and item["prompt_provider_calls"] == 0 for item in metrics)
+    assert [item["command"] for item in metrics] == [
+        "execute_compact_candidate",
+        "finalize_compact",
+    ]
+    assert all(
+        item["elapsed_ms"] >= 0 and item["prompt_provider_calls"] == 0
+        for item in metrics
+    )
 
 
 def test_auxiliary_type_leaf_requires_five_train_opportunities():
     from src.engine.scalping.mechanistic_entry_runtime_policy import AI_VERSION
 
-    row = {"input": {"entry_setup_evidence_v1": {
-        "mechanistic_context": {"group": {"key_parts": {
-            "price_tick_band": "LOW_PRICE",
-        }}},
-    }}}
+    row = {
+        "input": {
+            "entry_setup_evidence_v1": {
+                "mechanistic_context": {
+                    "group": {
+                        "key_parts": {
+                            "price_tick_band": "LOW_PRICE",
+                        }
+                    }
+                },
+            }
+        }
+    }
     sparse = compact.auxiliary_v2_candidates([(row, 0.0)] * 4, AI_VERSION)
     supported = compact.auxiliary_v2_candidates([(row, 0.0)] * 5, AI_VERSION)
     assert not any(policy["leaves"] for policy in sparse)
     assert any(policy["leaves"] for policy in supported)
 
 
-def test_auxiliary_stage_replays_good_pass_and_bad_pass_on_fixed_denominator(monkeypatch):
+def test_auxiliary_stage_replays_good_pass_and_bad_pass_on_fixed_denominator(
+    monkeypatch,
+):
     from copy import deepcopy
     from src.tests.test_entry_setup_evidence import _machine_screen_case
 
     rows = []
-    for ordinal, (verdict, first_hit, extra_support) in enumerate((
-        ("PASS", "target_first", True),
-        ("PASS", "adverse_first", False),
-        ("VETO", "target_first", True),
-        ("VETO", "adverse_first", False),
-    )):
+    for ordinal, (verdict, first_hit, extra_support) in enumerate(
+        (
+            ("PASS", "target_first", True),
+            ("PASS", "adverse_first", False),
+            ("VETO", "target_first", True),
+            ("VETO", "adverse_first", False),
+        )
+    ):
         setup, response = _machine_screen_case(verdict)
         if extra_support:
-            response["supporting_fact_ids"].append(next(
-                f for f in setup["positive_facts"]
-                if f not in response["supporting_fact_ids"]
-            ))
-        rows.append({
-            "source_date": "2026-09-22", "stock_code": f"{ordinal:06d}",
-            "scanner_promotion_id": f"promotion-{ordinal}",
-            "evaluation_key": f"trace-{ordinal}", "decision_ts": f"2026-09-22T10:0{ordinal}:00+09:00",
-            "effective_venue": "KRX", "session_bucket": "KRX_REGULAR",
-            "machine_policy": {},
-            "incumbent_prompt_version": "parent", "incumbent_verdict": verdict,
-            "input": {"entry_setup_evidence_v1": setup},
-            "raw_response": response, "parent_auxiliary_soft_policy": None,
-            "natural_contract_evidence": {
-                "semantic_validation_status": "pass", "decision_quality_contract_status": "pass",
-            },
-            "source_label_identity_reasons": [],
-            "ai_stage_path": {
-                "schema": "auxiliary_fixed_path_10m_v1", "first_hit": first_hit,
-                "target_pct": .3, "adverse_pct": -.7, "end_return_pct": 0,
-                "sample_count": 5, "conservative_execution_cost_pct": .1,
-                "label_report_sha256": "a" * 64,
-                "label_source_quality_status": "pass", "observed_venue": "KRX",
-                "observed_session_bucket": "KRX_REGULAR",
-            },
-        })
+            response["supporting_fact_ids"].append(
+                next(
+                    f
+                    for f in setup["positive_facts"]
+                    if f not in response["supporting_fact_ids"]
+                )
+            )
+        rows.append(
+            {
+                "source_date": "2026-09-22",
+                "stock_code": f"{ordinal:06d}",
+                "scanner_promotion_id": f"promotion-{ordinal}",
+                "evaluation_key": f"trace-{ordinal}",
+                "decision_ts": f"2026-09-22T10:0{ordinal}:00+09:00",
+                "effective_venue": "KRX",
+                "session_bucket": "KRX_REGULAR",
+                "machine_policy": {},
+                "incumbent_prompt_version": "parent",
+                "incumbent_verdict": verdict,
+                "input": {"entry_setup_evidence_v1": setup},
+                "raw_response": response,
+                "parent_auxiliary_soft_policy": None,
+                "natural_contract_evidence": {
+                    "semantic_validation_status": "pass",
+                    "decision_quality_contract_status": "pass",
+                },
+                "source_label_identity_reasons": [],
+                "ai_stage_path": {
+                    "schema": "auxiliary_fixed_path_10m_v1",
+                    "first_hit": first_hit,
+                    "target_pct": 0.3,
+                    "adverse_pct": -0.7,
+                    "end_return_pct": 0,
+                    "sample_count": 5,
+                    "conservative_execution_cost_pct": 0.1,
+                    "label_report_sha256": "a" * 64,
+                    "label_source_quality_status": "pass",
+                    "observed_venue": "KRX",
+                    "observed_session_bucket": "KRX_REGULAR",
+                },
+            }
+        )
     base_rows = deepcopy(rows)
     for day in ("2026-09-20", "2026-09-21"):
         for row in base_rows:
@@ -123,16 +209,22 @@ def test_auxiliary_stage_replays_good_pass_and_bad_pass_on_fixed_denominator(mon
             copy["decision_ts"] = row["decision_ts"].replace("2026-09-22", day)
             copy["evaluation_key"] = day + ":" + row["evaluation_key"]
             rows.append(copy)
-    projection = compact.sealed({
-        "schema": "compact_auxiliary_frozen_projection_v1",
-        "target_date": "2026-09-22", "source_manifest_sha256": "b" * 64,
-        "source_tuning_allowed": True, "rows": rows,
-    })
+    projection = compact.sealed(
+        {
+            "schema": "compact_auxiliary_frozen_projection_v1",
+            "target_date": "2026-09-22",
+            "source_manifest_sha256": "b" * 64,
+            "source_tuning_allowed": True,
+            "rows": rows,
+        }
+    )
     candidate_source_days = []
     original_candidates = compact.auxiliary_v2_candidates
+
     def capture_candidates(train_rows, version):
         candidate_source_days.append({row["source_date"] for row, _ in train_rows})
         return original_candidates(train_rows, version)
+
     monkeypatch.setattr(compact, "auxiliary_v2_candidates", capture_candidates)
     result = compact.evaluate_auxiliary_stage(projection)
     assert candidate_source_days == [{"2026-09-20", "2026-09-21"}]
@@ -141,7 +233,9 @@ def test_auxiliary_stage_replays_good_pass_and_bad_pass_on_fixed_denominator(mon
     assert scope["status"] == "candidate_selected"
     assert len(scope["candidates"]) <= 33  # parent plus bounded 32-candidate search
     assert scope["holdout_day"] == "2026-09-22"
-    assert scope["selection_rank_version"] == "train_winrate_improvement_holdout_gate_v5"
+    assert (
+        scope["selection_rank_version"] == "train_winrate_improvement_holdout_gate_v5"
+    )
     assert scope["axis_train_support_count"]["materiality:REWARD_RISK_WEAK"] == 0
     assert scope["eligible_successful_pass_count"] == 3
     assert scope["selected"]["good_pass_retention"] == 1
@@ -154,11 +248,19 @@ def test_auxiliary_stage_replays_good_pass_and_bad_pass_on_fixed_denominator(mon
         ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION,
         ENTRY_MACHINE_AUXILIARY_COMPACT_CONTRACT_PROMPT_VERSION,
     )
-    from src.engine.scalping.entry_setup_evidence import entry_risk_adjudication_openai_schema
-    from src.engine.scalping.mechanistic_entry_runtime_policy import compact_auxiliary_prompt
+    from src.engine.scalping.entry_setup_evidence import (
+        entry_risk_adjudication_openai_schema,
+    )
+    from src.engine.scalping.mechanistic_entry_runtime_policy import (
+        compact_auxiliary_prompt,
+    )
     from src.engine.scalping import mechanistic_entry_runtime_policy as runtime_policy
+
     assert runtime_policy.AI_VERSION == ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION
-    assert ENTRY_MACHINE_AUXILIARY_COMPACT_CONTRACT_PROMPT_VERSION in runtime_policy.COMPACT_AI_VARIANTS
+    assert (
+        ENTRY_MACHINE_AUXILIARY_COMPACT_CONTRACT_PROMPT_VERSION
+        in runtime_policy.COMPACT_AI_VARIANTS
+    )
     prompt_results = {}
     for version in (
         ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION,
@@ -169,57 +271,102 @@ def test_auxiliary_stage_replays_good_pass_and_bad_pass_on_fixed_denominator(mon
         prompt_results[version] = {}
         for row in rows:
             identity = compact.auxiliary_prompt_identity(
-                row, version, compact.digest(prompt),
-                compact.digest(entry_risk_adjudication_openai_schema(
-                    row["input"]["entry_setup_evidence_v1"])),
+                row,
+                version,
+                compact.digest(prompt),
+                compact.digest(
+                    entry_risk_adjudication_openai_schema(
+                        row["input"]["entry_setup_evidence_v1"]
+                    )
+                ),
             )
-            prompt_results[version][row["evaluation_key"]] = compact.sealed({
-                "candidate_response": row["raw_response"],
-                "candidate_identity": identity,
-                "input_sha256": compact.input_identity(row),
-                "prompt_sha256": compact.digest(prompt),
-                "provider_provenance": {"provider": compact.PROMPT_PROVIDER,
-                                        "model": compact.PROMPT_MODEL,
-                                        "provider_call_succeeded": True},
-                "validation_errors": [],
-            })
+            prompt_results[version][row["evaluation_key"]] = compact.sealed(
+                {
+                    "candidate_response": row["raw_response"],
+                    "candidate_identity": identity,
+                    "input_sha256": compact.input_identity(row),
+                    "prompt_sha256": compact.digest(prompt),
+                    "provider_provenance": {
+                        "provider": compact.PROMPT_PROVIDER,
+                        "model": compact.PROMPT_MODEL,
+                        "provider_call_succeeded": True,
+                    },
+                    "validation_errors": [],
+                }
+            )
     prompt_stage = compact.evaluate_auxiliary_stage(projection, prompt_results)
-    assert prompt_stage["scope_results"]["KRX|KRX_REGULAR"]["prompt_candidate_status"] == "complete"
+    assert (
+        prompt_stage["scope_results"]["KRX|KRX_REGULAR"]["prompt_candidate_status"]
+        == "complete"
+    )
     assert compact.auxiliary_prompt_result_matches(
-        rows[0], ENTRY_MACHINE_AUXILIARY_COMPACT_CONTRACT_PROMPT_VERSION,
-        prompt_results[ENTRY_MACHINE_AUXILIARY_COMPACT_CONTRACT_PROMPT_VERSION][rows[0]["evaluation_key"]],
+        rows[0],
+        ENTRY_MACHINE_AUXILIARY_COMPACT_CONTRACT_PROMPT_VERSION,
+        prompt_results[ENTRY_MACHINE_AUXILIARY_COMPACT_CONTRACT_PROMPT_VERSION][
+            rows[0]["evaluation_key"]
+        ],
     )
     assert compact.auxiliary_prompt_results_complete(
-        projection, prompt_results, {row["evaluation_key"] for row in rows},
+        projection,
+        prompt_results,
+        {row["evaluation_key"] for row in rows},
     )
-    bad_provider = compact.sealed({
-        **prompt_results[ENTRY_MACHINE_AUXILIARY_COMPACT_CONTRACT_PROMPT_VERSION][rows[0]["evaluation_key"]],
-        "provider_provenance": {"provider": "other", "model": compact.PROMPT_MODEL,
-                                "provider_call_succeeded": True},
-    })
+    bad_provider = compact.sealed(
+        {
+            **prompt_results[ENTRY_MACHINE_AUXILIARY_COMPACT_CONTRACT_PROMPT_VERSION][
+                rows[0]["evaluation_key"]
+            ],
+            "provider_provenance": {
+                "provider": "other",
+                "model": compact.PROMPT_MODEL,
+                "provider_call_succeeded": True,
+            },
+        }
+    )
     assert not compact.auxiliary_prompt_result_matches(
-        rows[0], ENTRY_MACHINE_AUXILIARY_COMPACT_CONTRACT_PROMPT_VERSION, bad_provider)
-    prompt_results[ENTRY_MACHINE_AUXILIARY_COMPACT_CONTRACT_PROMPT_VERSION][rows[0]["evaluation_key"]] = compact.sealed({
-        **prompt_results[ENTRY_MACHINE_AUXILIARY_COMPACT_CONTRACT_PROMPT_VERSION][rows[0]["evaluation_key"]],
-        "candidate_identity": "0" * 64,
-    })
+        rows[0], ENTRY_MACHINE_AUXILIARY_COMPACT_CONTRACT_PROMPT_VERSION, bad_provider
+    )
+    prompt_results[ENTRY_MACHINE_AUXILIARY_COMPACT_CONTRACT_PROMPT_VERSION][
+        rows[0]["evaluation_key"]
+    ] = compact.sealed(
+        {
+            **prompt_results[ENTRY_MACHINE_AUXILIARY_COMPACT_CONTRACT_PROMPT_VERSION][
+                rows[0]["evaluation_key"]
+            ],
+            "candidate_identity": "0" * 64,
+        }
+    )
     assert not compact.auxiliary_prompt_result_matches(
-        rows[0], ENTRY_MACHINE_AUXILIARY_COMPACT_CONTRACT_PROMPT_VERSION,
-        prompt_results[ENTRY_MACHINE_AUXILIARY_COMPACT_CONTRACT_PROMPT_VERSION][rows[0]["evaluation_key"]],
+        rows[0],
+        ENTRY_MACHINE_AUXILIARY_COMPACT_CONTRACT_PROMPT_VERSION,
+        prompt_results[ENTRY_MACHINE_AUXILIARY_COMPACT_CONTRACT_PROMPT_VERSION][
+            rows[0]["evaluation_key"]
+        ],
     )
     assert not compact.auxiliary_prompt_results_complete(
-        projection, prompt_results, {row["evaluation_key"] for row in rows},
+        projection,
+        prompt_results,
+        {row["evaluation_key"] for row in rows},
     )
-    assert compact.evaluate_auxiliary_stage(projection, prompt_results)["scope_results"][
-        "KRX|KRX_REGULAR"]["prompt_candidate_status"] == "source_gap_exact_variant_response_missing"
+    assert (
+        compact.evaluate_auxiliary_stage(projection, prompt_results)["scope_results"][
+            "KRX|KRX_REGULAR"
+        ]["prompt_candidate_status"]
+        == "source_gap_exact_variant_response_missing"
+    )
     missing = deepcopy(rows)
     missing[0]["ai_stage_path"]["conservative_execution_cost_pct"] = None
-    assert compact.evaluate_auxiliary_stage(compact.sealed({**projection, "rows": missing}))[
-        "exclusion_counts"
-    ]["fixed_path_or_cost_incomplete"] == 1
+    assert (
+        compact.evaluate_auxiliary_stage(
+            compact.sealed({**projection, "rows": missing})
+        )["exclusion_counts"]["fixed_path_or_cost_incomplete"]
+        == 1
+    )
 
 
-def test_auxiliary_stage_publisher_updates_only_ai_component_with_parent_cas(tmp_path, monkeypatch):
+def test_auxiliary_stage_publisher_updates_only_ai_component_with_parent_cas(
+    tmp_path, monkeypatch
+):
     from src.engine.scalping import mechanistic_entry_runtime_policy as policy
     from src.tests.test_mechanistic_entry_runtime_policy import initial
 
@@ -229,89 +376,142 @@ def test_auxiliary_stage_publisher_updates_only_ai_component_with_parent_cas(tmp
         "veto_min_independent_evidence_count": 2,
         "pass_min_positive_evidence_count": 3,
     }
-    projection = compact.sealed({
-        "schema": "compact_auxiliary_frozen_projection_v1",
-        "target_date": "2026-09-17", "rows": [],
-    })
-    compact.write(compact.report_path(tmp_path, "2026-09-17").with_suffix(".source.json"), projection)
+    projection = compact.sealed(
+        {
+            "schema": "compact_auxiliary_frozen_projection_v1",
+            "target_date": "2026-09-17",
+            "rows": [],
+        }
+    )
+    compact.write(
+        compact.report_path(tmp_path, "2026-09-17").with_suffix(".source.json"),
+        projection,
+    )
     source = full_compact_proof()
     source.update(
-        candidate_improvement_proven=False, promotion_pass=False,
-        candidate_selection=compact.sealed({"schema": compact.CANDIDATE_SELECTION_SCHEMA,
-                                            "status": "insufficient_sample"}),
-        promotion_scopes=[], machine_parent_bundle_sha256s=[parent["bundle_sha256"]],
+        candidate_improvement_proven=False,
+        promotion_pass=False,
+        candidate_selection=compact.sealed(
+            {
+                "schema": compact.CANDIDATE_SELECTION_SCHEMA,
+                "status": "insufficient_sample",
+            }
+        ),
+        promotion_scopes=[],
+        machine_parent_bundle_sha256s=[parent["bundle_sha256"]],
         source_projection_sha256=projection["artifact_content_sha256"],
-        auxiliary_stage=compact.sealed({
-            "schema": "auxiliary_ai_stage_evaluation_v1",
-            "source_date": "2026-09-17", "source_projection_sha256": projection["artifact_content_sha256"],
-            "source_manifest_sha256": "d" * 64, "source_tuning_allowed": True,
-            "additional_provider_calls": 0,
-            "scope_results": {"KRX|KRX_REGULAR": {
-                "status": "candidate_selected",
-                "parent_prompt_versions": [parent["ai_policy"]["prompt_version"]],
-                "parent_soft_policy_sha256s": [compact.digest(None)],
-                "parent_machine_bundle_sha256s": [parent["bundle_sha256"]],
-                "selected": {"policy": candidate},
-            }},
-        }),
+        auxiliary_stage=compact.sealed(
+            {
+                "schema": "auxiliary_ai_stage_evaluation_v1",
+                "source_date": "2026-09-17",
+                "source_projection_sha256": projection["artifact_content_sha256"],
+                "source_manifest_sha256": "d" * 64,
+                "source_tuning_allowed": True,
+                "additional_provider_calls": 0,
+                "scope_results": {
+                    "KRX|KRX_REGULAR": {
+                        "status": "candidate_selected",
+                        "parent_prompt_versions": [
+                            parent["ai_policy"]["prompt_version"]
+                        ],
+                        "parent_soft_policy_sha256s": [compact.digest(None)],
+                        "parent_machine_bundle_sha256s": [parent["bundle_sha256"]],
+                        "selected": {"policy": candidate},
+                    }
+                },
+            }
+        ),
     )
-    monkeypatch.setattr(compact, "evaluate_auxiliary_stage", lambda _: source["auxiliary_stage"])
+    monkeypatch.setattr(
+        compact, "evaluate_auxiliary_stage", lambda _: source["auxiliary_stage"]
+    )
     source = compact.sealed(source)
     intraday_root = tmp_path / "intraday"
     intraday_parent = initial(intraday_root)
-    intraday_stage = compact.sealed({
-        **source["auxiliary_stage"],
-        "scope_results": {"KRX|KRX_REGULAR": {
-            **source["auxiliary_stage"]["scope_results"]["KRX|KRX_REGULAR"],
-            "parent_machine_bundle_sha256s": [intraday_parent["bundle_sha256"]],
-        }},
-    })
-    intraday_source = compact.sealed({
-        **source, "machine_parent_bundle_sha256s": [intraday_parent["bundle_sha256"]],
-        "auxiliary_stage": intraday_stage,
-    })
-    carry_stage = compact.sealed({
-        **intraday_stage,
-        "scope_results": {"KRX|KRX_REGULAR": {
-            **intraday_stage["scope_results"]["KRX|KRX_REGULAR"],
-            "status": "incumbent_carry",
-        }},
-    })
+    intraday_stage = compact.sealed(
+        {
+            **source["auxiliary_stage"],
+            "scope_results": {
+                "KRX|KRX_REGULAR": {
+                    **source["auxiliary_stage"]["scope_results"]["KRX|KRX_REGULAR"],
+                    "parent_machine_bundle_sha256s": [intraday_parent["bundle_sha256"]],
+                }
+            },
+        }
+    )
+    intraday_source = compact.sealed(
+        {
+            **source,
+            "machine_parent_bundle_sha256s": [intraday_parent["bundle_sha256"]],
+            "auxiliary_stage": intraday_stage,
+        }
+    )
+    carry_stage = compact.sealed(
+        {
+            **intraday_stage,
+            "scope_results": {
+                "KRX|KRX_REGULAR": {
+                    **intraday_stage["scope_results"]["KRX|KRX_REGULAR"],
+                    "status": "incumbent_carry",
+                }
+            },
+        }
+    )
     carry_source = compact.sealed({**intraday_source, "auxiliary_stage": carry_stage})
     monkeypatch.setattr(compact, "evaluate_auxiliary_stage", lambda _: carry_stage)
-    compact.write(compact.report_path(intraday_root, "2026-09-17").with_suffix(".source.json"), projection)
+    compact.write(
+        compact.report_path(intraday_root, "2026-09-17").with_suffix(".source.json"),
+        projection,
+    )
     compact.write(compact.report_path(intraday_root, "2026-09-17"), carry_source)
     carry = policy.activate_dated_auxiliary_policy(
-        data_root=intraday_root, target_date=datetime.now(policy.KST).date().isoformat(),
-        source_day="2026-09-17", now=datetime.now(policy.KST),
+        data_root=intraday_root,
+        target_date=datetime.now(policy.KST).date().isoformat(),
+        source_day="2026-09-17",
+        now=datetime.now(policy.KST),
     )
     assert carry["status"] == "incumbent_carry"
-    assert policy.load_effective(
-        data_root=intraday_root, target_date=datetime.now(policy.KST).date().isoformat()
-    )["bundle_sha256"] == intraday_parent["bundle_sha256"]
+    assert (
+        policy.load_effective(
+            data_root=intraday_root,
+            target_date=datetime.now(policy.KST).date().isoformat(),
+        )["bundle_sha256"]
+        == intraday_parent["bundle_sha256"]
+    )
     monkeypatch.setattr(compact, "evaluate_auxiliary_stage", lambda _: intraday_stage)
     compact.write(compact.report_path(intraday_root, "2026-09-17"), intraday_source)
     intraday = policy.activate_dated_auxiliary_policy(
-        data_root=intraday_root, target_date=datetime.now(policy.KST).date().isoformat(),
-        source_day="2026-09-17", now=datetime.now(policy.KST),
+        data_root=intraday_root,
+        target_date=datetime.now(policy.KST).date().isoformat(),
+        source_day="2026-09-17",
+        now=datetime.now(policy.KST),
     )
     assert intraday["status"] == "activated"
     intraday_effective = policy.load_effective(
-        data_root=intraday_root, target_date=datetime.now(policy.KST).date().isoformat())
+        data_root=intraday_root, target_date=datetime.now(policy.KST).date().isoformat()
+    )
     assert intraday_effective["machine_policy"] == intraday_parent["machine_policy"]
     assert intraday_effective["ai_policy"]["auxiliary_soft_policy"] == candidate
-    monkeypatch.setattr(compact, "evaluate_auxiliary_stage", lambda _: source["auxiliary_stage"])
+    monkeypatch.setattr(
+        compact, "evaluate_auxiliary_stage", lambda _: source["auxiliary_stage"]
+    )
     receipt = {
-        "source_manifest_sha256": "d" * 64, "target_date": "2026-09-17",
+        "source_manifest_sha256": "d" * 64,
+        "target_date": "2026-09-17",
         "tuning_input_allowed": True,
-        "machine_terminal_tuning_gate": {"decision_counterfactual_tuning_input_allowed": True},
+        "machine_terminal_tuning_gate": {
+            "decision_counterfactual_tuning_input_allowed": True
+        },
         "compact_auxiliary_policy_measurement": {"measurement_allowed": True},
     }
     monkeypatch.setattr(compact, "promotion_valid", lambda *args, **kwargs: True)
     now = datetime.fromisoformat("2026-09-18T20:00:00+09:00")
     published = policy.publish_compact_evaluation(
-        source, source_receipt=receipt, publication_day="2026-09-18",
-        data_root=tmp_path, now=now,
+        source,
+        source_receipt=receipt,
+        publication_day="2026-09-18",
+        data_root=tmp_path,
+        now=now,
     )
     assert published["target_date"] == "2026-09-21"
     assert published["machine_policy"] == parent["machine_policy"]
@@ -319,25 +519,41 @@ def test_auxiliary_stage_publisher_updates_only_ai_component_with_parent_cas(tmp
     assert published["auxiliary_soft_promoted_scopes"] == ["KRX|KRX_REGULAR"]
     assert policy.load(data_root=tmp_path, target_date="2026-09-21") == published
 
-    conflicting = compact.sealed({
-        **source,
-        "auxiliary_stage": compact.sealed({
-            **source["auxiliary_stage"],
-            "scope_results": {"KRX|KRX_REGULAR": {
-                **source["auxiliary_stage"]["scope_results"]["KRX|KRX_REGULAR"],
-                "parent_soft_policy_sha256s": ["f" * 64],
-            }},
-        }),
-    })
-    monkeypatch.setattr(compact, "evaluate_auxiliary_stage", lambda _: conflicting["auxiliary_stage"])
+    conflicting = compact.sealed(
+        {
+            **source,
+            "auxiliary_stage": compact.sealed(
+                {
+                    **source["auxiliary_stage"],
+                    "scope_results": {
+                        "KRX|KRX_REGULAR": {
+                            **source["auxiliary_stage"]["scope_results"][
+                                "KRX|KRX_REGULAR"
+                            ],
+                            "parent_soft_policy_sha256s": ["f" * 64],
+                        }
+                    },
+                }
+            ),
+        }
+    )
+    monkeypatch.setattr(
+        compact, "evaluate_auxiliary_stage", lambda _: conflicting["auxiliary_stage"]
+    )
     with pytest.raises(ValueError, match="parent_conflict"):
         policy.publish_compact_evaluation(
-            conflicting, source_receipt=receipt, publication_day="2026-09-18",
-            data_root=tmp_path, now=now,
+            conflicting,
+            source_receipt=receipt,
+            publication_day="2026-09-18",
+            data_root=tmp_path,
+            now=now,
         )
-    monkeypatch.setattr(compact, "evaluate_auxiliary_stage", lambda _: source["auxiliary_stage"])
+    monkeypatch.setattr(
+        compact, "evaluate_auxiliary_stage", lambda _: source["auxiliary_stage"]
+    )
     activated = policy.activate_dated_auxiliary_policy(
-        data_root=tmp_path, target_date="2026-09-21",
+        data_root=tmp_path,
+        target_date="2026-09-21",
         now=datetime.fromisoformat("2026-09-21T07:40:00+09:00"),
     )
     assert activated["status"] == "activated"
@@ -347,89 +563,141 @@ def test_auxiliary_stage_publisher_updates_only_ai_component_with_parent_cas(tmp
     assert effective["ai_policy"]["auxiliary_soft_policy"] == candidate
 
 
-def test_auxiliary_prompt_only_candidate_publishes_reviewed_variant(tmp_path, monkeypatch):
+def test_auxiliary_prompt_only_candidate_publishes_reviewed_variant(
+    tmp_path, monkeypatch
+):
     from src.engine.scalping import mechanistic_entry_runtime_policy as policy
-    from src.engine.ai_prompt_contracts import ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION
+    from src.engine.ai_prompt_contracts import (
+        ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION,
+    )
     from src.tests.test_mechanistic_entry_runtime_policy import initial
 
     parent = initial(tmp_path)
-    projection = compact.sealed({
-        "schema": "compact_auxiliary_frozen_projection_v1",
-        "target_date": "2026-09-17", "rows": [],
-    })
-    compact.write(compact.report_path(tmp_path, "2026-09-17").with_suffix(".source.json"), projection)
-    stage = compact.sealed({
-        "schema": "auxiliary_ai_stage_evaluation_v1",
-        "source_date": "2026-09-17",
-        "source_projection_sha256": projection["artifact_content_sha256"],
-        "source_manifest_sha256": "d" * 64,
-        "source_tuning_allowed": True, "additional_provider_calls": 0,
-        "scope_results": {"KRX|KRX_REGULAR": {
-            "status": "candidate_selected",
-            "parent_prompt_versions": [parent["ai_policy"]["prompt_version"]],
-            "parent_soft_policy_sha256s": [compact.digest(None)],
-            "parent_machine_bundle_sha256s": [parent["bundle_sha256"]],
-            "selected": {"policy": None,
-                         "prompt_version": ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION},
-        }},
-    })
+    projection = compact.sealed(
+        {
+            "schema": "compact_auxiliary_frozen_projection_v1",
+            "target_date": "2026-09-17",
+            "rows": [],
+        }
+    )
+    compact.write(
+        compact.report_path(tmp_path, "2026-09-17").with_suffix(".source.json"),
+        projection,
+    )
+    stage = compact.sealed(
+        {
+            "schema": "auxiliary_ai_stage_evaluation_v1",
+            "source_date": "2026-09-17",
+            "source_projection_sha256": projection["artifact_content_sha256"],
+            "source_manifest_sha256": "d" * 64,
+            "source_tuning_allowed": True,
+            "additional_provider_calls": 0,
+            "scope_results": {
+                "KRX|KRX_REGULAR": {
+                    "status": "candidate_selected",
+                    "parent_prompt_versions": [parent["ai_policy"]["prompt_version"]],
+                    "parent_soft_policy_sha256s": [compact.digest(None)],
+                    "parent_machine_bundle_sha256s": [parent["bundle_sha256"]],
+                    "selected": {
+                        "policy": None,
+                        "prompt_version": ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION,
+                    },
+                }
+            },
+        }
+    )
     source = full_compact_proof()
     source.update(
-        candidate_improvement_proven=False, promotion_pass=False,
-        candidate_selection=compact.sealed({
-            "schema": compact.CANDIDATE_SELECTION_SCHEMA,
-            "status": "insufficient_sample"}),
-        promotion_scopes=[], machine_parent_bundle_sha256s=[parent["bundle_sha256"]],
+        candidate_improvement_proven=False,
+        promotion_pass=False,
+        candidate_selection=compact.sealed(
+            {
+                "schema": compact.CANDIDATE_SELECTION_SCHEMA,
+                "status": "insufficient_sample",
+            }
+        ),
+        promotion_scopes=[],
+        machine_parent_bundle_sha256s=[parent["bundle_sha256"]],
         source_projection_sha256=projection["artifact_content_sha256"],
         auxiliary_stage=stage,
     )
     source = compact.sealed(source)
     monkeypatch.setattr(compact, "evaluate_auxiliary_stage", lambda _: stage)
     receipt = {
-        "source_manifest_sha256": "d" * 64, "target_date": "2026-09-17",
+        "source_manifest_sha256": "d" * 64,
+        "target_date": "2026-09-17",
         "tuning_input_allowed": True,
-        "machine_terminal_tuning_gate": {"decision_counterfactual_tuning_input_allowed": True},
+        "machine_terminal_tuning_gate": {
+            "decision_counterfactual_tuning_input_allowed": True
+        },
         "compact_auxiliary_policy_measurement": {"measurement_allowed": True},
     }
     published = policy.publish_compact_evaluation(
-        source, source_receipt=receipt, publication_day="2026-09-18",
-        data_root=tmp_path, now=datetime.fromisoformat("2026-09-18T20:00:00+09:00"),
+        source,
+        source_receipt=receipt,
+        publication_day="2026-09-18",
+        data_root=tmp_path,
+        now=datetime.fromisoformat("2026-09-18T20:00:00+09:00"),
     )
     assert published["machine_policy"] == parent["machine_policy"]
-    assert published["ai_policy"]["prompt_version"] == ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION
+    assert (
+        published["ai_policy"]["prompt_version"]
+        == ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION
+    )
     assert published["ai_policy"].get("auxiliary_soft_policy") is None
     assert published["auxiliary_soft_promoted_scopes"] == ["KRX|KRX_REGULAR"]
 
 
 def test_auxiliary_population_binds_bounded_previous_day_sources(tmp_path):
-    previous = compact.sealed({
-        "schema": "compact_auxiliary_frozen_projection_v1",
-        "source_projection_contract": compact.SOURCE_PROJECTION_CONTRACT,
-        "target_date": "2026-09-22", "source_tuning_allowed": True,
-        "rows": [{"evaluation_key": "previous"}],
-    })
-    current = compact.sealed({
-        "schema": "compact_auxiliary_frozen_projection_v1",
-        "source_projection_contract": compact.SOURCE_PROJECTION_CONTRACT,
-        "target_date": "2026-09-23", "source_tuning_allowed": True,
-        "rows": [{"evaluation_key": "current"}],
-    })
-    compact.write(compact.report_path(tmp_path, "2026-09-22").with_suffix(".source.json"), previous)
-    combined = compact.auxiliary_population_projection(current, compact.report_path(tmp_path, "2026-09-23").parent)
-    assert [row["evaluation_key"] for row in combined["rows"]] == ["previous", "current"]
+    previous = compact.sealed(
+        {
+            "schema": "compact_auxiliary_frozen_projection_v1",
+            "source_projection_contract": compact.SOURCE_PROJECTION_CONTRACT,
+            "target_date": "2026-09-22",
+            "source_tuning_allowed": True,
+            "rows": [{"evaluation_key": "previous"}],
+        }
+    )
+    current = compact.sealed(
+        {
+            "schema": "compact_auxiliary_frozen_projection_v1",
+            "source_projection_contract": compact.SOURCE_PROJECTION_CONTRACT,
+            "target_date": "2026-09-23",
+            "source_tuning_allowed": True,
+            "rows": [{"evaluation_key": "current"}],
+        }
+    )
+    compact.write(
+        compact.report_path(tmp_path, "2026-09-22").with_suffix(".source.json"),
+        previous,
+    )
+    combined = compact.auxiliary_population_projection(
+        current, compact.report_path(tmp_path, "2026-09-23").parent
+    )
+    assert [row["evaluation_key"] for row in combined["rows"]] == [
+        "previous",
+        "current",
+    ]
     assert combined["current_projection_sha256"] == current["artifact_content_sha256"]
     assert combined["history_projection_sha256s"] == {
-        "2026-09-22": previous["artifact_content_sha256"]}
+        "2026-09-22": previous["artifact_content_sha256"]
+    }
     changed = compact.sealed({**previous, "rows": [{"evaluation_key": "altered"}]})
-    compact.write(compact.report_path(tmp_path, "2026-09-22").with_suffix(".source.json"), changed)
+    compact.write(
+        compact.report_path(tmp_path, "2026-09-22").with_suffix(".source.json"), changed
+    )
     with pytest.raises(ValueError, match="auxiliary_history_source_changed"):
         compact.auxiliary_population_projection(
-            current, compact.report_path(tmp_path, "2026-09-23").parent,
+            current,
+            compact.report_path(tmp_path, "2026-09-23").parent,
             history_hashes=combined["history_projection_sha256s"],
         )
-    with pytest.raises(ValueError, match="auxiliary_history_manifest_unbounded_or_invalid"):
+    with pytest.raises(
+        ValueError, match="auxiliary_history_manifest_unbounded_or_invalid"
+    ):
         compact.auxiliary_population_projection(
-            current, compact.report_path(tmp_path, "2026-09-23").parent,
+            current,
+            compact.report_path(tmp_path, "2026-09-23").parent,
             history_hashes={f"2026-09-{day:02d}": "a" * 64 for day in range(17, 22)},
         )
 
@@ -438,12 +706,15 @@ def test_auxiliary_population_starts_at_forward_policy_date(tmp_path):
     old_path = compact.report_path(tmp_path, "2026-09-28").with_suffix(".source.json")
     old_path.parent.mkdir(parents=True, exist_ok=True)
     old_path.write_text("invalid historical source", encoding="utf-8")
-    current = compact.sealed({
-        "schema": "compact_auxiliary_frozen_projection_v1",
-        "source_projection_contract": compact.SOURCE_PROJECTION_CONTRACT,
-        "target_date": "2026-09-29", "source_tuning_allowed": True,
-        "rows": [{"evaluation_key": "forward"}],
-    })
+    current = compact.sealed(
+        {
+            "schema": "compact_auxiliary_frozen_projection_v1",
+            "source_projection_contract": compact.SOURCE_PROJECTION_CONTRACT,
+            "target_date": "2026-09-29",
+            "source_tuning_allowed": True,
+            "rows": [{"evaluation_key": "forward"}],
+        }
+    )
     combined = compact.auxiliary_population_projection(current, old_path.parent)
     assert [row["evaluation_key"] for row in combined["rows"]] == ["forward"]
     assert combined["history_projection_sha256s"] == {}
@@ -451,55 +722,79 @@ def test_auxiliary_population_starts_at_forward_policy_date(tmp_path):
 
 def test_forward_compact_candidate_plan_has_independent_selection(tmp_path):
     candidate = "example_candidate"
-    selected = compact.sealed({
-        "schema": compact.CANDIDATE_SELECTION_SCHEMA,
-        "status": "candidate_selected",
-        "candidate_prompt_version": candidate,
-    })
+    selected = compact.sealed(
+        {
+            "schema": compact.CANDIDATE_SELECTION_SCHEMA,
+            "status": "candidate_selected",
+            "candidate_prompt_version": candidate,
+        }
+    )
     old_plan = compact._candidate_plan_path(tmp_path, "2026-09-28", candidate)
-    compact.write(old_plan, compact.sealed({
-        "candidate_prompt_version": candidate,
-        "candidate_selection": selected,
-    }))
+    compact.write(
+        old_plan,
+        compact.sealed(
+            {
+                "candidate_prompt_version": candidate,
+                "candidate_selection": selected,
+            }
+        ),
+    )
     assert compact.frozen_candidate_selection(tmp_path, "2026-09-28") == selected
     assert compact.frozen_candidate_selection(tmp_path, "2026-09-29") is None
     new_plan = compact._candidate_plan_path(tmp_path, "2026-09-29", candidate)
     assert new_plan != old_plan
-    compact.write(new_plan, compact.sealed({
-        "candidate_prompt_version": candidate,
-        "candidate_selection": selected,
-    }))
+    compact.write(
+        new_plan,
+        compact.sealed(
+            {
+                "candidate_prompt_version": candidate,
+                "candidate_selection": selected,
+            }
+        ),
+    )
     assert compact.frozen_candidate_selection(tmp_path, "2026-09-29") == selected
 
 
 def test_auxiliary_population_reads_archived_source_with_same_hash(tmp_path):
     import gzip
 
-    previous = compact.sealed({
-        "schema": "compact_auxiliary_frozen_projection_v1",
-        "source_projection_contract": compact.SOURCE_PROJECTION_CONTRACT,
-        "target_date": "2026-09-22", "source_tuning_allowed": True,
-        "rows": [{"evaluation_key": "archived"}],
-    })
-    current = compact.sealed({
-        "schema": "compact_auxiliary_frozen_projection_v1",
-        "source_projection_contract": compact.SOURCE_PROJECTION_CONTRACT,
-        "target_date": "2026-09-23", "source_tuning_allowed": True,
-        "rows": [],
-    })
-    archive = Path(str(compact.report_path(tmp_path, "2026-09-22").with_suffix(".source.json")) + ".gz")
+    previous = compact.sealed(
+        {
+            "schema": "compact_auxiliary_frozen_projection_v1",
+            "source_projection_contract": compact.SOURCE_PROJECTION_CONTRACT,
+            "target_date": "2026-09-22",
+            "source_tuning_allowed": True,
+            "rows": [{"evaluation_key": "archived"}],
+        }
+    )
+    current = compact.sealed(
+        {
+            "schema": "compact_auxiliary_frozen_projection_v1",
+            "source_projection_contract": compact.SOURCE_PROJECTION_CONTRACT,
+            "target_date": "2026-09-23",
+            "source_tuning_allowed": True,
+            "rows": [],
+        }
+    )
+    archive = Path(
+        str(compact.report_path(tmp_path, "2026-09-22").with_suffix(".source.json"))
+        + ".gz"
+    )
     archive.parent.mkdir(parents=True, exist_ok=True)
     with gzip.open(archive, "wt") as handle:
         json.dump(previous, handle)
     combined = compact.auxiliary_population_projection(current, archive.parent)
     assert [row["evaluation_key"] for row in combined["rows"]] == ["archived"]
     assert combined["history_projection_sha256s"] == {
-        "2026-09-22": previous["artifact_content_sha256"]}
+        "2026-09-22": previous["artifact_content_sha256"]
+    }
 
 
 def test_auxiliary_prompt_trials_keep_v2_profile_prompt_aligned():
     from src.engine.scalping.entry_setup_evidence import evaluate_auxiliary_policy
-    from src.engine.ai_prompt_contracts import ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION
+    from src.engine.ai_prompt_contracts import (
+        ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION,
+    )
     from src.tests.test_entry_setup_evidence import _machine_screen_case
 
     setup, response = _machine_screen_case("VETO")
@@ -507,46 +802,72 @@ def test_auxiliary_prompt_trials_keep_v2_profile_prompt_aligned():
     profile = {
         "veto_min_independent_evidence_count": 1,
         "pass_min_positive_evidence_count": 1,
-        "materiality_max": {"LIQUIDITY_FRAGILE": 0.0,
-                            "ADVERSE_TAPE": 0.0, "REWARD_RISK_WEAK": 0.0},
+        "materiality_max": {
+            "LIQUIDITY_FRAGILE": 0.0,
+            "ADVERSE_TAPE": 0.0,
+            "REWARD_RISK_WEAK": 0.0,
+        },
         "prompt_version": version,
     }
     policy = {"schema": "auxiliary_soft_policy_v2", "parent": profile, "leaves": []}
     verdict = evaluate_auxiliary_policy(
-        response, setup_evidence=setup, machine_policy={}, soft_policy=policy,
+        response,
+        setup_evidence=setup,
+        machine_policy={},
+        soft_policy=policy,
     )["effective_verdict"]
     row = {
-        "source_date": "2026-09-22", "stock_code": "000001",
-        "scanner_promotion_id": "promotion-1", "evaluation_key": "trace-1",
+        "source_date": "2026-09-22",
+        "stock_code": "000001",
+        "scanner_promotion_id": "promotion-1",
+        "evaluation_key": "trace-1",
         "decision_ts": "2026-09-22T10:00:00+09:00",
-        "effective_venue": "KRX", "session_bucket": "KRX_REGULAR",
-        "machine_policy": {}, "incumbent_prompt_version": version,
-        "incumbent_verdict": verdict, "input": {"entry_setup_evidence_v1": setup},
-        "raw_response": response, "parent_auxiliary_soft_policy": policy,
+        "effective_venue": "KRX",
+        "session_bucket": "KRX_REGULAR",
+        "machine_policy": {},
+        "incumbent_prompt_version": version,
+        "incumbent_verdict": verdict,
+        "input": {"entry_setup_evidence_v1": setup},
+        "raw_response": response,
+        "parent_auxiliary_soft_policy": policy,
         "parent_auxiliary_soft_policy_sha256": compact.digest(policy),
         "natural_contract_evidence": {
-            "semantic_validation_status": "pass", "decision_quality_contract_status": "pass",
+            "semantic_validation_status": "pass",
+            "decision_quality_contract_status": "pass",
         },
         "source_label_identity_reasons": [],
         "ai_stage_path": {
-            "schema": "auxiliary_fixed_path_10m_v1", "first_hit": "target_first",
-            "target_pct": .3, "adverse_pct": -.7, "end_return_pct": 0,
-            "sample_count": 5, "conservative_execution_cost_pct": .1,
+            "schema": "auxiliary_fixed_path_10m_v1",
+            "first_hit": "target_first",
+            "target_pct": 0.3,
+            "adverse_pct": -0.7,
+            "end_return_pct": 0,
+            "sample_count": 5,
+            "conservative_execution_cost_pct": 0.1,
             "label_report_sha256": "a" * 64,
-            "label_source_quality_status": "pass", "observed_venue": "KRX",
+            "label_source_quality_status": "pass",
+            "observed_venue": "KRX",
             "observed_session_bucket": "KRX_REGULAR",
         },
     }
-    projection = compact.sealed({
-        "schema": "compact_auxiliary_frozen_projection_v1",
-        "target_date": row["source_date"], "source_tuning_allowed": True,
-        "rows": [row],
-    })
+    projection = compact.sealed(
+        {
+            "schema": "compact_auxiliary_frozen_projection_v1",
+            "target_date": row["source_date"],
+            "source_tuning_allowed": True,
+            "rows": [row],
+        }
+    )
     stage = compact.evaluate_auxiliary_stage(projection)
     assert stage["eligible_count"] == 1
     for trial in stage["scope_results"]["KRX|KRX_REGULAR"]["candidates"]:
-        if trial["policy"] and trial["policy"].get("schema") == "auxiliary_soft_policy_v2":
-            assert trial["policy"]["parent"]["prompt_version"] == trial["prompt_version"]
+        if (
+            trial["policy"]
+            and trial["policy"].get("schema") == "auxiliary_soft_policy_v2"
+        ):
+            assert (
+                trial["policy"]["parent"]["prompt_version"] == trial["prompt_version"]
+            )
 
 
 def test_compact_owner_replay_is_bound_to_exact_attempt_and_plan_hash():
@@ -588,7 +909,10 @@ def test_compact_prospective_contract_keeps_historical_rows_unmodified():
     assert receipt["source_lineage_counts"]["writer_trace_plan_joined"] == 1
     assert receipt["historical_missing_fields_reconstructed"] is False
 
-    mismatched = {**projection, "rows": [{**row, "entry_economic_writer_plan_sha256": "f" * 64}]}
+    mismatched = {
+        **projection,
+        "rows": [{**row, "entry_economic_writer_plan_sha256": "f" * 64}],
+    }
     mismatch_receipt = compact.prospective_source_contract(mismatched)
     assert mismatch_receipt["natural_exact_row_count"] == 0
     assert mismatch_receipt["first_source_gap"] == "writer_trace_plan_hash_mismatch"
@@ -601,8 +925,14 @@ def test_compact_prospective_contract_keeps_historical_rows_unmodified():
 
 
 def test_compact_whole_population_zero_same_verdict_and_unresolved_caution():
-    rows = [compact_row(ordinal=i, verdict=v) for i,v in enumerate(["PASS", "VETO", "CAUTION"])]
-    results = {r["evaluation_key"]: compact_result(r, "PASS" if i == 0 else "VETO") for i,r in enumerate(rows)}
+    rows = [
+        compact_row(ordinal=i, verdict=v)
+        for i, v in enumerate(["PASS", "VETO", "CAUTION"])
+    ]
+    results = {
+        r["evaluation_key"]: compact_result(r, "PASS" if i == 0 else "VETO")
+        for i, r in enumerate(rows)
+    }
     metrics = compact.evaluate(rows, results)
     assert metrics["paired_comparable_count"] == 2
     assert metrics["delta_net_ev_pct"] == 0
@@ -616,7 +946,10 @@ def test_compact_whole_population_zero_same_verdict_and_unresolved_caution():
 def test_compact_no_notional_is_percentage_diagnostic_not_daily_profit():
     empty = compact.evaluate([], {})
     assert empty["portfolio_daily_net_delta_krw"] is None
-    assert empty["net_profit_status"] == "not_available_without_owner_plan_and_portfolio_replay"
+    assert (
+        empty["net_profit_status"]
+        == "not_available_without_owner_plan_and_portfolio_replay"
+    )
     row = compact_row()
     row["owner_replay"] = None
     metrics = compact.evaluate([row], {row["evaluation_key"]: compact_result(row)})
@@ -628,39 +961,71 @@ def test_compact_no_notional_is_percentage_diagnostic_not_daily_profit():
     assert metrics["paired_comparable_count"] == 0
 
 
-def test_compact_checkpoint_reuse_economics_rejoin_and_source_block(monkeypatch, tmp_path):
+def test_compact_checkpoint_reuse_economics_rejoin_and_source_block(
+    monkeypatch, tmp_path
+):
     import src.engine.scalping.entry_setup_evidence as evidence
+
     row = operating_compact_row()
     model = full_compact_proof()["owner_execution_model_validation"]
-    monkeypatch.setattr(compact, "runtime_inference_cost_receipt", lambda *_: full_compact_proof()["runtime_inference_cost_receipt"])
-    projection = compact.sealed({"owner_execution_model_validation":model,"rows": [row], "screened_total": 1, "source_manifest_sha256": "d"*64,
-                                  "source_tuning_allowed": True, "exclusion_counts": {}, **compact.AUTHORITY})
+    monkeypatch.setattr(
+        compact,
+        "runtime_inference_cost_receipt",
+        lambda *_: full_compact_proof()["runtime_inference_cost_receipt"],
+    )
+    projection = compact.sealed(
+        {
+            "owner_execution_model_validation": model,
+            "rows": [row],
+            "screened_total": 1,
+            "source_manifest_sha256": "d" * 64,
+            "source_tuning_allowed": True,
+            "exclusion_counts": {},
+            **compact.AUTHORITY,
+        }
+    )
     monkeypatch.setattr(compact, "prepare", lambda *_: projection)
     monkeypatch.setattr(
         compact,
         "candidate_direction_selection",
         lambda *_: compact_candidate_selection(),
     )
-    monkeypatch.setattr(evidence, "entry_risk_adjudication_openai_schema", lambda *_: {})
-    monkeypatch.setattr(evidence, "validate_entry_risk_adjudication", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(
+        evidence, "entry_risk_adjudication_openai_schema", lambda *_: {}
+    )
+    monkeypatch.setattr(
+        evidence, "validate_entry_risk_adjudication", lambda *_args, **_kwargs: []
+    )
     calls = []
+
     def runner(request):
         calls.append(request)
         return {"candidate_response": {"risk_verdict": "PASS"}}
-    first = compact.run(data_root=tmp_path, day="2026-09-17", execute=True, runner=runner)
-    second = compact.run(data_root=tmp_path, day="2026-09-17", execute=True, runner=runner)
+
+    first = compact.run(
+        data_root=tmp_path, day="2026-09-17", execute=True, runner=runner
+    )
+    second = compact.run(
+        data_root=tmp_path, day="2026-09-17", execute=True, runner=runner
+    )
     assert len(calls) == 1
     assert first == second
     assert first["metrics"]["delta_net_ev_pct"] > 0
-    assert first["metrics"]["economic_research_status"] == "supported_cost_adjusted_comparison"
-    assert first["metrics"]["promotion_primary_decision_metric"] == "robust_paired_delta_ev_lower_bound_pct"
+    assert (
+        first["metrics"]["economic_research_status"]
+        == "supported_cost_adjusted_comparison"
+    )
+    assert (
+        first["metrics"]["promotion_primary_decision_metric"]
+        == "robust_paired_delta_ev_lower_bound_pct"
+    )
     assert first["metrics"]["model_delta_ev_is_actual_profit"] is False
     assert len(first["evaluation_fingerprint"]) == 64
     assert first["evaluation_state"] in {"evaluated_hold", "waiting_model_or_sample"}
     assert not first["promotion_pass"]
-    checkpoint_path = compact.report_path(
-        tmp_path, "2026-09-17"
-    ).with_suffix(".checkpoint.json")
+    checkpoint_path = compact.report_path(tmp_path, "2026-09-17").with_suffix(
+        ".checkpoint.json"
+    )
     legacy_checkpoint = compact.read(checkpoint_path)
     legacy_checkpoint.pop("candidate_selection_sha256")
     compact.write(checkpoint_path, compact.sealed(legacy_checkpoint))
@@ -677,47 +1042,88 @@ def test_compact_checkpoint_reuse_economics_rejoin_and_source_block(monkeypatch,
     identity = compact.input_identity(row)
     row["entry_quality_path"]["gross_net_target_pct"] = 0.9
     assert compact.input_identity(row) == identity
-    row["payload_sha256"] = "e"*64
+    row["payload_sha256"] = "e" * 64
     assert compact.input_identity(row) != identity
     blocked = tmp_path / "blocked"
     projection["source_tuning_allowed"] = False
     projection = compact.sealed(projection)
-    report = compact.run(data_root=blocked, day="2026-09-17", execute=True, runner=lambda _: pytest.fail("blocked source cannot call provider"))
+    report = compact.run(
+        data_root=blocked,
+        day="2026-09-17",
+        execute=True,
+        runner=lambda _: pytest.fail("blocked source cannot call provider"),
+    )
     assert report["status"] == "source_contract_blocked"
     assert report["evaluation_state"] == "blocked_source"
 
 
-def test_compact_builtin_provider_path_reserves_valid_token_ceiling(monkeypatch, tmp_path):
+def test_compact_builtin_provider_path_reserves_valid_token_ceiling(
+    monkeypatch, tmp_path
+):
     from src.engine.scalping import entry_setup_evidence as evidence
     from src.engine.scalping.micro_reversion import provider_budget as budget
+
     row = operating_compact_row()
     proof = full_compact_proof()
-    projection = compact.sealed({
-        "owner_execution_model_validation": proof["owner_execution_model_validation"],
-        "rows": [row], "screened_total": 1, "source_manifest_sha256": "d" * 64,
-        "source_tuning_allowed": True, "exclusion_counts": {}, **compact.AUTHORITY,
-    })
+    projection = compact.sealed(
+        {
+            "owner_execution_model_validation": proof[
+                "owner_execution_model_validation"
+            ],
+            "rows": [row],
+            "screened_total": 1,
+            "source_manifest_sha256": "d" * 64,
+            "source_tuning_allowed": True,
+            "exclusion_counts": {},
+            **compact.AUTHORITY,
+        }
+    )
     monkeypatch.setattr(compact, "prepare", lambda *_: projection)
-    monkeypatch.setattr(compact, "candidate_direction_selection", lambda *_: compact_candidate_selection())
-    monkeypatch.setattr(compact, "runtime_inference_cost_receipt", lambda *_: proof["runtime_inference_cost_receipt"])
-    monkeypatch.setattr(evidence, "entry_risk_adjudication_openai_schema", lambda *_: {})
-    monkeypatch.setattr(evidence, "validate_entry_risk_adjudication", lambda *_args, **_kwargs: [])
-    monkeypatch.setattr(budget, "load_reviewed_pricing_artifact", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(
+        compact,
+        "candidate_direction_selection",
+        lambda *_: compact_candidate_selection(),
+    )
+    monkeypatch.setattr(
+        compact,
+        "runtime_inference_cost_receipt",
+        lambda *_: proof["runtime_inference_cost_receipt"],
+    )
+    monkeypatch.setattr(
+        evidence, "entry_risk_adjudication_openai_schema", lambda *_: {}
+    )
+    monkeypatch.setattr(
+        evidence, "validate_entry_risk_adjudication", lambda *_args, **_kwargs: []
+    )
+    monkeypatch.setattr(
+        budget, "load_reviewed_pricing_artifact", lambda *_args, **_kwargs: object()
+    )
     reserved = []
+
     class Ledger:
         def __init__(self, **_kwargs):
             pass
+
         def reserve_attempt(self, _attempt, *, token_ceiling):
             reserved.append(token_ceiling)
             return type("Permit", (), {"reservation_id": "test-reservation"})()
+
         def settle_attempt(self, *_args, **_kwargs):
             return type("Settlement", (), {"actual_cost_usd": 0})()
+
     monkeypatch.setattr(budget, "ProviderBudgetLedger", Ledger)
-    monkeypatch.setattr(quality, "execute_openai_prompt_v2_candidate", lambda *_args, **_kwargs: {
-        "candidate_response": {"risk_verdict": "PASS"},
-        "provider_provenance": {"input_tokens": 10, "output_tokens": 5,
-                                "response_sha256": "f" * 64},
-    })
+    monkeypatch.setattr(
+        quality,
+        "execute_openai_prompt_v2_candidate",
+        lambda *_args, **_kwargs: {
+            "candidate_response": {"risk_verdict": "PASS"},
+            "provider_provenance": {
+                "input_tokens": 10,
+                "output_tokens": 5,
+                "response_sha256": "f" * 64,
+            },
+        },
+    )
     report = compact.run(data_root=tmp_path, day="2026-09-17", execute=True, max_new=1)
     assert report["provider_calls_this_run"] == 1
     assert not report["execution_errors"]
@@ -728,20 +1134,37 @@ def test_compact_builtin_provider_path_reserves_valid_token_ceiling(monkeypatch,
 
 @lru_cache(maxsize=1)
 def operating_test_context():
-    from src.engine.scalping.strategy_owner_replay import ENTRY_OPERATING_SCHEMA, entry_operating_model_identity
+    from src.engine.scalping.strategy_owner_replay import (
+        ENTRY_OPERATING_SCHEMA,
+        entry_operating_model_identity,
+    )
     from src.engine.lifecycle.avg_down_policy_replay import snapshot_version
+
     snapshot = dict(rules={}, environment={}, implementation={})
-    return dict(schema=ENTRY_OPERATING_SCHEMA,broker_route="KRX",policy_snapshot=snapshot,initial_policy_state={},
-        exit_policy_version=snapshot_version(snapshot),model_implementation_sha256=entry_operating_model_identity(),
-        budget_krw=120000.,cost_rate=.0023,cost_policy_version="trade_profit_net_realized_pnl:rate=0.0023",
-        cost_provenance="frozen_loaded_trade_profit_configuration_not_broker_settlement",**compact.AUTHORITY)
+    return dict(
+        schema=ENTRY_OPERATING_SCHEMA,
+        broker_route="KRX",
+        policy_snapshot=snapshot,
+        initial_policy_state={},
+        exit_policy_version=snapshot_version(snapshot),
+        model_implementation_sha256=entry_operating_model_identity(),
+        budget_krw=120000.0,
+        cost_rate=0.0023,
+        cost_policy_version="trade_profit_net_realized_pnl:rate=0.0023",
+        cost_provenance="frozen_loaded_trade_profit_configuration_not_broker_settlement",
+        **compact.AUTHORITY,
+    )
 
 
 def operating_compact_row(day="2026-09-17", ordinal=0):
     """Synthetic operating receipt tests consumer wiring, not real profitability."""
     from copy import deepcopy
     from src.engine.scalping import strategy_owner_replay as owner
-    from src.engine.scalping.entry_split_order_plan import QUANTITY_LEG_FOUR_ARM_IDS, _canonical_sha256
+    from src.engine.scalping.entry_split_order_plan import (
+        QUANTITY_LEG_FOUR_ARM_IDS,
+        _canonical_sha256,
+    )
+
     row = compact_row(day, ordinal)
     replay = row["owner_replay"]
     seed = replay["seed"]
@@ -750,27 +1173,50 @@ def operating_compact_row(day="2026-09-17", ordinal=0):
     decision = dict(
         evaluation_attempt_id=seed["evaluation_attempt_id"],
         machine_bundle_sha256=seed["policy_bundle_sha256"],
-        machine_policy_version="machine-v1", machine_policy_sha256="1" * 64,
-        compact_prompt_version="compact-v1", compact_prompt_sha256="2" * 64,
-        decision_trace_id=f"fixture-trace-{day}-{ordinal}", runtime_pid=123,
+        machine_policy_version="machine-v1",
+        machine_policy_sha256="1" * 64,
+        compact_prompt_version="compact-v1",
+        compact_prompt_sha256="2" * 64,
+        decision_trace_id=f"fixture-trace-{day}-{ordinal}",
+        runtime_pid=123,
     )
     decision["sha256"] = compact.digest(decision)
     context["entry_decision_version_receipt"] = decision
-    context["sha256"] = compact.digest({k: v for k, v in context.items() if k != "sha256"})
+    context["sha256"] = compact.digest(
+        {k: v for k, v in context.items() if k != "sha256"}
+    )
     seed["operating_contract"] = context
-    seed["seed_sha256"] = compact.digest({k: v for k, v in seed.items() if k != "seed_sha256"})
-    arm = dict(schema=owner.ENTRY_OPERATING_SCHEMA,status="completed_source_only",actual_fill_evidence=False,
-        requested_qty=seed["total_qty"],modeled_filled_qty=seed["total_qty"],fill_participation_rate=1.,
-        budget_krw=context["budget_krw"],net_pnl_krw=600.,stress_net_pnl_krw=480.,
-        capital_krw_minutes=12000.,reserve_krw_minutes=1200.,
-        net_return_pct=.5,stress_net_return_pct=.4,modeled_entry_at=seed["observed_at"],
+    seed["seed_sha256"] = compact.digest(
+        {k: v for k, v in seed.items() if k != "seed_sha256"}
+    )
+    arm = dict(
+        schema=owner.ENTRY_OPERATING_SCHEMA,
+        status="completed_source_only",
+        actual_fill_evidence=False,
+        requested_qty=seed["total_qty"],
+        modeled_filled_qty=seed["total_qty"],
+        fill_participation_rate=1.0,
+        budget_krw=context["budget_krw"],
+        net_pnl_krw=600.0,
+        stress_net_pnl_krw=480.0,
+        capital_krw_minutes=12000.0,
+        reserve_krw_minutes=1200.0,
+        net_return_pct=0.5,
+        stress_net_return_pct=0.4,
+        modeled_entry_at=seed["observed_at"],
         modeled_exit_at=replay["arms"][QUANTITY_LEG_FOUR_ARM_IDS[0]]["modeled_exit_at"],
-        contract_sha256=context["sha256"],exit_policy_sha256=context["exit_policy_version"],
-        cost_policy_version=context["cost_policy_version"],cost_provenance=context["cost_provenance"],
-        terminal_evidence_sha256="9"*64,**compact.AUTHORITY)
+        contract_sha256=context["sha256"],
+        exit_policy_sha256=context["exit_policy_version"],
+        cost_policy_version=context["cost_policy_version"],
+        cost_provenance=context["cost_provenance"],
+        terminal_evidence_sha256="9" * 64,
+        **compact.AUTHORITY,
+    )
     arm["sha256"] = _canonical_sha256(arm)
-    replay["operating_arms"] = {QUANTITY_LEG_FOUR_ARM_IDS[0]:arm}
-    replay["replay_sha256"] = compact.digest({k:v for k,v in replay.items() if k != "replay_sha256"})
+    replay["operating_arms"] = {QUANTITY_LEG_FOUR_ARM_IDS[0]: arm}
+    replay["replay_sha256"] = compact.digest(
+        {k: v for k, v in replay.items() if k != "replay_sha256"}
+    )
     return row
 
 
@@ -778,20 +1224,22 @@ def compact_candidate_selection(
     candidate="entry_machine_auxiliary_compact_opportunity_v2",
     scopes=("KRX|KRX_REGULAR",),
 ):
-    return compact.sealed({
-        "schema": compact.CANDIDATE_SELECTION_SCHEMA,
-        "status": "candidate_selected",
-        "selection_direction": "select_opportunity_preservation_variant",
-        "candidate_prompt_version": candidate,
-        "selected_policy_scopes": list(scopes),
-        "scope_evidence": {},
-        "combined_economics": {},
-        "primary_input_disposition_counts": {},
-        "candidate_response_used_for_selection": False,
-        "candidate_holdout_used_for_selection": False,
-        "model_holdout_precedes_selection_population": True,
-        **compact.AUTHORITY,
-    })
+    return compact.sealed(
+        {
+            "schema": compact.CANDIDATE_SELECTION_SCHEMA,
+            "status": "candidate_selected",
+            "selection_direction": "select_opportunity_preservation_variant",
+            "candidate_prompt_version": candidate,
+            "selected_policy_scopes": list(scopes),
+            "scope_evidence": {},
+            "combined_economics": {},
+            "primary_input_disposition_counts": {},
+            "candidate_response_used_for_selection": False,
+            "candidate_holdout_used_for_selection": False,
+            "model_holdout_precedes_selection_population": True,
+            **compact.AUTHORITY,
+        }
+    )
 
 
 def test_compact_candidate_direction_uses_incumbent_learning_only():
@@ -803,18 +1251,24 @@ def test_compact_candidate_direction_uses_incumbent_learning_only():
     from src.engine.scalping import entry_split_order_plan as split
 
     model = full_compact_proof()["owner_execution_model_validation"]
-    opportunity_rows = [operating_compact_row("2026-09-17", index) for index in range(20)]
-    opportunity = compact.candidate_direction_selection([
-        compact.sealed({
-            "target_date": "2026-09-17",
-            "source_projection_contract": compact.SOURCE_PROJECTION_CONTRACT,
-            "projection_contract_sha256": compact.digest(compact.CONTRACT),
-            "source_tuning_allowed": True,
-            "owner_execution_model_validation": model,
-            "rows": opportunity_rows,
-            **compact.AUTHORITY,
-        })
-    ])
+    opportunity_rows = [
+        operating_compact_row("2026-09-17", index) for index in range(20)
+    ]
+    opportunity = compact.candidate_direction_selection(
+        [
+            compact.sealed(
+                {
+                    "target_date": "2026-09-17",
+                    "source_projection_contract": compact.SOURCE_PROJECTION_CONTRACT,
+                    "projection_contract_sha256": compact.digest(compact.CONTRACT),
+                    "source_tuning_allowed": True,
+                    "owner_execution_model_validation": model,
+                    "rows": opportunity_rows,
+                    **compact.AUTHORITY,
+                }
+            )
+        ]
+    )
     assert opportunity["candidate_prompt_version"] == (
         ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION
     )
@@ -825,38 +1279,44 @@ def test_compact_candidate_direction_uses_incumbent_learning_only():
     unsupported_route["evaluation_key"] = "compact-route-model-gap"
     unsupported_route["scanner_promotion_id"] = "promotion-route-model-gap"
     unsupported_route["broker_route"] = "SOR"
-    mixed_route = compact.candidate_direction_selection([
-        compact.sealed({
-            "target_date": "2026-09-17",
-            "source_projection_contract": compact.SOURCE_PROJECTION_CONTRACT,
-            "projection_contract_sha256": compact.digest(compact.CONTRACT),
-            "source_tuning_allowed": True,
-            "owner_execution_model_validation": model,
-            "rows": opportunity_rows + [unsupported_route],
-            **compact.AUTHORITY,
-        })
-    ])
+    mixed_route = compact.candidate_direction_selection(
+        [
+            compact.sealed(
+                {
+                    "target_date": "2026-09-17",
+                    "source_projection_contract": compact.SOURCE_PROJECTION_CONTRACT,
+                    "projection_contract_sha256": compact.digest(compact.CONTRACT),
+                    "source_tuning_allowed": True,
+                    "owner_execution_model_validation": model,
+                    "rows": opportunity_rows + [unsupported_route],
+                    **compact.AUTHORITY,
+                }
+            )
+        ]
+    )
     assert mixed_route["status"] == "insufficient_sample"
     assert mixed_route["candidate_prompt_version"] is None
     assert mixed_route["selected_policy_scopes"] == []
 
     conflicting = deepcopy(opportunity_rows[0])
     conflicting["incumbent_verdict"] = "PASS"
-    conflict_receipt = compact.candidate_direction_selection([
-        compact.sealed({
-            "target_date": "2026-09-17",
-            "source_projection_contract": compact.SOURCE_PROJECTION_CONTRACT,
-            "projection_contract_sha256": compact.digest(compact.CONTRACT),
-            "source_tuning_allowed": True,
-            "owner_execution_model_validation": model,
-            "rows": opportunity_rows + [conflicting],
-            **compact.AUTHORITY,
-        })
-    ])
+    conflict_receipt = compact.candidate_direction_selection(
+        [
+            compact.sealed(
+                {
+                    "target_date": "2026-09-17",
+                    "source_projection_contract": compact.SOURCE_PROJECTION_CONTRACT,
+                    "projection_contract_sha256": compact.digest(compact.CONTRACT),
+                    "source_tuning_allowed": True,
+                    "owner_execution_model_validation": model,
+                    "rows": opportunity_rows + [conflicting],
+                    **compact.AUTHORITY,
+                }
+            )
+        ]
+    )
     assert conflict_receipt["status"] == "insufficient_sample"
-    assert conflict_receipt["primary_input_disposition_counts"] == {
-        "source_gap": 1
-    }
+    assert conflict_receipt["primary_input_disposition_counts"] == {"source_gap": 1}
 
     risk_rows = deepcopy(opportunity_rows)
     for row in risk_rows:
@@ -875,34 +1335,42 @@ def test_compact_candidate_direction_uses_incumbent_learning_only():
         replay["replay_sha256"] = compact.digest(
             {key: value for key, value in replay.items() if key != "replay_sha256"}
         )
-    risk = compact.candidate_direction_selection([
-        compact.sealed({
-            "target_date": "2026-09-17",
-            "source_projection_contract": compact.SOURCE_PROJECTION_CONTRACT,
-            "projection_contract_sha256": compact.digest(compact.CONTRACT),
-            "source_tuning_allowed": True,
-            "owner_execution_model_validation": model,
-            "rows": risk_rows,
-            **compact.AUTHORITY,
-        })
-    ])
+    risk = compact.candidate_direction_selection(
+        [
+            compact.sealed(
+                {
+                    "target_date": "2026-09-17",
+                    "source_projection_contract": compact.SOURCE_PROJECTION_CONTRACT,
+                    "projection_contract_sha256": compact.digest(compact.CONTRACT),
+                    "source_tuning_allowed": True,
+                    "owner_execution_model_validation": model,
+                    "rows": risk_rows,
+                    **compact.AUTHORITY,
+                }
+            )
+        ]
+    )
     assert risk["candidate_prompt_version"] == (
         ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION
     )
 
 
-def test_compact_candidate_direction_waits_without_spending_provider(monkeypatch, tmp_path):
+def test_compact_candidate_direction_waits_without_spending_provider(
+    monkeypatch, tmp_path
+):
     row = operating_compact_row()
     model = full_compact_proof()["owner_execution_model_validation"]
-    projection = compact.sealed({
-        "owner_execution_model_validation": model,
-        "rows": [row],
-        "screened_total": 1,
-        "source_manifest_sha256": "d" * 64,
-        "source_tuning_allowed": True,
-        "exclusion_counts": {},
-        **compact.AUTHORITY,
-    })
+    projection = compact.sealed(
+        {
+            "owner_execution_model_validation": model,
+            "rows": [row],
+            "screened_total": 1,
+            "source_manifest_sha256": "d" * 64,
+            "source_tuning_allowed": True,
+            "exclusion_counts": {},
+            **compact.AUTHORITY,
+        }
+    )
     monkeypatch.setattr(compact, "prepare", lambda *_: projection)
     monkeypatch.setattr(
         compact,
@@ -926,52 +1394,100 @@ def test_compact_candidate_direction_waits_without_spending_provider(monkeypatch
 @lru_cache(maxsize=1)
 def _full_compact_proof():
     from src.engine.scalping import mechanistic_entry_runtime_policy as policy
-    rows = [operating_compact_row(day, i) for day in ["2026-09-14", "2026-09-16", "2026-09-17"] for i in range(20)]
-    metrics = compact.evaluate(rows, {r["evaluation_key"]: compact_result(r) for r in rows})
+
+    rows = [
+        operating_compact_row(day, i)
+        for day in ["2026-09-14", "2026-09-16", "2026-09-17"]
+        for i in range(20)
+    ]
+    metrics = compact.evaluate(
+        rows, {r["evaluation_key"]: compact_result(r) for r in rows}
+    )
     frozen = "2026-09-15T21:00:00+09:00"
     from src.engine.scalping import entry_split_order_plan as split
     from src.tests.test_entry_split_order_plan import _operating_economic_fixture
+
     scope = split._entry_operating_scope(rows[0]["owner_replay"]["seed"])
     _, actuals, _ = _operating_economic_fixture()
     for actual in actuals:
         actual["scope_sha256"] = scope
     inputs = split._entry_operating_input_rows([rows[0]["owner_replay"]])
-    validation = split.evaluate_entry_split_operating_economics(inputs, actuals,
-        {"2026-09-08":10,"2026-09-09":10},target_date="2026-09-17")
+    validation = split.evaluate_entry_split_operating_economics(
+        inputs, actuals, {"2026-09-08": 10, "2026-09-09": 10}, target_date="2026-09-17"
+    )
     model_scope = validation["model_scopes"][0]
     assert model_scope["validated"]
     from tempfile import mkdtemp
     from src.tests.test_micro_reversion_provider_budget import _write_pricing_artifact
+
     pricing_root = Path(mkdtemp(prefix="adq-reviewed-pricing-fixture-"))
-    pricing_path = _write_pricing_artifact(pricing_root / "policy/micro_reversion",
-        effective_to="2026-09-30", pricing_basis="operator_accounting_zero_cost",
-        prices=[dict(provider="openai",model="gpt-5.4-nano",input_usd_per_million_tokens="0",output_usd_per_million_tokens="0")])
+    pricing_path = _write_pricing_artifact(
+        pricing_root / "policy/micro_reversion",
+        effective_to="2026-09-30",
+        pricing_basis="operator_accounting_zero_cost",
+        prices=[
+            dict(
+                provider="openai",
+                model="gpt-5.4-nano",
+                input_usd_per_million_tokens="0",
+                output_usd_per_million_tokens="0",
+            )
+        ],
+    )
     pricing_path.rename(pricing_path.with_name("provider_pricing.json"))
-    inference_receipt = compact.runtime_inference_cost_receipt(pricing_root, "2026-09-17")
+    inference_receipt = compact.runtime_inference_cost_receipt(
+        pricing_root, "2026-09-17"
+    )
     assert inference_receipt["status"] == "reviewed_operator_zero_cost"
-    return compact.sealed({"schema": compact.SCHEMA, "target_date": "2026-09-17",
-        "runtime_inference_cost_receipt": inference_receipt,
-        "incumbent_prompt_version": policy.AI_VERSION,
-        "candidate_prompt_version": policy.ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION,
-        "candidate_selection": compact_candidate_selection(
-            policy.ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION
-        ),
-        "source_manifest_sha256": "d"*64, "promotion_contract_sha256": compact.digest(compact.CONTRACT),
-        "status": "comparison_complete", "candidate_frozen_at": frozen,
-        # Synthetic validated scope exercises wiring; it is not actual economic evidence.
-        "owner_execution_model_validation": {"contract_version": "entry_split_execution_model_validation_v1", "source_date": "2026-09-17", "status": "validated_scope", "allowed_runtime_apply": True, "validated_scopes": [model_scope]},
-        "metrics": metrics, "candidate_improvement_proven": True, "selection_disposition": "candidate_selected",
-        "chronological_validation": {"candidate_frozen_at": frozen, "learning_pairs": metrics["pairs"][:20],
-                                     "holdout_pairs": metrics["pairs"][20:], "holdout_consumed": False}, **compact.AUTHORITY})
+    return compact.sealed(
+        {
+            "schema": compact.SCHEMA,
+            "target_date": "2026-09-17",
+            "runtime_inference_cost_receipt": inference_receipt,
+            "incumbent_prompt_version": policy.AI_VERSION,
+            "candidate_prompt_version": policy.ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION,
+            "candidate_selection": compact_candidate_selection(
+                policy.ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION
+            ),
+            "source_manifest_sha256": "d" * 64,
+            "promotion_contract_sha256": compact.digest(compact.CONTRACT),
+            "status": "comparison_complete",
+            "candidate_frozen_at": frozen,
+            # Synthetic validated scope exercises wiring; it is not actual economic evidence.
+            "owner_execution_model_validation": {
+                "contract_version": "entry_split_execution_model_validation_v1",
+                "source_date": "2026-09-17",
+                "status": "validated_scope",
+                "allowed_runtime_apply": True,
+                "validated_scopes": [model_scope],
+            },
+            "metrics": metrics,
+            "candidate_improvement_proven": True,
+            "selection_disposition": "candidate_selected",
+            "chronological_validation": {
+                "candidate_frozen_at": frozen,
+                "learning_pairs": metrics["pairs"][:20],
+                "holdout_pairs": metrics["pairs"][20:],
+                "holdout_consumed": False,
+            },
+            **compact.AUTHORITY,
+        }
+    )
 
 
 def full_compact_proof():
     from copy import deepcopy
+
     return deepcopy(_full_compact_proof())
+
 
 def test_compact_signed_owner_cf_forward_holdout_positive_and_corruption():
     proof = full_compact_proof()
-    kwargs = dict(incumbent=proof["incumbent_prompt_version"], selected=proof["candidate_prompt_version"], source_manifest_sha256="d"*64)
+    kwargs = dict(
+        incumbent=proof["incumbent_prompt_version"],
+        selected=proof["candidate_prompt_version"],
+        source_manifest_sha256="d" * 64,
+    )
     assert compact.promotion_valid(proof, **kwargs)
     proof["chronological_validation"]["holdout_consumed"] = True
     assert not compact.promotion_valid(compact.sealed(proof), **kwargs)
@@ -987,28 +1503,45 @@ def test_compact_first_forward_day_can_promote_with_disjoint_chronological_pairs
     start = datetime.fromisoformat("2026-09-29T09:00:00+09:00")
     for index, row in enumerate(rows):
         row["decision_ts"] = (start + timedelta(seconds=index)).isoformat()
-    metrics = compact.evaluate(rows, {row["evaluation_key"]: compact_result(row) for row in rows})
+    metrics = compact.evaluate(
+        rows, {row["evaluation_key"]: compact_result(row) for row in rows}
+    )
     proof = full_compact_proof()
     proof["target_date"] = "2026-09-29"
     proof["metrics"] = metrics
     proof["owner_execution_model_validation"]["source_date"] = "2026-09-29"
-    selection = {k: v for k, v in proof["candidate_selection"].items()
-                 if k != "artifact_content_sha256"}
+    selection = {
+        k: v
+        for k, v in proof["candidate_selection"].items()
+        if k != "artifact_content_sha256"
+    }
     selection["same_day_holdout_keys"] = [row["evaluation_key"] for row in rows[20:]]
     proof["candidate_selection"] = compact.sealed(selection)
-    scopes, _ = compact.scope_candidate_validation(metrics["pairs"], rows,
+    scopes, _ = compact.scope_candidate_validation(
+        metrics["pairs"],
+        rows,
         {"scope_coverage": metrics["scope_coverage"]},
         {"candidate_selection": proof["candidate_selection"]},
         candidate=proof["candidate_prompt_version"],
-        now=datetime.fromisoformat("2026-09-29T20:00:00+09:00"))
+        now=datetime.fromisoformat("2026-09-29T20:00:00+09:00"),
+    )
     proof["scope_validation"] = scopes
     proof["candidate_frozen_at"] = scopes["KRX|KRX_REGULAR"]["candidate_frozen_at"]
-    proof["chronological_validation"] = scopes["KRX|KRX_REGULAR"]["chronological_validation"]
-    kwargs = dict(incumbent=proof["incumbent_prompt_version"],
-        selected=proof["candidate_prompt_version"], source_manifest_sha256="d" * 64)
+    proof["chronological_validation"] = scopes["KRX|KRX_REGULAR"][
+        "chronological_validation"
+    ]
+    kwargs = dict(
+        incumbent=proof["incumbent_prompt_version"],
+        selected=proof["candidate_prompt_version"],
+        source_manifest_sha256="d" * 64,
+    )
     assert compact.promotion_valid(compact.sealed(proof), **kwargs)
-    proof["chronological_validation"]["holdout_pairs"][0]["decision_ts"] = rows[0]["decision_ts"]
-    proof["scope_validation"]["KRX|KRX_REGULAR"]["chronological_validation"] = proof["chronological_validation"]
+    proof["chronological_validation"]["holdout_pairs"][0]["decision_ts"] = rows[0][
+        "decision_ts"
+    ]
+    proof["scope_validation"]["KRX|KRX_REGULAR"]["chronological_validation"] = proof[
+        "chronological_validation"
+    ]
     assert not compact.promotion_valid(compact.sealed(proof), **kwargs)
 
 
@@ -1019,20 +1552,31 @@ def test_compact_first_forward_day_direction_excludes_same_day_holdout():
     start = datetime.fromisoformat("2026-09-29T09:00:00+09:00")
     for index, row in enumerate(rows):
         row["decision_ts"] = (start + timedelta(seconds=index)).isoformat()
-    projection = compact.sealed(dict(target_date="2026-09-29",
-        source_projection_contract=compact.SOURCE_PROJECTION_CONTRACT,
-        projection_contract_sha256=compact.digest(compact.CONTRACT),
-        source_tuning_allowed=True,
-        owner_execution_model_validation=full_compact_proof()["owner_execution_model_validation"],
-        rows=rows, **compact.AUTHORITY))
+    projection = compact.sealed(
+        dict(
+            target_date="2026-09-29",
+            source_projection_contract=compact.SOURCE_PROJECTION_CONTRACT,
+            projection_contract_sha256=compact.digest(compact.CONTRACT),
+            source_tuning_allowed=True,
+            owner_execution_model_validation=full_compact_proof()[
+                "owner_execution_model_validation"
+            ],
+            rows=rows,
+            **compact.AUTHORITY,
+        )
+    )
     selection = compact.candidate_direction_selection([projection])
     assert selection["status"] == "candidate_selected"
-    assert selection["same_day_holdout_keys"] == [row["evaluation_key"] for row in rows[49:]]
+    assert selection["same_day_holdout_keys"] == [
+        row["evaluation_key"] for row in rows[49:]
+    ]
     assert selection["scope_evidence"]["KRX|KRX_REGULAR|KRX"]["learning_ready"] is True
 
 
 @pytest.mark.parametrize("promote", [False, True])
-def test_compact_public_finalization_uses_direct_pair_policy_consumer(tmp_path, promote, monkeypatch):
+def test_compact_public_finalization_uses_direct_pair_policy_consumer(
+    tmp_path, promote, monkeypatch
+):
     from src.tests.test_mechanistic_entry_runtime_policy import initial
     from src.engine.scalping import mechanistic_entry_runtime_policy as policy
     from src.engine.scalping.main_ai_prompt_consumer import verify_compact_handoff
@@ -1171,9 +1715,7 @@ def test_compact_public_finalization_uses_direct_pair_policy_consumer(tmp_path, 
         {k: v for k, v in broken.items() if k != "bundle_sha256"}
     )
     compact.write(Path(result["policy_path"]), broken)
-    compact.finalize(
-        data_root=tmp_path, day="2026-09-17", publication_day="2026-09-18"
-    )
+    compact.finalize(data_root=tmp_path, day="2026-09-17", publication_day="2026-09-18")
     repaired = policy.load(data_root=tmp_path, target_date=result["effective_date"])
     assert repaired["source_date"] == parent["source_date"]
     assert repaired["source_file_sha256"] == parent["source_file_sha256"]
@@ -1188,31 +1730,46 @@ def test_compact_public_finalization_uses_direct_pair_policy_consumer(tmp_path, 
     assert "old compact copy" not in checklist_text
     assert "Scanner lookup source preserved" in checklist_text
     assert "compact_auxiliary_direct_sha256" in checklist_text
-    assert verify_compact_handoff(tmp_path, "2026-09-17", effective_date="2026-09-21")["status"] == "PASS"
+    assert (
+        verify_compact_handoff(tmp_path, "2026-09-17", effective_date="2026-09-21")[
+            "status"
+        ]
+        == "PASS"
+    )
     other_policy = Path(result["policy_path"]).with_name("policy_2026-09-22.json")
     compact.write(other_policy, {**repaired, "target_date": "2026-09-22"})
-    assert verify_compact_handoff(tmp_path, "2026-09-17", effective_date="2026-09-21")["status"] == "PASS"
+    assert (
+        verify_compact_handoff(tmp_path, "2026-09-17", effective_date="2026-09-21")[
+            "status"
+        ]
+        == "PASS"
+    )
     assert verify_compact_handoff(tmp_path, "2026-09-17")["status"] != "PASS"
     other_policy.unlink()
-    checklist.write_text(checklist_text.replace("compact_auxiliary_direct_sha256", "tampered_projection"))
+    checklist.write_text(
+        checklist_text.replace("compact_auxiliary_direct_sha256", "tampered_projection")
+    )
     assert verify_compact_handoff(tmp_path, "2026-09-17")["status"] != "PASS"
     checklist.write_text(checklist_text)
     label_path = quality.label_report_path("2026-09-17")
     original_labels = compact.read(label_path)
     compact.write(label_path, {**original_labels, "tampered": True})
-    assert "compact_source_label_revision_stale" in verify_compact_handoff(
-        tmp_path, "2026-09-17"
-    )["issues"]
+    assert (
+        "compact_source_label_revision_stale"
+        in verify_compact_handoff(tmp_path, "2026-09-17")["issues"]
+    )
     compact.write(label_path, original_labels)
     consumer_path = Path(result["consumer_path"])
     consumer = compact.read(consumer_path)
     consumer["compact_auxiliary"]["policy_bundle_sha256"] = "f" * 64
     compact.write(consumer_path, compact.sealed(consumer))
-    assert "compact_direct_consumer_invalid" in verify_compact_handoff(
-        tmp_path, "2026-09-17"
-    )["issues"]
+    assert (
+        "compact_direct_consumer_invalid"
+        in verify_compact_handoff(tmp_path, "2026-09-17")["issues"]
+    )
     compact.write(consumer_path, compact.sealed(consumer))
     if not promote:
+
         class AfterPreopenClock(datetime):
             @classmethod
             def now(cls, tz=None):
@@ -1221,67 +1778,127 @@ def test_compact_public_finalization_uses_direct_pair_policy_consumer(tmp_path, 
 
         monkeypatch.setattr(policy, "datetime", AfterPreopenClock)
         frozen_bytes = Path(result["policy_path"]).read_bytes()
-        recovered = compact.sealed({**proof, "status": "source_contract_blocked",
-            "evaluation_state": "blocked_source", "candidate_improvement_proven": False,
-            "promotion_pass": False, "promotion_scopes": [],
-            "evaluation_fingerprint": compact.digest(["closed_date_recovery"])})
+        recovered = compact.sealed(
+            {
+                **proof,
+                "status": "source_contract_blocked",
+                "evaluation_state": "blocked_source",
+                "candidate_improvement_proven": False,
+                "promotion_pass": False,
+                "promotion_scopes": [],
+                "evaluation_fingerprint": compact.digest(["closed_date_recovery"]),
+            }
+        )
         compact.write(compact.report_path(tmp_path, "2026-09-17"), recovered)
         handoff = compact.finalize(
             data_root=tmp_path, day="2026-09-17", publication_day="2026-09-18"
         )
-        assert handoff["selection_disposition"] == "incumbent_preserved_after_preopen_recovery"
+        assert (
+            handoff["selection_disposition"]
+            == "incumbent_preserved_after_preopen_recovery"
+        )
         assert handoff["policy_source_mode"] == "verified_frozen_preopen_source"
         assert Path(result["policy_path"]).read_bytes() == frozen_bytes
         assert verify_compact_handoff(tmp_path, "2026-09-17")["status"] == "PASS"
-        snapshot = policy.root(tmp_path) / "sources" / f"{child['compact_source_file_sha256']}.json"
+        snapshot = (
+            policy.root(tmp_path)
+            / "sources"
+            / f"{child['compact_source_file_sha256']}.json"
+        )
         snapshot_bytes = snapshot.read_bytes()
         snapshot.write_bytes(b"{}")
-        assert "compact_dated_policy_direct_binding_invalid" in verify_compact_handoff(
-            tmp_path, "2026-09-17"
-        )["issues"]
+        assert (
+            "compact_dated_policy_direct_binding_invalid"
+            in verify_compact_handoff(tmp_path, "2026-09-17")["issues"]
+        )
         snapshot.write_bytes(snapshot_bytes)
+
 
 def test_compact_json_string_semantics_and_repeated_input_envelopes(tmp_path):
     import hashlib
     from src.engine.scalping.ai_decision_trace import _json_bytes
     from src.engine.scalping.mechanistic_entry_runtime_policy import AI_VERSION
+
     day = "2026-09-17"
     raw = {"entry_setup_evidence_v1": {}}
     original_sha = hashlib.sha256(json.dumps(raw, indent=2).encode()).hexdigest()
     semantic_sha = hashlib.sha256(_json_bytes(raw)).hexdigest()
     traces, payloads, labels = [], [], []
     for i in range(2):
-        trace = {"decision_trace_id": f"req-{i}", "decision_stage": "entry_screen", "prompt_version": AI_VERSION,
-                 "provider_called": True, "provider_actual": "openai", "model": "gpt-5.4-nano",
-                 "entry_mechanistic_action": "ENTER_NOW", "semantic_validation_status": "pass",
-                 "decision_quality_contract_status": "pass", "entry_ai_risk_verdict": "PASS",
-                 "watch_origin": "MAIN_FIXED_WATCH", "watch_admission_id": "native-watch",
-                 "watch_generation_id": "native-generation",
-                 "entry_economic_observation_probe_contract": "conditional-source-only",
-                 "payload_sha256": original_sha, "prompt_sha256": f"prompt-{i}", "request_envelope_sha256": f"env-{i}"}
+        trace = {
+            "decision_trace_id": f"req-{i}",
+            "decision_stage": "entry_screen",
+            "prompt_version": AI_VERSION,
+            "provider_called": True,
+            "provider_actual": "openai",
+            "model": "gpt-5.4-nano",
+            "entry_mechanistic_action": "ENTER_NOW",
+            "semantic_validation_status": "pass",
+            "decision_quality_contract_status": "pass",
+            "entry_ai_risk_verdict": "PASS",
+            "watch_origin": "MAIN_FIXED_WATCH",
+            "watch_admission_id": "native-watch",
+            "watch_generation_id": "native-generation",
+            "entry_economic_observation_probe_contract": "conditional-source-only",
+            "payload_sha256": original_sha,
+            "prompt_sha256": f"prompt-{i}",
+            "request_envelope_sha256": f"env-{i}",
+        }
         traces.append(trace)
-        payloads.append({k: trace[k] for k in ["payload_sha256", "prompt_sha256", "request_envelope_sha256"]} | {
-            "input_format": "json_string", "redacted": False, "replay_exact": True,
-            "sanitized_user_input": raw, "sanitized_user_input_sha256": semantic_sha})
-        labels.append({"decision_trace_id": f"req-{i}", "horizon_metrics": {"10m": {"entry_quality_path": compact_row()["entry_quality_path"]}}})
-    for folder, name, rows in [("ai_decision_trace", "ai_decision_trace", traces), ("ai_decision_payloads", "ai_decision_payloads", payloads)]:
+        payloads.append(
+            {
+                k: trace[k]
+                for k in ["payload_sha256", "prompt_sha256", "request_envelope_sha256"]
+            }
+            | {
+                "input_format": "json_string",
+                "redacted": False,
+                "replay_exact": True,
+                "sanitized_user_input": raw,
+                "sanitized_user_input_sha256": semantic_sha,
+            }
+        )
+        labels.append(
+            {
+                "decision_trace_id": f"req-{i}",
+                "horizon_metrics": {
+                    "10m": {"entry_quality_path": compact_row()["entry_quality_path"]}
+                },
+            }
+        )
+    for folder, name, rows in [
+        ("ai_decision_trace", "ai_decision_trace", traces),
+        ("ai_decision_payloads", "ai_decision_payloads", payloads),
+    ]:
         path = tmp_path / folder / f"{name}_{day}.jsonl"
         path.parent.mkdir(parents=True)
-        path.write_text("".join(json.dumps(r)+"\n" for r in rows))
-    compact.write(tmp_path / "report/ai_decision_outcome_labels" / f"ai_decision_outcome_labels_{day}.json", {"labels": labels})
+        path.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    compact.write(
+        tmp_path
+        / "report/ai_decision_outcome_labels"
+        / f"ai_decision_outcome_labels_{day}.json",
+        {"labels": labels},
+    )
     result = compact.prepare(tmp_path, day)
     assert result["screened_total"] == 2
     assert result["exclusion_counts"] == {}
-    for row in result['rows']:
-        assert row['watch_origin'] == 'MAIN_FIXED_WATCH'
-        assert row['watch_admission_id'] == 'native-watch'
-        assert row['watch_generation_id'] == 'native-generation'
-        assert row['entry_economic_observation_probe_contract'] == 'conditional-source-only'
+    for row in result["rows"]:
+        assert row["watch_origin"] == "MAIN_FIXED_WATCH"
+        assert row["watch_admission_id"] == "native-watch"
+        assert row["watch_generation_id"] == "native-generation"
+        assert (
+            row["entry_economic_observation_probe_contract"]
+            == "conditional-source-only"
+        )
 
 
 def test_compact_recomputed_owner_economics_and_consumed_holdout(tmp_path):
     proof = full_compact_proof()
-    kwargs = dict(incumbent=proof["incumbent_prompt_version"], selected=proof["candidate_prompt_version"], source_manifest_sha256="d"*64)
+    kwargs = dict(
+        incumbent=proof["incumbent_prompt_version"],
+        selected=proof["candidate_prompt_version"],
+        source_manifest_sha256="d" * 64,
+    )
     assert compact.promotion_valid(proof, **kwargs)
     missing_model = dict(proof, owner_execution_model_validation={})
     assert not compact.promotion_valid(compact.sealed(missing_model), **kwargs)
@@ -1293,7 +1910,9 @@ def test_compact_recomputed_owner_economics_and_consumed_holdout(tmp_path):
     with pytest.raises(ValueError, match="already_consumed"):
         compact.consume_holdout(changed, tmp_path)
     proof = full_compact_proof()
-    proof["chronological_validation"]["holdout_pairs"][0]["runtime_inference_cost_delta_krw"] = None
+    proof["chronological_validation"]["holdout_pairs"][0][
+        "runtime_inference_cost_delta_krw"
+    ] = None
     assert not compact.promotion_valid(compact.sealed(proof), **kwargs)
 
 
@@ -2174,7 +2793,18 @@ def test_empty_control_rejects_hash_and_cohort_mismatch():
     )
 
 
-@pytest.mark.parametrize("defect", ["legacy_only", "wrong_scope", "late_model", "unsealed_model", "operating_net_corrupt", "missing_scope", "bad_model_date"])
+@pytest.mark.parametrize(
+    "defect",
+    [
+        "legacy_only",
+        "wrong_scope",
+        "late_model",
+        "unsealed_model",
+        "operating_net_corrupt",
+        "missing_scope",
+        "bad_model_date",
+    ],
+)
 def test_compact_reused_model_requires_operating_outcome_and_prior_exact_scope(defect):
     proof = full_compact_proof()
     pair = proof["chronological_validation"]["learning_pairs"][0]
@@ -2183,31 +2813,47 @@ def test_compact_reused_model_requires_operating_outcome_and_prior_exact_scope(d
         proof["owner_execution_model_validation"]["validated_scopes"] = []
     elif defect == "bad_model_date":
         model["available_after_date"] = None
-        model["sha256"] = compact.digest({k:v for k,v in model.items() if k != "sha256"})
+        model["sha256"] = compact.digest(
+            {k: v for k, v in model.items() if k != "sha256"}
+        )
     elif defect == "legacy_only":
         pair["owner_replay"].pop("operating_arms")
-        pair["owner_replay"]["replay_sha256"] = compact.digest({k:v for k,v in pair["owner_replay"].items() if k != "replay_sha256"})
+        pair["owner_replay"]["replay_sha256"] = compact.digest(
+            {k: v for k, v in pair["owner_replay"].items() if k != "replay_sha256"}
+        )
     elif defect == "wrong_scope":
         model["scope_sha256"] = "0" * 64
     elif defect == "late_model":
         model["available_after_date"] = pair["source_date"]
-        model["sha256"] = compact.digest({k:v for k,v in model.items() if k != "sha256"})
+        model["sha256"] = compact.digest(
+            {k: v for k, v in model.items() if k != "sha256"}
+        )
     elif defect == "unsealed_model":
         model["sha256"] = "0" * 64
     else:
         from src.engine.scalping.entry_split_order_plan import QUANTITY_LEG_FOUR_ARM_IDS
-        pair["owner_replay"]["operating_arms"][QUANTITY_LEG_FOUR_ARM_IDS[0]]["net_pnl_krw"] += 1
-    assert not compact.promotion_valid(compact.sealed(proof),incumbent=proof["incumbent_prompt_version"],selected=proof["candidate_prompt_version"],source_manifest_sha256="d"*64)
+
+        pair["owner_replay"]["operating_arms"][QUANTITY_LEG_FOUR_ARM_IDS[0]][
+            "net_pnl_krw"
+        ] += 1
+    assert not compact.promotion_valid(
+        compact.sealed(proof),
+        incumbent=proof["incumbent_prompt_version"],
+        selected=proof["candidate_prompt_version"],
+        source_manifest_sha256="d" * 64,
+    )
 
 
 def test_compact_operating_money_and_stress_do_not_use_legacy_research_arm():
     row = operating_compact_row()
-    result = compact.evaluate([row], {row["evaluation_key"]:compact_result(row)})
-    assert result["delta_net_ev_pct"] == .5
-    assert result["portfolio_daily_net_delta_krw"] == {"2026-09-17":600.}
-    assert result["pairs"][0]["stress_delta_net_pct"] == .4
+    result = compact.evaluate([row], {row["evaluation_key"]: compact_result(row)})
+    assert result["delta_net_ev_pct"] == 0.5
+    assert result["portfolio_daily_net_delta_krw"] == {"2026-09-17": 600.0}
+    assert result["pairs"][0]["stress_delta_net_pct"] == 0.4
     legacy = compact_row()
-    diagnostic = compact.evaluate([legacy], {legacy["evaluation_key"]:compact_result(legacy)})
+    diagnostic = compact.evaluate(
+        [legacy], {legacy["evaluation_key"]: compact_result(legacy)}
+    )
     assert diagnostic["portfolio_daily_net_delta_krw"] is None
 
 
@@ -2218,25 +2864,53 @@ def test_compact_large_atomic_operating_generation_is_consumable(tmp_path):
     assert compact.read(path) == generation
 
 
-def test_additive_label_revision_reuses_frozen_projection_without_raw_rescan(monkeypatch, tmp_path):
+def test_additive_label_revision_reuses_frozen_projection_without_raw_rescan(
+    monkeypatch, tmp_path
+):
     row = compact_row()
-    projection = compact.sealed({"rows": [row], "screened_total": 1,
-        "source_manifest_sha256": "d"*64, "source_tuning_allowed": True, "exclusion_counts": {}, **compact.AUTHORITY})
+    projection = compact.sealed(
+        {
+            "rows": [row],
+            "screened_total": 1,
+            "source_manifest_sha256": "d" * 64,
+            "source_tuning_allowed": True,
+            "exclusion_counts": {},
+            **compact.AUTHORITY,
+        }
+    )
     monkeypatch.setattr(compact, "prepare", lambda *_: projection)
     compact.run(data_root=tmp_path, day="2026-09-17", execute=False)
-    path = tmp_path / "report/ai_decision_outcome_labels/ai_decision_outcome_labels_2026-09-17.json"
-    report = {"target_date": "2026-09-17", "labels": [{"decision_trace_id": row["evaluation_key"],
-        "horizon_metrics": {"10m": {"entry_quality_path": row["entry_quality_path"]}},
-        "evaluation_label_contract": {"diagnostic": "additive_revision"}}]}
+    path = (
+        tmp_path
+        / "report/ai_decision_outcome_labels/ai_decision_outcome_labels_2026-09-17.json"
+    )
+    report = {
+        "target_date": "2026-09-17",
+        "labels": [
+            {
+                "decision_trace_id": row["evaluation_key"],
+                "horizon_metrics": {
+                    "10m": {"entry_quality_path": row["entry_quality_path"]}
+                },
+                "evaluation_label_contract": {"diagnostic": "additive_revision"},
+            }
+        ],
+    }
     # Other label cohorts must not invalidate this frozen compact population.
     report["labels"].extend([{"decision_trace_id": "unrelated"}] * 2)
     compact.write(path, report)
-    monkeypatch.setattr(compact, "prepare", lambda *_: pytest.fail("additive revision cannot rescan frozen raw"))
+    monkeypatch.setattr(
+        compact,
+        "prepare",
+        lambda *_: pytest.fail("additive revision cannot rescan frozen raw"),
+    )
     refreshed = compact.run(data_root=tmp_path, day="2026-09-17", execute=False)
     assert refreshed["source_label_report_sha256"] == compact.digest(compact.read(path))
     assert refreshed["metrics"]["screened_total"] == 1
     # A real path revision must reach the original source producer.
-    report["labels"][0]["horizon_metrics"]["10m"]["entry_quality_path"]["gross_net_target_pct"] = .8
+    report["labels"][0]["horizon_metrics"]["10m"]["entry_quality_path"][
+        "gross_net_target_pct"
+    ] = 0.8
     compact.write(path, report)
     calls = []
     monkeypatch.setattr(compact, "prepare", lambda *_: calls.append(True) or projection)
@@ -2244,37 +2918,75 @@ def test_additive_label_revision_reuses_frozen_projection_without_raw_rescan(mon
     assert calls == [True]
 
 
-@pytest.mark.parametrize("revision", ["identity_changed", "label_removed", "duplicate_identity"])
-def test_label_admission_revision_requires_evaluation_before_publication(monkeypatch, tmp_path, revision):
+@pytest.mark.parametrize(
+    "revision", ["identity_changed", "label_removed", "duplicate_identity"]
+)
+def test_label_admission_revision_requires_evaluation_before_publication(
+    monkeypatch, tmp_path, revision
+):
     row = compact_row()
-    projection = compact.sealed(dict(rows=[row], screened_total=1,
-        source_manifest_sha256="d" * 64, source_tuning_allowed=True,
-        exclusion_counts={}, **compact.AUTHORITY))
-    label = {"decision_trace_id": row["evaluation_key"],
-        "horizon_metrics": {"10m": {"entry_quality_path": row["entry_quality_path"]}}}
-    label_path = tmp_path / "report/ai_decision_outcome_labels/ai_decision_outcome_labels_2026-09-17.json"
+    projection = compact.sealed(
+        dict(
+            rows=[row],
+            screened_total=1,
+            source_manifest_sha256="d" * 64,
+            source_tuning_allowed=True,
+            exclusion_counts={},
+            **compact.AUTHORITY,
+        )
+    )
+    label = {
+        "decision_trace_id": row["evaluation_key"],
+        "horizon_metrics": {"10m": {"entry_quality_path": row["entry_quality_path"]}},
+    }
+    label_path = (
+        tmp_path
+        / "report/ai_decision_outcome_labels/ai_decision_outcome_labels_2026-09-17.json"
+    )
     labels = {"target_date": "2026-09-17", "labels": [label]}
     compact.write(label_path, labels)
     monkeypatch.setattr(compact, "prepare", lambda *_: projection)
     compact.run(data_root=tmp_path, day="2026-09-17", execute=False)
     if revision == "identity_changed":
-        label["primary_cohort_exclusion_reasons"] = ["canonical_context_venue_session_mismatch"]
+        label["primary_cohort_exclusion_reasons"] = [
+            "canonical_context_venue_session_mismatch"
+        ]
     elif revision == "label_removed":
         labels["labels"] = []
     else:
         labels["labels"].append(dict(label))
     compact.write(label_path, labels)
-    monkeypatch.setattr(compact, "prepare", lambda *_: pytest.fail("finalization must not rescan raw"))
-    with pytest.raises(ValueError, match="compact_finalize_requires_evaluation_of_changed_source"):
-        compact.run(data_root=tmp_path, day="2026-09-17", execute=False, allow_source_rebuild=False)
+    monkeypatch.setattr(
+        compact, "prepare", lambda *_: pytest.fail("finalization must not rescan raw")
+    )
+    with pytest.raises(
+        ValueError, match="compact_finalize_requires_evaluation_of_changed_source"
+    ):
+        compact.run(
+            data_root=tmp_path,
+            day="2026-09-17",
+            execute=False,
+            allow_source_rebuild=False,
+        )
     # Reproduce an old writer masking the revision with current stat/hash.
-    source_path = compact.report_path(tmp_path, "2026-09-17").with_suffix(".source.json")
+    source_path = compact.report_path(tmp_path, "2026-09-17").with_suffix(
+        ".source.json"
+    )
     source = compact.read(source_path)
-    source["dependency_signatures"] = compact.source_dependency_signatures(tmp_path, "2026-09-17")
+    source["dependency_signatures"] = compact.source_dependency_signatures(
+        tmp_path, "2026-09-17"
+    )
     source["source_label_report_sha256"] = compact.digest(compact.read(label_path))
     compact.write(source_path, compact.sealed(source))
-    with pytest.raises(ValueError, match="compact_finalize_requires_evaluation_of_changed_source"):
-        compact.run(data_root=tmp_path, day="2026-09-17", execute=False, allow_source_rebuild=False)
+    with pytest.raises(
+        ValueError, match="compact_finalize_requires_evaluation_of_changed_source"
+    ):
+        compact.run(
+            data_root=tmp_path,
+            day="2026-09-17",
+            execute=False,
+            allow_source_rebuild=False,
+        )
     calls = []
     monkeypatch.setattr(compact, "prepare", lambda *_: calls.append(True) or projection)
     compact.run(data_root=tmp_path, day="2026-09-17", execute=False)
@@ -2284,87 +2996,158 @@ def test_label_admission_revision_requires_evaluation_before_publication(monkeyp
 def test_operating_comparison_error_envelope_exposure_and_capital_conflict():
     from copy import deepcopy
     from src.engine.scalping import entry_split_order_plan as split
+
     proof = full_compact_proof()
-    pairs = proof['chronological_validation']['holdout_pairs']
-    model = proof['owner_execution_model_validation']
+    pairs = proof["chronological_validation"]["holdout_pairs"]
+    model = proof["owner_execution_model_validation"]
     good = compact.operating_comparison_metrics(pairs, model)
-    assert good['status'] == 'supported_operating_comparison'
-    assert good['robust_paired_delta_ev_lower_bound_pct'] > 0
-    assert good['candidate']['net_pnl_krw'] > good['incumbent']['net_pnl_krw']
-    assert good['candidate']['capital_krw_minutes'] > 0
-    assert good['candidate']['reserve_krw_minutes'] > 0
+    assert good["status"] == "supported_operating_comparison"
+    assert good["robust_paired_delta_ev_lower_bound_pct"] > 0
+    assert good["candidate"]["net_pnl_krw"] > good["incumbent"]["net_pnl_krw"]
+    assert good["candidate"]["capital_krw_minutes"] > 0
+    assert good["candidate"]["reserve_krw_minutes"] > 0
     inflated = deepcopy(model)
-    scope = inflated['validated_scopes'][0]
-    for r in scope['calibration_rows'] + scope['holdout_rows']:
-        r['net_error_budget_pct'] = 1.
-    scope['tolerance']['net_error_budget_pct'] = 1.
-    scope['optimistic_net_error_budget_pct'] = 1.
-    scope['actual_rows_sha256'] = split._canonical_sha256(scope['calibration_rows'] + scope['holdout_rows'])
-    scope['sha256'] = split._canonical_sha256({k:v for k,v in scope.items() if k != 'sha256'})
+    scope = inflated["validated_scopes"][0]
+    for r in scope["calibration_rows"] + scope["holdout_rows"]:
+        r["net_error_budget_pct"] = 1.0
+    scope["tolerance"]["net_error_budget_pct"] = 1.0
+    scope["optimistic_net_error_budget_pct"] = 1.0
+    scope["actual_rows_sha256"] = split._canonical_sha256(
+        scope["calibration_rows"] + scope["holdout_rows"]
+    )
+    scope["sha256"] = split._canonical_sha256(
+        {k: v for k, v in scope.items() if k != "sha256"}
+    )
     rejected = compact.operating_comparison_metrics(pairs, inflated)
-    assert rejected['status'] == 'supported_operating_comparison'
-    assert rejected['robust_paired_delta_ev_lower_bound_pct'] < 0
-    proof['owner_execution_model_validation'] = inflated
-    kwargs = dict(incumbent=proof['incumbent_prompt_version'], selected=proof['candidate_prompt_version'], source_manifest_sha256='d'*64)
+    assert rejected["status"] == "supported_operating_comparison"
+    assert rejected["robust_paired_delta_ev_lower_bound_pct"] < 0
+    proof["owner_execution_model_validation"] = inflated
+    kwargs = dict(
+        incumbent=proof["incumbent_prompt_version"],
+        selected=proof["candidate_prompt_version"],
+        source_manifest_sha256="d" * 64,
+    )
     assert not compact.promotion_valid(compact.sealed(proof), **kwargs)
     # Signed but incomplete exposure is a source gap, not zero occupancy.
     damaged = deepcopy(pairs[:1])
-    replay = damaged[0]['owner_replay']
-    arm = next(iter(replay['operating_arms'].values()))
-    arm.pop('reserve_krw_minutes')
-    arm['sha256'] = split._canonical_sha256({k:v for k,v in arm.items() if k != 'sha256'})
-    replay['replay_sha256'] = compact.digest({k:v for k,v in replay.items() if k != 'replay_sha256'})
-    assert compact.operating_comparison_metrics(damaged, model)['robust_paired_delta_ev_lower_bound_pct'] is None
+    replay = damaged[0]["owner_replay"]
+    arm = next(iter(replay["operating_arms"].values()))
+    arm.pop("reserve_krw_minutes")
+    arm["sha256"] = split._canonical_sha256(
+        {k: v for k, v in arm.items() if k != "sha256"}
+    )
+    replay["replay_sha256"] = compact.digest(
+        {k: v for k, v in replay.items() if k != "replay_sha256"}
+    )
+    assert (
+        compact.operating_comparison_metrics(damaged, model)[
+            "robust_paired_delta_ev_lower_bound_pct"
+        ]
+        is None
+    )
     overlapping = deepcopy(pairs[:1]) * 2
-    assert compact.operating_comparison_metrics(overlapping, model)['blocker'] == 'overlapping_owner_capital_allocation_unsupported'
+    assert (
+        compact.operating_comparison_metrics(overlapping, model)["blocker"]
+        == "overlapping_owner_capital_allocation_unsupported"
+    )
 
 
-def test_source_contract_code_upgrade_preserves_exclusions_without_raw_rescan(monkeypatch, tmp_path):
-    day='2026-09-17'
-    row=compact_row()
-    row.update(input=None, owner_replay=None, exclusion_reason='exact_stop_distance_missing')
+def test_source_contract_code_upgrade_preserves_exclusions_without_raw_rescan(
+    monkeypatch, tmp_path
+):
+    day = "2026-09-17"
+    row = compact_row()
+    row.update(
+        input=None, owner_replay=None, exclusion_reason="exact_stop_distance_missing"
+    )
     row.pop("entry_economic_plan_sha256")
-    projection=compact.sealed(dict(rows=[row],screened_total=1,source_manifest_sha256='d'*64,
-        source_tuning_allowed=True, exclusion_counts={'exact_stop_distance_missing':1}, **compact.AUTHORITY))
-    monkeypatch.setattr(compact,'prepare',lambda *_: projection)
-    compact.run(data_root=tmp_path,day=day,execute=False)
-    path=compact.report_path(tmp_path,day).with_suffix('.source.json')
-    old=compact.read(path)
-    old.pop('source_projection_contract')
-    old['projection_contract_sha256']='e'*64
-    compact.write(path,compact.sealed(old))
-    monkeypatch.setattr(compact,'prepare',lambda *_: pytest.fail('code upgrade must not rescan frozen raw'))
-    result=compact.run(data_root=tmp_path,day=day,execute=False)
-    source=compact.read(path)
-    assert source['source_upgrade']['raw_not_read'] is True
-    assert source['rows'][0]['input'] is None
-    assert source['rows'][0]['exclusion_reason']=='exact_stop_distance_missing'
-    assert result['metrics']['delta_net_ev_pct'] is None
-    assert result['provider_calls_this_run']==0
+    projection = compact.sealed(
+        dict(
+            rows=[row],
+            screened_total=1,
+            source_manifest_sha256="d" * 64,
+            source_tuning_allowed=True,
+            exclusion_counts={"exact_stop_distance_missing": 1},
+            **compact.AUTHORITY,
+        )
+    )
+    monkeypatch.setattr(compact, "prepare", lambda *_: projection)
+    compact.run(data_root=tmp_path, day=day, execute=False)
+    path = compact.report_path(tmp_path, day).with_suffix(".source.json")
+    old = compact.read(path)
+    old.pop("source_projection_contract")
+    old["projection_contract_sha256"] = "e" * 64
+    compact.write(path, compact.sealed(old))
+    monkeypatch.setattr(
+        compact,
+        "prepare",
+        lambda *_: pytest.fail("code upgrade must not rescan frozen raw"),
+    )
+    result = compact.run(data_root=tmp_path, day=day, execute=False)
+    source = compact.read(path)
+    assert source["source_upgrade"]["raw_not_read"] is True
+    assert source["rows"][0]["input"] is None
+    assert source["rows"][0]["exclusion_reason"] == "exact_stop_distance_missing"
+    assert result["metrics"]["delta_net_ev_pct"] is None
+    assert result["provider_calls_this_run"] == 0
 
 
-def test_native_watch_metadata_warm_cache_recovers_exact_trace_only(monkeypatch, tmp_path):
+def test_native_watch_metadata_warm_cache_recovers_exact_trace_only(
+    monkeypatch, tmp_path
+):
     day = "2026-09-30"
     row = compact_row()
-    row.update(scanner_promotion_id=None, source_date=day,
-        decision_ts=day + "T09:03:09+09:00", payload_sha256="a" * 64,
-        machine_bundle_sha256="b" * 64, input=None,
-        exclusion_reason="exact_stop_distance_missing", owner_replay=None)
-    trace = {key: row[key] for key in ("stock_code", "decision_ts", "payload_sha256",
-        "machine_bundle_sha256", "effective_venue", "session_bucket")}
-    trace.update(decision_trace_id=row["evaluation_key"], watch_origin="MAIN_FIXED_WATCH",
-        watch_admission_id="native-admission", watch_generation_id="native-generation")
+    row.update(
+        scanner_promotion_id=None,
+        source_date=day,
+        decision_ts=day + "T09:03:09+09:00",
+        payload_sha256="a" * 64,
+        machine_bundle_sha256="b" * 64,
+        input=None,
+        exclusion_reason="exact_stop_distance_missing",
+        owner_replay=None,
+    )
+    trace = {
+        key: row[key]
+        for key in (
+            "stock_code",
+            "decision_ts",
+            "payload_sha256",
+            "machine_bundle_sha256",
+            "effective_venue",
+            "session_bucket",
+        )
+    }
+    trace.update(
+        decision_trace_id=row["evaluation_key"],
+        watch_origin="MAIN_FIXED_WATCH",
+        watch_admission_id="native-admission",
+        watch_generation_id="native-generation",
+    )
     trace_path = tmp_path / "ai_decision_trace" / f"ai_decision_trace_{day}.jsonl"
     trace_path.parent.mkdir(parents=True)
     trace_path.write_text(json.dumps(trace) + "\n")
-    projection = compact.sealed(dict(rows=[row], screened_total=1,
-        source_manifest_sha256="d" * 64, source_tuning_allowed=True,
-        exclusion_counts={"exact_stop_distance_missing": 1}, **compact.AUTHORITY))
+    projection = compact.sealed(
+        dict(
+            rows=[row],
+            screened_total=1,
+            source_manifest_sha256="d" * 64,
+            source_tuning_allowed=True,
+            exclusion_counts={"exact_stop_distance_missing": 1},
+            **compact.AUTHORITY,
+        )
+    )
     monkeypatch.setattr(compact, "prepare", lambda *_: projection)
     compact.run(data_root=tmp_path, day=day, execute=False)
-    monkeypatch.setattr(compact, "prepare", lambda *_: pytest.fail("warm metadata repair must not read payloads"))
+    monkeypatch.setattr(
+        compact,
+        "prepare",
+        lambda *_: pytest.fail("warm metadata repair must not read payloads"),
+    )
     result = compact.run(data_root=tmp_path, day=day, execute=False)
-    upgraded = compact.read(compact.report_path(tmp_path, day).with_suffix(".source.json"))
+    upgraded = compact.read(
+        compact.report_path(tmp_path, day).with_suffix(".source.json")
+    )
     assert upgraded["rows"][0]["watch_admission_id"] == "native-admission"
     assert upgraded["native_watch_metadata_upgrade"]["repaired_rows"] == 1
     assert upgraded["rows"][0]["input"] is None
@@ -2372,19 +3155,48 @@ def test_native_watch_metadata_warm_cache_recovers_exact_trace_only(monkeypatch,
     assert result["provider_calls_this_run"] == 0
 
 
-@pytest.mark.parametrize("damage", ["payload_sha256", "stock_code", "conflict", "generation", "budget", "evaluation_key"])
-def test_native_watch_metadata_upgrade_rejects_unbound_trace(tmp_path, monkeypatch, damage):
+@pytest.mark.parametrize(
+    "damage",
+    [
+        "payload_sha256",
+        "stock_code",
+        "conflict",
+        "generation",
+        "budget",
+        "evaluation_key",
+    ],
+)
+def test_native_watch_metadata_upgrade_rejects_unbound_trace(
+    tmp_path, monkeypatch, damage
+):
     day = "2026-09-30"
     row = compact_row()
-    row.update(scanner_promotion_id=None, source_date=day,
-        decision_ts=day + "T09:03:09+09:00", payload_sha256="a" * 64,
-        machine_bundle_sha256="b" * 64)
+    row.update(
+        scanner_promotion_id=None,
+        source_date=day,
+        decision_ts=day + "T09:03:09+09:00",
+        payload_sha256="a" * 64,
+        machine_bundle_sha256="b" * 64,
+    )
     if damage == "evaluation_key":
         row["evaluation_key"] = "None"
-    trace = {key: row[key] for key in ("stock_code", "decision_ts", "payload_sha256",
-        "machine_bundle_sha256", "effective_venue", "session_bucket")}
-    trace.update(decision_trace_id=row["evaluation_key"], watch_origin="MAIN_FIXED_WATCH",
-        watch_admission_id="native-admission", watch_generation_id="native-generation")
+    trace = {
+        key: row[key]
+        for key in (
+            "stock_code",
+            "decision_ts",
+            "payload_sha256",
+            "machine_bundle_sha256",
+            "effective_venue",
+            "session_bucket",
+        )
+    }
+    trace.update(
+        decision_trace_id=row["evaluation_key"],
+        watch_origin="MAIN_FIXED_WATCH",
+        watch_admission_id="native-admission",
+        watch_generation_id="native-generation",
+    )
     if damage in ("payload_sha256", "stock_code"):
         trace[damage] = "wrong"
     path = tmp_path / "ai_decision_trace" / f"ai_decision_trace_{day}.jsonl"
@@ -2403,264 +3215,512 @@ def test_native_watch_metadata_upgrade_rejects_unbound_trace(tmp_path, monkeypat
     assert "watch_admission_id" not in upgraded["rows"][0]
     assert upgraded["native_watch_metadata_upgrade"]["repaired_rows"] == 0
     if damage == "budget":
-        assert upgraded["native_watch_metadata_upgrade"]["status"] == "native_watch_metadata_trace_scan_budget_exceeded"
+        assert (
+            upgraded["native_watch_metadata_upgrade"]["status"]
+            == "native_watch_metadata_trace_scan_budget_exceeded"
+        )
 
 
-def test_source_contract_upgrade_reclassifies_historical_response_failure_without_raw_rescan(monkeypatch, tmp_path):
+def test_source_contract_upgrade_reclassifies_historical_response_failure_without_raw_rescan(
+    monkeypatch, tmp_path
+):
     day = "2026-09-17"
     row = compact_row()
-    row.update(input=None, owner_replay=None, exclusion_reason="natural_contract_invalid",
-        natural_contract_evidence={"model": "gpt-5.4-nano", "provider_actual": "openai",
+    row.update(
+        input=None,
+        owner_replay=None,
+        exclusion_reason="natural_contract_invalid",
+        natural_contract_evidence={
+            "model": "gpt-5.4-nano",
+            "provider_actual": "openai",
             "semantic_validation_status": "not_evaluated_transport",
             "decision_quality_contract_status": "not_evaluated_transport",
-            "result_source": "transport_error"})
-    projection = compact.sealed(dict(rows=[row], screened_total=1,
-        source_manifest_sha256="d"*64, source_tuning_allowed=True,
-        exclusion_counts={"natural_contract_invalid": 1}, **compact.AUTHORITY))
+            "result_source": "transport_error",
+        },
+    )
+    projection = compact.sealed(
+        dict(
+            rows=[row],
+            screened_total=1,
+            source_manifest_sha256="d" * 64,
+            source_tuning_allowed=True,
+            exclusion_counts={"natural_contract_invalid": 1},
+            **compact.AUTHORITY,
+        )
+    )
     monkeypatch.setattr(compact, "prepare", lambda *_: projection)
     compact.run(data_root=tmp_path, day=day, execute=False)
     path = compact.report_path(tmp_path, day).with_suffix(".source.json")
     old = compact.read(path)
     old["source_projection_contract"] = "compact_pre_ai_execution_source_v5"
-    old["projection_contract_sha256"] = "e"*64
+    old["projection_contract_sha256"] = "e" * 64
     old["rows"][0]["exclusion_reason"] = "natural_response_semantic_invalid"
     compact.write(path, compact.sealed(old))
-    monkeypatch.setattr(compact, "prepare", lambda *_: pytest.fail("upgrade must use frozen evidence"))
+    monkeypatch.setattr(
+        compact, "prepare", lambda *_: pytest.fail("upgrade must use frozen evidence")
+    )
     report = compact.run(data_root=tmp_path, day=day, execute=False)
     upgraded = compact.read(path)
     assert upgraded["source_upgrade"]["raw_not_read"] is True
-    assert upgraded["rows"][0]["exclusion_reason"] == "natural_response_transport_invalid"
-    assert report["candidate_zero_disposition"]["primary_input_disposition_counts"] == {"source_gap": 1}
+    assert (
+        upgraded["rows"][0]["exclusion_reason"] == "natural_response_transport_invalid"
+    )
+    assert report["candidate_zero_disposition"]["primary_input_disposition_counts"] == {
+        "source_gap": 1
+    }
 
 
-def test_compact_primary_source_gap_does_not_spend_provider_budget(monkeypatch,tmp_path):
-    row=compact_row()
-    projection=compact.sealed(dict(rows=[row],screened_total=1,source_manifest_sha256='d'*64,
-        source_tuning_allowed=True,exclusion_counts={},**compact.AUTHORITY))
-    monkeypatch.setattr(compact,'prepare',lambda *_:projection)
-    result=compact.run(data_root=tmp_path,day='2026-09-17',execute=True,
-        runner=lambda _:pytest.fail('diagnostic-only rows must not call the provider'))
-    assert result['provider_calls_this_run']==0
-    assert result['candidate_zero_disposition']['status']=='source_gap'
-    assert result['metrics']['delta_net_ev_pct'] is None
+def test_compact_primary_source_gap_does_not_spend_provider_budget(
+    monkeypatch, tmp_path
+):
+    row = compact_row()
+    projection = compact.sealed(
+        dict(
+            rows=[row],
+            screened_total=1,
+            source_manifest_sha256="d" * 64,
+            source_tuning_allowed=True,
+            exclusion_counts={},
+            **compact.AUTHORITY,
+        )
+    )
+    monkeypatch.setattr(compact, "prepare", lambda *_: projection)
+    result = compact.run(
+        data_root=tmp_path,
+        day="2026-09-17",
+        execute=True,
+        runner=lambda _: pytest.fail("diagnostic-only rows must not call the provider"),
+    )
+    assert result["provider_calls_this_run"] == 0
+    assert result["candidate_zero_disposition"]["status"] == "source_gap"
+    assert result["metrics"]["delta_net_ev_pct"] is None
 
 
 def test_actual_decision_version_performance_reuses_completed_cost_owner():
-    receipt=dict(evaluation_attempt_id='attempt',machine_bundle_sha256='a'*64,
-        machine_policy_version='machine-v1',machine_policy_sha256='c'*64,
-        compact_prompt_version='compact-v1',compact_prompt_sha256='d'*64,
-        decision_trace_id='trace',runtime_pid=123)
-    receipt['sha256']=compact.digest(receipt)
-    row=dict(episode_id='natural-episode',status='COMPLETED',origin='real',owner='main_scalping',
-        exact_lineage=True,cost_complete=True,entry_decision_pid_consumed=True,entry_decision_version_receipt=receipt,
-        scope_sha256='b'*64,fill_class='full',completion_date='2026-09-17',net_pnl_krw=200.,profit_rate=.2,
-        budget_krw=100000.,capital_krw_minutes=100.,reserve_krw_minutes=10.,net_error_budget_pct=.01)
-    report={'operating_economic_state':{'model_rows':[row,row,{**row,'episode_id':'simulation','origin':'sim'}]}}
-    value=compact.applied_decision_version_performance(report,day='2026-09-17')
-    assert value['groups'][0]['cumulative']['completed_episodes']==1
-    assert value['groups'][0]['rolling']['net_pnl_krw']==200.
-    assert value['groups'][0]['policy_version']=='machine-v1|'+'c'*64+'|compact-v1|'+'d'*64
-    assert value['causal_profit_improvement'] is None
-    incomplete_receipt = dict(receipt)
-    incomplete_receipt.pop('compact_prompt_sha256')
-    incomplete_receipt['sha256'] = compact.digest({
-        key: value for key, value in incomplete_receipt.items() if key != 'sha256'
-    })
-    incomplete = compact.applied_decision_version_performance(
-        {'operating_economic_state': {'model_rows': [{
-            **row,
-            'episode_id': 'missing-exact-version-hash',
-            'entry_decision_version_receipt': incomplete_receipt,
-        }]}},
-        day='2026-09-17',
+    receipt = dict(
+        evaluation_attempt_id="attempt",
+        machine_bundle_sha256="a" * 64,
+        machine_policy_version="machine-v1",
+        machine_policy_sha256="c" * 64,
+        compact_prompt_version="compact-v1",
+        compact_prompt_sha256="d" * 64,
+        decision_trace_id="trace",
+        runtime_pid=123,
     )
-    assert incomplete['groups'] == []
-    assert incomplete['excluded_counts'] == {
-        'exact_submit_decision_version_receipt_missing_or_invalid': 1
+    receipt["sha256"] = compact.digest(receipt)
+    row = dict(
+        episode_id="natural-episode",
+        status="COMPLETED",
+        origin="real",
+        owner="main_scalping",
+        exact_lineage=True,
+        cost_complete=True,
+        entry_decision_pid_consumed=True,
+        entry_decision_version_receipt=receipt,
+        scope_sha256="b" * 64,
+        fill_class="full",
+        completion_date="2026-09-17",
+        net_pnl_krw=200.0,
+        profit_rate=0.2,
+        budget_krw=100000.0,
+        capital_krw_minutes=100.0,
+        reserve_krw_minutes=10.0,
+        net_error_budget_pct=0.01,
+    )
+    report = {
+        "operating_economic_state": {
+            "model_rows": [
+                row,
+                row,
+                {**row, "episode_id": "simulation", "origin": "sim"},
+            ]
+        }
     }
-    report['operating_economic_state']['model_rows'].append({**row,'net_pnl_krw':999.})
-    assert not compact.applied_decision_version_performance(report,day='2026-09-17')['groups']
+    value = compact.applied_decision_version_performance(report, day="2026-09-17")
+    assert value["groups"][0]["cumulative"]["completed_episodes"] == 1
+    assert value["groups"][0]["rolling"]["net_pnl_krw"] == 200.0
+    assert (
+        value["groups"][0]["policy_version"]
+        == "machine-v1|" + "c" * 64 + "|compact-v1|" + "d" * 64
+    )
+    assert value["causal_profit_improvement"] is None
+    incomplete_receipt = dict(receipt)
+    incomplete_receipt.pop("compact_prompt_sha256")
+    incomplete_receipt["sha256"] = compact.digest(
+        {key: value for key, value in incomplete_receipt.items() if key != "sha256"}
+    )
+    incomplete = compact.applied_decision_version_performance(
+        {
+            "operating_economic_state": {
+                "model_rows": [
+                    {
+                        **row,
+                        "episode_id": "missing-exact-version-hash",
+                        "entry_decision_version_receipt": incomplete_receipt,
+                    }
+                ]
+            }
+        },
+        day="2026-09-17",
+    )
+    assert incomplete["groups"] == []
+    assert incomplete["excluded_counts"] == {
+        "exact_submit_decision_version_receipt_missing_or_invalid": 1
+    }
+    report["operating_economic_state"]["model_rows"].append(
+        {**row, "net_pnl_krw": 999.0}
+    )
+    assert not compact.applied_decision_version_performance(report, day="2026-09-17")[
+        "groups"
+    ]
 
 
 def test_supported_operating_owner_cannot_override_source_label_venue_conflict():
-    row=operating_compact_row()
-    row['source_label_identity_reasons']=['canonical_context_venue_session_mismatch']
-    blocker=compact.primary_input_blocker(row,full_compact_proof()['owner_execution_model_validation'])
-    assert blocker==('source_gap','source_label_identity_contract_invalid:canonical_context_venue_session_mismatch')
+    row = operating_compact_row()
+    row["source_label_identity_reasons"] = ["canonical_context_venue_session_mismatch"]
+    blocker = compact.primary_input_blocker(
+        row, full_compact_proof()["owner_execution_model_validation"]
+    )
+    assert blocker == (
+        "source_gap",
+        "source_label_identity_contract_invalid:canonical_context_venue_session_mismatch",
+    )
 
 
-@pytest.mark.parametrize("venue,session,route", [
-    ("KRX", "KRX_REGULAR", "SOR"),
-    ("NXT", "NXT_PREMARKET", "SOR"),
-    ("KRX_NXT_INTEGRATED", "KRX_NXT_AFTERMARKET", "SOR"),
-    ("NXT", "NXT_REGULAR_OVERLAP", "SOR"),
-    ("NXT", "NXT_AFTERMARKET", "SOR"),
-])
-def test_registered_sor_scope_independent_promotion_and_dated_consumer(tmp_path, venue, session, route):
+@pytest.mark.parametrize(
+    "venue,session,route",
+    [
+        ("KRX", "KRX_REGULAR", "SOR"),
+        ("NXT", "NXT_PREMARKET", "SOR"),
+        ("KRX_NXT_INTEGRATED", "KRX_NXT_AFTERMARKET", "SOR"),
+        ("NXT", "NXT_REGULAR_OVERLAP", "SOR"),
+        ("NXT", "NXT_AFTERMARKET", "SOR"),
+    ],
+)
+def test_registered_sor_scope_independent_promotion_and_dated_consumer(
+    tmp_path, venue, session, route
+):
     from copy import deepcopy
     from datetime import datetime
-    from src.engine.scalping import entry_split_order_plan as split, mechanistic_entry_runtime_policy as policy
+    from src.engine.scalping import (
+        entry_split_order_plan as split,
+        mechanistic_entry_runtime_policy as policy,
+    )
     from src.tests.test_mechanistic_entry_runtime_policy import source
-    parent = policy.publish(source(tmp_path), data_root=tmp_path, bootstrap=True,
-        adopt_all_continuous=True, now=datetime(2026,9,13,20,tzinfo=policy.KST))
+
+    parent = policy.publish(
+        source(tmp_path),
+        data_root=tmp_path,
+        bootstrap=True,
+        adopt_all_continuous=True,
+        now=datetime(2026, 9, 13, 20, tzinfo=policy.KST),
+    )
     proof = full_compact_proof()
-    proof['machine_parent_bundle_sha256s'] = [parent['bundle_sha256']]
+    proof["machine_parent_bundle_sha256s"] = [parent["bundle_sha256"]]
     scope = (venue, session)
-    for pair in proof['chronological_validation']['learning_pairs'] + proof['chronological_validation']['holdout_pairs']:
+    for pair in (
+        proof["chronological_validation"]["learning_pairs"]
+        + proof["chronological_validation"]["holdout_pairs"]
+    ):
         pair.update(effective_venue=venue, session_bucket=session, broker_route=route)
-        owner=pair['owner_replay']; seed=owner['seed']
-        seed.update(effective_venue=venue,session_bucket=session)
-        context=seed['operating_contract'];context['broker_route']=route
-        context['sha256']=compact.digest({k:v for k,v in context.items() if k!='sha256'})
-        seed['seed_sha256']=compact.digest({k:v for k,v in seed.items() if k!='seed_sha256'})
-        for arm in owner['operating_arms'].values():
-            arm['contract_sha256']=context['sha256']
-            arm['sha256']=split._canonical_sha256({k:v for k,v in arm.items() if k!='sha256'})
-        owner['replay_sha256']=compact.digest({k:v for k,v in owner.items() if k!='replay_sha256'})
-    exact_scope=split._entry_operating_scope(proof['chronological_validation']['learning_pairs'][0]['owner_replay']['seed'])
-    model=proof['owner_execution_model_validation']['validated_scopes'][0]
-    model['scope_sha256']=exact_scope
-    for key in ('calibration_rows','holdout_rows'):
-        for row in model[key]:row['scope_sha256']=exact_scope
-    model['actual_rows_sha256']=split._canonical_sha256(model['calibration_rows']+model['holdout_rows'])
-    model['sha256']=split._canonical_sha256({k:v for k,v in model.items() if k!='sha256'})
+        owner = pair["owner_replay"]
+        seed = owner["seed"]
+        seed.update(effective_venue=venue, session_bucket=session)
+        context = seed["operating_contract"]
+        context["broker_route"] = route
+        context["sha256"] = compact.digest(
+            {k: v for k, v in context.items() if k != "sha256"}
+        )
+        seed["seed_sha256"] = compact.digest(
+            {k: v for k, v in seed.items() if k != "seed_sha256"}
+        )
+        for arm in owner["operating_arms"].values():
+            arm["contract_sha256"] = context["sha256"]
+            arm["sha256"] = split._canonical_sha256(
+                {k: v for k, v in arm.items() if k != "sha256"}
+            )
+        owner["replay_sha256"] = compact.digest(
+            {k: v for k, v in owner.items() if k != "replay_sha256"}
+        )
+    exact_scope = split._entry_operating_scope(
+        proof["chronological_validation"]["learning_pairs"][0]["owner_replay"]["seed"]
+    )
+    model = proof["owner_execution_model_validation"]["validated_scopes"][0]
+    model["scope_sha256"] = exact_scope
+    for key in ("calibration_rows", "holdout_rows"):
+        for row in model[key]:
+            row["scope_sha256"] = exact_scope
+    model["actual_rows_sha256"] = split._canonical_sha256(
+        model["calibration_rows"] + model["holdout_rows"]
+    )
+    model["sha256"] = split._canonical_sha256(
+        {k: v for k, v in model.items() if k != "sha256"}
+    )
     # An unrelated scope may be pending or have a different incumbent. Neither
     # can remove this scope's complete population or authorize the other scope.
-    coverage = proof['metrics']['scope_coverage']['KRX|KRX_REGULAR']
-    proof['metrics']['response_coverage'] = .5
-    original_incumbent = proof['incumbent_prompt_version']
-    scope_key = '|'.join(scope)
-    proof['scope_validation'] = {scope_key: {
-        'incumbent_prompt_version': original_incumbent,
-        'candidate_frozen_at': proof['candidate_frozen_at'],
-        'coverage': coverage,
-        'chronological_validation': deepcopy(proof['chronological_validation']),
-    }}
-    proof['candidate_selection'] = compact_candidate_selection(
-        proof['candidate_prompt_version'], (scope_key,)
+    coverage = proof["metrics"]["scope_coverage"]["KRX|KRX_REGULAR"]
+    proof["metrics"]["response_coverage"] = 0.5
+    original_incumbent = proof["incumbent_prompt_version"]
+    scope_key = "|".join(scope)
+    proof["scope_validation"] = {
+        scope_key: {
+            "incumbent_prompt_version": original_incumbent,
+            "candidate_frozen_at": proof["candidate_frozen_at"],
+            "coverage": coverage,
+            "chronological_validation": deepcopy(proof["chronological_validation"]),
+        }
+    }
+    proof["candidate_selection"] = compact_candidate_selection(
+        proof["candidate_prompt_version"], (scope_key,)
     )
-    proof['incumbent_prompt_version'] = None
-    proof=compact.sealed(proof)
-    kwargs=dict(incumbent=original_incumbent,selected=proof['candidate_prompt_version'],source_manifest_sha256='d'*64)
-    assert compact.promotion_valid(proof,scope=scope,**kwargs)
-    assert compact.primary_input_blocker(proof['chronological_validation']['learning_pairs'][0],proof['owner_execution_model_validation']) is None
-    assert not compact.promotion_valid(proof,scope=('NXT','NXT_REGULAR'),**kwargs)
+    proof["incumbent_prompt_version"] = None
+    proof = compact.sealed(proof)
+    kwargs = dict(
+        incumbent=original_incumbent,
+        selected=proof["candidate_prompt_version"],
+        source_manifest_sha256="d" * 64,
+    )
+    assert compact.promotion_valid(proof, scope=scope, **kwargs)
+    assert (
+        compact.primary_input_blocker(
+            proof["chronological_validation"]["learning_pairs"][0],
+            proof["owner_execution_model_validation"],
+        )
+        is None
+    )
+    assert not compact.promotion_valid(proof, scope=("NXT", "NXT_REGULAR"), **kwargs)
     # Existing public dated publisher receives the validated economic proof.
     from src.tests.test_ai_action_outcome_calibration import _compact_router_case_table
-    receipt=deepcopy(_compact_router_case_table()['machine_ai_natural_source_receipt'])
-    receipt['source_manifest_sha256']='d'*64
-    receipt['compact_auxiliary_policy_measurement']={'measurement_allowed':True}
-    table={'compact_auxiliary_screen_outcomes':{'paired_economic_evaluation':proof},
-           'machine_ai_natural_source_receipt':receipt}
-    report=compact.sealed({'report_scope':'compact_auxiliary_only','target_date':'2026-09-18',
-        'evaluation_source_date':'2026-09-17','hierarchical_entry_quality':{'machine_decision_case_table':table}})
-    successor=policy._publish_compact_scope(report,data_root=tmp_path,current=datetime(2026,9,18,21,tzinfo=policy.KST))
-    assert successor['compact_promoted_scopes']==['|'.join(scope)]
-    loaded=policy.load_effective(data_root=tmp_path,target_date='2026-09-21')
-    assert policy.for_cohort(loaded,scope)['ai_policy']['prompt_version']==proof['candidate_prompt_version']
-    for parent_scope_key,value in parent['scope_policies'].items():
-        if parent_scope_key!='|'.join(scope):
-            assert loaded['scope_policies'][parent_scope_key]['ai_policy']['prompt_version']==value['ai_policy']['prompt_version']
+
+    receipt = deepcopy(
+        _compact_router_case_table()["machine_ai_natural_source_receipt"]
+    )
+    receipt["source_manifest_sha256"] = "d" * 64
+    receipt["compact_auxiliary_policy_measurement"] = {"measurement_allowed": True}
+    table = {
+        "compact_auxiliary_screen_outcomes": {"paired_economic_evaluation": proof},
+        "machine_ai_natural_source_receipt": receipt,
+    }
+    report = compact.sealed(
+        {
+            "report_scope": "compact_auxiliary_only",
+            "target_date": "2026-09-18",
+            "evaluation_source_date": "2026-09-17",
+            "hierarchical_entry_quality": {"machine_decision_case_table": table},
+        }
+    )
+    successor = policy._publish_compact_scope(
+        report, data_root=tmp_path, current=datetime(2026, 9, 18, 21, tzinfo=policy.KST)
+    )
+    assert successor["compact_promoted_scopes"] == ["|".join(scope)]
+    loaded = policy.load_effective(data_root=tmp_path, target_date="2026-09-21")
+    assert (
+        policy.for_cohort(loaded, scope)["ai_policy"]["prompt_version"]
+        == proof["candidate_prompt_version"]
+    )
+    for parent_scope_key, value in parent["scope_policies"].items():
+        if parent_scope_key != "|".join(scope):
+            assert (
+                loaded["scope_policies"][parent_scope_key]["ai_policy"][
+                    "prompt_version"
+                ]
+                == value["ai_policy"]["prompt_version"]
+            )
     # No route pooling may manufacture a passing learning/holdout population.
-    short=deepcopy(proof)
-    short['scope_validation'][scope_key]['chronological_validation']['holdout_pairs']=short['scope_validation'][scope_key]['chronological_validation']['holdout_pairs'][:19]
-    assert not compact.promotion_valid(compact.sealed(short),scope=scope,**kwargs)
+    short = deepcopy(proof)
+    short["scope_validation"][scope_key]["chronological_validation"][
+        "holdout_pairs"
+    ] = short["scope_validation"][scope_key]["chronological_validation"][
+        "holdout_pairs"
+    ][
+        :19
+    ]
+    assert not compact.promotion_valid(compact.sealed(short), scope=scope, **kwargs)
     missing = deepcopy(proof)
-    missing['scope_validation'][scope_key]['coverage']['response_coverage'] = .95
-    assert not compact.promotion_valid(compact.sealed(missing),scope=scope,**kwargs)
+    missing["scope_validation"][scope_key]["coverage"]["response_coverage"] = 0.95
+    assert not compact.promotion_valid(compact.sealed(missing), scope=scope, **kwargs)
 
 
 def test_later_scope_freezes_without_moving_earlier_holdout_or_pooling_routes():
     from copy import deepcopy
     from datetime import datetime
-    earlier = full_compact_proof()['chronological_validation']['learning_pairs']
-    incumbent = earlier[0]['incumbent_prompt_version']
-    candidate = full_compact_proof()['candidate_prompt_version']
+
+    earlier = full_compact_proof()["chronological_validation"]["learning_pairs"]
+    incumbent = earlier[0]["incumbent_prompt_version"]
+    candidate = full_compact_proof()["candidate_prompt_version"]
     later = deepcopy(earlier)
     for pair in later:
-        pair.update(effective_venue='NXT', session_bucket='NXT_PREMARKET', broker_route='SOR')
+        pair.update(
+            effective_venue="NXT", session_bucket="NXT_PREMARKET", broker_route="SOR"
+        )
     rows = [earlier[0], later[0]]
-    metrics = {'scope_coverage': {}}
-    first, frozen = compact.scope_candidate_validation(earlier + later[:1], rows, metrics, {},
-        candidate=candidate, now=datetime(2026,9,15,21,tzinfo=compact.KST))
-    assert first['KRX|KRX_REGULAR']['candidate_frozen_at'].startswith('2026-09-15')
-    assert first['NXT|NXT_PREMARKET']['candidate_frozen_at'] is None
+    metrics = {"scope_coverage": {}}
+    first, frozen = compact.scope_candidate_validation(
+        earlier + later[:1],
+        rows,
+        metrics,
+        {},
+        candidate=candidate,
+        now=datetime(2026, 9, 15, 21, tzinfo=compact.KST),
+    )
+    assert first["KRX|KRX_REGULAR"]["candidate_frozen_at"].startswith("2026-09-15")
+    assert first["NXT|NXT_PREMARKET"]["candidate_frozen_at"] is None
     for pair in later[1:]:
-        pair['source_date'] = '2026-09-16'
-    second, successor = compact.scope_candidate_validation(earlier + later, rows, metrics,
-        {'scope_candidates': frozen}, candidate=candidate, now=datetime(2026,9,17,21,tzinfo=compact.KST))
-    assert successor['KRX|KRX_REGULAR'] == frozen['KRX|KRX_REGULAR']
-    assert second['NXT|NXT_PREMARKET']['candidate_frozen_at'].startswith('2026-09-17')
-    assert len(second['NXT|NXT_PREMARKET']['chronological_validation']['learning_pairs']) == 20
-    assert not second['NXT|NXT_PREMARKET']['chronological_validation']['holdout_pairs']
+        pair["source_date"] = "2026-09-16"
+    second, successor = compact.scope_candidate_validation(
+        earlier + later,
+        rows,
+        metrics,
+        {"scope_candidates": frozen},
+        candidate=candidate,
+        now=datetime(2026, 9, 17, 21, tzinfo=compact.KST),
+    )
+    assert successor["KRX|KRX_REGULAR"] == frozen["KRX|KRX_REGULAR"]
+    assert second["NXT|NXT_PREMARKET"]["candidate_frozen_at"].startswith("2026-09-17")
+    assert (
+        len(second["NXT|NXT_PREMARKET"]["chronological_validation"]["learning_pairs"])
+        == 20
+    )
+    assert not second["NXT|NXT_PREMARKET"]["chronological_validation"]["holdout_pairs"]
     # A newly observed direct route still needs its own 20 learning episodes.
     direct = deepcopy(later[:19])
     for pair in direct:
-        pair['broker_route'] = 'NXT'
-    waiting, _ = compact.scope_candidate_validation(earlier + later + direct, rows, metrics,
-        {'scope_candidates': frozen}, candidate=candidate, now=datetime(2026,9,17,21,tzinfo=compact.KST))
-    assert waiting['NXT|NXT_PREMARKET']['candidate_frozen_at'] is None
+        pair["broker_route"] = "NXT"
+    waiting, _ = compact.scope_candidate_validation(
+        earlier + later + direct,
+        rows,
+        metrics,
+        {"scope_candidates": frozen},
+        candidate=candidate,
+        now=datetime(2026, 9, 17, 21, tzinfo=compact.KST),
+    )
+    assert waiting["NXT|NXT_PREMARKET"]["candidate_frozen_at"] is None
 
 
-@pytest.mark.parametrize('verdict,selected_scopes,status', [
-    ('PASS', ['KRX|KRX_REGULAR'], 'candidate_selected'), ('VETO', [], 'valid_no_edge')])
-def test_public_compact_run_preserves_prior_unanswered_holdout_and_recovers(monkeypatch, tmp_path, verdict, selected_scopes, status):
+@pytest.mark.parametrize(
+    "verdict,selected_scopes,status",
+    [
+        ("PASS", ["KRX|KRX_REGULAR"], "candidate_selected"),
+        ("VETO", [], "valid_no_edge"),
+    ],
+)
+def test_public_compact_run_preserves_prior_unanswered_holdout_and_recovers(
+    monkeypatch, tmp_path, verdict, selected_scopes, status
+):
     from datetime import datetime
     from src.engine.scalping import entry_setup_evidence as evidence
+
     proof = full_compact_proof()
-    monkeypatch.setattr(compact, 'runtime_inference_cost_receipt', lambda *_: proof['runtime_inference_cost_receipt'])
-    monkeypatch.setattr(evidence, 'entry_risk_adjudication_openai_schema', lambda *_: {})
-    monkeypatch.setattr(evidence, 'validate_entry_risk_adjudication', lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(
+        compact,
+        "runtime_inference_cost_receipt",
+        lambda *_: proof["runtime_inference_cost_receipt"],
+    )
+    monkeypatch.setattr(
+        evidence, "entry_risk_adjudication_openai_schema", lambda *_: {}
+    )
+    monkeypatch.setattr(
+        evidence, "validate_entry_risk_adjudication", lambda *_args, **_kwargs: []
+    )
+
     class Clock(datetime):
-        day = '2026-09-15'
+        day = "2026-09-15"
+
         @classmethod
         def now(cls, tz=None):
-            return datetime.fromisoformat(cls.day + 'T21:00:00+09:00')
-    monkeypatch.setattr(compact, 'datetime', Clock)
+            return datetime.fromisoformat(cls.day + "T21:00:00+09:00")
+
+    monkeypatch.setattr(compact, "datetime", Clock)
+
     def prepare(_root, day):
-        model = {**proof['owner_execution_model_validation'], 'source_date': day}
-        return compact.sealed({'owner_execution_model_validation': model,
-            'rows': [operating_compact_row(day, i) for i in range(20)], 'screened_total': 20,
-            'source_manifest_sha256': 'd'*64, 'source_tuning_allowed': True,
-            'exclusion_counts': {}, **compact.AUTHORITY})
-    monkeypatch.setattr(compact, 'prepare', prepare)
-    runner = lambda _: {'candidate_response': {'risk_verdict': verdict}}
-    learning = compact.run(data_root=tmp_path, day='2026-09-14', execute=True, runner=runner)
-    assert learning['scope_validation']['KRX|KRX_REGULAR']['candidate_frozen_at'].startswith('2026-09-15')
-    Clock.day = '2026-09-16'
-    partial = compact.run(data_root=tmp_path, day='2026-09-16', execute=True, max_new=19, runner=runner)
-    assert partial['metrics']['paired_comparable_count'] == 19
-    Clock.day = '2026-09-17'
-    held = compact.run(data_root=tmp_path, day='2026-09-17', execute=True, runner=runner)
-    assert held['metrics']['response_coverage'] == 1.
-    scope = held['scope_validation']['KRX|KRX_REGULAR']
-    assert scope['coverage']['economic_eligible_count'] == 60
-    assert scope['coverage']['paired_comparable_count'] == 59
-    assert not held['promotion_pass']
-    assert held['candidate_zero_disposition']['scope_dispositions']['KRX|KRX_REGULAR']['status'] == 'pending'
+        model = {**proof["owner_execution_model_validation"], "source_date": day}
+        return compact.sealed(
+            {
+                "owner_execution_model_validation": model,
+                "rows": [operating_compact_row(day, i) for i in range(20)],
+                "screened_total": 20,
+                "source_manifest_sha256": "d" * 64,
+                "source_tuning_allowed": True,
+                "exclusion_counts": {},
+                **compact.AUTHORITY,
+            }
+        )
+
+    monkeypatch.setattr(compact, "prepare", prepare)
+    runner = lambda _: {"candidate_response": {"risk_verdict": verdict}}
+    learning = compact.run(
+        data_root=tmp_path, day="2026-09-14", execute=True, runner=runner
+    )
+    assert learning["scope_validation"]["KRX|KRX_REGULAR"][
+        "candidate_frozen_at"
+    ].startswith("2026-09-15")
+    Clock.day = "2026-09-16"
+    partial = compact.run(
+        data_root=tmp_path, day="2026-09-16", execute=True, max_new=19, runner=runner
+    )
+    assert partial["metrics"]["paired_comparable_count"] == 19
+    Clock.day = "2026-09-17"
+    held = compact.run(
+        data_root=tmp_path, day="2026-09-17", execute=True, runner=runner
+    )
+    assert held["metrics"]["response_coverage"] == 1.0
+    scope = held["scope_validation"]["KRX|KRX_REGULAR"]
+    assert scope["coverage"]["economic_eligible_count"] == 60
+    assert scope["coverage"]["paired_comparable_count"] == 59
+    assert not held["promotion_pass"]
+    assert (
+        held["candidate_zero_disposition"]["scope_dispositions"]["KRX|KRX_REGULAR"][
+            "status"
+        ]
+        == "pending"
+    )
     # The resumable producer may repair the actual missing response. No
     # complete response is reissued and no missing economics becomes zero.
-    compact.run(data_root=tmp_path, day='2026-09-16', execute=True, runner=runner)
-    recovered = compact.run(data_root=tmp_path, day='2026-09-17', execute=True, runner=runner)
-    assert recovered['scope_validation']['KRX|KRX_REGULAR']['coverage']['response_coverage'] == 1.
-    assert recovered['promotion_scopes'] == selected_scopes
-    assert recovered['candidate_zero_disposition']['scope_dispositions']['KRX|KRX_REGULAR']['status'] == status
+    compact.run(data_root=tmp_path, day="2026-09-16", execute=True, runner=runner)
+    recovered = compact.run(
+        data_root=tmp_path, day="2026-09-17", execute=True, runner=runner
+    )
+    assert (
+        recovered["scope_validation"]["KRX|KRX_REGULAR"]["coverage"][
+            "response_coverage"
+        ]
+        == 1.0
+    )
+    assert recovered["promotion_scopes"] == selected_scopes
+    assert (
+        recovered["candidate_zero_disposition"]["scope_dispositions"][
+            "KRX|KRX_REGULAR"
+        ]["status"]
+        == status
+    )
 
 
-@pytest.mark.parametrize('venue,session,route', [
-    ('KRX','KRX_REGULAR','UNKNOWN'),('KRX','KRX_REGULAR','NXT'),
-    ('NXT','NXT_PREMARKET','KRX'),('NXT','UNREGISTERED','SOR')])
-def test_operating_market_route_contract_rejects_real_mismatch(venue,session,route):
-    from src.engine.scalping.strategy_owner_replay import entry_operating_route_supported
-    assert not entry_operating_route_supported(venue,session,route)
+@pytest.mark.parametrize(
+    "venue,session,route",
+    [
+        ("KRX", "KRX_REGULAR", "UNKNOWN"),
+        ("KRX", "KRX_REGULAR", "NXT"),
+        ("NXT", "NXT_PREMARKET", "KRX"),
+        ("NXT", "UNREGISTERED", "SOR"),
+    ],
+)
+def test_operating_market_route_contract_rejects_real_mismatch(venue, session, route):
+    from src.engine.scalping.strategy_owner_replay import (
+        entry_operating_route_supported,
+    )
+
+    assert not entry_operating_route_supported(venue, session, route)
 
 
-@pytest.mark.parametrize("reason", [
-    "natural_contract_invalid",
-    "natural_response_transport_invalid",
-    "natural_response_semantic_invalid",
-    "natural_provider_or_model_contract_invalid",
-])
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "natural_contract_invalid",
+        "natural_response_transport_invalid",
+        "natural_response_semantic_invalid",
+        "natural_provider_or_model_contract_invalid",
+    ],
+)
 def test_natural_response_failures_are_source_gaps_not_market_scope(reason):
     row = compact_row()
     row["exclusion_reason"] = reason
@@ -2670,23 +3730,43 @@ def test_natural_response_failures_are_source_gaps_not_market_scope(reason):
     assert accountability["owner"] == "ai_decision_trace_and_quality_response_contract"
 
 
-@pytest.mark.parametrize("patch,expected", [
-    ({"semantic_validation_status": "not_evaluated_transport", "result_source": "timeout"},
-     "natural_response_transport_invalid"),
-    ({"semantic_validation_status": None, "result_source": "timeout",
-      "decision_quality_contract_status": "not_evaluated_transport"},
-     "natural_response_transport_invalid"),
-    ({"semantic_validation_status": "semantic_rejected"},
-     "natural_response_semantic_invalid"),
-    ({"decision_quality_contract_status": "fail"},
-     "natural_response_semantic_invalid"),
-    ({"provider_actual": "other"},
-     "natural_provider_or_model_contract_invalid"),
-])
+@pytest.mark.parametrize(
+    "patch,expected",
+    [
+        (
+            {
+                "semantic_validation_status": "not_evaluated_transport",
+                "result_source": "timeout",
+            },
+            "natural_response_transport_invalid",
+        ),
+        (
+            {
+                "semantic_validation_status": None,
+                "result_source": "timeout",
+                "decision_quality_contract_status": "not_evaluated_transport",
+            },
+            "natural_response_transport_invalid",
+        ),
+        (
+            {"semantic_validation_status": "semantic_rejected"},
+            "natural_response_semantic_invalid",
+        ),
+        (
+            {"decision_quality_contract_status": "fail"},
+            "natural_response_semantic_invalid",
+        ),
+        ({"provider_actual": "other"}, "natural_provider_or_model_contract_invalid"),
+    ],
+)
 def test_natural_response_contract_preserves_first_failure_boundary(patch, expected):
-    trace = {"model": "gpt-5.4-nano", "provider_actual": "openai",
-             "semantic_validation_status": "pass",
-             "decision_quality_contract_status": "pass", **patch}
+    trace = {
+        "model": "gpt-5.4-nano",
+        "provider_actual": "openai",
+        "semantic_validation_status": "pass",
+        "decision_quality_contract_status": "pass",
+        **patch,
+    }
     assert compact.natural_response_contract_exclusion(trace) == expected
 
 
@@ -2700,33 +3780,76 @@ def test_calibration_cli_has_no_compact_postclose_phase():
 
 
 @pytest.mark.parametrize("changed_contract", ["prompt", "schema", "pricing"])
-def test_compact_reuse_binds_current_candidate_and_pricing(monkeypatch, tmp_path, changed_contract):
+def test_compact_reuse_binds_current_candidate_and_pricing(
+    monkeypatch, tmp_path, changed_contract
+):
     from src.engine.scalping import entry_setup_evidence as evidence
     from src.engine.scalping import mechanistic_entry_runtime_policy as policy
+
     proof = full_compact_proof()
     row = operating_compact_row()
-    projection = compact.sealed(dict(rows=[row], screened_total=1, exclusion_counts={},
-        source_manifest_sha256="d"*64, source_tuning_allowed=True,
-        owner_execution_model_validation=proof["owner_execution_model_validation"], **compact.AUTHORITY))
+    projection = compact.sealed(
+        dict(
+            rows=[row],
+            screened_total=1,
+            exclusion_counts={},
+            source_manifest_sha256="d" * 64,
+            source_tuning_allowed=True,
+            owner_execution_model_validation=proof["owner_execution_model_validation"],
+            **compact.AUTHORITY,
+        )
+    )
     monkeypatch.setattr(compact, "prepare", lambda *_: projection)
-    monkeypatch.setattr(compact, "candidate_direction_selection", lambda *_: compact_candidate_selection())
-    monkeypatch.setattr(compact, "runtime_inference_cost_receipt", lambda *_: proof["runtime_inference_cost_receipt"])
-    monkeypatch.setattr(evidence, "entry_risk_adjudication_openai_schema", lambda *_: {})
-    monkeypatch.setattr(evidence, "validate_entry_risk_adjudication", lambda *a, **k: [])
+    monkeypatch.setattr(
+        compact,
+        "candidate_direction_selection",
+        lambda *_: compact_candidate_selection(),
+    )
+    monkeypatch.setattr(
+        compact,
+        "runtime_inference_cost_receipt",
+        lambda *_: proof["runtime_inference_cost_receipt"],
+    )
+    monkeypatch.setattr(
+        evidence, "entry_risk_adjudication_openai_schema", lambda *_: {}
+    )
+    monkeypatch.setattr(
+        evidence, "validate_entry_risk_adjudication", lambda *a, **k: []
+    )
     calls = []
+
     def runner(request):
         calls.append(request)
         return {"candidate_response": {"risk_verdict": "PASS"}}
-    first = compact.run(data_root=tmp_path, day="2026-09-17", execute=True, runner=runner)
+
+    first = compact.run(
+        data_root=tmp_path, day="2026-09-17", execute=True, runner=runner
+    )
     assert first["metrics"]["paired_comparable_count"] == 1
     if changed_contract == "prompt":
         original = policy.compact_auxiliary_prompt
-        monkeypatch.setattr(policy, "compact_auxiliary_prompt", lambda **k: original(**k) + "\nReviewed revision.")
+        monkeypatch.setattr(
+            policy,
+            "compact_auxiliary_prompt",
+            lambda **k: original(**k) + "\nReviewed revision.",
+        )
     elif changed_contract == "schema":
-        monkeypatch.setattr(evidence, "entry_risk_adjudication_openai_schema", lambda *_: {"changed": True})
+        monkeypatch.setattr(
+            evidence,
+            "entry_risk_adjudication_openai_schema",
+            lambda *_: {"changed": True},
+        )
     else:
-        monkeypatch.setattr(compact, "runtime_inference_cost_receipt", lambda *_: dict(status="source_gap", delta_krw=None, blocker="pricing_missing"))
-    refreshed = compact.run(data_root=tmp_path, day="2026-09-17", execute=False, runner=runner)
+        monkeypatch.setattr(
+            compact,
+            "runtime_inference_cost_receipt",
+            lambda *_: dict(
+                status="source_gap", delta_krw=None, blocker="pricing_missing"
+            ),
+        )
+    refreshed = compact.run(
+        data_root=tmp_path, day="2026-09-17", execute=False, runner=runner
+    )
     assert len(calls) == 1
     assert refreshed["metrics"]["paired_comparable_count"] == 0
     assert refreshed["metrics"]["delta_net_ev_pct"] is None
@@ -2735,27 +3858,52 @@ def test_compact_reuse_binds_current_candidate_and_pricing(monkeypatch, tmp_path
         assert len(calls) == 2
 
 
-def test_compact_shared_data_mount_reuses_snapshot_and_finalization_never_rescans(monkeypatch, tmp_path):
+def test_compact_shared_data_mount_reuses_snapshot_and_finalization_never_rescans(
+    monkeypatch, tmp_path
+):
     from src.engine.scalping import entry_setup_evidence as evidence
+
     root = tmp_path / "actual"
     root.mkdir()
     alias = tmp_path / "release_data"
     alias.symlink_to(root, target_is_directory=True)
     proof = full_compact_proof()
     row = operating_compact_row()
-    projection = compact.sealed(dict(rows=[row], screened_total=1, exclusion_counts={},
-        source_manifest_sha256="d"*64, source_tuning_allowed=True,
-        owner_execution_model_validation=proof["owner_execution_model_validation"], **compact.AUTHORITY))
+    projection = compact.sealed(
+        dict(
+            rows=[row],
+            screened_total=1,
+            exclusion_counts={},
+            source_manifest_sha256="d" * 64,
+            source_tuning_allowed=True,
+            owner_execution_model_validation=proof["owner_execution_model_validation"],
+            **compact.AUTHORITY,
+        )
+    )
     prepared = []
     monkeypatch.setattr(compact, "prepare", lambda *a: prepared.append(a) or projection)
-    monkeypatch.setattr(compact, "candidate_direction_selection", lambda *_: compact_candidate_selection())
-    monkeypatch.setattr(compact, "runtime_inference_cost_receipt", lambda *_: proof["runtime_inference_cost_receipt"])
-    monkeypatch.setattr(evidence, "entry_risk_adjudication_openai_schema", lambda *_: {})
-    monkeypatch.setattr(evidence, "validate_entry_risk_adjudication", lambda *a, **k: [])
+    monkeypatch.setattr(
+        compact,
+        "candidate_direction_selection",
+        lambda *_: compact_candidate_selection(),
+    )
+    monkeypatch.setattr(
+        compact,
+        "runtime_inference_cost_receipt",
+        lambda *_: proof["runtime_inference_cost_receipt"],
+    )
+    monkeypatch.setattr(
+        evidence, "entry_risk_adjudication_openai_schema", lambda *_: {}
+    )
+    monkeypatch.setattr(
+        evidence, "validate_entry_risk_adjudication", lambda *a, **k: []
+    )
     calls = []
+
     def runner(request):
         calls.append(request)
         return {"candidate_response": {"risk_verdict": "PASS"}}
+
     compact.run(data_root=root, day="2026-09-17", execute=True, runner=runner)
     compact.run(data_root=alias, day="2026-09-17", execute=True, runner=runner)
     assert len(prepared) == len(calls) == 1

@@ -35,17 +35,33 @@ OUTCOME_SCHEMA = "ai_decision_outcome_label_v1"
 CONTEXT_CANDIDATE_SCHEMA = "ai_canonical_context_candidate_v1"
 DECISION_LAYERS_SCHEMA = "ai_entry_decision_layers_v1"
 OUTCOME_HORIZONS_MIN = (1, 3, 5, 10, 20, 30, 60)
-_PROVIDER_TRANSPORT_STAGES = frozenset({
-    'reserved', 'adapter_entered', 'request_built_before_capture',
-    'capture_started', 'capture_finished', 'http_prepare_completed',
-    'executor_enqueued', 'executor_started', 'sdk_started', 'sdk_finished',
-    'response_received', 'caller_adapter_finished', 'future_settled',
-})
-_PROVIDER_DEADLINE_FIELDS = frozenset({
-    'budget_before_transport_ms', 'response_reserve_ms',
-    'configured_transport_limit_ms', 'timeout_override_ms',
-    'original_deadline_epoch', 'original_deadline_perf',
-})
+_PROVIDER_TRANSPORT_STAGES = frozenset(
+    {
+        "reserved",
+        "adapter_entered",
+        "request_built_before_capture",
+        "capture_started",
+        "capture_finished",
+        "http_prepare_completed",
+        "executor_enqueued",
+        "executor_started",
+        "sdk_started",
+        "sdk_finished",
+        "response_received",
+        "caller_adapter_finished",
+        "future_settled",
+    }
+)
+_PROVIDER_DEADLINE_FIELDS = frozenset(
+    {
+        "budget_before_transport_ms",
+        "response_reserve_ms",
+        "configured_transport_limit_ms",
+        "timeout_override_ms",
+        "original_deadline_epoch",
+        "original_deadline_perf",
+    }
+)
 
 OBSERVATION_CONTRACT = {
     "metric_role": "ai_decision_quality_observation",
@@ -285,36 +301,56 @@ def _raw_auxiliary_projection(merged: dict) -> dict:
     so an absent historical field is never reconstructed as an empty response.
     The normal adapter and this projection use the same 64 item / 512 char cap.
     """
-    names = ('risk_verdict', 'risk_codes', 'supporting_fact_ids', 'contradicting_fact_ids', 'confidence')
-    present = {name: 'entry_ai_raw_' + name in merged for name in names}
-    upstream_present = merged.get('entry_ai_raw_fields_present')
+    names = (
+        "risk_verdict",
+        "risk_codes",
+        "supporting_fact_ids",
+        "contradicting_fact_ids",
+        "confidence",
+    )
+    present = {name: "entry_ai_raw_" + name in merged for name in names}
+    upstream_present = merged.get("entry_ai_raw_fields_present")
     if isinstance(upstream_present, dict):
         for name in names:
             if name in upstream_present:
                 present[name] = upstream_present[name] is True
-    truncated = bool(merged.get('entry_ai_raw_fields_truncated', False))
+    truncated = bool(merged.get("entry_ai_raw_fields_truncated", False))
     result = {}
-    for name in ('risk_codes', 'supporting_fact_ids', 'contradicting_fact_ids'):
-        value = merged.get('entry_ai_raw_' + name)
+    for name in ("risk_codes", "supporting_fact_ids", "contradicting_fact_ids"):
+        value = merged.get("entry_ai_raw_" + name)
         if not isinstance(value, list):
-            result['entry_ai_raw_' + name] = []
+            result["entry_ai_raw_" + name] = []
             continue
-        truncated = truncated or len(value) > 64 or any(
-            not isinstance(item, str) or len(item) > 512 for item in value)
-        result['entry_ai_raw_' + name] = [str(item)[:512] for item in value[:64]]
-    result.update(entry_ai_raw_fields_present=present,
-                  entry_ai_raw_fields_truncated=truncated,
-                  entry_ai_raw_fields_source=merged.get('entry_ai_raw_fields_source')
-                    or ('caller_raw_projection' if any(present.values()) else 'unavailable'))
-    invalid_shape = merged.get('entry_ai_raw_fields_invalid_shape')
+        truncated = (
+            truncated
+            or len(value) > 64
+            or any(not isinstance(item, str) or len(item) > 512 for item in value)
+        )
+        result["entry_ai_raw_" + name] = [str(item)[:512] for item in value[:64]]
+    result.update(
+        entry_ai_raw_fields_present=present,
+        entry_ai_raw_fields_truncated=truncated,
+        entry_ai_raw_fields_source=merged.get("entry_ai_raw_fields_source")
+        or ("caller_raw_projection" if any(present.values()) else "unavailable"),
+    )
+    invalid_shape = merged.get("entry_ai_raw_fields_invalid_shape")
     invalid_shape = invalid_shape if isinstance(invalid_shape, list) else []
-    result['entry_ai_raw_fields_invalid_shape'] = [name for name in names
+    result["entry_ai_raw_fields_invalid_shape"] = [
+        name
+        for name in names
         if name in invalid_shape
-        or name in ('risk_codes', 'supporting_fact_ids', 'contradicting_fact_ids')
-            and present[name] and not isinstance(merged.get('entry_ai_raw_' + name), list)]
-    raw_hash = merged.get('entry_ai_raw_response_sha256')
-    result['entry_ai_raw_response_sha256'] = (raw_hash if isinstance(raw_hash, str)
-        and len(raw_hash) == 64 and all(c in '0123456789abcdef' for c in raw_hash) else None)
+        or name in ("risk_codes", "supporting_fact_ids", "contradicting_fact_ids")
+        and present[name]
+        and not isinstance(merged.get("entry_ai_raw_" + name), list)
+    ]
+    raw_hash = merged.get("entry_ai_raw_response_sha256")
+    result["entry_ai_raw_response_sha256"] = (
+        raw_hash
+        if isinstance(raw_hash, str)
+        and len(raw_hash) == 64
+        and all(c in "0123456789abcdef" for c in raw_hash)
+        else None
+    )
     return result
 
 
@@ -323,11 +359,12 @@ def _append_jsonl(path: Path, payload: dict[str, Any]) -> dict[str, float]:
     encoded = (
         json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str)
         + "\n"
-    ).encode('utf-8')
+    ).encode("utf-8")
     serialization_ms = (time.perf_counter() - serialization_started) * 1000
     from src.engine.scalping.trace_dedup import MAX_ROW_BYTES
+
     if len(encoded) > MAX_ROW_BYTES:
-        raise ValueError('ai_trace_dedup_row_size_exceeded')
+        raise ValueError("ai_trace_dedup_row_size_exceeded")
     lock_started = time.perf_counter()
     with jsonl_artifact_generation_lock(
         path,
@@ -338,25 +375,40 @@ def _append_jsonl(path: Path, payload: dict[str, Any]) -> dict[str, float]:
         lock_ms = (write_started - lock_started) * 1000
         descriptor = -1
         entry_name = generation.logical.name
-        index_field = next((field for prefix, field in (
-            ('ai_decision_payloads_', 'request_envelope_sha256'),
-            ('ai_decision_prompts_', 'prompt_sha256'),
-            ('ai_decision_requests_', 'request_id'),
-            ('ai_decision_trace_', 'decision_trace_id'),
-            ('ai_decision_outcomes_', 'label_id'),
-            ('ai_canonical_context_candidates_', 'candidate_sha256'))
-            if path.name.startswith(prefix)), None)
+        index_field = next(
+            (
+                field
+                for prefix, field in (
+                    ("ai_decision_payloads_", "request_envelope_sha256"),
+                    ("ai_decision_prompts_", "prompt_sha256"),
+                    ("ai_decision_requests_", "request_id"),
+                    ("ai_decision_trace_", "decision_trace_id"),
+                    ("ai_decision_outcomes_", "label_id"),
+                    ("ai_canonical_context_candidates_", "candidate_sha256"),
+                )
+                if path.name.startswith(prefix)
+            ),
+            None,
+        )
         key_field = index_field if index_field and payload.get(index_field) else None
         try:
             if key_field:
                 from src.engine.scalping import trace_dedup
-                index = trace_dedup.prepare(path, key_field, generation,
-                    max_bytes=64 * 1024, hot=True)
+
+                index = trace_dedup.prepare(
+                    path, key_field, generation, max_bytes=64 * 1024, hot=True
+                )
                 if str(payload[key_field]) in index.keys:
-                    if index.digests[str(payload[key_field])] != trace_dedup.semantic_digest(payload, key_field):
-                        raise ValueError('ai_trace_dedup_identity_conflict')
-                    return {"ai_trace_file_lock_wait_ms": lock_ms, "ai_trace_write_ms": 0.0,
-                            "ai_trace_serialization_ms": serialization_ms, "ai_trace_fsync_ms": 0.0}
+                    if index.digests[
+                        str(payload[key_field])
+                    ] != trace_dedup.semantic_digest(payload, key_field):
+                        raise ValueError("ai_trace_dedup_identity_conflict")
+                    return {
+                        "ai_trace_file_lock_wait_ms": lock_ms,
+                        "ai_trace_write_ms": 0.0,
+                        "ai_trace_serialization_ms": serialization_ms,
+                        "ai_trace_fsync_ms": 0.0,
+                    }
             generation.chmod_parent(0o700)
             existing = generation.stat_name(entry_name)
             if existing is not None and not stat.S_ISREG(existing.st_mode):
@@ -401,17 +453,35 @@ def _append_jsonl(path: Path, payload: dict[str, Any]) -> dict[str, float]:
                 generation.assert_name_identity(entry_name, final_identity)
             if index_field:
                 from src.engine.scalping import trace_dedup
-                trace_dedup.appended(path, index_field, payload, descriptor,
-                    previous_identity=opened_identity, encoded=encoded)
-            from src.engine.automation.main_trailing_source_store import capture_native_append
-            capture_native_append(path, before=trailing_source_before,
-                after=os.fstat(descriptor), raw=encoded, row=payload)
+
+                trace_dedup.appended(
+                    path,
+                    index_field,
+                    payload,
+                    descriptor,
+                    previous_identity=opened_identity,
+                    encoded=encoded,
+                )
+            from src.engine.automation.main_trailing_source_store import (
+                capture_native_append,
+            )
+
+            capture_native_append(
+                path,
+                before=trailing_source_before,
+                after=os.fstat(descriptor),
+                raw=encoded,
+                row=payload,
+            )
         finally:
             if descriptor >= 0:
                 os.close(descriptor)
-    return {"ai_trace_file_lock_wait_ms": lock_ms,
-            "ai_trace_write_ms": (time.perf_counter() - write_started) * 1000,
-            "ai_trace_serialization_ms": serialization_ms, "ai_trace_fsync_ms": fsync_ms}
+    return {
+        "ai_trace_file_lock_wait_ms": lock_ms,
+        "ai_trace_write_ms": (time.perf_counter() - write_started) * 1000,
+        "ai_trace_serialization_ms": serialization_ms,
+        "ai_trace_fsync_ms": fsync_ms,
+    }
 
 
 def prepare_ai_request_capture(target_date: str | None = None) -> dict[str, float]:
@@ -420,22 +490,30 @@ def prepare_ai_request_capture(target_date: str | None = None) -> dict[str, floa
         return {}
     day = target_date or _date_text()
     payload_path = _payload_path(day)
-    if (payload_path.parent.name == 'ai_decision_payloads'
-            and _trace_path(day).parent.parent == payload_path.parent.parent):
+    if (
+        payload_path.parent.name == "ai_decision_payloads"
+        and _trace_path(day).parent.parent == payload_path.parent.parent
+    ):
         from src.engine.automation.main_trailing_source_store import maintain
+
         maintain(payload_path.parent.parent, day)
-    indexes = ((_SEEN_PAYLOAD_HASHES, _payload_path, "request_envelope_sha256"),
-               (_SEEN_PROMPT_HASHES, _prompt_path, "prompt_sha256"),
-               (_SEEN_REQUEST_IDS, _request_path, "request_id"),
-               (_SEEN_TRACE_IDS, _trace_path, "decision_trace_id"),
-               (_SEEN_OUTCOME_LABEL_IDS, _outcome_path, "label_id"),
-               (_SEEN_CONTEXT_CANDIDATE_HASHES, _context_candidate_path, "candidate_sha256"))
+    indexes = (
+        (_SEEN_PAYLOAD_HASHES, _payload_path, "request_envelope_sha256"),
+        (_SEEN_PROMPT_HASHES, _prompt_path, "prompt_sha256"),
+        (_SEEN_REQUEST_IDS, _request_path, "request_id"),
+        (_SEEN_TRACE_IDS, _trace_path, "decision_trace_id"),
+        (_SEEN_OUTCOME_LABEL_IDS, _outcome_path, "label_id"),
+        (_SEEN_CONTEXT_CANDIDATE_HASHES, _context_candidate_path, "candidate_sha256"),
+    )
     started = time.perf_counter()
     from src.engine.scalping import trace_dedup
+
     pending = False
     for cache, path, field in indexes:
         try:
-            with jsonl_artifact_generation_lock(path(day), exclusive=False, blocking=False) as generation:
+            with jsonl_artifact_generation_lock(
+                path(day), exclusive=False, blocking=False
+            ) as generation:
                 index = trace_dedup.prepare(path(day), field, generation)
             # Writers acquire _WRITE_LOCK before the file generation lease.
             # Release the reader lease before taking that lock to avoid ABBA.
@@ -452,9 +530,12 @@ def prepare_ai_request_capture(target_date: str | None = None) -> dict[str, floa
             # OSError. Only its typed cause and exact lease marker are pending;
             # descriptor/parent changes, permission and disk errors still fail.
             if isinstance(exc, OSError) and not (
-                    isinstance(exc, BlockingIOError)
-                    or (isinstance(exc.__cause__, BlockingIOError)
-                        and str(exc).startswith('jsonl_generation_lock_busy:'))):
+                isinstance(exc, BlockingIOError)
+                or (
+                    isinstance(exc.__cause__, BlockingIOError)
+                    and str(exc).startswith("jsonl_generation_lock_busy:")
+                )
+            ):
                 raise
             pending = True
             with _WRITE_LOCK:
@@ -468,8 +549,13 @@ def prepare_ai_request_capture(target_date: str | None = None) -> dict[str, floa
 def _load_seen(path: Path, field: str) -> set[str]:
     """Only a prepared index or a bounded append suffix is eligible on hot paths."""
     from src.engine.scalping import trace_dedup
-    with jsonl_artifact_generation_lock(path, exclusive=False, blocking=False) as generation:
-        value = trace_dedup.prepare(path, field, generation, max_bytes=64 * 1024, hot=True)
+
+    with jsonl_artifact_generation_lock(
+        path, exclusive=False, blocking=False
+    ) as generation:
+        value = trace_dedup.prepare(
+            path, field, generation, max_bytes=64 * 1024, hot=True
+        )
         return value.keys
 
 
@@ -596,10 +682,17 @@ def _native_claim_digest_is_public(value: dict, path: tuple[str, ...]) -> bool:
     try:
         snapshot = value.get("snapshot") or value.get("supplied_snapshot")
         generation = value.get("generation") or value.get("claim_generation")
-        if not isinstance(generation, str) or not re.fullmatch(r"[0-9a-f]{64}", generation):
+        if not isinstance(generation, str) or not re.fullmatch(
+            r"[0-9a-f]{64}", generation
+        ):
             return False
-        encoded = json.dumps([generation, snapshot[0]["signal_id"], snapshot],
-            sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False).encode()
+        encoded = json.dumps(
+            [generation, snapshot[0]["signal_id"], snapshot],
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+            allow_nan=False,
+        ).encode()
         return hashlib.sha256(encoded).hexdigest() == token
     except (KeyError, TypeError, ValueError, IndexError, OverflowError):
         return False
@@ -628,10 +721,12 @@ def _sanitize(
     if _key_cache is None:
         _key_cache = {}
     current_path = (*path, str(key)) if key else path
-    sensitive = _sanitize_label(key, _key_cache)[2] if type(key) is str else _is_sensitive_key(key)
-    if sensitive and not _is_non_secret_internal_token(
-        current_path, value
-    ):
+    sensitive = (
+        _sanitize_label(key, _key_cache)[2]
+        if type(key) is str
+        else _is_sensitive_key(key)
+    )
+    if sensitive and not _is_non_secret_internal_token(current_path, value):
         return "[REDACTED]", True
     if isinstance(value, dict):
         cleaned: dict[str, Any] = {}
@@ -641,7 +736,9 @@ def _sanitize(
             if key_redacted:
                 safe_key = f"[REDACTED_KEY_{index}]"
                 safe_value, child_redacted = "[REDACTED]", True
-            elif child_key == "claim_token" and _native_claim_digest_is_public(value, current_path):
+            elif child_key == "claim_token" and _native_claim_digest_is_public(
+                value, current_path
+            ):
                 safe_value, child_redacted = child_value, False
             else:
                 safe_value, child_redacted = _sanitize(
@@ -885,7 +982,10 @@ def _request_context(
         "target_pct": _safe_number(_first_value(parsed, ("target_pct",))),
         "adverse_pct": _safe_number(_first_value(parsed, ("adverse_pct", "stop_pct"))),
     }
-    for key in ("machine_source_recovery_parent_sha256", "machine_source_recovery_parent_attempt_id"):
+    for key in (
+        "machine_source_recovery_parent_sha256",
+        "machine_source_recovery_parent_attempt_id",
+    ):
         if metadata.get(key) not in (None, ""):
             context[key] = metadata[key]
     return context
@@ -1171,14 +1271,23 @@ def bind_machine_observation_revision(state, capture, *, symbol, bundle_sha256):
     One receipt per watched stock bounds memory. Lost/restarted/interleaved
     attempts start a new root, which consumers must not infer as continuity.
     """
-    if not isinstance(state, dict) or capture.get("machine_capture_status") != "captured":
+    if (
+        not isinstance(state, dict)
+        or capture.get("machine_capture_status") != "captured"
+    ):
         return
     source_identity = capture.get("scanner_promotion_id")
     if capture.get("watch_origin") == "MAIN_FIXED_WATCH":
         source_identity = capture.get("watch_admission_id")
-    key = [source_identity, capture.get("evaluation_attempt_id"),
-           symbol, capture.get("effective_venue"),
-           capture.get("market_session_bucket"), bundle_sha256, os.getpid()]
+    key = [
+        source_identity,
+        capture.get("evaluation_attempt_id"),
+        symbol,
+        capture.get("effective_venue"),
+        capture.get("market_session_bucket"),
+        bundle_sha256,
+        os.getpid(),
+    ]
     digest = capture.get("machine_observation_sha256")
     if not all(key) or not re.fullmatch(r"[0-9a-f]{64}", str(digest or "")):
         return
@@ -1188,10 +1297,17 @@ def bind_machine_observation_revision(state, capture, *, symbol, bundle_sha256):
         if same_attempt and previous.get("digest") == digest:
             receipt = previous["receipt"]
         else:
-            receipt = {"machine_revision_schema": "exact_machine_revision_v1",
-                       "machine_revision_parent_sha256": previous["digest"] if same_attempt else ""}
+            receipt = {
+                "machine_revision_schema": "exact_machine_revision_v1",
+                "machine_revision_parent_sha256": (
+                    previous["digest"] if same_attempt else ""
+                ),
+            }
             state["_machine_observation_revision"] = {
-                "key": key, "digest": digest, "receipt": receipt}
+                "key": key,
+                "digest": digest,
+                "receipt": receipt,
+            }
         capture.update(receipt)
 
 
@@ -1239,8 +1355,10 @@ def capture_machine_observation(
         }
     )
     capture_identity = {
-        "evaluation_role": exact_payload.get('evaluation_role', 'unspecified_legacy'),
-        "parent_observation_snapshot_sha256": exact_payload.get('parent_observation_snapshot_sha256'),
+        "evaluation_role": exact_payload.get("evaluation_role", "unspecified_legacy"),
+        "parent_observation_snapshot_sha256": exact_payload.get(
+            "parent_observation_snapshot_sha256"
+        ),
         "evaluation_attempt_id": context.get("evaluation_attempt_id"),
         "evaluation_attempt_identity_source": (
             "caller_evaluation_attempt_id"
@@ -1305,43 +1423,69 @@ def capture_machine_observation(
         )
     )
     from src.engine.scalping.entry_machine_source_recovery import quote_label_reference
+
     # A pre-adjudication rejection retains raw quote provenance, but never
     # claims that an unperformed calculation supplied an outcome label.
-    quote_label = (None if assessment.get('schema') == 'mechanistic_entry_source_invalid_v1'
-                   and str(assessment.get('action', '')).upper() == 'SOURCE_INVALID'
-                   else quote_label_reference(exact_payload, assessment))
+    quote_label = (
+        None
+        if assessment.get("schema") == "mechanistic_entry_source_invalid_v1"
+        and str(assessment.get("action", "")).upper() == "SOURCE_INVALID"
+        else quote_label_reference(exact_payload, assessment)
+    )
     if quote_label is not None:
-        if quote_label['decision_epoch'] > now.timestamp():
-            raise ValueError('quote_recovery_label_capture_clock_before_evaluation')
-        context.update(reference_price_type=quote_label['reference_price_type'],
-                       reference_price=quote_label['reference_price'],
-                       entry_source_quote_label=quote_label)
+        if quote_label["decision_epoch"] > now.timestamp():
+            raise ValueError("quote_recovery_label_capture_clock_before_evaluation")
+        context.update(
+            reference_price_type=quote_label["reference_price_type"],
+            reference_price=quote_label["reference_price"],
+            entry_source_quote_label=quote_label,
+        )
     source, redacted = _sanitize(
         {
             "exact_payload": exact_payload,
             "setup_evidence": setup_evidence,
             "assessment": assessment,
-            **({'auxiliary_request': reversal_request} if reversal_request is not None else {}),
+            **(
+                {"auxiliary_request": reversal_request}
+                if reversal_request is not None
+                else {}
+            ),
         }
     )
     context, context_redacted = _sanitize(context)
-    lineage, lineage_redacted = _sanitize({
-        "source_event_stage": (metadata or {}).get("source_event_stage"),
-        "zero_base_source_sha256": (metadata or {}).get("zero_base_source_sha256"),
-        "zero_base_route": (metadata or {}).get("zero_base_route"),
-    })
+    lineage, lineage_redacted = _sanitize(
+        {
+            "source_event_stage": (metadata or {}).get("source_event_stage"),
+            "zero_base_source_sha256": (metadata or {}).get("zero_base_source_sha256"),
+            "zero_base_route": (metadata or {}).get("zero_base_route"),
+        }
+    )
     redacted = redacted or context_redacted or lineage_redacted
     body = {
         "schema": "mechanistic_entry_observation_v1",
-        "evaluation_role": capture_identity['evaluation_role'],
-        "parent_observation_snapshot_sha256": capture_identity['parent_observation_snapshot_sha256'],
+        "evaluation_role": capture_identity["evaluation_role"],
+        "parent_observation_snapshot_sha256": capture_identity[
+            "parent_observation_snapshot_sha256"
+        ],
         **lineage,
-        "runtime_consumption": dict(pid=os.getpid(), cwd=str(Path.cwd()),
-            process_start_ticks=Path('/proc/self/stat').read_text().split(') ', 1)[1].split()[19],
-            bundle_sha256=bundle_sha256, ai_component_sha256=(metadata or {}).get('ai_component_sha256'), policy_sha256=(assessment.get('strategy_selection') or {}).get('policy_sha256'),
-            selector_leaf=(assessment.get('strategy_selection') or {}).get('leaf'),
-            effective_thresholds=(assessment.get('strategy_selection') or {}).get('effective_thresholds'),
-            consumed_at=now.isoformat()),
+        "runtime_consumption": dict(
+            pid=os.getpid(),
+            cwd=str(Path.cwd()),
+            process_start_ticks=Path("/proc/self/stat")
+            .read_text()
+            .split(") ", 1)[1]
+            .split()[19],
+            bundle_sha256=bundle_sha256,
+            ai_component_sha256=(metadata or {}).get("ai_component_sha256"),
+            policy_sha256=(assessment.get("strategy_selection") or {}).get(
+                "policy_sha256"
+            ),
+            selector_leaf=(assessment.get("strategy_selection") or {}).get("leaf"),
+            effective_thresholds=(assessment.get("strategy_selection") or {}).get(
+                "effective_thresholds"
+            ),
+            consumed_at=now.isoformat(),
+        ),
         "captured_at": now.isoformat(),
         "scanner_promotion_id": context.get("scanner_promotion_id"),
         "watch_origin": context.get("watch_origin"),
@@ -1358,27 +1502,37 @@ def capture_machine_observation(
         "broker_order_forbidden": True,
     }
     if reversal_context is not None:
-        body['capture_contract'] = 'continuous_reversal_consumption_v1'
+        body["capture_contract"] = "continuous_reversal_consumption_v1"
         native, native_redacted = _sanitize(reversal_context)
-        body['runtime_consumption']['continuous_reversal'] = {
+        body["runtime_consumption"]["continuous_reversal"] = {
             **native,
-            'schema': 'continuous_reversal_consumption_v1',
-            'event_id': assessment.get('event_id'),
-            'cell_key': assessment.get('cell_key'),
-            'rule': assessment.get('rule'),
-            'bundle_sha256': bundle_sha256,
-            'exact_payload_sha256': hashlib.sha256(_json_bytes(source['exact_payload'])).hexdigest(),
-            'assessment_sha256': hashlib.sha256(_json_bytes(source['assessment'])).hexdigest(),
-            'pid': body['runtime_consumption']['pid'],
-            'process_start_ticks': body['runtime_consumption']['process_start_ticks'],
-            'captured_at': now.isoformat(),
-            'provider_request_observed': False,
-            'evaluation_role': capture_identity['evaluation_role'],
-            'provider_state': ('probe_observation_provider_forbidden' if capture_identity['evaluation_role'] == 'probe_observation'
-                               else 'eligible_not_yet_requested' if assessment.get('action') == 'ENTER_NOW'
-                               else 'not_requested_machine_nonentry'),
+            "schema": "continuous_reversal_consumption_v1",
+            "event_id": assessment.get("event_id"),
+            "cell_key": assessment.get("cell_key"),
+            "rule": assessment.get("rule"),
+            "bundle_sha256": bundle_sha256,
+            "exact_payload_sha256": hashlib.sha256(
+                _json_bytes(source["exact_payload"])
+            ).hexdigest(),
+            "assessment_sha256": hashlib.sha256(
+                _json_bytes(source["assessment"])
+            ).hexdigest(),
+            "pid": body["runtime_consumption"]["pid"],
+            "process_start_ticks": body["runtime_consumption"]["process_start_ticks"],
+            "captured_at": now.isoformat(),
+            "provider_request_observed": False,
+            "evaluation_role": capture_identity["evaluation_role"],
+            "provider_state": (
+                "probe_observation_provider_forbidden"
+                if capture_identity["evaluation_role"] == "probe_observation"
+                else (
+                    "eligible_not_yet_requested"
+                    if assessment.get("action") == "ENTER_NOW"
+                    else "not_requested_machine_nonentry"
+                )
+            ),
         }
-        body['redacted'] = redacted or native_redacted
+        body["redacted"] = redacted or native_redacted
     digest = hashlib.sha256(_json_bytes(body)).hexdigest()
     try:
         _append_jsonl(
@@ -1395,15 +1549,28 @@ def capture_machine_observation(
         "machine_capture_status": "redacted_ineligible" if redacted else "captured",
         "machine_observation_sha256": digest,
         "machine_observation_captured_at": now.isoformat(),
-        **({'continuous_reversal_consumption': body['runtime_consumption']['continuous_reversal']}
-           if reversal_context is not None else {}),
-        **{key: context[key] for key in (
-            "machine_source_recovery_parent_sha256", "machine_source_recovery_parent_attempt_id",
-        ) if context.get(key)},
+        **(
+            {
+                "continuous_reversal_consumption": body["runtime_consumption"][
+                    "continuous_reversal"
+                ]
+            }
+            if reversal_context is not None
+            else {}
+        ),
+        **{
+            key: context[key]
+            for key in (
+                "machine_source_recovery_parent_sha256",
+                "machine_source_recovery_parent_attempt_id",
+            )
+            if context.get(key)
+        },
         # This is the frozen decision input, not the earlier feature probe.
         "entry_decision_large_sell_print_detected": (
             exact_payload.get("features", {}).get("large_sell_print_detected")
-            if isinstance(exact_payload.get("features"), dict) else None
+            if isinstance(exact_payload.get("features"), dict)
+            else None
         ),
         **capture_identity,
     }
@@ -1427,8 +1594,11 @@ def capture_ai_request(
 ) -> dict[str, Any]:
     """Persist provider input plus an optional exact offline replay context."""
     started = time.perf_counter()
-    timings = {"ai_trace_file_lock_wait_ms": 0.0, "ai_trace_write_ms": 0.0,
-               "ai_trace_dedup_init_ms": 0.0}
+    timings = {
+        "ai_trace_file_lock_wait_ms": 0.0,
+        "ai_trace_write_ms": 0.0,
+        "ai_trace_dedup_init_ms": 0.0,
+    }
 
     def persist(path, row):
         for key, value in (_append_jsonl(path, row) or {}).items():
@@ -1586,8 +1756,14 @@ def capture_ai_request(
             "input_format": input_format,
             "redacted": bool(redacted),
             "replay_exact": not redacted,
-            "sanitized_user_input": sanitized_input if endpoint_name!='holding_path_vote' else None,
-            "holding_raw_user_input": user_input if endpoint_name=='holding_path_vote' and not redacted else None,
+            "sanitized_user_input": (
+                sanitized_input if endpoint_name != "holding_path_vote" else None
+            ),
+            "holding_raw_user_input": (
+                user_input
+                if endpoint_name == "holding_path_vote" and not redacted
+                else None
+            ),
             "holding_provider_contract": metadata_row.get("holding_provider_contract"),
             "sanitized_user_input_sha256": sanitized_user_input_sha256,
             **replay_payload_fields,
@@ -1609,9 +1785,17 @@ def capture_ai_request(
             **OBSERVATION_CONTRACT,
         }
         request_row = {
-            **{key: metadata_row.get(key) for key in (
-                'async_request_id', 'async_producer_pid', 'async_producer_start_ticks',
-                'async_origin_deadline_epoch', 'async_order_venue', 'scanner_generation_id')},
+            **{
+                key: metadata_row.get(key)
+                for key in (
+                    "async_request_id",
+                    "async_producer_pid",
+                    "async_producer_start_ticks",
+                    "async_origin_deadline_epoch",
+                    "async_order_venue",
+                    "scanner_generation_id",
+                )
+            },
             "schema": REQUEST_SCHEMA,
             "captured_at": now.isoformat(),
             "request_id": trace_id,
@@ -1648,31 +1832,49 @@ def capture_ai_request(
             **STORAGE_SECURITY_CONTRACT,
             **OBSERVATION_CONTRACT,
         }
-        native = metadata_row.get('continuous_reversal_consumption')
+        native = metadata_row.get("continuous_reversal_consumption")
         if isinstance(native, dict):
-            binding = dict(machine_observation_sha256=metadata_row.get('machine_observation_sha256'),
+            binding = dict(
+                machine_observation_sha256=metadata_row.get(
+                    "machine_observation_sha256"
+                ),
                 continuous_reversal_consumption=native,
                 observed_input_sha256=sanitized_replay_context_sha256,
                 observed_prompt_sha256=prompt_sha256,
-                request_id=trace_id, provider_fact='request_prepared_not_execution')
-            wire=(metadata or {}).get('auxiliary_wire_envelope')
-            if isinstance(wire,dict):
-                binding['auxiliary_wire_envelope']=wire
-                binding['binding_status']=('matched' if native.get('input_sha256')==sanitized_replay_context_sha256
-                    and native.get('input_sha256')==wire.get('hashes',{}).get('logical_input')
-                    and sanitized_user_input_sha256==wire.get('hashes',{}).get('wire_input')
-                    and native.get('prompt_sha256')==wire.get('hashes',{}).get('logical_prompt')
-                    and prompt_sha256==wire.get('hashes',{}).get('final_prompt_bytes') else 'mismatch')
+                request_id=trace_id,
+                provider_fact="request_prepared_not_execution",
+            )
+            wire = (metadata or {}).get("auxiliary_wire_envelope")
+            if isinstance(wire, dict):
+                binding["auxiliary_wire_envelope"] = wire
+                binding["binding_status"] = (
+                    "matched"
+                    if native.get("input_sha256") == sanitized_replay_context_sha256
+                    and native.get("input_sha256")
+                    == wire.get("hashes", {}).get("logical_input")
+                    and sanitized_user_input_sha256
+                    == wire.get("hashes", {}).get("wire_input")
+                    and native.get("prompt_sha256")
+                    == wire.get("hashes", {}).get("logical_prompt")
+                    and prompt_sha256
+                    == wire.get("hashes", {}).get("final_prompt_bytes")
+                    else "mismatch"
+                )
             else:
-                binding['binding_status'] = ('matched' if
-                native.get('input_sha256') == sanitized_replay_context_sha256
-                and native.get('prompt_sha256') == prompt_sha256 else 'mismatch')
-            request_row['continuous_reversal_request_binding'] = binding
-            payload_row['continuous_reversal_request_binding'] = binding
+                binding["binding_status"] = (
+                    "matched"
+                    if native.get("input_sha256") == sanitized_replay_context_sha256
+                    and native.get("prompt_sha256") == prompt_sha256
+                    else "mismatch"
+                )
+            request_row["continuous_reversal_request_binding"] = binding
+            payload_row["continuous_reversal_request_binding"] = binding
         timings["ai_trace_prepare_ms"] = (time.perf_counter() - started) * 1000
         lock_started = time.perf_counter()
         with _WRITE_LOCK:
-            timings["ai_trace_lock_wait_ms"] = (time.perf_counter() - lock_started) * 1000
+            timings["ai_trace_lock_wait_ms"] = (
+                time.perf_counter() - lock_started
+            ) * 1000
             # The append owner validates the bounded prepared index and exact
             # content under its exclusive generation lease. A preliminary
             # nonblocking reader can race a machine capture and discard this
@@ -1683,9 +1885,17 @@ def capture_ai_request(
             # payload/prompt content that failed to persist.
             persist(_request_path(target_date), request_row)
         return {
-            **{key: metadata_row.get(key) for key in (
-                'async_request_id', 'async_producer_pid', 'async_producer_start_ticks',
-                'async_origin_deadline_epoch', 'async_order_venue', 'scanner_generation_id')},
+            **{
+                key: metadata_row.get(key)
+                for key in (
+                    "async_request_id",
+                    "async_producer_pid",
+                    "async_producer_start_ticks",
+                    "async_origin_deadline_epoch",
+                    "async_order_venue",
+                    "scanner_generation_id",
+                )
+            },
             **timings,
             "ai_trace_capture_ms": (time.perf_counter() - started) * 1000,
             "ai_decision_trace_id": trace_id,
@@ -2073,12 +2283,25 @@ def record_ai_decision_trace(
             or "-"
         ).strip()
         trace_row = {
-            **{key: _optional(merged, key) for key in (
-                'async_request_id', 'async_producer_pid', 'async_producer_start_ticks',
-                'async_origin_deadline_epoch', 'async_order_venue', 'scanner_generation_id',
-                'entry_machine_bundle_sha256', 'entry_auxiliary_policy_sha256')},
-            'entry_machine_bundle_sha256': _optional(merged,'entry_machine_bundle_sha256','machine_bundle_sha256'),
-            'entry_auxiliary_policy_sha256': _optional(merged,'entry_auxiliary_policy_sha256','entry_ai_component_sha256'),
+            **{
+                key: _optional(merged, key)
+                for key in (
+                    "async_request_id",
+                    "async_producer_pid",
+                    "async_producer_start_ticks",
+                    "async_origin_deadline_epoch",
+                    "async_order_venue",
+                    "scanner_generation_id",
+                    "entry_machine_bundle_sha256",
+                    "entry_auxiliary_policy_sha256",
+                )
+            },
+            "entry_machine_bundle_sha256": _optional(
+                merged, "entry_machine_bundle_sha256", "machine_bundle_sha256"
+            ),
+            "entry_auxiliary_policy_sha256": _optional(
+                merged, "entry_auxiliary_policy_sha256", "entry_ai_component_sha256"
+            ),
             **microstructure_delivery_fields(merged),
             "schema": TRACE_SCHEMA,
             "decision_trace_id": trace_id,
@@ -2149,8 +2372,12 @@ def record_ai_decision_trace(
                 "scanner_promotion_id",
             ),
             "watch_origin": _optional(merged, "ai_trace_watch_origin", "watch_origin"),
-            "watch_admission_id": _optional(merged, "ai_trace_watch_admission_id", "watch_admission_id"),
-            "watch_generation_id": _optional(merged, "ai_trace_watch_generation_id", "watch_generation_id"),
+            "watch_admission_id": _optional(
+                merged, "ai_trace_watch_admission_id", "watch_admission_id"
+            ),
+            "watch_generation_id": _optional(
+                merged, "ai_trace_watch_generation_id", "watch_generation_id"
+            ),
             "endpoint": _optional(
                 merged,
                 "ai_trace_endpoint_name",
@@ -2350,37 +2577,90 @@ def record_ai_decision_trace(
                 )
                 if key in merged
             },
-            "entry_local_stage_timings_ms": {
-                key: value for key, value in (merged.get('entry_local_stage_timings_ms') or {}).items()
-                if isinstance(key, str) and key.startswith('entry_')
-                and type(value) in (int, float) and math.isfinite(value) and value >= 0
-            } if isinstance(merged.get('entry_local_stage_timings_ms'), dict) else {},
-            "provider_stage_monotonic": {
-                key: value for key, value in (merged.get('provider_stage_monotonic') or {}).items()
-                if key in _PROVIDER_TRANSPORT_STAGES
-                and type(value) in (int, float) and math.isfinite(value) and value >= 0
-            } if isinstance(merged.get('provider_stage_monotonic'), dict) and not bool(merged.get('cache_hit')) else {},
-            "provider_stage_remaining_ms": {
-                key: value for key, value in (merged.get('provider_stage_remaining_ms') or {}).items()
-                if key in _PROVIDER_TRANSPORT_STAGES
-                and type(value) in (int, float) and math.isfinite(value) and value >= 0
-            } if isinstance(merged.get('provider_stage_remaining_ms'), dict) and not bool(merged.get('cache_hit')) else {},
-            "provider_deadline_budget": {
-                key: value for key, value in (merged.get('provider_deadline_budget') or {}).items()
-                if key in _PROVIDER_DEADLINE_FIELDS
-                and type(value) in (int, float) and math.isfinite(value)
-                and (value >= 0 or key == 'timeout_override_ms')
-            } if isinstance(merged.get('provider_deadline_budget'), dict) and not bool(merged.get('cache_hit')) else {},
+            "entry_local_stage_timings_ms": (
+                {
+                    key: value
+                    for key, value in (
+                        merged.get("entry_local_stage_timings_ms") or {}
+                    ).items()
+                    if isinstance(key, str)
+                    and key.startswith("entry_")
+                    and type(value) in (int, float)
+                    and math.isfinite(value)
+                    and value >= 0
+                }
+                if isinstance(merged.get("entry_local_stage_timings_ms"), dict)
+                else {}
+            ),
+            "provider_stage_monotonic": (
+                {
+                    key: value
+                    for key, value in (
+                        merged.get("provider_stage_monotonic") or {}
+                    ).items()
+                    if key in _PROVIDER_TRANSPORT_STAGES
+                    and type(value) in (int, float)
+                    and math.isfinite(value)
+                    and value >= 0
+                }
+                if isinstance(merged.get("provider_stage_monotonic"), dict)
+                and not bool(merged.get("cache_hit"))
+                else {}
+            ),
+            "provider_stage_remaining_ms": (
+                {
+                    key: value
+                    for key, value in (
+                        merged.get("provider_stage_remaining_ms") or {}
+                    ).items()
+                    if key in _PROVIDER_TRANSPORT_STAGES
+                    and type(value) in (int, float)
+                    and math.isfinite(value)
+                    and value >= 0
+                }
+                if isinstance(merged.get("provider_stage_remaining_ms"), dict)
+                and not bool(merged.get("cache_hit"))
+                else {}
+            ),
+            "provider_deadline_budget": (
+                {
+                    key: value
+                    for key, value in (
+                        merged.get("provider_deadline_budget") or {}
+                    ).items()
+                    if key in _PROVIDER_DEADLINE_FIELDS
+                    and type(value) in (int, float)
+                    and math.isfinite(value)
+                    and (value >= 0 or key == "timeout_override_ms")
+                }
+                if isinstance(merged.get("provider_deadline_budget"), dict)
+                and not bool(merged.get("cache_hit"))
+                else {}
+            ),
             "entry_local_stage_clocks": {
-                key: value for key, value in (
-                    merged.get('entry_local_stage_clocks', {}).items()
-                    if isinstance(merged.get('entry_local_stage_clocks'), dict) else ())
-                if key in {'analysis_started_perf', 'provider_started_perf', 'pre_provider_seconds',
-                    'provider_returned_perf', 'provider_call_seconds', 'annotation_started_perf',
-                    'response_processing_seconds', 'failure_observed_perf', 'failure_processing_seconds',
-                    'analysis_return_perf', 'annotation_and_cache_seconds'}
-                and type(value) in (int, float) and math.isfinite(value)
-                and not bool(merged.get('cache_hit'))
+                key: value
+                for key, value in (
+                    merged.get("entry_local_stage_clocks", {}).items()
+                    if isinstance(merged.get("entry_local_stage_clocks"), dict)
+                    else ()
+                )
+                if key
+                in {
+                    "analysis_started_perf",
+                    "provider_started_perf",
+                    "pre_provider_seconds",
+                    "provider_returned_perf",
+                    "provider_call_seconds",
+                    "annotation_started_perf",
+                    "response_processing_seconds",
+                    "failure_observed_perf",
+                    "failure_processing_seconds",
+                    "analysis_return_perf",
+                    "annotation_and_cache_seconds",
+                }
+                and type(value) in (int, float)
+                and math.isfinite(value)
+                and not bool(merged.get("cache_hit"))
             },
             "response_ms": _safe_number(
                 _optional(
@@ -2538,9 +2818,7 @@ def record_ai_decision_trace(
             "entry_conservative_execution_cost_pct": _safe_number(
                 merged.get("entry_conservative_execution_cost_pct")
             ),
-            "entry_cost_source_status": _optional(
-                merged, "entry_cost_source_status"
-            ),
+            "entry_cost_source_status": _optional(merged, "entry_cost_source_status"),
             "entry_cost_basis": _optional(merged, "entry_cost_basis"),
             "entry_cost_scope": _optional(merged, "entry_cost_scope"),
             "entry_cost_contract_sha256": _optional(
@@ -2566,11 +2844,15 @@ def record_ai_decision_trace(
                 merged, "entry_execution_readiness_state"
             ),
             "entry_ai_risk_verdict": _optional(merged, "entry_ai_risk_verdict"),
-            "entry_ai_soft_policy_sha256": _optional(merged, "entry_ai_soft_policy_sha256"),
+            "entry_ai_soft_policy_sha256": _optional(
+                merged, "entry_ai_soft_policy_sha256"
+            ),
             "entry_ai_soft_policy": _optional(merged, "entry_ai_soft_policy"),
             "entry_ai_selected_profile": _optional(merged, "entry_ai_selected_profile"),
             "entry_ai_component_sha256": _optional(merged, "entry_ai_component_sha256"),
-            "entry_ai_effective_assessment": _optional(merged, "entry_ai_effective_assessment"),
+            "entry_ai_effective_assessment": _optional(
+                merged, "entry_ai_effective_assessment"
+            ),
             "entry_ai_risk_codes": (
                 [str(code) for code in merged.get("entry_ai_risk_codes") or []]
                 if isinstance(merged.get("entry_ai_risk_codes"), list)
@@ -2803,10 +3085,18 @@ def record_ai_decision_trace(
             ),
             "input_blockers": merged.get("ai_input_preflight_blockers", []),
             "input_source_timing": merged.get("ai_input_preflight_source_timing", {}),
-            "input_realtime_type_provenance": merged.get("ai_input_preflight_realtime_type_provenance", {}),
-            "input_source_clock_snapshot_id": merged.get("ai_input_preflight_source_clock_snapshot_id"),
-            "input_source_clock_captured_at": merged.get("ai_input_preflight_source_clock_captured_at"),
-            "machine_context_capture_owner": merged.get("entry_machine_context_capture_owner"),
+            "input_realtime_type_provenance": merged.get(
+                "ai_input_preflight_realtime_type_provenance", {}
+            ),
+            "input_source_clock_snapshot_id": merged.get(
+                "ai_input_preflight_source_clock_snapshot_id"
+            ),
+            "input_source_clock_captured_at": merged.get(
+                "ai_input_preflight_source_clock_captured_at"
+            ),
+            "machine_context_capture_owner": merged.get(
+                "entry_machine_context_capture_owner"
+            ),
             "market_data_health": merged.get("ai_input_preflight_market_data_health"),
             "input_trade_activity": merged.get("ai_input_preflight_trade_activity"),
             "input_feature_allowed": merged.get("ai_input_preflight_feature_allowed"),
@@ -2846,19 +3136,39 @@ def record_ai_decision_trace(
             "adverse_pct": _safe_number(_optional(merged, "ai_trace_adverse_pct")),
             "entry_economic_plan_sha256": merged.get("entry_economic_plan_sha256"),
             "entry_economic_plan_kind": merged.get("entry_economic_plan_kind"),
-            "entry_economic_conditional_seed": merged.get("entry_economic_conditional_seed"),
-            "entry_economic_operating_context": merged.get("entry_economic_operating_context"),
-            "entry_economic_original_stop_receipt": merged.get("entry_economic_original_stop_receipt"),
-            "entry_economic_writer_plan_sha256": merged.get("entry_economic_writer_plan_sha256"),
+            "entry_economic_conditional_seed": merged.get(
+                "entry_economic_conditional_seed"
+            ),
+            "entry_economic_operating_context": merged.get(
+                "entry_economic_operating_context"
+            ),
+            "entry_economic_original_stop_receipt": merged.get(
+                "entry_economic_original_stop_receipt"
+            ),
+            "entry_economic_writer_plan_sha256": merged.get(
+                "entry_economic_writer_plan_sha256"
+            ),
             "entry_economic_source_status": merged.get("entry_economic_source_status"),
-            "entry_economic_source_blocker": merged.get("entry_economic_source_blocker"),
-            "entry_economic_observation_probe_contract": merged.get("entry_economic_observation_probe_contract"),
+            "entry_economic_source_blocker": merged.get(
+                "entry_economic_source_blocker"
+            ),
+            "entry_economic_observation_probe_contract": merged.get(
+                "entry_economic_observation_probe_contract"
+            ),
             "entry_pre_ai_source_capsule": merged.get("entry_pre_ai_source_capsule"),
-            "entry_pre_ai_source_append_receipt": merged.get("entry_pre_ai_source_append_receipt"),
+            "entry_pre_ai_source_append_receipt": merged.get(
+                "entry_pre_ai_source_append_receipt"
+            ),
             "entry_economic_guard_receipt": merged.get("entry_economic_guard_receipt"),
-            "entry_economic_capacity_blocker": merged.get("entry_economic_capacity_blocker"),
-            "entry_economic_capacity_receipt": merged.get("entry_economic_capacity_receipt"),
-            "entry_economic_stage_timings_ms": merged.get('entry_economic_stage_timings_ms'),
+            "entry_economic_capacity_blocker": merged.get(
+                "entry_economic_capacity_blocker"
+            ),
+            "entry_economic_capacity_receipt": merged.get(
+                "entry_economic_capacity_receipt"
+            ),
+            "entry_economic_stage_timings_ms": merged.get(
+                "entry_economic_stage_timings_ms"
+            ),
             "actual_order_authority": bool(merged.get("actual_order_authority", False)),
             "outcome_label_eligible": not outcome_label_exclusion_reasons,
             "outcome_label_exclusion_reasons": outcome_label_exclusion_reasons,
@@ -3030,9 +3340,16 @@ def record_ai_decision_trace(
         trace_row.update(screen_fields)
         pending_row = {
             **screen_fields,
-            **{key: trace_row[key] for key in ('entry_ai_raw_fields_present',
-                'entry_ai_raw_fields_truncated', 'entry_ai_raw_fields_source', 'entry_ai_raw_response_sha256',
-                'entry_ai_raw_fields_invalid_shape')},
+            **{
+                key: trace_row[key]
+                for key in (
+                    "entry_ai_raw_fields_present",
+                    "entry_ai_raw_fields_truncated",
+                    "entry_ai_raw_fields_source",
+                    "entry_ai_raw_response_sha256",
+                    "entry_ai_raw_fields_invalid_shape",
+                )
+            },
             "schema": OUTCOME_SCHEMA,
             "label_id": f"{trace_id}:v1",
             "decision_trace_id": trace_id,
@@ -3211,32 +3528,78 @@ def record_ai_decision_trace(
             **STORAGE_SECURITY_CONTRACT,
             **OBSERVATION_CONTRACT,
         }
-        from src.engine.scalping.auxiliary_source_contract import capsule, digest as capsule_digest
+        from src.engine.scalping.auxiliary_source_contract import (
+            capsule,
+            digest as capsule_digest,
+        )
+
         trace_row["auxiliary_source_capsule"] = capsule(
-            {**trace_row, "source_date": target_date,
-             "schema_sha256": trace_row.get("response_schema_sha256"),
-             "system_prompt_sha256": trace_row.get("auxiliary_system_prompt_sha256"),
-             "machine_policy_sha256": merged.get("entry_mechanistic_policy_sha256")},
-            producer="ai_decision_trace.record_ai_decision_trace", clock=trace_row["decision_ts"],
-            references={"pre_ai_capsule": trace_row.get("entry_pre_ai_source_capsule"),
-                "pre_ai_append_receipt": trace_row.get("entry_pre_ai_source_append_receipt"),
-                "raw_response_sha256": capsule_digest({k: v for k, v in trace_row.items() if k.startswith("entry_ai_raw_")}),
-                "response_trace_append_contract": "presence_in_trace_file_is_append_evidence"})
-        from src.engine.monitoring.runtime_performance import record_entry_duration, timed_entry_call
-        record_entry_duration('entry_trace_prepare', time.perf_counter() - preparation_started)
+            {
+                **trace_row,
+                "source_date": target_date,
+                "schema_sha256": trace_row.get("response_schema_sha256"),
+                "system_prompt_sha256": trace_row.get("auxiliary_system_prompt_sha256"),
+                "machine_policy_sha256": merged.get("entry_mechanistic_policy_sha256"),
+            },
+            producer="ai_decision_trace.record_ai_decision_trace",
+            clock=trace_row["decision_ts"],
+            references={
+                "pre_ai_capsule": trace_row.get("entry_pre_ai_source_capsule"),
+                "pre_ai_append_receipt": trace_row.get(
+                    "entry_pre_ai_source_append_receipt"
+                ),
+                "raw_response_sha256": capsule_digest(
+                    {
+                        k: v
+                        for k, v in trace_row.items()
+                        if k.startswith("entry_ai_raw_")
+                    }
+                ),
+                "response_trace_append_contract": "presence_in_trace_file_is_append_evidence",
+            },
+        )
+        from src.engine.monitoring.runtime_performance import (
+            record_entry_duration,
+            timed_entry_call,
+        )
+
+        record_entry_duration(
+            "entry_trace_prepare", time.perf_counter() - preparation_started
+        )
         with _WRITE_LOCK:
             if trace_row.get("entry_economic_plan_sha256"):
                 from src.utils.pipeline_event_logger import emit_pipeline_event
-                emit_pipeline_event("ENTRY_PIPELINE", str(trace_row.get("stock_code") or ""),
-                    str(trace_row.get("stock_code") or ""), "entry_ai_economic_decision_available",
-                    fields={"evaluation_attempt_id": trace_row.get("evaluation_attempt_id"),
-                        "entry_economic_plan_sha256": trace_row["entry_economic_plan_sha256"],
-                        "entry_economic_decision_available_at": trace_row["decision_ts"],
-                        "decision_trace_id": trace_id, "actual_order_submitted": False,
-                        "broker_order_forbidden": True, "runtime_effect": False, "allowed_runtime_apply": False})
-            timed_entry_call('entry_trace_append', _append_jsonl, _trace_path(target_date), trace_row)
+
+                emit_pipeline_event(
+                    "ENTRY_PIPELINE",
+                    str(trace_row.get("stock_code") or ""),
+                    str(trace_row.get("stock_code") or ""),
+                    "entry_ai_economic_decision_available",
+                    fields={
+                        "evaluation_attempt_id": trace_row.get("evaluation_attempt_id"),
+                        "entry_economic_plan_sha256": trace_row[
+                            "entry_economic_plan_sha256"
+                        ],
+                        "entry_economic_decision_available_at": trace_row[
+                            "decision_ts"
+                        ],
+                        "decision_trace_id": trace_id,
+                        "actual_order_submitted": False,
+                        "broker_order_forbidden": True,
+                        "runtime_effect": False,
+                        "allowed_runtime_apply": False,
+                    },
+                )
+            timed_entry_call(
+                "entry_trace_append", _append_jsonl, _trace_path(target_date), trace_row
+            )
             if trace_row["outcome_label_eligible"]:
-                timed_entry_call('entry_outcome_append', _append_jsonl, _outcome_path(target_date), pending_row)
+                timed_entry_call(
+                    "entry_outcome_append",
+                    _append_jsonl,
+                    _outcome_path(target_date),
+                    pending_row,
+                )
         return {
             "ai_decision_trace_schema": TRACE_SCHEMA,
             "ai_decision_trace_id": trace_id,

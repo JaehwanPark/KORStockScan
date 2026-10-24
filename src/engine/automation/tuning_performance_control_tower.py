@@ -44,9 +44,19 @@ def _selected_runtime(
     pid_receipt: dict[str, Any] | None = None,
     target_date: str,
 ) -> dict[str, Any]:
-    path = DATA_DIR / "runtime" / "policy_bootstrap" / f"runtime_policy_bootstrap_{target_date}.json"
+    path = (
+        DATA_DIR
+        / "runtime"
+        / "policy_bootstrap"
+        / f"runtime_policy_bootstrap_{target_date}.json"
+    )
     manifest = _load_json(path) or (runtime_manifest or {})
-    verify_path = DATA_DIR / "runtime" / "policy_bootstrap" / f"runtime_policy_bootstrap_verify_{target_date}.json"
+    verify_path = (
+        DATA_DIR
+        / "runtime"
+        / "policy_bootstrap"
+        / f"runtime_policy_bootstrap_verify_{target_date}.json"
+    )
     verification = _load_json(verify_path) or (pid_receipt or {})
     return {
         "owner": "runtime_policy_bootstrap",
@@ -69,8 +79,16 @@ def build_tuning_performance_control_tower(target_date: str) -> dict[str, Any]:
         source_receipt,
     )
 
-    summary_path = REPORT_ROOT_DIR / "runtime_approval_summary" / f"runtime_approval_summary_{target_date}.json"
-    verifier_path = REPORT_ROOT_DIR / "threshold_cycle_postclose_verification" / f"threshold_cycle_postclose_verification_{target_date}.json"
+    summary_path = (
+        REPORT_ROOT_DIR
+        / "runtime_approval_summary"
+        / f"runtime_approval_summary_{target_date}.json"
+    )
+    verifier_path = (
+        REPORT_ROOT_DIR
+        / "threshold_cycle_postclose_verification"
+        / f"threshold_cycle_postclose_verification_{target_date}.json"
+    )
     summary = _load_json(summary_path)
     verifier = _load_json(verifier_path)
     preopen_receipt = (
@@ -80,8 +98,14 @@ def build_tuning_performance_control_tower(target_date: str) -> dict[str, Any]:
     )
     runtime_apply_date = str(preopen_receipt.get("apply_date") or target_date)
     sources = {
-        "runtime_approval_summary": {"path": str(summary_path), "sha256": _sha(summary_path)},
-        "postclose_verifier": {"path": str(verifier_path), "sha256": _sha(verifier_path)},
+        "runtime_approval_summary": {
+            "path": str(summary_path),
+            "sha256": _sha(summary_path),
+        },
+        "postclose_verifier": {
+            "path": str(verifier_path),
+            "sha256": _sha(verifier_path),
+        },
     }
     handoff_paths = source_paths(REPORT_ROOT_DIR, target_date, "tower")
     runtime_root = DATA_DIR / "runtime" / "policy_bootstrap"
@@ -103,7 +127,12 @@ def build_tuning_performance_control_tower(target_date: str) -> dict[str, Any]:
         "report_type": REPORT_TYPE,
         "date": target_date,
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
-        "status": "pass" if summary.get("direct_evidence_state") == "complete" and verifier.get("status") == "pass" else "direct_evidence_pending",
+        "status": (
+            "pass"
+            if summary.get("direct_evidence_state") == "complete"
+            and verifier.get("status") == "pass"
+            else "direct_evidence_pending"
+        ),
         "summary": {
             "direct_source_status": summary.get("direct_evidence_state") or "missing",
             "postclose_verifier_status": verifier.get("status") or "missing",
@@ -111,8 +140,10 @@ def build_tuning_performance_control_tower(target_date: str) -> dict[str, Any]:
             "economic_state_counts": summary.get("economic_state_counts") or {},
             "validated_improvement_count": summary.get("validated_edge_count") or 0,
             "policy_candidate_count": summary.get("policy_candidate_count") or 0,
-            "preopen_consumption_state": summary.get("preopen_consumption_state") or "not_available",
-            "natural_acceptance_state": summary.get("natural_acceptance_state") or "not_available",
+            "preopen_consumption_state": summary.get("preopen_consumption_state")
+            or "not_available",
+            "natural_acceptance_state": summary.get("natural_acceptance_state")
+            or "not_available",
             "common_tuning_search_retired": True,
         },
         "selected_runtime": _selected_runtime(target_date=runtime_apply_date),
@@ -138,27 +169,42 @@ def build_tuning_performance_control_tower(target_date: str) -> dict[str, Any]:
         ),
     }
     from src.engine.automation.entry_cancel_wait_tuning import load_handoff_view
+
     cancel_wait = load_handoff_view(target_date, REPORT_ROOT_DIR)
     if cancel_wait is not None:
         report["entry_cancel_wait_economic_tuning"] = cancel_wait
-        summary_view = (((summary.get("sources") or {}).get("entry_cancel_wait") or {}).get("economic_evidence") or {}).get("cancel_wait_reconciliation")
-        if summary.get("sources", {}).get("entry_cancel_wait") is not None and summary_view != cancel_wait["reconciliation"]:
+        summary_view = (
+            ((summary.get("sources") or {}).get("entry_cancel_wait") or {}).get(
+                "economic_evidence"
+            )
+            or {}
+        ).get("cancel_wait_reconciliation")
+        if (
+            summary.get("sources", {}).get("entry_cancel_wait") is not None
+            and summary_view != cancel_wait["reconciliation"]
+        ):
             raise ValueError("cancel_wait_summary_projection_generation_invalid")
     json_path, md_path = report_paths(target_date)
     assert_sources_unchanged(handoff_receipt, handoff_paths)
     assert_sources_unchanged(observed_runtime_receipt, observed_runtime_paths)
     json_path.parent.mkdir(parents=True, exist_ok=True)
     from src.engine.verify_threshold_cycle_postclose_chain import _atomic_write
-    _atomic_write(json_path,json.dumps(report, ensure_ascii=False, indent=2) + "\n")
-    _atomic_write(md_path,
-        "\n".join([
-            f"# Tuning control tower - {target_date}", "",
-            f"- status: `{report['status']}`",
-            "- common tuning search: `retired`",
-            f"- direct source status: `{report['summary']['direct_source_status']}`",
-            f"- verifier status: `{report['summary']['postclose_verifier_status']}`",
-            f"- runtime bootstrap verification: `{report['selected_runtime']['verification_status']}`", "",
-        ])
+
+    _atomic_write(json_path, json.dumps(report, ensure_ascii=False, indent=2) + "\n")
+    _atomic_write(
+        md_path,
+        "\n".join(
+            [
+                f"# Tuning control tower - {target_date}",
+                "",
+                f"- status: `{report['status']}`",
+                "- common tuning search: `retired`",
+                f"- direct source status: `{report['summary']['direct_source_status']}`",
+                f"- verifier status: `{report['summary']['postclose_verifier_status']}`",
+                f"- runtime bootstrap verification: `{report['selected_runtime']['verification_status']}`",
+                "",
+            ]
+        ),
     )
     return report
 
@@ -168,7 +214,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--date", required=True)
     args = parser.parse_args(argv)
     report = build_tuning_performance_control_tower(args.date)
-    print(json.dumps({"date": args.date, "path": str(report_paths(args.date)[0]), "summary": report["summary"]}, ensure_ascii=False))
+    print(
+        json.dumps(
+            {
+                "date": args.date,
+                "path": str(report_paths(args.date)[0]),
+                "summary": report["summary"],
+            },
+            ensure_ascii=False,
+        )
+    )
     return 0
 
 

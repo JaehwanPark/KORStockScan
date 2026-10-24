@@ -15,11 +15,13 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from src.engine.automation.source_quality_clean_baseline import (
-    clean_baseline_policy, policy_refresh_start_date,
+    clean_baseline_policy,
+    policy_refresh_start_date,
 )
 from src.engine.monitor_snapshot_runtime import guard_stdin_heavy_build
 from src.engine.sniper_trade_review_report import (
-    COMPLETED_CENSUS_CONTRACT_FROM, verify_completed_census_manifest,
+    COMPLETED_CENSUS_CONTRACT_FROM,
+    verify_completed_census_manifest,
     completed_census_projection_ids,
 )
 from src.engine.scalping.trailing_threshold_policy import (
@@ -47,18 +49,24 @@ from src.engine.scalping.trailing_four_axis_replay import summarize_four_axis
 from src.engine.scalping.trailing_mechanical_replay import summarize_mechanical
 from src.engine.scalping.holding_path_vote_replay import summarize_holding_path_votes
 from src.engine.ai.holding_exit_vote import load_path_events_file, path_vote_store_path
-from src.engine.scalping.trailing_operational_replay import summarize_operational_input_replay
-from src.engine.scalping.trailing_historical_scenario import summarize_legacy_neutral_scenarios
+from src.engine.scalping.trailing_operational_replay import (
+    summarize_operational_input_replay,
+)
+from src.engine.scalping.trailing_historical_scenario import (
+    summarize_legacy_neutral_scenarios,
+)
 from src.utils.constants import DATA_DIR, TRADING_RULES
 from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
 
 SCHEMA_VERSION = 2
-_INPUT_BUDGET = ContextVar('holding_report_input_budget', default=None)
-_SOURCE_ROOT = ContextVar('holding_report_source_root', default=None)
+_INPUT_BUDGET = ContextVar("holding_report_input_budget", default=None)
+_SOURCE_ROOT = ContextVar("holding_report_source_root", default=None)
 
 
 def _data_root():
     return _SOURCE_ROOT.get() or DATA_DIR
+
+
 SOR_KRX_POST_SELL_USER_OVERRIDE = "user_2026_09_27_sor_krx_reference_postclose"
 POST_FALLBACK_CUTOFF = datetime(2026, 4, 21, 9, 45)
 TARGET_EXIT_RULES = (
@@ -126,39 +134,54 @@ def _parse_aware_dt(value: Any) -> datetime | None:
 
 def _sor_krx_post_sell_user_override(trade: dict, candidate: dict) -> bool:
     """Admit a real SOR fill to KRX-reference postclose analysis only."""
-    from src.trading.market.execution_venue import execution_venue_fields, VENUE_ASSIGNMENT_AUTHORITIES, MARKET_DEFAULT_AUTHORITY
-    assigned = execution_venue_fields(trade, observed_at=trade.get("exact_sell_fill_time"))
+    from src.trading.market.execution_venue import (
+        execution_venue_fields,
+        VENUE_ASSIGNMENT_AUTHORITIES,
+        MARKET_DEFAULT_AUTHORITY,
+    )
+
+    assigned = execution_venue_fields(
+        trade, observed_at=trade.get("exact_sell_fill_time")
+    )
     authority = assigned["execution_venue_override"]
     if authority in VENUE_ASSIGNMENT_AUTHORITIES:
-        candidate_assignment = execution_venue_fields(candidate,
-            observed_at=candidate.get("exact_sell_fill_time"))
-        return bool(candidate_assignment["execution_venue_override"] == authority
-            and trade.get("effective_venue") == candidate.get("actual_execution_venue") == "KRX"
-            and trade.get("execution_venue_override") == candidate.get("execution_venue_override") == authority
+        candidate_assignment = execution_venue_fields(
+            candidate, observed_at=candidate.get("exact_sell_fill_time")
+        )
+        return bool(
+            candidate_assignment["execution_venue_override"] == authority
+            and trade.get("effective_venue")
+            == candidate.get("actual_execution_venue")
+            == "KRX"
+            and trade.get("execution_venue_override")
+            == candidate.get("execution_venue_override")
+            == authority
             and trade.get("actual_execution_venue_verified") is False
             and candidate.get("actual_execution_venue_verified") is False
             and str(trade.get("exit_execution_broker_route") or "").upper()
-                == str(candidate.get("broker_route_requested") or "").upper()
-            and (str(candidate.get("broker_route_requested") or "").upper() == "SOR"
-                 or authority == MARKET_DEFAULT_AUTHORITY and
-                 str(candidate.get("broker_route_requested") or "").upper() in {"KRX", "NXT"})
-            and candidate.get("market_axes_source_quality_status") == "route_contract_ready"
+            == str(candidate.get("broker_route_requested") or "").upper()
+            and (
+                str(candidate.get("broker_route_requested") or "").upper() == "SOR"
+                or authority == MARKET_DEFAULT_AUTHORITY
+                and str(candidate.get("broker_route_requested") or "").upper()
+                in {"KRX", "NXT"}
+            )
+            and candidate.get("market_axes_source_quality_status")
+            == "route_contract_ready"
             and trade.get("terminal_population_scope") == "real_record_bound"
-            and trade.get("terminal_decision_authority") == "broker_sell_fill_observation_only"
-            and trade.get("sell_quantity_conserved") is True)
+            and trade.get("terminal_decision_authority")
+            == "broker_sell_fill_observation_only"
+            and trade.get("sell_quantity_conserved") is True
+        )
     return bool(
         str(trade.get("effective_venue") or "").upper() == "KRX"
         and str(trade.get("market_session_bucket") or "").lower() == "krx_regular"
         and str(trade.get("exit_execution_broker_route") or "").upper() == "SOR"
         and str(candidate.get("broker_route_requested") or "").upper() == "SOR"
-        and str(candidate.get("market_session_regime") or "").lower()
-        == "krx_regular"
-        and candidate.get("market_axes_source_quality_status")
-        == "route_contract_ready"
-        and str(trade.get("broker_actual_execution_venue") or "").upper()
-        == "UNKNOWN"
-        and str(candidate.get("actual_execution_venue") or "").upper()
-        == "UNKNOWN"
+        and str(candidate.get("market_session_regime") or "").lower() == "krx_regular"
+        and candidate.get("market_axes_source_quality_status") == "route_contract_ready"
+        and str(trade.get("broker_actual_execution_venue") or "").upper() == "UNKNOWN"
+        and str(candidate.get("actual_execution_venue") or "").upper() == "UNKNOWN"
         and str(trade.get("broker_actual_execution_venue_source") or "")
         == "official_exchange_fields_ambiguous_or_missing"
         and str(candidate.get("actual_execution_venue_source") or "")
@@ -184,11 +207,13 @@ def _post_sell_binding_gap(trade: dict, candidate: dict) -> str | None:
         return "source_gap_exact_fill_binding_missing"
     if terminal_fill_at != candidate_fill_at:
         return "source_gap_exact_fill_binding_mismatch"
-    if (not trade.get("sell_order_no") or not trade.get("sell_execution_no")
-            or str(candidate.get("sell_order_no") or "")
-               != str(trade.get("sell_order_no"))
-            or str(candidate.get("sell_execution_no") or "")
-               != str(trade.get("sell_execution_no"))):
+    if (
+        not trade.get("sell_order_no")
+        or not trade.get("sell_execution_no")
+        or str(candidate.get("sell_order_no") or "") != str(trade.get("sell_order_no"))
+        or str(candidate.get("sell_execution_no") or "")
+        != str(trade.get("sell_execution_no"))
+    ):
         return "source_gap_post_sell_execution_identity"
     terminal_venue = str(trade.get("effective_venue") or "").upper()
     candidate_venue = str(candidate.get("actual_execution_venue") or "").upper()
@@ -196,24 +221,28 @@ def _post_sell_binding_gap(trade: dict, candidate: dict) -> str | None:
     candidate_route = str(candidate.get("broker_route_requested") or "").upper()
     override = _sor_krx_post_sell_user_override(trade, candidate)
     from src.trading.market.execution_venue import VENUE_ASSIGNMENT_AUTHORITIES
-    assigned_reference = any(row.get(key) in VENUE_ASSIGNMENT_AUTHORITIES
-        for row in (trade, candidate) for key in (
-            "execution_venue_override", "actual_execution_venue_source"))
+
+    assigned_reference = any(
+        row.get(key) in VENUE_ASSIGNMENT_AUTHORITIES
+        for row in (trade, candidate)
+        for key in ("execution_venue_override", "actual_execution_venue_source")
+    )
     unverified_sor_venue_relabel = bool(
         terminal_route == "SOR"
-        and str(trade.get("broker_actual_execution_venue") or "").upper()
-        == "UNKNOWN"
+        and str(trade.get("broker_actual_execution_venue") or "").upper() == "UNKNOWN"
         and candidate_venue in {"KRX", "NXT"}
         and candidate.get("actual_execution_venue_source")
         == "official_exchange_fields_ambiguous_or_missing"
     )
-    if (candidate.get("market_axes_source_quality_status") != "route_contract_ready"
-            or terminal_venue not in {"KRX", "NXT"}
-            or (candidate_venue != terminal_venue and not override)
-            or (assigned_reference and not override)
-            or unverified_sor_venue_relabel
-            or terminal_route not in {"KRX", "NXT", "SOR"}
-            or candidate_route != terminal_route):
+    if (
+        candidate.get("market_axes_source_quality_status") != "route_contract_ready"
+        or terminal_venue not in {"KRX", "NXT"}
+        or (candidate_venue != terminal_venue and not override)
+        or (assigned_reference and not override)
+        or unverified_sor_venue_relabel
+        or terminal_route not in {"KRX", "NXT", "SOR"}
+        or candidate_route != terminal_route
+    ):
         return "source_gap_post_sell_venue_route"
     return None
 
@@ -275,16 +304,17 @@ def _analysis_window_start(
 
 def _read_json(path: Path) -> dict:
     from src.engine.lifecycle.research_input_budget import Claim
+
     maximum = 4 * 1024 * 1024
     if path.is_symlink() or any(parent.is_symlink() for parent in path.parents):
-        raise ValueError('holding_input_path_invalid')
+        raise ValueError("holding_input_path_invalid")
     if path.stat().st_size > maximum:
-        raise ValueError('holding_input_partition_required')
-    opener = gzip.open if path.suffix == '.gz' else open
-    with opener(path, 'rb') as handle:
+        raise ValueError("holding_input_partition_required")
+    opener = gzip.open if path.suffix == ".gz" else open
+    with opener(path, "rb") as handle:
         raw = handle.read(maximum + 1)
     if len(raw) > maximum:
-        raise ValueError('holding_input_partition_required')
+        raise ValueError("holding_input_partition_required")
     budget = _INPUT_BUDGET.get()
     if budget is not None:
         budget.enter_context(Claim(len(raw) * 8))
@@ -329,7 +359,9 @@ def _load_saved_snapshot(snapshot_kind: str, target_date: str) -> dict | None:
     try:
         return _read_json(path)
     except Exception as exc:
-        if str(exc).startswith(('shared_research_budget_', 'holding_input_partition_required')):
+        if str(exc).startswith(
+            ("shared_research_budget_", "holding_input_partition_required")
+        ):
             raise
         return None
 
@@ -347,9 +379,12 @@ def _load_saved_snapshots(
             continue
         try:
             if snapshot_kind == "trade_review":
-                original = ((window_dependencies or {}).get(target_date) or {}).get('original_cost_generation')
-                projected = _verified_trade_review_projection(path, target_date,
-                    original_cost_generation=original)
+                original = ((window_dependencies or {}).get(target_date) or {}).get(
+                    "original_cost_generation"
+                )
+                projected = _verified_trade_review_projection(
+                    path, target_date, original_cost_generation=original
+                )
                 if projected is not None:
                     snapshots.append(projected)
                     paths.append(str(path.with_suffix(".completed_projection.json")))
@@ -361,94 +396,169 @@ def _load_saved_snapshots(
             snapshots.append(_read_json(path))
             paths.append(str(path))
         except Exception as exc:
-            if str(exc).startswith(('shared_research_budget_', 'holding_input_partition_required')):
+            if str(exc).startswith(
+                ("shared_research_budget_", "holding_input_partition_required")
+            ):
                 raise
             continue
     return snapshots, paths
 
 
-def _verified_trade_review_projection(path: Path, target_date: str, *, data_root: Path | None = None,
-                                      metadata_only: bool = False, source_generations: dict | None = None,
-                                      original_cost_generation=None) -> dict | None:
-    from src.engine.lifecycle.snapshot_archive import logical_path, present, generation, snapshot_identity, identity_available, snapshot_identity_matches
+def _verified_trade_review_projection(
+    path: Path,
+    target_date: str,
+    *,
+    data_root: Path | None = None,
+    metadata_only: bool = False,
+    source_generations: dict | None = None,
+    original_cost_generation=None,
+) -> dict | None:
+    from src.engine.lifecycle.snapshot_archive import (
+        logical_path,
+        present,
+        generation,
+        snapshot_identity,
+        identity_available,
+        snapshot_identity_matches,
+    )
+
     path = logical_path(path)
     data_root = _data_root() if data_root is None else data_root
     sidecar = path.with_suffix(".completed_projection.json")
-    if not identity_available(path) and Path(str(path)+'.gz').is_file():
-        expected = Path(data_root).resolve()/'report/monitor_snapshots'/f'trade_review_{target_date}.json'
+    if not identity_available(path) and Path(str(path) + ".gz").is_file():
+        expected = (
+            Path(data_root).resolve()
+            / "report/monitor_snapshots"
+            / f"trade_review_{target_date}.json"
+        )
         if path.resolve() != expected:
             return None
         path = expected
-        from src.engine.lifecycle.holding_window_generation import verified_archived_empty_projection
+        from src.engine.lifecycle.holding_window_generation import (
+            verified_archived_empty_projection,
+        )
+
         try:
             value, observed = verified_archived_empty_projection(data_root, target_date)
-        except (OSError,ValueError,TypeError,KeyError) as exc:
-            if str(exc).startswith(('shared_research_budget_', 'holding_input_partition_required')):
+        except (OSError, ValueError, TypeError, KeyError) as exc:
+            if str(exc).startswith(
+                ("shared_research_budget_", "holding_input_partition_required")
+            ):
                 raise
             return None
         budget = _INPUT_BUDGET.get()
         if budget is not None:
             from src.engine.lifecycle.research_input_budget import Claim
-            budget.enter_context(Claim(observed['logical_size'] * 8))
+
+            budget.enter_context(Claim(observed["logical_size"] * 8))
         if source_generations is not None:
-            physical=Path(str(path)+'.gz')
-            source_generations[str(physical)]={k:observed[k] for k in ('path','size','sha256')}
-            manifest=path.parent/'manifests'/observed['original_native_manifest']['path']
-            source_generations[str(manifest)]=observed['original_native_manifest']
+            physical = Path(str(path) + ".gz")
+            source_generations[str(physical)] = {
+                k: observed[k] for k in ("path", "size", "sha256")
+            }
+            manifest = (
+                path.parent / "manifests" / observed["original_native_manifest"]["path"]
+            )
+            source_generations[str(manifest)] = observed["original_native_manifest"]
         return value
     if not present(sidecar):
         return None
-    if metadata_only and generation(sidecar)['size'] > 4 * 1024 * 1024:
+    if metadata_only and generation(sidecar)["size"] > 4 * 1024 * 1024:
         from src.engine.lifecycle.holding_window_generation import _capture_day
+
         try:
-            dependency=_capture_day(Path(data_root),path.parent,target_date,
-                                     original_cost_generation=original_cost_generation)
-            if not dependency['census_sha256'] or dependency['profile']!='postclose_exit':return None
-            return dict(date=target_date,meta=dict(snapshot_profile=dependency['profile'],
-                actual_cost_source_generation=dependency['cost_generation'],
-                knowledge_cutoff=dependency['knowledge_cutoff']),
-                normalized_projection_reference=dependency['projection'])
-        except (OSError,ValueError,KeyError,TypeError):return None
+            dependency = _capture_day(
+                Path(data_root),
+                path.parent,
+                target_date,
+                original_cost_generation=original_cost_generation,
+            )
+            if (
+                not dependency["census_sha256"]
+                or dependency["profile"] != "postclose_exit"
+            ):
+                return None
+            return dict(
+                date=target_date,
+                meta=dict(
+                    snapshot_profile=dependency["profile"],
+                    actual_cost_source_generation=dependency["cost_generation"],
+                    knowledge_cutoff=dependency["knowledge_cutoff"],
+                ),
+                normalized_projection_reference=dependency["projection"],
+            )
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
     try:
         from src.engine.lifecycle.snapshot_archive import read_bytes
+
         raw = read_bytes(sidecar, maximum=4 * 1024 * 1024)
         budget = _INPUT_BUDGET.get()
         if budget is not None:
             from src.engine.lifecycle.research_input_budget import Claim
-            budget.enter_context(Claim(len(raw)*8))
+
+            budget.enter_context(Claim(len(raw) * 8))
         projected = json.loads(raw)
         from src.engine.lifecycle.broker_cost_reconciliation import source_generation
-        from src.engine.lifecycle.holding_window_generation import completed_projection_census_issue
-        costs = (original_cost_generation if original_cost_generation is not None
-                 else source_generation(data_root, target_date))
-        recorded_costs = (projected.get("meta") or {}).get("actual_cost_source_generation")
-        if recorded_costs != costs and (recorded_costs is not None or costs["count"] or costs.get("official_source_sha256")):
+        from src.engine.lifecycle.holding_window_generation import (
+            completed_projection_census_issue,
+        )
+
+        costs = (
+            original_cost_generation
+            if original_cost_generation is not None
+            else source_generation(data_root, target_date)
+        )
+        recorded_costs = (projected.get("meta") or {}).get(
+            "actual_cost_source_generation"
+        )
+        if recorded_costs != costs and (
+            recorded_costs is not None
+            or costs["count"]
+            or costs.get("official_source_sha256")
+        ):
             return None
         declared = projected.get("artifact_sha256")
-        content = {key: value for key, value in projected.items()
-                   if key != "artifact_sha256"}
-        actual = hashlib.sha256(json.dumps(
-            content, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
-        ).encode("utf-8")).hexdigest()
+        content = {
+            key: value for key, value in projected.items() if key != "artifact_sha256"
+        }
+        actual = hashlib.sha256(
+            json.dumps(
+                content,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode("utf-8")
+        ).hexdigest()
         identity = projected.get("snapshot_identity") or {}
-        if (projected.get("schema") != "trade_review_completed_projection_sidecar_v1"
+        if (
+            projected.get("schema") != "trade_review_completed_projection_sidecar_v1"
             or projected.get("date") != target_date
-            or projected.get("code") or projected.get("since")
-            or not snapshot_identity_matches(path, identity) or declared != actual
-            or completed_projection_census_issue(projected, target_date, costs=costs) is not None
-            or not isinstance((projected.get("sections") or {}).get(
-                "open_scalp_position_projection"), list)):
+            or projected.get("code")
+            or projected.get("since")
+            or not snapshot_identity_matches(path, identity)
+            or declared != actual
+            or completed_projection_census_issue(projected, target_date, costs=costs)
+            is not None
+            or not isinstance(
+                (projected.get("sections") or {}).get("open_scalp_position_projection"),
+                list,
+            )
+        ):
             return None
         return projected
     except (OSError, ValueError, TypeError, KeyError) as exc:
-        if str(exc).startswith(('shared_research_budget_', 'holding_input_partition_required')):
+        if str(exc).startswith(
+            ("shared_research_budget_", "holding_input_partition_required")
+        ):
             raise
         return None
 
 
 def _collect_completed_trade_rows(
     snapshots: list[dict],
-    *, data_root: Path | None = None,
+    *,
+    data_root: Path | None = None,
 ) -> tuple[list[dict], list[dict]]:
     rows: list[dict] = []
     gaps: list[dict] = []
@@ -472,13 +582,16 @@ def _collect_completed_trade_rows(
         sections = snapshot.get("sections") or {}
         projection = sections.get("completed_trade_projection")
         snapshot_date = str(snapshot.get("date") or "")
-        if (snapshot_date >= COMPLETED_CENSUS_CONTRACT_FROM
-                and (snapshot.get("meta") or {}).get("snapshot_profile")
-                != "postclose_exit"):
-            gaps.append({
-                "date": snapshot_date,
-                "reason": "completed_census_profile_not_postclose_exit",
-            })
+        if (
+            snapshot_date >= COMPLETED_CENSUS_CONTRACT_FROM
+            and (snapshot.get("meta") or {}).get("snapshot_profile") != "postclose_exit"
+        ):
+            gaps.append(
+                {
+                    "date": snapshot_date,
+                    "reason": "completed_census_profile_not_postclose_exit",
+                }
+            )
             continue
         if isinstance(projection, list) and (
             (snapshot.get("meta") or {}).get("completed_census_manifest") is not None
@@ -486,18 +599,30 @@ def _collect_completed_trade_rows(
         ):
             issue = verify_completed_census_manifest(snapshot, snapshot_date)
             if issue:
-                from src.engine.lifecycle.holding_window_generation import completed_projection_census_issue
-                from src.engine.lifecycle.broker_cost_reconciliation import source_generation
-                issue=completed_projection_census_issue(snapshot,snapshot_date,
-                    costs=source_generation(_data_root() if data_root is None else data_root,snapshot_date))
+                from src.engine.lifecycle.holding_window_generation import (
+                    completed_projection_census_issue,
+                )
+                from src.engine.lifecycle.broker_cost_reconciliation import (
+                    source_generation,
+                )
+
+                issue = completed_projection_census_issue(
+                    snapshot,
+                    snapshot_date,
+                    costs=source_generation(
+                        _data_root() if data_root is None else data_root, snapshot_date
+                    ),
+                )
             if issue:
                 gaps.append({"date": snapshot_date, "reason": issue})
                 continue
         elif isinstance(projection, list):
-            gaps.append({
-                "date": snapshot_date,
-                "reason": "legacy_completion_census_unsealed",
-            })
+            gaps.append(
+                {
+                    "date": snapshot_date,
+                    "reason": "legacy_completion_census_unsealed",
+                }
+            )
         recent = sections.get("recent_trades") or []
         candidates = projection if isinstance(projection, list) else recent
         completed = [
@@ -517,12 +642,16 @@ def _collect_completed_trade_rows(
         if isinstance(projection, list):
             meta = snapshot.get("meta") or {}
             try:
-                expected_ids = (completed_census_projection_ids(meta["completed_census_manifest"])
-                                if isinstance(meta.get("completed_census_manifest"), dict)
-                                else meta.get("sell_completed_event_ids"))
+                expected_ids = (
+                    completed_census_projection_ids(meta["completed_census_manifest"])
+                    if isinstance(meta.get("completed_census_manifest"), dict)
+                    else meta.get("sell_completed_event_ids")
+                )
             except ValueError:
                 expected_ids = None
-            if not isinstance(expected_ids, list) or {str(item) for item in expected_ids} != set(ids):
+            if not isinstance(expected_ids, list) or {
+                str(item) for item in expected_ids
+            } != set(ids):
                 gaps.append(
                     {
                         "date": snapshot.get("date"),
@@ -605,8 +734,11 @@ def _collect_completed_trade_rows(
 
 
 def _mechanical_completed_cohort(
-    main_rows: list[dict], strict_rows: list[dict], completed_gaps: list[dict],
-    *, target_date: str | None = None,
+    main_rows: list[dict],
+    strict_rows: list[dict],
+    completed_gaps: list[dict],
+    *,
+    target_date: str | None = None,
 ) -> tuple[list[dict], dict]:
     """Seal the M1 entry cohort without inheriting pre-M1 census gaps.
 
@@ -619,55 +751,82 @@ def _mechanical_completed_cohort(
     def valid_day(raw: Any) -> str | None:
         value = str(raw or "")[:10]
         try:
-            return value if datetime.strptime(value, "%Y-%m-%d").strftime(
-                "%Y-%m-%d") == value else None
+            return (
+                value
+                if datetime.strptime(value, "%Y-%m-%d").strftime("%Y-%m-%d") == value
+                else None
+            )
         except ValueError:
             return None
 
-    first_days = sorted({
-        str(row.get("rec_date") or "")[:10]
-        for row in main_rows
-        if any(
-            isinstance(event, dict)
-            and event.get("stage") == "scalp_trailing_input_transition"
-            and (event.get("fields") or {}).get("classifier_version")
-            == SCALP_TRAILING_MECHANICAL_CLASSIFIER_VERSION
-            for event in row.get("timeline") or []
-        )
-        and valid_day(row.get("rec_date")) is not None
-        and str(row.get("rec_date") or "")[:10] >= "2026-06-05"
-    })
+    first_days = sorted(
+        {
+            str(row.get("rec_date") or "")[:10]
+            for row in main_rows
+            if any(
+                isinstance(event, dict)
+                and event.get("stage") == "scalp_trailing_input_transition"
+                and (event.get("fields") or {}).get("classifier_version")
+                == SCALP_TRAILING_MECHANICAL_CLASSIFIER_VERSION
+                for event in row.get("timeline") or []
+            )
+            and valid_day(row.get("rec_date")) is not None
+            and str(row.get("rec_date") or "")[:10] >= "2026-06-05"
+        }
+    )
     source_day = target_date or max(
-        (valid_day(row.get("completion_observed_date"))
-         or valid_day(row.get("rec_date")) or "2026-06-05"
-         for row in main_rows), default="2026-06-05",
+        (
+            valid_day(row.get("completion_observed_date"))
+            or valid_day(row.get("rec_date"))
+            or "2026-06-05"
+            for row in main_rows
+        ),
+        default="2026-06-05",
     )
     forward_start = policy_refresh_start_date(source_day)
-    start_day = (max(first_days[0], forward_start) if first_days else
-                 forward_start if not main_rows and source_day >= forward_start else None)
-    cohort_rows = [row for row in main_rows
-                   if start_day and valid_day(row.get("rec_date"))
-                   and str(row.get("rec_date") or "")[:10] >= start_day]
-    unplaced_ids = sorted({
-        _trade_id(row) for row in main_rows
-        if start_day and valid_day(row.get("rec_date")) is None
-        and (valid_day(row.get("completion_observed_date")) or start_day)
+    start_day = (
+        max(first_days[0], forward_start)
+        if first_days
+        else forward_start if not main_rows and source_day >= forward_start else None
+    )
+    cohort_rows = [
+        row
+        for row in main_rows
+        if start_day
+        and valid_day(row.get("rec_date"))
+        and str(row.get("rec_date") or "")[:10] >= start_day
+    ]
+    unplaced_ids = sorted(
+        {
+            _trade_id(row)
+            for row in main_rows
+            if start_day
+            and valid_day(row.get("rec_date")) is None
+            and (valid_day(row.get("completion_observed_date")) or start_day)
             >= start_day
-    })
+        }
+    )
     cohort_ids = [_trade_id(row) for row in cohort_rows]
     cohort_id_set = set(cohort_ids)
     strict = [row for row in strict_rows if _trade_id(row) in cohort_id_set]
     strict_ids = {_trade_id(row) for row in strict}
-    gaps = [gap for gap in completed_gaps
-            if start_day and str(gap.get("date") or "") >= start_day
-            and gap.get("reason") != "completed_position_id_partition_mismatch"]
-    valid_ids = {_trade_id(row) for row in cohort_rows
-                 if _is_valid_completed_trade(row)}
-    invalid_ids = {_trade_id(row) for row in cohort_rows
-                   if not _is_valid_completed_trade(row)}
+    gaps = [
+        gap
+        for gap in completed_gaps
+        if start_day
+        and str(gap.get("date") or "") >= start_day
+        and gap.get("reason") != "completed_position_id_partition_mismatch"
+    ]
+    valid_ids = {
+        _trade_id(row) for row in cohort_rows if _is_valid_completed_trade(row)
+    }
+    invalid_ids = {
+        _trade_id(row) for row in cohort_rows if not _is_valid_completed_trade(row)
+    }
     valid_identity = bool(
         len(cohort_ids) == len(cohort_id_set)
-        and all(cohort_ids) and valid_ids.isdisjoint(invalid_ids)
+        and all(cohort_ids)
+        and valid_ids.isdisjoint(invalid_ids)
         and valid_ids.union(invalid_ids) == cohort_id_set
         and strict_ids.issubset(valid_ids)
     )
@@ -677,8 +836,9 @@ def _mechanical_completed_cohort(
         "start_entry_day": start_day,
         "entry_day_basis": "verified_classifier_generation_and_policy_refresh_floor",
         "policy_refresh_start_date": forward_start,
-        "complete": bool(start_day and not gaps and not unplaced_ids
-                         and valid_identity),
+        "complete": bool(
+            start_day and not gaps and not unplaced_ids and valid_identity
+        ),
         "source_gap_dates": gaps,
         "completed_main_ids": cohort_ids,
         "strict_completed_position_ids": sorted(strict_ids),
@@ -749,17 +909,21 @@ def _strict_completed_reasons(row: dict, *, clean_start: str) -> list[str]:
     entry_day = str(row.get("rec_date") or "")[:10]
     completion_day = str(row.get("completion_observed_date") or "")[:10]
     if entry_day < completion_day:
-        if (row.get("prior_entry_snapshot_receipt") or {}).get("status") != "sealed_entry_snapshot":
+        if (row.get("prior_entry_snapshot_receipt") or {}).get(
+            "status"
+        ) != "sealed_entry_snapshot":
             reasons.append("source_gap_prior_entry_snapshot_unsealed")
         fill_receipts = row.get("prior_fill_snapshot_receipts")
         try:
             day = datetime.strptime(entry_day, "%Y-%m-%d").date()
             final_day = datetime.strptime(completion_day, "%Y-%m-%d").date()
             while day < final_day:
-                if (not isinstance(fill_receipts, dict)
-                        or not isinstance(fill_receipts.get(day.isoformat()), dict)
-                        or fill_receipts[day.isoformat()].get("status")
-                        != "sealed_entry_snapshot"):
+                if (
+                    not isinstance(fill_receipts, dict)
+                    or not isinstance(fill_receipts.get(day.isoformat()), dict)
+                    or fill_receipts[day.isoformat()].get("status")
+                    != "sealed_entry_snapshot"
+                ):
                     reasons.append("source_gap_prior_fill_snapshot_unsealed")
                     break
                 day += timedelta(days=1)
@@ -770,16 +934,19 @@ def _strict_completed_reasons(row: dict, *, clean_start: str) -> list[str]:
     if row.get("terminal_profit_rate_reconciled") is not True:
         reasons.append("source_gap_profit_rate_unreconciled")
     cost_source = row.get("realized_pnl_krw_source")
-    if (cost_source not in {"broker_fill_prices_fee_aware",
-                            "broker_actual_fee_reconciled"}
-            or _safe_float(row.get("realized_pnl_krw"), None) is None):
+    if (
+        cost_source
+        not in {"broker_fill_prices_fee_aware", "broker_actual_fee_reconciled"}
+        or _safe_float(row.get("realized_pnl_krw"), None) is None
+    ):
         reasons.append("source_gap_exact_cost_missing")
-    if (str(row.get("completion_observed_date") or "")[:10]
-            >= COMPLETED_CENSUS_CONTRACT_FROM
-            and (cost_source != "broker_actual_fee_reconciled"
-                 or row.get("broker_actual_cost_observed") is not True
-                 or _safe_float(row.get("broker_actual_fees_taxes_krw"), None)
-                 is None)):
+    if str(row.get("completion_observed_date") or "")[
+        :10
+    ] >= COMPLETED_CENSUS_CONTRACT_FROM and (
+        cost_source != "broker_actual_fee_reconciled"
+        or row.get("broker_actual_cost_observed") is not True
+        or _safe_float(row.get("broker_actual_fees_taxes_krw"), None) is None
+    ):
         reasons.append("source_gap_broker_actual_cost_missing")
     return sorted(set(reasons))
 
@@ -968,7 +1135,9 @@ _FLOW_INTERVENTION_STAGES = {
 
 
 def _trailing_policy_manifest_binding(
-    policy_date: str, observed_sha: str, observed_market_sha: str = "",
+    policy_date: str,
+    observed_sha: str,
+    observed_market_sha: str = "",
     observed_vector_sha: str = "",
 ) -> dict:
     """Bind an effective value hash to its dated producer, not to a live PID."""
@@ -989,11 +1158,16 @@ def _trailing_policy_manifest_binding(
         env_bytes = env_path.read_bytes()
     except (OSError, ValueError):
         return {"status": "source_gap_bootstrap_missing", "path": str(path)}
-    unsigned = {key: value for key, value in manifest.items() if key != "manifest_sha256"}
+    unsigned = {
+        key: value for key, value in manifest.items() if key != "manifest_sha256"
+    }
     try:
         manifest_sha = hashlib.sha256(
             json.dumps(
-                unsigned, ensure_ascii=True, allow_nan=False, sort_keys=True,
+                unsigned,
+                ensure_ascii=True,
+                allow_nan=False,
+                sort_keys=True,
                 separators=(",", ":"),
             ).encode("utf-8")
         ).hexdigest()
@@ -1004,9 +1178,12 @@ def _trailing_policy_manifest_binding(
         try:
             mechanical_source = (
                 "reviewed_selected_candidate"
-                if any(isinstance(row, dict) and row.get("family")
-                       == "scalp_trailing_mechanical_three_axis_selector"
-                       for row in manifest.get("direct_family_receipts") or [])
+                if any(
+                    isinstance(row, dict)
+                    and row.get("family")
+                    == "scalp_trailing_mechanical_three_axis_selector"
+                    for row in manifest.get("direct_family_receipts") or []
+                )
                 else "operator_directed_m1_baseline"
             )
             expected_mechanical = scalp_trailing_mechanical_bootstrap_receipt(
@@ -1016,22 +1193,28 @@ def _trailing_policy_manifest_binding(
                 manifest.get("target_date") == policy_date
                 and manifest.get("manifest_sha256") == manifest_sha
                 and manifest.get("env_sha256") == hashlib.sha256(env_bytes).hexdigest()
-                and mechanical_receipt.get("schema") == (
+                and mechanical_receipt.get("schema")
+                == (
                     SCALP_TRAILING_MECHANICAL_SELECTED_RECEIPT_SCHEMA
                     if mechanical_source == "reviewed_selected_candidate"
                     else SCALP_TRAILING_MECHANICAL_BASELINE_SCHEMA
                 )
                 and mechanical_receipt == expected_mechanical
-                and observed_vector_sha == mechanical_receipt.get("market_values_sha256")
+                and observed_vector_sha
+                == mechanical_receipt.get("market_values_sha256")
                 and manifest["env_overrides"].get(
                     SCALP_TRAILING_MECHANICAL_VECTOR_SHA_ENV_KEY
-                ) == observed_vector_sha
+                )
+                == observed_vector_sha
             )
         except (KeyError, TypeError, ValueError):
             valid_mechanical = False
         return {
-            "status": ("manifest_value_hash_matched_no_pid_proof"
-                       if valid_mechanical else "source_gap_bootstrap_binding_mismatch"),
+            "status": (
+                "manifest_value_hash_matched_no_pid_proof"
+                if valid_mechanical
+                else "source_gap_bootstrap_binding_mismatch"
+            ),
             "path": str(path),
             "manifest_sha256": manifest_sha if valid_mechanical else None,
             "value_sha256": observed_vector_sha if valid_mechanical else None,
@@ -1053,23 +1236,25 @@ def _trailing_policy_manifest_binding(
         and receipt.get("schema") == "scalp_trailing_threshold_receipt_v3"
         and receipt.get("value_sha256") == receipt_sha
         and receipt == expected_receipt
-        and manifest["env_overrides"].get(
-            "KORSTOCKSCAN_SCALP_TRAILING_VALUE_SHA256"
-        ) == receipt_sha
+        and manifest["env_overrides"].get("KORSTOCKSCAN_SCALP_TRAILING_VALUE_SHA256")
+        == receipt_sha
         and observed_sha == receipt_sha
         and receipt.get("start_by_market_sha256") == observed_market_sha
         and manifest["env_overrides"].get(
             "KORSTOCKSCAN_SCALP_TRAILING_START_BY_MARKET_SHA256"
-        ) == observed_market_sha
+        )
+        == observed_market_sha
         and receipt.get("market_values_sha256") == observed_vector_sha
         and manifest["env_overrides"].get(
             "KORSTOCKSCAN_SCALP_TRAILING_MARKET_VECTOR_SHA256"
-        ) == observed_vector_sha
+        )
+        == observed_vector_sha
     )
     return {
         "status": (
             "manifest_value_hash_matched_no_pid_proof"
-            if valid else "source_gap_bootstrap_binding_mismatch"
+            if valid
+            else "source_gap_bootstrap_binding_mismatch"
         ),
         "path": str(path),
         "manifest_sha256": manifest_sha if valid else None,
@@ -1086,7 +1271,9 @@ def _operational_manifest_binding(
     if not isinstance(values, dict) or not isinstance(sources, dict):
         return {"status": "source_gap_operational_values_or_sources"}
     path = (
-        _data_root() / "runtime" / "policy_bootstrap"
+        _data_root()
+        / "runtime"
+        / "policy_bootstrap"
         / f"runtime_policy_bootstrap_{policy_date}.json"
     )
     try:
@@ -1119,7 +1306,8 @@ def _operational_manifest_binding(
             mismatched.append(key)
     return {
         "status": (
-            "source_gap_operational_env_mismatch" if mismatched
+            "source_gap_operational_env_mismatch"
+            if mismatched
             else "env_values_matched_code_defaults_unproven_no_pid_proof"
         ),
         "manifest_path": str(path),
@@ -1155,8 +1343,8 @@ def _build_position_outcomes(
             exit_signal_binding_status != "same_order_generation"
             or bool(exit_signal.get("inferred"))
             or not any(
-            event.get("stage") == "exit_signal" and not event.get("is_inferred")
-            for event in timeline
+                event.get("stage") == "exit_signal" and not event.get("is_inferred")
+                for event in timeline
             )
         )
         role_event = next(
@@ -1194,11 +1382,11 @@ def _build_position_outcomes(
             for row in trailing_transitions
         )
         holding_start_events = [
-            event for event in timeline
+            event
+            for event in timeline
             if event.get("stage") == "holding_started"
-            and (event.get("fields") or {}).get(
-                "pipeline_lifecycle_population_scope"
-            ) == "real_record_bound"
+            and (event.get("fields") or {}).get("pipeline_lifecycle_population_scope")
+            == "real_record_bound"
         ]
         first_arm = next(
             (
@@ -1232,26 +1420,34 @@ def _build_position_outcomes(
             for fields in trailing_transitions
         }
         coverage_exhausted = any(
-            str(fields.get("observation_coverage_exhausted")).lower()
-            in {"true", "1"}
+            str(fields.get("observation_coverage_exhausted")).lower() in {"true", "1"}
             for fields in trailing_transitions
         )
         telemetry_gap = any(
             str(fields.get("observation_telemetry_gap")).lower() in {"true", "1"}
             for fields in trailing_transitions
-        ) or str(threshold_fields.get(
-            "scalp_trailing_observation_source_gap"
-        )).lower() in {"true", "1"}
+        ) or str(
+            threshold_fields.get("scalp_trailing_observation_source_gap")
+        ).lower() in {
+            "true",
+            "1",
+        }
         policy_sha = str(
             threshold_fields.get("scalp_trailing_policy_value_sha256")
-            or (trailing_transitions[-1].get("scalp_trailing_policy_value_sha256")
-                if trailing_transitions else "")
+            or (
+                trailing_transitions[-1].get("scalp_trailing_policy_value_sha256")
+                if trailing_transitions
+                else ""
+            )
             or ""
         )
         policy_date = str(
             threshold_fields.get("scalp_trailing_policy_date")
-            or (trailing_transitions[-1].get("scalp_trailing_policy_date")
-                if trailing_transitions else "")
+            or (
+                trailing_transitions[-1].get("scalp_trailing_policy_date")
+                if trailing_transitions
+                else ""
+            )
             or ""
         )
         policy_values = threshold_fields.get("scalp_trailing_policy_values")
@@ -1267,8 +1463,11 @@ def _build_position_outcomes(
         try:
             policy_values_valid = (
                 isinstance(policy_values, dict)
-                and (scalp_trailing_mechanical_value_hash(policy_values)
-                     if mechanical_generation else scalp_trailing_value_hash(policy_values))
+                and (
+                    scalp_trailing_mechanical_value_hash(policy_values)
+                    if mechanical_generation
+                    else scalp_trailing_value_hash(policy_values)
+                )
                 == policy_sha
             )
         except (KeyError, TypeError, ValueError):
@@ -1309,8 +1508,10 @@ def _build_position_outcomes(
         try:
             operational_values_hash = hashlib.sha256(
                 json.dumps(
-                    first_operational_values, allow_nan=False, sort_keys=True,
-                    separators=(",", ":")
+                    first_operational_values,
+                    allow_nan=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
                 ).encode()
             ).hexdigest()
         except (TypeError, ValueError):
@@ -1332,14 +1533,20 @@ def _build_position_outcomes(
             None,
         )
         start_replay = (
-            {"source_gap": "legacy_ai_start_replay_retired_for_mechanical_generation",
-             "markets": {}}
-            if mechanical_generation else replay_start_grid(
-                trade, trailing_transitions, actual_exit_rule=exit_rule,
+            {
+                "source_gap": "legacy_ai_start_replay_retired_for_mechanical_generation",
+                "markets": {},
+            }
+            if mechanical_generation
+            else replay_start_grid(
+                trade,
+                trailing_transitions,
+                actual_exit_rule=exit_rule,
                 actual_exit_signal=exit_signal,
                 incumbent_start_pct=_safe_float(
                     (policy_values or {}).get("SCALP_TRAILING_START_PCT"), 0.4
-                ) or 0.4,
+                )
+                or 0.4,
                 incumbent_by_market=market_values,
             )
         )
@@ -1349,7 +1556,8 @@ def _build_position_outcomes(
                 first_operational_values if operational_values_valid else None,
                 first_operational_sources if operational_values_valid else None,
             )
-            if is_trailing_observed else {"status": "not_applicable_non_trailing"}
+            if is_trailing_observed
+            else {"status": "not_applicable_non_trailing"}
         )
         market_shas = {
             str(fields.get("scalp_trailing_start_by_market_sha256") or "")
@@ -1361,30 +1569,43 @@ def _build_position_outcomes(
         }
         market_sha = next(iter(market_shas), "")
         vector_values = next(
-            (row.get("scalp_trailing_market_values") for row in trailing_transitions
-             if isinstance(row.get("scalp_trailing_market_values"), dict)), None,
+            (
+                row.get("scalp_trailing_market_values")
+                for row in trailing_transitions
+                if isinstance(row.get("scalp_trailing_market_values"), dict)
+            ),
+            None,
         )
-        vector_shas = {str(row.get("scalp_trailing_market_values_sha256") or "")
-                       for row in trailing_transitions}
+        vector_shas = {
+            str(row.get("scalp_trailing_market_values_sha256") or "")
+            for row in trailing_transitions
+        }
         vector_sha = next(iter(vector_shas), "")
         try:
-            vector_valid = bool(vector_values and len(vector_shas) == 1
-                                and (scalp_trailing_mechanical_market_values_hash(vector_values)
-                                     if mechanical_generation else
-                                     scalp_trailing_market_values_hash(vector_values))
-                                == vector_sha
-                                and all(
-                                    row.get("scalp_trailing_market_values") == vector_values
-                                    for row in trailing_transitions
-                                ))
+            vector_valid = bool(
+                vector_values
+                and len(vector_shas) == 1
+                and (
+                    scalp_trailing_mechanical_market_values_hash(vector_values)
+                    if mechanical_generation
+                    else scalp_trailing_market_values_hash(vector_values)
+                )
+                == vector_sha
+                and all(
+                    row.get("scalp_trailing_market_values") == vector_values
+                    for row in trailing_transitions
+                )
+            )
         except (KeyError, TypeError, ValueError):
             vector_valid = False
         market_value_hashes = set()
         for row in trailing_transitions:
             try:
-                market_value_hashes.add(scalp_trailing_start_values_hash(
-                    row.get("scalp_trailing_start_by_market")
-                ))
+                market_value_hashes.add(
+                    scalp_trailing_start_values_hash(
+                        row.get("scalp_trailing_start_by_market")
+                    )
+                )
             except (TypeError, ValueError):
                 market_value_hashes.add("")
         binding_key = (policy_date, policy_sha, market_sha, vector_sha)
@@ -1393,11 +1614,14 @@ def _build_position_outcomes(
                 policy_date, policy_sha, market_sha, vector_sha
             )
         policy_binding = (
-            bootstrap_bindings[binding_key] if is_trailing_observed
+            bootstrap_bindings[binding_key]
+            if is_trailing_observed
             else {"status": "not_applicable_non_trailing"}
         )
         if mechanical_generation:
-            trailing_replay_status = "legacy_ai_replay_retired_for_mechanical_generation"
+            trailing_replay_status = (
+                "legacy_ai_replay_retired_for_mechanical_generation"
+            )
         elif not is_trailing_observed:
             trailing_replay_status = "not_applicable_non_trailing"
         elif not trailing_transitions:
@@ -1432,13 +1656,14 @@ def _build_position_outcomes(
             trailing_replay_status = "source_gap_market_vector_changed_or_missing"
         elif not vector_valid:
             trailing_replay_status = "source_gap_market_vector_values_hash"
-        elif {str(row.get("scalp_trailing_market_values_provenance") or "")
-              for row in trailing_transitions} != {"bootstrap_value_hash_matched"}:
+        elif {
+            str(row.get("scalp_trailing_market_values_provenance") or "")
+            for row in trailing_transitions
+        } != {"bootstrap_value_hash_matched"}:
             trailing_replay_status = "source_gap_market_vector_runtime_hash"
-        elif (
-            observed_policy_provenance != {"bootstrap_value_hash_matched"}
-            or observed_expected_shas != {policy_sha}
-        ):
+        elif observed_policy_provenance != {
+            "bootstrap_value_hash_matched"
+        } or observed_expected_shas != {policy_sha}:
             trailing_replay_status = "source_gap_runtime_bootstrap_hash"
         elif not policy_values_valid:
             trailing_replay_status = "source_gap_policy_values"
@@ -1481,8 +1706,7 @@ def _build_position_outcomes(
             ),
             "ai_provider": any(
                 str(row.get("ai_score_source") or "-") not in {"", "-", "missing"}
-                and str(row.get("ai_score_data_quality") or "-")
-                in {"fresh", "partial"}
+                and str(row.get("ai_score_data_quality") or "-") in {"fresh", "partial"}
                 for row in trailing_transitions
             ),
             "nxt_0b_0d": any(
@@ -1596,7 +1820,9 @@ def _build_position_outcomes(
                 "sell_execution_no": trade.get("sell_execution_no"),
                 "sell_quantity_conserved": trade.get("sell_quantity_conserved"),
                 "actual_cost_reconciliation": trade.get("actual_cost_reconciliation"),
-                "holding_path_buy_fill_identity": trade.get("holding_path_buy_fill_identity"),
+                "holding_path_buy_fill_identity": trade.get(
+                    "holding_path_buy_fill_identity"
+                ),
                 "exact_sell_fill_time": exact_fill_time or None,
                 "exit_rule": exit_rule,
                 "exit_rule_provenance": "inferred" if inferred else "observed",
@@ -1604,21 +1830,27 @@ def _build_position_outcomes(
                 "exit_signal_policy_binding_status": (
                     exit_signal.get("policy_binding_status") if not inferred else None
                 ),
-                "exit_signal_source_date": (
-                    exit_signal.get("fields") or {}
-                ).get("exit_signal_source_date"),
-                "exit_signal_contract_sha256": (
-                    exit_signal.get("fields") or {}
-                ).get("exit_signal_contract_sha256"),
+                "exit_signal_source_date": (exit_signal.get("fields") or {}).get(
+                    "exit_signal_source_date"
+                ),
+                "exit_signal_contract_sha256": (exit_signal.get("fields") or {}).get(
+                    "exit_signal_contract_sha256"
+                ),
                 "exit_signal_submission": (
-                    exit_signal.get("submission")
-                    if not inferred else None
+                    exit_signal.get("submission") if not inferred else None
                 ),
                 "exit_class": (
-                    "exit_rule_missing" if exit_rule in {"", "-", "unknown"} else
-                    "exit_rule_inferred" if inferred else
-                    "trailing_observed" if exit_rule == "scalp_trailing_take_profit" else
-                    "other_exit_observed"
+                    "exit_rule_missing"
+                    if exit_rule in {"", "-", "unknown"}
+                    else (
+                        "exit_rule_inferred"
+                        if inferred
+                        else (
+                            "trailing_observed"
+                            if exit_rule == "scalp_trailing_take_profit"
+                            else "other_exit_observed"
+                        )
+                    )
                 ),
                 "holding_score_role_gate": role_gate,
                 "ai_intervention": ai_intervention,
@@ -1647,8 +1879,11 @@ def _build_position_outcomes(
                 ),
                 "trailing_classifier_version": (
                     first_trigger.get("classifier_version")
-                    or (trailing_transitions[-1].get("classifier_version")
-                        if trailing_transitions else None)
+                    or (
+                        trailing_transitions[-1].get("classifier_version")
+                        if trailing_transitions
+                        else None
+                    )
                 ),
                 "trailing_classifier_state_at_first_trigger": (
                     first_trigger.get("classifier_state") or None
@@ -1680,7 +1915,9 @@ def _build_position_outcomes(
                 "trailing_start_by_market_values": market_values,
                 "trailing_market_values_sha256": vector_sha or None,
                 "trailing_market_values": vector_values if vector_valid else None,
-                "trailing_policy_values": policy_values if policy_values_valid else None,
+                "trailing_policy_values": (
+                    policy_values if policy_values_valid else None
+                ),
                 "trailing_policy_date": policy_date or None,
                 "trailing_policy_binding": policy_binding,
                 "trailing_operational_value_sha256": (
@@ -1697,7 +1934,8 @@ def _build_position_outcomes(
                 "trailing_start_market_replay": start_replay,
                 "trailing_observation_grid_version": (
                     next(iter(transition_grid_versions))
-                    if len(transition_grid_versions) == 1 else None
+                    if len(transition_grid_versions) == 1
+                    else None
                 ),
                 "trailing_observation_coverage_exhausted": coverage_exhausted,
                 "trailing_observation_telemetry_gap": telemetry_gap,
@@ -1747,29 +1985,44 @@ def _build_position_outcomes(
                 "sell_time_precision": trade.get("sell_time_precision"),
                 "post_sell_ids": [row["post_sell_id"] for row in matching],
                 "post_sell_status": post_sell_status,
-                "post_sell_observed_at": matching[0].get("evaluated_at") if len(matching) == 1 else None,
+                "post_sell_observed_at": (
+                    matching[0].get("evaluated_at") if len(matching) == 1 else None
+                ),
                 "post_sell_reference_venue": (
                     "KRX" if sor_krx_override_applied else None
                 ),
                 "post_sell_actual_execution_venue": (
                     matching[0].get("actual_execution_venue")
-                    if len(matching) == 1 else None
+                    if len(matching) == 1
+                    else None
                 ),
                 "post_sell_user_override": (
-                    matching[0].get("execution_venue_override") or SOR_KRX_POST_SELL_USER_OVERRIDE
-                    if sor_krx_override_applied else None
+                    matching[0].get("execution_venue_override")
+                    or SOR_KRX_POST_SELL_USER_OVERRIDE
+                    if sor_krx_override_applied
+                    else None
                 ),
                 "post_sell_actual_venue_verified": (
                     False if sor_krx_override_applied else None
                 ),
                 "post_sell_layer": (
-                    "pass" if post_sell_status == "pass" else
-                    "partial_window" if post_sell_status == "partial_window" else
-                    "unmatured" if post_sell_status in {
-                        "not_recorded_or_unmatured", "candidate_unmatured"
-                    } else
-                    "not_observable_no_exact_fill_time" if post_sell_status ==
-                    "not_observable_no_exact_fill_time" else "source_gap"
+                    "pass"
+                    if post_sell_status == "pass"
+                    else (
+                        "partial_window"
+                        if post_sell_status == "partial_window"
+                        else (
+                            "unmatured"
+                            if post_sell_status
+                            in {"not_recorded_or_unmatured", "candidate_unmatured"}
+                            else (
+                                "not_observable_no_exact_fill_time"
+                                if post_sell_status
+                                == "not_observable_no_exact_fill_time"
+                                else "source_gap"
+                            )
+                        )
+                    )
                 ),
                 "post_sell_outcome_diagnostic": (
                     matching[0].get("outcome") if len(matching) == 1 else None
@@ -1811,16 +2064,28 @@ def _build_position_outcomes(
         "completed_valid_trades": len(outcomes),
         "exit_class_ids": {
             label: [row["record_id"] for row in outcomes if row["exit_class"] == label]
-            for label in ("trailing_observed", "other_exit_observed",
-                          "exit_rule_inferred", "exit_rule_missing")
+            for label in (
+                "trailing_observed",
+                "other_exit_observed",
+                "exit_rule_inferred",
+                "exit_rule_missing",
+            )
         },
         "post_sell_layer_ids": {
-            label: [row["record_id"] for row in outcomes if row["post_sell_layer"] == label]
-            for label in ("pass", "partial_window", "unmatured",
-                          "not_observable_no_exact_fill_time", "source_gap")
+            label: [
+                row["record_id"] for row in outcomes if row["post_sell_layer"] == label
+            ]
+            for label in (
+                "pass",
+                "partial_window",
+                "unmatured",
+                "not_observable_no_exact_fill_time",
+                "source_gap",
+            )
         },
         "sor_krx_reference_user_override_ids": [
-            row["record_id"] for row in outcomes
+            row["record_id"]
+            for row in outcomes
             if row["post_sell_user_override"] == SOR_KRX_POST_SELL_USER_OVERRIDE
         ],
         "full_post_sell_user_override_trades": sum(
@@ -1841,9 +2106,9 @@ def _build_position_outcomes(
         "observed_exit_signal_trades": sum(
             row["exit_rule_provenance"] == "observed" for row in outcomes
         ),
-        "exit_signal_binding_status_counts": dict(Counter(
-            row["exit_signal_binding_status"] for row in outcomes
-        )),
+        "exit_signal_binding_status_counts": dict(
+            Counter(row["exit_signal_binding_status"] for row in outcomes)
+        ),
         "effective_threshold_receipt_trades": sum(
             row["exit_threshold_status"] == "effective_value_observed"
             for row in outcomes
@@ -1855,8 +2120,7 @@ def _build_position_outcomes(
             and row.get("trailing_classifier_version") == "mechanical_strength_v1"
             and row["exit_threshold_peak_price"] > 0
             and row["exit_threshold_executable_bid"] > 0
-            and row["exit_threshold_trigger_kind"]
-            == "trailing_peak_worsen_floor"
+            and row["exit_threshold_trigger_kind"] == "trailing_peak_worsen_floor"
             for row in outcomes
         ),
         "trailing_input_transition_trades": sum(
@@ -2085,22 +2349,19 @@ def _summarize_exit_rule_quality(
     return rows
 
 
-
-
-
-
 def _build_trailing_threshold_readiness(
-    outcomes: list[dict], open_positions: list[dict] | None = None,
-    *, completed_valid_ids: list[str] | None = None,
+    outcomes: list[dict],
+    open_positions: list[dict] | None = None,
+    *,
+    completed_valid_ids: list[str] | None = None,
     mechanical_tuning: dict | None = None,
 ) -> dict:
     """Expose source-qualified denominators; never infer a tuning proposal."""
 
-    trailing = [
-        row for row in outcomes if row["exit_class"] == "trailing_observed"
-    ]
+    trailing = [row for row in outcomes if row["exit_class"] == "trailing_observed"]
     direct = [
-        row for row in trailing
+        row
+        for row in trailing
         if row["exit_rule_provenance"] == "observed"
         and row.get("terminal_population_scope") == "real_record_bound"
     ]
@@ -2115,33 +2376,43 @@ def _build_trailing_threshold_readiness(
     ]
     exact = [row for row in inputs if row["realized_pnl_krw"] is not None]
     forward = [row for row in exact if row["post_sell_status"] == "pass"]
-    mechanical_eligible = set((mechanical_tuning or {}).get("evidence_grade_by_id") or {})
+    mechanical_eligible = set(
+        (mechanical_tuning or {}).get("evidence_grade_by_id") or {}
+    )
     source_linked = [row for row in outcomes if row["record_id"] in mechanical_eligible]
     paired_ids = set((mechanical_tuning or {}).get("joint_common_support_ids") or [])
     fully_paired = [row for row in source_linked if row["record_id"] in paired_ids]
     arm = [
-        row for row in source_linked
-        if row["trailing_first_arm_at_epoch"] is not None
+        row for row in source_linked if row["trailing_first_arm_at_epoch"] is not None
     ]
-    classifier = [row for row in source_linked
-                  if row.get("trailing_classifier_version") == "mechanical_strength_v1"
-                  and row.get("trailing_classifier_state_at_first_trigger")
-                  in {"STRONG", "WEAK", "UNKNOWN"}]
+    classifier = [
+        row
+        for row in source_linked
+        if row.get("trailing_classifier_version") == "mechanical_strength_v1"
+        and row.get("trailing_classifier_state_at_first_trigger")
+        in {"STRONG", "WEAK", "UNKNOWN"}
+    ]
     funnel = {
         "completed_valid_ids": (
-            completed_valid_ids if completed_valid_ids is not None
+            completed_valid_ids
+            if completed_valid_ids is not None
             else [row["record_id"] for row in outcomes]
         ),
         "strict_completed_position_ids": [row["record_id"] for row in outcomes],
-        "competing_exit_ids": [row["record_id"] for row in outcomes
-                               if row["exit_class"] == "other_exit_observed"],
+        "competing_exit_ids": [
+            row["record_id"]
+            for row in outcomes
+            if row["exit_class"] == "other_exit_observed"
+        ],
         "trailing_exit_ids": [row["record_id"] for row in trailing],
         "real_completed_ids": [
-            row["record_id"] for row in outcomes
+            row["record_id"]
+            for row in outcomes
             if row.get("terminal_population_scope") == "real_record_bound"
         ],
         "terminal_custody_unproven_ids": [
-            row["record_id"] for row in outcomes
+            row["record_id"]
+            for row in outcomes
             if row.get("terminal_population_scope") != "real_record_bound"
         ],
         "direct_signal_ids": [row["record_id"] for row in direct],
@@ -2150,35 +2421,52 @@ def _build_trailing_threshold_readiness(
         "mature_forward_ids": [row["record_id"] for row in forward],
         "paired_replay_eligible_ids": [row["record_id"] for row in fully_paired],
         "censored_open_position_ids": [
-            str(row["id"]) for row in (open_positions or [])
+            str(row["id"])
+            for row in (open_positions or [])
             if row.get("real_position_observed")
         ],
         "open_position_custody_unproven_ids": [
-            str(row["id"]) for row in (open_positions or [])
+            str(row["id"])
+            for row in (open_positions or [])
             if not row.get("real_position_observed")
         ],
         "grid_source_linked_ids": [
-            row["record_id"] for row in outcomes
+            row["record_id"]
+            for row in outcomes
             if row["record_id"] in mechanical_eligible
         ],
         "policy_manifest_bound_ids": [
-            row["record_id"] for row in outcomes
+            row["record_id"]
+            for row in outcomes
             if (row.get("trailing_policy_binding") or {}).get("status")
             == "manifest_value_hash_matched_no_pid_proof"
         ],
     }
     axis_inputs = {
-        "SCALP_TRAILING_START_PCT": (arm, "pre_arm_quote_path_and_paired_replay_missing"),
+        "SCALP_TRAILING_START_PCT": (
+            arm,
+            "pre_arm_quote_path_and_paired_replay_missing",
+        ),
         "mechanical_strength_v1": (
             classifier,
             "direct_0b_0d_first_crossing_and_paired_replay_missing",
         ),
         "SCALP_TRAILING_LIMIT_WEAK": (
-            [row for row in forward if row in source_linked and row["exit_threshold_key"] == "SCALP_TRAILING_LIMIT_WEAK"],
+            [
+                row
+                for row in forward
+                if row in source_linked
+                and row["exit_threshold_key"] == "SCALP_TRAILING_LIMIT_WEAK"
+            ],
             "first_crossing_fill_cost_and_holdout_replay_missing",
         ),
         "SCALP_TRAILING_LIMIT_STRONG": (
-            [row for row in forward if row in source_linked and row["exit_threshold_key"] == "SCALP_TRAILING_LIMIT_STRONG"],
+            [
+                row
+                for row in forward
+                if row in source_linked
+                and row["exit_threshold_key"] == "SCALP_TRAILING_LIMIT_STRONG"
+            ],
             "first_crossing_fill_cost_and_holdout_replay_missing",
         ),
     }
@@ -2205,29 +2493,52 @@ def _build_trailing_threshold_readiness(
         "KORSTOCKSCAN_SCALP_FAST_EXIT_POLL_MS": ("ms", "poll_interval=max(50,value)"),
         "KORSTOCKSCAN_QUOTE_CONSISTENCY_MAX_WS_AGE_MS": ("ms", "ws_age<=value"),
         "KORSTOCKSCAN_QUOTE_CONSISTENCY_MAX_REST_AGE_MS": ("ms", "rest_age<=value"),
-        "KORSTOCKSCAN_QUOTE_CONSISTENCY_WARN_GAP_BPS": ("bps", "gap_or_spread>value_requires_recheck"),
-        "KORSTOCKSCAN_QUOTE_CONSISTENCY_EMERGENCY_REST_TIMEOUT_MS": ("ms", "rest_request_timeout=value"),
-        "HOLDING_EXIT_REST_QUOTE_FALLBACK_MIN_INTERVAL_SEC": ("sec", "rest_retry_elapsed>=max(3,value)"),
-        "KORSTOCKSCAN_SCALP_NXT_TRAILING_BID_GUARD_MAX_0D_AGE_MS": ("ms", "nxt_0d_age<=value"),
-        "KORSTOCKSCAN_SCALP_NXT_TRAILING_BID_GUARD_MIN_0B_STALE_MS": ("ms", "nxt_0b_age>=value"),
+        "KORSTOCKSCAN_QUOTE_CONSISTENCY_WARN_GAP_BPS": (
+            "bps",
+            "gap_or_spread>value_requires_recheck",
+        ),
+        "KORSTOCKSCAN_QUOTE_CONSISTENCY_EMERGENCY_REST_TIMEOUT_MS": (
+            "ms",
+            "rest_request_timeout=value",
+        ),
+        "HOLDING_EXIT_REST_QUOTE_FALLBACK_MIN_INTERVAL_SEC": (
+            "sec",
+            "rest_retry_elapsed>=max(3,value)",
+        ),
+        "KORSTOCKSCAN_SCALP_NXT_TRAILING_BID_GUARD_MAX_0D_AGE_MS": (
+            "ms",
+            "nxt_0d_age<=value",
+        ),
+        "KORSTOCKSCAN_SCALP_NXT_TRAILING_BID_GUARD_MIN_0B_STALE_MS": (
+            "ms",
+            "nxt_0b_age>=value",
+        ),
         "AI_HOLDING_CRITICAL_COOLDOWN": ("sec", "critical_score_age<=value"),
         "AI_HOLDING_CRITICAL_MIN_COOLDOWN": ("sec", "critical_recheck_elapsed>value"),
         "AI_HOLDING_MIN_COOLDOWN": ("sec", "normal_recheck_elapsed>value"),
         "AI_HOLDING_MAX_COOLDOWN": ("sec", "normal_recheck_elapsed>value_forced"),
         "SCALP_SAFE_PROFIT": ("pct", "profit_near_or_above_value_changes_ai_zone"),
         "AI_HOLDING_FAST_REUSE_MAX_WS_AGE_SEC": ("sec", "ws_snapshot_age<=value"),
-        "AI_HOLDING_NEAR_SAFE_PROFIT_BAND_PCT": ("pct_point", "abs(profit-safe_profit)<=value"),
-        "AI_HOLDING_CRITICAL_PRICE_TRIGGER_PCT": ("pct", "critical_price_change>=value"),
+        "AI_HOLDING_NEAR_SAFE_PROFIT_BAND_PCT": (
+            "pct_point",
+            "abs(profit-safe_profit)<=value",
+        ),
+        "AI_HOLDING_CRITICAL_PRICE_TRIGGER_PCT": (
+            "pct",
+            "critical_price_change>=value",
+        ),
         "AI_HOLDING_NORMAL_PRICE_TRIGGER_PCT": ("pct", "normal_price_change>=value"),
     }
     operational_axes = {}
     for key, required_input in operational_requirements.items():
         observed_rows = [
-            row for row in outcomes
+            row
+            for row in outcomes
             if key in (row.get("trailing_operational_values") or {})
         ]
         connected_rows = [
-            row for row in observed_rows
+            row
+            for row in observed_rows
             if row["record_id"] in mechanical_eligible
             and (
                 required_input is None
@@ -2238,25 +2549,34 @@ def _build_trailing_threshold_readiness(
             "unit": operational_contracts[key][0],
             "consumer_comparison": operational_contracts[key][1],
             "owner": (
-                "shared_quote_safety" if "QUOTE_CONSISTENCY" in key
-                or "REST_QUOTE" in key else
-                "holding_ai_shared" if key.startswith("AI_HOLDING")
-                or key == "SCALP_SAFE_PROFIT" else
-                "scalp_exit_input_quality"
+                "shared_quote_safety"
+                if "QUOTE_CONSISTENCY" in key or "REST_QUOTE" in key
+                else (
+                    "holding_ai_shared"
+                    if key.startswith("AI_HOLDING") or key == "SCALP_SAFE_PROFIT"
+                    else "scalp_exit_input_quality"
+                )
             ),
             "observed_value_ids": [row["record_id"] for row in observed_rows],
             "source_connected_ids": [row["record_id"] for row in connected_rows],
-            "effective_values": sorted({
-                row["trailing_operational_values"][key] for row in observed_rows
-            }),
-            "effective_value_sha256": sorted({
-                row["trailing_operational_value_sha256"] for row in observed_rows
-                if row.get("trailing_operational_value_sha256")
-            }),
-            "effective_sources": sorted({
-                (row.get("trailing_operational_sources") or {}).get(key, "source_gap")
-                for row in observed_rows
-            }),
+            "effective_values": sorted(
+                {row["trailing_operational_values"][key] for row in observed_rows}
+            ),
+            "effective_value_sha256": sorted(
+                {
+                    row["trailing_operational_value_sha256"]
+                    for row in observed_rows
+                    if row.get("trailing_operational_value_sha256")
+                }
+            ),
+            "effective_sources": sorted(
+                {
+                    (row.get("trailing_operational_sources") or {}).get(
+                        key, "source_gap"
+                    )
+                    for row in observed_rows
+                }
+            ),
             "candidate_value": None,
             "eligible_for_live_review": False,
             "blocker": (
@@ -2276,38 +2596,49 @@ def _build_trailing_threshold_readiness(
                 "unit": "state" if key == "mechanical_strength_v1" else "pct",
                 "consumer_comparison": (
                     "source_bound_book_and_trade_selects_strong"
-                    if key == "mechanical_strength_v1" else
-                    "peak_profit>=value_arms"
-                    if key == "SCALP_TRAILING_START_PCT" else
-                    "armed_and_peak_to_bid_drawdown>=value_triggers"
+                    if key == "mechanical_strength_v1"
+                    else (
+                        "peak_profit>=value_arms"
+                        if key == "SCALP_TRAILING_START_PCT"
+                        else "armed_and_peak_to_bid_drawdown>=value_triggers"
+                    )
                 ),
                 "owner": "scalp_trailing_take_profit",
                 "qualified_input_ids": [row["record_id"] for row in rows],
                 "qualified_input_count": len(rows),
                 "policy_manifest_bound_ids": [
-                    row["record_id"] for row in rows
+                    row["record_id"]
+                    for row in rows
                     if (row.get("trailing_policy_binding") or {}).get("status")
                     == "manifest_value_hash_matched_no_pid_proof"
                 ],
-                "effective_values": sorted({
-                    row["trailing_policy_values"][key]
-                    for row in rows
-                    if isinstance(row.get("trailing_policy_values"), dict)
-                    and key in row["trailing_policy_values"]
-                }),
-                "effective_value_sha256": sorted({
-                    row["trailing_policy_value_sha256"]
-                    for row in rows if row.get("trailing_policy_value_sha256")
-                }),
-                "effective_sources": sorted({
-                    (row.get("trailing_policy_binding") or {}).get("sources", {}).get(
-                        key, "source_gap"
-                    )
-                    for row in rows
-                    if isinstance(
-                        (row.get("trailing_policy_binding") or {}).get("sources"), dict
-                    )
-                }),
+                "effective_values": sorted(
+                    {
+                        row["trailing_policy_values"][key]
+                        for row in rows
+                        if isinstance(row.get("trailing_policy_values"), dict)
+                        and key in row["trailing_policy_values"]
+                    }
+                ),
+                "effective_value_sha256": sorted(
+                    {
+                        row["trailing_policy_value_sha256"]
+                        for row in rows
+                        if row.get("trailing_policy_value_sha256")
+                    }
+                ),
+                "effective_sources": sorted(
+                    {
+                        (row.get("trailing_policy_binding") or {})
+                        .get("sources", {})
+                        .get(key, "source_gap")
+                        for row in rows
+                        if isinstance(
+                            (row.get("trailing_policy_binding") or {}).get("sources"),
+                            dict,
+                        )
+                    }
+                ),
                 "candidate_value": None,
                 "eligible_for_live_review": False,
                 "blocker": blocker,
@@ -2448,7 +2779,9 @@ def _build_soft_stop_rebound(
     if rebound_buy_rate >= 50.0:
         recommendation = "cooldown live 금지, threshold/AI 재판정 후보"
     elif whipsaw_signal:
-        recommendation = "Main stop confirmation source review; retired whipsaw is not a candidate"
+        recommendation = (
+            "Main stop confirmation source review; retired whipsaw is not a candidate"
+        )
     elif (
         rebound_sell_rate >= 50.0
         and rebound_buy_rate < 50.0
@@ -2712,27 +3045,41 @@ def _build_load_distribution_evidence(
 
 
 def build_holding_exit_observation_report(
-    *, target_date: str, month_start: str | None = None, input_root=None,
-    all_scope_research=False, research_output_root=None,research_input_root=None,
+    *,
+    target_date: str,
+    month_start: str | None = None,
+    input_root=None,
+    all_scope_research=False,
+    research_output_root=None,
+    research_input_root=None,
 ) -> dict:
     """Normal postclose profile assembles sources; ordinary observers stay light.
 
     An explicit root is task-local, so isolated recovery cannot change another
     report's source root. Legacy report claims end before the research replay.
     """
-    root_token = _SOURCE_ROOT.set(Path(input_root).resolve() if input_root is not None else None)
+    root_token = _SOURCE_ROOT.set(
+        Path(input_root).resolve() if input_root is not None else None
+    )
     try:
         if all_scope_research:
             from src.engine.automation.main_trailing_completed_store import admit_window
-            admit_window(_data_root(),target_date,start_date=month_start)
+
+            admit_window(_data_root(), target_date, start_date=month_start)
         with ExitStack() as budget:
             token = _INPUT_BUDGET.set(budget)
             try:
                 try:
-                    report = _build_holding_exit_observation_report(target_date=target_date, month_start=month_start)
+                    report = _build_holding_exit_observation_report(
+                        target_date=target_date, month_start=month_start
+                    )
                 except ValueError as exc:
-                    if not all_scope_research or not str(exc).startswith((
-                        'holding_input_partition_required','shared_research_budget_partition_resume_required')):
+                    if not all_scope_research or not str(exc).startswith(
+                        (
+                            "holding_input_partition_required",
+                            "shared_research_budget_partition_resume_required",
+                        )
+                    ):
                         raise
                     report = None
             finally:
@@ -2744,34 +3091,66 @@ def build_holding_exit_observation_report(
             from src.engine.lifecycle.research_disk_budget import use
             from src.engine.lifecycle.holding_window_generation import byte_generation
             from src.engine.build_next_stage2_checklist import _next_krx_trading_day
-            root=_data_root().resolve()
-            out=Path(research_output_root).resolve() if research_output_root is not None else root/'report/main_all_scope_trailing'/target_date
+
+            root = _data_root().resolve()
+            out = (
+                Path(research_output_root).resolve()
+                if research_output_root is not None
+                else root / "report/main_all_scope_trailing" / target_date
+            )
             # Input and output are sibling generations outside canonical raw
             # sources; neither reads the holding report being constructed.
-            assembly=(Path(research_input_root).resolve() if research_input_root is not None
-                else root.parent/(root.name+'-research-inputs')/'main_trailing'/target_date)
-            with direct_job(root,'main_trailing_all_scope',target_date), use(out):
-                manifest=assemble(root,assembly,source_date=target_date,target_date=_next_krx_trading_day(target_date),
-                    start_date=month_start or '2026-09-29',immutable=True)
-                assembly=manifest.parent
+            assembly = (
+                Path(research_input_root).resolve()
+                if research_input_root is not None
+                else root.parent
+                / (root.name + "-research-inputs")
+                / "main_trailing"
+                / target_date
+            )
+            with direct_job(root, "main_trailing_all_scope", target_date), use(out):
+                manifest = assemble(
+                    root,
+                    assembly,
+                    source_date=target_date,
+                    target_date=_next_krx_trading_day(target_date),
+                    start_date=month_start or "2026-09-29",
+                    immutable=True,
+                )
+                assembly = manifest.parent
                 if research_output_root is None:
-                    out=out/'generations'/assembly.name
-                result=run(manifest,input_root=assembly,output_root=out,dry_run=False,resume=True)
+                    out = out / "generations" / assembly.name
+                result = run(
+                    manifest,
+                    input_root=assembly,
+                    output_root=out,
+                    dry_run=False,
+                    resume=True,
+                )
                 if report is None:
-                    report=_partitioned_holding_report(target_date,month_start,result,out,assembly)
-            path=out/f'research_{target_date}.json'
-            report['all_scope_trailing_research']={
-                'schema':result['schema'],'status':result['status'],'report_path':str(path),
-                'report_generation':byte_generation(path),'input_window_generation_sha256':result['input_window_generation_sha256'],
-                'initial_policy_sha256':result['initial_policy']['policy_sha256'],
-                'scope_count':result['scope']['scope_count'],'source_census':result['assembly_census'],
-                'allowed_runtime_apply':False}
+                    report = _partitioned_holding_report(
+                        target_date, month_start, result, out, assembly
+                    )
+            path = out / f"research_{target_date}.json"
+            report["all_scope_trailing_research"] = {
+                "schema": result["schema"],
+                "status": result["status"],
+                "report_path": str(path),
+                "report_generation": byte_generation(path),
+                "input_window_generation_sha256": result[
+                    "input_window_generation_sha256"
+                ],
+                "initial_policy_sha256": result["initial_policy"]["policy_sha256"],
+                "scope_count": result["scope"]["scope_count"],
+                "source_census": result["assembly_census"],
+                "allowed_runtime_apply": False,
+            }
         return report
     finally:
         _SOURCE_ROOT.reset(root_token)
 
 
-def _partitioned_holding_report(target_date,month_start,result,out,assembly):
+def _partitioned_holding_report(target_date, month_start, result, out, assembly):
     """Keep the complete actual cohort as sealed refs, never an empty list.
 
     Large legacy display diagnostics cannot select values. The universal
@@ -2780,66 +3159,163 @@ def _partitioned_holding_report(target_date,month_start,result,out,assembly):
     """
     from src.engine.lifecycle import research_storage as storage
     from src.engine.automation.main_trailing_all_scope_research import _sealed
-    manifest=_sealed(assembly/'manifest.json')
-    start,window=_analysis_window_start(target_date=target_date,month_start=month_start)
+
+    manifest = _sealed(assembly / "manifest.json")
+    start, window = _analysis_window_start(
+        target_date=target_date, month_start=month_start
+    )
+
     def actual_ids():
-        for part in storage.iter_tree(assembly,manifest['partitions_ref']):
-            payload=_sealed(assembly/part['path'])
-            for position in payload['positions']:
-                if position['evidence_kind']=='actual_completed':yield position['position_key']
-    actual_ref=storage.write_tree(out,actual_ids())
+        for part in storage.iter_tree(assembly, manifest["partitions_ref"]):
+            payload = _sealed(assembly / part["path"])
+            for position in payload["positions"]:
+                if position["evidence_kind"] == "actual_completed":
+                    yield position["position_key"]
+
+    actual_ref = storage.write_tree(out, actual_ids())
     from src.engine.lifecycle.holding_window_generation import capture_window
-    dependency=capture_window(_data_root(),manifest['consumed_dates'],allow_cost_revision=True)
-    source_gaps=result['assembly_census'].get('source_gaps',{})
-    census_complete=not any(source_gaps.get(key,0) for key in (
-        'completed_snapshot_source_gap','completed_snapshot_missing','completed_snapshot_unverified'))
-    eligible_complete=result.get('eligible_evaluation_complete',result['status']=='complete')
+
+    dependency = capture_window(
+        _data_root(), manifest["consumed_dates"], allow_cost_revision=True
+    )
+    source_gaps = result["assembly_census"].get("source_gaps", {})
+    census_complete = not any(
+        source_gaps.get(key, 0)
+        for key in (
+            "completed_snapshot_source_gap",
+            "completed_snapshot_missing",
+            "completed_snapshot_unverified",
+        )
+    )
+    eligible_complete = result.get(
+        "eligible_evaluation_complete", result["status"] == "complete"
+    )
     from src.engine.automation.scalp_trailing_mechanical_policy_apply import _type_view
-    research=result.get('trailing_situation_research') or {}
-    market=research.get('train_selected_market')
-    kinds=[(key.split('|')[-1],cell) for key,cell in research.get('cells',{}).items()
-        if key.startswith('actual_completed|'+str(market)+'|') and not key.endswith('|BASE')]
-    winner=min(kinds,key=lambda item:(-(item[1]['train'].get('paired_delta_net_krw') or 0),item[0])) if kinds else None
-    view=_type_view(result,result['artifact_sha256'],report_path=out/f'research_{target_date}.json',
-        market=market,kind=winner[0]) if winner else None
-    market_tuning=view['trailing_mechanical_market_tuning'] if view else dict(
-        status='partitioned_research_hold_sample_or_edge',population_complete=eligible_complete,
-        research_candidate=None,decision_authority='existing_mechanical_selector')
-    market_tuning.update(raw_census_complete=census_complete,eligible_evaluation_complete=eligible_complete,
-                         universal_evaluation=result['common_population_evaluation'])
-    from src.engine.scalping.holding_path_vote_replay import summarize_frozen_holding_path_votes
+
+    research = result.get("trailing_situation_research") or {}
+    market = research.get("train_selected_market")
+    kinds = [
+        (key.split("|")[-1], cell)
+        for key, cell in research.get("cells", {}).items()
+        if key.startswith("actual_completed|" + str(market) + "|")
+        and not key.endswith("|BASE")
+    ]
+    winner = (
+        min(
+            kinds,
+            key=lambda item: (
+                -(item[1]["train"].get("paired_delta_net_krw") or 0),
+                item[0],
+            ),
+        )
+        if kinds
+        else None
+    )
+    view = (
+        _type_view(
+            result,
+            result["artifact_sha256"],
+            report_path=out / f"research_{target_date}.json",
+            market=market,
+            kind=winner[0],
+        )
+        if winner
+        else None
+    )
+    market_tuning = (
+        view["trailing_mechanical_market_tuning"]
+        if view
+        else dict(
+            status="partitioned_research_hold_sample_or_edge",
+            population_complete=eligible_complete,
+            research_candidate=None,
+            decision_authority="existing_mechanical_selector",
+        )
+    )
+    market_tuning.update(
+        raw_census_complete=census_complete,
+        eligible_evaluation_complete=eligible_complete,
+        universal_evaluation=result["common_population_evaluation"],
+    )
+    from src.engine.scalping.holding_path_vote_replay import (
+        summarize_frozen_holding_path_votes,
+    )
+
     votes = summarize_frozen_holding_path_votes(
-        assembly,manifest['partitions_ref'],clean_start=window['evaluation_start_date'],
-        model=str(getattr(TRADING_RULES, 'OPENAI_HOLDING_EXIT_VOTE_MODEL',
-                          'gpt-5.4-nano') or 'gpt-5.4-nano'),
+        assembly,
+        manifest["partitions_ref"],
+        clean_start=window["evaluation_start_date"],
+        model=str(
+            getattr(TRADING_RULES, "OPENAI_HOLDING_EXIT_VOTE_MODEL", "gpt-5.4-nano")
+            or "gpt-5.4-nano"
+        ),
     )
     votes.update(available_actual_population_ids_ref=actual_ref)
     from src.engine.scalping.holding_vote_experiment import native_research
-    votes['vote_numeric_research']=native_research(_data_root(),target_date,trailing_assembly=assembly)
+
+    votes["vote_numeric_research"] = native_research(
+        _data_root(), target_date, trailing_assembly=assembly
+    )
     from src.engine.monitoring.policy_generation_contract import native
-    votes['policy_generation']=native(votes,family='holding_vote',day=target_date,data_root=_data_root(),
-        source_state=votes['source_status'],comparison_state=votes['vote_numeric_research']['status'],
-        handoff_state='pending_publication' if votes['vote_numeric_research'].get('selected_cells') else 'incumbent_carried')
-    return dict(date=target_date,month_start=start,analysis_window=window,
-        completed_population_quality=dict(complete=census_complete,storage_schema='main_holding_cohort_reference_v2',
-            canonical_main_completed_rows=actual_ref['count'],db_completed_main_ids_ref=actual_ref,
+
+    votes["policy_generation"] = native(
+        votes,
+        family="holding_vote",
+        day=target_date,
+        data_root=_data_root(),
+        source_state=votes["source_status"],
+        comparison_state=votes["vote_numeric_research"]["status"],
+        handoff_state=(
+            "pending_publication"
+            if votes["vote_numeric_research"].get("selected_cells")
+            else "incumbent_carried"
+        ),
+    )
+    return dict(
+        date=target_date,
+        month_start=start,
+        analysis_window=window,
+        completed_population_quality=dict(
+            complete=census_complete,
+            storage_schema="main_holding_cohort_reference_v2",
+            canonical_main_completed_rows=actual_ref["count"],
+            db_completed_main_ids_ref=actual_ref,
             source_gap_counts=source_gaps,
-            whole_census_economics_complete=None),
-        mechanical_population_quality=dict(complete=eligible_complete,raw_census_complete=census_complete,start_entry_day=window['policy_refresh_start_date'],
-            entry_day_basis='verified_forward_source_window',
-            policy_refresh_start_date=window['policy_refresh_start_date'],
-            classifier_version=manifest['approved_parent_receipt']['classifier_version']),
-        cohorts=dict(actual_completed=dict(population_ids_ref=actual_ref,n=actual_ref['count'])),
-        position_outcomes_ref=result['partition_results_ref'],
+            whole_census_economics_complete=None,
+        ),
+        mechanical_population_quality=dict(
+            complete=eligible_complete,
+            raw_census_complete=census_complete,
+            start_entry_day=window["policy_refresh_start_date"],
+            entry_day_basis="verified_forward_source_window",
+            policy_refresh_start_date=window["policy_refresh_start_date"],
+            classifier_version=manifest["approved_parent_receipt"][
+                "classifier_version"
+            ],
+        ),
+        cohorts=dict(
+            actual_completed=dict(population_ids_ref=actual_ref, n=actual_ref["count"])
+        ),
+        position_outcomes_ref=result["partition_results_ref"],
         holding_path_vote_replay=votes,
         trailing_mechanical_market_tuning=market_tuning,
-        input_window_dependencies=dependency,input_window_generation_sha256=dependency['input_window_generation_sha256'],
-        actual_cost_source_generations={d:v['cost_generation'] for d,v in dependency['dependencies'].items()},
-        cost_input_complete=None,readiness=dict(status='partitioned_source_verified'),
-        meta=dict(schema_version=SCHEMA_VERSION,storage_schema='main_holding_cohort_reference_v2',
-            basis='main-only, normal_only, post_fallback_deprecation',
-            legacy_display_diagnostics='partitioned',
-            knowledge_cutoff=datetime.fromtimestamp(manifest['as_of'],ZoneInfo('Asia/Seoul')).isoformat()))
+        input_window_dependencies=dependency,
+        input_window_generation_sha256=dependency["input_window_generation_sha256"],
+        actual_cost_source_generations={
+            d: v["cost_generation"] for d, v in dependency["dependencies"].items()
+        },
+        cost_input_complete=None,
+        readiness=dict(status="partitioned_source_verified"),
+        meta=dict(
+            schema_version=SCHEMA_VERSION,
+            storage_schema="main_holding_cohort_reference_v2",
+            basis="main-only, normal_only, post_fallback_deprecation",
+            legacy_display_diagnostics="partitioned",
+            knowledge_cutoff=datetime.fromtimestamp(
+                manifest["as_of"], ZoneInfo("Asia/Seoul")
+            ).isoformat(),
+        ),
+    )
 
 
 def _build_holding_exit_observation_report(
@@ -2862,12 +3338,25 @@ def _build_holding_exit_observation_report(
         return guarded
 
     dates = _date_range(safe_month_start, safe_date)
-    from src.engine.lifecycle.holding_window_generation import capture_window, verify_window, completed_projection_census_issue
+    from src.engine.lifecycle.holding_window_generation import (
+        capture_window,
+        verify_window,
+        completed_projection_census_issue,
+    )
     from src.engine.lifecycle.broker_cost_reconciliation import source_generation
+
     input_window = capture_window(_data_root(), dates, allow_cost_revision=True)
-    isolated_dates = [day for day,row in input_window['dependencies'].items() if row['status'] == 'source_gap']
-    trade_snapshots, trade_snapshot_paths = _load_saved_snapshots('trade_review', dates, excluded_dates=isolated_dates,
-        window_dependencies=input_window['dependencies'])
+    isolated_dates = [
+        day
+        for day, row in input_window["dependencies"].items()
+        if row["status"] == "source_gap"
+    ]
+    trade_snapshots, trade_snapshot_paths = _load_saved_snapshots(
+        "trade_review",
+        dates,
+        excluded_dates=isolated_dates,
+        window_dependencies=input_window["dependencies"],
+    )
     performance_snapshot = _load_saved_snapshot("performance_tuning", safe_date)
     performance_paths = []
     perf_path = _monitor_snapshot_path("performance_tuning", safe_date)
@@ -2878,27 +3367,57 @@ def _build_holding_exit_observation_report(
     # Keep the original census while refusing stale actual money. Current
     # research allocation is consumed separately by the native research owner.
     for index, row in enumerate(completed_rows):
-        day = str(row.get('completion_observed_date') or row.get('sell_time') or '')[:10]
-        if 'original_cost_generation' in input_window['dependencies'].get(day, {}):
-            completed_rows[index] = {**row, 'profit_rate':None, 'realized_pnl_krw':None,
-                'broker_actual_fees_taxes_krw':None, 'broker_actual_cost_observed':False,
-                'actual_cost_reconciliation':{'status':'actual_cost_unallocated', 'reason':'late_cost_revision'},
-                'strict_completion_status':'excluded',
-                'strict_completion_reasons':sorted(set(row.get('strict_completion_reasons') or []) | {
-                    'source_gap_broker_actual_cost_missing'})}
-    completed_gaps.extend({'date':day, 'reason':'input_window_source_gap',
-                           'detail':input_window['dependencies'][day]['reason']} for day in isolated_dates)
+        day = str(row.get("completion_observed_date") or row.get("sell_time") or "")[
+            :10
+        ]
+        if "original_cost_generation" in input_window["dependencies"].get(day, {}):
+            completed_rows[index] = {
+                **row,
+                "profit_rate": None,
+                "realized_pnl_krw": None,
+                "broker_actual_fees_taxes_krw": None,
+                "broker_actual_cost_observed": False,
+                "actual_cost_reconciliation": {
+                    "status": "actual_cost_unallocated",
+                    "reason": "late_cost_revision",
+                },
+                "strict_completion_status": "excluded",
+                "strict_completion_reasons": sorted(
+                    set(row.get("strict_completion_reasons") or [])
+                    | {"source_gap_broker_actual_cost_missing"}
+                ),
+            }
+    completed_gaps.extend(
+        {
+            "date": day,
+            "reason": "input_window_source_gap",
+            "detail": input_window["dependencies"][day]["reason"],
+        }
+        for day in isolated_dates
+    )
     census_receipts = [
-        item for snapshot in trade_snapshots
-        if isinstance(item := (snapshot.get("meta") or {}).get(
-            "completed_census_manifest"), dict)
-        and (str(snapshot.get("date") or "") < COMPLETED_CENSUS_CONTRACT_FROM
-             or (snapshot.get("meta") or {}).get("snapshot_profile")
-             == "postclose_exit")
-        and completed_projection_census_issue(snapshot, str(snapshot.get("date") or ""),
-            costs=input_window['dependencies'].get(str(snapshot.get('date') or ''),{}).get(
-                'original_cost_generation',input_window['dependencies'].get(
-                    str(snapshot.get('date') or ''),{}).get('cost_generation'))) is None
+        item
+        for snapshot in trade_snapshots
+        if isinstance(
+            item := (snapshot.get("meta") or {}).get("completed_census_manifest"), dict
+        )
+        and (
+            str(snapshot.get("date") or "") < COMPLETED_CENSUS_CONTRACT_FROM
+            or (snapshot.get("meta") or {}).get("snapshot_profile") == "postclose_exit"
+        )
+        and completed_projection_census_issue(
+            snapshot,
+            str(snapshot.get("date") or ""),
+            costs=input_window["dependencies"]
+            .get(str(snapshot.get("date") or ""), {})
+            .get(
+                "original_cost_generation",
+                input_window["dependencies"]
+                .get(str(snapshot.get("date") or ""), {})
+                .get("cost_generation"),
+            ),
+        )
+        is None
     ]
     loaded_trade_dates = {str(item.get("date") or "") for item in trade_snapshots}
     for missing_date in dates:
@@ -2933,19 +3452,22 @@ def _build_holding_exit_observation_report(
         for row in valid_trades
     }
     strict_trades = [
-        row for row in valid_trades
-        if not strict_exclusions[_trade_id(row)]
+        row for row in valid_trades if not strict_exclusions[_trade_id(row)]
     ]
     main_ids = [_trade_id(row) for row in main_completed_rows]
     valid_ids = [_trade_id(row) for row in valid_trades]
     invalid_ids = [
-        _trade_id(row) for row in main_completed_rows
+        _trade_id(row)
+        for row in main_completed_rows
         if not _is_valid_completed_trade(row)
     ]
     strict_ids = [_trade_id(row) for row in strict_trades]
-    excluded_ids = [trade_id for trade_id, reasons in strict_exclusions.items() if reasons]
+    excluded_ids = [
+        trade_id for trade_id, reasons in strict_exclusions.items() if reasons
+    ]
     source_gap_ids = [
-        trade_id for trade_id, reasons in strict_exclusions.items()
+        trade_id
+        for trade_id, reasons in strict_exclusions.items()
         if any(reason.startswith("source_gap_") for reason in reasons)
     ]
     census_id_contract_ok = bool(
@@ -2957,9 +3479,9 @@ def _build_holding_exit_observation_report(
         and set(source_gap_ids).issubset(excluded_ids)
     )
     if not census_id_contract_ok:
-        completed_gaps.append({
-            "date": safe_date, "reason": "completed_position_id_partition_mismatch"
-        })
+        completed_gaps.append(
+            {"date": safe_date, "reason": "completed_position_id_partition_mismatch"}
+        )
     target_valid_trades = [
         row
         for row in strict_trades
@@ -2986,7 +3508,8 @@ def _build_holding_exit_observation_report(
 
     same_symbol_reentry = _build_same_symbol_reentry(strict_trades)
     four_axis_tuning = summarize_four_axis(
-        strict_trades, position_outcomes,
+        strict_trades,
+        position_outcomes,
         population_complete=not completed_gaps and census_id_contract_ok,
     )
     four_axis_tuning["legacy_ai_policy"] = True
@@ -2994,40 +3517,78 @@ def _build_holding_exit_observation_report(
     four_axis_tuning["runtime_selected"] = None
     four_axis_tuning["status"] = "legacy_ai_policy_retired"
     mechanical_trades, mechanical_population_quality = _mechanical_completed_cohort(
-        main_completed_rows, strict_trades, completed_gaps,
+        main_completed_rows,
+        strict_trades,
+        completed_gaps,
         target_date=safe_date,
     )
     if not analysis_window["eligible_for_successor_selection"]:
         mechanical_population_quality["complete"] = False
-        mechanical_population_quality["selection_blocked_reason"] = "explicit_audit_window"
+        mechanical_population_quality["selection_blocked_reason"] = (
+            "explicit_audit_window"
+        )
     mechanical_ids = {_trade_id(row) for row in mechanical_trades}
     mechanical_tuning = summarize_mechanical(
         mechanical_trades,
-        [row for row in position_outcomes
-         if str(row.get("record_id") or "") in mechanical_ids],
+        [
+            row
+            for row in position_outcomes
+            if str(row.get("record_id") or "") in mechanical_ids
+        ],
         population_complete=mechanical_population_quality["complete"],
     )
     from src.engine.scalping.universal_trailing_replay import completed_census
-    bootstrap_path = _data_root() / 'runtime/policy_bootstrap' / f'runtime_policy_bootstrap_{safe_date}.json'
-    parent_manifest = _read_json(bootstrap_path) if bootstrap_path.is_file() and bootstrap_path.stat().st_size <= 4*1024*1024 else {}
-    if (parent_manifest.get('target_date') != safe_date or parent_manifest.get('manifest_sha256') !=
-            hashlib.sha256(json.dumps({k:v for k,v in parent_manifest.items() if k != 'manifest_sha256'},
-                sort_keys=True, separators=(',', ':'), ensure_ascii=True, allow_nan=False).encode()).hexdigest()):
+
+    bootstrap_path = (
+        _data_root()
+        / "runtime/policy_bootstrap"
+        / f"runtime_policy_bootstrap_{safe_date}.json"
+    )
+    parent_manifest = (
+        _read_json(bootstrap_path)
+        if bootstrap_path.is_file() and bootstrap_path.stat().st_size <= 4 * 1024 * 1024
+        else {}
+    )
+    if (
+        parent_manifest.get("target_date") != safe_date
+        or parent_manifest.get("manifest_sha256")
+        != hashlib.sha256(
+            json.dumps(
+                {k: v for k, v in parent_manifest.items() if k != "manifest_sha256"},
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+                allow_nan=False,
+            ).encode()
+        ).hexdigest()
+    ):
         parent_manifest = {}
-    parent_receipt = parent_manifest.get('scalp_trailing_mechanical_policy_receipt') or {}
+    parent_receipt = (
+        parent_manifest.get("scalp_trailing_mechanical_policy_receipt") or {}
+    )
     from src.engine.scalping.trailing_mechanical_policy import market_values_hash
+
     try:
-        if (parent_receipt.get('source') not in {'operator_directed_m1_baseline', 'reviewed_selected_candidate', 'rollback_incumbent'}
-                or market_values_hash(parent_receipt['market_values'], parent_receipt['classifier_parameters'])
-                != parent_receipt.get('market_values_sha256')):
-            raise ValueError('approved_parent_receipt_invalid')
-        universal_parent = {'market_values':parent_receipt['market_values'],
-                            'classifier_parameters':parent_receipt['classifier_parameters']}
+        if parent_receipt.get("source") not in {
+            "operator_directed_m1_baseline",
+            "reviewed_selected_candidate",
+            "rollback_incumbent",
+        } or market_values_hash(
+            parent_receipt["market_values"], parent_receipt["classifier_parameters"]
+        ) != parent_receipt.get(
+            "market_values_sha256"
+        ):
+            raise ValueError("approved_parent_receipt_invalid")
+        universal_parent = {
+            "market_values": parent_receipt["market_values"],
+            "classifier_parameters": parent_receipt["classifier_parameters"],
+        }
     except (KeyError, TypeError, ValueError):
         universal_parent = None
     universal_replay = completed_census(main_completed_rows, incumbent=universal_parent)
     operational_input_replay = summarize_operational_input_replay(
-        strict_trades, position_outcomes,
+        strict_trades,
+        position_outcomes,
         population_complete=not completed_gaps and census_id_contract_ok,
     )
     historical_neutral_scenario = summarize_legacy_neutral_scenarios(
@@ -3038,17 +3599,34 @@ def _build_holding_exit_observation_report(
     holding_path_vote_replay = summarize_holding_path_votes(
         strict_trades,
         load_events=lambda position_key: load_path_events_file(
-            path_vote_store_path(_data_root(), position_key), position_key,
+            path_vote_store_path(_data_root(), position_key),
+            position_key,
         ),
-        model=str(getattr(TRADING_RULES, "OPENAI_HOLDING_EXIT_VOTE_MODEL",
-                          "gpt-5.4-nano") or "gpt-5.4-nano"),
+        model=str(
+            getattr(TRADING_RULES, "OPENAI_HOLDING_EXIT_VOTE_MODEL", "gpt-5.4-nano")
+            or "gpt-5.4-nano"
+        ),
     )
     from src.engine.scalping.holding_vote_experiment import native_research
-    holding_path_vote_replay['vote_numeric_research']=native_research(_data_root(),target_date)
+
+    holding_path_vote_replay["vote_numeric_research"] = native_research(
+        _data_root(), target_date
+    )
     from src.engine.monitoring.policy_generation_contract import native
-    holding_path_vote_replay['policy_generation']=native(holding_path_vote_replay,family='holding_vote',day=target_date,data_root=_data_root(),
-        source_state='partitioned',comparison_state=holding_path_vote_replay['vote_numeric_research']['status'],
-        handoff_state='pending_publication' if holding_path_vote_replay['vote_numeric_research'].get('selected_cells') else 'incumbent_carried')
+
+    holding_path_vote_replay["policy_generation"] = native(
+        holding_path_vote_replay,
+        family="holding_vote",
+        day=target_date,
+        data_root=_data_root(),
+        source_state="partitioned",
+        comparison_state=holding_path_vote_replay["vote_numeric_research"]["status"],
+        handoff_state=(
+            "pending_publication"
+            if holding_path_vote_replay["vote_numeric_research"].get("selected_cells")
+            else "incumbent_carried"
+        ),
+    )
     historical_source_availability = {
         "schema": "scalp_trailing_historical_source_availability_v1",
         "decision_authority": "source_inventory_only_no_threshold_apply",
@@ -3056,24 +3634,25 @@ def _build_holding_exit_observation_report(
         "valid_profit_ids": valid_ids,
         "strict_completed_position_ids": strict_ids,
         "strict_excluded_by_id": {
-            trade_id: reasons for trade_id, reasons in strict_exclusions.items() if reasons
+            trade_id: reasons
+            for trade_id, reasons in strict_exclusions.items()
+            if reasons
         },
         "four_axis_source_gap_by_id": four_axis_tuning["source_gap_by_id"],
         "historical_direct_ids": sorted(
-            trade_id for trade_id, grade in four_axis_tuning[
-                "evidence_grade_by_id"
-            ].items() if grade == "historical_direct"
+            trade_id
+            for trade_id, grade in four_axis_tuning["evidence_grade_by_id"].items()
+            if grade == "historical_direct"
         ),
-        "historical_reconstructed_count": four_axis_tuning[
-            "evidence_grade_counts"
-        ].get("historical_reconstructed", 0),
+        "historical_reconstructed_count": four_axis_tuning["evidence_grade_counts"].get(
+            "historical_reconstructed", 0
+        ),
         "not_four_axis_eligible_ids": sorted(
-            set(valid_ids) - set(strict_ids)
-            | set(four_axis_tuning["source_gap_by_id"])
+            set(valid_ids) - set(strict_ids) | set(four_axis_tuning["source_gap_by_id"])
         ),
     }
     report = {
-        'universal_trailing_replay': universal_replay,
+        "universal_trailing_replay": universal_replay,
         "date": safe_date,
         # Kept for compatibility with existing readers. New readers should
         # consume analysis_window, whose default is the policy refresh floor rather
@@ -3097,23 +3676,29 @@ def _build_holding_exit_observation_report(
             "raw_terminal_count_scope": (
                 "sealed_dates_only" if census_receipts else "unobserved"
             ),
-            "sealed_source_generations": [{
-                "source_date": item.get("source_date"),
-                "profile": item.get("profile"),
-                "run_id": item.get("run_id"),
-                "source_receipts_sha256": item.get("source_receipts_sha256"),
-                "source_receipts_status": item.get("source_receipts_status"),
-                "input_generation_sha256": item.get("input_generation_sha256"),
-                "projection_sha256": item.get("projection_sha256"),
-                "raw_terminal_count": item.get("raw_terminal_count"),
-                "projected_count": item.get("projected_count"),
-                "unobserved_count": item.get("unobserved_count"),
-            } for item in census_receipts],
-            "quarantined_duplicate_ids": sorted({
-                gap["id"] for gap in completed_gaps
-                if gap.get("reason") == "duplicate_completed_trade_conflict"
-                and gap.get("id")
-            }),
+            "sealed_source_generations": [
+                {
+                    "source_date": item.get("source_date"),
+                    "profile": item.get("profile"),
+                    "run_id": item.get("run_id"),
+                    "source_receipts_sha256": item.get("source_receipts_sha256"),
+                    "source_receipts_status": item.get("source_receipts_status"),
+                    "input_generation_sha256": item.get("input_generation_sha256"),
+                    "projection_sha256": item.get("projection_sha256"),
+                    "raw_terminal_count": item.get("raw_terminal_count"),
+                    "projected_count": item.get("projected_count"),
+                    "unobserved_count": item.get("unobserved_count"),
+                }
+                for item in census_receipts
+            ],
+            "quarantined_duplicate_ids": sorted(
+                {
+                    gap["id"]
+                    for gap in completed_gaps
+                    if gap.get("reason") == "duplicate_completed_trade_conflict"
+                    and gap.get("id")
+                }
+            ),
             "main_completed_rows": len(main_completed_rows),
             "other_owner_excluded_rows": len(completed_rows) - len(main_completed_rows),
             "valid_profit_rows": len(valid_trades),
@@ -3124,19 +3709,25 @@ def _build_holding_exit_observation_report(
             "db_completed_invalid_profit_ids": invalid_ids,
             "strict_completed_position_ids": strict_ids,
             "excluded_ids_by_reason": {
-                reason: [trade_id for trade_id, reasons in strict_exclusions.items()
-                         if reasons and reasons[0] == reason]
-                for reason in sorted({reasons[0] for reasons in strict_exclusions.values()
-                                      if reasons})
+                reason: [
+                    trade_id
+                    for trade_id, reasons in strict_exclusions.items()
+                    if reasons and reasons[0] == reason
+                ]
+                for reason in sorted(
+                    {reasons[0] for reasons in strict_exclusions.values() if reasons}
+                )
             },
             "excluded_all_reasons": {
-                trade_id: reasons for trade_id, reasons in strict_exclusions.items()
+                trade_id: reasons
+                for trade_id, reasons in strict_exclusions.items()
                 if reasons
             },
             "source_gap_ids": source_gap_ids,
             "strict_cohort_research_ready": bool(strict_trades and not completed_gaps),
             "whole_census_economics_complete": bool(
-                strict_trades and len(strict_trades) == len(valid_trades)
+                strict_trades
+                and len(strict_trades) == len(valid_trades)
                 and len(valid_trades) == len(main_completed_rows)
                 and not completed_gaps
             ),
@@ -3149,7 +3740,8 @@ def _build_holding_exit_observation_report(
             "status": open_position_status,
             "position_ids": [str(row["id"]) for row in open_positions],
             "real_observed_ids": [
-                str(row["id"]) for row in open_positions
+                str(row["id"])
+                for row in open_positions
                 if row.get("real_position_observed")
             ],
             "decision_authority": "source_only_no_pnl_or_threshold_apply",
@@ -3161,9 +3753,12 @@ def _build_holding_exit_observation_report(
             target_pipeline_summary=target_pipeline_summary,
         ),
         "cohorts": _build_cohorts(strict_trades),
-        "exit_rule_quality": _summarize_exit_rule_quality(post_sell_rows, strict_trades),
+        "exit_rule_quality": _summarize_exit_rule_quality(
+            post_sell_rows, strict_trades
+        ),
         "trailing_threshold_readiness": _build_trailing_threshold_readiness(
-            position_outcomes, open_positions,
+            position_outcomes,
+            open_positions,
             completed_valid_ids=[_trade_id(row) for row in valid_trades],
             mechanical_tuning=mechanical_tuning,
         ),
@@ -3215,7 +3810,8 @@ def _build_holding_exit_observation_report(
         and position_coverage["exact_cost_trades"] == len(strict_trades)
     )
     decision_economic_eligible_ids = sorted(
-        row["record_id"] for row in position_outcomes
+        row["record_id"]
+        for row in position_outcomes
         if row["realized_pnl_krw"] is not None
         and row["exit_rule_provenance"] == "observed"
     )
@@ -3223,17 +3819,29 @@ def _build_holding_exit_observation_report(
         "decision_economic_eligible_ids"
     ] = decision_economic_eligible_ids
     report["cost_input_complete"] = cost_input_complete
-    report["actual_cost_status_counts"] = dict(sorted(Counter(
-        (row.get("actual_cost_reconciliation") or {}).get("status", "cost_source_unavailable")
-        for row in main_completed_rows).items()))
+    report["actual_cost_status_counts"] = dict(
+        sorted(
+            Counter(
+                (row.get("actual_cost_reconciliation") or {}).get(
+                    "status", "cost_source_unavailable"
+                )
+                for row in main_completed_rows
+            ).items()
+        )
+    )
     report["actual_cost_source_generations"] = {
-        day:row['cost_generation'] for day,row in input_window['dependencies'].items()}
-    report['original_cost_source_generations'] = {
-        day:row['original_cost_generation'] for day,row in input_window['dependencies'].items()
-        if 'original_cost_generation' in row}
+        day: row["cost_generation"] for day, row in input_window["dependencies"].items()
+    }
+    report["original_cost_source_generations"] = {
+        day: row["original_cost_generation"]
+        for day, row in input_window["dependencies"].items()
+        if "original_cost_generation" in row
+    }
     verify_window(_data_root(), input_window)
     report["input_window_dependencies"] = input_window
-    report["input_window_generation_sha256"] = input_window["input_window_generation_sha256"]
+    report["input_window_generation_sha256"] = input_window[
+        "input_window_generation_sha256"
+    ]
     economic_input_complete = bool(
         cost_input_complete
         and len(decision_economic_eligible_ids) == len(strict_trades)
@@ -3242,7 +3850,8 @@ def _build_holding_exit_observation_report(
     tuning_input_complete = bool(
         economic_input_complete
         and position_coverage["observed_exit_signal_trades"] == len(strict_trades)
-        and position_coverage["effective_threshold_receipt_trades"] == len(strict_trades)
+        and position_coverage["effective_threshold_receipt_trades"]
+        == len(strict_trades)
         and position_coverage["full_post_sell_observation_trades"] == len(strict_trades)
     )
     report["tuning_input_complete"] = tuning_input_complete

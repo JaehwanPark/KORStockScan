@@ -34,43 +34,63 @@ KST = ZoneInfo("Asia/Seoul")
 
 def _local_breakout_bars(recent, *, resistance=3120):
     from datetime import timedelta
+
     start = datetime(2026, 9, 21, 14, 47, tzinfo=KST)
-    values = [(resistance - 10, resistance, resistance - 20, resistance - 10)] * 10 + recent
-    return [dict(dt=start + timedelta(minutes=i), o=o, h=h, l=l, c=c, v=100,
-                 forming=False) for i, (o, h, l, c) in enumerate(values)]
+    values = [
+        (resistance - 10, resistance, resistance - 20, resistance - 10)
+    ] * 10 + recent
+    return [
+        dict(dt=start + timedelta(minutes=i), o=o, h=h, l=l, c=c, v=100, forming=False)
+        for i, (o, h, l, c) in enumerate(values)
+    ]
 
 
 def test_local_breakout_freezes_prebreak_line_and_preserves_shared_structure():
-    from src.engine.scalping.entry_candle_context import _structure, LOCAL_BREAKOUT_VERSION
+    from src.engine.scalping.entry_candle_context import (
+        _structure,
+        LOCAL_BREAKOUT_VERSION,
+    )
+
     # 092220 observed recent bars: the newer 3185 high is NOT resistance.
-    bars = _local_breakout_bars([(3110, 3135, 3100, 3120),
-                                 (3120, 3185, 3115, 3160),
-                                 (3160, 3165, 3150, 3155)])
+    bars = _local_breakout_bars(
+        [(3110, 3135, 3100, 3120), (3120, 3185, 3115, 3160), (3160, 3165, 3150, 3155)]
+    )
     legacy = _structure(bars)
     current = _structure(bars, local_breakout=True)
     local = current["local_breakout"]
     assert legacy["regime"] == "failed_breakout"
     assert current["regime"] != "failed_breakout"
-    assert local["resistance_price"] == 3135  # Ten bars BEFORE the confirmed 14:58 close.
+    assert (
+        local["resistance_price"] == 3135
+    )  # Ten bars BEFORE the confirmed 14:58 close.
     assert local["status"] == "breakout_holding"
     assert local["recheck_required"] is True
     assert current["structure_contract_version"] == LOCAL_BREAKOUT_VERSION
     assert local["available_at"] == bars[-2]["dt"].timestamp() + 60
     altered = [dict(b) for b in bars]
     altered[-1]["h"] = 3200
-    assert _structure(altered, local_breakout=True)["local_breakout"]["episode_id"] == local["episode_id"]
+    assert (
+        _structure(altered, local_breakout=True)["local_breakout"]["episode_id"]
+        == local["episode_id"]
+    )
     assert "local_breakout" not in legacy
 
 
 def test_local_breakout_touch_is_not_confirmation_and_real_failure_is_separate():
     from src.engine.scalping.entry_candle_context import _local_breakout
-    touched = _local_breakout_bars([(30150, 30200, 30100, 30150),
-                                    (30150, 30250, 30100, 30200),
-                                    (30200, 30250, 30100, 30150)], resistance=30200)
+
+    touched = _local_breakout_bars(
+        [
+            (30150, 30200, 30100, 30150),
+            (30150, 30250, 30100, 30200),
+            (30200, 30250, 30100, 30150),
+        ],
+        resistance=30200,
+    )
     assert _local_breakout(touched)["status"] == "no_confirmed_breakout"
-    bars = _local_breakout_bars([(3120, 3150, 3110, 3140),
-                                 (3140, 3145, 3105, 3115),
-                                 (3115, 3120, 3105, 3110)])
+    bars = _local_breakout_bars(
+        [(3120, 3150, 3110, 3140), (3140, 3145, 3105, 3115), (3115, 3120, 3105, 3110)]
+    )
     assert _local_breakout(bars[:-1])["status"] == "retest_pending"
     assert _local_breakout(bars)["status"] == "failed_breakout"
     bars[-1]["forming"] = True
@@ -80,6 +100,7 @@ def test_local_breakout_touch_is_not_confirmation_and_real_failure_is_separate()
 def test_local_breakout_rejects_missing_reversed_or_cross_day_bars():
     from datetime import timedelta
     from src.engine.scalping.entry_candle_context import _local_breakout
+
     bars = _local_breakout_bars([(3120, 3150, 3110, 3140)])
     assert _local_breakout(bars[:10])["status"] == "insufficient"
     assert _local_breakout(list(reversed(bars)))["status"] == "insufficient"
@@ -117,12 +138,14 @@ def test_default_session_uses_shared_post_effective_market_contract():
 
 
 def test_default_session_does_not_reopen_entry_after_integrated_buy_window():
-    assert resolve_entry_candle_session(
-        datetime(2026, 9, 14, 19, 41, tzinfo=KST)
-    ) == "krx_nxt_aftermarket_close_only"
-    assert resolve_entry_candle_session(
-        datetime(2026, 9, 14, 19, 46, tzinfo=KST)
-    ) == "krx_nxt_aftermarket_terminal_exit"
+    assert (
+        resolve_entry_candle_session(datetime(2026, 9, 14, 19, 41, tzinfo=KST))
+        == "krx_nxt_aftermarket_close_only"
+    )
+    assert (
+        resolve_entry_candle_session(datetime(2026, 9, 14, 19, 46, tzinfo=KST))
+        == "krx_nxt_aftermarket_terminal_exit"
+    )
 
 
 def _enable(monkeypatch):
@@ -185,24 +208,43 @@ def _ws(price=10400):
 def _completed_reduced_rest_fixture(now):
     """Exact local REST producer receipt; no live transport or fabricated bars."""
     from src.tests.test_ai_market_snapshot import _ws as snapshot_ws
+
     rows = _candles(12)
     for row in rows:
         row["source_time_basis"] = "ka10080_cntr_tm_bar_timestamp"
     ws = snapshot_ws(now.timestamp(), code="000660")
     ws.update(market_suffix="", market_route="krx_only", market_data_transport_epoch=2)
-    common = dict(item="000660", market_suffix="", market_route="krx_only", transport_epoch=2)
-    ws["realtime_type_snapshots_by_route"] = {"KRX|krx_only": {
-        "0B": dict(common, observed_epoch=now.timestamp() - .1, current_price=10000),
-        "0D": dict(common, observed_epoch=now.timestamp() - .2,
-                   orderbook={"bids": [{"price": 9990}], "asks": [{"price": 10000}]}),
-    }}
+    common = dict(
+        item="000660", market_suffix="", market_route="krx_only", transport_epoch=2
+    )
+    ws["realtime_type_snapshots_by_route"] = {
+        "KRX|krx_only": {
+            "0B": dict(
+                common, observed_epoch=now.timestamp() - 0.1, current_price=10000
+            ),
+            "0D": dict(
+                common,
+                observed_epoch=now.timestamp() - 0.2,
+                orderbook={"bids": [{"price": 9990}], "asks": [{"price": 10000}]},
+            ),
+        }
+    }
     meta = dict(
-        api_id="ka10080", decision_input_profile="reduced_completed_v1",
-        completed_only=True, request_code="000660", entry_candle_request_code="000660",
-        explicit_request_code=True, multi_timeframe_auxiliary_fetch=False,
+        api_id="ka10080",
+        decision_input_profile="reduced_completed_v1",
+        completed_only=True,
+        request_code="000660",
+        entry_candle_request_code="000660",
+        explicit_request_code=True,
+        multi_timeframe_auxiliary_fetch=False,
         rest_received_ts_ms=int(now.timestamp() * 1000),
-        entry_candle_route_binding=dict(schema="entry_candle_request_route_binding_v1",
-            request_code="000660", session="krx_regular", broker_route="KRX", transport_epoch=2),
+        entry_candle_route_binding=dict(
+            schema="entry_candle_request_route_binding_v1",
+            request_code="000660",
+            session="krx_regular",
+            broker_route="KRX",
+            transport_epoch=2,
+        ),
     )
     return rows, ws, meta
 
@@ -211,8 +253,17 @@ def _completed_reduced_rest_fixture(now):
 def test_reduced_completed_candle_uses_verified_close_at_each_minute_phase(second):
     now = datetime(2026, 7, 23, 9, 12, second, tzinfo=KST)
     rows, ws, meta = _completed_reduced_rest_fixture(now)
-    context = build_entry_candle_context(None, "000660", ws, "KRX", "krx_regular",
-        now_ts=now, recent_candles=rows, source_meta=meta, broker_route="KRX")
+    context = build_entry_candle_context(
+        None,
+        "000660",
+        ws,
+        "KRX",
+        "krx_regular",
+        now_ts=now,
+        recent_candles=rows,
+        source_meta=meta,
+        broker_route="KRX",
+    )
     timing = context["completed_candle_timing"]
     source = context["ai_market_snapshot_v1"]["sources"]["candle"]
     assert context["source_quality"]["status"] == "fresh_consistent"
@@ -222,37 +273,71 @@ def test_reduced_completed_candle_uses_verified_close_at_each_minute_phase(secon
     assert source["freshness_limit_ms"] == 90000
     assert source["quality"] == "fresh"
     assert source["observed_at"] == now.replace(second=0).isoformat()
-    assert timing["original_source_verified_epoch"] == meta["rest_received_ts_ms"] / 1000
+    assert (
+        timing["original_source_verified_epoch"] == meta["rest_received_ts_ms"] / 1000
+    )
     fields = snapshot_module.ai_market_snapshot_log_fields(context)
-    assert fields["ai_input_preflight_source_timing"]["candle"]["completed_candle_timing"] == timing
+    assert (
+        fields["ai_input_preflight_source_timing"]["candle"]["completed_candle_timing"]
+        == timing
+    )
 
 
-@pytest.mark.parametrize("fault,expected", [
-    ("missing_latest", "candle_latest_completed_missing"),
-    ("missing_receive", "candle_completed_clock_invalid"),
-    ("old_receive", "candle_completed_clock_invalid"),
-    ("future_receive", "candle_completed_clock_invalid"),
-    ("wrong_epoch", "candle_completed_route_or_epoch_invalid"),
-    ("wrong_route", "candle_completed_route_or_epoch_invalid"),
-    ("wrong_time_basis", "candle_completed_rest_time_basis_invalid"),
-    ("future_bar", "candle_completed_row_clock_invalid"),
-    ("bad_ohlc", "candle_completed_ohlc_invalid"),
-])
-def test_reduced_completed_candle_missing_or_conflicting_source_fails_closed(fault, expected):
+@pytest.mark.parametrize(
+    "fault,expected",
+    [
+        ("missing_latest", "candle_latest_completed_missing"),
+        ("missing_receive", "candle_completed_clock_invalid"),
+        ("old_receive", "candle_completed_clock_invalid"),
+        ("future_receive", "candle_completed_clock_invalid"),
+        ("wrong_epoch", "candle_completed_route_or_epoch_invalid"),
+        ("wrong_route", "candle_completed_route_or_epoch_invalid"),
+        ("wrong_time_basis", "candle_completed_rest_time_basis_invalid"),
+        ("future_bar", "candle_completed_row_clock_invalid"),
+        ("bad_ohlc", "candle_completed_ohlc_invalid"),
+    ],
+)
+def test_reduced_completed_candle_missing_or_conflicting_source_fails_closed(
+    fault, expected
+):
     from datetime import timedelta
+
     now = datetime(2026, 7, 23, 9, 12, 59, tzinfo=KST)
     rows, ws, meta = _completed_reduced_rest_fixture(now)
-    if fault == "missing_latest": rows.pop()
-    elif fault == "missing_receive": meta.pop("rest_received_ts_ms")
-    elif fault == "old_receive": meta["rest_received_ts_ms"] -= 180000
-    elif fault == "future_receive": meta["rest_received_ts_ms"] += 1000
-    elif fault == "wrong_epoch": meta["entry_candle_route_binding"]["transport_epoch"] = 1
-    elif fault == "wrong_route": meta["request_code"] = "000660_AL"
-    elif fault == "wrong_time_basis": rows[-1].pop("source_time_basis")
-    elif fault == "future_bar": rows.append(dict(rows[-1], source_timestamp=(now+timedelta(minutes=1)).strftime("%Y%m%d%H%M00")))
-    elif fault == "bad_ohlc": rows[-1]["고가"] = 1
-    context = build_entry_candle_context(None, "000660", ws, "KRX", "krx_regular",
-        now_ts=now, recent_candles=rows, source_meta=meta, broker_route="KRX")
+    if fault == "missing_latest":
+        rows.pop()
+    elif fault == "missing_receive":
+        meta.pop("rest_received_ts_ms")
+    elif fault == "old_receive":
+        meta["rest_received_ts_ms"] -= 180000
+    elif fault == "future_receive":
+        meta["rest_received_ts_ms"] += 1000
+    elif fault == "wrong_epoch":
+        meta["entry_candle_route_binding"]["transport_epoch"] = 1
+    elif fault == "wrong_route":
+        meta["request_code"] = "000660_AL"
+    elif fault == "wrong_time_basis":
+        rows[-1].pop("source_time_basis")
+    elif fault == "future_bar":
+        rows.append(
+            dict(
+                rows[-1],
+                source_timestamp=(now + timedelta(minutes=1)).strftime("%Y%m%d%H%M00"),
+            )
+        )
+    elif fault == "bad_ohlc":
+        rows[-1]["고가"] = 1
+    context = build_entry_candle_context(
+        None,
+        "000660",
+        ws,
+        "KRX",
+        "krx_regular",
+        now_ts=now,
+        recent_candles=rows,
+        source_meta=meta,
+        broker_route="KRX",
+    )
     assert expected in context["completed_candle_timing"]["blockers"]
     assert context["source_quality"]["status"] == "blocked"
     assert context["ai_market_snapshot_v1"]["ai_input_preflight_v1"]["allowed"] is False
@@ -260,114 +345,258 @@ def test_reduced_completed_candle_missing_or_conflicting_source_fails_closed(fau
 
 def test_completed_receipt_does_not_relabel_strict_holding_or_refresh_at_rollover():
     from datetime import timedelta
-    from src.engine.scalping.entry_candle_context import build_session_candle_source, revalidate_entry_candle_snapshot
+    from src.engine.scalping.entry_candle_context import (
+        build_session_candle_source,
+        revalidate_entry_candle_snapshot,
+    )
+
     now = datetime(2026, 7, 23, 9, 12, 59, tzinfo=KST)
     rows, ws, meta = _completed_reduced_rest_fixture(now)
-    strict = build_session_candle_source(None, "000660", ws, "KRX", "krx_regular",
-        now_ts=now, recent_candles=rows, source_meta=meta, broker_route="KRX")
+    strict = build_session_candle_source(
+        None,
+        "000660",
+        ws,
+        "KRX",
+        "krx_regular",
+        now_ts=now,
+        recent_candles=rows,
+        source_meta=meta,
+        broker_route="KRX",
+    )
     assert "completed_candle_timing" not in strict
-    context = build_entry_candle_context(None, "000660", ws, "KRX", "krx_regular",
-        now_ts=now, recent_candles=rows, source_meta=meta, broker_route="KRX")
+    context = build_entry_candle_context(
+        None,
+        "000660",
+        ws,
+        "KRX",
+        "krx_regular",
+        now_ts=now,
+        recent_candles=rows,
+        source_meta=meta,
+        broker_route="KRX",
+    )
     for stage in ("holding_score", "entry_leg_reprice", "gatekeeper"):
-        snapshot = snapshot_module.build_ai_market_snapshot(stock_code="000660",
-            decision_stage=stage, ws_data=ws, effective_venue="KRX",
-            session_bucket="krx_regular", broker_route="KRX", candle_context=context,
-            now_ts=now.timestamp())
+        snapshot = snapshot_module.build_ai_market_snapshot(
+            stock_code="000660",
+            decision_stage=stage,
+            ws_data=ws,
+            effective_venue="KRX",
+            session_bucket="krx_regular",
+            broker_route="KRX",
+            candle_context=context,
+            now_ts=now.timestamp(),
+        )
         assert snapshot["sources"]["candle"]["age_ms"] == 119000
         assert snapshot["sources"]["candle"]["quality"] == "stale"
     captured = copy.deepcopy(context["completed_candle_timing"])
-    rebound = revalidate_entry_candle_snapshot(context, ws, now_ts=(now+timedelta(seconds=1)).timestamp())
+    rebound = revalidate_entry_candle_snapshot(
+        context, ws, now_ts=(now + timedelta(seconds=1)).timestamp()
+    )
     assert rebound["completed_candle_timing"] == captured
-    assert "candle_latest_completed_missing" in rebound["ai_market_snapshot_v1"]["ai_input_preflight_v1"]["source_blockers"]
+    assert (
+        "candle_latest_completed_missing"
+        in rebound["ai_market_snapshot_v1"]["ai_input_preflight_v1"]["source_blockers"]
+    )
     assert context["completed_candle_timing"] == captured
     ws["market_data_transport_epoch"] = 3
     rebound = revalidate_entry_candle_snapshot(context, ws, now_ts=now.timestamp())
-    assert "candle_completed_route_or_epoch_invalid" in rebound["ai_market_snapshot_v1"]["ai_input_preflight_v1"]["source_blockers"]
+    assert (
+        "candle_completed_route_or_epoch_invalid"
+        in rebound["ai_market_snapshot_v1"]["ai_input_preflight_v1"]["source_blockers"]
+    )
 
 
 def test_reduced_completed_receipt_cannot_bypass_quote_freshness_or_mutate_frozen_snapshot():
     now = datetime(2026, 7, 23, 9, 12, 59, tzinfo=KST)
     rows, ws, meta = _completed_reduced_rest_fixture(now)
-    ws["realtime_type_snapshots_by_route"]["KRX|krx_only"]["0D"]["observed_epoch"] = now.timestamp()-4
-    context = build_entry_candle_context(None, "000660", ws, "KRX", "krx_regular",
-        now_ts=now, recent_candles=rows, source_meta=meta, broker_route="KRX")
+    ws["realtime_type_snapshots_by_route"]["KRX|krx_only"]["0D"]["observed_epoch"] = (
+        now.timestamp() - 4
+    )
+    context = build_entry_candle_context(
+        None,
+        "000660",
+        ws,
+        "KRX",
+        "krx_regular",
+        now_ts=now,
+        recent_candles=rows,
+        source_meta=meta,
+        broker_route="KRX",
+    )
     snapshot = context["ai_market_snapshot_v1"]
     assert snapshot["sources"]["candle"]["quality"] == "fresh"
     assert snapshot["ai_input_preflight_v1"]["allowed"] is False
     assert "bbo_stale" in snapshot["ai_input_preflight_v1"]["source_blockers"]
-    frozen = copy.deepcopy(snapshot["sources"]["candle"]["value"]["completed_candle_timing"])
+    frozen = copy.deepcopy(
+        snapshot["sources"]["candle"]["value"]["completed_candle_timing"]
+    )
     context["completed_candle_timing"]["bar_close_epoch"] += 60
     assert snapshot["sources"]["candle"]["value"]["completed_candle_timing"] == frozen
     epoch, errors = snapshot_module.completed_candle_timing_validation(
-        context, ws, now_epoch=now.timestamp(), session="krx_regular")
+        context, ws, now_epoch=now.timestamp(), session="krx_regular"
+    )
     assert epoch is None and errors == ["candle_completed_timing_invalid"]
 
 
-@pytest.mark.parametrize("elapsed,expected_status", [(0.05, "validated"), (1.05, "blocked")])
-def test_reduced_fetch_uses_actual_preparation_service_clock_and_rollover_cutoff(monkeypatch, elapsed, expected_status):
+@pytest.mark.parametrize(
+    "elapsed,expected_status", [(0.05, "validated"), (1.05, "blocked")]
+)
+def test_reduced_fetch_uses_actual_preparation_service_clock_and_rollover_cutoff(
+    monkeypatch, elapsed, expected_status
+):
     from src.engine.scalping import entry_candle_context as owner
+
     now = datetime(2026, 7, 23, 9, 12, 59, tzinfo=KST)
     rows, ws, meta = _completed_reduced_rest_fixture(now)
-    meta["rest_received_ts_ms"] = int((now.timestamp()+elapsed) * 1000)
+    meta["rest_received_ts_ms"] = int((now.timestamp() + elapsed) * 1000)
     local_perf = [0.0]
     monkeypatch.setattr(owner.time, "perf_counter", lambda: local_perf[0])
+
     def fetch(*args, **kwargs):
         local_perf[0] = elapsed
         return rows, meta
+
     monkeypatch.setattr(owner, "fetch_entry_candles_with_meta", fetch)
-    context = build_entry_candle_context(None, "000660", ws, "KRX", "krx_regular",
-        now_ts=now, source_meta=meta, broker_route="KRX")
+    context = build_entry_candle_context(
+        None,
+        "000660",
+        ws,
+        "KRX",
+        "krx_regular",
+        now_ts=now,
+        source_meta=meta,
+        broker_route="KRX",
+    )
     receipt = context["completed_candle_timing"]
-    assert receipt["prepared_at_epoch"] == now.timestamp()+elapsed
-    assert receipt["original_source_verified_epoch"] == meta["rest_received_ts_ms"]/1000
+    assert receipt["prepared_at_epoch"] == now.timestamp() + elapsed
+    assert (
+        receipt["original_source_verified_epoch"] == meta["rest_received_ts_ms"] / 1000
+    )
     assert receipt["status"] == expected_status
-    assert context["ai_market_snapshot_v1"]["captured_at"] == snapshot_module._iso(now.timestamp()+elapsed)
+    assert context["ai_market_snapshot_v1"]["captured_at"] == snapshot_module._iso(
+        now.timestamp() + elapsed
+    )
     if expected_status == "validated":
-        assert "candle_completed_clock_invalid" not in context["source_quality"]["blockers"]
-        assert context["ai_market_snapshot_v1"]["sources"]["candle"]["quality"] == "fresh"
+        assert (
+            "candle_completed_clock_invalid"
+            not in context["source_quality"]["blockers"]
+        )
+        assert (
+            context["ai_market_snapshot_v1"]["sources"]["candle"]["quality"] == "fresh"
+        )
     else:
         assert "candle_latest_completed_missing" in receipt["blockers"]
 
 
-def test_reduced_ws_close_requires_latest_bar_current_epoch_and_sealed_watermark(tmp_path):
+def test_reduced_ws_close_requires_latest_bar_current_epoch_and_sealed_watermark(
+    tmp_path,
+):
     from datetime import timedelta
-    from src.tests.test_micro_reversion_completed_bars import BASE, INTEGRITY, point, bind
-    from src.engine.scalping.micro_reversion.completed_bars import CompletedBarProjection
+    from src.tests.test_micro_reversion_completed_bars import (
+        BASE,
+        INTEGRITY,
+        point,
+        bind,
+    )
+    from src.engine.scalping.micro_reversion.completed_bars import (
+        CompletedBarProjection,
+    )
     from src.trading.market import shared_ws_snapshot as reader
     from src.engine.scalping.entry_candle_context import build_session_candle_source
+
     p = CompletedBarProjection(tmp_path)
     published = BASE + timedelta(seconds=122)
-    p.consume([point(1, 10), point(2, 60), point(3, 121)], integrity=INTEGRITY,
-        journal_path="durable.jsonl", now_ts=published.timestamp())
+    p.consume(
+        [point(1, 10), point(2, 60), point(3, 121)],
+        integrity=INTEGRITY,
+        journal_path="durable.jsonl",
+        now_ts=published.timestamp(),
+    )
     now = BASE + timedelta(seconds=179)
-    selected = reader.read_shared_completed_bars("005930_AL", now=now,
-        root=tmp_path, snapshot_path=bind(tmp_path, p, now), allow_partial_history=True)
-    rows = [{"source_timestamp": row["cntr_tm"],
-             "source_time_basis": "provider_trade_time", "_history_basis": "observed_valid_rows",
-             "시가": int(row["open_pric"]), "고가": int(row["high_pric"]),
-             "저가": int(row["low_pric"]), "현재가": int(row["cur_prc"]),
-             "거래량": int(row["trde_qty"])} for row in selected["stk_min_pole_chart_qry"]]
-    ws = dict(market_suffix="_AL", market_route="krx_nxt_integrated", market_data_transport_epoch=2)
-    meta = dict(api_id="WS_0B_completed_1m", decision_input_profile="reduced_completed_v1",
-        completed_only=True, request_code="005930_AL", entry_candle_request_code="005930_AL",
-        multi_timeframe_auxiliary_fetch=False, completed_bar_source=selected["_completed_bar_source"],
-        entry_candle_route_binding=dict(schema="entry_candle_request_route_binding_v1",
-            request_code="005930_AL", session="krx_nxt_aftermarket", broker_route="SOR", transport_epoch=2))
+    selected = reader.read_shared_completed_bars(
+        "005930_AL",
+        now=now,
+        root=tmp_path,
+        snapshot_path=bind(tmp_path, p, now),
+        allow_partial_history=True,
+    )
+    rows = [
+        {
+            "source_timestamp": row["cntr_tm"],
+            "source_time_basis": "provider_trade_time",
+            "_history_basis": "observed_valid_rows",
+            "시가": int(row["open_pric"]),
+            "고가": int(row["high_pric"]),
+            "저가": int(row["low_pric"]),
+            "현재가": int(row["cur_prc"]),
+            "거래량": int(row["trde_qty"]),
+        }
+        for row in selected["stk_min_pole_chart_qry"]
+    ]
+    ws = dict(
+        market_suffix="_AL",
+        market_route="krx_nxt_integrated",
+        market_data_transport_epoch=2,
+    )
+    meta = dict(
+        api_id="WS_0B_completed_1m",
+        decision_input_profile="reduced_completed_v1",
+        completed_only=True,
+        request_code="005930_AL",
+        entry_candle_request_code="005930_AL",
+        multi_timeframe_auxiliary_fetch=False,
+        completed_bar_source=selected["_completed_bar_source"],
+        entry_candle_route_binding=dict(
+            schema="entry_candle_request_route_binding_v1",
+            request_code="005930_AL",
+            session="krx_nxt_aftermarket",
+            broker_route="SOR",
+            transport_epoch=2,
+        ),
+    )
+
     def build():
-        return build_session_candle_source(None, "005930_AL", ws, "SOR", "krx_nxt_aftermarket",
-            now_ts=now, recent_candles=rows, source_meta=meta, broker_route="SOR", reduced_inputs=True)
+        return build_session_candle_source(
+            None,
+            "005930_AL",
+            ws,
+            "SOR",
+            "krx_nxt_aftermarket",
+            now_ts=now,
+            recent_candles=rows,
+            source_meta=meta,
+            broker_route="SOR",
+            reduced_inputs=True,
+        )
+
     original = build()
     assert original["completed_candle_timing"]["status"] == "validated"
-    assert original["completed_candle_timing"]["original_source_verified_epoch"] == published.timestamp()
+    assert (
+        original["completed_candle_timing"]["original_source_verified_epoch"]
+        == published.timestamp()
+    )
     assert original["latest_bar_age_sec"] == 119
     meta["completed_bar_source"]["source_epoch"] = 8
-    assert "candle_completed_ws_provenance_invalid" in build()["completed_candle_timing"]["blockers"]
+    assert (
+        "candle_completed_ws_provenance_invalid"
+        in build()["completed_candle_timing"]["blockers"]
+    )
     meta["completed_bar_source"]["source_epoch"] = 7
     meta["completed_bar_source"]["watermark_epoch"] = now.replace(second=0).timestamp()
-    assert "candle_completed_ws_clock_invalid" in build()["completed_candle_timing"]["blockers"]
+    assert (
+        "candle_completed_ws_clock_invalid"
+        in build()["completed_candle_timing"]["blockers"]
+    )
     assert original["completed_candle_timing"]["source_proof"]["source_epoch"] == 7
-    meta["completed_bar_source"]["latest_completed_bar"]["available_at_epoch"] = now.timestamp()+1
-    assert original["completed_candle_timing"]["source_proof"]["latest_completed_bar"]["available_at_epoch"] == published.timestamp()
+    meta["completed_bar_source"]["latest_completed_bar"]["available_at_epoch"] = (
+        now.timestamp() + 1
+    )
+    assert (
+        original["completed_candle_timing"]["source_proof"]["latest_completed_bar"][
+            "available_at_epoch"
+        ]
+        == published.timestamp()
+    )
 
 
 def test_builder_keeps_current_session_separate_and_compresses_latest_twenty(
@@ -1529,7 +1758,9 @@ def test_runtime_call_sites_use_context_and_s15_no_longer_sends_empty_candles():
     state_source = (root / "engine" / "sniper_state_handlers.py").read_text()
     s15_source = (root / "engine" / "sniper_s15_fast_track.py").read_text()
     analysis_source = (root / "engine" / "sniper_analysis.py").read_text()
-    assert not (root / "engine" / "ipo_listing_day_runner.py").exists()  # Permanently retired.
+    assert not (
+        root / "engine" / "ipo_listing_day_runner.py"
+    ).exists()  # Permanently retired.
 
     assert "candle_context=candle_context" in state_source
     assert "candle_context=gatekeeper_candle_context" not in state_source

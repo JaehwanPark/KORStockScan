@@ -12,8 +12,10 @@ def test_backfill_samples_through_canonical_monitoring_owner(monkeypatch):
     sample = {"cpu": {"cpu_busy_pct": 12.0}}
     monkeypatch.setattr(system_metric_sampler, "sample_once", lambda: sample)
     assert mod._sample_metrics() is sample
+
     def failed_sample():
         raise OSError("fixture_sample_failed")
+
     monkeypatch.setattr(system_metric_sampler, "sample_once", failed_sample)
     assert mod._sample_metrics() == {"sample_error": "fixture_sample_failed"}
 
@@ -184,21 +186,35 @@ def test_backfill_routes_dynamic_smoothing_journal_family(tmp_path, monkeypatch)
     assert audit["coverage_complete"] is True
     assert audit["unroutable_stage_count"] == 3
     assert audit["issues"] == ["unroutable_smoothing_stage_present"]
-    expected_counts = {"holding_flow_ofi_smoothing": {
-        "smoothing_source_only_path_armed": 1,
-        "smoothing_source_only_path_horizon": 1,
-        "smoothing_source_only_path_closed": 1,
-    }}
+    expected_counts = {
+        "holding_flow_ofi_smoothing": {
+            "smoothing_source_only_path_armed": 1,
+            "smoothing_source_only_path_horizon": 1,
+            "smoothing_source_only_path_closed": 1,
+        }
+    }
     assert audit["raw_stage_counts_by_family"] == expected_counts
     assert audit["written_stage_counts_by_family"] == expected_counts
     partitions = tmp_path / "threshold_cycle" / "date=2026-08-13"
     assert not (partitions / "family=soft_stop_whipsaw_confirmation").exists()
-    active_files = sorted((partitions / "family=holding_flow_ofi_smoothing").glob("*.jsonl"))
+    active_files = sorted(
+        (partitions / "family=holding_flow_ofi_smoothing").glob("*.jsonl")
+    )
     assert [path.name for path in active_files] == ["part-000001.jsonl"]
     projected = [json.loads(line) for line in active_files[0].read_text().splitlines()]
-    assert all(row["event_type"] == "threshold_cycle_event"
-               and row["family"] == "holding_flow_ofi_smoothing" for row in projected)
-    source_fields = ("stage", "pipeline", "stock_code", "fields", "emitted_at", "emitted_date")
+    assert all(
+        row["event_type"] == "threshold_cycle_event"
+        and row["family"] == "holding_flow_ofi_smoothing"
+        for row in projected
+    )
+    source_fields = (
+        "stage",
+        "pipeline",
+        "stock_code",
+        "fields",
+        "emitted_at",
+        "emitted_date",
+    )
     assert [{k: row[k] for k in source_fields} for row in projected] == [
         {k: row[k] for k in source_fields} for row in rows[3:]
     ]

@@ -758,11 +758,14 @@ def test_post_sell_inventory_keeps_sim_and_real_separate(tmp_path):
     assert inventory["legacy_rows_used_as_exact_outcomes"] == 0
 
 
-def test_write_report_creates_json_and_markdown(tmp_path,monkeypatch):
+def test_write_report_creates_json_and_markdown(tmp_path, monkeypatch):
     from src.engine.scalping import opening_rotation_backtest as retired
-    def forbidden(*args,**kwargs):raise AssertionError("retired publisher performed I/O")
-    monkeypatch.setattr(type(tmp_path),"write_text",forbidden)
-    assert retired.write_report({})["status"]=="retired"
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("retired publisher performed I/O")
+
+    monkeypatch.setattr(type(tmp_path), "write_text", forbidden)
+    assert retired.write_report({})["status"] == "retired"
 
 
 @pytest.mark.parametrize(
@@ -800,4 +803,6 @@ def test_report_identity_pins_config_and_versioned_filename(tmp_path):
     assert identity["opening_rotation_window_version"] == WINDOW_VERSION
     assert len(identity["config_fingerprint"]) == 12
 
-    assert identity["config_fingerprint"] == backtest._config_fingerprint(identity["entry_config"])
+    assert identity["config_fingerprint"] == backtest._config_fingerprint(
+        identity["entry_config"]
+    )

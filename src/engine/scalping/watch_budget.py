@@ -237,8 +237,6 @@ class WatchBudgetLimits:
     rising_max_with_borrow: int
 
 
-
-
 def policy_version() -> str:
     return "general1_rising_residual_opening_retired_v3"
 
@@ -262,9 +260,7 @@ def limits(
     general_max = min(1, total)
     del opening_window_active
     opening_protected = 0
-    rising_guaranteed = max(
-        0, total - general_max - opening_protected
-    )
+    rising_guaranteed = max(0, total - general_max - opening_protected)
     # The general slot is never borrowed.
     rising_max_with_borrow = max(0, total - general_max)
     return WatchBudgetLimits(

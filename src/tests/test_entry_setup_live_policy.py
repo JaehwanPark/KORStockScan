@@ -81,8 +81,12 @@ def _pin_auto_promotion(monkeypatch, tmp_path):
 
 
 @pytest.mark.parametrize("scope", rollout.AUTO_PROMOTION_SCOPES)
-@pytest.mark.parametrize("fixed_symbol", [None, "005930", "034020", "403870", "196170", "036930"])
-def test_all_continuous_machine_primary_resolver(monkeypatch, tmp_path, scope, fixed_symbol):
+@pytest.mark.parametrize(
+    "fixed_symbol", [None, "005930", "034020", "403870", "196170", "036930"]
+)
+def test_all_continuous_machine_primary_resolver(
+    monkeypatch, tmp_path, scope, fixed_symbol
+):
     from src.engine.scalping import mechanistic_entry_runtime_policy as initial
     from src.tests.test_mechanistic_entry_runtime_policy import source
 
@@ -111,22 +115,34 @@ def test_all_continuous_machine_primary_resolver(monkeypatch, tmp_path, scope, f
     position_tag = "SCANNER"
     if fixed_symbol:
         from src.engine import sniper_state_handlers as handlers
+
         class EvaluationClock(datetime):
             @classmethod
             def now(cls, tz=None):
                 return datetime(2026, 8, 7, 10, tzinfo=policy.KST)
+
         monkeypatch.setattr(handlers, "datetime", EvaluationClock)
         from src.engine.scalping import main_fixed_watch as fixed
         from types import SimpleNamespace
-        monkeypatch.setattr(fixed.session_contract, "resolve_market_session", lambda _now: SimpleNamespace(
-            session_regime=fixed.session_contract.MARKET_SESSION_REGIME_KRX_REGULAR))
+
+        monkeypatch.setattr(
+            fixed.session_contract,
+            "resolve_market_session",
+            lambda _now: SimpleNamespace(
+                session_regime=fixed.session_contract.MARKET_SESSION_REGIME_KRX_REGULAR
+            ),
+        )
         now_ts = EvaluationClock.now().timestamp()
         route = fixed.session_route(now_ts, fixed_symbol)
-        target = {"position_tag": "SCALP_BASE", "code": fixed_symbol,
-                  "watch_origin": "MAIN_FIXED_WATCH",
-                  "watch_admission_id": f"FIXED-2026-08-07-{fixed_symbol}-{route['bucket']}-{route['route']}-a1",
-                  "watch_generation_id": fixed.generation_id(now_ts, route),
-                  "market_data_route": route["route"], "broker_route": "SOR"}
+        target = {
+            "position_tag": "SCALP_BASE",
+            "code": fixed_symbol,
+            "watch_origin": "MAIN_FIXED_WATCH",
+            "watch_admission_id": f"FIXED-2026-08-07-{fixed_symbol}-{route['bucket']}-{route['route']}-a1",
+            "watch_generation_id": fixed.generation_id(now_ts, route),
+            "market_data_route": route["route"],
+            "broker_route": "SOR",
+        }
         position_tag = handlers._entry_ai_policy_position_tag(target)
         assert target["position_tag"] == "SCALP_BASE"
     resolved = policy.resolve_live_prompt_policy(
@@ -145,9 +161,7 @@ def test_all_continuous_machine_primary_resolver(monkeypatch, tmp_path, scope, f
     assert resolved["machine_policy_scope"] == [venue, session]
     assert resolved["auxiliary_historical_context"]["scope"] == scope
     assert resolved["status"] == (
-        "active_bounded_krx_canary"
-        if venue == "KRX"
-        else "active_bounded_nxt_canary"
+        "active_bounded_krx_canary" if venue == "KRX" else "active_bounded_nxt_canary"
     )
     monkeypatch.setenv(policy._cohort_env_key((venue, session)), "false")
     disabled = policy.resolve_live_prompt_policy(
@@ -196,7 +210,9 @@ def test_machine_primary_preopen_verification_checks_exact_loaded_env(
         runtime_env=loaded_env,
     )
     assert rejected["passed"] is False
-    assert all(row["primary_decision_owner"] is None for row in rejected["scope_results"])
+    assert all(
+        row["primary_decision_owner"] is None for row in rejected["scope_results"]
+    )
 
 
 def test_initial_machine_policy_resolves_without_performance_candidate(
@@ -285,9 +301,7 @@ def test_nxt_exact_candidate_preopen_and_runtime_are_isolated(monkeypatch, tmp_p
     )
     blocked = policy.build_preopen_activation(target_date=TARGET_DATE, cohort=cohort)
     assert "runtime_contract_exact_rollout_scope_missing" in blocked["blocking_reasons"]
-    monkeypatch.setenv(
-        policy._cohort_env_key(("NXT", "NXT_AFTERMARKET")), "true"
-    )
+    monkeypatch.setenv(policy._cohort_env_key(("NXT", "NXT_AFTERMARKET")), "true")
     activation = policy.write_preopen_activation(target_date=TARGET_DATE, cohort=cohort)
     assert activation["status"] == "active_bounded_canary"
     resolved = policy.resolve_live_prompt_policy(
@@ -1519,9 +1533,7 @@ def test_integrated_legacy_aftermarket_label_resolves_to_canonical_policy_scope(
     _pin_auto_promotion(monkeypatch, tmp_path)
     monkeypatch.setenv(policy.CANARY_ENV_KEY, "true")
     for name in ("MAX_DAILY_RECHECK", "MAX_DAILY_BUY_RECOVERY"):
-        monkeypatch.setenv(
-            "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_" + name, "100"
-        )
+        monkeypatch.setenv("KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_" + name, "100")
     initial.publish(
         source(tmp_path, SOURCE_DATE),
         data_root=tmp_path,
@@ -1578,7 +1590,9 @@ def test_running_process_with_previous_runtime_date_falls_back(monkeypatch, tmp_
 
 
 @pytest.mark.parametrize("parent_state", ["legacy", "current", "tampered"])
-def test_mechanistic_candidate_projects_to_preopen_primary_owner(monkeypatch, tmp_path, parent_state):
+def test_mechanistic_candidate_projects_to_preopen_primary_owner(
+    monkeypatch, tmp_path, parent_state
+):
     monkeypatch.setattr(policy, "DATA_DIR", tmp_path)
     report_dir = tmp_path / "report" / "ai_decision_action_outcome_calibration"
     report_dir.mkdir(parents=True)
@@ -1607,7 +1621,9 @@ def test_mechanistic_candidate_projects_to_preopen_primary_owner(monkeypatch, tm
         parent = json.loads(json.dumps(policy.MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1))
         parent["thresholds"]["minimum_micro_net_aggressive_delta_10t"] = 7.0
         candidate_body["incumbent_machine_policy"] = parent
-        candidate_body["incumbent_machine_policy_sha256"] = calibration._canonical_sha256(parent)
+        candidate_body["incumbent_machine_policy_sha256"] = (
+            calibration._canonical_sha256(parent)
+        )
         if parent_state == "tampered":
             parent["thresholds"]["minimum_micro_net_aggressive_delta_10t"] = 9.0
     candidate = {
@@ -1643,35 +1659,61 @@ def test_mechanistic_candidate_projects_to_preopen_primary_owner(monkeypatch, tm
     assert projection["runtime_effect"] is False
     assert projection["allowed_runtime_apply"] is False
     if parent_state == "current":
-        assert projection["threshold_policy"]["thresholds"]["minimum_micro_net_aggressive_delta_10t"] == 7.0
-        assert projection["incumbent_machine_policy_sha256"] == calibration._canonical_sha256(parent)
+        assert (
+            projection["threshold_policy"]["thresholds"][
+                "minimum_micro_net_aggressive_delta_10t"
+            ]
+            == 7.0
+        )
+        assert projection[
+            "incumbent_machine_policy_sha256"
+        ] == calibration._canonical_sha256(parent)
 
 
 def test_initial_resolver_uses_validated_readonly_components(monkeypatch, tmp_path):
     from src.engine.scalping import mechanistic_entry_runtime_policy as native
+
     _configure_paths(monkeypatch, tmp_path)
     _enable_probe_contract(monkeypatch)
     _pin_auto_promotion(monkeypatch, tmp_path)
-    bundle = native._freeze(dict(source_date=SOURCE_DATE, target_date=TARGET_DATE,
-        bundle_sha256='b'*64, adoption_basis='operator_initial', machine_disposition='selected',
-        ai_policy=dict(prompt_version=native.AI_VERSION, system_prompt='prompt',
-                       system_prompt_sha256='p'*64, variant=native.AI_VARIANT),
-        machine_policy={'thresholds': {'same': 1}}, historical_context={},
-        continuous_reversal={'auxiliary_cells': {'unchanged': []}}))
-    calls=[]
+    bundle = native._freeze(
+        dict(
+            source_date=SOURCE_DATE,
+            target_date=TARGET_DATE,
+            bundle_sha256="b" * 64,
+            adoption_basis="operator_initial",
+            machine_disposition="selected",
+            ai_policy=dict(
+                prompt_version=native.AI_VERSION,
+                system_prompt="prompt",
+                system_prompt_sha256="p" * 64,
+                variant=native.AI_VARIANT,
+            ),
+            machine_policy={"thresholds": {"same": 1}},
+            historical_context={},
+            continuous_reversal={"auxiliary_cells": {"unchanged": []}},
+        )
+    )
+    calls = []
+
     def load(**kw):
         calls.append(kw)
-        assert kw['_immutable'] is True
+        assert kw["_immutable"] is True
         return bundle
-    monkeypatch.setattr(native, 'load_effective', load)
+
+    monkeypatch.setattr(native, "load_effective", load)
     result = policy.resolve_live_prompt_policy(
         configured_prompt_version=DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
-        effective_venue='KRX', session_bucket='KRX_REGULAR', position_tag='SCANNER', strategy='SCALPING',
-        now=datetime(2026,8,7,10,0,tzinfo=policy.KST))
-    assert result['enabled'] is True
-    assert len(calls)==1
-    assert result['continuous_reversal'] is bundle['continuous_reversal']
-    with pytest.raises(TypeError, match='immutable'):
-        result['continuous_reversal']['auxiliary_cells']['unchanged'].append('mutation')
-    result['continuous_reversal_assessment'] = {'action':'BLOCK'}
-    assert 'continuous_reversal_assessment' not in bundle
+        effective_venue="KRX",
+        session_bucket="KRX_REGULAR",
+        position_tag="SCANNER",
+        strategy="SCALPING",
+        now=datetime(2026, 8, 7, 10, 0, tzinfo=policy.KST),
+    )
+    assert result["enabled"] is True
+    assert len(calls) == 1
+    assert result["continuous_reversal"] is bundle["continuous_reversal"]
+    with pytest.raises(TypeError, match="immutable"):
+        result["continuous_reversal"]["auxiliary_cells"]["unchanged"].append("mutation")
+    result["continuous_reversal_assessment"] = {"action": "BLOCK"}
+    assert "continuous_reversal_assessment" not in bundle

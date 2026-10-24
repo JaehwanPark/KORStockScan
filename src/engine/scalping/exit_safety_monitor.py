@@ -64,8 +64,9 @@ class ScalpExitSafetyMonitor:
         if thread and thread is not threading.current_thread():
             thread.join(timeout=max(0.0, float(timeout)))
 
-    def run_once(self, *, now_ts: float | None = None,
-                 only_codes: set[str] | None = None) -> int:
+    def run_once(
+        self, *, now_ts: float | None = None, only_codes: set[str] | None = None
+    ) -> int:
         observed_at = float(time.time() if now_ts is None else now_ts)
         with self._state_lock:
             targets = [
@@ -77,13 +78,18 @@ class ScalpExitSafetyMonitor:
         if only_codes is None:
             with self._wakeup_lock:
                 self._holding_codes = {
-                    str(target.get("code") or target.get("stock_code") or "").strip()[:6]
+                    str(target.get("code") or target.get("stock_code") or "").strip()[
+                        :6
+                    ]
                     for target in targets
                 }
         else:
-            targets = [target for target in targets
-                       if str(target.get("code") or target.get("stock_code") or "").strip()[:6]
-                       in only_codes]
+            targets = [
+                target
+                for target in targets
+                if str(target.get("code") or target.get("stock_code") or "").strip()[:6]
+                in only_codes
+            ]
         evaluated = 0
         for target in targets:
             code = str(target.get("code") or target.get("stock_code") or "").strip()[:6]

@@ -55,9 +55,7 @@ def test_integrated_route_quiet_requires_both_verified_market_states_at_1945():
     assert result["expected_market_quiet"] is True
     assert result["receive_expectation"]["required_market_scopes"] == ["KRX", "NXT"]
     assert result["receive_expectation"]["verified_quiet_scopes"] == ["KRX", "NXT"]
-    assert result["receive_expectation"]["resume_at"] == (
-        "2026-09-14T19:45:20+09:00"
-    )
+    assert result["receive_expectation"]["resume_at"] == ("2026-09-14T19:45:20+09:00")
 
     one_scope = monitor.classify_receive_gap(
         _stale_receive_row("krx_nxt_integrated", {"NXT": both["NXT"]}), at

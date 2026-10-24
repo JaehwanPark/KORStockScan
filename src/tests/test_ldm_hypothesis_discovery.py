@@ -14,14 +14,6 @@ def _row(source_date, features, profit, quality="pass", weight=1):
     )
 
 
-
-
-
-
-
-
-
-
 def test_missing_rate_cap_excludes_sparse_feature():
     rows = []
     for idx in range(16):
@@ -35,8 +27,6 @@ def test_missing_rate_cap_excludes_sparse_feature():
     _, diagnostics = mod._feature_items(rows)
 
     assert diagnostics["sparse_alpha"]["excluded_reason"] == "missing_rate_cap"
-
-
 
 
 def test_catalog_merge_rejects_invalid_plan_without_writing(tmp_path, monkeypatch):
@@ -77,12 +67,19 @@ def test_catalog_merge_rejects_invalid_plan_without_writing(tmp_path, monkeypatc
     assert result["swing"]["merged"] is False
 
 
-def test_retired_current_producer_preserves_prior_and_has_no_authority(tmp_path,monkeypatch):
+def test_retired_current_producer_preserves_prior_and_has_no_authority(
+    tmp_path, monkeypatch
+):
     import importlib
-    current=importlib.import_module('src.engine.automation.ldm_hypothesis_discovery')
-    prior=tmp_path/"prior.json";prior.write_text("original")
-    def forbidden(*a,**kw):raise AssertionError("retired producer accessed storage")
-    monkeypatch.setattr(type(prior),"write_text",forbidden)
-    monkeypatch.setattr(type(prior),"read_text",forbidden)
-    result=current.build_hypotheses("2026-10-12")
-    assert result["status"]=="retired" and result["allowed_runtime_apply"] is False
+
+    current = importlib.import_module("src.engine.automation.ldm_hypothesis_discovery")
+    prior = tmp_path / "prior.json"
+    prior.write_text("original")
+
+    def forbidden(*a, **kw):
+        raise AssertionError("retired producer accessed storage")
+
+    monkeypatch.setattr(type(prior), "write_text", forbidden)
+    monkeypatch.setattr(type(prior), "read_text", forbidden)
+    result = current.build_hypotheses("2026-10-12")
+    assert result["status"] == "retired" and result["allowed_runtime_apply"] is False

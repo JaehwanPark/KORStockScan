@@ -41,10 +41,6 @@ def read_source(path: Path) -> tuple[dict, str | None]:
     return (value if isinstance(value, dict) else {}), digest
 
 
-
-
-
-
 def canonical_receipt(root: Path, day: str, ev: dict) -> dict:
     work, work_hash = read_source(report_path(root, "code_improvement_workorder", day))
     issues = []
@@ -112,9 +108,7 @@ def canonical_receipt(root: Path, day: str, ev: dict) -> dict:
     }
 
 
-def verify_drought_handoff(
-    root: Path, day: str, *, ev: dict, summary: dict
-) -> dict:
+def verify_drought_handoff(root: Path, day: str, *, ev: dict, summary: dict) -> dict:
     expected = canonical_receipt(root, day, ev)
     issues = list(expected["issues"])
     if summary.get("drought_handoff") != expected:

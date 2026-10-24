@@ -24,7 +24,9 @@ from zoneinfo import ZoneInfo
 
 from src.engine.sentinel_event_cache import update_and_load_cached_event_rows
 from src.engine.ai.holding_exit_vote import (
-    PATH_POLICY_BY_MARKET, load_path_events_file, path_vote_store_path,
+    PATH_POLICY_BY_MARKET,
+    load_path_events_file,
+    path_vote_store_path,
 )
 from src.engine.scalping.holding_path_vote_policy import (
     load_bundle as load_holding_vote_bundle,
@@ -74,14 +76,40 @@ SESSION_SCOPE_FIELD_KEYS = (
 )
 # Only prior-day summaries use this projection. Current-day causal auditing
 # continues to consume every original field, including the first-crossing source.
-BASELINE_SUMMARY_FIELDS = frozenset((*VENUE_SCOPE_FIELD_KEYS, *SESSION_SCOPE_FIELD_KEYS,
-    "actual_execution_venue", "actual_order_submitted", "broker_order_forbidden",
-    "simulated_order", "simulation_book", "simulation_owner", "swing_intraday_probe",
-    "probe_id", "probe_origin_stage", "ord_no", "order_no", "broker_order_no",
-    "ai_cache", "ai_parse_fail", "holding_score_score50_origin", "holding_score_effective",
-    "ai_score", "current_ai_score", "holding_score_preflight_blocked", "holding_score_source",
-    "holding_score_raw_source", "holding_score_basis", "holding_score_excluded_reason",
-    "ai_result_source", "worsen_pct", "profit_rate", "exit_rule", "reason"))
+BASELINE_SUMMARY_FIELDS = frozenset(
+    (
+        *VENUE_SCOPE_FIELD_KEYS,
+        *SESSION_SCOPE_FIELD_KEYS,
+        "actual_execution_venue",
+        "actual_order_submitted",
+        "broker_order_forbidden",
+        "simulated_order",
+        "simulation_book",
+        "simulation_owner",
+        "swing_intraday_probe",
+        "probe_id",
+        "probe_origin_stage",
+        "ord_no",
+        "order_no",
+        "broker_order_no",
+        "ai_cache",
+        "ai_parse_fail",
+        "holding_score_score50_origin",
+        "holding_score_effective",
+        "ai_score",
+        "current_ai_score",
+        "holding_score_preflight_blocked",
+        "holding_score_source",
+        "holding_score_raw_source",
+        "holding_score_basis",
+        "holding_score_excluded_reason",
+        "ai_result_source",
+        "worsen_pct",
+        "profit_rate",
+        "exit_rule",
+        "reason",
+    )
+)
 HOLDING_CLASSIFICATION_PRIORITY = (
     "RUNTIME_OPS",
     "SELL_EXECUTION_DROUGHT",
@@ -142,8 +170,11 @@ def _parse_iso_datetime(value: str) -> datetime | None:
         parsed = datetime.fromisoformat(text)
         # Sentinel windows use KST wall time. Normalize at both raw and legacy
         # cache entry points, before sorting or subtracting mixed source clocks.
-        return (parsed.astimezone(ZoneInfo("Asia/Seoul")).replace(tzinfo=None)
-                if parsed.tzinfo is not None else parsed)
+        return (
+            parsed.astimezone(ZoneInfo("Asia/Seoul")).replace(tzinfo=None)
+            if parsed.tzinfo is not None
+            else parsed
+        )
     except ValueError:
         return None
 
@@ -236,6 +267,7 @@ def load_pipeline_events(
         )
         if summary_only:
             from src.engine.monitoring import sentinel_compact_store as store
+
             cache_path = Path(receipt["cache_path"])
             meta_path = cache_path.with_suffix(".meta.json")
             # Share the native cache writer's lock across the projection read.
@@ -245,29 +277,55 @@ def load_pipeline_events(
                 expected = receipt["cache_generation"]
                 if store.stamp(cache_path) != expected:
                     raise ValueError("holding_baseline_cache_generation_changed")
-                columns = ("emitted_at", "pipeline", "stage", "stock_name", "stock_code", "record_id")
+                columns = (
+                    "emitted_at",
+                    "pipeline",
+                    "stage",
+                    "stock_name",
+                    "stock_code",
+                    "record_id",
+                )
 
                 def project_rows():
-                    return [[*(row.get(key) for key in columns), {
-                        str(key): _safe_str(value)
-                        for key, value in (row.get("fields") or {}).items()
-                        if key in BASELINE_SUMMARY_FIELDS}]
-                        for row in iter_jsonl(cache_path)]
+                    return [
+                        [
+                            *(row.get(key) for key in columns),
+                            {
+                                str(key): _safe_str(value)
+                                for key, value in (row.get("fields") or {}).items()
+                                if key in BASELINE_SUMMARY_FIELDS
+                            },
+                        ]
+                        for row in iter_jsonl(cache_path)
+                    ]
 
                 contract = {
-                    "reader_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
-                    "store_sha256": hashlib.sha256(Path(store.__file__).read_bytes()).hexdigest(),
+                    "reader_sha256": hashlib.sha256(
+                        Path(__file__).read_bytes()
+                    ).hexdigest(),
+                    "store_sha256": hashlib.sha256(
+                        Path(store.__file__).read_bytes()
+                    ).hexdigest(),
                     "fields": sorted(BASELINE_SUMMARY_FIELDS),
                     "columns": list(columns),
                 }
-                rows = store.slim_summary_projection(cache_path, project_rows, contract=contract)
-                if (store.stamp(cache_path) != expected
-                        or len(rows) != receipt["cache_event_count"]
-                        or any(not isinstance(row, list) or len(row) != len(columns) + 1
-                               or not isinstance(row[-1], dict)
-                               for row in rows)):
+                rows = store.slim_summary_projection(
+                    cache_path, project_rows, contract=contract
+                )
+                if (
+                    store.stamp(cache_path) != expected
+                    or len(rows) != receipt["cache_event_count"]
+                    or any(
+                        not isinstance(row, list)
+                        or len(row) != len(columns) + 1
+                        or not isinstance(row[-1], dict)
+                        for row in rows
+                    )
+                ):
                     raise ValueError("holding_baseline_projection_population_changed")
-                rows = [{**dict(zip(columns, row[:-1])), "fields": row[-1]} for row in rows]
+                rows = [
+                    {**dict(zip(columns, row[:-1])), "fields": row[-1]} for row in rows
+                ]
         events = [
             event for row in rows if (event := _event_from_cache_row(row)) is not None
         ]
@@ -358,15 +416,24 @@ def _partition_events_by_venue_session(
     events: list[PipelineEvent],
 ) -> tuple[dict[str, list[PipelineEvent]], dict[str, int]]:
     explicit_by_attempt: dict[str, dict[datetime, set[tuple[str, str]]]] = defaultdict(
-        lambda: defaultdict(set))
-    explicit_scopes = [event_scope.explicit_event_scope(
-            event.fields, event.emitted_at, venue_keys=VENUE_SCOPE_FIELD_KEYS,
-            session_keys=SESSION_SCOPE_FIELD_KEYS) for event in events]
+        lambda: defaultdict(set)
+    )
+    explicit_scopes = [
+        event_scope.explicit_event_scope(
+            event.fields,
+            event.emitted_at,
+            venue_keys=VENUE_SCOPE_FIELD_KEYS,
+            session_keys=SESSION_SCOPE_FIELD_KEYS,
+        )
+        for event in events
+    ]
     for event, scope in zip(events, explicit_scopes):
         exact_key = _exact_attempt_key(event)
         if scope and scope[2] == "pass" and exact_key:
             explicit_by_attempt[exact_key][event.emitted_at].add((scope[0], scope[1]))
-    indexed = {key: (sorted(scopes), scopes) for key, scopes in explicit_by_attempt.items()}
+    indexed = {
+        key: (sorted(scopes), scopes) for key, scopes in explicit_by_attempt.items()
+    }
 
     groups: dict[str, list[PipelineEvent]] = defaultdict(list)
     quality_counts: Counter[str] = Counter()
@@ -385,7 +452,10 @@ def _partition_events_by_venue_session(
                     for candidate_at in candidates
                 )
                 for candidate_at in candidates:
-                    if abs((candidate_at - event.emitted_at).total_seconds()) == min_delta:
+                    if (
+                        abs((candidate_at - event.emitted_at).total_seconds())
+                        == min_delta
+                    ):
                         nearest_scopes.update(scopes[candidate_at])
             if len(nearest_scopes) == 1:
                 venue, session = next(iter(nearest_scopes))
@@ -820,11 +890,15 @@ def _observation_metrics(observation: dict[str, Any] | None) -> dict[str, Any]:
     operational_axes = readiness.get("operational_axes") or {}
     population = observation.get("completed_population_quality") or {}
     return {
-        "completed_valid_count": len(population.get("db_completed_valid_profit_ids") or []),
+        "completed_valid_count": len(
+            population.get("db_completed_valid_profit_ids") or []
+        ),
         "strict_completed_position_count": len(
             population.get("strict_completed_position_ids") or []
         ),
-        "strict_completion_source_gap_count": len(population.get("source_gap_ids") or []),
+        "strict_completion_source_gap_count": len(
+            population.get("source_gap_ids") or []
+        ),
         "soft_stop_total": int(soft_stop.get("total_soft_stop") or 0),
         "soft_stop_rebound_above_sell_10m_rate": _safe_float(
             soft_stop.get("rebound_above_sell_10m_rate"),
@@ -848,23 +922,31 @@ def _observation_metrics(observation: dict[str, Any] | None) -> dict[str, Any]:
             operational_replay.get("source_gap_by_id") or {}
         ),
         "trailing_threshold_source_status": readiness.get("status") or "source_gap",
-        "trailing_four_axis_status": four_axis.get("status") or "source_gap_report_missing",
+        "trailing_four_axis_status": four_axis.get("status")
+        or "source_gap_report_missing",
         "trailing_four_axis_source_gap_count": len(
             four_axis.get("source_gap_by_id") or {}
         ),
         "trailing_four_axis_research_candidate_only": bool(
             four_axis.get("research_candidate")
         ),
-        "trailing_mechanical_schema": mechanical.get("schema") or "source_gap_report_missing",
-        "trailing_mechanical_status": mechanical.get("status") or "source_gap_report_missing",
-        "trailing_mechanical_source_gap_count": len(mechanical.get("source_gap_by_id") or {}),
-        "trailing_mechanical_research_candidate_only": bool(mechanical.get("research_candidate")),
+        "trailing_mechanical_schema": mechanical.get("schema")
+        or "source_gap_report_missing",
+        "trailing_mechanical_status": mechanical.get("status")
+        or "source_gap_report_missing",
+        "trailing_mechanical_source_gap_count": len(
+            mechanical.get("source_gap_by_id") or {}
+        ),
+        "trailing_mechanical_research_candidate_only": bool(
+            mechanical.get("research_candidate")
+        ),
         "trailing_mechanical_classifier_policy_status": (
             (mechanical.get("classifier_policy_research") or {}).get("status")
             or "source_gap_report_missing"
         ),
         "trailing_mechanical_classifier_candidate_count": (
-            (mechanical.get("classifier_policy_research") or {}).get("candidate_count") or 0
+            (mechanical.get("classifier_policy_research") or {}).get("candidate_count")
+            or 0
         ),
     }
 
@@ -1084,45 +1166,75 @@ def _followup_route(classification: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _profit_exit_bootstrap_binding(target_date: str, as_of: datetime, *, historical=False) -> tuple[dict | None, dict[int, dict]]:
+def _profit_exit_bootstrap_binding(
+    target_date: str, as_of: datetime, *, historical=False
+) -> tuple[dict | None, dict[int, dict]]:
     """Consume a bounded, exact-date verified receipt; do not inspect or alter a PID."""
     from src.engine.scalping.trailing_mechanical_policy import baseline_receipt
     from src.engine.automation.runtime_policy_bootstrap import _digest_json
+
     root = DATA_DIR / "runtime/policy_bootstrap"
+
     def current_binding():
         try:
-            paths = [root / f"runtime_policy_bootstrap{suffix}_{target_date}.json"
-                     for suffix in ("", "_verify")]
-            if any(path.is_symlink() or not path.is_file() or path.stat().st_size > 8 * 1024 * 1024
-                   for path in paths):
+            paths = [
+                root / f"runtime_policy_bootstrap{suffix}_{target_date}.json"
+                for suffix in ("", "_verify")
+            ]
+            if any(
+                path.is_symlink()
+                or not path.is_file()
+                or path.stat().st_size > 8 * 1024 * 1024
+                for path in paths
+            ):
                 return None, {}
             manifest, verification = [json.loads(path.read_text()) for path in paths]
             receipt = manifest["scalp_trailing_mechanical_policy_receipt"]
             verified_at = datetime.fromisoformat(verification["verified_at"])
             if verified_at.tzinfo is None:
                 return None, {}
-            if (manifest.get("target_date") != target_date or verification.get("target_date") != target_date
-                    or manifest.get("manifest_sha256") != _digest_json({
-                        k: v for k, v in manifest.items() if k != "manifest_sha256"})
-                    or verification.get("manifest_sha256") != manifest["manifest_sha256"]
-                    or verification.get("passed") is not True
-                    or verified_at.timestamp() > as_of.replace(tzinfo=ZoneInfo("Asia/Seoul")).timestamp()
-                    or receipt != baseline_receipt(manifest["env_overrides"], source=receipt["source"])):
+            if (
+                manifest.get("target_date") != target_date
+                or verification.get("target_date") != target_date
+                or manifest.get("manifest_sha256")
+                != _digest_json(
+                    {k: v for k, v in manifest.items() if k != "manifest_sha256"}
+                )
+                or verification.get("manifest_sha256") != manifest["manifest_sha256"]
+                or verification.get("passed") is not True
+                or verified_at.timestamp()
+                > as_of.replace(tzinfo=ZoneInfo("Asia/Seoul")).timestamp()
+                or receipt
+                != baseline_receipt(manifest["env_overrides"], source=receipt["source"])
+            ):
                 return None, {}
             # The native PID archive binds the typed policy from this exact
             # manifest environment. Compare the same receipt shape for the current
             # PID, or its valid archive would look like a conflicting vector.
-            from src.engine.scalping.trailing_situation_policy import ENV_KEY, PreparedTrailingPolicy
+            from src.engine.scalping.trailing_situation_policy import (
+                ENV_KEY,
+                PreparedTrailingPolicy,
+            )
+
             typed_raw = manifest["env_overrides"].get(ENV_KEY)
             typed_policy = json.loads(typed_raw) if typed_raw is not None else None
             if typed_policy is not None:
-                PreparedTrailingPolicy.prepare(typed_policy, target_date=target_date,
-                    parent_sha256=receipt["market_values_sha256"])
+                PreparedTrailingPolicy.prepare(
+                    typed_policy,
+                    target_date=target_date,
+                    parent_sha256=receipt["market_values_sha256"],
+                )
             receipt = {**receipt, "situation_policy": typed_policy}
             pid = verification.get("pid")
-            consumed = (pid if isinstance(pid, int) and not isinstance(pid, bool) and pid > 0
-                        and verification.get("pid_passed") is True
-                        and verification.get("pid_env_available") is True else None)
+            consumed = (
+                pid
+                if isinstance(pid, int)
+                and not isinstance(pid, bool)
+                and pid > 0
+                and verification.get("pid_passed") is True
+                and verification.get("pid_env_available") is True
+                else None
+            )
             return receipt, ({consumed: receipt} if consumed is not None else {})
         except (OSError, ValueError, TypeError, KeyError):
             return None, {}
@@ -1130,7 +1242,10 @@ def _profit_exit_bootstrap_binding(target_date: str, as_of: datetime, *, histori
     receipt, consumed_pids = current_binding()
     if receipt is None and not historical:
         return None, {}
-    if historical and target_date >= datetime.now(ZoneInfo("Asia/Seoul")).date().isoformat():
+    if (
+        historical
+        and target_date >= datetime.now(ZoneInfo("Asia/Seoul")).date().isoformat()
+    ):
         return None, {}
     try:
         conflicted_pids = set()
@@ -1146,17 +1261,26 @@ def _profit_exit_bootstrap_binding(target_date: str, as_of: datetime, *, histori
                 prior = json.loads(path.read_text())
                 prior_body = {k: v for k, v in prior.items() if k != "receipt_sha256"}
                 prior_at = datetime.fromisoformat(prior["verified_at"])
-                if (prior.get("schema") == "holding_profit_pid_verification_v1"
-                        and prior.get("receipt_sha256") == _digest_json(prior_body)
-                        and prior.get("target_date") == target_date
-                        and path.name == f"holding_profit_pid_{prior['pid']}_{prior['manifest_sha256']}.json"
-                        and isinstance(prior.get("mechanical_policy_receipt"), dict)
-                        and type(prior.get("pid")) is int and prior["pid"] > 0
-                        and prior_at.tzinfo is not None
-                        and prior_at.timestamp() <= as_of.replace(tzinfo=ZoneInfo("Asia/Seoul")).timestamp()):
+                if (
+                    prior.get("schema") == "holding_profit_pid_verification_v1"
+                    and prior.get("receipt_sha256") == _digest_json(prior_body)
+                    and prior.get("target_date") == target_date
+                    and path.name
+                    == f"holding_profit_pid_{prior['pid']}_{prior['manifest_sha256']}.json"
+                    and isinstance(prior.get("mechanical_policy_receipt"), dict)
+                    and type(prior.get("pid")) is int
+                    and prior["pid"] > 0
+                    and prior_at.tzinfo is not None
+                    and prior_at.timestamp()
+                    <= as_of.replace(tzinfo=ZoneInfo("Asia/Seoul")).timestamp()
+                ):
                     if prior["pid"] in conflicted_pids:
                         continue
-                    if prior["pid"] in consumed_pids and consumed_pids[prior["pid"]] != prior["mechanical_policy_receipt"]:
+                    if (
+                        prior["pid"] in consumed_pids
+                        and consumed_pids[prior["pid"]]
+                        != prior["mechanical_policy_receipt"]
+                    ):
                         # A process cannot consume two pinned bootstrap vectors.
                         consumed_pids.pop(prior["pid"], None)
                         conflicted_pids.add(prior["pid"])
@@ -1182,7 +1306,10 @@ def build_holding_exit_sentinel_report(
     use_cache: bool = False,
     historical_policy: bool = False,
 ) -> dict[str, Any]:
-    if historical_policy and target_date >= datetime.now(ZoneInfo("Asia/Seoul")).date().isoformat():
+    if (
+        historical_policy
+        and target_date >= datetime.now(ZoneInfo("Asia/Seoul")).date().isoformat()
+    ):
         raise ValueError("holding_historical_policy_requires_closed_date")
     events = load_pipeline_events(target_date, use_cache=use_cache)
     if as_of is None:
@@ -1193,11 +1320,24 @@ def build_holding_exit_sentinel_report(
     if as_of.tzinfo is not None:
         as_of = as_of.astimezone(ZoneInfo("Asia/Seoul")).replace(tzinfo=None)
     # All consumers use the same knowledge boundary, including scope partitioning.
-    events = [event for event in events
-              if (event.emitted_at.astimezone(ZoneInfo("Asia/Seoul")).replace(tzinfo=None)
-                  if event.emitted_at.tzinfo else event.emitted_at).date().isoformat() == target_date
-              and (event.emitted_at.astimezone(ZoneInfo("Asia/Seoul")).replace(tzinfo=None)
-                   if event.emitted_at.tzinfo else event.emitted_at) <= as_of]
+    events = [
+        event
+        for event in events
+        if (
+            event.emitted_at.astimezone(ZoneInfo("Asia/Seoul")).replace(tzinfo=None)
+            if event.emitted_at.tzinfo
+            else event.emitted_at
+        )
+        .date()
+        .isoformat()
+        == target_date
+        and (
+            event.emitted_at.astimezone(ZoneInfo("Asia/Seoul")).replace(tzinfo=None)
+            if event.emitted_at.tzinfo
+            else event.emitted_at
+        )
+        <= as_of
+    ]
 
     session_start = datetime.combine(_parse_target_date(target_date), SESSION_START)
     session_summary = _summarize_events(events, start_at=session_start, end_at=as_of)
@@ -1211,8 +1351,9 @@ def build_holding_exit_sentinel_report(
     baseline_date = previous_trading_day_with_events(target_date)
     baseline_summary = None
     if baseline_date:
-        baseline_events = load_pipeline_events(baseline_date, use_cache=use_cache,
-                                              summary_only=use_cache)
+        baseline_events = load_pipeline_events(
+            baseline_date, use_cache=use_cache, summary_only=use_cache
+        )
         baseline_start = datetime.combine(
             _parse_target_date(baseline_date), SESSION_START
         )
@@ -1230,28 +1371,50 @@ def build_holding_exit_sentinel_report(
         try:
             # Archived policy lineage has its own native validator. It cannot
             # claim current-day deployment or enter a runtime policy cache.
-            policy_options = {"require_current_code": False} if historical_policy else {}
-            vote_policy_bundle = load_holding_vote_bundle(DATA_DIR, target_date, **policy_options)
-            verify_holding_vote_source_handoff(DATA_DIR, vote_policy_bundle, **policy_options)
+            policy_options = (
+                {"require_current_code": False} if historical_policy else {}
+            )
+            vote_policy_bundle = load_holding_vote_bundle(
+                DATA_DIR, target_date, **policy_options
+            )
+            verify_holding_vote_source_handoff(
+                DATA_DIR, vote_policy_bundle, **policy_options
+            )
             vote_policies = {
-                (path, market): vote_policy_bundle["cells"][f"{path}|{market}"]["policy"]
+                (path, market): vote_policy_bundle["cells"][f"{path}|{market}"][
+                    "policy"
+                ]
                 for path, market in PATH_POLICY_BY_MARKET
             }
             vote_policy_bundle_sha = vote_policy_bundle["bundle_sha256"]
-            vote_policy_status = ("validated_successor_verified" if vote_policy_bundle.get("selection_mode")=="validated_successor" else "verified_incumbent_carried" if vote_policy_bundle.get("schema")=="holding_path_vote_selected_policy_v2" else "estimated_provisional_verified")
+            vote_policy_status = (
+                "validated_successor_verified"
+                if vote_policy_bundle.get("selection_mode") == "validated_successor"
+                else (
+                    "verified_incumbent_carried"
+                    if vote_policy_bundle.get("schema")
+                    == "holding_path_vote_selected_policy_v2"
+                    else "estimated_provisional_verified"
+                )
+            )
         except (OSError, ValueError, TypeError, KeyError):
             vote_policy_status = "policy_binding_gap"
     mechanical_receipt, consumed_pids = _profit_exit_bootstrap_binding(
-        target_date, as_of, **({"historical": True} if historical_policy else {}))
+        target_date, as_of, **({"historical": True} if historical_policy else {})
+    )
     profit_semantics = audit_profit_exit_flow(
-        events, target_date=target_date,
+        events,
+        target_date=target_date,
         load_votes=lambda position_key: load_path_events_file(
-            path_vote_store_path(DATA_DIR, position_key), position_key,
+            path_vote_store_path(DATA_DIR, position_key),
+            position_key,
         ),
-        observation=observation, policies=vote_policies,
+        observation=observation,
+        policies=vote_policies,
         policy_bundle_sha256=vote_policy_bundle_sha,
         as_of=as_of,
-        mechanical_policy_receipt=mechanical_receipt, consumed_pids=list(consumed_pids),
+        mechanical_policy_receipt=mechanical_receipt,
+        consumed_pids=list(consumed_pids),
         mechanical_receipts_by_pid=consumed_pids,
     )
     profit_semantics["policy_status"] = vote_policy_status
@@ -1306,7 +1469,8 @@ def build_holding_exit_sentinel_report(
             "actual_execution_venue_counts": dict(
                 sorted(
                     Counter(
-                        event_scope.actual_execution_venue(event.fields) for event in source_events
+                        event_scope.actual_execution_venue(event.fields)
+                        for event in source_events
                     ).items()
                 )
             ),
@@ -1474,51 +1638,103 @@ def publish_historical_buy_resolution(target_date, accepted_position_ids, *, now
     """
     directory = _report_dir()
     directory.mkdir(parents=True, exist_ok=True)
-    lock_path = directory/'.historical_resolution.lock'
-    with os.fdopen(os.open(lock_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600), 'a+b') as lock:
+    lock_path = directory / ".historical_resolution.lock"
+    with os.fdopen(
+        os.open(lock_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600), "a+b"
+    ) as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        if (lock_path.stat().st_dev, lock_path.stat().st_ino) != (os.fstat(lock.fileno()).st_dev, os.fstat(lock.fileno()).st_ino):
-            raise ValueError('holding_historical_lock_changed')
+        if (lock_path.stat().st_dev, lock_path.stat().st_ino) != (
+            os.fstat(lock.fileno()).st_dev,
+            os.fstat(lock.fileno()).st_ino,
+        ):
+            raise ValueError("holding_historical_lock_changed")
         from src.engine.scalping import holding_profit_exit_semantics as semantics
-        from src.engine.scalping.entry_split_monitor_projection import _read, _digest, _write_atomic
-        now = now or datetime.now(ZoneInfo('Asia/Seoul'))
-        path = _report_dir()/f'holding_exit_sentinel_{target_date}.json'
-        original, reference = _read(path, 8*1024*1024)
-        prior = semantics.read_historical_resolution(original, report_path=path,
-            report_sha256=reference['sha256'], data_root=DATA_DIR, now=now)
+        from src.engine.scalping.entry_split_monitor_projection import (
+            _read,
+            _digest,
+            _write_atomic,
+        )
+
+        now = now or datetime.now(ZoneInfo("Asia/Seoul"))
+        path = _report_dir() / f"holding_exit_sentinel_{target_date}.json"
+        original, reference = _read(path, 8 * 1024 * 1024)
+        prior = semantics.read_historical_resolution(
+            original,
+            report_path=path,
+            report_sha256=reference["sha256"],
+            data_root=DATA_DIR,
+            now=now,
+        )
         if prior is not None:
-            if prior['accepted_position_ids'] != sorted(map(str, accepted_position_ids)):
-                raise ValueError('holding_historical_gap_population_unproven')
+            if prior["accepted_position_ids"] != sorted(
+                map(str, accepted_position_ids)
+            ):
+                raise ValueError("holding_historical_gap_population_unproven")
             return prior
         before_code = semantics.historical_resolution_code()
         before_sources = semantics.historical_resolution_sources(original, DATA_DIR)
         # Reuse the original knowledge cutoff; later observations cannot fill an
         # absent decision-time field in the frozen report.
-        rebuilt = build_holding_exit_sentinel_report(target_date,
-            as_of=datetime.fromisoformat(original['as_of']), use_cache=True,
-            dry_run=bool(original['dry_run']), historical_policy=True)
-        if (rebuilt['source_generation'] != original['source_generation']
-                or rebuilt['profit_exit_semantics'] != original['profit_exit_semantics']):
-            raise ValueError('holding_historical_native_reaudit_changed')
-        resolution = semantics.historical_buy_gap_resolution(original, data_root=DATA_DIR,
-            accepted_position_ids=accepted_position_ids, now=now)
-        value = dict(schema='holding_historical_resolution_receipt_v1',
-            report_sha256=reference['sha256'], code=before_code,
+        rebuilt = build_holding_exit_sentinel_report(
+            target_date,
+            as_of=datetime.fromisoformat(original["as_of"]),
+            use_cache=True,
+            dry_run=bool(original["dry_run"]),
+            historical_policy=True,
+        )
+        if (
+            rebuilt["source_generation"] != original["source_generation"]
+            or rebuilt["profit_exit_semantics"] != original["profit_exit_semantics"]
+        ):
+            raise ValueError("holding_historical_native_reaudit_changed")
+        resolution = semantics.historical_buy_gap_resolution(
+            original,
+            data_root=DATA_DIR,
+            accepted_position_ids=accepted_position_ids,
+            now=now,
+        )
+        value = dict(
+            schema="holding_historical_resolution_receipt_v1",
+            report_sha256=reference["sha256"],
+            code=before_code,
             sources=semantics.historical_resolution_sources(original, DATA_DIR),
-            accepted_position_ids=sorted(map(str, accepted_position_ids)), resolution=resolution)
-        value['receipt_sha256'] = _digest(value)
-        if (_read(path, 8*1024*1024)[1] != reference
-                or before_code != semantics.historical_resolution_code()):
-            raise ValueError('holding_historical_resolution_source_changed')
+            accepted_position_ids=sorted(map(str, accepted_position_ids)),
+            resolution=resolution,
+        )
+        value["receipt_sha256"] = _digest(value)
+        if (
+            _read(path, 8 * 1024 * 1024)[1] != reference
+            or before_code != semantics.historical_resolution_code()
+        ):
+            raise ValueError("holding_historical_resolution_source_changed")
         # The native cache may append while catching up to the original raw input.
         # Other sources must retain the exact pre-audit generation.
-        if any(value['sources'].get(name) != source for name, source in before_sources.items()
-               if '/sentinel_event_cache/' not in name):
-            raise ValueError('holding_historical_resolution_source_changed')
-        destination = path.parent/'historical_resolutions'/(reference['sha256']+'-'+_digest(before_code)+'-'+_digest(value['sources'])+'.json')
+        if any(
+            value["sources"].get(name) != source
+            for name, source in before_sources.items()
+            if "/sentinel_event_cache/" not in name
+        ):
+            raise ValueError("holding_historical_resolution_source_changed")
+        destination = (
+            path.parent
+            / "historical_resolutions"
+            / (
+                reference["sha256"]
+                + "-"
+                + _digest(before_code)
+                + "-"
+                + _digest(value["sources"])
+                + ".json"
+            )
+        )
         _write_atomic(destination, value, 262144, immutable=True)
-        return semantics.read_historical_resolution(original, report_path=path,
-            report_sha256=reference['sha256'], data_root=DATA_DIR, now=now)
+        return semantics.read_historical_resolution(
+            original,
+            report_path=path,
+            report_sha256=reference["sha256"],
+            data_root=DATA_DIR,
+            now=now,
+        )
 
 
 def save_report_artifacts(report: dict[str, Any]) -> dict[str, str]:

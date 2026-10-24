@@ -25,13 +25,14 @@ class SniperRadar:
     def __init__(self, token):
         self.access_token = token
         self._big_bite_state = {}
-        self._regime_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='radar_regime')
+        self._regime_executor = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="radar_regime"
+        )
         self._regime_lock = threading.Lock()
         self._regime_pending = None
         self._regime_result = None
         self._regime_age_sec = 30.0
         self._regime_closed = False
-
 
         # 💡 [핵심] EventBus 인스턴스 획득 및 실시간 데이터 구독
         self.event_bus = EventBus()
@@ -445,42 +446,77 @@ class SniperRadar:
                 try:
                     self._regime_result = self._regime_pending.result()
                 except Exception as exc:
-                    self._regime_result = dict(regime='BEAR', source_quality='invalid',
-                        reason=type(exc).__name__, fetched_epoch=now)
+                    self._regime_result = dict(
+                        regime="BEAR",
+                        source_quality="invalid",
+                        reason=type(exc).__name__,
+                        fetched_epoch=now,
+                    )
                 self._regime_pending = None
             value = self._regime_result
-            usable = value is not None and 0 <= now-value['fetched_epoch'] <= self._regime_age_sec
+            usable = (
+                value is not None
+                and 0 <= now - value["fetched_epoch"] <= self._regime_age_sec
+            )
             if not usable and self._regime_pending is None and not self._regime_closed:
-                self._regime_pending = self._regime_executor.submit(self._fetch_market_regime, self.access_token)
+                self._regime_pending = self._regime_executor.submit(
+                    self._fetch_market_regime, self.access_token
+                )
             if usable:
-                return value['regime'], dict(value, age_sec=now-value['fetched_epoch'])
-            return 'BEAR', dict(source_quality='pending_or_stale', reason='regime_preparation_pending',
-                                decision_authority='conservative_existing_fallback')
+                return value["regime"], dict(
+                    value, age_sec=now - value["fetched_epoch"]
+                )
+            return "BEAR", dict(
+                source_quality="pending_or_stale",
+                reason="regime_preparation_pending",
+                decision_authority="conservative_existing_fallback",
+            )
 
     def _fetch_market_regime(self, token=None):
         from src.trading.market.index_regime import index_regime
+
         started = time.time()
         started_perf = time.perf_counter()
-        base_date = datetime.now().strftime('%Y%m%d')
+        base_date = datetime.now().strftime("%Y%m%d")
+
         def bind_clock(result):
             result = dict(result, fetched_epoch=started, completed_epoch=time.time())
-            if time.perf_counter()-started_perf > self._regime_age_sec or datetime.now().strftime('%Y%m%d') != base_date:
-                return dict(result, regime='BEAR', source_quality='invalid', reason='regime_original_query_expired')
+            if (
+                time.perf_counter() - started_perf > self._regime_age_sec
+                or datetime.now().strftime("%Y%m%d") != base_date
+            ):
+                return dict(
+                    result,
+                    regime="BEAR",
+                    source_quality="invalid",
+                    reason="regime_original_query_expired",
+                )
             return result
+
         try:
-            df = fdr.DataReader('KS11')
-            rows = [{'dt':day.strftime('%Y%m%d'), 'cur_prc':row['Close']}
-                    for day,row in df.tail(20).iloc[::-1].iterrows()]
+            df = fdr.DataReader("KS11")
+            rows = [
+                {"dt": day.strftime("%Y%m%d"), "cur_prc": row["Close"]}
+                for day, row in df.tail(20).iloc[::-1].iterrows()
+            ]
             result = index_regime(rows, base_date=base_date)
-            return bind_clock(dict(result, source='FDR_KS11'))
+            return bind_clock(dict(result, source="FDR_KS11"))
         except Exception as exc:
-            log_info('[RADAR_REGIME_FDR_INVALID] reason=' + type(exc).__name__)
-        if token and time.perf_counter()-started_perf <= self._regime_age_sec:
+            log_info("[RADAR_REGIME_FDR_INVALID] reason=" + type(exc).__name__)
+        if token and time.perf_counter() - started_perf <= self._regime_age_sec:
             try:
-                return bind_clock(kiwoom_utils.get_index_twenty_day_regime_ka20006(token, base_date=base_date))
+                return bind_clock(
+                    kiwoom_utils.get_index_twenty_day_regime_ka20006(
+                        token, base_date=base_date
+                    )
+                )
             except Exception as exc:
-                log_info('[RADAR_REGIME_KIWOOM_INVALID] reason=' + type(exc).__name__)
-        return bind_clock(dict(regime='BEAR', source_quality='invalid', reason='regime_source_invalid'))
+                log_info("[RADAR_REGIME_KIWOOM_INVALID] reason=" + type(exc).__name__)
+        return bind_clock(
+            dict(
+                regime="BEAR", source_quality="invalid", reason="regime_source_invalid"
+            )
+        )
 
     def shutdown(self):
         with self._regime_lock:
@@ -489,4 +525,4 @@ class SniperRadar:
 
     def get_market_regime(self, token=None):
         """Synchronous offline/scanner compatibility; WS uses preparation only."""
-        return self._fetch_market_regime(token)['regime']
+        return self._fetch_market_regime(token)["regime"]

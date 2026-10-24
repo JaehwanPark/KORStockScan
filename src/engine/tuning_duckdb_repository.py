@@ -60,8 +60,14 @@ class TuningDuckDBRepository:
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
 
-    def register_parquet_dataset(self, dataset: str, partition_pattern: str = "date=*",
-                                 *, start_date=None, end_date=None):
+    def register_parquet_dataset(
+        self,
+        dataset: str,
+        partition_pattern: str = "date=*",
+        *,
+        start_date=None,
+        end_date=None,
+    ):
         """Parquet 데이터셋을 DuckDB에 외부 테이블로 등록."""
         self.registered_parquet_files.pop(dataset, None)
         # 파티션 디렉토리: analytics/parquet/<dataset>/date=*
@@ -71,49 +77,84 @@ class TuningDuckDBRepository:
             raise ValueError("incomplete_parquet_window")
         dataset_dir = PARQUET_ROOT / dataset
         if start_date is not None:
-            start, end = date.fromisoformat(str(start_date)), date.fromisoformat(str(end_date))
+            start, end = date.fromisoformat(str(start_date)), date.fromisoformat(
+                str(end_date)
+            )
             if start > end:
                 raise ValueError("invalid_parquet_window")
             # Bind only actual partitions in the approved window. SQL WHERE
             # cannot protect obsolete files from read_parquet schema discovery.
-            paths = sorted(p for p in dataset_dir.glob("date=*/*.parquet")
-                           if start.isoformat() <= p.parent.name[5:] <= end.isoformat()
-                           and re.fullmatch(r"date=\d{4}-\d{2}-\d{2}", p.parent.name))
+            paths = sorted(
+                p
+                for p in dataset_dir.glob("date=*/*.parquet")
+                if start.isoformat() <= p.parent.name[5:] <= end.isoformat()
+                and re.fullmatch(r"date=\d{4}-\d{2}-\d{2}", p.parent.name)
+            )
             from src.utils.market_day import is_krx_trading_day
-            day=start
-            verified_empty=0
-            present_dates={p.parent.name[5:] for p in paths}
-            if dataset == 'pipeline_events':
-                from src.engine.build_tuning_monitoring_parquet import verify_pipeline_source_receipt
+
+            day = start
+            verified_empty = 0
+            present_dates = {p.parent.name[5:] for p in paths}
+            if dataset == "pipeline_events":
+                from src.engine.build_tuning_monitoring_parquet import (
+                    verify_pipeline_source_receipt,
+                )
+
                 for present_date in present_dates:
-                    receipt_path = dataset_dir / ('date=' + present_date) / 'source_receipt.json'
+                    receipt_path = (
+                        dataset_dir / ("date=" + present_date) / "source_receipt.json"
+                    )
                     if receipt_path.exists():
-                        self.pipeline_source_receipts[present_date] = verify_pipeline_source_receipt(
-                            date.fromisoformat(present_date), analytics_root=PARQUET_ROOT)
-            while day<=end:
+                        self.pipeline_source_receipts[present_date] = (
+                            verify_pipeline_source_receipt(
+                                date.fromisoformat(present_date),
+                                analytics_root=PARQUET_ROOT,
+                            )
+                        )
+            while day <= end:
                 if is_krx_trading_day(day) and day.isoformat() not in present_dates:
-                    if dataset not in {'post_sell', 'pipeline_events'}:raise ValueError('parquet_window_source_missing:'+dataset+':'+day.isoformat())
-                    empty_receipt = self._verify_empty_partition(dataset,day)
-                    if dataset == 'pipeline_events':
+                    if dataset not in {"post_sell", "pipeline_events"}:
+                        raise ValueError(
+                            "parquet_window_source_missing:"
+                            + dataset
+                            + ":"
+                            + day.isoformat()
+                        )
+                    empty_receipt = self._verify_empty_partition(dataset, day)
+                    if dataset == "pipeline_events":
                         self.pipeline_source_receipts[day.isoformat()] = empty_receipt
-                    verified_empty+=1
-                day+=timedelta(days=1)
+                    verified_empty += 1
+                day += timedelta(days=1)
             if not paths:
-                if not verified_empty:raise ValueError('parquet_window_source_missing:'+dataset)
-                if dataset == 'pipeline_events':
-                    from src.engine.build_tuning_monitoring_parquet import pa, _pipeline_arrow_schema
-                    self.conn.register('_verified_empty_pipeline', pa.Table.from_pylist([], schema=_pipeline_arrow_schema()))
-                    self.conn.execute('CREATE OR REPLACE TEMP VIEW v_pipeline_events AS SELECT * FROM _verified_empty_pipeline')
+                if not verified_empty:
+                    raise ValueError("parquet_window_source_missing:" + dataset)
+                if dataset == "pipeline_events":
+                    from src.engine.build_tuning_monitoring_parquet import (
+                        pa,
+                        _pipeline_arrow_schema,
+                    )
+
+                    self.conn.register(
+                        "_verified_empty_pipeline",
+                        pa.Table.from_pylist([], schema=_pipeline_arrow_schema()),
+                    )
+                    self.conn.execute(
+                        "CREATE OR REPLACE TEMP VIEW v_pipeline_events AS SELECT * FROM _verified_empty_pipeline"
+                    )
                     self.registered_parquet_files[dataset] = ()
                     return True
-                self.conn.execute("CREATE OR REPLACE TEMP VIEW v_post_sell AS SELECT "
-                                  "CAST(NULL AS VARCHAR) AS emitted_date, CAST(NULL AS VARCHAR) AS outcome, "
-                                  "CAST(NULL AS VARCHAR) AS profit_rate WHERE FALSE")
+                self.conn.execute(
+                    "CREATE OR REPLACE TEMP VIEW v_post_sell AS SELECT "
+                    "CAST(NULL AS VARCHAR) AS emitted_date, CAST(NULL AS VARCHAR) AS outcome, "
+                    "CAST(NULL AS VARCHAR) AS profit_rate WHERE FALSE"
+                )
                 self.registered_parquet_files[dataset] = ()
                 return True
             quoted = ",".join("'" + str(p).replace("'", "''") + "'" for p in paths)
-            self.conn.execute(f"CREATE OR REPLACE TEMP VIEW v_{dataset} AS "
-                              f"SELECT * FROM read_parquet([{quoted}], union_by_name=true)")
+            self.conn.execute(
+                f"CREATE OR REPLACE TEMP VIEW v_{dataset} AS "
+                f"SELECT * FROM read_parquet([{quoted}], union_by_name=true)"
+            )
             self.registered_parquet_files[dataset] = tuple(paths)
             return True
         if not dataset_dir.exists():
@@ -136,27 +177,52 @@ class TuningDuckDBRepository:
             return False
 
     @staticmethod
-    def _verify_empty_partition(dataset,day):
-        if dataset == 'pipeline_events':
-            from src.engine.build_tuning_monitoring_parquet import verify_pipeline_source_receipt
-            if not (PARQUET_ROOT/dataset/('date='+day.isoformat())/'source_receipt.json').is_file():
-                raise ValueError('parquet_window_source_missing:'+dataset+':'+day.isoformat())
+    def _verify_empty_partition(dataset, day):
+        if dataset == "pipeline_events":
+            from src.engine.build_tuning_monitoring_parquet import (
+                verify_pipeline_source_receipt,
+            )
+
+            if not (
+                PARQUET_ROOT
+                / dataset
+                / ("date=" + day.isoformat())
+                / "source_receipt.json"
+            ).is_file():
+                raise ValueError(
+                    "parquet_window_source_missing:" + dataset + ":" + day.isoformat()
+                )
             receipt = verify_pipeline_source_receipt(day, analytics_root=PARQUET_ROOT)
-            if receipt.get('written_count') != 0 or receipt.get('population_state') != 'valid_empty':
-                raise ValueError('parquet_empty_receipt_invalid:'+day.isoformat())
+            if (
+                receipt.get("written_count") != 0
+                or receipt.get("population_state") != "valid_empty"
+            ):
+                raise ValueError("parquet_empty_receipt_invalid:" + day.isoformat())
             return receipt
         import json
-        from src.engine.scalping.continuous_reversal_postclose import seal,file_hash
+        from src.engine.scalping.continuous_reversal_postclose import seal, file_hash
         from src.engine.build_tuning_monitoring_parquet import list_jsonl_files
-        path=PARQUET_ROOT/dataset/('date='+day.isoformat())/'source_receipt.json'
-        if not path.is_file():raise ValueError('parquet_empty_receipt_missing:'+day.isoformat())
-        receipt=json.loads(path.read_text())
-        files=[dict(path=str(p.resolve()),sha256=file_hash(p)) for p in list_jsonl_files(dataset,day)]
-        if (receipt!=seal(receipt) or receipt.get('schema')!='tuning_parquet_empty_source_v1'
-                or receipt.get('status')!='valid_empty' or receipt.get('dataset')!=dataset
-                or receipt.get('target_date')!=day.isoformat() or receipt.get('written_rows')!=0
-                or receipt.get('source_files')!=files):
-            raise ValueError('parquet_empty_receipt_invalid:'+day.isoformat())
+
+        path = (
+            PARQUET_ROOT / dataset / ("date=" + day.isoformat()) / "source_receipt.json"
+        )
+        if not path.is_file():
+            raise ValueError("parquet_empty_receipt_missing:" + day.isoformat())
+        receipt = json.loads(path.read_text())
+        files = [
+            dict(path=str(p.resolve()), sha256=file_hash(p))
+            for p in list_jsonl_files(dataset, day)
+        ]
+        if (
+            receipt != seal(receipt)
+            or receipt.get("schema") != "tuning_parquet_empty_source_v1"
+            or receipt.get("status") != "valid_empty"
+            or receipt.get("dataset") != dataset
+            or receipt.get("target_date") != day.isoformat()
+            or receipt.get("written_rows") != 0
+            or receipt.get("source_files") != files
+        ):
+            raise ValueError("parquet_empty_receipt_invalid:" + day.isoformat())
 
     def query(self, sql: str, params: Optional[list] = None) -> pd.DataFrame:
         """SQL 쿼리 실행 후 DataFrame 반환."""

@@ -3496,37 +3496,67 @@ def test_realtime_report_uses_role_model(monkeypatch):
     assert used_models == ["gpt-5.4-mini"]
 
 
-
-
 def test_role_change_invalidates_only_its_analysis_and_gatekeeper_cache(monkeypatch):
     engine = _build_engine()
     rules = ai_engine_openai_module.TRADING_RULES
     ws = {"curr": 10000, "fluctuation": 1.0, "orderbook": {"asks": [], "bids": []}}
-    key_args = dict(target_name="TEST", strategy="SCALPING", ws_data=ws,
-                    recent_ticks=[], recent_candles=[], program_net_qty=0, cache_profile="default")
+    key_args = dict(
+        target_name="TEST",
+        strategy="SCALPING",
+        ws_data=ws,
+        recent_ticks=[],
+        recent_candles=[],
+        program_net_qty=0,
+        cache_profile="default",
+    )
     # The role-independent input digest remains reusable; the request cache
     # adds only the selected role model in analyze_target.
     input_key = engine._build_analysis_cache_key_with_profile(**key_args)
-    gate_args = dict(stock_name="TEST", stock_code="005930", realtime_ctx=ws, analysis_mode="SCALP")
+    gate_args = dict(
+        stock_name="TEST", stock_code="005930", realtime_ctx=ws, analysis_mode="SCALP"
+    )
     report_key = engine._build_gatekeeper_cache_key(**gate_args)
-    monkeypatch.setattr(ai_engine_openai_module, "TRADING_RULES", replace(
-        rules, OPENAI_HOLDING_FLOW_MODEL="changed-flow"))
+    monkeypatch.setattr(
+        ai_engine_openai_module,
+        "TRADING_RULES",
+        replace(rules, OPENAI_HOLDING_FLOW_MODEL="changed-flow"),
+    )
     assert engine._build_analysis_cache_key_with_profile(**key_args) == input_key
     assert engine._build_gatekeeper_cache_key(**gate_args) == report_key
-    monkeypatch.setattr(ai_engine_openai_module, "TRADING_RULES", replace(
-        rules, OPENAI_REALTIME_REPORT_MODEL="changed-report"))
+    monkeypatch.setattr(
+        ai_engine_openai_module,
+        "TRADING_RULES",
+        replace(rules, OPENAI_REALTIME_REPORT_MODEL="changed-report"),
+    )
     assert engine._build_gatekeeper_cache_key(**gate_args) != report_key
     used = []
-    monkeypatch.setattr(engine, "_call_openai_safe", lambda *a, **kw:
-                        (used.append(kw["model_override"]) or {"action": "WAIT", "score": 70, "reason": "ok"}))
-    monkeypatch.setattr(engine, "_apply_remote_entry_guard", lambda result, **kw: result, raising=False)
+    monkeypatch.setattr(
+        engine,
+        "_call_openai_safe",
+        lambda *a, **kw: (
+            used.append(kw["model_override"])
+            or {"action": "WAIT", "score": 70, "reason": "ok"}
+        ),
+    )
+    monkeypatch.setattr(
+        engine, "_apply_remote_entry_guard", lambda result, **kw: result, raising=False
+    )
     # A genuine same-input cache hit precedes the role change. The changed
     # watching role must produce a new request, with no new cadence budget.
-    first = engine.analyze_target("TEST", ws, [], [], strategy="SCALPING", prompt_profile="watching")
-    cached = engine.analyze_target("TEST", ws, [], [], strategy="SCALPING", prompt_profile="watching")
-    monkeypatch.setattr(ai_engine_openai_module, "TRADING_RULES", replace(
-        rules, OPENAI_SCALPING_ENTRY_MODEL="changed-entry"))
-    changed = engine.analyze_target("TEST", ws, [], [], strategy="SCALPING", prompt_profile="watching")
+    first = engine.analyze_target(
+        "TEST", ws, [], [], strategy="SCALPING", prompt_profile="watching"
+    )
+    cached = engine.analyze_target(
+        "TEST", ws, [], [], strategy="SCALPING", prompt_profile="watching"
+    )
+    monkeypatch.setattr(
+        ai_engine_openai_module,
+        "TRADING_RULES",
+        replace(rules, OPENAI_SCALPING_ENTRY_MODEL="changed-entry"),
+    )
+    changed = engine.analyze_target(
+        "TEST", ws, [], [], strategy="SCALPING", prompt_profile="watching"
+    )
     assert cached["cache_hit"] is True
     assert used == [rules.OPENAI_SCALPING_ENTRY_MODEL, "changed-entry"]
     assert first["ai_model"] == rules.OPENAI_SCALPING_ENTRY_MODEL

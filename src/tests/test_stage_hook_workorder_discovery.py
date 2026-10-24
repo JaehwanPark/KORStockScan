@@ -99,7 +99,8 @@ def test_stage_hook_ai_review_rejects_real_preapply_primary_ev_claim():
     ] = "Use real_1share_primary_ev as the hook evidence and allow runtime_change_from_preapply_real."
 
     status, _, warnings = mod.parse_candidate_review_response(
-        payload, reviewer=mod.AI_REVIEWER_NAME,
+        payload,
+        reviewer=mod.AI_REVIEWER_NAME,
         allowed_decisions=mod.STAGE_HOOK_DUAL_DECISIONS,
     )
 

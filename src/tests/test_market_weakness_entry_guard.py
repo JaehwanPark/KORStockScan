@@ -220,9 +220,7 @@ def test_missing_or_invalid_state_is_observable_but_does_not_freeze(tmp_path):
 def test_operator_rollback_env_disables_guard(tmp_path, monkeypatch):
     state_path = tmp_path / "state.json"
     _write_state(state_path)
-    monkeypatch.setenv(
-        "KORSTOCKSCAN_MACHINE_MARKET_WEAKNESS_ENTRY_GUARD_ENABLED", "0"
-    )
+    monkeypatch.setenv("KORSTOCKSCAN_MACHINE_MARKET_WEAKNESS_ENTRY_GUARD_ENABLED", "0")
 
     decision = evaluate_market_weakness_entry_guard(
         symbol="005930",

@@ -70,4 +70,7 @@ def test_approval_contract_registry_marks_dynamic_formula_as_dated_preopen_guard
         "position_sizing_dynamic_formula_2026-06-10.json"
     )
     assert request["approval_contract_missing_components"] == []
-    assert request["approval_artifact_consumer"] == "position_sizing_allocator.dated_policy_loader"
+    assert (
+        request["approval_artifact_consumer"]
+        == "position_sizing_allocator.dated_policy_loader"
+    )

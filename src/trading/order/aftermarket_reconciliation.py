@@ -12,7 +12,6 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Iterable
 
-
 SCHEMA = "aftermarket_close_reconciliation_v1"
 _DATED_API = "kt00007"
 _CURRENT_API = "ka10075"
@@ -355,17 +354,23 @@ def reconcile_aftermarket_boundary(
         parent_reasons.append("unbound_dated_receipt")
     if any(row.broker_order_no not in declared for row in current_rows):
         parent_reasons.append("unbound_current_receipt")
-    if any(
-        not _is_sha256(row.receipt_sha256) for row in dated_rows + current_rows
-    ):
+    if any(not _is_sha256(row.receipt_sha256) for row in dated_rows + current_rows):
         parent_reasons.append("invalid_source_receipt_sha256")
 
     child_results = tuple(
         _reconcile_child(
             intent,
             child,
-            tuple(row for row in dated_rows if row.broker_order_no == child.broker_order_no),
-            tuple(row for row in current_rows if row.broker_order_no == child.broker_order_no),
+            tuple(
+                row
+                for row in dated_rows
+                if row.broker_order_no == child.broker_order_no
+            ),
+            tuple(
+                row
+                for row in current_rows
+                if row.broker_order_no == child.broker_order_no
+            ),
             current_snapshot_complete=current_snapshot_complete,
         )
         for child in children
@@ -395,7 +400,9 @@ def reconcile_aftermarket_boundary(
         else:
             # Never release a terminal venue remainder while another SOR child
             # is open or ambiguous; that would duplicate the live commitment.
-            releasable_qty = canceled_qty if state is ReconciliationState.TERMINAL else 0
+            releasable_qty = (
+                canceled_qty if state is ReconciliationState.TERMINAL else 0
+            )
 
     child_reasons = [reason for child in child_results for reason in child.reasons]
     # Keep every supplied receipt digest, including an unbound receipt that

@@ -150,16 +150,26 @@ def test_retired_vcp_s15_conditions_cannot_create_new_targets(monkeypatch):
     monkeypatch.setattr(
         handlers.kiwoom_utils,
         "get_basic_info_ka10001",
-        lambda *_args: (_ for _ in ()).throw(AssertionError("retired condition fetched")),
+        lambda *_args: (_ for _ in ()).throw(
+            AssertionError("retired condition fetched")
+        ),
     )
     for condition in (
-        "vcp_candid_01", "vcp_shooting_01", "vcp_shooting_next_01",
-        "s15_scan_base", "s15_trigger_break",
-        "s15_scan_base_01", "s15_trigger_break_01",
+        "vcp_candid_01",
+        "vcp_shooting_01",
+        "vcp_shooting_next_01",
+        "s15_scan_base",
+        "s15_trigger_break",
+        "s15_scan_base_01",
+        "s15_trigger_break_01",
     ):
         assert handlers.resolve_condition_profile(condition) is None
-        handlers.handle_condition_matched({"code": "123456", "condition_name": condition})
-        handlers.handle_condition_unmatched({"code": "123456", "condition_name": condition})
+        handlers.handle_condition_matched(
+            {"code": "123456", "condition_name": condition}
+        )
+        handlers.handle_condition_unmatched(
+            {"code": "123456", "condition_name": condition}
+        )
     assert db.records == []
     assert active_targets == []
     assert event_bus.events == []
@@ -172,12 +182,16 @@ def test_zero_base_mode_rejects_legacy_scalping_condition_intake(monkeypatch):
     _bind_test_deps(active_targets, db, event_bus)
     monkeypatch.setenv("KORSTOCKSCAN_ZERO_BASE_SCANNER_ENABLED", "true")
     monkeypatch.setattr(
-        handlers.kiwoom_utils, "get_basic_info_ka10001",
+        handlers.kiwoom_utils,
+        "get_basic_info_ka10001",
         lambda *_args: (_ for _ in ()).throw(AssertionError("retired intake fetched")),
     )
-    handlers.handle_condition_matched({
-        "code": "123456", "condition_name": "scalp_candid_normal_01",
-    })
+    handlers.handle_condition_matched(
+        {
+            "code": "123456",
+            "condition_name": "scalp_candid_normal_01",
+        }
+    )
     assert not active_targets and not db.records and not event_bus.events
 
 

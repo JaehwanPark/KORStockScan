@@ -3115,14 +3115,6 @@ def test_fixed_tp_split_policy_uses_only_complete_prior_arm_history():
     )
 
 
-
-
-
-
-
-
-
-
 def _entry_quality_trade(
     *,
     day: int,

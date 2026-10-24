@@ -176,8 +176,6 @@ def _source_exploration_limit_valid(
     )
 
 
-
-
 EXPLORATION_CONTINUATION_MIN_EXPOSURES = 10
 EXPLORATION_CONTINUATION_MIN_SYMBOLS = 3
 SUPPORTED_BOUNDED_LIVE_PROMPT_VERSIONS = (
@@ -256,8 +254,13 @@ def _mechanistic_primary_activation_projection(
     if not path.is_file():
         return None, []
     report = _read_json(path)
-    refinement = (report.get("mechanistic_entry_refinement") if cohort == ("KRX", "KRX_REGULAR")
-                  else (report.get("mechanistic_refinements_by_scope") or {}).get("|".join(cohort)))
+    refinement = (
+        report.get("mechanistic_entry_refinement")
+        if cohort == ("KRX", "KRX_REGULAR")
+        else (report.get("mechanistic_refinements_by_scope") or {}).get(
+            "|".join(cohort)
+        )
+    )
     if not isinstance(refinement, dict):
         return None, []
     candidate = refinement.get("policy_candidate")
@@ -281,7 +284,8 @@ def _mechanistic_primary_activation_projection(
         report.get("target_date") != source_date
         or not calibration._artifact_content_sha256_valid(report)
         or refinement.get("schema") != calibration.MECHANISTIC_REFINEMENT_SCHEMA
-        or refinement.get("policy_version") not in {
+        or refinement.get("policy_version")
+        not in {
             calibration.MECHANISTIC_REFINEMENT_POLICY_VERSION,
             calibration.MECHANISTIC_FULL_POPULATION_POLICY_VERSION,
         }
@@ -309,7 +313,10 @@ def _mechanistic_primary_activation_projection(
             or validate_mechanistic_entry_threshold_policy(parent)
         ):
             return None, ["mechanistic_primary_candidate_parent_invalid"]
-    full_population = candidate.get("policy_version") == calibration.MECHANISTIC_FULL_POPULATION_POLICY_VERSION
+    full_population = (
+        candidate.get("policy_version")
+        == calibration.MECHANISTIC_FULL_POPULATION_POLICY_VERSION
+    )
     if full_population:
         source_contract = calibration._as_dict(refinement.get("source_contract"))
         checks = calibration._as_dict(candidate.get("promotion_checks"))
@@ -317,9 +324,11 @@ def _mechanistic_primary_activation_projection(
             parent is not None
             and candidate.get("evaluation_contract")
             == "full_population_cost_adjusted_10bp_paired_delta_v3"
-            and source_contract.get("schema") == "machine_common_refinement_population_v1"
+            and source_contract.get("schema")
+            == "machine_common_refinement_population_v1"
             and source_contract.get("cohort", ["KRX", "KRX_REGULAR"]) == list(cohort)
-            and candidate.get("source_contract_sha256") == calibration._canonical_sha256(source_contract)
+            and candidate.get("source_contract_sha256")
+            == calibration._canonical_sha256(source_contract)
             and candidate.get("promotion_checks") == refinement.get("promotion_checks")
             and bool(checks)
             and all(v is True for v in checks.values())
@@ -327,65 +336,113 @@ def _mechanistic_primary_activation_projection(
         for phase in ("calibration", "holdout"):
             metrics = calibration._as_dict(candidate.get(f"{phase}_metrics"))
             paired = calibration._as_dict(candidate.get(f"{phase}_paired_population"))
-            dates = candidate.get("calibration_source_dates" if phase == "calibration" else "holdout_source_dates")
+            dates = candidate.get(
+                "calibration_source_dates"
+                if phase == "calibration"
+                else "holdout_source_dates"
+            )
             floor = calibration.MECHANISTIC_REFINEMENT_GATE
             exposures = calibration._number(metrics.get("exposure_count"))
-            source_dates = calibration._number(metrics.get("independent_source_date_count"))
-            ev, delta = calibration.machine_selection_economics(metrics, paired, full_population=True)
-            proof_valid = bool(proof_valid
-                               and isinstance(dates, list) and bool(dates)
-                               and all(isinstance(d, str) and calibration.CLEAN_BASELINE_DATE <= d <= source_date for d in dates)
-                               and dates == sorted(set(dates))
-                               and exposures is not None and exposures.is_integer()
-                               and exposures >= floor[f"minimum_{phase}_exposure_count"]
-                               and source_dates is not None and source_dates.is_integer()
-                               and source_dates >= floor[f"minimum_{phase}_source_date_count"])
+            source_dates = calibration._number(
+                metrics.get("independent_source_date_count")
+            )
+            ev, delta = calibration.machine_selection_economics(
+                metrics, paired, full_population=True
+            )
+            proof_valid = bool(
+                proof_valid
+                and isinstance(dates, list)
+                and bool(dates)
+                and all(
+                    isinstance(d, str)
+                    and calibration.CLEAN_BASELINE_DATE <= d <= source_date
+                    for d in dates
+                )
+                and dates == sorted(set(dates))
+                and exposures is not None
+                and exposures.is_integer()
+                and exposures >= floor[f"minimum_{phase}_exposure_count"]
+                and source_dates is not None
+                and source_dates.is_integer()
+                and source_dates >= floor[f"minimum_{phase}_source_date_count"]
+            )
             if phase == "calibration":
                 symbols = calibration._number(metrics.get("unique_symbol_count"))
-                proof_valid = bool(proof_valid and symbols is not None and symbols.is_integer()
-                                   and symbols >= floor["minimum_calibration_symbol_count"])
+                proof_valid = bool(
+                    proof_valid
+                    and symbols is not None
+                    and symbols.is_integer()
+                    and symbols >= floor["minimum_calibration_symbol_count"]
+                )
             proof_valid = bool(
-                               proof_valid
-                               and ev is not None
-                               and ev >= floor["minimum_cost_adjusted_ev_pct"]
-                               and delta is not None and delta > 0
-                               and paired.get("paired_terminal_contract_complete") is True
-                               and paired.get("downstream_operating_evidence_complete") is True
-                               and paired.get("operating_economic_promotion_pass") is True
-                               and metrics.get("source_provenance_contract_complete") is True
-                               and metrics.get("catastrophic_terminal_proxy_count") == 0
-                               and metrics.get("terminal_evaluable_count") == metrics.get("exposure_count")
+                proof_valid
+                and ev is not None
+                and ev >= floor["minimum_cost_adjusted_ev_pct"]
+                and delta is not None
+                and delta > 0
+                and paired.get("paired_terminal_contract_complete") is True
+                and paired.get("downstream_operating_evidence_complete") is True
+                and paired.get("operating_economic_promotion_pass") is True
+                and metrics.get("source_provenance_contract_complete") is True
+                and metrics.get("catastrophic_terminal_proxy_count") == 0
+                and metrics.get("terminal_evaluable_count")
+                == metrics.get("exposure_count")
             )
-        train_dates, test_dates = candidate.get("calibration_source_dates"), candidate.get("holdout_source_dates")
-        proof_valid = bool(proof_valid and isinstance(train_dates, list) and bool(train_dates)
-                           and isinstance(test_dates, list) and bool(test_dates)
-                           and all(isinstance(d, str) for d in train_dates + test_dates)
-                           and max(train_dates) < min(test_dates)
-                           and source_contract.get("input_row_disposition_complete") is True)
+        train_dates, test_dates = candidate.get(
+            "calibration_source_dates"
+        ), candidate.get("holdout_source_dates")
+        proof_valid = bool(
+            proof_valid
+            and isinstance(train_dates, list)
+            and bool(train_dates)
+            and isinstance(test_dates, list)
+            and bool(test_dates)
+            and all(isinstance(d, str) for d in train_dates + test_dates)
+            and max(train_dates) < min(test_dates)
+            and source_contract.get("input_row_disposition_complete") is True
+        )
         if not proof_valid:
             return None, ["mechanistic_primary_full_population_economic_proof_invalid"]
         if source_contract.get("forward_holdout_required") is True:
             frozen = source_contract.get("frozen_selection") or {}
-            if (frozen.get("policy") != candidate.get("thresholds")
+            if (
+                frozen.get("policy") != candidate.get("thresholds")
                 or frozen.get("incumbent_sha256") != parent_hash
-                or frozen.get("economic_kernel_sha256") != source_contract.get("economic_kernel_sha256")
+                or frozen.get("economic_kernel_sha256")
+                != source_contract.get("economic_kernel_sha256")
                 or not isinstance(frozen.get("frozen_date"), str)
                 or min(test_dates) <= frozen["frozen_date"]
-                or any((candidate.get(f"{phase}_paired_population") or {}).get("operating_economic_promotion_pass") is not True
-                       or (calibration._number((candidate.get(f"{phase}_paired_population") or {}).get("daily_net_profit_delta_krw")) or 0) <= 0
-                       for phase in ("calibration", "holdout"))):
+                or any(
+                    (candidate.get(f"{phase}_paired_population") or {}).get(
+                        "operating_economic_promotion_pass"
+                    )
+                    is not True
+                    or (
+                        calibration._number(
+                            (candidate.get(f"{phase}_paired_population") or {}).get(
+                                "daily_net_profit_delta_krw"
+                            )
+                        )
+                        or 0
+                    )
+                    <= 0
+                    for phase in ("calibration", "holdout")
+                )
+            ):
                 return None, ["mechanistic_primary_forward_operating_proof_invalid"]
-    threshold_policy = json.loads(json.dumps(parent or MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1))
+    threshold_policy = json.loads(
+        json.dumps(parent or MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1)
+    )
     threshold_policy.pop("hierarchy", None)
     threshold_policy["version"] = str(candidate.get("policy_version") or "")
     if full_population:
         threshold_policy["postclose_selection"]["minimum_cost_adjusted_ev_pct"] = (
-            calibration.MECHANISTIC_REFINEMENT_GATE[
-                "minimum_cost_adjusted_ev_pct"
-            ]
+            calibration.MECHANISTIC_REFINEMENT_GATE["minimum_cost_adjusted_ev_pct"]
         )
     thresholds = candidate.get("thresholds")
-    if not isinstance(thresholds, dict) or set(thresholds) != set(calibration.MECHANISTIC_COMMON_FEATURE_GRID):
+    if not isinstance(thresholds, dict) or set(thresholds) != set(
+        calibration.MECHANISTIC_COMMON_FEATURE_GRID
+    ):
         errors.append("mechanistic_primary_candidate_thresholds_invalid")
         return None, errors
     threshold_policy["thresholds"].update(thresholds)
@@ -515,7 +572,13 @@ def _enabled_by_operator(
     if cohort == DUAL_OBSERVE_ONLY_COHORT and not auto_scope_authorized:
         return False
     process_veto = os.getenv(_cohort_env_key(cohort))
-    if process_veto and process_veto.strip().lower() in {"0", "false", "no", "n", "off"}:
+    if process_veto and process_veto.strip().lower() in {
+        "0",
+        "false",
+        "no",
+        "n",
+        "off",
+    }:
         return False
     raw = _env_value(_cohort_env_key(cohort), env)
     if raw is None and env is not None:
@@ -567,8 +630,11 @@ def _runtime_probe_contract_errors(
     }
     from src.engine.scalping.entry_setup_scalping_rollout import authorized_scopes
 
-    content_kwargs = ({"preparation_target_date": preparation_target_date}
-                      if preparation_target_date is not None else {})
+    content_kwargs = (
+        {"preparation_target_date": preparation_target_date}
+        if preparation_target_date is not None
+        else {}
+    )
     allowed_scopes.update(authorized_scopes(env=env, now=now, **content_kwargs))
     from src.engine.scalping.entry_setup_scalping_rollout import runtime_scope
 
@@ -711,14 +777,10 @@ def _normalize_cohort(venue: Any, session: Any) -> tuple[str, str]:
     normalized_session = _normalize_session(session)
     if normalized_venue in {"INTEGRATED", "SOR", "KRX_NXT"}:
         normalized_venue = "KRX_NXT_INTEGRATED"
-    if (
-        normalized_venue == "KRX_NXT_INTEGRATED"
-        and normalized_session
-        in {
-            "NXT_AFTERMARKET",
-            "KRX_NXT_AFTERMARKET",
-        }
-    ):
+    if normalized_venue == "KRX_NXT_INTEGRATED" and normalized_session in {
+        "NXT_AFTERMARKET",
+        "KRX_NXT_AFTERMARKET",
+    }:
         # Accept the legacy main-window label, but do not collapse close-only
         # or terminal-exit buckets into an entry-enabled policy cohort.
         normalized_session = "KRX_NXT_AFTERMARKET"
@@ -2112,7 +2174,11 @@ def resolve_live_prompt_policy(
     target_date = policy_target_date or current.date().isoformat()
     if date.fromisoformat(target_date).isoformat() != target_date:
         raise ValueError("entry_prompt_policy_date_invalid")
-    if policy_target_date and not preparation and target_date != current.date().isoformat():
+    if (
+        policy_target_date
+        and not preparation
+        and target_date != current.date().isoformat()
+    ):
         raise ValueError("entry_prompt_future_date_requires_preparation")
     configured_fallback = str(configured_prompt_version or "").strip()
     cohort = _normalize_cohort(effective_venue, session_bucket)
@@ -2195,7 +2261,9 @@ def resolve_live_prompt_policy(
             result["status"] = "fallback_operator_disabled"
             return result
         errors = _runtime_probe_contract_errors(
-            target_date=target_date, cohort=cohort, now=current,
+            target_date=target_date,
+            cohort=cohort,
+            now=current,
             **content_kwargs,
         )
         if errors:
@@ -2213,7 +2281,9 @@ def resolve_live_prompt_policy(
             and result["position_tag"] in CANARY_POSITION_TAGS
         ):
             from src.engine.scalping.mechanistic_entry_runtime_policy import (
-                load, load_effective, for_cohort,
+                load,
+                load_effective,
+                for_cohort,
             )
 
             try:
@@ -2223,10 +2293,19 @@ def resolve_live_prompt_policy(
                     # read-only, as in the existing verified_evaluation scope.
                     # Avoid copying every market's historical policy graph
                     # on the machine-to-AI deadline.
-                    (load(data_root=Path(data_root or DATA_DIR), target_date=target_date)
-                     if preparation else
-                     load_effective(data_root=Path(data_root or DATA_DIR), target_date=target_date,
-                                    _immutable=True)), cohort
+                    (
+                        load(
+                            data_root=Path(data_root or DATA_DIR),
+                            target_date=target_date,
+                        )
+                        if preparation
+                        else load_effective(
+                            data_root=Path(data_root or DATA_DIR),
+                            target_date=target_date,
+                            _immutable=True,
+                        )
+                    ),
+                    cohort,
                 )
             except (ValueError, OSError, TypeError, KeyError) as exc:
                 result.update(
@@ -2308,8 +2387,18 @@ def resolve_live_prompt_policy(
                     runtime_effect=True,
                     primary_decision_owner=MECHANISTIC_PRIMARY_DECISION_OWNER,
                     ai_role=MECHANISTIC_AI_ADVISORY_ROLE,
-                    auxiliary_policy_sha256=hashlib.sha256(json.dumps(initial['ai_policy'], sort_keys=True, separators=(',', ':'), ensure_ascii=True, allow_nan=False).encode()).hexdigest(),
-                    auxiliary_soft_policy=initial["ai_policy"].get("auxiliary_soft_policy"),
+                    auxiliary_policy_sha256=hashlib.sha256(
+                        json.dumps(
+                            initial["ai_policy"],
+                            sort_keys=True,
+                            separators=(",", ":"),
+                            ensure_ascii=True,
+                            allow_nan=False,
+                        ).encode()
+                    ).hexdigest(),
+                    auxiliary_soft_policy=initial["ai_policy"].get(
+                        "auxiliary_soft_policy"
+                    ),
                     mechanistic_threshold_policy=initial["machine_policy"],
                     machine_bundle_sha256=initial["bundle_sha256"],
                     machine_policy_disposition=initial["machine_disposition"],
@@ -2339,14 +2428,21 @@ def resolve_live_prompt_policy(
                         "compact_prompt_disposition"
                     ),
                 )
-                if initial.get('continuous_reversal'):
-                    result.update(continuous_reversal=initial['continuous_reversal'],
-                                  machine_policy_all_continuous=True,
-                                  auxiliary_soft_policy=None,
-                                  ai_policy_disposition='continuous_reversal_selected',
-                                  auxiliary_policy_sha256=hashlib.sha256(json.dumps(
-                                      initial['continuous_reversal']['auxiliary_cells'],
-                                      sort_keys=True,separators=(',',':'),ensure_ascii=True).encode()).hexdigest())
+                if initial.get("continuous_reversal"):
+                    result.update(
+                        continuous_reversal=initial["continuous_reversal"],
+                        machine_policy_all_continuous=True,
+                        auxiliary_soft_policy=None,
+                        ai_policy_disposition="continuous_reversal_selected",
+                        auxiliary_policy_sha256=hashlib.sha256(
+                            json.dumps(
+                                initial["continuous_reversal"]["auxiliary_cells"],
+                                sort_keys=True,
+                                separators=(",", ":"),
+                                ensure_ascii=True,
+                            ).encode()
+                        ).hexdigest(),
+                    )
                 return result
         # The legacy rollout remains a durable V2.14 owner. Only the new,
         # separately pinned auto-promotion authority may consult an activation
@@ -2386,7 +2482,9 @@ def resolve_live_prompt_policy(
         result["status"] = "fallback_position_owner_out_of_scope"
         return result
     runtime_contract_errors = _runtime_probe_contract_errors(
-        target_date=target_date, cohort=cohort, now=current,
+        target_date=target_date,
+        cohort=cohort,
+        now=current,
         **content_kwargs,
     )
     if runtime_contract_errors:
@@ -2678,7 +2776,10 @@ def verify_machine_primary_runtime_contract(
                 "active_bounded_nxt_canary",
             }:
                 errors.append("live_resolver_fallback_status")
-            if resolved.get("primary_decision_owner") != MECHANISTIC_PRIMARY_DECISION_OWNER:
+            if (
+                resolved.get("primary_decision_owner")
+                != MECHANISTIC_PRIMARY_DECISION_OWNER
+            ):
                 errors.append("mechanistic_primary_owner_missing")
             if resolved.get("ai_role") != MECHANISTIC_AI_ADVISORY_ROLE:
                 errors.append("compact_auxiliary_role_missing")
@@ -2695,16 +2796,10 @@ def verify_machine_primary_runtime_contract(
                 {
                     "scope": f"{cohort[0]}|{cohort[1]}",
                     "status": resolved.get("status"),
-                    "selected_prompt_version": resolved.get(
-                        "selected_prompt_version"
-                    ),
-                    "primary_decision_owner": resolved.get(
-                        "primary_decision_owner"
-                    ),
+                    "selected_prompt_version": resolved.get("selected_prompt_version"),
+                    "primary_decision_owner": resolved.get("primary_decision_owner"),
                     "ai_role": resolved.get("ai_role"),
-                    "machine_bundle_sha256": resolved.get(
-                        "machine_bundle_sha256"
-                    ),
+                    "machine_bundle_sha256": resolved.get("machine_bundle_sha256"),
                     "errors": errors,
                 }
             )
@@ -2715,7 +2810,9 @@ def verify_machine_primary_runtime_contract(
             "passed": False,
             "expected_bundle_sha256": None,
             "scope_results": [],
-            "errors": [f"live_resolver_verification_exception:{type(exc).__name__}:{exc}"],
+            "errors": [
+                f"live_resolver_verification_exception:{type(exc).__name__}:{exc}"
+            ],
         }
     finally:
         for key, value in prior.items():
@@ -2725,9 +2822,7 @@ def verify_machine_primary_runtime_contract(
                 os.environ[key] = value
 
     errors = [
-        f"{row['scope']}:{error}"
-        for row in scope_results
-        for error in row["errors"]
+        f"{row['scope']}:{error}" for row in scope_results for error in row["errors"]
     ]
     return {
         "schema": "entry_machine_primary_preopen_verification_v1",

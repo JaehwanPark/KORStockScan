@@ -372,7 +372,11 @@ class PreEventRingBuffer:
         """Discard buffered observations and ordering state for one symbol."""
 
         with self._lock:
-            keys = [key for key in self._last_sequence.keys() | self._points.keys() if key[0] == symbol]
+            keys = [
+                key
+                for key in self._last_sequence.keys() | self._points.keys()
+                if key[0] == symbol
+            ]
             removed = sum(len(self._points.get(key, ())) for key in keys)
             for key in keys:
                 self._points.pop(key, None)
@@ -732,7 +736,14 @@ def to_market_stream_point(
         source_item=envelope.source_item,
         native_transport_epoch=envelope.native_transport_epoch,
         native_route_sequence=envelope.native_route_sequence,
-        native_receive_session=(market_source_session_bucket(envelope.venue,datetime.fromisoformat(envelope.local_receive_timestamp).timetz()) if source_contract else None),
+        native_receive_session=(
+            market_source_session_bucket(
+                envelope.venue,
+                datetime.fromisoformat(envelope.local_receive_timestamp).timetz(),
+            )
+            if source_contract
+            else None
+        ),
         source_contract=source_contract,
         cumulative_volume_raw=envelope.cumulative_volume_raw,
         trade_volume_raw=envelope.trade_volume_raw,

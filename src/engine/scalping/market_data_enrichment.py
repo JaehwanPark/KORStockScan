@@ -721,17 +721,30 @@ def build_market_data_enrichment(
     # Receipt projection only: retain existing normalized 0D route/epoch so
     # downstream models can prove displayed depth belongs to their route.
     from src.engine.scalping.initial_quantity_cap_observation import quote_route_binding
-    quote_receipt=ws_quote_source_receipt(base,now_ts=now_value)
-    depth_receipt=quote_receipt.get("depth_receipt") or {}
-    binding=quote_route_binding(str(depth_receipt.get("item") or ""),str(depth_receipt.get("market_route") or ""))
-    bound_depth=bool(effective_source=="ws" and binding
-        and depth_receipt.get("transport_epoch")==quote_receipt.get("transport_epoch")
-        and depth_receipt.get("item")==quote_receipt.get("item")
-        and depth_receipt.get("market_route")==quote_receipt.get("market_route"))
+
+    quote_receipt = ws_quote_source_receipt(base, now_ts=now_value)
+    depth_receipt = quote_receipt.get("depth_receipt") or {}
+    binding = quote_route_binding(
+        str(depth_receipt.get("item") or ""),
+        str(depth_receipt.get("market_route") or ""),
+    )
+    bound_depth = bool(
+        effective_source == "ws"
+        and binding
+        and depth_receipt.get("transport_epoch") == quote_receipt.get("transport_epoch")
+        and depth_receipt.get("item") == quote_receipt.get("item")
+        and depth_receipt.get("market_route") == quote_receipt.get("market_route")
+    )
     fields: dict[str, Any] = {
-        "market_data_effective_order_route": binding["order_route"] if bound_depth else None,
-        "market_data_effective_transport_epoch": depth_receipt.get("transport_epoch") if bound_depth else None,
-        "market_data_effective_depth_observed_epoch": depth_receipt.get("observed_epoch") if bound_depth else None,
+        "market_data_effective_order_route": (
+            binding["order_route"] if bound_depth else None
+        ),
+        "market_data_effective_transport_epoch": (
+            depth_receipt.get("transport_epoch") if bound_depth else None
+        ),
+        "market_data_effective_depth_observed_epoch": (
+            depth_receipt.get("observed_epoch") if bound_depth else None
+        ),
         "market_data_enrichment_applied": bool(rest_orderbook or rest_signed_ticks),
         "market_data_enrichment_sources": ",".join(sources) if sources else "-",
         "market_data_freshness_state": freshness_state,

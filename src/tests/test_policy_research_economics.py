@@ -185,8 +185,6 @@ def test_bounded_census_reader_rejects_alias_nonfinite_oversize_and_non_object(
         assert economics.load_research_census(path) is None
 
 
-
-
 def test_future_ai_progress_does_not_change_native_admission_deduplication():
     row = admission_row()
     projection = dict(
@@ -309,7 +307,10 @@ def test_compact_census_publication_consumes_large_parent_without_rescan(
         report, source_date=DAY, universe={"000001": "fixed"}, owner="low_price_two_leg"
     )
     result = economics.research_admission_ledger(
-        compact, source_date=DAY, universe={"000001": "fixed"}, owner="low_price_two_leg"
+        compact,
+        source_date=DAY,
+        universe={"000001": "fixed"},
+        owner="low_price_two_leg",
     )
     assert result["disposition_counts"] == oracle["disposition_counts"]
     assert result["input_count"] == 2
@@ -335,8 +336,6 @@ def test_compact_corruption_never_falls_back_to_old_full_summary(tmp_path, monke
     assert economics.load_research_census(parent) is None
 
 
-
-
 def test_census_publication_busy_preserves_verified_parent(tmp_path, monkeypatch):
     from src.engine.monitoring import market_opportunity_census as producer
 
@@ -357,18 +356,10 @@ def test_census_publication_busy_preserves_verified_parent(tmp_path, monkeypatch
     assert economics.load_research_census(parent) is not None
 
 
-
-
 def observe(row):
     return economics.source_only_timing_observation(
         source_date=DAY, row=row, replay=row["dynamic_confirmation_source_only_replay"]
     )
-
-
-
-
-
-
 
 
 def episode(day="2026-08-28", *, price=100, net=1, minute=0):
@@ -411,8 +402,6 @@ def test_joint_capital_releases_before_same_timestamp_entry():
     result = economics.joint_capital_demand(rows, capital_limit_krw=1000)
     assert result["capital_feasible"] is True
     assert result["feasible_combined_net_profit_krw"] == 20
-
-
 
 
 def write_quotes(tmp_path, *, raw_only=False, depth=40):

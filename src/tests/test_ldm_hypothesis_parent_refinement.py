@@ -68,28 +68,6 @@ def _candidate_event(score, source, *, matched="False", hypothesis_id="", profit
     }
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 def test_latest_lifecycle_bucket_report_ignores_future_daily_reports(
     tmp_path, monkeypatch
 ):
@@ -138,8 +116,6 @@ def test_previous_gap_count_ignores_future_refinement_reports(tmp_path, monkeypa
         )
 
     assert mod._previous_gap_count("h_gap", "2026-06-02") == 1
-
-
 
 
 def test_repeated_taxonomy_source_quality_parent_conflict_and_fragile_diagnoses():
@@ -207,12 +183,19 @@ def test_repeated_taxonomy_source_quality_parent_conflict_and_fragile_diagnoses(
     assert repeated_fragile_diag["retry_count"] == 2
 
 
-def test_retired_current_producer_preserves_prior_and_has_no_authority(tmp_path,monkeypatch):
+def test_retired_current_producer_preserves_prior_and_has_no_authority(
+    tmp_path, monkeypatch
+):
     import importlib
-    current=importlib.import_module('src.engine.automation.ldm_hypothesis_discovery')
-    prior=tmp_path/"prior.json";prior.write_text("original")
-    def forbidden(*a,**kw):raise AssertionError("retired producer accessed storage")
-    monkeypatch.setattr(type(prior),"write_text",forbidden)
-    monkeypatch.setattr(type(prior),"read_text",forbidden)
-    result=current.build_hypotheses("2026-10-12")
-    assert result["status"]=="retired" and result["allowed_runtime_apply"] is False
+
+    current = importlib.import_module("src.engine.automation.ldm_hypothesis_discovery")
+    prior = tmp_path / "prior.json"
+    prior.write_text("original")
+
+    def forbidden(*a, **kw):
+        raise AssertionError("retired producer accessed storage")
+
+    monkeypatch.setattr(type(prior), "write_text", forbidden)
+    monkeypatch.setattr(type(prior), "read_text", forbidden)
+    result = current.build_hypotheses("2026-10-12")
+    assert result["status"] == "retired" and result["allowed_runtime_apply"] is False

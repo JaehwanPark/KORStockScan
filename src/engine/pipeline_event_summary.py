@@ -113,24 +113,43 @@ SUMMARY_STAGES = frozenset(
         "blocked_swing_gap",
     }
 )
-EXECUTION_SUMMARY_STAGES = frozenset({
-    "entry_async_disposition", "scanner_async_result_commit", "native_signal_lifecycle", "zero_base_probe_result",
-    "pre_submit_delay_committed", "pre_submit_delay_quote_observed",
-    "pre_submit_delay_intent_terminal",
-    "pre_submit_delay_recheck_observed",
-    "entry_execution_sizing_plan", "entry_execution_sizing_plan_block",
-    "entry_ai_economic_plan_observed", "entry_ai_economic_source_gap",
-    "entry_ai_economic_decision_available", "entry_machine_watch_terminal",
-    "entry_probe_conditional_receipt_observed",
-    "entry_quantity_leg_four_arm_evaluation", "order_leg_sent", "order_leg_fail",
-    "order_leg_no_response", "order_bundle_submitted", "order_bundle_failed",
-})
-CANCEL_WAIT_SUMMARY_STAGES = frozenset({
-    "entry_cancel_wait_submission", "entry_order_cancel_requested",
-    "entry_order_cancel_confirmed", "entry_order_cancel_failed",
-})
+EXECUTION_SUMMARY_STAGES = frozenset(
+    {
+        "entry_async_disposition",
+        "scanner_async_result_commit",
+        "native_signal_lifecycle",
+        "zero_base_probe_result",
+        "pre_submit_delay_committed",
+        "pre_submit_delay_quote_observed",
+        "pre_submit_delay_intent_terminal",
+        "pre_submit_delay_recheck_observed",
+        "entry_execution_sizing_plan",
+        "entry_execution_sizing_plan_block",
+        "entry_ai_economic_plan_observed",
+        "entry_ai_economic_source_gap",
+        "entry_ai_economic_decision_available",
+        "entry_machine_watch_terminal",
+        "entry_probe_conditional_receipt_observed",
+        "entry_quantity_leg_four_arm_evaluation",
+        "order_leg_sent",
+        "order_leg_fail",
+        "order_leg_no_response",
+        "order_bundle_submitted",
+        "order_bundle_failed",
+    }
+)
+CANCEL_WAIT_SUMMARY_STAGES = frozenset(
+    {
+        "entry_cancel_wait_submission",
+        "entry_order_cancel_requested",
+        "entry_order_cancel_confirmed",
+        "entry_order_cancel_failed",
+    }
+)
 LOSSLESS_ORDER_STAGES = EXECUTION_SUMMARY_STAGES | CANCEL_WAIT_SUMMARY_STAGES
-PRODUCER_SUMMARY_STAGES = SUMMARY_STAGES | HIGH_VOLUME_OBSERVATION_STAGES | LOSSLESS_ORDER_STAGES
+PRODUCER_SUMMARY_STAGES = (
+    SUMMARY_STAGES | HIGH_VOLUME_OBSERVATION_STAGES | LOSSLESS_ORDER_STAGES
+)
 
 NUMERIC_FIELD_LIMIT = 64
 SAMPLE_HASH_LIMIT = 2
@@ -221,10 +240,14 @@ def _read_json(path: Path) -> dict[str, Any]:
 
 
 def checkpoint_digest(payload: dict[str, Any]) -> str:
-    return hashlib.sha256(json.dumps(
-        {k: v for k, v in payload.items() if k != "checkpoint_digest"},
-        sort_keys=True, ensure_ascii=False, allow_nan=False,
-    ).encode()).hexdigest()
+    return hashlib.sha256(
+        json.dumps(
+            {k: v for k, v in payload.items() if k != "checkpoint_digest"},
+            sort_keys=True,
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode()
+    ).hexdigest()
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -240,13 +263,28 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
 
 
 ROLLUP_KEY_FIELDS = (
-    "target_date", "bucket_start", "bucket_end", "pipeline", "stage", "stock_code",
-    "stock_name", "strategy", "market", "reason_label", "actual_order_submitted",
+    "target_date",
+    "bucket_start",
+    "bucket_end",
+    "pipeline",
+    "stage",
+    "stock_code",
+    "stock_name",
+    "strategy",
+    "market",
+    "reason_label",
+    "actual_order_submitted",
 )
 
 
 ROLLUP_BUCKET_FIELDS = (
-    "target_date", "bucket_start", "bucket_end", "pipeline", "stage", "reason_label", "actual_order_submitted",
+    "target_date",
+    "bucket_start",
+    "bucket_end",
+    "pipeline",
+    "stage",
+    "reason_label",
+    "actual_order_submitted",
 )
 ROLLUP_CONTRACT = "bucket_stage_full_payload_and_partition_multiset_v1"
 
@@ -254,8 +292,14 @@ ROLLUP_CONTRACT = "bucket_stage_full_payload_and_partition_multiset_v1"
 def partition_hash_sum(row):
     if row.get("rollup_contract") == ROLLUP_CONTRACT:
         return int(row["partition_hash_sum"], 16)
-    key = json.dumps([row.get(name) for name in ROLLUP_KEY_FIELDS], ensure_ascii=False, separators=(",", ":"))
-    return (int(hashlib.sha256(key.encode()).hexdigest(), 16) * row["event_count"]) % IDENTITY_MODULUS
+    key = json.dumps(
+        [row.get(name) for name in ROLLUP_KEY_FIELDS],
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    return (
+        int(hashlib.sha256(key.encode()).hexdigest(), 16) * row["event_count"]
+    ) % IDENTITY_MODULUS
 
 
 def merge_identity_rows(previous, appended):
@@ -271,14 +315,26 @@ def merge_identity_rows(previous, appended):
         partition = partition_hash_sum(row)
         if key not in groups:
             groups[key] = {name: row.get(name) for name in ROLLUP_BUCKET_FIELDS}
-            groups[key].update(event_count=0, evidence_hash_sum="0" * 64,
-                               partition_hash_sum="0" * 64, rollup_contract=ROLLUP_CONTRACT,
-                               identity_contract=IDENTITY_CONTRACT, first_seen=row.get("first_seen"), last_seen=row.get("last_seen"))
+            groups[key].update(
+                event_count=0,
+                evidence_hash_sum="0" * 64,
+                partition_hash_sum="0" * 64,
+                rollup_contract=ROLLUP_CONTRACT,
+                identity_contract=IDENTITY_CONTRACT,
+                first_seen=row.get("first_seen"),
+                last_seen=row.get("last_seen"),
+            )
         old = groups[key]
         old["event_count"] += row["event_count"]
-        old["evidence_hash_sum"] = f"{(int(old['evidence_hash_sum'], 16) + int(row['evidence_hash_sum'], 16)) % IDENTITY_MODULUS:064x}"
-        old["partition_hash_sum"] = f"{(int(old['partition_hash_sum'], 16) + partition) % IDENTITY_MODULUS:064x}"
-        old["first_seen"] = min(old.get("first_seen") or "", row.get("first_seen") or "")
+        old["evidence_hash_sum"] = (
+            f"{(int(old['evidence_hash_sum'], 16) + int(row['evidence_hash_sum'], 16)) % IDENTITY_MODULUS:064x}"
+        )
+        old["partition_hash_sum"] = (
+            f"{(int(old['partition_hash_sum'], 16) + partition) % IDENTITY_MODULUS:064x}"
+        )
+        old["first_seen"] = min(
+            old.get("first_seen") or "", row.get("first_seen") or ""
+        )
         old["last_seen"] = max(old.get("last_seen") or "", row.get("last_seen") or "")
     return list(groups.values())
 
@@ -288,10 +344,15 @@ def _with_summary_generation_lock(method):
     def locked(*args, **kwargs):
         summary_dir = kwargs["summary_dir"]
         summary_dir.mkdir(parents=True, exist_ok=True)
-        _, manifest = _summary_paths(summary_dir, kwargs["target_date"], profile=kwargs.get("summary_profile", "default"))
+        _, manifest = _summary_paths(
+            summary_dir,
+            kwargs["target_date"],
+            profile=kwargs.get("summary_profile", "default"),
+        )
         with manifest.with_suffix(".lock").open("a") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
             return method(*args, **kwargs)
+
     return locked
 
 
@@ -337,7 +398,9 @@ def _part_representations(logical: Path) -> list[Path]:
     return paths
 
 
-def _part_snapshot(path: Path, *, rows: Callable[[bytes], None] | None = None) -> dict[str, Any]:
+def _part_snapshot(
+    path: Path, *, rows: Callable[[bytes], None] | None = None
+) -> dict[str, Any]:
     before = _part_snapshot_stamp(path)
     digest = hashlib.sha256()
     decoded_bytes = 0
@@ -364,13 +427,22 @@ def _part_snapshot(path: Path, *, rows: Callable[[bytes], None] | None = None) -
         raise ValueError(f"raw_source_unreadable:{path}") from exc
     if before != _part_snapshot_stamp(path):
         raise ValueError(f"raw_source_changed_during_read:{path}")
-    return {"path": str(path.resolve()), "stamp": before,
-            "logical_sha256": digest.hexdigest(), "decoded_bytes": decoded_bytes,
-            "raw_count": count}
+    return {
+        "path": str(path.resolve()),
+        "stamp": before,
+        "logical_sha256": digest.hexdigest(),
+        "decoded_bytes": decoded_bytes,
+        "raw_count": count,
+    }
 
 
-def _source_snapshot(raw_dir: Path, target_date: str, part: str,
-                     *, rows: Callable[[bytes], None] | None = None) -> dict[str, Any] | None:
+def _source_snapshot(
+    raw_dir: Path,
+    target_date: str,
+    part: str,
+    *,
+    rows: Callable[[bytes], None] | None = None,
+) -> dict[str, Any] | None:
     logical = _source_part_path(raw_dir, target_date, part)
     if part == "late" and not logical.exists() and not Path(f"{logical}.gz").exists():
         return None
@@ -380,17 +452,25 @@ def _source_snapshot(raw_dir: Path, target_date: str, part: str,
     for duplicate in paths[1:]:
         other = _part_snapshot(duplicate)
         snapshots.append(other)
-        if any(selected[key] != other[key] for key in
-               ("logical_sha256", "decoded_bytes", "raw_count")):
+        if any(
+            selected[key] != other[key]
+            for key in ("logical_sha256", "decoded_bytes", "raw_count")
+        ):
             raise ValueError(f"raw_plain_gzip_conflict:{logical}")
-    return {"partition": part, "logical_path": str(logical.resolve()),
-            "physical_paths": [str(path.resolve()) for path in paths],
-            **{key: selected[key] for key in
-               ("logical_sha256", "decoded_bytes", "raw_count")},
-            "logical_start_offset": 0,
-            "logical_end_offset": selected["decoded_bytes"],
-            "representations": [{"path": item["path"], "stamp": item["stamp"]}
-                                for item in snapshots]}
+    return {
+        "partition": part,
+        "logical_path": str(logical.resolve()),
+        "physical_paths": [str(path.resolve()) for path in paths],
+        **{
+            key: selected[key]
+            for key in ("logical_sha256", "decoded_bytes", "raw_count")
+        },
+        "logical_start_offset": 0,
+        "logical_end_offset": selected["decoded_bytes"],
+        "representations": [
+            {"path": item["path"], "stamp": item["stamp"]} for item in snapshots
+        ],
+    }
 
 
 def _part_snapshot_stamp(path: Path) -> list[int]:
@@ -400,8 +480,13 @@ def _part_snapshot_stamp(path: Path) -> list[int]:
     return [st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns]
 
 
-def _producer_raw_ledger(data_dir: Path, target_date: str, *, selected_stages=frozenset(),
-                         valid_event_observer=None) -> dict[str, Any]:
+def _producer_raw_ledger(
+    data_dir: Path,
+    target_date: str,
+    *,
+    selected_stages=frozenset(),
+    valid_event_observer=None,
+) -> dict[str, Any]:
     raw_dir = data_dir / "pipeline_events"
     counts = Counter()
     reasons = Counter()
@@ -423,15 +508,29 @@ def _producer_raw_ledger(data_dir: Path, target_date: str, *, selected_stages=fr
             counts["quarantined_count"] += 1
             reasons["invalid_json"] += 1
             return
-        if not isinstance(payload, dict) or payload.get("event_type") != "pipeline_event":
+        if (
+            not isinstance(payload, dict)
+            or payload.get("event_type") != "pipeline_event"
+        ):
             counts["quarantined_count"] += 1
             reasons["invalid_event_schema"] += 1
             return
         stage = _safe_str(payload.get("stage"))
-        entry = (stages.setdefault(stage, {"raw_event_count": 0, "valid_count": 0,
-                                           "excluded_count": 0, "quarantined_count": 0,
-                                           "unobserved_count": 0, "raw_evidence_hash_sum": 0})
-                 if stage in PRODUCER_SUMMARY_STAGES else None)
+        entry = (
+            stages.setdefault(
+                stage,
+                {
+                    "raw_event_count": 0,
+                    "valid_count": 0,
+                    "excluded_count": 0,
+                    "quarantined_count": 0,
+                    "unobserved_count": 0,
+                    "raw_evidence_hash_sum": 0,
+                },
+            )
+            if stage in PRODUCER_SUMMARY_STAGES
+            else None
+        )
         if entry is not None:
             entry["raw_event_count"] += 1
         row_hash = hashlib.sha256(line).digest()
@@ -444,10 +543,16 @@ def _producer_raw_ledger(data_dir: Path, target_date: str, *, selected_stages=fr
         at = _parse_iso_datetime(_safe_str(payload.get("emitted_at")))
         emitted = _safe_str(payload.get("emitted_date"))
         partition = _safe_str(payload.get("storage_partition_date"))
-        event_day = (at.astimezone(ZoneInfo("Asia/Seoul")).date().isoformat()
-                     if at is not None and at.tzinfo is not None else
-                     at.date().isoformat() if at is not None else "")
-        if not event_day or emitted != event_day or (partition and partition != target_date):
+        event_day = (
+            at.astimezone(ZoneInfo("Asia/Seoul")).date().isoformat()
+            if at is not None and at.tzinfo is not None
+            else at.date().isoformat() if at is not None else ""
+        )
+        if (
+            not event_day
+            or emitted != event_day
+            or (partition and partition != target_date)
+        ):
             counts["quarantined_count"] += 1
             reasons["date_or_partition_invalid"] += 1
             if entry is not None:
@@ -465,7 +570,9 @@ def _producer_raw_ledger(data_dir: Path, target_date: str, *, selected_stages=fr
             if entry is not None:
                 entry["quarantined_count"] += 1
             return
-        event = summary_event_from_payload(payload, summary_stages=PRODUCER_SUMMARY_STAGES)
+        event = summary_event_from_payload(
+            payload, summary_stages=PRODUCER_SUMMARY_STAGES
+        )
         if event is None:
             counts["excluded_count"] += 1
             reasons["outside_producer_summary_profile"] += 1
@@ -481,35 +588,71 @@ def _producer_raw_ledger(data_dir: Path, target_date: str, *, selected_stages=fr
         if stage in selected_stages:
             selected_identities[stage].append(execution_projection_identity(payload))
         entry["raw_evidence_hash_sum"] = (
-            entry["raw_evidence_hash_sum"] + event.evidence_hash) % IDENTITY_MODULUS
+            entry["raw_evidence_hash_sum"] + event.evidence_hash
+        ) % IDENTITY_MODULUS
 
-    base = _source_snapshot(raw_dir, target_date, "base", rows=lambda line: collect(line, "base"))
-    late = _source_snapshot(raw_dir, target_date, "late", rows=lambda line: collect(line, "late"))
+    base = _source_snapshot(
+        raw_dir, target_date, "base", rows=lambda line: collect(line, "base")
+    )
+    late = _source_snapshot(
+        raw_dir, target_date, "late", rows=lambda line: collect(line, "late")
+    )
     parts = [part for part in (base, late) if part is not None]
-    if counts["raw_count"] != sum(counts[key] for key in
-                                   ("valid_count", "excluded_count", "quarantined_count", "unobserved_count")):
+    if counts["raw_count"] != sum(
+        counts[key]
+        for key in (
+            "valid_count",
+            "excluded_count",
+            "quarantined_count",
+            "unobserved_count",
+        )
+    ):
         raise ValueError("raw_source_ledger_count_mismatch")
     for entry in stages.values():
         entry["raw_evidence_hash_sum"] = f"{entry['raw_evidence_hash_sum']:064x}"
-    result = {"schema": "pipeline_producer_raw_ledger_v1",
-            "source_date": target_date, "profile": "producer_summary",
-            "status": "valid_empty" if counts["raw_count"] == 0 else
-                      "ready_with_quarantine" if counts["quarantined_count"] or counts["duplicate_count"] else "ready",
-            **{key: counts[key] for key in
-               ("raw_count", "valid_count", "excluded_count", "quarantined_count", "unobserved_count", "duplicate_count", "duplicate_eligible_count")},
-            "source_quality_reasons": dict(sorted(reasons.items())),
-            "parts": parts, "stages": stages,
-            "logical_sha256": logical_digest.hexdigest(),
-            "decoded_bytes": sum(part["decoded_bytes"] for part in parts)}
+    result = {
+        "schema": "pipeline_producer_raw_ledger_v1",
+        "source_date": target_date,
+        "profile": "producer_summary",
+        "status": (
+            "valid_empty"
+            if counts["raw_count"] == 0
+            else (
+                "ready_with_quarantine"
+                if counts["quarantined_count"] or counts["duplicate_count"]
+                else "ready"
+            )
+        ),
+        **{
+            key: counts[key]
+            for key in (
+                "raw_count",
+                "valid_count",
+                "excluded_count",
+                "quarantined_count",
+                "unobserved_count",
+                "duplicate_count",
+                "duplicate_eligible_count",
+            )
+        },
+        "source_quality_reasons": dict(sorted(reasons.items())),
+        "parts": parts,
+        "stages": stages,
+        "logical_sha256": logical_digest.hexdigest(),
+        "decoded_bytes": sum(part["decoded_bytes"] for part in parts),
+    }
     if selected_stages:
         result["selected_execution_identities"] = {
-            stage: sorted(identities) for stage, identities in selected_identities.items()
+            stage: sorted(identities)
+            for stage, identities in selected_identities.items()
         }
     return result
 
 
 def _stage_source_digest(value: Any) -> str:
-    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    return hashlib.sha256(
+        json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
 
 
 def _logical_body_digest(path: Path) -> tuple[str | None, int]:
@@ -525,25 +668,34 @@ def _logical_body_digest(path: Path) -> tuple[str | None, int]:
     return results[0]
 
 
-def _assert_expected_raw_generation(data_dir: Path, target_date: str,
-                                    expected: dict[str, Any] | None) -> None:
+def _assert_expected_raw_generation(
+    data_dir: Path, target_date: str, expected: dict[str, Any] | None
+) -> None:
     if expected is None:
         return
-    if (not isinstance(expected, dict) or set(expected) != {'path', 'stamp'}
-            or not isinstance(expected['path'], str)
-            or not isinstance(expected['stamp'], list) or len(expected['stamp']) != 5
-            or any(type(value) is not int for value in expected['stamp'])):
-        raise ValueError('producer_raw_expected_generation_invalid')
-    raw = _source_part_path(Path(data_dir) / 'pipeline_events', target_date, 'base')
-    path = Path(expected['path'])
-    if path.resolve() not in {raw.resolve(), Path(f'{raw}.gz').resolve()}:
-        raise ValueError('producer_raw_expected_generation_path_invalid')
-    if _part_snapshot_stamp(path) != expected['stamp']:
-        raise ValueError('producer_raw_expected_generation_changed')
+    if (
+        not isinstance(expected, dict)
+        or set(expected) != {"path", "stamp"}
+        or not isinstance(expected["path"], str)
+        or not isinstance(expected["stamp"], list)
+        or len(expected["stamp"]) != 5
+        or any(type(value) is not int for value in expected["stamp"])
+    ):
+        raise ValueError("producer_raw_expected_generation_invalid")
+    raw = _source_part_path(Path(data_dir) / "pipeline_events", target_date, "base")
+    path = Path(expected["path"])
+    if path.resolve() not in {raw.resolve(), Path(f"{raw}.gz").resolve()}:
+        raise ValueError("producer_raw_expected_generation_path_invalid")
+    if _part_snapshot_stamp(path) != expected["stamp"]:
+        raise ValueError("producer_raw_expected_generation_changed")
 
 
-def rebuild_producer_summary_source(data_dir: Path, target_date: str,
-                                    *, expected_raw_generation: dict[str, Any] | None = None) -> dict[str, Any]:
+def rebuild_producer_summary_source(
+    data_dir: Path,
+    target_date: str,
+    *,
+    expected_raw_generation: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Reconstruct a closed source profile from retained raw, preserving originals.
 
     This is source recovery, never a live producer timing or trading receipt.
@@ -555,12 +707,20 @@ def rebuild_producer_summary_source(data_dir: Path, target_date: str,
     directory = data_dir / "pipeline_event_summaries"
     summary, manifest_path = producer_summary_paths(directory, target_date)
     from src.engine.observation_source_quality_audit import _raw_source_writer_active
-    raw_path = existing_or_gzip_path(data_dir / "pipeline_events" / f"pipeline_events_{target_date}.jsonl")
+
+    raw_path = existing_or_gzip_path(
+        data_dir / "pipeline_events" / f"pipeline_events_{target_date}.jsonl"
+    )
     _assert_expected_raw_generation(data_dir, target_date, expected_raw_generation)
-    if (expected_raw_generation is not None
-            and Path(expected_raw_generation['path']).resolve() != raw_path.resolve()):
-        raise ValueError('producer_raw_expected_generation_path_invalid')
-    if _raw_source_writer_active(target_date, raw_path) and expected_raw_generation is None:
+    if (
+        expected_raw_generation is not None
+        and Path(expected_raw_generation["path"]).resolve() != raw_path.resolve()
+    ):
+        raise ValueError("producer_raw_expected_generation_path_invalid")
+    if (
+        _raw_source_writer_active(target_date, raw_path)
+        and expected_raw_generation is None
+    ):
         raise ValueError("producer_reconstruction_writer_active")
     if summary.is_symlink() or manifest_path.is_symlink():
         raise ValueError("producer_reconstruction_symlink")
@@ -569,54 +729,88 @@ def rebuild_producer_summary_source(data_dir: Path, target_date: str,
         before_summary = summary.read_bytes()
         before_manifest = manifest_path.read_bytes()
         original = json.loads(before_manifest)
-        if (not isinstance(original, dict) or original.get("mode") != "shadow"
-                or original.get("summary_stages") != sorted(PRODUCER_SUMMARY_STAGES)
-                or original.get("summary_detail_level") != PRODUCER_PARITY_DETAIL_LEVEL
-                or original.get("schema_version") != PRODUCER_SUMMARY_SCHEMA_VERSION
-                or original.get("raw_suppression_enabled") is not False
-                or original.get("summary_path") != str(summary)):
+        if (
+            not isinstance(original, dict)
+            or original.get("mode") != "shadow"
+            or original.get("summary_stages") != sorted(PRODUCER_SUMMARY_STAGES)
+            or original.get("summary_detail_level") != PRODUCER_PARITY_DETAIL_LEVEL
+            or original.get("schema_version") != PRODUCER_SUMMARY_SCHEMA_VERSION
+            or original.get("raw_suppression_enabled") is not False
+            or original.get("summary_path") != str(summary)
+        ):
             raise ValueError("producer_reconstruction_profile_invalid")
-        with tempfile.TemporaryDirectory(prefix=".source-recovery-", dir=directory) as private:
-            collector = ProducerSummaryCompactor(summary_dir=Path(private), mode="shadow",
-                                                 flush_sec=3600, auto_flush=False)
+        with tempfile.TemporaryDirectory(
+            prefix=".source-recovery-", dir=directory
+        ) as private:
+            collector = ProducerSummaryCompactor(
+                summary_dir=Path(private),
+                mode="shadow",
+                flush_sec=3600,
+                auto_flush=False,
+            )
             count = 0
+
             def observe(payload):
                 nonlocal count
                 collector.submit(payload)
                 count += 1
                 if count % 1024 == 0:
                     collector.flush(target_date=target_date)
+
             try:
-                raw = _producer_raw_ledger(data_dir, target_date, valid_event_observer=observe)
+                raw = _producer_raw_ledger(
+                    data_dir, target_date, valid_event_observer=observe
+                )
                 if raw["duplicate_eligible_count"] or not raw["parts"]:
                     raise ValueError("producer_reconstruction_raw_invalid")
                 collector.flush(target_date=target_date)
             finally:
                 collector.close()
-            rebuilt, rebuilt_manifest = producer_summary_paths(Path(private), target_date)
+            rebuilt, rebuilt_manifest = producer_summary_paths(
+                Path(private), target_date
+            )
             candidate = _read_json(rebuilt_manifest)
             if candidate.get("summary_event_count") != raw["valid_count"]:
                 raise ValueError("producer_reconstruction_count_invalid")
             totals, hashes = Counter(), Counter()
             for row in load_summary_rows(rebuilt, include_samples=False, strict=True):
                 totals[row["stage"]] += row["event_count"]
-                hashes[row["stage"]] = (hashes[row["stage"]] + int(row["evidence_hash_sum"], 16)) % IDENTITY_MODULUS
-            if any(totals[stage] != entry["valid_count"]
-                   or f"{hashes[stage]:064x}" != entry["raw_evidence_hash_sum"]
-                   for stage, entry in raw["stages"].items()):
+                hashes[row["stage"]] = (
+                    hashes[row["stage"]] + int(row["evidence_hash_sum"], 16)
+                ) % IDENTITY_MODULUS
+            if any(
+                totals[stage] != entry["valid_count"]
+                or f"{hashes[stage]:064x}" != entry["raw_evidence_hash_sum"]
+                for stage, entry in raw["stages"].items()
+            ):
                 raise ValueError("producer_reconstruction_identity_invalid")
             # Publication cannot adopt source appended after the observed generation.
             for part in raw["parts"]:
                 for representation in part["representations"]:
-                    if _part_snapshot_stamp(Path(representation["path"])) != representation["stamp"]:
+                    if (
+                        _part_snapshot_stamp(Path(representation["path"]))
+                        != representation["stamp"]
+                    ):
                         raise ValueError("producer_reconstruction_raw_changed")
-            if summary.read_bytes() != before_summary or manifest_path.read_bytes() != before_manifest:
+            if (
+                summary.read_bytes() != before_summary
+                or manifest_path.read_bytes() != before_manifest
+            ):
                 raise ValueError("producer_reconstruction_predecessor_changed")
-            _assert_expected_raw_generation(data_dir, target_date, expected_raw_generation)
-            backup = directory / "recovery" / target_date / hashlib.sha256(before_manifest).hexdigest()
+            _assert_expected_raw_generation(
+                data_dir, target_date, expected_raw_generation
+            )
+            backup = (
+                directory
+                / "recovery"
+                / target_date
+                / hashlib.sha256(before_manifest).hexdigest()
+            )
             backup.mkdir(parents=True, exist_ok=True)
-            for path, content in ((backup / summary.name, before_summary),
-                                  (backup / manifest_path.name, before_manifest)):
+            for path, content in (
+                (backup / summary.name, before_summary),
+                (backup / manifest_path.name, before_manifest),
+            ):
                 if path.exists():
                     if path.read_bytes() != content:
                         raise ValueError("producer_reconstruction_backup_conflict")
@@ -625,17 +819,27 @@ def rebuild_producer_summary_source(data_dir: Path, target_date: str,
                         handle.write(content)
                         handle.flush()
                         os.fsync(handle.fileno())
-            updated = {**original, "summary_event_count": candidate["summary_event_count"],
-                       "summary_row_count": candidate["summary_row_count"],
-                       "summary_storage_size_bytes": rebuilt.stat().st_size,
-                       "source_reconstruction": {"schema": "producer_retained_raw_recovery_v1",
-                           "source_date": target_date,
-                           "reconstructed_at": datetime.now().astimezone().isoformat(),
-                           "original_summary_sha256": hashlib.sha256(before_summary).hexdigest(),
-                           "original_manifest_sha256": hashlib.sha256(before_manifest).hexdigest(),
-                           "original_backup_directory": str(backup),
-                           "raw_logical_sha256": raw["logical_sha256"],
-                           "runtime_effect": False, "live_producer_timing_claimed": False}}
+            updated = {
+                **original,
+                "summary_event_count": candidate["summary_event_count"],
+                "summary_row_count": candidate["summary_row_count"],
+                "summary_storage_size_bytes": rebuilt.stat().st_size,
+                "source_reconstruction": {
+                    "schema": "producer_retained_raw_recovery_v1",
+                    "source_date": target_date,
+                    "reconstructed_at": datetime.now().astimezone().isoformat(),
+                    "original_summary_sha256": hashlib.sha256(
+                        before_summary
+                    ).hexdigest(),
+                    "original_manifest_sha256": hashlib.sha256(
+                        before_manifest
+                    ).hexdigest(),
+                    "original_backup_directory": str(backup),
+                    "raw_logical_sha256": raw["logical_sha256"],
+                    "runtime_effect": False,
+                    "live_producer_timing_claimed": False,
+                },
+            }
             updated.pop("raw_source_ledger", None)
             try:
                 rebuilt.replace(summary)
@@ -644,13 +848,18 @@ def rebuild_producer_summary_source(data_dir: Path, target_date: str,
                 summary.write_bytes(before_summary)
                 manifest_path.write_bytes(before_manifest)
                 raise
-    return seal_producer_summary_source(data_dir, target_date,
-                                       expected_raw_generation=expected_raw_generation)
+    return seal_producer_summary_source(
+        data_dir, target_date, expected_raw_generation=expected_raw_generation
+    )
 
 
-def seal_producer_summary_source(data_dir: Path, target_date: str,
-                                 *, explicit_valid_empty: bool = False,
-                                 expected_raw_generation: dict[str, Any] | None = None) -> dict[str, Any]:
+def seal_producer_summary_source(
+    data_dir: Path,
+    target_date: str,
+    *,
+    explicit_valid_empty: bool = False,
+    expected_raw_generation: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Seal one closed-date raw/profile generation before its first stage reader."""
     if date.fromisoformat(target_date).isoformat() != target_date:
         raise ValueError("source_date_invalid")
@@ -662,8 +871,12 @@ def seal_producer_summary_source(data_dir: Path, target_date: str,
         fcntl.flock(lock_handle, fcntl.LOCK_EX)
         _assert_expected_raw_generation(data_dir, target_date, expected_raw_generation)
         existing = _read_json(manifest_path)
-        if existing.get("raw_source_ledger") and not producer_source_ledger_issues(data_dir, target_date):
-            _assert_expected_raw_generation(data_dir, target_date, expected_raw_generation)
+        if existing.get("raw_source_ledger") and not producer_source_ledger_issues(
+            data_dir, target_date
+        ):
+            _assert_expected_raw_generation(
+                data_dir, target_date, expected_raw_generation
+            )
             return existing
         raw = _producer_raw_ledger(data_dir, target_date)
         if raw["duplicate_eligible_count"]:
@@ -673,43 +886,64 @@ def seal_producer_summary_source(data_dir: Path, target_date: str,
         if not manifest:
             if not explicit_valid_empty or raw["raw_count"] or rows:
                 raise ValueError("producer_summary_manifest_missing")
-            manifest = {"schema_version": PRODUCER_SUMMARY_SCHEMA_VERSION,
-                        "summary_path": str(summary_path), "summary_row_count": 0,
-                        "summary_event_count": 0, "mode": "shadow",
-                        "summary_detail_level": PRODUCER_PARITY_DETAIL_LEVEL,
-                        "summary_stages": sorted(PRODUCER_SUMMARY_STAGES),
-                        "raw_suppression_enabled": False, "runtime_effect": False,
-                        "valid_empty": True}
-        if (manifest.get("schema_version") != PRODUCER_SUMMARY_SCHEMA_VERSION
-                or manifest.get("mode") != "shadow"
-                or manifest.get("summary_detail_level") != PRODUCER_PARITY_DETAIL_LEVEL
-                or manifest.get("summary_path") != str(summary_path)
-                or manifest.get("summary_stages") != sorted(PRODUCER_SUMMARY_STAGES)
-                or manifest.get("raw_suppression_enabled") is not False):
+            manifest = {
+                "schema_version": PRODUCER_SUMMARY_SCHEMA_VERSION,
+                "summary_path": str(summary_path),
+                "summary_row_count": 0,
+                "summary_event_count": 0,
+                "mode": "shadow",
+                "summary_detail_level": PRODUCER_PARITY_DETAIL_LEVEL,
+                "summary_stages": sorted(PRODUCER_SUMMARY_STAGES),
+                "raw_suppression_enabled": False,
+                "runtime_effect": False,
+                "valid_empty": True,
+            }
+        if (
+            manifest.get("schema_version") != PRODUCER_SUMMARY_SCHEMA_VERSION
+            or manifest.get("mode") != "shadow"
+            or manifest.get("summary_detail_level") != PRODUCER_PARITY_DETAIL_LEVEL
+            or manifest.get("summary_path") != str(summary_path)
+            or manifest.get("summary_stages") != sorted(PRODUCER_SUMMARY_STAGES)
+            or manifest.get("raw_suppression_enabled") is not False
+        ):
             raise ValueError("producer_summary_profile_invalid")
-        if (summary_path.exists() and manifest.get("summary_storage_size_bytes") is not None
-                and manifest["summary_storage_size_bytes"] != summary_path.stat().st_size):
+        if (
+            summary_path.exists()
+            and manifest.get("summary_storage_size_bytes") is not None
+            and manifest["summary_storage_size_bytes"] != summary_path.stat().st_size
+        ):
             raise ValueError("producer_summary_storage_size_mismatch")
         per_stage: dict[str, dict[str, int]] = {}
         for row in rows:
-            if (row.get("target_date") != target_date
-                    or row.get("summary_detail_level") != PRODUCER_PARITY_DETAIL_LEVEL
-                    or row.get("identity_contract") != IDENTITY_CONTRACT):
+            if (
+                row.get("target_date") != target_date
+                or row.get("summary_detail_level") != PRODUCER_PARITY_DETAIL_LEVEL
+                or row.get("identity_contract") != IDENTITY_CONTRACT
+            ):
                 raise ValueError("producer_summary_row_invalid")
-            entry = per_stage.setdefault(row.get("stage"), {"events": 0, "rows": 0, "identity": 0})
+            entry = per_stage.setdefault(
+                row.get("stage"), {"events": 0, "rows": 0, "identity": 0}
+            )
             entry["events"] += row["event_count"]
             entry["rows"] += 1
-            entry["identity"] = (entry["identity"] + int(row["evidence_hash_sum"], 16)) % IDENTITY_MODULUS
-        if (manifest.get("summary_event_count") != sum(row["event_count"] for row in rows)
-                or manifest.get("summary_row_count") != len(rows)
-                or raw["valid_count"] != manifest["summary_event_count"]
-                or {stage for stage, entry in raw["stages"].items() if entry["valid_count"]}
-                   != set(per_stage)):
+            entry["identity"] = (
+                entry["identity"] + int(row["evidence_hash_sum"], 16)
+            ) % IDENTITY_MODULUS
+        if (
+            manifest.get("summary_event_count")
+            != sum(row["event_count"] for row in rows)
+            or manifest.get("summary_row_count") != len(rows)
+            or raw["valid_count"] != manifest["summary_event_count"]
+            or {stage for stage, entry in raw["stages"].items() if entry["valid_count"]}
+            != set(per_stage)
+        ):
             raise ValueError("producer_raw_summary_count_mismatch")
         for stage, entry in raw["stages"].items():
             summarized = per_stage.get(stage, {"events": 0, "rows": 0, "identity": 0})
-            if (entry["valid_count"] != summarized["events"]
-                    or entry["raw_evidence_hash_sum"] != f"{summarized['identity']:064x}"):
+            if (
+                entry["valid_count"] != summarized["events"]
+                or entry["raw_evidence_hash_sum"] != f"{summarized['identity']:064x}"
+            ):
                 raise ValueError(f"producer_raw_summary_identity_mismatch:{stage}")
             entry["summary_event_count"] = summarized["events"]
             entry["summary_row_count"] = summarized["rows"]
@@ -723,10 +957,15 @@ def seal_producer_summary_source(data_dir: Path, target_date: str,
         raw["summary_path"] = str(summary_path)
         raw["summary_representations"] = {
             str(path.resolve()): _part_snapshot_stamp(path)
-            for path in (summary_path, Path(f"{summary_path}.gz")) if path.exists()
+            for path in (summary_path, Path(f"{summary_path}.gz"))
+            if path.exists()
         }
         raw["producer_manifest_preseal_sha256"] = producer_manifest_fingerprint(
-            {key: value for key, value in manifest.items() if key != "raw_source_ledger"}
+            {
+                key: value
+                for key, value in manifest.items()
+                if key != "raw_source_ledger"
+            }
         )
         raw["ledger_sha256"] = _stage_source_digest(raw)
         _assert_expected_raw_generation(data_dir, target_date, expected_raw_generation)
@@ -738,51 +977,85 @@ def seal_producer_summary_source(data_dir: Path, target_date: str,
 
 def producer_source_ledger_issues(data_dir: Path, target_date: str) -> list[str]:
     """Check a sealed generation; only representation changes require a full scan."""
-    summary_path, manifest_path = producer_summary_paths(Path(data_dir) / "pipeline_event_summaries", target_date)
+    summary_path, manifest_path = producer_summary_paths(
+        Path(data_dir) / "pipeline_event_summaries", target_date
+    )
     manifest = _read_json(manifest_path)
     ledger = manifest.get("raw_source_ledger")
     if not isinstance(ledger, dict):
         return ["raw_source_ledger_missing"]
     parts = ledger.get("parts")
-    if (not isinstance(parts, list) or not parts
-            or any(not isinstance(part, dict)
-                   or part.get("partition") not in {"base", "late"}
-                   or not isinstance(part.get("logical_path"), str)
-                   or not isinstance(part.get("representations"), list)
-                   or any(not isinstance(item, dict) or not isinstance(item.get("path"), str)
-                          or not isinstance(item.get("stamp"), list)
-                          for item in part.get("representations", []))
-                   or not all(key in part for key in
-                              ("logical_sha256", "decoded_bytes", "raw_count",
-                               "logical_start_offset", "logical_end_offset"))
-                   for part in parts)
-            or parts[0].get("partition") != "base"
-            or len({part["partition"] for part in parts}) != len(parts)
-            or not isinstance(ledger.get("summary_representations"), dict)
-            or any(key not in ledger for key in
-                   ("summary_logical_sha256", "summary_decoded_bytes"))):
-        return ["raw_source_ledger_invalid"]
-    if (ledger.get("source_date") != target_date
-            or ledger.get("schema") != "pipeline_producer_raw_ledger_v1"
-            or ledger.get("profile") != "producer_summary"
-            or ledger.get("status") not in {"ready", "ready_with_quarantine", "valid_empty"}
-            or manifest.get("mode") != "shadow"
-            or manifest.get("schema_version") != PRODUCER_SUMMARY_SCHEMA_VERSION
-            or manifest.get("summary_path") != str(summary_path)
-            or ledger.get("summary_path") != str(summary_path)
-            or ledger.get("duplicate_eligible_count") != 0
-            or any(part["logical_start_offset"] != 0
-                   or part["logical_end_offset"] != part["decoded_bytes"] for part in parts)
-            or ledger.get("producer_manifest_preseal_sha256") != producer_manifest_fingerprint(
-                {key: value for key, value in manifest.items() if key != "raw_source_ledger"}
+    if (
+        not isinstance(parts, list)
+        or not parts
+        or any(
+            not isinstance(part, dict)
+            or part.get("partition") not in {"base", "late"}
+            or not isinstance(part.get("logical_path"), str)
+            or not isinstance(part.get("representations"), list)
+            or any(
+                not isinstance(item, dict)
+                or not isinstance(item.get("path"), str)
+                or not isinstance(item.get("stamp"), list)
+                for item in part.get("representations", [])
             )
-            or ledger.get("ledger_sha256") != _stage_source_digest({k: v for k, v in ledger.items() if k != "ledger_sha256"})
-            or ledger.get("summary_event_count") != manifest.get("summary_event_count")
-            or ledger.get("summary_row_count") != manifest.get("summary_row_count")):
+            or not all(
+                key in part
+                for key in (
+                    "logical_sha256",
+                    "decoded_bytes",
+                    "raw_count",
+                    "logical_start_offset",
+                    "logical_end_offset",
+                )
+            )
+            for part in parts
+        )
+        or parts[0].get("partition") != "base"
+        or len({part["partition"] for part in parts}) != len(parts)
+        or not isinstance(ledger.get("summary_representations"), dict)
+        or any(
+            key not in ledger
+            for key in ("summary_logical_sha256", "summary_decoded_bytes")
+        )
+    ):
+        return ["raw_source_ledger_invalid"]
+    if (
+        ledger.get("source_date") != target_date
+        or ledger.get("schema") != "pipeline_producer_raw_ledger_v1"
+        or ledger.get("profile") != "producer_summary"
+        or ledger.get("status") not in {"ready", "ready_with_quarantine", "valid_empty"}
+        or manifest.get("mode") != "shadow"
+        or manifest.get("schema_version") != PRODUCER_SUMMARY_SCHEMA_VERSION
+        or manifest.get("summary_path") != str(summary_path)
+        or ledger.get("summary_path") != str(summary_path)
+        or ledger.get("duplicate_eligible_count") != 0
+        or any(
+            part["logical_start_offset"] != 0
+            or part["logical_end_offset"] != part["decoded_bytes"]
+            for part in parts
+        )
+        or ledger.get("producer_manifest_preseal_sha256")
+        != producer_manifest_fingerprint(
+            {
+                key: value
+                for key, value in manifest.items()
+                if key != "raw_source_ledger"
+            }
+        )
+        or ledger.get("ledger_sha256")
+        != _stage_source_digest(
+            {k: v for k, v in ledger.items() if k != "ledger_sha256"}
+        )
+        or ledger.get("summary_event_count") != manifest.get("summary_event_count")
+        or ledger.get("summary_row_count") != manifest.get("summary_row_count")
+    ):
         return ["raw_source_ledger_invalid"]
     for part in parts:
         logical = Path(part["logical_path"])
-        if logical != _source_part_path(Path(data_dir) / "pipeline_events", target_date, part.get("partition", "")):
+        if logical != _source_part_path(
+            Path(data_dir) / "pipeline_events", target_date, part.get("partition", "")
+        ):
             return ["raw_source_path_invalid"]
         paths = [p for p in (logical, Path(f"{logical}.gz")) if p.exists()]
         if not paths:
@@ -797,20 +1070,29 @@ def producer_source_ledger_issues(data_dir: Path, target_date: str) -> list[str]
             snapshots = [_part_snapshot(path) for path in paths]
         except (OSError, ValueError):
             return ["raw_generation_unreadable"]
-        if any(item["logical_sha256"] != part["logical_sha256"]
-               or item["decoded_bytes"] != part["decoded_bytes"]
-               or item["raw_count"] != part["raw_count"] for item in snapshots):
+        if any(
+            item["logical_sha256"] != part["logical_sha256"]
+            or item["decoded_bytes"] != part["decoded_bytes"]
+            or item["raw_count"] != part["raw_count"]
+            for item in snapshots
+        ):
             return ["raw_generation_changed"]
     for part in ("base", "late"):
         expected = next((p for p in parts if p["partition"] == part), None)
-        logical = _source_part_path(Path(data_dir) / "pipeline_events", target_date, part)
+        logical = _source_part_path(
+            Path(data_dir) / "pipeline_events", target_date, part
+        )
         if expected is None and (logical.exists() or Path(f"{logical}.gz").exists()):
             return ["raw_generation_changed"]
-    summary_paths = [path for path in (summary_path, Path(f"{summary_path}.gz")) if path.exists()]
+    summary_paths = [
+        path for path in (summary_path, Path(f"{summary_path}.gz")) if path.exists()
+    ]
     if not summary_paths and ledger.get("summary_representations"):
         return ["summary_generation_missing"]
     try:
-        summary_stamps = {str(path.resolve()): _part_snapshot_stamp(path) for path in summary_paths}
+        summary_stamps = {
+            str(path.resolve()): _part_snapshot_stamp(path) for path in summary_paths
+        }
     except (OSError, ValueError):
         return ["summary_generation_unreadable"]
     if summary_stamps != ledger.get("summary_representations"):
@@ -818,7 +1100,10 @@ def producer_source_ledger_issues(data_dir: Path, target_date: str) -> list[str]
             sha, size = _logical_body_digest(summary_path)
         except (OSError, EOFError, ValueError):
             return ["summary_generation_unreadable"]
-        if sha != ledger["summary_logical_sha256"] or size != ledger["summary_decoded_bytes"]:
+        if (
+            sha != ledger["summary_logical_sha256"]
+            or size != ledger["summary_decoded_bytes"]
+        ):
             return ["summary_generation_changed"]
     return []
 
@@ -1047,7 +1332,9 @@ class _SummaryAggregate:
 
     def add(self, event: SummaryEvent) -> None:
         self.event_count += 1
-        self.execution_projection_hash_sum = (self.execution_projection_hash_sum + event.execution_projection_hash) % IDENTITY_MODULUS
+        self.execution_projection_hash_sum = (
+            self.execution_projection_hash_sum + event.execution_projection_hash
+        ) % IDENTITY_MODULUS
         self.evidence_hash_sum = (
             self.evidence_hash_sum + event.evidence_hash
         ) % IDENTITY_MODULUS
@@ -1142,9 +1429,14 @@ class _SummaryAggregate:
             "event_count": self.event_count,
             "identity_contract": IDENTITY_CONTRACT,
             "evidence_hash_sum": f"{self.evidence_hash_sum:064x}",
-            **({"execution_projection_identity_contract": "lossless_execution_projection_v1",
-                "execution_projection_hash_sum": f"{self.execution_projection_hash_sum:064x}"}
-               if self.stage in LOSSLESS_ORDER_STAGES else {}),
+            **(
+                {
+                    "execution_projection_identity_contract": "lossless_execution_projection_v1",
+                    "execution_projection_hash_sum": f"{self.execution_projection_hash_sum:064x}",
+                }
+                if self.stage in LOSSLESS_ORDER_STAGES
+                else {}
+            ),
             "first_seen": (self.first_seen.isoformat() if self.first_seen else None),
             "last_seen": (self.last_seen.isoformat() if self.last_seen else None),
             "metric_role": "ops_volume_diagnostic",
@@ -1286,8 +1578,11 @@ def _summary_event_from_payload(
         actual_order_submitted=actual_order_submitted,
         raw_offset_start=line_start,
         raw_offset_end=line_end,
-        execution_projection_hash=(int(execution_projection_identity(payload), 16)
-            if stage in LOSSLESS_ORDER_STAGES else 0),
+        execution_projection_hash=(
+            int(execution_projection_identity(payload), 16)
+            if stage in LOSSLESS_ORDER_STAGES
+            else 0
+        ),
         evidence_hash=int.from_bytes(
             hashlib.sha256(
                 json.dumps(
@@ -1301,10 +1596,26 @@ def _summary_event_from_payload(
 
 def execution_projection_identity(payload):
     """Same lossless economic envelope on raw and compact sides."""
-    keys = ("pipeline", "stage", "stock_name", "stock_code", "record_id", "fields", "emitted_at", "emitted_date")
+    keys = (
+        "pipeline",
+        "stage",
+        "stock_name",
+        "stock_code",
+        "record_id",
+        "fields",
+        "emitted_at",
+        "emitted_date",
+    )
     value = {key: payload.get(key) for key in keys}
-    return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True,
-        separators=(",", ":"), allow_nan=False).encode("utf-8")).hexdigest()
+    return hashlib.sha256(
+        json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    ).hexdigest()
 
 
 def summary_event_from_payload(
@@ -1366,7 +1677,10 @@ def _new_aggregate(
 
 
 def _load_summary_rows(
-    summary_path: Path, *, include_samples: bool = True, strict: bool = False,
+    summary_path: Path,
+    *,
+    include_samples: bool = True,
+    strict: bool = False,
     _projection_reuse: bool = False,
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
@@ -1375,10 +1689,20 @@ def _load_summary_rows(
         return rows
     if not include_samples and _projection_reuse:
         from src.engine.monitoring.sentinel_compact_store import slim_summary_projection
-        contract = hashlib.sha256(Path(__file__).read_bytes()).hexdigest() + ':' + str(strict)
-        return slim_summary_projection(summary_path,
-            lambda: _load_summary_rows(summary_path, include_samples=False, strict=strict,
-                                      _projection_reuse=False), contract=contract)
+
+        contract = (
+            hashlib.sha256(Path(__file__).read_bytes()).hexdigest() + ":" + str(strict)
+        )
+        return slim_summary_projection(
+            summary_path,
+            lambda: _load_summary_rows(
+                summary_path,
+                include_samples=False,
+                strict=strict,
+                _projection_reuse=False,
+            ),
+            contract=contract,
+        )
     with open_text_auto(summary_path, errors="replace") as handle:
         for raw_line in handle:
             line = raw_line.strip()
@@ -1429,8 +1753,12 @@ def _rehydrate_summary_for_append(summary_path: Path) -> None:
 def load_summary_rows(
     path: Path, *, include_samples: bool = True, strict: bool = False
 ) -> list[dict[str, Any]]:
-    return _load_summary_rows(path, include_samples=include_samples, strict=strict,
-                              _projection_reuse=not include_samples)
+    return _load_summary_rows(
+        path,
+        include_samples=include_samples,
+        strict=strict,
+        _projection_reuse=not include_samples,
+    )
 
 
 def _slim_summary_row(payload: dict[str, Any]) -> dict[str, Any]:
@@ -1506,23 +1834,45 @@ def update_and_load_pipeline_event_summaries(
         else DEFAULT_SUMMARY_DETAIL_LEVEL
     )
     force_rebuild = False
-    invalid_checkpoint = manifest_path.exists() and (not manifest or
-        ("checkpoint_digest" in manifest and manifest["checkpoint_digest"] != checkpoint_digest(manifest)))
+    invalid_checkpoint = manifest_path.exists() and (
+        not manifest
+        or (
+            "checkpoint_digest" in manifest
+            and manifest["checkpoint_digest"] != checkpoint_digest(manifest)
+        )
+    )
     if invalid_checkpoint:
         if not allow_bootstrap:
             raise ValueError("raw_summary_checkpoint_digest_invalid")
         force_rebuild = True
     actual_summary = existing_or_gzip_path(summary_path)
     summary_stamp = manifest.get("summary_stamp")
-    if actual_summary.exists() and summary_stamp and summary_stamp != [
-        actual_summary.stat().st_ino, actual_summary.stat().st_size,
-        actual_summary.stat().st_mtime_ns, actual_summary.stat().st_ctime_ns,
-    ]:
+    if (
+        actual_summary.exists()
+        and summary_stamp
+        and summary_stamp
+        != [
+            actual_summary.stat().st_ino,
+            actual_summary.stat().st_size,
+            actual_summary.stat().st_mtime_ns,
+            actual_summary.stat().st_ctime_ns,
+        ]
+    ):
         if not allow_bootstrap:
-            raise ValueError("raw_summary_generation_invalid; --allow-bootstrap permits explicit scoped repair")
+            raise ValueError(
+                "raw_summary_generation_invalid; --allow-bootstrap permits explicit scoped repair"
+            )
         force_rebuild = True
-    if raw_observer is not None and manifest and "raw_volume" not in manifest and max(stat.st_size, int(manifest.get("raw_offset") or 0)) > 64 * 1024 * 1024 and not allow_bootstrap:
-        raise ValueError("volume_bootstrap_required; approved source-day streaming required")
+    if (
+        raw_observer is not None
+        and manifest
+        and "raw_volume" not in manifest
+        and max(stat.st_size, int(manifest.get("raw_offset") or 0)) > 64 * 1024 * 1024
+        and not allow_bootstrap
+    ):
+        raise ValueError(
+            "volume_bootstrap_required; approved source-day streaming required"
+        )
     callback_sources = []
     for callback in (reason_labeler, ignore_payload):
         if callback is None:
@@ -1531,9 +1881,13 @@ def update_and_load_pipeline_event_summaries(
             callback_sources.append(inspect.getsource(callback))
             owner_file = inspect.getsourcefile(callback)
             if owner_file:
-                callback_sources.append(hashlib.sha256(Path(owner_file).read_bytes()).hexdigest())
+                callback_sources.append(
+                    hashlib.sha256(Path(owner_file).read_bytes()).hexdigest()
+                )
             if getattr(callback, "__closure__", None):
-                force_rebuild = True  # Unbound captured state has no append-prefix authority.
+                force_rebuild = (
+                    True  # Unbound captured state has no append-prefix authority.
+                )
         except (OSError, TypeError):
             force_rebuild = True  # Still support normal streaming calculation.
     callback_contract = hashlib.sha256("\n".join(callback_sources).encode()).hexdigest()
@@ -1542,15 +1896,26 @@ def update_and_load_pipeline_event_summaries(
     archived_summary_path = Path(f"{summary_path}.gz")
     summary_exists = summary_path.exists() or archived_summary_path.exists()
     parser_contract = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
-    callback_changed = bool(manifest.get("callback_contract") and manifest["callback_contract"] != callback_contract)
-    parser_changed = bool(manifest.get("parser_contract") and manifest["parser_contract"] != parser_contract)
+    callback_changed = bool(
+        manifest.get("callback_contract")
+        and manifest["callback_contract"] != callback_contract
+    )
+    parser_changed = bool(
+        manifest.get("parser_contract")
+        and manifest["parser_contract"] != parser_contract
+    )
     contract_migration = None
     if (callback_changed or parser_changed) and not allow_bootstrap:
         from src.engine.monitoring.sentinel_summary_contract import verify_predecessor
+
         contract_migration = verify_predecessor(
-            manifest=manifest, manifest_path=manifest_path, raw_path=raw_path,
-            summary_path=actual_summary, callbacks=(reason_labeler, ignore_payload),
-            callback_contract=callback_contract, parser_path=Path(__file__),
+            manifest=manifest,
+            manifest_path=manifest_path,
+            raw_path=raw_path,
+            summary_path=actual_summary,
+            callbacks=(reason_labeler, ignore_payload),
+            callback_contract=callback_contract,
+            parser_path=Path(__file__),
             parser_contract=parser_contract,
         )
     stale_summary = (
@@ -1560,20 +1925,33 @@ def update_and_load_pipeline_event_summaries(
         or int(manifest.get("raw_inode") or -1) != int(raw_inode or -1)
         or set(manifest.get("summary_stages") or ()) != set(summary_stages)
         or str(manifest.get("summary_detail_level") or "") != summary_detail_level
-        or (int(manifest.get("raw_size") or 0) == raw_size and (manifest.get("raw_mtime_ns") != stat.st_mtime_ns
-            or manifest.get("raw_ctime_ns", stat.st_ctime_ns) != stat.st_ctime_ns))
+        or (
+            int(manifest.get("raw_size") or 0) == raw_size
+            and (
+                manifest.get("raw_mtime_ns") != stat.st_mtime_ns
+                or manifest.get("raw_ctime_ns", stat.st_ctime_ns) != stat.st_ctime_ns
+            )
+        )
         or (raw_observer is not None and "raw_volume" not in manifest)
-        or (raw_observer is not None and manifest.get("observer_contract") != observer_contract)
+        or (
+            raw_observer is not None
+            and manifest.get("observer_contract") != observer_contract
+        )
         or (callback_changed and contract_migration is None)
         or (parser_changed and contract_migration is None)
         or raw_offset > raw_size
         or not summary_exists
-        or (incremental_rollup and not is_gzip_raw and not raw_path.with_name(f".{raw_path.name}.partition.lock").is_file())
+        or (
+            incremental_rollup
+            and not is_gzip_raw
+            and not raw_path.with_name(f".{raw_path.name}.partition.lock").is_file()
+        )
     )
     if contract_migration is not None:
         if stale_summary:
             raise RuntimeError("summary_contract_migration_source_guard_failed")
         from src.engine.monitoring.sentinel_summary_contract import archive_predecessor
+
         contract_migration = archive_predecessor(contract_migration, manifest_path)
     if stale_summary:
         raw_offset = 0
@@ -1644,25 +2022,43 @@ def update_and_load_pipeline_event_summaries(
             if last_good_offset <= line_start:
                 break
 
-    if contract_migration is not None and last_good_offset != contract_migration["raw_read_end"]:
+    if (
+        contract_migration is not None
+        and last_good_offset != contract_migration["raw_read_end"]
+    ):
         raise RuntimeError("summary_contract_migration_incomplete_source_prefix")
 
     if contract_migration is not None:
-        from src.engine.monitoring.sentinel_summary_contract import verify_before_publication
+        from src.engine.monitoring.sentinel_summary_contract import (
+            verify_before_publication,
+        )
+
         verify_before_publication(contract_migration, raw_path, actual_summary)
 
-    new_rows = [groups[key].to_row(target_date=target_date, summary_detail_level=summary_detail_level)
-                for key in sorted(groups)]
+    new_rows = [
+        groups[key].to_row(
+            target_date=target_date, summary_detail_level=summary_detail_level
+        )
+        for key in sorted(groups)
+    ]
     appended_summary_rows = len(new_rows)
     # Build successors off to the side; do not delete the valid generation before
     # a rebuild succeeds. An interrupted two-file publication is detected by stamp.
-    publish_path = summary_path.with_name(f"{summary_path.name}.rebuild.{os.getpid()}") if stale_summary else summary_path
+    publish_path = (
+        summary_path.with_name(f"{summary_path.name}.rebuild.{os.getpid()}")
+        if stale_summary
+        else summary_path
+    )
     if not stale_summary:
         _rehydrate_summary_for_append(summary_path)
     initial_size = publish_path.stat().st_size if publish_path.exists() else 0
-    with publish_path.open("w" if stale_summary else "a", encoding="utf-8") as summary_handle:
+    with publish_path.open(
+        "w" if stale_summary else "a", encoding="utf-8"
+    ) as summary_handle:
         for row in new_rows:
-            summary_handle.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
+            summary_handle.write(
+                json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n"
+            )
         summary_handle.flush()
         os.fsync(summary_handle.fileno())
     if incremental_rollup:
@@ -1674,8 +2070,11 @@ def update_and_load_pipeline_event_summaries(
         else:
             rows = merge_identity_rows(previous, new_rows)
     else:
-        rows = _load_summary_rows(publish_path, include_samples=include_samples,
-                                  _projection_reuse=reuse_small_projection)
+        rows = _load_summary_rows(
+            publish_path,
+            include_samples=include_samples,
+            _projection_reuse=reuse_small_projection,
+        )
     backup_path = summary_path.with_name(f"{summary_path.name}.previous.{os.getpid()}")
     if stale_summary:
         if summary_path.exists():
@@ -1701,7 +2100,8 @@ def update_and_load_pipeline_event_summaries(
         "manifest_path": str(manifest_path),
         "summary_profile": summary_profile,
         "summary_detail_level": summary_detail_level,
-        "summary_row_count": appended_summary_rows + (0 if stale_summary else int(manifest.get("summary_row_count") or 0)),
+        "summary_row_count": appended_summary_rows
+        + (0 if stale_summary else int(manifest.get("summary_row_count") or 0)),
         "incomplete_tail": incomplete_tail,
         "incomplete_tail_bytes": incomplete_tail_bytes,
         "appended_raw_lines": appended_raw_lines,
@@ -1724,7 +2124,12 @@ def update_and_load_pipeline_event_summaries(
     if not stale_summary and "producer_rollup" in manifest:
         new_manifest["producer_rollup"] = manifest["producer_rollup"]
     st = actual_summary.stat()
-    new_manifest["summary_stamp"] = [st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns]
+    new_manifest["summary_stamp"] = [
+        st.st_ino,
+        st.st_size,
+        st.st_mtime_ns,
+        st.st_ctime_ns,
+    ]
     new_manifest["callback_contract"] = callback_contract
     new_manifest["observer_contract"] = observer_contract
     new_manifest["parser_contract"] = parser_contract
@@ -1740,7 +2145,12 @@ def update_and_load_pipeline_event_summaries(
             backup_path.replace(summary_path)
             if manifest:
                 st = summary_path.stat()
-                manifest["summary_stamp"] = [st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns]
+                manifest["summary_stamp"] = [
+                    st.st_ino,
+                    st.st_size,
+                    st.st_mtime_ns,
+                    st.st_ctime_ns,
+                ]
                 manifest["checkpoint_digest"] = checkpoint_digest(manifest)
                 _write_json(manifest_path, manifest)
         if not stale_summary:
@@ -1750,7 +2160,12 @@ def update_and_load_pipeline_event_summaries(
             # valid offset if publication failed before the commit.
             if manifest:
                 st = summary_path.stat()
-                manifest["summary_stamp"] = [st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns]
+                manifest["summary_stamp"] = [
+                    st.st_ino,
+                    st.st_size,
+                    st.st_mtime_ns,
+                    st.st_ctime_ns,
+                ]
                 manifest["checkpoint_digest"] = checkpoint_digest(manifest)
                 _write_json(manifest_path, manifest)
         raise
@@ -1957,7 +2372,8 @@ class ProducerSummaryCompactor:
             "summary_recorded": True,
             "suppress_raw": suppress_raw,
             "lossless": lossless,
-            "_flush_requested": self._termination_drain or (
+            "_flush_requested": self._termination_drain
+            or (
                 not self._auto_flush
                 and (
                     self.flush_sec == 0
@@ -2126,10 +2542,21 @@ class ProducerSummaryCompactor:
         )
         if not isinstance(existing, dict):
             raise ValueError("invalid producer manifest")
-        if existing and not summary_path.exists() and existing.get("summary_event_count"):
+        if (
+            existing
+            and not summary_path.exists()
+            and existing.get("summary_event_count")
+        ):
             raise ValueError("producer_summary_committed_body_missing; raw retained")
-        if existing and summary_path.exists() and existing.get("summary_storage_size_bytes") != summary_path.stat().st_size:
-            raise ValueError("producer_summary_uncommitted_or_corrupt_generation; raw retained")
+        if (
+            existing
+            and summary_path.exists()
+            and existing.get("summary_storage_size_bytes")
+            != summary_path.stat().st_size
+        ):
+            raise ValueError(
+                "producer_summary_uncommitted_or_corrupt_generation; raw retained"
+            )
         if not existing and summary_path.exists() and summary_path.stat().st_size:
             raise ValueError("producer_summary_missing_commit_receipt; raw retained")
         previous_rows = int(existing.get("summary_row_count") or 0)
@@ -2138,38 +2565,67 @@ class ProducerSummaryCompactor:
         # minute projection here so independent monitors need not decode the
         # entire growing daily summary. Migrate the old body once, in this
         # background writer, retaining the native validator and global count.
-        recent = existing.get('recent_summary')
+        recent = existing.get("recent_summary")
         prior_rows = []
         if recent is not None:
-            if (recent.get('schema') != 'producer_recent_minutes_v1'
-                    or recent.get('body_sha256') != hashlib.sha256(json.dumps(
-                        recent['rows'], sort_keys=True, separators=(',', ':')).encode()).hexdigest()):
-                raise ValueError('producer_recent_summary_invalid')
-            prior_rows = recent['rows']
+            if (
+                recent.get("schema") != "producer_recent_minutes_v1"
+                or recent.get("body_sha256")
+                != hashlib.sha256(
+                    json.dumps(
+                        recent["rows"], sort_keys=True, separators=(",", ":")
+                    ).encode()
+                ).hexdigest()
+            ):
+                raise ValueError("producer_recent_summary_invalid")
+            prior_rows = recent["rows"]
         elif previous_events:
-            prior_rows = load_summary_rows(summary_path, include_samples=False, strict=True)
-            if sum(r['event_count'] for r in prior_rows) != previous_events:
-                raise ValueError('producer_recent_summary_migration_count_invalid')
-        latest_bucket = max((str(r['bucket_start']) for r in recent_rows), default=safe_date+'T00:00:00')
+            prior_rows = load_summary_rows(
+                summary_path, include_samples=False, strict=True
+            )
+            if sum(r["event_count"] for r in prior_rows) != previous_events:
+                raise ValueError("producer_recent_summary_migration_count_invalid")
+        latest_bucket = max(
+            (str(r["bucket_start"]) for r in recent_rows),
+            default=safe_date + "T00:00:00",
+        )
         if recent:
-            latest_bucket = max(latest_bucket, recent['latest_bucket'])
-        lower = (datetime.fromisoformat(latest_bucket) - timedelta(minutes=20)).isoformat()
+            latest_bucket = max(latest_bucket, recent["latest_bucket"])
+        lower = (
+            datetime.fromisoformat(latest_bucket) - timedelta(minutes=20)
+        ).isoformat()
         minute_rows = {}
         for r in chain(prior_rows, recent_rows):
-            bucket = str(r['bucket_start'])
+            bucket = str(r["bucket_start"])
             if bucket < lower:
                 continue
-            key = (bucket, r['stage'])
-            item = minute_rows.setdefault(key, dict(target_date=safe_date, bucket_start=bucket,
-                stage=r['stage'], event_count=0, evidence_hash_sum='0'*64))
-            item['event_count'] += r['event_count']
-            item['evidence_hash_sum'] = f"{(int(item['evidence_hash_sum'],16)+int(r['evidence_hash_sum'],16))%IDENTITY_MODULUS:064x}"
+            key = (bucket, r["stage"])
+            item = minute_rows.setdefault(
+                key,
+                dict(
+                    target_date=safe_date,
+                    bucket_start=bucket,
+                    stage=r["stage"],
+                    event_count=0,
+                    evidence_hash_sum="0" * 64,
+                ),
+            )
+            item["event_count"] += r["event_count"]
+            item["evidence_hash_sum"] = (
+                f"{(int(item['evidence_hash_sum'],16)+int(r['evidence_hash_sum'],16))%IDENTITY_MODULUS:064x}"
+            )
         recent_body = [minute_rows[k] for k in sorted(minute_rows)]
         if len(recent_body) > 10000 or len(json.dumps(recent_body).encode()) > 1500000:
-            raise ValueError('producer_recent_summary_budget_exceeded')
-        recent = dict(schema='producer_recent_minutes_v1', lower_bound=lower, latest_bucket=latest_bucket,
-            rows=recent_body, body_sha256=hashlib.sha256(json.dumps(recent_body,
-                sort_keys=True,separators=(',', ':')).encode()).hexdigest())
+            raise ValueError("producer_recent_summary_budget_exceeded")
+        recent = dict(
+            schema="producer_recent_minutes_v1",
+            lower_bound=lower,
+            latest_bucket=latest_bucket,
+            rows=recent_body,
+            body_sha256=hashlib.sha256(
+                json.dumps(recent_body, sort_keys=True, separators=(",", ":")).encode()
+            ).hexdigest(),
+        )
         existing_first_event_at = _safe_str(existing.get("coverage_first_event_at"))
         existing_last_event_at = _safe_str(existing.get("coverage_last_event_at"))
         coverage_first_event_at = (

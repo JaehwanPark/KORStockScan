@@ -27,7 +27,9 @@ from src.engine.scalping.risky_micro_episode import (
     evaluate_risky_micro_episode,
 )
 from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
-from src.engine.automation.source_quality_clean_baseline import policy_refresh_start_date
+from src.engine.automation.source_quality_clean_baseline import (
+    policy_refresh_start_date,
+)
 
 
 class _PipelineReplay:
@@ -47,7 +49,7 @@ class _PipelineReplay:
         pickle.dump(row, self.pending, protocol=pickle.HIGHEST_PROTOCOL)
         self.row_count += 1
         self.pending_count += 1
-        self.stages.add(str(row.get('stage') or ''))
+        self.stages.add(str(row.get("stage") or ""))
         self.codes.add(_event_code(row))
         if self.pending_count >= 128 or self.pending.tell() >= 1024 * 1024:
             self.flush()
@@ -58,9 +60,14 @@ class _PipelineReplay:
         encoded = gzip.compress(self.pending.getvalue(), compresslevel=1, mtime=0)
         offset = self.storage.tell()
         self.storage.write(encoded)
-        self.blocks.append((offset, len(encoded), self.pending_count, self.stages, self.codes))
-        self.pending.seek(0); self.pending.truncate()
-        self.pending_count = 0; self.stages = set(); self.codes = set()
+        self.blocks.append(
+            (offset, len(encoded), self.pending_count, self.stages, self.codes)
+        )
+        self.pending.seek(0)
+        self.pending.truncate()
+        self.pending_count = 0
+        self.stages = set()
+        self.codes = set()
 
     def __iter__(self):
         return self.iter_rows()
@@ -69,7 +76,9 @@ class _PipelineReplay:
         for offset, size, count, block_stages, block_codes in self.blocks:
             if stages is not None and not block_stages.intersection(stages):
                 continue
-            if stage_prefix is not None and not any(x.startswith(stage_prefix) for x in block_stages):
+            if stage_prefix is not None and not any(
+                x.startswith(stage_prefix) for x in block_stages
+            ):
                 continue
             if codes is not None and not block_codes.intersection(codes):
                 continue
@@ -77,21 +86,30 @@ class _PipelineReplay:
             with io.BytesIO(gzip.decompress(self.storage.read(size))) as stream:
                 for _ in range(count):
                     row = pickle.load(stream)
-                    stage = str(row.get('stage') or '')
-                    if stages is not None and stage not in stages:continue
-                    if stage_prefix is not None and not stage.startswith(stage_prefix):continue
-                    if codes is not None and _event_code(row) not in codes:continue
+                    stage = str(row.get("stage") or "")
+                    if stages is not None and stage not in stages:
+                        continue
+                    if stage_prefix is not None and not stage.startswith(stage_prefix):
+                        continue
+                    if codes is not None and _event_code(row) not in codes:
+                        continue
                     yield row
-                if stream.read(1):raise ValueError('pipeline_replay_trailing_data')
+                if stream.read(1):
+                    raise ValueError("pipeline_replay_trailing_data")
 
 
 def _pipeline_rows(source, *, stages=None, stage_prefix=None, codes=None):
     if isinstance(source, _PipelineReplay):
         return source.iter_rows(stages=stages, stage_prefix=stage_prefix, codes=codes)
-    return (row for row in iter_jsonl(source)
-            if (stages is None or str(row.get('stage') or '') in stages)
-            and (stage_prefix is None or str(row.get('stage') or '').startswith(stage_prefix))
-            and (codes is None or _event_code(row) in codes))
+    return (
+        row
+        for row in iter_jsonl(source)
+        if (stages is None or str(row.get("stage") or "") in stages)
+        and (
+            stage_prefix is None or str(row.get("stage") or "").startswith(stage_prefix)
+        )
+        and (codes is None or _event_code(row) in codes)
+    )
 
 
 @contextmanager
@@ -115,13 +133,19 @@ def _pipeline_replay(path):
                 stream = gzip.GzipFile(fileobj=raw, mode="rb") if compressed else raw
                 try:
                     while compressed or source_bytes < before.st_size:
-                        line = stream.readline() if compressed else stream.readline(before.st_size - source_bytes)
+                        line = (
+                            stream.readline()
+                            if compressed
+                            else stream.readline(before.st_size - source_bytes)
+                        )
                         if not line:
                             break
                         source_bytes += len(line)
                         digest.update(line)
                         try:
-                            row = json.loads(line.decode("utf-8", errors="replace").strip())
+                            row = json.loads(
+                                line.decode("utf-8", errors="replace").strip()
+                            )
                         except json.JSONDecodeError:
                             continue
                         if isinstance(row, dict):
@@ -133,12 +157,16 @@ def _pipeline_replay(path):
                 after = os.fstat(raw.fileno())
                 current = actual.stat()
                 identity = lambda st: (st.st_dev, st.st_ino)
-                if (identity(before) != identity(current)
-                        or after.st_size < before.st_size
-                        or (after.st_size == before.st_size and
-                            (after.st_mtime_ns, after.st_ctime_ns) !=
-                            (before.st_mtime_ns, before.st_ctime_ns))
-                        or (compressed and after.st_size != before.st_size)):
+                if (
+                    identity(before) != identity(current)
+                    or after.st_size < before.st_size
+                    or (
+                        after.st_size == before.st_size
+                        and (after.st_mtime_ns, after.st_ctime_ns)
+                        != (before.st_mtime_ns, before.st_ctime_ns)
+                    )
+                    or (compressed and after.st_size != before.st_size)
+                ):
                     raise ValueError("pipeline_source_changed_during_snapshot")
                 if not compressed and source_bytes != before.st_size:
                     raise ValueError("pipeline_source_prefix_incomplete")
@@ -154,6 +182,7 @@ def _pipeline_replay(path):
             "spool_memory_limit_bytes": 8 * 1024 * 1024,
         }
         yield replay
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 PIPELINE_EVENTS_DIR = PROJECT_ROOT / "data" / "pipeline_events"
@@ -493,12 +522,14 @@ def _event_price(row: dict[str, Any]) -> float | None:
 
 
 def _tp1_quantity_source(fields):
-    value=fields.get("tp1_quantity_capital_source")
-    if isinstance(value,dict):return value
+    value = fields.get("tp1_quantity_capital_source")
+    if isinstance(value, dict):
+        return value
     try:
-        decoded=json.loads(value or "null")
-        return decoded if isinstance(decoded,dict) else None
-    except (ValueError,TypeError):return None
+        decoded = json.loads(value or "null")
+        return decoded if isinstance(decoded, dict) else None
+    except (ValueError, TypeError):
+        return None
 
 
 def _event_executable_bbo(
@@ -2982,18 +3013,36 @@ def _daily_feedback_report_date(path: Path) -> str | None:
 
 def _prior_daily_report(path, cache):
     from copy import deepcopy
+
     before = path.stat()
-    stamp = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns)
+    stamp = (
+        before.st_dev,
+        before.st_ino,
+        before.st_size,
+        before.st_mtime_ns,
+        before.st_ctime_ns,
+    )
     entry = (cache or {}).get(path)
     if entry and entry[0] == stamp:
         return deepcopy(entry[1])
-    with path.open('r', encoding='utf-8') as handle:
+    with path.open("r", encoding="utf-8") as handle:
         value = json.load(handle)
     after = path.stat()
-    if stamp != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns):
-        raise OSError('prior_report_changed_during_read')
-    if (cache is not None and before.st_size <= 1024 * 1024 and len(cache) < 20
-            and sum(item[0][2] for item in cache.values()) + before.st_size <= 4 * 1024 * 1024):
+    if stamp != (
+        after.st_dev,
+        after.st_ino,
+        after.st_size,
+        after.st_mtime_ns,
+        after.st_ctime_ns,
+    ):
+        raise OSError("prior_report_changed_during_read")
+    if (
+        cache is not None
+        and before.st_size <= 1024 * 1024
+        and len(cache) < 20
+        and sum(item[0][2] for item in cache.values()) + before.st_size
+        <= 4 * 1024 * 1024
+    ):
         cache[path] = (stamp, deepcopy(value))
     return value
 
@@ -3001,7 +3050,8 @@ def _prior_daily_report(path, cache):
 def _clean_baseline_rolling_latency_false_negative_candidates(
     target_date: str,
     current_rows: list[dict[str, Any]],
-    *, report_cache=None,
+    *,
+    report_cache=None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Roll source-only latency false negatives without restoring retry authority."""
 
@@ -3014,7 +3064,10 @@ def _clean_baseline_rolling_latency_false_negative_candidates(
     eligible_paths: list[Path] = []
     for path in sorted(REPORT_DIR.glob(f"{prefix}*.json")):
         report_date = _daily_feedback_report_date(path)
-        if report_date and policy_refresh_start_date(target_date) <= report_date < target_date:
+        if (
+            report_date
+            and policy_refresh_start_date(target_date) <= report_date < target_date
+        ):
             eligible_paths.append(path)
     prior_limit = max(0, LATENCY_FALSE_NEGATIVE_ROLLING_REPORT_DAYS - 1)
     for path in eligible_paths[-prior_limit:] if prior_limit else []:
@@ -3325,7 +3378,9 @@ def _tp1_market_axes(fields: dict[str, Any]) -> dict[str, str]:
     ).strip()
     if not session_regime:
         session_regime = session_bucket
-    actual_venue = str(fields.get("actual_execution_venue") or "UNKNOWN").strip().upper()
+    actual_venue = (
+        str(fields.get("actual_execution_venue") or "UNKNOWN").strip().upper()
+    )
     if actual_venue not in {"KRX", "NXT"}:
         actual_venue = "UNKNOWN"
     return {
@@ -3515,23 +3570,37 @@ def _tp1_post_block_horizon_measurements(
                 if measurement["min_move_pct"] is None
                 else min(float(measurement["min_move_pct"]), move_pct)
             )
-            qfields=_fields(subsequent)
-            qty=qfields.get("market_data_effective_best_bid_qty")
-            verified=_boolish(qfields.get("market_data_effective_best_bid_qty_source_valid"))
-            execution_quote=dict(exit_at=_event_ts(subsequent),exit_bid_krw=executable_bid,
+            qfields = _fields(subsequent)
+            qty = qfields.get("market_data_effective_best_bid_qty")
+            verified = _boolish(
+                qfields.get("market_data_effective_best_bid_qty_source_valid")
+            )
+            execution_quote = dict(
+                exit_at=_event_ts(subsequent),
+                exit_bid_krw=executable_bid,
                 exit_bid_qty=_safe_int(qty) if verified else None,
                 route=qfields.get("market_data_effective_order_route"),
                 transport_epoch=qfields.get("market_data_effective_transport_epoch"),
-                observed_epoch=qfields.get("market_data_effective_depth_observed_epoch"),
-                source_sha256=hashlib.sha256(json.dumps(subsequent,sort_keys=True,default=str).encode()).hexdigest())
-            if bbo_source == 'nxt_post_block_ws_0d_bbo':
-                prefix='rising_missed_nxt_post_block_ws_0d_'
+                observed_epoch=qfields.get(
+                    "market_data_effective_depth_observed_epoch"
+                ),
+                source_sha256=hashlib.sha256(
+                    json.dumps(subsequent, sort_keys=True, default=str).encode()
+                ).hexdigest(),
+            )
+            if bbo_source == "nxt_post_block_ws_0d_bbo":
+                prefix = "rising_missed_nxt_post_block_ws_0d_"
                 execution_quote.update(
-                    exit_bid_qty=_safe_int(qfields.get(prefix+'best_bid_qty')) if _boolish(qfields.get(prefix+'best_bid_qty_source_valid')) else None,
-                    route=qfields.get(prefix+'order_route'),
-                    transport_epoch=qfields.get(prefix+'transport_epoch'),
-                    observed_epoch=qfields.get(prefix+'observed_epoch'))
-            measurement["terminal_execution_quote"]=execution_quote
+                    exit_bid_qty=(
+                        _safe_int(qfields.get(prefix + "best_bid_qty"))
+                        if _boolish(qfields.get(prefix + "best_bid_qty_source_valid"))
+                        else None
+                    ),
+                    route=qfields.get(prefix + "order_route"),
+                    transport_epoch=qfields.get(prefix + "transport_epoch"),
+                    observed_epoch=qfields.get(prefix + "observed_epoch"),
+                )
+            measurement["terminal_execution_quote"] = execution_quote
             measurement["terminal_executable_ts"] = _event_ts(subsequent)
             measurement["terminal_executable_move_pct"] = move_pct
             measurement["terminal_executable_price_source"] = price_source
@@ -3541,7 +3610,7 @@ def _tp1_post_block_horizon_measurements(
                 elif move_pct <= TP1_ADVERSE_STOP_PCT:
                     measurement["first_hit_label"] = "adverse_stop_first"
                 if measurement["first_hit_label"] is not None:
-                    measurement["first_hit_execution_quote"]=execution_quote
+                    measurement["first_hit_execution_quote"] = execution_quote
                     measurement["first_hit_ts"] = _event_ts(subsequent)
                     measurement["first_hit_move_pct"] = move_pct
                     measurement["first_hit_price_source"] = price_source
@@ -4156,7 +4225,9 @@ def _build_tp1_counterfactual_submit_safety(
     risk_counts: Counter[str] = Counter()
     unique_symbols: set[str] = set()
     rows: list[dict[str, Any]] = []
-    for row in _pipeline_rows(pipeline_path, stages={"rising_missed_tp1_counterfactual_submit_safety"}):
+    for row in _pipeline_rows(
+        pipeline_path, stages={"rising_missed_tp1_counterfactual_submit_safety"}
+    ):
         if (
             str(row.get("stage") or "")
             != "rising_missed_tp1_counterfactual_submit_safety"
@@ -4685,7 +4756,8 @@ def _aggregate_nxt_post_block_outcomes(
 def _clean_baseline_rolling_nxt_post_block_outcomes(
     target_date: str,
     current_rows: list[dict[str, Any]],
-    *, report_cache=None,
+    *,
+    report_cache=None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Aggregate recent source-quality-gated blocker outcomes since baseline.
 
@@ -4704,7 +4776,9 @@ def _clean_baseline_rolling_nxt_post_block_outcomes(
     eligible_paths = []
     for path in sorted(REPORT_DIR.glob(f"{prefix}*.json")):
         report_date = _daily_feedback_report_date(path)
-        if not report_date or not (policy_refresh_start_date(target_date) <= report_date < target_date):
+        if not report_date or not (
+            policy_refresh_start_date(target_date) <= report_date < target_date
+        ):
             continue
         eligible_paths.append(path)
     prior_limit = max(0, NXT_POST_BLOCK_ROLLING_REPORT_DAYS - 1)
@@ -5446,7 +5520,9 @@ def _build_adverse_micro_recovery_observation(
     outcome_counts: Counter[str] = Counter()
     rows: list[dict[str, Any]] = []
     registered_observation_ids: set[str] = set()
-    for event in _pipeline_rows(pipeline_path, stage_prefix="rising_missed_adverse_micro_recovery_"):
+    for event in _pipeline_rows(
+        pipeline_path, stage_prefix="rising_missed_adverse_micro_recovery_"
+    ):
         stage = str(event.get("stage") or "")
         if not stage.startswith("rising_missed_adverse_micro_recovery_"):
             continue
@@ -6765,8 +6841,7 @@ def _risky_micro_daily_rolling_eligible_rows(
         if (
             not code
             or candidate_status != "source_only_candidate"
-            or venue
-            not in {"KRX", "NXT", "KRX_NXT_INTEGRATED", "PREMARKET_KRX_LIKE"}
+            or venue not in {"KRX", "NXT", "KRX_NXT_INTEGRATED", "PREMARKET_KRX_LIKE"}
             or session in {"", "UNKNOWN"}
         ):
             continue
@@ -6830,7 +6905,8 @@ def _risky_micro_daily_rolling_eligible_rows(
 def _clean_baseline_rolling_risky_micro_outcomes(
     target_date: str,
     current_daily_rows: list[dict[str, Any]],
-    *, report_cache=None,
+    *,
+    report_cache=None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Aggregate clean-baseline source-only outcomes without live authority."""
 
@@ -6841,7 +6917,10 @@ def _clean_baseline_rolling_risky_micro_outcomes(
     eligible_paths: list[Path] = []
     for path in sorted(REPORT_DIR.glob(f"{prefix}*.json")):
         report_date = _daily_feedback_report_date(path)
-        if report_date and policy_refresh_start_date(target_date) <= report_date < target_date:
+        if (
+            report_date
+            and policy_refresh_start_date(target_date) <= report_date < target_date
+        ):
             eligible_paths.append(path)
     prior_limit = max(0, RISKY_MICRO_ROLLING_REPORT_DAYS - 1)
     for path in eligible_paths[-prior_limit:] if prior_limit else []:
@@ -7116,7 +7195,9 @@ def build_report(
     generated_at = generated_at or datetime.now(KST).isoformat(timespec="seconds")
     with _pipeline_replay(path) as replay:
         report = _build_report(
-            target_date, pipeline_path=path, pipeline_rows=replay,
+            target_date,
+            pipeline_path=path,
+            pipeline_rows=replay,
             generated_at=generated_at,
             entry_turn_symbol_master_path=entry_turn_symbol_master_path,
         )
@@ -7134,7 +7215,8 @@ def _build_report(
 ) -> dict[str, Any]:
     pipeline_path = pipeline_path or _pipeline_path(target_date)
     resolved_pipeline_path = (
-        Path(pipeline_rows.receipt["source_path"]) if pipeline_rows is not None
+        Path(pipeline_rows.receipt["source_path"])
+        if pipeline_rows is not None
         else existing_or_gzip_path(pipeline_path)
     )
     generated_at = generated_at or datetime.now(KST).isoformat(timespec="seconds")
@@ -7142,8 +7224,11 @@ def _build_report(
     source = pipeline_rows if pipeline_rows is not None else pipeline_path
     forced: dict[str, dict[str, Any]] = {}
     holding_by_record: dict[str, dict[str, Any]] = {}
-    source_exists = (pipeline_rows.receipt["source_exists"] if pipeline_rows is not None
-                     else resolved_pipeline_path.exists())
+    source_exists = (
+        pipeline_rows.receipt["source_exists"]
+        if pipeline_rows is not None
+        else resolved_pipeline_path.exists()
+    )
     source_quality_status = "pass" if source_exists else "missing_pipeline_events"
 
     for row in _pipeline_rows(source):

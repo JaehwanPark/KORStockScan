@@ -6,7 +6,9 @@ import pytest
 from src.engine.automation import runtime_policy_bootstrap as bootstrap
 from src.engine import runtime_approval_summary as summary_mod
 from src.engine import verify_threshold_cycle_postclose_chain as verifier
-from src.engine.automation import scalp_trailing_mechanical_policy_apply as scalp_publisher
+from src.engine.automation import (
+    scalp_trailing_mechanical_policy_apply as scalp_publisher,
+)
 
 
 def _write(path: Path, payload: dict):
@@ -16,30 +18,54 @@ def _write(path: Path, payload: dict):
 
 def test_write_dispatch_publishes_future_transition_after_verify(monkeypatch):
     calls = []
-    monkeypatch.setattr(bootstrap, "write_bootstrap", lambda *a, **k: {"target_date": a[0]})
-    monkeypatch.setattr(bootstrap, "verify_bootstrap", lambda *a, **k: {
-        "status": "pass", "passed": True, "pid": None,
-    })
-    monkeypatch.setattr(bootstrap, "publish_future_handoff_transition", lambda day: (
-        calls.append(day) or {"status": "linked"}
-    ))
+    monkeypatch.setattr(
+        bootstrap, "write_bootstrap", lambda *a, **k: {"target_date": a[0]}
+    )
+    monkeypatch.setattr(
+        bootstrap,
+        "verify_bootstrap",
+        lambda *a, **k: {
+            "status": "pass",
+            "passed": True,
+            "pid": None,
+        },
+    )
+    monkeypatch.setattr(
+        bootstrap,
+        "publish_future_handoff_transition",
+        lambda day: (calls.append(day) or {"status": "linked"}),
+    )
     assert bootstrap.main(["--date", "2026-09-28", "--write"]) == 0
     assert calls == ["2026-09-28"]
 
 
 def test_write_dispatch_rejects_blocked_future_transition(monkeypatch):
-    monkeypatch.setattr(bootstrap, "write_bootstrap", lambda *a, **k: {"target_date": a[0]})
-    monkeypatch.setattr(bootstrap, "verify_bootstrap", lambda *a, **k: {
-        "status": "pass", "passed": True, "pid": None,
-    })
-    monkeypatch.setattr(bootstrap, "publish_future_handoff_transition", lambda day: {
-        "status": "blocked", "issues": ["future_transition_selected_release_mismatch"],
-    })
+    monkeypatch.setattr(
+        bootstrap, "write_bootstrap", lambda *a, **k: {"target_date": a[0]}
+    )
+    monkeypatch.setattr(
+        bootstrap,
+        "verify_bootstrap",
+        lambda *a, **k: {
+            "status": "pass",
+            "passed": True,
+            "pid": None,
+        },
+    )
+    monkeypatch.setattr(
+        bootstrap,
+        "publish_future_handoff_transition",
+        lambda day: {
+            "status": "blocked",
+            "issues": ["future_transition_selected_release_mismatch"],
+        },
+    )
     assert bootstrap.main(["--date", "2026-09-28", "--write"]) == 1
 
 
 def test_initial_quantity_pid_verification_archive_survives_daily_overwrite(
-    monkeypatch, tmp_path,
+    monkeypatch,
+    tmp_path,
 ):
     day = "2026-09-28"
     monkeypatch.setattr(bootstrap, "BOOTSTRAP_DIR", tmp_path / "policy_bootstrap")
@@ -60,24 +86,38 @@ def test_initial_quantity_pid_verification_archive_survives_daily_overwrite(
             bootstrap.INITIAL_QUANTITY_ENV_SHA: policy_file_sha,
         },
     }
-    verify = {"status": "pass", "passed": True, "pid_passed": True,
-              "pid_env_available": True, "pid": 1234,
-              "target_date": day, "verified_at": f"{day}T08:00:00+09:00",
-              "manifest_sha256": "m" * 64, "findings": [],
-              "pid_mismatches": []}
+    verify = {
+        "status": "pass",
+        "passed": True,
+        "pid_passed": True,
+        "pid_env_available": True,
+        "pid": 1234,
+        "target_date": day,
+        "verified_at": f"{day}T08:00:00+09:00",
+        "manifest_sha256": "m" * 64,
+        "findings": [],
+        "pid_mismatches": [],
+    }
     archived = bootstrap._archive_initial_quantity_pid_verification(
-        day, verify, manifest)
+        day, verify, manifest
+    )
     assert archived.is_file()
-    assert bootstrap._archive_initial_quantity_pid_verification(
-        day, verify, manifest) == archived
+    assert (
+        bootstrap._archive_initial_quantity_pid_verification(day, verify, manifest)
+        == archived
+    )
     assert json.loads(archived.read_text())["policy_file_sha256"] == policy_file_sha
     verify["pid"] = 2345
-    assert bootstrap._archive_initial_quantity_pid_verification(
-        day, verify, manifest) != archived
+    assert (
+        bootstrap._archive_initial_quantity_pid_verification(day, verify, manifest)
+        != archived
+    )
     assert archived.is_file()
     verify["pid_passed"] = False
-    assert bootstrap._archive_initial_quantity_pid_verification(
-        day, verify, manifest) is None
+    assert (
+        bootstrap._archive_initial_quantity_pid_verification(day, verify, manifest)
+        is None
+    )
 
 
 def _rising_source_report(
@@ -103,7 +143,9 @@ def _rising_source_report(
     return report
 
 
-def test_bootstrap_carries_incumbent_applies_lock_and_scrubs_retired(monkeypatch, tmp_path):
+def test_bootstrap_carries_incumbent_applies_lock_and_scrubs_retired(
+    monkeypatch, tmp_path
+):
     boot_dir = tmp_path / "runtime" / "policy_bootstrap"
     legacy_dir = tmp_path / "threshold_cycle" / "runtime_env"
     lock_dir = tmp_path / "threshold_cycle" / "operator_runtime_env_locks"
@@ -132,9 +174,7 @@ def test_bootstrap_carries_incumbent_applies_lock_and_scrubs_retired(monkeypatch
             "lock_id": "score-lock",
             "family": "score65_74_recovery_probe",
             "enabled": True,
-            "env_overrides": {
-                "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_MIN_SCORE": "69"
-            },
+            "env_overrides": {"KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_MIN_SCORE": "69"},
         },
     )
     _write(
@@ -166,11 +206,12 @@ def test_bootstrap_carries_incumbent_applies_lock_and_scrubs_retired(monkeypatch
         "order_submitted": False,
         "economic_candidate_created": False,
     }
-    assert manifest["env_overrides"]["KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_MIN_SCORE"] == "69"
     assert (
-        manifest["env_overrides"][
-            "KORSTOCKSCAN_THRESHOLD_RUNTIME_AUTO_APPLY_ENABLED"
-        ]
+        manifest["env_overrides"]["KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_MIN_SCORE"]
+        == "69"
+    )
+    assert (
+        manifest["env_overrides"]["KORSTOCKSCAN_THRESHOLD_RUNTIME_AUTO_APPLY_ENABLED"]
         == "true"
     )
     assert (
@@ -184,7 +225,10 @@ def test_bootstrap_carries_incumbent_applies_lock_and_scrubs_retired(monkeypatch
     assert manifest["env_overrides"]["KORSTOCKSCAN_LIMIT_DOWN_WATCH_ENABLED"] == "false"
     assert "limit_down_watch" not in manifest["selected_families"]
     assert "KORSTOCKSCAN_EXPIRED_SHOULD_NOT_LOAD" not in manifest["env_overrides"]
-    assert "KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_MANIFEST_SHA256" not in manifest["env_overrides"]
+    assert (
+        "KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_MANIFEST_SHA256"
+        not in manifest["env_overrides"]
+    )
     assert manifest["direct_family_receipts"][0]["family"] == "direct_family"
     assert any(
         row.get("reason") == "outside_active_window"
@@ -193,14 +237,26 @@ def test_bootstrap_carries_incumbent_applies_lock_and_scrubs_retired(monkeypatch
     assert bootstrap.verify_bootstrap("2026-09-19")["status"] == "pass"
     prepared_dir = tmp_path / "prepared" / "2026-09-19"
     prepared = bootstrap.write_bootstrap(
-        "2026-09-19", receipt_paths=[receipt], output_dir=prepared_dir,
+        "2026-09-19",
+        receipt_paths=[receipt],
+        output_dir=prepared_dir,
     )
-    assert prepared["env_file"] == str(bootstrap.env_path("2026-09-19", output_dir=prepared_dir))
-    assert bootstrap.verify_bootstrap("2026-09-19", output_dir=prepared_dir)["status"] == "pass"
+    assert prepared["env_file"] == str(
+        bootstrap.env_path("2026-09-19", output_dir=prepared_dir)
+    )
+    assert (
+        bootstrap.verify_bootstrap("2026-09-19", output_dir=prepared_dir)["status"]
+        == "pass"
+    )
     with pytest.raises(ValueError, match="prepared_bootstrap_cannot_claim_pid"):
         bootstrap.verify_bootstrap("2026-09-19", output_dir=prepared_dir, pid=123)
     bootstrap.env_path("2026-09-19", output_dir=prepared_dir).write_text("tampered\n")
-    assert bootstrap.verify_bootstrap("2026-09-19", output_dir=prepared_dir, write=False)["status"] == "fail"
+    assert (
+        bootstrap.verify_bootstrap("2026-09-19", output_dir=prepared_dir, write=False)[
+            "status"
+        ]
+        == "fail"
+    )
     assert bootstrap.verify_bootstrap("2026-09-19", write=False)["status"] == "pass"
     receipt.write_text("{}", encoding="utf-8")
     assert "source_receipt_hash_mismatch" in " ".join(
@@ -220,30 +276,34 @@ def test_bootstrap_carries_incumbent_applies_lock_and_scrubs_retired(monkeypatch
     assert bootstrap.verify_bootstrap("2026-09-19")["status"] == "fail"
 
 
-def test_bootstrap_rejects_missing_trailing_receipt_and_env_owner(monkeypatch, tmp_path):
+def test_bootstrap_rejects_missing_trailing_receipt_and_env_owner(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(bootstrap, "BOOTSTRAP_DIR", tmp_path / "bootstrap")
     monkeypatch.setattr(bootstrap, "LEGACY_RUNTIME_DIR", tmp_path / "legacy")
     monkeypatch.setattr(bootstrap, "OPERATOR_LOCK_DIR", tmp_path / "locks")
-    _write(tmp_path / "legacy" / "threshold_runtime_env_2026-09-18.json", {
-        "target_date": "2026-09-18", "env_overrides": {"BASE": "1"}
-    })
-    _write(tmp_path / "legacy" / "threshold_runtime_env_verify_2026-09-18.json", {
-        "target_date": "2026-09-18", "status": "pass", "passed": True
-    })
+    _write(
+        tmp_path / "legacy" / "threshold_runtime_env_2026-09-18.json",
+        {"target_date": "2026-09-18", "env_overrides": {"BASE": "1"}},
+    )
+    _write(
+        tmp_path / "legacy" / "threshold_runtime_env_verify_2026-09-18.json",
+        {"target_date": "2026-09-18", "status": "pass", "passed": True},
+    )
     manifest = bootstrap.write_bootstrap("2026-09-19")
     manifest.pop("scalp_trailing_mechanical_policy_receipt")
-    manifest["manifest_sha256"] = bootstrap._digest_json({
-        key: value for key, value in manifest.items() if key != "manifest_sha256"
-    })
+    manifest["manifest_sha256"] = bootstrap._digest_json(
+        {key: value for key, value in manifest.items() if key != "manifest_sha256"}
+    )
     _write(bootstrap.manifest_path("2026-09-19"), manifest)
     result = bootstrap.verify_bootstrap("2026-09-19", write=False)
     assert "scalp_trailing_mechanical_policy_receipt_missing" in result["findings"]
 
     manifest = bootstrap.write_bootstrap("2026-09-19")
     manifest["env_key_owners"].pop("KORSTOCKSCAN_SCALP_TRAILING_START_PCT")
-    manifest["manifest_sha256"] = bootstrap._digest_json({
-        key: value for key, value in manifest.items() if key != "manifest_sha256"
-    })
+    manifest["manifest_sha256"] = bootstrap._digest_json(
+        {key: value for key, value in manifest.items() if key != "manifest_sha256"}
+    )
     _write(bootstrap.manifest_path("2026-09-19"), manifest)
     result = bootstrap.verify_bootstrap("2026-09-19", write=False)
     assert "scalp_trailing_mechanical_env_or_owner_missing" in result["findings"]
@@ -271,15 +331,11 @@ def test_bootstrap_preserves_explicit_operator_handoff_veto(monkeypatch, tmp_pat
     manifest = bootstrap.write_bootstrap("2026-09-19")
 
     assert (
-        manifest["env_overrides"][
-            "KORSTOCKSCAN_THRESHOLD_RUNTIME_AUTO_APPLY_ENABLED"
-        ]
+        manifest["env_overrides"]["KORSTOCKSCAN_THRESHOLD_RUNTIME_AUTO_APPLY_ENABLED"]
         == "false"
     )
     assert (
-        manifest["env_key_owners"][
-            "KORSTOCKSCAN_THRESHOLD_RUNTIME_AUTO_APPLY_ENABLED"
-        ]
+        manifest["env_key_owners"]["KORSTOCKSCAN_THRESHOLD_RUNTIME_AUTO_APPLY_ENABLED"]
         == "operator_runtime_override"
     )
     verification = bootstrap.verify_bootstrap("2026-09-19", write=False)
@@ -336,22 +392,25 @@ def test_verify_cli_persists_receipt_only_when_explicit(monkeypatch, capsys):
 
     monkeypatch.setattr(bootstrap, "verify_bootstrap", fake_verify)
 
-    assert bootstrap.main(
-        ["--verify", "--target-date", "2026-09-21", "--pid", "123"]
-    ) == 0
+    assert (
+        bootstrap.main(["--verify", "--target-date", "2026-09-21", "--pid", "123"]) == 0
+    )
     assert calls[-1] == ("2026-09-21", 123, False)
     capsys.readouterr()
 
-    assert bootstrap.main(
-        [
-            "--verify",
-            "--target-date",
-            "2026-09-21",
-            "--pid",
-            "123",
-            "--write-verify-artifact",
-        ]
-    ) == 0
+    assert (
+        bootstrap.main(
+            [
+                "--verify",
+                "--target-date",
+                "2026-09-21",
+                "--pid",
+                "123",
+                "--write-verify-artifact",
+            ]
+        )
+        == 0
+    )
     assert calls[-1] == ("2026-09-21", 123, True)
 
 
@@ -447,44 +506,58 @@ def test_bootstrap_applies_bounded_rising_missed_policy_before_operator_locks(
         monkeypatch, tmp_path, "2026-09-18", status="validated_edge"
     )
     policy = {
-            "report_type": "rising_missed_tp1_policy",
-            "runtime_family": "rising_missed_tp1_selector",
-            "source_date": "2026-09-18",
-            "effective_date": "2026-09-19",
-            "status": "validated_edge",
-            "selected_axis": "positive_support_min",
-            "allowed_runtime_apply": True,
-            "runtime_effect": True,
-            "source_report_sha256": source["artifact_sha256"],
-            "consumer_schema": "rising_missed_tp1_selector_bounded_env_v1",
-            "runtime_env_overrides": {
-                "KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ENABLED": "true",
-                "KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ACTIVE_DATE": "2026-09-19",
-                "KORSTOCKSCAN_RISING_MISSED_TP1_POSITIVE_SUPPORT_MIN": "1",
-            },
-        }
+        "report_type": "rising_missed_tp1_policy",
+        "runtime_family": "rising_missed_tp1_selector",
+        "source_date": "2026-09-18",
+        "effective_date": "2026-09-19",
+        "status": "validated_edge",
+        "selected_axis": "positive_support_min",
+        "allowed_runtime_apply": True,
+        "runtime_effect": True,
+        "source_report_sha256": source["artifact_sha256"],
+        "consumer_schema": "rising_missed_tp1_selector_bounded_env_v1",
+        "runtime_env_overrides": {
+            "KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ENABLED": "true",
+            "KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ACTIVE_DATE": "2026-09-19",
+            "KORSTOCKSCAN_RISING_MISSED_TP1_POSITIVE_SUPPORT_MIN": "1",
+        },
+    }
     policy["policy_sha256"] = bootstrap.direct_policy_digest(policy)
-    policy["runtime_env_overrides"][
-        "KORSTOCKSCAN_RISING_MISSED_TP1_POLICY_SHA256"
-    ] = policy["policy_sha256"]
+    policy["runtime_env_overrides"]["KORSTOCKSCAN_RISING_MISSED_TP1_POLICY_SHA256"] = (
+        policy["policy_sha256"]
+    )
     _write(receipt, policy)
 
     manifest = bootstrap.build_manifest("2026-09-19", receipt_paths=[receipt])
 
-    assert manifest["env_overrides"]["KORSTOCKSCAN_RISING_MISSED_TP1_POSITIVE_SUPPORT_MIN"] == "1"
-    assert manifest["env_key_owners"]["KORSTOCKSCAN_RISING_MISSED_TP1_POSITIVE_SUPPORT_MIN"] == "direct_policy:rising_missed_tp1_selector"
-    assert manifest["direct_family_receipts"][0]["family"] == "rising_missed_tp1_selector"
+    assert (
+        manifest["env_overrides"]["KORSTOCKSCAN_RISING_MISSED_TP1_POSITIVE_SUPPORT_MIN"]
+        == "1"
+    )
+    assert (
+        manifest["env_key_owners"][
+            "KORSTOCKSCAN_RISING_MISSED_TP1_POSITIVE_SUPPORT_MIN"
+        ]
+        == "direct_policy:rising_missed_tp1_selector"
+    )
+    assert (
+        manifest["direct_family_receipts"][0]["family"] == "rising_missed_tp1_selector"
+    )
 
     bootstrap.write_bootstrap("2026-09-19", receipt_paths=[receipt])
     assert bootstrap.verify_bootstrap("2026-09-19", write=True)["passed"] is True
     source["economic_evaluation"]["validated_candidate_count"] = 0
     _write(
-        bootstrap.RISING_MISSED_REPORT_DIR / "rising_missed_classifier_prior_2026-09-18.json",
+        bootstrap.RISING_MISSED_REPORT_DIR
+        / "rising_missed_classifier_prior_2026-09-18.json",
         source,
     )
     verification = bootstrap.verify_bootstrap("2026-09-19", write=False)
     assert verification["passed"] is False
-    assert "rising_missed_source_binding_invalid:source_report_sha256_mismatch" in verification["findings"]
+    assert (
+        "rising_missed_source_binding_invalid:source_report_sha256_mismatch"
+        in verification["findings"]
+    )
 
 
 def test_bootstrap_rejects_out_of_bounds_rising_missed_policy(monkeypatch, tmp_path):
@@ -492,27 +565,38 @@ def test_bootstrap_rejects_out_of_bounds_rising_missed_policy(monkeypatch, tmp_p
     monkeypatch.setattr(bootstrap, "BOOTSTRAP_DIR", tmp_path / "bootstrap")
     monkeypatch.setattr(bootstrap, "LEGACY_RUNTIME_DIR", legacy_dir)
     monkeypatch.setattr(bootstrap, "OPERATOR_LOCK_DIR", tmp_path / "locks")
-    _write(legacy_dir / "threshold_runtime_env_2026-09-18.json", {"target_date": "2026-09-18", "env_overrides": {"BASE": "1"}})
-    _write(legacy_dir / "threshold_runtime_env_verify_2026-09-18.json", {"status": "pass"})
+    _write(
+        legacy_dir / "threshold_runtime_env_2026-09-18.json",
+        {"target_date": "2026-09-18", "env_overrides": {"BASE": "1"}},
+    )
+    _write(
+        legacy_dir / "threshold_runtime_env_verify_2026-09-18.json", {"status": "pass"}
+    )
     receipt = tmp_path / "rising.json"
-    _write(receipt, {
-        "report_type": "rising_missed_tp1_policy",
-        "runtime_family": "rising_missed_tp1_selector",
-        "effective_date": "2026-09-19",
-        "allowed_runtime_apply": True,
-        "selected_axis": "positive_support_min",
-        "runtime_env_overrides": {
-            "KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ENABLED": "true",
-            "KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ACTIVE_DATE": "2026-09-19",
-            "KORSTOCKSCAN_RISING_MISSED_TP1_POSITIVE_SUPPORT_MIN": "0",
-            "KORSTOCKSCAN_RISING_MISSED_TP1_POLICY_SHA256": "b" * 64,
+    _write(
+        receipt,
+        {
+            "report_type": "rising_missed_tp1_policy",
+            "runtime_family": "rising_missed_tp1_selector",
+            "effective_date": "2026-09-19",
+            "allowed_runtime_apply": True,
+            "selected_axis": "positive_support_min",
+            "runtime_env_overrides": {
+                "KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ENABLED": "true",
+                "KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ACTIVE_DATE": "2026-09-19",
+                "KORSTOCKSCAN_RISING_MISSED_TP1_POSITIVE_SUPPORT_MIN": "0",
+                "KORSTOCKSCAN_RISING_MISSED_TP1_POLICY_SHA256": "b" * 64,
+            },
         },
-    })
+    )
 
     manifest = bootstrap.build_manifest("2026-09-19", receipt_paths=[receipt])
 
     assert manifest["direct_family_receipts"] == []
-    assert manifest["direct_family_receipts_rejected"][0]["reason"] == "runtime_env_value_out_of_bounds"
+    assert (
+        manifest["direct_family_receipts_rejected"][0]["reason"]
+        == "runtime_env_value_out_of_bounds"
+    )
 
 
 def test_bootstrap_rejects_multi_axis_rising_policy(monkeypatch, tmp_path):
@@ -551,9 +635,9 @@ def test_bootstrap_rejects_multi_axis_rising_policy(monkeypatch, tmp_path):
         },
     }
     policy["policy_sha256"] = bootstrap.direct_policy_digest(policy)
-    policy["runtime_env_overrides"][
-        "KORSTOCKSCAN_RISING_MISSED_TP1_POLICY_SHA256"
-    ] = policy["policy_sha256"]
+    policy["runtime_env_overrides"]["KORSTOCKSCAN_RISING_MISSED_TP1_POLICY_SHA256"] = (
+        policy["policy_sha256"]
+    )
     _write(receipt, policy)
 
     manifest = bootstrap.build_manifest("2026-09-19", receipt_paths=[receipt])
@@ -564,13 +648,20 @@ def test_bootstrap_rejects_multi_axis_rising_policy(monkeypatch, tmp_path):
     )
 
 
-def test_bootstrap_accepts_hash_bound_incumbent_preserved_receipt(monkeypatch, tmp_path):
+def test_bootstrap_accepts_hash_bound_incumbent_preserved_receipt(
+    monkeypatch, tmp_path
+):
     legacy_dir = tmp_path / "threshold_cycle" / "runtime_env"
     monkeypatch.setattr(bootstrap, "BOOTSTRAP_DIR", tmp_path / "bootstrap")
     monkeypatch.setattr(bootstrap, "LEGACY_RUNTIME_DIR", legacy_dir)
     monkeypatch.setattr(bootstrap, "OPERATOR_LOCK_DIR", tmp_path / "locks")
-    _write(legacy_dir / "threshold_runtime_env_2026-09-18.json", {"target_date": "2026-09-18", "env_overrides": {"BASE": "1"}})
-    _write(legacy_dir / "threshold_runtime_env_verify_2026-09-18.json", {"status": "pass"})
+    _write(
+        legacy_dir / "threshold_runtime_env_2026-09-18.json",
+        {"target_date": "2026-09-18", "env_overrides": {"BASE": "1"}},
+    )
+    _write(
+        legacy_dir / "threshold_runtime_env_verify_2026-09-18.json", {"status": "pass"}
+    )
     receipt = tmp_path / "rising.json"
     source = _rising_source_report(
         monkeypatch, tmp_path, "2026-09-18", status="measured_no_edge"
@@ -695,10 +786,14 @@ def test_bootstrap_seeds_from_legacy_common_handoff_only_when_family_checks_pass
         raise AssertionError("active family verification failure must stay blocked")
 
 
-def test_direct_summary_and_verifier_do_not_require_retired_common_reports(monkeypatch, tmp_path):
+def test_direct_summary_and_verifier_do_not_require_retired_common_reports(
+    monkeypatch, tmp_path
+):
     data_dir = tmp_path / "data"
     monkeypatch.setattr(summary_mod, "DATA_DIR", data_dir)
-    monkeypatch.setattr(summary_mod, "REPORT_DIR", data_dir / "report" / "runtime_approval_summary")
+    monkeypatch.setattr(
+        summary_mod, "REPORT_DIR", data_dir / "report" / "runtime_approval_summary"
+    )
     target = "2026-09-19"
     for owner, path in summary_mod._paths(target).items():
         if owner == "runtime_bootstrap":
@@ -711,19 +806,49 @@ def test_direct_summary_and_verifier_do_not_require_retired_common_reports(monke
 
     monkeypatch.setattr(verifier, "DATA_DIR", data_dir)
     monkeypatch.setattr(verifier, "REPORT_DIR", data_dir / "report")
-    monkeypatch.setattr(verifier, "OUTPUT_DIR", data_dir / "report" / "threshold_cycle_postclose_verification")
-    terminal_path = data_dir / "report" / "threshold_cycle_postclose_status" / f"threshold_cycle_postclose_{target}.status.json"
+    monkeypatch.setattr(
+        verifier,
+        "OUTPUT_DIR",
+        data_dir / "report" / "threshold_cycle_postclose_verification",
+    )
+    terminal_path = (
+        data_dir
+        / "report"
+        / "threshold_cycle_postclose_status"
+        / f"threshold_cycle_postclose_{target}.status.json"
+    )
     # Retirement of common reports never waives native terminal provenance.
     _write(terminal_path, {"target_date": target, "status": "succeeded"})
-    assert verifier.build_threshold_cycle_postclose_verification(target)["status"] == "fail"
+    assert (
+        verifier.build_threshold_cycle_postclose_verification(target)["status"]
+        == "fail"
+    )
     proof = tmp_path / "main-precommit.json"
     identity = {"run_id": "current-run", "code_commit": "a" * 40}
-    _write(proof, {"date": target, "status": "pass", "verification_scope": "main_precommit", **identity})
-    _write(terminal_path, {
-        "target_date": target, "status": "succeeded", "exit_code": 0, **identity,
-        "started_at": f"{target}T20:10:00+09:00", "finished_at": f"{target}T21:00:00+09:00",
-        "verification_receipt": {"path": str(proof), "sha256": verifier._sha(proof)},
-    })
+    _write(
+        proof,
+        {
+            "date": target,
+            "status": "pass",
+            "verification_scope": "main_precommit",
+            **identity,
+        },
+    )
+    _write(
+        terminal_path,
+        {
+            "target_date": target,
+            "status": "succeeded",
+            "exit_code": 0,
+            **identity,
+            "started_at": f"{target}T20:10:00+09:00",
+            "finished_at": f"{target}T21:00:00+09:00",
+            "verification_receipt": {
+                "path": str(proof),
+                "sha256": verifier._sha(proof),
+            },
+        },
+    )
     report = verifier.build_threshold_cycle_postclose_verification(target)
     assert report["status"] == "pass"
     joined = json.dumps(report)
@@ -732,30 +857,42 @@ def test_direct_summary_and_verifier_do_not_require_retired_common_reports(monke
 
 
 def test_mechanical_selection_binds_postclose_parent_and_33_market_keys(
-    monkeypatch, tmp_path,
+    monkeypatch,
+    tmp_path,
 ):
     from src.engine.scalping.trailing_mechanical_policy import (
-        CLASSIFIER_VERSION, CONFIG_DEFAULTS, DEFAULTS, SELECTED_SCHEMA,
-        START_MARKETS, classifier_hash,
-        market_values_hash, selected_policy_env,
+        CLASSIFIER_VERSION,
+        CONFIG_DEFAULTS,
+        DEFAULTS,
+        SELECTED_SCHEMA,
+        START_MARKETS,
+        classifier_hash,
+        market_values_hash,
+        selected_policy_env,
     )
+
     monkeypatch.setattr(bootstrap, "DATA_DIR", tmp_path)
     monkeypatch.setattr(bootstrap, "BOOTSTRAP_DIR", tmp_path / "bootstrap")
-    monkeypatch.setattr(bootstrap, "LEGACY_RUNTIME_DIR", tmp_path / "threshold_cycle" / "runtime_env")
+    monkeypatch.setattr(
+        bootstrap, "LEGACY_RUNTIME_DIR", tmp_path / "threshold_cycle" / "runtime_env"
+    )
     monkeypatch.setattr(bootstrap, "OPERATOR_LOCK_DIR", tmp_path / "locks")
     legacy = bootstrap.LEGACY_RUNTIME_DIR
-    _write(legacy / "threshold_runtime_env_2026-09-18.json",
-           {"target_date": "2026-09-18", "env_overrides": {"BASE": "1"}})
+    _write(
+        legacy / "threshold_runtime_env_2026-09-18.json",
+        {"target_date": "2026-09-18", "env_overrides": {"BASE": "1"}},
+    )
     _write(legacy / "threshold_runtime_env_verify_2026-09-18.json", {"status": "pass"})
-    parent = bootstrap.scalp_trailing_bootstrap_receipt({"BASE": "1"}, source="rollback_incumbent") [
-        "market_values_sha256"
-    ]
+    parent = bootstrap.scalp_trailing_bootstrap_receipt(
+        {"BASE": "1"}, source="rollback_incumbent"
+    )["market_values_sha256"]
     vector = {market: dict(DEFAULTS) for market in START_MARKETS}
     classifier_values = {market: dict(CONFIG_DEFAULTS) for market in START_MARKETS}
     vector["REGULAR"]["SCALP_TRAILING_START_PCT"] = 0.5
     digest = market_values_hash(vector)
     report = {
-        "date": "2026-09-18", "meta": {"snapshot_profile": "postclose_exit"},
+        "date": "2026-09-18",
+        "meta": {"snapshot_profile": "postclose_exit"},
         "completed_population_quality": {"complete": True},
         "mechanical_population_quality": {"complete": True},
         "trailing_mechanical_market_tuning": {
@@ -763,47 +900,77 @@ def test_mechanical_selection_binds_postclose_parent_and_33_market_keys(
             "population_complete": True,
             "holdout_days": ["2026-09-17", "2026-09-18"],
             "status": "research_candidate_holdout_positive_review_required",
-            "joint_three_market": {digest: {
-                "values": vector,
-                "train": {"n": 30, "paired_ev_pct": 0.1,
-                          "large_loss_worsened_ids": []},
-                "holdout": {"n": 10, "paired_ev_pct": 0.1,
-                            "large_loss_worsened_ids": [],
-                            "execution_slippage_sensitivity": {
-                                "100": {"paired_ev_pct": 0.01}}},
-            }},
+            "joint_three_market": {
+                digest: {
+                    "values": vector,
+                    "train": {
+                        "n": 30,
+                        "paired_ev_pct": 0.1,
+                        "large_loss_worsened_ids": [],
+                    },
+                    "holdout": {
+                        "n": 10,
+                        "paired_ev_pct": 0.1,
+                        "large_loss_worsened_ids": [],
+                        "execution_slippage_sensitivity": {
+                            "100": {"paired_ev_pct": 0.01}
+                        },
+                    },
+                }
+            },
             "research_candidate": {
-                "values": vector, "classifier_parameters": classifier_values,
+                "values": vector,
+                "classifier_parameters": classifier_values,
                 "market_values_sha256": digest,
                 "decision_authority": "research_candidate_requires_policy_selection",
             },
-                "joint_selection_evidence": {
-                    "winner_sha256": digest, "tail_review_required": False,
-                    "holdout_conservative_delta_krw": 100,
-                    "holdout_conservative_worst_slippage_delta_krw": 10,
-                    "holdout_worst_slippage_min_day_ev_pct": 0.01,
-                },
+            "joint_selection_evidence": {
+                "winner_sha256": digest,
+                "tail_review_required": False,
+                "holdout_conservative_delta_krw": 100,
+                "holdout_conservative_worst_slippage_delta_krw": 10,
+                "holdout_worst_slippage_min_day_ev_pct": 0.01,
+            },
         },
     }
-    report_path = (tmp_path / "report" / "monitor_snapshots"
-                   / "holding_exit_observation_2026-09-18.json")
+    report_path = (
+        tmp_path
+        / "report"
+        / "monitor_snapshots"
+        / "holding_exit_observation_2026-09-18.json"
+    )
     _write(report_path, report)
-    manifest_path = (tmp_path / "report" / "monitor_snapshots" / "manifests"
-                     / "monitor_snapshot_manifest_2026-09-18_postclose_exit.json")
-    _write(manifest_path, {
-        "profile": "postclose_exit", "target_date": "2026-09-18",
-        "snapshot_paths": {"holding_exit_observation": str(report_path)},
-        "snapshot_sha256": {"holding_exit_observation": bootstrap._digest_bytes(
-            report_path.read_bytes())},
-    })
+    manifest_path = (
+        tmp_path
+        / "report"
+        / "monitor_snapshots"
+        / "manifests"
+        / "monitor_snapshot_manifest_2026-09-18_postclose_exit.json"
+    )
+    _write(
+        manifest_path,
+        {
+            "profile": "postclose_exit",
+            "target_date": "2026-09-18",
+            "snapshot_paths": {"holding_exit_observation": str(report_path)},
+            "snapshot_sha256": {
+                "holding_exit_observation": bootstrap._digest_bytes(
+                    report_path.read_bytes()
+                )
+            },
+        },
+    )
     policy = {
         "schema": SELECTED_SCHEMA,
         "family": "scalp_trailing_mechanical_three_axis_selector",
-        "source_date": "2026-09-18", "target_date": "2026-09-19",
+        "source_date": "2026-09-18",
+        "target_date": "2026-09-19",
         "source_report_sha256": bootstrap._digest_bytes(report_path.read_bytes()),
         "source_manifest_sha256": bootstrap._digest_bytes(manifest_path.read_bytes()),
-        "allowed_runtime_apply": True, "runtime_effect": True,
-        "apply_scope": "one_stage_canary", "market_values": vector,
+        "allowed_runtime_apply": True,
+        "runtime_effect": True,
+        "apply_scope": "one_stage_canary",
+        "market_values": vector,
         "changed_market": "REGULAR",
         "market_values_sha256": digest,
         "classifier_version": CLASSIFIER_VERSION,
@@ -811,23 +978,36 @@ def test_mechanical_selection_binds_postclose_parent_and_33_market_keys(
         "classifier_parameters": classifier_values,
         "rollback_market_values_sha256": parent,
         "selection_review": {
-            "status": "reviewed_one_stage_canary", "candidate_sha256": digest,
-            "source_quality": "pass", "execution_model": "pass",
+            "status": "reviewed_one_stage_canary",
+            "candidate_sha256": digest,
+            "source_quality": "pass",
+            "execution_model": "pass",
             "same_stage_owner": "scalp_trailing_take_profit",
             "rollback_sha256": parent,
         },
     }
     policy["runtime_env_overrides"] = selected_policy_env(
-        policy, report, target_date="2026-09-19",
+        policy,
+        report,
+        target_date="2026-09-19",
         report_sha256=policy["source_report_sha256"],
     )
     assert len(policy["runtime_env_overrides"]) == 33
     policy_path = tmp_path / "selected.json"
     _write(policy_path, policy)
     manifest = bootstrap.build_manifest("2026-09-19", receipt_paths=[policy_path])
-    assert manifest["direct_family_receipts"][0]["family"] == "scalp_trailing_mechanical_three_axis_selector"
-    assert manifest["holding_path_vote_baseline_receipt"] == bootstrap.path_policy_baseline_receipt()
-    assert manifest["scalp_trailing_mechanical_policy_receipt"]["market_values_sha256"] == digest
+    assert (
+        manifest["direct_family_receipts"][0]["family"]
+        == "scalp_trailing_mechanical_three_axis_selector"
+    )
+    assert (
+        manifest["holding_path_vote_baseline_receipt"]
+        == bootstrap.path_policy_baseline_receipt()
+    )
+    assert (
+        manifest["scalp_trailing_mechanical_policy_receipt"]["market_values_sha256"]
+        == digest
+    )
     assert manifest["scalp_trailing_mechanical_policy_receipt"]["schema"] == (
         "scalp_trailing_mechanical_selected_receipt_v2"
     )
@@ -841,8 +1021,10 @@ def test_mechanical_selection_binds_postclose_parent_and_33_market_keys(
     _write(report_path, report)
     verification = bootstrap.verify_bootstrap("2026-09-19", write=False)
     assert verification["passed"] is False
-    assert any(finding.startswith("scalp_trailing_source_binding_invalid:")
-               for finding in verification["findings"])
+    assert any(
+        finding.startswith("scalp_trailing_source_binding_invalid:")
+        for finding in verification["findings"]
+    )
     report_path.write_bytes(original_report_bytes)
     policy["rollback_market_values_sha256"] = "f" * 64
     policy["selection_review"]["rollback_sha256"] = "f" * 64
@@ -851,31 +1033,50 @@ def test_mechanical_selection_binds_postclose_parent_and_33_market_keys(
         bootstrap.build_manifest("2026-09-19", receipt_paths=[policy_path])
     policy_path.write_bytes(valid_policy_bytes)
     carried = bootstrap.build_manifest("2026-09-25")
-    assert carried["scalp_trailing_mechanical_policy_receipt"]["market_values_sha256"] == digest
-    assert carried["env_overrides"]["KORSTOCKSCAN_SCALP_TRAILING_START_PCT_REGULAR"] == "0.5"
+    assert (
+        carried["scalp_trailing_mechanical_policy_receipt"]["market_values_sha256"]
+        == digest
+    )
+    assert (
+        carried["env_overrides"]["KORSTOCKSCAN_SCALP_TRAILING_START_PCT_REGULAR"]
+        == "0.5"
+    )
     assert carried["scalp_trailing_selection_lineage"]["status"] == "carried_selected"
-    assert carried["scalp_trailing_selection_lineage"]["origin_target_date"] == "2026-09-19"
+    assert (
+        carried["scalp_trailing_selection_lineage"]["origin_target_date"]
+        == "2026-09-19"
+    )
 
 
 def test_mechanical_publisher_requires_sealed_postclose_report_and_one_market(
-    monkeypatch, tmp_path,
+    monkeypatch,
+    tmp_path,
 ):
     from src.engine.scalping.trailing_mechanical_policy import (
-        CONFIG_DEFAULTS, DEFAULTS, START_MARKETS, baseline_receipt,
+        CONFIG_DEFAULTS,
+        DEFAULTS,
+        START_MARKETS,
+        baseline_receipt,
         market_values_hash,
     )
+
     report_dir = tmp_path / "monitor_snapshots"
     monkeypatch.setattr(scalp_publisher, "REPORT_DIR", report_dir)
     parent = baseline_receipt({}, source="rollback_incumbent")
-    monkeypatch.setattr(scalp_publisher, "build_manifest", lambda _: {
-        "scalp_trailing_mechanical_policy_receipt": parent,
-    })
+    monkeypatch.setattr(
+        scalp_publisher,
+        "build_manifest",
+        lambda _: {
+            "scalp_trailing_mechanical_policy_receipt": parent,
+        },
+    )
     values = {market: dict(DEFAULTS) for market in START_MARKETS}
     classifier_values = {market: dict(CONFIG_DEFAULTS) for market in START_MARKETS}
     classifier_values["REGULAR"]["strong_queue_min"] = 0.1
     digest = market_values_hash(values, classifier_values)
     report = {
-        "date": "2026-09-25", "meta": {"snapshot_profile": "postclose_exit"},
+        "date": "2026-09-25",
+        "meta": {"snapshot_profile": "postclose_exit"},
         "completed_population_quality": {"complete": True},
         "mechanical_population_quality": {"complete": True},
         "trailing_mechanical_market_tuning": {
@@ -886,28 +1087,39 @@ def test_mechanical_publisher_requires_sealed_postclose_report_and_one_market(
             "classifier_policy_research": {
                 "grid_sha256": "a" * 64,
                 "research_candidate": {"market_values_sha256": digest},
-                "candidates": {digest: {
-                    "values": values,
-                    "classifier_parameters": classifier_values,
-                    "changed_train_ids": [str(i) for i in range(10)],
-                    "changed_holdout_ids": [str(i) for i in range(5)],
-                    "changed_train_symbol_count": 2,
-                    "changed_holdout_symbol_count": 2,
-                    "train": {"n": 30, "paired_ev_pct": 0.1,
-                              "large_loss_worsened_ids": []},
-                    "holdout": {"n": 10, "paired_ev_pct": 0.1,
-                                "large_loss_worsened_ids": [],
-                                "execution_slippage_sensitivity": {
-                                    "100": {"paired_ev_pct": 0.01}}},
-                }},
+                "candidates": {
+                    digest: {
+                        "values": values,
+                        "classifier_parameters": classifier_values,
+                        "changed_train_ids": [str(i) for i in range(10)],
+                        "changed_holdout_ids": [str(i) for i in range(5)],
+                        "changed_train_symbol_count": 2,
+                        "changed_holdout_symbol_count": 2,
+                        "train": {
+                            "n": 30,
+                            "paired_ev_pct": 0.1,
+                            "large_loss_worsened_ids": [],
+                        },
+                        "holdout": {
+                            "n": 10,
+                            "paired_ev_pct": 0.1,
+                            "large_loss_worsened_ids": [],
+                            "execution_slippage_sensitivity": {
+                                "100": {"paired_ev_pct": 0.01}
+                            },
+                        },
+                    }
+                },
             },
             "research_candidate": {
-                "values": values, "classifier_parameters": classifier_values,
+                "values": values,
+                "classifier_parameters": classifier_values,
                 "market_values_sha256": digest,
                 "decision_authority": "research_candidate_requires_policy_selection",
             },
             "joint_selection_evidence": {
-                "winner_sha256": digest, "tail_review_required": False,
+                "winner_sha256": digest,
+                "tail_review_required": False,
                 "holdout_conservative_delta_krw": 100,
                 "holdout_conservative_worst_slippage_delta_krw": 50,
                 "holdout_worst_slippage_min_day_ev_pct": 0.01,
@@ -920,41 +1132,60 @@ def test_mechanical_publisher_requires_sealed_postclose_report_and_one_market(
     post_sell_path = report_dir / "post_sell_feedback_2026-09-25.json"
     _write(trade_path, {"date": "2026-09-25"})
     _write(post_sell_path, {"date": "2026-09-25"})
-    manifest_path = (report_dir / "manifests"
-                     / "monitor_snapshot_manifest_2026-09-25_postclose_exit.json")
-    _write(manifest_path, {
-        "target_date": "2026-09-25", "profile": "postclose_exit",
-        "snapshot_kinds": ["trade_review", "post_sell_feedback", "holding_exit_observation"],
-        "snapshot_paths": {
-            "trade_review": str(trade_path),
-            "post_sell_feedback": str(post_sell_path),
-            "holding_exit_observation": str(report_path),
+    manifest_path = (
+        report_dir
+        / "manifests"
+        / "monitor_snapshot_manifest_2026-09-25_postclose_exit.json"
+    )
+    _write(
+        manifest_path,
+        {
+            "target_date": "2026-09-25",
+            "profile": "postclose_exit",
+            "snapshot_kinds": [
+                "trade_review",
+                "post_sell_feedback",
+                "holding_exit_observation",
+            ],
+            "snapshot_paths": {
+                "trade_review": str(trade_path),
+                "post_sell_feedback": str(post_sell_path),
+                "holding_exit_observation": str(report_path),
+            },
+            "snapshot_sha256": {
+                "trade_review": bootstrap._digest_bytes(trade_path.read_bytes()),
+                "post_sell_feedback": bootstrap._digest_bytes(
+                    post_sell_path.read_bytes()
+                ),
+                "holding_exit_observation": bootstrap._digest_bytes(
+                    report_path.read_bytes()
+                ),
+            },
         },
-        "snapshot_sha256": {
-            "trade_review": bootstrap._digest_bytes(trade_path.read_bytes()),
-            "post_sell_feedback": bootstrap._digest_bytes(post_sell_path.read_bytes()),
-            "holding_exit_observation": bootstrap._digest_bytes(report_path.read_bytes()),
-        },
-    })
+    )
     selected = scalp_publisher.build_selection("2026-09-28")
     assert selected["allowed_runtime_apply"] is True
     assert selected["changed_market"] == "REGULAR"
     assert len(selected["runtime_env_overrides"]) == 33
     report["trailing_mechanical_market_tuning"]["classifier_policy_research"][
-        "candidates"][digest]["train"]["n"] = 1
+        "candidates"
+    ][digest]["train"]["n"] = 1
     _write(report_path, report)
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest["snapshot_sha256"]["holding_exit_observation"] = bootstrap._digest_bytes(
-        report_path.read_bytes())
+        report_path.read_bytes()
+    )
     _write(manifest_path, manifest)
     assert scalp_publisher.build_selection("2026-09-28")["status"] == (
         "hold_selection_contract"
     )
     report["trailing_mechanical_market_tuning"]["classifier_policy_research"][
-        "candidates"][digest]["train"]["n"] = 30
+        "candidates"
+    ][digest]["train"]["n"] = 30
     _write(report_path, report)
     manifest["snapshot_sha256"]["holding_exit_observation"] = bootstrap._digest_bytes(
-        report_path.read_bytes())
+        report_path.read_bytes()
+    )
     _write(manifest_path, manifest)
     post_sell_path.write_text("{}", encoding="utf-8")
     assert scalp_publisher.build_selection("2026-09-28")["status"] == "hold_source_gap"
@@ -965,46 +1196,90 @@ def test_mechanical_publisher_requires_sealed_postclose_report_and_one_market(
     assert held["allowed_runtime_apply"] is False
 
 
-def test_holding_profit_pid_archive_is_idempotent_and_keeps_original_verification_time(tmp_path, monkeypatch):
+def test_holding_profit_pid_archive_is_idempotent_and_keeps_original_verification_time(
+    tmp_path, monkeypatch
+):
     from src.engine.automation import runtime_policy_bootstrap as bootstrap
     from src.engine.scalping.trailing_mechanical_policy import baseline_receipt
+
     monkeypatch.setattr(bootstrap, "BOOTSTRAP_DIR", tmp_path)
     receipt = baseline_receipt({}, source="operator_directed_m1_baseline")
-    manifest = {"target_date": "2026-10-09", "manifest_sha256": "a" * 64,
-                "scalp_trailing_mechanical_policy_receipt": receipt}
-    verification = {"target_date": "2026-10-09", "pid": 42, "passed": True, "pid_passed": True, "pid_env_available": True,
-                    "manifest_sha256": "a" * 64, "verified_at": "2026-10-09T09:00:00+09:00"}
-    path = bootstrap._archive_holding_profit_pid_verification("2026-10-09", verification, manifest)
+    manifest = {
+        "target_date": "2026-10-09",
+        "manifest_sha256": "a" * 64,
+        "scalp_trailing_mechanical_policy_receipt": receipt,
+    }
+    verification = {
+        "target_date": "2026-10-09",
+        "pid": 42,
+        "passed": True,
+        "pid_passed": True,
+        "pid_env_available": True,
+        "manifest_sha256": "a" * 64,
+        "verified_at": "2026-10-09T09:00:00+09:00",
+    }
+    path = bootstrap._archive_holding_profit_pid_verification(
+        "2026-10-09", verification, manifest
+    )
     before = path.read_bytes()
     verification["verified_at"] = "2026-10-09T09:10:00+09:00"
-    assert bootstrap._archive_holding_profit_pid_verification("2026-10-09", verification, manifest) == path
+    assert (
+        bootstrap._archive_holding_profit_pid_verification(
+            "2026-10-09", verification, manifest
+        )
+        == path
+    )
     assert path.read_bytes() == before
     assert len(list(path.parent.glob("*.json"))) == 1
     verification["pid"] = 43
-    bootstrap._archive_holding_profit_pid_verification("2026-10-09", verification, manifest)
+    bootstrap._archive_holding_profit_pid_verification(
+        "2026-10-09", verification, manifest
+    )
     assert len(list(path.parent.glob("*.json"))) == 2
 
 
-def test_holding_profit_pid_archive_failed_publish_can_retry_without_partial_receipt(tmp_path, monkeypatch):
+def test_holding_profit_pid_archive_failed_publish_can_retry_without_partial_receipt(
+    tmp_path, monkeypatch
+):
     from src.engine.automation import runtime_policy_bootstrap as bootstrap
     from src.engine.scalping.trailing_mechanical_policy import baseline_receipt
+
     monkeypatch.setattr(bootstrap, "BOOTSTRAP_DIR", tmp_path)
-    manifest = {"target_date": "2026-10-09", "manifest_sha256": "a" * 64,
-                "scalp_trailing_mechanical_policy_receipt": baseline_receipt({}, source="operator_directed_m1_baseline")}
-    verification = {"target_date": "2026-10-09", "pid": 42, "passed": True, "pid_passed": True,
-                    "pid_env_available": True, "manifest_sha256": "a" * 64,
-                    "verified_at": "2026-10-09T09:00:00+09:00"}
+    manifest = {
+        "target_date": "2026-10-09",
+        "manifest_sha256": "a" * 64,
+        "scalp_trailing_mechanical_policy_receipt": baseline_receipt(
+            {}, source="operator_directed_m1_baseline"
+        ),
+    }
+    verification = {
+        "target_date": "2026-10-09",
+        "pid": 42,
+        "passed": True,
+        "pid_passed": True,
+        "pid_env_available": True,
+        "manifest_sha256": "a" * 64,
+        "verified_at": "2026-10-09T09:00:00+09:00",
+    }
     with monkeypatch.context() as publication:
+
         def fail_link(*_args):
             raise OSError("publication_unavailable")
+
         publication.setattr(bootstrap.os, "link", fail_link)
         with pytest.raises(OSError, match="publication_unavailable"):
-            bootstrap._archive_holding_profit_pid_verification("2026-10-09", verification, manifest)
+            bootstrap._archive_holding_profit_pid_verification(
+                "2026-10-09", verification, manifest
+            )
     directory = tmp_path / "verified_holding_profit_pid" / "2026-10-09"
     assert list(directory.iterdir()) == []
-    path = bootstrap._archive_holding_profit_pid_verification("2026-10-09", verification, manifest)
+    path = bootstrap._archive_holding_profit_pid_verification(
+        "2026-10-09", verification, manifest
+    )
     assert json.loads(path.read_text())["pid"] == 42
     assert list(directory.iterdir()) == [path]
     verification["target_date"] = "2026-10-08"
     with pytest.raises(ValueError, match="source_mismatch"):
-        bootstrap._archive_holding_profit_pid_verification("2026-10-09", verification, manifest)
+        bootstrap._archive_holding_profit_pid_verification(
+            "2026-10-09", verification, manifest
+        )

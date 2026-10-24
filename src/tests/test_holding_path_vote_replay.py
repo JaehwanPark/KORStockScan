@@ -9,17 +9,31 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from src.engine.ai.holding_exit_vote import (
-    MARKETS, PATH_IDS, PATH_POLICY_BY_MARKET, PATH_PROMPT_VERSION,
+    MARKETS,
+    PATH_IDS,
+    PATH_POLICY_BY_MARKET,
+    PATH_PROMPT_VERSION,
     PATH_REASON_PREFIX,
-    buy_fill_identity_from_legs, buy_fill_identity_from_runtime,
-    input_snapshot_id, load_path_events_file, normalize_path_vote_bundle,
+    buy_fill_identity_from_legs,
+    buy_fill_identity_from_runtime,
+    input_snapshot_id,
+    load_path_events_file,
+    normalize_path_vote_bundle,
     path_policy_baseline_receipt,
     path_signal_snapshot,
 )
 from src.engine.scalping.holding_path_vote_replay import summarize_holding_path_votes
 from src.engine.scalping.holding_path_vote_policy import (
-    ENV_DATE, ENV_PATH, ENV_SHA, create_bundle, digest, load_bundle, policy_path,
-    runtime_policy_from_env, validate_bundle, verify_source_handoff,
+    ENV_DATE,
+    ENV_PATH,
+    ENV_SHA,
+    create_bundle,
+    digest,
+    load_bundle,
+    policy_path,
+    runtime_policy_from_env,
+    validate_bundle,
+    verify_source_handoff,
 )
 
 
@@ -27,6 +41,7 @@ def test_v10_holding_prompt_names_each_path_and_keeps_action_directions():
     from src.engine.ai_prompt_contracts import (
         SCALPING_HOLDING_PATH_VOTE_SYSTEM_PROMPT as prompt,
     )
+
     assert prompt.isascii()
     for path in PATH_IDS:
         assert f"{path}:" in prompt
@@ -35,45 +50,76 @@ def test_v10_holding_prompt_names_each_path_and_keeps_action_directions():
     assert "Do not treat a submitted but unfilled ADD" in prompt
 
 
-BUY_LEGS = [{"at": "1970-01-01T00:00:00+00:00", "order_no": "BUY-1",
-             "execution_no": "FILL-1", "qty": 1}]
+BUY_LEGS = [
+    {
+        "at": "1970-01-01T00:00:00+00:00",
+        "order_no": "BUY-1",
+        "execution_no": "FILL-1",
+        "qty": 1,
+    }
+]
 BUY_IDENTITY = input_snapshot_id([["BUY-1", "FILL-1", 1]])
 EMPTY_SOURCE_QUALITY = {
     "strict_population_count": 0,
     "completed_population_complete": False,
-    "main_completed_ids": [], "strict_completed_ids": [],
-    "source_gap_ids": [], "excluded_by_id": {},
-    "vote_replay_excluded_by_id": {}, "source_gap_date_count": 0,
+    "main_completed_ids": [],
+    "strict_completed_ids": [],
+    "source_gap_ids": [],
+    "excluded_by_id": {},
+    "vote_replay_excluded_by_id": {},
+    "source_gap_date_count": 0,
 }
 
 
 def _receipt_stock(**extra):
-    return {"_entry_receipt_filled_by_order_no": {"BUY-1": 1},
-            "_entry_receipt_executions_by_order_no": {
-                "BUY-1": {"FILL-1": {"cumulative_qty": 1}}},
-            **extra}
+    return {
+        "_entry_receipt_filled_by_order_no": {"BUY-1": 1},
+        "_entry_receipt_executions_by_order_no": {
+            "BUY-1": {"FILL-1": {"cumulative_qty": 1}}
+        },
+        **extra,
+    }
 
 
-def _events(path, market, *, verdicts=("PASS", "PASS"), position_key="record:7",
-            session_key="2026-09-25", base_at=1.0):
+def _events(
+    path,
+    market,
+    *,
+    verdicts=("PASS", "PASS"),
+    position_key="record:7",
+    session_key="2026-09-25",
+    base_at=1.0,
+):
     rows = []
     for index, verdict in enumerate(verdicts):
         at = base_at + index * 10.0
         response = {
             "input_snapshot_id": f"snapshot-{index}",
-            "votes": [{
-                "path_id": path, "verdict": verdict, "conviction": "FIRM",
-                "reason_codes": [PATH_REASON_PREFIX[path] + "tape_evidence"],
-            }],
+            "votes": [
+                {
+                    "path_id": path,
+                    "verdict": verdict,
+                    "conviction": "FIRM",
+                    "reason_codes": [PATH_REASON_PREFIX[path] + "tape_evidence"],
+                }
+            ],
         }
         event = normalize_path_vote_bundle(
-            response, requested_paths=(path,),
+            response,
+            requested_paths=(path,),
             expected_snapshot_id=f"snapshot-{index}",
-            position_key=position_key, market=market, session_key=session_key,
-            model="gpt-5.4-nano", route="KRX", transport_epoch="1",
-            source_generation=f"item:{index}", requested_at=at,
-            received_at=at + 0.5, buy_fill_identity=BUY_IDENTITY,
-            buy_fill_legs=BUY_LEGS, quote_observed_at=at - 0.1,
+            position_key=position_key,
+            market=market,
+            session_key=session_key,
+            model="gpt-5.4-nano",
+            route="KRX",
+            transport_epoch="1",
+            source_generation=f"item:{index}",
+            requested_at=at,
+            received_at=at + 0.5,
+            buy_fill_identity=BUY_IDENTITY,
+            buy_fill_legs=BUY_LEGS,
+            quote_observed_at=at - 0.1,
         )[0]
         event["persisted_at"] = at + 0.6
         event["provider_called"] = True
@@ -91,38 +137,63 @@ def test_baseline_receipt_covers_every_path_and_market_without_apply_authority()
 
 def test_zero_natural_votes_publish_source_bound_estimated_baseline(tmp_path):
     source_date, target_date = "2026-09-26", "2026-09-28"
-    source = (tmp_path / "report" / "monitor_snapshots" /
-              f"holding_exit_observation_{source_date}.json")
+    source = (
+        tmp_path
+        / "report"
+        / "monitor_snapshots"
+        / f"holding_exit_observation_{source_date}.json"
+    )
     source.parent.mkdir(parents=True)
     source.write_text('{"date":"2026-09-26"}', encoding="utf-8")
     import hashlib
+
     source_sha = hashlib.sha256(source.read_bytes()).hexdigest()
     replay = summarize_holding_path_votes(
-        [], load_events=lambda _: [], model="gpt-5.4-nano",
+        [],
+        load_events=lambda _: [],
+        model="gpt-5.4-nano",
     )
     bundle = create_bundle(
-        source_date=source_date, target_date=target_date,
-        source_report_sha256=source_sha, replay=replay,
+        source_date=source_date,
+        target_date=target_date,
+        source_report_sha256=source_sha,
+        replay=replay,
         source_quality=EMPTY_SOURCE_QUALITY,
     )
     assert len(bundle["cells"]) == len(PATH_IDS) * len(MARKETS)
     assert bundle["realized_paired_ev_krw"] is None
     assert bundle["evidence_grade"] == "estimated_provisional"
-    assert bundle["cells"]["EXIT_TRAILING_TP|PREMARKET"]["scenario_decisions"][
-        "source_gap"] == "INSUFFICIENT"
+    assert (
+        bundle["cells"]["EXIT_TRAILING_TP|PREMARKET"]["scenario_decisions"][
+            "source_gap"
+        ]
+        == "INSUFFICIENT"
+    )
     path = policy_path(tmp_path, target_date)
     path.parent.mkdir(parents=True)
     path.write_text(json.dumps(bundle), encoding="utf-8")
     assert load_bundle(tmp_path, target_date) == bundle
-    selected, receipt = runtime_policy_from_env({
-        ENV_DATE: target_date, ENV_PATH: str(path), ENV_SHA: bundle["bundle_sha256"],
-    }, data_root=tmp_path, active_date=target_date)
+    selected, receipt = runtime_policy_from_env(
+        {
+            ENV_DATE: target_date,
+            ENV_PATH: str(path),
+            ENV_SHA: bundle["bundle_sha256"],
+        },
+        data_root=tmp_path,
+        active_date=target_date,
+    )
     assert receipt["status"] == "baseline_policy_load_rejected"
     assert selected == PATH_POLICY_BY_MARKET
     source.write_text('{"date":"tampered"}', encoding="utf-8")
-    _, rejected = runtime_policy_from_env({
-        ENV_DATE: target_date, ENV_PATH: str(path), ENV_SHA: bundle["bundle_sha256"],
-    }, data_root=tmp_path, active_date=target_date)
+    _, rejected = runtime_policy_from_env(
+        {
+            ENV_DATE: target_date,
+            ENV_PATH: str(path),
+            ENV_SHA: bundle["bundle_sha256"],
+        },
+        data_root=tmp_path,
+        active_date=target_date,
+    )
     assert rejected["status"] == "baseline_policy_load_rejected"
     tampered = dict(bundle)
     tampered["cells"] = dict(bundle["cells"])
@@ -132,120 +203,181 @@ def test_zero_natural_votes_publish_source_bound_estimated_baseline(tmp_path):
 
 
 def test_estimated_policy_strict_handoff_and_bootstrap_consume_same_hash(
-    tmp_path, monkeypatch,
+    tmp_path,
+    monkeypatch,
 ):
     from src.engine.automation import postclose_summary_handoff as handoff
     from src.engine.automation import runtime_policy_bootstrap as bootstrap
     from src.engine import build_next_stage2_checklist
     import hashlib
+
     source_date, target_date = "2026-09-26", "2026-09-28"
     report_dir = tmp_path / "report"
-    observation = (report_dir / "monitor_snapshots" /
-                   f"holding_exit_observation_{source_date}.json")
+    observation = (
+        report_dir
+        / "monitor_snapshots"
+        / f"holding_exit_observation_{source_date}.json"
+    )
     observation.parent.mkdir(parents=True)
     replay = summarize_holding_path_votes(
-        [], load_events=lambda _: [], model="gpt-5.4-nano",
+        [],
+        load_events=lambda _: [],
+        model="gpt-5.4-nano",
     )
-    observation.write_text(json.dumps({
-        "date": source_date, "holding_path_vote_replay": replay,
-        "completed_population_quality": {
-            "complete": False, "db_completed_main_ids": [],
-            "strict_completed_position_ids": [], "source_gap_ids": [],
-            "excluded_all_reasons": {}, "source_gap_dates": [],
-        },
-    }), encoding="utf-8")
+    observation.write_text(
+        json.dumps(
+            {
+                "date": source_date,
+                "holding_path_vote_replay": replay,
+                "completed_population_quality": {
+                    "complete": False,
+                    "db_completed_main_ids": [],
+                    "strict_completed_position_ids": [],
+                    "source_gap_ids": [],
+                    "excluded_all_reasons": {},
+                    "source_gap_dates": [],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
     source_sha = hashlib.sha256(observation.read_bytes()).hexdigest()
-    bundle = create_bundle(source_date=source_date, target_date=target_date,
-                           source_report_sha256=source_sha, replay=replay,
-                           source_quality=EMPTY_SOURCE_QUALITY)
+    bundle = create_bundle(
+        source_date=source_date,
+        target_date=target_date,
+        source_report_sha256=source_sha,
+        replay=replay,
+        source_quality=EMPTY_SOURCE_QUALITY,
+    )
     selected_file = policy_path(tmp_path, target_date)
     selected_file.parent.mkdir(parents=True)
     selected_file.write_text(json.dumps(bundle), encoding="utf-8")
     receipt = {
         "status": "estimated_provisional_published",
-        "source_date": source_date, "target_date": target_date,
+        "source_date": source_date,
+        "target_date": target_date,
         "bundle_sha256": bundle["bundle_sha256"],
         "policy_set_sha256": bundle["policy_set_sha256"],
         "source_report_sha256": source_sha,
-        "cell_count": len(PATH_IDS) * len(MARKETS), "allowed_runtime_apply": True,
+        "cell_count": len(PATH_IDS) * len(MARKETS),
+        "allowed_runtime_apply": True,
     }
-    summary_file = report_dir / "runtime_approval_summary" / (
-        f"runtime_approval_summary_{source_date}.json")
+    summary_file = (
+        report_dir
+        / "runtime_approval_summary"
+        / (f"runtime_approval_summary_{source_date}.json")
+    )
     summary_file.parent.mkdir(parents=True)
-    summary_file.write_text(json.dumps({
-        "schema_version": 3, "holding_path_vote_policy": receipt,
-    }), encoding="utf-8")
-    monkeypatch.setattr(build_next_stage2_checklist, "_next_krx_trading_day",
-                        lambda _: target_date)
+    summary_file.write_text(
+        json.dumps(
+            {
+                "schema_version": 3,
+                "holding_path_vote_policy": receipt,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        build_next_stage2_checklist, "_next_krx_trading_day", lambda _: target_date
+    )
     monkeypatch.setattr(handoff, "stage_receipt_issues", lambda *_a: [])
     monkeypatch.setattr(bootstrap, "DATA_DIR", tmp_path)
     checked = handoff.verify_summary_handoff(
-        source_date, report_dir=report_dir, checklist_path=tmp_path / "unused.md",
-        require_tower=False, require_checklist=False,
+        source_date,
+        report_dir=report_dir,
+        checklist_path=tmp_path / "unused.md",
+        require_tower=False,
+        require_checklist=False,
     )
     assert checked["status"] == "pass"
     env, bootstrap_receipt = bootstrap._holding_vote_handoff(target_date)
     assert bootstrap_receipt["bundle_sha256"] == bundle["bundle_sha256"]
     assert env[ENV_SHA] == bundle["bundle_sha256"]
     selected, runtime_receipt = runtime_policy_from_env(
-        env, data_root=tmp_path, active_date=target_date)
+        env, data_root=tmp_path, active_date=target_date
+    )
     assert runtime_receipt["status"] == "estimated_provisional_loaded"
     assert selected == PATH_POLICY_BY_MARKET
     stale, stale_receipt = runtime_policy_from_env(
-        env, data_root=tmp_path, active_date="2026-09-29")
+        env, data_root=tmp_path, active_date="2026-09-29"
+    )
     assert stale == PATH_POLICY_BY_MARKET
     assert stale_receipt["status"] == "baseline_policy_target_date_stale"
     altered = json.loads(json.dumps(bundle))
     altered["cells"]["EXIT_TRAILING_TP|PREMARKET"]["eligible_signal_count"] = 1
-    altered["bundle_sha256"] = digest({
-        key: value for key, value in altered.items() if key != "bundle_sha256"
-    })
+    altered["bundle_sha256"] = digest(
+        {key: value for key, value in altered.items() if key != "bundle_sha256"}
+    )
     validate_bundle(altered, target_date=target_date)
     with pytest.raises(ValueError, match="source_semantics_mismatch"):
         verify_source_handoff(tmp_path, altered)
     receipt["policy_set_sha256"] = "0" * 64
-    summary_file.write_text(json.dumps({
-        "schema_version": 3, "holding_path_vote_policy": receipt,
-    }), encoding="utf-8")
-    assert handoff.verify_summary_handoff(
-        source_date, report_dir=report_dir, checklist_path=tmp_path / "unused.md",
-        require_tower=False, require_checklist=False,
-    )["status"] == "fail"
+    summary_file.write_text(
+        json.dumps(
+            {
+                "schema_version": 3,
+                "holding_path_vote_policy": receipt,
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert (
+        handoff.verify_summary_handoff(
+            source_date,
+            report_dir=report_dir,
+            checklist_path=tmp_path / "unused.md",
+            require_tower=False,
+            require_checklist=False,
+        )["status"]
+        == "fail"
+    )
 
 
 def test_long_lived_runtime_drops_expired_selected_vote_policy(monkeypatch):
     from src.engine import sniper_state_handlers as handlers
+
     key = ("EXIT_TRAILING_TP", "REGULAR")
     changed = {**PATH_POLICY_BY_MARKET[key], "min_votes": 3}
     monkeypatch.setattr(handlers, "_HOLDING_PATH_POLICY", {key: changed})
-    monkeypatch.setattr(handlers, "_HOLDING_PATH_POLICY_RECEIPT", {
-        "status": "estimated_provisional_loaded", "target_date": "2000-01-01",
-        "bundle_sha256": "a" * 64,
-    })
+    monkeypatch.setattr(
+        handlers,
+        "_HOLDING_PATH_POLICY_RECEIPT",
+        {
+            "status": "estimated_provisional_loaded",
+            "target_date": "2000-01-01",
+            "bundle_sha256": "a" * 64,
+        },
+    )
     assert handlers._holding_path_policy_for(*key) == PATH_POLICY_BY_MARKET[key]
 
 
 def test_terminal_receipt_binds_only_same_tp_buy_generation():
     from src.engine import sniper_execution_receipts as receipts
+
     stock = _receipt_stock(
-        id=7, last_exit_rule="scalp_trailing_take_profit",
+        id=7,
+        last_exit_rule="scalp_trailing_take_profit",
     )
     buy_identity = buy_fill_identity_from_runtime(stock)
     assert buy_identity
     stock["holding_path_latest_tp_signal"] = {
-        "position_key": "record:7", "buy_fill_identity": buy_identity,
-        "signal_id": "crossing-7", "signal_at": 20.0,
+        "position_key": "record:7",
+        "buy_fill_identity": buy_identity,
+        "signal_id": "crossing-7",
+        "signal_at": 20.0,
         "policy_bundle_sha256": "a" * 64,
     }
     bound = receipts._holding_path_terminal_lineage_fields(stock, 7)
     assert bound["holding_path_signal_id"] == "crossing-7"
     assert bound["holding_path_terminal_signal_binding"] == (
-        "same_position_buy_generation")
+        "same_position_buy_generation"
+    )
     stock["holding_path_latest_tp_signal"]["buy_fill_identity"] = "0" * 64
     gap = receipts._holding_path_terminal_lineage_fields(stock, 7)
     assert "holding_path_signal_id" not in gap
     assert gap["holding_path_terminal_signal_binding"] == (
-        "source_gap_generation_mismatch")
+        "source_gap_generation_mismatch"
+    )
 
 
 def test_provider_call_returns_separate_votes_once(monkeypatch):
@@ -256,43 +388,76 @@ def test_provider_call_returns_separate_votes_once(monkeypatch):
     engine.lock = threading.Lock()
     engine.ai_disabled = False
     engine._extract_quote_snapshot = lambda _: {
-        "best_bid": 99, "best_ask": 100,
-        "best_bid_qty": 10, "best_ask_qty": 10,
+        "best_bid": 99,
+        "best_ask": 100,
+        "best_bid_qty": 10,
+        "best_ask_qty": 10,
     }
-    monkeypatch.setattr(ai_engine_openai, "ai_input_preflight",
-                        lambda _: {"allowed": True, "status": "ok", "blockers": []})
-    monkeypatch.setattr(ai_market_snapshot, "ai_input_preflight",
-                        lambda _: {"allowed": True, "status": "ok", "blockers": []})
+    monkeypatch.setattr(
+        ai_engine_openai,
+        "ai_input_preflight",
+        lambda _: {"allowed": True, "status": "ok", "blockers": []},
+    )
+    monkeypatch.setattr(
+        ai_market_snapshot,
+        "ai_input_preflight",
+        lambda _: {"allowed": True, "status": "ok", "blockers": []},
+    )
     calls = []
     provider_meta = {"model": "gpt-5.4-nano", "transport": "http"}
 
     def provider(prompt, user_input, **kwargs):
         payload = json.loads(user_input)
         calls.append((prompt, payload, kwargs))
-        engine._set_last_transport_meta({
-            "openai_model": "gpt-5.4-nano",
-            "openai_response_model": provider_meta["model"],
-            "openai_transport_mode": provider_meta["transport"],
-        })
+        engine._set_last_transport_meta(
+            {
+                "openai_model": "gpt-5.4-nano",
+                "openai_response_model": provider_meta["model"],
+                "openai_transport_mode": provider_meta["transport"],
+            }
+        )
         return {
             "input_snapshot_id": payload["input_snapshot_id"],
-            "votes": [{"path_id": path, "verdict": "PASS", "conviction": "FIRM",
-                       "reason_codes": [PATH_REASON_PREFIX[path] + "tape_evidence"]}
-                      for path in payload["requested_paths"]],
+            "votes": [
+                {
+                    "path_id": path,
+                    "verdict": "PASS",
+                    "conviction": "FIRM",
+                    "reason_codes": [PATH_REASON_PREFIX[path] + "tape_evidence"],
+                }
+                for path in payload["requested_paths"]
+            ],
         }
 
     engine._call_openai_safe = provider
-    monkeypatch.setattr(ai_engine_openai, "record_ai_decision_trace",
-                        lambda *_a, **_kw: {"ai_decision_trace_id": "trace-1"})
+    monkeypatch.setattr(
+        ai_engine_openai,
+        "record_ai_decision_trace",
+        lambda *_a, **_kw: {"ai_decision_trace_id": "trace-1"},
+    )
     rows = engine.evaluate_scalping_holding_path_votes(
-        "Stock", "005930", {"curr": 99}, [], [],
-        {"buy_price": 100, "curr_price": 99, "profit_rate": -1,
-         "peak_profit": 0, "held_sec": 30, "prior_score": 90},
+        "Stock",
+        "005930",
+        {"curr": 99},
+        [],
+        [],
+        {
+            "buy_price": 100,
+            "curr_price": 99,
+            "profit_rate": -1,
+            "peak_profit": 0,
+            "held_sec": 30,
+            "prior_score": 90,
+        },
         requested_paths=("EXIT_SOFT_STOP", "ADD_REBOUND"),
-        market="REGULAR", session_key="2026-09-25", position_key="record:7",
+        market="REGULAR",
+        session_key="2026-09-25",
+        position_key="record:7",
         buy_fill_identity=BUY_IDENTITY,
         buy_fill_legs=BUY_LEGS,
-        route="KRX", transport_epoch="1", source_generation="item:1",
+        route="KRX",
+        transport_epoch="1",
+        source_generation="item:1",
         quote_observed_at=time.time(),
         holding_context={},
     )
@@ -301,31 +466,62 @@ def test_provider_call_returns_separate_votes_once(monkeypatch):
     assert all(row["status"] == "VALID" for row in rows)
     provider_meta["model"] = "gpt-5.4-nano-2026-03-17"
     snapshot_model = engine.evaluate_scalping_holding_path_votes(
-        "Stock", "005930", {"curr": 99}, [], [],
-        {"buy_price": 100, "curr_price": 99, "profit_rate": -1,
-         "peak_profit": 0, "held_sec": 30},
-        requested_paths=("EXIT_SOFT_STOP",), market="REGULAR",
-        session_key="2026-09-25", position_key="record:7",
-        buy_fill_identity=BUY_IDENTITY, buy_fill_legs=BUY_LEGS,
-        route="KRX", transport_epoch="1", source_generation="item:snapshot",
-        quote_observed_at=time.time(), holding_context={},
+        "Stock",
+        "005930",
+        {"curr": 99},
+        [],
+        [],
+        {
+            "buy_price": 100,
+            "curr_price": 99,
+            "profit_rate": -1,
+            "peak_profit": 0,
+            "held_sec": 30,
+        },
+        requested_paths=("EXIT_SOFT_STOP",),
+        market="REGULAR",
+        session_key="2026-09-25",
+        position_key="record:7",
+        buy_fill_identity=BUY_IDENTITY,
+        buy_fill_legs=BUY_LEGS,
+        route="KRX",
+        transport_epoch="1",
+        source_generation="item:snapshot",
+        quote_observed_at=time.time(),
+        holding_context={},
     )
     assert snapshot_model[0]["status"] == "VALID"
     provider_meta["model"] = "gpt-5.4-mini"
     wrong_model = engine.evaluate_scalping_holding_path_votes(
-        "Stock", "005930", {"curr": 99}, [], [],
-        {"buy_price": 100, "curr_price": 99, "profit_rate": -1,
-         "peak_profit": 0, "held_sec": 30},
-        requested_paths=("EXIT_SOFT_STOP",), market="REGULAR",
-        session_key="2026-09-25", position_key="record:7",
-        buy_fill_identity=BUY_IDENTITY, buy_fill_legs=BUY_LEGS,
-        route="KRX", transport_epoch="1", source_generation="item:2",
-        quote_observed_at=time.time(), holding_context={},
+        "Stock",
+        "005930",
+        {"curr": 99},
+        [],
+        [],
+        {
+            "buy_price": 100,
+            "curr_price": 99,
+            "profit_rate": -1,
+            "peak_profit": 0,
+            "held_sec": 30,
+        },
+        requested_paths=("EXIT_SOFT_STOP",),
+        market="REGULAR",
+        session_key="2026-09-25",
+        position_key="record:7",
+        buy_fill_identity=BUY_IDENTITY,
+        buy_fill_legs=BUY_LEGS,
+        route="KRX",
+        transport_epoch="1",
+        source_generation="item:2",
+        quote_observed_at=time.time(),
+        holding_context={},
     )
     assert wrong_model[0]["status"] == "INSUFFICIENT"
     assert wrong_model[0]["excluded_reason"] == (
         "provider_response_model_missing_or_mismatch"
     )
+
     def untrusted_provider(*args, **kwargs):
         response = provider(*args, **kwargs)
         engine._set_last_transport_meta({})
@@ -334,14 +530,29 @@ def test_provider_call_returns_separate_votes_once(monkeypatch):
 
     engine._call_openai_safe = untrusted_provider
     spoofed_model = engine.evaluate_scalping_holding_path_votes(
-        "Stock", "005930", {"curr": 99}, [], [],
-        {"buy_price": 100, "curr_price": 99, "profit_rate": -1,
-         "peak_profit": 0, "held_sec": 30},
-        requested_paths=("EXIT_SOFT_STOP",), market="REGULAR",
-        session_key="2026-09-25", position_key="record:7",
-        buy_fill_identity=BUY_IDENTITY, buy_fill_legs=BUY_LEGS,
-        route="KRX", transport_epoch="1", source_generation="item:spoof",
-        quote_observed_at=time.time(), holding_context={},
+        "Stock",
+        "005930",
+        {"curr": 99},
+        [],
+        [],
+        {
+            "buy_price": 100,
+            "curr_price": 99,
+            "profit_rate": -1,
+            "peak_profit": 0,
+            "held_sec": 30,
+        },
+        requested_paths=("EXIT_SOFT_STOP",),
+        market="REGULAR",
+        session_key="2026-09-25",
+        position_key="record:7",
+        buy_fill_identity=BUY_IDENTITY,
+        buy_fill_legs=BUY_LEGS,
+        route="KRX",
+        transport_epoch="1",
+        source_generation="item:spoof",
+        quote_observed_at=time.time(),
+        holding_context={},
     )
     assert spoofed_model[0]["status"] == "INSUFFICIENT"
     assert spoofed_model[0]["excluded_reason"] == (
@@ -350,10 +561,15 @@ def test_provider_call_returns_separate_votes_once(monkeypatch):
     provider_meta["model"] = "gpt-5.4-nano"
     engine._call_openai_safe = provider
     from types import SimpleNamespace
-    monkeypatch.setattr(ai_engine_openai, "TRADING_RULES", SimpleNamespace(
-        OPENAI_HOLDING_EXIT_VOTE_MODEL="gpt-5.4-nano",
-        OPENAI_HOLDING_EXIT_VOTE_TIMEOUT_MS=1,
-    ))
+
+    monkeypatch.setattr(
+        ai_engine_openai,
+        "TRADING_RULES",
+        SimpleNamespace(
+            OPENAI_HOLDING_EXIT_VOTE_MODEL="gpt-5.4-nano",
+            OPENAI_HOLDING_EXIT_VOTE_TIMEOUT_MS=1,
+        ),
+    )
 
     def slow_provider(*args, **kwargs):
         time.sleep(0.01)
@@ -361,14 +577,29 @@ def test_provider_call_returns_separate_votes_once(monkeypatch):
 
     engine._call_openai_safe = slow_provider
     late = engine.evaluate_scalping_holding_path_votes(
-        "Stock", "005930", {"curr": 99}, [], [],
-        {"buy_price": 100, "curr_price": 99, "profit_rate": -1,
-         "peak_profit": 0, "held_sec": 30},
-        requested_paths=("EXIT_SOFT_STOP",), market="REGULAR",
-        session_key="2026-09-25", position_key="record:7",
-        buy_fill_identity=BUY_IDENTITY, buy_fill_legs=BUY_LEGS,
-        route="KRX", transport_epoch="1", source_generation="item:3",
-        quote_observed_at=time.time(), holding_context={},
+        "Stock",
+        "005930",
+        {"curr": 99},
+        [],
+        [],
+        {
+            "buy_price": 100,
+            "curr_price": 99,
+            "profit_rate": -1,
+            "peak_profit": 0,
+            "held_sec": 30,
+        },
+        requested_paths=("EXIT_SOFT_STOP",),
+        market="REGULAR",
+        session_key="2026-09-25",
+        position_key="record:7",
+        buy_fill_identity=BUY_IDENTITY,
+        buy_fill_legs=BUY_LEGS,
+        route="KRX",
+        transport_epoch="1",
+        source_generation="item:3",
+        quote_observed_at=time.time(),
+        holding_context={},
     )
     assert late[0]["status"] == "INSUFFICIENT"
     assert late[0]["excluded_reason"] == "provider_response_after_deadline"
@@ -383,23 +614,43 @@ def test_two_independent_path_votes_required_in_every_market(path, market):
     policy = PATH_POLICY_BY_MARKET[(path, market)]
     rows = _events(path, market)
     one = path_signal_snapshot(
-        rows[:1], position_key="record:7", market=market,
-        session_key="2026-09-25", path_id=path, model="gpt-5.4-nano",
-        signal_at=20.0, policy=policy, buy_fill_identity=BUY_IDENTITY,
+        rows[:1],
+        position_key="record:7",
+        market=market,
+        session_key="2026-09-25",
+        path_id=path,
+        model="gpt-5.4-nano",
+        signal_at=20.0,
+        policy=policy,
+        buy_fill_identity=BUY_IDENTITY,
     )
     assert one["vote_count"] == 1 and one["decision"] == "INSUFFICIENT"
     two = path_signal_snapshot(
-        rows, position_key="record:7", market=market,
-        session_key="2026-09-25", path_id=path, model="gpt-5.4-nano",
-        signal_at=20.0, policy=policy, buy_fill_identity=BUY_IDENTITY,
+        rows,
+        position_key="record:7",
+        market=market,
+        session_key="2026-09-25",
+        path_id=path,
+        model="gpt-5.4-nano",
+        signal_at=20.0,
+        policy=policy,
+        buy_fill_identity=BUY_IDENTITY,
     )
     assert two["vote_count"] == 2 and two["decision"] == "PASS"
-    assert path_signal_snapshot(
-        _events(path, market, verdicts=("VETO", "VETO")),
-        position_key="record:7", market=market,
-        session_key="2026-09-25", path_id=path, model="gpt-5.4-nano",
-        signal_at=20.0, policy=policy, buy_fill_identity=BUY_IDENTITY,
-    )["decision"] == "VETO"
+    assert (
+        path_signal_snapshot(
+            _events(path, market, verdicts=("VETO", "VETO")),
+            position_key="record:7",
+            market=market,
+            session_key="2026-09-25",
+            path_id=path,
+            model="gpt-5.4-nano",
+            signal_at=20.0,
+            policy=policy,
+            buy_fill_identity=BUY_IDENTITY,
+        )["decision"]
+        == "VETO"
+    )
 
 
 def test_cross_path_missing_cycle_and_late_receipt_cannot_vote():
@@ -407,23 +658,42 @@ def test_cross_path_missing_cycle_and_late_receipt_cannot_vote():
     path = "ADD_REBOUND"
     rows = _events(path, market)
     rows.append(_events("EXIT_TRAILING_TP", market)[0])
-    missing = dict(rows[1], status="INSUFFICIENT", verdict=None,
-                   conviction=None, excluded_reason="budget_deferred")
-    assert path_signal_snapshot(
-        [rows[0], missing, rows[2]], position_key="record:7",
-        market=market, session_key="2026-09-25", path_id=path,
-        model="gpt-5.4-nano", signal_at=20.0,
-        policy=PATH_POLICY_BY_MARKET[(path, market)],
-        buy_fill_identity=BUY_IDENTITY,
-    )["decision"] == "INSUFFICIENT"
+    missing = dict(
+        rows[1],
+        status="INSUFFICIENT",
+        verdict=None,
+        conviction=None,
+        excluded_reason="budget_deferred",
+    )
+    assert (
+        path_signal_snapshot(
+            [rows[0], missing, rows[2]],
+            position_key="record:7",
+            market=market,
+            session_key="2026-09-25",
+            path_id=path,
+            model="gpt-5.4-nano",
+            signal_at=20.0,
+            policy=PATH_POLICY_BY_MARKET[(path, market)],
+            buy_fill_identity=BUY_IDENTITY,
+        )["decision"]
+        == "INSUFFICIENT"
+    )
     late = dict(rows[1], persisted_at=21.0)
-    assert path_signal_snapshot(
-        [rows[0], late], position_key="record:7", market=market,
-        session_key="2026-09-25", path_id=path,
-        model="gpt-5.4-nano", signal_at=20.0,
-        policy=PATH_POLICY_BY_MARKET[(path, market)],
-        buy_fill_identity=BUY_IDENTITY,
-    )["vote_count"] == 1
+    assert (
+        path_signal_snapshot(
+            [rows[0], late],
+            position_key="record:7",
+            market=market,
+            session_key="2026-09-25",
+            path_id=path,
+            model="gpt-5.4-nano",
+            signal_at=20.0,
+            policy=PATH_POLICY_BY_MARKET[(path, market)],
+            buy_fill_identity=BUY_IDENTITY,
+        )["vote_count"]
+        == 1
+    )
 
 
 def test_slow_provider_response_does_not_refresh_old_quote_vote():
@@ -431,9 +701,14 @@ def test_slow_provider_response_does_not_refresh_old_quote_vote():
     rows = _events(path, market)
     delayed = dict(rows[1], received_at=105.0, persisted_at=105.1)
     snapshot = path_signal_snapshot(
-        [rows[0], delayed], position_key="record:7", market=market,
-        session_key="2026-09-25", path_id=path, model="gpt-5.4-nano",
-        signal_at=106.0, policy=PATH_POLICY_BY_MARKET[(path, market)],
+        [rows[0], delayed],
+        position_key="record:7",
+        market=market,
+        session_key="2026-09-25",
+        path_id=path,
+        model="gpt-5.4-nano",
+        signal_at=106.0,
+        policy=PATH_POLICY_BY_MARKET[(path, market)],
         buy_fill_identity=BUY_IDENTITY,
     )
     assert snapshot["vote_count"] == 2
@@ -447,20 +722,31 @@ def test_partial_buy_fill_changes_generation_and_replay_uses_signal_time():
     first_identity = buy_fill_identity_from_runtime(before)
     before["_entry_receipt_filled_by_order_no"]["BUY-1"] = 2
     before["_entry_receipt_executions_by_order_no"]["BUY-1"]["FILL-2"] = {
-        "cumulative_qty": 2}
+        "cumulative_qty": 2
+    }
     second_identity = buy_fill_identity_from_runtime(before)
     assert first_identity == BUY_IDENTITY
     assert second_identity != first_identity
     rows = _events(path, market)
     rows[1]["buy_fill_identity"] = second_identity
-    assert path_signal_snapshot(
-        rows, position_key="record:7", market=market,
-        session_key="2026-09-25", path_id=path, model="gpt-5.4-nano",
-        signal_at=20.0, policy=PATH_POLICY_BY_MARKET[(path, market)],
-        buy_fill_identity=second_identity,
-    )["vote_count"] == 1
-    legs = [*BUY_LEGS, {**BUY_LEGS[0], "at": "1970-01-01T00:00:09+00:00",
-                         "execution_no": "FILL-2"}]
+    assert (
+        path_signal_snapshot(
+            rows,
+            position_key="record:7",
+            market=market,
+            session_key="2026-09-25",
+            path_id=path,
+            model="gpt-5.4-nano",
+            signal_at=20.0,
+            policy=PATH_POLICY_BY_MARKET[(path, market)],
+            buy_fill_identity=second_identity,
+        )["vote_count"]
+        == 1
+    )
+    legs = [
+        *BUY_LEGS,
+        {**BUY_LEGS[0], "at": "1970-01-01T00:00:09+00:00", "execution_no": "FILL-2"},
+    ]
     assert buy_fill_identity_from_legs(legs) == second_identity
     assert buy_fill_identity_from_runtime({}) is None
 
@@ -477,14 +763,26 @@ def test_vote_store_rejects_tampered_raw_buy_fill_id(tmp_path):
 def test_due_gap_breaks_two_prior_valid_votes():
     market, path = "REGULAR", "EXIT_SOFT_STOP"
     rows = _events(path, market)
-    gap = {**rows[-1], "requested_at": 15.0, "received_at": 15.1,
-           "persisted_at": 15.2, "source_generation": "gap:1",
-           "status": "INSUFFICIENT", "verdict": None, "conviction": None,
-           "provider_called": False}
+    gap = {
+        **rows[-1],
+        "requested_at": 15.0,
+        "received_at": 15.1,
+        "persisted_at": 15.2,
+        "source_generation": "gap:1",
+        "status": "INSUFFICIENT",
+        "verdict": None,
+        "conviction": None,
+        "provider_called": False,
+    }
     snapshot = path_signal_snapshot(
-        [*rows, gap], position_key="record:7", market=market,
-        session_key="2026-09-25", path_id=path, model="gpt-5.4-nano",
-        signal_at=20.0, policy=PATH_POLICY_BY_MARKET[(path, market)],
+        [*rows, gap],
+        position_key="record:7",
+        market=market,
+        session_key="2026-09-25",
+        path_id=path,
+        model="gpt-5.4-nano",
+        signal_at=20.0,
+        policy=PATH_POLICY_BY_MARKET[(path, market)],
         buy_fill_identity=BUY_IDENTITY,
     )
     assert snapshot["vote_count"] == 0
@@ -495,37 +793,59 @@ def test_due_gap_breaks_two_prior_valid_votes():
 def test_exit_vote_defer_blocks_concurrent_add_candidate():
     from src.engine import sniper_state_handlers as handlers
 
-    stock = {"status": "HOLDING", "holding_path_exit_hold": {
-        "path_id": "EXIT_TRAILING_TP", "signal_id": "crossing-1",
-    }}
-    assert (handlers._scale_in_exit_authority_block_reason(stock)
-            == "holding_path_exit_veto_defer_active")
+    stock = {
+        "status": "HOLDING",
+        "holding_path_exit_hold": {
+            "path_id": "EXIT_TRAILING_TP",
+            "signal_id": "crossing-1",
+        },
+    }
+    assert (
+        handlers._scale_in_exit_authority_block_reason(stock)
+        == "holding_path_exit_veto_defer_active"
+    )
     stock.pop("holding_path_exit_hold")
     stock["holding_path_exit_candidate"] = {"path_id": "EXIT_SOFT_STOP"}
-    assert (handlers._scale_in_exit_authority_block_reason(stock)
-            == "holding_path_exit_candidate_active")
+    assert (
+        handlers._scale_in_exit_authority_block_reason(stock)
+        == "holding_path_exit_candidate_active"
+    )
 
 
-def test_due_source_gap_is_durable_and_breaks_prior_vote_sequence(monkeypatch, tmp_path):
+def test_due_source_gap_is_durable_and_breaks_prior_vote_sequence(
+    monkeypatch, tmp_path
+):
     from src.engine import sniper_state_handlers as handlers
 
     now = datetime(2026, 9, 25, 9, tzinfo=ZoneInfo("Asia/Seoul")).timestamp()
     monkeypatch.setattr(handlers, "DATA_DIR", tmp_path)
     monkeypatch.setattr(handlers.time, "time", lambda: now)
     monkeypatch.setattr(handlers, "scalp_trailing_market_type_at", lambda _: "REGULAR")
-    stock = {"id": 7, "status": "HOLDING", "strategy": "SCALPING",
-             "buy_price": 100, "curr_price": 90}
-    assert handlers._persist_holding_path_review_gap(
-        stock=stock, code="005930", reason="quote_or_tape_unusable",
-        paths=("EXIT_TRAILING_TP", "ADD_REBOUND"),
-    ) == "appended"
+    stock = {
+        "id": 7,
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_price": 100,
+        "curr_price": 90,
+    }
+    assert (
+        handlers._persist_holding_path_review_gap(
+            stock=stock,
+            code="005930",
+            reason="quote_or_tape_unusable",
+            paths=("EXIT_TRAILING_TP", "ADD_REBOUND"),
+        )
+        == "appended"
+    )
     rows = load_path_events_file(
-        handlers.path_vote_store_path(tmp_path, "record:7"), "record:7",
+        handlers.path_vote_store_path(tmp_path, "record:7"),
+        "record:7",
     )
     assert len(rows) == 2
     assert {row["path_id"] for row in rows} == {"EXIT_TRAILING_TP", "ADD_REBOUND"}
-    assert all(row["status"] == "INSUFFICIENT" and not row["provider_called"]
-               for row in rows)
+    assert all(
+        row["status"] == "INSUFFICIENT" and not row["provider_called"] for row in rows
+    )
 
 
 def test_durable_store_failure_freezes_insufficient_and_blocks_add(monkeypatch):
@@ -533,34 +853,59 @@ def test_durable_store_failure_freezes_insufficient_and_blocks_add(monkeypatch):
 
     signal_at = datetime(2026, 9, 25, 9, tzinfo=ZoneInfo("Asia/Seoul")).timestamp()
     monkeypatch.setattr(handlers, "scalp_trailing_market_type_at", lambda _: "REGULAR")
-    stock = {"id": 7, "status": "HOLDING", "strategy": "SCALPING",
-             "holding_path_vote_store_gap": "durable_vote_store_unavailable"}
+    stock = {
+        "id": 7,
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "holding_path_vote_store_gap": "durable_vote_store_unavailable",
+    }
     frozen = handlers._holding_path_signal_decision(
-        stock, "005930", path_id="ADD_REBOUND", signal_id="add-1",
+        stock,
+        "005930",
+        path_id="ADD_REBOUND",
+        signal_id="add-1",
         signal_at=signal_at,
     )
     assert frozen["decision"] == "INSUFFICIENT"
     assert frozen["reason"] == "durable_vote_store_unavailable"
     stock.pop("holding_path_vote_store_gap")
-    assert handlers._holding_path_signal_decision(
-        stock, "005930", path_id="ADD_REBOUND", signal_id="add-1",
-        signal_at=signal_at,
-    ) == frozen
+    assert (
+        handlers._holding_path_signal_decision(
+            stock,
+            "005930",
+            path_id="ADD_REBOUND",
+            signal_id="add-1",
+            signal_at=signal_at,
+        )
+        == frozen
+    )
     stock["holding_path_vote_store_gap"] = "durable_vote_store_unavailable"
-    assert handlers.execute_scale_in_order(
-        stock=stock, code="005930", ws_data={},
-        action={"add_type": "AVG_DOWN"}, admin_id="test",
-    )["reason"] == "add_vote_store_unavailable"
+    assert (
+        handlers.execute_scale_in_order(
+            stock=stock,
+            code="005930",
+            ws_data={},
+            action={"add_type": "AVG_DOWN"},
+            admin_id="test",
+        )["reason"]
+        == "add_vote_store_unavailable"
+    )
 
 
 def test_scalping_exit_receipt_does_not_publish_neutral_50_as_ai_score():
     from src.engine import sniper_state_handlers as handlers
 
-    stock = {"strategy": "SCALPING", "holding_score_raw": 91.0,
-             "holding_score_effective": 91.0}
+    stock = {
+        "strategy": "SCALPING",
+        "holding_score_raw": 91.0,
+        "holding_score_effective": 91.0,
+    }
     handlers._remember_exit_context(
-        stock=stock, exit_rule="scalp_trailing_take_profit",
-        reason="trailing", peak_profit=1.2, held_sec=20,
+        stock=stock,
+        exit_rule="scalp_trailing_take_profit",
+        reason="trailing",
+        peak_profit=1.2,
+        held_sec=20,
         current_ai_score=50.0,
     )
     assert stock["last_exit_current_ai_score"] is None
@@ -570,20 +915,39 @@ def test_scalping_exit_receipt_does_not_publish_neutral_50_as_ai_score():
 
 
 def test_bundle_rejects_cross_purpose_reason_and_duplicate_path():
-    kwargs = dict(requested_paths=("EXIT_SOFT_STOP", "ADD_REBOUND"),
-                  expected_snapshot_id="s", position_key="record:7",
-                  buy_fill_identity=BUY_IDENTITY,
-                  buy_fill_legs=BUY_LEGS,
-                  market="REGULAR", session_key="2026-09-25",
-                  model="gpt-5.4-nano", route="KRX", transport_epoch="1",
-                  source_generation="item:1", requested_at=1.0, received_at=2.0)
+    kwargs = dict(
+        requested_paths=("EXIT_SOFT_STOP", "ADD_REBOUND"),
+        expected_snapshot_id="s",
+        position_key="record:7",
+        buy_fill_identity=BUY_IDENTITY,
+        buy_fill_legs=BUY_LEGS,
+        market="REGULAR",
+        session_key="2026-09-25",
+        model="gpt-5.4-nano",
+        route="KRX",
+        transport_epoch="1",
+        source_generation="item:1",
+        requested_at=1.0,
+        received_at=2.0,
+    )
     kwargs["quote_observed_at"] = 0.9
-    response = {"input_snapshot_id": "s", "votes": [
-        {"path_id": "EXIT_SOFT_STOP", "verdict": "PASS", "conviction": "FIRM",
-         "reason_codes": ["add_rebound_tape_supportive"]},
-        {"path_id": "ADD_REBOUND", "verdict": "PASS", "conviction": "FIRM",
-         "reason_codes": ["add_rebound_tape_supportive"]},
-    ]}
+    response = {
+        "input_snapshot_id": "s",
+        "votes": [
+            {
+                "path_id": "EXIT_SOFT_STOP",
+                "verdict": "PASS",
+                "conviction": "FIRM",
+                "reason_codes": ["add_rebound_tape_supportive"],
+            },
+            {
+                "path_id": "ADD_REBOUND",
+                "verdict": "PASS",
+                "conviction": "FIRM",
+                "reason_codes": ["add_rebound_tape_supportive"],
+            },
+        ],
+    }
     rows = normalize_path_vote_bundle(response, **kwargs)
     assert [item["status"] for item in rows] == ["INSUFFICIENT", "VALID"]
     response["votes"][1]["path_id"] = "EXIT_SOFT_STOP"
@@ -593,33 +957,62 @@ def test_bundle_rejects_cross_purpose_reason_and_duplicate_path():
 
 def test_bundle_rejects_reason_from_another_exit_path():
     rows = normalize_path_vote_bundle(
-        {"input_snapshot_id": "s", "votes": [{
-            "path_id": "EXIT_TRAILING_TP", "verdict": "VETO",
-            "conviction": "FIRM", "reason_codes": ["exit_soft_tape_adverse"],
-        }]},
-        requested_paths=("EXIT_TRAILING_TP",), expected_snapshot_id="s",
-        position_key="record:7", market="REGULAR", session_key="2026-09-25",
+        {
+            "input_snapshot_id": "s",
+            "votes": [
+                {
+                    "path_id": "EXIT_TRAILING_TP",
+                    "verdict": "VETO",
+                    "conviction": "FIRM",
+                    "reason_codes": ["exit_soft_tape_adverse"],
+                }
+            ],
+        },
+        requested_paths=("EXIT_TRAILING_TP",),
+        expected_snapshot_id="s",
+        position_key="record:7",
+        market="REGULAR",
+        session_key="2026-09-25",
         buy_fill_identity=BUY_IDENTITY,
         buy_fill_legs=BUY_LEGS,
         quote_observed_at=0.9,
-        model="gpt-5.4-nano", route="KRX", transport_epoch="1",
-        source_generation="item:1", requested_at=1.0, received_at=2.0,
+        model="gpt-5.4-nano",
+        route="KRX",
+        transport_epoch="1",
+        source_generation="item:1",
+        requested_at=1.0,
+        received_at=2.0,
     )
     assert rows[0]["status"] == "INSUFFICIENT"
 
 
 def test_bundle_rejects_quote_clock_older_than_three_seconds():
     rows = normalize_path_vote_bundle(
-        {"input_snapshot_id": "s", "votes": [{
-            "path_id": "EXIT_TRAILING_TP", "verdict": "VETO",
-            "conviction": "FIRM", "reason_codes": ["exit_tp_bid_stable"],
-        }]},
-        requested_paths=("EXIT_TRAILING_TP",), expected_snapshot_id="s",
-        position_key="record:7", market="REGULAR", session_key="2026-09-25",
-        buy_fill_identity=BUY_IDENTITY, buy_fill_legs=BUY_LEGS,
-        model="gpt-5.4-nano", route="KRX", transport_epoch="1",
-        source_generation="item:1", quote_observed_at=1.0,
-        requested_at=4.1, received_at=4.2,
+        {
+            "input_snapshot_id": "s",
+            "votes": [
+                {
+                    "path_id": "EXIT_TRAILING_TP",
+                    "verdict": "VETO",
+                    "conviction": "FIRM",
+                    "reason_codes": ["exit_tp_bid_stable"],
+                }
+            ],
+        },
+        requested_paths=("EXIT_TRAILING_TP",),
+        expected_snapshot_id="s",
+        position_key="record:7",
+        market="REGULAR",
+        session_key="2026-09-25",
+        buy_fill_identity=BUY_IDENTITY,
+        buy_fill_legs=BUY_LEGS,
+        model="gpt-5.4-nano",
+        route="KRX",
+        transport_epoch="1",
+        source_generation="item:1",
+        quote_observed_at=1.0,
+        requested_at=4.1,
+        received_at=4.2,
     )
     assert rows[0]["status"] == "INSUFFICIENT"
     assert rows[0]["excluded_reason"] == "missing_or_invalid_provenance"
@@ -627,29 +1020,49 @@ def test_bundle_rejects_quote_clock_older_than_three_seconds():
 
 def test_model_declared_input_insufficient_never_counts_as_pass_or_veto():
     rows = normalize_path_vote_bundle(
-        {"input_snapshot_id": "s", "votes": [{
-            "path_id": "ADD_REBOUND", "verdict": "PASS",
-            "conviction": "FIRM",
-            "reason_codes": ["add_rebound_input_insufficient"],
-        }]},
-        requested_paths=("ADD_REBOUND",), expected_snapshot_id="s",
-        position_key="record:7", market="REGULAR", session_key="2026-09-25",
-        buy_fill_identity=BUY_IDENTITY, model="gpt-5.4-nano",
+        {
+            "input_snapshot_id": "s",
+            "votes": [
+                {
+                    "path_id": "ADD_REBOUND",
+                    "verdict": "PASS",
+                    "conviction": "FIRM",
+                    "reason_codes": ["add_rebound_input_insufficient"],
+                }
+            ],
+        },
+        requested_paths=("ADD_REBOUND",),
+        expected_snapshot_id="s",
+        position_key="record:7",
+        market="REGULAR",
+        session_key="2026-09-25",
+        buy_fill_identity=BUY_IDENTITY,
+        model="gpt-5.4-nano",
         buy_fill_legs=BUY_LEGS,
         quote_observed_at=0.9,
-        route="KRX", transport_epoch="1", source_generation="item:1",
-        requested_at=1.0, received_at=2.0,
+        route="KRX",
+        transport_epoch="1",
+        source_generation="item:1",
+        requested_at=1.0,
+        received_at=2.0,
     )
     assert rows[0]["status"] == "INSUFFICIENT"
     assert rows[0]["excluded_reason"] == "model_input_insufficient"
     rows[0].update(persisted_at=2.1, provider_called=True)
-    assert path_signal_snapshot(
-        rows, position_key="record:7", market="REGULAR",
-        session_key="2026-09-25", path_id="ADD_REBOUND",
-        model="gpt-5.4-nano", signal_at=20.0,
-        policy=PATH_POLICY_BY_MARKET[("ADD_REBOUND", "REGULAR")],
-        buy_fill_identity=BUY_IDENTITY,
-    )["decision"] == "INSUFFICIENT"
+    assert (
+        path_signal_snapshot(
+            rows,
+            position_key="record:7",
+            market="REGULAR",
+            session_key="2026-09-25",
+            path_id="ADD_REBOUND",
+            model="gpt-5.4-nano",
+            signal_at=20.0,
+            policy=PATH_POLICY_BY_MARKET[("ADD_REBOUND", "REGULAR")],
+            buy_fill_identity=BUY_IDENTITY,
+        )["decision"]
+        == "INSUFFICIENT"
+    )
 
 
 def test_runtime_exit_veto_has_first_crossing_and_bounded_lifetime(monkeypatch):
@@ -659,10 +1072,14 @@ def test_runtime_exit_veto_has_first_crossing_and_bounded_lifetime(monkeypatch):
     clock = [start + 30.0]
     monkeypatch.setattr(handlers.time, "time", lambda: clock[0])
     monkeypatch.setattr(handlers, "scalp_trailing_market_type_at", lambda _: "REGULAR")
-    monkeypatch.setattr(handlers, "_pre_submit_input_snapshot_has_usable_quote",
-                        lambda _: True)
-    monkeypatch.setattr(handlers, "ws_quote_source_receipt", lambda *_a, **_kw:
-                        {"observed_epoch": clock[0]})
+    monkeypatch.setattr(
+        handlers, "_pre_submit_input_snapshot_has_usable_quote", lambda _: True
+    )
+    monkeypatch.setattr(
+        handlers,
+        "ws_quote_source_receipt",
+        lambda *_a, **_kw: {"observed_epoch": clock[0]},
+    )
     monkeypatch.setattr(handlers, "_has_active_sell_order_pending", lambda _: False)
     monkeypatch.setattr(handlers, "_log_holding_pipeline", lambda *_a, **_kw: None)
     rows = _events("EXIT_TRAILING_TP", "REGULAR", verdicts=("VETO", "VETO"))
@@ -670,21 +1087,40 @@ def test_runtime_exit_veto_has_first_crossing_and_bounded_lifetime(monkeypatch):
         for field in ("requested_at", "received_at", "persisted_at"):
             row[field] += start
     monkeypatch.setattr(handlers, "load_path_events_file", lambda *_a, **_kw: rows)
-    stock = _receipt_stock(id=7, strategy="SCALPING", status="HOLDING",
-             scalp_trailing_first_crossing={
-                 "at_epoch": start + 20.0,
-                 "threshold_key": "SCALP_TRAILING_LIMIT_WEAK"},
-             holding_path_vote_ledger=rows)
-    assert handlers._holding_path_exit_proceeds(
-        stock, "005930", exit_rule="scalp_trailing_take_profit",
-        profit_rate=1.0, ws_data={}, signal_at=clock[0],
-    ) is False
+    stock = _receipt_stock(
+        id=7,
+        strategy="SCALPING",
+        status="HOLDING",
+        scalp_trailing_first_crossing={
+            "at_epoch": start + 20.0,
+            "threshold_key": "SCALP_TRAILING_LIMIT_WEAK",
+        },
+        holding_path_vote_ledger=rows,
+    )
+    assert (
+        handlers._holding_path_exit_proceeds(
+            stock,
+            "005930",
+            exit_rule="scalp_trailing_take_profit",
+            profit_rate=1.0,
+            ws_data={},
+            signal_at=clock[0],
+        )
+        is False
+    )
     assert stock["holding_path_exit_hold"]["started_at"] == start + 20.0
     clock[0] = start + 66.0
-    assert handlers._holding_path_exit_proceeds(
-        stock, "005930", exit_rule="scalp_trailing_take_profit",
-        profit_rate=1.0, ws_data={}, signal_at=clock[0],
-    ) is True
+    assert (
+        handlers._holding_path_exit_proceeds(
+            stock,
+            "005930",
+            exit_rule="scalp_trailing_take_profit",
+            profit_rate=1.0,
+            ws_data={},
+            signal_at=clock[0],
+        )
+        is True
+    )
     assert "holding_path_exit_hold" not in stock
 
 
@@ -692,150 +1128,268 @@ def test_postclose_keeps_strict_population_and_null_economics():
     market, path = "REGULAR", "EXIT_SOFT_STOP"
     rows = _events(path, market)
     policy = PATH_POLICY_BY_MARKET[(path, market)]
-    trade = {"id": 7, "buy_fill_legs": BUY_LEGS,
-             "exact_sell_fill_time": "1970-01-01T00:01:00+00:00", "timeline": [{
-        "stage": "holding_path_signal_snapshot",
-        "fields": {"path_id": path, "market": market,
-                   "session_key": "2026-09-25", "position_key": "record:7",
-                   "buy_fill_identity": BUY_IDENTITY,
-                   "signal_id": "soft-1", "signal_at": 20.0,
-                   "policy_sha256": input_snapshot_id(policy),
-                   "decision": "PASS", "vote_count": 2},
-    }]}
+    trade = {
+        "id": 7,
+        "buy_fill_legs": BUY_LEGS,
+        "exact_sell_fill_time": "1970-01-01T00:01:00+00:00",
+        "timeline": [
+            {
+                "stage": "holding_path_signal_snapshot",
+                "fields": {
+                    "path_id": path,
+                    "market": market,
+                    "session_key": "2026-09-25",
+                    "position_key": "record:7",
+                    "buy_fill_identity": BUY_IDENTITY,
+                    "signal_id": "soft-1",
+                    "signal_at": 20.0,
+                    "policy_sha256": input_snapshot_id(policy),
+                    "decision": "PASS",
+                    "vote_count": 2,
+                },
+            }
+        ],
+    }
     report = summarize_holding_path_votes(
-        [trade], load_events=lambda _: rows, model="gpt-5.4-nano",
+        [trade],
+        load_events=lambda _: rows,
+        model="gpt-5.4-nano",
     )
     cell = report["path_market"][f"{path}|{market}"]
     assert cell["strict_completed_position_count"] == 1
     assert cell["eligible_signal_count"] == 1
     assert cell["runtime_decisions"]["PASS"] == 1
-    assert any(candidate["decision_counts"]["PASS"] == 1
-               for candidate in cell["candidate_grid"])
+    assert any(
+        candidate["decision_counts"]["PASS"] == 1
+        for candidate in cell["candidate_grid"]
+    )
     tp_grid = report["path_market"]["EXIT_TRAILING_TP|REGULAR"]["candidate_grid"]
     assert {"quorum_compound", "freshness_compound"}.issubset(
-        {candidate["axis"] for candidate in tp_grid})
-    assert all(candidate["policy"]["max_defer_sec"] <= 45
-               for candidate in tp_grid)
+        {candidate["axis"] for candidate in tp_grid}
+    )
+    assert all(candidate["policy"]["max_defer_sec"] <= 45 for candidate in tp_grid)
     assert cell["cost_after_paired_ev_krw"] is None
     assert report["selected_policy"] is None
     assert report["path_market"]["ADD_REBOUND|REGULAR"]["candidate_grid"] == []
     assert report["allowed_runtime_apply"] is False
 
 
-@pytest.mark.parametrize('input_state', ['valid', 'unverified', 'changed_after_seal'])
-def test_partitioned_postclose_replays_frozen_add_inputs_with_null_economics(tmp_path, monkeypatch, input_state):
+@pytest.mark.parametrize("input_state", ["valid", "unverified", "changed_after_seal"])
+def test_partitioned_postclose_replays_frozen_add_inputs_with_null_economics(
+    tmp_path, monkeypatch, input_state
+):
     from src.engine.lifecycle import research_storage as storage
-    from src.engine.ai import holding_exit_vote as vote, holding_vote_replay_source as evidence
+    from src.engine.ai import (
+        holding_exit_vote as vote,
+        holding_vote_replay_source as evidence,
+    )
     from src.engine.scalping import ai_decision_trace as writer
-    from src.engine.scalping.holding_path_vote_replay import summarize_frozen_holding_path_votes
+    from src.engine.scalping.holding_path_vote_replay import (
+        summarize_frozen_holding_path_votes,
+    )
     from src.engine.scalping.pre_submit_delay_initial_policy import digest, _atomic
     from datetime import datetime, timezone
-    at=datetime(2026,10,16,1,tzinfo=timezone.utc).timestamp()
-    path='ADD_REBOUND';market='REGULAR'
-    rows=_events(path,market,base_at=at+1,session_key='2026-10-16')
-    monkeypatch.setattr(writer,'DATA_DIR',tmp_path)
-    monkeypatch.setattr(writer,'trace_enabled',lambda:True)
-    monkeypatch.setattr(writer,'_now',lambda:datetime.fromtimestamp(at,ZoneInfo('Asia/Seoul')))
-    store=vote.path_vote_store_path(tmp_path,'record:7')
-    for index,row in enumerate(rows):
-        payload=dict(input_schema=vote.PATH_PROMPT_VERSION,requested_paths=[path],
-            position_key='record:7',buy_fill_identity=BUY_IDENTITY,market=market,session_key='2026-10-16',
-            position=dict(buy_price=100,curr_price=99+index*.01),
-            source=dict(route='KRX',transport_epoch='1'),flow={},quote={},source_quality=dict(allowed=True))
-        hashes=vote.path_vote_input_hashes(payload,model=row['model'])
-        payload['input_snapshot_id']=hashes['input_snapshot_id']
-        captured=writer.capture_ai_request(prompt='Original holding prompt',user_input=json.dumps(payload),
-            endpoint_name='holding_path_vote',request_id=f'original-{index}',symbol='005930',
-            require_json=True,model=row['model'],schema_name=vote.PATH_PROMPT_VERSION,
-            metadata=dict(holding_provider_contract=dict(instructions='Original holding prompt',model=row['model'])))
-        row.update(request_payload_sha256=hashes['request_payload_sha256'],
-            input_snapshot_id=hashes['input_snapshot_id'],prompt_sha256=captured['ai_prompt_sha256'],
-            actual_request_reference=dict(schema='holding_actual_request_reference_v1',
-                date=captured['ai_input_payload_store_date'],request_id=captured['ai_decision_trace_id'],
-                request_envelope_sha256=captured['ai_request_envelope_sha256'],
-                payload_sha256=captured['ai_input_payload_sha256'],prompt_sha256=captured['ai_prompt_sha256'],
-                response_sha256='e'*64,replay_exact=True))
-        monkeypatch.setattr(vote.time,'time',lambda row=row:row['received_at']+.1)
-        assert vote.append_path_events_file(store,'record:7',[row])[1]=='appended'
-    votes=evidence.assemble_votes(tmp_path,tmp_path,dict(schema=evidence.SCHEMA,
-        position_key='record:7',store_name=store.name,path_id=None),{})
-    original_rows=list(storage.iter_tree(tmp_path,votes['events_ref']))
-    assert all(row['actual_input_verified'] for row in original_rows)
-    if input_state=='unverified':
-        votes['events_ref']=storage.write_tree(tmp_path,
-            (dict(row,actual_input_verified=False) for row in original_rows))
-    legs=[dict(BUY_LEGS[0],at='2026-10-16T01:00:00+00:00')]
-    signal=dict(stage='holding_path_signal_snapshot',fields=dict(path_id=path,market=market,
-        session_key='2026-10-16',position_key='record:7',buy_fill_identity=BUY_IDENTITY,
-        signal_id='add-1',signal_at=at+20,policy_sha256=input_snapshot_id(PATH_POLICY_BY_MARKET[(path,market)]),
-        decision='PASS',vote_count=2))
-    trade=dict(id=7,code='005930',main_automatic_management_allowed=False,
-        rec_date='2026-10-16',completion_observed_date='2026-10-16',
-        status='COMPLETED',strategy='SCALPING',profit_rate=.2,strict_completion_status='eligible',
-        strict_completion_reasons=[],entry_mode='normal',terminal_population_scope='real_record_bound',
-        sell_quantity_conserved=True,terminal_profit_rate_reconciled=True,
-        realized_pnl_krw_source='broker_actual_fee_reconciled',realized_pnl_krw=100,
-        broker_actual_cost_observed=True,broker_actual_fees_taxes_krw=20,
-        exact_sell_fill_time='2026-10-16T01:01:00+00:00')
+
+    at = datetime(2026, 10, 16, 1, tzinfo=timezone.utc).timestamp()
+    path = "ADD_REBOUND"
+    market = "REGULAR"
+    rows = _events(path, market, base_at=at + 1, session_key="2026-10-16")
+    monkeypatch.setattr(writer, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(writer, "trace_enabled", lambda: True)
+    monkeypatch.setattr(
+        writer, "_now", lambda: datetime.fromtimestamp(at, ZoneInfo("Asia/Seoul"))
+    )
+    store = vote.path_vote_store_path(tmp_path, "record:7")
+    for index, row in enumerate(rows):
+        payload = dict(
+            input_schema=vote.PATH_PROMPT_VERSION,
+            requested_paths=[path],
+            position_key="record:7",
+            buy_fill_identity=BUY_IDENTITY,
+            market=market,
+            session_key="2026-10-16",
+            position=dict(buy_price=100, curr_price=99 + index * 0.01),
+            source=dict(route="KRX", transport_epoch="1"),
+            flow={},
+            quote={},
+            source_quality=dict(allowed=True),
+        )
+        hashes = vote.path_vote_input_hashes(payload, model=row["model"])
+        payload["input_snapshot_id"] = hashes["input_snapshot_id"]
+        captured = writer.capture_ai_request(
+            prompt="Original holding prompt",
+            user_input=json.dumps(payload),
+            endpoint_name="holding_path_vote",
+            request_id=f"original-{index}",
+            symbol="005930",
+            require_json=True,
+            model=row["model"],
+            schema_name=vote.PATH_PROMPT_VERSION,
+            metadata=dict(
+                holding_provider_contract=dict(
+                    instructions="Original holding prompt", model=row["model"]
+                )
+            ),
+        )
+        row.update(
+            request_payload_sha256=hashes["request_payload_sha256"],
+            input_snapshot_id=hashes["input_snapshot_id"],
+            prompt_sha256=captured["ai_prompt_sha256"],
+            actual_request_reference=dict(
+                schema="holding_actual_request_reference_v1",
+                date=captured["ai_input_payload_store_date"],
+                request_id=captured["ai_decision_trace_id"],
+                request_envelope_sha256=captured["ai_request_envelope_sha256"],
+                payload_sha256=captured["ai_input_payload_sha256"],
+                prompt_sha256=captured["ai_prompt_sha256"],
+                response_sha256="e" * 64,
+                replay_exact=True,
+            ),
+        )
+        monkeypatch.setattr(vote.time, "time", lambda row=row: row["received_at"] + 0.1)
+        assert vote.append_path_events_file(store, "record:7", [row])[1] == "appended"
+    votes = evidence.assemble_votes(
+        tmp_path,
+        tmp_path,
+        dict(
+            schema=evidence.SCHEMA,
+            position_key="record:7",
+            store_name=store.name,
+            path_id=None,
+        ),
+        {},
+    )
+    original_rows = list(storage.iter_tree(tmp_path, votes["events_ref"]))
+    assert all(row["actual_input_verified"] for row in original_rows)
+    if input_state == "unverified":
+        votes["events_ref"] = storage.write_tree(
+            tmp_path, (dict(row, actual_input_verified=False) for row in original_rows)
+        )
+    legs = [dict(BUY_LEGS[0], at="2026-10-16T01:00:00+00:00")]
+    signal = dict(
+        stage="holding_path_signal_snapshot",
+        fields=dict(
+            path_id=path,
+            market=market,
+            session_key="2026-10-16",
+            position_key="record:7",
+            buy_fill_identity=BUY_IDENTITY,
+            signal_id="add-1",
+            signal_at=at + 20,
+            policy_sha256=input_snapshot_id(PATH_POLICY_BY_MARKET[(path, market)]),
+            decision="PASS",
+            vote_count=2,
+        ),
+    )
+    trade = dict(
+        id=7,
+        code="005930",
+        main_automatic_management_allowed=False,
+        rec_date="2026-10-16",
+        completion_observed_date="2026-10-16",
+        status="COMPLETED",
+        strategy="SCALPING",
+        profit_rate=0.2,
+        strict_completion_status="eligible",
+        strict_completion_reasons=[],
+        entry_mode="normal",
+        terminal_population_scope="real_record_bound",
+        sell_quantity_conserved=True,
+        terminal_profit_rate_reconciled=True,
+        realized_pnl_krw_source="broker_actual_fee_reconciled",
+        realized_pnl_krw=100,
+        broker_actual_cost_observed=True,
+        broker_actual_fees_taxes_krw=20,
+        exact_sell_fill_time="2026-10-16T01:01:00+00:00",
+    )
     # Exercise the actual producer contracts instead of a handwritten main:7
     # partition that mirrored the consumer's old incorrect expectation.
     from src.engine.scalping.holding_path_vote_replay import freeze_replay_trade
     from src.engine.scalping.universal_trailing_replay import completed_sources
-    native_trade=dict(trade,timeline=[signal],buy_fill_legs=legs)
-    frozen=freeze_replay_trade(native_trade,tmp_path,tmp_path,{})
-    frozen['votes']=votes
-    positions,_=completed_sources([native_trade])
-    assert positions[0]['position_key']=='7' and positions[0]['owner']=='main'
-    positions[0].update(symbol='005930',source_reference={'id':'7'},
-        holding_path_diagnostic_ref=storage.write_tree(tmp_path,[frozen]))
-    partition=dict(positions=positions)
-    partition['artifact_sha256']=digest(partition);_atomic(tmp_path/'part.json',partition)
-    refs=storage.write_tree(tmp_path,[dict(path='part.json')])
-    if input_state=='changed_after_seal':
+
+    native_trade = dict(trade, timeline=[signal], buy_fill_legs=legs)
+    frozen = freeze_replay_trade(native_trade, tmp_path, tmp_path, {})
+    frozen["votes"] = votes
+    positions, _ = completed_sources([native_trade])
+    assert positions[0]["position_key"] == "7" and positions[0]["owner"] == "main"
+    positions[0].update(
+        symbol="005930",
+        source_reference={"id": "7"},
+        holding_path_diagnostic_ref=storage.write_tree(tmp_path, [frozen]),
+    )
+    partition = dict(positions=positions)
+    partition["artifact_sha256"] = digest(partition)
+    _atomic(tmp_path / "part.json", partition)
+    refs = storage.write_tree(tmp_path, [dict(path="part.json")])
+    if input_state == "changed_after_seal":
         from pathlib import Path
-        Path(original_rows[0]['actual_input_ref']['payload']['path']).write_text('{}\n')
-    result=summarize_frozen_holding_path_votes(tmp_path,refs,model='gpt-5.4-nano',clean_start='2026-06-05')
-    assert result['strict_population_count']==1
-    assert result['source_status']=='sealed_partition_vote_inputs'
-    cell=result['path_market']['ADD_REBOUND|REGULAR']
-    assert cell['eligible_signal_count']==int(input_state=='valid')
-    assert cell['cost_after_paired_ev_krw'] is None and cell['candidate_grid']==[]
-    assert result['allowed_runtime_apply'] is False
-    if input_state=='valid':
-        resident=summarize_holding_path_votes([dict(trade,timeline=[signal],buy_fill_legs=legs)],
-            load_events=lambda _:rows,model='gpt-5.4-nano')
-        assert resident['path_market']==result['path_market']
+
+        Path(original_rows[0]["actual_input_ref"]["payload"]["path"]).write_text("{}\n")
+    result = summarize_frozen_holding_path_votes(
+        tmp_path, refs, model="gpt-5.4-nano", clean_start="2026-06-05"
+    )
+    assert result["strict_population_count"] == 1
+    assert result["source_status"] == "sealed_partition_vote_inputs"
+    cell = result["path_market"]["ADD_REBOUND|REGULAR"]
+    assert cell["eligible_signal_count"] == int(input_state == "valid")
+    assert cell["cost_after_paired_ev_krw"] is None and cell["candidate_grid"] == []
+    assert result["allowed_runtime_apply"] is False
+    if input_state == "valid":
+        resident = summarize_holding_path_votes(
+            [dict(trade, timeline=[signal], buy_fill_legs=legs)],
+            load_events=lambda _: rows,
+            model="gpt-5.4-nano",
+        )
+        assert resident["path_market"] == result["path_market"]
     else:
-        assert result['excluded_by_position_id']['7']==['signal_replay_mismatch']
+        assert result["excluded_by_position_id"]["7"] == ["signal_replay_mismatch"]
 
 
 def test_postclose_reads_full_position_ledger_without_silent_truncation(tmp_path):
     rows = _events("EXIT_SOFT_STOP", "REGULAR", verdicts=("PASS",) * 193)
     path = tmp_path / "votes.jsonl"
-    path.write_text("".join(json.dumps({**row, "provider_called": True}) + "\n"
-                            for row in rows), encoding="utf-8")
+    path.write_text(
+        "".join(json.dumps({**row, "provider_called": True}) + "\n" for row in rows),
+        encoding="utf-8",
+    )
     assert len(load_path_events_file(path, "record:7")) == 193
 
 
-@pytest.mark.parametrize("bad_field,bad_value,reason", [
-    ("signal_at", float("nan"), "signal_time_invalid"),
-    ("vote_count", "broken", "signal_vote_count_invalid"),
-])
+@pytest.mark.parametrize(
+    "bad_field,bad_value,reason",
+    [
+        ("signal_at", float("nan"), "signal_time_invalid"),
+        ("vote_count", "broken", "signal_vote_count_invalid"),
+    ],
+)
 def test_postclose_quarantines_bad_signal_receipt(bad_field, bad_value, reason):
     market, path = "REGULAR", "EXIT_SOFT_STOP"
-    fields = {"path_id": path, "market": market,
-              "session_key": "2026-09-25", "position_key": "record:7",
-              "buy_fill_identity": BUY_IDENTITY,
-              "signal_id": "soft-1", "signal_at": 20.0,
-              "policy_sha256": input_snapshot_id(PATH_POLICY_BY_MARKET[(path, market)]),
-              "decision": "PASS", "vote_count": 2}
+    fields = {
+        "path_id": path,
+        "market": market,
+        "session_key": "2026-09-25",
+        "position_key": "record:7",
+        "buy_fill_identity": BUY_IDENTITY,
+        "signal_id": "soft-1",
+        "signal_at": 20.0,
+        "policy_sha256": input_snapshot_id(PATH_POLICY_BY_MARKET[(path, market)]),
+        "decision": "PASS",
+        "vote_count": 2,
+    }
     fields[bad_field] = bad_value
     report = summarize_holding_path_votes(
-        [{"id": 7, "buy_fill_legs": BUY_LEGS,
-          "exact_sell_fill_time": "1970-01-01T00:01:00+00:00",
-          "timeline": [{"stage": "holding_path_signal_snapshot",
-                                  "fields": fields}]}],
-        load_events=lambda _: _events(path, market), model="gpt-5.4-nano",
+        [
+            {
+                "id": 7,
+                "buy_fill_legs": BUY_LEGS,
+                "exact_sell_fill_time": "1970-01-01T00:01:00+00:00",
+                "timeline": [
+                    {"stage": "holding_path_signal_snapshot", "fields": fields}
+                ],
+            }
+        ],
+        load_events=lambda _: _events(path, market),
+        model="gpt-5.4-nano",
     )
     assert reason in report["excluded_by_position_id"]["7"]
     assert report["path_market"][f"{path}|{market}"]["eligible_signal_count"] == 0
@@ -843,17 +1397,31 @@ def test_postclose_quarantines_bad_signal_receipt(bad_field, bad_value, reason):
 
 def test_postclose_rejects_signal_after_exact_final_sell():
     market, path = "REGULAR", "EXIT_SOFT_STOP"
-    fields = {"path_id": path, "market": market,
-              "session_key": "2026-09-25", "position_key": "record:7",
-              "buy_fill_identity": BUY_IDENTITY,
-              "signal_id": "soft-1", "signal_at": 20.0,
-              "policy_sha256": input_snapshot_id(PATH_POLICY_BY_MARKET[(path, market)]),
-              "decision": "PASS", "vote_count": 2}
+    fields = {
+        "path_id": path,
+        "market": market,
+        "session_key": "2026-09-25",
+        "position_key": "record:7",
+        "buy_fill_identity": BUY_IDENTITY,
+        "signal_id": "soft-1",
+        "signal_at": 20.0,
+        "policy_sha256": input_snapshot_id(PATH_POLICY_BY_MARKET[(path, market)]),
+        "decision": "PASS",
+        "vote_count": 2,
+    }
     report = summarize_holding_path_votes(
-        [{"id": 7, "buy_fill_legs": BUY_LEGS,
-          "exact_sell_fill_time": "1970-01-01T00:00:15+00:00",
-          "timeline": [{"stage": "holding_path_signal_snapshot", "fields": fields}]}],
-        load_events=lambda _: _events(path, market), model="gpt-5.4-nano",
+        [
+            {
+                "id": 7,
+                "buy_fill_legs": BUY_LEGS,
+                "exact_sell_fill_time": "1970-01-01T00:00:15+00:00",
+                "timeline": [
+                    {"stage": "holding_path_signal_snapshot", "fields": fields}
+                ],
+            }
+        ],
+        load_events=lambda _: _events(path, market),
+        model="gpt-5.4-nano",
     )
     assert "signal_after_final_sell" in report["excluded_by_position_id"]["7"]
     assert report["path_market"][f"{path}|{market}"]["eligible_signal_count"] == 0
@@ -861,24 +1429,33 @@ def test_postclose_rejects_signal_after_exact_final_sell():
 
 def test_postclose_retains_population_but_excludes_missing_sell_time_and_fill_id():
     market, path = "REGULAR", "EXIT_SOFT_STOP"
-    fields = {"path_id": path, "market": market,
-              "session_key": "2026-09-25", "position_key": "record:7",
-              "buy_fill_identity": BUY_IDENTITY,
-              "signal_id": "soft-1", "signal_at": 20.0,
-              "policy_sha256": input_snapshot_id(PATH_POLICY_BY_MARKET[(path, market)]),
-              "decision": "PASS", "vote_count": 2}
-    trade = {"id": 7, "buy_fill_legs": BUY_LEGS, "timeline": [{
-        "stage": "holding_path_signal_snapshot", "fields": fields}]}
+    fields = {
+        "path_id": path,
+        "market": market,
+        "session_key": "2026-09-25",
+        "position_key": "record:7",
+        "buy_fill_identity": BUY_IDENTITY,
+        "signal_id": "soft-1",
+        "signal_at": 20.0,
+        "policy_sha256": input_snapshot_id(PATH_POLICY_BY_MARKET[(path, market)]),
+        "decision": "PASS",
+        "vote_count": 2,
+    }
+    trade = {
+        "id": 7,
+        "buy_fill_legs": BUY_LEGS,
+        "timeline": [{"stage": "holding_path_signal_snapshot", "fields": fields}],
+    }
     first = summarize_holding_path_votes(
-        [trade], load_events=lambda _: _events(path, market),
-        model="gpt-5.4-nano")
+        [trade], load_events=lambda _: _events(path, market), model="gpt-5.4-nano"
+    )
     assert first["strict_population_count"] == 1
     assert "exact_sell_time_missing" in first["excluded_by_position_id"]["7"]
     trade["exact_sell_fill_time"] = "1970-01-01T00:01:00+00:00"
     fields["buy_fill_identity"] = "0" * 64
     second = summarize_holding_path_votes(
-        [trade], load_events=lambda _: _events(path, market),
-        model="gpt-5.4-nano")
+        [trade], load_events=lambda _: _events(path, market), model="gpt-5.4-nano"
+    )
     assert "buy_fill_identity_mismatch" in second["excluded_by_position_id"]["7"]
     assert second["path_market"][f"{path}|{market}"]["eligible_signal_count"] == 0
 
@@ -891,20 +1468,35 @@ def test_frozen_replay_runtime_under_five_seconds():
     for index in range(250):
         key = f"record:{index + 1}"
         ledgers[key] = _events(path, market, position_key=key)
-        trades.append({"id": index + 1, "buy_fill_legs": BUY_LEGS,
-                       "exact_sell_fill_time": "1970-01-01T00:01:00+00:00",
-                       "timeline": [{
-            "stage": "holding_path_signal_snapshot",
-            "fields": {"path_id": path, "market": market,
-                       "session_key": "2026-09-25", "position_key": key,
-                       "buy_fill_identity": BUY_IDENTITY,
-                       "signal_id": f"soft-{index}", "signal_at": 20.0,
-                       "policy_sha256": input_snapshot_id(policy),
-                       "decision": "PASS", "vote_count": 2},
-        }]})
+        trades.append(
+            {
+                "id": index + 1,
+                "buy_fill_legs": BUY_LEGS,
+                "exact_sell_fill_time": "1970-01-01T00:01:00+00:00",
+                "timeline": [
+                    {
+                        "stage": "holding_path_signal_snapshot",
+                        "fields": {
+                            "path_id": path,
+                            "market": market,
+                            "session_key": "2026-09-25",
+                            "position_key": key,
+                            "buy_fill_identity": BUY_IDENTITY,
+                            "signal_id": f"soft-{index}",
+                            "signal_at": 20.0,
+                            "policy_sha256": input_snapshot_id(policy),
+                            "decision": "PASS",
+                            "vote_count": 2,
+                        },
+                    }
+                ],
+            }
+        )
     started = time.perf_counter()
     report = summarize_holding_path_votes(
-        trades, load_events=ledgers.__getitem__, model="gpt-5.4-nano",
+        trades,
+        load_events=ledgers.__getitem__,
+        model="gpt-5.4-nano",
     )
     elapsed = time.perf_counter() - started
     assert report["path_market"][f"{path}|{market}"]["eligible_signal_count"] == 250
@@ -923,41 +1515,67 @@ def test_frozen_three_market_all_path_replay_matrix():
                 position_key = f"record:{record_id}"
                 day = 21 + cohort_index % 3
                 session_key = f"2026-09-{day:02d}"
-                base_at = datetime(2026, 9, day, 9, tzinfo=ZoneInfo(
-                    "Asia/Seoul"
-                )).timestamp()
+                base_at = datetime(
+                    2026, 9, day, 9, tzinfo=ZoneInfo("Asia/Seoul")
+                ).timestamp()
                 ledgers[position_key] = _events(
-                    path, market, position_key=position_key,
-                    session_key=session_key, base_at=base_at,
+                    path,
+                    market,
+                    position_key=position_key,
+                    session_key=session_key,
+                    base_at=base_at,
                 )
-                legs = [{**BUY_LEGS[0], "at": datetime.fromtimestamp(
-                    base_at - 10.0, ZoneInfo("Asia/Seoul")
-                ).isoformat()}]
-                trades.append({"id": record_id, "buy_fill_legs": legs,
-                               "exact_sell_fill_time": datetime.fromtimestamp(
-                                   base_at + 30.0, ZoneInfo("Asia/Seoul")
-                               ).isoformat(), "timeline": [{
-                    "stage": "holding_path_signal_snapshot",
-                    "fields": {"path_id": path, "market": market,
-                               "session_key": session_key,
-                               "position_key": position_key,
-                               "buy_fill_identity": BUY_IDENTITY,
-                               "signal_id": f"signal-{record_id}",
-                               "signal_at": base_at + 20.0,
-                               "policy_sha256": input_snapshot_id(policy),
-                               "decision": "PASS", "vote_count": 2},
-                }]})
+                legs = [
+                    {
+                        **BUY_LEGS[0],
+                        "at": datetime.fromtimestamp(
+                            base_at - 10.0, ZoneInfo("Asia/Seoul")
+                        ).isoformat(),
+                    }
+                ]
+                trades.append(
+                    {
+                        "id": record_id,
+                        "buy_fill_legs": legs,
+                        "exact_sell_fill_time": datetime.fromtimestamp(
+                            base_at + 30.0, ZoneInfo("Asia/Seoul")
+                        ).isoformat(),
+                        "timeline": [
+                            {
+                                "stage": "holding_path_signal_snapshot",
+                                "fields": {
+                                    "path_id": path,
+                                    "market": market,
+                                    "session_key": session_key,
+                                    "position_key": position_key,
+                                    "buy_fill_identity": BUY_IDENTITY,
+                                    "signal_id": f"signal-{record_id}",
+                                    "signal_at": base_at + 20.0,
+                                    "policy_sha256": input_snapshot_id(policy),
+                                    "decision": "PASS",
+                                    "vote_count": 2,
+                                },
+                            }
+                        ],
+                    }
+                )
     report = summarize_holding_path_votes(
-        trades, load_events=ledgers.__getitem__, model="gpt-5.4-nano",
+        trades,
+        load_events=ledgers.__getitem__,
+        model="gpt-5.4-nano",
     )
-    assert report["strict_population_count"] == expected_per_cell * len(PATH_IDS) * len(MARKETS)
+    assert report["strict_population_count"] == expected_per_cell * len(PATH_IDS) * len(
+        MARKETS
+    )
     assert report["excluded_by_position_id"] == {}
     assert len(report["path_market"]) == len(PATH_IDS) * len(MARKETS)
-    assert all(cell["eligible_signal_count"] == expected_per_cell
-               and cell["runtime_decisions"]["PASS"] == expected_per_cell
-               and cell["cost_after_paired_ev_krw"] is None
-               and cell["allowed_runtime_apply"] is False
-               for cell in report["path_market"].values())
+    assert all(
+        cell["eligible_signal_count"] == expected_per_cell
+        and cell["runtime_decisions"]["PASS"] == expected_per_cell
+        and cell["cost_after_paired_ev_krw"] is None
+        and cell["allowed_runtime_apply"] is False
+        for cell in report["path_market"].values()
+    )
 
 
 def test_final_sell_snapshot_preserves_tp_signal_and_buy_fill_generation():
@@ -968,7 +1586,8 @@ def test_final_sell_snapshot_preserves_tp_signal_and_buy_fill_generation():
         holding_path_latest_tp_signal={
             "position_key": "record:7",
             "buy_fill_identity": BUY_IDENTITY,
-            "signal_id": "tp-first-7", "signal_at": 20.0,
+            "signal_id": "tp-first-7",
+            "signal_at": 20.0,
             "policy_bundle_sha256": "b" * 64,
         },
     )
@@ -984,67 +1603,136 @@ def test_final_sell_snapshot_preserves_tp_signal_and_buy_fill_generation():
         "holding_path_policy_bundle_sha256": "b" * 64,
     }
     frozen["_entry_receipt_executions_by_order_no"]["BUY-1"]["FILL-1"][
-        "cumulative_qty"] = 2
+        "cumulative_qty"
+    ] = 2
     assert receipts._holding_path_terminal_lineage_fields(frozen, 7) == {
         "holding_path_terminal_signal_binding": "source_gap_generation_mismatch",
     }
 
 
-def test_trailing_close_survives_native_sell_snapshot_outbox_and_position_reset(monkeypatch, tmp_path):
+def test_trailing_close_survives_native_sell_snapshot_outbox_and_position_reset(
+    monkeypatch, tmp_path
+):
     import json
     from src.engine import sniper_execution_receipts as receipts
     from src.engine.scalping.universal_trailing_replay import OBSERVATION_STREAM
+
     stock = _receipt_stock(
-        last_watching_ai_decision_trace_id='analyze_target:005930:1792717200000:aaaaaaaa',
+        last_watching_ai_decision_trace_id="analyze_target:005930:1792717200000:aaaaaaaa",
         scalp_trailing_observation_stream_contract=OBSERVATION_STREAM,
-        scalp_trailing_observation_position_key='record:7',
+        scalp_trailing_observation_position_key="record:7",
         scalp_trailing_observation_buy_fill_identity=BUY_IDENTITY,
         scalp_trailing_observation_sequence=321,
         scalp_trailing_observation_source_gap=True,
-        scalp_trailing_observation_admission_failure='observation_category_budget_exceeded')
+        scalp_trailing_observation_admission_failure="observation_category_budget_exceeded",
+    )
     frozen = receipts._normalized_receipt_snapshot(
-        receipts._receipt_snapshot(stock, receipts._SELL_RECEIPT_SNAPSHOT_KEYS))
-    leg = receipts._build_sell_lifecycle_outbox_leg(frozen, code='005930', target_id=7,
-        now=datetime(2026,10,23,10,tzinfo=ZoneInfo('Asia/Seoul')),stage='sell_completed',
-        event_fields=dict(actual_order_submitted=True,broker_order_forbidden=False,
-                          order_no='1234',execution_no='5678',sell_qty=1))
+        receipts._receipt_snapshot(stock, receipts._SELL_RECEIPT_SNAPSHOT_KEYS)
+    )
+    leg = receipts._build_sell_lifecycle_outbox_leg(
+        frozen,
+        code="005930",
+        target_id=7,
+        now=datetime(2026, 10, 23, 10, tzinfo=ZoneInfo("Asia/Seoul")),
+        stage="sell_completed",
+        event_fields=dict(
+            actual_order_submitted=True,
+            broker_order_forbidden=False,
+            order_no="1234",
+            execution_no="5678",
+            sell_qty=1,
+        ),
+    )
     assert receipts._standard_sell_partial_lifecycle_outbox_leg_valid(leg)
     stock.clear()
     # Exercise the actual durable-leg consumer, not the generic holding logger.
     from src.utils import pipeline_event_logger as logger
-    monkeypatch.setattr(logger,'DATA_DIR',tmp_path)
-    monkeypatch.setattr(logger,'log_info',lambda *a,**kw:None)
-    monkeypatch.setattr(logger,'_get_producer_compactor',lambda:None)
+
+    monkeypatch.setattr(logger, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(logger, "log_info", lambda *a, **kw: None)
+    monkeypatch.setattr(logger, "_get_producer_compactor", lambda: None)
     assert receipts._emit_standard_sell_partial_lifecycle_outbox_leg(leg)
-    saved=[json.loads(line) for p in (tmp_path/'pipeline_events').glob('*.jsonl')
-           for line in p.read_text().splitlines()]
-    close=json.loads(saved[0]['fields']['trailing_observation_close'])
-    assert close == dict(contract=OBSERVATION_STREAM,position_key='record:7',
-        buy_fill_identity=BUY_IDENTITY,expected_count=321,source_gap=True,
-        admission_failure='observation_category_budget_exceeded')
+    saved = [
+        json.loads(line)
+        for p in (tmp_path / "pipeline_events").glob("*.jsonl")
+        for line in p.read_text().splitlines()
+    ]
+    close = json.loads(saved[0]["fields"]["trailing_observation_close"])
+    assert close == dict(
+        contract=OBSERVATION_STREAM,
+        position_key="record:7",
+        buy_fill_identity=BUY_IDENTITY,
+        expected_count=321,
+        source_gap=True,
+        admission_failure="observation_category_budget_exceeded",
+    )
 
 
-def test_runtime_pass_keeps_immediate_path_and_veto_observation_failure_cannot_block_safety(monkeypatch):
+def test_runtime_pass_keeps_immediate_path_and_veto_observation_failure_cannot_block_safety(
+    monkeypatch,
+):
     from src.engine import sniper_state_handlers as handlers
+
     start = datetime(2026, 9, 25, 9, tzinfo=ZoneInfo("Asia/Seoul")).timestamp()
-    stock = _receipt_stock(id=7, status="HOLDING", strategy="SCALPING",
-        scalp_trailing_first_crossing={"at_epoch": start, "threshold_key": "SCALP_TRAILING_LIMIT_WEAK"})
+    stock = _receipt_stock(
+        id=7,
+        status="HOLDING",
+        strategy="SCALPING",
+        scalp_trailing_first_crossing={
+            "at_epoch": start,
+            "threshold_key": "SCALP_TRAILING_LIMIT_WEAK",
+        },
+    )
     monkeypatch.setattr(handlers.time, "time", lambda: start + 1)
-    monkeypatch.setattr(handlers, "_holding_path_signal_decision", lambda *_a, **_kw: {"decision": "PASS"})
-    monkeypatch.setattr(handlers, "ws_quote_source_receipt", lambda *_a, **_kw:
-        (_ for _ in ()).throw(AssertionError("PASS must not wait on extra quote checks")))
-    assert handlers._holding_path_exit_proceeds(stock, "005930", exit_rule="scalp_trailing_take_profit",
-        profit_rate=1, ws_data={}, signal_at=start + 1)
-    monkeypatch.setattr(handlers, "_holding_path_signal_decision", lambda *_a, **_kw: {"decision": "VETO"})
-    monkeypatch.setattr(handlers, "ws_quote_source_receipt", lambda *_a, **_kw: {"observed_epoch": start + 1})
-    monkeypatch.setattr(handlers, "_pre_submit_input_snapshot_has_usable_quote", lambda _: True)
+    monkeypatch.setattr(
+        handlers,
+        "_holding_path_signal_decision",
+        lambda *_a, **_kw: {"decision": "PASS"},
+    )
+    monkeypatch.setattr(
+        handlers,
+        "ws_quote_source_receipt",
+        lambda *_a, **_kw: (_ for _ in ()).throw(
+            AssertionError("PASS must not wait on extra quote checks")
+        ),
+    )
+    assert handlers._holding_path_exit_proceeds(
+        stock,
+        "005930",
+        exit_rule="scalp_trailing_take_profit",
+        profit_rate=1,
+        ws_data={},
+        signal_at=start + 1,
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_holding_path_signal_decision",
+        lambda *_a, **_kw: {"decision": "VETO"},
+    )
+    monkeypatch.setattr(
+        handlers,
+        "ws_quote_source_receipt",
+        lambda *_a, **_kw: {"observed_epoch": start + 1},
+    )
+    monkeypatch.setattr(
+        handlers, "_pre_submit_input_snapshot_has_usable_quote", lambda _: True
+    )
     monkeypatch.setattr(handlers, "_has_active_sell_order_pending", lambda _: True)
-    monkeypatch.setattr(handlers, "_log_holding_pipeline", lambda *_a, **_kw:
-        (_ for _ in ()).throw(OSError("fixture observer failed")))
+    monkeypatch.setattr(
+        handlers,
+        "_log_holding_pipeline",
+        lambda *_a, **_kw: (_ for _ in ()).throw(OSError("fixture observer failed")),
+    )
     monkeypatch.setattr(handlers, "log_error", lambda *_a: None)
     stock.pop("holding_path_exit_resolution", None)
-    assert handlers._holding_path_exit_proceeds(stock, "005930", exit_rule="scalp_trailing_take_profit",
-        profit_rate=1, ws_data={}, signal_at=start + 1)
+    assert handlers._holding_path_exit_proceeds(
+        stock,
+        "005930",
+        exit_rule="scalp_trailing_take_profit",
+        profit_rate=1,
+        ws_data={},
+        signal_at=start + 1,
+    )
     assert stock["holding_path_exit_resolution"]["release_reason"] == "safety_priority"
     assert "holding_path_exit_hold" not in stock
 
@@ -1052,70 +1740,149 @@ def test_runtime_pass_keeps_immediate_path_and_veto_observation_failure_cannot_b
 def test_retired_path_is_absent_from_live_prompt_and_provider_schema():
     from src.engine.ai_prompt_contracts import SCALPING_HOLDING_PATH_VOTE_SYSTEM_PROMPT
     from src.engine.ai_response_contracts import resolve_ai_response_schema
-    assert 'EXIT_BAD_ENTRY_REFINED' not in SCALPING_HOLDING_PATH_VOTE_SYSTEM_PROMPT
-    schema=resolve_ai_response_schema(PATH_PROMPT_VERSION)
-    assert set(schema['properties']['votes']['items']['properties']['path_id']['enum'])==PATH_IDS
+
+    assert "EXIT_BAD_ENTRY_REFINED" not in SCALPING_HOLDING_PATH_VOTE_SYSTEM_PROMPT
+    schema = resolve_ai_response_schema(PATH_PROMPT_VERSION)
+    assert (
+        set(schema["properties"]["votes"]["items"]["properties"]["path_id"]["enum"])
+        == PATH_IDS
+    )
 
 
 def test_retired_historical_vote_is_read_without_new_runtime_authority(tmp_path):
     from src.engine.ai.holding_exit_vote import iter_path_events_file
-    active=_events('EXIT_SOFT_STOP','REGULAR')[0]
-    retired={**active,'path_id':'EXIT_BAD_ENTRY_REFINED','prompt_version':'holding_path_vote_v10'}
-    path=tmp_path/'history.jsonl';path.write_text(json.dumps(retired)+'\n'+json.dumps(active)+'\n')
-    before=path.read_bytes()
-    assert list(iter_path_events_file(path,'record:7'))==[active]
-    assert path.read_bytes()==before
-    retired['prompt_version']=PATH_PROMPT_VERSION
-    path.write_text(json.dumps(retired)+'\n')
-    with pytest.raises(ValueError,match='contract_corrupt'):list(iter_path_events_file(path,'record:7'))
+
+    active = _events("EXIT_SOFT_STOP", "REGULAR")[0]
+    retired = {
+        **active,
+        "path_id": "EXIT_BAD_ENTRY_REFINED",
+        "prompt_version": "holding_path_vote_v10",
+    }
+    path = tmp_path / "history.jsonl"
+    path.write_text(json.dumps(retired) + "\n" + json.dumps(active) + "\n")
+    before = path.read_bytes()
+    assert list(iter_path_events_file(path, "record:7")) == [active]
+    assert path.read_bytes() == before
+    retired["prompt_version"] = PATH_PROMPT_VERSION
+    path.write_text(json.dumps(retired) + "\n")
+    with pytest.raises(ValueError, match="contract_corrupt"):
+        list(iter_path_events_file(path, "record:7"))
 
 
-@pytest.mark.parametrize('fault', ['none','main_prefix','record_prefix','cf_prefix','alternative_prefix','different_id',
-    'manual_owner','retired_owner','missing_owner','reference_id','symbol','management_conflict','management_type',
-    'wrong_date','cost_gap','non_main_trade','vote_source_id'])
-def test_frozen_completed_native_identity_preserves_main_source_and_exclusions(tmp_path,fault):
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "none",
+        "main_prefix",
+        "record_prefix",
+        "cf_prefix",
+        "alternative_prefix",
+        "different_id",
+        "manual_owner",
+        "retired_owner",
+        "missing_owner",
+        "reference_id",
+        "symbol",
+        "management_conflict",
+        "management_type",
+        "wrong_date",
+        "cost_gap",
+        "non_main_trade",
+        "vote_source_id",
+    ],
+)
+def test_frozen_completed_native_identity_preserves_main_source_and_exclusions(
+    tmp_path, fault
+):
     from src.engine.lifecycle import research_storage as storage
     from src.engine.scalping.universal_trailing_replay import completed_sources
-    from src.engine.scalping.holding_path_vote_replay import freeze_replay_trade,summarize_frozen_holding_path_votes
-    from src.engine.scalping.pre_submit_delay_initial_policy import digest,_atomic
-    trade=dict(id=49267,code='034020',main_automatic_management_allowed=False,
-        rec_date='2026-10-16',completion_observed_date='2026-10-16',status='COMPLETED',strategy='SCALPING',
-        profit_rate=.2,strict_completion_status='eligible',strict_completion_reasons=[],entry_mode='normal',
-        terminal_population_scope='real_record_bound',sell_quantity_conserved=True,terminal_profit_rate_reconciled=True,
-        realized_pnl_krw_source='broker_actual_fee_reconciled',realized_pnl_krw=100,
-        broker_actual_cost_observed=True,broker_actual_fees_taxes_krw=20,
-        exact_sell_fill_time='2026-10-16T10:01:00+09:00')
-    position=completed_sources([trade])[0][0]
-    position.update(symbol='034020',source_reference=dict(id='49267'))
-    if fault in {'main_prefix','record_prefix','cf_prefix','alternative_prefix'}:
-        position['position_key']=fault.removesuffix('_prefix')+':49267'
-    elif fault=='different_id':position['position_key']='49268'
-    elif fault=='manual_owner':position['owner']='manual_operator'
-    elif fault=='retired_owner':position['owner']='episode'
-    elif fault=='missing_owner':position.pop('owner')
-    elif fault=='reference_id':position['source_reference']['id']='49268'
-    elif fault=='symbol':position['symbol']='005930'
-    elif fault=='management_conflict':position['automatic_management_allowed']=True
-    elif fault=='management_type':position['automatic_management_allowed']='false'
-    elif fault=='wrong_date':trade['rec_date']='2026-06-04'
-    elif fault=='cost_gap':trade['broker_actual_cost_observed']=False
-    elif fault=='non_main_trade':trade['strategy']='SWING'
-    frozen=freeze_replay_trade(trade,tmp_path,tmp_path,{})
-    if fault=='vote_source_id':
-        frozen['votes']=dict(status='source_bound',original_position_key='record:49268')
-    position['holding_path_diagnostic_ref']=storage.write_tree(tmp_path,[frozen])
-    part=dict(positions=[position]);part['artifact_sha256']=digest(part);_atomic(tmp_path/'position.json',part)
-    result=summarize_frozen_holding_path_votes(tmp_path,storage.write_tree(tmp_path,[dict(path='position.json')]),
-        model='gpt-5.4-nano',clean_start='2026-06-05')
-    assert result['strict_population_count']==int(fault=='none')
-    assert result['selected_policy'] is None and result['allowed_runtime_apply'] is False
-    assert result['cost_after_paired_ev_krw'] is None
-    gaps=result['partition_excluded_by_position_id'].get('49267',[])
-    if fault=='none':
-        assert result['partition_excluded_by_position_id']=={}
-        assert result['excluded_by_position_id']['49267']==['vote_ledger_missing','path_signal_receipt_missing']
-    elif fault=='wrong_date':assert 'outside_clean_entry_window' in gaps
-    elif fault=='cost_gap':assert 'source_gap_broker_actual_cost_missing' in gaps
-    elif fault=='non_main_trade':assert 'completed_trade_invalid' in gaps
-    elif fault=='vote_source_id':assert gaps==['frozen_vote_source_identity_mismatch']
-    else:assert gaps==['frozen_vote_position_identity_mismatch']
+    from src.engine.scalping.holding_path_vote_replay import (
+        freeze_replay_trade,
+        summarize_frozen_holding_path_votes,
+    )
+    from src.engine.scalping.pre_submit_delay_initial_policy import digest, _atomic
+
+    trade = dict(
+        id=49267,
+        code="034020",
+        main_automatic_management_allowed=False,
+        rec_date="2026-10-16",
+        completion_observed_date="2026-10-16",
+        status="COMPLETED",
+        strategy="SCALPING",
+        profit_rate=0.2,
+        strict_completion_status="eligible",
+        strict_completion_reasons=[],
+        entry_mode="normal",
+        terminal_population_scope="real_record_bound",
+        sell_quantity_conserved=True,
+        terminal_profit_rate_reconciled=True,
+        realized_pnl_krw_source="broker_actual_fee_reconciled",
+        realized_pnl_krw=100,
+        broker_actual_cost_observed=True,
+        broker_actual_fees_taxes_krw=20,
+        exact_sell_fill_time="2026-10-16T10:01:00+09:00",
+    )
+    position = completed_sources([trade])[0][0]
+    position.update(symbol="034020", source_reference=dict(id="49267"))
+    if fault in {"main_prefix", "record_prefix", "cf_prefix", "alternative_prefix"}:
+        position["position_key"] = fault.removesuffix("_prefix") + ":49267"
+    elif fault == "different_id":
+        position["position_key"] = "49268"
+    elif fault == "manual_owner":
+        position["owner"] = "manual_operator"
+    elif fault == "retired_owner":
+        position["owner"] = "episode"
+    elif fault == "missing_owner":
+        position.pop("owner")
+    elif fault == "reference_id":
+        position["source_reference"]["id"] = "49268"
+    elif fault == "symbol":
+        position["symbol"] = "005930"
+    elif fault == "management_conflict":
+        position["automatic_management_allowed"] = True
+    elif fault == "management_type":
+        position["automatic_management_allowed"] = "false"
+    elif fault == "wrong_date":
+        trade["rec_date"] = "2026-06-04"
+    elif fault == "cost_gap":
+        trade["broker_actual_cost_observed"] = False
+    elif fault == "non_main_trade":
+        trade["strategy"] = "SWING"
+    frozen = freeze_replay_trade(trade, tmp_path, tmp_path, {})
+    if fault == "vote_source_id":
+        frozen["votes"] = dict(
+            status="source_bound", original_position_key="record:49268"
+        )
+    position["holding_path_diagnostic_ref"] = storage.write_tree(tmp_path, [frozen])
+    part = dict(positions=[position])
+    part["artifact_sha256"] = digest(part)
+    _atomic(tmp_path / "position.json", part)
+    result = summarize_frozen_holding_path_votes(
+        tmp_path,
+        storage.write_tree(tmp_path, [dict(path="position.json")]),
+        model="gpt-5.4-nano",
+        clean_start="2026-06-05",
+    )
+    assert result["strict_population_count"] == int(fault == "none")
+    assert (
+        result["selected_policy"] is None and result["allowed_runtime_apply"] is False
+    )
+    assert result["cost_after_paired_ev_krw"] is None
+    gaps = result["partition_excluded_by_position_id"].get("49267", [])
+    if fault == "none":
+        assert result["partition_excluded_by_position_id"] == {}
+        assert result["excluded_by_position_id"]["49267"] == [
+            "vote_ledger_missing",
+            "path_signal_receipt_missing",
+        ]
+    elif fault == "wrong_date":
+        assert "outside_clean_entry_window" in gaps
+    elif fault == "cost_gap":
+        assert "source_gap_broker_actual_cost_missing" in gaps
+    elif fault == "non_main_trade":
+        assert "completed_trade_invalid" in gaps
+    elif fault == "vote_source_id":
+        assert gaps == ["frozen_vote_source_identity_mismatch"]
+    else:
+        assert gaps == ["frozen_vote_position_identity_mismatch"]

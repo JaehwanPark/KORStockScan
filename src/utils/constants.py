@@ -861,7 +861,9 @@ class TradingConfig:
     SCALP_TRAILING_LIMIT_STRONG: float = (
         0.8  # 💡 [신규] strong holding score일 때 허용하는 고점 대비 눌림폭 (%)
     )
-    SCALP_TRAILING_LIMIT_WEAK: float = 0.4  # 💡 [신규] strong holding score가 아니면 타이트하게 끊어내는 고점 대비 눌림폭 (%)
+    SCALP_TRAILING_LIMIT_WEAK: float = (
+        0.4  # 💡 [신규] strong holding score가 아니면 타이트하게 끊어내는 고점 대비 눌림폭 (%)
+    )
     SCALP_PROTECT_TRAILING_SMOOTH_ENABLED: bool = (
         True  # 보호 트레일링은 단일 tick 대신 평탄화 이탈 확인
     )
@@ -2663,9 +2665,7 @@ def _build_trading_rules() -> TradingConfig:
     env_scalp_trailing_strong_ai_score = _env_int(
         "KORSTOCKSCAN_SCALP_TRAILING_STRONG_AI_SCORE"
     )
-    env_scalp_trailing_limit_weak = _env_float(
-        "KORSTOCKSCAN_SCALP_TRAILING_LIMIT_WEAK"
-    )
+    env_scalp_trailing_limit_weak = _env_float("KORSTOCKSCAN_SCALP_TRAILING_LIMIT_WEAK")
     env_scalp_trailing_limit_strong = _env_float(
         "KORSTOCKSCAN_SCALP_TRAILING_LIMIT_STRONG"
     )
@@ -5303,12 +5303,24 @@ def _build_trading_rules() -> TradingConfig:
     env_openai_holding_flow_timeout_ms = _env_int(
         "KORSTOCKSCAN_OPENAI_HOLDING_FLOW_TIMEOUT_MS"
     )
-    env_openai_realtime_report_model = _env_str("KORSTOCKSCAN_OPENAI_REALTIME_REPORT_MODEL")
-    env_openai_swing_analysis_model = _env_str("KORSTOCKSCAN_OPENAI_SWING_ANALYSIS_MODEL")
-    env_openai_scalping_shared_model = _env_str("KORSTOCKSCAN_OPENAI_SCALPING_SHARED_MODEL")
-    env_openai_watching_shadow_model = _env_str("KORSTOCKSCAN_OPENAI_WATCHING_SHADOW_MODEL")
-    env_openai_gatekeeper_shadow_model = _env_str("KORSTOCKSCAN_OPENAI_GATEKEEPER_SHADOW_MODEL")
-    env_openai_holding_exit_vote_model = _env_str("KORSTOCKSCAN_OPENAI_HOLDING_EXIT_VOTE_MODEL")
+    env_openai_realtime_report_model = _env_str(
+        "KORSTOCKSCAN_OPENAI_REALTIME_REPORT_MODEL"
+    )
+    env_openai_swing_analysis_model = _env_str(
+        "KORSTOCKSCAN_OPENAI_SWING_ANALYSIS_MODEL"
+    )
+    env_openai_scalping_shared_model = _env_str(
+        "KORSTOCKSCAN_OPENAI_SCALPING_SHARED_MODEL"
+    )
+    env_openai_watching_shadow_model = _env_str(
+        "KORSTOCKSCAN_OPENAI_WATCHING_SHADOW_MODEL"
+    )
+    env_openai_gatekeeper_shadow_model = _env_str(
+        "KORSTOCKSCAN_OPENAI_GATEKEEPER_SHADOW_MODEL"
+    )
+    env_openai_holding_exit_vote_model = _env_str(
+        "KORSTOCKSCAN_OPENAI_HOLDING_EXIT_VOTE_MODEL"
+    )
     env_openai_holding_flow_model = _env_str("KORSTOCKSCAN_OPENAI_HOLDING_FLOW_MODEL")
     env_openai_primary_bedrock_fallback_endpoints = _env_csv_tuple(
         "KORSTOCKSCAN_OPENAI_PRIMARY_BEDROCK_FALLBACK_ENDPOINTS"
@@ -6190,7 +6202,11 @@ def _build_trading_rules() -> TradingConfig:
                 if env_scalp_preset_hard_stop_emergency is not None
                 else config.SCALP_PRESET_HARD_STOP_EMERGENCY_PCT
             ),
-            SCALP_PRESET_HARD_STOP_GRACE_SEC=(max(0, env_scalp_preset_grace) if env_scalp_preset_grace is not None else config.SCALP_PRESET_HARD_STOP_GRACE_SEC),
+            SCALP_PRESET_HARD_STOP_GRACE_SEC=(
+                max(0, env_scalp_preset_grace)
+                if env_scalp_preset_grace is not None
+                else config.SCALP_PRESET_HARD_STOP_GRACE_SEC
+            ),
             KOSDAQ_STOP=(
                 env_kosdaq_stop if env_kosdaq_stop is not None else config.KOSDAQ_STOP
             ),

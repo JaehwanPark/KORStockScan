@@ -23,7 +23,9 @@ from src.engine.scalping.opening_rotation import (
 from src.engine import sniper_state_handlers as handlers
 from src.engine import sniper_execution_receipts
 from src.engine import sniper_sync
-from src.engine.lifecycle.archive import opening_rotation_backtest_readers as rotation_backtest
+from src.engine.lifecycle.archive import (
+    opening_rotation_backtest_readers as rotation_backtest,
+)
 from src.engine.scalping.scanner_runtime_scheduler import ScannerGeneration
 from src.utils import kiwoom_utils
 
@@ -42,7 +44,9 @@ def _active_krx_opening_policy_for_runtime_unit_tests(monkeypatch):
     """Keep legacy unit fixtures explicit about the reviewed PREOPEN state."""
 
     monkeypatch.setattr(handlers, "OPENING_ROTATION_RETIRED", False)
-    monkeypatch.setattr(handlers, "evaluate_opening_rotation_entry", _evaluate_entry_impl)
+    monkeypatch.setattr(
+        handlers, "evaluate_opening_rotation_entry", _evaluate_entry_impl
+    )
     monkeypatch.setattr(handlers, "evaluate_opening_rotation_exit", evaluate_exit)
     monkeypatch.setattr(
         handlers,
@@ -70,8 +74,6 @@ def _active_krx_opening_policy_for_runtime_unit_tests(monkeypatch):
         "_scanner_runtime_event_venue_fields",
         _runtime_venue_fields,
     )
-
-
 
 
 def _packet(price: int) -> dict:
@@ -991,8 +993,6 @@ def test_opening_rotation_ttl_sweep_backfills_missing_claim_time(monkeypatch):
     assert result["eligible_count"] == 0
     assert result["expired_count"] == 0
     assert stock["opening_rotation_watch_slot_claimed_at_epoch"] == now_ts
-
-
 
 
 def test_final_submit_rechecks_opening_owner_against_rising_missed_race(monkeypatch):
@@ -3424,8 +3424,6 @@ def test_holding_common_trailing_does_not_overwrite_an_existing_exit_owner():
     ) < (holding_source.index('exit_rule = "protect_trailing_stop"'))
 
 
-
-
 def test_opening_slot_release_converges_when_provenance_emit_fails(monkeypatch):
     stock = {
         "status": "WATCHING",
@@ -3452,8 +3450,6 @@ def test_opening_slot_release_converges_when_provenance_emit_fails(monkeypatch):
     assert "opening_rotation_watch_slot_promotion_id" not in stock
     assert "opening_rotation_watch_slot_claimed_at_epoch" not in stock
     assert errors and "provenance emit failed" in errors[-1]
-
-
 
 
 def test_explicit_rising_missed_class_alone_does_not_exclude_opening():
@@ -3806,14 +3802,6 @@ def _install_opening_sell_owner(monkeypatch, stock, *, target_id):
     )
 
 
-
-
-
-
-
-
-
-
 def test_holding_ai_handoff_is_called_once_and_cannot_choose_buy(monkeypatch):
     calls = []
     stock = {
@@ -3932,18 +3920,36 @@ def test_ratchet_is_shadow_only_and_recorded_once_on_fresh_trusted_trend(
     assert len(logs) == 1
     assert logs[0][1]["real_order_changed"] is False
 
-from src.engine.lifecycle.archive.opening_rotation_readers import EntryConfig,evaluate_entry as _evaluate_entry_impl,evaluate_exit
+
+from src.engine.lifecycle.archive.opening_rotation_readers import (
+    EntryConfig,
+    evaluate_entry as _evaluate_entry_impl,
+    evaluate_exit,
+)
 
 
 @pytest.mark.parametrize("filled_qty", [0, 1, 2])
-def test_retired_rotation_target_never_submits_or_rewrites_manual_custody(monkeypatch, filled_qty):
+def test_retired_rotation_target_never_submits_or_rewrites_manual_custody(
+    monkeypatch, filled_qty
+):
     import copy
-    stock = dict(position_tag=POSITION_TAG, buy_qty=filled_qty,
-        trailing_stop_price=10100, opening_rotation_profit_target_order_no="historical")
+
+    stock = dict(
+        position_tag=POSITION_TAG,
+        buy_qty=filled_qty,
+        trailing_stop_price=10100,
+        opening_rotation_profit_target_order_no="historical",
+    )
     before = copy.deepcopy(stock)
+
     def forbidden(**kwargs):
         raise AssertionError("retired opening target attempted automatic SELL")
+
     monkeypatch.setattr("src.engine.kiwoom_orders.send_sell_order_market", forbidden)
-    assert sniper_execution_receipts._submit_opening_rotation_profit_order(
-        stock, code="005930", buy_fill_price=10000, filled_qty=filled_qty) is False
+    assert (
+        sniper_execution_receipts._submit_opening_rotation_profit_order(
+            stock, code="005930", buy_fill_price=10000, filled_qty=filled_qty
+        )
+        is False
+    )
     assert stock == before

@@ -21,29 +21,63 @@ def test_two_scoped_weak_markets_without_weighted_panic_reach_observer(
     # KOSPI is weak by stock breadth; KOSDAQ is weak by index/industries.
     # Their weighted index does not meet the separate composite panic rule.
     rows = [
-        dict(code="001", name="KOSPI", change_pct=0.24, source_market="KOSPI",
-             listed_count=940, fall_count=756, rising_count=146),
-        dict(code="101", name="KOSDAQ", change_pct=-1.67, source_market="KOSDAQ",
-             listed_count=1824, fall_count=1267, rising_count=399),
+        dict(
+            code="001",
+            name="KOSPI",
+            change_pct=0.24,
+            source_market="KOSPI",
+            listed_count=940,
+            fall_count=756,
+            rising_count=146,
+        ),
+        dict(
+            code="101",
+            name="KOSDAQ",
+            change_pct=-1.67,
+            source_market="KOSDAQ",
+            listed_count=1824,
+            fall_count=1267,
+            rising_count=399,
+        ),
     ]
-    rows += [dict(code=str(base + i), name="industry", change_pct=-2.5,
-                  source_market=market)
-             for market, base in (("KOSPI", 1), ("KOSDAQ", 101)) for i in (1, 2, 3)]
+    rows += [
+        dict(code=str(base + i), name="industry", change_pct=-2.5, source_market=market)
+        for market, base in (("KOSPI", 1), ("KOSDAQ", 101))
+        for i in (1, 2, 3)
+    ]
     summary = collector.summarize_breadth(rows)
     assert summary["risk_off_advisory"] is False
     assert summary["affected_markets"] == ["KOSDAQ", "KOSPI"]
     report, state = tmp_path / "panic.json", tmp_path / "state.json"
     for minute in (0, 2):
-        when = datetime.fromisoformat("2026-08-28T10:00:00+09:00") + timedelta(minutes=minute)
+        when = datetime.fromisoformat("2026-08-28T10:00:00+09:00") + timedelta(
+            minutes=minute
+        )
         observation = collector.build_market_weakness_observation(
-            summary, target_date="2026-08-28", as_of=when.isoformat(),
+            summary,
+            target_date="2026-08-28",
+            as_of=when.isoformat(),
             source_quality_status=source_status,
         )
-        assert observation["raw_state"] == ("BROAD_WEAKNESS" if source_status == "ok" else "UNKNOWN")
-        report.write_text(json.dumps(dict(target_date="2026-08-28", as_of=(when + timedelta(seconds=age)).isoformat(),
-                                         market_weakness_observation=observation)))
-        notifier.notify_from_report(report, kind="market_weakness", state_file=state,
-                                    send_enabled=False, now_ts=when.timestamp() + age)
+        assert observation["raw_state"] == (
+            "BROAD_WEAKNESS" if source_status == "ok" else "UNKNOWN"
+        )
+        report.write_text(
+            json.dumps(
+                dict(
+                    target_date="2026-08-28",
+                    as_of=(when + timedelta(seconds=age)).isoformat(),
+                    market_weakness_observation=observation,
+                )
+            )
+        )
+        notifier.notify_from_report(
+            report,
+            kind="market_weakness",
+            state_file=state,
+            send_enabled=False,
+            now_ts=when.timestamp() + age,
+        )
     saved = json.loads(state.read_text())
     healthy = source_status == "ok" and age == 0
     assert saved["market_weakness_observer_health"]["ready"] is healthy
@@ -578,14 +612,19 @@ def test_market_weakness_observation_requires_recovery_margin():
     assert contract["required_outcomes"] == []
     assert "episode_entry_block" in recovered["forbidden_uses"]
     original_identity = recovered["observation_id"]
-    contract.update(status="source_only_counterfactual_collection",
-                    owner_isolation_required=["main", "episode"],
-                    candidate_arms=["skip_new_entry_during_confirmed_weakness"],
-                    required_outcomes=["cost_adjusted_ev_pct"])
+    contract.update(
+        status="source_only_counterfactual_collection",
+        owner_isolation_required=["main", "episode"],
+        candidate_arms=["skip_new_entry_during_confirmed_weakness"],
+        required_outcomes=["cost_adjusted_ev_pct"],
+    )
     assert collector.market_weakness_observation_contract_errors(recovered) == []
     assert collector.market_weakness_observation_id(recovered) == original_identity
     contract["status"] = "source_only_observation_no_execution_bridge"
-    assert "observation_only_response_contract_invalid" in collector.market_weakness_observation_contract_errors(recovered)
+    assert (
+        "observation_only_response_contract_invalid"
+        in collector.market_weakness_observation_contract_errors(recovered)
+    )
 
 
 def test_market_weakness_observation_binds_exact_date_reviewed_hysteresis(

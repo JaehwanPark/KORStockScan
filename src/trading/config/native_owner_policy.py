@@ -3,6 +3,7 @@
 Historical automatic-owner receipts remain attributed to their original owner.
 Only native Main intents may create automatic orders after retirement.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -29,6 +30,7 @@ class SymbolOwnerPolicyError(RuntimeError):
 def policy_path(target_date=None) -> Path:
     # Compatibility for callers testing whether custody evidence exists.
     from src.trading.order.owner_custody_registry import registry_path
+
     return registry_path()
 
 
@@ -61,7 +63,8 @@ class NativeOwnerDecision:
 
     def owner_allowed(self, owner, *, new_entry=True):
         return str(owner or "").strip().lower() == "main_scalping" and (
-            not self.policy_present or self.migration_completed)
+            not self.policy_present or self.migration_completed
+        )
 
     def as_log_fields(self):
         return {
@@ -73,15 +76,22 @@ class NativeOwnerDecision:
             "symbol_owner_policy_migration_completed": self.migration_completed,
             "symbol_owner_policy_reason": self.reason,
             "symbol_owner_policy_source": self.source_path,
-            "symbol_owner_policy_migration_registry_tail_hash": self.migration_registry_tail_hash or "-",
-            "symbol_owner_policy_activation_event_hash": self.activation_event_hash or "-",
-            "symbol_owner_policy_entry_authority_hash": self.entry_authority_hash or "-",
+            "symbol_owner_policy_migration_registry_tail_hash": self.migration_registry_tail_hash
+            or "-",
+            "symbol_owner_policy_activation_event_hash": self.activation_event_hash
+            or "-",
+            "symbol_owner_policy_entry_authority_hash": self.entry_authority_hash
+            or "-",
             "symbol_owner_policy_broker_snapshot_sha256": "-",
         }
 
 
 def resolve_symbol_owner_policy(symbol, *, target_date=None):
-    from src.trading.order.owner_custody_registry import default_order_owner_registry, OwnerRegistryError
+    from src.trading.order.owner_custody_registry import (
+        default_order_owner_registry,
+        OwnerRegistryError,
+    )
+
     try:
         status = default_order_owner_registry().native_owner_contract(symbol)
     except OwnerRegistryError as exc:
@@ -92,18 +102,35 @@ def resolve_symbol_owner_policy(symbol, *, target_date=None):
     day = date.fromisoformat(str(day)).isoformat()
     if status["registered"] and not status["disposition_hash"]:
         raise SymbolOwnerPolicyError("native_owner_management_disposition_missing")
-    binding = {"schema": NATIVE_POLICY_ID, "account_key": status["account_key"],
-               "symbol": normalize_symbol(symbol), "disposition_hash": status["disposition_hash"],
-               "effective_at": status["effective_at"]}
-    digest = hashlib.sha256(json.dumps(binding, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    binding = {
+        "schema": NATIVE_POLICY_ID,
+        "account_key": status["account_key"],
+        "symbol": normalize_symbol(symbol),
+        "disposition_hash": status["disposition_hash"],
+        "effective_at": status["effective_at"],
+    }
+    digest = hashlib.sha256(
+        json.dumps(binding, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
     return NativeOwnerDecision(
-        symbol=binding["symbol"], target_date=day, mode=COEXIST_ENTRY_ENABLED,
+        symbol=binding["symbol"],
+        target_date=day,
+        mode=COEXIST_ENTRY_ENABLED,
         allowed_owners=("main_scalping", "manual_operator"),
-        migration_completed=bool(status["disposition_hash"]), policy_present=status["registered"],
-        policy_id=NATIVE_POLICY_ID, policy_hash=digest, source_path=status["registry_path"],
-        reason="native_main_manual_resolved" if status["registered"] else "exact_date_policy_absent",
-        activation_event_hash=status["disposition_hash"], account_key=status["account_key"],
-        effective_at=status["effective_at"], entry_authority_hash=digest,
+        migration_completed=bool(status["disposition_hash"]),
+        policy_present=status["registered"],
+        policy_id=NATIVE_POLICY_ID,
+        policy_hash=digest,
+        source_path=status["registry_path"],
+        reason=(
+            "native_main_manual_resolved"
+            if status["registered"]
+            else "exact_date_policy_absent"
+        ),
+        activation_event_hash=status["disposition_hash"],
+        account_key=status["account_key"],
+        effective_at=status["effective_at"],
+        entry_authority_hash=digest,
     )
 
 
@@ -113,17 +140,22 @@ def historical_single_owner_binding(fields, *, observed_at):
     This proves only the source contract. Consumers still verify native date,
     order/quantity and absence of a conflicting frozen journal intent.
     """
-    if (fields.get("buy_registry_mode") != "single_owner_unregistered"
+    if (
+        fields.get("buy_registry_mode") != "single_owner_unregistered"
         or str(fields.get("buy_owner_policy_selected")).lower() != "false"
         or str(fields.get("buy_owner_policy_coexistence")).lower() != "false"
-        or fields.get("buy_owner_policy_reason") != "exact_date_policy_missing_legacy_exclusion_retained"
-        or str(fields.get("buy_owner_policy_hash") or "") not in {"", "-"}):
+        or fields.get("buy_owner_policy_reason")
+        != "exact_date_policy_missing_legacy_exclusion_retained"
+        or str(fields.get("buy_owner_policy_hash") or "") not in {"", "-"}
+    ):
         return False
     try:
         stamp = datetime.fromisoformat(str(observed_at))
         if stamp.tzinfo is None:
             stamp = stamp.replace(tzinfo=KST)
-        if stamp.astimezone(KST).date().isoformat() != fields.get("buy_owner_policy_date"):
+        if stamp.astimezone(KST).date().isoformat() != fields.get(
+            "buy_owner_policy_date"
+        ):
             return False
         # The dated original receipt is archive evidence. Never consult today's
         # registry or use this historical shape for post-retirement submissions.

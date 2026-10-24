@@ -17,7 +17,12 @@ from src.engine.scalping.initial_quantity_type import QUANTITY_TYPES, kst_timest
 
 MAX_BUNDLE_WAIT_SEC = 1200
 SCHEDULE_SCHEMA = "initial_quantity_bundle_timeout_schedule_v1"
-_TERMINAL_STATES = {"TERMINAL_FILLED", "TERMINAL_CANCELLED", "TERMINAL_SKIPPED", "TERMINAL_NOT_SENT"}
+_TERMINAL_STATES = {
+    "TERMINAL_FILLED",
+    "TERMINAL_CANCELLED",
+    "TERMINAL_SKIPPED",
+    "TERMINAL_NOT_SENT",
+}
 _OPEN_STATES = {"OPEN", "PARTIAL", "CANCEL_REQUESTED"}
 
 
@@ -29,29 +34,35 @@ def _identity(value: Any) -> bool:
     return isinstance(value, str) and bool(value.strip())
 
 
-def _terminal_proof_valid(item: dict[str, Any], state: str, slot: dict[str, Any],
-                          now_epoch: float) -> bool:
+def _terminal_proof_valid(
+    item: dict[str, Any], state: str, slot: dict[str, Any], now_epoch: float
+) -> bool:
     confirmed_at = item.get("terminal_confirmed_at_epoch")
-    if (item.get("terminal_confirmed") is not True
-            or isinstance(confirmed_at, bool)
-            or not isinstance(confirmed_at, (int, float))
-            or not math.isfinite(confirmed_at)
-            or not slot["slot_start_epoch"] <= confirmed_at <= now_epoch):
+    if (
+        item.get("terminal_confirmed") is not True
+        or isinstance(confirmed_at, bool)
+        or not isinstance(confirmed_at, (int, float))
+        or not math.isfinite(confirmed_at)
+        or not slot["slot_start_epoch"] <= confirmed_at <= now_epoch
+    ):
         return False
     if state == "TERMINAL_SKIPPED":
-        return bool(confirmed_at >= slot["cancel_request_by_epoch"]
-                and item.get("order_absence_confirmed") is True
-                and _identity(item.get("order_absence_receipt_id"))
-                and _identity(item.get("owner_registry_receipt_id"))
-                and not str(item.get("broker_order_no") or "").strip()
-                and item.get("skip_reason") == "insufficient_time_for_cancel_confirmation")
+        return bool(
+            confirmed_at >= slot["cancel_request_by_epoch"]
+            and item.get("order_absence_confirmed") is True
+            and _identity(item.get("order_absence_receipt_id"))
+            and _identity(item.get("owner_registry_receipt_id"))
+            and not str(item.get("broker_order_no") or "").strip()
+            and item.get("skip_reason") == "insufficient_time_for_cancel_confirmation"
+        )
     if state == "TERMINAL_NOT_SENT":
         proof = item.get("not_sent_receipt")
         if not isinstance(proof, dict):
             return False
         try:
-            proof_digest = _digest({key: value for key, value in proof.items()
-                                   if key != "content_sha256"})
+            proof_digest = _digest(
+                {key: value for key, value in proof.items() if key != "content_sha256"}
+            )
         except (TypeError, ValueError):
             return False
         return bool(
@@ -63,8 +74,10 @@ def _terminal_proof_valid(item: dict[str, Any], state: str, slot: dict[str, Any]
             and proof.get("confirmed_at_epoch") == confirmed_at
             and _identity(proof.get("reason"))
             and _identity(proof.get("owner_client_intent_id"))
-            and proof.get("owner_client_intent_id") == item.get("owner_client_intent_id")
-            and not item.get("broker_order_no"))
+            and proof.get("owner_client_intent_id")
+            == item.get("owner_client_intent_id")
+            and not item.get("broker_order_no")
+        )
     ordered = item.get("ordered_qty")
     filled = item.get("filled_qty")
     cancelled = item.get("cancelled_qty")
@@ -77,22 +90,35 @@ def _terminal_proof_valid(item: dict[str, Any], state: str, slot: dict[str, Any]
         and item["broker_unfilled_qty"] == 0
         and item.get("owner_registry_terminal") is True
         and item.get("account_position_reconciled") is True
-        and _nonnegative_int(ordered) and ordered > 0
-        and _nonnegative_int(filled) and _nonnegative_int(cancelled)
+        and _nonnegative_int(ordered)
+        and ordered > 0
+        and _nonnegative_int(filled)
+        and _nonnegative_int(cancelled)
         and filled + cancelled == ordered
-        and ((state == "TERMINAL_FILLED" and filled == ordered)
-             or (state == "TERMINAL_CANCELLED" and cancelled > 0)))
+        and (
+            (state == "TERMINAL_FILLED" and filled == ordered)
+            or (state == "TERMINAL_CANCELLED" and cancelled > 0)
+        )
+    )
 
 
 def _digest(payload: dict[str, Any]) -> str:
-    return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":"),
-                                     ensure_ascii=True).encode("ascii")).hexdigest()
+    return hashlib.sha256(
+        json.dumps(
+            payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+        ).encode("ascii")
+    ).hexdigest()
 
 
 def build_bundle_timeout_schedule(
-    *, quantity_type: str, policy_sha256: str, decision_at: str,
+    *,
+    quantity_type: str,
+    policy_sha256: str,
+    decision_at: str,
     order_start_at: str,
-    total_wait_sec: int, leg_count: int, cancel_confirm_reserve_sec: int,
+    total_wait_sec: int,
+    leg_count: int,
+    cancel_confirm_reserve_sec: int,
 ) -> dict[str, Any]:
     """Partition a bounded post-start budget into sequential leg slots."""
     decision = kst_timestamp(decision_at)
@@ -103,16 +129,24 @@ def build_bundle_timeout_schedule(
     except ValueError:
         decision_source_clock = None
         start_source_clock = None
-    if (quantity_type not in QUANTITY_TYPES
-            or not re.fullmatch(r"[0-9a-f]{64}", str(policy_sha256 or ""))
-            or decision is None or start is None or start < decision
-            or decision_source_clock is None or decision_source_clock.tzinfo is None
-            or start_source_clock is None or start_source_clock.tzinfo is None
-            or type(total_wait_sec) is not int or not 1 <= total_wait_sec <= MAX_BUNDLE_WAIT_SEC
-            or type(leg_count) is not int or not 1 <= leg_count <= 4
-            or type(cancel_confirm_reserve_sec) is not int
-            or cancel_confirm_reserve_sec < 1
-            or total_wait_sec // leg_count <= cancel_confirm_reserve_sec):
+    if (
+        quantity_type not in QUANTITY_TYPES
+        or not re.fullmatch(r"[0-9a-f]{64}", str(policy_sha256 or ""))
+        or decision is None
+        or start is None
+        or start < decision
+        or decision_source_clock is None
+        or decision_source_clock.tzinfo is None
+        or start_source_clock is None
+        or start_source_clock.tzinfo is None
+        or type(total_wait_sec) is not int
+        or not 1 <= total_wait_sec <= MAX_BUNDLE_WAIT_SEC
+        or type(leg_count) is not int
+        or not 1 <= leg_count <= 4
+        or type(cancel_confirm_reserve_sec) is not int
+        or cancel_confirm_reserve_sec < 1
+        or total_wait_sec // leg_count <= cancel_confirm_reserve_sec
+    ):
         raise ValueError("initial_quantity_timeout_contract_invalid")
     slot_sec = total_wait_sec / leg_count
     start_epoch = start.timestamp()
@@ -123,12 +157,14 @@ def build_bundle_timeout_schedule(
         slot_start = start_epoch + elapsed_sec
         elapsed_sec += whole_sec + (1 if index < extra_sec else 0)
         slot_end = start_epoch + elapsed_sec
-        slots.append({
-            "leg_index": index,
-            "slot_start_epoch": slot_start,
-            "cancel_request_by_epoch": slot_end - cancel_confirm_reserve_sec,
-            "terminal_confirm_by_epoch": slot_end,
-        })
+        slots.append(
+            {
+                "leg_index": index,
+                "slot_start_epoch": slot_start,
+                "cancel_request_by_epoch": slot_end - cancel_confirm_reserve_sec,
+                "terminal_confirm_by_epoch": slot_end,
+            }
+        )
     body = {
         "schema": SCHEDULE_SCHEMA,
         "quantity_type": quantity_type,
@@ -168,19 +204,24 @@ def timeout_schedule_valid(schedule: Any) -> bool:
 
 
 def next_bundle_timeout_action(
-    schedule: dict[str, Any], leg_states: list[dict[str, Any]], *, now_epoch: float,
+    schedule: dict[str, Any],
+    leg_states: list[dict[str, Any]],
+    *,
+    now_epoch: float,
 ) -> dict[str, Any]:
     """Require terminal proof before a later leg may be submitted.
 
     A late broker confirmation can exceed the target deadline externally. In
     that case this gate remains in RECONCILE and forbids successor BUY orders.
     """
-    if (not timeout_schedule_valid(schedule)
-            or not isinstance(leg_states, list)
-            or len(leg_states) != schedule["leg_count"]
-            or isinstance(now_epoch, bool)
-            or not isinstance(now_epoch, (int, float))
-            or not math.isfinite(now_epoch)):
+    if (
+        not timeout_schedule_valid(schedule)
+        or not isinstance(leg_states, list)
+        or len(leg_states) != schedule["leg_count"]
+        or isinstance(now_epoch, bool)
+        or not isinstance(now_epoch, (int, float))
+        or not math.isfinite(now_epoch)
+    ):
         return {"action": "BLOCK_INVALID_TIMEOUT_CONTRACT"}
     if not all(isinstance(item, dict) for item in leg_states):
         return {"action": "BLOCK_INVALID_LEG_STATE"}
@@ -188,12 +229,17 @@ def next_bundle_timeout_action(
     if leg_states[0].get("state") == "TERMINAL_NOT_SENT":
         # A proven-unsent initial leg closes the whole attempt. Later slots do
         # not acquire authority to turn that failed initial entry into a BUY.
-        if (any(item.get("state") != "NOT_SUBMITTED" for item in leg_states[1:])
-                or not _terminal_proof_valid(leg_states[0], "TERMINAL_NOT_SENT",
-                                             schedule["slots"][0], now_epoch)):
+        if any(
+            item.get("state") != "NOT_SUBMITTED" for item in leg_states[1:]
+        ) or not _terminal_proof_valid(
+            leg_states[0], "TERMINAL_NOT_SENT", schedule["slots"][0], now_epoch
+        ):
             return {"action": "BLOCK_INVALID_TIMEOUT_CONTRACT"}
-        return {"action": "DONE", "reason": "initial_entry_known_not_sent",
-                "budget_breached": overdue}
+        return {
+            "action": "DONE",
+            "reason": "initial_entry_known_not_sent",
+            "budget_breached": overdue,
+        }
     for index, (slot, item) in enumerate(zip(schedule["slots"], leg_states)):
         if not isinstance(item, dict):
             return {"action": "BLOCK_INVALID_LEG_STATE", "leg_index": index}
@@ -202,40 +248,76 @@ def next_bundle_timeout_action(
             return {"action": "BLOCK_INVALID_LEG_STATE", "leg_index": index}
         if state in _TERMINAL_STATES:
             if not _terminal_proof_valid(item, state, slot, now_epoch):
-                return {"action": "RECONCILE", "leg_index": index,
-                        "reason": "terminal_proof_missing", "budget_breached": overdue}
+                return {
+                    "action": "RECONCILE",
+                    "leg_index": index,
+                    "reason": "terminal_proof_missing",
+                    "budget_breached": overdue,
+                }
             confirmed_at = item["terminal_confirmed_at_epoch"]
             if confirmed_at > slot["terminal_confirm_by_epoch"]:
-                return {"action": "BLOCK_LATE_TERMINAL", "leg_index": index,
-                        "reason": "leg_confirmation_exceeded_slot", "budget_breached": overdue}
+                return {
+                    "action": "BLOCK_LATE_TERMINAL",
+                    "leg_index": index,
+                    "reason": "leg_confirmation_exceeded_slot",
+                    "budget_breached": overdue,
+                }
             continue
         if state in _OPEN_STATES and not _identity(item.get("broker_order_no")):
-            return {"action": "RECONCILE", "leg_index": index,
-                    "reason": "broker_order_identity_missing", "budget_breached": overdue}
+            return {
+                "action": "RECONCILE",
+                "leg_index": index,
+                "reason": "broker_order_identity_missing",
+                "budget_breached": overdue,
+            }
         if state == "CANCEL_REQUESTED":
-            return {"action": "RECONCILE", "leg_index": index,
-                    "reason": "cancel_terminal_pending", "budget_breached": overdue}
+            return {
+                "action": "RECONCILE",
+                "leg_index": index,
+                "reason": "cancel_terminal_pending",
+                "budget_breached": overdue,
+            }
         if state in {"SUBMIT_INTENT", "UNCERTAIN"}:
             # A crash or missing broker response after a durable submit intent
             # may still have placed an order. Never classify it as a fresh
             # unsent leg or retry it without exact broker/owner reconciliation.
-            return {"action": "RECONCILE", "leg_index": index,
-                    "reason": "submit_identity_pending", "budget_breached": overdue}
+            return {
+                "action": "RECONCILE",
+                "leg_index": index,
+                "reason": "submit_identity_pending",
+                "budget_breached": overdue,
+            }
         if state in {"OPEN", "PARTIAL"}:
             if now_epoch >= slot["cancel_request_by_epoch"]:
-                return {"action": "CANCEL", "leg_index": index,
-                        "reason": "leg_cancel_request_deadline", "budget_breached": overdue}
-            return {"action": "WAIT", "leg_index": index,
-                    "until_epoch": slot["cancel_request_by_epoch"]}
+                return {
+                    "action": "CANCEL",
+                    "leg_index": index,
+                    "reason": "leg_cancel_request_deadline",
+                    "budget_breached": overdue,
+                }
+            return {
+                "action": "WAIT",
+                "leg_index": index,
+                "until_epoch": slot["cancel_request_by_epoch"],
+            }
         if state != "NOT_SUBMITTED":
             return {"action": "BLOCK_INVALID_LEG_STATE", "leg_index": index}
         if now_epoch < slot["slot_start_epoch"]:
-            return {"action": "WAIT", "leg_index": index,
-                    "until_epoch": slot["slot_start_epoch"]}
+            return {
+                "action": "WAIT",
+                "leg_index": index,
+                "until_epoch": slot["slot_start_epoch"],
+            }
         if now_epoch >= slot["cancel_request_by_epoch"]:
-            return {"action": "SKIP_LEG", "leg_index": index,
-                    "reason": "insufficient_time_for_cancel_confirmation",
-                    "budget_breached": overdue}
-        return {"action": "SUBMIT", "leg_index": index,
-                "submit_before_epoch": slot["cancel_request_by_epoch"]}
+            return {
+                "action": "SKIP_LEG",
+                "leg_index": index,
+                "reason": "insufficient_time_for_cancel_confirmation",
+                "budget_breached": overdue,
+            }
+        return {
+            "action": "SUBMIT",
+            "leg_index": index,
+            "submit_before_epoch": slot["cancel_request_by_epoch"],
+        }
     return {"action": "DONE", "budget_breached": overdue}

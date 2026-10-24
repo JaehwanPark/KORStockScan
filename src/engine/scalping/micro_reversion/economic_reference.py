@@ -1799,55 +1799,86 @@ def publish_canonical_symbol_master(
     from .symbol_master import VerifiedSymbolMaster
 
     target = date.fromisoformat(target_date)
-    if (report.get("schema") != DAILY_RESOLUTION_SCHEMA
-            or report.get("target_date") != target_date
-            or report.get("verified") is not True
-            or report.get("artifact_content_sha256") != content_sha256({
-                key: value for key, value in report.items()
+    if (
+        report.get("schema") != DAILY_RESOLUTION_SCHEMA
+        or report.get("target_date") != target_date
+        or report.get("verified") is not True
+        or report.get("artifact_content_sha256")
+        != content_sha256(
+            {
+                key: value
+                for key, value in report.items()
                 if key != "artifact_content_sha256"
-            })
-            or any(report.get(key) != value for key, value in AUTHORITY_CONTRACT.items())):
+            }
+        )
+        or any(report.get(key) != value for key, value in AUTHORITY_CONTRACT.items())
+    ):
         raise ValueError("symbol_master_publication_daily_report_invalid")
     payload = report.get("canonical_symbol_master_payload")
-    if (not isinstance(payload, dict)
-            or report.get("canonical_symbol_master_payload_sha256") != content_sha256(payload)):
+    if not isinstance(payload, dict) or report.get(
+        "canonical_symbol_master_payload_sha256"
+    ) != content_sha256(payload):
         raise ValueError("symbol_master_publication_payload_binding_invalid")
     master = VerifiedSymbolMaster.from_payload(payload, require_canonical_owner=True)
     source = payload["source_artifacts"][0]
-    if (source.get("source_id") != f"kis-official-common-stock-master-{target_date}"
-            or source.get("effective_from") != target_date
-            or any(record.get("effective_from") != target_date
-                   or not master.lookup(record["symbol"], as_of=target).economic_metadata_allowed
-                   for record in payload["records"])):
+    if (
+        source.get("source_id") != f"kis-official-common-stock-master-{target_date}"
+        or source.get("effective_from") != target_date
+        or any(
+            record.get("effective_from") != target_date
+            or not master.lookup(
+                record["symbol"], as_of=target
+            ).economic_metadata_allowed
+            for record in payload["records"]
+        )
+    ):
         raise ValueError("symbol_master_publication_source_date_invalid")
     source_path = Path(str(source.get("resolved_path") or ""))
-    if (not source_path.is_file() or source_path.is_symlink()
-            or source_path.stat().st_size != source["observed_size_bytes"]
-            or source_path.stat().st_size > 16 * 1024 * 1024):
+    if (
+        not source_path.is_file()
+        or source_path.is_symlink()
+        or source_path.stat().st_size != source["observed_size_bytes"]
+        or source_path.stat().st_size > 16 * 1024 * 1024
+    ):
         raise ValueError("symbol_master_publication_original_source_invalid")
     before = source_path.stat()
     raw = source_path.read_bytes()
     after = source_path.stat()
-    if (hashlib.sha256(raw).hexdigest() != source["observed_sha256"]
-            or any(getattr(before, key) != getattr(after, key) for key in (
-                "st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns"))):
+    if hashlib.sha256(raw).hexdigest() != source["observed_sha256"] or any(
+        getattr(before, key) != getattr(after, key)
+        for key in ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
+    ):
         raise ValueError("symbol_master_publication_original_source_changed")
     original = json.loads(raw)
-    if (not isinstance(original, dict)
-            or original.get("schema") != RAW_SYMBOL_MASTER_SCHEMA
-            or original.get("source_id") != source["source_id"]
-            or not isinstance(original.get("records"), list)
-            or len(original["records"]) != source["record_count"]):
+    if (
+        not isinstance(original, dict)
+        or original.get("schema") != RAW_SYMBOL_MASTER_SCHEMA
+        or original.get("source_id") != source["source_id"]
+        or not isinstance(original.get("records"), list)
+        or len(original["records"]) != source["record_count"]
+    ):
         raise ValueError("symbol_master_publication_original_source_invalid")
-    fields = ("symbol", "listing_market", "instrument_type", "instrument_tax_class",
-              "effective_from", "effective_to")
+    fields = (
+        "symbol",
+        "listing_market",
+        "instrument_type",
+        "instrument_tax_class",
+        "effective_from",
+        "effective_to",
+    )
     original_records = original.get("records")
-    if (not isinstance(original_records, list)
-            or any(not isinstance(row, dict) for row in original_records)
-            or sorted(content_sha256({key: row.get(key) for key in fields})
-                      for row in original_records)
-            != sorted(content_sha256({key: row.get(key) for key in fields})
-                      for row in payload["records"])):
+    if (
+        not isinstance(original_records, list)
+        or any(not isinstance(row, dict) for row in original_records)
+        or sorted(
+            content_sha256({key: row.get(key) for key in fields})
+            for row in original_records
+        )
+        != sorted(
+            content_sha256({key: row.get(key) for key in fields})
+            for row in payload["records"]
+        )
+    ):
         raise ValueError("symbol_master_publication_original_metadata_mismatch")
     destination = Path(directory) / f"micro_reversion_symbol_master_{target_date}.json"
     # A retained canonical generation must agree exactly. Never overwrite an
@@ -1855,23 +1886,32 @@ def publish_canonical_symbol_master(
     import fcntl
     from src.engine.lifecycle.snapshot_archive import present
     from src.utils.jsonl_io import read_json_object_strict
+
     destination.parent.mkdir(parents=True, exist_ok=True)
-    with (destination.parent / f".symbol_master_{target_date}.publication.lock").open("a") as lock:
+    with (destination.parent / f".symbol_master_{target_date}.publication.lock").open(
+        "a"
+    ) as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         if present(destination):
             if read_json_object_strict(destination) != payload:
-                raise ValueError("symbol_master_publication_existing_generation_conflict")
+                raise ValueError(
+                    "symbol_master_publication_existing_generation_conflict"
+                )
             disposition = "verified_existing"
         else:
             atomic_write_json(destination, payload)
             disposition = "published"
     return {
-        "status": disposition, "target_date": target_date,
-        "path": str(destination), "content_sha256": payload["content_sha256"],
+        "status": disposition,
+        "target_date": target_date,
+        "path": str(destination),
+        "content_sha256": payload["content_sha256"],
         "source_report_sha256": report["artifact_content_sha256"],
         "original_source_sha256": source["observed_sha256"],
-        "symbol_count": master.symbol_count, "provider_call_performed": False,
-        "runtime_effect": False, "allowed_runtime_apply": False,
+        "symbol_count": master.symbol_count,
+        "provider_call_performed": False,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
     }
 
 

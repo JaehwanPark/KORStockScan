@@ -134,22 +134,30 @@ OBSERVATION_CONTRACT = {
 
 
 def _dual_source_only_market_axes(trace: dict[str, Any]) -> dict[str, Any]:
-    decision_scope = str(
-        trace.get("decision_market_scope") or trace.get("effective_venue") or "UNKNOWN"
-    ).strip().upper()
+    decision_scope = (
+        str(
+            trace.get("decision_market_scope")
+            or trace.get("effective_venue")
+            or "UNKNOWN"
+        )
+        .strip()
+        .upper()
+    )
     route = str(trace.get("market_data_route") or "").strip().lower()
-    session = str(
-        trace.get("market_session_regime")
-        or trace.get("session_bucket")
-        or "UNKNOWN"
-    ).strip().upper()
+    session = (
+        str(
+            trace.get("market_session_regime")
+            or trace.get("session_bucket")
+            or "UNKNOWN"
+        )
+        .strip()
+        .upper()
+    )
     dual_source_only = bool(
         decision_scope == "KRX_NXT_INTEGRATED"
         or session.startswith(DUAL_AFTERMARKET_SESSION_PREFIX)
     )
-    actual_venue = str(
-        trace.get("actual_execution_venue") or "UNKNOWN"
-    ).strip().upper()
+    actual_venue = str(trace.get("actual_execution_venue") or "UNKNOWN").strip().upper()
     if actual_venue not in {"KRX", "NXT"}:
         actual_venue = "UNKNOWN"
     return {
@@ -189,7 +197,10 @@ def runtime_env_path(target_date: str) -> Path:
 
 def runtime_verify_path(target_date: str) -> Path:
     if target_date >= RUNTIME_BOOTSTRAP_CUTOVER_DATE:
-        return RUNTIME_BOOTSTRAP_DIR / f"runtime_policy_bootstrap_verify_{target_date}.json"
+        return (
+            RUNTIME_BOOTSTRAP_DIR
+            / f"runtime_policy_bootstrap_verify_{target_date}.json"
+        )
     return RUNTIME_ENV_DIR / f"threshold_runtime_env_verify_{target_date}.json"
 
 
@@ -473,21 +484,27 @@ def _retired_commit_rollback_env(target_date, source_date, artifact):
         "can_relax_threshold": False,
         "can_change_provider": False,
     }
-    if (not isinstance(payload, dict)
-            or any(type(payload.get(k)) is not type(v) or payload.get(k) != v
-                   for k, v in expected.items())
-            or not isinstance(payload.get("observation_contract"), dict)
-            or payload["observation_contract"].get("decision_authority")
-            != "source_quality_fail_closed_only"):
+    if (
+        not isinstance(payload, dict)
+        or any(
+            type(payload.get(k)) is not type(v) or payload.get(k) != v
+            for k, v in expected.items()
+        )
+        or not isinstance(payload.get("observation_contract"), dict)
+        or payload["observation_contract"].get("decision_authority")
+        != "source_quality_fail_closed_only"
+    ):
         raise ValueError("retired_context_baseline_contract_invalid")
     digest = _sha256(raw)
     pinned_hash = previous.get("KORSTOCKSCAN_AI_INPUT_BASELINE_ARTIFACT_SHA256")
     if pinned_hash and pinned_hash != digest:
         raise ValueError("retired_context_baseline_hash_mismatch")
-    rollback.update({
-        "KORSTOCKSCAN_AI_INPUT_BASELINE_ARTIFACT_DATE": baseline_date,
-        "KORSTOCKSCAN_AI_INPUT_BASELINE_ARTIFACT_SHA256": digest,
-    })
+    rollback.update(
+        {
+            "KORSTOCKSCAN_AI_INPUT_BASELINE_ARTIFACT_DATE": baseline_date,
+            "KORSTOCKSCAN_AI_INPUT_BASELINE_ARTIFACT_SHA256": digest,
+        }
+    )
     return rollback
 
 
@@ -525,8 +542,10 @@ def context_only_rollback_env(
             "KORSTOCKSCAN_AI_INPUT_PREFLIGHT_ARTIFACT_DATE", target_date
         ),
     }
-    for key in ("KORSTOCKSCAN_AI_INPUT_BASELINE_ARTIFACT_DATE",
-                "KORSTOCKSCAN_AI_INPUT_BASELINE_ARTIFACT_SHA256"):
+    for key in (
+        "KORSTOCKSCAN_AI_INPUT_BASELINE_ARTIFACT_DATE",
+        "KORSTOCKSCAN_AI_INPUT_BASELINE_ARTIFACT_SHA256",
+    ):
         if previous.get(key):
             rollback[key] = str(previous[key])
     return rollback
@@ -1311,8 +1330,7 @@ def build_first_observation_report(
         "dual_source_only_observations": list(dual_first.values()),
         "dual_source_only_observation_count": len(dual_first),
         "dual_actual_execution_venue_unknown_count": sum(
-            row["actual_execution_venue"] == "UNKNOWN"
-            for row in dual_first.values()
+            row["actual_execution_venue"] == "UNKNOWN" for row in dual_first.values()
         ),
         "dual_auto_promotion_candidate_count": 0,
         "pending_natural_endpoints": pending,

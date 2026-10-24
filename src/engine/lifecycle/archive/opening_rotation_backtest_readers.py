@@ -54,7 +54,6 @@ from src.utils.constants import DATA_DIR
 
 from src.utils.jsonl_io import existing_or_gzip_path, open_text_auto
 
-
 REPORT_TYPE = "opening_rotation_1pct_backtest"
 
 

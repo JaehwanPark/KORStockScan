@@ -129,8 +129,6 @@ def test_reviewed_logging_controls_do_not_invalidate_strategy_context():
     assert mod.context_fingerprint(rules) != before
 
 
-
-
 def test_disjoint_context_policies_are_not_erased():
     source = book()
     for identity, row in list(source["rows"].items()):
@@ -269,10 +267,6 @@ def test_runtime_requires_exact_date_context_venue_and_real_scope():
     assert run()["status"] == "baseline"
 
 
-
-
-
-
 def test_component_source_and_policy_runtime_projections_are_journal_compatible():
     from src.engine.scalping.main_lifecycle_paired import _validated_pipeline_transition
     from src.tests.test_main_lifecycle_paired import _pipeline_event, TARGET_DATE
@@ -350,8 +344,6 @@ def test_changed_scope_dates_do_not_create_frequency_uplift():
     assert not mod.evaluate(source, mod.WEAK, profiles()[mod.WEAK], "2026-09-09")[
         "policies"
     ]
-
-
 
 
 def test_nonfinite_diagnostic_context_does_not_raise_in_live_logger():

@@ -15,7 +15,10 @@ from zoneinfo import ZoneInfo
 
 from src.engine.trade_profit import calculate_net_realized_pnl
 from src.engine.log_archive_service import iter_target_log_lines, load_monitor_snapshot
-from src.engine.monitor_snapshot_runtime import guard_stdin_heavy_build, should_guard_stdin_heavy_build
+from src.engine.monitor_snapshot_runtime import (
+    guard_stdin_heavy_build,
+    should_guard_stdin_heavy_build,
+)
 from src.utils.constants import DATA_DIR, LOGS_DIR, POSTGRES_URL
 from src.utils.jsonl_io import existing_or_gzip_path, open_text_auto
 from src.engine.sniper_gatekeeper_replay import find_gatekeeper_snapshot_for_trade
@@ -216,10 +219,12 @@ def _parse_event(line: str) -> HoldingEvent | None:
     match = _HOLDING_RE.match(line.strip())
     if not match:
         return None
-    fields = _decode_threshold_json_fields({
-        m.group("key"): str(m.group("value") or "").replace("|", " ")
-        for m in _FIELD_RE.finditer(match.group("rest") or "")
-    })
+    fields = _decode_threshold_json_fields(
+        {
+            m.group("key"): str(m.group("value") or "").replace("|", " ")
+            for m in _FIELD_RE.finditer(match.group("rest") or "")
+        }
+    )
     return HoldingEvent(
         timestamp=match.group("timestamp"),
         name=match.group("name"),
@@ -258,9 +263,10 @@ def _load_holding_projection_events_from_structured(
                     if not isinstance(payload, dict):
                         malformed_count += 1
                         continue
-                    if payload.get("pipeline") != "HOLDING_PIPELINE" or payload.get(
-                        "stage"
-                    ) not in _PROJECTION_EVENT_STAGES:
+                    if (
+                        payload.get("pipeline") != "HOLDING_PIPELINE"
+                        or payload.get("stage") not in _PROJECTION_EVENT_STAGES
+                    ):
                         continue
                     emitted_at = str(payload.get("emitted_at") or "")
                     partition_date = str(
@@ -279,32 +285,47 @@ def _load_holding_projection_events_from_structured(
                         malformed_count += 1
                         continue
                     fields["id"] = str(record_id)
-                    events.append(HoldingEvent(
-                        timestamp=emitted_at[:19].replace("T", " "),
-                        name=str(payload.get("stock_name") or "-"),
-                        code=str(payload.get("stock_code") or "-")[:6],
-                        stage=str(payload["stage"]),
-                        fields=fields,
-                        raw_line=str(payload.get("text_payload") or ""),
-                    ))
+                    events.append(
+                        HoldingEvent(
+                            timestamp=emitted_at[:19].replace("T", " "),
+                            name=str(payload.get("stock_name") or "-"),
+                            code=str(payload.get("stock_code") or "-")[:6],
+                            stage=str(payload["stage"]),
+                            fields=fields,
+                            raw_line=str(payload.get("text_payload") or ""),
+                        )
+                    )
             after = path.stat()
             if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (
-                after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns
+                after.st_dev,
+                after.st_ino,
+                after.st_size,
+                after.st_mtime_ns,
             ):
                 return [], "source_gap_structured_partition_changed_during_read", []
-            source_receipts.append({
-                "path": str(path),
-                "logical_sha256": digest.hexdigest(),
-                "size_bytes": before.st_size,
-            })
+            source_receipts.append(
+                {
+                    "path": str(path),
+                    "logical_sha256": digest.hexdigest(),
+                    "size_bytes": before.st_size,
+                }
+            )
     except (OSError, EOFError, UnicodeError):
         return [], "source_gap_structured_partition_unreadable", []
     events.sort(key=_event_sort_key)
-    return events, (
-        "source_gap_base_partition_missing" if base_missing
-        else "source_gap_structured_projection_malformed" if malformed_count
-        else "structured_partition_read"
-    ), source_receipts
+    return (
+        events,
+        (
+            "source_gap_base_partition_missing"
+            if base_missing
+            else (
+                "source_gap_structured_projection_malformed"
+                if malformed_count
+                else "structured_partition_read"
+            )
+        ),
+        source_receipts,
+    )
 
 
 def _event_sort_key(event: HoldingEvent) -> tuple[datetime, str, str]:
@@ -586,10 +607,15 @@ def _fetch_open_scalp_rows(target_date: str) -> tuple[list[dict], list[str]]:
         with engine.connect() as conn:
             rows = [
                 _db_trade_mapping(row)
-                for row in conn.execute(text(query), {
-                    "baseline_date": datetime(2026, 6, 5).date(),
-                    "target_date": datetime.strptime(target_date, "%Y-%m-%d").date(),
-                }).mappings()
+                for row in conn.execute(
+                    text(query),
+                    {
+                        "baseline_date": datetime(2026, 6, 5).date(),
+                        "target_date": datetime.strptime(
+                            target_date, "%Y-%m-%d"
+                        ).date(),
+                    },
+                ).mappings()
             ]
         if len(rows) > 1000:
             return [], ["source_gap_open_scalp_census_cap_exceeded"]
@@ -631,9 +657,12 @@ def _build_timeline(events: list[HoldingEvent]) -> list[dict[str, Any]]:
         if (
             timeline
             and timeline[-1]["stage"] == event.stage
-            and event.stage not in {
-                "scalp_trailing_input_transition", "scalp_trailing_mechanical_input",
-                "holding_path_signal_snapshot", "holding_path_votes_collected",
+            and event.stage
+            not in {
+                "scalp_trailing_input_transition",
+                "scalp_trailing_mechanical_input",
+                "holding_path_signal_snapshot",
+                "holding_path_votes_collected",
                 "holding_path_exit_veto_deferred",
             }
         ):
@@ -810,9 +839,17 @@ def _infer_exit_decision_source(
 
 
 def _exit_event_order_no(event: HoldingEvent) -> str:
-    return str(next((event.fields.get(key) for key in (
-        "broker_order_no", "order_no", "sell_order_no", "ord_no"
-    ) if event.fields.get(key)), "") or "").strip()
+    return str(
+        next(
+            (
+                event.fields.get(key)
+                for key in ("broker_order_no", "order_no", "sell_order_no", "ord_no")
+                if event.fields.get(key)
+            ),
+            "",
+        )
+        or ""
+    ).strip()
 
 
 def _direct_exit_signal_binding(
@@ -825,36 +862,45 @@ def _direct_exit_signal_binding(
         return None, "source_gap_explicit_signal_missing"
     if not any(row.fields.get("exit_signal_contract") for row in explicit):
         return None, "legacy_unbound"
-    terminal = next((row for row in reversed(ordered)
-                     if row.stage == "sell_completed"), None)
+    terminal = next(
+        (row for row in reversed(ordered) if row.stage == "sell_completed"), None
+    )
     if terminal and not _exit_event_order_no(terminal):
         return None, "source_gap_terminal_order_missing"
-    submissions = [row for row in ordered if row.stage == "sell_order_sent"
-                   and (not terminal or
-                        _exit_event_order_no(row) == _exit_event_order_no(terminal))
-                   and (not terminal or row.timestamp <= terminal.timestamp)]
+    submissions = [
+        row
+        for row in ordered
+        if row.stage == "sell_order_sent"
+        and (
+            not terminal or _exit_event_order_no(row) == _exit_event_order_no(terminal)
+        )
+        and (not terminal or row.timestamp <= terminal.timestamp)
+    ]
     if not submissions:
         return None, "source_gap_submission_missing"
-    signatures = {(
-        row.fields.get("exit_signal_id"),
-        row.fields.get("exit_signal_contract_sha256"),
-        row.fields.get("exit_signal_position_key"),
-        row.fields.get("exit_signal_buy_fill_identity"),
-        row.fields.get("exit_signal_at"),
-        row.fields.get("exit_signal_source_date"),
-        row.fields.get("exit_signal_binding_status"),
-        row.fields.get("exit_signal_submit_intended_route"),
-        row.fields.get("sell_submit_generation"),
-        row.fields.get("sell_submit_context_sha256"),
-        row.fields.get("sell_submit_context_contract"),
-        row.fields.get("broker_route"),
-        row.fields.get("market_session_bucket"),
-        row.fields.get("qty") or row.fields.get("submitted_qty"),
-        row.fields.get("actual_order_submitted"),
-        row.fields.get("owner_id"),
-        row.fields.get("account_key"),
-        _exit_event_order_no(row),
-    ) for row in submissions}
+    signatures = {
+        (
+            row.fields.get("exit_signal_id"),
+            row.fields.get("exit_signal_contract_sha256"),
+            row.fields.get("exit_signal_position_key"),
+            row.fields.get("exit_signal_buy_fill_identity"),
+            row.fields.get("exit_signal_at"),
+            row.fields.get("exit_signal_source_date"),
+            row.fields.get("exit_signal_binding_status"),
+            row.fields.get("exit_signal_submit_intended_route"),
+            row.fields.get("sell_submit_generation"),
+            row.fields.get("sell_submit_context_sha256"),
+            row.fields.get("sell_submit_context_contract"),
+            row.fields.get("broker_route"),
+            row.fields.get("market_session_bucket"),
+            row.fields.get("qty") or row.fields.get("submitted_qty"),
+            row.fields.get("actual_order_submitted"),
+            row.fields.get("owner_id"),
+            row.fields.get("account_key"),
+            _exit_event_order_no(row),
+        )
+        for row in submissions
+    }
     if len(signatures) != 1:
         return None, "source_gap_conflicting_submission"
     submission = submissions[-1]
@@ -862,26 +908,36 @@ def _direct_exit_signal_binding(
     signal_id = str(submit.get("exit_signal_id") or "").strip()
     if not signal_id:
         return None, "legacy_unbound"
-    signal_rows = [row for row in explicit
-                   if str(row.fields.get("exit_signal_id") or "").strip()
-                   == signal_id]
+    signal_rows = [
+        row
+        for row in explicit
+        if str(row.fields.get("exit_signal_id") or "").strip() == signal_id
+    ]
     if not signal_rows:
         return None, "source_gap_decision_missing_for_submission"
-    if len({(
-        row.fields.get("exit_signal_contract_sha256"),
-        row.fields.get("exit_signal_contract"),
-        row.fields.get("exit_signal_position_key"),
-        row.fields.get("exit_signal_buy_fill_identity"),
-        row.fields.get("exit_rule"),
-        row.fields.get("exit_threshold_key"),
-        row.fields.get("exit_threshold_effective_pct"),
-        row.fields.get("scalp_trailing_policy_value_sha256"),
-        row.fields.get("holding_context_venue"),
-        row.fields.get("holding_context_session"),
-        row.fields.get("exit_signal_source_date"),
-        row.fields.get("exit_signal_at"),
-        row.fields.get("pipeline_lifecycle_population_scope"),
-    ) for row in signal_rows}) != 1:
+    if (
+        len(
+            {
+                (
+                    row.fields.get("exit_signal_contract_sha256"),
+                    row.fields.get("exit_signal_contract"),
+                    row.fields.get("exit_signal_position_key"),
+                    row.fields.get("exit_signal_buy_fill_identity"),
+                    row.fields.get("exit_rule"),
+                    row.fields.get("exit_threshold_key"),
+                    row.fields.get("exit_threshold_effective_pct"),
+                    row.fields.get("scalp_trailing_policy_value_sha256"),
+                    row.fields.get("holding_context_venue"),
+                    row.fields.get("holding_context_session"),
+                    row.fields.get("exit_signal_source_date"),
+                    row.fields.get("exit_signal_at"),
+                    row.fields.get("pipeline_lifecycle_population_scope"),
+                )
+                for row in signal_rows
+            }
+        )
+        != 1
+    ):
         return None, "source_gap_conflicting_decision"
     decision = signal_rows[-1]
     fields = decision.fields
@@ -889,18 +945,29 @@ def _direct_exit_signal_binding(
         raw = fields.get("exit_signal_contract")
         contract = json.loads(raw) if isinstance(raw, str) else raw
         context_raw = submit.get("sell_submit_context_contract")
-        context = (json.loads(context_raw) if isinstance(context_raw, str)
-                   else context_raw)
+        context = (
+            json.loads(context_raw) if isinstance(context_raw, str) else context_raw
+        )
         if not isinstance(contract, dict) or not isinstance(context, dict):
             return None, "source_gap_contract_invalid"
-        decision_sha = hashlib.sha256(json.dumps(
-            contract, ensure_ascii=True, sort_keys=True, separators=(",", ":"),
-            allow_nan=False,
-        ).encode()).hexdigest()
-        context_sha = hashlib.sha256(json.dumps(
-            context, ensure_ascii=True, sort_keys=True, separators=(",", ":"),
-            allow_nan=False,
-        ).encode()).hexdigest()
+        decision_sha = hashlib.sha256(
+            json.dumps(
+                contract,
+                ensure_ascii=True,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            ).encode()
+        ).hexdigest()
+        context_sha = hashlib.sha256(
+            json.dumps(
+                context,
+                ensure_ascii=True,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            ).encode()
+        ).hexdigest()
         signal_at = _parse_dt(contract.get("signal_at"))
         decision_at = _parse_dt(decision.timestamp)
         submitted_at = _parse_dt(submission.timestamp)
@@ -922,16 +989,28 @@ def _direct_exit_signal_binding(
     record = str(contract.get("record_id") or "")
     rule = _normalize_exit_rule(contract.get("exit_rule"))
     decision_input_keys = (
-        "reason", "sell_reason_type", "exit_decision_source", "profit_rate",
-        "peak_profit", "curr_price", "buy_price", "buy_qty",
-        "exit_threshold_status", "exit_threshold_key",
-        "exit_threshold_effective_pct", "exit_threshold_observed_pct",
+        "reason",
+        "sell_reason_type",
+        "exit_decision_source",
+        "profit_rate",
+        "peak_profit",
+        "curr_price",
+        "buy_price",
+        "buy_qty",
+        "exit_threshold_status",
+        "exit_threshold_key",
+        "exit_threshold_effective_pct",
+        "exit_threshold_observed_pct",
         "exit_threshold_trailing_start_pct",
         "exit_threshold_trailing_arm_observed_pct",
-        "exit_threshold_classifier_version", "exit_threshold_peak_price",
-        "exit_threshold_executable_bid", "exit_threshold_bid_source",
-        "exit_threshold_trigger_kind", "holding_score_role_gate",
-        "holding_path_signal_id", "holding_path_signal_at",
+        "exit_threshold_classifier_version",
+        "exit_threshold_peak_price",
+        "exit_threshold_executable_bid",
+        "exit_threshold_bid_source",
+        "exit_threshold_trigger_kind",
+        "holding_score_role_gate",
+        "holding_path_signal_id",
+        "holding_path_signal_at",
         "holding_path_policy_bundle_sha256",
     )
     expected_inputs = {
@@ -940,87 +1019,100 @@ def _direct_exit_signal_binding(
     raw_inputs = contract.get("decision_inputs")
     actual_inputs = (
         {key: str(value) for key, value in raw_inputs.items()}
-        if isinstance(raw_inputs, dict) else None
+        if isinstance(raw_inputs, dict)
+        else None
     )
-    if (contract.get("schema") != "holding_exit_signal_receipt_v1"
-            or context.get("schema") != "sell_submit_pending_context_v1"
-            or not all((record, rule, signal_at, decision_at, submitted_at,
-                        contract.get("buy_fill_identity"),
-                        contract.get("position_key"),
-                        context.get("generation")))
-            or decision_sha != fields.get("exit_signal_contract_sha256")
-            or decision_sha != submit.get("exit_signal_contract_sha256")
-            or context_sha != submit.get("sell_submit_context_sha256")
-            or not (decision_at <= submitted_at
-                    and signal_at <= decision_at + timedelta(seconds=1))
-            or (decision_at - signal_at).total_seconds() > 60
-            or started_local < signal_at
-            or started_local > submitted_at + timedelta(seconds=1)
-            or contract.get("source_date") != str(contract.get("signal_at"))[:10]
-            or contract.get("source_date") != fields.get("exit_signal_source_date")
-            or contract.get("source_date") != submit.get("exit_signal_source_date")
-            or contract.get("signal_id") != signal_id
-            or contract.get("signal_at") != submit.get("exit_signal_at")
-            or contract.get("strategy") not in {"SCALPING", "SCALP"}
-            or contract.get("decision_owner_type") != "main_scalping"
-            or fields.get("pipeline_lifecycle_population_scope")
-            != "real_record_bound"
-            or submit.get("pipeline_lifecycle_population_scope")
-            != "real_record_bound"
-            or contract.get("record_id") != str(fields.get("id") or "")
-            or record != str(submit.get("id") or "")
-            or contract.get("code") != decision.code
-            or contract.get("code") != submission.code
-            or contract.get("position_key") != f"record:{record}"
-            or contract.get("position_key") != fields.get("exit_signal_position_key")
-            or contract.get("position_key") != submit.get("exit_signal_position_key")
-            or contract.get("buy_fill_identity") != fields.get(
-                "exit_signal_buy_fill_identity"
+    if (
+        contract.get("schema") != "holding_exit_signal_receipt_v1"
+        or context.get("schema") != "sell_submit_pending_context_v1"
+        or not all(
+            (
+                record,
+                rule,
+                signal_at,
+                decision_at,
+                submitted_at,
+                contract.get("buy_fill_identity"),
+                contract.get("position_key"),
+                context.get("generation"),
             )
-            or contract.get("buy_fill_identity") != submit.get(
-                "exit_signal_buy_fill_identity"
+        )
+        or decision_sha != fields.get("exit_signal_contract_sha256")
+        or decision_sha != submit.get("exit_signal_contract_sha256")
+        or context_sha != submit.get("sell_submit_context_sha256")
+        or not (
+            decision_at <= submitted_at
+            and signal_at <= decision_at + timedelta(seconds=1)
+        )
+        or (decision_at - signal_at).total_seconds() > 60
+        or started_local < signal_at
+        or started_local > submitted_at + timedelta(seconds=1)
+        or contract.get("source_date") != str(contract.get("signal_at"))[:10]
+        or contract.get("source_date") != fields.get("exit_signal_source_date")
+        or contract.get("source_date") != submit.get("exit_signal_source_date")
+        or contract.get("signal_id") != signal_id
+        or contract.get("signal_at") != submit.get("exit_signal_at")
+        or contract.get("strategy") not in {"SCALPING", "SCALP"}
+        or contract.get("decision_owner_type") != "main_scalping"
+        or fields.get("pipeline_lifecycle_population_scope") != "real_record_bound"
+        or submit.get("pipeline_lifecycle_population_scope") != "real_record_bound"
+        or contract.get("record_id") != str(fields.get("id") or "")
+        or record != str(submit.get("id") or "")
+        or contract.get("code") != decision.code
+        or contract.get("code") != submission.code
+        or contract.get("position_key") != f"record:{record}"
+        or contract.get("position_key") != fields.get("exit_signal_position_key")
+        or contract.get("position_key") != submit.get("exit_signal_position_key")
+        or contract.get("buy_fill_identity")
+        != fields.get("exit_signal_buy_fill_identity")
+        or contract.get("buy_fill_identity")
+        != submit.get("exit_signal_buy_fill_identity")
+        or rule != _normalize_exit_rule(fields.get("exit_rule"))
+        or rule != _normalize_exit_rule(submit.get("exit_rule"))
+        or (
+            terminal
+            and terminal.fields.get("exit_rule")
+            and rule != _normalize_exit_rule(terminal.fields.get("exit_rule"))
+        )
+        or contract.get("threshold_key")
+        != str(fields.get("exit_threshold_key") or "").strip()
+        or str(contract.get("threshold_effective_pct"))
+        != str(fields.get("exit_threshold_effective_pct"))
+        or contract.get("policy_sha256")
+        != str(fields.get("scalp_trailing_policy_value_sha256") or "").strip()
+        or contract.get("context_venue") != fields.get("holding_context_venue")
+        or contract.get("context_session") != fields.get("holding_context_session")
+        or actual_inputs != expected_inputs
+        or context.get("target_id") != _safe_int(record, -1)
+        or context.get("code") != decision.code
+        or context.get("generation") != submit.get("sell_submit_generation")
+        or context.get("requested_qty")
+        != _safe_int(submit.get("qty") or submit.get("submitted_qty"), -1)
+        or _safe_int(context.get("requested_qty"), 0) <= 0
+        or context.get("intended_route")
+        != submit.get("exit_signal_submit_intended_route")
+        or str(submit.get("broker_route") or "").upper() not in {"KRX", "NXT", "SOR"}
+        or context.get("intended_session_bucket") != expected_intended_session
+        or submit.get("market_session_bucket") != session_bucket
+        or submit.get("exit_signal_binding_status") != "same_position_buy_generation"
+        or str(submit.get("actual_order_submitted")).lower() != "true"
+        or str(submit.get("broker_order_forbidden")).lower() == "true"
+        or not _exit_event_order_no(submission)
+        or (
+            terminal
+            and (
+                terminal.code != decision.code
+                or str(terminal.fields.get("id") or "") != record
             )
-            or rule != _normalize_exit_rule(fields.get("exit_rule"))
-            or rule != _normalize_exit_rule(submit.get("exit_rule"))
-            or (terminal and terminal.fields.get("exit_rule") and
-                rule != _normalize_exit_rule(terminal.fields.get("exit_rule")))
-            or contract.get("threshold_key") != str(fields.get(
-                "exit_threshold_key") or "").strip()
-            or str(contract.get("threshold_effective_pct")) != str(
-                fields.get("exit_threshold_effective_pct")
-            )
-            or contract.get("policy_sha256") != str(fields.get(
-                "scalp_trailing_policy_value_sha256") or "").strip()
-            or contract.get("context_venue") != fields.get("holding_context_venue")
-            or contract.get("context_session") != fields.get("holding_context_session")
-            or actual_inputs != expected_inputs
-            or context.get("target_id") != _safe_int(record, -1)
-            or context.get("code") != decision.code
-            or context.get("generation") != submit.get("sell_submit_generation")
-            or context.get("requested_qty") != _safe_int(
-                submit.get("qty") or submit.get("submitted_qty"), -1
-            )
-            or _safe_int(context.get("requested_qty"), 0) <= 0
-            or context.get("intended_route") != submit.get(
-                "exit_signal_submit_intended_route"
-            )
-            or str(submit.get("broker_route") or "").upper()
-            not in {"KRX", "NXT", "SOR"}
-            or context.get("intended_session_bucket") != expected_intended_session
-            or submit.get("market_session_bucket") != session_bucket
-            or submit.get("exit_signal_binding_status")
-            != "same_position_buy_generation"
-            or str(submit.get("actual_order_submitted")).lower() != "true"
-            or str(submit.get("broker_order_forbidden")).lower() == "true"
-            or not _exit_event_order_no(submission)
-            or (terminal and (terminal.code != decision.code or
-                str(terminal.fields.get("id") or "") != record))):
+        )
+    ):
         return None, "source_gap_decision_submit_contract_mismatch"
     return decision, "same_order_generation"
 
 
 def _build_exit_signal(
-    events: list[HoldingEvent], trade: dict | None = None,
+    events: list[HoldingEvent],
+    trade: dict | None = None,
 ) -> dict | None:
     explicit, binding_status = _direct_exit_signal_binding(events)
     if explicit is not None and trade is not None:
@@ -1034,50 +1126,55 @@ def _build_exit_signal(
         buy_at = _parse_dt(trade.get("buy_time"))
         sell_at = _parse_dt(trade.get("sell_time"))
         if buy_at and buy_at.tzinfo:
-            buy_at = buy_at.astimezone(ZoneInfo("Asia/Seoul")).replace(
-                tzinfo=None
-            )
+            buy_at = buy_at.astimezone(ZoneInfo("Asia/Seoul")).replace(tzinfo=None)
         if sell_at and sell_at.tzinfo:
-            sell_at = sell_at.astimezone(ZoneInfo("Asia/Seoul")).replace(
-                tzinfo=None
-            )
-        if (str(trade.get("id") or "") != contract.get("record_id")
-                or str(trade.get("code") or "")[:6] != contract.get("code")
-                or str(trade.get("strategy") or "").upper()
-                != contract.get("strategy")
-                or str(trade.get("position_tag") or "")
-                != contract.get("position_tag")
-                or not buy_at or not signal_at or signal_at < buy_at
-                or (sell_at and signal_at > sell_at + timedelta(seconds=1))):
+            sell_at = sell_at.astimezone(ZoneInfo("Asia/Seoul")).replace(tzinfo=None)
+        if (
+            str(trade.get("id") or "") != contract.get("record_id")
+            or str(trade.get("code") or "")[:6] != contract.get("code")
+            or str(trade.get("strategy") or "").upper() != contract.get("strategy")
+            or str(trade.get("position_tag") or "") != contract.get("position_tag")
+            or not buy_at
+            or not signal_at
+            or signal_at < buy_at
+            or (sell_at and signal_at > sell_at + timedelta(seconds=1))
+        ):
             explicit = None
             binding_status = "source_gap_trade_custody_mismatch"
     if explicit is not None:
         rule = _normalize_exit_rule(explicit.fields.get("exit_rule"))
         payload = _build_exit_signal_payload(
-            explicit, exit_rule=rule,
+            explicit,
+            exit_rule=rule,
             exit_decision_source=_infer_exit_decision_source(
-                exit_rule=rule, reason=explicit.fields.get("reason"),
+                exit_rule=rule,
+                reason=explicit.fields.get("reason"),
                 fields=explicit.fields,
             ),
-            inferred=False, binding_status=binding_status,
+            inferred=False,
+            binding_status=binding_status,
         )
-        policy_sha = str(explicit.fields.get(
-            "scalp_trailing_policy_value_sha256") or "").strip()
+        policy_sha = str(
+            explicit.fields.get("scalp_trailing_policy_value_sha256") or ""
+        ).strip()
         payload["policy_sha256"] = policy_sha or None
         if rule != "scalp_trailing_take_profit":
             policy_status = "branch_value_only_no_policy_sha"
         elif not re.fullmatch(r"[0-9a-f]{64}", policy_sha):
             policy_status = "source_gap_policy_sha_missing"
-        elif (explicit.fields.get("scalp_trailing_policy_expected_sha256")
-              == policy_sha
-              and explicit.fields.get("scalp_trailing_policy_provenance")
-              == "bootstrap_value_hash_matched"):
+        elif (
+            explicit.fields.get("scalp_trailing_policy_expected_sha256") == policy_sha
+            and explicit.fields.get("scalp_trailing_policy_provenance")
+            == "bootstrap_value_hash_matched"
+        ):
             policy_status = "bootstrap_hash_matched_no_pid_proof"
         else:
             policy_status = "observed_sha_bootstrap_unverified"
         payload["policy_binding_status"] = policy_status
         submission = next(
-            row for row in events if row.stage == "sell_order_sent"
+            row
+            for row in events
+            if row.stage == "sell_order_sent"
             and row.fields.get("exit_signal_id")
             == explicit.fields.get("exit_signal_id")
         )
@@ -1089,17 +1186,13 @@ def _build_exit_signal(
             "owner_id": submission.fields.get("owner_id"),
             "account_key": submission.fields.get("account_key"),
             "broker_route": submission.fields.get("broker_route"),
-            "market_session_bucket": submission.fields.get(
-                "market_session_bucket"
-            ),
+            "market_session_bucket": submission.fields.get("market_session_bucket"),
             "submitted_qty": _safe_int(
-                submission.fields.get("submitted_qty")
-                or submission.fields.get("qty"), 0,
+                submission.fields.get("submitted_qty") or submission.fields.get("qty"),
+                0,
             ),
             "submitted_at": submission.timestamp,
-            "sell_submit_generation": submission.fields.get(
-                "sell_submit_generation"
-            ),
+            "sell_submit_generation": submission.fields.get("sell_submit_generation"),
             "sell_submit_context_sha256": submission.fields.get(
                 "sell_submit_context_sha256"
             ),
@@ -1633,11 +1726,17 @@ def _buy_parent_handoff_projection(
         intent = str(event.get("intent_id") or "").strip()
         if intent:
             registry[intent].append(event)
-            by_order[(str(event.get("account_key") or ""), source_date,
-                      str(event.get("broker_order_no") or ""))].add(intent)
+            by_order[
+                (
+                    str(event.get("account_key") or ""),
+                    source_date,
+                    str(event.get("broker_order_no") or ""),
+                )
+            ].add(intent)
             if event.get("broker_order_no"):
                 by_broker_number[str(event["broker_order_no"])].add(
-                    (str(event.get("account_key") or ""), intent))
+                    (str(event.get("account_key") or ""), intent)
+                )
     trades_by_id = {str(row.get("id")): row for row in trades}
     fills_by_key: dict[tuple[str, str, str], list[HoldingEvent]] = defaultdict(list)
     buy_orders_by_record: dict[str, set[str]] = defaultdict(set)
@@ -1645,16 +1744,22 @@ def _buy_parent_handoff_projection(
     terminals: dict[tuple[str, str], HoldingEvent] = {}
     cancels: dict[tuple[str, str], set[str]] = defaultdict(set)
     for candidate in entry_events:
-        if not isinstance(candidate, dict) or candidate.get("emitted_date") != source_date:
+        if (
+            not isinstance(candidate, dict)
+            or candidate.get("emitted_date") != source_date
+        ):
             continue
         if candidate.get("stage") not in {
-            "entry_order_cancel_requested", "entry_order_cancel_confirmed"}:
+            "entry_order_cancel_requested",
+            "entry_order_cancel_confirmed",
+        }:
             continue
         f = candidate.get("fields") or {}
         original = str(f.get("orig_ord_no") or "").strip()
         if original:
             cancels[(str(candidate.get("record_id") or ""), original)].add(
-                str(candidate["stage"]))
+                str(candidate["stage"])
+            )
     for event in holding_events:
         record = str(event.fields.get("id") or "")
         order = str(event.fields.get("order_no") or "")
@@ -1666,30 +1771,50 @@ def _buy_parent_handoff_projection(
         elif event.stage == "entry_buy_order_terminal_confirmed":
             key = (record, str(event.fields.get("orig_ord_no") or ""))
             if key in terminals and terminals[key] != event:
-                terminals[key] = HoldingEvent(event.timestamp, event.name,
-                    event.code, event.stage, {"terminal_conflict": "True"}, "")
+                terminals[key] = HoldingEvent(
+                    event.timestamp,
+                    event.name,
+                    event.code,
+                    event.stage,
+                    {"terminal_conflict": "True"},
+                    "",
+                )
             else:
                 terminals[key] = event
-        elif event.stage in {"sell_partial_fill_progress", "sell_completed",
-                             "nxt_rising_missed_tp1_partial_fill_progress",
-                             "nxt_rising_missed_tp1_partial_sell_completed"}:
+        elif event.stage in {
+            "sell_partial_fill_progress",
+            "sell_completed",
+            "nxt_rising_missed_tp1_partial_fill_progress",
+            "nxt_rising_missed_tp1_partial_sell_completed",
+        }:
             sells_by_record[record].append(event)
 
     uncertain_attempts = []
     for candidate in entry_events:
-        if not isinstance(candidate, dict) or candidate.get("emitted_date") != source_date:
+        if (
+            not isinstance(candidate, dict)
+            or candidate.get("emitted_date") != source_date
+        ):
             continue
         f = candidate.get("fields") or {}
-        if (candidate.get("stage") == "order_leg_no_response"
-            or (candidate.get("stage") == "order_leg_fail" and
-                (str(f.get("broker_response_success")).lower() == "true" or
-                 str(f.get("broker_submission_reconciliation_required")).lower() == "true"))):
-            uncertain_attempts.append({
-                "record_id": candidate.get("record_id"),
-                "attempt_id": f.get("entry_submit_attempt_id"),
-                "parent_id": None, "order_id": f.get("broker_order_no"),
-                "state": "broker_response_uncertain", "sellable_qty": None,
-            })
+        if candidate.get("stage") == "order_leg_no_response" or (
+            candidate.get("stage") == "order_leg_fail"
+            and (
+                str(f.get("broker_response_success")).lower() == "true"
+                or str(f.get("broker_submission_reconciliation_required")).lower()
+                == "true"
+            )
+        ):
+            uncertain_attempts.append(
+                {
+                    "record_id": candidate.get("record_id"),
+                    "attempt_id": f.get("entry_submit_attempt_id"),
+                    "parent_id": None,
+                    "order_id": f.get("broker_order_no"),
+                    "state": "broker_response_uncertain",
+                    "sellable_qty": None,
+                }
+            )
     rows: list[dict] = []
     seen: dict[tuple[str, str, str], dict] = {}
     rows_by_key: dict[tuple[str, str, str], dict] = {}
@@ -1716,8 +1841,9 @@ def _buy_parent_handoff_projection(
         if key in seen:
             reasons.append("conflicting_duplicate_submit")
             prior = rows_by_key[key]
-            prior["source_quality_reasons"] = sorted(set(
-                prior["source_quality_reasons"] + ["conflicting_duplicate_submit"]))
+            prior["source_quality_reasons"] = sorted(
+                set(prior["source_quality_reasons"] + ["conflicting_duplicate_submit"])
+            )
             prior["parent_id"] = prior["child_id"] = prior["sellable_qty"] = None
             if prior["state"] == "unobserved":
                 counts["unobserved"] -= 1
@@ -1729,7 +1855,11 @@ def _buy_parent_handoff_projection(
         seen[key] = event
         parent = str(fields.get("buy_parent_id") or "").strip()
         child = str(fields.get("buy_child_id") or "").strip()
-        attempt = str(fields.get("entry_submit_attempt_id") or fields.get('buy_submit_attempt_id') or "").strip()
+        attempt = str(
+            fields.get("entry_submit_attempt_id")
+            or fields.get("buy_submit_attempt_id")
+            or ""
+        ).strip()
         intent = str(fields.get("owner_registry_intent_id") or "").strip()
         owner = str(fields.get("buy_owner_id") or "").strip()
         route = str(fields.get("broker_route") or "").strip().upper()
@@ -1738,30 +1868,60 @@ def _buy_parent_handoff_projection(
         planned = _safe_int(fields.get("buy_planned_qty"), -1)
         mode = str(fields.get("buy_registry_mode") or "")
         single_owner = (
-            mode == "single_owner_unregistered" and not intent
+            mode == "single_owner_unregistered"
+            and not intent
             and str(fields.get("buy_owner_policy_selected")).lower() == "false"
             and str(fields.get("buy_owner_policy_coexistence")).lower() == "false"
             and fields.get("buy_owner_policy_date") == source_date
-            and policy_generation.get(code) == (
+            and policy_generation.get(code)
+            == (
                 str(fields.get("buy_owner_policy_reason") or ""),
-                str(fields.get("buy_owner_policy_hash") or ""))
-            and not any(row.get("symbol") == code for row in registry_events
-                        if isinstance(row, dict) and row.get("order_date") == source_date)
+                str(fields.get("buy_owner_policy_hash") or ""),
+            )
+            and not any(
+                row.get("symbol") == code
+                for row in registry_events
+                if isinstance(row, dict) and row.get("order_date") == source_date
+            )
         )
-        if (not all((record, code, order, account, parent, child, attempt,
-                     owner, route)) or (not intent and not single_owner)
-            or parent != attempt or not child.startswith(parent + ":")
-            or (fields.get('buy_submit_attempt_id') and fields['buy_submit_attempt_id']!=attempt)):
+        if (
+            not all(
+                (record, code, order, account, parent, child, attempt, owner, route)
+            )
+            or (not intent and not single_owner)
+            or parent != attempt
+            or not child.startswith(parent + ":")
+            or (
+                fields.get("buy_submit_attempt_id")
+                and fields["buy_submit_attempt_id"] != attempt
+            )
+        ):
             reasons.append("submit_parent_owner_identity_missing")
-        if fields.get("buy_owner_type") != "main_scalping" or owner != f"main_scalping:{record}":
+        if (
+            fields.get("buy_owner_type") != "main_scalping"
+            or owner != f"main_scalping:{record}"
+        ):
             reasons.append("main_owner_mismatch")
-        if submitted <= 0 or requested != submitted or (planned > 0 and planned < submitted):
+        if (
+            submitted <= 0
+            or requested != submitted
+            or (planned > 0 and planned < submitted)
+        ):
             reasons.append("submit_quantity_invalid")
         journal = registry.get(intent, [])
         if not journal and not single_owner:
             reasons.append("registry_intent_missing")
-        immutable = ("account_key", "order_date", "owner_type",
-                     "owner_id", "symbol", "side", "action", "route", "quantity")
+        immutable = (
+            "account_key",
+            "order_date",
+            "owner_type",
+            "owner_id",
+            "symbol",
+            "side",
+            "action",
+            "route",
+            "quantity",
+        )
         if journal and any(
             any(row.get(name) != journal[0].get(name) for name in immutable)
             for row in journal[1:]
@@ -1771,14 +1931,30 @@ def _buy_parent_handoff_projection(
         anchor = bound[0] if bound else (journal[0] if journal else {})
         if journal and (
             len({str(row["broker_order_no"]) for row in bound}) != 1
-            or (anchor.get("account_key"), anchor.get("order_date"),
-             str(anchor.get("broker_order_no") or ""),
-             anchor.get("owner_type"), anchor.get("owner_id"),
-             anchor.get("symbol"), anchor.get("side"),
-             anchor.get("action"), anchor.get("route"),
-             _safe_int(anchor.get("quantity"), -1))
-            != (account, source_date, order, "main_scalping", owner, code,
-                "BUY", "NEW", route, submitted)
+            or (
+                anchor.get("account_key"),
+                anchor.get("order_date"),
+                str(anchor.get("broker_order_no") or ""),
+                anchor.get("owner_type"),
+                anchor.get("owner_id"),
+                anchor.get("symbol"),
+                anchor.get("side"),
+                anchor.get("action"),
+                anchor.get("route"),
+                _safe_int(anchor.get("quantity"), -1),
+            )
+            != (
+                account,
+                source_date,
+                order,
+                "main_scalping",
+                owner,
+                code,
+                "BUY",
+                "NEW",
+                route,
+                submitted,
+            )
             or by_order[(account, source_date, order)] != {intent}
             or by_broker_number[order] != {(account, intent)}
         ):
@@ -1789,35 +1965,52 @@ def _buy_parent_handoff_projection(
         verified_fills: list[dict] = []
         cumulative = 0
         seen_executions: set[str] = set()
-        journal_fill_rows = [row for row in journal if row.get("event") == "FILL_RECORDED"]
-        journal_fills = {str(row.get("execution_no") or ""): row
-                         for row in journal_fill_rows}
+        journal_fill_rows = [
+            row for row in journal if row.get("event") == "FILL_RECORDED"
+        ]
+        journal_fills = {
+            str(row.get("execution_no") or ""): row for row in journal_fill_rows
+        }
         if len(journal_fills) != len(journal_fill_rows):
             reasons.append("duplicate_registry_execution")
-        matched = sorted(fills_by_key.get((record, code, order), []),
-                         key=lambda item: item.timestamp)
+        matched = sorted(
+            fills_by_key.get((record, code, order), []), key=lambda item: item.timestamp
+        )
         for fill in matched:
             f = fill.fields
             execution = str(f.get("execution_no") or "").strip()
             delta = _safe_int(f.get("fill_qty"), -1)
             observed_cumulative = _safe_int(f.get("order_filled_qty"), -1)
             remaining = _safe_int(f.get("order_remaining_qty"), -1)
-            if (not execution or execution in seen_executions or delta <= 0
+            if (
+                not execution
+                or execution in seen_executions
+                or delta <= 0
                 or observed_cumulative != cumulative + delta
                 or observed_cumulative + remaining != submitted
                 or f.get("pipeline_lifecycle_population_scope") != "real_record_bound"
                 or str(f.get("actual_order_submitted")).lower() != "true"
                 or str(f.get("broker_order_forbidden")).lower() != "false"
-                or (not single_owner
-                    and _safe_int(journal_fills.get(execution, {}).get("filled_qty"), -1)
-                        != observed_cumulative)):
+                or (
+                    not single_owner
+                    and _safe_int(
+                        journal_fills.get(execution, {}).get("filled_qty"), -1
+                    )
+                    != observed_cumulative
+                )
+            ):
                 reasons.append("broker_fill_owner_or_quantity_mismatch")
                 continue
             seen_executions.add(execution)
             cumulative = observed_cumulative
-            verified_fills.append({"execution_id": execution, "qty": delta,
-                                   "at": fill.timestamp,
-                                   "price": _safe_float(f.get("fill_price"), default=float("nan"))})
+            verified_fills.append(
+                {
+                    "execution_id": execution,
+                    "qty": delta,
+                    "at": fill.timestamp,
+                    "price": _safe_float(f.get("fill_price"), default=float("nan")),
+                }
+            )
         if not single_owner and len(journal_fills) != len(verified_fills):
             if journal_fills or matched:
                 reasons.append("fill_census_mismatch")
@@ -1830,215 +2023,371 @@ def _buy_parent_handoff_projection(
             reasons.append("cancel_ack_without_request")
         registry_terminal = any(
             row.get("state") == "ORDER_TERMINAL"
-            and bool(row.get("terminal_reconciliation")) for row in journal)
+            and bool(row.get("terminal_reconciliation"))
+            for row in journal
+        )
         # A native full fill has no residual order quantity. Its exact complete
         # execution set is distinct from partial/cancel terminal reconciliation.
-        full_fill_terminal = bool(cumulative == submitted > 0 and verified_fills
-            and len(journal_fills) == len(verified_fills) and any(
+        full_fill_terminal = bool(
+            cumulative == submitted > 0
+            and verified_fills
+            and len(journal_fills) == len(verified_fills)
+            and any(
                 row.get("state") == "ORDER_TERMINAL"
                 and _safe_int(row.get("filled_qty"), -1) == submitted
-                for row in journal))
+                for row in journal
+            )
+        )
         registry_terminal = registry_terminal or full_fill_terminal
-        if (not single_owner and cumulative == submitted > 0
-            and not registry_terminal):
+        if not single_owner and cumulative == submitted > 0 and not registry_terminal:
             reasons.append("full_buy_registry_terminal_unobserved")
         if terminal:
             terminal_fields = terminal_event.fields
-            if (terminal_fields.get("terminal_conflict") == "True"
+            if (
+                terminal_fields.get("terminal_conflict") == "True"
                 or _safe_int(terminal_fields.get("order_filled_qty"), -1) != cumulative
-                or _safe_int(terminal_fields.get("order_requested_qty"), -1) != submitted
-                or terminal_event.timestamp < max((row["at"] for row in verified_fills),
-                                                   default="")
-                or terminal_fields.get("terminal_reason") not in {
+                or _safe_int(terminal_fields.get("order_requested_qty"), -1)
+                != submitted
+                or terminal_event.timestamp
+                < max((row["at"] for row in verified_fills), default="")
+                or terminal_fields.get("terminal_reason")
+                not in {
                     "terminal_absence_and_owner_inventory_exact",
-                    "terminal_absence_and_inventory_exact"}
-                or (not single_owner and not registry_terminal)):
+                    "terminal_absence_and_inventory_exact",
+                }
+                or (not single_owner and not registry_terminal)
+            ):
                 reasons.append("terminal_owner_unreconciled")
         trade = trades_by_id.get(record)
         sellable = None
         if cumulative and not reasons and trade:
-            single_parent = buy_orders_by_record[record] == {order} and sum(
-                1 for item in entry_events if isinstance(item, dict)
-                and str(item.get("record_id") or "") == record
-                and item.get("stage") == "order_leg_sent"
-            ) == 1
+            single_parent = (
+                buy_orders_by_record[record] == {order}
+                and sum(
+                    1
+                    for item in entry_events
+                    if isinstance(item, dict)
+                    and str(item.get("record_id") or "") == record
+                    and item.get("stage") == "order_leg_sent"
+                )
+                == 1
+            )
             sold = 0
             seen_sells: set[tuple[str, str]] = set()
-            for sale in (sorted(sells_by_record[record], key=lambda item: item.timestamp) if single_parent else []):
+            for sale in (
+                sorted(sells_by_record[record], key=lambda item: item.timestamp)
+                if single_parent
+                else []
+            ):
                 f = sale.fields
-                sale_id = (str(f.get("order_no") or ""),
-                           str(f.get("execution_no") or ""))
+                sale_id = (
+                    str(f.get("order_no") or ""),
+                    str(f.get("execution_no") or ""),
+                )
                 delta = _safe_int(f.get("main_lifecycle_exit_qty"), -1)
-                if (not all(sale_id) or sale_id in seen_sells or delta <= 0
+                if (
+                    not all(sale_id)
+                    or sale_id in seen_sells
+                    or delta <= 0
                     or _safe_int(f.get("cumulative_sell_qty"), -1) != sold + delta
-                    or f.get("pipeline_lifecycle_population_scope") != "real_record_bound"
+                    or f.get("pipeline_lifecycle_population_scope")
+                    != "real_record_bound"
                     or str(f.get("actual_order_submitted")).lower() != "true"
                     or str(f.get("broker_order_forbidden")).lower() != "false"
-                    or sold + delta > sum(item["qty"] for item in verified_fills
-                                          if item["at"] <= sale.timestamp)):
+                    or sold + delta
+                    > sum(
+                        item["qty"]
+                        for item in verified_fills
+                        if item["at"] <= sale.timestamp
+                    )
+                ):
                     reasons.append("sell_quantity_or_identity_unreconciled")
                     break
                 seen_sells.add(sale_id)
                 sold += delta
             if sold > cumulative:
                 reasons.append("sell_exceeds_verified_buy")
-            if (single_parent and not reasons
-                and str(trade.get("status") or "").upper() in
-                    {"HOLDING", "SELL_ORDERED", "COMPLETED"}
-                and _safe_int(trade.get("buy_qty"), -1) == cumulative):
+            if (
+                single_parent
+                and not reasons
+                and str(trade.get("status") or "").upper()
+                in {"HOLDING", "SELL_ORDERED", "COMPLETED"}
+                and _safe_int(trade.get("buy_qty"), -1) == cumulative
+            ):
                 sellable = cumulative - sold
             elif not reasons and single_parent:
                 reasons.append("position_quantity_or_parent_census_unreconciled")
         row = {
-            "record_id": record or None, "attempt_id": attempt or None,
+            "record_id": record or None,
+            "attempt_id": attempt or None,
             "observed_parent_id": parent or None,
             "parent_id": parent if not reasons else None,
             "child_id": child if not reasons else None,
-            "intent_id": intent or None, "order_id": order or None,
+            "intent_id": intent or None,
+            "order_id": order or None,
             "execution_ids": [item["execution_id"] for item in verified_fills],
-            "owner_type": fields.get("buy_owner_type"), "owner_id": owner or None,
+            "owner_type": fields.get("buy_owner_type"),
+            "owner_id": owner or None,
             "custody_mode": mode or None,
-            "account_key": account or None, "route": route or None,
-            'position_cycle_id':fields.get('buy_position_cycle_id'),
+            "account_key": account or None,
+            "route": route or None,
+            "position_cycle_id": fields.get("buy_position_cycle_id"),
             "session": fields.get("market_session_bucket"),
             "submitted_at": event.get("emitted_at"),
             "terminal_observed": terminal,
-            "cancel_requested": cancel_requested, "cancel_ack_observed": cancel_ack,
+            "cancel_requested": cancel_requested,
+            "cancel_ack_observed": cancel_ack,
             "planned_qty": planned if planned > 0 else None,
             "submitted_qty": submitted if submitted > 0 else None,
             "filled_qty": cumulative if verified_fills else None,
-            "unsubmitted_qty": planned - submitted if planned >= submitted > 0 else None,
-            "sellable_qty": sellable, "cost_krw": None,
-            "state": ("quarantined" if reasons else
-                      "cancel_ack_terminal_pending" if cancel_ack and not terminal else
-                      "cancel_pending" if cancel_requested and not terminal else
-                      "unobserved" if not verified_fills else
-                      "full" if cumulative == submitted else
-                      "partial_terminal" if terminal else "partial_open"),
+            "unsubmitted_qty": (
+                planned - submitted if planned >= submitted > 0 else None
+            ),
+            "sellable_qty": sellable,
+            "cost_krw": None,
+            "state": (
+                "quarantined"
+                if reasons
+                else (
+                    "cancel_ack_terminal_pending"
+                    if cancel_ack and not terminal
+                    else (
+                        "cancel_pending"
+                        if cancel_requested and not terminal
+                        else (
+                            "unobserved"
+                            if not verified_fills
+                            else (
+                                "full"
+                                if cumulative == submitted
+                                else "partial_terminal" if terminal else "partial_open"
+                            )
+                        )
+                    )
+                )
+            ),
             "source_quality_reasons": sorted(set(reasons)),
         }
         rows.append(row)
         fills_by_row[id(row)] = verified_fills
         rows_by_key[key] = row
-        counts["quarantined" if reasons else "unobserved" if not verified_fills
-               else "valid"] += 1
+        counts[
+            (
+                "quarantined"
+                if reasons
+                else "unobserved" if not verified_fills else "valid"
+            )
+        ] += 1
     # Reconcile split children once as a whole position. Never assign one
     # position's complete SELL quantity to every individual BUY child.
     grouped = defaultdict(list)
     for row in rows:
-        grouped[row['record_id']].append(row)
+        grouped[row["record_id"]].append(row)
     for record, children in grouped.items():
-        if len(children)<2 or any(c['source_quality_reasons'] for c in children):
+        if len(children) < 2 or any(c["source_quality_reasons"] for c in children):
             continue
-        trade=trades_by_id.get(record) or {}
-        orders={str(c['order_id'] or '') for c in children}
-        parents={c['parent_id'] for c in children}
-        cycles={str(c.get('position_cycle_id') or '') for c in children}
-        journal_orders={str(r.get('broker_order_no')) for r in registry_events
-            if r.get('order_date')==source_date and r.get('owner_id')=='main_scalping:'+record
-            and r.get('side')=='BUY' and r.get('action')=='NEW' and r.get('broker_order_no')}
-        total=sum(_safe_int(c.get('filled_qty'),0) for c in children)
-        planned={c.get('planned_qty') for c in children}
-        valid=(len(orders)==len(children) and orders==buy_orders_by_record[record]==journal_orders
-            and len(parents)==1 and None not in parents and len(cycles)==1 and '' not in cycles
-            and cycles=={str(trade.get('position_cycle_id') or trade.get('id') or '')}
-            and len(planned)==1 and None not in planned and next(iter(planned))>=total
-            and _safe_int(trade.get('buy_qty'),-1)==total
-            and str(trade.get('status') or '').upper() in {'HOLDING','SELL_ORDERED','COMPLETED'}
-            and len({c['account_key'] for c in children})==1
-            and len({c['owner_id'] for c in children})==1)
-        fills=[f for c in children for f in fills_by_row[id(c)]]
-        sold=0; seen_sells=set()
+        trade = trades_by_id.get(record) or {}
+        orders = {str(c["order_id"] or "") for c in children}
+        parents = {c["parent_id"] for c in children}
+        cycles = {str(c.get("position_cycle_id") or "") for c in children}
+        journal_orders = {
+            str(r.get("broker_order_no"))
+            for r in registry_events
+            if r.get("order_date") == source_date
+            and r.get("owner_id") == "main_scalping:" + record
+            and r.get("side") == "BUY"
+            and r.get("action") == "NEW"
+            and r.get("broker_order_no")
+        }
+        total = sum(_safe_int(c.get("filled_qty"), 0) for c in children)
+        planned = {c.get("planned_qty") for c in children}
+        valid = (
+            len(orders) == len(children)
+            and orders == buy_orders_by_record[record] == journal_orders
+            and len(parents) == 1
+            and None not in parents
+            and len(cycles) == 1
+            and "" not in cycles
+            and cycles == {str(trade.get("position_cycle_id") or trade.get("id") or "")}
+            and len(planned) == 1
+            and None not in planned
+            and next(iter(planned)) >= total
+            and _safe_int(trade.get("buy_qty"), -1) == total
+            and str(trade.get("status") or "").upper()
+            in {"HOLDING", "SELL_ORDERED", "COMPLETED"}
+            and len({c["account_key"] for c in children}) == 1
+            and len({c["owner_id"] for c in children}) == 1
+        )
+        fills = [f for c in children for f in fills_by_row[id(c)]]
+        sold = 0
+        seen_sells = set()
+
         def clock(value):
-            value=_parse_dt(value)
-            if value is None:raise ValueError('split_fill_clock_missing')
-            return (value.replace(tzinfo=ZoneInfo('Asia/Seoul')) if value.tzinfo is None else value).timestamp()
+            value = _parse_dt(value)
+            if value is None:
+                raise ValueError("split_fill_clock_missing")
+            return (
+                value.replace(tzinfo=ZoneInfo("Asia/Seoul"))
+                if value.tzinfo is None
+                else value
+            ).timestamp()
+
         try:
-            for sale in sorted(sells_by_record[record],key=lambda e:clock(e.timestamp)):
-                f=sale.fields; identity=(str(f.get('order_no') or ''),str(f.get('execution_no') or ''))
-                delta=_safe_int(f.get('main_lifecycle_exit_qty'),-1)
-                available=sum(fill['qty'] for fill in fills if clock(fill['at'])<=clock(sale.timestamp))
-                if (not all(identity) or identity in seen_sells or delta<=0
-                        or _safe_int(f.get('cumulative_sell_qty'),-1)!=sold+delta
-                        or f.get('pipeline_lifecycle_population_scope')!='real_record_bound'
-                        or str(f.get('actual_order_submitted')).lower()!='true'
-                        or str(f.get('broker_order_forbidden')).lower()!='false'
-                        or sold+delta>available):
-                    valid=False;break
-                seen_sells.add(identity);sold+=delta
-        except (ValueError,TypeError,OverflowError):
-            valid=False
+            for sale in sorted(
+                sells_by_record[record], key=lambda e: clock(e.timestamp)
+            ):
+                f = sale.fields
+                identity = (
+                    str(f.get("order_no") or ""),
+                    str(f.get("execution_no") or ""),
+                )
+                delta = _safe_int(f.get("main_lifecycle_exit_qty"), -1)
+                available = sum(
+                    fill["qty"]
+                    for fill in fills
+                    if clock(fill["at"]) <= clock(sale.timestamp)
+                )
+                if (
+                    not all(identity)
+                    or identity in seen_sells
+                    or delta <= 0
+                    or _safe_int(f.get("cumulative_sell_qty"), -1) != sold + delta
+                    or f.get("pipeline_lifecycle_population_scope")
+                    != "real_record_bound"
+                    or str(f.get("actual_order_submitted")).lower() != "true"
+                    or str(f.get("broker_order_forbidden")).lower() != "false"
+                    or sold + delta > available
+                ):
+                    valid = False
+                    break
+                seen_sells.add(identity)
+                sold += delta
+        except (ValueError, TypeError, OverflowError):
+            valid = False
         for child in children:
-            child['sellable_qty']=None  # No invented per-leg SELL allocation.
-            child['position_sellable_qty']=total-sold if valid else None
+            child["sellable_qty"] = None  # No invented per-leg SELL allocation.
+            child["position_sellable_qty"] = total - sold if valid else None
             if not valid:
-                child['source_quality_reasons']=['position_quantity_or_parent_census_unreconciled']
-                child['state']='quarantined'
-                child['parent_id']=child['child_id']=None
-    for key in ('valid','quarantined','unobserved'):
-        counts[key]=sum(('quarantined' if r['source_quality_reasons'] else
-            'unobserved' if not r['execution_ids'] else 'valid')==key for r in rows)
-    return {"source_date": source_date, "counts": counts, "rows": rows,
-            "response_uncertain_attempts": uncertain_attempts,
-            "authority": "source_only_no_order_or_position_mutation"}
+                child["source_quality_reasons"] = [
+                    "position_quantity_or_parent_census_unreconciled"
+                ]
+                child["state"] = "quarantined"
+                child["parent_id"] = child["child_id"] = None
+    for key in ("valid", "quarantined", "unobserved"):
+        counts[key] = sum(
+            (
+                "quarantined"
+                if r["source_quality_reasons"]
+                else "unobserved" if not r["execution_ids"] else "valid"
+            )
+            == key
+            for r in rows
+        )
+    return {
+        "source_date": source_date,
+        "counts": counts,
+        "rows": rows,
+        "response_uncertain_attempts": uncertain_attempts,
+        "authority": "source_only_no_order_or_position_mutation",
+    }
 
 
 def _load_buy_parent_handoff_projection(
-    source_date: str, holding_events: list[HoldingEvent], trades: list[dict],
+    source_date: str,
+    holding_events: list[HoldingEvent],
+    trades: list[dict],
     holding_status: str,
 ) -> dict:
     """Read the bounded submit census and owner journal for the first holder."""
-    empty = {"source_date": source_date,
-             "counts": {key: None for key in
-                        ("raw", "valid", "excluded", "quarantined", "unobserved")},
-             "rows": [], "authority": "source_only_no_order_or_position_mutation"}
+    empty = {
+        "source_date": source_date,
+        "counts": {
+            key: None
+            for key in ("raw", "valid", "excluded", "quarantined", "unobserved")
+        },
+        "rows": [],
+        "authority": "source_only_no_order_or_position_mutation",
+    }
     if holding_status == "source_gap_structured_partition_missing":
         return {**empty, "source_quality_status": holding_status}
     try:
         from src.engine.scalping import entry_split_order_plan as entry
+
         sent, projection = entry._bounded_execution_projection(
-            source_date, stages={"order_leg_sent", "order_leg_no_response",
-                                 "order_leg_fail", "entry_order_cancel_requested",
-                                 "entry_order_cancel_confirmed"},
+            source_date,
+            stages={
+                "order_leg_sent",
+                "order_leg_no_response",
+                "order_leg_fail",
+                "entry_order_cancel_requested",
+                "entry_order_cancel_confirmed",
+            },
             families=("dynamic_entry_price_resolver", "entry_price_execution_quality"),
         )
         registry, custody = entry._execution_registry_snapshot()
     except (OSError, ValueError, TypeError, KeyError) as exc:
-        return {**empty, "source_quality_status":
-                "source_gap_buy_handoff_input:" + type(exc).__name__}
+        return {
+            **empty,
+            "source_quality_status": "source_gap_buy_handoff_input:"
+            + type(exc).__name__,
+        }
     if projection.get("status") != "ready" or custody.get("status") != "verified":
-        return {**empty, "source_quality_status": "source_gap_buy_handoff_generation",
-                "entry_projection": projection, "owner_registry": custody}
+        return {
+            **empty,
+            "source_quality_status": "source_gap_buy_handoff_generation",
+            "entry_projection": projection,
+            "owner_registry": custody,
+        }
     policy_generation = {}
     try:
         from src.trading.config.native_owner_policy import resolve_symbol_owner_policy
     except Exception:
         resolve_symbol_owner_policy = None
-    for symbol in {str(row.get("stock_code") or "")[:6] for row in sent
-                   if (row.get("fields") or {}).get("buy_registry_mode")
-                   == "single_owner_unregistered"}:
+    for symbol in {
+        str(row.get("stock_code") or "")[:6]
+        for row in sent
+        if (row.get("fields") or {}).get("buy_registry_mode")
+        == "single_owner_unregistered"
+    }:
         if resolve_symbol_owner_policy is None:
             break
         try:
             decision = resolve_symbol_owner_policy(symbol, target_date=source_date)
-            if (decision.target_date == source_date and not decision.symbol_selected
-                and not decision.coexistence_enabled):
+            if (
+                decision.target_date == source_date
+                and not decision.symbol_selected
+                and not decision.coexistence_enabled
+            ):
                 policy_generation[symbol] = (decision.reason, decision.policy_hash)
-            from src.trading.config.native_owner_policy import historical_single_owner_binding
+            from src.trading.config.native_owner_policy import (
+                historical_single_owner_binding,
+            )
+
             for event in sent:
-                fields = event.get('fields') or {}
-                if str(event.get('stock_code') or '')[:6] == symbol and historical_single_owner_binding(
-                        {**fields, 'stock_code': symbol}, observed_at=event.get('timestamp')):
-                    policy_generation[symbol] = (str(fields.get('buy_owner_policy_reason') or ''),
-                                                 str(fields.get('buy_owner_policy_hash') or ''))
+                fields = event.get("fields") or {}
+                if str(event.get("stock_code") or "")[
+                    :6
+                ] == symbol and historical_single_owner_binding(
+                    {**fields, "stock_code": symbol}, observed_at=event.get("timestamp")
+                ):
+                    policy_generation[symbol] = (
+                        str(fields.get("buy_owner_policy_reason") or ""),
+                        str(fields.get("buy_owner_policy_hash") or ""),
+                    )
         except Exception:
             continue
     result = _buy_parent_handoff_projection(
-        source_date, sent, registry, holding_events, trades, policy_generation)
+        source_date, sent, registry, holding_events, trades, policy_generation
+    )
     if holding_status != "structured_partition_read":
-        result["source_quality_status"] = "source_gap_holding_partition:" + holding_status
-    elif (result["counts"]["quarantined"] or result["counts"]["unobserved"]
-          or result["response_uncertain_attempts"]):
+        result["source_quality_status"] = (
+            "source_gap_holding_partition:" + holding_status
+        )
+    elif (
+        result["counts"]["quarantined"]
+        or result["counts"]["unobserved"]
+        or result["response_uncertain_attempts"]
+    ):
         result["source_quality_status"] = "source_gap_buy_parent_handoff"
     else:
         result["source_quality_status"] = (
@@ -2056,22 +2405,33 @@ def _quantity_sell_receipt_observations(events: list[HoldingEvent], *, record_id
     native identity, original broker clock and equal payload stays a ledger gap.
     """
     from src.engine.lifecycle.broker_cost_reconciliation import digest
+
     grouped = defaultdict(list)
     for index, event in enumerate(events):
         if event.stage == "sell_completed":
-            grouped[(event.code, str(event.fields.get("order_no") or ""),
-                     str(event.fields.get("execution_no") or ""))].append((index, event))
+            grouped[
+                (
+                    event.code,
+                    str(event.fields.get("order_no") or ""),
+                    str(event.fields.get("execution_no") or ""),
+                )
+            ].append((index, event))
     replacements, removed, audit = {}, set(), []
     for key, observations in grouped.items():
         if len(observations) < 2 or not all(key):
             continue
         try:
-            wrappers = [event for _, event in observations
-                        if event.fields.get("native_receipt_identity_schema")]
+            wrappers = [
+                event
+                for _, event in observations
+                if event.fields.get("native_receipt_identity_schema")
+            ]
             if not wrappers:
                 continue
             native = wrappers[0].fields
-            native_fields = {k: v for k, v in native.items() if k.startswith("native_receipt_")}
+            native_fields = {
+                k: v for k, v in native.items() if k.startswith("native_receipt_")
+            }
             # Structured pipeline rows carry the record outside fields; log
             # readers retain their original in-field ID. A conflicting caller
             # binding must never merge receipts across positions.
@@ -2079,95 +2439,201 @@ def _quantity_sell_receipt_observations(events: list[HoldingEvent], *, record_id
             if not record or record_id is not None and record != str(record_id):
                 continue
             schema = native.get("native_receipt_identity_schema")
-            identity_valid = (schema == "broker_position_sell_receipt_v1"
+            identity_valid = (
+                schema == "broker_position_sell_receipt_v1"
                 and native.get("native_receipt_position_key") == "record:" + record
                 and native.get("native_receipt_order_no") == key[1]
                 and native.get("native_receipt_execution_no") == key[2]
-                and native.get("native_receipt_buy_fill_identity") == native.get("holding_path_buy_fill_identity"))
-            observation_provenance_valid = str(native.get("broker_execution_provenance_complete")).lower() == "true"
-            lineage_gap = native.get("native_receipt_entry_lineage_status") == "source_gap"
-            if schema == "native_entry_sell_receipt_v1" or not observation_provenance_valid or lineage_gap:
+                and native.get("native_receipt_buy_fill_identity")
+                == native.get("holding_path_buy_fill_identity")
+            )
+            observation_provenance_valid = (
+                str(native.get("broker_execution_provenance_complete")).lower()
+                == "true"
+            )
+            lineage_gap = (
+                native.get("native_receipt_entry_lineage_status") == "source_gap"
+            )
+            if (
+                schema == "native_entry_sell_receipt_v1"
+                or not observation_provenance_valid
+                or lineage_gap
+            ):
                 # Revalidate the producer's terminal custody identity. An unknown
                 # execution venue remains unknown; it does not make unchanged
                 # observations of one acknowledged receipt multiple fills.
-                from src.engine.sniper_execution_receipts import _native_sell_receipt_identity
-                restored = {k: (True if v == "True" else False if v == "False" else v)
-                            for k, v in native.items() if not k.startswith("native_receipt_")}
+                from src.engine.sniper_execution_receipts import (
+                    _native_sell_receipt_identity,
+                )
+
+                restored = {
+                    k: (True if v == "True" else False if v == "False" else v)
+                    for k, v in native.items()
+                    if not k.startswith("native_receipt_")
+                }
                 # The pipeline logger renders integral lifecycle prices as
                 # e.g. "51300.0". Restore only that lossless typed context;
                 # official raw FIDs and the original payload remain untouched.
-                for name in ('main_lifecycle_exit_qty','main_lifecycle_exit_price'):
-                    value=restored.get(name)
-                    if isinstance(value,str) and re.fullmatch(r'[0-9]+(?:\.0+)?',value):
-                        restored[name]=int(value.partition('.')[0])
-                received_at = datetime.fromisoformat(str(native.get("native_receipt_observed_at")))
+                for name in ("main_lifecycle_exit_qty", "main_lifecycle_exit_price"):
+                    value = restored.get(name)
+                    if isinstance(value, str) and re.fullmatch(
+                        r"[0-9]+(?:\.0+)?", value
+                    ):
+                        restored[name] = int(value.partition(".")[0])
+                received_at = datetime.fromisoformat(
+                    str(native.get("native_receipt_observed_at"))
+                )
                 stock = {"id": record, "code": key[0]}
                 terminal_identity = _native_sell_receipt_identity(
-                    stock, key[0], record, "sell_completed", restored, received_at)
+                    stock, key[0], record, "sell_completed", restored, received_at
+                )
                 if schema == "native_entry_sell_receipt_v1":
-                    stock["last_watching_ai_attempt_decision_trace_id"] = native.get("native_receipt_entry_trace_id")
+                    stock["last_watching_ai_attempt_decision_trace_id"] = native.get(
+                        "native_receipt_entry_trace_id"
+                    )
                 identity = _native_sell_receipt_identity(
-                    stock, key[0], record, "sell_completed", restored, received_at)
+                    stock, key[0], record, "sell_completed", restored, received_at
+                )
                 # Issued v1 UNKNOWN-venue wrappers predate these two metadata
                 # fields. Authenticate the original complete identity; neither
                 # omission may replace custody, the source gap, or raw clocks.
-                venue_metadata = {"native_receipt_operational_venue",
-                                  "native_receipt_venue_assignment_authority"}
-                if (schema == "broker_position_sell_receipt_v1"
-                        and set(identity) - set(native_fields) == venue_metadata
-                        and set(native_fields) <= set(identity)
-                        and native.get("native_receipt_execution_venue_status") == "unknown_preserved"
-                        and native.get("native_receipt_source_gap") == "actual_execution_venue_unresolved"
-                        and restored.get("actual_execution_venue") == "UNKNOWN"):
-                    identity = {k: v for k, v in identity.items() if k not in venue_metadata}
-                identity_valid = bool(identity and set(identity) == set(native_fields)
-                    and all(str(native_fields[k]) == str(v) for k, v in identity.items()))
+                venue_metadata = {
+                    "native_receipt_operational_venue",
+                    "native_receipt_venue_assignment_authority",
+                }
+                if (
+                    schema == "broker_position_sell_receipt_v1"
+                    and set(identity) - set(native_fields) == venue_metadata
+                    and set(native_fields) <= set(identity)
+                    and native.get("native_receipt_execution_venue_status")
+                    == "unknown_preserved"
+                    and native.get("native_receipt_source_gap")
+                    == "actual_execution_venue_unresolved"
+                    and restored.get("actual_execution_venue") == "UNKNOWN"
+                ):
+                    identity = {
+                        k: v for k, v in identity.items() if k not in venue_metadata
+                    }
+                identity_valid = bool(
+                    identity
+                    and set(identity) == set(native_fields)
+                    and all(
+                        str(native_fields[k]) == str(v) for k, v in identity.items()
+                    )
+                )
                 observation_provenance_valid = observation_provenance_valid or (
-                    terminal_identity.get("native_receipt_source_gap") == "actual_execution_venue_unresolved")
-            if (not identity_valid
-                    or str(native.get("native_receipt_record_id")) != record
-                    or native.get("native_receipt_stock_code") != key[0]
-                    or not (lineage_gap or re.fullmatch(r"[0-9a-f]{64}", str(native.get("holding_path_buy_fill_identity") or "")))
-                    or not observation_provenance_valid
-                    or native.get("broker_execution_time_source") != "official_fid_908"
-                    or native.get("decision_authority") != "broker_sell_fill_observation_only"
-                    or native.get("pipeline_lifecycle_population_scope") != "real_record_bound"
-                    or str(native.get("actual_order_submitted")).lower() != "true"
-                    or str(native.get("broker_order_forbidden")).lower() != "false"):
+                    terminal_identity.get("native_receipt_source_gap")
+                    == "actual_execution_venue_unresolved"
+                )
+            if (
+                not identity_valid
+                or str(native.get("native_receipt_record_id")) != record
+                or native.get("native_receipt_stock_code") != key[0]
+                or not (
+                    lineage_gap
+                    or re.fullmatch(
+                        r"[0-9a-f]{64}",
+                        str(native.get("holding_path_buy_fill_identity") or ""),
+                    )
+                )
+                or not observation_provenance_valid
+                or native.get("broker_execution_time_source") != "official_fid_908"
+                or native.get("decision_authority")
+                != "broker_sell_fill_observation_only"
+                or native.get("pipeline_lifecycle_population_scope")
+                != "real_record_bound"
+                or str(native.get("actual_order_submitted")).lower() != "true"
+                or str(native.get("broker_order_forbidden")).lower() != "false"
+            ):
                 continue
+
             def clock(value, *, allow_naive=False):
                 value = datetime.fromisoformat(str(value))
                 if value.tzinfo is None and not allow_naive:
                     raise ValueError("sell_receipt_original_clock_timezone_missing")
-                return value.replace(tzinfo=ZoneInfo("Asia/Seoul")) if value.tzinfo is None else value.astimezone(ZoneInfo("Asia/Seoul"))
+                return (
+                    value.replace(tzinfo=ZoneInfo("Asia/Seoul"))
+                    if value.tzinfo is None
+                    else value.astimezone(ZoneInfo("Asia/Seoul"))
+                )
+
             occurred = clock(native["broker_execution_observed_at"])
             received = clock(native["broker_execution_received_at"])
-            if (clock(native["native_receipt_observed_at"]) != received or occurred > received
-                    or occurred.microsecond or native.get("broker_execution_time_raw") != occurred.strftime("%H%M%S")):
+            if (
+                clock(native["native_receipt_observed_at"]) != received
+                or occurred > received
+                or occurred.microsecond
+                or native.get("broker_execution_time_raw")
+                != occurred.strftime("%H%M%S")
+            ):
                 continue
-            payload = {k: v for k, v in native.items() if not k.startswith("native_receipt_")}
+            payload = {
+                k: v for k, v in native.items() if not k.startswith("native_receipt_")
+            }
             evidence = hashlib.sha256()
             for _, event in observations:
                 fields = event.fields
-                wrapper = {k: v for k, v in fields.items() if k.startswith("native_receipt_")}
-                if (event.code != key[0] or clock(event.timestamp, allow_naive=True) < occurred
-                        or {k: v for k, v in fields.items() if not k.startswith("native_receipt_")} != payload
-                        or wrapper and wrapper != native_fields):
+                wrapper = {
+                    k: v for k, v in fields.items() if k.startswith("native_receipt_")
+                }
+                if (
+                    event.code != key[0]
+                    or clock(event.timestamp, allow_naive=True) < occurred
+                    or {
+                        k: v
+                        for k, v in fields.items()
+                        if not k.startswith("native_receipt_")
+                    }
+                    != payload
+                    or wrapper
+                    and wrapper != native_fields
+                ):
                     raise ValueError("sell_receipt_reobservation_conflict")
-                evidence.update((digest(dict(timestamp=event.timestamp, code=event.code,
-                    stage=event.stage, fields=fields)) + "\n").encode("ascii"))
+                evidence.update(
+                    (
+                        digest(
+                            dict(
+                                timestamp=event.timestamp,
+                                code=event.code,
+                                stage=event.stage,
+                                fields=fields,
+                            )
+                        )
+                        + "\n"
+                    ).encode("ascii")
+                )
             first_index, first = observations[0]
-            replacements[first_index] = HoldingEvent(occurred.replace(tzinfo=None).isoformat(sep=" "),
-                first.name, first.code, first.stage, dict(first.fields), first.raw_line)
+            replacements[first_index] = HoldingEvent(
+                occurred.replace(tzinfo=None).isoformat(sep=" "),
+                first.name,
+                first.code,
+                first.stage,
+                dict(first.fields),
+                first.raw_line,
+            )
             removed.update(index for index, _ in observations[1:])
-            audit.append(dict(order_no=key[1], execution_no=key[2], record_id=record,
-                native_identity_sha256=digest(native_fields), original_occurred_at=occurred.isoformat(),
-                original_received_at=received.isoformat(), first_observed_at=observations[0][1].timestamp,
-                last_observed_at=observations[-1][1].timestamp, observation_count=len(observations),
-                reobserved_count=len(observations)-1, source_event_digests_sha256=evidence.hexdigest()))
+            audit.append(
+                dict(
+                    order_no=key[1],
+                    execution_no=key[2],
+                    record_id=record,
+                    native_identity_sha256=digest(native_fields),
+                    original_occurred_at=occurred.isoformat(),
+                    original_received_at=received.isoformat(),
+                    first_observed_at=observations[0][1].timestamp,
+                    last_observed_at=observations[-1][1].timestamp,
+                    observation_count=len(observations),
+                    reobserved_count=len(observations) - 1,
+                    source_event_digests_sha256=evidence.hexdigest(),
+                )
+            )
         except (ValueError, TypeError, KeyError, OverflowError):
             continue
-    return [replacements.get(index, event) for index, event in enumerate(events) if index not in removed], audit
+    return [
+        replacements.get(index, event)
+        for index, event in enumerate(events)
+        if index not in removed
+    ], audit
 
 
 def _completed_execution_ledger(trade: dict, events: list[HoldingEvent]) -> dict:
@@ -2188,17 +2654,29 @@ def _completed_execution_ledger(trade: dict, events: list[HoldingEvent]) -> dict
     buy_fill_legs: list[dict] = []
     sell_fill_legs: list[dict] = []
     sell_order_numbers: set[str] = set()
-    buy_events = [event for event in events if event.stage in {
-        "position_rebased_after_fill", "scale_in_executed"
-    }]
-    sell_events = [event for event in events if event.stage in {
-        "sell_partial_fill_progress", "nxt_rising_missed_tp1_partial_fill_progress",
-        "nxt_rising_missed_tp1_partial_sell_completed", "sell_completed"
-    }]
-    sell_events.sort(key=lambda event: (
-        event.timestamp, event.stage == "sell_completed",
-        _safe_int(event.fields.get("cumulative_sell_qty"), -1)
-    ))
+    buy_events = [
+        event
+        for event in events
+        if event.stage in {"position_rebased_after_fill", "scale_in_executed"}
+    ]
+    sell_events = [
+        event
+        for event in events
+        if event.stage
+        in {
+            "sell_partial_fill_progress",
+            "nxt_rising_missed_tp1_partial_fill_progress",
+            "nxt_rising_missed_tp1_partial_sell_completed",
+            "sell_completed",
+        }
+    ]
+    sell_events.sort(
+        key=lambda event: (
+            event.timestamp,
+            event.stage == "sell_completed",
+            _safe_int(event.fields.get("cumulative_sell_qty"), -1),
+        )
+    )
     if not buy_events:
         reasons.append("source_gap_buy_fill_missing")
     if not sell_events or sell_events[-1].stage != "sell_completed":
@@ -2224,64 +2702,89 @@ def _completed_execution_ledger(trade: dict, events: list[HoldingEvent]) -> dict
             continue
         seen_buy.add(identity)
         previous = buy_orders.get(order, 0)
-        if (delta <= 0 or price <= 0 or cumulative != previous + delta
-                or requested < cumulative or remaining < 0
-                or requested != cumulative + remaining):
+        if (
+            delta <= 0
+            or price <= 0
+            or cumulative != previous + delta
+            or requested < cumulative
+            or remaining < 0
+            or requested != cumulative + remaining
+        ):
             reasons.append("source_gap_buy_quantity_or_price")
             continue
-        if (str(fields.get("receipt_quantity_contract_complete")).lower() != "true"
-                or str(fields.get("receipt_unit_fill_consistent")).lower() != "true"
-                or str(fields.get("actual_order_submitted")).lower() != "true"
-                or str(fields.get("broker_order_forbidden")).lower() != "false"
-                or fields.get("pipeline_lifecycle_population_scope") != "real_record_bound"):
+        if (
+            str(fields.get("receipt_quantity_contract_complete")).lower() != "true"
+            or str(fields.get("receipt_unit_fill_consistent")).lower() != "true"
+            or str(fields.get("actual_order_submitted")).lower() != "true"
+            or str(fields.get("broker_order_forbidden")).lower() != "false"
+            or fields.get("pipeline_lifecycle_population_scope") != "real_record_bound"
+        ):
             reasons.append("source_gap_buy_receipt_authority_or_cost")
             continue
         buy_orders[order] = cumulative
         buy_qty += delta
         accepted_buy_fills.append((event.timestamp, delta))
-        buy_fill_legs.append({
-            "at": event.timestamp,
-            "order_no": order,
-            "execution_no": execution,
-            "qty": delta,
-            "price": price,
-            "amount_krw": delta * price,
-            "route": fields.get("broker_route") or fields.get("broker_order_route")
-            or fields.get("main_lifecycle_route"),
-        })
+        buy_fill_legs.append(
+            {
+                "at": event.timestamp,
+                "order_no": order,
+                "execution_no": execution,
+                "qty": delta,
+                "price": price,
+                "amount_krw": delta * price,
+                "route": fields.get("broker_route")
+                or fields.get("broker_order_route")
+                or fields.get("main_lifecycle_route"),
+            }
+        )
         buy_amount += delta * price
         buy_quality.add(str(fields.get("fill_quality") or "unknown").lower())
 
     terminal_buy_orders = {
         str(event.fields.get("orig_ord_no") or "").strip(): event
-        for event in events if event.stage in {
-            "entry_buy_order_terminal_confirmed", "scale_in_buy_order_terminal_confirmed"
+        for event in events
+        if event.stage
+        in {
+            "entry_buy_order_terminal_confirmed",
+            "scale_in_buy_order_terminal_confirmed",
         }
     }
     for order, filled_qty in buy_orders.items():
-        last_fill = next((event for event in reversed(buy_events)
-                          if event.fields.get("order_no") == order), None)
+        last_fill = next(
+            (
+                event
+                for event in reversed(buy_events)
+                if event.fields.get("order_no") == order
+            ),
+            None,
+        )
         if last_fill is None:
             continue
-        remaining = _safe_int(last_fill.fields.get(
-            "order_remaining_qty", last_fill.fields.get("remaining_qty")
-        ), -1)
+        remaining = _safe_int(
+            last_fill.fields.get(
+                "order_remaining_qty", last_fill.fields.get("remaining_qty")
+            ),
+            -1,
+        )
         if remaining == 0:
             continue
         terminal_buy = terminal_buy_orders.get(order)
         terminal_fields = terminal_buy.fields if terminal_buy else {}
-        if (terminal_buy is None
-                or terminal_buy.timestamp < last_fill.timestamp
-                or terminal_fields.get("pipeline_lifecycle_population_scope") != "real_record_bound"
-                or str(terminal_fields.get("actual_order_submitted")).lower() != "true"
-                or str(terminal_fields.get("broker_order_forbidden")).lower() != "false"
-                or terminal_fields.get("terminal_reason") not in {
-                    "terminal_absence_and_owner_inventory_exact",
-                    "terminal_absence_and_inventory_exact",
-                }
-                or _safe_int(terminal_fields.get("order_filled_qty"), -1) != filled_qty
-                or _safe_int(terminal_fields.get("order_requested_qty"), -1)
-                   < filled_qty):
+        if (
+            terminal_buy is None
+            or terminal_buy.timestamp < last_fill.timestamp
+            or terminal_fields.get("pipeline_lifecycle_population_scope")
+            != "real_record_bound"
+            or str(terminal_fields.get("actual_order_submitted")).lower() != "true"
+            or str(terminal_fields.get("broker_order_forbidden")).lower() != "false"
+            or terminal_fields.get("terminal_reason")
+            not in {
+                "terminal_absence_and_owner_inventory_exact",
+                "terminal_absence_and_inventory_exact",
+            }
+            or _safe_int(terminal_fields.get("order_filled_qty"), -1) != filled_qty
+            or _safe_int(terminal_fields.get("order_requested_qty"), -1) < filled_qty
+        ):
             reasons.append("source_gap_buy_order_terminal_missing")
 
     for event in sell_events:
@@ -2304,14 +2807,16 @@ def _completed_execution_ledger(trade: dict, events: list[HoldingEvent]) -> dict
         if delta <= 0 or price <= 0 or cumulative != sell_qty + delta:
             reasons.append("source_gap_sell_quantity_or_price")
             continue
-        if (str(fields.get("actual_order_submitted")).lower() != "true"
-                or str(fields.get("broker_order_forbidden")).lower() != "false"
-                or fields.get("pipeline_lifecycle_population_scope") != "real_record_bound"):
+        if (
+            str(fields.get("actual_order_submitted")).lower() != "true"
+            or str(fields.get("broker_order_forbidden")).lower() != "false"
+            or fields.get("pipeline_lifecycle_population_scope") != "real_record_bound"
+        ):
             reasons.append("source_gap_sell_receipt_authority")
             continue
         fee = _safe_float(fields.get("main_lifecycle_fees_taxes_krw"), -1.0)
-        net_pnl = _safe_float(fields.get(
-            "main_lifecycle_realized_net_pnl_krw"), default=float("nan")
+        net_pnl = _safe_float(
+            fields.get("main_lifecycle_realized_net_pnl_krw"), default=float("nan")
         )
         economics_complete = fields.get(
             "sell_receipt_economics_complete",
@@ -2325,11 +2830,17 @@ def _completed_execution_ledger(trade: dict, events: list[HoldingEvent]) -> dict
             "sell_receipt_unit_fill_consistent",
             fields.get("sell_execution_receipt_unit_fill_consistent"),
         )
-        if (str(quantity_complete).lower() != "true"
-                or str(unit_consistent).lower() != "true"):
+        if (
+            str(quantity_complete).lower() != "true"
+            or str(unit_consistent).lower() != "true"
+        ):
             reasons.append("source_gap_sell_leg_cost_or_quantity")
             continue
-        if str(economics_complete).lower() != "true" or fee < 0 or not math.isfinite(net_pnl):
+        if (
+            str(economics_complete).lower() != "true"
+            or fee < 0
+            or not math.isfinite(net_pnl)
+        ):
             reasons.append("source_gap_sell_leg_configured_cost")
         sell_orders[order] = sell_orders.get(order, 0) + delta
         sell_order_numbers.add(order)
@@ -2337,41 +2848,54 @@ def _completed_execution_ledger(trade: dict, events: list[HoldingEvent]) -> dict
         sell_amount += delta * price
         sell_fee_amount += max(0, fee)
         sell_leg_net_pnl += net_pnl if math.isfinite(net_pnl) else 0
-        sell_fill_legs.append({
-            "at": event.timestamp,
-            "order_no": order,
-            "execution_no": execution,
-            "qty": delta,
-            "price": price,
-            "fees_taxes_krw": fee,
-            "net_pnl_krw": net_pnl,
-            "route": fields.get("broker_route") or fields.get("broker_order_route")
-            or fields.get("main_lifecycle_route"),
-        })
-        if sell_qty > sum(qty for at, qty in accepted_buy_fills
-                          if at <= event.timestamp):
+        sell_fill_legs.append(
+            {
+                "at": event.timestamp,
+                "order_no": order,
+                "execution_no": execution,
+                "qty": delta,
+                "price": price,
+                "fees_taxes_krw": fee,
+                "net_pnl_krw": net_pnl,
+                "route": fields.get("broker_route")
+                or fields.get("broker_order_route")
+                or fields.get("main_lifecycle_route"),
+            }
+        )
+        if sell_qty > sum(
+            qty for at, qty in accepted_buy_fills if at <= event.timestamp
+        ):
             reasons.append("source_gap_negative_position_balance")
 
-    terminal = next((event for event in reversed(events)
-                     if event.stage == "sell_completed"), None)
+    terminal = next(
+        (event for event in reversed(events) if event.stage == "sell_completed"), None
+    )
     final_fields = terminal.fields if terminal else {}
     if terminal and _safe_int(final_fields.get("remaining_sell_qty"), -1) != 0:
         reasons.append("source_gap_sell_residual_unresolved")
     if not buy_qty or buy_qty != sell_qty:
         reasons.append("source_gap_position_quantity_not_conserved")
-    if buy_qty and not any(event.stage in {
-        "sell_partial_fill_progress",
-        "nxt_rising_missed_tp1_partial_fill_progress",
-        "nxt_rising_missed_tp1_partial_sell_completed",
-    } for event in sell_events):
+    if buy_qty and not any(
+        event.stage
+        in {
+            "sell_partial_fill_progress",
+            "nxt_rising_missed_tp1_partial_fill_progress",
+            "nxt_rising_missed_tp1_partial_sell_completed",
+        }
+        for event in sell_events
+    ):
         if _safe_int(trade.get("buy_qty"), -1) != buy_qty:
             reasons.append("source_gap_db_buy_quantity_mismatch")
-    if buy_qty and abs(_safe_float(trade.get("buy_price"), -1.0)
-                       - buy_amount / buy_qty) > 1.0:
+    if (
+        buy_qty
+        and abs(_safe_float(trade.get("buy_price"), -1.0) - buy_amount / buy_qty) > 1.0
+    ):
         reasons.append("source_gap_db_buy_cost_mismatch")
     if sell_qty and _safe_float(trade.get("sell_price"), 0.0) > 0:
-        if abs(_safe_float(trade.get("sell_price"), 0.0)
-               - sell_amount / sell_qty) > 1.0:
+        if (
+            abs(_safe_float(trade.get("sell_price"), 0.0) - sell_amount / sell_qty)
+            > 1.0
+        ):
             reasons.append("source_gap_db_sell_price_mismatch")
     return {
         "strict_completion_status": "eligible" if not reasons else "excluded",
@@ -2380,11 +2904,20 @@ def _completed_execution_ledger(trade: dict, events: list[HoldingEvent]) -> dict
         "buy_fill_amount": buy_amount if buy_qty else None,
         "sell_filled_qty": sell_qty,
         "sell_fill_amount": sell_amount if sell_qty else None,
-        "sell_fill_fees_taxes_krw": sell_fee_amount if sell_qty and "source_gap_sell_leg_configured_cost" not in reasons else None,
-        "sell_leg_net_pnl_krw": sell_leg_net_pnl if sell_qty and "source_gap_sell_leg_configured_cost" not in reasons else None,
+        "sell_fill_fees_taxes_krw": (
+            sell_fee_amount
+            if sell_qty and "source_gap_sell_leg_configured_cost" not in reasons
+            else None
+        ),
+        "sell_leg_net_pnl_krw": (
+            sell_leg_net_pnl
+            if sell_qty and "source_gap_sell_leg_configured_cost" not in reasons
+            else None
+        ),
         "position_residual_qty": buy_qty - sell_qty,
         "buy_fill_quality": (
-            "partial_fill" if "partial_fill" in buy_quality
+            "partial_fill"
+            if "partial_fill" in buy_quality
             else "full_fill" if buy_quality == {"full_fill"} else "unknown"
         ),
         "buy_execution_count": len(seen_buy),
@@ -2398,7 +2931,8 @@ def _completed_execution_ledger(trade: dict, events: list[HoldingEvent]) -> dict
 
 
 def _sell_balance_reconciliation_generation_status(
-    trade: dict, event: HoldingEvent | None,
+    trade: dict,
+    event: HoldingEvent | None,
 ) -> str:
     if event is None or event.fields.get("decision_authority") != (
         "broker_balance_reconciliation_only"
@@ -2413,17 +2947,19 @@ def _sell_balance_reconciliation_generation_status(
         contract = json.loads(raw) if isinstance(raw, str) else raw
         if not isinstance(contract, dict):
             return "invalid"
-        digest = hashlib.sha256(json.dumps(
-            contract, sort_keys=True, separators=(",", ":"),
-        ).encode("utf-8")).hexdigest()
+        digest = hashlib.sha256(
+            json.dumps(
+                contract,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
     except (TypeError, ValueError):
         return "invalid"
     source_date = str(contract.get("source_date") or "")
     try:
         order_time = str(contract["order_time"])
-        order_at = datetime.strptime(
-            source_date + order_time, "%Y-%m-%d%H%M%S"
-        )
+        order_at = datetime.strptime(source_date + order_time, "%Y-%m-%d%H%M%S")
         buy_at = _parse_dt(contract.get("owner_buy_time"))
         snapshot_at = _parse_dt(contract.get("broker_snapshot_at"))
         if buy_at is None or snapshot_at is None:
@@ -2431,44 +2967,41 @@ def _sell_balance_reconciliation_generation_status(
         if buy_at.tzinfo is not None:
             buy_at = buy_at.astimezone(ZoneInfo("Asia/Seoul")).replace(tzinfo=None)
         if snapshot_at.tzinfo is not None:
-            snapshot_at = snapshot_at.astimezone(
-                ZoneInfo("Asia/Seoul")
-            ).replace(tzinfo=None)
+            snapshot_at = snapshot_at.astimezone(ZoneInfo("Asia/Seoul")).replace(
+                tzinfo=None
+            )
     except (KeyError, TypeError, ValueError):
         return "invalid"
-    if (digest != sha
-            or contract.get("schema") != "sell_balance_reconciliation_source_v1"
-            or contract.get("source_api") != "kt00007"
-            or fields.get("sell_reconciliation_source_date") != source_date
-            or snapshot_at.date().isoformat() != source_date
-            or not buy_at <= order_at <= snapshot_at
-            or str(contract.get("record_id")) != str(trade.get("id"))
-            or contract.get("stock_code") != str(trade.get("code") or "")[:6]
-            or str(contract.get("order_no") or "") != str(
-                fields.get("sell_order_no") or ""
-            )
-            or _safe_int(contract.get("submitted_qty"), -1) <= 0
-            or _safe_int(contract.get("submitted_qty"), -1) != _safe_int(
-                contract.get("filled_qty"), -2
-            )
-            or _safe_int(contract.get("filled_qty"), -1) != _safe_int(
-                fields.get("sell_qty"), -2
-            )
-            or _safe_int(contract.get("filled_qty"), -1) != _safe_int(
-                trade.get("buy_qty"), -2
-            )
-            or _safe_int(contract.get("remaining_qty"), -1) != 0
-            or _safe_float(contract.get("execution_price"), -1) != _safe_float(
-                fields.get("sell_price"), -2
-            )
-            or _safe_float(contract.get("execution_price"), -1) != _safe_float(
-                trade.get("sell_price"), -2
-            )
-            or (str(contract.get("broker_sor_flag") or "").upper() != "Y"
-                and str(contract.get("broker_route") or "").upper()
-                not in {"1", "2", "KRX", "NXT", "SOR"})
-            or not contract.get("owner_buy_time")
-            or not contract.get("broker_snapshot_at")):
+    if (
+        digest != sha
+        or contract.get("schema") != "sell_balance_reconciliation_source_v1"
+        or contract.get("source_api") != "kt00007"
+        or fields.get("sell_reconciliation_source_date") != source_date
+        or snapshot_at.date().isoformat() != source_date
+        or not buy_at <= order_at <= snapshot_at
+        or str(contract.get("record_id")) != str(trade.get("id"))
+        or contract.get("stock_code") != str(trade.get("code") or "")[:6]
+        or str(contract.get("order_no") or "") != str(fields.get("sell_order_no") or "")
+        or _safe_int(contract.get("submitted_qty"), -1) <= 0
+        or _safe_int(contract.get("submitted_qty"), -1)
+        != _safe_int(contract.get("filled_qty"), -2)
+        or _safe_int(contract.get("filled_qty"), -1)
+        != _safe_int(fields.get("sell_qty"), -2)
+        or _safe_int(contract.get("filled_qty"), -1)
+        != _safe_int(trade.get("buy_qty"), -2)
+        or _safe_int(contract.get("remaining_qty"), -1) != 0
+        or _safe_float(contract.get("execution_price"), -1)
+        != _safe_float(fields.get("sell_price"), -2)
+        or _safe_float(contract.get("execution_price"), -1)
+        != _safe_float(trade.get("sell_price"), -2)
+        or (
+            str(contract.get("broker_sor_flag") or "").upper() != "Y"
+            and str(contract.get("broker_route") or "").upper()
+            not in {"1", "2", "KRX", "NXT", "SOR"}
+        )
+        or not contract.get("owner_buy_time")
+        or not contract.get("broker_snapshot_at")
+    ):
         return "invalid"
     return "normalized_contract_bound"
 
@@ -2476,44 +3009,66 @@ def _sell_balance_reconciliation_generation_status(
 def _verified_cost_custody(trade: dict, ledger: dict, rows) -> dict:
     """Supply absent exact-cost context only from fully verified Main custody."""
     from src.engine.lifecycle.broker_cost_reconciliation import digest
+
     record = str(trade.get("id") or "")
     owners = [row for row in rows if str(row.get("record_id")) == record]
-    if any(not isinstance(row.get("account_key"), str) or not row["account_key"].strip()
-           for row in owners):
+    if any(
+        not isinstance(row.get("account_key"), str) or not row["account_key"].strip()
+        for row in owners
+    ):
         return {}
     accounts = {row.get("account_key") for row in owners}
-    if (not owners or not record or len(accounts) != 1 or not next(iter(accounts), None)
-            or ledger["buy_filled_qty"] <= 0
-            or any(row.get("source_quality_reasons")
-                   or row.get("state") not in {"full", "partial_terminal"}
-                   or row.get("owner_type") != "main_scalping"
-                   or row.get("owner_id") != "main_scalping:" + record
-                   for row in owners)
-            or sum(_safe_int(row.get("filled_qty"), 0) for row in owners)
-               != ledger["buy_filled_qty"]):
+    if (
+        not owners
+        or not record
+        or len(accounts) != 1
+        or not next(iter(accounts), None)
+        or ledger["buy_filled_qty"] <= 0
+        or any(
+            row.get("source_quality_reasons")
+            or row.get("state") not in {"full", "partial_terminal"}
+            or row.get("owner_type") != "main_scalping"
+            or row.get("owner_id") != "main_scalping:" + record
+            for row in owners
+        )
+        or sum(_safe_int(row.get("filled_qty"), 0) for row in owners)
+        != ledger["buy_filled_qty"]
+    ):
         return {}
-    return {"owner": "main", "account_scope_sha256": digest(["broker_account", next(iter(accounts))])}
+    return {
+        "owner": "main",
+        "account_scope_sha256": digest(["broker_account", next(iter(accounts))]),
+    }
 
 
 def _quantity_registry_index(registry_events):
     owners, claims = defaultdict(list), defaultdict(list)
     for row in registry_events:
         if row.get("broker_order_no"):
-            claims[(str(row.get("order_date")), str(row["broker_order_no"]))].append(row)
+            claims[(str(row.get("order_date")), str(row["broker_order_no"]))].append(
+                row
+            )
         if row.get("side") == "BUY" and row.get("action") == "NEW":
             for owner in {row.get("owner_id"), row.get("position_id")} - {None, ""}:
                 owners[owner].append(row)
     return owners, claims
 
 
-def _quantity_registry_fill_custody(trade: dict, ledger: dict, registry_events: list[dict],
-                                    generation: dict, *, registry_index=None) -> list[dict]:
+def _quantity_registry_fill_custody(
+    trade: dict,
+    ledger: dict,
+    registry_events: list[dict],
+    generation: dict,
+    *,
+    registry_index=None,
+) -> list[dict]:
     """Prove research BUY custody from the exact verified registry fill census.
 
     This does not create submit/parent, CANCEL, broker terminal, or Main execution
     authority. Unfilled intents remain separately visible in the proof.
     """
     from src.engine.lifecycle.broker_cost_reconciliation import digest
+
     record = str(trade.get("id") or "")
     owner, stock = "main_scalping:" + record, str(trade.get("code") or "")[:6]
     legs = ledger.get("buy_fill_legs") or []
@@ -2526,11 +3081,19 @@ def _quantity_registry_fill_custody(trade: dict, ledger: dict, registry_events: 
             if key in indexed:
                 return []
             indexed[key] = leg
-        owners, order_claims = registry_index if registry_index is not None else _quantity_registry_index(registry_events)
+        owners, order_claims = (
+            registry_index
+            if registry_index is not None
+            else _quantity_registry_index(registry_events)
+        )
         selected = owners.get(owner, [])
-        if not selected or any(row.get("owner_id") != owner or row.get("owner_type") != "main_scalping"
-                or row.get("symbol") != stock or row.get("position_id", owner) != owner
-                for row in selected):
+        if not selected or any(
+            row.get("owner_id") != owner
+            or row.get("owner_type") != "main_scalping"
+            or row.get("symbol") != stock
+            or row.get("position_id", owner) != owner
+            for row in selected
+        ):
             return []
         intents = defaultdict(list)
         for row in selected:
@@ -2540,34 +3103,75 @@ def _quantity_registry_fill_custody(trade: dict, ledger: dict, registry_events: 
         output, accepted, unfilled = [], set(), []
         accounts = set()
         for intent, journal in intents.items():
-            immutable = ("account_key", "order_date", "owner_type", "owner_id", "symbol", "side", "action", "route", "quantity")
+            immutable = (
+                "account_key",
+                "order_date",
+                "owner_type",
+                "owner_id",
+                "symbol",
+                "side",
+                "action",
+                "route",
+                "quantity",
+            )
             anchor = journal[0]
-            if any(any(row.get(k) != anchor.get(k) for k in immutable) for row in journal):
+            if any(
+                any(row.get(k) != anchor.get(k) for k in immutable) for row in journal
+            ):
                 return []
-            orders = {str(row["broker_order_no"]) for row in journal if row.get("broker_order_no")}
+            orders = {
+                str(row["broker_order_no"])
+                for row in journal
+                if row.get("broker_order_no")
+            }
             fills = [row for row in journal if row.get("event") == "FILL_RECORDED"]
             if not fills:
                 unfilled.append(intent)
                 continue
-            if (len(orders) != 1 or not any(row.get("event") == "ORDER_BOUND" for row in journal)
-                    or not anchor.get("account_key") or anchor.get("route") not in {"KRX", "NXT", "SOR"}):
+            if (
+                len(orders) != 1
+                or not any(row.get("event") == "ORDER_BOUND" for row in journal)
+                or not anchor.get("account_key")
+                or anchor.get("route") not in {"KRX", "NXT", "SOR"}
+            ):
                 return []
             order = next(iter(orders))
             claims = order_claims.get((str(anchor["order_date"]), order), [])
-            if any(row.get("intent_id") != intent or row.get("account_key") != anchor["account_key"]
-                    or row.get("owner_id") != owner or row.get("owner_type") != "main_scalping"
-                    or row.get("side") != "BUY" or row.get("action") != "NEW" for row in claims):
+            if any(
+                row.get("intent_id") != intent
+                or row.get("account_key") != anchor["account_key"]
+                or row.get("owner_id") != owner
+                or row.get("owner_type") != "main_scalping"
+                or row.get("side") != "BUY"
+                or row.get("action") != "NEW"
+                for row in claims
+            ):
                 return []
             cumulative, amount = 0, 0.0
             for fill in fills:
-                key = (str(anchor["order_date"]), order, str(fill.get("execution_no") or ""))
+                key = (
+                    str(anchor["order_date"]),
+                    order,
+                    str(fill.get("execution_no") or ""),
+                )
                 leg = indexed.get(key)
-                if key in accepted or leg is None or leg.get("route") != anchor["route"]:
+                if (
+                    key in accepted
+                    or leg is None
+                    or leg.get("route") != anchor["route"]
+                ):
                     return []
-                delta, price = _safe_int(leg.get("qty"), -1), _safe_float(leg.get("price"), -1)
-                cumulative += delta; amount += delta * price
-                if (delta <= 0 or price <= 0 or _safe_int(fill.get("filled_qty"), -1) != cumulative
-                        or abs(_safe_float(fill.get("fill_amount"), -1) - amount) > 0.000001):
+                delta, price = _safe_int(leg.get("qty"), -1), _safe_float(
+                    leg.get("price"), -1
+                )
+                cumulative += delta
+                amount += delta * price
+                if (
+                    delta <= 0
+                    or price <= 0
+                    or _safe_int(fill.get("filled_qty"), -1) != cumulative
+                    or abs(_safe_float(fill.get("fill_amount"), -1) - amount) > 0.000001
+                ):
                     return []
                 accepted.add(key)
             # A complete exact fill census proves zero order residual. A stale
@@ -2575,14 +3179,28 @@ def _quantity_registry_fill_custody(trade: dict, ledger: dict, registry_events: 
             if cumulative != _safe_int(anchor.get("quantity"), -1):
                 return []
             accounts.add(str(anchor["account_key"]))
-            output.append(dict(record_id=record, owner_type="main_scalping", owner_id=owner,
-                account_key=anchor["account_key"], state="full", filled_qty=cumulative,
-                source_quality_reasons=[], intent_id=intent, order_id=order,
-                order_date=anchor["order_date"], route=anchor["route"],
-                custody_basis="verified_registry_and_exact_broker_fill_census",
-                registry_source_sha256=generation["sha256"], registry_tail_hash=generation["tail_hash"],
-                fill_event_sha256=digest(fills), fill_clock_source="original_broker_receipt",
-                terminal_observed=False, cost_krw=None))
+            output.append(
+                dict(
+                    record_id=record,
+                    owner_type="main_scalping",
+                    owner_id=owner,
+                    account_key=anchor["account_key"],
+                    state="full",
+                    filled_qty=cumulative,
+                    source_quality_reasons=[],
+                    intent_id=intent,
+                    order_id=order,
+                    order_date=anchor["order_date"],
+                    route=anchor["route"],
+                    custody_basis="verified_registry_and_exact_broker_fill_census",
+                    registry_source_sha256=generation["sha256"],
+                    registry_tail_hash=generation["tail_hash"],
+                    fill_event_sha256=digest(fills),
+                    fill_clock_source="original_broker_receipt",
+                    terminal_observed=False,
+                    cost_krw=None,
+                )
+            )
         if accepted != set(indexed) or len(accounts) != 1:
             return []
         unfilled = sorted(unfilled)
@@ -2598,6 +3216,7 @@ def _quantity_registry_fill_custody(trade: dict, ledger: dict, registry_events: 
 def _quantity_research_custody(prepared_records, native_rows):
     """Join prior/current BUY fills to a bounded local, hash-verified journal."""
     from src.engine.lifecycle.broker_cost_allocation import custody_account
+
     selected, missing = {}, []
     native_by_record = defaultdict(list)
     for row in native_rows:
@@ -2606,101 +3225,170 @@ def _quantity_research_custody(prepared_records, native_rows):
         record = str(trade.get("id") or "")
         rows = native_by_record.get(record, [])
         try:
-            custody_account(record, ledger["buy_fill_legs"], rows,
-                            allow_open=str(trade.get("status")).upper() != "COMPLETED")
+            custody_account(
+                record,
+                ledger["buy_fill_legs"],
+                rows,
+                allow_open=str(trade.get("status")).upper() != "COMPLETED",
+            )
             selected[record] = rows
         except (ValueError, TypeError, KeyError, ArithmeticError):
             selected[record] = rows
-            incomplete = {"position_quantity_or_parent_census_unreconciled",
-                          "full_buy_registry_terminal_unobserved"}
+            incomplete = {
+                "position_quantity_or_parent_census_unreconciled",
+                "full_buy_registry_terminal_unobserved",
+            }
             contradictory = any(
                 row.get("owner_type") != "main_scalping"
                 or row.get("owner_id") != "main_scalping:" + record
                 or not row.get("account_key")
-                or set(row.get("source_quality_reasons") or []) - (incomplete |
-                    ({"terminal_owner_unreconciled"} if not row.get("filled_qty") else set()))
-                for row in rows)
+                or set(row.get("source_quality_reasons") or [])
+                - (
+                    incomplete
+                    | (
+                        {"terminal_owner_unreconciled"}
+                        if not row.get("filled_qty")
+                        else set()
+                    )
+                )
+                for row in rows
+            )
             if not contradictory:
                 missing.append((trade, ledger))
     generation = {"status": "not_required", "source_only": True}
     if not missing:
         return selected, generation
-    from src.trading.order.owner_custody_registry import OrderOwnerRegistry, OwnerRegistryError
+    from src.trading.order.owner_custody_registry import (
+        OrderOwnerRegistry,
+        OwnerRegistryError,
+    )
     from src.engine.lifecycle.holding_window_generation import source_stat
     from src.engine.lifecycle.research_input_budget import Claim
+
     path = Path(DATA_DIR) / "runtime/order_owner_registry.jsonl"
     try:
         before = source_stat(path.stat())
         if path.is_symlink() or before[2] > 4 * 1024 * 1024:
             raise ValueError("quantity_research_registry_partition_required")
         with Claim(before[2] * 8):
-            registry = OrderOwnerRegistry(path).verified_events_snapshot(max_bytes=4 * 1024 * 1024)
+            registry = OrderOwnerRegistry(path).verified_events_snapshot(
+                max_bytes=4 * 1024 * 1024
+            )
             sha = hashlib.sha256()
             with path.open("rb") as handle:
                 for block in iter(lambda: handle.read(65536), b""):
                     sha.update(block)
             if source_stat(path.stat()) != before:
                 raise ValueError("quantity_research_registry_changed_during_report")
-            generation = dict(status="verified", path=str(path), size=before[2], stat=list(before),
-                sha256=sha.hexdigest(), tail_hash=registry[-1]["event_hash"] if registry else "0" * 64,
-                source_only=True, maximum_source_bytes=4 * 1024 * 1024)
+            generation = dict(
+                status="verified",
+                path=str(path),
+                size=before[2],
+                stat=list(before),
+                sha256=sha.hexdigest(),
+                tail_hash=registry[-1]["event_hash"] if registry else "0" * 64,
+                source_only=True,
+                maximum_source_bytes=4 * 1024 * 1024,
+            )
             registry_index = _quantity_registry_index(registry)
             for trade, ledger in missing:
-                proof = _quantity_registry_fill_custody(trade, ledger, registry, generation,
-                                                      registry_index=registry_index)
+                proof = _quantity_registry_fill_custody(
+                    trade, ledger, registry, generation, registry_index=registry_index
+                )
                 record = str(trade["id"])
                 native_accounts = {row.get("account_key") for row in selected[record]}
-                if proof and (not native_accounts or native_accounts == {proof[0]["account_key"]}):
+                if proof and (
+                    not native_accounts or native_accounts == {proof[0]["account_key"]}
+                ):
                     selected[record] = proof
     except (OSError, ValueError, TypeError, KeyError, OwnerRegistryError) as exc:
-        if str(exc).startswith("shared_research_budget_") or "changed_during_report" in str(exc) or "changed_during_read" in str(exc):
+        if (
+            str(exc).startswith("shared_research_budget_")
+            or "changed_during_report" in str(exc)
+            or "changed_during_read" in str(exc)
+        ):
             raise
-        generation = dict(status="source_gap", reason=str(exc), path=str(path), source_only=True)
+        generation = dict(
+            status="source_gap", reason=str(exc), path=str(path), source_only=True
+        )
     return selected, generation
 
 
 def _verify_quantity_research_registry(generation):
     if generation.get("status") == "verified":
         from src.engine.lifecycle.holding_window_generation import source_stat
+
         if list(source_stat(Path(generation["path"]).stat())) != generation["stat"]:
             raise ValueError("quantity_research_registry_changed_during_report")
 
 
-def _quantity_research_position(trade: dict, events: list[HoldingEvent], ledger: dict,
-                                custody_rows: list[dict]) -> dict:
+def _quantity_research_position(
+    trade: dict, events: list[HoldingEvent], ledger: dict, custody_rows: list[dict]
+) -> dict:
     events, _ = _quantity_sell_receipt_observations(events)
-    terminal = next((event for event in reversed(events) if event.stage == "sell_completed"), None)
+    terminal = next(
+        (event for event in reversed(events) if event.stage == "sell_completed"), None
+    )
     completed_at = _parse_dt(terminal.timestamp) if terminal else None
     if completed_at is not None:
-        completed_at = (completed_at.replace(tzinfo=ZoneInfo("Asia/Seoul"))
-                        if completed_at.tzinfo is None else completed_at.astimezone(ZoneInfo("Asia/Seoul")))
+        completed_at = (
+            completed_at.replace(tzinfo=ZoneInfo("Asia/Seoul"))
+            if completed_at.tzinfo is None
+            else completed_at.astimezone(ZoneInfo("Asia/Seoul"))
+        )
     reasons = list(ledger["strict_completion_reasons"])
-    if terminal and (terminal.fields.get("decision_authority") != "broker_sell_fill_observation_only"
-            or str(terminal.fields.get("actual_order_submitted")).lower() != "true"
-            or str(terminal.fields.get("broker_order_forbidden")).lower() != "false"
-            or terminal.fields.get("pipeline_lifecycle_population_scope") != "real_record_bound"):
+    if terminal and (
+        terminal.fields.get("decision_authority") != "broker_sell_fill_observation_only"
+        or str(terminal.fields.get("actual_order_submitted")).lower() != "true"
+        or str(terminal.fields.get("broker_order_forbidden")).lower() != "false"
+        or terminal.fields.get("pipeline_lifecycle_population_scope")
+        != "real_record_bound"
+    ):
         reasons.append("source_gap_final_sell_authority")
-    terminal_observed = bool(terminal and "source_gap_final_sell_authority" not in reasons
-                             and _safe_int(terminal.fields.get("remaining_sell_qty"), -1) == 0)
-    return dict(record_id=str(trade.get("id") or ""), symbol=str(trade.get("code") or "")[:6],
+    terminal_observed = bool(
+        terminal
+        and "source_gap_final_sell_authority" not in reasons
+        and _safe_int(terminal.fields.get("remaining_sell_qty"), -1) == 0
+    )
+    return dict(
+        record_id=str(trade.get("id") or ""),
+        symbol=str(trade.get("code") or "")[:6],
         status=str(trade.get("status") or "").upper(),
-        completion_observed_date=completed_at.date().isoformat() if completed_at else None,
+        completion_observed_date=(
+            completed_at.date().isoformat() if completed_at else None
+        ),
         completed_at=completed_at.isoformat() if completed_at else None,
         terminal_observed=terminal_observed,
-        buy_legs=ledger["buy_fill_legs"], sell_legs=ledger["sell_fill_legs"],
+        buy_legs=ledger["buy_fill_legs"],
+        sell_legs=ledger["sell_fill_legs"],
         fact_buy_price=trade.get("buy_price"),
-        fact_sell_price=trade.get("sell_price") if str(trade.get("status")).upper() == "COMPLETED" else None,
-        custody_rows=[row for row in custody_rows if str(row.get("record_id")) == str(trade.get("id"))],
-        execution_source_quality_reasons=sorted(set(reasons)))
+        fact_sell_price=(
+            trade.get("sell_price")
+            if str(trade.get("status")).upper() == "COMPLETED"
+            else None
+        ),
+        custody_rows=[
+            row
+            for row in custody_rows
+            if str(row.get("record_id")) == str(trade.get("id"))
+        ],
+        execution_source_quality_reasons=sorted(set(reasons)),
+    )
 
 
-def _quantity_research_source_dates(positions: list[dict], target_date: str) -> list[str]:
+def _quantity_research_source_dates(
+    positions: list[dict], target_date: str
+) -> list[str]:
     dates = {target_date}
     for position in positions:
         for leg in position["buy_legs"] + position["sell_legs"]:
             at = _parse_dt(str(leg.get("at") or ""))
             if at is not None:
-                at = at.replace(tzinfo=ZoneInfo("Asia/Seoul")) if at.tzinfo is None else at.astimezone(ZoneInfo("Asia/Seoul"))
+                at = (
+                    at.replace(tzinfo=ZoneInfo("Asia/Seoul"))
+                    if at.tzinfo is None
+                    else at.astimezone(ZoneInfo("Asia/Seoul"))
+                )
                 dates.add(at.date().isoformat())
     return sorted(dates)
 
@@ -2709,20 +3397,35 @@ def _quantity_research_pending_reasons(rows: list[dict]) -> list[str]:
     """Queue bounded reason codes; retain full source detail in each receipt."""
     reasons = set()
     for row in rows:
-        detail = str(row["quantity_research_cost"].get("reason") or "research_cost_source_unresolved")
+        detail = str(
+            row["quantity_research_cost"].get("reason")
+            or "research_cost_source_unresolved"
+        )
         for issue in detail.split(";"):
             code = issue.partition(":")[0]
-            reasons.add(code if re.fullmatch(r"[A-Za-z0-9_.-]{1,120}", code)
-                        else "research_cost_source_unresolved")
+            reasons.add(
+                code
+                if re.fullmatch(r"[A-Za-z0-9_.-]{1,120}", code)
+                else "research_cost_source_unresolved"
+            )
     ordered = sorted(reasons)
-    return (ordered if len(ordered) <= 32 else
-            ordered[:31] + ["research_cost_additional_reasons_in_receipts"])
+    return (
+        ordered
+        if len(ordered) <= 32
+        else ordered[:31] + ["research_cost_additional_reasons_in_receipts"]
+    )
 
 
 def _completed_trade_projection(
-    trade: dict, events: list[HoldingEvent], compiled: dict,
-    *, cost_receipt: dict | None = None, knowledge_cutoff: float | None = None,
-    broker_cost_source: dict | None = None, cost_custody_rows=(), cost_peer_records=(),
+    trade: dict,
+    events: list[HoldingEvent],
+    compiled: dict,
+    *,
+    cost_receipt: dict | None = None,
+    knowledge_cutoff: float | None = None,
+    broker_cost_source: dict | None = None,
+    cost_custody_rows=(),
+    cost_peer_records=(),
     execution_ledger: dict | None = None,
 ) -> dict | None:
     """Keep the full canonical completion census separate from display recovery."""
@@ -2736,11 +3439,19 @@ def _completed_trade_projection(
     terminal = next(
         (event for event in reversed(events) if event.stage == "sell_completed"), None
     ) or next(
-        (event for event in reversed(events)
-         if event.stage == "sell_completion_reconciliation_gap"), None
+        (
+            event
+            for event in reversed(events)
+            if event.stage == "sell_completion_reconciliation_gap"
+        ),
+        None,
     )
     terminal_fields = terminal.fields if terminal else {}
-    ledger = execution_ledger if execution_ledger is not None else _completed_execution_ledger(trade, events)
+    ledger = (
+        execution_ledger
+        if execution_ledger is not None
+        else _completed_execution_ledger(trade, events)
+    )
     terminal_observed_date = str(terminal.timestamp)[:10] if terminal else None
     sell_date = str(trade.get("sell_time") or "")[:10]
     completion_observed_date = terminal_observed_date or sell_date or None
@@ -2771,17 +3482,21 @@ def _completed_trade_projection(
         and math.isfinite(receipt_pnl)
         and ledger["sell_fill_fees_taxes_krw"] is not None
         and ledger["sell_leg_net_pnl_krw"] is not None
-        and abs(receipt_pnl - ledger["sell_leg_net_pnl_krw"]) <= max(
-            2.0, ledger["sell_execution_count"] * 1.0
+        and abs(receipt_pnl - ledger["sell_leg_net_pnl_krw"])
+        <= max(2.0, ledger["sell_execution_count"] * 1.0)
+        and abs(
+            receipt_pnl
+            - (
+                ledger["sell_fill_amount"]
+                - ledger["buy_fill_amount"]
+                - ledger["sell_fill_fees_taxes_krw"]
+            )
         )
-        and abs(receipt_pnl - (
-            ledger["sell_fill_amount"] - ledger["buy_fill_amount"]
-            - ledger["sell_fill_fees_taxes_krw"]
-        )) <= max(2.0, ledger["sell_execution_count"] * 1.0)
-        and abs(ledger["sell_fill_fees_taxes_krw"]
-                - ledger["sell_fill_amount"] * cost_rate) <= max(
-                    2.0, ledger["sell_execution_count"] * 1.0
-                )
+        <= max(2.0, ledger["sell_execution_count"] * 1.0)
+        and abs(
+            ledger["sell_fill_fees_taxes_krw"] - ledger["sell_fill_amount"] * cost_rate
+        )
+        <= max(2.0, ledger["sell_execution_count"] * 1.0)
         and profit is not None
         and abs(profit - receipt_pnl / ledger["buy_fill_amount"] * 100.0) <= 0.02
     )
@@ -2795,9 +3510,18 @@ def _completed_trade_projection(
         and ledger["strict_completion_status"] == "eligible"
         and rate_reconciled
         and fill_cost_reconciled
-        and str(terminal_fields.get("sell_execution_receipt_economics_complete")).lower() == "true"
-        and str(terminal_fields.get("sell_execution_receipt_quantity_contract_complete")).lower() == "true"
-        and str(terminal_fields.get("sell_execution_receipt_unit_fill_consistent")).lower() == "true"
+        and str(
+            terminal_fields.get("sell_execution_receipt_economics_complete")
+        ).lower()
+        == "true"
+        and str(
+            terminal_fields.get("sell_execution_receipt_quantity_contract_complete")
+        ).lower()
+        == "true"
+        and str(
+            terminal_fields.get("sell_execution_receipt_unit_fill_consistent")
+        ).lower()
+        == "true"
         and _safe_float(terminal_fields.get("main_lifecycle_fees_taxes_krw"), -1.0) >= 0
         and not terminal_fields.get("trade_review_economics_reconciled")
     )
@@ -2807,56 +3531,88 @@ def _completed_trade_projection(
     if not configured_receipt or not math.isfinite(configured_pnl):
         configured_pnl = None
     from src.engine.lifecycle.broker_cost_reconciliation import digest, reconcile
+
     verified_custody = _verified_cost_custody(trade, ledger, cost_custody_rows)
     completed_at = _parse_dt(terminal.timestamp) if terminal else None
     if completed_at is not None and completed_at.tzinfo is None:
         completed_at = completed_at.replace(tzinfo=ZoneInfo("Asia/Seoul"))
     actual_cost = reconcile(
-        cost_receipt, context={
+        cost_receipt,
+        context={
             "position_key": f"record:{trade.get('id')}",
             "symbol": str(trade.get("code") or "")[:6],
-            "owner": terminal_fields.get("holding_cost_owner") or verified_custody.get("owner"),
-            "account_scope_sha256": terminal_fields.get("holding_cost_account_scope_sha256")
-                or verified_custody.get("account_scope_sha256"),
+            "owner": terminal_fields.get("holding_cost_owner")
+            or verified_custody.get("owner"),
+            "account_scope_sha256": terminal_fields.get(
+                "holding_cost_account_scope_sha256"
+            )
+            or verified_custody.get("account_scope_sha256"),
             "buy_fill_identity": digest(ledger["buy_fill_legs"]),
             "completion_observed_date": completion_observed_date,
             "completed_at": completed_at.timestamp() if completed_at else None,
-        }, buy_legs=ledger["buy_fill_legs"], sell_legs=ledger["sell_fill_legs"],
+        },
+        buy_legs=ledger["buy_fill_legs"],
+        sell_legs=ledger["sell_fill_legs"],
         knowledge_cutoff=knowledge_cutoff,
     )
     if cost_receipt is None and broker_cost_source is not None:
         from src.engine.lifecycle.broker_cost_source import reconcile_position
+
         actual_cost = reconcile_position(
-            broker_cost_source, target_date=completion_observed_date,
-            record_id=trade.get("id"), stock_code=str(trade.get("code") or "")[:6],
-            buy_legs=ledger["buy_fill_legs"], sell_legs=ledger["sell_fill_legs"],
-            custody_rows=cost_custody_rows, peer_records=cost_peer_records,
-            knowledge_cutoff=knowledge_cutoff)
+            broker_cost_source,
+            target_date=completion_observed_date,
+            record_id=trade.get("id"),
+            stock_code=str(trade.get("code") or "")[:6],
+            buy_legs=ledger["buy_fill_legs"],
+            sell_legs=ledger["sell_fill_legs"],
+            custody_rows=cost_custody_rows,
+            peer_records=cost_peer_records,
+            knowledge_cutoff=knowledge_cutoff,
+        )
     broker_actual_fee = actual_cost["actual_fees_taxes_krw"]
     exact_pnl = actual_cost["exact_pnl_krw"]
     actual_reconciled = actual_cost["status"] == "actual_cost_reconciled"
-    main_parents = [row for row in cost_custody_rows
-                    if str(row.get('record_id')) == str(trade.get('id'))]
-    automatic_custody = bool(main_parents and all(
-        not row.get('source_quality_reasons') and row.get('state') in {'full', 'partial_terminal'}
-        and row.get('owner_type') == 'main_scalping'
-        and row.get('owner_id') == 'main_scalping:' + str(trade.get('id'))
-        for row in main_parents) and sum(_safe_int(row.get('filled_qty'), 0) for row in main_parents) == ledger['buy_filled_qty'])
+    main_parents = [
+        row
+        for row in cost_custody_rows
+        if str(row.get("record_id")) == str(trade.get("id"))
+    ]
+    automatic_custody = bool(
+        main_parents
+        and all(
+            not row.get("source_quality_reasons")
+            and row.get("state") in {"full", "partial_terminal"}
+            and row.get("owner_type") == "main_scalping"
+            and row.get("owner_id") == "main_scalping:" + str(trade.get("id"))
+            for row in main_parents
+        )
+        and sum(_safe_int(row.get("filled_qty"), 0) for row in main_parents)
+        == ledger["buy_filled_qty"]
+    )
     strict_reasons = list(ledger["strict_completion_reasons"])
     if actual_reconciled:
-        strict_reasons = [reason for reason in strict_reasons
-                          if reason != "source_gap_sell_leg_configured_cost"]
+        strict_reasons = [
+            reason
+            for reason in strict_reasons
+            if reason != "source_gap_sell_leg_configured_cost"
+        ]
     if not rate_reconciled and not actual_reconciled:
         strict_reasons.append("source_gap_profit_rate_unreconciled")
     if not actual_reconciled and (not fill_cost_reconciled or configured_pnl is None):
         strict_reasons.append("source_gap_exact_cost_missing")
     if not actual_reconciled:
         strict_reasons.append("source_gap_broker_actual_cost_missing")
-    if terminal_fields.get("decision_authority") == "broker_balance_reconciliation_only":
+    if (
+        terminal_fields.get("decision_authority")
+        == "broker_balance_reconciliation_only"
+    ):
         strict_reasons.append("source_gap_sell_balance_reconciliation_only")
     if terminal_fields.get("decision_authority") != "broker_sell_fill_observation_only":
         strict_reasons.append("source_gap_final_sell_authority")
-    if terminal_fields.get("trade_review_economics_reconciled") and not actual_reconciled:
+    if (
+        terminal_fields.get("trade_review_economics_reconciled")
+        and not actual_reconciled
+    ):
         strict_reasons.append("source_gap_terminal_db_economics_conflict")
     occurrence_source = str(
         terminal_fields.get("main_lifecycle_execution_occurrence_time_source") or ""
@@ -2869,8 +3625,14 @@ def _completed_trade_projection(
         and quantity_conserved
         and str(terminal_fields.get("order_no") or "").isdigit()
         and str(terminal_fields.get("execution_no") or "").isdigit()
-        and str(terminal_fields.get("sell_execution_receipt_quantity_contract_complete")).lower() == "true"
-        and str(terminal_fields.get("sell_execution_receipt_unit_fill_consistent")).lower() == "true"
+        and str(
+            terminal_fields.get("sell_execution_receipt_quantity_contract_complete")
+        ).lower()
+        == "true"
+        and str(
+            terminal_fields.get("sell_execution_receipt_unit_fill_consistent")
+        ).lower()
+        == "true"
     )
     exact_fill_time = (
         occurrence_time
@@ -2889,53 +3651,69 @@ def _completed_trade_projection(
     submission_fields = {}
     if balance_only:
         order_no = str(terminal_fields.get("sell_order_no") or "").strip()
-        submissions = [event for event in events
+        submissions = [
+            event
+            for event in events
             if event.stage == "sell_order_sent"
             and str(event.fields.get("broker_order_no") or "").strip() == order_no
             and order_no
-            and terminal is not None and event.timestamp <= terminal.timestamp]
-        signatures = {(
-            str(event.fields.get("attempt_id") or ""),
-            str(event.fields.get("main_lifecycle_id") or ""),
-            str(event.fields.get("broker_route") or ""),
-            str(event.fields.get("market_session_bucket") or ""),
-            str(event.fields.get("qty") or ""),
-            str(event.fields.get("requested_qty") or ""),
-            str(event.fields.get("sell_price") or ""),
-        ) for event in submissions}
-        if (len(signatures) == 1 and submissions
-                and all(str(event.fields.get("actual_order_submitted")).lower()
-                        == "true" and
-                        str(event.fields.get("broker_order_forbidden")).lower()
-                        == "false" for event in submissions)):
+            and terminal is not None
+            and event.timestamp <= terminal.timestamp
+        ]
+        signatures = {
+            (
+                str(event.fields.get("attempt_id") or ""),
+                str(event.fields.get("main_lifecycle_id") or ""),
+                str(event.fields.get("broker_route") or ""),
+                str(event.fields.get("market_session_bucket") or ""),
+                str(event.fields.get("qty") or ""),
+                str(event.fields.get("requested_qty") or ""),
+                str(event.fields.get("sell_price") or ""),
+            )
+            for event in submissions
+        }
+        if (
+            len(signatures) == 1
+            and submissions
+            and all(
+                str(event.fields.get("actual_order_submitted")).lower() == "true"
+                and str(event.fields.get("broker_order_forbidden")).lower() == "false"
+                for event in submissions
+            )
+        ):
             submission_identity_status = "matched_source_only"
             submission_fields = submissions[0].fields
         else:
             submission_identity_status = (
                 "conflicting" if len(signatures) > 1 else "missing"
             )
-        if (balance_generation_status == "normalized_contract_bound"
-                and submission_identity_status != "matched_source_only"):
+        if (
+            balance_generation_status == "normalized_contract_bound"
+            and submission_identity_status != "matched_source_only"
+        ):
             balance_generation_status = "submission_unbound"
         elif balance_generation_status == "normalized_contract_bound":
             contract = terminal_fields["sell_reconciliation_source_contract"]
             if isinstance(contract, str):
                 contract = json.loads(contract)
             source_route = str(contract.get("broker_route") or "").upper()
-            requested_route = str(
-                submission_fields.get("broker_route") or ""
-            ).upper()
+            requested_route = str(submission_fields.get("broker_route") or "").upper()
             expected_route = (
-                "SOR" if str(contract.get("broker_sor_flag") or "").upper()
-                == "Y" else
-                "KRX" if source_route in {"1", "KRX"} else
-                "NXT" if source_route in {"2", "NXT"} else source_route
+                "SOR"
+                if str(contract.get("broker_sor_flag") or "").upper() == "Y"
+                else (
+                    "KRX"
+                    if source_route in {"1", "KRX"}
+                    else "NXT" if source_route in {"2", "NXT"} else source_route
+                )
             )
             if requested_route != expected_route:
                 balance_generation_status = "submission_route_conflict"
     configured_fee = _safe_float(
-        terminal_fields.get("main_lifecycle_configured_fee_estimate_krw",
-                            terminal_fields.get("configured_fee_estimate_krw")),
+        terminal_fields.get(
+            "main_lifecycle_configured_fee_estimate_krw",
+            terminal_fields.get("configured_fee_estimate_krw"),
+        ),
         default=float("nan"),
     )
     if not math.isfinite(configured_fee) and configured_receipt:
@@ -2943,26 +3721,47 @@ def _completed_trade_projection(
             terminal_fields.get("main_lifecycle_fees_taxes_krw"),
             default=float("nan"),
         )
-    if (not math.isfinite(configured_fee) or configured_fee < 0
-            or not configured_receipt and not (
-                balance_only and balance_generation_status == "normalized_contract_bound"
-            )):
+    if (
+        not math.isfinite(configured_fee)
+        or configured_fee < 0
+        or not configured_receipt
+        and not (
+            balance_only and balance_generation_status == "normalized_contract_bound"
+        )
+    ):
         configured_fee = None
     terminal_source_status = (
-        "balance_reconciled_price_only" if balance_only and
-        terminal_fields.get("reconciliation_result") ==
-        "broker_exact_order_fill_recovered" else
-        "balance_absent_receipt_missing" if balance_only else
-        "execution_receipt_exact_configured_cost" if configured_receipt else
-        "source_gap_unknown"
+        "balance_reconciled_price_only"
+        if balance_only
+        and terminal_fields.get("reconciliation_result")
+        == "broker_exact_order_fill_recovered"
+        else (
+            "balance_absent_receipt_missing"
+            if balance_only
+            else (
+                "execution_receipt_exact_configured_cost"
+                if configured_receipt
+                else "source_gap_unknown"
+            )
+        )
     )
-    from src.trading.market.execution_venue import execution_venue_fields, broker_route_fields
-    assigned_venue = execution_venue_fields(terminal_fields,
-        observed_at=terminal_fields.get("broker_execution_observed_at") or occurrence_time)
+    from src.trading.market.execution_venue import (
+        execution_venue_fields,
+        broker_route_fields,
+    )
+
+    assigned_venue = execution_venue_fields(
+        terminal_fields,
+        observed_at=terminal_fields.get("broker_execution_observed_at")
+        or occurrence_time,
+    )
     assigned_route = broker_route_fields(
-        terminal_fields.get("broker_route_requested") or terminal_fields.get("broker_route"),
-        observed_at=terminal_fields.get("broker_execution_observed_at") or occurrence_time,
-        recorded=terminal_fields)
+        terminal_fields.get("broker_route_requested")
+        or terminal_fields.get("broker_route"),
+        observed_at=terminal_fields.get("broker_execution_observed_at")
+        or occurrence_time,
+        recorded=terminal_fields,
+    )
     return {
         "id": trade.get("id"),
         "rec_date": trade.get("rec_date"),
@@ -2971,9 +3770,12 @@ def _completed_trade_projection(
         "status": "COMPLETED",
         "strategy": trade.get("strategy"),
         "position_tag": trade.get("position_tag"),
-        "effective_venue": (assigned_venue["actual_execution_venue"]
-            if assigned_venue["execution_venue_override"] else
-            terminal_fields.get("main_lifecycle_venue") or terminal_fields.get("effective_venue")),
+        "effective_venue": (
+            assigned_venue["actual_execution_venue"]
+            if assigned_venue["execution_venue_override"]
+            else terminal_fields.get("main_lifecycle_venue")
+            or terminal_fields.get("effective_venue")
+        ),
         **assigned_venue,
         "market_session_bucket": terminal_fields.get("main_lifecycle_session_bucket")
         or terminal_fields.get("market_session_bucket"),
@@ -3012,8 +3814,7 @@ def _completed_trade_projection(
             submission_fields.get("broker_route") if balance_only else None
         ),
         "sell_submission_session_bucket": (
-            submission_fields.get("market_session_bucket")
-            if balance_only else None
+            submission_fields.get("market_session_bucket") if balance_only else None
         ),
         "sell_submission_owner_id": (
             submission_fields.get("owner_id") if balance_only else None
@@ -3022,28 +3823,34 @@ def _completed_trade_projection(
             submission_fields.get("account_key") if balance_only else None
         ),
         "sell_cancel_deferred_event_count": sum(
-            event.stage == "sell_cancel_reconciliation_deferred"
-            for event in events
+            event.stage == "sell_cancel_reconciliation_deferred" for event in events
         ),
         "sell_reconciliation_order_no": (
             terminal_fields.get("sell_order_no") or terminal_fields.get("order_no")
-            if balance_only else None
+            if balance_only
+            else None
         ),
         "sell_reconciliation_source_date": (
             terminal_fields.get("sell_reconciliation_source_date")
-            if balance_only else None
+            if balance_only
+            else None
         ),
         "sell_reconciliation_normalized_sha256": (
             terminal_fields.get("sell_reconciliation_normalized_sha256")
-            if balance_only else None
+            if balance_only
+            else None
         ),
         "configured_fee_estimate_krw": configured_fee,
         "broker_actual_fees_taxes_krw": broker_actual_fee,
         "broker_actual_cost_observed": actual_reconciled,
         "actual_cost_reconciliation": actual_cost,
         "main_automatic_management_allowed": automatic_custody,
-        "main_custody_source_sha256": digest(main_parents) if automatic_custody else None,
-        "holding_path_buy_fill_identity": terminal_fields.get("holding_path_buy_fill_identity"),
+        "main_custody_source_sha256": (
+            digest(main_parents) if automatic_custody else None
+        ),
+        "holding_path_buy_fill_identity": terminal_fields.get(
+            "holding_path_buy_fill_identity"
+        ),
         "economics_status": actual_cost["status"],
         "canonical_configured_profit_rate": profit,
         "configured_cost_estimated_pnl_krw": (
@@ -3057,9 +3864,13 @@ def _completed_trade_projection(
         "terminal_profit_rate_reconciled": rate_reconciled or actual_reconciled,
         "fill_cost_reconciled": fill_cost_reconciled,
         "cost_basis": (
-            "broker_actual_fee_reconciled" if actual_reconciled else
-            "broker_fill_prices_configured_cost_rate"
-            if fill_cost_reconciled else "source_gap_cost_provenance"
+            "broker_actual_fee_reconciled"
+            if actual_reconciled
+            else (
+                "broker_fill_prices_configured_cost_rate"
+                if fill_cost_reconciled
+                else "source_gap_cost_provenance"
+            )
         ),
         "effective_cost_rate": cost_rate if 0 < cost_rate <= 0.05 else None,
         "entry_mode": compiled.get("entry_mode"),
@@ -3073,7 +3884,9 @@ def _completed_trade_projection(
             "terminal_event" if terminal_observed_date else "db_sell_time_only"
         ),
         "exact_sell_fill_time": exact_fill_time,
-        "profit_rate": actual_cost["exact_profit_rate"] if actual_reconciled else profit,
+        "profit_rate": (
+            actual_cost["exact_profit_rate"] if actual_reconciled else profit
+        ),
         "realized_pnl_krw": int(round(exact_pnl)) if exact_pnl is not None else None,
         "realized_pnl_krw_source": (
             "broker_actual_fee_reconciled"
@@ -3117,7 +3930,9 @@ def _completed_trade_projection(
     }
 
 
-def _open_scalp_position_projection(trade: dict, events: list[HoldingEvent]) -> dict | None:
+def _open_scalp_position_projection(
+    trade: dict, events: list[HoldingEvent]
+) -> dict | None:
     """Keep the observed open census separate from completed PnL evidence."""
 
     if str(trade.get("status") or "").upper() not in {"HOLDING", "SELL_ORDERED"}:
@@ -3127,17 +3942,24 @@ def _open_scalp_position_projection(trade: dict, events: list[HoldingEvent]) -> 
     if _safe_int(trade.get("buy_qty"), 0) <= 0:
         return None
     observed = [
-        event for event in events
-        if event.stage in {
-            "position_rebased_after_fill", "holding_started", "scale_in_executed",
-            "avg_down_shared_rebound_signal", "holding_path_signal_snapshot",
-            "scale_in_order_submitted", "scale_in_order_leg_submitted",
+        event
+        for event in events
+        if event.stage
+        in {
+            "position_rebased_after_fill",
+            "holding_started",
+            "scale_in_executed",
+            "avg_down_shared_rebound_signal",
+            "holding_path_signal_snapshot",
+            "scale_in_order_submitted",
+            "scale_in_order_leg_submitted",
             "entry_buy_order_terminal_confirmed",
             "scale_in_buy_order_terminal_confirmed",
             "sell_partial_fill_progress",
             "nxt_rising_missed_tp1_partial_fill_progress",
             "nxt_rising_missed_tp1_partial_sell_completed",
-            "scalp_trailing_input_transition", "exit_signal",
+            "scalp_trailing_input_transition",
+            "exit_signal",
         }
     ]
     real_observed = any(
@@ -3145,10 +3967,13 @@ def _open_scalp_position_projection(trade: dict, events: list[HoldingEvent]) -> 
         for event in observed
     )
     rebound_blockers = Counter(
-        (str(event.fields.get("reason") or "unknown"),
-         str(event.fields.get("preflight_primary_blocker") or "-"),
-         str(event.fields.get("machine_action") or "-"))
-        for event in events if event.stage == "avg_down_shared_rebound_blocked"
+        (
+            str(event.fields.get("reason") or "unknown"),
+            str(event.fields.get("preflight_primary_blocker") or "-"),
+            str(event.fields.get("machine_action") or "-"),
+        )
+        for event in events
+        if event.stage == "avg_down_shared_rebound_blocked"
     )
     return {
         "id": trade.get("id"),
@@ -3161,40 +3986,64 @@ def _open_scalp_position_projection(trade: dict, events: list[HoldingEvent]) -> 
         "real_position_observed": real_observed,
         "censor_reason": "open_position_no_completed_economics",
         "avg_down_rebound_blocker_summary": [
-            {"reason": reason, "primary_blocker": primary,
-             "machine_action": action, "count": count}
+            {
+                "reason": reason,
+                "primary_blocker": primary,
+                "machine_action": action,
+                "count": count,
+            }
             for (reason, primary, action), count in sorted(rebound_blockers.items())
         ],
         "timeline": [
-            {"stage": event.stage, "timestamp": event.timestamp, "fields": dict(event.fields)}
+            {
+                "stage": event.stage,
+                "timestamp": event.timestamp,
+                "fields": dict(event.fields),
+            }
             for event in observed
         ],
     }
 
 
 def _avg_down_rebound_lineage(
-    trade: dict, events: list[HoldingEvent], completed: dict | None,
+    trade: dict,
+    events: list[HoldingEvent],
+    completed: dict | None,
 ) -> dict | None:
     """Attribute exact shared-rebound stages to one position, without CF PnL."""
     if str(trade.get("strategy") or "").upper() not in {"SCALPING", "SCALP"}:
         return None
-    blocked = [event for event in events
-               if event.stage == "avg_down_shared_rebound_blocked"]
-    blocker_summary_gaps = [event for event in events
-                            if event.stage == "avg_down_shared_rebound_blocker_summary_gap"]
-    signals = [event for event in events
-               if event.stage == "avg_down_shared_rebound_signal"]
-    votes = [event for event in events
-             if event.stage == "holding_path_signal_snapshot"
-             and event.fields.get("path_id") == "ADD_REBOUND"]
-    submitted = [event for event in events
-                 if event.stage == "scale_in_order_submitted"
-                 and event.fields.get("add_trigger") == "shared_main_rebound_entry"
-                 and str(event.fields.get("actual_order_submitted")).lower() == "true"]
-    fills = [event for event in events
-             if event.stage == "scale_in_executed"
-             and event.fields.get("add_reason") == "shared_main_rebound_entry"
-             and str(event.fields.get("actual_order_submitted")).lower() == "true"]
+    blocked = [
+        event for event in events if event.stage == "avg_down_shared_rebound_blocked"
+    ]
+    blocker_summary_gaps = [
+        event
+        for event in events
+        if event.stage == "avg_down_shared_rebound_blocker_summary_gap"
+    ]
+    signals = [
+        event for event in events if event.stage == "avg_down_shared_rebound_signal"
+    ]
+    votes = [
+        event
+        for event in events
+        if event.stage == "holding_path_signal_snapshot"
+        and event.fields.get("path_id") == "ADD_REBOUND"
+    ]
+    submitted = [
+        event
+        for event in events
+        if event.stage == "scale_in_order_submitted"
+        and event.fields.get("add_trigger") == "shared_main_rebound_entry"
+        and str(event.fields.get("actual_order_submitted")).lower() == "true"
+    ]
+    fills = [
+        event
+        for event in events
+        if event.stage == "scale_in_executed"
+        and event.fields.get("add_reason") == "shared_main_rebound_entry"
+        and str(event.fields.get("actual_order_submitted")).lower() == "true"
+    ]
     if not (blocked or signals or votes or submitted or fills):
         return None
     vote_by_signal = defaultdict(list)
@@ -3203,9 +4052,13 @@ def _avg_down_rebound_lineage(
     submit_by_decision = defaultdict(list)
     fill_by_decision = defaultdict(list)
     for event in submitted:
-        submit_by_decision[str(event.fields.get("scale_in_decision_id") or "")].append(event)
+        submit_by_decision[str(event.fields.get("scale_in_decision_id") or "")].append(
+            event
+        )
     for event in fills:
-        fill_by_decision[str(event.fields.get("scale_in_decision_id") or "")].append(event)
+        fill_by_decision[str(event.fields.get("scale_in_decision_id") or "")].append(
+            event
+        )
     decision_rows = []
     seen_decisions = set()
     for event in signals:
@@ -3213,48 +4066,90 @@ def _avg_down_rebound_lineage(
         decision_id = str(fields.get("scale_in_decision_id") or "")
         episode_id = str(fields.get("position_episode_id") or "")
         signal_id = str(fields.get("source_signal_id") or "")
-        if not decision_id or not episode_id or not signal_id or decision_id in seen_decisions:
-            decision_rows.append({"decision_id": decision_id or None,
-                                  "status": "lineage_gap_signal_identity"})
+        if (
+            not decision_id
+            or not episode_id
+            or not signal_id
+            or decision_id in seen_decisions
+        ):
+            decision_rows.append(
+                {
+                    "decision_id": decision_id or None,
+                    "status": "lineage_gap_signal_identity",
+                }
+            )
             continue
         seen_decisions.add(decision_id)
+
         def valid_hash(value):
-            return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) is not None
+            return (
+                isinstance(value, str)
+                and re.fullmatch(r"[0-9a-f]{64}", value) is not None
+            )
 
         identity = fields.get("buy_fill_identity")
         policy_hash = fields.get("holding_path_vote_policy_sha256")
         identity_valid = valid_hash(identity)
-        policy_valid = valid_hash(fields.get("machine_bundle_sha256")) and valid_hash(policy_hash)
-        matching_votes = [vote for vote in vote_by_signal.get(signal_id, [])
-                          if identity_valid and policy_valid
-                          and vote.fields.get("path_id") == "ADD_REBOUND"
-                          and vote.fields.get("decision") == "PASS"
-                          and vote.fields.get("policy_sha256") == policy_hash
-                          and _safe_int(vote.fields.get("vote_count"), 0) >= 2
-                          and vote.fields.get("buy_fill_identity")
-                          == identity]
-        matching_submits = [row for row in submit_by_decision.get(decision_id, [])
-                            if row.fields.get("position_episode_id") == episode_id]
-        matching_fills = [row for row in fill_by_decision.get(decision_id, [])
-                          if row.fields.get("position_episode_id") == episode_id]
-        orders = sorted({part.strip() for row in matching_submits
-                         for part in str(row.fields.get("broker_order_no_list") or "").split(",")
-                         if part.strip() and part.strip() != "-"})
-        exact_fills = {(str(row.fields.get("order_no") or ""),
-                        str(row.fields.get("execution_no") or "")):
-                       _safe_int(row.fields.get("fill_qty"), 0)
-                       for row in matching_fills
-                       if str(row.fields.get("order_no") or "") in orders
-                       and str(row.fields.get("execution_no") or "") not in {"", "-"}}
-        submitted_qty = sum(_safe_int(row.fields.get("submitted_qty"), 0)
-                            for row in matching_submits)
+        policy_valid = valid_hash(fields.get("machine_bundle_sha256")) and valid_hash(
+            policy_hash
+        )
+        matching_votes = [
+            vote
+            for vote in vote_by_signal.get(signal_id, [])
+            if identity_valid
+            and policy_valid
+            and vote.fields.get("path_id") == "ADD_REBOUND"
+            and vote.fields.get("decision") == "PASS"
+            and vote.fields.get("policy_sha256") == policy_hash
+            and _safe_int(vote.fields.get("vote_count"), 0) >= 2
+            and vote.fields.get("buy_fill_identity") == identity
+        ]
+        matching_submits = [
+            row
+            for row in submit_by_decision.get(decision_id, [])
+            if row.fields.get("position_episode_id") == episode_id
+        ]
+        matching_fills = [
+            row
+            for row in fill_by_decision.get(decision_id, [])
+            if row.fields.get("position_episode_id") == episode_id
+        ]
+        orders = sorted(
+            {
+                part.strip()
+                for row in matching_submits
+                for part in str(row.fields.get("broker_order_no_list") or "").split(",")
+                if part.strip() and part.strip() != "-"
+            }
+        )
+        exact_fills = {
+            (
+                str(row.fields.get("order_no") or ""),
+                str(row.fields.get("execution_no") or ""),
+            ): _safe_int(row.fields.get("fill_qty"), 0)
+            for row in matching_fills
+            if str(row.fields.get("order_no") or "") in orders
+            and str(row.fields.get("execution_no") or "") not in {"", "-"}
+        }
+        submitted_qty = sum(
+            _safe_int(row.fields.get("submitted_qty"), 0) for row in matching_submits
+        )
         filled_qty = sum(exact_fills.values())
-        valid_fills = bool(matching_fills and len(exact_fills) == len(matching_fills)
-                           and all(qty > 0 for qty in exact_fills.values())
-                           and 0 < filled_qty <= submitted_qty)
-        fill_quality = ("full" if valid_fills and filled_qty == submitted_qty
-                        else "partial" if valid_fills else
-                        "lineage_gap" if matching_fills else "no_fill")
+        valid_fills = bool(
+            matching_fills
+            and len(exact_fills) == len(matching_fills)
+            and all(qty > 0 for qty in exact_fills.values())
+            and 0 < filled_qty <= submitted_qty
+        )
+        fill_quality = (
+            "full"
+            if valid_fills and filled_qty == submitted_qty
+            else (
+                "partial"
+                if valid_fills
+                else "lineage_gap" if matching_fills else "no_fill"
+            )
+        )
         if not identity_valid:
             status = "lineage_gap_buy_fill_identity"
         elif not policy_valid:
@@ -3268,30 +4163,44 @@ def _avg_down_rebound_lineage(
         elif not valid_fills:
             status = "lineage_gap_exact_fill"
         elif not completed:
-            status = "partial_fill_open_or_censored" if fill_quality == "partial" else "open_or_censored"
-        elif (completed.get("strict_completion_status") != "eligible"
-              or completed.get("fill_cost_reconciled") is not True
-              or completed.get("realized_pnl_krw") is None
-              or completed.get("profit_rate") is None):
+            status = (
+                "partial_fill_open_or_censored"
+                if fill_quality == "partial"
+                else "open_or_censored"
+            )
+        elif (
+            completed.get("strict_completion_status") != "eligible"
+            or completed.get("fill_cost_reconciled") is not True
+            or completed.get("realized_pnl_krw") is None
+            or completed.get("profit_rate") is None
+        ):
             status = "terminal_cost_gap"
         else:
-            status = ("partial_fill_completed_exact_cost" if fill_quality == "partial"
-                      else "completed_exact_cost")
-        decision_rows.append({
-            "decision_id": decision_id, "position_episode_id": episode_id,
-            "source_signal_id": signal_id, "machine_bundle_sha256": fields.get("machine_bundle_sha256"),
-            "buy_fill_identity": fields.get("buy_fill_identity"),
-            "valid_vote_count": len(matching_votes),
-            "submitted_order_numbers": orders,
-            "submitted_qty": submitted_qty,
-            "exact_filled_qty": filled_qty if valid_fills else None,
-            "fill_quality": fill_quality,
-            "exact_fill_legs": [
-                {"order_no": order, "execution_no": execution, "qty": qty}
-                for (order, execution), qty in sorted(exact_fills.items())
-            ],
-            "status": status,
-        })
+            status = (
+                "partial_fill_completed_exact_cost"
+                if fill_quality == "partial"
+                else "completed_exact_cost"
+            )
+        decision_rows.append(
+            {
+                "decision_id": decision_id,
+                "position_episode_id": episode_id,
+                "source_signal_id": signal_id,
+                "machine_bundle_sha256": fields.get("machine_bundle_sha256"),
+                "buy_fill_identity": fields.get("buy_fill_identity"),
+                "valid_vote_count": len(matching_votes),
+                "submitted_order_numbers": orders,
+                "submitted_qty": submitted_qty,
+                "exact_filled_qty": filled_qty if valid_fills else None,
+                "fill_quality": fill_quality,
+                "exact_fill_legs": [
+                    {"order_no": order, "execution_no": execution, "qty": qty}
+                    for (order, execution), qty in sorted(exact_fills.items())
+                ],
+                "status": status,
+            }
+        )
+
     def observation_count(event: HoldingEvent) -> int:
         if event.fields.get("_sealed_rebound_blocker_summary") is True:
             return max(1, _safe_int(event.fields.get("observation_count"), 1))
@@ -3299,18 +4208,27 @@ def _avg_down_rebound_lineage(
 
     blocker_counts = Counter()
     for row in blocked:
-        blocker_counts[(str(row.fields.get("reason") or "unknown"),
-                        str(row.fields.get("preflight_primary_blocker") or "-"))] += observation_count(row)
-    exact_terminal = bool(completed and completed.get("strict_completion_status") == "eligible"
-                          and completed.get("fill_cost_reconciled") is True
-                          and completed.get("realized_pnl_krw") is not None
-                          and completed.get("profit_rate") is not None)
+        blocker_counts[
+            (
+                str(row.fields.get("reason") or "unknown"),
+                str(row.fields.get("preflight_primary_blocker") or "-"),
+            )
+        ] += observation_count(row)
+    exact_terminal = bool(
+        completed
+        and completed.get("strict_completion_status") == "eligible"
+        and completed.get("fill_cost_reconciled") is True
+        and completed.get("realized_pnl_krw") is not None
+        and completed.get("profit_rate") is not None
+    )
     joined_decisions = {
         (row.get("decision_id"), row.get("position_episode_id"))
-        for row in decision_rows if row.get("position_episode_id")
+        for row in decision_rows
+        if row.get("position_episode_id")
     }
     return {
-        "record_id": trade.get("id"), "code": trade.get("code"),
+        "record_id": trade.get("id"),
+        "code": trade.get("code"),
         "blocker_counts": [
             {"reason": reason, "primary_blocker": primary, "count": count}
             for (reason, primary), count in sorted(blocker_counts.items())
@@ -3329,7 +4247,8 @@ def _avg_down_rebound_lineage(
             and row.fields.get("machine_action") == "BLOCK"
         ),
         "machine_enter_vote_gap_count": sum(
-            observation_count(row) for row in blocked
+            observation_count(row)
+            for row in blocked
             if row.fields.get("machine_action") == "ENTER_NOW"
             and str(row.fields.get("reason") or "").startswith(
                 "shared_main_rebound_add_vote_"
@@ -3338,25 +4257,37 @@ def _avg_down_rebound_lineage(
         "valid_add_vote_snapshot_count": sum(
             row.fields.get("decision") == "PASS"
             and isinstance(row.fields.get("buy_fill_identity"), str)
-            and re.fullmatch(r"[0-9a-f]{64}", row.fields["buy_fill_identity"]) is not None
+            and re.fullmatch(r"[0-9a-f]{64}", row.fields["buy_fill_identity"])
+            is not None
             and _safe_int(row.fields.get("vote_count"), 0) >= 2
             for row in votes
         ),
         "decision_rows": decision_rows,
         "unjoined_submit_count": sum(
-            (row.fields.get("scale_in_decision_id"),
-             row.fields.get("position_episode_id")) not in joined_decisions
+            (
+                row.fields.get("scale_in_decision_id"),
+                row.fields.get("position_episode_id"),
+            )
+            not in joined_decisions
             for row in submitted
         ),
         "unjoined_fill_count": sum(
-            (row.fields.get("scale_in_decision_id"),
-             row.fields.get("position_episode_id")) not in joined_decisions
+            (
+                row.fields.get("scale_in_decision_id"),
+                row.fields.get("position_episode_id"),
+            )
+            not in joined_decisions
             for row in fills
         ),
         "position_terminal": {
-            "status": "completed_exact_cost" if exact_terminal else (
-                "terminal_cost_gap" if completed else "open_or_censored"),
-            "realized_pnl_krw": completed.get("realized_pnl_krw") if exact_terminal else None,
+            "status": (
+                "completed_exact_cost"
+                if exact_terminal
+                else ("terminal_cost_gap" if completed else "open_or_censored")
+            ),
+            "realized_pnl_krw": (
+                completed.get("realized_pnl_krw") if exact_terminal else None
+            ),
             "profit_rate": completed.get("profit_rate") if exact_terminal else None,
             "cost_basis": completed.get("cost_basis") if completed else None,
         },
@@ -3375,8 +4306,9 @@ def _prior_entry_fill_events(
         if str(trade.get("status") or "").upper() != "COMPLETED":
             continue
         try:
-            entry_day = datetime.strptime(str(trade.get("rec_date") or "")[:10],
-                                          "%Y-%m-%d").date()
+            entry_day = datetime.strptime(
+                str(trade.get("rec_date") or "")[:10], "%Y-%m-%d"
+            ).date()
             exit_day = datetime.strptime(target_date, "%Y-%m-%d").date()
         except ValueError:
             continue
@@ -3390,18 +4322,26 @@ def _prior_entry_fill_events(
     receipts: dict[str, dict] = {}
     for prior_date in sorted(prior_dates):
         from src.engine.log_archive_service import prior_entry_snapshot_rejection
+
         rejected = prior_entry_snapshot_rejection(prior_date, data_root=DATA_DIR)
         if rejected is not None:
             receipts[prior_date] = {"status": rejected}
             continue
         from src.engine.log_archive_service import load_prior_entry_projection
+
         try:
             projection = load_prior_entry_projection(prior_date, data_root=DATA_DIR)
         except (OSError, ValueError, TypeError, KeyError) as exc:
-            receipts[prior_date] = {"status": "source_gap_entry_snapshot_provenance", "reason": str(exc)}
+            receipts[prior_date] = {
+                "status": "source_gap_entry_snapshot_provenance",
+                "reason": str(exc),
+            }
             continue
-        snapshot, projection_receipt = projection if projection is not None else (
-            load_monitor_snapshot("trade_review", prior_date), None)
+        snapshot, projection_receipt = (
+            projection
+            if projection is not None
+            else (load_monitor_snapshot("trade_review", prior_date), None)
+        )
         if not isinstance(snapshot, dict) or snapshot.get("date") != prior_date:
             receipts[prior_date] = {"status": "source_gap_entry_snapshot_missing"}
             continue
@@ -3410,59 +4350,94 @@ def _prior_entry_fill_events(
             continue
         rows = (snapshot.get("sections") or {}).get("open_scalp_position_projection")
         metrics = snapshot.get("metrics") or {}
-        ids = [str(row.get("id") or "") for row in rows] if (
-            isinstance(rows, list) and all(isinstance(row, dict) for row in rows)
-        ) else []
-        if (not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows)
-                or not all(ids) or len(ids) != len(set(ids))
-                or metrics.get("open_scalp_position_projection_status") != "current_db_census"
-                or _safe_int(metrics.get("open_scalp_position_projection_count"), -1) != len(rows)):
+        ids = (
+            [str(row.get("id") or "") for row in rows]
+            if (isinstance(rows, list) and all(isinstance(row, dict) for row in rows))
+            else []
+        )
+        if (
+            not isinstance(rows, list)
+            or not all(isinstance(row, dict) for row in rows)
+            or not all(ids)
+            or len(ids) != len(set(ids))
+            or metrics.get("open_scalp_position_projection_status")
+            != "current_db_census"
+            or _safe_int(metrics.get("open_scalp_position_projection_count"), -1)
+            != len(rows)
+        ):
             receipts[prior_date] = {"status": "source_gap_entry_snapshot_census"}
             continue
-        receipts[prior_date] = {"status": "sealed_entry_snapshot", **(projection_receipt or {
-            "logical_sha256": hashlib.sha256(json.dumps(snapshot, ensure_ascii=False,
-                sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()})}
+        receipts[prior_date] = {
+            "status": "sealed_entry_snapshot",
+            **(
+                projection_receipt
+                or {
+                    "logical_sha256": hashlib.sha256(
+                        json.dumps(
+                            snapshot,
+                            ensure_ascii=False,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        ).encode("utf-8")
+                    ).hexdigest()
+                }
+            ),
+        }
         for row in rows:
             trade_id = str(row["id"])
             blocker_summary = row.get("avg_down_rebound_blocker_summary")
-            valid_summary = (
-                isinstance(blocker_summary, list)
-                and all(isinstance(item, dict)
-                        and all(isinstance(item.get(key), str) for key in (
-                            "reason", "primary_blocker", "machine_action"))
-                        and isinstance(item.get("count"), int)
-                        and not isinstance(item["count"], bool)
-                        and 0 < item["count"] <= 100_000
-                        for item in blocker_summary)
+            valid_summary = isinstance(blocker_summary, list) and all(
+                isinstance(item, dict)
+                and all(
+                    isinstance(item.get(key), str)
+                    for key in ("reason", "primary_blocker", "machine_action")
+                )
+                and isinstance(item.get("count"), int)
+                and not isinstance(item["count"], bool)
+                and 0 < item["count"] <= 100_000
+                for item in blocker_summary
             )
             if valid_summary:
                 for item in blocker_summary:
-                    events_by_id[trade_id].append(HoldingEvent(
-                        timestamp=f"{prior_date} 23:59:59",
-                        name=str(row.get("name") or "-"),
-                        code=str(row.get("code") or "-")[:6],
-                        stage="avg_down_shared_rebound_blocked",
-                        fields={"id": trade_id, "reason": item["reason"],
+                    events_by_id[trade_id].append(
+                        HoldingEvent(
+                            timestamp=f"{prior_date} 23:59:59",
+                            name=str(row.get("name") or "-"),
+                            code=str(row.get("code") or "-")[:6],
+                            stage="avg_down_shared_rebound_blocked",
+                            fields={
+                                "id": trade_id,
+                                "reason": item["reason"],
                                 "preflight_primary_blocker": item["primary_blocker"],
                                 "machine_action": item["machine_action"],
                                 "observation_count": item["count"],
-                                "_sealed_rebound_blocker_summary": True},
-                        raw_line="",
-                    ))
+                                "_sealed_rebound_blocker_summary": True,
+                            },
+                            raw_line="",
+                        )
+                    )
             else:
-                events_by_id[trade_id].append(HoldingEvent(
-                    timestamp=f"{prior_date} 23:59:59",
-                    name=str(row.get("name") or "-"),
-                    code=str(row.get("code") or "-")[:6],
-                    stage="avg_down_shared_rebound_blocker_summary_gap",
-                    fields={"id": trade_id, "reason": "prior_summary_missing_or_invalid"},
-                    raw_line="",
-                ))
+                events_by_id[trade_id].append(
+                    HoldingEvent(
+                        timestamp=f"{prior_date} 23:59:59",
+                        name=str(row.get("name") or "-"),
+                        code=str(row.get("code") or "-")[:6],
+                        stage="avg_down_shared_rebound_blocker_summary_gap",
+                        fields={
+                            "id": trade_id,
+                            "reason": "prior_summary_missing_or_invalid",
+                        },
+                        raw_line="",
+                    )
+                )
             for item in row.get("timeline") or []:
                 if not isinstance(item, dict) or item.get("stage") not in {
-                    "position_rebased_after_fill", "scale_in_executed",
-                    "avg_down_shared_rebound_signal", "holding_path_signal_snapshot",
-                    "scale_in_order_submitted", "scale_in_order_leg_submitted",
+                    "position_rebased_after_fill",
+                    "scale_in_executed",
+                    "avg_down_shared_rebound_signal",
+                    "holding_path_signal_snapshot",
+                    "scale_in_order_submitted",
+                    "scale_in_order_leg_submitted",
                     "entry_buy_order_terminal_confirmed",
                     "scale_in_buy_order_terminal_confirmed",
                     "sell_partial_fill_progress",
@@ -3471,16 +4446,24 @@ def _prior_entry_fill_events(
                 }:
                     continue
                 fields = item.get("fields")
-                if not isinstance(fields, dict) or str(fields.get("id") or "") != trade_id:
+                if (
+                    not isinstance(fields, dict)
+                    or str(fields.get("id") or "") != trade_id
+                ):
                     continue
                 timestamp = str(item.get("timestamp") or "")
                 if _parse_dt(timestamp) is None or timestamp[:10] != prior_date:
                     continue
-                events_by_id[trade_id].append(HoldingEvent(
-                    timestamp=timestamp, name=str(row.get("name") or "-"),
-                    code=str(row.get("code") or "-")[:6],
-                    stage=str(item["stage"]), fields=dict(fields), raw_line="",
-                ))
+                events_by_id[trade_id].append(
+                    HoldingEvent(
+                        timestamp=timestamp,
+                        name=str(row.get("name") or "-"),
+                        code=str(row.get("code") or "-")[:6],
+                        stage=str(item["stage"]),
+                        fields=dict(fields),
+                        raw_line="",
+                    )
+                )
     return events_by_id, receipts
 
 
@@ -3641,10 +4624,15 @@ def _build_hard_stop_taxonomy(rows: list[dict], events: list[HoldingEvent]) -> d
 
 
 def _completed_census_sha256(value: Any) -> str:
-    return hashlib.sha256(json.dumps(
-        value, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
-        default=str,
-    ).encode("utf-8")).hexdigest()
+    return hashlib.sha256(
+        json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+    ).hexdigest()
 
 
 def completed_census_manifest(report: dict) -> dict:
@@ -3652,27 +4640,30 @@ def completed_census_manifest(report: dict) -> dict:
     meta = report.get("meta") or {}
     rows = (report.get("sections") or {}).get("completed_trade_projection") or []
     receipts = meta.get("trailing_event_source_receipts") or []
-    row_receipts = [{
-        "id": str(row.get("id") or ""),
-        "completion_observed_date": row.get("completion_observed_date"),
-        "entry_date": row.get("rec_date"),
-        "owner_scope": row.get("terminal_population_scope"),
-        "strategy": row.get("strategy"),
-        "position_tag": row.get("position_tag"),
-        "owner_id": row.get("sell_submission_owner_id"),
-        "account_key": row.get("sell_submission_account_key"),
-        "session": row.get("market_session_bucket"),
-        "quantity": row.get("cumulative_sell_qty"),
-        "attempt_id": row.get("attempt_id"),
-        "order_no": row.get("sell_order_no"),
-        "execution_no": row.get("sell_execution_no"),
-        "route": row.get("exit_execution_broker_route"),
-        "configured_fee_estimate_krw": row.get("configured_fee_estimate_krw"),
-        "broker_actual_fees_taxes_krw": row.get("broker_actual_fees_taxes_krw"),
-        "strict_status": row.get("strict_completion_status"),
-        "source_quality_reasons": row.get("strict_completion_reasons") or [],
-        "row_sha256": _completed_census_sha256(row),
-    } for row in rows]
+    row_receipts = [
+        {
+            "id": str(row.get("id") or ""),
+            "completion_observed_date": row.get("completion_observed_date"),
+            "entry_date": row.get("rec_date"),
+            "owner_scope": row.get("terminal_population_scope"),
+            "strategy": row.get("strategy"),
+            "position_tag": row.get("position_tag"),
+            "owner_id": row.get("sell_submission_owner_id"),
+            "account_key": row.get("sell_submission_account_key"),
+            "session": row.get("market_session_bucket"),
+            "quantity": row.get("cumulative_sell_qty"),
+            "attempt_id": row.get("attempt_id"),
+            "order_no": row.get("sell_order_no"),
+            "execution_no": row.get("sell_execution_no"),
+            "route": row.get("exit_execution_broker_route"),
+            "configured_fee_estimate_krw": row.get("configured_fee_estimate_krw"),
+            "broker_actual_fees_taxes_krw": row.get("broker_actual_fees_taxes_krw"),
+            "strict_status": row.get("strict_completion_status"),
+            "source_quality_reasons": row.get("strict_completion_reasons") or [],
+            "row_sha256": _completed_census_sha256(row),
+        }
+        for row in rows
+    ]
     source_sha = _completed_census_sha256(receipts) if receipts else None
     output_sha = _completed_census_sha256(rows)
     manifest = {
@@ -3686,20 +4677,22 @@ def completed_census_manifest(report: dict) -> dict:
         "input_generation_sha256": meta.get("completed_census_input_sha256"),
         "actual_cost_source_generation": meta.get("actual_cost_source_generation"),
         "projection_sha256": output_sha,
-        "run_id": _completed_census_sha256({
-            "date": report.get("date"), "source": source_sha,
-            "profile": meta.get("snapshot_profile") or "unobserved_report_build",
-            "input": meta.get("completed_census_input_sha256"),
-            "projection": output_sha,
-        })[:24],
-        "raw_terminal_ids": sorted(str(item) for item in
-                                   meta.get("sell_completed_event_ids") or []),
+        "run_id": _completed_census_sha256(
+            {
+                "date": report.get("date"),
+                "source": source_sha,
+                "profile": meta.get("snapshot_profile") or "unobserved_report_build",
+                "input": meta.get("completed_census_input_sha256"),
+                "projection": output_sha,
+            }
+        )[:24],
+        "raw_terminal_ids": sorted(
+            str(item) for item in meta.get("sell_completed_event_ids") or []
+        ),
         "raw_terminal_count": len(meta.get("sell_completed_event_ids") or []),
         "raw_completion_event_count": int(meta.get("completion_event_id_count") or 0),
         "projected_count": len(rows),
-        "valid_profit_count": sum(
-            row.get("profit_rate") is not None for row in rows
-        ),
+        "valid_profit_count": sum(row.get("profit_rate") is not None for row in rows),
         "strict_count": sum(
             row.get("strict_completion_status") == "eligible" for row in rows
         ),
@@ -3712,31 +4705,43 @@ def completed_census_manifest(report: dict) -> dict:
 
     if "database_completed_sources" in meta:
         sources = meta["database_completed_sources"]
-        manifest["database_completed_sources_sha256"] = _completed_census_sha256(sources)
-        manifest["database_completed_ids"] = sorted(str(row.get("id") or "")
-            for row in sources if isinstance(row, dict)) if isinstance(sources, list) else []
+        manifest["database_completed_sources_sha256"] = _completed_census_sha256(
+            sources
+        )
+        manifest["database_completed_ids"] = (
+            sorted(str(row.get("id") or "") for row in sources if isinstance(row, dict))
+            if isinstance(sources, list)
+            else []
+        )
     return manifest
-
 
 
 def completed_census_projection_ids(census: dict) -> list[str]:
     """Read the full sealed population, preserving the native-terminal subset."""
-    if not isinstance(census, dict) or census.get("schema") != "trade_review_completed_census_v1":
+    if (
+        not isinstance(census, dict)
+        or census.get("schema") != "trade_review_completed_census_v1"
+    ):
         raise ValueError("completed_census_population_invalid")
     rows = census.get("rows")
     raw = census.get("raw_terminal_ids")
     database = census.get("database_completed_ids", [])
-    if (not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows)
-            or not isinstance(raw, list) or not isinstance(database, list)
-            or type(census.get("projected_count")) is not int
-            or len(rows) != census["projected_count"]
-            or type(census.get("raw_terminal_count")) is not int
-            or len(raw) != census["raw_terminal_count"]):
+    if (
+        not isinstance(rows, list)
+        or any(not isinstance(row, dict) for row in rows)
+        or not isinstance(raw, list)
+        or not isinstance(database, list)
+        or type(census.get("projected_count")) is not int
+        or len(rows) != census["projected_count"]
+        or type(census.get("raw_terminal_count")) is not int
+        or len(raw) != census["raw_terminal_count"]
+    ):
         raise ValueError("completed_census_population_invalid")
     ids = [str(row.get("id") or "") for row in rows]
     for values in (ids, raw, database):
-        if (any(not isinstance(value, str) or not value for value in values)
-                or len(set(values)) != len(values)):
+        if any(not isinstance(value, str) or not value for value in values) or len(
+            set(values)
+        ) != len(values):
             raise ValueError("completed_census_population_invalid")
     if set(ids) != set(raw) | set(database):
         raise ValueError("completed_census_population_invalid")
@@ -3762,8 +4767,10 @@ def verify_completed_census_manifest(report: dict, expected_date: str) -> str | 
     except ValueError:
         return "completed_census_id_mismatch"
     ids = [str(row.get("id") or "").strip() for row in rows]
-    raw_ids = [str(item) for item in
-               (report.get("meta") or {}).get("sell_completed_event_ids") or []]
+    raw_ids = [
+        str(item)
+        for item in (report.get("meta") or {}).get("sell_completed_event_ids") or []
+    ]
     expected_ids = set(raw_ids)
     database_sources = (report.get("meta") or {}).get("database_completed_sources")
     if "database_completed_sources" in (report.get("meta") or {}):
@@ -3776,56 +4783,95 @@ def verify_completed_census_manifest(report: dict, expected_date: str) -> str | 
             identity = source.get("id")
             identity_text = str(identity or "")
             digest = source.get("source_row_sha256")
-            if (isinstance(identity, bool) or not identity_text.isdecimal()
-                    or int(identity_text) <= 0 or identity_text in database_by_id
-                    or str(source.get("status") or "").upper() != "COMPLETED"
-                    or _parse_dt(source.get("sell_time")) is None
-                    or str(source.get("sell_time") or "")[:10] != expected_date
-                    or not isinstance(digest, str) or len(digest) != 64
-                    or any(char not in "0123456789abcdef" for char in digest)):
+            if (
+                isinstance(identity, bool)
+                or not identity_text.isdecimal()
+                or int(identity_text) <= 0
+                or identity_text in database_by_id
+                or str(source.get("status") or "").upper() != "COMPLETED"
+                or _parse_dt(source.get("sell_time")) is None
+                or str(source.get("sell_time") or "")[:10] != expected_date
+                or not isinstance(digest, str)
+                or len(digest) != 64
+                or any(char not in "0123456789abcdef" for char in digest)
+            ):
                 return "completed_census_database_source_invalid"
             database_by_id[identity_text] = source
         expected_ids.update(database_by_id)
         for row, identity in zip(rows, ids):
             source = database_by_id.get(identity)
-            if source is not None and row.get("database_completion_source_sha256") != source["source_row_sha256"]:
+            if (
+                source is not None
+                and row.get("database_completion_source_sha256")
+                != source["source_row_sha256"]
+            ):
                 return "completed_census_database_row_binding_invalid"
             if identity not in raw_ids and (
-                    source is None
-                    or row.get("completion_source_status") != "database_completed_native_terminal_unobserved"
-                    or row.get("strict_completion_status") != "excluded"
-                    or "source_gap_native_sell_completed_event_missing" not in (row.get("strict_completion_reasons") or [])):
+                source is None
+                or row.get("completion_source_status")
+                != "database_completed_native_terminal_unobserved"
+                or row.get("strict_completion_status") != "excluded"
+                or "source_gap_native_sell_completed_event_missing"
+                not in (row.get("strict_completion_reasons") or [])
+            ):
                 return "completed_census_database_only_authority_invalid"
-    if (not all(ids) or len(set(ids)) != len(ids)
-            or len(set(raw_ids)) != len(raw_ids)
-            or set(ids) != expected_ids
-            or len(rows) != (report.get("metrics") or {}).get("canonical_completed_trades")):
+    if (
+        not all(ids)
+        or len(set(ids)) != len(ids)
+        or len(set(raw_ids)) != len(raw_ids)
+        or set(ids) != expected_ids
+        or len(rows) != (report.get("metrics") or {}).get("canonical_completed_trades")
+    ):
         return "completed_census_id_mismatch"
-    if any(row.get("completion_observed_date") != expected_date
-           or str(row.get("status") or "").upper() != "COMPLETED"
-           for row in rows):
+    if any(
+        row.get("completion_observed_date") != expected_date
+        or str(row.get("status") or "").upper() != "COMPLETED"
+        for row in rows
+    ):
         return "completed_census_completion_date_mismatch"
     return None
 
 
 def strategy_fact_projection_rows(rows: list[dict]) -> list[dict]:
     """Keep the full entry-day fact census before display truncation/timelines."""
-    fields = ('id', 'rec_date', 'code', 'name', 'strategy', 'position_tag', 'status',
-              'buy_price', 'buy_qty', 'buy_time', 'sell_price', 'sell_time',
-              'profit_rate', 'holding_seconds', 'add_count', 'avg_down_count', 'pyramid_count',
-              'scanner_promotion_id', 'effective_venue', 'market_session_bucket')
+    fields = (
+        "id",
+        "rec_date",
+        "code",
+        "name",
+        "strategy",
+        "position_tag",
+        "status",
+        "buy_price",
+        "buy_qty",
+        "buy_time",
+        "sell_price",
+        "sell_time",
+        "profit_rate",
+        "holding_seconds",
+        "add_count",
+        "avg_down_count",
+        "pyramid_count",
+        "scanner_promotion_id",
+        "effective_venue",
+        "market_session_bucket",
+    )
     result = []
     for row in rows:
         projected = {key: row.get(key) for key in fields}
         if "quantity_research_cost" in row:
             projected["quantity_research_cost"] = row["quantity_research_cost"]
         for name, keys in {
-            'exit_signal': ('exit_rule', 'sell_reason_type'),
-            'ai_review_summary': ('headline',),
-            'gatekeeper_replay': ('action', 'action_key', 'allow_entry'),
+            "exit_signal": ("exit_rule", "sell_reason_type"),
+            "ai_review_summary": ("headline",),
+            "gatekeeper_replay": ("action", "action_key", "allow_entry"),
         }.items():
             value = row.get(name)
-            projected[name] = {key: value.get(key) for key in keys} if isinstance(value, dict) else None
+            projected[name] = (
+                {key: value.get(key) for key in keys}
+                if isinstance(value, dict)
+                else None
+            )
         result.append(projected)
     return result
 
@@ -3844,8 +4890,11 @@ def build_trade_review_report(
     guarded = guard_stdin_heavy_build(
         snapshot_kind="trade_review",
         target_date=target_date,
-        fallback_snapshot=(load_monitor_snapshot("trade_review", target_date)
-                           if should_guard_stdin_heavy_build(target_date) else None),
+        fallback_snapshot=(
+            load_monitor_snapshot("trade_review", target_date)
+            if should_guard_stdin_heavy_build(target_date)
+            else None
+        ),
         request_details={
             "code": code,
             "since_time": since_time,
@@ -3855,7 +4904,9 @@ def build_trade_review_report(
     )
     if guarded is not None:
         if write_research_costs:
-            raise ValueError("quantity_research_cost_write_requires_native_report_build")
+            raise ValueError(
+                "quantity_research_cost_write_requires_native_report_build"
+            )
         return guarded
 
     normalized_code = str(code).strip()[:6] if code else None
@@ -3874,10 +4925,13 @@ def build_trade_review_report(
         _load_holding_projection_events_from_structured(target_date)
     )
     trailing_source_sha256 = (
-        hashlib.sha256(json.dumps(
-            trailing_source_receipts, sort_keys=True, separators=(",", ":")
-        ).encode()).hexdigest()
-        if trailing_source_receipts else None
+        hashlib.sha256(
+            json.dumps(
+                trailing_source_receipts, sort_keys=True, separators=(",", ":")
+            ).encode()
+        ).hexdigest()
+        if trailing_source_receipts
+        else None
     )
     structured_text_counts = Counter(
         event.raw_line for event in structured_projection_events if event.raw_line
@@ -3887,7 +4941,8 @@ def build_trade_review_report(
         marker = "[HOLDING_PIPELINE]"
         text_payload = (
             marker + event.raw_line.split(marker, 1)[1]
-            if marker in event.raw_line else ""
+            if marker in event.raw_line
+            else ""
         )
         if structured_text_counts[text_payload] > 0:
             structured_text_counts[text_payload] -= 1
@@ -3944,24 +4999,29 @@ def build_trade_review_report(
     open_census_rows, open_census_warnings = _fetch_open_scalp_rows(target_date)
     existing_ids = {_safe_int(row.get("id")) for row in trade_rows}
     trade_rows.extend(
-        row for row in open_census_rows
-        if _safe_int(row.get("id")) not in existing_ids
+        row for row in open_census_rows if _safe_int(row.get("id")) not in existing_ids
     )
     # DB completion observations and native terminal events are different
     # source populations. Preserve the original DB row witness without
     # manufacturing a sell_completed event or granting economic eligibility.
-    database_completed_sources = [{
-        "id": row.get("id"), "status": row.get("status"),
-        "sell_time": str(row.get("sell_time") or ""),
-        "source_row_sha256": _completed_census_sha256(row),
-    } for row in trade_rows
+    database_completed_sources = [
+        {
+            "id": row.get("id"),
+            "status": row.get("status"),
+            "sell_time": str(row.get("sell_time") or ""),
+            "source_row_sha256": _completed_census_sha256(row),
+        }
+        for row in trade_rows
         if str(row.get("status") or "").upper() == "COMPLETED"
-        and str(row.get("sell_time") or "")[:10] == target_date]
+        and str(row.get("sell_time") or "")[:10] == target_date
+    ]
     database_completed_by_id = {
         _safe_int(row["id"]): row for row in database_completed_sources
     }
     buy_parent_handoff = _load_buy_parent_handoff_projection(
-        target_date, structured_projection_events, trade_rows,
+        target_date,
+        structured_projection_events,
+        trade_rows,
         trailing_source_status,
     )
     unresolved_completion_ids = missing_completion_ids - {
@@ -3977,8 +5037,11 @@ def build_trade_review_report(
     per_stage = Counter(event.stage for event in events)
 
     knowledge_cutoff = datetime.now(ZoneInfo("Asia/Seoul")).timestamp()
-    custody_rows = (buy_parent_handoff.get("rows", [])
-                    if trailing_source_status == "structured_partition_read" else [])
+    custody_rows = (
+        buy_parent_handoff.get("rows", [])
+        if trailing_source_status == "structured_partition_read"
+        else []
+    )
     prepared_records = []
     research_positions = []
     # Allocation needs every confirmed BUY/SELL turnover, including open peers.
@@ -3988,19 +5051,29 @@ def build_trade_review_report(
         prior_date = str(trade.get("rec_date") or "")[:10]
         if prior_date < target_date:
             matched.extend(
-                event for event in prior_entry_events.get(str(trade.get("id") or ""), [])
+                event
+                for event in prior_entry_events.get(str(trade.get("id") or ""), [])
                 if event.code == str(trade.get("code") or "")[:6]
             )
             matched.sort(key=_event_sort_key)
         compiled = _build_trade_row(trade, matched)
         ledger = _completed_execution_ledger(trade, matched)
         prepared_records.append((trade, matched, compiled, ledger))
-    research_custody, research_registry_generation = _quantity_research_custody(prepared_records, custody_rows)
+    research_custody, research_registry_generation = _quantity_research_custody(
+        prepared_records, custody_rows
+    )
     for trade, matched, _, ledger in prepared_records:
-        research_positions.append(_quantity_research_position(trade, matched, ledger,
-            research_custody.get(str(trade.get("id") or ""), [])))
+        research_positions.append(
+            _quantity_research_position(
+                trade,
+                matched,
+                ledger,
+                research_custody.get(str(trade.get("id") or ""), []),
+            )
+        )
     required_dates = _quantity_research_source_dates(research_positions, target_date)
     from src.engine.lifecycle.broker_cost_source import load_source
+
     sources_by_date = {}
     source_errors = {}
     for source_date in required_dates:
@@ -4010,11 +5083,16 @@ def build_trade_review_report(
             sources_by_date[source_date] = None
             source_errors[source_date] = type(exc).__name__
     if source_errors:
-        warnings.append("Official broker cost source contract invalid; affected research costs excluded")
+        warnings.append(
+            "Official broker cost source contract invalid; affected research costs excluded"
+        )
     broker_cost_source = sources_by_date.get(target_date)
     from src.engine.lifecycle.broker_cost_allocation import (
-        build_research_cost_allocations, persist_research_costs, validate_research_cost,
+        build_research_cost_allocations,
+        persist_research_costs,
+        validate_research_cost,
     )
+
     allocated = build_research_cost_allocations(sources_by_date, research_positions)
     research_costs = {}
     for position in research_positions:
@@ -4022,20 +5100,29 @@ def build_trade_review_report(
             continue
         record = position["record_id"]
         produced = allocated.get(record)
-        if isinstance(produced, dict) and produced.get("status") in {"research_cost_invalid", "research_cost_pending"}:
+        if isinstance(produced, dict) and produced.get("status") in {
+            "research_cost_invalid",
+            "research_cost_pending",
+        }:
             # This is the fresh allocator's failure, not a receipt to validate.
             # Keep its original cause and dependency dates for bounded recovery.
             research_costs[record] = dict(produced)
             continue
-        research_costs[record] = validate_research_cost(allocated.get(record),
-            record_id=record, symbol=position["symbol"],
-            buy_legs=position["buy_legs"], sell_legs=position["sell_legs"],
+        research_costs[record] = validate_research_cost(
+            allocated.get(record),
+            record_id=record,
+            symbol=position["symbol"],
+            buy_legs=position["buy_legs"],
+            sell_legs=position["sell_legs"],
             custody_rows=position["custody_rows"],
-            completion_date=position["completion_observed_date"], knowledge_cutoff=knowledge_cutoff)
+            completion_date=position["completion_observed_date"],
+            knowledge_cutoff=knowledge_cutoff,
+        )
     _verify_quantity_research_registry(research_registry_generation)
     if write_research_costs:
         persist_research_costs(DATA_DIR, target_date, research_costs, required_dates)
     from src.engine.lifecycle.broker_cost_reconciliation import source_generation
+
     actual_cost_source_generation = source_generation(DATA_DIR, target_date)
     compiled_rows = []
     completed_projection = []
@@ -4045,21 +5132,33 @@ def build_trade_review_report(
         prior_date = str(trade.get("rec_date") or "")[:10]
         compiled_rows.append(compiled)
         from src.engine.lifecycle.broker_cost_reconciliation import load_receipt
+
         cost_receipt = None
         cost_source_error = None
         try:
-            cost_receipt = load_receipt(DATA_DIR, target_date, str(trade.get("id") or ""))
+            cost_receipt = load_receipt(
+                DATA_DIR, target_date, str(trade.get("id") or "")
+            )
         except (OSError, ValueError, TypeError) as exc:
             cost_source_error = str(exc)
-        projected = _completed_trade_projection(trade, matched, compiled,
-                                               cost_receipt=cost_receipt,
-                                               knowledge_cutoff=knowledge_cutoff,
-                                               broker_cost_source=(broker_cost_source if cost_source_error is None else None),
-                                               cost_custody_rows=custody_rows,
-                                               execution_ledger=ledger,
-                                               cost_peer_records=[r.get("id") for r in trade_rows
-                                                   if str(r.get("code") or "")[:6] == str(trade.get("code") or "")[:6]
-                                                   and _safe_float(r.get("buy_qty"), 0) > 0])
+        projected = _completed_trade_projection(
+            trade,
+            matched,
+            compiled,
+            cost_receipt=cost_receipt,
+            knowledge_cutoff=knowledge_cutoff,
+            broker_cost_source=(
+                broker_cost_source if cost_source_error is None else None
+            ),
+            cost_custody_rows=custody_rows,
+            execution_ledger=ledger,
+            cost_peer_records=[
+                r.get("id")
+                for r in trade_rows
+                if str(r.get("code") or "")[:6] == str(trade.get("code") or "")[:6]
+                and _safe_float(r.get("buy_qty"), 0) > 0
+            ],
+        )
         if projected is not None and cost_source_error:
             projected["actual_cost_reconciliation"]["reason"] = cost_source_error
             projected["actual_cost_reconciliation"]["status"] = "actual_cost_invalid"
@@ -4070,40 +5169,55 @@ def build_trade_review_report(
         ):
             projected["trailing_event_source_status"] = trailing_source_status
             projected["trailing_event_source_sha256"] = trailing_source_sha256
-            projected["quantity_research_cost"] = research_costs[str(trade.get("id") or "")]
+            projected["quantity_research_cost"] = research_costs[
+                str(trade.get("id") or "")
+            ]
             compiled["quantity_research_cost"] = projected["quantity_research_cost"]
             if prior_date < target_date:
                 projected["prior_entry_snapshot_receipt"] = prior_entry_receipts.get(
                     prior_date, {"status": "source_gap_entry_snapshot_missing"}
                 )
                 projected["prior_fill_snapshot_receipts"] = {
-                    day: receipt for day, receipt in prior_entry_receipts.items()
+                    day: receipt
+                    for day, receipt in prior_entry_receipts.items()
                     if prior_date <= day < target_date
                 }
             database_source = database_completed_by_id.get(_safe_int(trade.get("id")))
             if database_source is not None:
-                projected["database_completion_source_sha256"] = database_source["source_row_sha256"]
+                projected["database_completion_source_sha256"] = database_source[
+                    "source_row_sha256"
+                ]
             if _safe_int(trade.get("id")) not in sell_completed_event_ids:
-                projected["completion_source_status"] = "database_completed_native_terminal_unobserved"
+                projected["completion_source_status"] = (
+                    "database_completed_native_terminal_unobserved"
+                )
                 projected["strict_completion_status"] = "excluded"
-                projected["strict_completion_reasons"] = sorted(set(
-                    projected.get("strict_completion_reasons") or []) | {
-                    "source_gap_native_sell_completed_event_missing"})
+                projected["strict_completion_reasons"] = sorted(
+                    set(projected.get("strict_completion_reasons") or [])
+                    | {"source_gap_native_sell_completed_event_missing"}
+                )
             completed_projection.append(projected)
         open_projected = _open_scalp_position_projection(trade, matched)
         if open_projected is not None:
             open_projection.append(open_projected)
         rebound_lineage = _avg_down_rebound_lineage(
-            trade, matched,
-            projected if projected is not None
-            and projected.get("completion_observed_date") == target_date else None,
+            trade,
+            matched,
+            (
+                projected
+                if projected is not None
+                and projected.get("completion_observed_date") == target_date
+                else None
+            ),
         )
         if rebound_lineage is not None:
             avg_down_rebound_lineage_rows.append(rebound_lineage)
     projected_completed_ids = {_safe_int(row.get("id")) for row in completed_projection}
     exit_signal_binding_counts = Counter(
-        str((row.get("exit_signal") or {}).get("binding_status")
-            or "source_gap_signal_missing")
+        str(
+            (row.get("exit_signal") or {}).get("binding_status")
+            or "source_gap_signal_missing"
+        )
         for row in completed_projection
     )
     declared_completed_ids = sell_completed_event_ids | set(database_completed_by_id)
@@ -4169,22 +5283,49 @@ def build_trade_review_report(
             raise ValueError("research_cost_source_changed_during_report")
     _verify_quantity_research_registry(research_registry_generation)
     if write_research_costs:
-        from src.engine.lifecycle.broker_cost_source import enqueue_pending, resolve_pending
-        exact_records = [str(row["id"]) for row in completed_projection
-                         if row["broker_actual_cost_observed"] is True]
-        research_records = [str(row["id"]) for row in completed_projection
-                            if str(row["id"]) not in set(exact_records)
-                            and row["quantity_research_cost"].get("status") == "research_cost_allocated"]
+        from src.engine.lifecycle.broker_cost_source import (
+            enqueue_pending,
+            resolve_pending,
+        )
+
+        exact_records = [
+            str(row["id"])
+            for row in completed_projection
+            if row["broker_actual_cost_observed"] is True
+        ]
+        research_records = [
+            str(row["id"])
+            for row in completed_projection
+            if str(row["id"]) not in set(exact_records)
+            and row["quantity_research_cost"].get("status") == "research_cost_allocated"
+        ]
         resolved = set(exact_records + research_records)
-        pending = [row for row in completed_projection if str(row["id"]) not in resolved]
+        pending = [
+            row for row in completed_projection if str(row["id"]) not in resolved
+        ]
         if pending:
             reasons = _quantity_research_pending_reasons(pending)
-            enqueue_pending(DATA_DIR, target_date, required_dates,
-                            [str(row["id"]) for row in pending], reasons)
+            enqueue_pending(
+                DATA_DIR,
+                target_date,
+                required_dates,
+                [str(row["id"]) for row in pending],
+                reasons,
+            )
         if exact_records:
-            resolve_pending(DATA_DIR, target_date, exact_records, reason="consumer_exact_cost_reconciled")
+            resolve_pending(
+                DATA_DIR,
+                target_date,
+                exact_records,
+                reason="consumer_exact_cost_reconciled",
+            )
         if research_records:
-            resolve_pending(DATA_DIR, target_date, research_records, reason="consumer_research_cost_allocated")
+            resolve_pending(
+                DATA_DIR,
+                target_date,
+                research_records,
+                reason="consumer_research_cost_allocated",
+            )
     report = {
         "date": target_date,
         "code": normalized_code,
@@ -4193,13 +5334,16 @@ def build_trade_review_report(
         "has_data": bool(visible_rows or events),
         "meta": {
             "warnings": warnings,
-            "official_broker_cost_source_sha256": (broker_cost_source or {}).get("source_sha256"),
+            "official_broker_cost_source_sha256": (broker_cost_source or {}).get(
+                "source_sha256"
+            ),
             "quantity_research_cost_source_dates": required_dates,
             "quantity_research_custody_registry_generation": research_registry_generation,
             "quantity_research_cost_source_errors": source_errors,
             "quantity_research_cost_position_count": len(research_positions),
-            "quantity_research_cost_status_counts": dict(Counter(
-                value.get("status") for value in research_costs.values())),
+            "quantity_research_cost_status_counts": dict(
+                Counter(value.get("status") for value in research_costs.values())
+            ),
             "quantity_research_cost_persisted": write_research_costs,
             "sell_completed_event_ids": sorted(sell_completed_event_ids),
             "database_completed_sources": database_completed_sources,
@@ -4208,30 +5352,46 @@ def build_trade_review_report(
             "available_stocks": available_stocks,
             "log_paths": [str(path) for path in log_paths],
             "trailing_event_source_receipts": trailing_source_receipts,
-            "completed_census_input_sha256": _completed_census_sha256({
-                "actual_cost_source_generation": actual_cost_source_generation,
-                "source_date": target_date,
-                "db_completed_rows": [row for row in trade_rows
-                                      if str(row.get("status") or "").upper()
-                                      == "COMPLETED"],
-                "terminal_events": [{
-                    "stage": event.stage, "timestamp": event.timestamp,
-                    "fields": event.fields,
-                } for event in all_events if event.stage in {
-                    "sell_completed", "sell_completion_reconciliation_gap",
-                    "sell_partial_fill_progress", "sell_order_sent",
-                }],
-                "structured_source_receipts": trailing_source_receipts,
-            }),
+            "completed_census_input_sha256": _completed_census_sha256(
+                {
+                    "actual_cost_source_generation": actual_cost_source_generation,
+                    "source_date": target_date,
+                    "db_completed_rows": [
+                        row
+                        for row in trade_rows
+                        if str(row.get("status") or "").upper() == "COMPLETED"
+                    ],
+                    "terminal_events": [
+                        {
+                            "stage": event.stage,
+                            "timestamp": event.timestamp,
+                            "fields": event.fields,
+                        }
+                        for event in all_events
+                        if event.stage
+                        in {
+                            "sell_completed",
+                            "sell_completion_reconciliation_gap",
+                            "sell_partial_fill_progress",
+                            "sell_order_sent",
+                        }
+                    ],
+                    "structured_source_receipts": trailing_source_receipts,
+                }
+            ),
             "actual_cost_source_generation": actual_cost_source_generation,
-            "knowledge_cutoff": datetime.fromtimestamp(knowledge_cutoff, ZoneInfo("Asia/Seoul")).isoformat(),
+            "knowledge_cutoff": datetime.fromtimestamp(
+                knowledge_cutoff, ZoneInfo("Asia/Seoul")
+            ).isoformat(),
         },
         "metrics": {
             "total_trades": len(visible_rows),
             "completed_trades": len(realized),
             "canonical_completed_trades": len(completed_projection),
             "native_sell_completed_trade_count": len(sell_completed_event_ids),
-            "database_only_completed_trade_count": len(projected_completed_ids - sell_completed_event_ids),
+            "database_only_completed_trade_count": len(
+                projected_completed_ids - sell_completed_event_ids
+            ),
             "exit_signal_binding_counts": dict(exit_signal_binding_counts),
             "open_scalp_position_projection_count": len(open_projection),
             "avg_down_rebound_position_count": len(avg_down_rebound_lineage_rows),
@@ -4240,9 +5400,12 @@ def build_trade_review_report(
                 for row in avg_down_rebound_lineage_rows
             ),
             "buy_parent_handoff_counts": buy_parent_handoff["counts"],
-            "buy_parent_handoff_source_status": buy_parent_handoff["source_quality_status"],
+            "buy_parent_handoff_source_status": buy_parent_handoff[
+                "source_quality_status"
+            ],
             "open_scalp_position_projection_status": (
-                "current_db_census" if not open_census_warnings
+                "current_db_census"
+                if not open_census_warnings
                 else open_census_warnings[0]
             ),
             "trailing_input_transition_source_status": trailing_source_status,
@@ -4312,7 +5475,9 @@ def build_trade_review_report(
         ],
         "sections": {
             "recent_trades": recent_trades,
-            "strategy_position_fact_projection": strategy_fact_projection_rows(visible_rows),
+            "strategy_position_fact_projection": strategy_fact_projection_rows(
+                visible_rows
+            ),
             "completed_trade_projection": completed_projection,
             "open_scalp_position_projection": open_projection,
             "avg_down_rebound_lineage": avg_down_rebound_lineage_rows,
@@ -4349,9 +5514,7 @@ def format_trade_review_summary(report: dict) -> str:
     lines.append(f"- 평균 손익률: {metrics.get('avg_profit_rate', 0.0)}%")
     lines.append("- broker 실제 과금 후 실현손익: 원천 미확인")
     if metrics.get("modeled_display_pnl_krw") is not None:
-        lines.append(
-            f"- 비용모델 표시 추정: {metrics['modeled_display_pnl_krw']:,}원"
-        )
+        lines.append(f"- 비용모델 표시 추정: {metrics['modeled_display_pnl_krw']:,}원")
     warnings = report.get("meta", {}).get("warnings", []) or []
     if warnings:
         lines.append("- 경고:")

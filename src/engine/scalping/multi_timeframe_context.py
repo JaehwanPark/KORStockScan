@@ -268,7 +268,9 @@ def promotion_activation_state(captured_at: datetime) -> dict[str, Any]:
             f"runtime_policy_bootstrap_{promotion_target_date}.json"
         )
     else:
-        env_path = RUNTIME_ENV_DIR / f"threshold_runtime_env_{promotion_target_date}.env"
+        env_path = (
+            RUNTIME_ENV_DIR / f"threshold_runtime_env_{promotion_target_date}.env"
+        )
         manifest_path = (
             RUNTIME_ENV_DIR / f"threshold_runtime_env_{promotion_target_date}.json"
         )
@@ -589,9 +591,12 @@ def build_multi_timeframe_context(
         minute_bar_source_api_id=minute_bar_source_api_id,
     )
     if complete_session_prefix is False:
-        for name in ('session_bar_vwap', 'opening_range_5m', 'opening_range_15m'):
-            derived[name] = {'status': 'source_unavailable', 'value': None,
-                             'reason': 'full_session_history_not_required'}
+        for name in ("session_bar_vwap", "opening_range_5m", "opening_range_15m"):
+            derived[name] = {
+                "status": "source_unavailable",
+                "value": None,
+                "reason": "full_session_history_not_required",
+            }
     activation = promotion_activation_state(captured_at)
     bundle = {
         "schema": SCHEMA,

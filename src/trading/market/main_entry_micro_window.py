@@ -18,26 +18,49 @@ DEADLINE_MS = 6500
 MAXIMUM_SOURCE_AGE_MS = 1500
 
 
-
-
-
 def evaluate_machine_entry_payload(*, snapshot, payload, cutoff_ms):
     """Bind the market-data item to the exact AI snapshot, not a scope alias."""
     payload = payload if isinstance(payload, dict) else {}
     exact = payload.get("ai_market_snapshot_v1")
     exact = exact if isinstance(exact, dict) else {}
     market_route = str(exact.get("market_data_route") or "").lower()
-    route = {"krx_only": "KRX", "nxt_only": "NXT", "krx_nxt_integrated": "SOR"}.get(market_route)
+    route = {"krx_only": "KRX", "nxt_only": "NXT", "krx_nxt_integrated": "SOR"}.get(
+        market_route
+    )
     symbol = str(payload.get("stock_code") or "")
     identity_valid = bool(
-        route and exact.get("snapshot_id") and symbol
+        route
+        and exact.get("snapshot_id")
+        and symbol
         and symbol == exact.get("stock_code")
-        and all(str(payload.get(k) or "").upper() == str(exact.get(k) or "").upper() and payload.get(k) for k in ("effective_venue", "session_bucket"))
+        and all(
+            str(payload.get(k) or "").upper() == str(exact.get(k) or "").upper()
+            and payload.get(k)
+            for k in ("effective_venue", "session_bucket")
+        )
     )
     if not identity_valid:
-        return {"contract": CONTRACT, "action": "SOURCE_UNAVAILABLE", "cutoff_ms": cutoff_ms, "source_quality_status": "source_gap", "reason": "machine_payload_market_route_missing_or_conflicting"}
-    result = evaluate_snapshot(snapshot=snapshot, symbol=symbol, route=route, cutoff_ms=cutoff_ms, market_session=payload["session_bucket"])
-    result["machine_market_route_binding"] = {"snapshot_id": exact["snapshot_id"], "market_data_route": market_route, "confirmation_route": route, "effective_venue": payload["effective_venue"], "session_bucket": payload["session_bucket"]}
+        return {
+            "contract": CONTRACT,
+            "action": "SOURCE_UNAVAILABLE",
+            "cutoff_ms": cutoff_ms,
+            "source_quality_status": "source_gap",
+            "reason": "machine_payload_market_route_missing_or_conflicting",
+        }
+    result = evaluate_snapshot(
+        snapshot=snapshot,
+        symbol=symbol,
+        route=route,
+        cutoff_ms=cutoff_ms,
+        market_session=payload["session_bucket"],
+    )
+    result["machine_market_route_binding"] = {
+        "snapshot_id": exact["snapshot_id"],
+        "market_data_route": market_route,
+        "confirmation_route": route,
+        "effective_venue": payload["effective_venue"],
+        "session_bucket": payload["session_bucket"],
+    }
     return result
 
 
@@ -84,7 +107,9 @@ def evaluate_snapshot(
         item = _live_route_item(symbol, route)
         stock = snapshot["stocks"][symbol]
         result["market_data_health"] = build_market_data_health(
-            stock, now_ts=cutoff_ms / 1000.0, quote_max_age_ms=MAXIMUM_SOURCE_AGE_MS,
+            stock,
+            now_ts=cutoff_ms / 1000.0,
+            quote_max_age_ms=MAXIMUM_SOURCE_AGE_MS,
         )
         routes = stock["machine_confirmation_routes"]
         matches = [

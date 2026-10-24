@@ -21,7 +21,10 @@ from src.trading.entry.normal_entry_builder import NormalEntryBuilder
 from src.trading.entry.orderbook_stability_observer import ORDERBOOK_STABILITY_OBSERVER
 from src.trading.entry.signal_snapshot import build_signal_snapshot
 from src.trading.market.market_data_cache import MarketDataCache
-from src.trading.market.quote_consistency import ws_quote_receive_age_ms, ws_quote_source_receipt
+from src.trading.market.quote_consistency import (
+    ws_quote_receive_age_ms,
+    ws_quote_source_receipt,
+)
 from src.trading.order.tick_utils import clamp_price_to_tick
 from src.trading.order.tick_utils import get_tick_size
 from src.trading.order.tick_utils import move_price_by_ticks
@@ -86,6 +89,7 @@ def resolved_quote_time_policy(**owner_values):
         # Runtime-only import: the Main adapter supplies resolved configuration.
         # Its explicit-values call below terminates this delegation.
         from src.engine.sniper_state_handlers import _entry_quote_time_policy
+
         return _entry_quote_time_policy()
     from src.trading.entry.quote_time_policy import configured_quote_time_policy
     from src.trading.market.quote_consistency import QuoteConsistencyConfig
@@ -981,19 +985,21 @@ def resolve_scalping_entry_price(
             result["reason"] = "initial_quantity_offset_collapsed"
             result["price_resolution_reason"] = result["reason"]
             return result
-        result.update({
-            "allowed": True,
-            "anchor_price": anchor,
-            "min_price": resolved_price,
-            "max_price": anchor,
-            "offset_profile": str(initial_quantity_shape),
-            "resolved_order_price": resolved_price,
-            "order_price": resolved_price,
-            "reason": "initial_quantity_shape_p1",
-            "price_resolution_reason": "initial_quantity_shape_p1",
-            "fresh_mark_price": _safe_price_int(fresh_mark_price),
-            "residual_leg_index": leg_index,
-        })
+        result.update(
+            {
+                "allowed": True,
+                "anchor_price": anchor,
+                "min_price": resolved_price,
+                "max_price": anchor,
+                "offset_profile": str(initial_quantity_shape),
+                "resolved_order_price": resolved_price,
+                "order_price": resolved_price,
+                "reason": "initial_quantity_shape_p1",
+                "price_resolution_reason": "initial_quantity_shape_p1",
+                "fresh_mark_price": _safe_price_int(fresh_mark_price),
+                "residual_leg_index": leg_index,
+            }
+        )
         return result
 
     if action == "ALLOW_NARROW":
@@ -3998,10 +4004,9 @@ def _should_apply_latency_spread_relief_canary(
         getattr(TRADING_RULES, "SCALP_LATENCY_SPREAD_RELIEF_BLOCK_UNSTABLE_QUOTE", True)
     ):
         stability = _orderbook_stability_for_frame(code, ws_data)
-        if (
-            (ws_data or {}).get("market_data_transport_epoch") is not None
-            and stability.get("observer_healthy") is not True
-        ):
+        if (ws_data or {}).get(
+            "market_data_transport_epoch"
+        ) is not None and stability.get("observer_healthy") is not True:
             return False, "orderbook_stability_unproven"
         if bool(stability.get("unstable_quote_observed")):
             return False, "unstable_quote_observed"
@@ -4171,10 +4176,9 @@ def _should_apply_latency_wide_spread_passive_requote(
     ):
         stability = _orderbook_stability_for_frame(code, ws_data)
         diagnostics.update(stability)
-        if (
-            (ws_data or {}).get("market_data_transport_epoch") is not None
-            and stability.get("observer_healthy") is not True
-        ):
+        if (ws_data or {}).get(
+            "market_data_transport_epoch"
+        ) is not None and stability.get("observer_healthy") is not True:
             return False, "orderbook_stability_unproven", diagnostics
         if bool(stability.get("unstable_quote_observed")):
             return False, "unstable_quote_observed", diagnostics
@@ -4308,11 +4312,17 @@ def _maybe_refresh_stale_quote_from_observer(
         type(expected_epoch) is not int
         or snapshot.get("observer_transport_epoch") != expected_epoch
     ):
-        provenance["pre_submit_quote_refresh_reason"] = "observer_transport_epoch_unproven"
+        provenance["pre_submit_quote_refresh_reason"] = (
+            "observer_transport_epoch_unproven"
+        )
         return latency, provenance
     received_epoch = snapshot.get("observer_quote_received_epoch")
-    if not isinstance(received_epoch, (int, float)) or not math.isfinite(received_epoch):
-        provenance["pre_submit_quote_refresh_reason"] = "observer_quote_receive_clock_unproven"
+    if not isinstance(received_epoch, (int, float)) or not math.isfinite(
+        received_epoch
+    ):
+        provenance["pre_submit_quote_refresh_reason"] = (
+            "observer_quote_receive_clock_unproven"
+        )
         return latency, provenance
     provenance["pre_submit_quote_refresh_received_epoch"] = received_epoch
     best_bid = int(snapshot.get("best_bid") or 0)
@@ -4894,10 +4904,9 @@ def _should_apply_latency_other_danger_relief_canary(
         )
     ):
         stability = _orderbook_stability_for_frame(code, ws_data)
-        if (
-            (ws_data or {}).get("market_data_transport_epoch") is not None
-            and stability.get("observer_healthy") is not True
-        ):
+        if (ws_data or {}).get(
+            "market_data_transport_epoch"
+        ) is not None and stability.get("observer_healthy") is not True:
             return False, "orderbook_stability_unproven"
         if bool(stability.get("unstable_quote_observed")):
             return False, "unstable_quote_observed"
@@ -5010,15 +5019,21 @@ def evaluate_live_buy_entry(
     )
 
     source_receipt = ws_quote_source_receipt(ws_data or {}, now_ts=quote_clock)
-    quote_scope = tuple(str(value or "") for value in (
-        source_receipt.get("item") or code,
-        source_receipt.get("market_route"),
-        (ws_data or {}).get("market_session_bucket"),
-        source_receipt.get("transport_epoch"),
-    ))
+    quote_scope = tuple(
+        str(value or "")
+        for value in (
+            source_receipt.get("item") or code,
+            source_receipt.get("market_route"),
+            (ws_data or {}).get("market_session_bucket"),
+            source_receipt.get("transport_epoch"),
+        )
+    )
     quote_sequence = source_receipt.get("route_sequence")
-    quote_identity = ((source_receipt.get("source_type"), quote_sequence)
-                      if type(quote_sequence) is int and quote_sequence > 0 else None)
+    quote_identity = (
+        (source_receipt.get("source_type"), quote_sequence)
+        if type(quote_sequence) is int and quote_sequence > 0
+        else None
+    )
     with _CACHE_LOCK:
         _CACHE.update(
             code,
@@ -5030,7 +5045,9 @@ def evaluate_live_buy_entry(
             received_at=received_at,
         )
         quote_health = _CACHE.get_quote_health(
-            code, scope=quote_scope, source_frame=ws_data or {},
+            code,
+            scope=quote_scope,
+            source_frame=ws_data or {},
         )
         if received_at <= 0 or received_at > time.time():
             # A missing/future source stamp is not a fresh consume-time packet.
@@ -5089,7 +5106,9 @@ def evaluate_live_buy_entry(
                 # The observer owns the adopted quote's original receipt;
                 # common health still describes the unchanged input WS frame.
                 quote_health = _CACHE.get_quote_health(
-                    code, scope=quote_scope, source_frame=ws_data or {},
+                    code,
+                    scope=quote_scope,
+                    source_frame=ws_data or {},
                 )
     snapshot = build_signal_snapshot(
         symbol=code,
@@ -5531,8 +5550,12 @@ def evaluate_live_buy_entry(
         "market_data_health": getattr(quote_health, "market_data_health", None),
         "input_quote_source_receipt": source_receipt,
         "quote_time_policy_receipt": resolved_quote_time_policy().to_dict(),
-        "cached_quote_received_epoch": getattr(quote_health, "quote_received_epoch", None),
-        "cached_quote_receive_age_ms": getattr(quote_health, "quote_receive_age_ms", None),
+        "cached_quote_received_epoch": getattr(
+            quote_health, "quote_received_epoch", None
+        ),
+        "cached_quote_receive_age_ms": getattr(
+            quote_health, "quote_receive_age_ms", None
+        ),
         "latency_danger_reasons": latency_danger_reasons,
         "latency_danger_remeasure_reasons": latency_danger_remeasure_reasons,
         **latency_danger_provenance,
@@ -5623,15 +5646,22 @@ def evaluate_live_buy_entry(
             applied_bps = int(
                 gap_profile.get("bps", normal_defensive_bps) or normal_defensive_bps
             )
-            from src.engine.scalping.entry_execution_sizing_plan import scoped_entry_price_bps
-            from src.engine.monitoring.entry_attempt_identity import submit_attempt_machine_lineage
+            from src.engine.scalping.entry_execution_sizing_plan import (
+                scoped_entry_price_bps,
+            )
+            from src.engine.monitoring.entry_attempt_identity import (
+                submit_attempt_machine_lineage,
+            )
+
             price_lineage = submit_attempt_machine_lineage(stock, code)
             applied_bps = scoped_entry_price_bps(
-                str(gap_profile.get('profile')), applied_bps,
-                venue=str(price_lineage.get('effective_venue') or '').upper(),
-                session=str(price_lineage.get('market_session_bucket') or ''),
-                policy_bundle_sha256=price_lineage.get('policy_bundle_hash'))
-            gap_profile['bps'] = applied_bps
+                str(gap_profile.get("profile")),
+                applied_bps,
+                venue=str(price_lineage.get("effective_venue") or "").upper(),
+                session=str(price_lineage.get("market_session_bucket") or ""),
+                policy_bundle_sha256=price_lineage.get("policy_bundle_hash"),
+            )
+            gap_profile["bps"] = applied_bps
             entry_price_guard = {
                 "normal": "normal_defensive_percent_bps",
                 "strong_1tick_pressure": "conditional_strong_defensive_percent_bps",

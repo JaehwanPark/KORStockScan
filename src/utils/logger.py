@@ -75,7 +75,10 @@ class ProcessSafeRotatingFileHandler(RotatingFileHandler):
         # backups from another generation or process while emitting a record.
         self._close_stream()
         from src.engine.infrastructure.log_retention import close_module_generation
-        close_module_generation(self.baseFilename, owner="module:" + Path(self.baseFilename).name)
+
+        close_module_generation(
+            self.baseFilename, owner="module:" + Path(self.baseFilename).name
+        )
 
     def emit(self, record):
         lock_fd = -1

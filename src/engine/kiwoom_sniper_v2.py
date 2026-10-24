@@ -52,7 +52,11 @@ from src.utils.numeric import safe_float as _safe_float
 from src.utils.logger import log_error, log_info
 from src.utils.constants import DATA_DIR, RESTART_FLAG_PATH, TRADING_RULES
 from src.utils.pipeline_event_logger import emit_pipeline_event
-from src.engine.infrastructure.restart_requests import consume_restart_request, request_shutdown, shutdown_requested
+from src.engine.infrastructure.restart_requests import (
+    consume_restart_request,
+    request_shutdown,
+    shutdown_requested,
+)
 from src.database.db_manager import (
     DBManager,
     SWING_REAL_WATCHING_ENABLED_ENV,
@@ -346,7 +350,7 @@ def enqueue_zero_base_machine_enter(result):
     """Scanner callback: only an immutable message and a Main wakeup."""
     try:
         with _ZERO_BASE_PROBE_LOCK:
-            handoff_id = (result or {}).get('ws_handoff_id')
+            handoff_id = (result or {}).get("ws_handoff_id")
             if handoff_id and handoff_id in _ZERO_BASE_MAIN_PENDING:
                 return True
             _ZERO_BASE_MAIN_INBOX.put_nowait(copy.deepcopy(result))
@@ -356,12 +360,12 @@ def enqueue_zero_base_machine_enter(result):
         # The worker owns terminal evidence and lease cleanup. The callback
         # only acknowledges refusal; it must not perform disk or DB I/O.
         with _ZERO_BASE_PROBE_LOCK:
-            handoff = _ZERO_BASE_HANDOFFS.get((result or {}).get('ws_handoff_id'))
+            handoff = _ZERO_BASE_HANDOFFS.get((result or {}).get("ws_handoff_id"))
             if handoff is not None:
-                handoff.update(outcome='rejected', reason='main_inbox_full')
-                handoff['event'].set()
+                handoff.update(outcome="rejected", reason="main_inbox_full")
+                handoff["event"].set()
         return False
-    coordinator = getattr(run_sniper, 'scanner_async_eval_coordinator', None)
+    coordinator = getattr(run_sniper, "scanner_async_eval_coordinator", None)
     if coordinator is not None:
         coordinator.completion_event.set()
     return True
@@ -376,7 +380,10 @@ def _drain_zero_base_main_inbox(limit=2):
         try:
             handle_zero_base_machine_enter(result)
         except Exception:
-            _zero_base_attach_receipt(result, outcome='rejected', reason='main_attach_exception')
+            _zero_base_attach_receipt(
+                result, outcome="rejected", reason="main_attach_exception"
+            )
+
 
 global ACTIVE_TARGETS
 ACTIVE_TARGETS = []
@@ -400,10 +407,13 @@ _SCANNER_OBSERVATION_EXECUTOR = ThreadPoolExecutor(
     max_workers=1, thread_name_prefix="scanner_observation"
 )
 from src.utils.pipeline_event_logger import BoundedObservationQueue
+
 _SCANNER_OBSERVATION_QUEUE = BoundedObservationQueue(_SCANNER_OBSERVATION_EXECUTOR)
 from src.engine.monitoring.runtime_performance import set_observation_health
+
 set_observation_health(_SCANNER_OBSERVATION_QUEUE.snapshot)
 from src.engine.monitoring.runtime_performance import set_lifecycle_sink
+
 set_lifecycle_sink(_SCANNER_OBSERVATION_QUEUE.submit)
 _SCANNER_RUNTIME_INSTANCE_ID = (
     f"scanner-runtime-{os.getpid()}-{int(time.time() * 1000)}"
@@ -424,9 +434,7 @@ _SCANNER_MARKET_DATA_ENRICHMENT_LOCK = threading.Lock()
 _SCANNER_PROMOTION_PENDING_ATTACH_UNTIL: dict[str, float] = {}
 _SCANNER_PROMOTION_PENDING_ATTACH_LOCK = threading.Lock()
 _SCANNER_PROMOTION_INBOX = ScannerPromotionInbox(max_active=40)
-_SCANNER_SCHEDULER_DEFAULT_VENUES = (
-    "KRX,PREMARKET_KRX_LIKE,NXT,KRX_NXT_INTEGRATED"
-)
+_SCANNER_SCHEDULER_DEFAULT_VENUES = "KRX,PREMARKET_KRX_LIKE,NXT,KRX_NXT_INTEGRATED"
 _SCANNER_RUNTIME_SUPPORTED_COHORTS = frozenset(
     {"KRX", "PREMARKET_KRX_LIKE", "NXT", "KRX_NXT_INTEGRATED"}
 )
@@ -691,18 +699,25 @@ def _request_broker_snapshot_refresh_after_execution(*, code: str, reason: str) 
 
 def _periodic_broker_snapshot_required(targets):
     """Optional context polling serves real positions/orders or watch admission."""
-    if getattr(_reconcile_main_fixed_watch, 'broker_refresh_needed', False):
+    if getattr(_reconcile_main_fixed_watch, "broker_refresh_needed", False):
         return True
     for target in targets:
-        if str(target.get('status') or '').upper() not in {'WATCHING', 'EXPIRED', 'COMPLETED'}:
+        if str(target.get("status") or "").upper() not in {
+            "WATCHING",
+            "EXPIRED",
+            "COMPLETED",
+        }:
             return True  # Unknown state retains conservative reconciliation.
         try:
-            quantity = float(str(target.get('buy_qty') or 0).replace(',', ''))
+            quantity = float(str(target.get("buy_qty") or 0).replace(",", ""))
             if not math.isfinite(quantity) or quantity != 0:
                 return True
         except (TypeError, ValueError):
             return True
-        if any(target.get(k) for k in ('buy_ord_no', 'sell_ord_no', 'pending_cancel_ord_no')):
+        if any(
+            target.get(k)
+            for k in ("buy_ord_no", "sell_ord_no", "pending_cancel_ord_no")
+        ):
             return True
     return False
 
@@ -1338,10 +1353,11 @@ def _is_ok_response(res):
     return sniper_trade_utils.is_ok_response(res)
 
 
-
-
 def _prune_ws_subscriptions_for_inactive_targets(targets):
-    from src.engine.scalping.pre_submit_delay_observation import should_retain_ws_subscription as retain_delay_source
+    from src.engine.scalping.pre_submit_delay_observation import (
+        should_retain_ws_subscription as retain_delay_source,
+    )
+
     if not WS_MANAGER:
         return
     subscribed_codes = list(getattr(WS_MANAGER, "subscribed_codes", set()) or [])
@@ -1520,8 +1536,6 @@ def _legacy_entry_score_role_gate(stock, ws_data, current_ai_score):
     return gate
 
 
-
-
 def check_watching_conditions(
     stock, code, ws_data, admin_id, radar=None, ai_engine=None
 ):
@@ -1642,9 +1656,7 @@ def check_watching_conditions(
                     entry_score_role_gate.get("entry_score_usable_for_entry_submit")
                 ),
             )
-            stock["legacy_entry_score_prior_band"] = score_prior.get(
-                "score_prior_band"
-            )
+            stock["legacy_entry_score_prior_band"] = score_prior.get("score_prior_band")
             stock["legacy_entry_score_prior_weight"] = score_prior.get(
                 "ai_score_prior_weight"
             )
@@ -2777,10 +2789,19 @@ def _scanner_runtime_handoff_updates(payload, *, source, existing=None):
         else time.time()
     )
     return {
-        **{key: copy.deepcopy(payload[key]) for key in (
-            'native_observation', 'ws_handoff_id', 'physical_probe_lease_id',
-            '_zero_base_source_continuity') if key in payload},
-        '_zero_base_source_continuity': copy.deepcopy(payload.get('_zero_base_source_continuity')),
+        **{
+            key: copy.deepcopy(payload[key])
+            for key in (
+                "native_observation",
+                "ws_handoff_id",
+                "physical_probe_lease_id",
+                "_zero_base_source_continuity",
+            )
+            if key in payload
+        },
+        "_zero_base_source_continuity": copy.deepcopy(
+            payload.get("_zero_base_source_continuity")
+        ),
         "scanner_runtime_handoff_epoch": round(float(handoff_epoch), 6),
         "scanner_runtime_handoff_source": str(source),
         "scanner_runtime_handoff_promotion_id": promotion_id,
@@ -2826,9 +2847,15 @@ def _emit_scanner_scheduler_event(
     }
 
     # Arguments are frozen by the finite queue, including existing callers.
-    _SCANNER_OBSERVATION_QUEUE.submit(emit_pipeline_event,
-        "ENTRY_PIPELINE", stock_name, stock_code, stage_name,
-        record_id=record_id, fields=event_fields)
+    _SCANNER_OBSERVATION_QUEUE.submit(
+        emit_pipeline_event,
+        "ENTRY_PIPELINE",
+        stock_name,
+        stock_code,
+        stage_name,
+        record_id=record_id,
+        fields=event_fields,
+    )
 
 
 def _resolve_scanner_runtime_record_id(payload, code, strategy):
@@ -3425,11 +3452,16 @@ def _scanner_watch_eviction_decision_from_no_trade(target, ws_data, *, now_ts):
             "ws_recovery_outcome": "not_applicable_ws_recovery_outcome",
         }
     from src.engine.scalping.native_source_continuity import source_ready
+
     continuity_ready = source_ready(target, ws_data, now=now_ts)
-    if post_attach_trade_evidence or continuity_ready or (
-        attach_epoch <= 0
-        and attach_anchor_source == "missing"
-        and "0B" in received_types
+    if (
+        post_attach_trade_evidence
+        or continuity_ready
+        or (
+            attach_epoch <= 0
+            and attach_anchor_source == "missing"
+            and "0B" in received_types
+        )
     ):
         target.pop("_scanner_watch_no_trade_count", None)
         target.pop("_scanner_watch_no_trade_first_observed_epoch", None)
@@ -5473,12 +5505,15 @@ def _zero_base_watch_session_matches(target, now_ts):
     """A zero-base observation owns a single trading session."""
     target = target or {}
     expected = {
-        ("PREMARKET_KRX_LIKE", "krx_like_premarket"):
-            session_contract.MARKET_SESSION_REGIME_LEGACY_PREMARKET,
-        ("KRX", "krx_regular"):
-            session_contract.MARKET_SESSION_REGIME_KRX_REGULAR,
-        ("KRX_NXT_INTEGRATED", "KRX_NXT_AFTERMARKET"):
-            session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET,
+        (
+            "PREMARKET_KRX_LIKE",
+            "krx_like_premarket",
+        ): session_contract.MARKET_SESSION_REGIME_LEGACY_PREMARKET,
+        ("KRX", "krx_regular"): session_contract.MARKET_SESSION_REGIME_KRX_REGULAR,
+        (
+            "KRX_NXT_INTEGRATED",
+            "KRX_NXT_AFTERMARKET",
+        ): session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET,
     }.get((target.get("effective_venue"), target.get("market_session_bucket")))
     current = session_contract.resolve_market_session(
         datetime.fromtimestamp(now_ts, tz=session_contract.KST)
@@ -5496,6 +5531,7 @@ def _scalping_fifo_candidates(watching_stocks, now_ts):
 def _record_machine_watch_terminal(target, *, now_ts):
     """Emit the existing TTL/FIFO terminal without changing runtime state."""
     from src.engine import sniper_state_handlers
+
     contract = target.get("entry_economic_watch_lifetime") or {}
     promotion = target.get("scanner_promotion_id")
     if not promotion or contract.get("scanner_promotion_id") != promotion:
@@ -5507,12 +5543,18 @@ def _record_machine_watch_terminal(target, *, now_ts):
         else "ttl_expired" if now_ts > contract["deadline_epoch"] else "fifo_evicted"
     )
     try:
-        sniper_state_handlers._log_entry_pipeline(target, target.get("code"),
-            "entry_machine_watch_terminal", scanner_promotion_id=promotion,
-            watch_deadline_epoch=contract["deadline_epoch"], watch_terminal_epoch=now_ts,
+        sniper_state_handlers._log_entry_pipeline(
+            target,
+            target.get("code"),
+            "entry_machine_watch_terminal",
+            scanner_promotion_id=promotion,
+            watch_deadline_epoch=contract["deadline_epoch"],
+            watch_terminal_epoch=now_ts,
             watch_terminal_owner=contract["owner"],
             watch_terminal_reason=terminal_reason,
-            actual_order_submitted=False, broker_order_forbidden=True)
+            actual_order_submitted=False,
+            broker_order_forbidden=True,
+        )
     except Exception as exc:
         log_error("[MACHINE_WATCH_TERMINAL] observation failed: " + type(exc).__name__)
 
@@ -6043,7 +6085,10 @@ def _expire_scalping_watch_budget_targets(
         for target in active_targets or []
         if str(target.get("status") or "").upper() not in {"COMPLETED", "EXPIRED"}
     }
-    from src.engine.scalping.pre_submit_delay_observation import should_retain_ws_subscription as retain_delay_source
+    from src.engine.scalping.pre_submit_delay_observation import (
+        should_retain_ws_subscription as retain_delay_source,
+    )
+
     unregister_codes = [
         code
         for code in sorted(set(expired_codes))
@@ -6071,8 +6116,6 @@ def _expire_scalping_watch_budget_targets(
     return expired_targets
 
 
-
-
 def _initial_ws_registration_groups(targets, now_ts=None):
     now_ts = time.time() if now_ts is None else now_ts
     priority_codes = []
@@ -6097,7 +6140,9 @@ def _initial_ws_registration_groups(targets, now_ts=None):
             continue
         priority_item = code
         if main_fixed_watch.is_fixed_watch(target):
-            route = main_fixed_watch.session_route(now_ts, str(target.get("code") or "")[:6])
+            route = main_fixed_watch.session_route(
+                now_ts, str(target.get("code") or "")[:6]
+            )
             priority_item = route["item"] if route else ""
         if priority_item and priority_item not in seen_priority:
             priority_codes.append(priority_item)
@@ -6132,39 +6177,63 @@ def _reconcile_main_fixed_watch(targets, *, now_ts, publish_reg):
         try:
             with ENTRY_LOCK:
                 outcome, target = main_fixed_watch.reconcile(
-                    DB, targets, now_epoch=now_ts,
-                    watch_cap=_scalping_fifo_max_active(), symbol=code,
+                    DB,
+                    targets,
+                    now_epoch=now_ts,
+                    watch_cap=_scalping_fifo_max_active(),
+                    symbol=code,
                 )
         except Exception as exc:
-            log_error(f"[MAIN_FIXED_WATCH] {code} reconcile failed: {type(exc).__name__}: {exc}")
+            log_error(
+                f"[MAIN_FIXED_WATCH] {code} reconcile failed: {type(exc).__name__}: {exc}"
+            )
             outcomes[code] = "reconcile_error"
             continue
         outcomes[code] = outcome
         adopt = getattr(WS_MANAGER, "adopt_main_fixed_watch_target", None)
-        adopted = bool(target is not None and callable(adopt)
-                       and adopt(target, now_ts=now_ts))
+        adopted = bool(
+            target is not None and callable(adopt) and adopt(target, now_ts=now_ts)
+        )
         if outcome == "armed" and target is not None:
             route = main_fixed_watch.session_route(now_ts, code)
             if publish_reg and route is not None and not adopted:
-                event_bus.publish("COMMAND_WS_REG", {
-                    "codes": [route["item"]], "source": "main_fixed_watch_admission",
-                    "required_realtime_types": ("0B", "0D"),
-                })
-            log_info(f"[MAIN_FIXED_WATCH] armed code={code} id={target.get('id')} "
-                     f"admission={target.get('watch_admission_id')} "
-                     f"generation={target.get('watch_generation_id')} item={route['item'] if route else '-'}")
-        elif outcome not in {"already_watching", "disabled", "outside_supported_session"}:
+                event_bus.publish(
+                    "COMMAND_WS_REG",
+                    {
+                        "codes": [route["item"]],
+                        "source": "main_fixed_watch_admission",
+                        "required_realtime_types": ("0B", "0D"),
+                    },
+                )
+            log_info(
+                f"[MAIN_FIXED_WATCH] armed code={code} id={target.get('id')} "
+                f"admission={target.get('watch_admission_id')} "
+                f"generation={target.get('watch_generation_id')} item={route['item'] if route else '-'}"
+            )
+        elif outcome not in {
+            "already_watching",
+            "disabled",
+            "outside_supported_session",
+        }:
             waits = getattr(_reconcile_main_fixed_watch, "waits", {})
             reason, last_log = waits.get(code, ("", 0.0))
             if outcome != reason or now_ts - last_log >= 60:
-                log_info(f"[MAIN_FIXED_WATCH] code={code} admission waiting reason={outcome}")
+                log_info(
+                    f"[MAIN_FIXED_WATCH] code={code} admission waiting reason={outcome}"
+                )
                 waits[code] = (outcome, now_ts)
                 _reconcile_main_fixed_watch.waits = waits
     _reconcile_main_fixed_watch.broker_refresh_needed = any(
-        reason in {'broker_snapshot_missing_or_stale', 'broker_exchange_census_incomplete',
-                   'broker_inventory_rows_invalid', 'broker_open_orders_unverified',
-                   'broker_open_order_rows_invalid'} for reason in
-        (value.rsplit(':', 1)[-1] for value in outcomes.values()))
+        reason
+        in {
+            "broker_snapshot_missing_or_stale",
+            "broker_exchange_census_incomplete",
+            "broker_inventory_rows_invalid",
+            "broker_open_orders_unverified",
+            "broker_open_order_rows_invalid",
+        }
+        for reason in (value.rsplit(":", 1)[-1] for value in outcomes.values())
+    )
     return outcomes.get(main_fixed_watch.SAMSUNG_CODE, "disabled")
 
 
@@ -6828,11 +6897,15 @@ def _scanner_record_first_entry_realtime(target, ws_data, *, now_ts):
         SCANNER_WATCH_EVICTION_STALE_MIN_AGE_SEC,
     )
     from src.engine.scalping.native_source_continuity import source_ready
+
     continuity_ready = source_ready(target, ws_data, now=now_ts)
     return {
         "scanner_native_source_continuity_ready": continuity_ready,
         "scanner_continuous_source_adopted_epoch": (
-            target["_zero_base_source_continuity"]["adopted_epoch"] if continuity_ready else None),
+            target["_zero_base_source_continuity"]["adopted_epoch"]
+            if continuity_ready
+            else None
+        ),
         "scanner_entry_realtime_state": "awaiting_first_post_attach_trade_input",
         "scanner_entry_realtime_attach_anchor_epoch": f"{attach_epoch:.6f}",
         "scanner_entry_realtime_attach_anchor_source": attach_anchor_source,
@@ -8533,8 +8606,13 @@ def _scanner_pipeline_stock_snapshot(stock_value):
 
 
 def _zero_base_runtime_enabled():
-    return str(os.getenv("KORSTOCKSCAN_ZERO_BASE_SCANNER_ENABLED", "false")).strip().lower() in {
-        "1", "true", "yes", "on",
+    return str(
+        os.getenv("KORSTOCKSCAN_ZERO_BASE_SCANNER_ENABLED", "false")
+    ).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
     }
 
 
@@ -8551,34 +8629,52 @@ def _zero_base_active_conflict(code):
 def _zero_base_active_target_snapshot(readiness):
     """Read only Main's target identities; failure falls back to callback checks."""
     if not ENTRY_LOCK.acquire(blocking=False):
-        return {'status': 'unobserved', 'reason': 'main_target_lock_busy'}
+        return {"status": "unobserved", "reason": "main_target_lock_busy"}
     try:
         if len(ACTIVE_TARGETS) > 512:
-            return {'status': 'unobserved', 'reason': 'main_target_snapshot_bound'}
-        identities = sorted((
-            str((target or {}).get('code') or '').strip()[:6],
-            str((target or {}).get('id') or ''),
-            str((target or {}).get('status') or '').upper(),
-            str((target or {}).get('owner') or ''),
-            str((target or {}).get('source_signature') or ''),
-            str((target or {}).get('watch_generation_id') or ''),
-        ) for target in ACTIVE_TARGETS)
-        active_codes = sorted({row[0] for row in identities
-            for code, status in [(row[0], row[2])]
-            if len(code) == 6 and code.isdigit()
-            and status not in {'EXPIRED', 'COMPLETED', 'CANCELLED'}})
-        observed_epoch=time.time()
+            return {"status": "unobserved", "reason": "main_target_snapshot_bound"}
+        identities = sorted(
+            (
+                str((target or {}).get("code") or "").strip()[:6],
+                str((target or {}).get("id") or ""),
+                str((target or {}).get("status") or "").upper(),
+                str((target or {}).get("owner") or ""),
+                str((target or {}).get("source_signature") or ""),
+                str((target or {}).get("watch_generation_id") or ""),
+            )
+            for target in ACTIVE_TARGETS
+        )
+        active_codes = sorted(
+            {
+                row[0]
+                for row in identities
+                for code, status in [(row[0], row[2])]
+                if len(code) == 6
+                and code.isdigit()
+                and status not in {"EXPIRED", "COMPLETED", "CANCELLED"}
+            }
+        )
+        observed_epoch = time.time()
     except (AttributeError, TypeError, ValueError):
-        return {'status': 'unobserved', 'reason': 'main_target_snapshot_invalid'}
+        return {"status": "unobserved", "reason": "main_target_snapshot_invalid"}
     finally:
         ENTRY_LOCK.release()
-    owner = {key: readiness.get(key) for key in (
-        'runtime_generation', 'process_pid', 'process_start_ticks', 'date')}
-    generation = hashlib.sha256(json.dumps(
-        [owner, identities], sort_keys=True, separators=(',', ':')).encode()).hexdigest()
-    return dict(schema='zero_base_main_target_snapshot_v1', status='observed',
-        **owner, generation=generation, observed_epoch=observed_epoch,
-        active_codes=active_codes, runtime_effect=False)
+    owner = {
+        key: readiness.get(key)
+        for key in ("runtime_generation", "process_pid", "process_start_ticks", "date")
+    }
+    generation = hashlib.sha256(
+        json.dumps([owner, identities], sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    return dict(
+        schema="zero_base_main_target_snapshot_v1",
+        status="observed",
+        **owner,
+        generation=generation,
+        observed_epoch=observed_epoch,
+        active_codes=active_codes,
+        runtime_effect=False,
+    )
 
 
 def _zero_base_probe_result(request, result, reason):
@@ -8597,19 +8693,23 @@ def _zero_base_probe_result(request, result, reason):
     )
 
 
-def _zero_base_attach_receipt(result, *, outcome, reason, record_id=None, finalize_payload=None):
-    if outcome in {'attached', 'rejected'}:
+def _zero_base_attach_receipt(
+    result, *, outcome, reason, record_id=None, finalize_payload=None
+):
+    if outcome in {"attached", "rejected"}:
         with _ZERO_BASE_PROBE_LOCK:
-            _ZERO_BASE_MAIN_PENDING.discard((result or {}).get('ws_handoff_id'))
-            handoff = _ZERO_BASE_HANDOFFS.get((result or {}).get('ws_handoff_id'))
+            _ZERO_BASE_MAIN_PENDING.discard((result or {}).get("ws_handoff_id"))
+            handoff = _ZERO_BASE_HANDOFFS.get((result or {}).get("ws_handoff_id"))
             if handoff is not None:
-                handoff['outcome'] = outcome
-                handoff['event'].set()
+                handoff["outcome"] = outcome
+                handoff["event"].set()
     claim = (result or {}).get("claim") or {}
     try:
         emit_pipeline_event(
-            "ENTRY_PIPELINE", str(claim.get("code") or "-"),
-            str(claim.get("code") or "-"), "zero_base_watch_attach",
+            "ENTRY_PIPELINE",
+            str(claim.get("code") or "-"),
+            str(claim.get("code") or "-"),
+            "zero_base_watch_attach",
             fields={
                 "metric_role": "funnel_count",
                 "decision_authority": "main_watching_attach_only",
@@ -8617,17 +8717,31 @@ def _zero_base_attach_receipt(result, *, outcome, reason, record_id=None, finali
                 "zero_base_attach_reason": reason,
                 "zero_base_route": claim.get("route"),
                 "zero_base_source_sha256": claim.get("source_sha256"),
-                "zero_base_machine_bundle_sha256": (result or {}).get("machine_bundle_sha256"),
-                "machine_observation_sha256": (result or {}).get("machine_observation_sha256"),
+                "zero_base_machine_bundle_sha256": (result or {}).get(
+                    "machine_bundle_sha256"
+                ),
+                "machine_observation_sha256": (result or {}).get(
+                    "machine_observation_sha256"
+                ),
                 "record_id": record_id,
                 "zero_base_finalize_receipt": json.dumps(
-                    (finalize_payload if finalize_payload is not None else result or {}).get(
-                        '_zero_base_finalize_receipt') or {}, sort_keys=True),
-                "zero_base_handoff_id": (result or {}).get('ws_handoff_id'),
-                "zero_base_physical_probe_lease_id": (result or {}).get('physical_probe_lease_id'),
+                    (
+                        finalize_payload
+                        if finalize_payload is not None
+                        else result or {}
+                    ).get("_zero_base_finalize_receipt")
+                    or {},
+                    sort_keys=True,
+                ),
+                "zero_base_handoff_id": (result or {}).get("ws_handoff_id"),
+                "zero_base_physical_probe_lease_id": (result or {}).get(
+                    "physical_probe_lease_id"
+                ),
                 "zero_base_attach_pid": os.getpid(),
                 "zero_base_attach_process_start_ticks": __import__(
-                    'src.engine.monitoring.runtime_performance',fromlist=['process_identity_fields']).process_identity_fields()['process_start_ticks'],
+                    "src.engine.monitoring.runtime_performance",
+                    fromlist=["process_identity_fields"],
+                ).process_identity_fields()["process_start_ticks"],
                 "actual_order_submitted": False,
                 "broker_order_forbidden": True,
             },
@@ -8642,27 +8756,33 @@ def _zero_base_inbox_attach_receipt(payload, *, outcome, reason):
             "claim": {
                 "code": (payload or {}).get("code"),
                 "route": (payload or {}).get("market_data_route"),
-                "source_sha256": str((payload or {}).get("source_signature") or "").removeprefix(
-                    "ZERO_BASE_DISCOVERY:"
-                ),
+                "source_sha256": str(
+                    (payload or {}).get("source_signature") or ""
+                ).removeprefix("ZERO_BASE_DISCOVERY:"),
             },
             "machine_bundle_sha256": (payload or {}).get(
                 "zero_base_probe_machine_bundle_sha256"
             ),
-            "ws_handoff_id": (payload or {}).get('ws_handoff_id'),
+            "ws_handoff_id": (payload or {}).get("ws_handoff_id"),
             "machine_observation_sha256": (payload or {}).get(
                 "zero_base_probe_machine_observation_sha256"
             ),
-            "physical_probe_lease_id": (payload or {}).get('physical_probe_lease_id'),
-            "_zero_base_finalize_receipt": (payload or {}).get('_zero_base_finalize_receipt'),
+            "physical_probe_lease_id": (payload or {}).get("physical_probe_lease_id"),
+            "_zero_base_finalize_receipt": (payload or {}).get(
+                "_zero_base_finalize_receipt"
+            ),
         },
-        outcome=outcome, reason=reason, record_id=(payload or {}).get("record_id"),
+        outcome=outcome,
+        reason=reason,
+        record_id=(payload or {}).get("record_id"),
     )
 
 
 def _zero_base_release_probe_ws(code, item, lease_id=None):
     manager = WS_MANAGER
-    if lease_id and callable(getattr(manager, "execute_release_exact_probe_item", None)):
+    if lease_id and callable(
+        getattr(manager, "execute_release_exact_probe_item", None)
+    ):
         return manager.execute_release_exact_probe_item(item, lease_id)
     if manager is None or _zero_base_active_conflict(code):
         return
@@ -8671,8 +8791,11 @@ def _zero_base_release_probe_ws(code, item, lease_id=None):
         micro_owned = code in manager._micro_reversion_observation_items_by_code
         pinned = code in getattr(manager, "_pinned_observation_codes", set())
         current_items = tuple(manager._registered_items_by_code.get(code) or ())
-    if source_only and not micro_owned and not pinned and (
-        item in current_items or not current_items
+    if (
+        source_only
+        and not micro_owned
+        and not pinned
+        and (item in current_items or not current_items)
     ):
         return manager.execute_unsubscribe([code])
 
@@ -8687,7 +8810,7 @@ def _retry_zero_base_cleanup():
         try:
             callback()
         except Exception as exc:
-            log_error('[ZERO_BASE_PROBE_RELEASE] retry:' + type(exc).__name__)
+            log_error("[ZERO_BASE_PROBE_RELEASE] retry:" + type(exc).__name__)
 
 
 def _drain_zero_base_probe_leases(*, timeout=45.0):
@@ -8706,7 +8829,7 @@ def _drain_zero_base_probe_leases(*, timeout=45.0):
                 return True
         if time.monotonic() >= deadline:
             return False
-        time.sleep(min(.05, max(0., deadline-time.monotonic())))
+        time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
 
 
 def _zero_base_probe_observation_profile(session_regime):
@@ -8728,10 +8851,15 @@ def _zero_base_probe_observation_profile(session_regime):
 def _zero_base_consumer_readiness():
     from src.engine.scalping.zero_base_probe import consumer_readiness
     from src.engine.scalping.reversal_current_backend import backend
-    readiness = consumer_readiness(ws_manager=WS_MANAGER, ai_engine=AI_ENGINE,
-        token=KIWOOM_TOKEN, enabled=_zero_base_runtime_enabled(),
-        family_sha256=getattr(backend(), '_GENERATION', None))
-    readiness['main_target_snapshot'] = _zero_base_active_target_snapshot(readiness)
+
+    readiness = consumer_readiness(
+        ws_manager=WS_MANAGER,
+        ai_engine=AI_ENGINE,
+        token=KIWOOM_TOKEN,
+        enabled=_zero_base_runtime_enabled(),
+        family_sha256=getattr(backend(), "_GENERATION", None),
+    )
+    readiness["main_target_snapshot"] = _zero_base_active_target_snapshot(readiness)
     return readiness
 
 
@@ -8741,29 +8869,39 @@ def handle_zero_base_probe_requested(request):
     candidate = request.get("candidate") or {}
     code = str(claim.get("code") or "")
     if not _zero_base_runtime_enabled():
-        _zero_base_probe_result(request, "policy_unavailable", "zero_base_runtime_disabled")
+        _zero_base_probe_result(
+            request, "policy_unavailable", "zero_base_runtime_disabled"
+        )
         return
     if (
-        len(code) != 6 or not code.isdigit()
+        len(code) != 6
+        or not code.isdigit()
         or candidate.get("code") != code
         or candidate.get("route") != claim.get("route")
         or candidate.get("source_sha256") != claim.get("source_sha256")
     ):
         _zero_base_probe_result(request, "source_unavailable", "invalid_probe_request")
         return
-    session_regime = scalping_session_venue_provenance(time.time()).get("market_session_regime")
+    session_regime = scalping_session_venue_provenance(time.time()).get(
+        "market_session_regime"
+    )
     expected_route = (
         "nxt_only"
         if session_regime == session_contract.MARKET_SESSION_REGIME_LEGACY_PREMARKET
-        else "krx_nxt_integrated"
-        if session_regime in {
-            session_contract.MARKET_SESSION_REGIME_KRX_REGULAR,
-            session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET,
-        }
-        else None
+        else (
+            "krx_nxt_integrated"
+            if session_regime
+            in {
+                session_contract.MARKET_SESSION_REGIME_KRX_REGULAR,
+                session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET,
+            }
+            else None
+        )
     )
     if claim.get("route") != expected_route:
-        _zero_base_probe_result(request, "source_unavailable", "probe_route_session_mismatch")
+        _zero_base_probe_result(
+            request, "source_unavailable", "probe_route_session_mismatch"
+        )
         return
     if _zero_base_active_conflict(code):
         _zero_base_probe_result(request, "active_conflict", "existing_runtime_target")
@@ -8773,30 +8911,37 @@ def handle_zero_base_probe_requested(request):
         return
     readiness = _zero_base_consumer_readiness()
     from src.engine.scalping.zero_base_probe import readiness_issue
-    issue = readiness_issue(request.get('consumer_readiness'), readiness)
+
+    issue = readiness_issue(request.get("consumer_readiness"), readiness)
     if issue:
         # Callback began, but no executor/physical lease has been started.
-        request['consumer_readiness_at_callback'] = readiness
-        _zero_base_probe_result(request, 'policy_unavailable', issue)
+        request["consumer_readiness_at_callback"] = readiness
+        _zero_base_probe_result(request, "policy_unavailable", issue)
         return
     if not _ZERO_BASE_PROBE_SLOTS.acquire(blocking=False):
-        _zero_base_probe_result(request, "probe_capacity_deferred", "probe_worker_capacity")
+        _zero_base_probe_result(
+            request, "probe_capacity_deferred", "probe_worker_capacity"
+        )
         return
     with _ZERO_BASE_PROBE_LOCK:
         closing = _ZERO_BASE_PROBE_CLOSING.is_set()
         if not closing and code in _ZERO_BASE_PROBE_IN_FLIGHT:
             _ZERO_BASE_PROBE_SLOTS.release()
-            _zero_base_probe_result(request, "probe_capacity_deferred", "same_code_probe_in_flight")
+            _zero_base_probe_result(
+                request, "probe_capacity_deferred", "same_code_probe_in_flight"
+            )
             return
         if not closing:
             _ZERO_BASE_PROBE_IN_FLIGHT.add(code)
     if closing:
         _ZERO_BASE_PROBE_SLOTS.release()
-        _zero_base_probe_result(request, "probe_capacity_deferred", "probe_executor_unavailable")
+        _zero_base_probe_result(
+            request, "probe_capacity_deferred", "probe_executor_unavailable"
+        )
         return
 
     def worker():
-        probe_lease_id = claim.get('physical_probe_lease_id') or uuid.uuid4().hex
+        probe_lease_id = claim.get("physical_probe_lease_id") or uuid.uuid4().hex
         deferred_cleanup = False
         retained_ws = False
         slot_released = False
@@ -8811,8 +8956,11 @@ def handle_zero_base_probe_requested(request):
                     return
                 closed_published = True
             from src.scanners.zero_base_discovery_runtime import HANDOFF_ACK_EVENT
-            event_bus.publish(HANDOFF_ACK_EVENT, dict(handoff_closed=True,
-                claim=claim, ws_handoff_id=probe_lease_id))
+
+            event_bus.publish(
+                HANDOFF_ACK_EVENT,
+                dict(handoff_closed=True, claim=claim, ws_handoff_id=probe_lease_id),
+            )
 
         def release_slot():
             nonlocal slot_released
@@ -8827,25 +8975,38 @@ def handle_zero_base_probe_requested(request):
         def release_probe_ws(release_code, release_item, lease_id=None):
             nonlocal release_pending
             release_pending = True
+
             def retry():
                 with _ZERO_BASE_PROBE_LOCK:
-                    _ZERO_BASE_CLEANUP_RETRIES[probe_lease_id] = (time.monotonic()+5,
-                        lambda: release_probe_ws(release_code, release_item, lease_id))
+                    _ZERO_BASE_CLEANUP_RETRIES[probe_lease_id] = (
+                        time.monotonic() + 5,
+                        lambda: release_probe_ws(release_code, release_item, lease_id),
+                    )
+
             def on_remove_complete(future):
                 try:
                     if future.result() is not True:
-                        log_error("[ZERO_BASE_PROBE_RELEASE] " + code + ":ws_remove_unconfirmed")
+                        log_error(
+                            "[ZERO_BASE_PROBE_RELEASE] "
+                            + code
+                            + ":ws_remove_unconfirmed"
+                        )
                         retry()
                         return
                 except Exception as exc:
-                    log_error("[ZERO_BASE_PROBE_RELEASE] " + code + ":" + type(exc).__name__)
+                    log_error(
+                        "[ZERO_BASE_PROBE_RELEASE] " + code + ":" + type(exc).__name__
+                    )
                     retry()
                     return
                 release_slot()
 
             try:
-                completion = (_zero_base_release_probe_ws(release_code, release_item, lease_id)
-                              if lease_id else _zero_base_release_probe_ws(release_code, release_item))
+                completion = (
+                    _zero_base_release_probe_ws(release_code, release_item, lease_id)
+                    if lease_id
+                    else _zero_base_release_probe_ws(release_code, release_item)
+                )
             except Exception:
                 retry()
                 raise
@@ -8860,27 +9021,39 @@ def handle_zero_base_probe_requested(request):
                 if completion is True or (completion is None and lease_id is None):
                     release_slot()
                 else:
-                    log_error("[ZERO_BASE_PROBE_RELEASE] " + code + ":ws_remove_unconfirmed")
+                    log_error(
+                        "[ZERO_BASE_PROBE_RELEASE] " + code + ":ws_remove_unconfirmed"
+                    )
                     retry()
 
         try:
             try:
                 profile = _zero_base_probe_observation_profile(session_regime)
 
-                def observe_once(*, warmup_sec, timeout_sec, empty_timeout_sec,
-                                 retain_on_recheck):
+                def observe_once(
+                    *, warmup_sec, timeout_sec, empty_timeout_sec, retain_on_recheck
+                ):
                     # Executor queue residence is another race boundary. No
                     # physical REG is attempted with a replaced consumer.
                     current = _zero_base_consumer_readiness()
-                    issue = readiness_issue(request.get('consumer_readiness'), current)
+                    issue = readiness_issue(request.get("consumer_readiness"), current)
                     if issue:
-                        return dict(request, result='policy_unavailable', reason=issue,
-                                    consumer_readiness_at_worker=current, machine_action='')
+                        return dict(
+                            request,
+                            result="policy_unavailable",
+                            reason=issue,
+                            consumer_readiness_at_worker=current,
+                            machine_action="",
+                        )
                     if _zero_base_active_conflict(code):
                         # Main may attach a target while this executor waited.
                         # No physical REG has occurred at this boundary.
-                        return dict(request, result='active_conflict',
-                            reason='existing_runtime_target_at_worker', machine_action='')
+                        return dict(
+                            request,
+                            result="active_conflict",
+                            reason="existing_runtime_target_at_worker",
+                            machine_action="",
+                        )
                     return run_zero_base_probe(
                         request,
                         ws_manager=WS_MANAGER,
@@ -8893,7 +9066,9 @@ def handle_zero_base_probe_requested(request):
                         ws_wait_partial_extension_sec=profile["partial_extension_sec"],
                         retain_ws_on_recheck=retain_on_recheck,
                         ws_lease_id=probe_lease_id,
-                        native_wait_deadline_epoch=claim.get('residence_deadline_epoch'),
+                        native_wait_deadline_epoch=claim.get(
+                            "residence_deadline_epoch"
+                        ),
                     )
 
                 result = observe_once(
@@ -8903,9 +9078,11 @@ def handle_zero_base_probe_requested(request):
                     retain_on_recheck=True,
                 )
                 retained_ws = bool(result.pop("_ws_lease_retained", False))
-                if (result.get("result") == "assessed"
-                        and result.get("machine_action") == "RECHECK"
-                        and not _zero_base_active_conflict(code)):
+                if (
+                    result.get("result") == "assessed"
+                    and result.get("machine_action") == "RECHECK"
+                    and not _zero_base_active_conflict(code)
+                ):
                     first = result
                     try:
                         followup = observe_once(
@@ -8920,17 +9097,15 @@ def handle_zero_base_probe_requested(request):
                             "reason": "recheck_probe_exception:" + type(exc).__name__,
                         }
                     followup.pop("_ws_lease_retained", None)
-                    result = (
-                        followup if followup.get("result") == "assessed"
-                        else first
-                    )
+                    result = followup if followup.get("result") == "assessed" else first
                     result["recheck_attempts"] = 2
                     result["recheck_first_machine_observation_sha256"] = first.get(
-                        "machine_observation_sha256")
+                        "machine_observation_sha256"
+                    )
                     result["recheck_first_reason"] = first.get("reason")
                     result["recheck_first_ws_wait_ms"] = (
-                        (first.get("ws_observation") or {}).get("wait_ms")
-                    )
+                        first.get("ws_observation") or {}
+                    ).get("wait_ms")
                     result["recheck_followup_result"] = followup.get("result")
                     result["recheck_followup_reason"] = followup.get("reason")
                     result["recheck_followup_ws_observation"] = (
@@ -8938,7 +9113,9 @@ def handle_zero_base_probe_requested(request):
                     )
                 elif result.get("machine_action") == "RECHECK":
                     result["recheck_attempts"] = 1
-                    result["recheck_followup_reason"] = "active_conflict_after_first_assessment"
+                    result["recheck_followup_reason"] = (
+                        "active_conflict_after_first_assessment"
+                    )
             except Exception as exc:
                 result = {
                     **request,
@@ -8951,36 +9128,74 @@ def handle_zero_base_probe_requested(request):
                 }
             deferred_cleanup = bool(result.pop("_ws_cleanup_deferred", False))
             result["result_epoch"] = time.time()
-            result['physical_probe_lease_id'] = probe_lease_id
+            result["physical_probe_lease_id"] = probe_lease_id
             handoff_id = None
-            if retained_ws and result.get('machine_action') == 'ENTER_NOW' and result.get('native_observation'):
+            if (
+                retained_ws
+                and result.get("machine_action") == "ENTER_NOW"
+                and result.get("native_observation")
+            ):
                 handoff_id = probe_lease_id
-                result['ws_handoff_id'] = handoff_id
+                result["ws_handoff_id"] = handoff_id
                 with _ZERO_BASE_PROBE_LOCK:
-                    _ZERO_BASE_HANDOFFS[handoff_id] = dict(event=threading.Event(), outcome=None,
-                        code=code, route=claim.get('route'), lease_id=probe_lease_id)
+                    _ZERO_BASE_HANDOFFS[handoff_id] = dict(
+                        event=threading.Event(),
+                        outcome=None,
+                        code=code,
+                        route=claim.get("route"),
+                        lease_id=probe_lease_id,
+                    )
             event_bus.publish(PROBE_RESULT_EVENT, result)
             result_published = True
             publish_closed()
             if handoff_id:
                 with _ZERO_BASE_PROBE_LOCK:
                     handoff = _ZERO_BASE_HANDOFFS[handoff_id]
-                bound = result['native_observation']
-                handoff['event'].wait(max(0, min(bound['deadline_epoch']-time.time(),
-                                               bound['deadline_perf']-time.perf_counter())))
-                if handoff.get('outcome') is None or handoff.get('reason'):
-                    _zero_base_attach_receipt(result, outcome='rejected',
-                        reason=handoff.get('reason') or 'original_native_handoff_expired')
+                bound = result["native_observation"]
+                handoff["event"].wait(
+                    max(
+                        0,
+                        min(
+                            bound["deadline_epoch"] - time.time(),
+                            bound["deadline_perf"] - time.perf_counter(),
+                        ),
+                    )
+                )
+                if handoff.get("outcome") is None or handoff.get("reason"):
+                    _zero_base_attach_receipt(
+                        result,
+                        outcome="rejected",
+                        reason=handoff.get("reason")
+                        or "original_native_handoff_expired",
+                    )
                 with _ZERO_BASE_PROBE_LOCK:
                     _ZERO_BASE_HANDOFFS.pop(handoff_id, None)
         finally:
             try:
                 if retained_ws and not deferred_cleanup:
                     try:
-                        release_probe_ws(code, probe_item(code, claim.get("route") or ""),
-                                         probe_lease_id if callable(getattr(WS_MANAGER, "execute_acquire_exact_probe_item", None)) else None)
+                        release_probe_ws(
+                            code,
+                            probe_item(code, claim.get("route") or ""),
+                            (
+                                probe_lease_id
+                                if callable(
+                                    getattr(
+                                        WS_MANAGER,
+                                        "execute_acquire_exact_probe_item",
+                                        None,
+                                    )
+                                )
+                                else None
+                            ),
+                        )
                     except Exception as exc:
-                        log_error("[ZERO_BASE_PROBE_RELEASE] " + code + ":" + type(exc).__name__)
+                        log_error(
+                            "[ZERO_BASE_PROBE_RELEASE] "
+                            + code
+                            + ":"
+                            + type(exc).__name__
+                        )
             finally:
                 if not deferred_cleanup and not release_pending:
                     release_slot()
@@ -8991,31 +9206,45 @@ def handle_zero_base_probe_requested(request):
         with _ZERO_BASE_PROBE_LOCK:
             _ZERO_BASE_PROBE_IN_FLIGHT.discard(code)
         _ZERO_BASE_PROBE_SLOTS.release()
-        _zero_base_probe_result(request, "probe_capacity_deferred", "probe_executor_unavailable")
+        _zero_base_probe_result(
+            request, "probe_capacity_deferred", "probe_executor_unavailable"
+        )
 
 
 def _zero_base_native_handoff_valid(payload):
-    expected = (payload or {}).get('native_observation')
+    expected = (payload or {}).get("native_observation")
     if expected is None:
-        return not (payload or {}).get('ws_handoff_id')  # Legacy non-native lane.
-    from src.engine.scalping.reversal_source_diagnostics import observation_binding_valid
+        return not (payload or {}).get("ws_handoff_id")  # Legacy non-native lane.
+    from src.engine.scalping.reversal_source_diagnostics import (
+        observation_binding_valid,
+    )
+
     if not observation_binding_valid(expected):
         return False
     with _ZERO_BASE_PROBE_LOCK:
-        pending = _ZERO_BASE_HANDOFFS.get(payload.get('ws_handoff_id'))
-        if pending is None or pending.get('outcome') is not None:
+        pending = _ZERO_BASE_HANDOFFS.get(payload.get("ws_handoff_id"))
+        if pending is None or pending.get("outcome") is not None:
             return False
     try:
-        event = expected['snapshot'][0]
-        item = event['source_item']
+        event = expected["snapshot"][0]
+        item = event["source_item"]
         with WS_MANAGER.lock:
             epoch = WS_MANAGER._market_data_transport_epoch
-            lease = getattr(WS_MANAGER, '_exact_probe_item_leases', {}).get(item)
-            return bool(epoch == event['native_epoch']
+            lease = getattr(WS_MANAGER, "_exact_probe_item_leases", {}).get(item)
+            return bool(
+                epoch == event["native_epoch"]
                 and WS_MANAGER._registered_item_epochs.get(item) == epoch
-                and {'0B','0D'}.issubset(WS_MANAGER._registered_item_types.get(item, ()))
-                and (lease is None or (lease.get('lease_id') == payload.get('ws_handoff_id')
-                                       and not lease.get('removing'))))
+                and {"0B", "0D"}.issubset(
+                    WS_MANAGER._registered_item_types.get(item, ())
+                )
+                and (
+                    lease is None
+                    or (
+                        lease.get("lease_id") == payload.get("ws_handoff_id")
+                        and not lease.get("removing")
+                    )
+                )
+            )
     except (AttributeError, KeyError, TypeError):
         return False
 
@@ -9023,43 +9252,71 @@ def _zero_base_native_handoff_valid(payload):
 def _zero_base_finalize_candidate_record(payload, *, attached):
     record_id = (payload or {}).get("record_id")
     code = str((payload or {}).get("code") or "").strip()[:6]
+
     def finish(accepted, reason, **fields):
         try:
             if isinstance(payload, dict):
-                expected = payload.get('native_observation') or {}
-                from src.engine.monitoring.runtime_performance import process_identity_fields
-                identity=process_identity_fields()
-                payload['_zero_base_finalize_receipt'] = dict(schema='zero_base_finalize_receipt_v1',
-                    finalized=accepted, attached=bool(attached), reason=reason, record_id=record_id,
-                    code=code, **identity, observed_epoch=time.time(),
-                    ws_handoff_id=payload.get('ws_handoff_id'),
-                    physical_probe_lease_id=payload.get('physical_probe_lease_id'),
-                    admission_failure_reason=payload.get('_zero_base_attach_failure_reason'),
-                    machine_observation_sha256=payload.get('zero_base_probe_machine_observation_sha256')
-                        or payload.get('machine_observation_sha256'),
-                    native_signal_id=((expected.get('snapshot') or ({},))[0] or {}).get('signal_id'),
-                    native_event_id=((expected.get('snapshot') or ({},))[0] or {}).get('event_id'),
-                    native_snapshot_sha256=expected.get('snapshot_sha256'),
-                    original_deadline_perf=expected.get('deadline_perf'),
-                    decision_authority='observation_only', actual_order_submitted=False, **fields)
+                expected = payload.get("native_observation") or {}
+                from src.engine.monitoring.runtime_performance import (
+                    process_identity_fields,
+                )
+
+                identity = process_identity_fields()
+                payload["_zero_base_finalize_receipt"] = dict(
+                    schema="zero_base_finalize_receipt_v1",
+                    finalized=accepted,
+                    attached=bool(attached),
+                    reason=reason,
+                    record_id=record_id,
+                    code=code,
+                    **identity,
+                    observed_epoch=time.time(),
+                    ws_handoff_id=payload.get("ws_handoff_id"),
+                    physical_probe_lease_id=payload.get("physical_probe_lease_id"),
+                    admission_failure_reason=payload.get(
+                        "_zero_base_attach_failure_reason"
+                    ),
+                    machine_observation_sha256=payload.get(
+                        "zero_base_probe_machine_observation_sha256"
+                    )
+                    or payload.get("machine_observation_sha256"),
+                    native_signal_id=((expected.get("snapshot") or ({},))[0] or {}).get(
+                        "signal_id"
+                    ),
+                    native_event_id=((expected.get("snapshot") or ({},))[0] or {}).get(
+                        "event_id"
+                    ),
+                    native_snapshot_sha256=expected.get("snapshot_sha256"),
+                    original_deadline_perf=expected.get("deadline_perf"),
+                    decision_authority="observation_only",
+                    actual_order_submitted=False,
+                    **fields,
+                )
         except Exception as exc:
-            try:log_error("[ZERO_BASE_FINALIZE_RECEIPT] " + type(exc).__name__)
-            except Exception:pass
+            try:
+                log_error("[ZERO_BASE_FINALIZE_RECEIPT] " + type(exc).__name__)
+            except Exception:
+                pass
         return accepted
+
     if not record_id or not code:
-        return finish(False, 'record_identity_missing')
+        return finish(False, "record_identity_missing")
     native_claim = None
     try:
         with ENTRY_LOCK:
             attached_target = next(
-                (target for target in ACTIVE_TARGETS
-                 if target.get("id") == record_id and target.get("code") == code
-                 and target.get("status") == "WATCHING"),
+                (
+                    target
+                    for target in ACTIVE_TARGETS
+                    if target.get("id") == record_id
+                    and target.get("code") == code
+                    and target.get("status") == "WATCHING"
+                ),
                 None,
             )
             if attached and attached_target is None:
-                return finish(False, 'watching_target_missing')
-            expected = (payload or {}).get('native_observation')
+                return finish(False, "watching_target_missing")
+            expected = (payload or {}).get("native_observation")
             with DB.get_session() as session:
                 row = session.get(RecommendationHistory, int(record_id))
                 if (
@@ -9070,63 +9327,90 @@ def _zero_base_finalize_candidate_record(payload, *, attached):
                         "ZERO_BASE_DISCOVERY:"
                     )
                 ):
-                    return finish(False, 'durable_probe_admission_mismatch',
-                        observed_row_state=getattr(row, 'status', None))
+                    return finish(
+                        False,
+                        "durable_probe_admission_mismatch",
+                        observed_row_state=getattr(row, "status", None),
+                    )
                 # Validate durable admission before consuming the single-use
                 # native claim. A missing/stale row has no claim authority.
                 if attached and expected is not None:
                     if not _zero_base_native_handoff_valid(payload):
-                        return finish(False, 'native_handoff_invalid')
-                    from src.engine.scalping.reversal_source_diagnostics import claim_expected_snapshot
+                        return finish(False, "native_handoff_invalid")
+                    from src.engine.scalping.reversal_source_diagnostics import (
+                        claim_expected_snapshot,
+                    )
+
                     native_claim = claim_expected_snapshot(expected)
                     if native_claim is None:
-                        return finish(False, 'expected_native_claim_unavailable')
+                        return finish(False, "expected_native_claim_unavailable")
                 row.status = "WATCHING" if attached else "EXPIRED"
             if attached_target is not None and attached:
                 attached_target.pop("zero_base_pending_db", None)
                 if native_claim is not None:
-                    attached_target['_continuous_reversal_pending_claim'] = native_claim
-                    attached_target['_entry_native_deadline_binding'] = {
-                        'claim_token': native_claim['token'],
-                        'deadline_perf': expected['deadline_perf'],
+                    attached_target["_continuous_reversal_pending_claim"] = native_claim
+                    attached_target["_entry_native_deadline_binding"] = {
+                        "claim_token": native_claim["token"],
+                        "deadline_perf": expected["deadline_perf"],
                     }
-            return finish(True, 'watching_finalized' if attached else 'probe_expired')
+            return finish(True, "watching_finalized" if attached else "probe_expired")
     except Exception as exc:
         if native_claim is not None:
             from src.engine.scalping.reversal_current_backend import acknowledge_any
-            acknowledge_any(native_claim, status='main_attach_commit_failed')
+
+            acknowledge_any(native_claim, status="main_attach_commit_failed")
         log_error("[ZERO_BASE_ATTACH_DB] finalize failed: " + type(exc).__name__)
-        return finish(False, 'db_finalize_exception', exception_type=type(exc).__name__)
+        return finish(False, "db_finalize_exception", exception_type=type(exc).__name__)
 
 
 def _zero_base_rollback_uncommitted_target(payload):
     record_id = (payload or {}).get("record_id")
     code = str((payload or {}).get("code") or "").strip()[:6]
-    original = (payload or {}).get('_zero_base_finalize_receipt')
-    if (original or {}).get('finalized') and (original or {}).get('attached'):
+    original = (payload or {}).get("_zero_base_finalize_receipt")
+    if (original or {}).get("finalized") and (original or {}).get("attached"):
         return  # A committed Main target is outside provisional rollback custody.
-    cleanup_done = ((original or {}).get('rollback_receipt') or {}).get('finalized')
-    if ((payload or {}).get('zero_base_pending_db')
-            and not (original or {}).get('finalized') and not cleanup_done):
+    cleanup_done = ((original or {}).get("rollback_receipt") or {}).get("finalized")
+    if (
+        (payload or {}).get("zero_base_pending_db")
+        and not (original or {}).get("finalized")
+        and not cleanup_done
+    ):
         _zero_base_finalize_candidate_record(payload, attached=False)
-        cleanup = payload.get('_zero_base_finalize_receipt')
+        cleanup = payload.get("_zero_base_finalize_receipt")
         if original is not None:
-            payload['_zero_base_finalize_receipt'] = dict(original, rollback_receipt=cleanup)
+            payload["_zero_base_finalize_receipt"] = dict(
+                original, rollback_receipt=cleanup
+            )
     with ENTRY_LOCK:
         before = len(ACTIVE_TARGETS)
         ACTIVE_TARGETS[:] = [
-            target for target in ACTIVE_TARGETS
-            if not (target.get("id") == record_id and target.get("code") == code
-                    and target.get("status") == "WATCHING" and target.get('zero_base_pending_db'))
+            target
+            for target in ACTIVE_TARGETS
+            if not (
+                target.get("id") == record_id
+                and target.get("code") == code
+                and target.get("status") == "WATCHING"
+                and target.get("zero_base_pending_db")
+            )
         ]
         removed = len(ACTIVE_TARGETS) < before
-    if (code and (removed or (payload or {}).get('_zero_base_ws_adopted'))
-            and not _zero_base_active_conflict(code)):
-        event_bus.publish("COMMAND_WS_UNREG", {
-            "codes": [_scanner_runtime_ws_item(code, (payload or {}).get("market_data_route"))],
-            "source": "zero_base_attach_rollback",
-        })
-        payload.pop('_zero_base_ws_adopted', None)
+    if (
+        code
+        and (removed or (payload or {}).get("_zero_base_ws_adopted"))
+        and not _zero_base_active_conflict(code)
+    ):
+        event_bus.publish(
+            "COMMAND_WS_UNREG",
+            {
+                "codes": [
+                    _scanner_runtime_ws_item(
+                        code, (payload or {}).get("market_data_route")
+                    )
+                ],
+                "source": "zero_base_attach_rollback",
+            },
+        )
+        payload.pop("_zero_base_ws_adopted", None)
 
 
 def _scanner_runtime_ws_item(code, route):
@@ -9139,14 +9423,21 @@ def _scanner_runtime_ws_item(code, route):
 
 def _zero_base_adopt_probe_ws(payload):
     """Preserve the original native lease when a provisional target attaches."""
-    if not payload.get('zero_base_pending_db') or payload.get('native_observation') is None:
+    if (
+        not payload.get("zero_base_pending_db")
+        or payload.get("native_observation") is None
+    ):
         return True  # Existing non-native scanner registration path.
-    adopt = getattr(WS_MANAGER, 'adopt_zero_base_probe_target', None)
-    adopted = bool(_zero_base_native_handoff_valid(payload) and callable(adopt) and adopt(payload))
+    adopt = getattr(WS_MANAGER, "adopt_zero_base_probe_target", None)
+    adopted = bool(
+        _zero_base_native_handoff_valid(payload) and callable(adopt) and adopt(payload)
+    )
     if not adopted:
-        payload['_zero_base_attach_failure_reason'] = 'native_subscription_adoption_failed'
+        payload["_zero_base_attach_failure_reason"] = (
+            "native_subscription_adoption_failed"
+        )
     else:
-        payload['_zero_base_ws_adopted'] = True
+        payload["_zero_base_ws_adopted"] = True
     return adopted
 
 
@@ -9157,20 +9448,29 @@ def handle_zero_base_machine_enter(result):
     code = str(claim.get("code") or "")
     route = str(claim.get("route") or "")
     now_epoch = time.time()
-    expected = result.get('native_observation')
-    from src.engine.scalping.reversal_source_diagnostics import observation_binding_valid
-    if ((result.get('physical_probe_lease_id') and expected is None)
-            or (expected is not None and not observation_binding_valid(expected, now=now_epoch))):
-        _zero_base_attach_receipt(result, outcome='rejected', reason='original_native_deadline_expired')
+    expected = result.get("native_observation")
+    from src.engine.scalping.reversal_source_diagnostics import (
+        observation_binding_valid,
+    )
+
+    if (result.get("physical_probe_lease_id") and expected is None) or (
+        expected is not None and not observation_binding_valid(expected, now=now_epoch)
+    ):
+        _zero_base_attach_receipt(
+            result, outcome="rejected", reason="original_native_deadline_expired"
+        )
         return False
     if expected is not None and not _zero_base_native_handoff_valid(result):
-        _zero_base_attach_receipt(result, outcome='rejected', reason='native_handoff_lease_unavailable')
+        _zero_base_attach_receipt(
+            result, outcome="rejected", reason="native_handoff_lease_unavailable"
+        )
         return False
     if (
         not _zero_base_runtime_enabled()
         or result.get("result") != "assessed"
         or result.get("machine_action") != "ENTER_NOW"
-        or len(code) != 6 or not code.isdigit()
+        or len(code) != 6
+        or not code.isdigit()
         or candidate.get("code") != code
         or candidate.get("route") != route
         or candidate.get("source_sha256") != claim.get("source_sha256")
@@ -9188,38 +9488,63 @@ def handle_zero_base_machine_enter(result):
         or _zero_base_active_conflict(code)
         or evaluate_main_bot_control_exclusion(code).excluded
     ):
-        _zero_base_attach_receipt(result, outcome="rejected", reason="invalid_or_stale_machine_result")
+        _zero_base_attach_receipt(
+            result, outcome="rejected", reason="invalid_or_stale_machine_result"
+        )
         return False
     session_fields = scalping_session_venue_provenance(now_epoch)
     session_regime = session_fields.get("market_session_regime")
-    if (session_regime == session_contract.MARKET_SESSION_REGIME_LEGACY_PREMARKET
-            and route == "nxt_only"):
+    if (
+        session_regime == session_contract.MARKET_SESSION_REGIME_LEGACY_PREMARKET
+        and route == "nxt_only"
+    ):
         venue, broker_route = "PREMARKET_KRX_LIKE", "NXT"
-    elif (session_regime == session_contract.MARKET_SESSION_REGIME_KRX_REGULAR
-          and route == "krx_nxt_integrated"):
+    elif (
+        session_regime == session_contract.MARKET_SESSION_REGIME_KRX_REGULAR
+        and route == "krx_nxt_integrated"
+    ):
         venue, broker_route = "KRX", "SOR"
-    elif (session_regime == session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET
-          and route == "krx_nxt_integrated"):
+    elif (
+        session_regime == session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET
+        and route == "krx_nxt_integrated"
+    ):
         venue, broker_route = "KRX_NXT_INTEGRATED", "SOR"
     else:
-        _zero_base_attach_receipt(result, outcome="rejected", reason="route_session_unavailable")
+        _zero_base_attach_receipt(
+            result, outcome="rejected", reason="route_session_unavailable"
+        )
         return False
     source_hash = str(claim.get("source_sha256") or "")
     source_signature = "ZERO_BASE_DISCOVERY:" + source_hash
-    if len(source_hash) != 64 or any(char not in "0123456789abcdef" for char in source_hash):
-        _zero_base_attach_receipt(result, outcome="rejected", reason="source_hash_invalid")
+    if len(source_hash) != 64 or any(
+        char not in "0123456789abcdef" for char in source_hash
+    ):
+        _zero_base_attach_receipt(
+            result, outcome="rejected", reason="source_hash_invalid"
+        )
         return False
     bundle_hash = str(result.get("machine_bundle_sha256") or "")
-    if len(bundle_hash) != 64 or any(char not in "0123456789abcdef" for char in bundle_hash):
-        _zero_base_attach_receipt(result, outcome="rejected", reason="machine_bundle_invalid")
+    if len(bundle_hash) != 64 or any(
+        char not in "0123456789abcdef" for char in bundle_hash
+    ):
+        _zero_base_attach_receipt(
+            result, outcome="rejected", reason="machine_bundle_invalid"
+        )
         return False
     promotion_id = (
         f"ZBPROM-{code}-{int(result['result_epoch'] * 1000)}-"
         f"{int(claim.get('claim_count') or 0)}"
     )
     payload = {
-        **{key: copy.deepcopy(result[key]) for key in (
-            'native_observation', 'ws_handoff_id', 'physical_probe_lease_id') if key in result},
+        **{
+            key: copy.deepcopy(result[key])
+            for key in (
+                "native_observation",
+                "ws_handoff_id",
+                "physical_probe_lease_id",
+            )
+            if key in result
+        },
         "code": code,
         "name": candidate.get("name") or code,
         "strategy": "SCALPING",
@@ -9243,28 +9568,40 @@ def handle_zero_base_machine_enter(result):
         "zero_base_pending_db": True,
         "zero_base_probe_machine_bundle_sha256": result.get("machine_bundle_sha256"),
         "zero_base_probe_machine_observation_sha256": result.get(
-            "machine_observation_sha256"),
+            "machine_observation_sha256"
+        ),
         "zero_base_probe_trade_epoch": result.get("probe_trade_epoch"),
         "zero_base_probe_depth_epoch": result.get("probe_depth_epoch"),
     }
     with ENTRY_LOCK:
         if _zero_base_active_conflict(code):
-            _zero_base_attach_receipt(result, outcome="rejected", reason="active_conflict")
+            _zero_base_attach_receipt(
+                result, outcome="rejected", reason="active_conflict"
+            )
             return False
         allowed, _, _ = _scalping_attach_capacity_decision(
-            payload, now_epoch,
+            payload,
+            now_epoch,
         )
         if not allowed:
-            _zero_base_attach_receipt(result, outcome="deferred", reason="watch_capacity_full")
+            _zero_base_attach_receipt(
+                result, outcome="deferred", reason="watch_capacity_full"
+            )
             return False
         try:
             with DB.get_session() as session:
                 row = RecommendationHistory(
-                    rec_date=datetime.now().date(), stock_code=code,
-                    stock_name=payload["name"], buy_price=payload["buy_price"],
-                    trade_type="SCALP", strategy="SCALPING", status="PROBE_READY",
-                    position_tag="SCANNER", entry_armed_at_epoch=now_epoch,
-                    effective_venue=venue, venue_resolution="exact_zero_base_probe_route",
+                    rec_date=datetime.now().date(),
+                    stock_code=code,
+                    stock_name=payload["name"],
+                    buy_price=payload["buy_price"],
+                    trade_type="SCALP",
+                    strategy="SCALPING",
+                    status="PROBE_READY",
+                    position_tag="SCANNER",
+                    entry_armed_at_epoch=now_epoch,
+                    effective_venue=venue,
+                    venue_resolution="exact_zero_base_probe_route",
                     market_session_bucket=payload["market_session_bucket"],
                     scanner_promotion_id=promotion_id,
                     scanner_promotion_reason=payload["scanner_promotion_reason"],
@@ -9277,13 +9614,23 @@ def handle_zero_base_machine_enter(result):
                 session.flush()
                 payload["record_id"] = row.id
         except Exception as exc:
-            log_error("[ZERO_BASE_ATTACH_DB] provisional insert failed: " + type(exc).__name__)
-            _zero_base_attach_receipt(result, outcome="rejected", reason="provisional_db_failed")
+            log_error(
+                "[ZERO_BASE_ATTACH_DB] provisional insert failed: " + type(exc).__name__
+            )
+            _zero_base_attach_receipt(
+                result, outcome="rejected", reason="provisional_db_failed"
+            )
             return False
     with ENTRY_LOCK:
         if _zero_base_active_conflict(code):
             _zero_base_finalize_candidate_record(payload, attached=False)
-            _zero_base_attach_receipt(result, outcome="rejected", reason="conflict_after_provisional_insert", record_id=payload.get("record_id"), finalize_payload=payload)
+            _zero_base_attach_receipt(
+                result,
+                outcome="rejected",
+                reason="conflict_after_provisional_insert",
+                record_id=payload.get("record_id"),
+                finalize_payload=payload,
+            )
             return False
         scheduler_mode = _scanner_scheduler_startup_mode()
         try:
@@ -9291,7 +9638,8 @@ def handle_zero_base_machine_enter(result):
                 handle_scalping_scanner_promoted_target(payload)
                 if scheduler_mode in {"deadline_v1", "async_v1"}
                 else _apply_scalping_scanner_promoted_target(
-                    payload, mutation_lock=ENTRY_LOCK,
+                    payload,
+                    mutation_lock=ENTRY_LOCK,
                 )
             )
         except Exception as exc:
@@ -9299,16 +9647,30 @@ def handle_zero_base_machine_enter(result):
             _zero_base_finalize_candidate_record(payload, attached=False)
             _zero_base_rollback_uncommitted_target(payload)
             _zero_base_attach_receipt(
-                result, outcome="rejected", reason="attach_exception",
-                record_id=payload.get("record_id"), finalize_payload=payload,
+                result,
+                outcome="rejected",
+                reason="attach_exception",
+                record_id=payload.get("record_id"),
+                finalize_payload=payload,
             )
             return False
     if scheduler_mode in {"deadline_v1", "async_v1"}:
         if not accepted:
             _zero_base_finalize_candidate_record(payload, attached=False)
-            _zero_base_attach_receipt(result, outcome="rejected", reason="scheduler_inbox_rejected", record_id=payload.get("record_id"), finalize_payload=payload)
+            _zero_base_attach_receipt(
+                result,
+                outcome="rejected",
+                reason="scheduler_inbox_rejected",
+                record_id=payload.get("record_id"),
+                finalize_payload=payload,
+            )
         else:
-            _zero_base_attach_receipt(result, outcome="queued", reason="scheduler_inbox_pending", record_id=payload.get("record_id"))
+            _zero_base_attach_receipt(
+                result,
+                outcome="queued",
+                reason="scheduler_inbox_pending",
+                record_id=payload.get("record_id"),
+            )
         return bool(accepted)
     finalized = _zero_base_finalize_candidate_record(payload, attached=bool(accepted))
     if accepted and not finalized:
@@ -9316,9 +9678,14 @@ def handle_zero_base_machine_enter(result):
     _zero_base_attach_receipt(
         result,
         outcome="attached" if accepted and finalized else "rejected",
-        reason=("committed" if accepted and finalized else
-                payload.get('_zero_base_attach_failure_reason') or "attach_or_db_finalize_failed"),
-        record_id=payload.get("record_id"), finalize_payload=payload,
+        reason=(
+            "committed"
+            if accepted and finalized
+            else payload.get("_zero_base_attach_failure_reason")
+            or "attach_or_db_finalize_failed"
+        ),
+        record_id=payload.get("record_id"),
+        finalize_payload=payload,
     )
     return bool(accepted and finalized)
 
@@ -9489,7 +9856,10 @@ def _apply_scalping_scanner_promoted_target(payload, *, mutation_lock=ENTRY_LOCK
             if status == "WATCHING":
                 if not _zero_base_adopt_probe_ws(payload):
                     _log_scanner_runtime_target_attach(
-                        payload_for_log, outcome="skipped", reason="native_subscription_adoption_failed")
+                        payload_for_log,
+                        outcome="skipped",
+                        reason="native_subscription_adoption_failed",
+                    )
                     return False
                 refresh_context_updates, refresh_context_fields = (
                     _scanner_merge_context_preserving_positive_delta(
@@ -9531,7 +9901,9 @@ def _apply_scalping_scanner_promoted_target(payload, *, mutation_lock=ENTRY_LOCK
                         "market_data_route": payload.get("market_data_route"),
                         "broker_route": payload.get("broker_route"),
                         "scanner_required_realtime_types": "0B",
-                        "zero_base_pending_db": bool(payload.get("zero_base_pending_db")),
+                        "zero_base_pending_db": bool(
+                            payload.get("zero_base_pending_db")
+                        ),
                         **refresh_venue_fields,
                         **refresh_handoff_fields,
                         **refresh_context_updates,
@@ -9573,11 +9945,20 @@ def _apply_scalping_scanner_promoted_target(payload, *, mutation_lock=ENTRY_LOCK
                     reason="existing_watching_refreshed",
                     target=existing,
                 )
-                if not (payload.get('zero_base_pending_db') and payload.get('native_observation') is not None):
+                if not (
+                    payload.get("zero_base_pending_db")
+                    and payload.get("native_observation") is not None
+                ):
                     event_bus.publish(
                         "COMMAND_WS_REG",
-                        {"codes": [_scanner_runtime_ws_item(code, payload.get("market_data_route"))],
-                         "source": "scanner_runtime_target_refresh"},
+                        {
+                            "codes": [
+                                _scanner_runtime_ws_item(
+                                    code, payload.get("market_data_route")
+                                )
+                            ],
+                            "source": "scanner_runtime_target_refresh",
+                        },
                     )
                 return True
 
@@ -9663,7 +10044,10 @@ def _apply_scalping_scanner_promoted_target(payload, *, mutation_lock=ENTRY_LOCK
             return False
         if not _zero_base_adopt_probe_ws(payload):
             _log_scanner_runtime_target_attach(
-                payload_for_log, outcome="skipped", reason="native_subscription_adoption_failed")
+                payload_for_log,
+                outcome="skipped",
+                reason="native_subscription_adoption_failed",
+            )
             return False
         if replacements:
             _expire_scalping_watch_budget_targets(
@@ -9672,15 +10056,24 @@ def _apply_scalping_scanner_promoted_target(payload, *, mutation_lock=ENTRY_LOCK
                 reason="higher_priority_owner_slot_reclaimed",
             )
         if payload.get("_zero_base_source_continuity"):
-            new_target["_zero_base_source_continuity"] = copy.deepcopy(payload["_zero_base_source_continuity"])
+            new_target["_zero_base_source_continuity"] = copy.deepcopy(
+                payload["_zero_base_source_continuity"]
+            )
         new_target["marcap"] = _resolve_stock_marcap(new_target, code)
         ACTIVE_TARGETS.append(new_target)
 
-    if not (payload.get('zero_base_pending_db') and payload.get('native_observation') is not None):
+    if not (
+        payload.get("zero_base_pending_db")
+        and payload.get("native_observation") is not None
+    ):
         event_bus.publish(
             "COMMAND_WS_REG",
-            {"codes": [_scanner_runtime_ws_item(code, payload.get("market_data_route"))],
-             "source": "scanner_runtime_target_attach"},
+            {
+                "codes": [
+                    _scanner_runtime_ws_item(code, payload.get("market_data_route"))
+                ],
+                "source": "scanner_runtime_target_attach",
+            },
         )
     _log_scanner_runtime_target_attach(
         payload_for_log,
@@ -9951,7 +10344,10 @@ def _scanner_scheduler_session_context_at_epoch(boot_epoch):
 def _scanner_scheduler_effective_venue_from_session_context(context):
     if context.blocker is not None:
         return "UNKNOWN"
-    if context.session_regime == session_contract.MARKET_SESSION_REGIME_LEGACY_PREMARKET:
+    if (
+        context.session_regime
+        == session_contract.MARKET_SESSION_REGIME_LEGACY_PREMARKET
+    ):
         return "PREMARKET_KRX_LIKE"
     if context.session_regime in {
         session_contract.MARKET_SESSION_REGIME_LEGACY_KRX_ONLY,
@@ -9981,9 +10377,7 @@ def _scanner_scheduler_boot_restore_payload(
         if session_context is None
         else {
             "effective_venue": (
-                _scanner_scheduler_effective_venue_from_session_context(
-                    session_context
-                )
+                _scanner_scheduler_effective_venue_from_session_context(session_context)
             )
         }
     )
@@ -10228,7 +10622,9 @@ def _drain_scanner_promotion_inbox(scheduler, *, max_items):
             str(payload.get("code") or "").strip()[:6]
         ):
             _zero_base_finalize_candidate_record(payload, attached=False)
-            _zero_base_inbox_attach_receipt(payload, outcome="rejected", reason="active_conflict_at_inbox")
+            _zero_base_inbox_attach_receipt(
+                payload, outcome="rejected", reason="active_conflict_at_inbox"
+            )
             continue
         duplicate_target = _scanner_scheduler_coalesce_duplicate_inbox(
             scheduler,
@@ -10238,7 +10634,9 @@ def _drain_scanner_promotion_inbox(scheduler, *, max_items):
         if duplicate_target is not None:
             if zero_base_provisional:
                 _zero_base_finalize_candidate_record(payload, attached=False)
-                _zero_base_inbox_attach_receipt(payload, outcome="rejected", reason="duplicate_at_inbox")
+                _zero_base_inbox_attach_receipt(
+                    payload, outcome="rejected", reason="duplicate_at_inbox"
+                )
             coalesced += 1
             continue
         attach_attempt_epoch = time.time()
@@ -10253,7 +10651,9 @@ def _drain_scanner_promotion_inbox(scheduler, *, max_items):
             _zero_base_finalize_candidate_record(payload, attached=False)
             _zero_base_rollback_uncommitted_target(payload)
             _zero_base_inbox_attach_receipt(
-                payload, outcome="rejected", reason="attach_exception",
+                payload,
+                outcome="rejected",
+                reason="attach_exception",
             )
             continue
         attach_epoch = time.time()
@@ -10270,11 +10670,13 @@ def _drain_scanner_promotion_inbox(scheduler, *, max_items):
         )
         if zero_base_provisional:
             attached_ok = bool(
-                success and target is not None
+                success
+                and target is not None
                 and target.get("id") == payload.get("record_id")
             )
             finalized = _zero_base_finalize_candidate_record(
-                payload, attached=attached_ok,
+                payload,
+                attached=attached_ok,
             )
             if attached_ok and not finalized:
                 _zero_base_rollback_uncommitted_target(payload)
@@ -10282,8 +10684,12 @@ def _drain_scanner_promotion_inbox(scheduler, *, max_items):
             _zero_base_inbox_attach_receipt(
                 payload,
                 outcome="attached" if success else "rejected",
-                reason=("committed" if success else
-                        payload.get('_zero_base_attach_failure_reason') or "attach_or_db_finalize_failed"),
+                reason=(
+                    "committed"
+                    if success
+                    else payload.get("_zero_base_attach_failure_reason")
+                    or "attach_or_db_finalize_failed"
+                ),
             )
         if success and target is not None:
             applied += 1
@@ -10606,12 +11012,16 @@ def _restore_scanner_async_commit_transport(target, async_result):
 
 
 def _scanner_async_result_owns_target_slot(target, async_result):
-    generation = str(getattr(async_result, 'generation_id', '') or '')
-    key = str(getattr(async_result, 'cache_key', '') or '')
-    return bool(isinstance(target, dict) and generation and key
-        and str(target.get('scanner_generation_id') or '') == generation
-        and str(target.get('_scanner_async_generation_id') or generation) == generation
-        and str(target.get('_scanner_async_cache_key') or key) == key)
+    generation = str(getattr(async_result, "generation_id", "") or "")
+    key = str(getattr(async_result, "cache_key", "") or "")
+    return bool(
+        isinstance(target, dict)
+        and generation
+        and key
+        and str(target.get("scanner_generation_id") or "") == generation
+        and str(target.get("_scanner_async_generation_id") or generation) == generation
+        and str(target.get("_scanner_async_cache_key") or key) == key
+    )
 
 
 def _arm_scanner_async_rejected_result_recheck(target, async_result, *, now_epoch):
@@ -12079,7 +12489,11 @@ def attach_db_poll_target_if_missing(db_target, targets, now_ts):
         ):
             targets[:] = [target for target in targets if target is not dt]
             return False
-    fixed_route = main_fixed_watch.session_route(now_ts, str(dt.get("code") or "")[:6]) if main_fixed_watch.is_fixed_watch(dt) else None
+    fixed_route = (
+        main_fixed_watch.session_route(now_ts, str(dt.get("code") or "")[:6])
+        if main_fixed_watch.is_fixed_watch(dt)
+        else None
+    )
     reg_payload = {"codes": [fixed_route["item"] if fixed_route else code]}
     if main_fixed_watch.is_fixed_watch(dt):
         reg_payload["source"] = "main_fixed_watch_db_restore"
@@ -12225,11 +12639,15 @@ def _restore_holding_runtime_state(targets):
                 from src.engine.scalping.main_stop_quantity_source import (
                     restore_terminal_quantity_source,
                 )
+
                 # Source-only terminal recovery after native BUY receipts. An
                 # active bundle remains owned by its existing runtime path.
-                stock["main_stop_quantity_restore_status"] = restore_terminal_quantity_source(
-                    stock, bundle_root=DATA_DIR / "runtime/initial_quantity/bundles",
-                    at=time.time(),
+                stock["main_stop_quantity_restore_status"] = (
+                    restore_terminal_quantity_source(
+                        stock,
+                        bundle_root=DATA_DIR / "runtime/initial_quantity/bundles",
+                        at=time.time(),
+                    )
                 )
 
         if stock.get("buy_time") and not stock.get("holding_started_at"):
@@ -12303,22 +12721,37 @@ def _restore_holding_runtime_state(targets):
         log_info(f"[BOOT_RESTORE] HOLDING runtime rehydrated count={restored}")
 
 
-def evaluate_scalping_exit(stock, code, ws_data, curr_p, buy_p, profit_rate, peak_profit):
+def evaluate_scalping_exit(
+    stock, code, ws_data, curr_p, buy_p, profit_rate, peak_profit
+):
     """Read-only explanation using the live stop algebra; no legacy score exit."""
-    from src.engine.scalping.main_stop_policy import StopValues, pin_values, soft_decision
+    from src.engine.scalping.main_stop_policy import (
+        StopValues,
+        pin_values,
+        soft_decision,
+    )
     from src.engine.scalping.position_peak_ledger import position_cycle_id
+
     try:
         value = stock.get("main_stop_policy_pin")
-        values = pin_values(value, position_cycle_id(stock)) if value else StopValues.from_rules(
-            lambda key: getattr(TRADING_RULES, key, None))
+        values = (
+            pin_values(value, position_cycle_id(stock))
+            if value
+            else StopValues.from_rules(lambda key: getattr(TRADING_RULES, key, None))
+        )
     except (ValueError, TypeError):
         return "손절 정책 원천 확인 필요"
-    result = soft_decision(values, profit_pct=profit_rate, now=time.time(),
+    result = soft_decision(
+        values,
+        profit_pct=profit_rate,
+        now=time.time(),
         touch_at=stock.get("soft_stop_micro_grace_started_at"),
-        enabled=bool(getattr(TRADING_RULES,"SCALP_SOFT_STOP_MICRO_GRACE_ENABLED", True)),
-        after_add=bool(stock.get("reversal_add_used")))
+        enabled=bool(
+            getattr(TRADING_RULES, "SCALP_SOFT_STOP_MICRO_GRACE_ENABLED", True)
+        ),
+        after_add=bool(stock.get("reversal_add_used")),
+    )
     return result.rule if result.disposition == "exit_candidate" else None
-
 
 
 def evaluate_swing_exit(
@@ -12462,14 +12895,23 @@ def _start_post_sell_bbo_observer_worker() -> threading.Thread:
         while not stop_event.wait(0.1):
             _retry_zero_base_cleanup()
             try:
-                from src.engine.scalping.ai_decision_trace import prepare_ai_request_capture
+                from src.engine.scalping.ai_decision_trace import (
+                    prepare_ai_request_capture,
+                )
+
                 prepare_ai_request_capture()
             except Exception as exc:
                 from src.engine.monitoring.runtime_performance import failure
+
                 reason = type(exc).__name__
                 if isinstance(exc, OSError):
-                    reason += ':errno=' + str(exc.errno) + ':file=' + Path(str(exc.filename or '')).name
-                failure('trace_dedup_prepare', reason)
+                    reason += (
+                        ":errno="
+                        + str(exc.errno)
+                        + ":file="
+                        + Path(str(exc.filename or "")).name
+                    )
+                failure("trace_dedup_prepare", reason)
             capacity_result = sniper_state_handlers.prepare_pending_entry_capacity()
             if capacity_result.get("status") != "idle":
                 run_sniper.entry_economic_capacity_preparation_receipt = capacity_result
@@ -12477,19 +12919,32 @@ def _start_post_sell_bbo_observer_worker() -> threading.Thread:
                 continue
             next_maintenance = time.monotonic() + 1.0
             try:
-                from src.engine.scalping.reversal_path_runtime import prepare_anchor_source_step
-                run_sniper.session_anchor_preparation_receipt=prepare_anchor_source_step(
-                    Path(PROJECT_ROOT)/'data',datetime.now(session_contract.KST).date().isoformat())
+                from src.engine.scalping.reversal_path_runtime import (
+                    prepare_anchor_source_step,
+                )
+
+                run_sniper.session_anchor_preparation_receipt = (
+                    prepare_anchor_source_step(
+                        Path(PROJECT_ROOT) / "data",
+                        datetime.now(session_contract.KST).date().isoformat(),
+                    )
+                )
             except Exception as exc:
                 from src.engine.monitoring.runtime_performance import failure
-                failure('session_anchor_preparation',type(exc).__name__,emit_log=False)
+
+                failure(
+                    "session_anchor_preparation", type(exc).__name__, emit_log=False
+                )
             # Source-only policy preparation shares the existing detached
             # cadence, never the entry/submit thread or retired capture loop.
             from src.engine.scalping.avg_down_replay_capture import (
                 maintain_main_entry_policy_cache,
             )
+
             run_sniper.entry_economic_policy_cache_receipt = (
-                maintain_main_entry_policy_cache(sniper_state_handlers, now_ts=time.time())
+                maintain_main_entry_policy_cache(
+                    sniper_state_handlers, now_ts=time.time()
+                )
             )
             try:
                 result = (
@@ -12530,9 +12985,18 @@ def _start_post_sell_bbo_observer_worker() -> threading.Thread:
 
 
 def _run_sniper_iterations(
-    *, is_test_mode, targets, admin_id, radar, ai_engine,
-    last_db_poll_time, last_msg_min, scanner_ws_reg_last_emit_ts, scanner_ws_repair_cycle_state_by_code,
-    log_error, log_info,
+    *,
+    is_test_mode,
+    targets,
+    admin_id,
+    radar,
+    ai_engine,
+    last_db_poll_time,
+    last_msg_min,
+    scanner_ws_reg_last_emit_ts,
+    scanner_ws_repair_cycle_state_by_code,
+    log_error,
+    log_info,
 ):
     """Execute native Main iterations after existing startup has bound dependencies.
 
@@ -12543,15 +13007,22 @@ def _run_sniper_iterations(
     while not shutdown_requested():
         loop_work_started = time.perf_counter()
         from src.engine.monitoring.runtime_performance import record_main_phase
-        record_main_phase('loop_prepare')
+
+        record_main_phase("loop_prepare")
         now_ts = time.time()
-        from src.engine.scalping.pre_submit_delay_observation import prune as prune_delay_observations
+        from src.engine.scalping.pre_submit_delay_observation import (
+            prune as prune_delay_observations,
+        )
+
         prune_delay_observations(now_ts)
         now = datetime.now()
         now_t = now.time()
         run_sniper.runtime_pause_state = is_buy_side_paused()
         current_market_regime = _current_market_regime_code()
-        from src.engine.scalping.avg_down_replay_capture import record_main_market_regime
+        from src.engine.scalping.avg_down_replay_capture import (
+            record_main_market_regime,
+        )
+
         record_main_market_regime(current_market_regime, now_ts=now_ts)
         _ensure_state_handler_deps()
 
@@ -12590,8 +13061,7 @@ def _run_sniper_iterations(
         today_key = now.date().isoformat()
         if (
             now_t >= TIME_09_00
-            and getattr(run_sniper, "krx_open_watchlist_reset_date", None)
-            != today_key
+            and getattr(run_sniper, "krx_open_watchlist_reset_date", None) != today_key
         ):
             reset_codes = _reset_krx_open_watch_targets(targets, now_dt=now)
             run_sniper.krx_open_watchlist_reset_date = today_key
@@ -12608,13 +13078,13 @@ def _run_sniper_iterations(
             )
         )
         run_sniper.last_scalp_sim_state_mtime = scalp_sim_sync.get("state_mtime")
-        swing_probe_sync = sniper_state_handlers.sync_swing_intraday_probe_targets_if_state_changed(
-            targets,
-            last_mtime=getattr(run_sniper, "last_swing_probe_state_mtime", None),
+        swing_probe_sync = (
+            sniper_state_handlers.sync_swing_intraday_probe_targets_if_state_changed(
+                targets,
+                last_mtime=getattr(run_sniper, "last_swing_probe_state_mtime", None),
+            )
         )
-        run_sniper.last_swing_probe_state_mtime = swing_probe_sync.get(
-            "state_mtime"
-        )
+        run_sniper.last_swing_probe_state_mtime = swing_probe_sync.get("state_mtime")
 
         if not is_test_mode and now_t >= TIME_20_00:
             unresolved_scalping = (
@@ -12628,10 +13098,7 @@ def _run_sniper_iterations(
                 terminal_reason = "market_close_unresolved_scalping_positions"
                 unresolved_codes = ",".join(
                     sorted(
-                        {
-                            str(item.get("code") or "-")
-                            for item in unresolved_scalping
-                        }
+                        {str(item.get("code") or "-") for item in unresolved_scalping}
                     )
                 )
                 log_error(
@@ -12674,16 +13141,17 @@ def _run_sniper_iterations(
         # 신규 DB 타겟 polling (P0 계측 포함)
         # =====================================================
         _t0_db = time.perf_counter()
-        record_main_phase('target_db_and_fixed_watch_reconcile')
+        record_main_phase("target_db_and_fixed_watch_reconcile")
         if now_ts - last_db_poll_time > 5:
             db_targets = DB.get_active_targets() or []
             for dt in db_targets:
                 attach_db_poll_target_if_missing(dt, targets, now_ts)
             last_db_poll_time = now_ts
         _db_elapsed_ms = (time.perf_counter() - _t0_db) * 1000
-        if (main_fixed_watch.enabled_symbols() or any(
-            main_fixed_watch.is_fixed_watch(target) for target in targets
-        )) and now_ts - getattr(
+        if (
+            main_fixed_watch.enabled_symbols()
+            or any(main_fixed_watch.is_fixed_watch(target) for target in targets)
+        ) and now_ts - getattr(
             run_sniper, "last_fixed_watch_reconcile_time", 0.0
         ) >= 5.0:
             _reconcile_main_fixed_watch(targets, now_ts=now_ts, publish_reg=True)
@@ -12727,16 +13195,17 @@ def _run_sniper_iterations(
                 t["entry_economic_watch_lifetime"] = {
                     "owner": "kiwoom_sniper_v2._scanner_evaluation_lifetime_anchor/_scalping_watching_ttl_sec",
                     "scanner_promotion_id": t.get("scanner_promotion_id"),
-                    "deadline_epoch": _scanner_evaluation_lifetime_anchor(t, now_ts=now_ts) + scalping_watching_ttl_sec,
+                    "deadline_epoch": _scanner_evaluation_lifetime_anchor(
+                        t, now_ts=now_ts
+                    )
+                    + scalping_watching_ttl_sec,
                     "observed_epoch": now_ts,
                 }
-                if (
-                    now_ts - _scanner_evaluation_lifetime_anchor(t, now_ts=now_ts)
-                    > scalping_watching_ttl_sec
-                    or (
-                        _is_zero_base_watch_target(t)
-                        and not _zero_base_watch_session_matches(t, now_ts)
-                    )
+                if now_ts - _scanner_evaluation_lifetime_anchor(
+                    t, now_ts=now_ts
+                ) > scalping_watching_ttl_sec or (
+                    _is_zero_base_watch_target(t)
+                    and not _zero_base_watch_session_matches(t, now_ts)
                 ):
                     expired_ids.append(t["id"])
                     expired_names.append(t["name"])
@@ -12764,9 +13233,7 @@ def _run_sniper_iterations(
                         t["status"] = "EXPIRED"
                         _record_machine_watch_terminal(t, now_ts=now_ts)
 
-                print(
-                    f"🗑️ [스캘핑 큐 정리] {len(expired_ids)}개 단기 종목 감시 만료"
-                )
+                print(f"🗑️ [스캘핑 큐 정리] {len(expired_ids)}개 단기 종목 감시 만료")
                 if len(expired_names) <= 10:
                     print(f"   └ 만료 종목: {', '.join(expired_names)}")
 
@@ -12776,7 +13243,7 @@ def _run_sniper_iterations(
         # 90초 lifecycle reconciliation과 45초 read-only broker snapshot
         # =====================================================
         _t0_acct = time.perf_counter()
-        record_main_phase('account_task_admission')
+        record_main_phase("account_task_admission")
         if (
             now_ts - getattr(run_sniper, "last_account_sync_time", 0)
             > ACCOUNT_RECONCILIATION_INTERVAL_SEC
@@ -12784,10 +13251,10 @@ def _run_sniper_iterations(
             if _submit_account_sync(reason="periodic_90s"):
                 run_sniper.last_account_sync_time = now_ts
                 run_sniper.last_broker_snapshot_refresh_time = now_ts
-        elif (
-            now_ts - getattr(run_sniper, "last_broker_snapshot_refresh_time", 0)
-            > BROKER_SNAPSHOT_REFRESH_INTERVAL_SEC
-            and _periodic_broker_snapshot_required(targets)
+        elif now_ts - getattr(
+            run_sniper, "last_broker_snapshot_refresh_time", 0
+        ) > BROKER_SNAPSHOT_REFRESH_INTERVAL_SEC and _periodic_broker_snapshot_required(
+            targets
         ):
             if _submit_account_task(
                 task_kind="broker_snapshot_read_only",
@@ -12795,7 +13262,7 @@ def _run_sniper_iterations(
             ):
                 run_sniper.last_broker_snapshot_refresh_time = now_ts
         _acct_elapsed_ms = (time.perf_counter() - _t0_acct) * 1000
-        record_main_phase('prequeue_maintenance')
+        record_main_phase("prequeue_maintenance")
 
         # Legacy overnight AI is retired. Holding AI remains active through
         # the close; the post-effective terminal rule only adds a SELL when
@@ -12806,9 +13273,7 @@ def _run_sniper_iterations(
         # 상태 로그
         # =====================================================
         if now_t.minute % 5 == 0 and now_t.minute != last_msg_min:
-            watching_count = len(
-                [t for t in targets if t.get("status") == "WATCHING"]
-            )
+            watching_count = len([t for t in targets if t.get("status") == "WATCHING"])
             holding_targets = [t for t in targets if t.get("status") == "HOLDING"]
             real_holding_count = len(
                 [t for t in holding_targets if not _is_runtime_simulation_target(t)]
@@ -12857,7 +13322,7 @@ def _run_sniper_iterations(
                 targets,
                 now_epoch=time.time(),
             )
-        record_main_phase('async_completion_drain')
+        record_main_phase("async_completion_drain")
         async_coordinator = getattr(
             run_sniper,
             "scanner_async_eval_coordinator",
@@ -12867,24 +13332,28 @@ def _run_sniper_iterations(
         def _scanner_async_commit_ready_for_main_thread() -> bool:
             """Yield between synchronous units when a COMMIT is ready.
 
-                Scanner output needs the next outer drain and COMMIT lane.
-                Exact fixed-watch output can use its remaining Main visit.
-                This is deliberately a main-thread-only cooperative yield:
-                it neither applies a result nor changes any trading state.
-                """
+            Scanner output needs the next outer drain and COMMIT lane.
+            Exact fixed-watch output can use its remaining Main visit.
+            This is deliberately a main-thread-only cooperative yield:
+            it neither applies a result nor changes any trading state.
+            """
 
             return bool(
                 _scanner_scheduler_startup_mode() == "async_v1"
                 and isinstance(async_coordinator, ScannerAsyncEvalCoordinator)
                 and async_coordinator.has_undrained_result(
                     direct_fixed_requests={
-                        (target.get('_scanner_async_generation_id'),
-                         target.get('_scanner_async_cache_key'))
+                        (
+                            target.get("_scanner_async_generation_id"),
+                            target.get("_scanner_async_cache_key"),
+                        )
                         for target in runtime_work_queue
-                        if target.get('status') == 'WATCHING'
+                        if target.get("status") == "WATCHING"
                         and main_fixed_watch.is_fixed_watch(target)
-                        and target.get('_scanner_async_generation_id')
-                        and target.get('_scanner_async_cache_key')})
+                        and target.get("_scanner_async_generation_id")
+                        and target.get("_scanner_async_cache_key")
+                    }
+                )
             )
 
         if _scanner_scheduler_startup_mode() == "async_v1" and isinstance(
@@ -12895,7 +13364,8 @@ def _run_sniper_iterations(
                     # The native WATCHING handler owns take/commit. A
                     # scanner-only target lookup must not discard it.
                     sniper_state_handlers._discard_orphaned_fixed_watch_result(
-                        async_coordinator, async_result, targets)
+                        async_coordinator, async_result, targets
+                    )
                     continue
                 async_target = next(
                     (
@@ -12934,11 +13404,17 @@ def _run_sniper_iterations(
                     async_coordinator.discard_completed(
                         generation_id=async_result.generation_id,
                         cache_key=async_result.cache_key,
-                        reason=async_transport.get('reason') if async_target else 'target_removed',
+                        reason=(
+                            async_transport.get("reason")
+                            if async_target
+                            else "target_removed"
+                        ),
                     )
                     if async_target is not None:
                         with ENTRY_LOCK:
-                            async_slot_owned = _scanner_async_result_owns_target_slot(async_target, async_result)
+                            async_slot_owned = _scanner_async_result_owns_target_slot(
+                                async_target, async_result
+                            )
                             async_recheck_fields = (
                                 _arm_scanner_async_rejected_result_recheck(
                                     async_target,
@@ -12946,9 +13422,11 @@ def _run_sniper_iterations(
                                     now_epoch=time.time(),
                                 )
                             )
-                            sniper_state_handlers._clear_scanner_async_identity(async_target,
+                            sniper_state_handlers._clear_scanner_async_identity(
+                                async_target,
                                 generation_id=async_result.generation_id,
-                                cache_key=async_result.cache_key)
+                                cache_key=async_result.cache_key,
+                            )
                             async_park_reason = (
                                 "async_preparation_deadline_expired_"
                                 "generation_warm_parked"
@@ -13017,12 +13495,8 @@ def _run_sniper_iterations(
                     stage="scalping_scanner_async_transport_ready",
                     fields={
                         "metric_role": "runtime_scheduler_latency",
-                        "decision_authority": (
-                            "scanner_async_commit_transport_only"
-                        ),
-                        "window_policy": (
-                            "per_scanner_generation_action_timestamps"
-                        ),
+                        "decision_authority": ("scanner_async_commit_transport_only"),
+                        "window_policy": ("per_scanner_generation_action_timestamps"),
                         "sample_floor": "one_completed_async_result",
                         "primary_decision_metric": "result_to_commit_sec",
                         "source_quality_gate": (
@@ -13070,13 +13544,17 @@ def _run_sniper_iterations(
                     async_coordinator.discard_completed(
                         generation_id=async_result.generation_id,
                         cache_key=async_result.cache_key,
-                        reason='async_commit_enqueue_rejected',
+                        reason="async_commit_enqueue_rejected",
                     )
                     with ENTRY_LOCK:
-                        async_slot_owned = _scanner_async_result_owns_target_slot(async_target, async_result)
-                        sniper_state_handlers._clear_scanner_async_identity(async_target,
+                        async_slot_owned = _scanner_async_result_owns_target_slot(
+                            async_target, async_result
+                        )
+                        sniper_state_handlers._clear_scanner_async_identity(
+                            async_target,
                             generation_id=async_result.generation_id,
-                            cache_key=async_result.cache_key)
+                            cache_key=async_result.cache_key,
+                        )
                         if async_slot_owned:
                             _scanner_scheduler_park_target_generation(
                                 run_sniper.scanner_runtime_scheduler,
@@ -13084,7 +13562,7 @@ def _run_sniper_iterations(
                                 now_epoch=time.time(),
                                 reason="async_commit_enqueue_rejected_generation_warm_parked",
                             )
-        record_main_phase('target_source_preparation')
+        record_main_phase("target_source_preparation")
         queue_context = _runtime_queue_context(targets, now_ts=now_ts)
         active_scanner_watch_codes = {
             str(t.get("code", "")).strip()[:6]
@@ -13121,9 +13599,7 @@ def _run_sniper_iterations(
             _scanner_rest_quote_fallback_max_per_loop()
         )
         scanner_rest_quote_fallback_loop_count = 0
-        scanner_no_trade_eviction_loop_limit = (
-            _scanner_no_trade_eviction_max_per_loop()
-        )
+        scanner_no_trade_eviction_loop_limit = _scanner_no_trade_eviction_max_per_loop()
         scanner_no_trade_eviction_loop_count = 0
         scanner_queue_lag_eviction_loop_limit = (
             _scanner_queue_lag_eviction_max_per_loop()
@@ -13134,9 +13610,7 @@ def _run_sniper_iterations(
         )
         scanner_full_eval_deferred_eviction_loop_count = 0
 
-        def _defer_scanner_entry_pipeline_log(
-            stock_value, code_value, stage, fields
-        ):
+        def _defer_scanner_entry_pipeline_log(stock_value, code_value, stage, fields):
             deferred_scanner_pipeline_events.append(
                 (
                     _scanner_pipeline_stock_snapshot(stock_value),
@@ -13155,7 +13629,11 @@ def _run_sniper_iterations(
             for stock_value, code_value, stage, fields in events:
                 _SCANNER_OBSERVATION_QUEUE.submit(
                     sniper_state_handlers._log_entry_pipeline,
-                    stock_value, code_value, stage, **fields)
+                    stock_value,
+                    code_value,
+                    stage,
+                    **fields,
+                )
 
         def _defer_emit_scanner_fast_precheck(
             stock_value,
@@ -13202,10 +13680,7 @@ def _run_sniper_iterations(
                 scanner_watching_count=scanner_watching_count,
             )
             fields.update(entry_realtime_fields)
-            if (
-                fields.get("fast_precheck_result")
-                == "eligible_for_heavy_entry_eval"
-            ):
+            if fields.get("fast_precheck_result") == "eligible_for_heavy_entry_eval":
                 stock_value["_scanner_heavy_queue_enter_epoch"] = float(now_value)
             stock_value["_scanner_fast_precheck_result"] = fields.get(
                 "fast_precheck_result"
@@ -13353,9 +13828,7 @@ def _run_sniper_iterations(
             return True
 
         def _defer_scanner_watching_runtime_skip(stock_value, code_value, **kwargs):
-            deferred_scanner_skip_events.append(
-                (stock_value, code_value, dict(kwargs))
-            )
+            deferred_scanner_skip_events.append((stock_value, code_value, dict(kwargs)))
 
         def _flush_deferred_scanner_skip_events():
             if not deferred_scanner_skip_events:
@@ -13365,12 +13838,18 @@ def _run_sniper_iterations(
 
             for stock_value, code_value, kwargs in events:
                 kwargs = dict(kwargs)
-                kwargs["ws_data"] = sniper_state_handlers.scanner_skip_observation_snapshot(
-                    kwargs.get("ws_data"))
+                kwargs["ws_data"] = (
+                    sniper_state_handlers.scanner_skip_observation_snapshot(
+                        kwargs.get("ws_data")
+                    )
+                )
                 _SCANNER_OBSERVATION_QUEUE.submit(
                     sniper_state_handlers.emit_scanner_watching_runtime_skip,
-                    _scanner_pipeline_stock_snapshot(stock_value), code_value,
-                    observation_receipt=True, **kwargs)
+                    _scanner_pipeline_stock_snapshot(stock_value),
+                    code_value,
+                    observation_receipt=True,
+                    **kwargs,
+                )
 
         def _queue_scanner_ws_reg(code_value, source):
             norm_code = str(code_value or "").strip()[:6]
@@ -13418,9 +13897,7 @@ def _run_sniper_iterations(
                     stock_value["_scanner_ws_persistent_repair"] = repair_state
             cycle_id = str(fields.get("ws_repair_cycle_id") or "")
             min_interval_sec = _scanner_ws_persistent_repair_min_interval_sec()
-            last_batch_ts = _safe_float(
-                repair_state.get("last_repair_batch_ts"), 0.0
-            )
+            last_batch_ts = _safe_float(repair_state.get("last_repair_batch_ts"), 0.0)
             last_cycle_id = str(repair_state.get("last_repair_cycle_id") or "")
             if not recheck_fields.get("ws_subscription_repair_needed", True):
                 repair_state["last_repair_outcome"] = (
@@ -13439,9 +13916,7 @@ def _run_sniper_iterations(
                 and now_value - last_batch_ts < min_interval_sec
             ):
                 next_after = last_batch_ts + min_interval_sec
-                repair_state["last_repair_outcome"] = (
-                    "persistent_repair_batch_deferred"
-                )
+                repair_state["last_repair_outcome"] = "persistent_repair_batch_deferred"
                 return {
                     **recheck_fields,
                     "ws_repair_batch_queued": False,
@@ -13509,9 +13984,7 @@ def _run_sniper_iterations(
                     rest_orderbook=cached.get("rest_orderbook"),
                     rest_signed_ticks=cached.get("rest_signed_ticks"),
                     candidate_metadata={
-                        "source_signature": (stock_value or {}).get(
-                            "source_signature"
-                        )
+                        "source_signature": (stock_value or {}).get("source_signature")
                         or (stock_value or {}).get("scanner_promotion_reason")
                         or "scanner_fast_precheck",
                     },
@@ -13519,9 +13992,7 @@ def _run_sniper_iterations(
                     prefer_freshest_source=True,
                 )
                 packet_fields.update(envelope_fields)
-                packet_fields["market_data_enrichment_packet_source"] = (
-                    "scanner_cache"
-                )
+                packet_fields["market_data_enrichment_packet_source"] = "scanner_cache"
                 enriched_ws.update(packet_fields)
                 return enriched_ws, packet_fields
             if (
@@ -13711,9 +14182,7 @@ def _run_sniper_iterations(
                     queue_enter_epoch,
                 ) = delayed_scanner_heavy_eval.pop(0)
                 if delayed_stock.get("status") != "WATCHING":
-                    scheduler = getattr(
-                        run_sniper, "scanner_runtime_scheduler", None
-                    )
+                    scheduler = getattr(run_sniper, "scanner_runtime_scheduler", None)
                     if isinstance(scheduler, ScannerRuntimeScheduler):
                         scheduler.invalidate(
                             delayed_code,
@@ -13736,10 +14205,7 @@ def _run_sniper_iterations(
                     # must supersede the same-symbol item before heavy
                     # evaluation begins.  An unrelated inbox envelope must
                     # not preempt the first ready heavy unit indefinitely.
-                    if (
-                        _SCANNER_PROMOTION_INBOX.pending_for(delayed_code)
-                        is not None
-                    ):
+                    if _SCANNER_PROMOTION_INBOX.pending_for(delayed_code) is not None:
                         delayed_scanner_heavy_eval.append(
                             (
                                 delayed_stock,
@@ -13798,9 +14264,7 @@ def _run_sniper_iterations(
                         continue
                     scheduler_heavy_item = scheduler_claim.item
                 heavy_eval_attempted = True
-                delayed_stock["_scanner_last_heavy_eval_attempt_epoch"] = (
-                    time.time()
-                )
+                delayed_stock["_scanner_last_heavy_eval_attempt_epoch"] = time.time()
                 delayed_stock["_scanner_last_heavy_eval_evidence_fingerprint"] = (
                     _scanner_heavy_eval_evidence_fingerprint(delayed_ws_data)
                 )
@@ -13819,57 +14283,52 @@ def _run_sniper_iterations(
                         recheck_fields.get("ws_subscription_recheck_age_sec"),
                         999999.0,
                     )
-                    heavy_recheck_fresh_sec = (
-                        _scanner_heavy_eval_recheck_fresh_sec()
-                    )
+                    heavy_recheck_fresh_sec = _scanner_heavy_eval_recheck_fresh_sec()
                     heavy_recheck_repair_needed = (
                         bool(recheck_fields.get("ws_subscription_repair_needed"))
                         or heavy_recheck_age_sec > heavy_recheck_fresh_sec
                     )
-                    opening_rotation_handoff_fields = sniper_state_handlers._opening_rotation_upstream_handoff_fields(
-                        delayed_stock,
-                        delayed_ws_data,
-                        now_ts=time.time(),
+                    opening_rotation_handoff_fields = (
+                        sniper_state_handlers._opening_rotation_upstream_handoff_fields(
+                            delayed_stock,
+                            delayed_ws_data,
+                            now_ts=time.time(),
+                        )
                     )
                     opening_rotation_handoff_allowed = bool(
                         opening_rotation_handoff_fields.get(
                             "opening_rotation_upstream_handoff_allowed"
                         )
                     )
-                    if (
-                        heavy_recheck_repair_needed
-                        and opening_rotation_handoff_allowed
-                    ):
+                    if heavy_recheck_repair_needed and opening_rotation_handoff_allowed:
                         eval_ws_data = delayed_ws_data
-                        delayed_stock[
-                            "_opening_rotation_upstream_handoff_applied"
-                        ] = True
-                        delayed_stock[
-                            "_opening_rotation_upstream_handoff_reason"
-                        ] = opening_rotation_handoff_fields.get(
-                            "opening_rotation_upstream_handoff_reason"
+                        delayed_stock["_opening_rotation_upstream_handoff_applied"] = (
+                            True
+                        )
+                        delayed_stock["_opening_rotation_upstream_handoff_reason"] = (
+                            opening_rotation_handoff_fields.get(
+                                "opening_rotation_upstream_handoff_reason"
+                            )
                         )
                         delayed_stock[
                             "_scanner_heavy_eval_ws_snapshot_refresh_status"
                         ] = "opening_rotation_quote_envelope_pending"
-                        delayed_stock[
-                            "_scanner_heavy_eval_ws_snapshot_apply_phase"
-                        ] = "opening_rotation_bounded_handoff"
+                        delayed_stock["_scanner_heavy_eval_ws_snapshot_apply_phase"] = (
+                            "opening_rotation_bounded_handoff"
+                        )
                     elif heavy_recheck_repair_needed:
-                        recheck_fields["scanner_heavy_eval_recheck_fresh_sec"] = (
-                            round(
-                                heavy_recheck_fresh_sec,
-                                3,
-                            )
+                        recheck_fields["scanner_heavy_eval_recheck_fresh_sec"] = round(
+                            heavy_recheck_fresh_sec,
+                            3,
                         )
                         recheck_fields["scanner_heavy_eval_recheck_age_sec"] = (
                             round(heavy_recheck_age_sec, 3)
                             if heavy_recheck_age_sec < 999999.0
                             else "not_available_ws_age_sec"
                         )
-                        recheck_fields[
-                            "scanner_heavy_eval_recheck_repair_needed"
-                        ] = True
+                        recheck_fields["scanner_heavy_eval_recheck_repair_needed"] = (
+                            True
+                        )
                         rest_quote_allowed, rest_quote_deferred_reason = (
                             _scanner_rest_quote_recovery_options(
                                 delayed_stock,
@@ -13898,9 +14357,7 @@ def _run_sniper_iterations(
                                     recovery_fields,
                                 )
                             )
-                        elif recovery_fields.get(
-                            "ws_repair_cycle_reg_allowed", True
-                        ):
+                        elif recovery_fields.get("ws_repair_cycle_reg_allowed", True):
                             _queue_scanner_ws_reg(
                                 delayed_code,
                                 "scanner_heavy_eval_stale_ws_recovery",
@@ -13910,9 +14367,7 @@ def _run_sniper_iterations(
                             recovery_fields,
                             recovery_snapshot_applied,
                         ) = _apply_subscription_recheck_snapshot_if_ready(
-                            _recovered_ws_data
-                            or recheck_snapshot
-                            or delayed_ws_data,
+                            _recovered_ws_data or recheck_snapshot or delayed_ws_data,
                             recovery_fields,
                             phase="heavy_eval_repair",
                         )
@@ -13924,9 +14379,7 @@ def _run_sniper_iterations(
                             delayed_stock[
                                 "_scanner_heavy_eval_ws_snapshot_refresh_status"
                             ] = (
-                                recovery_fields.get(
-                                    "ws_subscription_recheck_status"
-                                )
+                                recovery_fields.get("ws_subscription_recheck_status")
                                 or "fresh_snapshot_recovered"
                             )
                             delayed_stock[
@@ -13968,15 +14421,13 @@ def _run_sniper_iterations(
                                 )
                             continue
                     if (
-                        not recheck_fields.get(
-                            "ws_subscription_repair_needed", True
-                        )
+                        not recheck_fields.get("ws_subscription_repair_needed", True)
                         and _safe_int(recheck_snapshot.get("curr"), 0) > 0
                     ):
                         eval_ws_data = recheck_snapshot
-                        delayed_stock[
-                            "_scanner_heavy_eval_ws_snapshot_refreshed"
-                        ] = True
+                        delayed_stock["_scanner_heavy_eval_ws_snapshot_refreshed"] = (
+                            True
+                        )
                         delayed_stock[
                             "_scanner_heavy_eval_ws_snapshot_refresh_status"
                         ] = (
@@ -13993,9 +14444,7 @@ def _run_sniper_iterations(
                         now_value=time.time(),
                         queue_enter_epoch=queue_enter_epoch,
                     )
-                _scanner_watch_reset_full_eval_deferred_eviction_state(
-                    delayed_stock
-                )
+                _scanner_watch_reset_full_eval_deferred_eviction_state(delayed_stock)
                 _flush_deferred_scanner_pipeline_events()
                 handler_now_ts = (
                     time.time() if opening_rotation_handoff_allowed else now_ts
@@ -14061,9 +14510,7 @@ def _run_sniper_iterations(
                     started_epoch=heavy_eval_started_epoch,
                     completed_epoch=time.time(),
                     queue_enter_epoch=queue_enter_epoch,
-                    outcome=str(
-                        delayed_stock.get("status") or "heavy_eval_completed"
-                    ),
+                    outcome=str(delayed_stock.get("status") or "heavy_eval_completed"),
                 )
                 _flush_deferred_scanner_pipeline_events()
                 if scheduler_heavy_item is not None:
@@ -14094,9 +14541,7 @@ def _run_sniper_iterations(
                             scheduler,
                             delayed_stock,
                             now_epoch=time.time(),
-                            park_reason=(
-                                "heavy_eval_completed_generation_warm_parked"
-                            ),
+                            park_reason=("heavy_eval_completed_generation_warm_parked"),
                             expected_generation=(
                                 scheduler_heavy_item.generation
                                 if scheduler_heavy_item is not None
@@ -14134,7 +14579,7 @@ def _run_sniper_iterations(
             scanner_heavy_eval_flushed = True
 
         runtime_work_queue = list(queue_context["iteration_targets"])
-        record_main_phase('target_queue')
+        record_main_phase("target_queue")
         runtime_iteration_accounting_targets = list(runtime_work_queue)
         runtime_processed_target_ids = set()
         runtime_native_revisited_ids = set()
@@ -14182,28 +14627,23 @@ def _run_sniper_iterations(
                             registered_targets,
                         )
                     )
-                    runtime_work_queue = (
-                        _runtime_prioritize_registered_scanner_targets(
-                            runtime_work_queue,
-                            registered_targets,
-                        )
+                    runtime_work_queue = _runtime_prioritize_registered_scanner_targets(
+                        runtime_work_queue,
+                        registered_targets,
                     )
             else:
                 registered_targets = []
-            runtime_work_queue, live_attaches = (
-                _runtime_admit_live_scanner_attaches(
-                    runtime_work_queue,
-                    targets,
-                    processed_target_ids=runtime_processed_target_ids,
-                    admitted_target_ids=runtime_live_attach_ids,
-                    now_ts=time.time(),
-                    max_new_targets=(
-                        _scalping_fifo_base_max_active()
-                        if _scanner_scheduler_startup_mode()
-                        in {"deadline_v1", "async_v1"}
-                        else 8
-                    ),
-                )
+            runtime_work_queue, live_attaches = _runtime_admit_live_scanner_attaches(
+                runtime_work_queue,
+                targets,
+                processed_target_ids=runtime_processed_target_ids,
+                admitted_target_ids=runtime_live_attach_ids,
+                now_ts=time.time(),
+                max_new_targets=(
+                    _scalping_fifo_base_max_active()
+                    if _scanner_scheduler_startup_mode() in {"deadline_v1", "async_v1"}
+                    else 8
+                ),
             )
             admitted_targets = []
             admitted_ids = set()
@@ -14251,15 +14691,26 @@ def _run_sniper_iterations(
                 or _scanner_async_commit_ready_for_main_thread()
             ):
                 break
-            record_main_phase('target_admission')
+            record_main_phase("target_admission")
             from src.engine.monitoring.runtime_performance import (
-                prioritize_native_watches, acknowledge_native_watch_visit)
+                prioritize_native_watches,
+                acknowledge_native_watch_visit,
+            )
+
             native_visit_tokens = {}
-            runtime_work_queue = prioritize_native_watches(runtime_work_queue, now=time.time(),
-                completed_requests=(async_coordinator.fixed_watch_ready_requests()
-                    if isinstance(async_coordinator, ScannerAsyncEvalCoordinator) else None),
-                all_targets=targets, processed_target_ids=runtime_processed_target_ids,
-                revisited_target_ids=runtime_native_revisited_ids, visit_tokens=native_visit_tokens)
+            runtime_work_queue = prioritize_native_watches(
+                runtime_work_queue,
+                now=time.time(),
+                completed_requests=(
+                    async_coordinator.fixed_watch_ready_requests()
+                    if isinstance(async_coordinator, ScannerAsyncEvalCoordinator)
+                    else None
+                ),
+                all_targets=targets,
+                processed_target_ids=runtime_processed_target_ids,
+                revisited_target_ids=runtime_native_revisited_ids,
+                visit_tokens=native_visit_tokens,
+            )
             if not runtime_work_queue:
                 _flush_delayed_scanner_heavy_eval()
                 if scanner_async_commit_yield_requested:
@@ -14269,14 +14720,24 @@ def _run_sniper_iterations(
             _admit_runtime_live_attaches()
             if not runtime_work_queue:
                 break
-            runtime_work_queue = prioritize_native_watches(runtime_work_queue, now=time.time(),
-                completed_requests=(async_coordinator.fixed_watch_ready_requests()
-                    if isinstance(async_coordinator, ScannerAsyncEvalCoordinator) else None),
-                all_targets=targets, processed_target_ids=runtime_processed_target_ids,
-                revisited_target_ids=runtime_native_revisited_ids, visit_tokens=native_visit_tokens)
+            runtime_work_queue = prioritize_native_watches(
+                runtime_work_queue,
+                now=time.time(),
+                completed_requests=(
+                    async_coordinator.fixed_watch_ready_requests()
+                    if isinstance(async_coordinator, ScannerAsyncEvalCoordinator)
+                    else None
+                ),
+                all_targets=targets,
+                processed_target_ids=runtime_processed_target_ids,
+                revisited_target_ids=runtime_native_revisited_ids,
+                visit_tokens=native_visit_tokens,
+            )
             stock = runtime_work_queue.pop(0)
-            record_main_phase('target_visit', stock.get('code'))
-            acknowledge_native_watch_visit(stock, native_visit_tokens.get(id(stock)), now=time.time())
+            record_main_phase("target_visit", stock.get("code"))
+            acknowledge_native_watch_visit(
+                stock, native_visit_tokens.get(id(stock)), now=time.time()
+            )
             runtime_processed_target_ids.add(id(stock))
             code = str(stock.get("code", "")).strip()[:6]
             status = stock.get("status")
@@ -14305,9 +14766,12 @@ def _run_sniper_iterations(
                         pending_sell_ws_data or {},
                         now_ts=now_ts,
                     )
-                    if sniper_state_handlers.pre_submit_delay_observation_due(stock, now_ts=time.time()):
-                        sniper_state_handlers.observe_pre_submit_delay_quote(stock, code,
-                            pending_sell_ws_data or {}, now_ts=time.time())
+                    if sniper_state_handlers.pre_submit_delay_observation_due(
+                        stock, now_ts=time.time()
+                    ):
+                        sniper_state_handlers.observe_pre_submit_delay_quote(
+                            stock, code, pending_sell_ws_data or {}, now_ts=time.time()
+                        )
                 except Exception as exc:
                     log_error(
                         "[SMOOTHING_SELL_ORDERED] source-only observer failed "
@@ -14316,10 +14780,7 @@ def _run_sniper_iterations(
                 handle_sell_ordered_state(stock, code)
                 continue
 
-            if (
-                _is_scanner_watching_target(stock)
-                and code in scanner_ws_snapshot_cache
-            ):
+            if _is_scanner_watching_target(stock) and code in scanner_ws_snapshot_cache:
                 ws_data = scanner_ws_snapshot_cache.get(code) or {}
             elif status == "WATCHING" and main_fixed_watch.is_fixed_watch(stock):
                 route = main_fixed_watch.session_route(now_ts, code)
@@ -14330,33 +14791,61 @@ def _run_sniper_iterations(
                 )
             else:
                 ws_data = WS_MANAGER.get_latest_data(code) if WS_MANAGER else {}
-            if sniper_state_handlers.pre_submit_delay_observation_due(stock, now_ts=time.time()):
+            if sniper_state_handlers.pre_submit_delay_observation_due(
+                stock, now_ts=time.time()
+            ):
                 try:
-                    sniper_state_handlers.observe_pre_submit_delay_quote(stock, code, ws_data or {}, now_ts=time.time())
+                    sniper_state_handlers.observe_pre_submit_delay_quote(
+                        stock, code, ws_data or {}, now_ts=time.time()
+                    )
                 except (ValueError, TypeError, KeyError, AttributeError):
                     from src.engine.monitoring.runtime_performance import failure
-                    failure('pre_submit_delay_observation', 'source_unobservable', emit_log=False)
-            if (status == "WATCHING" and main_fixed_watch.is_fixed_watch(stock)
-                    and isinstance(async_coordinator, ScannerAsyncEvalCoordinator)
-                    and async_coordinator.has_completed(
-                        generation_id=stock.get('_scanner_async_generation_id', ''),
-                        cache_key=stock.get('_scanner_async_cache_key', ''))):
-                sniper_state_handlers.handle_watching_state(stock, code, ws_data or {}, admin_id,
-                    now_ts=time.time(), now_dt=datetime.now(), radar=radar, ai_engine=ai_engine,
+
+                    failure(
+                        "pre_submit_delay_observation",
+                        "source_unobservable",
+                        emit_log=False,
+                    )
+            if (
+                status == "WATCHING"
+                and main_fixed_watch.is_fixed_watch(stock)
+                and isinstance(async_coordinator, ScannerAsyncEvalCoordinator)
+                and async_coordinator.has_completed(
+                    generation_id=stock.get("_scanner_async_generation_id", ""),
+                    cache_key=stock.get("_scanner_async_cache_key", ""),
+                )
+            ):
+                sniper_state_handlers.handle_watching_state(
+                    stock,
+                    code,
+                    ws_data or {},
+                    admin_id,
+                    now_ts=time.time(),
+                    now_dt=datetime.now(),
+                    radar=radar,
+                    ai_engine=ai_engine,
                     scanner_async_eval_coordinator=async_coordinator,
-                    scanner_async_commit_phase=True)
+                    scanner_async_commit_phase=True,
+                )
                 continue
             if status == "WATCHING" and main_fixed_watch.is_fixed_watch(stock):
                 if not main_fixed_watch.symbol_enabled(code):
                     continue
                 ready, wait_reason = main_fixed_watch.observation_ready(
-                    stock, ws_data, now_epoch=now_ts,
+                    stock,
+                    ws_data,
+                    now_epoch=now_ts,
                 )
                 if not ready:
-                    if now_ts - float(stock.get("_fixed_last_wait_log_epoch") or 0) >= 10:
+                    if (
+                        now_ts - float(stock.get("_fixed_last_wait_log_epoch") or 0)
+                        >= 10
+                    ):
                         stock["_fixed_last_wait_log_epoch"] = now_ts
                         sniper_state_handlers._log_entry_pipeline(
-                            stock, code, "main_fixed_watch_observation_wait",
+                            stock,
+                            code,
+                            "main_fixed_watch_observation_wait",
                             watch_origin=main_fixed_watch.WATCH_ORIGIN,
                             watch_admission_id=stock.get("watch_admission_id"),
                             watch_generation_id=stock.get("watch_generation_id"),
@@ -14451,11 +14940,9 @@ def _run_sniper_iterations(
                     or "generation_not_registered",
                 )
                 continue
-            scheduler_owns_missing_ws_lane = (
-                _scanner_scheduler_owns_missing_ws_lane(
-                    stock,
-                    scheduler=scheduler,
-                )
+            scheduler_owns_missing_ws_lane = _scanner_scheduler_owns_missing_ws_lane(
+                stock,
+                scheduler=scheduler,
             )
             if not scheduler_owns_missing_ws_lane and (
                 not ws_data or ws_data.get("curr", 0) == 0
@@ -14495,9 +14982,7 @@ def _run_sniper_iterations(
                                     recovery_fields,
                                 )
                             )
-                        elif recovery_fields.get(
-                            "ws_repair_cycle_reg_allowed", True
-                        ):
+                        elif recovery_fields.get("ws_repair_cycle_reg_allowed", True):
                             _queue_scanner_ws_reg(
                                 code, "scanner_watching_ws_snapshot_recovery"
                             )
@@ -14705,12 +15190,14 @@ def _run_sniper_iterations(
                                             scheduler_generation.generation_id
                                         ),
                                         cache_key=async_cache_key,
-                                        reason='async_commit_branch_closed',
+                                        reason="async_commit_branch_closed",
                                     )
                                 if scheduler_generation is not None and async_cache_key:
-                                    sniper_state_handlers._clear_scanner_async_identity(stock,
+                                    sniper_state_handlers._clear_scanner_async_identity(
+                                        stock,
                                         generation_id=scheduler_generation.generation_id,
-                                        cache_key=async_cache_key)
+                                        cache_key=async_cache_key,
+                                    )
                             scheduler_claim = (
                                 _scanner_scheduler_refresh_claim_after_expiry(
                                     scheduler,
@@ -14723,21 +15210,16 @@ def _run_sniper_iterations(
                             if scheduler_claim is None:
                                 continue
                         if scheduler_claim.action == "not_next":
-                            deferred_winner = (
-                                _runtime_scheduler_deferred_winner_target(
-                                    scheduler_claim,
-                                    targets,
-                                    queued_target_ids={
-                                        id(target) for target in runtime_work_queue
-                                    },
-                                    delayed_target_ids={
-                                        id(item[0])
-                                        for item in delayed_scanner_heavy_eval
-                                    },
-                                    forced_target_ids=(
-                                        runtime_scheduler_forced_target_ids
-                                    ),
-                                )
+                            deferred_winner = _runtime_scheduler_deferred_winner_target(
+                                scheduler_claim,
+                                targets,
+                                queued_target_ids={
+                                    id(target) for target in runtime_work_queue
+                                },
+                                delayed_target_ids={
+                                    id(item[0]) for item in delayed_scanner_heavy_eval
+                                },
+                                forced_target_ids=(runtime_scheduler_forced_target_ids),
                             )
                             if deferred_winner is not None:
                                 runtime_scheduler_forced_target_ids.add(
@@ -14810,9 +15292,7 @@ def _run_sniper_iterations(
                                         scanner_async_eval_coordinator=(
                                             async_coordinator
                                         ),
-                                        scanner_async_generation=(
-                                            scheduler_generation
-                                        ),
+                                        scanner_async_generation=(scheduler_generation),
                                     )
                                     opening_rotation_handoff_generation_id = str(
                                         stock.get(
@@ -14856,9 +15336,7 @@ def _run_sniper_iterations(
                                         scanner_async_eval_coordinator=(
                                             async_coordinator
                                         ),
-                                        scanner_async_generation=(
-                                            scheduler_generation
-                                        ),
+                                        scanner_async_generation=(scheduler_generation),
                                         scanner_async_commit_phase=True,
                                     )
                             except Exception:
@@ -14872,21 +15350,19 @@ def _run_sniper_iterations(
                                 raise
                             if async_cache_key:
                                 unused_result = async_coordinator.discard_completed(
-                                    generation_id=(
-                                        scheduler_generation.generation_id
-                                    ),
+                                    generation_id=(scheduler_generation.generation_id),
                                     cache_key=async_cache_key,
                                 )
                                 if unused_result is not None:
-                                    sniper_state_handlers._clear_scanner_async_identity(stock,
+                                    sniper_state_handlers._clear_scanner_async_identity(
+                                        stock,
                                         generation_id=unused_result.generation_id,
-                                        cache_key=unused_result.cache_key)
+                                        cache_key=unused_result.cache_key,
+                                    )
                                     _emit_scanner_scheduler_event(
                                         payload=stock,
                                         target=stock,
-                                        stage=(
-                                            "scalping_scanner_async_commit_unused"
-                                        ),
+                                        stage=("scalping_scanner_async_commit_unused"),
                                         fields={
                                             "metric_role": (
                                                 "runtime_scheduler_latency"
@@ -15026,16 +15502,14 @@ def _run_sniper_iterations(
                             queue_rank=queue_context["queue_rank_by_obj"].get(
                                 id(stock), 0
                             ),
-                            scanner_queue_rank=queue_context[
-                                "scanner_rank_by_obj"
-                            ].get(id(stock), 0),
+                            scanner_queue_rank=queue_context["scanner_rank_by_obj"].get(
+                                id(stock), 0
+                            ),
                             watching_count=queue_context["watching_count"],
                             scanner_watching_count=queue_context[
                                 "scanner_watching_count"
                             ],
-                            throttle_sec=(
-                                0 if scheduler_generation is not None else 5
-                            ),
+                            throttle_sec=(0 if scheduler_generation is not None else 5),
                         )
                     queue_lag_fields = (
                         None
@@ -15047,9 +15521,9 @@ def _run_sniper_iterations(
                             queue_rank=queue_context["queue_rank_by_obj"].get(
                                 id(stock), 0
                             ),
-                            scanner_queue_rank=queue_context[
-                                "scanner_rank_by_obj"
-                            ].get(id(stock), 0),
+                            scanner_queue_rank=queue_context["scanner_rank_by_obj"].get(
+                                id(stock), 0
+                            ),
                             watching_count=queue_context["watching_count"],
                             scanner_watching_count=queue_context[
                                 "scanner_watching_count"
@@ -15162,9 +15636,7 @@ def _run_sniper_iterations(
                                     recovery_fields,
                                 )
                             )
-                        elif recovery_fields.get(
-                            "ws_repair_cycle_reg_allowed", True
-                        ):
+                        elif recovery_fields.get("ws_repair_cycle_reg_allowed", True):
                             _queue_scanner_ws_reg(
                                 code, "scanner_fast_precheck_stale_ws_recovery"
                             )
@@ -15296,8 +15768,7 @@ def _run_sniper_iterations(
                                 if fast_precheck_result == "stability_pending"
                                 else (
                                     "scanner_fast_precheck_source_quality_blocked"
-                                    if fast_precheck_result
-                                    == "source_quality_blocked"
+                                    if fast_precheck_result == "source_quality_blocked"
                                     else "scanner_fast_precheck_not_eligible"
                                 )
                             )
@@ -15372,9 +15843,9 @@ def _run_sniper_iterations(
                             queue_rank=queue_context["queue_rank_by_obj"].get(
                                 id(stock), 0
                             ),
-                            scanner_queue_rank=queue_context[
-                                "scanner_rank_by_obj"
-                            ].get(id(stock), 0),
+                            scanner_queue_rank=queue_context["scanner_rank_by_obj"].get(
+                                id(stock), 0
+                            ),
                             watching_count=queue_context["watching_count"],
                             scanner_watching_count=queue_context[
                                 "scanner_watching_count"
@@ -15463,9 +15934,7 @@ def _run_sniper_iterations(
                     ):
                         _scanner_watch_reset_terminal_eviction_state(stock)
                         recheck_after_epoch = _safe_float(
-                            stock.get(
-                                "entry_strength_momentum_recheck_after_epoch"
-                            ),
+                            stock.get("entry_strength_momentum_recheck_after_epoch"),
                             0.0,
                         )
                         _defer_scanner_watching_runtime_skip(
@@ -15478,9 +15947,9 @@ def _run_sniper_iterations(
                             queue_rank=queue_context["queue_rank_by_obj"].get(
                                 id(stock), 0
                             ),
-                            scanner_queue_rank=queue_context[
-                                "scanner_rank_by_obj"
-                            ].get(id(stock), 0),
+                            scanner_queue_rank=queue_context["scanner_rank_by_obj"].get(
+                                id(stock), 0
+                            ),
                             watching_count=queue_context["watching_count"],
                             scanner_watching_count=queue_context[
                                 "scanner_watching_count"
@@ -15594,10 +16063,12 @@ def _run_sniper_iterations(
                             "fast_precheck_reason": fast_precheck_reason or "-",
                             **_scanner_common_watch_budget_priority_fields(stock),
                         }
-                        full_eval_deferred_decision = _scanner_watch_eviction_decision_from_full_eval_deferred(
-                            stock,
-                            now_ts=heavy_queue_enter_epoch,
-                            skip_fields=full_eval_deferred_fields,
+                        full_eval_deferred_decision = (
+                            _scanner_watch_eviction_decision_from_full_eval_deferred(
+                                stock,
+                                now_ts=heavy_queue_enter_epoch,
+                                skip_fields=full_eval_deferred_fields,
+                            )
                         )
                         full_eval_deferred_fields.update(
                             {
@@ -15661,12 +16132,11 @@ def _run_sniper_iterations(
                         stock.get("_scanner_last_heavy_eval_attempt_epoch"),
                         0.0,
                     )
-                    current_heavy_evidence = (
-                        _scanner_heavy_eval_evidence_fingerprint(ws_data)
+                    current_heavy_evidence = _scanner_heavy_eval_evidence_fingerprint(
+                        ws_data
                     )
                     previous_heavy_evidence = str(
-                        stock.get("_scanner_last_heavy_eval_evidence_fingerprint")
-                        or ""
+                        stock.get("_scanner_last_heavy_eval_evidence_fingerprint") or ""
                     )
                     heavy_evidence_changed = bool(
                         previous_heavy_evidence
@@ -15732,9 +16202,7 @@ def _run_sniper_iterations(
                             enqueued_epoch=time.time(),
                             attempt=max(
                                 1,
-                                _safe_int(
-                                    stock.get("_scanner_scheduler_attempt"), 1
-                                ),
+                                _safe_int(stock.get("_scanner_scheduler_attempt"), 1),
                             ),
                         )
                         if (
@@ -15811,7 +16279,7 @@ def _run_sniper_iterations(
                     ai_engine=holding_ai_engine,
                 )
 
-        record_main_phase('post_target_maintenance')
+        record_main_phase("post_target_maintenance")
         _flush_delayed_scanner_heavy_eval()
         _flush_pending_scanner_ws_reg()
         _flush_deferred_scanner_pipeline_events()
@@ -15867,8 +16335,9 @@ def _run_sniper_iterations(
                 buy_time_allowed=is_scalping_buy_time_allowed(now),
             )
         from src.engine.monitoring.runtime_performance import observe, log_snapshot
-        record_main_phase('loop_diagnostics')
-        observe('loop_work', time.perf_counter() - loop_work_started)
+
+        record_main_phase("loop_diagnostics")
+        observe("loop_work", time.perf_counter() - loop_work_started)
         global _LOOP_METRICS_LAST_LOG_TS
         if now_ts - _LOOP_METRICS_LAST_LOG_TS >= 60:
             log_info(
@@ -15884,13 +16353,13 @@ def _run_sniper_iterations(
             log_snapshot()
             _LOOP_METRICS_LAST_LOG_TS = now_ts
 
-        coordinator = getattr(run_sniper, 'scanner_async_eval_coordinator', None)
-        record_main_phase('idle_wait')
+        coordinator = getattr(run_sniper, "scanner_async_eval_coordinator", None)
+        record_main_phase("idle_wait")
         if coordinator is not None:
             coordinator.wait_for_completion(_sleep_ms / 1000.0)
         else:
             time.sleep(_sleep_ms / 1000.0)
-        record_main_phase('main_wake')
+        record_main_phase("main_wake")
         yield None
 
 
@@ -15899,23 +16368,50 @@ def close_observation_sources():
     before = _SCANNER_OBSERVATION_QUEUE.snapshot()
     complete = False
     try:
-        from src.engine.scalping.pre_submit_delay_observation import shutdown as close_delay_observations
+        from src.engine.scalping.pre_submit_delay_observation import (
+            shutdown as close_delay_observations,
+        )
+
         complete = close_delay_observations()
-        from src.engine.scalping.initial_quantity_cap_observation import configure_sink as configure_quantity_sink
+        from src.engine.scalping.initial_quantity_cap_observation import (
+            configure_sink as configure_quantity_sink,
+        )
+
         configure_quantity_sink(None)
-        from src.engine.scalping.main_stop_policy import configure_source_sink as configure_stop_sink
+        from src.engine.scalping.main_stop_policy import (
+            configure_source_sink as configure_stop_sink,
+        )
+
         configure_stop_sink(None)
         from src.utils.pipeline_event_logger import configure_trailing_observation_sink
+
         configure_trailing_observation_sink(None)
-        from src.engine.scalping.reversal_anchor_index import configure_sink as configure_anchor_sink
+        from src.engine.scalping.reversal_anchor_index import (
+            configure_sink as configure_anchor_sink,
+        )
+
         configure_anchor_sink(None)
     finally:
         drained = _SCANNER_OBSERVATION_QUEUE.close(timeout=1.0)
     after = _SCANNER_OBSERVATION_QUEUE.snapshot()
-    complete = complete and drained and all(after[key] == before[key] for key in (
-        'append_failed', 'append_unobservable', 'intentionally_not_written', 'unavailable'))
+    complete = (
+        complete
+        and drained
+        and all(
+            after[key] == before[key]
+            for key in (
+                "append_failed",
+                "append_unobservable",
+                "intentionally_not_written",
+                "unavailable",
+            )
+        )
+    )
     if not complete:
-        log_error('[SOURCE_OBSERVATION_SHUTDOWN_INCOMPLETE] pending=' + str(after['pending_items']))
+        log_error(
+            "[SOURCE_OBSERVATION_SHUTDOWN_INCOMPLETE] pending="
+            + str(after["pending_items"])
+        )
     return complete
 
 
@@ -15929,28 +16425,54 @@ def run_sniper(is_test_mode=False):
     log_info(f"[DEBUG] run_sniper started at {datetime.now()}")
     from src.engine.infrastructure.main_policy_loading import load_main_policies
     from src.utils.constants import DATA_DIR
-    policy_clock = datetime.now(__import__('zoneinfo').ZoneInfo('Asia/Seoul'))
+
+    policy_clock = datetime.now(__import__("zoneinfo").ZoneInfo("Asia/Seoul"))
     run_sniper.policy_loading = load_main_policies(
-        target_date=os.getenv('KORSTOCKSCAN_RUNTIME_POLICY_BOOTSTRAP_DATE') or policy_clock.date().isoformat(),
-        observed_at=policy_clock, data_root=DATA_DIR, env=os.environ)
-    run_sniper.pre_submit_delay_preparation = run_sniper.policy_loading['delay_preparation']
-    run_sniper.trailing_situation_preparation = run_sniper.policy_loading['trailing_preparation']
+        target_date=os.getenv("KORSTOCKSCAN_RUNTIME_POLICY_BOOTSTRAP_DATE")
+        or policy_clock.date().isoformat(),
+        observed_at=policy_clock,
+        data_root=DATA_DIR,
+        env=os.environ,
+    )
+    run_sniper.pre_submit_delay_preparation = run_sniper.policy_loading[
+        "delay_preparation"
+    ]
+    run_sniper.trailing_situation_preparation = run_sniper.policy_loading[
+        "trailing_preparation"
+    ]
     from src.engine.automation.main_trailing_source_store import prepare_for_day
+
     try:
-        prepare_for_day(DATA_DIR,policy_clock.date().isoformat())
+        prepare_for_day(DATA_DIR, policy_clock.date().isoformat())
     except Exception as exc:
-        log_error('[TRAILING_SOURCE_INDEX_PREPARATION] '+type(exc).__name__)
-    from src.engine.scalping.pre_submit_delay_observation import configure_sink, configure_sampler
+        log_error("[TRAILING_SOURCE_INDEX_PREPARATION] " + type(exc).__name__)
+    from src.engine.scalping.pre_submit_delay_observation import (
+        configure_sink,
+        configure_sampler,
+    )
+
     configure_sink(_SCANNER_OBSERVATION_QUEUE.submit)
-    configure_sampler(lambda code: WS_MANAGER.get_pre_submit_delay_depth(code) if WS_MANAGER else {},
-                      sniper_state_handlers.observe_pre_submit_delay_quote)
-    from src.engine.scalping.initial_quantity_cap_observation import configure_sink as configure_quantity_sink
-    configure_quantity_sink(_SCANNER_OBSERVATION_QUEUE.submit,recover_pending=True)
-    from src.engine.scalping.main_stop_policy import configure_source_sink as configure_stop_sink
+    configure_sampler(
+        lambda code: WS_MANAGER.get_pre_submit_delay_depth(code) if WS_MANAGER else {},
+        sniper_state_handlers.observe_pre_submit_delay_quote,
+    )
+    from src.engine.scalping.initial_quantity_cap_observation import (
+        configure_sink as configure_quantity_sink,
+    )
+
+    configure_quantity_sink(_SCANNER_OBSERVATION_QUEUE.submit, recover_pending=True)
+    from src.engine.scalping.main_stop_policy import (
+        configure_source_sink as configure_stop_sink,
+    )
+
     configure_stop_sink(_SCANNER_OBSERVATION_QUEUE.submit)
     from src.utils.pipeline_event_logger import configure_trailing_observation_sink
+
     configure_trailing_observation_sink(_SCANNER_OBSERVATION_QUEUE.submit)
-    from src.engine.scalping.reversal_anchor_index import configure_sink as configure_anchor_sink
+    from src.engine.scalping.reversal_anchor_index import (
+        configure_sink as configure_anchor_sink,
+    )
+
     configure_anchor_sink(_SCANNER_OBSERVATION_QUEUE.submit)
     run_sniper.last_fifo_time = 0
     run_sniper.last_account_sync_time = 0
@@ -15985,6 +16507,7 @@ def run_sniper(is_test_mode=False):
     run_sniper.hot_path_ai_dispatcher = None
     run_sniper.scanner_async_eval_coordinator = None
     from src.engine.monitoring.runtime_performance import set_native_ready_event
+
     set_native_ready_event(None)
     run_sniper.scanner_runtime_scheduler = ScannerRuntimeScheduler(
         max_active=_scalping_fifo_base_max_active()
@@ -16101,7 +16624,9 @@ def run_sniper(is_test_mode=False):
         event_bus.subscribe("ORDER_EXECUTED", handle_real_execution)
         event_bus.subscribe("CONDITION_MATCHED", handle_condition_matched)
         event_bus.subscribe("CONDITION_UNMATCHED", handle_condition_unmatched)
-        handle_zero_base_probe_requested.runtime_readiness = _zero_base_consumer_readiness
+        handle_zero_base_probe_requested.runtime_readiness = (
+            _zero_base_consumer_readiness
+        )
         event_bus.subscribe(PROBE_REQUEST_EVENT, handle_zero_base_probe_requested)
         event_bus.subscribe(MACHINE_ENTER_EVENT, enqueue_zero_base_machine_enter)
         event_bus.subscribe(
@@ -16180,7 +16705,9 @@ def run_sniper(is_test_mode=False):
                         and is_scalping_buy_time_allowed(datetime.now())
                     )
             except Exception as warmup_error:
-                log_error(f"[AI_TRANSPORT_WARMUP_START_FAILED] type={type(warmup_error).__name__}")
+                log_error(
+                    f"[AI_TRANSPORT_WARMUP_START_FAILED] type={type(warmup_error).__name__}"
+                )
         except Exception as e:
             log_error(f"🚨 OpenAI AI 엔진 초기화 실패: {e}")
             event_bus.publish(
@@ -16226,7 +16753,9 @@ def run_sniper(is_test_mode=False):
             f"(main_openai={'ON' if runtime_role == 'main' else 'OFF'})"
         )
 
-    if run_sniper.scanner_scheduler_mode == "async_v1" or (AI_ENGINE is not None and openai_api_keys):
+    if run_sniper.scanner_scheduler_mode == "async_v1" or (
+        AI_ENGINE is not None and openai_api_keys
+    ):
         if AI_ENGINE is None or not openai_api_keys:
             log_error(
                 "[SCANNER_ASYNC] async_v1 requested without a loaded OpenAI "
@@ -16244,8 +16773,13 @@ def run_sniper(is_test_mode=False):
                     owns_ai_dispatcher=False,
                     observation_sink=_SCANNER_OBSERVATION_QUEUE.submit,
                 )
-                from src.engine.monitoring.runtime_performance import set_native_ready_event
-                set_native_ready_event(run_sniper.scanner_async_eval_coordinator.completion_event)
+                from src.engine.monitoring.runtime_performance import (
+                    set_native_ready_event,
+                )
+
+                set_native_ready_event(
+                    run_sniper.scanner_async_eval_coordinator.completion_event
+                )
                 log_info(
                     "[SCANNER_ASYNC] initialized "
                     f"workers={run_sniper.hot_path_ai_dispatcher.max_workers} "
@@ -16278,7 +16812,14 @@ def run_sniper(is_test_mode=False):
         try:
             from src.engine.scalping.reversal_evaluation_context import prepare
             from src.utils.constants import DATA_DIR
-            policy_day = datetime.fromtimestamp(time.time(), __import__('zoneinfo').ZoneInfo('Asia/Seoul')).date().isoformat()
+
+            policy_day = (
+                datetime.fromtimestamp(
+                    time.time(), __import__("zoneinfo").ZoneInfo("Asia/Seoul")
+                )
+                .date()
+                .isoformat()
+            )
             prepare(data_root=DATA_DIR, day=policy_day)
             log_info("[MAIN_POLICY_STARTUP] current policy reader verified")
         except (OSError, ValueError, TypeError, KeyError) as exc:
@@ -16436,19 +16977,26 @@ def run_sniper(is_test_mode=False):
         ):
             source_prepare_started = time.perf_counter()
             source_prepare_day = datetime.now().date().isoformat()
-            sniper_state_handlers._load_scalp_loss_reentry_cooldown_events(source_prepare_day)
+            sniper_state_handlers._load_scalp_loss_reentry_cooldown_events(
+                source_prepare_day
+            )
             log_info(
                 "[ENTRY_GUARD_SOURCE_PREPARED] "
                 f"day={source_prepare_day} seconds={time.perf_counter() - source_prepare_started:.3f} "
                 "main_entry_evaluation_started=false exit_monitor_started=true"
             )
         for _ in _run_sniper_iterations(
-            is_test_mode=is_test_mode, targets=targets, admin_id=admin_id,
-            radar=radar, ai_engine=ai_engine, last_db_poll_time=last_db_poll_time,
+            is_test_mode=is_test_mode,
+            targets=targets,
+            admin_id=admin_id,
+            radar=radar,
+            ai_engine=ai_engine,
+            last_db_poll_time=last_db_poll_time,
             last_msg_min=last_msg_min,
             scanner_ws_reg_last_emit_ts=scanner_ws_reg_last_emit_ts,
             scanner_ws_repair_cycle_state_by_code=scanner_ws_repair_cycle_state_by_code,
-            log_error=log_error, log_info=log_info,
+            log_error=log_error,
+            log_info=log_info,
         ):
             pass
 
@@ -16467,10 +17015,12 @@ def run_sniper(is_test_mode=False):
         try:
             radar.shutdown()
             try:
-                if getattr(AI_ENGINE, '_transport_warmup', None) is not None:
+                if getattr(AI_ENGINE, "_transport_warmup", None) is not None:
                     AI_ENGINE.stop_transport_warmup()
             except Exception as warmup_error:
-                log_error(f"[AI_TRANSPORT_WARMUP_STOP_FAILED] type={type(warmup_error).__name__}")
+                log_error(
+                    f"[AI_TRANSPORT_WARMUP_STOP_FAILED] type={type(warmup_error).__name__}"
+                )
             try:
                 from src.engine.error_detectors.process_health import (
                     write_heartbeat as _sniper_final_heartbeat,
@@ -16478,7 +17028,9 @@ def run_sniper(is_test_mode=False):
 
                 _sniper_final_heartbeat("sniper_engine", alive=False)
             except Exception as heartbeat_error:
-                log_error("[SNIPER_HEARTBEAT_FINALIZE_FAILED] " f"error={heartbeat_error}")
+                log_error(
+                    "[SNIPER_HEARTBEAT_FINALIZE_FAILED] " f"error={heartbeat_error}"
+                )
             smoothing_source_only_observer.stop()
             fast_exit_monitor.stop()
             if WS_MANAGER is not None and hasattr(WS_MANAGER, "set_fast_exit_wakeup"):
@@ -16499,7 +17051,10 @@ def run_sniper(is_test_mode=False):
                 except Exception as e:
                     log_error(f"scanner async coordinator stop failed: {e}")
                 finally:
-                    from src.engine.monitoring.runtime_performance import set_native_ready_event
+                    from src.engine.monitoring.runtime_performance import (
+                        set_native_ready_event,
+                    )
+
                     set_native_ready_event(None)
                     run_sniper.scanner_async_eval_coordinator = None
             if isinstance(hot_path_dispatcher, HotPathAIDispatcher):

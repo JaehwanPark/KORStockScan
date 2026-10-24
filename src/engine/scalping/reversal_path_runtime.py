@@ -1,4 +1,5 @@
 """Causal all-tick paths, independent of the immutable v3 turn registry."""
+
 from __future__ import annotations
 import copy
 import math
@@ -16,7 +17,9 @@ from src.engine.scalping.continuous_reversal_postclose import digest
 
 
 class State(OLD.State):
-    def __init__(self, *, branch_ids, session_anchor=None, generation='research', offline=False):
+    def __init__(
+        self, *, branch_ids, session_anchor=None, generation="research", offline=False
+    ):
         self.selected_ids = tuple(branch_ids)
         self.offline = offline
         self.path_pending = {}
@@ -29,12 +32,15 @@ class State(OLD.State):
         self._feature_values = None
         self.diagnostic_features = {}
         self.diagnostic_rolling = None
-        super().__init__(branch_ids=[b for b in branch_ids if b not in C.NEW_DEFINITIONS],
-                         session_anchor=session_anchor, generation=generation)
+        super().__init__(
+            branch_ids=[b for b in branch_ids if b not in C.NEW_DEFINITIONS],
+            session_anchor=session_anchor,
+            generation=generation,
+        )
 
     def _reset_windows(self):
         super()._reset_windows()
-        self.counts['path_source_censored'] += len(self.path_pending)
+        self.counts["path_source_censored"] += len(self.path_pending)
         self.path_pending.clear()
         self.root_previous.clear()
         self.prior_high = OLD.Extreme(True)
@@ -46,18 +52,21 @@ class State(OLD.State):
         self.diagnostic_features.clear()
         self.diagnostic_rolling = None
 
-    def features(self,row):
-        identity=tuple(row[:3])
-        if identity!=self._feature_key:
+    def features(self, row):
+        identity = tuple(row[:3])
+        if identity != self._feature_key:
             self.diagnostic_features.clear()
             self.diagnostic_rolling = None
-            self._feature_values=super().features(row)
-            self._feature_key=identity
+            self._feature_values = super().features(row)
+            self._feature_key = identity
         return self._feature_values.copy()
 
     def record_diagnostic_features(self, bid, event, values):
-        self.diagnostic_features[bid] = dict(identity=tuple(self.legacy.last[:3]),
-            phase=event['decision_phase'], values=dict(values))
+        self.diagnostic_features[bid] = dict(
+            identity=tuple(self.legacy.last[:3]),
+            phase=event["decision_phase"],
+            values=dict(values),
+        )
 
     def _observe_legacy(self, row, *, symbol, venue, session):
         last = self.legacy.last
@@ -67,408 +76,821 @@ class State(OLD.State):
             self._reset_windows()
         self.legacy.observe(row, symbol=symbol, venue=venue, session=session)
         if not row[8] or not self.legacy.last[8]:
-            self._reset_windows(); return []
-        self.history.append(row); self.delay.append(row); self.high_delay.append(row)
-        self.new_low.add(row); self.new_high.add(row)
+            self._reset_windows()
+            return []
+        self.history.append(row)
+        self.delay.append(row)
+        self.high_delay.append(row)
+        self.new_low.add(row)
+        self.new_high.add(row)
         for q in (self.q60, self.q120, self.q10):
             q.add(row)
-        f = self.features(row); t = row[0]; signals = {}
-        while self.ready and t-self.ready[0]['event']['epoch'] > 5:
-            self.ready.popleft(); self.counts['ready_expired'] += 1
+        f = self.features(row)
+        t = row[0]
+        signals = {}
+        while self.ready and t - self.ready[0]["event"]["epoch"] > 5:
+            self.ready.popleft()
+            self.counts["ready_expired"] += 1
         # Ready observations are invalidated by native path breaks, not by a
         # different branch's new anchor. Pending ownership includes definition.
         for identity, anchor in list(self.pending.items()):
-            e = anchor['event']
-            reason = 'confirmation_timeout' if t > e['epoch']+5 else 'original_low_retested' if row[3] <= e['low_price'] else None
+            e = anchor["event"]
+            reason = (
+                "confirmation_timeout"
+                if t > e["epoch"] + 5
+                else "original_low_retested" if row[3] <= e["low_price"] else None
+            )
             if reason:
-                self.pending.pop(identity); self.counts[reason] += 1
-            elif row[3] > e['confirmation_price']:
                 self.pending.pop(identity)
-                bid = anchor['branch_id']
-                event = {k: v for k, v in e.items() if not k.startswith('_')}
-                eid = f'{datetime.fromtimestamp(t,K.KST).date()}:{venue}:{session}:{symbol}:{row[1]}:{row[2]}'
-                event.update(event_id=eid, signal_id=eid, epoch=t, at=K.iso(t),
-                             decision_phase=B.CONFIRMED, confirmation_price=row[3],
-                             entry_ask=row[5] if K.good_quote(row) else None,
-                             spread_pct=100*(row[5]/row[4]-1) if K.good_quote(row) else None,
-                             anchor_event_id=e['event_id'], anchor_epoch=e['epoch'],
-                             anchor_price=e['confirmation_price'], branch_features=anchor['features'],
-                             native_epoch=row[1], native_sequence=row[2],
-                             registry_generation=self.generation,
-                             branch_definition_sha256=C.OLD.branch(bid).get('definition_sha256'))
+                self.counts[reason] += 1
+            elif row[3] > e["confirmation_price"]:
+                self.pending.pop(identity)
+                bid = anchor["branch_id"]
+                event = {k: v for k, v in e.items() if not k.startswith("_")}
+                eid = f"{datetime.fromtimestamp(t,K.KST).date()}:{venue}:{session}:{symbol}:{row[1]}:{row[2]}"
+                event.update(
+                    event_id=eid,
+                    signal_id=eid,
+                    epoch=t,
+                    at=K.iso(t),
+                    decision_phase=B.CONFIRMED,
+                    confirmation_price=row[3],
+                    entry_ask=row[5] if K.good_quote(row) else None,
+                    spread_pct=(
+                        100 * (row[5] / row[4] - 1) if K.good_quote(row) else None
+                    ),
+                    anchor_event_id=e["event_id"],
+                    anchor_epoch=e["epoch"],
+                    anchor_price=e["confirmation_price"],
+                    branch_features=anchor["features"],
+                    native_epoch=row[1],
+                    native_sequence=row[2],
+                    registry_generation=self.generation,
+                    branch_definition_sha256=C.OLD.branch(bid).get("definition_sha256"),
+                )
                 signals.setdefault(bid, []).append(event)
         turn = self.legacy.turn
-        if turn and turn['event_id'] != self.last_anchor:
-            self.last_anchor = turn['event_id']; self.counts['anchors'] += 1
+        if turn and turn["event_id"] != self.last_anchor:
+            self.last_anchor = turn["event_id"]
+            self.counts["anchors"] += 1
             # The first-tick volume fact is frozen with the type filters.
-            old_qty = self.q120.qty-self.q60.qty
-            turn['volume_ratio_60s'] = (self.q60.qty/old_qty if t-self.legacy.segment_start >= 120 and not self.q120.bad and old_qty > 0 else None)
-            turn.update(decision_phase=B.FIRST, signal_id=turn['event_id'],
-                        branch_features=copy.deepcopy(f),
-                        native_epoch=row[1], native_sequence=row[2], registry_generation=self.generation)
-            self.anchor_state = 'condition_not_met'
+            old_qty = self.q120.qty - self.q60.qty
+            turn["volume_ratio_60s"] = (
+                self.q60.qty / old_qty
+                if t - self.legacy.segment_start >= 120
+                and not self.q120.bad
+                and old_qty > 0
+                else None
+            )
+            turn.update(
+                decision_phase=B.FIRST,
+                signal_id=turn["event_id"],
+                branch_features=copy.deepcopy(f),
+                native_epoch=row[1],
+                native_sequence=row[2],
+                registry_generation=self.generation,
+            )
+            self.anchor_state = "condition_not_met"
             for bid in self.branch_ids:
                 match = C.OLD.matches(bid, turn, f)
-                self.record_diagnostic_features(bid, turn, dict(f,
-                    dd=turn.get('drawdown_5m_pct'), volume=turn.get('volume_ratio_60s'),
-                    spread=turn.get('spread_pct')))
-                self.counts[bid+(':missing' if match is None else ':matched' if match else ':miss')] += 1
+                self.record_diagnostic_features(
+                    bid,
+                    turn,
+                    dict(
+                        f,
+                        dd=turn.get("drawdown_5m_pct"),
+                        volume=turn.get("volume_ratio_60s"),
+                        spread=turn.get("spread_pct"),
+                    ),
+                )
+                self.counts[
+                    bid
+                    + (
+                        ":missing"
+                        if match is None
+                        else ":matched" if match else ":miss"
+                    )
+                ] += 1
                 if match is None:
-                    self.anchor_state = 'required_feature_missing'
+                    self.anchor_state = "required_feature_missing"
                 if not match:
                     continue
-                if C.OLD.branch(bid)['decision_phase'] == B.FIRST:
+                if C.OLD.branch(bid)["decision_phase"] == B.FIRST:
                     signals.setdefault(bid, []).append(copy.deepcopy(turn))
-                elif not self.offline and len(self.pending)+len(self.path_pending) >= B.MAX_PENDING:
-                    self.counts['pending_overload'] += 1
+                elif (
+                    not self.offline
+                    and len(self.pending) + len(self.path_pending) >= B.MAX_PENDING
+                ):
+                    self.counts["pending_overload"] += 1
                 else:
-                    self.pending[bid+':'+turn['event_id']] = dict(branch_id=bid, event=copy.deepcopy(turn), features=copy.deepcopy(f))
-                    self.anchor_state = 'pending_confirmation'
+                    self.pending[bid + ":" + turn["event_id"]] = dict(
+                        branch_id=bid,
+                        event=copy.deepcopy(turn),
+                        features=copy.deepcopy(f),
+                    )
+                    self.anchor_state = "pending_confirmation"
         if not signals:
-            if self.ready and all(e['decision_phase'] == B.FIRST for e in self.ready[-1]['event']['branch_signals'].values()) and (not turn or turn['event_id'] != self.ready[-1]['event']['event_id']):
-                self.ready.pop(); self.counts['first_invalidated'] += 1
+            if (
+                self.ready
+                and all(
+                    e["decision_phase"] == B.FIRST
+                    for e in self.ready[-1]["event"]["branch_signals"].values()
+                )
+                and (
+                    not turn or turn["event_id"] != self.ready[-1]["event"]["event_id"]
+                )
+            ):
+                self.ready.pop()
+                self.counts["first_invalidated"] += 1
             return []
-        represented = {}; lineage = {}
+        represented = {}
+        lineage = {}
         for bid, anchors in signals.items():
-            anchors.sort(key=lambda e: (e.get('anchor_epoch', e['epoch']), e.get('anchor_event_id', e['event_id'])))
+            anchors.sort(
+                key=lambda e: (
+                    e.get("anchor_epoch", e["epoch"]),
+                    e.get("anchor_event_id", e["event_id"]),
+                )
+            )
             represented[bid] = anchors[0]
-            lineage[bid] = [e.get('anchor_event_id', e['event_id']) for e in anchors]
+            lineage[bid] = [e.get("anchor_event_id", e["event_id"]) for e in anchors]
         # One bundle per native confirmation tick, including simultaneous phases.
         first = next(iter(represented.values()))
-        event = {k: v for k, v in first.items() if not k.startswith('_')}
-        event.update(branch_signals={b: {k: v for k, v in e.items() if not k.startswith('_')} for b,e in represented.items()},
-                     anchor_lineage=lineage, registry_sha256=C.OLD.SHA256)
-        event['canonical_opportunity_id'] = digest([str(datetime.fromtimestamp(t,K.KST).date()), symbol,
-            K.market_bucket(session), venue, row[9], row[1], row[2]])
+        event = {k: v for k, v in first.items() if not k.startswith("_")}
+        event.update(
+            branch_signals={
+                b: {k: v for k, v in e.items() if not k.startswith("_")}
+                for b, e in represented.items()
+            },
+            anchor_lineage=lineage,
+            registry_sha256=C.OLD.SHA256,
+        )
+        event["canonical_opportunity_id"] = digest(
+            [
+                str(datetime.fromtimestamp(t, K.KST).date()),
+                symbol,
+                K.market_bucket(session),
+                venue,
+                row[9],
+                row[1],
+                row[2],
+            ]
+        )
         ready = dict(event=event, row=row, claimed=False)
-        if self.ready and all(e['decision_phase'] == B.FIRST for e in self.ready[-1]['event']['branch_signals'].values()) and (not turn or turn['event_id'] != self.ready[-1]['event']['event_id']):
+        if (
+            self.ready
+            and all(
+                e["decision_phase"] == B.FIRST
+                for e in self.ready[-1]["event"]["branch_signals"].values()
+            )
+            and (not turn or turn["event_id"] != self.ready[-1]["event"]["event_id"])
+        ):
             self.ready.pop()
         if not self.offline and len(self.ready) >= B.MAX_READY:
-            self.counts['ready_overload'] += 1
+            self.counts["ready_overload"] += 1
             return []
-        self.ready.append(ready); self.counts['confirmed'] += 1
+        self.ready.append(ready)
+        self.counts["confirmed"] += 1
         return [ready]
 
     def _event(self, bid, row, symbol, venue, session, f, proof):
-        eid = f'{datetime.fromtimestamp(row[0],K.KST).date()}:{venue}:{session}:{symbol}:{row[1]}:{row[2]}'
-        return dict(event_id=eid, signal_id=eid, symbol=symbol, venue=venue, session=session,
-                    market=K.market_bucket(session), source_item=row[9], epoch=row[0], at=K.iso(row[0]),
-                    confirmation_price=row[3], entry_ask=row[5] if K.good_quote(row) else None,
-                    spread_pct=100*(row[5]-row[4])/row[3] if K.good_quote(row) else None,
-                    drawdown_5m_pct=f['dd'], volume_ratio_60s=f['volume'],
-                    branch_features=copy.deepcopy(f), decision_phase=C.PHASES[bid],
-                    signal_kind=C.PHASES[bid], signal_proof=copy.deepcopy(proof),
-                    native_epoch=row[1], native_sequence=row[2], registry_generation=self.generation,
-                    branch_definition_sha256=C.branch(bid)['definition_sha256'])
+        eid = f"{datetime.fromtimestamp(row[0],K.KST).date()}:{venue}:{session}:{symbol}:{row[1]}:{row[2]}"
+        return dict(
+            event_id=eid,
+            signal_id=eid,
+            symbol=symbol,
+            venue=venue,
+            session=session,
+            market=K.market_bucket(session),
+            source_item=row[9],
+            epoch=row[0],
+            at=K.iso(row[0]),
+            confirmation_price=row[3],
+            entry_ask=row[5] if K.good_quote(row) else None,
+            spread_pct=100 * (row[5] - row[4]) / row[3] if K.good_quote(row) else None,
+            drawdown_5m_pct=f["dd"],
+            volume_ratio_60s=f["volume"],
+            branch_features=copy.deepcopy(f),
+            decision_phase=C.PHASES[bid],
+            signal_kind=C.PHASES[bid],
+            signal_proof=copy.deepcopy(proof),
+            native_epoch=row[1],
+            native_sequence=row[2],
+            registry_generation=self.generation,
+            branch_definition_sha256=C.branch(bid)["definition_sha256"],
+        )
 
     def _source(self, event, row):
-        f = event['branch_features']
+        f = event["branch_features"]
         recent = list(self.legacy.rows)[-10:]
-        prices = [dict(age_sec=event['epoch']-r[0], price=r[3], qty=r[6],
-                       side={1:'BUY',-1:'SELL'}.get(r[7],'UNKNOWN')) for r in recent]
+        prices = [
+            dict(
+                age_sec=event["epoch"] - r[0],
+                price=r[3],
+                qty=r[6],
+                side={1: "BUY", -1: "SELL"}.get(r[7], "UNKNOWN"),
+            )
+            for r in recent
+        ]
         q = self.q30
-        facts = dict(confirmation_price=row[3], entry_ask=event['entry_ask'],
-                     spread_pct=event['spread_pct'], drawdown_5m_pct=f['dd'],
-                     volume_ratio_60s=f['volume'], return_60s_pct=f['ret'],
-                     session_return_pct=f['session'], vs_vwap_60s_pct=f['vwap'],
-                     buy_pressure_10t=f['buy10'],
-                     buy_pressure_30s=100*q.buy/q.qty if row[0]-self.legacy.segment_start>=30 and q.qty>0 and not q.bad else None,
-                     return_10t_pct=100*(row[3]/recent[-10][3]-1) if len(recent)>=10 else None)
-        return dict(market=event['market'], venue=event['venue'], source_item=event['source_item'],
-                    symbol_group=C.group(event['symbol']), price_band=C.band(row[3]), as_of=K.iso(row[0]),
-                    schema='continuous_path_prefix_v1', facts=facts, signal_kind=event['signal_kind'],
-                    signal_proof=copy.deepcopy(event['signal_proof']), recent_observed_prices=prices)
+        facts = dict(
+            confirmation_price=row[3],
+            entry_ask=event["entry_ask"],
+            spread_pct=event["spread_pct"],
+            drawdown_5m_pct=f["dd"],
+            volume_ratio_60s=f["volume"],
+            return_60s_pct=f["ret"],
+            session_return_pct=f["session"],
+            vs_vwap_60s_pct=f["vwap"],
+            buy_pressure_10t=f["buy10"],
+            buy_pressure_30s=(
+                100 * q.buy / q.qty
+                if row[0] - self.legacy.segment_start >= 30 and q.qty > 0 and not q.bad
+                else None
+            ),
+            return_10t_pct=(
+                100 * (row[3] / recent[-10][3] - 1) if len(recent) >= 10 else None
+            ),
+        )
+        return dict(
+            market=event["market"],
+            venue=event["venue"],
+            source_item=event["source_item"],
+            symbol_group=C.group(event["symbol"]),
+            price_band=C.band(row[3]),
+            as_of=K.iso(row[0]),
+            schema="continuous_path_prefix_v1",
+            facts=facts,
+            signal_kind=event["signal_kind"],
+            signal_proof=copy.deepcopy(event["signal_proof"]),
+            recent_observed_prices=prices,
+        )
 
     def observe(self, row, *, symbol, venue, session):
         last = self.legacy.last
         if last and row == last:
             return []
-        self.branch_ids = tuple(b for b in self.selected_ids if b not in C.NEW_DEFINITIONS)
-        old_ready = self._observe_legacy(row, symbol=symbol, venue=venue, session=session)
+        self.branch_ids = tuple(
+            b for b in self.selected_ids if b not in C.NEW_DEFINITIONS
+        )
+        old_ready = self._observe_legacy(
+            row, symbol=symbol, venue=venue, session=session
+        )
         if not row[8] or not self.legacy.last[8]:
             return []
         t = row[0]
-        self.prior_high.expire(t-300)
-        self.prior_60_high.expire(t-60)
-        previous_high, previous_60_high = self.prior_high.value(), self.prior_60_high.value()
+        self.prior_high.expire(t - 300)
+        self.prior_60_high.expire(t - 60)
+        previous_high, previous_60_high = (
+            self.prior_high.value(),
+            self.prior_60_high.value(),
+        )
         f = self.features(row)
-        old_qty = self.q120.qty-self.q60.qty
-        f.update(dd=100*(previous_high/row[3]-1) if previous_high else None,
-                 volume=self.q60.qty/old_qty if t-self.legacy.segment_start>=120 and not self.q120.bad and old_qty>0 else None)
+        old_qty = self.q120.qty - self.q60.qty
+        f.update(
+            dd=100 * (previous_high / row[3] - 1) if previous_high else None,
+            volume=(
+                self.q60.qty / old_qty
+                if t - self.legacy.segment_start >= 120
+                and not self.q120.bad
+                and old_qty > 0
+                else None
+            ),
+        )
         self.q30.add(row)
         candidates = []
         ids = [bid for bid in self.selected_ids if bid in C.NEW_DEFINITIONS]
         # Pending roots own their first confirmation, even if its quote/filter fails.
         for identity, pending in list(self.path_pending.items()):
-            bid = pending['bid']; phase = C.PHASES[bid]
+            bid = pending["bid"]
+            phase = C.PHASES[bid]
             if bid not in ids:
-                self.path_pending.pop(identity); continue
-            if phase == 'MOMENTUM_HOLD':
-                if row[3] < pending['price']:
-                    self.path_pending.pop(identity); self.counts['hold_breached'] += 1; continue
-                pending['minimum_price'] = min(pending['minimum_price'], row[3])
-                confirmed = t-pending['epoch'] >= 1
+                self.path_pending.pop(identity)
+                continue
+            if phase == "MOMENTUM_HOLD":
+                if row[3] < pending["price"]:
+                    self.path_pending.pop(identity)
+                    self.counts["hold_breached"] += 1
+                    continue
+                pending["minimum_price"] = min(pending["minimum_price"], row[3])
+                confirmed = t - pending["epoch"] >= 1
             else:
-                if t > pending['epoch']+120 or row[3] < pending['low']*.998:
-                    self.path_pending.pop(identity); self.counts['retest_expired_or_breached'] += 1; continue
-                pending['minimum_price'] = min(pending['minimum_price'],row[3])
-                if pending.get('touch_sequence') is None and row[3] <= pending['low']:
-                    pending.update(touch_sequence=row[2], touch_epoch=t, touch_price=row[3])
-                confirmed = pending.get('touch_sequence') is not None and row[2] > pending['touch_sequence'] and row[3] >= pending['reclaim']
+                if t > pending["epoch"] + 120 or row[3] < pending["low"] * 0.998:
+                    self.path_pending.pop(identity)
+                    self.counts["retest_expired_or_breached"] += 1
+                    continue
+                pending["minimum_price"] = min(pending["minimum_price"], row[3])
+                if pending.get("touch_sequence") is None and row[3] <= pending["low"]:
+                    pending.update(
+                        touch_sequence=row[2], touch_epoch=t, touch_price=row[3]
+                    )
+                confirmed = (
+                    pending.get("touch_sequence") is not None
+                    and row[2] > pending["touch_sequence"]
+                    and row[3] >= pending["reclaim"]
+                )
             if confirmed:
                 self.path_pending.pop(identity)
-                candidates.append((bid,dict(pending)))
+                candidates.append((bid, dict(pending)))
         turn = self.legacy.turn
-        if turn and turn['event_id'] != self.last_path_turn:
-            self.last_path_turn = turn['event_id']
+        if turn and turn["event_id"] != self.last_path_turn:
+            self.last_path_turn = turn["event_id"]
             # Freeze every native FIRST, independently of other policies' verdicts.
             for bid in ids:
                 phase = C.PHASES[bid]
                 if phase == B.FIRST:
                     signal = copy.deepcopy(turn)
-                    signal.update(branch_features=copy.deepcopy(f), decision_phase=B.FIRST,
-                                  native_epoch=row[1], native_sequence=row[2], registry_generation=self.generation,
-                                  branch_definition_sha256=C.branch(bid)['definition_sha256'])
+                    signal.update(
+                        branch_features=copy.deepcopy(f),
+                        decision_phase=B.FIRST,
+                        native_epoch=row[1],
+                        native_sequence=row[2],
+                        registry_generation=self.generation,
+                        branch_definition_sha256=C.branch(bid)["definition_sha256"],
+                    )
                     # HA retains the native low-based DD and FIRST input semantics.
-                    signal['volume_ratio_60s'] = f['volume']
-                    candidates.append((bid,signal))
-                elif phase.startswith('RETEST_'):
-                    if not self.offline and len(self.path_pending)+len(self.pending) >= B.MAX_PENDING:
-                        self.counts['path_pending_overload'] += 1; continue
-                    self.path_pending[bid+':'+turn['event_id']] = dict(bid=bid,epoch=t,price=row[3],
-                        native_sequence=row[2],native_epoch=row[1],anchor_event_id=turn['event_id'],
-                        low=turn['low_price'],peak=self.legacy.peak[3],
-                        reclaim=self.legacy.peak[3] if phase=='RETEST_RECLAIM_PEAK' else row[3],
-                        minimum_price=row[3],touch_sequence=None)
+                    signal["volume_ratio_60s"] = f["volume"]
+                    candidates.append((bid, signal))
+                elif phase.startswith("RETEST_"):
+                    if (
+                        not self.offline
+                        and len(self.path_pending) + len(self.pending) >= B.MAX_PENDING
+                    ):
+                        self.counts["path_pending_overload"] += 1
+                        continue
+                    self.path_pending[bid + ":" + turn["event_id"]] = dict(
+                        bid=bid,
+                        epoch=t,
+                        price=row[3],
+                        native_sequence=row[2],
+                        native_epoch=row[1],
+                        anchor_event_id=turn["event_id"],
+                        low=turn["low_price"],
+                        peak=self.legacy.peak[3],
+                        reclaim=(
+                            self.legacy.peak[3]
+                            if phase == "RETEST_RECLAIM_PEAK"
+                            else row[3]
+                        ),
+                        minimum_price=row[3],
+                        touch_sequence=None,
+                    )
         for bid in ids:
-            root = C.NEW_DEFINITIONS[bid].get('root_contract',{})
+            root = C.NEW_DEFINITIONS[bid].get("root_contract", {})
             phase = C.PHASES[bid]
-            if phase not in {'MOMENTUM_CROSS','MOMENTUM_HOLD','HIGH_BREAKOUT'}:
+            if phase not in {"MOMENTUM_CROSS", "MOMENTUM_HOLD", "HIGH_BREAKOUT"}:
                 continue
-            if phase == 'HIGH_BREAKOUT':
-                known = t-self.legacy.segment_start>=60 and previous_60_high is not None
+            if phase == "HIGH_BREAKOUT":
+                known = (
+                    t - self.legacy.segment_start >= 60 and previous_60_high is not None
+                )
                 value = row[3] > previous_60_high if known else None
-                proof = dict(prior_high=previous_60_high, previous_condition=self.root_previous.get(bid),
-                             price=row[3], epoch=t, native_epoch=row[1], native_sequence=row[2])
+                proof = dict(
+                    prior_high=previous_60_high,
+                    previous_condition=self.root_previous.get(bid),
+                    price=row[3],
+                    epoch=t,
+                    native_epoch=row[1],
+                    native_sequence=row[2],
+                )
             else:
-                known = f['ret'] is not None
-                value = f['ret'] >= root['return_60s_min_pct'] if known else None
-                proof = dict(threshold=root['return_60s_min_pct'], return_60s_pct=f['ret'],
-                             previous_condition=self.root_previous.get(bid), price=row[3],epoch=t,
-                             native_epoch=row[1],native_sequence=row[2])
+                known = f["ret"] is not None
+                value = f["ret"] >= root["return_60s_min_pct"] if known else None
+                proof = dict(
+                    threshold=root["return_60s_min_pct"],
+                    return_60s_pct=f["ret"],
+                    previous_condition=self.root_previous.get(bid),
+                    price=row[3],
+                    epoch=t,
+                    native_epoch=row[1],
+                    native_sequence=row[2],
+                )
             crossed = known and self.root_previous.get(bid) is False and value is True
             self.root_previous[bid] = value
             if crossed:
-                if phase == 'MOMENTUM_HOLD':
-                    if self.offline or len(self.path_pending)+len(self.pending) < B.MAX_PENDING:
-                        self.path_pending[bid+':'+str(row[2])] = dict(bid=bid,minimum_price=row[3],**proof)
+                if phase == "MOMENTUM_HOLD":
+                    if (
+                        self.offline
+                        or len(self.path_pending) + len(self.pending) < B.MAX_PENDING
+                    ):
+                        self.path_pending[bid + ":" + str(row[2])] = dict(
+                            bid=bid, minimum_price=row[3], **proof
+                        )
                     else:
-                        self.counts['path_pending_overload'] += 1
+                        self.counts["path_pending_overload"] += 1
                 else:
-                    candidates.append((bid,proof))
-        self.prior_high.add(row); self.prior_60_high.add(row)
-        signals = copy.deepcopy(old_ready[0]['event']['branch_signals']) if old_ready else {}
+                    candidates.append((bid, proof))
+        self.prior_high.add(row)
+        self.prior_60_high.add(row)
+        signals = (
+            copy.deepcopy(old_ready[0]["event"]["branch_signals"]) if old_ready else {}
+        )
         inputs = {}
-        lineage = copy.deepcopy(old_ready[0]['event']['anchor_lineage']) if old_ready else {}
-        for bid,proof in candidates:
-            event = proof if C.PHASES[bid]==B.FIRST else self._event(bid,row,symbol,venue,session,f,proof)
-            matched = C.matches(bid,event,event['branch_features'])
-            self.record_diagnostic_features(bid,event,event['branch_features'])
-            self.counts[bid+(':missing' if matched is None else ':matched' if matched else ':miss')] += 1
-            if not matched:continue
-            if event.get('entry_ask') is None:
-                self.counts['path_first_confirmation_quote_missing'] += 1
+        lineage = (
+            copy.deepcopy(old_ready[0]["event"]["anchor_lineage"]) if old_ready else {}
+        )
+        for bid, proof in candidates:
+            event = (
+                proof
+                if C.PHASES[bid] == B.FIRST
+                else self._event(bid, row, symbol, venue, session, f, proof)
+            )
+            matched = C.matches(bid, event, event["branch_features"])
+            self.record_diagnostic_features(bid, event, event["branch_features"])
+            self.counts[
+                bid
+                + (
+                    ":missing"
+                    if matched is None
+                    else ":matched" if matched else ":miss"
+                )
+            ] += 1
+            if not matched:
                 continue
-            lineage.setdefault(bid,[]).append(proof.get('anchor_event_id',event['event_id']))
-            if bid in signals:continue
+            if event.get("entry_ask") is None:
+                self.counts["path_first_confirmation_quote_missing"] += 1
+                continue
+            lineage.setdefault(bid, []).append(
+                proof.get("anchor_event_id", event["event_id"])
+            )
+            if bid in signals:
+                continue
             signals[bid] = event
             if C.PHASES[bid] != B.FIRST:
-                inputs[bid] = self._source(event,row)
+                inputs[bid] = self._source(event, row)
         if not signals:
             return []
         first = next(iter(signals.values()))
         event = copy.deepcopy(first)
-        event.update(branch_signals=signals,anchor_lineage=lineage,registry_sha256=C.SHA256,
-                     canonical_opportunity_id=digest([str(datetime.fromtimestamp(t,K.KST).date()),symbol,
-                         K.market_bucket(session),venue,row[9],row[1],row[2]]))
+        event.update(
+            branch_signals=signals,
+            anchor_lineage=lineage,
+            registry_sha256=C.SHA256,
+            canonical_opportunity_id=digest(
+                [
+                    str(datetime.fromtimestamp(t, K.KST).date()),
+                    symbol,
+                    K.market_bucket(session),
+                    venue,
+                    row[9],
+                    row[1],
+                    row[2],
+                ]
+            ),
+        )
         if old_ready:
             self.ready.remove(old_ready[0])
-        if not self.offline and len(self.ready)>=B.MAX_READY:
-            self.counts['path_ready_overload'] += 1; return []
-        ready = dict(event=event,row=row,claimed=False,path_inputs=inputs)
+        if not self.offline and len(self.ready) >= B.MAX_READY:
+            self.counts["path_ready_overload"] += 1
+            return []
+        ready = dict(event=event, row=row, claimed=False, path_inputs=inputs)
         self.ready.append(ready)
         return [ready]
 
     def snapshot(self, ready):
-        event = copy.deepcopy(ready['event'])
-        branch_inputs = copy.deepcopy(ready.get('path_inputs',{}))
-        old_signals = {bid:signal for bid,signal in event['branch_signals'].items() if bid not in branch_inputs}
+        event = copy.deepcopy(ready["event"])
+        branch_inputs = copy.deepcopy(ready.get("path_inputs", {}))
+        old_signals = {
+            bid: signal
+            for bid, signal in event["branch_signals"].items()
+            if bid not in branch_inputs
+        }
         if old_signals:
-            source_ready = dict(ready,event=dict(event,branch_signals=old_signals))
-            old_event,old_source = super().snapshot(source_ready)
-            event['branch_signals'].update(old_event['branch_signals'])
-            branch_inputs.update(old_source['branch_inputs'])
-        return event,dict(branch_inputs=branch_inputs)
+            source_ready = dict(ready, event=dict(event, branch_signals=old_signals))
+            old_event, old_source = super().snapshot(source_ready)
+            event["branch_signals"].update(old_event["branch_signals"])
+            branch_inputs.update(old_source["branch_inputs"])
+        return event, dict(branch_inputs=branch_inputs)
 
 
 _LOCK = threading.RLock()
-_STATES = {}; _ANCHORS = {}; _RESTORED_DAYS = set(); _EMPTY_PREFIX_DAYS = set()
-_ANCHOR_CURSORS={};_ANCHOR_ROOTS={};_ANCHOR_GAPS=set()
-_CLAIMS = {}; _GENERATION = None; _FAMILY = None
+_STATES = {}
+_ANCHORS = {}
+_RESTORED_DAYS = set()
+_EMPTY_PREFIX_DAYS = set()
+_ANCHOR_CURSORS = {}
+_ANCHOR_ROOTS = {}
+_ANCHOR_GAPS = set()
+_CLAIMS = {}
+_GENERATION = None
+_FAMILY = None
 
 
 def configure(family):
     global _GENERATION, _FAMILY
     with _LOCK:
-        if _GENERATION != family['family_sha256']:
+        if _GENERATION != family["family_sha256"]:
             for state in _STATES.values():
-                state._reset_windows(); state.ready.clear(); state.legacy.turn = None; state.last_anchor = None
-                state.legacy.segment_start = state.legacy.last[0] if state.legacy.last else None
-                state.generation=family['family_sha256']
+                state._reset_windows()
+                state.ready.clear()
+                state.legacy.turn = None
+                state.last_anchor = None
+                state.legacy.segment_start = (
+                    state.legacy.last[0] if state.legacy.last else None
+                )
+                state.generation = family["family_sha256"]
             _CLAIMS.clear()
-        _GENERATION = family['family_sha256']; _FAMILY = family
+        _GENERATION = family["family_sha256"]
+        _FAMILY = family
 
 
-def restore_session_anchors(data_root, day, *, max_bytes=None, max_seconds=None, read_only=False):
+def restore_session_anchors(
+    data_root, day, *, max_bytes=None, max_seconds=None, read_only=False
+):
     """Restore the same native prefix; preparation never publishes its cache."""
-    if type(read_only) is not bool:raise ValueError("anchor_read_only_flag_invalid")
+    if type(read_only) is not bool:
+        raise ValueError("anchor_read_only_flag_invalid")
     from src.engine.scalping.continuous_reversal_source import discover
     from src.engine.scalping import reversal_anchor_index as I
+
     with _LOCK:
         if day in _RESTORED_DAYS:
-            return dict(status='restored',bytes_read=0)
-    budget=min(I.LIMIT,max_bytes or I.LIMIT)
-    started=__import__('time').monotonic()
-    specs = discover(data_root, day); anchors = {};cursors={};gaps=set();complete=True
-    consumed=0
-    cached=I.load(data_root,day)
-    if cached is not None:anchors,cursors,gaps=cached
+            return dict(status="restored", bytes_read=0)
+    budget = min(I.LIMIT, max_bytes or I.LIMIT)
+    started = __import__("time").monotonic()
+    specs = discover(data_root, day)
+    anchors = {}
+    cursors = {}
+    gaps = set()
+    complete = True
+    consumed = 0
+    cached = I.load(data_root, day)
+    if cached is not None:
+        anchors, cursors, gaps = cached
     for spec in specs:
-        for source in spec['files']:
-            path = Path(source['path']); opener = gzip.open if path.suffix == '.gz' else open
-            signature=(path.stat().st_ino,path.stat().st_size)
-            cursor=cursors.get(str(path)) or {}
-            offset=cursor.get('offset',0) if (cursor.get('inode')==signature[0]
-                and signature[1]>=cursor.get('physical_bytes_at_cursor',0)) else 0
-            if cursor.get('inode')==signature[0] and cursor.get('bytes')==signature[1]:continue
-            with opener(path, 'rt') as handle:
-                if offset:handle.seek(offset)
-                file_complete=True
+        for source in spec["files"]:
+            path = Path(source["path"])
+            opener = gzip.open if path.suffix == ".gz" else open
+            signature = (path.stat().st_ino, path.stat().st_size)
+            cursor = cursors.get(str(path)) or {}
+            offset = (
+                cursor.get("offset", 0)
+                if (
+                    cursor.get("inode") == signature[0]
+                    and signature[1] >= cursor.get("physical_bytes_at_cursor", 0)
+                )
+                else 0
+            )
+            if (
+                cursor.get("inode") == signature[0]
+                and cursor.get("bytes") == signature[1]
+            ):
+                continue
+            with opener(path, "rt") as handle:
+                if offset:
+                    handle.seek(offset)
+                file_complete = True
                 while True:
-                    line_start=handle.tell()
-                    if consumed>=budget or (max_seconds is not None and __import__('time').monotonic()-started>=max_seconds):
-                        file_complete=False;complete=False;break
-                    line=handle.readline(budget-consumed+1)
-                    if not line:break
-                    consumed+=handle.tell()-line_start
-                    if consumed>budget or not line.endswith('\n'):
-                        handle.seek(line_start);file_complete=False;complete=False;break
-                    candidate_key=None
+                    line_start = handle.tell()
+                    if consumed >= budget or (
+                        max_seconds is not None
+                        and __import__("time").monotonic() - started >= max_seconds
+                    ):
+                        file_complete = False
+                        complete = False
+                        break
+                    line = handle.readline(budget - consumed + 1)
+                    if not line:
+                        break
+                    consumed += handle.tell() - line_start
+                    if consumed > budget or not line.endswith("\n"):
+                        handle.seek(line_start)
+                        file_complete = False
+                        complete = False
+                        break
+                    candidate_key = None
                     try:
                         r = json.loads(line)
-                        item=r.get('source_item');code=r.get('symbol');venue=r.get('venue')
-                        candidate_key=None
-                        if (r.get('path_consumer_eligible') is True and r.get('path_order_status')=='accept'
-                                and isinstance(code,str) and isinstance(item,str) and isinstance(venue,str)
-                                and item.split('_',1)[0]==code and isinstance(r.get('session_bucket'),str)):
-                            candidate_key=(code,venue,item,K.market_bucket(r['session_bucket']),day)
-                        received = datetime.fromisoformat(r['local_receive_timestamp']); exchanged = datetime.fromisoformat(r['exchange_timestamp'])
-                        p = r['trade_price']; item = r['source_item']; code = r['symbol']; venue = r['venue']
-                        if (r.get('schema') != 'scalp_micro_reversion_market_stream_point_v3' or not received.tzinfo or not exchanged.tzinfo
-                                or received.astimezone(K.KST).date().isoformat() != day
-                                or r.get('path_consumer_eligible') is not True or r.get('path_order_status') != 'accept'
-                                or type(p) not in (int,float) or not math.isfinite(p) or p <= 0
-                                or not 0 <= received.timestamp()-exchanged.timestamp() <= 5
-                                or type(r['sequence_epoch']) is not int or r['sequence_epoch']<=0
-                                or type(r['series_sequence']) is not int or r['series_sequence'] <= 0):
-                            if candidate_key is not None and candidate_key not in anchors:gaps.add(candidate_key)
+                        item = r.get("source_item")
+                        code = r.get("symbol")
+                        venue = r.get("venue")
+                        candidate_key = None
+                        if (
+                            r.get("path_consumer_eligible") is True
+                            and r.get("path_order_status") == "accept"
+                            and isinstance(code, str)
+                            and isinstance(item, str)
+                            and isinstance(venue, str)
+                            and item.split("_", 1)[0] == code
+                            and isinstance(r.get("session_bucket"), str)
+                        ):
+                            candidate_key = (
+                                code,
+                                venue,
+                                item,
+                                K.market_bucket(r["session_bucket"]),
+                                day,
+                            )
+                        received = datetime.fromisoformat(r["local_receive_timestamp"])
+                        exchanged = datetime.fromisoformat(r["exchange_timestamp"])
+                        p = r["trade_price"]
+                        item = r["source_item"]
+                        code = r["symbol"]
+                        venue = r["venue"]
+                        if (
+                            r.get("schema")
+                            != "scalp_micro_reversion_market_stream_point_v3"
+                            or not received.tzinfo
+                            or not exchanged.tzinfo
+                            or received.astimezone(K.KST).date().isoformat() != day
+                            or r.get("path_consumer_eligible") is not True
+                            or r.get("path_order_status") != "accept"
+                            or type(p) not in (int, float)
+                            or not math.isfinite(p)
+                            or p <= 0
+                            or not 0
+                            <= received.timestamp() - exchanged.timestamp()
+                            <= 5
+                            or type(r["sequence_epoch"]) is not int
+                            or r["sequence_epoch"] <= 0
+                            or type(r["series_sequence"]) is not int
+                            or r["series_sequence"] <= 0
+                        ):
+                            if (
+                                candidate_key is not None
+                                and candidate_key not in anchors
+                            ):
+                                gaps.add(candidate_key)
                             continue
-                        from src.trading.market.session_contract import market_source_partition_venue as _explicit_item_venue
-                        if item.split('_',1)[0] != code or _explicit_item_venue(item) != venue:
+                        from src.trading.market.session_contract import (
+                            market_source_partition_venue as _explicit_item_venue,
+                        )
+
+                        if (
+                            item.split("_", 1)[0] != code
+                            or _explicit_item_venue(item) != venue
+                        ):
                             continue
-                        key = code, venue, item, K.market_bucket(r['session_bucket']), day
-                        ep=r.get('native_transport_epoch',r['sequence_epoch'])
-                        seq=r.get('native_route_sequence',r['series_sequence'])
+                        key = (
+                            code,
+                            venue,
+                            item,
+                            K.market_bucket(r["session_bucket"]),
+                            day,
+                        )
+                        ep = r.get("native_transport_epoch", r["sequence_epoch"])
+                        seq = r.get("native_route_sequence", r["series_sequence"])
                         row = [received.timestamp(), ep, seq, p]
-                        if not I.valid(key,row,day):
-                            if key not in anchors:gaps.add(key)
+                        if not I.valid(key, row, day):
+                            if key not in anchors:
+                                gaps.add(key)
                             continue
-                        if key in gaps:continue
-                        if key not in anchors or tuple(row[:3]) < tuple(anchors[key][:3]):
+                        if key in gaps:
+                            continue
+                        if key not in anchors or tuple(row[:3]) < tuple(
+                            anchors[key][:3]
+                        ):
                             anchors[key] = row
-                    except (ValueError, KeyError, TypeError, AttributeError, OverflowError):
-                        if candidate_key is not None and candidate_key not in anchors:gaps.add(candidate_key)
+                    except (
+                        ValueError,
+                        KeyError,
+                        TypeError,
+                        AttributeError,
+                        OverflowError,
+                    ):
+                        if candidate_key is not None and candidate_key not in anchors:
+                            gaps.add(candidate_key)
                         continue
-                position=handle.tell()
-                cursors[str(path)]=dict(inode=signature[0],bytes=signature[1] if file_complete else -1,
-                    physical_bytes_at_cursor=signature[1],offset=position)
+                position = handle.tell()
+                cursors[str(path)] = dict(
+                    inode=signature[0],
+                    bytes=signature[1] if file_complete else -1,
+                    physical_bytes_at_cursor=signature[1],
+                    offset=position,
+                )
     with _LOCK:
         _ANCHORS.update(anchors)
         _ANCHOR_GAPS.update(gaps)
-        _ANCHOR_CURSORS[day]=cursors;_ANCHOR_ROOTS[day]=Path(data_root)
+        _ANCHOR_CURSORS[day] = cursors
+        _ANCHOR_ROOTS[day] = Path(data_root)
         if not specs:
             _EMPTY_PREFIX_DAYS.add(day)
         for key, state in _STATES.items():
-            anchor=_ANCHORS.get(key)
-            if state.session_anchor!=anchor:
-                state.session_anchor=anchor
-                state._feature_key=None;state.diagnostic_features.clear();state.diagnostic_rolling=None
-        if complete:_RESTORED_DAYS.add(day)
-        frozen={k:list(v) for k,v in _ANCHORS.items() if k[4]==day}
+            anchor = _ANCHORS.get(key)
+            if state.session_anchor != anchor:
+                state.session_anchor = anchor
+                state._feature_key = None
+                state.diagnostic_features.clear()
+                state.diagnostic_rolling = None
+        if complete:
+            _RESTORED_DAYS.add(day)
+        frozen = {k: list(v) for k, v in _ANCHORS.items() if k[4] == day}
     if read_only:
-        I.index_payload(day,frozen,cursors,unobservable_streams=_ANCHOR_GAPS)
+        I.index_payload(day, frozen, cursors, unobservable_streams=_ANCHOR_GAPS)
     else:
-        I.save(data_root,day,frozen,cursors,unobservable_streams=_ANCHOR_GAPS)
-    return dict(status='restored' if complete else 'prefix_incomplete',bytes_read=consumed)
+        I.save(data_root, day, frozen, cursors, unobservable_streams=_ANCHOR_GAPS)
+    return dict(
+        status="restored" if complete else "prefix_incomplete", bytes_read=consumed
+    )
 
 
-def prepare_anchor_source_step(data_root,day):
+def prepare_anchor_source_step(data_root, day):
     """Resume a cold prefix on the existing detached preparation cadence."""
-    if _FAMILY is None:return dict(status='not_configured')
+    if _FAMILY is None:
+        return dict(status="not_configured")
     with _LOCK:
-        if day in _RESTORED_DAYS:return dict(status='restored',bytes_read=0)
-    return restore_session_anchors(data_root,day,max_bytes=4*1024*1024,max_seconds=.1)
+        if day in _RESTORED_DAYS:
+            return dict(status="restored", bytes_read=0)
+    return restore_session_anchors(
+        data_root, day, max_bytes=4 * 1024 * 1024, max_seconds=0.1
+    )
 
 
 def observe_normalized(symbol, session, envelope):
     if _FAMILY is None:
         return B.observe_normalized(symbol, session, envelope)
-    venue = 'SOR' if envelope.get('market_route') == 'krx_nxt_integrated' else envelope.get('effective_venue')
+    venue = (
+        "SOR"
+        if envelope.get("market_route") == "krx_nxt_integrated"
+        else envelope.get("effective_venue")
+    )
     if venue not in C.ROUTES.get(K.market_bucket(session), ()):
         return
-    from src.trading.market.session_contract import market_source_partition_venue as _explicit_item_venue
-    item = envelope.get('item')
-    if not isinstance(item,str) or item.split('_',1)[0] != symbol or _explicit_item_venue(item) != venue:
+    from src.trading.market.session_contract import (
+        market_source_partition_venue as _explicit_item_venue,
+    )
+
+    item = envelope.get("item")
+    if (
+        not isinstance(item, str)
+        or item.split("_", 1)[0] != symbol
+        or _explicit_item_venue(item) != venue
+    ):
         return
     try:
-        t, price = float(envelope['observed_epoch']), float(envelope['trade_price'])
-        ex = envelope.get('provider_trade_epoch')
-        row = [t, envelope['transport_epoch'], envelope['route_sequence'], price,
-               envelope.get('inline_best_bid'), envelope.get('inline_best_ask'), envelope.get('trade_qty'),
-               {'BUY':1, 'SELL':-1}.get(envelope.get('aggressor_side'), 0),
-               int(math.isfinite(t) and math.isfinite(price) and price > 0 and type(ex) in (int,float) and 0 <= t-ex <= 5), envelope['item'], 0]
-        key = symbol, venue, row[9], K.market_bucket(session), datetime.fromtimestamp(t,K.KST).date().isoformat()
+        t, price = float(envelope["observed_epoch"]), float(envelope["trade_price"])
+        ex = envelope.get("provider_trade_epoch")
+        row = [
+            t,
+            envelope["transport_epoch"],
+            envelope["route_sequence"],
+            price,
+            envelope.get("inline_best_bid"),
+            envelope.get("inline_best_ask"),
+            envelope.get("trade_qty"),
+            {"BUY": 1, "SELL": -1}.get(envelope.get("aggressor_side"), 0),
+            int(
+                math.isfinite(t)
+                and math.isfinite(price)
+                and price > 0
+                and type(ex) in (int, float)
+                and 0 <= t - ex <= 5
+            ),
+            envelope["item"],
+            0,
+        ]
+        key = (
+            symbol,
+            venue,
+            row[9],
+            K.market_bucket(session),
+            datetime.fromtimestamp(t, K.KST).date().isoformat(),
+        )
         with _LOCK:
             # Restoration completes the earlier accepted prefix. A different
             # symbol's source file must not prevent this stream's first fact.
             from src.engine.scalping import reversal_anchor_index as I
-            if key[4] in _RESTORED_DAYS and row[8] and I.valid(key,row[:4],key[4]) and key not in _ANCHORS and key not in _ANCHOR_GAPS:
+
+            if (
+                key[4] in _RESTORED_DAYS
+                and row[8]
+                and I.valid(key, row[:4], key[4])
+                and key not in _ANCHORS
+                and key not in _ANCHOR_GAPS
+            ):
                 _ANCHORS[key] = row[:4]
-                root=_ANCHOR_ROOTS.get(key[4])
+                root = _ANCHOR_ROOTS.get(key[4])
                 if root is not None:
                     from src.engine.scalping import reversal_anchor_index as I
-                    if not I.enqueue(root,key[4],__import__(__name__,fromlist=['*'])):
+
+                    if not I.enqueue(
+                        root, key[4], __import__(__name__, fromlist=["*"])
+                    ):
                         # Keep the real fact in memory; source restoration will
                         # reconstruct it after restart. Surface persistence loss.
-                        state=_STATES.get(key)
-                        if state is not None:state.counts['anchor_persistence_unavailable']+=1
-            cell = _FAMILY['machine_cells'][C.cell_key(symbol, session, price)]['routes'][venue]
+                        state = _STATES.get(key)
+                        if state is not None:
+                            state.counts["anchor_persistence_unavailable"] += 1
+            cell = _FAMILY["machine_cells"][C.cell_key(symbol, session, price)][
+                "routes"
+            ][venue]
             # Track selected definitions across bands; filter at the actual confirmation.
-            ids = tuple(dict.fromkeys(b['branch_id'] for band in C.BANDS
-                for b in _FAMILY['machine_cells'][f'{C.group(symbol)}|{K.market_bucket(session)}|{band}']['routes'][venue]['payload']['branches']))
+            ids = tuple(
+                dict.fromkeys(
+                    b["branch_id"]
+                    for band in C.BANDS
+                    for b in _FAMILY["machine_cells"][
+                        f"{C.group(symbol)}|{K.market_bucket(session)}|{band}"
+                    ]["routes"][venue]["payload"]["branches"]
+                )
+            )
             state = _STATES.get(key)
             if state is None:
-                state = _STATES[key] = State(branch_ids=ids, session_anchor=_ANCHORS.get(key), generation=_GENERATION)
+                state = _STATES[key] = State(
+                    branch_ids=ids,
+                    session_anchor=_ANCHORS.get(key),
+                    generation=_GENERATION,
+                )
             else:
                 state.selected_ids = ids
             for old in list(_STATES):
@@ -480,73 +902,117 @@ def observe_normalized(symbol, session, envelope):
 
 
 def claim_snapshot(symbol, venue, session, *, now, item, family_sha256):
-    key = symbol, venue, item, K.market_bucket(session), datetime.fromtimestamp(now,K.KST).date().isoformat()
+    key = (
+        symbol,
+        venue,
+        item,
+        K.market_bucket(session),
+        datetime.fromtimestamp(now, K.KST).date().isoformat(),
+    )
     with _LOCK:
         if family_sha256 != _GENERATION:
             return None
         for token, old in list(_CLAIMS.items()):
-            if now-old['snapshot'][0]['epoch'] > 5:
+            if now - old["snapshot"][0]["epoch"] > 5:
                 _CLAIMS.pop(token)
         state = _STATES.get(key)
         if not state:
             return None
         for ready in state.ready:
-            if ready['claimed'] or not 0 <= now-ready['event']['epoch'] <= 5:
+            if ready["claimed"] or not 0 <= now - ready["event"]["epoch"] <= 5:
                 continue
-            e = ready['event']
+            e = ready["event"]
             # An all-FIRST bundle must still be the latest uninvalidated turn.
-            if all(s['decision_phase'] == B.FIRST for s in e['branch_signals'].values()) and (not state.legacy.turn or state.legacy.turn['event_id'] != e['event_id']):
-                ready['claimed'] = True; continue
-            ready['claimed'] = True; snap = state.snapshot(ready)
-            cell = _FAMILY['machine_cells'][C.cell_key(symbol,session,e['confirmation_price'])]['routes'][venue]
-            selected = {b['branch_id'] for b in cell['payload']['branches']}
-            for bid in list(snap[0]['branch_signals']):
-                if bid not in selected:
-                    snap[0]['branch_signals'].pop(bid)
-                    snap[1]['branch_inputs'].pop(bid)
-            if not snap[0]['branch_signals']:
+            if all(
+                s["decision_phase"] == B.FIRST for s in e["branch_signals"].values()
+            ) and (
+                not state.legacy.turn or state.legacy.turn["event_id"] != e["event_id"]
+            ):
+                ready["claimed"] = True
                 continue
-            if not state.legacy.turn or state.legacy.turn['event_id'] != e['event_id']:
-                for bid in list(snap[0]['branch_signals']):
-                    if snap[0]['branch_signals'][bid]['decision_phase'] == B.FIRST:
-                        snap[0]['branch_signals'].pop(bid)
-                        snap[1]['branch_inputs'].pop(bid)
-                if not snap[0]['branch_signals']:
+            ready["claimed"] = True
+            snap = state.snapshot(ready)
+            cell = _FAMILY["machine_cells"][
+                C.cell_key(symbol, session, e["confirmation_price"])
+            ]["routes"][venue]
+            selected = {b["branch_id"] for b in cell["payload"]["branches"]}
+            for bid in list(snap[0]["branch_signals"]):
+                if bid not in selected:
+                    snap[0]["branch_signals"].pop(bid)
+                    snap[1]["branch_inputs"].pop(bid)
+            if not snap[0]["branch_signals"]:
+                continue
+            if not state.legacy.turn or state.legacy.turn["event_id"] != e["event_id"]:
+                for bid in list(snap[0]["branch_signals"]):
+                    if snap[0]["branch_signals"][bid]["decision_phase"] == B.FIRST:
+                        snap[0]["branch_signals"].pop(bid)
+                        snap[1]["branch_inputs"].pop(bid)
+                if not snap[0]["branch_signals"]:
                     continue
-            token = digest([family_sha256, e['signal_id'], snap])
-            _CLAIMS[token] = dict(snapshot=copy.deepcopy(snap), generation=family_sha256, scope=key)
-            return dict(token=token, snapshot=snap, generation=family_sha256, backend='registered_v4')
+            token = digest([family_sha256, e["signal_id"], snap])
+            _CLAIMS[token] = dict(
+                snapshot=copy.deepcopy(snap), generation=family_sha256, scope=key
+            )
+            return dict(
+                token=token,
+                snapshot=snap,
+                generation=family_sha256,
+                backend="registered_v4",
+            )
     return None
 
 
 def validate_claim(claim, family_sha256, *, now):
     if not isinstance(claim, dict):
-        raise ValueError('reversal_signal_claim_missing')
+        raise ValueError("reversal_signal_claim_missing")
     with _LOCK:
-        original = _CLAIMS.get(claim.get('token'))
-        if not original or original['generation'] != family_sha256 or claim.get('generation') != family_sha256 or _GENERATION != family_sha256:
-            raise ValueError('reversal_signal_generation_changed')
-        snap = original['snapshot']; event = snap[0]
-        if digest(snap) != digest(claim.get('snapshot')) or not 0 <= now-event['epoch'] <= 5:
-            raise ValueError('reversal_signal_expired_or_changed')
-        state = _STATES.get(original['scope'])
-        if not state or not state.legacy.last or not state.legacy.last[8] or state.legacy.last[1] != event['native_epoch']:
-            raise ValueError('reversal_signal_path_changed')
+        original = _CLAIMS.get(claim.get("token"))
+        if (
+            not original
+            or original["generation"] != family_sha256
+            or claim.get("generation") != family_sha256
+            or _GENERATION != family_sha256
+        ):
+            raise ValueError("reversal_signal_generation_changed")
+        snap = original["snapshot"]
+        event = snap[0]
+        if (
+            digest(snap) != digest(claim.get("snapshot"))
+            or not 0 <= now - event["epoch"] <= 5
+        ):
+            raise ValueError("reversal_signal_expired_or_changed")
+        state = _STATES.get(original["scope"])
+        if (
+            not state
+            or not state.legacy.last
+            or not state.legacy.last[8]
+            or state.legacy.last[1] != event["native_epoch"]
+        ):
+            raise ValueError("reversal_signal_path_changed")
         from src.engine.scalping.continuous_reversal_policy_v4 import primary
-        cell = _FAMILY['machine_cells'][C.cell_key(event['symbol'],event['market'],event['confirmation_price'])]['routes'][event['venue']]
-        matched = [b for b in event['branch_signals'] if b in {x['branch_id'] for x in cell['payload']['branches']}]
+
+        cell = _FAMILY["machine_cells"][
+            C.cell_key(event["symbol"], event["market"], event["confirmation_price"])
+        ]["routes"][event["venue"]]
+        matched = [
+            b
+            for b in event["branch_signals"]
+            if b in {x["branch_id"] for x in cell["payload"]["branches"]}
+        ]
         if not matched:
-            raise ValueError('reversal_signal_path_changed')
-        bid = primary(cell,matched)
-        if event['branch_signals'][bid]['decision_phase'] == B.FIRST and (not state.legacy.turn or state.legacy.turn['event_id'] != event['event_id']):
-            raise ValueError('reversal_first_signal_invalidated')
-        if not any(r['event']['signal_id'] == event['signal_id'] for r in state.ready):
-            raise ValueError('reversal_signal_path_changed')
+            raise ValueError("reversal_signal_path_changed")
+        bid = primary(cell, matched)
+        if event["branch_signals"][bid]["decision_phase"] == B.FIRST and (
+            not state.legacy.turn or state.legacy.turn["event_id"] != event["event_id"]
+        ):
+            raise ValueError("reversal_first_signal_invalidated")
+        if not any(r["event"]["signal_id"] == event["signal_id"] for r in state.ready):
+            raise ValueError("reversal_signal_path_changed")
         return copy.deepcopy(snap)
 
 
 def acknowledge(claim, *, status):
     with _LOCK:
-        old = _CLAIMS.get((claim or {}).get('token'))
+        old = _CLAIMS.get((claim or {}).get("token"))
         if old:
-            old['status'] = status
+            old["status"] = status

@@ -437,6 +437,7 @@ def _receipt_market_axes(
 
     requested_route = ""
     from src.trading.market.execution_venue import UNRESOLVED_MARKET_VALUES
+
     for key in requested_route_keys:
         candidate = str(stock.get(key) or "").strip().upper()
         if not requested_route:
@@ -463,7 +464,11 @@ def _receipt_market_axes(
         else "unknown"
     )
 
-    from src.trading.market.execution_venue import execution_venue_fields, broker_route_fields
+    from src.trading.market.execution_venue import (
+        execution_venue_fields,
+        broker_route_fields,
+    )
+
     assigned_venue = execution_venue_fields(stock, observed_at=receipt_at)
     return {
         "session_contract_version": session_contract_version or "unknown",
@@ -1028,19 +1033,34 @@ _EXIT_DECISION_RESET_KEYS = (
     "exit_decision_quote_reason",
 )
 _POSITION_PEAK_RESET_KEYS = (
-    "main_stop_policy_pin", "main_stop_new_fill", "main_stop_pin_persistence",
-    "main_stop_clock_unobserved", "main_stop_restoring_position",
-    "_main_stop_typed_values", "_main_stop_position_key", "main_stop_source_at",
-    "main_stop_source_rejected_count", "main_stop_source_gap",
-    "_main_stop_source_values", "_main_stop_quote_generation",
-    "_main_stop_evaluation_generation", "_main_stop_source_observation_generation",
-    "_main_stop_normal_preset_evaluation", "_main_stop_last_quote_source",
-    "_main_stop_current_quote_context", "_main_stop_last_captured_quote",
-    "_main_stop_quote_context_by_evaluator", "_main_stop_observation_epoch",
-    "_main_stop_normal_exit_observation", "_main_stop_evaluation_lane_generations",
-    "main_stop_evaluation_rejected_count", "main_stop_evaluation_source_gap",
-    "_main_stop_quantity_source", "main_stop_quantity_source_gap",
-    "main_stop_quantity_restore_source", "main_stop_quantity_restore_status",
+    "main_stop_policy_pin",
+    "main_stop_new_fill",
+    "main_stop_pin_persistence",
+    "main_stop_clock_unobserved",
+    "main_stop_restoring_position",
+    "_main_stop_typed_values",
+    "_main_stop_position_key",
+    "main_stop_source_at",
+    "main_stop_source_rejected_count",
+    "main_stop_source_gap",
+    "_main_stop_source_values",
+    "_main_stop_quote_generation",
+    "_main_stop_evaluation_generation",
+    "_main_stop_source_observation_generation",
+    "_main_stop_normal_preset_evaluation",
+    "_main_stop_last_quote_source",
+    "_main_stop_current_quote_context",
+    "_main_stop_last_captured_quote",
+    "_main_stop_quote_context_by_evaluator",
+    "_main_stop_observation_epoch",
+    "_main_stop_normal_exit_observation",
+    "_main_stop_evaluation_lane_generations",
+    "main_stop_evaluation_rejected_count",
+    "main_stop_evaluation_source_gap",
+    "_main_stop_quantity_source",
+    "main_stop_quantity_source_gap",
+    "main_stop_quantity_restore_source",
+    "main_stop_quantity_restore_status",
     "soft_stop_micro_grace_started_at",
     "position_peak_cycle_id",
     "position_peak_persisted_price",
@@ -1434,23 +1454,35 @@ def _native_sell_receipt_identity(stock, code, target_id, stage, fields, observe
     This is receipt custody, not scanner lifecycle coverage or a current exit
     AI decision. It also works for sealed outbox legs created before this fix.
     """
-    if (not isinstance(stock, dict)
-            or stage not in {"sell_completed", "sell_partial_fill_progress",
-                             "nxt_rising_missed_tp1_partial_fill_progress",
-                             "nxt_rising_missed_tp1_partial_sell_completed"}
-            or any(stock.get(key) or fields.get(key) for key in (
-                "scanner_promotion_id", "scanner_generation_id"))
-            or stock.get("simulation_book") or stock.get("simulation_owner")
-            or fields.get("actual_order_submitted") is not True
-            or fields.get("broker_order_forbidden") is not False
-            or not re.fullmatch(r"[0-9]+", str(fields.get("order_no") or ""))
-            or not re.fullmatch(r"[0-9]+", str(fields.get("execution_no") or ""))
-            or _safe_int(fields.get("sell_qty"), 0) <= 0
-            or _safe_int(stock.get("id"), 0) != _safe_int(target_id, 0)
-            or str(stock.get("code") or "") != str(code)):
+    if (
+        not isinstance(stock, dict)
+        or stage
+        not in {
+            "sell_completed",
+            "sell_partial_fill_progress",
+            "nxt_rising_missed_tp1_partial_fill_progress",
+            "nxt_rising_missed_tp1_partial_sell_completed",
+        }
+        or any(
+            stock.get(key) or fields.get(key)
+            for key in ("scanner_promotion_id", "scanner_generation_id")
+        )
+        or stock.get("simulation_book")
+        or stock.get("simulation_owner")
+        or fields.get("actual_order_submitted") is not True
+        or fields.get("broker_order_forbidden") is not False
+        or not re.fullmatch(r"[0-9]+", str(fields.get("order_no") or ""))
+        or not re.fullmatch(r"[0-9]+", str(fields.get("execution_no") or ""))
+        or _safe_int(fields.get("sell_qty"), 0) <= 0
+        or _safe_int(stock.get("id"), 0) != _safe_int(target_id, 0)
+        or str(stock.get("code") or "") != str(code)
+    ):
         return {}
-    trace = str(stock.get("last_watching_ai_attempt_decision_trace_id")
-                or stock.get("last_watching_ai_decision_trace_id") or "")
+    trace = str(
+        stock.get("last_watching_ai_attempt_decision_trace_id")
+        or stock.get("last_watching_ai_decision_trace_id")
+        or ""
+    )
     if not isinstance(observed_at, datetime) or observed_at.tzinfo is None:
         return {}
     if not trace:
@@ -1460,67 +1492,122 @@ def _native_sell_receipt_identity(stock, code, target_id, stage, fields, observe
         # SOR may confirm the order/execution while leaving the actual venue
         # explicitly unresolved. Receipt custody can ACK that terminal without
         # promoting its venue, economic provenance or scanner coverage.
-        from src.trading.market.execution_venue import execution_venue_fields, VENUE_ASSIGNMENT_AUTHORITIES
+        from src.trading.market.execution_venue import (
+            execution_venue_fields,
+            VENUE_ASSIGNMENT_AUTHORITIES,
+        )
+
         assigned = execution_venue_fields(fields, observed_at=observed_at)
         authority = assigned["execution_venue_override"]
-        assigned_gap = (authority in VENUE_ASSIGNMENT_AUTHORITIES
-            and fields.get("actual_execution_venue") == fields.get("exit_effective_venue") == "KRX"
+        assigned_gap = (
+            authority in VENUE_ASSIGNMENT_AUTHORITIES
+            and fields.get("actual_execution_venue")
+            == fields.get("exit_effective_venue")
+            == "KRX"
             and fields.get("actual_execution_venue_source") == authority
             and fields.get("execution_venue_override") == authority
-            and fields.get("actual_execution_venue_verified") is False)
-        legacy_gap = (fields.get("actual_execution_venue") == fields.get("exit_effective_venue") == "UNKNOWN"
-            and fields.get("actual_execution_venue_source") == "official_exchange_fields_ambiguous_or_missing")
-        known_venue_gap = (fields.get("broker_execution_provenance_complete") is False
+            and fields.get("actual_execution_venue_verified") is False
+        )
+        legacy_gap = (
+            fields.get("actual_execution_venue")
+            == fields.get("exit_effective_venue")
+            == "UNKNOWN"
+            and fields.get("actual_execution_venue_source")
+            == "official_exchange_fields_ambiguous_or_missing"
+        )
+        known_venue_gap = (
+            fields.get("broker_execution_provenance_complete") is False
             and fields.get("broker_actual_execution_venue") == "UNKNOWN"
-            and fields.get("broker_actual_execution_venue_source") == "official_exchange_fields_ambiguous_or_missing"
+            and fields.get("broker_actual_execution_venue_source")
+            == "official_exchange_fields_ambiguous_or_missing"
             and (legacy_gap or assigned_gap)
-            and fields.get("broker_route") == fields.get("broker_route_requested") == "SOR"
-            and fields.get("main_lifecycle_broker_raw_envelope_schema") == "kiwoom_websocket_order_execution_00_values_v1"
+            and fields.get("broker_route")
+            == fields.get("broker_route_requested")
+            == "SOR"
+            and fields.get("main_lifecycle_broker_raw_envelope_schema")
+            == "kiwoom_websocket_order_execution_00_values_v1"
             and fields.get("main_lifecycle_broker_raw_source_type") == "00"
-            and fields.get("broker_execution_receive_time_source") == "websocket_packet_ingress"
-            and fields.get("broker_execution_received_at") == fields.get("exit_execution_received_at")
-            and fields.get("exit_market_session_time_source") == "websocket_packet_ingress"
-            and fields.get("session_contract_version") == "market_session_contract_v2")
+            and fields.get("broker_execution_receive_time_source")
+            == "websocket_packet_ingress"
+            and fields.get("broker_execution_received_at")
+            == fields.get("exit_execution_received_at")
+            and fields.get("exit_market_session_time_source")
+            == "websocket_packet_ingress"
+            and fields.get("session_contract_version") == "market_session_contract_v2"
+        )
         signal_bound = bool(
             fields.get("exit_rule") == "scalp_trailing_take_profit"
-            and fields.get("holding_path_terminal_signal_binding") == "same_position_buy_generation"
+            and fields.get("holding_path_terminal_signal_binding")
+            == "same_position_buy_generation"
             and fields.get("holding_path_position_key") == f"record:{int(target_id)}"
             and isinstance(fields.get("holding_path_signal_id"), str)
             and fields["holding_path_signal_id"]
-            and all(re.fullmatch(r"[0-9a-f]{64}", str(fields.get(key) or ""))
-                    for key in ("holding_path_buy_fill_identity", "holding_path_policy_bundle_sha256")))
+            and all(
+                re.fullmatch(r"[0-9a-f]{64}", str(fields.get(key) or ""))
+                for key in (
+                    "holding_path_buy_fill_identity",
+                    "holding_path_policy_bundle_sha256",
+                )
+            )
+        )
         final = stage == "sell_completed"
         # Broker custody and research entry/signal coverage are separate.
         # Reuse the canonical raw receipt validator; never invent a BUY trace,
         # BUY generation, venue or actual cost to acknowledge an existing fill.
         raw = build_broker_execution_provenance(
-            fields, expected_qty=fields.get("main_lifecycle_exit_qty"),
+            fields,
+            expected_qty=fields.get("main_lifecycle_exit_qty"),
             expected_price=fields.get("main_lifecycle_exit_price"),
-            expected_stock_code=code, expected_side="SELL",
-            lifecycle_venue=fields.get("exit_effective_venue", fields.get("effective_venue")),
-            expected_fill_state="full" if final else "partial")
+            expected_stock_code=code,
+            expected_side="SELL",
+            lifecycle_venue=fields.get(
+                "exit_effective_venue", fields.get("effective_venue")
+            ),
+            expected_fill_state="full" if final else "partial",
+        )
         raw_bound = bool(
             raw.get("broker_execution_identity_complete") is True
             and raw.get("broker_execution_order_no") == str(fields.get("order_no"))
             and raw.get("broker_execution_no") == str(fields.get("execution_no"))
-            and raw.get("broker_execution_remaining_qty") == _safe_int(fields.get("remaining_sell_qty"), -1)
-            and 0 < _safe_int(fields.get("main_lifecycle_exit_qty"), 0) <= _safe_int(fields.get("sell_qty"), 0)
-            and (final or fields.get("main_lifecycle_exit_qty") == fields.get("sell_qty")))
+            and raw.get("broker_execution_remaining_qty")
+            == _safe_int(fields.get("remaining_sell_qty"), -1)
+            and 0
+            < _safe_int(fields.get("main_lifecycle_exit_qty"), 0)
+            <= _safe_int(fields.get("sell_qty"), 0)
+            and (
+                final or fields.get("main_lifecycle_exit_qty") == fields.get("sell_qty")
+            )
+        )
         # Keep the original sealed terminal reader for pre-canonical legs.
-        legacy_bound = bool(final and signal_bound and (
-            fields.get("broker_execution_provenance_complete") is True or known_venue_gap))
+        legacy_bound = bool(
+            final
+            and signal_bound
+            and (
+                fields.get("broker_execution_provenance_complete") is True
+                or known_venue_gap
+            )
+        )
         quantity_prefix = "sell_execution_receipt" if final else "sell_receipt"
-        if (not (raw_bound or legacy_bound)
-                or fields.get("main_lifecycle_broker_reconciled") is not final
-                or fields.get("main_lifecycle_reconciled_final_exit") is not final
-                or any(fields.get(key) is not True for key in (
+        if (
+            not (raw_bound or legacy_bound)
+            or fields.get("main_lifecycle_broker_reconciled") is not final
+            or fields.get("main_lifecycle_reconciled_final_exit") is not final
+            or any(
+                fields.get(key) is not True
+                for key in (
                     quantity_prefix + "_quantity_contract_complete",
-                    quantity_prefix + "_unit_fill_consistent", "exit_receipt_submission_custody_committed"))
-                or fields.get("exit_receipt_submission_custody_source_gap") is not False
-                or (final and _safe_int(fields.get("remaining_sell_qty"), -1) != 0)):
+                    quantity_prefix + "_unit_fill_consistent",
+                    "exit_receipt_submission_custody_committed",
+                )
+            )
+            or fields.get("exit_receipt_submission_custody_source_gap") is not False
+            or (final and _safe_int(fields.get("remaining_sell_qty"), -1) != 0)
+        ):
             return {}
         try:
-            received_at = datetime.fromisoformat(str(fields.get("exit_execution_received_at") or ""))
+            received_at = datetime.fromisoformat(
+                str(fields.get("exit_execution_received_at") or "")
+            )
         except ValueError:
             return {}
         if received_at.tzinfo is None or received_at != observed_at:
@@ -1528,28 +1615,44 @@ def _native_sell_receipt_identity(stock, code, target_id, stage, fields, observe
         identity = {
             "native_receipt_identity_schema": "broker_position_sell_receipt_v1",
             "native_receipt_position_key": f"record:{int(target_id)}",
-            "native_receipt_buy_fill_identity": fields.get("holding_path_buy_fill_identity") if signal_bound else None,
+            "native_receipt_buy_fill_identity": (
+                fields.get("holding_path_buy_fill_identity") if signal_bound else None
+            ),
             "native_receipt_order_no": str(fields["order_no"]),
             "native_receipt_execution_no": str(fields["execution_no"]),
             "native_receipt_record_id": int(target_id),
             "native_receipt_stock_code": str(code),
-            "native_receipt_observed_at": observed_at.astimezone(_KST).isoformat(timespec="microseconds"),
+            "native_receipt_observed_at": observed_at.astimezone(_KST).isoformat(
+                timespec="microseconds"
+            ),
         }
         if not signal_bound:
-            identity.update(native_receipt_entry_lineage_status="source_gap",
-                native_receipt_entry_lineage_reason=str(fields.get("holding_path_terminal_signal_binding")
-                    or "entry_buy_generation_unavailable"))
+            identity.update(
+                native_receipt_entry_lineage_status="source_gap",
+                native_receipt_entry_lineage_reason=str(
+                    fields.get("holding_path_terminal_signal_binding")
+                    or "entry_buy_generation_unavailable"
+                ),
+            )
         if known_venue_gap:
             from src.trading.market.execution_venue import MARKET_DEFAULT_AUTHORITY
-            identity.update(native_receipt_execution_venue_status="unknown_preserved",
+
+            identity.update(
+                native_receipt_execution_venue_status="unknown_preserved",
                 native_receipt_broker_provenance_complete=False,
                 native_receipt_operational_venue=fields.get("actual_execution_venue"),
                 native_receipt_venue_assignment_authority=authority,
-                native_receipt_source_gap=(None if assigned_gap and authority == MARKET_DEFAULT_AUTHORITY
-                                           else "actual_execution_venue_unresolved"))
+                native_receipt_source_gap=(
+                    None
+                    if assigned_gap and authority == MARKET_DEFAULT_AUTHORITY
+                    else "actual_execution_venue_unresolved"
+                ),
+            )
         return identity
-    if not re.fullmatch(r"analyze_target:" + re.escape(str(code))
-                        + r":[0-9]{10,16}:[0-9a-f]{8,64}", trace):
+    if not re.fullmatch(
+        r"analyze_target:" + re.escape(str(code)) + r":[0-9]{10,16}:[0-9a-f]{8,64}",
+        trace,
+    ):
         return {}
     return {
         "native_receipt_identity_schema": "native_entry_sell_receipt_v1",
@@ -1557,7 +1660,8 @@ def _native_sell_receipt_identity(stock, code, target_id, stage, fields, observe
         "native_receipt_record_id": int(target_id),
         "native_receipt_stock_code": str(code),
         "native_receipt_observed_at": observed_at.astimezone(_KST).isoformat(
-            timespec="microseconds"),
+            timespec="microseconds"
+        ),
     }
 
 
@@ -1577,13 +1681,20 @@ def _log_holding_pipeline_impl(
         source_stage=stage,
     )
     if stage in {
-        "position_rebased_after_fill", "holding_started", "scale_in_executed",
-        "sell_partial_fill_progress", "nxt_rising_missed_tp1_partial_fill_progress",
-        "nxt_rising_missed_tp1_partial_sell_completed", "sell_completed",
+        "position_rebased_after_fill",
+        "holding_started",
+        "scale_in_executed",
+        "sell_partial_fill_progress",
+        "nxt_rising_missed_tp1_partial_fill_progress",
+        "nxt_rising_missed_tp1_partial_sell_completed",
+        "sell_completed",
     }:
         simulated = bool(
             isinstance(candidate_stock, dict)
-            and (candidate_stock.get("simulation_book") or candidate_stock.get("simulation_owner"))
+            and (
+                candidate_stock.get("simulation_book")
+                or candidate_stock.get("simulation_owner")
+            )
         )
         real_receipt = bool(
             isinstance(candidate_stock, dict)
@@ -1604,8 +1715,12 @@ def _log_holding_pipeline_impl(
     if isinstance(candidate_stock, dict):
         lineage = candidate_stock.get("_scale_in_applied_policy_lineage") or {}
         if stage in {"sell_completed", "scale_in_executed"} and lineage:
-            fields.update({"scale_in_applied_" + key: value for key, value in lineage.items()})
-            fields["scale_in_applied_lineage_conflict"] = bool(candidate_stock.get("_scale_in_applied_lineage_conflict"))
+            fields.update(
+                {"scale_in_applied_" + key: value for key, value in lineage.items()}
+            )
+            fields["scale_in_applied_lineage_conflict"] = bool(
+                candidate_stock.get("_scale_in_applied_lineage_conflict")
+            )
         fields.update(
             entry_opportunity_recheck_attribution_fields(
                 candidate_stock,
@@ -1633,9 +1748,16 @@ def _log_holding_pipeline_impl(
             )
         )
         if not fields.get("main_lifecycle_id"):
-            fields.update(_native_sell_receipt_identity(
-                identity_stock, code, target_id, stage, fields, trusted_observed_at,
-            ))
+            fields.update(
+                _native_sell_receipt_identity(
+                    identity_stock,
+                    code,
+                    target_id,
+                    stage,
+                    fields,
+                    trusted_observed_at,
+                )
+            )
         if observe_candidate_lifecycle:
             observe_candidate_transition_safe(candidate_stock, code, stage, fields)
     emitted = emit_pipeline_event(
@@ -1646,32 +1768,65 @@ def _log_holding_pipeline_impl(
         record_id=target_id,
         fields=fields,
     )
-    if stage == 'probe_filled' and isinstance(candidate_stock, dict):
+    if stage == "probe_filled" and isinstance(candidate_stock, dict):
         # The native matched one-share receipt is the sole fill authority.
         # An observation failure must not alter already received broker state.
         try:
-            from src.engine.scalping.entry_probe_conditional_replay import SCHEMA, native_receipt
-            seed = candidate_stock.get('entry_split_initial_entry_seed') or {}
-            if (seed.get('schema') == SCHEMA and fields.get('actual_order_submitted') is True
-                    and fields.get('broker_order_forbidden') is False
-                    and candidate_stock.get('entry_split_initial_entry_lineage_conflict') is not True
-                    and candidate_stock.get('entry_lifecycle_conflict') is not True):
-                at = candidate_stock['entry_split_probe_filled_at']
-                original = {key: fields.get(key) for key in (
-                    'order_no', 'fill_qty', 'fill_price', 'probe_bundle_id')}
-                original.update(native_owner='sniper_execution_receipts.probe_filled',
-                                receipt_received_at=at)
-                receipt = native_receipt(seed, kind='probe_fill', sequence=time.monotonic_ns(),
-                    event_at=at, available_at=at, source=original, runtime_pid=os.getpid(),
-                    broker_receipt_verified=True, broker_order_no=fields.get('order_no'),
-                    cumulative_qty=fields.get('fill_qty'), fill_price=fields.get('fill_price'))
-                emit_pipeline_event('ENTRY_PIPELINE', name, code,
-                    'entry_probe_conditional_receipt_observed', record_id=target_id,
-                    fields={'entry_probe_conditional_receipt': json.dumps(receipt, sort_keys=True),
-                            'actual_order_submitted': False, 'broker_order_forbidden': True,
-                            'runtime_effect': False})
+            from src.engine.scalping.entry_probe_conditional_replay import (
+                SCHEMA,
+                native_receipt,
+            )
+
+            seed = candidate_stock.get("entry_split_initial_entry_seed") or {}
+            if (
+                seed.get("schema") == SCHEMA
+                and fields.get("actual_order_submitted") is True
+                and fields.get("broker_order_forbidden") is False
+                and candidate_stock.get("entry_split_initial_entry_lineage_conflict")
+                is not True
+                and candidate_stock.get("entry_lifecycle_conflict") is not True
+            ):
+                at = candidate_stock["entry_split_probe_filled_at"]
+                original = {
+                    key: fields.get(key)
+                    for key in ("order_no", "fill_qty", "fill_price", "probe_bundle_id")
+                }
+                original.update(
+                    native_owner="sniper_execution_receipts.probe_filled",
+                    receipt_received_at=at,
+                )
+                receipt = native_receipt(
+                    seed,
+                    kind="probe_fill",
+                    sequence=time.monotonic_ns(),
+                    event_at=at,
+                    available_at=at,
+                    source=original,
+                    runtime_pid=os.getpid(),
+                    broker_receipt_verified=True,
+                    broker_order_no=fields.get("order_no"),
+                    cumulative_qty=fields.get("fill_qty"),
+                    fill_price=fields.get("fill_price"),
+                )
+                emit_pipeline_event(
+                    "ENTRY_PIPELINE",
+                    name,
+                    code,
+                    "entry_probe_conditional_receipt_observed",
+                    record_id=target_id,
+                    fields={
+                        "entry_probe_conditional_receipt": json.dumps(
+                            receipt, sort_keys=True
+                        ),
+                        "actual_order_submitted": False,
+                        "broker_order_forbidden": True,
+                        "runtime_effect": False,
+                    },
+                )
         except Exception as exc:
-            log_error(f'[CONDITIONAL_PROBE_SOURCE] {code} native fill observation: {type(exc).__name__}:{exc}')
+            log_error(
+                f"[CONDITIONAL_PROBE_SOURCE] {code} native fill observation: {type(exc).__name__}:{exc}"
+            )
     return emitted
 
 
@@ -2951,18 +3106,32 @@ def _build_sell_lifecycle_outbox_leg(
             "code": str(code or "").strip()[:6],
         }
     )
-    if stage == 'sell_completed' and target_stock.get('scalp_trailing_observation_stream_contract'):
+    if stage == "sell_completed" and target_stock.get(
+        "scalp_trailing_observation_stream_contract"
+    ):
         # Freeze attempted observations into the native terminal outbox before
         # position reset. Queue admission never substitutes for append proof.
         event_fields = dict(event_fields)
-        event_fields['trailing_observation_close'] = json.dumps(dict(
-            contract=target_stock['scalp_trailing_observation_stream_contract'],
-            position_key=target_stock.get('scalp_trailing_observation_position_key'),
-            buy_fill_identity=target_stock.get('scalp_trailing_observation_buy_fill_identity'),
-            expected_count=target_stock.get('scalp_trailing_observation_sequence'),
-            source_gap=bool(target_stock.get('scalp_trailing_observation_source_gap')),
-            admission_failure=target_stock.get('scalp_trailing_observation_admission_failure')),
-            sort_keys=True, separators=(',', ':'))
+        event_fields["trailing_observation_close"] = json.dumps(
+            dict(
+                contract=target_stock["scalp_trailing_observation_stream_contract"],
+                position_key=target_stock.get(
+                    "scalp_trailing_observation_position_key"
+                ),
+                buy_fill_identity=target_stock.get(
+                    "scalp_trailing_observation_buy_fill_identity"
+                ),
+                expected_count=target_stock.get("scalp_trailing_observation_sequence"),
+                source_gap=bool(
+                    target_stock.get("scalp_trailing_observation_source_gap")
+                ),
+                admission_failure=target_stock.get(
+                    "scalp_trailing_observation_admission_failure"
+                ),
+            ),
+            sort_keys=True,
+            separators=(",", ":"),
+        )
     leg = {
         "schema": _SELL_PARTIAL_LIFECYCLE_OUTBOX_SCHEMA,
         "stage": stage,
@@ -2981,7 +3150,8 @@ def _build_sell_lifecycle_outbox_leg(
 
 
 def _holding_path_terminal_lineage_fields(
-    target_stock: dict[str, Any], target_id: int,
+    target_stock: dict[str, Any],
+    target_id: int,
 ) -> dict[str, Any]:
     """Bind a terminal leg to the frozen TP vote only for the same BUY generation."""
     if str(target_stock.get("last_exit_rule") or "") != "scalp_trailing_take_profit":
@@ -2990,11 +3160,15 @@ def _holding_path_terminal_lineage_fields(
     if not isinstance(signal, dict):
         return {"holding_path_terminal_signal_binding": "source_gap_signal_missing"}
     buy_identity = buy_fill_identity_from_runtime(target_stock)
-    if (signal.get("position_key") != f"record:{target_id}"
-            or not buy_identity
-            or signal.get("buy_fill_identity") != buy_identity
-            or not signal.get("signal_id")):
-        return {"holding_path_terminal_signal_binding": "source_gap_generation_mismatch"}
+    if (
+        signal.get("position_key") != f"record:{target_id}"
+        or not buy_identity
+        or signal.get("buy_fill_identity") != buy_identity
+        or not signal.get("signal_id")
+    ):
+        return {
+            "holding_path_terminal_signal_binding": "source_gap_generation_mismatch"
+        }
     return {
         "holding_path_terminal_signal_binding": "same_position_buy_generation",
         "holding_path_signal_id": signal["signal_id"],
@@ -3580,8 +3754,12 @@ def _sell_lifecycle_outbox_event_contract_valid(
     except (TypeError, ValueError):
         return False
     native_identity = _native_sell_receipt_identity(
-        leg.get("candidate_stock"), leg.get("code"), leg.get("target_id"),
-        leg.get("stage"), event_fields, native_observed_at,
+        leg.get("candidate_stock"),
+        leg.get("code"),
+        leg.get("target_id"),
+        leg.get("stage"),
+        event_fields,
+        native_observed_at,
     )
     if native_identity:
         # Preserve every frozen field and exact broker/position identity.
@@ -3593,10 +3771,13 @@ def _sell_lifecycle_outbox_event_contract_valid(
             and event_payload.get("stock_code") == leg.get("code")
             and not fields.get("main_lifecycle_id")
             and not fields.get("attempt_id")
-            and all(fields.get(str(key)) == str(value)
-                    for key, value in event_fields.items())
-            and all(fields.get(key) == str(value)
-                    for key, value in native_identity.items())
+            and all(
+                fields.get(str(key)) == str(value)
+                for key, value in event_fields.items()
+            )
+            and all(
+                fields.get(key) == str(value) for key, value in native_identity.items()
+            )
         )
     attempt_id = str(fields.get("attempt_id") or "").strip()
     if not attempt_id:
@@ -4277,7 +4458,9 @@ def _validated_sell_order_context(target_stock: dict[str, Any]):
     proof = target_stock.get("_sell_submit_receipt_proof")
     if not isinstance(proof, dict):
         return None, reason
-    order_no = str(target_stock.get("sell_odno") or target_stock.get("sell_ord_no") or "").strip()
+    order_no = str(
+        target_stock.get("sell_odno") or target_stock.get("sell_ord_no") or ""
+    ).strip()
     if not (
         str(target_stock.get("status") or "").upper() == "SELL_ORDERED"
         and proof.get("schema") == "sell_submit_receipt_proof_v1"
@@ -4288,11 +4471,15 @@ def _validated_sell_order_context(target_stock: dict[str, Any]):
         and _safe_int(proof.get("target_id"), 0) == _safe_int(target_stock.get("id"), 0)
         and proof.get("code") == str(target_stock.get("code") or "").strip()[:6]
         and proof.get("generation") == target_stock.get("sell_submit_generation")
-        and proof.get("submit_context_sha256") == target_stock.get("sell_submit_context_sha256")
-        and _safe_int(proof.get("requested_qty"), 0) == _safe_int(target_stock.get("sell_submit_requested_qty"), 0)
+        and proof.get("submit_context_sha256")
+        == target_stock.get("sell_submit_context_sha256")
+        and _safe_int(proof.get("requested_qty"), 0)
+        == _safe_int(target_stock.get("sell_submit_requested_qty"), 0)
     ):
         return None, "known_sell_order_context_mismatch"
-    return _validated_sell_pending_submit_context({**target_stock, "sell_submit_pending": True})
+    return _validated_sell_pending_submit_context(
+        {**target_stock, "sell_submit_pending": True}
+    )
 
 
 def _validated_sell_cancel_intent(
@@ -5099,7 +5286,11 @@ def persist_pending_sell_definitive_reject_outcome(
 
     context, reason = (
         _validated_sell_order_context(target_stock)
-        if outcome_kind in {"cancel_ack_terminal_absence_reconciled", "cancel_intent_terminal_absence_reconciled"}
+        if outcome_kind
+        in {
+            "cancel_ack_terminal_absence_reconciled",
+            "cancel_intent_terminal_absence_reconciled",
+        }
         else _validated_sell_pending_submit_context(target_stock)
     )
     target_id = _safe_int(target_stock.get("id"), 0)
@@ -5552,8 +5743,10 @@ def pending_sell_cancel_ack_exact(
     if not all(
         (
             target_id > 0,
-            (re.fullmatch(r"[0-9]{7}", normalized_order_no) is not None
-             and int(normalized_order_no) > 0),
+            (
+                re.fullmatch(r"[0-9]{7}", normalized_order_no) is not None
+                and int(normalized_order_no) > 0
+            ),
             str(target_stock.get("code") or "").strip()[:6] == normalized_code,
             current_order_no == normalized_order_no,
             owner_position_qty > 0,
@@ -6051,7 +6244,9 @@ def _persist_sell_receipt_recovery_or_interlock(
     if isinstance(state, dict):
         proof = target_stock.get("_sell_submit_receipt_proof")
         if isinstance(proof, dict) and proof.get("custody_emitted") is True:
-            if _active_partial_sell_receipt(target_stock, str(proof.get("order_no") or "")):
+            if _active_partial_sell_receipt(
+                target_stock, str(proof.get("order_no") or "")
+            ):
                 state[_SELL_SUBMIT_CUSTODY_RETRY_SNAPSHOT_KEY] = (
                     _pending_sell_submit_custody_retry_snapshot(target_stock)
                 )
@@ -8080,10 +8275,13 @@ def _complete_standard_sell_runtime_after_db(
 ) -> None:
     """Publish runtime terminal state only after durable DB completion."""
 
-    if (target_stock.get("sell_submit_generation")
-            and isinstance(target_stock.get("_sell_submit_receipt_proof"), dict)
-            and not _clear_pending_sell_submit_after_successor_persisted(
-                target_stock, target_id=target_id, code=code)):
+    if (
+        target_stock.get("sell_submit_generation")
+        and isinstance(target_stock.get("_sell_submit_receipt_proof"), dict)
+        and not _clear_pending_sell_submit_after_successor_persisted(
+            target_stock, target_id=target_id, code=code
+        )
+    ):
         log_error(f"[SELL_FINAL_PENDING_CUSTODY_CLEAR_DEFERRED] {code} id={target_id}")
         return
     try:
@@ -8195,8 +8393,15 @@ def recover_final_sell_receipt(target_stock: dict[str, Any]) -> bool:
                         == "WATCHING"
                         and str(revived_record.stock_code or "").strip()[:6] == code
                     )
-                    from src.engine.scalping.main_fixed_watch import persisted_watch_identity
-                    revived_watch_fields = persisted_watch_identity(revived_record) if committed_pair else {}
+                    from src.engine.scalping.main_fixed_watch import (
+                        persisted_watch_identity,
+                    )
+
+                    revived_watch_fields = (
+                        persisted_watch_identity(revived_record)
+                        if committed_pair
+                        else {}
+                    )
             except Exception:
                 return False
             if committed_pair:
@@ -9194,7 +9399,10 @@ def _handle_scalp_revive_sell_execution(
             )
 
             from src.engine.scalping.main_fixed_watch import revived_watch_identity
-            revived_watch_fields = revived_watch_identity(record, symbol=code, now_epoch=now.timestamp())
+
+            revived_watch_fields = revived_watch_identity(
+                record, symbol=code, now_epoch=now.timestamp()
+            )
             new_record = RecommendationHistory(
                 rec_date=now.date(),
                 stock_code=code,
@@ -9957,7 +10165,9 @@ def _extract_order_no(response: Any) -> str:
     return ""
 
 
-def _submit_opening_rotation_profit_order(target_stock, *, code, buy_fill_price, filled_qty):
+def _submit_opening_rotation_profit_order(
+    target_stock, *, code, buy_fill_price, filled_qty
+):
     """Retired opening ownership never submits a new automatic target order."""
     return False
 
@@ -9970,10 +10180,18 @@ def initial_main_entry_exit_fields(target_stock, *, rules=None):
     """
     strategy = normalize_strategy(target_stock.get("strategy"))
     tag = normalize_position_tag(strategy, target_stock.get("position_tag"))
-    if strategy != "SCALPING" or not (tag == "SCANNER" or is_default_position_tag(strategy, tag)):
+    if strategy != "SCALPING" or not (
+        tag == "SCANNER" or is_default_position_tag(strategy, tag)
+    ):
         raise ValueError("unsupported_initial_main_entry_position_role:" + tag)
-    return {"position_tag": tag, **(initial_scalp_preset_exit_fields(target_stock, rules=rules)
-        if is_default_position_tag(strategy, tag) else {})}
+    return {
+        "position_tag": tag,
+        **(
+            initial_scalp_preset_exit_fields(target_stock, rules=rules)
+            if is_default_position_tag(strategy, tag)
+            else {}
+        ),
+    }
 
 
 def initial_scalp_preset_exit_fields(target_stock, *, rules=None):
@@ -9984,13 +10202,25 @@ def initial_scalp_preset_exit_fields(target_stock, *, rules=None):
     """
     rules = TRADING_RULES if rules is None else rules
     stop = float(getattr(rules, "SCALP_PRESET_HARD_STOP_PCT", -0.7) or -0.7)
-    fields = dict(exit_mode="SCALP_PRESET_TP", preset_tp_price=0,
+    fields = dict(
+        exit_mode="SCALP_PRESET_TP",
+        preset_tp_price=0,
         hard_stop_pct=stop,
-        hard_stop_grace_sec=int(getattr(rules, "SCALP_PRESET_HARD_STOP_GRACE_SEC", 0) or 0),
-        hard_stop_emergency_pct=float(getattr(rules, "SCALP_PRESET_HARD_STOP_EMERGENCY_PCT",
-            min(stop - 0.5, -1.2)) or min(stop - 0.5, -1.2)),
-        protect_profit_pct=None, ai_review_done=False, ai_review_score=None,
-        ai_review_action=None, last_ai_reviewed_at=None)
+        hard_stop_grace_sec=int(
+            getattr(rules, "SCALP_PRESET_HARD_STOP_GRACE_SEC", 0) or 0
+        ),
+        hard_stop_emergency_pct=float(
+            getattr(
+                rules, "SCALP_PRESET_HARD_STOP_EMERGENCY_PCT", min(stop - 0.5, -1.2)
+            )
+            or min(stop - 0.5, -1.2)
+        ),
+        protect_profit_pct=None,
+        ai_review_done=False,
+        ai_review_score=None,
+        ai_review_action=None,
+        last_ai_reviewed_at=None,
+    )
     if not target_stock.get("entry_lifecycle_conflict"):
         fields.update(exit_requested=False, exit_order_type=None, exit_order_time=None)
     return fields
@@ -10960,8 +11190,13 @@ def _handle_add_buy_execution(
     )
 
     from src.engine.scalping.holding_vote_exit_models import record_generation
-    record_generation(target_stock, add_receipt, at=now_ts,
-        completed=bool(requested_qty>0 and filled_qty>=requested_qty))
+
+    record_generation(
+        target_stock,
+        add_receipt,
+        at=now_ts,
+        completed=bool(requested_qty > 0 and filled_qty >= requested_qty),
+    )
 
     protection_ok = _apply_scale_in_protection(target_stock, add_type)
     strategy = normalize_strategy(target_stock.get("strategy"))
@@ -11275,11 +11510,17 @@ def _handle_entry_buy_execution(
         # resets through _SCOUT_AI_ATTRIBUTION_SNAPSHOT_KEYS.
         target_stock["rising_missed_scout_position_cycle_active"] = True
     if int(target_stock.get("entry_filled_qty", 0) or 0) == 0:
-        for observation_key in ("_scale_in_applied_policy_lineage", "_scale_in_applied_lineage_conflict",
-                                "_pyramid_lifecycle_context", "_pyramid_lifecycle_observed_episode",
-                                "_scale_in_observation_budget"):
+        for observation_key in (
+            "_scale_in_applied_policy_lineage",
+            "_scale_in_applied_lineage_conflict",
+            "_pyramid_lifecycle_context",
+            "_pyramid_lifecycle_observed_episode",
+            "_scale_in_observation_budget",
+        ):
             target_stock.pop(observation_key, None)
-    target_stock["last_entry_receipt_quantity_contract_complete"] = bool(entry_receipt.get("quantity_contract_complete"))
+    target_stock["last_entry_receipt_quantity_contract_complete"] = bool(
+        entry_receipt.get("quantity_contract_complete")
+    )
     target_stock["entry_filled_qty"] = (
         int(target_stock.get("entry_filled_qty", 0) or 0) + effective_exec_qty
     )
@@ -11447,7 +11688,10 @@ def _handle_entry_buy_execution(
             # The fill can race ahead of the submit acknowledgement.  A broker
             # fill proves that the one-share probe was submitted.
             target_stock["entry_split_probe_actual_submitted_qty"] = max(
-                1, _safe_int(target_stock.get("entry_split_probe_actual_submitted_qty"), 0)
+                1,
+                _safe_int(
+                    target_stock.get("entry_split_probe_actual_submitted_qty"), 0
+                ),
             )
             target_stock["entry_split_probe_scale_in_forbidden"] = True
             target_stock["probe_expand_forbidden"] = bool(
@@ -11460,7 +11704,9 @@ def _handle_entry_buy_execution(
                 fill_price=exec_price,
                 filled_at=filled_at_ts,
                 fill_qty=effective_exec_qty,
-                actual_submitted_qty=target_stock["entry_split_probe_actual_submitted_qty"],
+                actual_submitted_qty=target_stock[
+                    "entry_split_probe_actual_submitted_qty"
+                ],
                 entry_split_probe_scale_in_forbidden=True,
                 probe_expand_forbidden=bool(
                     target_stock.get("entry_lifecycle_conflict")
@@ -12016,6 +12262,7 @@ def _handle_entry_buy_execution(
     _persist_buy_fill_receipt_or_block(target_stock, code)
     if strategy == "SCALPING" and target_stock.get("main_stop_new_fill"):
         from src.engine.sniper_state_handlers import _main_stop_values
+
         _main_stop_values(target_stock, time.time())
     threading.Thread(
         target=_update_db_for_buy,
@@ -12435,45 +12682,81 @@ def handle_real_execution(exec_data):
                 # Native registry custody can precede local REST staging for
                 # both the initial BUY and residual. Project only that exact
                 # accepted owner/order; never infer a leg from quantity alone.
-                residual_prefix = f"main_scalping:{target_id}:{target_id}:ENTRY_RESIDUAL_BUY:"
+                residual_prefix = (
+                    f"main_scalping:{target_id}:{target_id}:ENTRY_RESIDUAL_BUY:"
+                )
                 cycle = str(target_stock.get("position_cycle_id") or target_id).strip()
                 initial_prefix = f"main_scalping:{target_id}:{cycle}:ENTRY_BUY:"
                 client = str((owner_row or {}).get("client_intent_id") or "")
                 prefix = residual_prefix
-                entry_scope = bool(target_stock.get("entry_split_probe_bundle_id")
-                    and str(target_stock.get("entry_split_probe_phase") or "") in {
-                        "residual_claimed", "residual_submitting", "residual_submitted",
-                        "residual_partial_submitted"})
+                entry_scope = bool(
+                    target_stock.get("entry_split_probe_bundle_id")
+                    and str(target_stock.get("entry_split_probe_phase") or "")
+                    in {
+                        "residual_claimed",
+                        "residual_submitting",
+                        "residual_submitted",
+                        "residual_partial_submitted",
+                    }
+                )
                 if client.startswith(initial_prefix):
                     prefix = initial_prefix
-                    entry_scope = str(target_stock.get("status") or "").strip().upper() in {
-                        "WATCHING", "BUY_ORDERED", "HOLDING"}
-                tag = client[len(prefix):].rsplit(":", 1)[0]
+                    entry_scope = str(
+                        target_stock.get("status") or ""
+                    ).strip().upper() in {"WATCHING", "BUY_ORDERED", "HOLDING"}
+                tag = client[len(prefix) :].rsplit(":", 1)[0]
                 if prefix == initial_prefix:
                     tag, separator, ordinal = tag.rpartition(":")
                     nonce = client.rsplit(":", 1)[-1]
-                    entry_scope = bool(entry_scope and tag and separator and ordinal.isascii() and ordinal.isdecimal()
-                        and int(ordinal) > 0 and len(nonce) == 32
-                        and all(c in "0123456789abcdef" for c in nonce))
-                if (isinstance(owner_row, dict) and entry_scope
-                        and client.startswith(prefix)
-                        and owner_row.get("owner_type") == "main_scalping"
-                        and owner_row.get("owner_id") == f"main_scalping:{target_id}"
-                        and owner_row.get("position_id") == f"main_scalping:{target_id}"
-                        and owner_row.get("symbol") == code
-                        and owner_row.get("side") == "BUY" and owner_row.get("action") == "NEW"
-                        and owner_row.get("order_date") == received_at.date().isoformat()
-                        and owner_row.get("broker_order_no") == order_no
-                        and owner_row.get("quantity") == order_qty):
+                    entry_scope = bool(
+                        entry_scope
+                        and tag
+                        and separator
+                        and ordinal.isascii()
+                        and ordinal.isdecimal()
+                        and int(ordinal) > 0
+                        and len(nonce) == 32
+                        and all(c in "0123456789abcdef" for c in nonce)
+                    )
+                if (
+                    isinstance(owner_row, dict)
+                    and entry_scope
+                    and client.startswith(prefix)
+                    and owner_row.get("owner_type") == "main_scalping"
+                    and owner_row.get("owner_id") == f"main_scalping:{target_id}"
+                    and owner_row.get("position_id") == f"main_scalping:{target_id}"
+                    and owner_row.get("symbol") == code
+                    and owner_row.get("side") == "BUY"
+                    and owner_row.get("action") == "NEW"
+                    and owner_row.get("order_date") == received_at.date().isoformat()
+                    and owner_row.get("broker_order_no") == order_no
+                    and owner_row.get("quantity") == order_qty
+                ):
                     pending = target_stock.get("pending_entry_orders") or []
-                    if (isinstance(pending, list) and all(isinstance(item, dict) for item in pending)
-                            and not any(not str(item.get("ord_no") or "").strip() for item in pending)
-                            and not any(str(item.get("ord_no") or "").strip() == order_no for item in pending)):
+                    if (
+                        isinstance(pending, list)
+                        and all(isinstance(item, dict) for item in pending)
+                        and not any(
+                            not str(item.get("ord_no") or "").strip()
+                            for item in pending
+                        )
+                        and not any(
+                            str(item.get("ord_no") or "").strip() == order_no
+                            for item in pending
+                        )
+                    ):
                         target_stock["pending_entry_orders"] = pending
-                        pending.append(dict(ord_no=order_no, qty=order_qty, filled_qty=0,
-                            status="OPEN", broker_route=owner_row.get("route"),
-                            owner_registry_intent_id=owner_row.get("intent_id"),
-                            tag=tag))
+                        pending.append(
+                            dict(
+                                ord_no=order_no,
+                                qty=order_qty,
+                                filled_qty=0,
+                                status="OPEN",
+                                broker_route=owner_row.get("route"),
+                                owner_registry_intent_id=owner_row.get("intent_id"),
+                                tag=tag,
+                            )
+                        )
                 _handle_entry_buy_execution(
                     target_id=target_id,
                     target_stock=target_stock,

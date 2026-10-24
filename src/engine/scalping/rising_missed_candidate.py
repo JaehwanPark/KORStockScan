@@ -174,8 +174,6 @@ def _has_signature(stock: dict[str, Any], marker: str) -> bool:
     return marker.upper() in _signature_tokens(stock)
 
 
-
-
 def _prior_log_fields(stock: dict[str, Any]) -> dict[str, Any]:
     prior = stock.get("rising_missed_prior")
     prior = prior if isinstance(prior, dict) else {}
@@ -572,10 +570,9 @@ def evaluate_rising_missed_normal_buy_bridge(
     # The normal-buy caller can supply its just-completed action separately
     # before the cached stock projection exists. Never overwrite an explicit
     # non-evaluation or untrusted cached result with this compatibility input.
-    if (
-        _entry_ai_action_for_rising_missed(stock)[1] == "missing"
-        and str(current_ai_action or "").strip().upper() in {"BUY", "WAIT", "DROP"}
-    ):
+    if _entry_ai_action_for_rising_missed(stock)[1] == "missing" and str(
+        current_ai_action or ""
+    ).strip().upper() in {"BUY", "WAIT", "DROP"}:
         stock = {**stock, "entry_ai_action": current_ai_action}
     decision = _evaluate_rising_missed_candidate(
         stock,
@@ -839,8 +836,6 @@ def scout_ai_execution_attribution_fields(
             "order_price_or_quantity_change|broker_guard_bypass|hard_safety_bypass"
         ),
     }
-
-
 
 
 def evaluate_rising_missed_tp1_candidate(
@@ -1133,11 +1128,7 @@ def evaluate_rising_missed_tp1_candidate(
         "rising_missed_tp1_positive_support_min": (
             0
             if lane == "ai_wait_probe_intent"
-            else (
-                1
-                if nxt_price_jump_recovery_lane
-                else positive_support_min
-            )
+            else (1 if nxt_price_jump_recovery_lane else positive_support_min)
         ),
         "rising_missed_tp1_positive_support_families": ",".join(positive_supports)
         or "-",
@@ -1307,11 +1298,7 @@ def evaluate_rising_missed_tp1_candidate(
     required_positive_supports = (
         0
         if lane == "ai_wait_probe_intent"
-        else (
-            1
-            if nxt_price_jump_recovery_lane
-            else positive_support_min
-        )
+        else (1 if nxt_price_jump_recovery_lane else positive_support_min)
     )
     if len(positive_supports) < required_positive_supports:
         return RisingMissedTP1CandidateDecision(

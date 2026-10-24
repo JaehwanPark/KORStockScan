@@ -268,10 +268,16 @@ def test_unsupported_budget_cannot_be_approved(ready, limit):
         _approve(ready, maximum_daily_exploration_probes=limit)
 
 
-def test_retired_recheck_budget_does_not_control_normal_exploration(ready, monkeypatch, tmp_path):
+def test_retired_recheck_budget_does_not_control_normal_exploration(
+    ready, monkeypatch, tmp_path
+):
     _pin(monkeypatch, tmp_path, _approve(ready, maximum_daily_exploration_probes=100))
-    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MAX_DAILY_BUY_RECOVERY", "3")
-    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ALLOWED_SCOPES", "NXT|NXT_AFTERMARKET")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MAX_DAILY_BUY_RECOVERY", "3"
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ALLOWED_SCOPES", "NXT|NXT_AFTERMARKET"
+    )
     assert _resolve()["enabled"]
     assert _resolve()["maximum_daily_exploration_probes"] == 100
     monkeypatch.setenv(policy.CANARY_ENV_KEY, "false")

@@ -1884,8 +1884,10 @@ def _call_openai_ai_review(
         config=config,
         metadata={"endpoint_name": AI_REVIEWER_NAME, "report_type": REPORT_TYPE},
         contract_validator=partial(
-            validate_candidate_review_response, context=context,
-            reviewer=AI_REVIEWER_NAME, allowed_decisions=PRODUCER_DUAL_DECISIONS,
+            validate_candidate_review_response,
+            context=context,
+            reviewer=AI_REVIEWER_NAME,
+            allowed_decisions=PRODUCER_DUAL_DECISIONS,
         ),
         ensure_ascii=False,
     )
@@ -2224,7 +2226,8 @@ def build_producer_gap_discovery_report(
         )
         provider_status["retry_attempted"] = False
     ai_status, ai_payload, ai_warnings = parse_candidate_review_response(
-        raw_response, reviewer=AI_REVIEWER_NAME,
+        raw_response,
+        reviewer=AI_REVIEWER_NAME,
         allowed_decisions=PRODUCER_DUAL_DECISIONS,
     )
     audit = ai_payload.get("audit") if isinstance(ai_payload.get("audit"), dict) else {}
@@ -2276,7 +2279,8 @@ def build_producer_gap_discovery_report(
             context, config=retry_config
         )
         ai_status, ai_payload, ai_warnings = parse_candidate_review_response(
-            raw_response, reviewer=AI_REVIEWER_NAME,
+            raw_response,
+            reviewer=AI_REVIEWER_NAME,
             allowed_decisions=PRODUCER_DUAL_DECISIONS,
         )
         audit = (

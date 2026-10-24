@@ -125,7 +125,10 @@ def _seed_propagation_chain(tmp_path: Path, report_dir: Path, target_date: str) 
     )
     _write_json(
         runtime_path,
-        {"status": "pass", "sources": {"pattern_lab_propagation_audit": str(propagation_path)}},
+        {
+            "status": "pass",
+            "sources": {"pattern_lab_propagation_audit": str(propagation_path)},
+        },
     )
     _write_json(
         tmp_path

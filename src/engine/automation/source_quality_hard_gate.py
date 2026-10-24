@@ -106,11 +106,14 @@ def _generation_matches(recorded: Any, current: dict) -> bool:
     """Validate all claimed fields in either supported stat receipt version."""
     required = {"device", "inode", "size_bytes", "mtime_ns"}
     if not isinstance(recorded, dict) or set(recorded) not in (
-        required, required | {"ctime_ns"}
+        required,
+        required | {"ctime_ns"},
     ):
         return False
-    return all(type(value) is int and value == current.get(key)
-               for key, value in recorded.items())
+    return all(
+        type(value) is int and value == current.get(key)
+        for key, value in recorded.items()
+    )
 
 
 def _archive_matches_source(archived: Path, source: dict, current: dict) -> bool:
@@ -154,12 +157,20 @@ def load_source_quality_preflight(
     clean_baseline_enforced = is_date_allowed(target_date, clean_baseline_policy())
     load_error: str | None = None
     stored_path = path if path.is_file() else Path(str(path) + ".gz")
+
     def generation():
         try:
             value = stored_path.stat()
-            return (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+            return (
+                value.st_dev,
+                value.st_ino,
+                value.st_size,
+                value.st_mtime_ns,
+                value.st_ctime_ns,
+            )
         except OSError:
             return None
+
     publication_before = generation()
     artifact_sha256 = None
     try:
@@ -196,7 +207,10 @@ def load_source_quality_preflight(
     validation_errors: list[str] = []
     if require_final:
         from src.engine.observation_source_quality_audit import check_audit_reusable
-        if not check_audit_reusable(target_date, audit_phase="final", artifact_path=path)["reusable"]:
+
+        if not check_audit_reusable(
+            target_date, audit_phase="final", artifact_path=path
+        )["reusable"]:
             validation_errors.append("source_quality_final_dependency_binding_invalid")
     if publication_before != generation():
         validation_errors.append("source_quality_publication_changed_during_validation")
@@ -237,7 +251,8 @@ def load_source_quality_preflight(
                     archived, source, current
                 )
                 if source.get("generation_stable") is not True or not (
-                    _generation_matches(source.get("generation"), current) or same_content
+                    _generation_matches(source.get("generation"), current)
+                    or same_content
                 ):
                     validation_errors.append(
                         "source_quality_preflight_source_generation_changed"
@@ -252,7 +267,13 @@ def load_source_quality_preflight(
                         "source_quality_preflight_source_digest_invalid"
                     )
                 after = (archived if migrated else raw_path).stat()
-                if (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns) != (
+                if (
+                    after.st_dev,
+                    after.st_ino,
+                    after.st_size,
+                    after.st_mtime_ns,
+                    after.st_ctime_ns,
+                ) != (
                     stat.st_dev,
                     stat.st_ino,
                     stat.st_size,

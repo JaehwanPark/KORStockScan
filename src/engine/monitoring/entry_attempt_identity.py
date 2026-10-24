@@ -108,15 +108,27 @@ def _promotion_id(stock):
 
 
 def _watch_identity(stock):
-    return tuple(str(stock.get(key) or "").strip() for key in
-                 ("watch_origin", "watch_admission_id", "watch_generation_id"))
+    return tuple(
+        str(stock.get(key) or "").strip()
+        for key in ("watch_origin", "watch_admission_id", "watch_generation_id")
+    )
 
 
 def same_market_session_name(left, right):
     """Compare known session names without rewriting native receipt fields."""
     from src.trading.market import session_contract as S
-    known={v.casefold() for k,v in vars(S).items() if k.startswith('MARKET_SESSION_REGIME_') and isinstance(v,str)}
-    known |= {'premarket_krx_like','nxt_premarket','nxt_regular_overlap','nxt_aftermarket'}
+
+    known = {
+        v.casefold()
+        for k, v in vars(S).items()
+        if k.startswith("MARKET_SESSION_REGIME_") and isinstance(v, str)
+    }
+    known |= {
+        "premarket_krx_like",
+        "nxt_premarket",
+        "nxt_regular_overlap",
+        "nxt_aftermarket",
+    }
     if not isinstance(left, str) or not isinstance(right, str):
         return False
     left, right = left.casefold(), right.casefold()
@@ -125,14 +137,17 @@ def same_market_session_name(left, right):
     # Fixed-watch admission uses the session-contract legacy name; the exact
     # machine snapshot uses the AI input name for that same premarket session.
     # Venue, route, watch parent and revision checks remain independent.
-    aliases = {'premarket_krx_like': 'krx_like_premarket'}
+    aliases = {"premarket_krx_like": "krx_like_premarket"}
     return aliases.get(left, left) == aliases.get(right, right)
 
 
 def submit_attempt_lineage_rejection(stock, code):
     value = _ATTEMPT.get()
-    if (not isinstance(value, dict) or value.get("record_id") != str(stock.get("id") or "")
-            or value.get("code") != str(code)):
+    if (
+        not isinstance(value, dict)
+        or value.get("record_id") != str(stock.get("id") or "")
+        or value.get("code") != str(code)
+    ):
         return {}
     return dict(value.get("machine_lineage_rejection") or {})
 
@@ -146,12 +161,19 @@ def bind_submit_attempt_machine_lineage(stock, code, source, *, replace_existing
     """
 
     value = _ATTEMPT.get()
+
     def reject(reason, **fields):
         current = _ATTEMPT.get()
         if isinstance(current, dict) and current is value:
-            _ATTEMPT.set({**current, "machine_lineage": {}, "machine_lineage_rejection": dict(
-                reason=reason, **fields)})
+            _ATTEMPT.set(
+                {
+                    **current,
+                    "machine_lineage": {},
+                    "machine_lineage_rejection": dict(reason=reason, **fields),
+                }
+            )
         return False
+
     if (
         not isinstance(value, dict)
         or value.get("record_id") != str(stock.get("id") or "")
@@ -167,8 +189,11 @@ def bind_submit_attempt_machine_lineage(stock, code, source, *, replace_existing
     lineage = {
         key: source[key]
         for key in _MACHINE_LINEAGE_FIELDS
-        if key in source and (key == "machine_revision_parent_sha256"
-            or source[key] not in (None, "", "-", "unknown", "UNKNOWN"))
+        if key in source
+        and (
+            key == "machine_revision_parent_sha256"
+            or source[key] not in (None, "", "-", "unknown", "UNKNOWN")
+        )
     }
     required = {
         "entry_primary_decision_owner",
@@ -181,28 +206,42 @@ def bind_submit_attempt_machine_lineage(stock, code, source, *, replace_existing
         "entry_ai_screen_pass",
     }
     if not required <= lineage.keys():
-        return reject("machine_lineage_required_fields_missing", missing_fields=sorted(required-lineage.keys()))
+        return reject(
+            "machine_lineage_required_fields_missing",
+            missing_fields=sorted(required - lineage.keys()),
+        )
     fixed = value.get("watch_identity", ("",))[0] == "MAIN_FIXED_WATCH"
     if fixed:
         parent = value["watch_identity"]
-        if (_watch_identity(source) != parent or _watch_identity(stock) != parent
-                or not re.fullmatch(r"[0-9a-f]{64}", parent[2])
-                or not re.match(r"FIXED-\d{4}-\d{2}-\d{2}-" + re.escape(str(code)[:6]) + "-", parent[1])
-                or str(stock.get("code") or "")[:6] != str(code)[:6]
-                or str(source.get("effective_venue")).upper() != str(stock.get("effective_venue")).upper()
-                or not same_market_session_name(source.get("market_session_bucket"), stock.get("market_session_bucket"))):
-            return reject("fixed_watch_parent_or_market_mismatch",
-                source_session=source.get("market_session_bucket"), stock_session=stock.get("market_session_bucket"))
-        if (lineage.get("machine_capture_status") != "captured"
-                or not re.fullmatch(r"[0-9a-f]{64}", str(lineage.get("machine_observation_sha256") or ""))):
+        if (
+            _watch_identity(source) != parent
+            or _watch_identity(stock) != parent
+            or not re.fullmatch(r"[0-9a-f]{64}", parent[2])
+            or not re.match(
+                r"FIXED-\d{4}-\d{2}-\d{2}-" + re.escape(str(code)[:6]) + "-", parent[1]
+            )
+            or str(stock.get("code") or "")[:6] != str(code)[:6]
+            or str(source.get("effective_venue")).upper()
+            != str(stock.get("effective_venue")).upper()
+            or not same_market_session_name(
+                source.get("market_session_bucket"), stock.get("market_session_bucket")
+            )
+        ):
+            return reject(
+                "fixed_watch_parent_or_market_mismatch",
+                source_session=source.get("market_session_bucket"),
+                stock_session=stock.get("market_session_bucket"),
+            )
+        if lineage.get("machine_capture_status") != "captured" or not re.fullmatch(
+            r"[0-9a-f]{64}", str(lineage.get("machine_observation_sha256") or "")
+        ):
             return reject("machine_capture_unverified")
         # A fixed watch is admitted by its native watch ID, never a fabricated
         # scanner promotion. Reject ambiguous simultaneous origin claims.
         if _promotion_id(source) or _promotion_id(stock):
             return reject("ambiguous_scanner_and_fixed_origin")
         lineage.pop("scanner_promotion_id", None)
-    elif (_watch_identity(source)[0] == "MAIN_FIXED_WATCH"
-          or not _promotion_id(source)):
+    elif _watch_identity(source)[0] == "MAIN_FIXED_WATCH" or not _promotion_id(source):
         return reject("scanner_parent_missing_or_fixed_origin")
     if (
         str(lineage["entry_primary_decision_owner"]) != "mechanistic_entry_adjudicator"
@@ -217,8 +256,14 @@ def bind_submit_attempt_machine_lineage(stock, code, source, *, replace_existing
         )
     ):
         return reject("machine_action_or_market_contract_invalid")
-    expected_parent = _promotion_id(stock) if replace_existing else value.get("promotion_id")
-    if not fixed and expected_parent and str(lineage["scanner_promotion_id"]) != str(expected_parent):
+    expected_parent = (
+        _promotion_id(stock) if replace_existing else value.get("promotion_id")
+    )
+    if (
+        not fixed
+        and expected_parent
+        and str(lineage["scanner_promotion_id"]) != str(expected_parent)
+    ):
         return reject("scanner_parent_mismatch")
     updated = {**value, "machine_lineage": lineage, "machine_lineage_rejection": {}}
     if not fixed and not updated.get("promotion_id"):
@@ -258,8 +303,11 @@ def mark_submit_attempt_broker_accepted(stock, code):
 def record_submit_attempt_terminal(stock, reason):
     """Keep the first direct return-site reason on this invocation only."""
     value = _ATTEMPT.get()
-    if (not isinstance(value, dict) or value.get("stock_identity") != id(stock)
-            or value.get("record_id") != str(stock.get("id") or "")):
+    if (
+        not isinstance(value, dict)
+        or value.get("stock_identity") != id(stock)
+        or value.get("record_id") != str(stock.get("id") or "")
+    ):
         return False
     if not value.get("terminal_reason") and isinstance(reason, str) and reason.strip():
         _ATTEMPT.set({**value, "terminal_reason": reason.strip()})
@@ -277,7 +325,10 @@ def submit_attempt_fields(stock, code):
     # The scanner may refresh the stock's promotion while this call waits.
     # Preserve that live metadata, but bind submit telemetry to one parent.
     # Late hydration may supply the first known parent before the first event.
-    if not value.get("promotion_id") and value.get("watch_identity", ("",))[0] != "MAIN_FIXED_WATCH":
+    if (
+        not value.get("promotion_id")
+        and value.get("watch_identity", ("",))[0] != "MAIN_FIXED_WATCH"
+    ):
         parent = _promotion_id(stock)
         if parent:
             value = {**value, "promotion_id": parent}
@@ -300,6 +351,10 @@ def submit_attempt_fields(stock, code):
     if value.get("promotion_id"):
         fields["entry_submit_attempt_parent_promotion_id"] = value["promotion_id"]
     if value.get("watch_identity", ("",))[0] == "MAIN_FIXED_WATCH":
-        fields["entry_submit_attempt_parent_watch_admission_id"] = value["watch_identity"][1]
-        fields["entry_submit_attempt_parent_watch_generation_id"] = value["watch_identity"][2]
+        fields["entry_submit_attempt_parent_watch_admission_id"] = value[
+            "watch_identity"
+        ][1]
+        fields["entry_submit_attempt_parent_watch_generation_id"] = value[
+            "watch_identity"
+        ][2]
     return fields

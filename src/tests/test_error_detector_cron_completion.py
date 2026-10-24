@@ -10,7 +10,10 @@ from pathlib import Path
 
 import pytest
 
-from src.engine.error_detectors.cron_completion import CRON_JOB_REGISTRY, CronCompletionDetector
+from src.engine.error_detectors.cron_completion import (
+    CRON_JOB_REGISTRY,
+    CronCompletionDetector,
+)
 
 
 def test_finalization_detector_window_precedes_preopen_scanner():
@@ -21,87 +24,139 @@ def test_finalization_detector_window_precedes_preopen_scanner():
     assert jobs["log_rotation_cleanup"]["window_end"] == (6, 50)
 
 
-@pytest.mark.parametrize('markers,expected', [
-    (['FAIL', 'DONE'], 'pass'),
-    (['DONE', 'FAIL'], 'warning'),
-    (['FAIL', 'SKIP'], 'warning'),
-    (['FAIL', 'OTHER_DONE'], 'warning'),
-    (['FAIL', 'DONE', 'START'], 'in_progress'),
-    (['FAIL', 'DONE', 'GENERIC_ERROR'], 'warning'),
-    (['START'], 'unknown'),
-])
-@pytest.mark.parametrize('job_id,label', [
-    ('buy_funnel_sentinel', 'buy_funnel_sentinel'), ('buy_funnel_sentinel', 'buy funnel sentinel'),
-    ('holding_exit_sentinel', 'holding_exit_sentinel'), ('holding_exit_sentinel', 'holding exit sentinel'),
-    ('panic_sell_defense', 'panic_sell_defense'), ('panic_sell_defense', 'panic sell defense')])
-def test_recurring_sentinel_recovers_only_after_latest_real_owner_done(monkeypatch, tmp_path, markers, expected, job_id, label):
+@pytest.mark.parametrize(
+    "markers,expected",
+    [
+        (["FAIL", "DONE"], "pass"),
+        (["DONE", "FAIL"], "warning"),
+        (["FAIL", "SKIP"], "warning"),
+        (["FAIL", "OTHER_DONE"], "warning"),
+        (["FAIL", "DONE", "START"], "in_progress"),
+        (["FAIL", "DONE", "GENERIC_ERROR"], "warning"),
+        (["START"], "unknown"),
+    ],
+)
+@pytest.mark.parametrize(
+    "job_id,label",
+    [
+        ("buy_funnel_sentinel", "buy_funnel_sentinel"),
+        ("buy_funnel_sentinel", "buy funnel sentinel"),
+        ("holding_exit_sentinel", "holding_exit_sentinel"),
+        ("holding_exit_sentinel", "holding exit sentinel"),
+        ("panic_sell_defense", "panic_sell_defense"),
+        ("panic_sell_defense", "panic sell defense"),
+    ],
+)
+def test_recurring_sentinel_recovers_only_after_latest_real_owner_done(
+    monkeypatch, tmp_path, markers, expected, job_id, label
+):
     import src.engine.error_detectors.cron_completion as cc
-    job = next(dict(job) for job in CRON_JOB_REGISTRY if job['id'] == job_id)
-    log = tmp_path / job['log']; log.parent.mkdir()
+
+    job = next(dict(job) for job in CRON_JOB_REGISTRY if job["id"] == job_id)
+    log = tmp_path / job["log"]
+    log.parent.mkdir()
     lines = []
     for marker in markers:
-        owner = 'other_job' if marker == 'OTHER_DONE' else label
-        kind = 'DONE' if marker == 'OTHER_DONE' else 'ERROR' if marker == 'GENERIC_ERROR' else marker
-        lines.append(f'[{kind}] {owner} target_date=2026-10-12')
-    log.write_text('\n'.join(lines)+'\n')
-    monkeypatch.setattr(cc, 'PROJECT_ROOT', tmp_path)
-    monkeypatch.setattr(cc, '_today_kst', lambda: '2026-10-12')
-    monkeypatch.setattr(cc, '_kst_time_tuple', lambda: (10, 30))
-    monkeypatch.setattr(cc, 'is_krx_trading_day', lambda day: True)
-    monkeypatch.setattr(cc, 'CRON_JOB_REGISTRY', [job])
-    marker = {'buy_funnel_sentinel': 'BUY_FUNNEL_SENTINEL_INTRADAY',
-              'holding_exit_sentinel': 'HOLDING_EXIT_SENTINEL_PREMARKET',
-              'panic_sell_defense': 'PANIC_SELL_DEFENSE_INTRADAY'}[job_id]
-    monkeypatch.setattr(cc, 'load_installed_crontab', lambda: '*/5 9-15 * * 1-5 # '+marker)
+        owner = "other_job" if marker == "OTHER_DONE" else label
+        kind = (
+            "DONE"
+            if marker == "OTHER_DONE"
+            else "ERROR" if marker == "GENERIC_ERROR" else marker
+        )
+        lines.append(f"[{kind}] {owner} target_date=2026-10-12")
+    log.write_text("\n".join(lines) + "\n")
+    monkeypatch.setattr(cc, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(cc, "_today_kst", lambda: "2026-10-12")
+    monkeypatch.setattr(cc, "_kst_time_tuple", lambda: (10, 30))
+    monkeypatch.setattr(cc, "is_krx_trading_day", lambda day: True)
+    monkeypatch.setattr(cc, "CRON_JOB_REGISTRY", [job])
+    marker = {
+        "buy_funnel_sentinel": "BUY_FUNNEL_SENTINEL_INTRADAY",
+        "holding_exit_sentinel": "HOLDING_EXIT_SENTINEL_PREMARKET",
+        "panic_sell_defense": "PANIC_SELL_DEFENSE_INTRADAY",
+    }[job_id]
+    monkeypatch.setattr(
+        cc, "load_installed_crontab", lambda: "*/5 9-15 * * 1-5 # " + marker
+    )
     result = CronCompletionDetector(dry_run=True).check()
-    assert result.details[job_id+'_status'] == expected
-    assert result.severity == ('warning' if expected == 'warning' else 'pass')
-    assert log.read_text() == '\n'.join(lines)+'\n'
+    assert result.details[job_id + "_status"] == expected
+    assert result.severity == ("warning" if expected == "warning" else "pass")
+    assert log.read_text() == "\n".join(lines) + "\n"
 
 
-@pytest.mark.parametrize("clock,expected", [((5, 34), "not_yet_due"), ((5, 35), "warning")])
-def test_finalization_schedule_does_not_report_missing_before_0535(monkeypatch, tmp_path, clock, expected):
+@pytest.mark.parametrize(
+    "clock,expected", [((5, 34), "not_yet_due"), ((5, 35), "warning")]
+)
+def test_finalization_schedule_does_not_report_missing_before_0535(
+    monkeypatch, tmp_path, clock, expected
+):
     import src.engine.error_detectors.cron_completion as cc
 
     monkeypatch.setattr(cc, "PROJECT_ROOT", tmp_path)
     monkeypatch.setattr(cc, "_today_kst", lambda: "2026-10-12")
     monkeypatch.setattr(cc, "_kst_time_tuple", lambda: clock)
-    monkeypatch.setattr(cc, "CRON_JOB_REGISTRY", [dict(job) for job in CRON_JOB_REGISTRY
-                                                 if job["id"] == "postclose_finalization"])
-    monkeypatch.setattr(cc, "load_installed_crontab", lambda: "35 5 * * * # POSTCLOSE_FINALIZATION_0535")
+    monkeypatch.setattr(
+        cc,
+        "CRON_JOB_REGISTRY",
+        [
+            dict(job)
+            for job in CRON_JOB_REGISTRY
+            if job["id"] == "postclose_finalization"
+        ],
+    )
+    monkeypatch.setattr(
+        cc, "load_installed_crontab", lambda: "35 5 * * * # POSTCLOSE_FINALIZATION_0535"
+    )
     result = cc.CronCompletionDetector(dry_run=True).check()
     assert result.details["postclose_finalization_status"] == expected
 
 
-@pytest.mark.parametrize('trading,clock,marker,expected', [
-    (False, (21, 5), 'START', 'skip_non_trading_day'),
-    (True, (21, 5), 'START', 'in_progress'),
-    (True, (22, 20), 'START', 'in_progress'),
-    (True, (22, 35), 'START', 'fail'),
-    (True, (21, 5), 'FAIL', 'fail'),
-    (True, (21, 5), 'DONE', 'pass'),
-    (True, (22, 35), 'OLD_DONE', 'fail'),
-])
+@pytest.mark.parametrize(
+    "trading,clock,marker,expected",
+    [
+        (False, (21, 5), "START", "skip_non_trading_day"),
+        (True, (21, 5), "START", "in_progress"),
+        (True, (22, 20), "START", "in_progress"),
+        (True, (22, 35), "START", "fail"),
+        (True, (21, 5), "FAIL", "fail"),
+        (True, (21, 5), "DONE", "pass"),
+        (True, (22, 35), "OLD_DONE", "fail"),
+    ],
+)
 def test_dashboard_archive_calendar_eod_wait_and_terminal_failure(
-    monkeypatch, tmp_path, trading, clock, marker, expected,
+    monkeypatch,
+    tmp_path,
+    trading,
+    clock,
+    marker,
+    expected,
 ):
     import src.engine.error_detectors.cron_completion as cc
 
-    day = '2026-10-08' if trading else '2026-10-09'
-    log = tmp_path / 'logs/dashboard_db_archive_cron.log'
+    day = "2026-10-08" if trading else "2026-10-09"
+    log = tmp_path / "logs/dashboard_db_archive_cron.log"
     log.parent.mkdir()
-    marker_day = '2026-10-07' if marker == 'OLD_DONE' else day
-    log.write_text(f'[{marker.removeprefix("OLD_")}] dashboard_db_archive target_date={marker_day}\n')
-    monkeypatch.setattr(cc, 'PROJECT_ROOT', tmp_path)
-    monkeypatch.setattr(cc, '_today_kst', lambda: day)
-    monkeypatch.setattr(cc, '_kst_time_tuple', lambda: clock)
-    monkeypatch.setattr(cc, 'is_krx_trading_day', lambda _: trading)
-    monkeypatch.setattr(cc, 'CRON_JOB_REGISTRY', [dict(job) for job in CRON_JOB_REGISTRY
-                                               if job['id'] == 'dashboard_db_archive'])
-    monkeypatch.setattr(cc, 'load_installed_crontab', lambda: '50 20 * * 1-5 # DASHBOARD_DB_ARCHIVE_2050')
+    marker_day = "2026-10-07" if marker == "OLD_DONE" else day
+    log.write_text(
+        f'[{marker.removeprefix("OLD_")}] dashboard_db_archive target_date={marker_day}\n'
+    )
+    monkeypatch.setattr(cc, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(cc, "_today_kst", lambda: day)
+    monkeypatch.setattr(cc, "_kst_time_tuple", lambda: clock)
+    monkeypatch.setattr(cc, "is_krx_trading_day", lambda _: trading)
+    monkeypatch.setattr(
+        cc,
+        "CRON_JOB_REGISTRY",
+        [dict(job) for job in CRON_JOB_REGISTRY if job["id"] == "dashboard_db_archive"],
+    )
+    monkeypatch.setattr(
+        cc,
+        "load_installed_crontab",
+        lambda: "50 20 * * 1-5 # DASHBOARD_DB_ARCHIVE_2050",
+    )
     result = CronCompletionDetector(dry_run=True).check()
-    assert result.details['dashboard_db_archive_status'] == expected
-    assert result.severity == ('fail' if expected == 'fail' else 'pass')
+    assert result.details["dashboard_db_archive_status"] == expected
+    assert result.severity == ("fail" if expected == "fail" else "pass")
 
 
 @pytest.mark.parametrize(
@@ -133,7 +188,8 @@ def test_morning_finalization_checks_previous_source_date_and_completion_time(
     monkeypatch.setattr(cc, "_today_kst", lambda: "2026-09-29")
     monkeypatch.setattr(cc, "_kst_time_tuple", lambda: (12, 16))
     monkeypatch.setattr(
-        cc, "CRON_JOB_REGISTRY",
+        cc,
+        "CRON_JOB_REGISTRY",
         [
             dict(job)
             for job in CRON_JOB_REGISTRY
@@ -143,10 +199,15 @@ def test_morning_finalization_checks_previous_source_date_and_completion_time(
     monkeypatch.setattr(
         cc, "load_installed_crontab", lambda: "0 5 * * * # POSTCLOSE_FINALIZATION_0500"
     )
+
     def marker_check(*args, validation_details):
-        validation_details.update(basis='consumed_intraday_preserved_historical_generation',
-                                  runtime_effect=False, new_finalization_claimed=False)
+        validation_details.update(
+            basis="consumed_intraday_preserved_historical_generation",
+            runtime_effect=False,
+            new_finalization_claimed=False,
+        )
         return []
+
     monkeypatch.setattr(generation, "finalization_marker_issues", marker_check)
 
     result = CronCompletionDetector(dry_run=True).check()
@@ -157,9 +218,9 @@ def test_morning_finalization_checks_previous_source_date_and_completion_time(
     assert result.details["log_rotation_cleanup_status"] == expected_status
     assert result.severity == expected_severity
     assert "no today marker" not in result.summary
-    evidence = result.details['postclose_finalization_generation_validation']
-    assert evidence['basis'] == 'consumed_intraday_preserved_historical_generation'
-    assert evidence['new_finalization_claimed'] is False
+    evidence = result.details["postclose_finalization_generation_validation"]
+    assert evidence["basis"] == "consumed_intraday_preserved_historical_generation"
+    assert evidence["new_finalization_claimed"] is False
 
 
 def test_morning_finalization_for_current_source_date_is_due_next_trading_day(
@@ -171,8 +232,13 @@ def test_morning_finalization_for_current_source_date_is_due_next_trading_day(
     monkeypatch.setattr(cc, "_today_kst", lambda: "2026-09-29")
     monkeypatch.setattr(cc, "_kst_time_tuple", lambda: (12, 16))
     monkeypatch.setattr(
-        cc, "CRON_JOB_REGISTRY",
-        [dict(job) for job in CRON_JOB_REGISTRY if job["id"] == "postclose_finalization"],
+        cc,
+        "CRON_JOB_REGISTRY",
+        [
+            dict(job)
+            for job in CRON_JOB_REGISTRY
+            if job["id"] == "postclose_finalization"
+        ],
     )
     monkeypatch.setattr(
         cc, "load_installed_crontab", lambda: "0 5 * * * # POSTCLOSE_FINALIZATION_0500"
@@ -202,7 +268,8 @@ def test_morning_cleanup_still_fails_when_previous_source_receipt_is_missing(
     monkeypatch.setattr(cc, "_today_kst", lambda: "2026-09-29")
     monkeypatch.setattr(cc, "_kst_time_tuple", lambda: (12, 16))
     monkeypatch.setattr(
-        cc, "CRON_JOB_REGISTRY",
+        cc,
+        "CRON_JOB_REGISTRY",
         [dict(job) for job in CRON_JOB_REGISTRY if job["id"] == "log_rotation_cleanup"],
     )
     monkeypatch.setattr(
@@ -219,13 +286,41 @@ def test_morning_cleanup_still_fails_when_previous_source_receipt_is_missing(
 @pytest.mark.parametrize(
     ("parent_markers", "cleanup_markers", "cleanup_status"),
     [
-        ("[FAIL] postclose_finalization target_date=2026-10-01 reason=predecessor_terminal_failure\n", "", "blocked_by_finalization"),
-        ("[FAIL] postclose_finalization target_date=2026-10-01 reason=predecessor_timeout\n", "", "blocked_by_finalization"),
-        ("[FAIL] postclose_finalization target_date=2026-09-30 reason=predecessor_terminal_failure\n", "", "fail"),
-        ("[FAIL] postclose_finalization target_date=2026-10-01 reason=cleanup_failed\n", "", "fail"),
-        ("[FAIL] other_job target_date=2026-10-01 text=[FAIL] postclose_finalization reason=predecessor_terminal_failure\n", "", "fail"),
-        ("[FAIL] postclose_finalization target_date=2026-10-01 reason=predecessor_terminal_failure\n[START] postclose_finalization target_date=2026-10-01\n", "", "fail"),
-        ("[FAIL] postclose_finalization target_date=2026-10-01 reason=predecessor_terminal_failure\n", "[START] log_rotation_cleanup target_date=2026-10-01\n[FAIL] log_rotation_cleanup target_date=2026-10-01\n", "fail"),
+        (
+            "[FAIL] postclose_finalization target_date=2026-10-01 reason=predecessor_terminal_failure\n",
+            "",
+            "blocked_by_finalization",
+        ),
+        (
+            "[FAIL] postclose_finalization target_date=2026-10-01 reason=predecessor_timeout\n",
+            "",
+            "blocked_by_finalization",
+        ),
+        (
+            "[FAIL] postclose_finalization target_date=2026-09-30 reason=predecessor_terminal_failure\n",
+            "",
+            "fail",
+        ),
+        (
+            "[FAIL] postclose_finalization target_date=2026-10-01 reason=cleanup_failed\n",
+            "",
+            "fail",
+        ),
+        (
+            "[FAIL] other_job target_date=2026-10-01 text=[FAIL] postclose_finalization reason=predecessor_terminal_failure\n",
+            "",
+            "fail",
+        ),
+        (
+            "[FAIL] postclose_finalization target_date=2026-10-01 reason=predecessor_terminal_failure\n[START] postclose_finalization target_date=2026-10-01\n",
+            "",
+            "fail",
+        ),
+        (
+            "[FAIL] postclose_finalization target_date=2026-10-01 reason=predecessor_terminal_failure\n",
+            "[START] log_rotation_cleanup target_date=2026-10-01\n[FAIL] log_rotation_cleanup target_date=2026-10-01\n",
+            "fail",
+        ),
     ],
 )
 def test_cleanup_dependency_preserves_parent_failure_and_cleanup_authority(
@@ -240,27 +335,41 @@ def test_cleanup_dependency_preserves_parent_failure_and_cleanup_authority(
     monkeypatch.setattr(cc, "PROJECT_ROOT", tmp_path)
     monkeypatch.setattr(cc, "_today_kst", lambda: "2026-10-02")
     monkeypatch.setattr(cc, "_kst_time_tuple", lambda: (7, 0))
-    monkeypatch.setattr(cc, "CRON_JOB_REGISTRY", [
-        dict(job) for job in CRON_JOB_REGISTRY
-        if job["id"] in {"postclose_finalization", "log_rotation_cleanup"}
-    ])
-    monkeypatch.setattr(cc, "load_installed_crontab", lambda: "0 5 * * * # POSTCLOSE_FINALIZATION_0500")
+    monkeypatch.setattr(
+        cc,
+        "CRON_JOB_REGISTRY",
+        [
+            dict(job)
+            for job in CRON_JOB_REGISTRY
+            if job["id"] in {"postclose_finalization", "log_rotation_cleanup"}
+        ],
+    )
+    monkeypatch.setattr(
+        cc, "load_installed_crontab", lambda: "0 5 * * * # POSTCLOSE_FINALIZATION_0500"
+    )
     result = CronCompletionDetector(dry_run=True).check()
     assert result.details["log_rotation_cleanup_status"] == cleanup_status
     assert result.severity == "fail"  # Parent failure is never excused.
     if cleanup_status == "blocked_by_finalization":
         assert result.details["postclose_finalization_status"] == "fail"
         assert "log_rotation_cleanup: no today marker" not in result.summary
-        assert result.details["log_rotation_cleanup_predecessor"]["source_date"] == "2026-10-01"
+        assert (
+            result.details["log_rotation_cleanup_predecessor"]["source_date"]
+            == "2026-10-01"
+        )
 
 
-def test_cleanup_dependency_does_not_accept_a_changing_parent_generation(monkeypatch, tmp_path):
+def test_cleanup_dependency_does_not_accept_a_changing_parent_generation(
+    monkeypatch, tmp_path
+):
     import src.engine.error_detectors.cron_completion as cc
 
     logs = tmp_path / "logs"
     logs.mkdir()
     parent = logs / "postclose_finalization_cron.log"
-    parent.write_text("[FAIL] postclose_finalization target_date=2026-10-01 reason=predecessor_terminal_failure\n")
+    parent.write_text(
+        "[FAIL] postclose_finalization target_date=2026-10-01 reason=predecessor_terminal_failure\n"
+    )
     monkeypatch.setattr(cc, "PROJECT_ROOT", tmp_path)
     original = cc.CronCompletionDetector._read_once_markers
 
@@ -271,15 +380,18 @@ def test_cleanup_dependency_does_not_accept_a_changing_parent_generation(monkeyp
                 stream.write("[START] postclose_finalization target_date=2026-10-01\n")
         return result
 
-    monkeypatch.setattr(cc.CronCompletionDetector, "_read_once_markers", staticmethod(read_and_change))
-    assert cc.CronCompletionDetector._cleanup_predecessor_failure(
-        logs / "log_rotation_cleanup_cron.log", "2026-10-01"
-    ) is None
+    monkeypatch.setattr(
+        cc.CronCompletionDetector, "_read_once_markers", staticmethod(read_and_change)
+    )
+    assert (
+        cc.CronCompletionDetector._cleanup_predecessor_failure(
+            logs / "log_rotation_cleanup_cron.log", "2026-10-01"
+        )
+        is None
+    )
 
 
-def test_explicit_previous_source_date_keeps_morning_window_open(
-    monkeypatch, tmp_path
-):
+def test_explicit_previous_source_date_keeps_morning_window_open(monkeypatch, tmp_path):
     import src.engine.error_detectors.cron_completion as cc
 
     log_path = tmp_path / "logs/log_rotation_cleanup_cron.log"
@@ -289,7 +401,8 @@ def test_explicit_previous_source_date_keeps_morning_window_open(
     monkeypatch.setattr(cc, "_today_kst", lambda: "2026-09-29")
     monkeypatch.setattr(cc, "_kst_time_tuple", lambda: (5, 40))
     monkeypatch.setattr(
-        cc, "CRON_JOB_REGISTRY",
+        cc,
+        "CRON_JOB_REGISTRY",
         [dict(job) for job in CRON_JOB_REGISTRY if job["id"] == "log_rotation_cleanup"],
     )
     monkeypatch.setattr(
@@ -331,8 +444,13 @@ def test_only_preselection_0928_unbound_generation_is_historical(
     monkeypatch.setattr(cc, "_today_kst", lambda: effective_date)
     monkeypatch.setattr(cc, "_kst_time_tuple", lambda: (12, 16))
     monkeypatch.setattr(
-        cc, "CRON_JOB_REGISTRY",
-        [dict(job) for job in CRON_JOB_REGISTRY if job["id"] == "postclose_finalization"],
+        cc,
+        "CRON_JOB_REGISTRY",
+        [
+            dict(job)
+            for job in CRON_JOB_REGISTRY
+            if job["id"] == "postclose_finalization"
+        ],
     )
     monkeypatch.setattr(
         cc, "load_installed_crontab", lambda: "0 5 * * * # POSTCLOSE_FINALIZATION_0500"
@@ -346,31 +464,52 @@ def test_only_preselection_0928_unbound_generation_is_historical(
     result = CronCompletionDetector(dry_run=True).check()
 
     assert result.details["postclose_finalization_status"] == expected_status
-    assert result.severity == ("warning" if expected_status == "historical_gap" else "fail")
+    assert result.severity == (
+        "warning" if expected_status == "historical_gap" else "fail"
+    )
 
 
 def test_error_detector_cron_install_preserves_release_routed_finalization(tmp_path):
     root = Path(__file__).resolve().parents[2]
     (tmp_path / "data/runtime").mkdir(parents=True)
     state = tmp_path / "crontab.txt"
-    finalizer = ("55 21 * * 1-5 bash /home/ubuntu/KORStockScan/deploy/"
-                 "run_runtime_release.sh finalize $(TZ=Asia/Seoul date +\\%F) "
-                 "# POSTCLOSE_FINALIZATION_2155")
+    finalizer = (
+        "55 21 * * 1-5 bash /home/ubuntu/KORStockScan/deploy/"
+        "run_runtime_release.sh finalize $(TZ=Asia/Seoul date +\\%F) "
+        "# POSTCLOSE_FINALIZATION_2155"
+    )
     state.write_text(finalizer + "\n")
     stub = tmp_path / "crontab"
-    stub.write_text('#!/bin/sh\nif [ "$1" = -l ]; then cat "$CRONTAB_STATE"; '
-                    'else cp "$1" "$CRONTAB_STATE"; fi\n')
+    stub.write_text(
+        '#!/bin/sh\nif [ "$1" = -l ]; then cat "$CRONTAB_STATE"; '
+        'else cp "$1" "$CRONTAB_STATE"; fi\n'
+    )
     stub.chmod(0o755)
-    env = {**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}",
-           "CRONTAB_STATE": str(state), "PROJECT_DIR": str(tmp_path)}
+    env = {
+        **os.environ,
+        "PATH": f"{tmp_path}:{os.environ['PATH']}",
+        "CRONTAB_STATE": str(state),
+        "PROJECT_DIR": str(tmp_path),
+    }
     for _ in range(2):
-        subprocess.run(["bash", str(root / "deploy/install_error_detection_cron.sh")],
-                       env=env, check=True, capture_output=True, text=True)
+        subprocess.run(
+            ["bash", str(root / "deploy/install_error_detection_cron.sh")],
+            env=env,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
         lines = state.read_text().splitlines()
         assert lines.count(finalizer) == 1
         assert sum("# ERROR_DETECTION_FULL" in line for line in lines) == 3
-        assert sum(line.startswith("35 22 ") and "ERROR_DETECTION_FULL_ARCHIVE_TERMINAL" in line
-                   for line in lines) == 1
+        assert (
+            sum(
+                line.startswith("35 22 ")
+                and "ERROR_DETECTION_FULL_ARCHIVE_TERMINAL" in line
+                for line in lines
+            )
+            == 1
+        )
 
 
 @pytest.mark.parametrize(
@@ -390,7 +529,7 @@ def test_error_detector_cron_install_preserves_release_routed_finalization(tmp_p
         )
     ],
 )
-@pytest.mark.parametrize('schema_version', [1, 2])
+@pytest.mark.parametrize("schema_version", [1, 2])
 def test_postclose_completion_shares_exact_bounded_running_gate(
     monkeypatch, tmp_path, case, expected, schema_version
 ):
@@ -419,7 +558,7 @@ def test_postclose_completion_shares_exact_bounded_running_gate(
         "started_at": "2026-09-10T20:10:04+09:00",
     }
     if schema_version == 2:
-        payload.update(run_id='a'*32, code_commit='b'*40)
+        payload.update(run_id="a" * 32, code_commit="b" * 40)
     if case == "failed":
         payload.update(status="failed", exit_code=1)
     elif case == "done":
@@ -459,9 +598,9 @@ def test_postclose_completion_shares_exact_bounded_running_gate(
     result = detector.check()
     assert result.details[f"{job['id']}_status"] == expected
     assert result.severity == ("warning" if expected == "in_progress" else expected)
-    if expected == 'in_progress':
-        assert result.details[f"{job['id']}_running_deadline"] == '23:20 source date'
-        assert 'before source-date 23:20' in result.summary
+    if expected == "in_progress":
+        assert result.details[f"{job['id']}_running_deadline"] == "23:20 source date"
+        assert "before source-date 23:20" in result.summary
 
 
 @pytest.fixture(autouse=True)
@@ -660,7 +799,12 @@ class TestCronCompletionDetector:
         self, monkeypatch, tmp_path
     ):
         import src.engine.error_detectors.cron_completion as cc
-        monkeypatch.setattr(cc, "load_installed_crontab", lambda: "10 20 * * 1-5 run_threshold_cycle_postclose.sh # THRESHOLD_CYCLE_POSTCLOSE")
+
+        monkeypatch.setattr(
+            cc,
+            "load_installed_crontab",
+            lambda: "10 20 * * 1-5 run_threshold_cycle_postclose.sh # THRESHOLD_CYCLE_POSTCLOSE",
+        )
 
         logs_dir = tmp_path / "logs"
         logs_dir.mkdir(parents=True)
@@ -706,7 +850,12 @@ class TestCronCompletionDetector:
         self, monkeypatch, tmp_path
     ):
         import src.engine.error_detectors.cron_completion as cc
-        monkeypatch.setattr(cc, "load_installed_crontab", lambda: "10 20 * * 1-5 run_threshold_cycle_postclose.sh # THRESHOLD_CYCLE_POSTCLOSE")
+
+        monkeypatch.setattr(
+            cc,
+            "load_installed_crontab",
+            lambda: "10 20 * * 1-5 run_threshold_cycle_postclose.sh # THRESHOLD_CYCLE_POSTCLOSE",
+        )
 
         logs_dir = tmp_path / "logs"
         logs_dir.mkdir(parents=True)
@@ -746,7 +895,12 @@ class TestCronCompletionDetector:
     ):
         import json
         import src.engine.error_detectors.cron_completion as cc
-        monkeypatch.setattr(cc, "load_installed_crontab", lambda: "10 20 * * 1-5 run_threshold_cycle_postclose.sh # THRESHOLD_CYCLE_POSTCLOSE")
+
+        monkeypatch.setattr(
+            cc,
+            "load_installed_crontab",
+            lambda: "10 20 * * 1-5 run_threshold_cycle_postclose.sh # THRESHOLD_CYCLE_POSTCLOSE",
+        )
 
         logs_dir = tmp_path / "logs"
         status_dir = tmp_path / "data" / "report" / "threshold_cycle_postclose_status"
@@ -802,7 +956,12 @@ class TestCronCompletionDetector:
     ):
         import json
         import src.engine.error_detectors.cron_completion as cc
-        monkeypatch.setattr(cc, "load_installed_crontab", lambda: "10 20 * * 1-5 POSTCLOSE_DONE_CONTROLLER_ENABLED=true TUNING_MONITORING_POSTCLOSE_ENABLED=true")
+
+        monkeypatch.setattr(
+            cc,
+            "load_installed_crontab",
+            lambda: "10 20 * * 1-5 POSTCLOSE_DONE_CONTROLLER_ENABLED=true TUNING_MONITORING_POSTCLOSE_ENABLED=true",
+        )
 
         logs_dir = tmp_path / "logs"
         status_dir = tmp_path / "data" / "report" / "tuning_monitoring" / "status"
@@ -857,7 +1016,12 @@ class TestCronCompletionDetector:
     ):
         import json
         import src.engine.error_detectors.cron_completion as cc
-        monkeypatch.setattr(cc, "load_installed_crontab", lambda: "10 20 * * 1-5 POSTCLOSE_DONE_CONTROLLER_ENABLED=true TUNING_MONITORING_POSTCLOSE_ENABLED=true")
+
+        monkeypatch.setattr(
+            cc,
+            "load_installed_crontab",
+            lambda: "10 20 * * 1-5 POSTCLOSE_DONE_CONTROLLER_ENABLED=true TUNING_MONITORING_POSTCLOSE_ENABLED=true",
+        )
 
         logs_dir = tmp_path / "logs"
         status_dir = tmp_path / "data" / "report" / "postclose_done_controller"
@@ -909,7 +1073,12 @@ class TestCronCompletionDetector:
     ):
         import json
         import src.engine.error_detectors.cron_completion as cc
-        monkeypatch.setattr(cc, "load_installed_crontab", lambda: "10 20 * * 1-5 POSTCLOSE_DONE_CONTROLLER_ENABLED=true TUNING_MONITORING_POSTCLOSE_ENABLED=true")
+
+        monkeypatch.setattr(
+            cc,
+            "load_installed_crontab",
+            lambda: "10 20 * * 1-5 POSTCLOSE_DONE_CONTROLLER_ENABLED=true TUNING_MONITORING_POSTCLOSE_ENABLED=true",
+        )
 
         logs_dir = tmp_path / "logs"
         status_dir = tmp_path / "data" / "report" / "tuning_monitoring" / "status"
@@ -1189,6 +1358,7 @@ def test_once_marker_census_rejects_embedded_json_receipts(tmp_path):
 def test_self_audit_cannot_be_claimed_by_dead_or_unrelated_parent(monkeypatch):
     import os
     from src.engine.error_detectors import cron_completion as cc
+
     monkeypatch.setenv("POSTCLOSE_FINALIZATION_DETECTOR_DATE", "2026-09-17")
     monkeypatch.setenv("POSTCLOSE_FINALIZATION_DETECTOR_PARENT_PID", str(os.getpid()))
     assert cc._finalization_self_audit("2026-09-17") is False

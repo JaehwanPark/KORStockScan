@@ -267,8 +267,7 @@ def contract_issues(report: dict[str, Any], target_date: str) -> list[str]:
                     issues.append("family_economic_evidence_invalid")
         for row in rows:
             if (
-                row.get("action_priority_class")
-                not in {"P0", "P1", "P2", "P3", "P4"}
+                row.get("action_priority_class") not in {"P0", "P1", "P2", "P3", "P4"}
                 or row.get("resolution_mode")
                 not in {
                     "producer_repair",
@@ -289,13 +288,10 @@ def contract_issues(report: dict[str, Any], target_date: str) -> list[str]:
                 or not row["closure_owner"].strip()
             ):
                 issues.append("order_resolution_contract_invalid")
-            if (
-                row.get("economic_eligibility") == "blocked_structural"
-                and (
-                    not isinstance(row.get("first_blocker"), str)
-                    or not row["first_blocker"].strip()
-                    or not row.get("closure_test")
-                )
+            if row.get("economic_eligibility") == "blocked_structural" and (
+                not isinstance(row.get("first_blocker"), str)
+                or not row["first_blocker"].strip()
+                or not row.get("closure_test")
             ):
                 issues.append("order_resolution_contract_invalid")
     return sorted(set(issues))

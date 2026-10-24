@@ -26,89 +26,118 @@ def test_orderbook_observer_uses_exact_ws_item_and_fails_closed_without_identity
 ):
     requested = []
     monkeypatch.setattr(
-        entry_latency_module, "ws_quote_source_receipt",
+        entry_latency_module,
+        "ws_quote_source_receipt",
         lambda frame, now_ts: {"item": frame.get("test_source_item")},
     )
     monkeypatch.setattr(
         entry_latency_module.ORDERBOOK_STABILITY_OBSERVER,
         "snapshot",
-        lambda item: requested.append(item) or {
-            "observer_healthy": True, "observer_transport_epoch": 1
-        },
+        lambda item: requested.append(item)
+        or {"observer_healthy": True, "observer_transport_epoch": 1},
     )
     frame = {"market_data_transport_epoch": 1, "test_source_item": "001820_AL"}
     assert entry_latency_module._orderbook_stability_for_frame("001820", frame) == {
-        "observer_healthy": True, "observer_transport_epoch": 1
+        "observer_healthy": True,
+        "observer_transport_epoch": 1,
     }
     assert requested == ["001820_AL"]
     frame["test_source_item"] = None
-    assert entry_latency_module._orderbook_stability_for_frame("001820", frame)[
-        "observer_missing_reason"
-    ] == "quote_source_identity_missing"
+    assert (
+        entry_latency_module._orderbook_stability_for_frame("001820", frame)[
+            "observer_missing_reason"
+        ]
+        == "quote_source_identity_missing"
+    )
     assert requested == ["001820_AL"]
     frame["test_source_item"] = "353200_AL"
-    assert entry_latency_module._orderbook_stability_for_frame("001820", frame)[
-        "observer_missing_reason"
-    ] == "quote_source_identity_missing"
+    assert (
+        entry_latency_module._orderbook_stability_for_frame("001820", frame)[
+            "observer_missing_reason"
+        ]
+        == "quote_source_identity_missing"
+    )
     assert requested == ["001820_AL"]
 
 
 def test_live_micro_context_uses_exact_ws_item(monkeypatch):
     requested = []
     monkeypatch.setattr(
-        state_handlers, "ws_quote_source_receipt",
+        state_handlers,
+        "ws_quote_source_receipt",
         lambda frame, now_ts: {"item": "001820_AL"},
     )
     monkeypatch.setattr(
         state_handlers.ORDERBOOK_STABILITY_OBSERVER,
         "snapshot",
-        lambda item: requested.append(item) or {
-            "orderbook_micro": {"ready": True}, "observer_transport_epoch": 1
-        },
+        lambda item: requested.append(item)
+        or {"orderbook_micro": {"ready": True}, "observer_transport_epoch": 1},
     )
     context = state_handlers._build_live_orderbook_micro_context(
         "001820", curr_price=10_000, ws_data={"market_data_transport_epoch": 1}
     )
     assert context["ready"] is True
     assert requested == ["001820_AL"]
-    assert state_handlers._build_live_orderbook_micro_context(
-        "001820", curr_price=10_000, ws_data={"market_data_transport_epoch": 2}
-    ) is None
+    assert (
+        state_handlers._build_live_orderbook_micro_context(
+            "001820", curr_price=10_000, ws_data={"market_data_transport_epoch": 2}
+        )
+        is None
+    )
 
 
 def test_machine_auxiliary_receipt_is_json_on_string_valued_event_wire():
     assessment = {"schema": "auxiliary_effective_assessment_v1", "raw_verdict": "VETO"}
-    fields = state_handlers._build_ai_ops_log_fields({
-        "entry_primary_decision_owner": "mechanistic_entry_adjudicator",
-        "entry_mechanistic_action": "ENTER_NOW",
-        "entry_ai_auxiliary_contract_version": "auxiliary_effective_assessment_v1",
-        "entry_ai_effective_assessment": assessment,
-        "entry_ai_advisory_contract_errors": ["risk_fact_missing"],
-        "entry_ai_soft_policy_sha256": "a" * 64,
-    })
+    fields = state_handlers._build_ai_ops_log_fields(
+        {
+            "entry_primary_decision_owner": "mechanistic_entry_adjudicator",
+            "entry_mechanistic_action": "ENTER_NOW",
+            "entry_ai_auxiliary_contract_version": "auxiliary_effective_assessment_v1",
+            "entry_ai_effective_assessment": assessment,
+            "entry_ai_advisory_contract_errors": ["risk_fact_missing"],
+            "entry_ai_soft_policy_sha256": "a" * 64,
+        }
+    )
     assert isinstance(fields["entry_ai_effective_assessment"], dict)
     fields = state_handlers._machine_auxiliary_receipt_wire_fields(fields)
     assert json.loads(fields["entry_ai_effective_assessment"]) == assessment
-    assert json.loads(fields["entry_ai_advisory_contract_errors"]) == ["risk_fact_missing"]
+    assert json.loads(fields["entry_ai_advisory_contract_errors"]) == [
+        "risk_fact_missing"
+    ]
     assert fields["entry_ai_soft_policy_sha256"] == "a" * 64
 
 
 def test_machine_auxiliary_receipt_is_json_after_pipeline_provenance_merge(monkeypatch):
     emitted = []
-    assessment = {"schema": "auxiliary_effective_assessment_v1",
-                  "raw_verdict": "PASS", "effective_verdict": "PASS",
-                  "validation_errors": []}
-    monkeypatch.setattr(state_handlers, "emit_pipeline_event",
-                        lambda *args, **kwargs: emitted.append(kwargs) or {})
-    monkeypatch.setattr(state_handlers, "_remember_scanner_terminal_block", lambda *_: None)
-    monkeypatch.setattr(state_handlers, "observe_candidate_transition_safe", lambda *_: None)
-    monkeypatch.setattr(state_handlers,
-        "_maybe_register_rising_missed_nxt_downstream_block_sampler", lambda *_: None)
+    assessment = {
+        "schema": "auxiliary_effective_assessment_v1",
+        "raw_verdict": "PASS",
+        "effective_verdict": "PASS",
+        "validation_errors": [],
+    }
+    monkeypatch.setattr(
+        state_handlers,
+        "emit_pipeline_event",
+        lambda *args, **kwargs: emitted.append(kwargs) or {},
+    )
+    monkeypatch.setattr(
+        state_handlers, "_remember_scanner_terminal_block", lambda *_: None
+    )
+    monkeypatch.setattr(
+        state_handlers, "observe_candidate_transition_safe", lambda *_: None
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_maybe_register_rising_missed_nxt_downstream_block_sampler",
+        lambda *_: None,
+    )
     state_handlers._log_entry_pipeline(
         {"id": 8, "name": "TEST", "code": "005930", "strategy": "SCALPING"},
-        "005930", "scalp_entry_action_decision_snapshot",
+        "005930",
+        "scalp_entry_action_decision_snapshot",
         entry_ai_effective_assessment=assessment,
-        entry_ai_advisory_contract_errors=[])
+        entry_ai_advisory_contract_errors=[],
+    )
     fields = emitted[0]["fields"]
     assert json.loads(fields["entry_ai_effective_assessment"]) == assessment
     assert json.loads(fields["entry_ai_advisory_contract_errors"]) == []
@@ -132,19 +161,29 @@ def test_post_sell_bbo_observer_runs_detached_from_trading_loop(monkeypatch, tmp
     monkeypatch.setattr(state_handlers, "_ENTRY_CAPACITY_PENDING", {})
     from src.engine.scalping import avg_down_replay_capture as capture
     from src.engine.scalping.position_peak_ledger import POSITION_PEAK_LEDGER
+
     monkeypatch.setattr(capture, "_POLICY_CACHE", {})
     monkeypatch.setattr(capture, "DATA_DIR", tmp_path / "data")
     rules = sniper_runtime.sniper_state_handlers.TRADING_RULES
-    monkeypatch.setattr(capture, "policy_snapshot", lambda handlers, now_ts: {
-        "schema": "avg_down_full_policy_snapshot_v1",
-        "rules": capture._json_value(vars(rules)), "environment": capture.policy_environment(),
-        "files": {}, "matrix_selection": {},
-        "peak_ledger_source_path": str(POSITION_PEAK_LEDGER.path.absolute()),
-    })
+    monkeypatch.setattr(
+        capture,
+        "policy_snapshot",
+        lambda handlers, now_ts: {
+            "schema": "avg_down_full_policy_snapshot_v1",
+            "rules": capture._json_value(vars(rules)),
+            "environment": capture.policy_environment(),
+            "files": {},
+            "matrix_selection": {},
+            "peak_ledger_source_path": str(POSITION_PEAK_LEDGER.path.absolute()),
+        },
+    )
     calls = []
     capacity_calls = []
-    monkeypatch.setattr(sniper_runtime.sniper_state_handlers, "prepare_pending_entry_capacity",
-                        lambda: capacity_calls.append(time.time()) or {"status": "ready"})
+    monkeypatch.setattr(
+        sniper_runtime.sniper_state_handlers,
+        "prepare_pending_entry_capacity",
+        lambda: capacity_calls.append(time.time()) or {"status": "ready"},
+    )
     monkeypatch.setattr(
         sniper_runtime.sniper_state_handlers,
         "observe_post_sell_executable_bbo_horizons",
@@ -161,13 +200,18 @@ def test_post_sell_bbo_observer_runs_detached_from_trading_loop(monkeypatch, tmp
 
     assert calls
     assert capacity_calls and capacity_calls[0] < calls[0]
-    assert sniper_runtime.run_sniper.entry_economic_capacity_preparation_receipt["status"] == "ready"
+    assert (
+        sniper_runtime.run_sniper.entry_economic_capacity_preparation_receipt["status"]
+        == "ready"
+    )
     assert not thread.is_alive()
     assert sniper_runtime.run_sniper.post_sell_bbo_observer_failure_count == 0
     assert sniper_runtime.run_sniper.post_sell_bbo_observer_last_success_epoch > 0.0
     receipt = sniper_runtime.run_sniper.entry_economic_policy_cache_receipt
     assert receipt["status"] == "ready", receipt
-    assert capture._cached_policy(sniper_runtime.sniper_state_handlers, time.time())["rules"]
+    assert capture._cached_policy(sniper_runtime.sniper_state_handlers, time.time())[
+        "rules"
+    ]
 
 
 def test_post_sell_bbo_observer_rate_limits_repeated_failures(monkeypatch):
@@ -204,43 +248,63 @@ def test_post_sell_bbo_observer_rate_limits_repeated_failures(monkeypatch):
     assert not thread.is_alive()
 
 
-def test_main_entry_policy_supplier_refreshes_real_snapshot_and_keeps_failure_reason(monkeypatch, tmp_path):
+def test_main_entry_policy_supplier_refreshes_real_snapshot_and_keeps_failure_reason(
+    monkeypatch, tmp_path
+):
     from src.engine.scalping import avg_down_replay_capture as capture
     from src.engine.scalping import strategy_owner_replay as replay
+
     policy_file = tmp_path / "policy.json"
     policy_file.write_text('{"version":1}')
-    handlers = SimpleNamespace(TRADING_RULES=SimpleNamespace(MAIN_POLICY_FILE=str(policy_file)),
-        _is_any_simulated_position=lambda *a: False)
+    handlers = SimpleNamespace(
+        TRADING_RULES=SimpleNamespace(MAIN_POLICY_FILE=str(policy_file)),
+        _is_any_simulated_position=lambda *a: False,
+    )
     monkeypatch.setattr(capture, "DATA_DIR", tmp_path / "data")
     monkeypatch.setattr(capture, "_POLICY_CACHE", {})
     monkeypatch.setattr(capture, "_IMPLEMENTATION", {})
     monkeypatch.setattr(capture, "loaded_code_identity", lambda *a: {})
-    sizing = SimpleNamespace(budget_base_krw=10000, safety_ratio=0.95, absolute_budget_cap_krw=0)
+    sizing = SimpleNamespace(
+        budget_base_krw=10000, safety_ratio=0.95, absolute_budget_cap_krw=0
+    )
     import pytest
+
     with pytest.raises(ValueError, match="policy_cache_not_ready"):
-        replay.freeze_entry_operating_context(handlers, {}, sizing, now_ts=100, strict=True)
+        replay.freeze_entry_operating_context(
+            handlers, {}, sizing, now_ts=100, strict=True
+        )
     cache_result = capture.maintain_main_entry_policy_cache(handlers, now_ts=100)
     assert cache_result["status"] == "ready", cache_result
     first = capture._cached_policy(handlers, 100)
     assert str(policy_file) in first["files"]
     from src.engine.scalping import position_peak_ledger as peak_ledger
+
     original_peak_path = peak_ledger.POSITION_PEAK_LEDGER.path
-    monkeypatch.setattr(peak_ledger.POSITION_PEAK_LEDGER, "path",
-                        tmp_path / "different_peak_source.json")
+    monkeypatch.setattr(
+        peak_ledger.POSITION_PEAK_LEDGER,
+        "path",
+        tmp_path / "different_peak_source.json",
+    )
     with pytest.raises(ValueError, match="peak_ledger_source_changed_since_snapshot"):
         capture._cached_policy(handlers, 100)
-    monkeypatch.setattr(peak_ledger.POSITION_PEAK_LEDGER, "path",
-                        original_peak_path)
+    monkeypatch.setattr(peak_ledger.POSITION_PEAK_LEDGER, "path", original_peak_path)
     policy_file.write_text('{"version":222}')
     with pytest.raises(ValueError, match="policy_file_changed_since_snapshot"):
         capture._cached_policy(handlers, 101)
-    assert capture.maintain_main_entry_policy_cache(handlers, now_ts=101)["status"] == "ready"
+    assert (
+        capture.maintain_main_entry_policy_cache(handlers, now_ts=101)["status"]
+        == "ready"
+    )
     assert capture._cached_policy(handlers, 101)["files"] != first["files"]
     with pytest.raises(ValueError, match="policy_cache_not_ready"):
         capture._cached_policy(handlers, 99)
     with pytest.raises(ValueError, match="policy_cache_not_ready"):
         capture._cached_policy(handlers, 162)
-    monkeypatch.setattr(capture, "policy_snapshot", lambda *a: (_ for _ in ()).throw(RuntimeError("fixture_failure")))
+    monkeypatch.setattr(
+        capture,
+        "policy_snapshot",
+        lambda *a: (_ for _ in ()).throw(RuntimeError("fixture_failure")),
+    )
     result = capture.maintain_main_entry_policy_cache(handlers, now_ts=162)
     assert result["status"] == "source_gap"
     assert result["blocker"] == "RuntimeError:fixture_failure"
@@ -2923,7 +2987,7 @@ def test_pre_submit_quote_refresh_uses_fresh_observer_quote_for_stale_ws(monkeyp
         "123456_refresh",
         best_bid=10_020,
         best_ask=10_030,
-        ts=now - .1,
+        ts=now - 0.1,
     )
     result = evaluate_live_buy_entry(
         stock=stock,
@@ -2955,12 +3019,12 @@ def test_pre_submit_quote_refresh_uses_fresh_observer_quote_for_stale_ws(monkeyp
     assert result["orderbook_stability"]["best_bid"] == 10_020
     assert result["orderbook_stability"]["best_ask"] == 10_030
 
-
-    assert result["cached_quote_received_epoch"] == now - .1
+    assert result["cached_quote_received_epoch"] == now - 0.1
     assert 99 <= result["cached_quote_receive_age_ms"] <= 101
     assert result["input_quote_source_receipt"]["observed_epoch"] == now - 3.0
     assert result["market_data_health"]["executable_quote_receive_age_ms"] == 3000
     assert result["market_data_health"]["decision_authority"] is False
+
 
 def test_pre_submit_quote_refresh_uses_pid_env_when_runtime_rules_are_stale(
     monkeypatch,
@@ -3171,14 +3235,6 @@ def test_real_pre_submit_ws_snapshot_refresh_uses_fresh_ws_manager_snapshot(
     assert "best_ask" not in refreshed
 
 
-
-
-
-
-
-
-
-
 def test_pre_submit_effective_quote_fields_mark_stale_ai_recovered_by_ws_refresh():
     fields = state_handlers._pre_submit_effective_quote_log_fields(
         latency_gate={
@@ -3328,7 +3384,7 @@ def test_pre_ai_strength_ws_snapshot_refresh_normalizes_latest_tick_timestamp(
     assert fields["pre_ai_ws_snapshot_refresh_latest_timestamp_normalized_from"] == ""
     assert fields["pre_ai_ws_snapshot_refresh_age_ms"] < 1000
     assert refreshed["last_ws_update_ts"] == now - 8.0
-    assert refreshed["last_realtime_type_ts"]["0B"] == now - .2
+    assert refreshed["last_realtime_type_ts"]["0B"] == now - 0.2
 
 
 def test_pre_ai_strength_ws_snapshot_refresh_keeps_fresh_input_history_count(
@@ -9982,8 +10038,12 @@ def test_p1_post_probe_defer_has_no_executable_price():
 def test_pre_ai_quote_clock_cannot_be_renewed_by_program_or_reported_age(monkeypatch):
     now = 1_800_000_000.0
     monkeypatch.setattr(state_handlers.time, "time", lambda: now)
-    frame = {"last_ws_update_ts": now, "last_realtime_type_ts": {"0D": now - 6},
-             "quote_age_ms": 0, "orderbook": {"best_bid": 10000, "best_ask": 10010}}
+    frame = {
+        "last_ws_update_ts": now,
+        "last_realtime_type_ts": {"0D": now - 6},
+        "quote_age_ms": 0,
+        "orderbook": {"best_bid": 10000, "best_ask": 10010},
+    }
     result = state_handlers._update_ai_quote_freshness_fields(frame)
     assert result["quote_age_ms"] == 6000
     assert result["quote_stale"] is True
@@ -9996,51 +10056,80 @@ def test_pre_ai_quote_clock_cannot_be_renewed_by_program_or_reported_age(monkeyp
 def test_pre_ai_future_quote_keeps_signed_age_and_blocks(monkeypatch):
     now = 1_800_000_000.0
     monkeypatch.setattr(state_handlers.time, "time", lambda: now)
-    result = state_handlers._update_ai_quote_freshness_fields({
-        "last_ws_update_ts": now, "last_realtime_type_ts": {"0D": now + .001},
-    })
+    result = state_handlers._update_ai_quote_freshness_fields(
+        {
+            "last_ws_update_ts": now,
+            "last_realtime_type_ts": {"0D": now + 0.001},
+        }
+    )
     assert result["quote_age_ms"] < 0
     assert result["quote_stale"] is True
 
 
-def test_observer_refresh_rejects_another_epoch_and_preserves_exact_receive_clock(monkeypatch):
+def test_observer_refresh_rejects_another_epoch_and_preserves_exact_receive_clock(
+    monkeypatch,
+):
     from types import SimpleNamespace
+
     now = 1_800_000_000.0
     monkeypatch.setattr(entry_latency_module.time, "time", lambda: now)
     monkeypatch.setenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_QUOTE_REFRESH_ENABLED", "true")
     observer = entry_latency_module.ORDERBOOK_STABILITY_OBSERVER
     observer.reset()
-    observer.record_quote("005930_AL", best_bid=10000, best_ask=10010,
-                          ts=now - .1, transport_epoch=1)
-    source = {"item": "005930_AL", "market_route": "krx_nxt_integrated",
-              "observed_epoch": now - 5, "transport_epoch": 2, "route_sequence": 1}
-    frame = {"last_realtime_type_ts": {"0D": now - 5},
-             "last_realtime_type_item": {"0D": "005930_AL"},
-             "market_data_transport_epoch": 2,
-             "realtime_type_snapshots_by_route": {"integrated": {"0D": source}}}
+    observer.record_quote(
+        "005930_AL", best_bid=10000, best_ask=10010, ts=now - 0.1, transport_epoch=1
+    )
+    source = {
+        "item": "005930_AL",
+        "market_route": "krx_nxt_integrated",
+        "observed_epoch": now - 5,
+        "transport_epoch": 2,
+        "route_sequence": 1,
+    }
+    frame = {
+        "last_realtime_type_ts": {"0D": now - 5},
+        "last_realtime_type_item": {"0D": "005930_AL"},
+        "market_data_transport_epoch": 2,
+        "realtime_type_snapshots_by_route": {"integrated": {"0D": source}},
+    }
     stale = SimpleNamespace(quote_stale=True)
     unchanged, receipt = entry_latency_module._maybe_refresh_stale_quote_from_observer(
-        code="005930", strategy_id="SCALPING", latest_price=10000, frozen_price=10000,
-        latency=stale, ws_data=frame,
+        code="005930",
+        strategy_id="SCALPING",
+        latest_price=10000,
+        frozen_price=10000,
+        latency=stale,
+        ws_data=frame,
     )
     assert unchanged is stale
     assert not receipt["pre_submit_quote_refresh_applied"]
-    assert receipt["pre_submit_quote_refresh_reason"] == "observer_transport_epoch_unproven"
-    observer.record_quote("005930_AL", best_bid=10000, best_ask=10010,
-                          ts=now - .05, transport_epoch=2)
+    assert (
+        receipt["pre_submit_quote_refresh_reason"]
+        == "observer_transport_epoch_unproven"
+    )
+    observer.record_quote(
+        "005930_AL", best_bid=10000, best_ask=10010, ts=now - 0.05, transport_epoch=2
+    )
     _, receipt = entry_latency_module._maybe_refresh_stale_quote_from_observer(
-        code="005930", strategy_id="SCALPING", latest_price=10000, frozen_price=10000,
-        latency=stale, ws_data=frame,
+        code="005930",
+        strategy_id="SCALPING",
+        latest_price=10000,
+        frozen_price=10000,
+        latency=stale,
+        ws_data=frame,
     )
     assert receipt["pre_submit_quote_refresh_applied"]
-    assert receipt["pre_submit_quote_refresh_received_epoch"] == now - .05
+    assert receipt["pre_submit_quote_refresh_received_epoch"] == now - 0.05
 
 
 def test_latency_input_health_survives_existing_pipeline_events(monkeypatch):
     from src.utils import pipeline_event_logger as pipeline_logger
 
-    monkeypatch.setattr(pipeline_logger, "TRADING_RULES",
-                        SimpleNamespace(PIPELINE_EVENT_JSONL_ENABLED=False))
+    monkeypatch.setattr(
+        pipeline_logger,
+        "TRADING_RULES",
+        SimpleNamespace(PIPELINE_EVENT_JSONL_ENABLED=False),
+    )
     monkeypatch.setattr(pipeline_logger, "_should_emit_text_info", lambda *args: False)
     logs = []
 
@@ -10053,113 +10142,292 @@ def test_latency_input_health_survives_existing_pipeline_events(monkeypatch):
     now = time.time()
     monkeypatch.setattr(entry_latency_module.time, "time", lambda: now)
     result = evaluate_live_buy_entry(
-        stock={"name": "FACTS", "position_tag": "MIDDLE"}, code="123456_facts",
-        ws_data={"curr": 10000, "last_ws_update_ts": now,
-                 "last_realtime_type_ts": {"0D": now - .1},
-                 "orderbook": {"asks": [{"price": 10010, "volume": 100}],
-                               "bids": [{"price": 10000, "volume": 100}]}},
-        strategy_id="SCALPING", planned_qty=1, signal_price=10000,
-        signal_strength=.9)
-    assert result["cached_quote_received_epoch"] == now - .1
+        stock={"name": "FACTS", "position_tag": "MIDDLE"},
+        code="123456_facts",
+        ws_data={
+            "curr": 10000,
+            "last_ws_update_ts": now,
+            "last_realtime_type_ts": {"0D": now - 0.1},
+            "orderbook": {
+                "asks": [{"price": 10010, "volume": 100}],
+                "bids": [{"price": 10000, "volume": 100}],
+            },
+        },
+        strategy_id="SCALPING",
+        planned_qty=1,
+        signal_price=10000,
+        signal_strength=0.9,
+    )
+    assert result["cached_quote_received_epoch"] == now - 0.1
     assert result["market_data_health"]["executable_quote_receive_age_ms"] > 0
     assert result["market_data_health"]["decision_authority"] is False
-    retained = {key: result[key] for key in (
-        "market_data_health", "input_quote_source_receipt",
-        "cached_quote_received_epoch", "cached_quote_receive_age_ms")}
+    retained = {
+        key: result[key]
+        for key in (
+            "market_data_health",
+            "input_quote_source_receipt",
+            "cached_quote_received_epoch",
+            "cached_quote_receive_age_ms",
+        )
+    }
     for stage in ("latency_block", "latency_pass", "order_bundle_submitted"):
-        state_handlers._log_entry_pipeline({"id": 9, "name": "FACTS"},
-                                           "123456_facts", stage, **retained)
+        state_handlers._log_entry_pipeline(
+            {"id": 9, "name": "FACTS"}, "123456_facts", stage, **retained
+        )
     assert [stage for stage, _ in logs] == [
-        "latency_block", "latency_pass", "order_bundle_submitted"]
+        "latency_block",
+        "latency_pass",
+        "order_bundle_submitted",
+    ]
     for _, fields in logs:
-        assert json.loads(fields["market_data_health"]) == retained["market_data_health"]
-        assert json.loads(fields["input_quote_source_receipt"]) == retained["input_quote_source_receipt"]
-        assert float(fields["cached_quote_received_epoch"]) == retained["cached_quote_received_epoch"]
-        assert float(fields["cached_quote_receive_age_ms"]) == retained["cached_quote_receive_age_ms"]
+        assert (
+            json.loads(fields["market_data_health"]) == retained["market_data_health"]
+        )
+        assert (
+            json.loads(fields["input_quote_source_receipt"])
+            == retained["input_quote_source_receipt"]
+        )
+        assert (
+            float(fields["cached_quote_received_epoch"])
+            == retained["cached_quote_received_epoch"]
+        )
+        assert (
+            float(fields["cached_quote_receive_age_ms"])
+            == retained["cached_quote_receive_age_ms"]
+        )
 
 
-@pytest.mark.parametrize('hour,broker,route,suffix', [
-    (8,'NXT','nxt_only','_NX'), (8,'SOR','krx_nxt_integrated','_AL'), (10,'SOR','krx_only',''),
-    (10,'SOR','krx_nxt_integrated','_AL'), (17,'SOR','krx_nxt_integrated','_AL'),
-    (10,'UNKNOWN','unknown','_AL'), (17,'UNKNOWN','unknown','_AL'),
-])
-@pytest.mark.parametrize('fault', [None,'stale','future','crossed','item','epoch','missing_quote','depth','invalid_depth'])
+@pytest.mark.parametrize(
+    "hour,broker,route,suffix",
+    [
+        (8, "NXT", "nxt_only", "_NX"),
+        (8, "SOR", "krx_nxt_integrated", "_AL"),
+        (10, "SOR", "krx_only", ""),
+        (10, "SOR", "krx_nxt_integrated", "_AL"),
+        (17, "SOR", "krx_nxt_integrated", "_AL"),
+        (10, "UNKNOWN", "unknown", "_AL"),
+        (17, "UNKNOWN", "unknown", "_AL"),
+    ],
+)
+@pytest.mark.parametrize(
+    "fault",
+    [
+        None,
+        "stale",
+        "future",
+        "crossed",
+        "item",
+        "epoch",
+        "missing_quote",
+        "depth",
+        "invalid_depth",
+    ],
+)
 def test_post_sell_registration_to_native_route_horizons_preserves_unknown_fill_venue(
-        monkeypatch,tmp_path,hour,broker,route,suffix,fault):
+    monkeypatch, tmp_path, hour, broker, route, suffix, fault
+):
     from src.engine import sniper_post_sell_feedback as feedback
-    from src.engine.scalping.micro_reversion.contracts import registration_item_market_data_identity
+    from src.engine.scalping.micro_reversion.contracts import (
+        registration_item_market_data_identity,
+    )
     from types import SimpleNamespace
-    sell=datetime(2026,10,21,hour,10,tzinfo=state_handlers._KST);epoch=sell.timestamp();clock=[epoch]
+
+    sell = datetime(2026, 10, 21, hour, 10, tzinfo=state_handlers._KST)
+    epoch = sell.timestamp()
+    clock = [epoch]
+
     class FrozenDateTime(datetime):
         @classmethod
-        def now(cls,tz=None):return sell.astimezone(tz) if tz else sell.replace(tzinfo=None)
-    monkeypatch.setattr(feedback,'datetime',FrozenDateTime)
-    monkeypatch.setattr(feedback.time,'time',lambda:clock[0])
-    monkeypatch.setattr(feedback,'DATA_DIR',tmp_path)
-    monkeypatch.setattr(feedback,'TRADING_RULES',SimpleNamespace(POST_SELL_FEEDBACK_ENABLED=True,POST_SELL_WS_RETAIN_MINUTES=10))
-    for name in ('_POST_SELL_EXECUTABLE_BBO_OBSERVERS','_RECORDED_KEYS','_WS_RETAIN_UNTIL'):
-        monkeypatch.setattr(feedback,name,{})
-    monkeypatch.setattr(state_handlers,'_POST_SELL_EXACT_ROUTE_REG_REPAIR_STATE',{})
-    stock=dict(name='TEST',strategy='SCALPING',broker_route_requested=broker,market_data_route=route,
-        market_session_regime='krx_like_premarket' if hour==8 else 'KRX_REGULAR' if hour==10 else 'KRX_NXT_AFTERMARKET',
-        broker_actual_execution_venue='NXT' if broker=='NXT' else 'UNKNOWN',
-        broker_actual_execution_venue_source='official_fid_2134_2135' if broker=='NXT' else 'official_exchange_fields_ambiguous_or_missing',
-        broker_actual_exchange_code='2' if broker=='NXT' else '0',
-        broker_actual_exchange_name='NXT' if broker=='NXT' else 'SOR',broker_sor_flag='N' if broker=='NXT' else 'Y')
-    native_route = 'krx_nxt_integrated' if route == 'unknown' else route
-    candidate=feedback.record_post_sell_candidate(recommendation_id=77,stock=stock,code='005090',
-        sell_time=sell,sell_price=10000,buy_price=9900,buy_qty=2)
-    assert candidate['post_sell_executable_bbo_observer_registered'] is True
-    assert candidate['actual_execution_venue_verified'] is (broker=='NXT')
-    assert candidate['broker_actual_execution_venue']==stock['broker_actual_execution_venue']
-    assert candidate['realized_net_pnl_krw'] is None
+        def now(cls, tz=None):
+            return sell.astimezone(tz) if tz else sell.replace(tzinfo=None)
+
+    monkeypatch.setattr(feedback, "datetime", FrozenDateTime)
+    monkeypatch.setattr(feedback.time, "time", lambda: clock[0])
+    monkeypatch.setattr(feedback, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(
+        feedback,
+        "TRADING_RULES",
+        SimpleNamespace(
+            POST_SELL_FEEDBACK_ENABLED=True, POST_SELL_WS_RETAIN_MINUTES=10
+        ),
+    )
+    for name in (
+        "_POST_SELL_EXECUTABLE_BBO_OBSERVERS",
+        "_RECORDED_KEYS",
+        "_WS_RETAIN_UNTIL",
+    ):
+        monkeypatch.setattr(feedback, name, {})
+    monkeypatch.setattr(state_handlers, "_POST_SELL_EXACT_ROUTE_REG_REPAIR_STATE", {})
+    stock = dict(
+        name="TEST",
+        strategy="SCALPING",
+        broker_route_requested=broker,
+        market_data_route=route,
+        market_session_regime=(
+            "krx_like_premarket"
+            if hour == 8
+            else "KRX_REGULAR" if hour == 10 else "KRX_NXT_AFTERMARKET"
+        ),
+        broker_actual_execution_venue="NXT" if broker == "NXT" else "UNKNOWN",
+        broker_actual_execution_venue_source=(
+            "official_fid_2134_2135"
+            if broker == "NXT"
+            else "official_exchange_fields_ambiguous_or_missing"
+        ),
+        broker_actual_exchange_code="2" if broker == "NXT" else "0",
+        broker_actual_exchange_name="NXT" if broker == "NXT" else "SOR",
+        broker_sor_flag="N" if broker == "NXT" else "Y",
+    )
+    native_route = "krx_nxt_integrated" if route == "unknown" else route
+    candidate = feedback.record_post_sell_candidate(
+        recommendation_id=77,
+        stock=stock,
+        code="005090",
+        sell_time=sell,
+        sell_price=10000,
+        buy_price=9900,
+        buy_qty=2,
+    )
+    assert candidate["post_sell_executable_bbo_observer_registered"] is True
+    assert candidate["actual_execution_venue_verified"] is (broker == "NXT")
+    assert (
+        candidate["broker_actual_execution_venue"]
+        == stock["broker_actual_execution_venue"]
+    )
+    assert candidate["realized_net_pnl_krw"] is None
+
     class Manager:
-        subscribed_codes={'005090'}
-        def __init__(self):self.items=[];self.requests=[]
-        def get_subscription_freshness_snapshot(self,codes,**kw):
-            return dict(rows=[dict(stock_code='005090',subscribed=True,registered_items=list(self.items),
-                registered_market_routes=[registration_item_market_data_identity(item)[1] for item in self.items])])
-        def execute_subscribe(self,items,**kw):
-            assert kw['observation_only'] is True and kw['remove_before_reg'] is False
-            assert kw['realtime_types']==('0B','0D')
-            self.items=list(items);self.requests.append((items,kw))
-        def get_latest_data(self,code):
-            quote_at=clock[0]-.1
-            if fault=='stale':quote_at=clock[0]-2
-            if fault=='future':quote_at=clock[0]+1
-            snapshot=dict(item=('000660' if fault=='item' else code)+suffix,market_route=native_route,
-                effective_venue='NXT' if suffix=='_NX' else '' if suffix=='_AL' else 'KRX',
-                observed_epoch=quote_at,transport_epoch=6 if fault=='epoch' else 7,
-                orderbook=dict(bids=[dict(price=10100,volume=0 if fault=='depth' else -1 if fault=='invalid_depth' else 20)],
-                    asks=[dict(price=10000 if fault=='crossed' else 10110,volume=30)]))
-            if hour==8 and suffix=='_AL':
-                snapshot['route_depth_totals']={'KRX':{'ask':0,'bid':0},'NXT':{'ask':30,'bid':20},
-                    'combined':{'ask':30,'bid':20}}
-            return dict(market_data_transport_epoch=7,
-                realtime_type_snapshots_by_route={} if fault=='missing_quote' else {native_route:{'0D':snapshot}})
-    manager=Manager();logs=[]
-    monkeypatch.setattr(state_handlers,'WS_MANAGER',manager)
-    monkeypatch.setattr(state_handlers,'active_post_sell_executable_bbo_observers',feedback.active_post_sell_executable_bbo_observers)
-    monkeypatch.setattr(state_handlers,'update_post_sell_executable_bbo_observer',feedback.update_post_sell_executable_bbo_observer)
-    monkeypatch.setattr(state_handlers,'emit_pipeline_event',lambda *a,**kw:logs.append(kw['fields']))
-    clock[0]=epoch+60.2
-    assert state_handlers.observe_post_sell_executable_bbo_horizons(now_ts=clock[0])['emitted_horizon_count']==0
-    assert manager.requests[0][0]==['005090'+suffix]
+        subscribed_codes = {"005090"}
+
+        def __init__(self):
+            self.items = []
+            self.requests = []
+
+        def get_subscription_freshness_snapshot(self, codes, **kw):
+            return dict(
+                rows=[
+                    dict(
+                        stock_code="005090",
+                        subscribed=True,
+                        registered_items=list(self.items),
+                        registered_market_routes=[
+                            registration_item_market_data_identity(item)[1]
+                            for item in self.items
+                        ],
+                    )
+                ]
+            )
+
+        def execute_subscribe(self, items, **kw):
+            assert kw["observation_only"] is True and kw["remove_before_reg"] is False
+            assert kw["realtime_types"] == ("0B", "0D")
+            self.items = list(items)
+            self.requests.append((items, kw))
+
+        def get_latest_data(self, code):
+            quote_at = clock[0] - 0.1
+            if fault == "stale":
+                quote_at = clock[0] - 2
+            if fault == "future":
+                quote_at = clock[0] + 1
+            snapshot = dict(
+                item=("000660" if fault == "item" else code) + suffix,
+                market_route=native_route,
+                effective_venue=(
+                    "NXT" if suffix == "_NX" else "" if suffix == "_AL" else "KRX"
+                ),
+                observed_epoch=quote_at,
+                transport_epoch=6 if fault == "epoch" else 7,
+                orderbook=dict(
+                    bids=[
+                        dict(
+                            price=10100,
+                            volume=(
+                                0
+                                if fault == "depth"
+                                else -1 if fault == "invalid_depth" else 20
+                            ),
+                        )
+                    ],
+                    asks=[
+                        dict(price=10000 if fault == "crossed" else 10110, volume=30)
+                    ],
+                ),
+            )
+            if hour == 8 and suffix == "_AL":
+                snapshot["route_depth_totals"] = {
+                    "KRX": {"ask": 0, "bid": 0},
+                    "NXT": {"ask": 30, "bid": 20},
+                    "combined": {"ask": 30, "bid": 20},
+                }
+            return dict(
+                market_data_transport_epoch=7,
+                realtime_type_snapshots_by_route=(
+                    {} if fault == "missing_quote" else {native_route: {"0D": snapshot}}
+                ),
+            )
+
+    manager = Manager()
+    logs = []
+    monkeypatch.setattr(state_handlers, "WS_MANAGER", manager)
+    monkeypatch.setattr(
+        state_handlers,
+        "active_post_sell_executable_bbo_observers",
+        feedback.active_post_sell_executable_bbo_observers,
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "update_post_sell_executable_bbo_observer",
+        feedback.update_post_sell_executable_bbo_observer,
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "emit_pipeline_event",
+        lambda *a, **kw: logs.append(kw["fields"]),
+    )
+    clock[0] = epoch + 60.2
+    assert (
+        state_handlers.observe_post_sell_executable_bbo_horizons(now_ts=clock[0])[
+            "emitted_horizon_count"
+        ]
+        == 0
+    )
+    assert manager.requests[0][0] == ["005090" + suffix]
     if fault is None:
-        for horizon in (60,180,300,600):
-            clock[0]=epoch+horizon+.3
-            result=state_handlers.observe_post_sell_executable_bbo_horizons(now_ts=clock[0])
-            assert result['fresh_horizon_count']==1,result
-        assert len(logs)==4
-        assert all(row['post_sell_executable_bbo_source_gap_reason']=='none' for row in logs)
-        assert all(row['post_sell_executable_bbo_execution_venue_verified'] is (broker=='NXT') for row in logs)
-        assert all(row['post_sell_executable_bbo_broker_actual_execution_venue']==stock['broker_actual_execution_venue'] for row in logs)
+        for horizon in (60, 180, 300, 600):
+            clock[0] = epoch + horizon + 0.3
+            result = state_handlers.observe_post_sell_executable_bbo_horizons(
+                now_ts=clock[0]
+            )
+            assert result["fresh_horizon_count"] == 1, result
+        assert len(logs) == 4
+        assert all(
+            row["post_sell_executable_bbo_source_gap_reason"] == "none" for row in logs
+        )
+        assert all(
+            row["post_sell_executable_bbo_execution_venue_verified"]
+            is (broker == "NXT")
+            for row in logs
+        )
+        assert all(
+            row["post_sell_executable_bbo_broker_actual_execution_venue"]
+            == stock["broker_actual_execution_venue"]
+            for row in logs
+        )
     else:
-        clock[0]=epoch+75.1
-        result=state_handlers.observe_post_sell_executable_bbo_horizons(now_ts=clock[0])
-        assert result['fresh_horizon_count']==0 and result['missing_horizon_count']==1
-        assert logs[0]['post_sell_executable_bbo_bid_return_pct']=='-'
-        assert logs[0]['post_sell_executable_bbo_source_gap_reason']!='none'
-    assert all(row['actual_order_submitted'] is False and row['runtime_effect'] is False
-        and row['broker_order_forbidden'] is True for row in logs)
-    assert candidate['actual_execution_venue_verified'] is (broker=='NXT')
+        clock[0] = epoch + 75.1
+        result = state_handlers.observe_post_sell_executable_bbo_horizons(
+            now_ts=clock[0]
+        )
+        assert (
+            result["fresh_horizon_count"] == 0 and result["missing_horizon_count"] == 1
+        )
+        assert logs[0]["post_sell_executable_bbo_bid_return_pct"] == "-"
+        assert logs[0]["post_sell_executable_bbo_source_gap_reason"] != "none"
+    assert all(
+        row["actual_order_submitted"] is False
+        and row["runtime_effect"] is False
+        and row["broker_order_forbidden"] is True
+        for row in logs
+    )
+    assert candidate["actual_execution_venue_verified"] is (broker == "NXT")
