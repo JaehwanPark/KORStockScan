@@ -151,3 +151,8 @@ Thumbs.db
 /data/ai_comparison_store/
 /data/runtime/
 /data/daily_recommendations*.csv
+
+# Local regression caches and preserved native validation evidence.
+.pytest_cache/
+/.weakness-native-label-validation-20261022/
+/data/threshold_cycle/holding_path_vote_policy/.*.publication.lock
