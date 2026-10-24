@@ -2,7 +2,7 @@
 
 작성일: 2026-10-10 KST
 
-최신 연구 상태: **2026-10-18의 §16 후속 실험·진입 이력·비용 소비 수리**, [후속 실행 검토](../audits/main-holding-exit-followup-research-execution-review-2026-10-18.md)를 따른다. 전체20,840범위를 유지하고495행의 경로·진입 이력·등록 연관 분석과 연구 배분비용8건을 실제 소비했다. 최종 대상 회귀284 PASS이며 초기정책 변경·신규 경제 개선·운영 발행/PID 소비는 없다. §14 실행안·§15 선행 실제 실행과 아래10/10 완료·배포 기록은 각 시점의 근거로 보존한다.
+최신 연구 상태: **2026-10-23 §18의 보유 원천·수익 보존·약세장 기회 연구**와 [실행 검토](../audits/main-holding-exit-opportunity-research-review-2026-10-23.md)를 따른다. 새로 확보된 장전/정규/장후 네 관측 분할의569개 확인 지점에서 고정 폭 민감도를 실행했다. 오늘 삼성전자 익절의 자연 영수증과 매도 후 호가를 확인했고, 보유 AI 입력 결손·256개 상세 기록 소진을 분리했다. 정책 수치 변경·발행·배포는 없다. §14–§17 및 아래10/10 기록은 해당 시점의 실행·종결 이력으로 보존한다.
 
 최신 수용 정정(10/10 21:27 KST): [정책 생성 구조 재점검](../audits/main-trailing-delay-policy-generation-structural-review-2026-10-10.md)의 TG1–TG4는 미해결이다. 아래 완료는 부모 계승 발행·분할 처리·검증된 운영 준비의 이력이다. 정상 완료 adapter의 원 holding-AI 증빙 누락, 신규 classifier SHA와 과거 pin의 순환 일치 조건, 대용량 시장 후보 미전달 및 일반 악화 전수 veto를 검증하지 못했으므로 **신규 학습 정책 생성까지 전체 구현 완료로 해석하지 않는다. 데이터 축적만으로 닫을 수 없다.** 보완 우선순위·종료 검사는 위 감사와 잔여계획의 최신 상태를 따른다.
 
@@ -731,3 +731,36 @@ ENTER_NOW+PASS와 후행 자료를 추가 활용할 수 있지만 실제 fill·�
 - 경과시간/내부 공백이 있는 OHLC227행과 탐색적 연관176행은 원6특징·원 AI·연속 실행 가능 경로를 증명하지 않는다. 현재 cohort의 시작률/weak/strong 우위, ADD/부분잔량 lifecycle, SELL 이후 미저장 경로, exact signal→intent→order→fill bridge는 해당 입력으로 비교 불가라는 결론으로 닫는다. E4/E5/E7의 새 전략을 구현·실행했다고 처리하지 않는다. 새로운 원천·가설은 별도 사전 등록 실험이며 같은 과거의 자연 표본 축적을 기다리는 blocker는 두지 않는다.
 
 원12cell 초기 부모 계승과 원천·보조 AI·수탁/수동 제외·비용·selector/PREOPEN은 보존했다. 이후 자연 원천·실제 PREOPEN/PID는 기존10/19 owner의 별도 수용이다. P5는 **모든 연구 종료 뒤에도 사용자의 별도 실행 지시 전까지 보류**한다. 운영 발행·배포·Main 재기동·외부 계좌/API·구독·provider·주문·외부 sync는 실행하지 않았다.
+
+## 18. 2026-10-23 방향 갱신과 새 원천 연구 실행
+
+사용자 요청에 따라 현재 AGENTS.md, Plan Rebase §1–§8,10/23 checklist를 다시 읽었다. §17의 과거 연구 종결을 취소하지 않고10/22 봉인 원천·10/23 신규 실제 체결로 후속 연구를 실행했다. 실행·수치·검증은 [10/23 검토](../audits/main-holding-exit-opportunity-research-review-2026-10-23.md), 실행 중인 후속 원천 작업은 [현재 checklist](../checklists/2026-10-23-stage2-todo-checklist.md)의 `HoldingProfitExitSourceContractRepair`가 소유한다. 기계/진입 연구의 기존 owner를 복제하지 않는다.
+
+### 18.1 연구 질문을 청산 단계별로 나눈다
+
+1. **진입→자동 보유 인계:** 실제 fill 이후 자동 보유가 시작되지 않은 시간, 부분 체결·미제출 잔량, 복구/수동 이관을 분리한다.10/22 주성49445의 복구 전 시간을 정상적인 장기 보유 전략 성과에 넣지 않는다.
+2. **시작률 도달 전:** 진입 근거와 초기 역행·시간 경과를 연구하되 hard/protect/emergency의 완화와 섞지 않는다. ENTER_NOW+PASS 미체결 기회는 원시각의 ask와 후행 bid, 누락·취소·경로를 붙인 별도 CF 모집단이다.
+3. **시작률 도달 후:** 체결가 기준 최고점과 실제 매도 가능 bid의 차이, 최소 호가 단위·spread·잔량·모델 비용을 함께 측정한다. 시작률과 되돌림폭은 결합 변수다. 약+0.4%에서 시작해0.4%를 반납하면 비용모형이 같은 이상적 연속 가격에서도 약−0.0016%이며, tick/호가 괴리로 손실이 커질 수 있다. 시작은 최소 수익 보장을 뜻하지 않는다.
+4. **기계 강약·보유 AI:** `mechanical_strength_v2`의 사건별 상태와 `holding_path_vote`의 입력 적격·투표·유예를 분리한다. 고정0.4/0.8 진단은 실제 강약 전환 재생이 아니다. 투표0을 PASS/VETO 또는 AI 품질 점수로 대체하지 않는다.
+5. **청산 신호→실제 체결→매도 후:** 동일 BUY 신원·signal·submit·terminal을 연결하고1/3/5/10분의 같은 item/route bid를 사용한다. 종가·분봉 고가를 당시 매도 가능한 가격으로 바꾸지 않는다. 후행 상승만으로 앞선 hard stop을 오판으로 판정하지 않는다.
+
+### 18.2 이번 실행으로 확정한 방향
+
+- 10/22 장전 NXT41·정규장 NXT 별도 관측179·정규 통합160·장후 통합189개, 총569개 확인 지점에 시작률0.4와 고정 폭0.4/0.8을 적용했다. 전체는 이미 본 부모 정책 원천이므로 탐색 분석이다. 중첩 지점은 독립 거래가 아니며 전략 수익으로 합산하지 않는다.
+- 두 폭 모두 가격 조건 종점이 있는216쌍에서0.4가 우세165·0.8이 우세36·동일15였다. 잔량·M1·유예·실제 주문 및 시간 guard를 재생하지 않았으므로 수치 승격 근거가 아니다. **strong 폭을 일괄 확대하는 방향은 채택하지 않고 수익 보존과 상승 지속의 구별을 먼저 연구한다.**
+- 약세장에서도 선행 관측과 이후 bid 상승을 확인했다.034020·036930의 예시에서는0.8로 기다릴 때 더 반납했다.003010·290720는 후행 목표 bid가 존재해도 체결가 최고점과 bid의 괴리로 단순 trailing 조건이 먼저 발생했다. 종목코드는 사례 식별 기준이며 종목별 whitelist를 만들지 않는다.
+- 다음 상황 특징은 기존 계약을 확장해 다룬다: **상승 지속, 약세 속 반등, 호가 괴리/가격 변동**, 그리고 입력 결손. 진입 전 특징으로 최초 유형을 정하고 이후 M1 상태 변화는 시간순 상태로 유지한다. 사후 고점·사후 승패로 진입 유형을 지정하지 않는다. 새 classifier나 종목 whitelist는 이번에 발행하지 않았다.
+- 시장 약세를 일괄 진입 금지로 해석하지 않는다. [누적 기회 연구](main-cumulative-opportunity-and-executable-quote-research-plan-2026-10-17.md)의 선행 패턴·시장 상대 강도·원 ask→bid 증명을 재사용한다. 잘못된 PASS, 유효 PASS의 후단 차단, 기계 미포착, 청산 후 상승은 별도 분모다. 약세장 반등 수익이 있었다는 사실과 실행 가능 수량·실제 순익 증명은 다르다.
+
+### 18.3 원천·변수·소비 계약을 먼저 닫는다
+
+| 우선순위 / 기존 owner | 첫 확인 계약과 다음 작업 | 종료 검사 |
+| --- | --- | --- |
+| 1 / `HoldingProfitExitSourceContractRepair` | 49480 보유 투표29행 중22행은 `executable_exit_pnl_missing`,7행은 quote/tape 불가다. `build_holding_decision_context()`의 `execution_pnl.executable_sell_price`·`estimated_net_executable_pnl_pct`가 `path_vote_input_gaps()`까지 전달되는 exact 입력을 대사한다. `_trailing_entry_cost_model`, 정상화된 book, 수량, fee/slippage의 absent/invalid를 각각 보존한다. | 당시 원 gap fixture와 새 동일 route 입력의 producer→context→vote preflight 소비. 결손을0으로 채우거나 quote guard를 해제하지 않는다. 현재 증거로 내부 어느 cost/book 분기가 원인인지 미확정인 점을 유지한다. |
+| 2 / 동일 owner | `_observe_scalp_trailing_input_transition()`이 상세 기록256개와 한도 고지1개 이후 중단했다. 기계 입력3999개·별도 stop source2047개와 중복 저장하는 대신 기존 writer/index/segment를 재사용해 quote·M1·AI state와 정책/BUY 세대 참조를 연결한다. 단순 한도 증가는 해법이 아니다. | 256개를 넘는 보유·재시작·ADD/부분잔량·세대 전환에서도 실제 coverage/gap과 first crossing/terminal이 보존되는 분할 재생. 기록 bytes·이벤트 처리량·지연·RSS·index 읽기량 대사. |
+| 3 / 동일 owner, 경제 비교는 기존 trailing selector | 위 두 원천이 적격인 actual/alternative/CF 각각에서 시작률×폭×유형의 공통 ID 비교. 0.4/0.8 고정 진단을 실제 강약/AI 성과로 승격하지 않는다. | 동시대 부모/후보, 실제 비용/모델 비용 분리, censored 수량/경로, 누적·후속 미사용 기간, winner 보존/실패 감소를 같은 분모로 검증. 부적격 구간만 제외하고 전체를0건 수익으로 처리하지 않는다. |
+| 연계 / `MachinePatternOpportunityResearch1023` | 소스22의 이미 본 결과를 새 holdout으로 사용하지 않는다. 소스23 봉인 후 기존 예정 창에서 같은 정의로 약세 반등·상승 지속과 실패 대조군을 평가한다. | 기존10/26 07:40–08:00 owner에서 closed receipt·source epoch·선행 시장 관측을 결속한다. 장후 오래된 정규장 지수는 장후 약세 증거로 사용하지 않는다. |
+
+공식 원천 가용성은 §14.5/§14.12와 [키움 원천 계약](../kiwoom-api-data-contract.md)을 따른다. 이번에는 외부 요청/파서/구독을 바꾸지 않았다. 향후 변경 전 공식 참조 gate를 수행한다. 현재 저장된 BBO·체결·book·봉·계좌/체결/비용 영수증은 해당 필드의 실제 producer·단위·시각·item·route로 연결한다. **과거 미저장 호가 전량 경로, 실제 발주하지 않은 가상 체결/대기열, 호출하지 않은 과거 AI 답변, 명시 거래소가 없는 SOR 체결 거래소**를 조회 가능 원천으로 약속하지 않는다.
+
+전체2,602종목×8scope=20,816등록 범위와 실제 관측 범위는 구분한다. 이번 네 분할 외의 scope는 기존 scope ledger의 unobserved/nonoperating 사유를 유지하며 지원 삭제로 처리하지 않는다. PREMARKET의 `_NX`/NXT와 정규·장후 `_AL`/SOR를 분리하고 물리 체결 venue는 native 영수증이 없으면 UNKNOWN이다. 정규장 NXT 별도 원천은 현 Main 기본 경로가 아니라 해당 역사 연구 분할이다. 현재 승인 초기값0.4/0.4/0.8의 운영 사용에는 새 경제 gate를 붙이지 않는다.
