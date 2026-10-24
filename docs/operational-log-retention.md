@@ -11,6 +11,16 @@ deployment workdirs, including intentionally inaccessible OS-isolation trees.
 Those trees retain their native storage owner. Enumeration failures inside the
 remaining cache scope still fail cleanup; permission errors are not suppressed.
 
+An explicitly authorized closed-target recovery may resume only a failed final
+detector with `run_postclose_finalization.sh SOURCE_DATE --recover-closed-target
+--resume-final-detector`. Under the existing finalizer lock, it verifies the
+latest native failed detector attempt, successful cleanup chronology and unchanged
+whole-chain controller/strict/snapshot generation. It preserves original logs and
+the failed report in an immutable recovery receipt, reports the original cleanup
+time, and runs a fresh detector. Controller, checklist, prepared/PREOPEN and policy
+artifacts are not rewritten. Only the normal fresh-detector and generation checks
+can emit DONE. Missing, changed or incomplete prefix evidence refuses recovery.
+
 Module writers rotate their own file at 20 MiB under the existing process flock.
 The closed inode receives a `closed_operational_log_v1` manifest in
 `logs/.retention`. Cron stdout uses `deploy/run_with_owned_log.sh` before opening

@@ -636,3 +636,17 @@ The authorized current-release integration retains the consumed numeric/source-f
 A signed legacy source-invalid preflight capture is historical process evidence only when its exact schema/action/reason, six-field scanner identity, bundle, original hash, same-day capture/consumption clock and strictly prior PID/start/birth all verify. Require explicit no-provider/no-order/no-runtime/no-apply flags, broker prohibition and no native reversal-consumption claim. The existing observer retains the original unresolved incident and source error; bounded WARNING does not grant current coverage, policy consumption or trading acceptance. Current actors, missing/conflicting proofs and unknown legacy captures remain actionable. The complete `REVIEWED_SCANNER_PREFLIGHT_PROFILE` retains the consumed listing generation and independent Main preparation review. [Cause and regression](audits/main-post-auxiliary-guards-cumulative-defect-review-2026-10-17.md#submission-monitor-legacy-preflight-lineage-repair---2026-10-23).
 
 Before the initial-quantity refresh (including its scoped resume), the postclose wrapper uses the existing `main_trailing_source_store.prepare_window` for the exact source day. Preflight quarantine can replace the raw inode after the earlier index was sealed. The native owner preserves displaced SQLite/WAL contents, verifies surviving sources and reuses covered generations before the cost revision reader binds them. No reader starts this migration, source dates and cost-null semantics remain unchanged.
+
+
+Historical source-profile discovery does not enlarge the inventory declared by
+that original contract. An absent optional detector selector is not a missing
+policy source. The existing native code verifier still requires every declared
+source and every dependency of a selected reviewed profile, with committed bytes,
+exact hashes and no aliases. Present invalid selectors and dangling aliases remain
+errors. Source reconciliation into main is a code change; it does not issue native
+handoff receipts, select a release or prove next-session consumption.
+
+A reviewed successor retains an earlier operator source only when that source's
+reviewed successor exactly matches the pinned predecessor. The complete current
+dependency generation remains mandatory; an isolated matching file cannot
+authenticate a mixed profile.

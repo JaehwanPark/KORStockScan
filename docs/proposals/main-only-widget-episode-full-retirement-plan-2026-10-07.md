@@ -118,7 +118,7 @@
 
 - [samsung_policy_episode_research.py](../../src/engine/scalping/samsung_policy_episode_research.py)는 Main 삼성 pattern/runtime/trailing 연구 소비자와 연결된다. Main 기능을 보존하고 필요하면 Main 역할이 드러나는 이름으로 이관한다.
 - `scalping/risky_micro_episode`와 Main의 관련 observer는 source-only 반사실적 관측이다. 독립 매매기계로 오인하지 않는다. 현재 Main consumer가 요구하는 부분을 유지하며 새 주문 권한을 부여하지 않는다.
-- `21:15 wrapper` (삭제된 전용 경로)는 에피소드 단계 외에 [samsung_frozen_postclose_validation](../../src/engine/automation/samsung_frozen_postclose_validation.py)을 호출한다. 필요한 Main 삼성 source-only 검증을 **기존 Main 장후의 선택적 진단 실행부로 이관한 뒤** wrapper/timer를 삭제한다. exact source date·입력 hash·단일 writer를 보존한다. 현재 `report_only`, `policy_publication=false`이며 실패도 추가 기동 요건이 아니다. 이관 후에도 결손/대기/실패를 기록하되 Main 정책 발행·strict/controller 완료·PREOPEN/기동을 막는 필수 predecessor로 승격하지 않는다.
+- `21:15 wrapper` (삭제된 전용 경로)는 에피소드 단계 외에 [samsung_frozen_postclose_validation 당시 원본](https://github.com/JaehwanPark/KORStockScan/blob/c619ab12932f2220f9676202be1701af84a8503f/src/engine/automation/samsung_frozen_postclose_validation.py)을 호출한다. 필요한 Main 삼성 source-only 검증을 **기존 Main 장후의 선택적 진단 실행부로 이관한 뒤** wrapper/timer를 삭제한다. exact source date·입력 hash·단일 writer를 보존한다. 현재 `report_only`, `policy_publication=false`이며 실패도 추가 기동 요건이 아니다. 이관 후에도 결손/대기/실패를 기록하되 Main 정책 발행·strict/controller 완료·PREOPEN/기동을 막는 필수 predecessor로 승격하지 않는다.
 
 ## 5. 장후·정책 적용·최종화에서 삭제할 계약
 

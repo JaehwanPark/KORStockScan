@@ -48,6 +48,8 @@
 4. **복구와 자연 완주 분리:** 정규 실행이 추가 수동 보정 없이 실제 기동까지 끝난 경우와 실패 후 승인된 수리·재생성으로 복구한 경우를 기존 감사/체크리스트에 구분한다. 복구 성공으로 최초 실패를 지우지 않으며, 수정본의 다음 정규 장후→Main 기동을 같은 owner의 자연 수용으로 확인한다. 이미 검증된 역사적 결손/null·유효 carry·정상 대기는 현재 실행 결함과 구분하고, 새 결손·상충은 계속 탐지한다. 주문·체결·양수 EV는 운영 완주의 추가 조건이 아니다.
 5. **대기와 인계:** 다음 실행창이 아직 오지 않았으면 자연 수용은 OPEN으로 유지하고 현재 체크리스트의 기존 stable ID에 source/target date, Due/Slot/TimeWindow, 남은 consumer와 판정 조건을 기록한다. 지속 모니터링은 실제 종료조건까지 이어가며, 사용자 지정 종료나 세션 인계 시에도 이 범위를 보존한다. `not_yet_due`는 전체 작업 완료가 아니다. 이미 유효한 승인 범위를 유지하고 새 권한이 필요한 정확한 행위만 차단 사유로 남긴다.
 
+다음 날짜 체크리스트의 direct-family 생성기는 source-date에 남은 의미적 원천 진단 OPEN을 기존 stable ID로 이관한다. 대상 owner 집합은 기존 `build_next_stage2_checklist._carry_open_semantic_owners`가 소유한다. 원 Acceptance·실패 이력을 보존하고 대상 날짜의 기존 완료·수동 처분을 우선하며, 완료/부재 항목을 비용 결손만으로 다시 열지 않는다. 중복 owner·일정 누락·읽는 동안 원문 변경은 게시 전에 실패한다. 이관은 진단 담당의 연결이며 원천 복구·경제성·PREOPEN/PID 완료가 아니다. 이미 strict/PID에 결속된 운영 문서의 교체는 release-routing 보존 절차를 따른다.
+
 ## 2. 권한 경계
 
 기본 결과 점검은 로그·status·report·manifest·systemd·process·lock·소스/consumer의 읽기 전용 대사와 점검 결과 기록이다. 실제 코드 수리·분석 worker 종료/재실행·보고서 재생성·추천 구현·commit/push·release 선택·서비스 기동은 별도 사용자 지시 및 기존 승인 범위를 확인한 경우에만 수행한다. 기존 승인은 그 대상·유효 범위 안에서 유지하며 후보별 재승인 gate를 추가하지 않는다.
@@ -60,7 +62,7 @@ OFF·퇴역 producer, 유효 frozen policy/checkpoint, 별도 custody/override·
 
 ## 3. 현재 장후 실행 owner
 
-아래는 정기 실행 owner다. stage 등록/의존은 [현행 목록 §2](audit-reports/2026-09-05-postclose-work-inventory.md#2-stage-영수증과-의존관계), 독립 timer는 §3, main 내부 producer·조건부 단계·embedded 출력은 [§4](audit-reports/2026-09-05-postclose-work-inventory.md#4-2010-main-wrapper-상세-목록), 최종화/정책 소비는 §5를 따른다. wrapper의 예약과 실제 완료 시각을 구분한다.
+아래는 정기 실행 owner다. stage 등록·의존·설치 일정은 [현행 Main-only 계약](audit-reports/2026-09-05-postclose-work-inventory.md#현행-main-only-계약), Main 내부 producer·조건부 단계·embedded 출력은 [활성 생산자와 마지막 소비자](audit-reports/2026-09-05-postclose-work-inventory.md#등록-stage-밖의-활성-생산자와-마지막-소비자), 최종화·정책 소비는 [runtime release routing](runtime-release-routing.md)을 따른다. wrapper의 예약과 실제 완료 시각을 구분한다.
 
 | 예약 | 실행 owner | 기계적 결과와 직접 소비 확인 |
 | --- | --- | --- |
