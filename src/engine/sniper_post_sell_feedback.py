@@ -1727,43 +1727,11 @@ def evaluate_post_sell_candidates(
             for item in new_evaluations:
                 _append_jsonl(path, item)
 
-    all_evaluations = _dedupe_latest_evaluations(existing_evaluations + new_evaluations)
-    summary.evaluated_candidates = len(all_evaluations)
-
-    outcome_counts: dict[str, int] = {"MISSED_UPSIDE": 0, "GOOD_EXIT": 0, "NEUTRAL": 0}
-    for item in all_evaluations:
-        outcome = str(item.get("outcome", "NEUTRAL") or "NEUTRAL").upper()
-        outcome_counts[outcome] = outcome_counts.get(outcome, 0) + 1
-    summary.outcome_counts = outcome_counts
-    summary.minute_candle_source_quality_counts = dict(
-        Counter(
-            str(item.get("minute_candle_source_quality") or "unknown")
-            for item in all_evaluations
-        )
+    return _build_summary_from_raw_rows(
+        target_date=target_date,
+        candidates=candidates,
+        evaluations=existing_evaluations + new_evaluations,
     )
-
-    summary.missed_upside_cases = sorted(
-        [
-            item
-            for item in all_evaluations
-            if str(item.get("outcome", "")).upper() == "MISSED_UPSIDE"
-        ],
-        key=lambda item: float(
-            (item.get("metrics_10m", {}) or {}).get("mfe_pct", 0.0) or 0.0
-        ),
-        reverse=True,
-    )[:5]
-    summary.good_exit_cases = sorted(
-        [
-            item
-            for item in all_evaluations
-            if str(item.get("outcome", "")).upper() == "GOOD_EXIT"
-        ],
-        key=lambda item: float(
-            (item.get("metrics_10m", {}) or {}).get("mae_pct", 0.0) or 0.0
-        ),
-    )[:5]
-    return summary
 
 
 def evaluate_sim_post_sell_candidates(
@@ -1956,42 +1924,11 @@ def evaluate_sim_post_sell_candidates(
             for item in new_evaluations:
                 _append_jsonl(path, item)
 
-    all_evaluations = _dedupe_latest_evaluations(existing_evaluations + new_evaluations)
-    summary.evaluated_candidates = len(all_evaluations)
-
-    outcome_counts: dict[str, int] = {"MISSED_UPSIDE": 0, "GOOD_EXIT": 0, "NEUTRAL": 0}
-    for item in all_evaluations:
-        outcome = str(item.get("outcome", "NEUTRAL") or "NEUTRAL").upper()
-        outcome_counts[outcome] = outcome_counts.get(outcome, 0) + 1
-    summary.outcome_counts = outcome_counts
-    summary.minute_candle_source_quality_counts = dict(
-        Counter(
-            str(item.get("minute_candle_source_quality") or "unknown")
-            for item in all_evaluations
-        )
+    return _build_summary_from_raw_rows(
+        target_date=target_date,
+        candidates=candidates,
+        evaluations=existing_evaluations + new_evaluations,
     )
-    summary.missed_upside_cases = sorted(
-        [
-            item
-            for item in all_evaluations
-            if str(item.get("outcome", "")).upper() == "MISSED_UPSIDE"
-        ],
-        key=lambda item: float(
-            (item.get("metrics_10m", {}) or {}).get("mfe_pct", 0.0) or 0.0
-        ),
-        reverse=True,
-    )[:5]
-    summary.good_exit_cases = sorted(
-        [
-            item
-            for item in all_evaluations
-            if str(item.get("outcome", "")).upper() == "GOOD_EXIT"
-        ],
-        key=lambda item: float(
-            (item.get("metrics_10m", {}) or {}).get("mae_pct", 0.0) or 0.0
-        ),
-    )[:5]
-    return summary
 
 
 def backfill_sim_post_sell_candidates_from_threshold_events(target_date: str) -> dict:
@@ -2160,6 +2097,12 @@ def _build_summary_from_raw_rows(
         outcome = str(item.get("outcome", "NEUTRAL") or "NEUTRAL").upper()
         outcome_counts[outcome] = outcome_counts.get(outcome, 0) + 1
     summary.outcome_counts = outcome_counts
+    summary.minute_candle_source_quality_counts = dict(
+        Counter(
+            str(item.get("minute_candle_source_quality") or "unknown")
+            for item in evaluations
+        )
+    )
 
     summary.missed_upside_cases = sorted(
         [

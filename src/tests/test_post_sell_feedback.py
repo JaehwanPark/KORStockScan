@@ -1194,6 +1194,7 @@ def test_build_post_sell_feedback_report(monkeypatch, tmp_path):
         evaluate_now=False,
     )
 
+    assert report["summary"] == feedback_mod.post_sell_feedback_summary_to_dict(summary)
     assert report["metrics"]["evaluated_candidates"] == 3
     assert report["metrics"]["missed_upside_rate"] > 0.0
     assert report["metrics"]["good_exit_rate"] > 0.0
@@ -1428,3 +1429,69 @@ def test_operator_default_does_not_normalize_conflicting_native_source():
         execution_venue_fields(source, observed_at=at)["execution_venue_override"]
         is None
     )
+
+
+@pytest.mark.parametrize("mode", ["real", "sim", "saved"])
+def test_post_sell_quality_census_preserved_for_all_summary_consumers(
+    monkeypatch, tmp_path, mode
+):
+    monkeypatch.setattr(feedback_mod, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(feedback_mod, "guard_stdin_heavy_build", lambda **kw: None)
+    monkeypatch.setattr(
+        feedback_mod,
+        "TRADING_RULES",
+        SimpleNamespace(POST_SELL_FEEDBACK_EVAL_ENABLED=True),
+    )
+    candidates = [{"post_sell_id": key, "stock_code": "005930"} for key in "abc"]
+    evaluations = [
+        {
+            "post_sell_id": key,
+            "outcome": "NEUTRAL",
+            **{
+                f"metrics_{h}m": {"bars": 1}
+                for h in feedback_mod.POST_SELL_FEEDBACK_HORIZONS_MIN
+            },
+            **({"minute_candle_source_quality": quality} if quality else {}),
+        }
+        for key, quality in [
+            ("a", "pass"),
+            ("b", "source_gap"),
+            ("c", None),
+            ("a", "partial_window"),
+        ]
+    ]
+    monkeypatch.setattr(
+        feedback_mod,
+        "_load_jsonl",
+        lambda path: candidates if "candidates" in path.name else evaluations,
+    )
+    fake = SimpleNamespace(
+        get_kiwoom_token=lambda: pytest.fail("unexpected provider call")
+    )
+    monkeypatch.setitem(sys.modules, "src.utils.kiwoom_utils", fake)
+    monkeypatch.setattr(utils_pkg, "kiwoom_utils", fake, raising=False)
+    if mode == "saved":
+        summary = feedback_mod.build_post_sell_feedback_report(
+            "2026-10-23", evaluate_now=False
+        )["summary"]
+    else:
+        producer = (
+            feedback_mod.evaluate_post_sell_candidates
+            if mode == "real"
+            else feedback_mod.evaluate_sim_post_sell_candidates
+        )
+        summary = feedback_mod.post_sell_feedback_summary_to_dict(
+            producer("2026-10-23", token="offline")
+        )
+    assert summary["total_candidates"] == 3
+    assert summary["evaluated_candidates"] == 3
+    assert summary["minute_candle_source_quality_counts"] == {
+        "partial_window": 1,
+        "source_gap": 1,
+        "unknown": 1,
+    }
+    assert summary["outcome_counts"] == {
+        "MISSED_UPSIDE": 0,
+        "GOOD_EXIT": 0,
+        "NEUTRAL": 3,
+    }
