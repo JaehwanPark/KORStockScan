@@ -274,7 +274,7 @@ gzip-only 날짜/종목 마스터·엄격한 alias 검증, 원 native 본문과 
 사용자 1~4번 구현·반복 리뷰·커밋 지시에 따른 보완이다. [구현 리뷰와 배포 인계](../audits/main-market-weakness-source-completeness-and-status-review-2026-10-16.md)가 검증 결과를 소유하고, [10/16 동일 stable ID](../checklists/2026-10-16-stage2-todo-checklist.md)의 자연 수용 OPEN을 유지한다. 이 절은 §11의 순환 규칙에 최신 원천 처리 기회를 추가하며, source-only·optional 권한과 원 evidence/후보/outbox 이력을 유지한다.
 
 - scheduler·누적·현행성 검사는 설치 원천 시작일, clean/forward 정책 시작일 중 가장 늦은 시작일과 `night_id` 이하의 발견 날짜를 공유한다. `source_scope`에 시작일·상한일·대상 날짜를 봉인하고 아직 cursor가 없는 날도 `not_started`/`pending_source_dates`에 포함한다. 발견 후 원천이 사라져도 현행 manifest에 보존된 날짜는 남겨 다음 처리에서 명시적 source gap으로 종결한다. 새 원천 날짜·시작일·cursor 변경은 이전 비교를 무효화하며, 계산 중 대상 목록이 바뀌면 publish를 보류한다. 예전 `source_scope` 없는 비교는 현행으로 재사용하지 않는다.
-- 최신 마감일이 원천 미완료이면 야간 첫 가용 처리 기회를 한 번 부여한다. 선택을 먼저 봉인하므로 실패/crash가 다음 슬롯을 독점하지 않는다. 이 선택은 기존 `last_source_date`를 이동하지 않으며, 나머지 미완료 날짜가 있으면 후속 source 슬롯은 최신 날짜를 제외하고 기존 순환 위치를 이어간다. 다른 source 수리가 끝나면 최신 날짜도 다시 이어갈 수 있다. 자정의 다음 날짜는 대상에 넣지 않는다. 슬롯·예약 상한이나 EOD/정규 장후 우선권을 늘리거나 우회하지 않는다.
+- 최신 마감일이 원천 미완료이면 야간 첫 가용 처리 기회를 부여한다. 이후 현재 원천 결속을 통과한 in-progress 커서의 위치/partition/native 색인과 기존 label DB의 커밋된 loaded marker에 실제 진전이 있을 때만 backlog 한 번 뒤 최신일을 재개한다. 선택 직전 checkpoint를 기존 schedule cursor에 봉인하며 최신 재개는 `last_source_date`를 이동하지 않는다. 진전 없음·crash·원천/코드 변경·잘못된 checkpoint/index에는 우선 재개권을 주지 않으며 기존 backlog 순환을 유지한다. 과거일 처리 기회와 최신일 완주를 같은 야간 예산 안에서 교대로 보장한다. 자정의 다음 날짜는 대상에 넣지 않는다. 슬롯·예약 상한이나 EOD/정규 장후 우선권을 늘리거나 우회하지 않는다.
 - 검증 가능한 야간 창 안에서 code/calendar 불일치·EOD 실행·야간 예산 소진·deadline 여유 부족으로 worker 시작 전에 보류한 결과도 lock 아래 `night_summary.latest_attempt`에 시각·사유·`worker_started=false`로 기록한다. 이 보류는 worker 예약 횟수·예약초·순환 위치·원 마지막 계산 bytes를 바꾸지 않는다. 최초 검사부터 시간창 밖이면 신규 lock/연구 상태 쓰기는 0이다. 다른 worker가 lock을 보유한 경우 그 writer의 요약을 덮지 않는다.
 - `source_census.native_observations`는 native 색인에 공급한 유효 행 수로 바로잡고, 독립 분석행 수는 `source_projection_census`로 분리한다. `native_indexed_rows`는 중복 입력을 포함한 행 수이며 고유 관측/매매 기회 수가 아니다. daily JSON/Markdown과 terminal에 두 census·색인 수·`analysis_coverage.native_binding_verified`를 제공한다. gzip 중단/CRC 실패 시 색인·두 census를 같은 checkpoint로 되돌린다. 분석/재생/보조 모집단이나 W/F/U·후보 정의를 변경하지 않는다.
 - 배포 전용 세션은 검토 커밋을 통합한 selected release에서 기존 자기 optional code/calendar binding을 재결속하고 설정·cron 재조회를 확인한다. 기존 enabled/notify·설치 역사·source floor·후보/outbox를 보존한다. 코드 hash 변경으로 기완료 날짜도 재처리 대상이 될 수 있으므로 한 야간의 전체 완료를 보장하지 않는다. 다음 허용 야간에서 최신 마감일 기회→기존 backlog 진전→migration/누적→알림 disposition을 수용한다. 연구 때문에 Main을 재기동하거나 과거 원천/보조 응답을 다시 생성하지 않는다. 후보의 새 전향 근거 부재는 알림 보류이며 실주문/정책 적용 권한이 아니다.
@@ -298,3 +298,49 @@ gzip-only 날짜/종목 마스터·엄격한 alias 검증, 원 native 본문과 
 유효 replay point가 남은 partition도 normalized source의 원 제외 수를 daily/terminal에 전달한다. 원 raw 행 제외 수와 projected opportunity 수는 다른 단위이며 서로 차감하지 않는다. partition의 마지막 chunk에서만 원 제외 수를 commit하여 중간 재개와 다중 chunk에서 중복 집계하지 않는다. 원 source epoch 결손과 비용/정답 null은 유지한다.
 
 명시적으로 지시한 장후 지정일 보고서 복구는 기존 supervisor의 `--scheduled --source-date YYYY-MM-DD`로 수행한다. 설치/calendar·야간 창·정규 장후 우선권·동일 worker lock·9회/600초 야간 예약·60초 child·512MiB·retained source 범위/마감일 이하 검사를 그대로 적용한다. 자동 cron의 backlog 순환은 변경하지 않으며 예약/최신 우선권 cursor를 수동 수정하거나 child 예약을 따로 만들지 않는다. worker 직접 CLI는 기존 supervisor parent/예약 검증을 유지한다. 지정일 재생성은 원천/정책/주문 권한을 부여하지 않는다.
+
+## 14. 2026-10-22 실제 판정의 장후 경로 라벨과 제한 복구
+
+사용자는 장중 추가 로깅 없이 실제 판정과 라벨의 연결 원인 수리·반복 리뷰, 과거7거래일 재처리와 누적/알림 판정 재검증을 지시했다. §13의 당시 준비 범위와 구분해 이 단회 닫힌 원천 복구를 실행한다. Main selector/재기동·cron/설치 설정·주문/정책 변경 및 Telegram 시험 발송은 포함하지 않는다.
+
+기존 `label_index`는 저장된 확인 리플레이 기회만 색인했다. 실제 WS 이벤트의 epoch/route sequence와 collector의 epoch/series sequence는 서로 다른 namespace이며, 같은 사건이 리플레이 FSM에서 재확인된다는 보장도 없다. 기존 native observation으로 검증한 사건을 frozen normalized source의 선언된 `native_transport_epoch/native_route_sequence`·종목·item·venue/session·기록 시각·actual ask에 정확히 연결한다. 시간의 근접 매칭이나 collector namespace의 대입은 금지한다. 같은 기존 `continuous_reversal.label`과 비용.0023·목표 순+.4%·soft stop 순-3%·1800초 계약으로 CF 라벨을 계산하며 실체결/손익으로 표시하지 않는다.
+
+기존 JSON streaming owner가 해시 결속된 partition의 gzip EOF/CRC와 metadata를 확인한 뒤 한 종목씩 공급한다. 연구 generation 안에서 partition 완료를 기존 SQLite label index에 checkpoint하여 trace chunk마다 다시 읽지 않는다. 신원 충돌·변경 ask·제외 row·경로 단절/부족은 U이고, WS namespace가 기록되지 않은10/9 이전의 확인된11열 역사 형식은 U로 보존한다. 현재/알 수 없는 schema와 신원·시간·출처 변경은 계속 거부한다. 새 source reader와 경로 label kernel도 기존 code binding에 포함한다.
+
+라벨 의존성 실패는 trace 원천 불량으로 분류하거나 압축 trace를 다음 source로 이동시키지 않는다. 해당 압축 source의 미확정 staging을 되돌리고 같은 source에서 pending을 유지한다. 원 실패와 이전 산출물은 보존하며 결정적 실패의 동일 재시도를 중단한다.
+
+기존 selected producer로9/29·9/30·10/2·10/6·10/7·10/8·10/12를 worker1/512MiB·단계60초·전체600초 이내 단회 재처리한다. 수리본의 code binding 변경으로 나머지7일도 무효화되므로 기존 canonical 연구 namespace에서9/29~10/21의14일까지만 단회 복구·검증한다(전체900초, worker1/512MiB, 단계60초). 장중10/22 원천 본문은 읽지 않는다. 외부 source anchor·동결 observer 출처 검증이 거부한 격리 입력 root를 허용하도록 guard를 바꾸지 않는다. 원 실패와 중간 시도를 보존하고, 이 실행을 정기 야간·선택본 교체·설치 재결속으로 표시하지 않는다. 정기 소비는 통합 배포 후 native optional installer의 code/calendar 결속과 다음 야간을 별도 수용한다. 결과·대체/제거·회귀·원천 결손은 [기존 리뷰](../audits/main-market-weakness-source-completeness-and-status-review-2026-10-16.md#실제-판정의-경로-라벨-수리와-제한-재처리--2026-10-22)에 기록한다.
+
+
+## 15. 2026-10-22 effective registry·과거 제한 복구 계약
+
+registry가 선언된 자연 판정은 원 native request/hash와 실제 G registry binding, logical schema, v2 wire/decoder 및 원 overlay/inheritance의 scope·확인 시점으로 검증한다. 기본 binding fallback은 미선언 자료에만 남긴다. immutable provenance는 검증된 파일 identity/coverage로 cache하고 행별 request/wire/시점 검증은 유지한다. 공통 source dependency는 cursor에서 경로별로 한 번 소유하며 index/projection에 반복 복제하지 않는다. missing/수정된 dependency는 다음 검증을 무효화하되 해당 row의 증거 결손을 전체 입력의 임의 PASS나 실행 허용으로 바꾸지 않는다.
+
+raw auxiliary response 계약과 응답 후 실행 guard 계약을 분리한다. 실제 raw PASS를 보존하면서 기존 실행 rejected/unknown은 post-auxiliary 효과 분모에서 제외한다. registry 검증 실패, `historical_reader_compatibility_missing`, epoch/path/horizon의 label U 및 `role_unverified`를 같은 표본 부족으로 표시하지 않는다. 과거 호환 증빙이 없으면 original reader/source SHA로 native owner에서 먼저 검증하며 임의 compatibility receipt/강제 PASS를 만들지 않는다.
+
+사용자 승인 단회 closed-source 복구는 기존 namespace lock·nice/resource supervisor와 native custody context에서 지정7일만 처리한다. `cumulative(from_date=...)`는 recovery_from_date/configured 시작일을 source scope에 함께 봉인하고 currentness/notifier가 같은 범위를 소비한다. 이전 기간은 immutable 진단으로 보존하며 검증하지 않은 이전 날짜를 새코드 current로 합산하지 않는다. 변경된 잘못된 binding의 후보는 재동결하고 이미 보유한 날짜 이후 cutoff를 적용한다. 장중 logger/판정/provider/주문·정기 cron/selector/PID 변경 권한은 이 단회 복구에서 발생하지 않는다.
+
+구현·실제7일 소비와 남은 과거 증빙/원천·기계 capability는 [원 owner의 10/22 수용](../audits/main-market-weakness-source-completeness-and-status-review-2026-10-16.md#effective-registry-결속-수리와-7거래일-제한-복구--2026-10-22)에 기록한다.
+
+
+### 라벨 색인의 제한 시간과 진행 보존
+
+`MainMarketWeaknessPostcloseObservation1008`은 기존 native projection→label_bindings.sqlite→daily/cumulative/notifier 경로를 소유한다. 각 봉인된 projection partition의 라벨과 loaded marker는 한 transaction으로 커밋한다. 제한 시간·중단·다음 partition의 손상은 이미 검증된 partition을 되돌리지 않으며, 재개는 그 marker 이후만 읽는다. 부분 partition은 marker 없이 rollback하고 원 SHA/새 generation/원천 currentness 검증은 유지한다. native path 라벨의 정확한 WS identity·clock·ask·누락/충돌 판정은 바꾸지 않는다.
+
+정기 예약의 60초 회차·야간 총600초·회차 수·06:30 종료 제한과 기존 source-date 회전은 유지한다. 동일 결정적 실패의 전체 재실행 대신 기존 cursor/SQLite의 실제 진행을 확인한 뒤 남은 원천만 재개한다. 코드 변경으로 무효화된 이전 날짜는 migration pending으로 남기며 원 U/null이나 과거 세대를 새 코드 current로 재표시하지 않는다. 장후 수용은 daily의 실제 라벨 결속·정확 날짜와 cumulative/notifier의 같은 세대 소비를 구분한다. Main 발행·기동 권한은 이 advisory 보고서에서 발생하지 않는다.
+
+
+### 최신 원천의 검증된 checkpoint 재개
+
+최신일 1회 뒤 다른 결손일이 하나라도 있으면 최신일을 모든 후속 슬롯에서 제외하던 조건은, 새 label writer가 partition을 커밋해도 그 야간에 이를 소비하지 못했다. 기존 label_index 실제 writer와 scheduler를 함께 검증해 이 실패를 재현했다. 기존 source selector에서 위 §12의 교대 규칙으로 대체한다. checkpoint는 read-only SQLite의 작은 loaded 표만 조회하며 labels/full source를 재조회하거나 writer를 열지 않는다. 첫 생성·새 generation의 실제 진전, 동일 generation의 커밋 증가, 무진전·stale·alias·잘못된 형식과 예산 만료를 구분한다.
+
+최대9회/예약600초·회차60초·512MiB·EOD/정규 장후 우선권·06:30 종료·원 자식 회수·동일한 cron과 source-only 권한은 유지한다. 코드 hash 변경에 따른 기존 보고서 재처리는 정상 migration이며, 이미 소진한 야간 quota를 초기화하거나 worker를 직접 호출하지 않는다. source22의04:39 계산은 원 generation/as-of와 결손을 보존한다. 다음 허용 야간 source23→10/24의 최신일 다회 checkpoint 재개와 backlog 교대·daily/누적/notification 실제 소비를 기존 MainMarketWeaknessPostcloseObservation1008에서 자연 수용한다.
+
+
+## 16. 2026-10-23 과거 15거래일의 제한 복구와 역사 검증
+
+사용자는 현재 코드로9/29~10/22의15거래일을 제한 재처리하고 누적 비교·알림 판정을 재검증하도록 승인했다. 이 단회 source-only 복구는 기존 namespace lock·native custody context·nice19·worker1/512MiB·단계60초·누적 연구 실행600초(검토·읽기 전용 대사 경과시간과 구분)를 사용한다. 원천일10/23은 읽거나 생성하지 않는다. 이미 소진한 정기 야간9회/예약540초, 설치/cron·selector·Main PID/정책·수동 veto·outbox를 보존한다. checkpoint가 진전할 때만 남은 입력을 재개하며, source/코드 변경·결정적 실패·자원 한도에서는 중단한다. 예산 초기화나 무변경 전체 재시도는 하지 않는다.
+
+과거 source의 reader hash가 현재와 다르면 기존 native compatibility owner의 exact bundle/source/old/new-reader 증빙을 요구한다. 그 증빙은 원 hash의 코드 inventory 아래에서 실제 실행한 원 native overlay/inheritance 검증, 원 lineage·registry/binding 결과와 물리 SHA를 연결한다. 연구 reader는 이 원 검증과 현재 registry·실제 request/schema/wire·scope/시점을 확인한다. 현재 매매를 시작할 수 있는지 확인하는 native 실행 검사를 역사적 연구 기록에 대신 적용하지 않는다. 원 현재 실행 검사·provider·주문·hard guard는 변경하지 않으며, missing/수정된 코드·증빙·원천·미확정 가격경로는 계속 unverified/U다.
+
+입력 사전검사 차단과 판정 전 계약 거부는 `not_adjudicated`로 보존하고 원 오류를 기록한다. 원 사건/ask가 없으므로 라벨을 만들지 않는다. 명시된 machine-only probe stage는 probe로 구분한다. 알 수 없는 native 결속 누락은 기존 오류를 유지한다. 이번 수용과 정기 선택 코드/설치 재결속·다음 source23→10/24 자연 수용은 별개이며 [기존 리뷰](../audits/main-market-weakness-source-completeness-and-status-review-2026-10-16.md#2026-10-23-15거래일-제한-복구와-역사-reader-결속)와 `MainMarketWeaknessPostcloseObservation1008`에서 관리한다.
