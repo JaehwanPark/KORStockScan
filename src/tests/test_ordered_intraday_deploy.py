@@ -175,6 +175,7 @@ def test_stopped_recovery_from_intraday_does_not_fabricate_native_receipt(stoppe
 def test_cli_holds_detector_lock_through_attestation_and_failure(tmp_path, monkeypatch, failure):
     calls = []
     class Driver:
+        workspace = tmp_path
         def __getattr__(self, name):
             def step(*args):
                 _assert_detector_lock_held(tmp_path)
@@ -258,12 +259,15 @@ def test_wrapper_stale_reader_and_invalid_selection_never_publish(tmp_path, guar
 
 
 @pytest.mark.parametrize('failure', [None, 'preflight', 'acquire_hold', 'drain', 'publish', 'prepare', 'start', 'attest'])
-def test_transition_does_not_advance_past_failed_phase(failure):
+def test_transition_does_not_advance_past_failed_phase(tmp_path, failure):
     calls = []
     steps = ['preflight', 'acquire_hold', 'drain', 'publish', 'prepare', 'start', 'attest']
     class Driver:
+        workspace = tmp_path
         def __getattr__(self, name):
             def step(*args):
+                with pytest.raises(ValueError, match='scheduled_execution_active'):
+                    with D.R.scheduled_execution_lease(tmp_path, exclusive=True): pass
                 calls.append(name)
                 if name == failure:
                     raise ValueError(name)
@@ -1047,3 +1051,16 @@ def test_candidate_active_policy_preflight_is_source_bound_and_read_only(tmp_pat
     assert selection.read_bytes()==before
     assert not (data/'runtime/operator_startup_hold.json').exists()
     assert not (tmp_path/'restart.flag').exists()
+
+
+def test_active_scheduled_owner_blocks_before_deployment_preflight(tmp_path):
+    calls = []
+    class Driver:
+        workspace = tmp_path
+        def preflight(self): calls.append('preflight')
+        def fail(self, exc): calls.append(str(exc))
+    with D.R.scheduled_execution_lease(tmp_path):
+        with pytest.raises(ValueError, match='scheduled_execution_active'):
+            D.execute(Driver())
+    assert calls == []
+    assert not (tmp_path / 'data/runtime/operator_startup_hold.json').exists()

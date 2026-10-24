@@ -7,7 +7,7 @@ Run by absolute filename with Python -I, not through a mutable package import.
 from __future__ import annotations
 
 import argparse
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from datetime import date, datetime
 import hashlib
 import fcntl
@@ -78,6 +78,32 @@ def runtime_release_set_lock(workspace: Path):
         except BlockingIOError as exc:
             raise ValueError("runtime_release_transition_in_progress") from exc
         yield
+
+
+@contextmanager
+def scheduled_execution_lease(workspace: Path, *, exclusive: bool = False):
+    """Pin scheduled readers across their children, independently of writers.
+
+    Followers may coexist and take native family/release writer locks. A
+    deployment yields before preflight if any follower is already executing;
+    a new follower waits before resolving the selector during a deployment.
+    """
+    path = Path(workspace) / 'data/runtime/runtime_scheduled_execution.lock'
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK, 0o666)
+    with os.fdopen(fd, 'a') as lock:
+        opened = os.fstat(lock.fileno())
+        if not stat.S_ISREG(opened.st_mode):
+            raise ValueError('runtime_scheduled_execution_lock_invalid')
+        os.fchmod(lock.fileno(), 0o666)
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB if exclusive else fcntl.LOCK_SH)
+        except BlockingIOError as exc:
+            raise ValueError('runtime_scheduled_execution_active') from exc
+        current = path.lstat()
+        if (opened.st_dev, opened.st_ino) != (current.st_dev, current.st_ino):
+            raise ValueError('runtime_scheduled_execution_lock_changed')
+        yield lock.fileno()
 
 
 def _systemd_properties(unit: str, *, timeout_sec: float = 5) -> dict[str, str]:
@@ -1202,6 +1228,7 @@ def main() -> int:
     args = parser.parse_args()
     source_path = Path(__file__).resolve()
     workspace = source_path.parents[3]
+    leases = ExitStack()
     try:
         if args.workspace is not None:
             if (args.record_pid is None or args.operation or args.target_date
@@ -1215,6 +1242,9 @@ def main() -> int:
             workspace = requested_workspace
         if args.resolve_effective_today and args.operation != "finalize":
             raise ValueError("resolve_effective_today_requires_finalize")
+        scheduled = args.operation in TAGS.values() and not args.print_plan
+        if scheduled:
+            scheduled_fd = leases.enter_context(scheduled_execution_lease(workspace))
         root, commit = selected_release(workspace)
         if args.workspace is not None and source_path != root / 'src/engine/infrastructure/runtime_release_router.py':
             raise ValueError("runtime_pid_router_not_selected_source")
@@ -1315,10 +1345,16 @@ def main() -> int:
                             )
                         return subprocess.run(plan["command"], env=env, check=False).returncode
                 return subprocess.run(plan["command"], env=env, check=False).returncode
+        if scheduled:
+            # The wrapper retains the lease even if only its router is killed.
+            return subprocess.run(plan['command'], env=env, check=False,
+                                  pass_fds=(scheduled_fd,)).returncode
         os.execvpe(plan["command"][0], plan["command"], env)
     except (OSError, ValueError, subprocess.SubprocessError) as exc:
         print(f"runtime_release_route_blocked: {exc}", file=sys.stderr)
         return 2
+    finally:
+        leases.close()
     return 0
 
 

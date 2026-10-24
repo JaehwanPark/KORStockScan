@@ -239,17 +239,18 @@ def _wait(predicate, timeout, reason):
 
 def execute(driver):
     """Order is deliberate: no selection or shared document write before drain."""
-    try:
-        driver.preflight()
-        driver.acquire_hold()
-        driver.drain()
-        driver.publish()
-        driver.prepare()
-        driver.start()
-        return driver.attest()
-    except BaseException as exc:
-        driver.fail(exc)
-        raise
+    with R.scheduled_execution_lease(driver.workspace, exclusive=True):
+        try:
+            driver.preflight()
+            driver.acquire_hold()
+            driver.drain()
+            driver.publish()
+            driver.prepare()
+            driver.start()
+            return driver.attest()
+        except BaseException as exc:
+            driver.fail(exc)
+            raise
 
 
 
