@@ -1577,6 +1577,11 @@ def test_compact_first_forward_day_direction_excludes_same_day_holdout():
 def test_compact_public_finalization_uses_direct_pair_policy_consumer(
     tmp_path, promote, monkeypatch
 ):
+    from src.engine import build_next_stage2_checklist as checklist_owner
+
+    monkeypatch.setattr(
+        checklist_owner, "CHECKLIST_LOCK_DIR", tmp_path / "runtime/checklist-locks"
+    )
     from src.tests.test_mechanistic_entry_runtime_policy import initial
     from src.engine.scalping import mechanistic_entry_runtime_policy as policy
     from src.engine.scalping.main_ai_prompt_consumer import verify_compact_handoff
