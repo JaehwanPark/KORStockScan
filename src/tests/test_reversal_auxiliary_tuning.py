@@ -462,6 +462,88 @@ def test_sampled_failure_does_not_reopen_initial_machine_adoption(setup):
     assert result["scope_census"]["new_ready"] == 128 and result["scope_pending"] == []
 
 
+@pytest.mark.parametrize("change", ["latest", "canonical", "evaluation"])
+def test_auxiliary_publication_keeps_exact_verified_campaign(
+    setup, monkeypatch, change
+):
+    root, parent, machine, _, _ = setup
+    day = "2026-10-07"
+    first = T.prepare(root, day, machine, parent)
+    successor = T.prepare(
+        root, day, P.seal(dict(machine, source_revision="new_generation")), parent
+    )
+    latest = T.directory(root, day) / "latest-campaign.json"
+    P.write(latest, first)
+    original = T.evaluate
+
+    def changed_pointer(data_root, source_day, *, campaign_path=None):
+        # Another producer may advance latest after publication admission.
+        P.write(latest, successor)
+        if change == "canonical":
+            P.write(
+                T.directory(root, day)
+                / "campaigns"
+                / (first["artifact_content_sha256"] + ".json"),
+                successor,
+            )
+        result = original(data_root, source_day, campaign_path=campaign_path)
+        if change == "evaluation":
+            result = P.seal(
+                dict(result, campaign_sha256=successor["artifact_content_sha256"])
+            )
+        return result
+
+    monkeypatch.setattr(T, "evaluate", changed_pointer)
+    output = PC.directory(root, day) / "auxiliary.json"
+    before = output.read_bytes()
+    if change != "latest":
+        with pytest.raises(ValueError, match="auxiliary_tuning_generation_changed"):
+            T.auxiliary_report(root, day, day, parent, publish_policy=False)
+        assert output.read_bytes() == before
+        return
+    report = T.auxiliary_report(root, day, day, parent, publish_policy=False)
+    evaluation = T.read(report["source_receipts"][0]["path"])
+    assert evaluation["campaign_sha256"] == first["artifact_content_sha256"]
+    assert report["resolution_sha256"] == evaluation["resolution_sha256"]
+    assert T.read(latest) == successor
+    assert report["runtime_effect"] is False
+    assert report["actual_order_submitted"] is False
+
+
+@pytest.mark.parametrize("defect", ["missing", "date", "parent", "machine"])
+def test_auxiliary_publication_rejects_invalid_campaign_before_evaluation(
+    setup, monkeypatch, defect
+):
+    root, parent, machine, _, _ = setup
+    day = "2026-10-07"
+    campaign = T.prepare(root, day, machine, parent)
+    out = T.directory(root, day)
+    if defect == "missing":
+        (out / "campaigns" / (campaign["artifact_content_sha256"] + ".json")).unlink()
+    else:
+        field = {
+            "date": "source_date",
+            "parent": "parent_bundle_sha256",
+            "machine": "machine_report_sha256",
+        }[defect]
+        campaign = P.seal(
+            dict(campaign, **{field: "2026-10-08" if defect == "date" else "f" * 64})
+        )
+        P.write(out / "latest-campaign.json", campaign)
+        P.write(
+            out / "campaigns" / (campaign["artifact_content_sha256"] + ".json"),
+            campaign,
+        )
+    monkeypatch.setattr(
+        T, "evaluate", lambda *a, **kw: pytest.fail("invalid admission")
+    )
+    output = PC.directory(root, day) / "auxiliary.json"
+    before = output.read_bytes()
+    with pytest.raises(FileNotFoundError if defect == "missing" else ValueError):
+        T.auxiliary_report(root, day, day, parent, publish_policy=False)
+    assert output.read_bytes() == before
+
+
 def test_configured_calls_never_fall_back_to_legacy_full_queue(setup, monkeypatch):
     root, b, m, sid, v = setup
     monkeypatch.setattr(

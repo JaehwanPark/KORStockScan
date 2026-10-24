@@ -1166,13 +1166,17 @@ def auxiliary_report(data_root, day, publication, parent, *, publish_policy=True
     from src.engine.scalping import mechanistic_entry_runtime_policy as N
 
     machine = read(O.directory(data_root, day) / "machine-comparison.json")
-    campaign = read(directory(data_root, day) / "latest-campaign.json")
+    campaign, _, campaign_path = load_campaign(data_root, day)
     if (
         campaign["machine_report_sha256"] != machine["artifact_content_sha256"]
         or campaign["parent_bundle_sha256"] != parent["bundle_sha256"]
     ):
         raise ValueError("auxiliary_tuning_generation_changed")
-    evaluated = evaluate(data_root, day)
+    # Keep the admitted immutable generation through evaluation and publication.
+    # A concurrent preparation may advance latest without changing this run.
+    evaluated = evaluate(data_root, day, campaign_path=campaign_path)
+    if evaluated.get("campaign_sha256") != campaign["artifact_content_sha256"]:
+        raise ValueError("auxiliary_tuning_generation_changed")
     evalpath = (
         directory(data_root, day)
         / "evaluations"
