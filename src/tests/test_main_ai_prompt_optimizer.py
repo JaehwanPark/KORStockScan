@@ -269,54 +269,16 @@ def test_prompt_revision_native_id_cost_cases_and_workorder_handoff(
             == "order_entry_prompt_revision_source_contract"
         )
 
-    report_dir = tmp_path / "reports"
-    monkeypatch.setattr(workorders, "_workorder_isolated_source_mode", lambda: False)
-    original_load = workorders._load_source_json
-    monkeypatch.setattr(
-        workorders,
-        "_load_source_json",
-        lambda path, **kwargs: (
-            original_load(path, **kwargs) if path.is_relative_to(report_dir) else {}
-        ),
-    )
-    monkeypatch.setattr(workorders, "REPORT_DIR", report_dir)
-    monkeypatch.setattr(
-        workorders,
-        "AI_DECISION_ACTION_OUTCOME_CALIBRATION_DIR",
-        report_dir / "calibration",
-    )
-    monkeypatch.setattr(
-        workorders, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir / "workorders"
-    )
-    monkeypatch.setattr(workorders, "CODE_IMPROVEMENT_WORKORDER_DIR", tmp_path / "docs")
-    _write(
-        report_dir
-        / "main_ai_prompt_optimizer"
-        / "main_ai_prompt_optimizer_2026-09-09.json",
-        report,
-    )
-    _write(
-        report_dir
-        / "calibration"
-        / "ai_decision_action_outcome_calibration_2026-09-09.json",
-        cal,
-    )
-    built = workorders.build_code_improvement_workorder(
+    # The historical workorder publisher is permanently retired. The native
+    # consumer below retains exact proposal identity and source-only authority.
+    retired = workorders.build_code_improvement_workorder(
         "2026-09-09", include_swing=False
     )
-    emitted = next(
-        row for row in built["orders"] if row["order_id"] == orders[0]["order_id"]
-    )
-    assert emitted["decision"] == "implement_now"
-    assert emitted["source_decision"] == "objective_followup_required"
-    assert emitted["recommendation_id"] == drafts[0]["recommendation_id"]
-    assert emitted["proposal_content_sha256"] == drafts[0]["proposal_content_sha256"]
-    assert emitted["proposed_appendix"] == drafts[0]["proposed_appendix"]
-    assert emitted["cost_evidence_by_case"] == drafts[0]["cost_evidence_by_case"]
-    assert emitted["provider_authority"] is False
-    assert built["source"]["main_ai_prompt_optimizer"]
+    assert retired["status"] == "retired"
+    assert retired["runtime_effect"] is False
+    assert not retired.get("orders")
+    assert not (tmp_path / "reports").exists()
 
-    # The final #80 consumer and #91 intake must agree on the same native ID.
     optimizer_path = tmp_path / "consumer-optimizer.json"
     prepared_path = consumer.quality.micro_reversion_prepared_request_path("2026-09-09")
     prepared = {
