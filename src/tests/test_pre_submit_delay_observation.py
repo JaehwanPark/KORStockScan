@@ -725,14 +725,53 @@ def test_expired_due_callsite_uses_terminal_owner_before_removal():
     import inspect
     from src.engine import sniper_state_handlers as h
 
-    source = inspect.getsource(h)
-    marker = 'if (isinstance(due_delay, dict) and due_delay.get("schema") == "pre_submit_delay_policy_v2"'
-    branch = source[source.index(marker) :].split("\n\n", 1)[0]
-    assert (
-        'expire_untriggered_pre_submit_delay(stock, code, reason="recheck_not_ready_before_expiry")'
-        in branch
+    import ast
+
+    branches = [
+        node
+        for node in ast.walk(ast.parse(inspect.getsource(h)))
+        if isinstance(node, ast.If)
+        and any(
+            isinstance(n, ast.Call)
+            and isinstance(n.func, ast.Attribute)
+            and isinstance(n.func.value, ast.Name)
+            and n.func.value.id == "due_delay"
+            and n.func.attr == "get"
+            and len(n.args) == 1
+            and isinstance(n.args[0], ast.Constant)
+            and n.args[0].value == "schema"
+            for n in ast.walk(node.test)
+        )
+        and any(
+            isinstance(n, ast.Constant) and n.value == "pre_submit_delay_policy_v2"
+            for n in ast.walk(node.test)
+        )
+    ]
+    assert len(branches) == 1
+    calls = [
+        n
+        for statement in branches[0].body
+        for n in ast.walk(statement)
+        if isinstance(n, ast.Call)
+    ]
+    terminal = [
+        n
+        for n in calls
+        if isinstance(n.func, ast.Name)
+        and n.func.id == "expire_untriggered_pre_submit_delay"
+    ]
+    assert len(terminal) == 1
+    assert [ast.unparse(arg) for arg in terminal[0].args] == ["stock", "code"]
+    assert {kw.arg: ast.literal_eval(kw.value) for kw in terminal[0].keywords} == {
+        "reason": "recheck_not_ready_before_expiry"
+    }
+    assert not any(
+        isinstance(n.func, ast.Attribute)
+        and isinstance(n.func.value, ast.Name)
+        and n.func.value.id == "stock"
+        and n.func.attr == "pop"
+        for n in calls
     )
-    assert "stock.pop" not in branch
 
 
 @pytest.mark.parametrize(

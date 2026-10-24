@@ -222,9 +222,9 @@ def test_retired_raw_job_cannot_be_reenabled_by_environment():
     names = {node.name for node in tree.body if isinstance(node, ast.FunctionDef)}
     assert "build_microstructure_reaction_context_report" not in names
     assert "backfill_clean_baseline_opportunity_rollups" not in names
-    compact = script.index("--execute-compact-candidate --finalize-compact")
-    direct_summary = script.index("src.engine.runtime_approval_summary", compact)
-    assert compact < direct_summary
+    machine_wait = script.index("--wait-stage main_machine_policy")
+    direct_summary = script.index("src.engine.runtime_approval_summary", machine_wait)
+    assert machine_wait < direct_summary
     assert "--postclose-phase" not in script
     assert "daily_machine_evaluation_handoff" not in script
     assert "--refresh-machine-evaluation-only" not in script
