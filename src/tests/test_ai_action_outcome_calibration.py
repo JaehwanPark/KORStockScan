@@ -5920,6 +5920,172 @@ def test_main_fingerprint_ignores_same_compact_projection_rewrite(
     )
 
 
+@pytest.mark.parametrize(
+    "dependency",
+    [
+        "report/ai_decision_outcome_labels/ai_decision_outcome_labels_2026-10-23.json",
+        "runtime/ai_decision_quality_control_2026-10-23.json",
+        "report/machine_completed_price_source/machine_completed_price_source_2026-10-23.json",
+        "report/ai_decision_action_outcome_calibration/ai_decision_action_outcome_calibration_2026-10-22.json",
+    ],
+)
+def test_machine_report_reuse_tracks_consumed_dependency(
+    monkeypatch, tmp_path, dependency
+):
+    from src.engine.scalping import continuous_reversal_operating_postclose as native
+    from src.engine.scalping import mechanistic_entry_runtime_policy as policy
+
+    monkeypatch.setattr(native, "load_report_parent", lambda *a: None)
+    monkeypatch.setattr(
+        calibration, "ensure_machine_economic_reference", lambda **kw: {}
+    )
+    monkeypatch.setattr(policy, "publish", lambda *a, **kw: pytest.fail("report-only"))
+    source = tmp_path / dependency
+    source.parent.mkdir(parents=True, exist_ok=True)
+    builds = []
+
+    def build(**kwargs):
+        builds.append(True)
+        return calibration._with_artifact_content_sha256(
+            dict(
+                schema=calibration.SCHEMA,
+                target_date="2026-10-23",
+                report_scope="main_mechanistic_entry",
+                noncompact_sections_refreshed=True,
+                evaluation_contract_version=calibration.MAIN_MECHANISTIC_EVALUATION_CONTRACT_VERSION,
+                evaluation_fingerprint=calibration._main_mechanistic_input_fingerprint(
+                    tmp_path, "2026-10-23"
+                ),
+                hierarchical_entry_quality={},
+                status="main_mechanistic_entry_full_evaluation_complete",
+                quality=calibration.materialized_quality_diagnostics(
+                    tmp_path, "2026-10-23"
+                ),
+            )
+        )
+
+    monkeypatch.setattr(calibration, "build_main_mechanistic_report", build)
+    args = [
+        "--target-date",
+        "2026-10-23",
+        "--data-root",
+        str(tmp_path),
+        "--machine-only",
+        "--report-only",
+        "--write",
+    ]
+    monkeypatch.delenv("POSTCLOSE_REGENERATION_SCOPE", raising=False)
+    assert calibration.main(args) == 0 and len(builds) == 1
+    assert calibration.main(args) == 0 and len(builds) == 1
+    for index, value in enumerate(['{"generation":1}', '{"generation":2}', None], 2):
+        if value is None:
+            source.unlink()
+        else:
+            source.write_text(value)
+        assert calibration.main(args) == 0 and len(builds) == index
+
+
+def test_machine_report_rejects_inputs_changed_during_calculation(
+    monkeypatch, tmp_path
+):
+    from src.engine.scalping import continuous_reversal_operating_postclose as native
+
+    parent = {
+        "machine_policy": calibration.MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1,
+        "continuous_reversal": {"schema": "test"},
+    }
+    monkeypatch.setattr(native, "load_report_parent", lambda *a: parent)
+    source = (
+        tmp_path
+        / "report/observation_source_quality_audit/observation_source_quality_audit_2026-10-23.json"
+    )
+    source.parent.mkdir(parents=True)
+    source.write_text("{}")
+
+    def observations(*a, **kw):
+        source.write_text('{"generation":2}')
+        return [], {}
+
+    monkeypatch.setattr(calibration, "load_machine_observation_rows", observations)
+    monkeypatch.setattr(
+        calibration,
+        "_compact_history_receipt",
+        lambda root, day, rows, parent, receipt: receipt,
+    )
+    monkeypatch.setattr(
+        calibration, "ensure_machine_economic_reference", lambda **kw: {}
+    )
+    output = calibration.report_path("2026-10-23", tmp_path / "report")
+    output.parent.mkdir(parents=True)
+    output.write_text('{"original_failed_attempt":"preserved"}')
+    original = output.read_bytes()
+    with pytest.raises(
+        ValueError, match="main_mechanistic_inputs_changed_during_evaluation"
+    ):
+        calibration.main(
+            [
+                "--target-date",
+                "2026-10-23",
+                "--data-root",
+                str(tmp_path),
+                "--machine-only",
+                "--report-only",
+                "--write",
+            ]
+        )
+    assert output.read_bytes() == original
+
+
+@pytest.mark.parametrize("day", ["2026-09-28", "2026-10-24"])
+def test_machine_report_fingerprint_excludes_out_of_window_inputs(
+    monkeypatch, tmp_path, day
+):
+    from src.engine.scalping import continuous_reversal_operating_postclose as native
+
+    monkeypatch.setattr(native, "load_report_parent", lambda *a: None)
+    original = calibration._main_mechanistic_input_fingerprint(tmp_path, "2026-10-23")
+    source = (
+        tmp_path
+        / f"report/ai_decision_outcome_labels/ai_decision_outcome_labels_{day}.json"
+    )
+    source.parent.mkdir(parents=True)
+    source.write_text("{}")
+    assert (
+        calibration._main_mechanistic_input_fingerprint(tmp_path, "2026-10-23")
+        == original
+    )
+
+
+@pytest.mark.parametrize(
+    "kernel",
+    [
+        "ai_decision_trace.py",
+        "microstructure_reaction_context.py",
+        "postclose_entry_validation.py",
+        "entry_setup_source_repair.py",
+        "entry_admission_recipe.py",
+    ],
+)
+def test_machine_report_fingerprint_includes_projection_kernels(
+    monkeypatch, tmp_path, kernel
+):
+    from src.engine.scalping import continuous_reversal_operating_postclose as native
+
+    monkeypatch.setattr(native, "load_report_parent", lambda *a: None)
+    original = calibration._main_mechanistic_input_fingerprint(tmp_path, "2026-10-23")
+    read = Path.read_bytes
+    changed = Path(calibration.__file__).with_name(kernel)
+    monkeypatch.setattr(
+        Path,
+        "read_bytes",
+        lambda path: read(path) + (b"\n" if path == changed else b""),
+    )
+    assert (
+        calibration._main_mechanistic_input_fingerprint(tmp_path, "2026-10-23")
+        != original
+    )
+
+
 def test_machine_microstructure_diagnostic_preserves_existing_auxiliary_gate():
     table = calibration.build_machine_decision_case_table(
         [_bound_microstructure_case_row(1, action="ENTER_NOW")],

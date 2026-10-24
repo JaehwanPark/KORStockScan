@@ -1391,6 +1391,48 @@ def test_compact_candidate_direction_waits_without_spending_provider(
     }
 
 
+@pytest.mark.parametrize(
+    "defect",
+    [None, "artifact_symlink", "directory_symlink", "raw_changed", "stale", "nonzero"],
+)
+def test_runtime_cost_resolves_data_mount_preserving_pricing_guards(tmp_path, defect):
+    from src.tests.test_micro_reversion_provider_budget import _write_pricing_artifact
+
+    data = tmp_path / "shared-data"
+    artifact = _write_pricing_artifact(
+        data / "policy/micro_reversion",
+        effective_to="2026-08-31" if defect == "stale" else "2026-10-31",
+        pricing_basis="operator_accounting_zero_cost",
+        prices=[
+            dict(
+                provider="openai",
+                model="gpt-5.4-nano",
+                input_usd_per_million_tokens="1" if defect == "nonzero" else "0",
+                output_usd_per_million_tokens="0",
+            )
+        ],
+    )
+    artifact = artifact.rename(artifact.with_name("provider_pricing.json"))
+    if defect == "artifact_symlink":
+        saved = artifact.rename(artifact.with_name("original.json"))
+        artifact.symlink_to(saved.name)
+    elif defect == "directory_symlink":
+        directory = artifact.parent
+        saved = directory.rename(directory.with_name("original"))
+        directory.symlink_to(saved.name, target_is_directory=True)
+    elif defect == "raw_changed":
+        (artifact.parent / "provider-pricing-source.txt").write_text("changed")
+    mount = tmp_path / "release-data"
+    mount.symlink_to(data, target_is_directory=True)
+    result = compact.runtime_inference_cost_receipt(mount, "2026-10-23")
+    assert result["status"] == (
+        "source_gap" if defect else "reviewed_operator_zero_cost"
+    )
+    assert result["delta_krw"] == (None if defect else 0.0)
+    if not defect:
+        assert result == compact.runtime_inference_cost_receipt(data, "2026-10-23")
+
+
 @lru_cache(maxsize=1)
 def _full_compact_proof():
     from src.engine.scalping import mechanistic_entry_runtime_policy as policy

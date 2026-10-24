@@ -547,7 +547,10 @@ def runtime_inference_cost_receipt(root, day):
         ProviderBudgetError,
     )
 
-    path = Path(root) / "policy/micro_reversion/provider_pricing.json"
+    # Resolve the caller's data mount, not the artifact or its descendants.
+    # Immutable releases use a shared data symlink; the native pricing reader
+    # still rejects symlinked policy directories, artifacts and raw sources.
+    path = Path(root).resolve() / "policy/micro_reversion/provider_pricing.json"
     try:
         pricing = load_reviewed_pricing_artifact(
             path, as_of_date=date.fromisoformat(day)

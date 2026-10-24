@@ -86,6 +86,18 @@ ENTRY_GROUP_OBSERVATION_SCHEMA = "entry_predecision_group_observation_v1"
 ENTRY_QUALITY_PATH_SCHEMA = "entry_quality_path_v1"
 MACHINE_COMPLETED_PRICE_CACHE_SCHEMA = "machine_completed_price_source_v2"
 MACHINE_COMPLETED_PRICE_MAX_ROUTES = 512
+MACHINE_OBSERVATION_KERNEL_FILES = (
+    "ai_action_outcome_calibration.py",
+    "ai_decision_quality.py",
+    "entry_strategy_policy.py",
+    "entry_setup_evidence.py",
+    "entry_candle_context.py",
+    "ai_decision_trace.py",
+    "microstructure_reaction_context.py",
+    "postclose_entry_validation.py",
+    "entry_setup_source_repair.py",
+    "entry_admission_recipe.py",
+)
 MACHINE_DECISION_CASE_TABLE_SCHEMA = "mechanistic_entry_decision_case_table_v1"
 MAIN_MECHANISTIC_EVALUATION_CONTRACT_VERSION = (
     "main_mechanistic_full_population_operating_scopes_v4"
@@ -363,12 +375,20 @@ def _main_mechanistic_input_fingerprint(
         "report/ai_entry_setup_paired_replay_batch/*.source.json",
         "report/entry_split_order_plan/entry_split_order_plan_*.json",
         "report/entry_cancel_wait_tuning/entry_cancel_wait_tuning_*.json",
+        "report/ai_decision_outcome_labels/ai_decision_outcome_labels_*.json",
+        "runtime/ai_decision_quality_control_*.json",
+        "report/machine_completed_price_source/machine_completed_price_source_*.json*",
+        "report/ai_decision_action_outcome_calibration/ai_decision_action_outcome_calibration_*.json",
     )
     refresh_floor = _refresh_floor(target_date)
     for pattern in patterns:
         for path in data_root.glob(pattern):
             match = re.search(r"(\d{4}-\d{2}-\d{2})", path.name)
             if match and refresh_floor <= match.group(1) <= target_date:
+                # Prior reports carry frozen selections. The current output is
+                # validated separately and must not invalidate its own reuse.
+                if path.parent.name == REPORT_SUBDIR and match.group(1) == target_date:
+                    continue
                 candidates.add(path)
     pricing = data_root / "policy/micro_reversion/provider_pricing.json"
     if pricing.is_file():
@@ -380,15 +400,14 @@ def _main_mechanistic_input_fingerprint(
     from src.engine.scalping.strategy_owner_replay import entry_operating_model_identity
 
     code_paths = [
-        Path(__file__),
-        Path(__file__).with_name("ai_decision_quality.py"),
-        Path(__file__).with_name("entry_setup_evidence.py"),
-        Path(__file__).with_name("entry_strategy_policy.py"),
-        Path(__file__).with_name("entry_candle_context.py"),
-        Path(__file__).with_name("compact_auxiliary_paired_replay.py"),
-        Path(__file__).with_name("strategy_owner_replay.py"),
-        Path(__file__).with_name("entry_split_order_plan.py"),
-        Path(__file__).with_name("continuous_reversal_operating_postclose.py"),
+        Path(__file__).with_name(name)
+        for name in (
+            *MACHINE_OBSERVATION_KERNEL_FILES,
+            "compact_auxiliary_paired_replay.py",
+            "strategy_owner_replay.py",
+            "entry_split_order_plan.py",
+            "continuous_reversal_operating_postclose.py",
+        )
     ]
     body = {
         "contract_version": MAIN_MECHANISTIC_EVALUATION_CONTRACT_VERSION,
@@ -6439,18 +6458,7 @@ def load_machine_observation_rows(
     capture_totals = Counter()
     kernels = {
         name: hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
-        for name in (
-            "ai_action_outcome_calibration.py",
-            "ai_decision_quality.py",
-            "entry_strategy_policy.py",
-            "entry_setup_evidence.py",
-            "entry_candle_context.py",
-            "ai_decision_trace.py",
-            "microstructure_reaction_context.py",
-            "postclose_entry_validation.py",
-            "entry_setup_source_repair.py",
-            "entry_admission_recipe.py",
-        )
+        for name in MACHINE_OBSERVATION_KERNEL_FILES
     }
     for day in sorted(paths):
 
@@ -13080,6 +13088,9 @@ def build_main_mechanistic_report(
     incumbent_date: str | None = None,
 ) -> dict[str, Any]:
     """Build only the active main-machine evaluation and publisher source."""
+    input_fingerprint = _main_mechanistic_input_fingerprint(
+        data_root, target_date, incumbent_date=incumbent_date
+    )
     report_root = data_root / "report"
     paired_rows, paired_contract = _mechanistic_source_rows(
         report_root / PAIRED_SUBDIR,
@@ -13311,9 +13322,7 @@ def build_main_mechanistic_report(
         "report_scope": "main_mechanistic_entry",
         "noncompact_sections_refreshed": True,
         "evaluation_contract_version": (MAIN_MECHANISTIC_EVALUATION_CONTRACT_VERSION),
-        "evaluation_fingerprint": _main_mechanistic_input_fingerprint(
-            data_root, target_date, incumbent_date=incumbent_date
-        ),
+        "evaluation_fingerprint": input_fingerprint,
         "candidate_count": 0,
         "selected_review_candidate": None,
         "ofi_smoothing_audit": {"status": "not_recomputed_machine_only"},
@@ -13375,6 +13384,10 @@ def build_main_mechanistic_report(
         report["submission_drought_price_comparison"] = refresh_daily_projection(
             data_root, target_date, incumbent
         )
+    if input_fingerprint != _main_mechanistic_input_fingerprint(
+        data_root, target_date, incumbent_date=incumbent_date
+    ):
+        raise ValueError("main_mechanistic_inputs_changed_during_evaluation")
     return _with_artifact_content_sha256(report)
 
 
