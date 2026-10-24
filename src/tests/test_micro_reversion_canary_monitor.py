@@ -569,7 +569,10 @@ def _reviewed_ws_lineage_sources():
     # Keep the historical receipt and runtime guard frozen. The additive raw
     # lineage path has a separate measured, exact-source receipt.
     root = Path(__file__).resolve().parents[2]
-    receipt = json.loads((root / "docs/audit-reports/2026-10-21-collector-epoch-latency-validation.json.txt").read_text())
+    receipt = json.loads((root / "docs/audit-reports/2026-10-24-collector-source-latency-validation.json.txt").read_text())
+    predecessor = "docs/audit-reports/2026-10-21-collector-epoch-latency-validation.json.txt"
+    assert receipt["predecessor_receipt"] == predecessor
+    assert hashlib.sha256((root / predecessor).read_bytes()).hexdigest() == receipt["predecessor_receipt_sha256"]
     assert receipt["status"] == "PASS_WITH_UNCHANGED_RUNTIME_LIMITS"
     assert receipt['scope']=='collector_0b_absolute_canary_only'
     assert receipt["runtime_guard_changed"] is False
@@ -626,6 +629,26 @@ def test_mount_compatibility_does_not_accept_unreviewed_source(tmp_path):
             changed,
             "7f63c64aa7f2d3feb6da814d4dcbfda3dae25be8f22a8b96c92b7df58a8f7df4",
         )
+
+
+@pytest.mark.parametrize("damage", ["guard", "predecessor", "source", "runtime_change"])
+def test_current_callback_receipt_rejects_changed_bindings(monkeypatch, damage):
+    root = Path(__file__).resolve().parents[2]
+    receipt_path = root / "docs/audit-reports/2026-10-24-collector-source-latency-validation.json.txt"
+    original_read = Path.read_text
+    receipt = json.loads(original_read(receipt_path))
+    source = "src/engine/scalping/micro_reversion/path_journal.py"
+    if damage == "source":
+        receipt["source_hashes"][source] = "0" * 64
+    elif damage == "runtime_change":
+        receipt["runtime_guard_changed"] = True
+    else:
+        key = "guard_config_sha256" if damage == "guard" else "predecessor_receipt_sha256"
+        receipt[key] = "0" * 64
+    monkeypatch.setattr(Path, "read_text", lambda path, *args, **kwargs:
+        json.dumps(receipt) if path == receipt_path else original_read(path, *args, **kwargs))
+    with pytest.raises(AssertionError):
+        _assert_frozen_source_or_reviewed_mount(root / source, "0" * 64)
 
 
 def test_repository_guard_matches_frozen_baseline_artifact() -> None:

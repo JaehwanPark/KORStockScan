@@ -1,0 +1,172 @@
+{
+  "schema": "scalp_micro_reversion_callback_baseline_v1",
+  "baseline_id": "main_server_synthetic_0b_20261024T125429+0900",
+  "generated_at": "2026-10-24T12:54:29+09:00",
+  "host": {
+    "hostname": "ip-172-31-34-105",
+    "machine": "aarch64",
+    "python": "3.13.12",
+    "platform": "Linux-7.0.0-1014-aws-aarch64-with-glibc2.39"
+  },
+  "workload": {
+    "input": "same_valid_stable_price_kiwoom_0b_snapshot",
+    "observer_off_then_on": true,
+    "path_capture_enabled_on": true,
+    "discovery_enabled_on": false,
+    "iterations_per_repeat": 5000,
+    "warmup_per_repeat": 500,
+    "repeat_count": 5
+  },
+  "observer_off_runs": [
+    {
+      "p50_ms": 0.00012,
+      "p95_ms": 0.000126,
+      "p99_ms": 0.000139,
+      "max_ms": 0.000576,
+      "mean_ms": 0.0001210152
+    },
+    {
+      "p50_ms": 0.000122,
+      "p95_ms": 0.000128,
+      "p99_ms": 0.000141,
+      "max_ms": 0.000225,
+      "mean_ms": 0.0001227074
+    },
+    {
+      "p50_ms": 0.000122,
+      "p95_ms": 0.000129,
+      "p99_ms": 0.000142,
+      "max_ms": 0.006293,
+      "mean_ms": 0.0001240688
+    },
+    {
+      "p50_ms": 0.000121,
+      "p95_ms": 0.000128,
+      "p99_ms": 0.000143,
+      "max_ms": 0.009506,
+      "mean_ms": 0.0001252014
+    },
+    {
+      "p50_ms": 0.000121,
+      "p95_ms": 0.000127,
+      "p99_ms": 0.000141,
+      "max_ms": 0.00022,
+      "mean_ms": 0.0001217994
+    }
+  ],
+  "observer_on_runs": [
+    {
+      "p50_ms": 0.022297,
+      "p95_ms": 0.025721,
+      "p99_ms": 0.032163,
+      "max_ms": 5.465647,
+      "mean_ms": 0.025400309200000002,
+      "collector_internal_p95_ms": 0.024139,
+      "collector_internal_p99_ms": 0.030078,
+      "queue_drop_count": 0.0,
+      "worker_error_count": 0.0
+    },
+    {
+      "p50_ms": 0.022283,
+      "p95_ms": 0.023599,
+      "p99_ms": 0.030026,
+      "max_ms": 5.120305,
+      "mean_ms": 0.027907942800000002,
+      "collector_internal_p95_ms": 0.02234,
+      "collector_internal_p99_ms": 0.028758,
+      "queue_drop_count": 0.0,
+      "worker_error_count": 0.0
+    },
+    {
+      "p50_ms": 0.022394,
+      "p95_ms": 0.023451,
+      "p99_ms": 0.03036,
+      "max_ms": 15.659439,
+      "mean_ms": 0.031607260400000003,
+      "collector_internal_p95_ms": 0.021974,
+      "collector_internal_p99_ms": 0.028853,
+      "queue_drop_count": 0.0,
+      "worker_error_count": 0.0
+    },
+    {
+      "p50_ms": 0.022339,
+      "p95_ms": 0.023466,
+      "p99_ms": 0.029535,
+      "max_ms": 5.119052,
+      "mean_ms": 0.0249473368,
+      "collector_internal_p95_ms": 0.021972,
+      "collector_internal_p99_ms": 0.028124,
+      "queue_drop_count": 0.0,
+      "worker_error_count": 0.0
+    },
+    {
+      "p50_ms": 0.022356,
+      "p95_ms": 0.023372,
+      "p99_ms": 0.0298,
+      "max_ms": 5.435776,
+      "mean_ms": 0.0250536894,
+      "collector_internal_p95_ms": 0.021877,
+      "collector_internal_p99_ms": 0.028348,
+      "queue_drop_count": 0.0,
+      "worker_error_count": 0.0
+    }
+  ],
+  "summary": {
+    "observer_off_p95_ms_max": 0.000129,
+    "observer_off_p99_ms_max": 0.000143,
+    "observer_on_external_p95_ms_max": 0.025721,
+    "observer_on_external_p99_ms_max": 0.032163,
+    "observer_on_internal_p95_ms_max": 0.024139,
+    "observer_on_internal_p99_ms_max": 0.030078,
+    "queue_drop_count": 0,
+    "worker_error_count": 0
+  },
+  "frozen_limits": {
+    "derivation": "max(absolute_floor, five_times_max_observed_internal_percentile)",
+    "minimum_callback_samples": 1000,
+    "producer_callback_latency_p95_max_ms": 1.0,
+    "producer_callback_latency_p99_max_ms": 2.0,
+    "snapshot_stale_after_sec": 30.0
+  },
+  "metric_role": "source_quality_gate_and_observer_canary_safety_veto",
+  "decision_authority": "observer_canary_stop_only_no_trading_authority",
+  "window_policy": "current_process_cumulative_with_periodic_snapshot",
+  "sample_floor": "latency_guard_after_frozen_minimum_callback_samples",
+  "primary_decision_metric": "stop_required",
+  "source_quality_gate": "fresh_collector_snapshot_and_valid_frozen_guard_config;_bounded_ingress_queue_loss_is_source_quality_exclusion_and_provider_replay_hold;_successful_write_below_preventive_low_disk_watermark_is_operational_warning_only;_worker_writer_actual_capture_loss_storage_self_disable_or_authority_failure_is_immediate_stop",
+  "forbidden_uses": [
+    "broker_order_submission",
+    "broker_order_cancel",
+    "buy_wait_drop_or_entry_exit_decision",
+    "simulated_or_real_position_creation",
+    "threshold_provider_bot_quantity_or_cap_mutation",
+    "p2_policy_selection_or_economic_edge_claim"
+  ],
+  "status": "PASS_WITH_UNCHANGED_RUNTIME_LIMITS",
+  "scope": "collector_0b_absolute_canary_only",
+  "runtime_guard_changed": false,
+  "guard_config_sha256": "6fb3781d01b89352aeaf828a2aee25474066b9ab2581bbcad2880de71c5124cf",
+  "runtime_limits": {
+    "minimum_callback_samples": 1000,
+    "producer_callback_latency_p95_max_ms": 1.0,
+    "producer_callback_latency_p99_max_ms": 2.0,
+    "snapshot_stale_after_sec": 30.0
+  },
+  "source_hashes": {
+    "src/engine/kiwoom_websocket.py": "ddc6bab2dfd4adb2d253a420e66eac6bd33c1877b18070023f75c489f9c40730",
+    "src/engine/scalping/micro_reversion/canary_monitor.py": "1a767cc4e34ac8add1ec4318e305317f6faa35c469951dd422b45ec814258891",
+    "src/engine/scalping/micro_reversion/forward_collector.py": "975d0b0061398a488244c80e869336a4aaac14e37d653b57c8115b83382e465e",
+    "src/engine/scalping/micro_reversion/observation_adapter.py": "4ddc938b5f4a0a185e9a9297763f604493913f764c79ccb90fceb17028cdac0d",
+    "src/engine/scalping/micro_reversion/observer_source_quality.py": "9f87eb48e36b9a0d19ac97289f0fc667d9217da75a8270d60377fb2a351cce66",
+    "src/engine/scalping/micro_reversion/path_capture.py": "f0494ef292fe8584dc387ba1bfbffcaf47084c3957c524a253dec69da014b0a0",
+    "src/engine/scalping/micro_reversion/path_journal.py": "91308bcba1d7162cdedcd47918b50400bc5a8e1f8afee66aa50b8f975b5672d1",
+    "src/engine/scalping/micro_reversion/storage_maintenance.py": "61282651dcdf8bda3a4311855c3e7d10b500f1f8ac3fbaef2d5a66b5f4bcc514",
+    "src/engine/scalping/native_packet_validation.py": "a4a36300a81f02cd89256f6b6a9d756de52990f5817d3ba7f90ae75df1d8faea",
+    "src/trading/market/session_contract.py": "52a9574a5e12b2437a727607c1f6fea93480861e1abb37076e9bb39ea920398c"
+  },
+  "benchmark_module_sha256": "1a767cc4e34ac8add1ec4318e305317f6faa35c469951dd422b45ec814258891",
+  "measured_source_commit": "7a962bbba703a1977b1ea68f7df85c9da6c9aae0",
+  "predecessor_receipt": "docs/audit-reports/2026-10-21-collector-epoch-latency-validation.json.txt",
+  "predecessor_receipt_sha256": "b26de21b87434640e060721b0fec1c5eca2a436c0e54cf774e03d777c3c9055b",
+  "acceptance_limits": "Synthetic collector callback only; no live websocket, PID, provider, order, trading or economic acceptance. Historical receipts and runtime thresholds remain unchanged."
+}
