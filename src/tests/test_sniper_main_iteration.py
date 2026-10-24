@@ -37,6 +37,35 @@ def _digest(node):
     return hashlib.sha256(ast.dump(node, include_attributes=False).encode()).hexdigest()
 
 
+def _restore_formatter_only_scanner_docstring(node):
+    """Prove text parity before undoing Black's nested docstring indentation."""
+    import subprocess
+    from pathlib import Path
+
+    source = subprocess.check_output(
+        [
+            "git",
+            "show",
+            "9e78afd1194233d87c4d340ba2f1981d340d88d4:src/engine/kiwoom_sniper_v2.py",
+        ],
+        cwd=Path(main.__file__).resolve().parents[2],
+        text=True,
+    )
+    name = "_scanner_async_commit_ready_for_main_thread"
+    original = next(
+        n
+        for n in ast.walk(ast.parse(source))
+        if isinstance(n, ast.FunctionDef) and n.name == name
+    )
+    matches = [
+        n for n in ast.walk(node) if isinstance(n, ast.FunctionDef) and n.name == name
+    ]
+    assert len(matches) == 1
+    assert ast.get_docstring(matches[0]) == ast.get_docstring(original)
+    matches[0].body[0] = deepcopy(original.body[0])
+    return node
+
+
 def _without_trailing_registration(function, *, startup):
     expected = {
         "from src.utils.pipeline_event_logger import configure_trailing_observation_sink",
@@ -76,8 +105,12 @@ def test_trailing_observer_only_adds_sink_registration_to_selected_native_main()
     }
     for name in ("run_sniper", "close_observation_sources", "_run_sniper_iterations"):
         current = ast.parse(inspect.getsource(getattr(main, name))).body[0]
+        if name == "_run_sniper_iterations":
+            _restore_formatter_only_scanner_docstring(current)
         if name != "_run_sniper_iterations":
             _without_trailing_registration(current, startup=name == "run_sniper")
+        if name == "_run_sniper_iterations":
+            _restore_formatter_only_scanner_docstring(baseline[name])
         assert _digest(current) == _digest(baseline[name])
 
 
@@ -136,7 +169,7 @@ os.kill(os.getpid(), signal.SIGTERM)
                 body.pop(i)
                 clocks += 1
     assert clocks == 2
-    return loop
+    return _restore_formatter_only_scanner_docstring(loop)
 
 
 def test_native_iteration_body_is_original_loop_including_nested_scopes_and_literals():
@@ -162,6 +195,8 @@ def test_shutdown_successor_preserves_consumed_native_loop_and_startup_body():
     )
     old = {n.name: n for n in ast.parse(source).body if isinstance(n, ast.FunctionDef)}
     current = ast.parse(inspect.getsource(main._run_sniper_iterations)).body[0]
+    _restore_formatter_only_scanner_docstring(current)
+    _restore_formatter_only_scanner_docstring(old["_run_sniper_iterations"])
     assert _digest(current) == _digest(old["_run_sniper_iterations"])
     current = ast.parse(inspect.getsource(main.run_sniper)).body[0]
     _without_trailing_registration(current, startup=True)
