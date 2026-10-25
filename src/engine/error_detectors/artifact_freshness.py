@@ -5040,6 +5040,7 @@ def _reconcile_update_kospi_master_difference(
 
 
 ARTIFACT_SCHEDULE_CONTRACTS: dict[str, dict[str, Any]] = {
+    "bd_fbuy_accum_pre_artifact": {"markers": ["BD_FBUY_ACCUM_PRE_INTRADAY"]},
     "pattern_lab_currentness_audit_report": {
         "markers": ["THRESHOLD_CYCLE_POSTCLOSE"],
         "parent_env_key": "THRESHOLD_CYCLE_RUN_SWING_POSTCLOSE",

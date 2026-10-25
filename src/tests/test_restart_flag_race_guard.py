@@ -53,7 +53,10 @@ def test_restart_script_reloads_stale_supervisor_only_after_child_drain():
     assert "Refusing supervisor reload because a bot child is alive" in source
     assert 'if tmux has-session -t "$BOT_TMUX_SESSION"' in source
     assert "confirmed session removal" in source
-    assert "exec ./run_bot.sh" in source
+    assert "router.main_supervisor_command(root)" in source
+    assert source.index("MAIN_SUPERVISOR_COMMAND=") < source.index(
+        'echo "Requesting graceful'
+    )
     assert 'exit "$VERIFY_RC"' in source
 
 
@@ -90,7 +93,7 @@ def test_drained_supervisor_retries_only_without_a_session_or_child(
         """
 set -eu
 failures=$1; appears=$2; attempts=0; session=1; child=0
-BOT_TMUX_SESSION=isolated_test; PROJECT_DIR=/unused
+BOT_TMUX_SESSION=isolated_test; PROJECT_DIR=/unused; MAIN_SUPERVISOR_COMMAND=fixture_command
 if [ "$appears" = initial_child ]; then child=1; fi
 bot_pids() { if [ "$child" = 1 ]; then echo 999; fi; }
 sleep() { :; }
@@ -345,3 +348,59 @@ R.finish_main_shutdown(thread)
         )
         == 1
     )
+
+
+@pytest.mark.parametrize("configuration", ["valid", "missing", "empty", "insecure"])
+def test_restart_database_command_is_prepared_before_drain(
+    tmp_path, monkeypatch, configuration
+):
+    import os
+    import shutil
+    import sys
+    from src.engine.infrastructure import runtime_release_router as router
+
+    release = tmp_path / "release"
+    target = release / "src/engine/infrastructure/runtime_release_router.py"
+    target.parent.mkdir(parents=True)
+    shutil.copy2(router.__file__, target)
+    constants = release / "src/utils/constants.py"
+    constants.parent.mkdir(parents=True)
+    shutil.copy2(Path("src/utils/constants.py"), constants)
+    retirement = release / "src/engine/lifecycle/retirement.py"
+    retirement.parent.mkdir(parents=True)
+    shutil.copy2(Path("src/engine/lifecycle/retirement.py"), retirement)
+    monkeypatch.delenv("KORSTOCKSCAN_POSTGRES_URL", raising=False)
+    monkeypatch.delenv("KORSTOCKSCAN_POSTGRES_URL_FILE", raising=False)
+    monkeypatch.setenv("KORSTOCKSCAN_REQUIRE_POSTGRES_URL", "1")
+    if configuration != "missing":
+        secret = tmp_path / "protected-db"
+        secret.write_text("" if configuration == "empty" else "fixture-private-value")
+        secret.chmod(0o644 if configuration == "insecure" else 0o600)
+        monkeypatch.setenv("KORSTOCKSCAN_POSTGRES_URL_FILE", str(secret))
+    source = Path("restart.sh").read_text()
+    prepare = source.split('MAIN_SUPERVISOR_COMMAND="$(', 1)[1].split(
+        '\necho "Requesting graceful bot restart', 1
+    )[0]
+    script = (
+        'set -eu\nMAIN_SUPERVISOR_COMMAND="$('
+        + prepare
+        + '\nprintf "%s\\n" "$MAIN_SUPERVISOR_COMMAND"\n'
+    )
+    result = subprocess.run(
+        ["bash", "-c", script],
+        env={**os.environ, "PROJECT_DIR": str(release), "VENV_PY": sys.executable},
+        capture_output=True,
+        text=True,
+    )
+    if configuration == "valid":
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == router.main_supervisor_command(release)
+    else:
+        assert result.returncode != 0
+        expected = {
+            "missing": "native_main_database_file_configuration_required",
+            "empty": "native_main_database_file_invalid",
+            "insecure": "native_main_database_file_invalid",
+        }[configuration]
+        assert expected in result.stderr
+        assert "fixture-private-value" not in result.stderr + result.stdout

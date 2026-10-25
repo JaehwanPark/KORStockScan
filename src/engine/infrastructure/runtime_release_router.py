@@ -1166,6 +1166,58 @@ def record_runtime_pid_consumption(
     return receipt
 
 
+def main_supervisor_command(root: Path) -> str:
+    """One quoted child environment for initial start and drained restart."""
+    database = []
+    url_file = os.environ.get("KORSTOCKSCAN_POSTGRES_URL_FILE")
+    required = os.environ.get("KORSTOCKSCAN_REQUIRE_POSTGRES_URL", "0")
+    if url_file is not None and "KORSTOCKSCAN_POSTGRES_URL" in os.environ:
+        raise ValueError("native_main_database_configuration_conflict")
+    if url_file is not None or required != "0":
+        if required not in {"0", "1"} or not url_file:
+            raise ValueError("native_main_database_file_configuration_required")
+        if not Path(url_file).is_absolute():
+            raise ValueError("native_main_database_file_path_invalid")
+        # Reuse the selected consumer's protected-file reader before a restart
+        # can drain its incumbent. No database connection or URL output occurs.
+        checked = subprocess.run(
+            [
+                sys.executable,
+                "-I",
+                "-c",
+                "import sys; sys.path.insert(0, sys.argv[1]); "
+                "from src.utils.constants import POSTGRES_URL",
+                str(root),
+            ],
+            capture_output=True,
+            timeout=30,
+            check=False,
+        )
+        if checked.returncode:
+            raise ValueError("native_main_database_file_invalid")
+        # Forward only a protected file path, never credentials in argv.
+        # A stale tmux server's direct URL must not override that file.
+        database = [
+            "-u",
+            "KORSTOCKSCAN_POSTGRES_URL",
+            f"KORSTOCKSCAN_REQUIRE_POSTGRES_URL={required}",
+            f"KORSTOCKSCAN_POSTGRES_URL_FILE={url_file}",
+        ]
+    elif "KORSTOCKSCAN_POSTGRES_URL" in os.environ:
+        raise ValueError("native_main_database_requires_protected_url_file")
+    return shlex.join(
+        [
+            "/usr/bin/env",
+            *database,
+            f"PROJECT_DIR={root}",
+            f"PYTHONPATH={root}",
+            f"VENV_PY={root}/.venv/bin/python",
+            "/bin/bash",
+            str(root / "src/run_bot.sh"),
+        ]
+    )
+
+
 def make_plan(
     workspace: Path, root: Path, commit: str, operation: str, target_date: str
 ) -> dict:
@@ -1290,16 +1342,7 @@ def make_plan(
         cwd = root / "src"
         # tmux may have a long-lived server with an older environment. Set the
         # release context in the actual child command, not only the client env.
-        child = shlex.join(
-            [
-                "/usr/bin/env",
-                f"PROJECT_DIR={root}",
-                f"PYTHONPATH={root}",
-                f"VENV_PY={root}/.venv/bin/python",
-                "/bin/bash",
-                str(root / "src/run_bot.sh"),
-            ]
-        )
+        child = main_supervisor_command(root)
         command = [
             "/usr/bin/tmux",
             "new-session",

@@ -3839,6 +3839,45 @@ class TestArtifactFreshnessDetector:
             ),
         )
 
+    @pytest.mark.parametrize(
+        "crontab,expected",
+        [
+            ("", "pass"),
+            ("# 5 9 * * 1-5 runner # BD_FBUY_ACCUM_PRE_INTRADAY\n", "pass"),
+            ("5 9 * * 1-5 runner # BD_FBUY_ACCUM_PRE_INTRADAY\n", "fail"),
+            (None, "fail"),
+        ],
+    )
+    def test_bd_file_expectation_uses_installed_producer(
+        self, tmp_path, monkeypatch, crontab, expected
+    ):
+        from src.engine.error_detectors import artifact_freshness as mod
+
+        entry = next(
+            dict(row)
+            for row in mod.ARTIFACT_REGISTRY
+            if row["id"] == "bd_fbuy_accum_pre_artifact"
+        )
+        entry.update(path_template=str(tmp_path / "missing.json"), critical=True)
+        for key in (
+            "window_start",
+            "window_end",
+            "window_grace_sec",
+            "trading_day_only",
+        ):
+            entry.pop(key, None)
+        monkeypatch.setattr(mod, "ARTIFACT_REGISTRY", [entry])
+        monkeypatch.setattr(mod, "load_installed_crontab", lambda: crontab)
+        result = mod.ArtifactFreshnessDetector().check()
+        assert result.severity == expected
+        if expected == "pass":
+            assert (
+                result.details["bd_fbuy_accum_pre_artifact_status"]
+                == "disabled_not_installed"
+            )
+        else:
+            assert result.details["bd_fbuy_accum_pre_artifact_status"] == "fail"
+
     def test_preopen_artifacts_allow_one_detector_interval_for_producer_race(self):
         preopen_artifacts = {
             artifact["id"]: artifact

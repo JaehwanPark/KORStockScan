@@ -1734,3 +1734,117 @@ def test_role_model_environment_override_is_single_setting(monkeypatch, setting)
     assert getattr(after, setting) == "only-this-role"
     for removed in ("GPT_FAST_MODEL", "GPT_REPORT_MODEL", "GPT_DEEP_MODEL"):
         assert not hasattr(after, removed)
+
+
+def test_postgres_configuration_injection_and_legacy_boundary(monkeypatch):
+    monkeypatch.delenv("KORSTOCKSCAN_POSTGRES_URL", raising=False)
+    monkeypatch.delenv("KORSTOCKSCAN_REQUIRE_POSTGRES_URL", raising=False)
+    resolve = constants._configured_postgres_url
+    assert resolve("legacy-fixture") == "legacy-fixture"
+    monkeypatch.setenv("KORSTOCKSCAN_REQUIRE_POSTGRES_URL", "1")
+    with pytest.raises(ValueError, match="^postgres_url_required$"):
+        resolve("legacy-fixture")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_POSTGRES_URL", "postgresql://fixture@localhost/new"
+    )
+    reloaded = importlib.reload(constants)
+    assert reloaded.POSTGRES_URL == "postgresql://fixture@localhost/new"
+
+
+@pytest.mark.parametrize("required", ["0", "1"])
+@pytest.mark.parametrize("value", ["", "  "])
+def test_explicit_empty_postgres_configuration_never_falls_back(
+    monkeypatch, required, value
+):
+    monkeypatch.setenv("KORSTOCKSCAN_REQUIRE_POSTGRES_URL", required)
+    monkeypatch.setenv("KORSTOCKSCAN_POSTGRES_URL", value)
+    with pytest.raises(ValueError, match="^postgres_url_empty$"):
+        constants._configured_postgres_url("legacy-fixture")
+
+
+def test_unknown_postgres_required_flag_fails_closed(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_REQUIRE_POSTGRES_URL", "typo")
+    with pytest.raises(ValueError, match="^postgres_url_required_flag_invalid$"):
+        constants._configured_postgres_url("legacy-fixture")
+
+
+def test_protected_postgres_file_reaches_existing_consumers(tmp_path, monkeypatch):
+    import runpy
+
+    monkeypatch.delenv("KORSTOCKSCAN_POSTGRES_URL", raising=False)
+    monkeypatch.setenv("KORSTOCKSCAN_REQUIRE_POSTGRES_URL", "1")
+    secret = tmp_path / "postgres-url"
+    secret.write_text("postgresql://fixture@localhost/new\n")
+    secret.chmod(0o600)
+    monkeypatch.setenv("KORSTOCKSCAN_POSTGRES_URL_FILE", str(secret))
+    importlib.reload(constants)
+    # Exercise the DBManager import-time default without opening a connection.
+    scope = runpy.run_path("src/database/db_manager.py")
+    assert scope["DBManager"].__init__.__defaults__ == (
+        "postgresql://fixture@localhost/new",
+    )
+
+
+@pytest.mark.parametrize(
+    "kind",
+    [
+        "missing",
+        "world_readable",
+        "symlink",
+        "directory",
+        "oversized",
+        "invalid_utf8",
+        "conflict",
+        "empty",
+    ],
+)
+def test_invalid_protected_postgres_file_fails_closed(tmp_path, monkeypatch, kind):
+    monkeypatch.delenv("KORSTOCKSCAN_POSTGRES_URL", raising=False)
+    monkeypatch.setenv("KORSTOCKSCAN_REQUIRE_POSTGRES_URL", "1")
+    secret = tmp_path / "postgres-url"
+    secret.write_text("postgresql://fixture:never-display@localhost/new")
+    secret.chmod(0o600)
+    if kind == "missing":
+        secret.unlink()
+    elif kind == "world_readable":
+        secret.chmod(0o644)
+    elif kind == "symlink":
+        other = tmp_path / "alias"
+        other.symlink_to(secret)
+        secret = other
+    elif kind == "directory":
+        secret.unlink()
+        secret.mkdir()
+    elif kind == "oversized":
+        secret.write_bytes(b"x" * 65537)
+    elif kind == "invalid_utf8":
+        secret.write_bytes(b"\xff")
+    elif kind == "conflict":
+        monkeypatch.setenv("KORSTOCKSCAN_POSTGRES_URL", "other")
+    elif kind == "empty":
+        secret.write_text("")
+    monkeypatch.setenv("KORSTOCKSCAN_POSTGRES_URL_FILE", str(secret))
+    with pytest.raises(ValueError) as error:
+        constants._configured_postgres_url("legacy-fixture")
+    assert "never-display" not in str(error.value)
+    assert "legacy-fixture" not in str(error.value)
+
+
+def test_missing_migration_db_configuration_traceback_contains_no_url(monkeypatch):
+    import os
+    import subprocess
+    import sys
+
+    monkeypatch.delenv("KORSTOCKSCAN_POSTGRES_URL", raising=False)
+    monkeypatch.delenv("KORSTOCKSCAN_POSTGRES_URL_FILE", raising=False)
+    monkeypatch.setenv("KORSTOCKSCAN_REQUIRE_POSTGRES_URL", "1")
+    result = subprocess.run(
+        [sys.executable, "-c", "import src.utils.constants"],
+        env=os.environ.copy(),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "postgres_url_required" in result.stderr
+    assert "://" not in result.stderr

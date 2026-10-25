@@ -116,8 +116,8 @@ restart_drained_tmux_supervisor() {
             echo "Refusing supervisor creation retry: a session or bot child appeared." >&2
             return 1
         fi
-        if tmux new-session -d -s "$BOT_TMUX_SESSION" \
-            "/bin/bash -c \"cd $PROJECT_DIR/src && source ../.venv/bin/activate && exec ./run_bot.sh\""; then
+        if tmux new-session -d -s "$BOT_TMUX_SESSION" -c "$PROJECT_DIR/src" \
+            "$MAIN_SUPERVISOR_COMMAND"; then
             return 0
         fi
         if [ "$attempt" -lt 3 ]; then
@@ -153,6 +153,21 @@ if { [ -n "$LOADED_SOURCE_ROOT" ] && [ "$LOADED_SOURCE_ROOT" != "$PROJECT_DIR" ]
     echo "Loaded run_bot.sh sha256: $LOADED_LAUNCHER_SHA256"
     echo "Current run_bot.sh sha256: $CURRENT_LAUNCHER_SHA256"
 fi
+
+# Resolve the shared child command before publishing a drain request. Invalid
+# target database configuration must preserve the incumbent supervisor.
+MAIN_SUPERVISOR_COMMAND="$("$VENV_PY" -I - "$PROJECT_DIR" <<'PY_COMMAND'
+from pathlib import Path
+import importlib.util
+import sys
+root = Path(sys.argv[1])
+path = root / "src/engine/infrastructure/runtime_release_router.py"
+spec = importlib.util.spec_from_file_location("native_restart_router", path)
+router = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(router)
+print(router.main_supervisor_command(root))
+PY_COMMAND
+)"
 
 echo "Requesting graceful bot restart via $RESTART_FLAG"
 echo "Current bot PID(s): ${OLD_PIDS[*]}"

@@ -1,5 +1,6 @@
 # src/utils/constants.py
 import os
+import stat
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -20,9 +21,59 @@ UTILS_DIR = PROJECT_ROOT / "src" / "utils"
 ENGINE_DIR = PROJECT_ROOT / "src" / "engine"
 MODEL_DIR = PROJECT_ROOT / "src" / "model"
 NOTIFY_DIR = PROJECT_ROOT / "src" / "notify"
-POSTGRES_URL = (
+
+
+def _configured_postgres_url(legacy_default):
+    """Resolve startup configuration once for all native database consumers.
+
+    Migration launchers require an explicit new URL. Missing/empty values fail
+    before constructing an engine; error messages never include credentials.
+    """
+    value = os.environ.get("KORSTOCKSCAN_POSTGRES_URL")
+    secret_path = os.environ.get("KORSTOCKSCAN_POSTGRES_URL_FILE")
+    if secret_path is not None:
+        if value is not None:
+            raise ValueError("postgres_url_configuration_conflict")
+        if not secret_path or not Path(secret_path).is_absolute():
+            raise ValueError("postgres_url_file_path_invalid")
+        try:
+            fd = os.open(secret_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            with os.fdopen(fd, "rb") as handle:
+                before = os.fstat(handle.fileno())
+                if (
+                    not stat.S_ISREG(before.st_mode)
+                    or before.st_mode & 0o077
+                    or before.st_uid not in {0, os.geteuid()}
+                    or before.st_size > 65536
+                ):
+                    raise ValueError("postgres_url_file_invalid")
+                raw = handle.read(65537)
+                after = os.fstat(handle.fileno())
+                if len(raw) > 65536 or (
+                    before.st_size,
+                    before.st_mtime_ns,
+                    before.st_ctime_ns,
+                ) != (after.st_size, after.st_mtime_ns, after.st_ctime_ns):
+                    raise ValueError("postgres_url_file_changed")
+                value = raw.decode("utf-8").strip()
+        except (OSError, UnicodeError):
+            raise ValueError("postgres_url_file_unreadable") from None
+    required = os.environ.get("KORSTOCKSCAN_REQUIRE_POSTGRES_URL", "0")
+    if required not in {"0", "1"}:
+        raise ValueError("postgres_url_required_flag_invalid")
+    if value is None:
+        if required == "1":
+            raise ValueError("postgres_url_required")
+        return legacy_default
+    if not value.strip():
+        raise ValueError("postgres_url_empty")
+    return value
+
+
+_LEGACY_POSTGRES_URL = (
     "postgresql://quant_admin:quant_password_123!@localhost:5432/korstockscan"
 )
+POSTGRES_URL = _configured_postgres_url(_LEGACY_POSTGRES_URL)
 # Runtime migration boundary for stale SCALPING rows. This is intentionally
 # separate from the clean-tuning policy, which has no live DB mutation authority.
 SCALPING_RUNTIME_ARCHIVE_CUTOFF_DATE = "2026-06-04"

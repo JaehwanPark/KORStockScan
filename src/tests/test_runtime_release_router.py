@@ -2097,3 +2097,73 @@ def test_direct_startup_entry_honors_operator_hold_before_any_bot_import(
     assert result.returncode != 0
     assert "operator_postclose_startup_hold_active" in result.stdout + result.stderr
     assert "ModuleNotFoundError" not in result.stderr
+
+
+def test_main_database_file_survives_stale_tmux_environment(tmp_path, monkeypatch):
+    import shlex
+    import shutil
+
+    constants = tmp_path / "release/src/utils/constants.py"
+    constants.parent.mkdir(parents=True)
+    shutil.copy2(Path("src/utils/constants.py"), constants)
+    retirement = tmp_path / "release/src/engine/lifecycle/retirement.py"
+    retirement.parent.mkdir(parents=True)
+    shutil.copy2(Path("src/engine/lifecycle/retirement.py"), retirement)
+
+    secret = tmp_path / "protected db url"
+    secret.write_text("postgresql://fixture:private-value@localhost/new\n")
+    secret.chmod(0o600)
+    monkeypatch.delenv("KORSTOCKSCAN_POSTGRES_URL", raising=False)
+    monkeypatch.setenv("KORSTOCKSCAN_REQUIRE_POSTGRES_URL", "1")
+    monkeypatch.setenv("KORSTOCKSCAN_POSTGRES_URL_FILE", str(secret))
+    plan = router.make_plan(
+        tmp_path, tmp_path / "release", "a" * 40, "start", "2026-10-26"
+    )
+    command = shlex.split(plan["command"][-1])
+    assert "private-value" not in plan["command"][-1]
+    # Run just the generated environment prefix against a harmless probe.
+    # This executes neither tmux nor the Main shell entrypoint.
+    end = command.index("/bin/bash")
+    env = {**os.environ, "KORSTOCKSCAN_POSTGRES_URL": "stale-server-url"}
+    result = subprocess.run(
+        command[:end]
+        + [
+            sys.executable,
+            "-c",
+            "import os; assert 'KORSTOCKSCAN_POSTGRES_URL' not in os.environ; "
+            "assert os.environ['KORSTOCKSCAN_REQUIRE_POSTGRES_URL'] == '1'; "
+            "assert os.path.isfile(os.environ['KORSTOCKSCAN_POSTGRES_URL_FILE'])",
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize(
+    "required,path,direct",
+    [
+        ("1", None, None),
+        ("typo", "/private/file", None),
+        ("1", "relative", None),
+        ("0", None, "private-url"),
+    ],
+)
+def test_native_main_rejects_unforwardable_database_configuration(
+    tmp_path, monkeypatch, required, path, direct
+):
+    monkeypatch.setenv("KORSTOCKSCAN_REQUIRE_POSTGRES_URL", required)
+    for key, value in (
+        ("KORSTOCKSCAN_POSTGRES_URL_FILE", path),
+        ("KORSTOCKSCAN_POSTGRES_URL", direct),
+    ):
+        if value is None:
+            monkeypatch.delenv(key, raising=False)
+        else:
+            monkeypatch.setenv(key, value)
+    with pytest.raises(ValueError, match="native_main_database_"):
+        router.make_plan(
+            tmp_path, tmp_path / "release", "a" * 40, "start", "2026-10-26"
+        )

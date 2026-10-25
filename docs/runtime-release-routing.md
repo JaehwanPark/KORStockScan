@@ -4,6 +4,26 @@
 
 # Main runtime release routing
 
+## Explicit database configuration for a migration candidate
+
+The native database consumer accepts `KORSTOCKSCAN_POSTGRES_URL` or
+`KORSTOCKSCAN_POSTGRES_URL_FILE`, exclusively. A migration launch profile sets
+`KORSTOCKSCAN_REQUIRE_POSTGRES_URL=1` and supplies an absolute protected file;
+unset incumbent configuration retains its existing consumer behavior. The file
+must be a regular non-symlink leaf, owned by root or the runtime user, with no
+group/other access. The bounded reader rejects empty, changed or unreadable input
+without printing its contents. Configuration alone creates no DB connection.
+
+The existing router's `main_supervisor_command` is shared by initial start and
+`restart.sh`. It independently loads the selected constants consumer before
+drain, forwards only the protected path and required flag, and removes a stale
+tmux server's direct-URL variable from the child. Direct URL launch arguments,
+conflicting configuration and invalid files fail before restart publication.
+No credentials are placed in command arguments. Target credentials and file
+permissions must be provisioned before native candidate/P5 validation; current
+runtime proof does not validate a new host or a new source commit. This source
+change does not select a release, install the candidate schedule or start Main.
+
 Owner: deployment infrastructure. Main and scheduled consumers use the selected immutable release; web units require the same reviewed release pin. Release routing is separate from exact-date trading approval. Retired executors have no independent code or policy pin.
 
 ## 스캘핑 트레일링 익절 기계판정 영수증
