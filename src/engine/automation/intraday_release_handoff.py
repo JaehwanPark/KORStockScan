@@ -10947,6 +10947,52 @@ REVIEWED_ENTRY_COST_PAIRS = {
 }
 
 
+# Frozen contract identity repair; prior complete generations stay readable.
+REVIEWED_AUXILIARY_ENVELOPE_HASHES = {
+    "src/engine/scalping/reversal_auxiliary_registry.py": "e0ef036e8451e3ca867fbe274ff26fa747f281907cbee2470183b307350a5b77",
+    "src/engine/monitoring/policy_generation_code_handoff.py": "02609b635fdb49576cd9596e25fa3c697ce557aa4cd856a27e090be045f1ea04",
+    "src/engine/infrastructure/startup_validation_code_context.py": "0206c0105ef369957816a2383f72edc89e4e0f5a145868e7db837b37e6ca687d",
+}
+REVIEWED_AUXILIARY_ENVELOPE_PROFILE = {
+    **REVIEWED_COLD_SOURCE_BOUNDARY_PROFILE,
+    **REVIEWED_AUXILIARY_ENVELOPE_HASHES,
+}
+REVIEWED_AUXILIARY_ENVELOPE_VARIANTS = {
+    (key[0], REVIEWED_AUXILIARY_ENVELOPE_HASHES.get(key[0], key[1])): {
+        **value,
+        "selector_path": "src/engine/scalping/reversal_auxiliary_registry.py",
+        "selector_sha256": REVIEWED_AUXILIARY_ENVELOPE_HASHES[
+            "src/engine/scalping/reversal_auxiliary_registry.py"
+        ],
+        "dependencies": {**value["dependencies"], **REVIEWED_AUXILIARY_ENVELOPE_HASHES},
+        "contract_extensions": {
+            origin: {
+                name: REVIEWED_AUXILIARY_ENVELOPE_HASHES.get(
+                    os.path.normpath(name), digest
+                )
+                for name, digest in paths.items()
+            }
+            for origin, paths in value["contract_extensions"].items()
+        },
+    }
+    for key, value in REVIEWED_COLD_SOURCE_BOUNDARY_VARIANTS.items()
+}
+REVIEWED_ENTRY_COST_PAIRS = {
+    **REVIEWED_ENTRY_COST_PAIRS,
+    **{
+        name: REVIEWED_ENTRY_COST_PAIRS.get(name, ())
+        + tuple(
+            (origin, current)
+            for origin in {
+                old for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ()) for old in pair
+            }
+            | {REVIEWED_COLD_SOURCE_BOUNDARY_PROFILE[name]}
+        )
+        for name, current in REVIEWED_AUXILIARY_ENVELOPE_HASHES.items()
+    },
+}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -11530,6 +11576,15 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     ):
         prepared_hashes = REVIEWED_COLD_SOURCE_BOUNDARY_PROFILE
         prepared_variants = REVIEWED_COLD_SOURCE_BOUNDARY_VARIANTS
+    envelope_name = 'src/engine/scalping/reversal_auxiliary_registry.py'
+    envelope_successor = candidate_bytes(envelope_name, optional=True)
+    if (
+        envelope_successor is not None
+        and hashlib.sha256(envelope_successor).hexdigest()
+        == REVIEWED_AUXILIARY_ENVELOPE_HASHES[envelope_name]
+    ):
+        prepared_hashes = REVIEWED_AUXILIARY_ENVELOPE_PROFILE
+        prepared_variants = REVIEWED_AUXILIARY_ENVELOPE_VARIANTS
     entry_cost_hashes = (
         prepared_hashes
         if prepared_owner_present

@@ -951,6 +951,15 @@ REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS["entry_cancel_wait"] += (
 )
 
 
+# Preserve authenticated frozen wire identity through the shared envelope owner.
+REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS["auxiliary"] += (
+    (
+        "8f7446efe983c1ad88ba90c3ca72114fe9e90d045356e8c7d74acd0d4ceb62fd",
+        "357573bd61c06c26c208be7ab5447eff3805a8efa21cf1bbf9df201be7c14ddd",
+    ),
+)
+
+
 def current_fixture_observation(observed, data):
     family = observed.get("family")
     pair = REVIEWED_SUCCESSORS.get(family)

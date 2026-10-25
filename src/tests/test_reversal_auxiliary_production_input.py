@@ -374,6 +374,11 @@ def test_frozen_registry_full_consumer_preserves_identity_and_guards(tmp_path):
     logical, prompt, schema = G.production_request(snapshot, current)
     fresh = definitions()[2]
     assert G.production_request(snapshot, fresh) == (logical, prompt, schema)
+    envelope = G.envelope(logical, current)
+    assert envelope["contract"] == current["wire_contract"]
+    assert envelope["hashes"] == G.envelope(logical, fresh)["hashes"]
+    envelope["contract"]["source_sha256"] = "0" * 64
+    assert current == originals[2]
     request = G.request(snapshot, current)
     request["candidate"]["compact_runtime_contract"] = copy.deepcopy(
         parent["wire_contract"]

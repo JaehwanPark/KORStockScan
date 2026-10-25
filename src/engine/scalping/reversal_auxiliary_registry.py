@@ -503,7 +503,11 @@ def envelope(logical_input, value):
     if value["schema"] == SCHEMA_V2:
         from src.engine.scalping import reversal_auxiliary_wire as W
 
-        return W.envelope(logical_input, value["prompt"], schema)
+        envelope = W.envelope(logical_input, value["prompt"], schema)
+        # validate() already authenticates this exact frozen contract against
+        # reviewed reader generations. Keep the registry's issued identity.
+        envelope["contract"] = copy.deepcopy(value["wire_contract"])
+        return envelope
     return dict(
         logical_input=logical_input,
         logical_prompt=value["prompt"],
