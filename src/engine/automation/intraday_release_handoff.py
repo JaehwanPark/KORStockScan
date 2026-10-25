@@ -1088,10 +1088,38 @@ def verify_entry_consumer_code(day, *, family, policy_sha, expected, paths, actu
         from src.engine.automation import prepared_policy_code_handoff as prepared_code
 
         review = _PREDECESSOR_REVIEW.get()
+        if review is None:
+            selection = _read(DATA_DIR / "runtime/runtime_release_selection.json")
+            if (
+                selection.get("main_start_authorized") is False
+                and selection.get("approval_scope")
+                == "after_postclose_deploy_for_next_regular_start"
+                and Path(__file__).resolve().parents[3]
+                != Path(selection.get("release_root") or "")
+            ):
+                # Controller/strict readers run outside the preparation caller.
+                # Authenticate the same stopped native transition independently.
+                with stopped_postclose_review(day):
+                    return verify_entry_consumer_code(
+                        day,
+                        family=family,
+                        policy_sha=policy_sha,
+                        expected=expected,
+                        paths=paths,
+                        actual=actual,
+                    )
         if review is not None:
             root, commit = _selection(require_selected_cwd=False)
             candidate = Path(__file__).resolve().parents[3]
-            if not predecessor_review_matches(review, day, root, commit, candidate):
+            observation = review.get("postclose_observation")
+            custody_day = day
+            if observation is not None:
+                if observation.get("prepared_target_date") != day:
+                    raise ValueError("entry_consumer_prepared_target_unbound")
+                custody_day = datetime.now(KST).date().isoformat()
+            if not predecessor_review_matches(
+                review, custody_day, root, commit, candidate
+            ):
                 raise ValueError("entry_consumer_prepared_predecessor_unbound")
             origin = prepared_code.resolve_prepared_code_origin(
                 DATA_DIR,
@@ -1116,7 +1144,7 @@ def verify_entry_consumer_code(day, *, family, policy_sha, expected, paths, actu
                 expected,
             )
             if not predecessor_review_matches(
-                review, day, root, commit, candidate
+                review, custody_day, root, commit, candidate
             ) or any(
                 _sha(name) != digest for name, digest in origin["sources"].items()
             ):
@@ -10672,6 +10700,105 @@ REVIEWED_ENTRY_COST_PAIRS = {
     },
 }
 
+# Exact cancel-cache capability repair; archive and earlier profiles retained.
+REVIEWED_CANCEL_CACHE_HASHES = {
+    "src/engine/automation/entry_cancel_wait_tuning.py": "7cb52595d1c470f89588b339b83558b990136073ba25e6917bd61e133f5f52b5",
+    "src/engine/monitoring/policy_generation_code_handoff.py": "bb62913faa6170362beffc417f974fbb07cca808754112dde0669cd889d1e99f",
+    "src/engine/infrastructure/startup_validation_code_context.py": "53737d9fb89696fcfa2a5ff7ca0035be1cb7db838e63c1235395248acb7fe712",
+}
+REVIEWED_CANCEL_CACHE_ORIGINS = {
+    "src/engine/automation/entry_cancel_wait_tuning.py": (
+        "38ba95d3965f11f4d31bee05c5a0e4ba28dd2fc7e05505104b491dbf390cd0fa",
+        "49c1f36ca4082714705e0e558fa6a931cba7f394fb7f1dca83090884db86dfb4",
+        "860304462737c66646146b84f04c5b930664d144442d12ef223e23f7d0b943fe",
+        "bdfaaeaac7768f703d181314be45afaf2ecfc983001a6364a60a41ae54882c4e",
+        "d557fef76bf6c35ff583c5c52fa23bd3c19039efe14fc48f81db90036edb61aa",
+        "e3d227354e85ec9d2dc19cb96e533d1b9f4cb54c5cd2338f7c671eae84a91582",
+    ),
+    "src/engine/monitoring/policy_generation_code_handoff.py": (
+        "056582f3a61d683220910a86107018d5fea3467f5181a7a837498cf94df6d4c2",
+        "1a572a81032cd49121e24e2e4925d91d922d9697a65c65db0f473873b656c5cc",
+        "1dff8c3fcc6dba15fdc720a36c5070a81805d5124433140b8158f3f50c62b98e",
+        "28feb05ecb68ddb0413e45043e92f0d30805a0b4b5b708c894bbdbe12a286411",
+        "41ebbc34a2fd015a0cd76ae525c1e6e859edbaa6dc4e4e88e4cc76a44a7a9bef",
+        "47db04eba70a27e3fbb5c4078e828be38920859efbf4224e3049582776ff6d5f",
+        "4c23315cdd2585bab300b493aae73e8204ab5aa38279b70196b6c34a8779421b",
+        "4db24d4d542b8cc6142c1b85e0839bfce6a7116aaae5f49e2b0d90e4174e3d62",
+        "58f427eee221104aef727ec4dcadb4ad5ec8021c262b6e3c104941ed851fcf6e",
+        "62872a82eda5eae04541329a65dc062b4f99150360dfb24b7eeb8888214f0c25",
+        "64c1d33b10b5e3999f12825dbcb850ad7520c7c117d8542e6da6e127234192dc",
+        "858f6f949015f1c27d0185a0183df7a331f7fda971830408a5cdf53d16b39b5a",
+        "af16ae40eed72ce51960ce6141f3b800e476007f3026cfd2dcd7455226b32fdc",
+        "b14d8aaf06d7414bcbe6bdb87ddfc685f2c3765db15f8a5f50d93f3e5eeaf444",
+        "b188d34dea921cf21f602ce83ef7d6c8af0527b8e874b208e92394f2d904759d",
+        "b65c616d024460c825d73472311ddf995282069cd58dfdec9241447d4285d841",
+        "b9bb89e9ea3c3835e2cb45dc7687b91e38156d208adf1dfc7554869038e50a0e",
+        "ceb7e9d6031da3e0f77fd0285897e760bec25b3c26f82f85e7b272537e4cbfee",
+        "d54110a7b981997f50e496a37a92c8a04f711278ccd9a50d194519ac35baed3b",
+        "e9b1ef85c2cae6c3bec70a6697a36d767584abee1c6fe621530865ef5146a9eb",
+    ),
+    "src/engine/infrastructure/startup_validation_code_context.py": (
+        "0ca493e04eecc4031d75de2d3dfcc076fca47fbc6fb874843f29ab51ff7adebe",
+        "13d85428ca0657171a7e01e9d5ada28e0ef1bd42db630d851072748963fc1ca5",
+        "15dc6609382751359651f7d744fa616207cf024abe45a5ae4c1fe167134c8b42",
+        "17e301896dcb28e112dee5497559ab33d9ac39c7a02c00f6851b507908fec8e8",
+        "21fdf9d9229c558edc70361412735a1be36b483e7eb841665a1d5659c45f7387",
+        "27cc959c3a18217d2e312a7a04b4c7160ab2a55bbc0ee6dbd4eb56c684138212",
+        "2c0b95c995c3f4db749dd40a7522a2e78a59c79ad244869a57b0295a8b7b2f0b",
+        "355a1eb29a8e7584872f7446cd7b78af4375a72c8d53fe482f2023afab311e59",
+        "52a87252121e687de0674cfea5ef565cb183032b0962e8fbee90a7d656b59fe5",
+        "5890164cb152c1f408347ea5703b699b5c8ec8cdf225819314c52bbc76776681",
+        "5a881b096932962604f6aab3a995378d0246ea30e7cb3c17e3ef7e3b93b2288d",
+        "5b1f9610fd8eda6353e8911cf558beb9d40f764cbd11472ddb883454d3355d6e",
+        "5e78314e2105d6a8c645bda55aed36036db797ef447dc5085c87dd3cf91d8bed",
+        "5f6b4ccc8c4ea74d5b4012dd02b4607c437587402fdbb325752fe53fc0080947",
+        "6366e821e8af94ff9b9ce582593a5c317f608b93a826e8d1951d8214e0b4922c",
+        "741f502aeb6c210fa59a7e1b5a5d5e0264fc1d3cc045a7717a8e403016e8ba3e",
+        "8ef7d406ba2b9af7504321f14114e4eea6a31c963d56048a26745f2a62cfd0de",
+        "94d6a8f4d3e5266523512f77fc05b706c0d26b0a28bf3bebb86dc2e863853337",
+        "a3d24175cc87b1e0d67963191bc34e1910595e7fd5e967707543ed0f45b747be",
+        "a54c23586d077630db8bdbe7b012719bbae411dfdf5f33ebae7bfa559a76f3bc",
+        "b999b1fb1e2ff40dc112cfd88a97ac0e2ecb62975fcbd95ac0c78a1899ad3ea2",
+        "be396153e7574f9cbf2d8a90145a373bbdc576adb116553896a9184093bcec47",
+        "c25b9e60f3773337412f1ccd28146aea2e9788980bc17f17802077352eb579fb",
+        "c2ad2370a32236543bdc70991274a83a109ed48ccd24d1eac4a7206f987034f5",
+        "e81848fa4e85f082005b905ff5e71390dc2bfec114be3ef9fd550bea2c4dceba",
+        "ee715b40b27ddd814128f7c49945d2dfbba08e65cf6c7c23c4a8cbd73594b171",
+        "eebb9048c5500a5c184c7dcca4810db89ec266722611fa07e4f4c90f66aad1cf",
+        "fb11b341ae539ba32b02871ea69f3e94a1e9b0ea5a295e4de4bc29f57df66e33",
+    ),
+}
+REVIEWED_CANCEL_CACHE_PROFILE = {
+    **REVIEWED_ARCHIVE_PROJECTION_PROFILE,
+    **REVIEWED_CANCEL_CACHE_HASHES,
+}
+REVIEWED_CANCEL_CACHE_VARIANTS = {
+    (key[0], REVIEWED_CANCEL_CACHE_HASHES.get(key[0], key[1])): {
+        **value,
+        "selector_path": "src/engine/automation/entry_cancel_wait_tuning.py",
+        "selector_sha256": REVIEWED_CANCEL_CACHE_HASHES[
+            "src/engine/automation/entry_cancel_wait_tuning.py"
+        ],
+        "dependencies": {**value["dependencies"], **REVIEWED_CANCEL_CACHE_HASHES},
+        "contract_extensions": {
+            origin: {
+                name: REVIEWED_CANCEL_CACHE_HASHES.get(os.path.normpath(name), sha)
+                for name, sha in paths.items()
+            }
+            for origin, paths in value["contract_extensions"].items()
+        },
+    }
+    for key, value in REVIEWED_ARCHIVE_PROJECTION_VARIANTS.items()
+}
+REVIEWED_ENTRY_COST_PAIRS = {
+    **REVIEWED_ENTRY_COST_PAIRS,
+    **{
+        name: REVIEWED_ENTRY_COST_PAIRS.get(name, ())
+        + tuple((origin, current) for origin in REVIEWED_CANCEL_CACHE_ORIGINS[name])
+        for name, current in REVIEWED_CANCEL_CACHE_HASHES.items()
+    },
+}
+
 # Exact source-only formatting succession. The review manifest preserves the
 # committed predecessor and deterministic formatter output; it never rewrites
 # a policy contract or grants runtime authority. The verifier itself remains
@@ -11287,6 +11414,15 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     ):
         prepared_hashes = REVIEWED_ARCHIVE_PROJECTION_PROFILE
         prepared_variants = REVIEWED_ARCHIVE_PROJECTION_VARIANTS
+    cancel_cache_name = "src/engine/automation/entry_cancel_wait_tuning.py"
+    cancel_cache_successor = candidate_bytes(cancel_cache_name, optional=True)
+    if (
+        cancel_cache_successor is not None
+        and hashlib.sha256(cancel_cache_successor).hexdigest()
+        == REVIEWED_CANCEL_CACHE_HASHES[cancel_cache_name]
+    ):
+        prepared_hashes = REVIEWED_CANCEL_CACHE_PROFILE
+        prepared_variants = REVIEWED_CANCEL_CACHE_VARIANTS
     entry_cost_hashes = (
         prepared_hashes
         if prepared_owner_present

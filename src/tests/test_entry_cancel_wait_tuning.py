@@ -3135,6 +3135,62 @@ def test_report_ignores_native_sources_that_have_no_replayable_seed(
     assert after["economic_tuning_input_allowed"] is False
 
 
+@pytest.mark.parametrize("generation", ["same", "changed", "missing"])
+def test_report_reuse_requires_current_generation_capability(
+    tmp_path, monkeypatch, generation
+):
+    import hashlib
+    from src.engine.monitoring import policy_generation_contract as capability
+
+    native_build = mod.build_report
+    report, _, path, _ = _reconciliation_fixture(tmp_path, monkeypatch)
+    monkeypatch.setattr(mod, "build_report", native_build)
+    if generation == "missing":
+        report.pop("policy_generation")
+        report["proof_sha256"] = mod._digest(
+            {
+                k: v
+                for k, v in report.items()
+                if k not in ("generated_at", "proof_sha256")
+            }
+        )
+        path.write_text(json.dumps(report))
+    original = path.read_bytes()
+    path.with_suffix(".reuse-contract.json").write_text(
+        json.dumps(
+            dict(
+                artifact_sha256=hashlib.sha256(original).hexdigest(),
+                preflight_fingerprint=report["preflight_fingerprint"],
+            )
+        )
+    )
+    if generation == "changed":
+        monkeypatch.setattr(capability, "code_generation", lambda family: "f" * 64)
+    native = capability.native
+    regenerated = []
+
+    def bind(*args, **kwargs):
+        regenerated.append(kwargs["family"])
+        return native(*args, **kwargs)
+
+    monkeypatch.setattr(capability, "native", bind)
+    current = native_build(report["date"], artifact_as_of=report["generated_at"])
+    assert regenerated == ([] if generation == "same" else ["entry_cancel_wait"])
+    assert path.read_bytes() == original
+    assert current["policy_generation"]["code_sha256"] == capability.code_generation(
+        "entry_cancel_wait"
+    )
+    assert {
+        k: v
+        for k, v in current.items()
+        if k not in ("policy_generation", "proof_sha256")
+    } == {
+        k: v
+        for k, v in report.items()
+        if k not in ("policy_generation", "proof_sha256")
+    }
+
+
 @pytest.mark.parametrize("mutation", [None, "changed", "missing", "appeared"])
 def test_native_input_selection_preserves_consumed_generation_checks(
     tmp_path, monkeypatch, mutation

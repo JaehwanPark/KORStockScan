@@ -2847,6 +2847,8 @@ def build_report(
     )
     current_path = report_paths(target_date)[0]
     receipt_path = current_path.with_suffix(".reuse-contract.json")
+    from src.engine.monitoring.policy_generation_contract import code_generation
+
     if (
         current_path.is_file()
         and receipt_path.is_file()
@@ -2856,6 +2858,8 @@ def build_report(
         receipt = json.loads(receipt_path.read_text())
         if (
             cached.get("preflight_fingerprint") == preflight
+            and (cached.get("policy_generation") or {}).get("code_sha256")
+            == code_generation("entry_cancel_wait")
             and cached.get("economic_tuning_input_allowed") is False
             and cached.get("scope_overrides")
             == incumbent_source.get("previous_scope_overrides", [])

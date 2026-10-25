@@ -2241,6 +2241,52 @@ REVIEWED_PREPARATION_HISTORY.setdefault(
     }
 )
 
+# Reviewed cancel cache capability generation.
+REVIEWED_PREPARATION_HISTORY.setdefault(
+    "src/engine/automation/entry_cancel_wait_tuning.py", set()
+).update(
+    {
+        (old, "7cb52595d1c470f89588b339b83558b990136073ba25e6917bd61e133f5f52b5")
+        for old in (
+            "38ba95d3965f11f4d31bee05c5a0e4ba28dd2fc7e05505104b491dbf390cd0fa",
+            "49c1f36ca4082714705e0e558fa6a931cba7f394fb7f1dca83090884db86dfb4",
+            "860304462737c66646146b84f04c5b930664d144442d12ef223e23f7d0b943fe",
+            "bdfaaeaac7768f703d181314be45afaf2ecfc983001a6364a60a41ae54882c4e",
+            "d557fef76bf6c35ff583c5c52fa23bd3c19039efe14fc48f81db90036edb61aa",
+            "e3d227354e85ec9d2dc19cb96e533d1b9f4cb54c5cd2338f7c671eae84a91582",
+        )
+    }
+)
+REVIEWED_PREPARATION_HISTORY.setdefault(
+    "src/engine/monitoring/policy_generation_code_handoff.py", set()
+).update(
+    {
+        (old, "bb62913faa6170362beffc417f974fbb07cca808754112dde0669cd889d1e99f")
+        for old in (
+            "056582f3a61d683220910a86107018d5fea3467f5181a7a837498cf94df6d4c2",
+            "1a572a81032cd49121e24e2e4925d91d922d9697a65c65db0f473873b656c5cc",
+            "1dff8c3fcc6dba15fdc720a36c5070a81805d5124433140b8158f3f50c62b98e",
+            "28feb05ecb68ddb0413e45043e92f0d30805a0b4b5b708c894bbdbe12a286411",
+            "41ebbc34a2fd015a0cd76ae525c1e6e859edbaa6dc4e4e88e4cc76a44a7a9bef",
+            "47db04eba70a27e3fbb5c4078e828be38920859efbf4224e3049582776ff6d5f",
+            "4c23315cdd2585bab300b493aae73e8204ab5aa38279b70196b6c34a8779421b",
+            "4db24d4d542b8cc6142c1b85e0839bfce6a7116aaae5f49e2b0d90e4174e3d62",
+            "58f427eee221104aef727ec4dcadb4ad5ec8021c262b6e3c104941ed851fcf6e",
+            "62872a82eda5eae04541329a65dc062b4f99150360dfb24b7eeb8888214f0c25",
+            "64c1d33b10b5e3999f12825dbcb850ad7520c7c117d8542e6da6e127234192dc",
+            "858f6f949015f1c27d0185a0183df7a331f7fda971830408a5cdf53d16b39b5a",
+            "af16ae40eed72ce51960ce6141f3b800e476007f3026cfd2dcd7455226b32fdc",
+            "b14d8aaf06d7414bcbe6bdb87ddfc685f2c3765db15f8a5f50d93f3e5eeaf444",
+            "b188d34dea921cf21f602ce83ef7d6c8af0527b8e874b208e92394f2d904759d",
+            "b65c616d024460c825d73472311ddf995282069cd58dfdec9241447d4285d841",
+            "b9bb89e9ea3c3835e2cb45dc7687b91e38156d208adf1dfc7554869038e50a0e",
+            "ceb7e9d6031da3e0f77fd0285897e760bec25b3c26f82f85e7b272537e4cbfee",
+            "d54110a7b981997f50e496a37a92c8a04f711278ccd9a50d194519ac35baed3b",
+            "e9b1ef85c2cae6c3bec70a6697a36d767584abee1c6fe621530865ef5146a9eb",
+        )
+    }
+)
+
 
 def reviewed_preparation_pair(relative, old, current):
     # An already reviewed physical pair keeps its original authority; a

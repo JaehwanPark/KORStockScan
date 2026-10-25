@@ -942,6 +942,15 @@ REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS["auxiliary"] += (
 )
 
 
+# Reviewed cancel report cache capability dependency.
+REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS["entry_cancel_wait"] += (
+    (
+        "5fa218b7b916b6b2a98a7a395573dac80ff96d2345edae3b64f9f99e3574125d",
+        "08489f10c33b2972a0d6b86b5b5696d4558d78e51d488ea47525a55a9d0510aa",
+    ),
+)
+
+
 def current_fixture_observation(observed, data):
     family = observed.get("family")
     pair = REVIEWED_SUCCESSORS.get(family)

@@ -221,6 +221,89 @@ def test_invalid_binding_never_uses_prepared_code_authority(prepared, fault):
         C.verify(data, DAY, **args, actual=actual)
 
 
+@pytest.mark.parametrize(
+    "prepared", ["pre_submit_delay", "main_stop", "holding_vote"], indirect=True
+)
+@pytest.mark.parametrize(
+    "fault", [None, "target", "custody", "source", "code", "scope_entry", "scope_exit"]
+)
+def test_stopped_workflow_consumer_binds_observation_and_prepared_dates(
+    prepared, monkeypatch, fault
+):
+    from contextlib import contextmanager
+
+    data, root, args, actual, receipt, pp = prepared
+    candidate = root.parent / "candidate"
+    (candidate / "src/engine/automation").mkdir(parents=True)
+    own = candidate / "src/engine/automation/intraday_release_handoff.py"
+    own.write_text("# fixture owner\n")
+    (candidate / "consumer.py").write_text("reviewed successor code\n")
+    selector = data / "runtime/runtime_release_selection.json"
+    selector.parent.mkdir(exist_ok=True)
+    selector.write_text(
+        json.dumps(
+            dict(
+                release_root=str(root),
+                main_start_authorized=False,
+                approval_scope="after_postclose_deploy_for_next_regular_start",
+            )
+        )
+    )
+    monkeypatch.setattr(H, "__file__", str(own))
+    monkeypatch.setattr(H, "DATA_DIR", data)
+    monkeypatch.setattr(H, "_selection", lambda **kw: (root, COMMIT))
+    observation_day = datetime.now(H.KST).date().isoformat()
+    review = dict(
+        day=observation_day,
+        code_root=candidate,
+        code_commit="c" * 40,
+        postclose_observation=dict(
+            prepared_target_date="wrong" if fault == "target" else DAY
+        ),
+    )
+    calls = []
+
+    @contextmanager
+    def stopped(day):
+        calls.append(day)
+        if fault == "scope_entry":
+            raise ValueError("invalid_native_cold_custody")
+        token = H._PREDECESSOR_REVIEW.set(review)
+        try:
+            yield
+            if fault == "scope_exit":
+                raise ValueError("native_cold_source_changed")
+        finally:
+            H._PREDECESSOR_REVIEW.reset(token)
+
+    monkeypatch.setattr(H, "stopped_postclose_review", stopped)
+    monkeypatch.setattr(
+        H,
+        "predecessor_review_matches",
+        lambda r, day, *a: r is review
+        and day == observation_day
+        and fault != "custody",
+    )
+    if fault == "source":
+        (data / "policy.json").write_text('{"changed":true}')
+    candidate_actual = C._digest({"consumer.py": C._sha(candidate / "consumer.py")})
+    if fault == "code":
+        candidate_actual = "d" * 64
+    before = {
+        p: p.read_bytes()
+        for p in (pp, selector, C.receipt_path(data, DAY, COMMIT, args["family"]))
+    }
+    if fault:
+        with pytest.raises(ValueError):
+            H.verify_entry_consumer_code(DAY, **args, actual=candidate_actual)
+    else:
+        proof = H.verify_entry_consumer_code(DAY, **args, actual=candidate_actual)
+        assert proof["release_commit"] == "c" * 40
+        assert proof["target_date"] == DAY and proof["actual_pid_consumed"] is False
+    assert calls == [DAY] and H._PREDECESSOR_REVIEW.get() is None
+    assert all(p.read_bytes() == raw for p, raw in before.items())
+
+
 def test_missing_receipt_keeps_ordinary_native_path(tmp_path, monkeypatch):
     monkeypatch.setattr(R, "selected_release", lambda *a: (tmp_path, COMMIT))
     assert (
