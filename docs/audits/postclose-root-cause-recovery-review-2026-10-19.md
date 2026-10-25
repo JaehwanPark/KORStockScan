@@ -3585,3 +3585,38 @@ workflow와 runtime의 코드 위치가 다를 때 기존 보조 게시자와 bo
 [원본 사본 최종 해시 대사](../../tmp/postclose-integrated-rework-20261025-58efa8cb9/original-copies-envelope-final.json)는 396개/2,636,104,362 byte 전부 PASS다. 기존 실패 시도·불가역 역사 원천/비용/label 결손·경제성 null과 6개 OPEN owner를 보존했다. 10/26 checklist는 native summary가 생산한 바이트만 반영했으며 수동 상태 보정은 없다. `DirectFamilyPreopenPolicyHandoff`의 실제 기동/PID 소비와 다음 예정 전체 실행의 무보정 완주, 나머지 원천 수용은 기존 날짜·window·closure test 아래 OPEN이다. 이번 결과를 실제 Main 기동, 자연 완주 또는 비용 후 성과로 종결하지 않는다. 최종 증거 문서 커밋은 운영 코드 `22b5630fd`의 selector나 준비 영수증을 변경하지 않는다.
 
 [최종 문서 리뷰](../../tmp/postclose-integrated-rework-20261025-58efa8cb9/candidate-22b5630fd/final-document-review.json)는 기준 `22b5630fd`, source/tests 변경 0, 문서만 +27/-6이며 이전 시도는 retained·최종 증거는 appended다. diff/로컬 링크/print-only parser 22개 항목과 위 6개 owner의 단일성, native checklist의 source hash 외 무변경, 최종 strict/PREOPEN/P5 바이트 불변을 확인했다. 추가 trading suite나 재생성은 문서 검증에 필요하지 않으며 외부 Project/Calendar 동기화는 수행하지 않았다.
+
+## 2026-10-25 WARNING·6개 OPEN 대사, 저장공간 회수와 신규 계정 형상 준비
+
+**판정과 범위.** source 10/23·관측 10/25·다음 거래일 10/26을 유지했다. Main 기동/운영 선택본 변경/신규 계정 cutover는 수행하지 않았다. 현행 Plan과 원 날짜 계약을 대사했고, 10/25 일일 체크리스트가 없는 점을 보존한다. strict에 결속된 10/26 체크리스트를 수동 수정하거나 과거 문서를 현재 실행 소유자로 대체하지 않았다. 아래의 6개 기존 OPEN은 같은 체크리스트 owner와 closure test를 유지한다.
+
+| 기존 owner | 지금 판정 | 다음 검증 창(KST)과 종결 증거 |
+|---|---|---|
+| DirectFamilyPreopenPolicyHandoff | 선택본22b5630fd의 준비·P5 유효, 실제 Main/PID는 이번 범위 제외 | 10/26 07:35~08:05; 승인된 실제 bootstrap/PID·정책 소비 |
+| DirectFamilySourceRepairEntryCancelWait | 역사 submit/비용/독립 holdout 원천 결손, 원본·null·제외 유지 | 10/26 16:30~21:40; 새 native 원천과 terminal/비용/holdout 대사 |
+| DirectFamilySourceRepairEntrySplit | paired order/비용/model holdout 미결, 기존 안전 조건 유지 | 10/26 16:30~21:40; paired terminal/비용 및 독립 검증 |
+| InitialQuantityProducerConsumerRepair1010 | fact33/eligible29/역사 제외4; 현재 분류 결함은 native 생산자로 종결 | 10/26 16:30~23:59; 새 terminal·비용 원천의 자연 수집 확인 |
+| HoldingProfitExitSourceContractRepair | 역사 source/replay coverage 미결 보존 | 10/26 09:00~23:59; 정확한 route/item/epoch·배포/PID의 원천·terminal·replay |
+| MainMarketWeaknessPostcloseObservation1008 | 이전 보조 응답71건 오제외 수리·16개 날짜 current·pending0, CF/label·자연 예약 수용 미결 | 10/26 21:40~10/27 05:40, 06:30 종료; 원천/label/누적/알림 native 실행 |
+
+[6개 미결의 기계 판독 대사](../../../KORStockScan-storage-archives/readiness-storage-migration-20261025/six-open-reconciliation.json)를 보존했다. 약세연구의 candidate302/eligible0/sent0을 서로 다른 의미로 유지하며, 주문/체결이나 경제적 성과를 만들어 수용을 닫지 않는다.
+
+**WARNING 대사와 실제 수정.** 초기수량의 49013/49266은 terminal 비용·수량 부재, 49362/49415는 research cost 무효인 기존 역사 결손이다. 49415는 fact/completion 세대만 바뀌고 동일한 비용 원천 receipt와 결손 이유가 유지됐다. full native stage 검증과 기존 분류 회귀57건 뒤 기존 monitor 생산자의 정확한 네 ID 수용 기능으로 역사 진단을 게시했다. [게시·직접 소비 검증](../../../KORStockScan-storage-archives/readiness-storage-migration-20261025/quantity-historical-classification.json)은 current findings 없음, historical diagnostic=`initial_quantity_economic_source_gap`이며 원 source/evaluation·비용/성과 null·활성 수량/정책·selector·봉인 health·strict/controller 바이트 불변이다. 새 결손, 변경된 fact/세대/원천·출처 불명은 계속 경고한다. 비용을 기본값으로 대체하거나 경보 문구를 감추지 않았다.
+
+EOD의 기존 completed_with_warnings는 제외된 범위이고 재실행하지 않았다. 과거 로그 경고는 새 오류 burst가 아니며 원본을 유지했다. 12:18:22의 finalization 대기는 12:18:24 DONE 이전의 정당한 관측이다. 이를 사후 PASS로 덮어쓰지 않았다. tmp 경고는 실제 정리 후 기존 capacity 생산자로만 갱신했고 [현재 resource 판정](../../../KORStockScan-storage-archives/readiness-storage-migration-20261025/tmp-capacity-published.json)은 PASS, capacity/growth warning=false다. 봉인된 전체 health report는 역사 WARNING을 그대로 보존한다.
+
+**공간 감소의 원인과 회수.** 시작 여유는18.273GiB였다. 과거 관측은 10/20 09:32 114.38GiB, 10/21 107.82GiB, 10/22 89.00GiB, 10/23 51.91GiB, 10/24 00:42 78.83GiB이고, 별도 10/24 snapshot은89.38GiB다. 현재 가장 큰 불필요 사본은 `/tmp`의 테스트·격리 재생 자료62.44GiB였다. 통과한 pytest 임시 tree까지 남는 기본 보존과 반복 private Git/fixture 사본이 주원인이다. 당시 디렉터리 인벤토리는 `/tmp`를 빠뜨렸으므로 전체 감소량을 정확히62.44GiB의 순증가로 단정하지 않는다. 비교 가능한 운영 tmp는 약4.46GiB, data는 약1.88GiB 증가했다. 10/20의200→300GiB 증설도 정리 효과와 구분한다.
+
+닫힌 테스트52개 묶음, 운영 검증 sandbox16개, 원본 backup/replay15개 묶음을 native archive→전체 member hash/size/mode/mtime→독립 복원→FD/mount/pin/문서/현재 소비자 재검증→삭제 순서로 정리했다. sparse·hardlink·접근 불가·직접 참조된 test branch는 보존했다. 재생성 가능한 미사용 `.pyc`17,346개/1,116,073,984byte도 원 `.py`와 사용 여부를 확인한 뒤 제거했다. 감사 전용 네 디렉터리 약1.43GiB는 원 경로 alias와 내용/메타데이터를 유지해 영구 보관 위치로 옮겼으며, 이 이동의 물리 공간 회수는0이다. 두 수정 가능한 디렉터리 링크는 검증된 보관 index로 연결했다. 등록 release/worktree와 native code-origin·선택/rollback/실패 증거는 삭제하지 않았다.
+
+정리 직후 여유는 약73.33GiB, 시작 대비 약55.05GiB 증가했다. 마지막 bundle 생성 등 관리 비용을 포함한 정확한 값은 [최종 공간/삭제 journal 대사](../../../KORStockScan-storage-archives/readiness-storage-migration-20261025/storage-result.json)에 기록한다. 운영 tmp의 native 논리 용량은13,268,334,314→7,123,946,246byte(약6.63GiB), 기존8GiB 기준까지 약1.36GiB 여유다. `/tmp`·data의 비특권 `du`는 일부 OS 격리 경로를 읽지 못하므로 하한값으로 표시하며, 파일시스템 free 측정과 혼동하지 않는다. 원본396개/2,636,104,362byte는 [정리 후 보존 대사](../../../KORStockScan-storage-archives/readiness-storage-migration-20261025/original-custody-after-cleanup.json)에서 materialized180·검증 archive member216으로 모두 해시 일치했다.
+
+**재발 방지와 코드 리뷰.** `47d294801`은 pytest의 native `failed` 임시 보존을 지정하고, 기존 DocumentReferences에 변경 감시를 추가했다. 삭제25개에서 동일 문서 census를55회 재순회하던 원 구현의 실패를 재현했다. 한 번의 전체 기준 검사 뒤 매 unlink 시 watch를 확인하며, 변경은 full census로, watch 부재는 기존 검사로 돌아가고 overflow/loss는 중단한다. 원 archive_tmp leaf 삭제/FD/pin/hash 검사는 그대로 한 owner에 남는다. 성공 시험 자료를 자동 정리하는 설정과 보관·이동 절차는 현재 workspace에 적용됐다. 선택된 immutable 운영 코드에는 이 소스 변경을 배포하지 않았다.
+
+`1793188e2`는 기존 DB 소비자에 protected URL-file 설정을 추가하고 기존 start/restart child 명령을 하나의 native owner로 통합했다. 오래된 tmux server 환경이 신규 DB 구성을 잃는 원인을 수정했고, 직접 URL을 argv에 넣지 않는다. 잘못된 파일·충돌·누락은 drain 전에 선택된 소비자를 격리 로드하여 거부한다. 리뷰 중 이 격리 로더의 import root 누락을 실제 shell 회귀로 발견해 exact root를 주입하는 별도 Python 프로세스로 보완했다. incumbent 기본값, provider/정책/주문 안전은 바꾸지 않았다. headless에서 제외된 BD producer의 artifact만 기존 installed-schedule 계약으로 대사하며, 설치됨/일정 미확인은 계속 누락 검사를 수행한다.
+
+교체/제거는 기존 full census `retained`(watch 불가/변경 시 소비), 삭제 leaf owner `consolidated`, start와 restart의 별도 inline child 구성 `removed`→공통 `main_supervisor_command`, 역사 reader·원본·legacy unset DB 경로 `retained`다. 새 실행 entrypoint나 병렬 validator는 없다. 기준de4d53ad4 대비 비테스트 소스+247/-13, 테스트+372/-2, 본 추가 감사 기록 전 운영 문서+36/-2이며 증가분은 보호 설정·공통 launcher·감시 및 음성 회귀다. [최종 코드 리뷰](../../../KORStockScan-storage-archives/readiness-storage-migration-20261025/final-code-review.json), 영향 회귀1,196건 PASS, 마지막 launcher/DB 변경 후318건 PASS, 기존 quantity 분류57건 PASS, compile/bash-n/diff/링크·owner/print-only parser 검증을 보존했다. 기존 pandas copy-on-write deprecation 경고1개가 있고 package를 임의 변경하지 않았다. 첫 격리 import 실패 및 이전 pytest 권한 격리 tree 정리 경고는 원 로그로 남겼다.
+
+**최종 소비와 이관 형상.** [정리·보고서 분류 후 최종 native 읽기 검증](../../../KORStockScan-storage-archives/readiness-storage-migration-20261025/final-selected-readiness-verification.json)은 선택본22b5630fd, source10/23→target10/26, strict/controller/최종화/준비/P5 결속 PASS, Main/supervisor 없음이다. selector·활성 정책/수량·원 준비 세대 불변을 확인했다. 결속된 health를 다시 생성하거나 실제 PID 증거를 만들지 않았다. 현재 종료 상태는 여전히 `recovered_preparation_only`이고 실제 기동 및 다음 무보정 전체 실행 수용은 OPEN이다.
+
+[신규 계정 최종 인계 문서](../../../KORStockScan-storage-archives/readiness-storage-migration-20261025/migration/HANDOFF.md)에 Git bundle/경로 재구성, 실제 의존성151개와 기존 headless117개 비교, target cron45→43개, 보호 DB 환경, PostgreSQL15 원 image와 loopback/restart=no 템플릿, 원천·비밀·제외 범위 및 마지막 writer 동결/DB delta 절차를 준비했다. 원 BASELINE-01 세 wrapper는 현재 main/선택본과 같음을 확인했다. Git 커밋 보존은 dirty worktree 내용을 포함하지 않으며 원 서버의 미커밋 자료는 그대로 남긴다. 대상 계정/VM·설치·DB 덤프/복원·최종 동결은 미실행이고, 현재 P5를 새 소스/호스트 검증으로 사용하지 않는다. 운영 선택·서비스/cron 설정·Main 기동·주문·외부 문서 동기화는 수행하지 않았다.
