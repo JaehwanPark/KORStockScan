@@ -60,6 +60,12 @@ need a document or process census.
 The census reads text once per invocation and checks the file/directory identity
 set and linked indexes/aliases around each unlink. New, removed or changed
 documents stop that attempt; do not reuse its plan or automatically retry it.
+For a verified closed archive batch, the existing owner can watch the entire
+census and alias ancestors with Linux inotify after a full baseline check. Each
+unlink still checks the watch; an ordinary change forces full census checks,
+and lost/overflowed/unmounted watches abort. Unavailable watches retain the
+original full-check path. The watch is closed on success and failure. This
+avoids rescanning thousands of unchanged document paths for every archived leaf.
 Keep document writers quiescent during deletion: these checks detect observed
 races but cannot lock arbitrary editors. Preserve the source archive and failure
 journal if a post-unlink check fails, restore the affected reference through the
@@ -87,6 +93,14 @@ their receipts are never resealed to match a document edit. Recovered indexes,
 original archives/manifests and linked files remain protected in later cleanup.
 This gate preserves references; it does not authorize deletion or automatically
 rewrite documents.
+
+Project pytest retains failed/interrupted temporary evidence with its native
+`tmp_path_retention_policy=failed`; passing per-test scratch is removed promptly.
+Explicit `--basetemp` runs and historical private clones still require a closed
+run, reference/FD/pin checks and verified archive custody before cleanup.
+Persistent audit evidence belongs outside operational tmp. A same-filesystem
+move with a validated original-path alias reduces tmp occupancy but reclaims no
+filesystem space; report it separately from compressed or unlinked bytes.
 
 Resource-pressure recovery runs only the bounded log lane. Exit zero and the
 exact run-id/applied/complete terminal are required before recording success and

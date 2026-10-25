@@ -2,3 +2,7 @@
 line-length = 88
 target-version = ["py311"]
 required-version = "26.5.1"
+
+[tool.pytest.ini_options]
+# Delete passing per-test scratch promptly; retain failed/interrupted evidence.
+tmp_path_retention_policy = "failed"

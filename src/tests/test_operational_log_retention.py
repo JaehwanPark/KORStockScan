@@ -438,6 +438,94 @@ def test_archive_index_protects_transitive_original_and_detects_index_edits(tmp_
         census.assert_unchanged()
 
 
+def test_archive_batch_checks_unchanged_census_without_per_file_rescan(
+    tmp_path, monkeypatch
+):
+    archive = scratch_owner(tmp_path, monkeypatch)
+    run = tmp_path / "tmp/run"
+    run.mkdir(parents=True)
+    for index in range(25):
+        (run / str(index)).write_text("closed fixture")
+    rows = archive.inventory(run)
+    original = R.DocumentReferences._inventory
+    calls = []
+
+    def counted(self):
+        calls.append(None)
+        return original(self)
+
+    monkeypatch.setattr(R.DocumentReferences, "_inventory", counted)
+    assert len(archive.delete_verified(run, rows)) == 25
+    assert len(calls) < 10 and not run.exists()
+
+
+@pytest.mark.parametrize(
+    "change", ["edit", "new_document", "delete", "rename", "alias", "linked_index"]
+)
+def test_watched_census_rejects_every_reference_change(tmp_path, change):
+    doc = tmp_path / "docs/audit.md"
+    target = tmp_path / "target"
+    target.write_text("original")
+    alias = tmp_path / "alias"
+    alias.symlink_to(target)
+    index = tmp_path / "index.md"
+    index.write_text("original index")
+    doc.write_text(f"[alias]({alias}) [index]({index})")
+    census = R.DocumentReferences(tmp_path)
+    with pytest.raises(R.DocumentReferenceError):
+        with census.watch_changes():
+            census.assert_unchanged()
+            if change == "edit":
+                doc.write_text("changed")
+            elif change == "new_document":
+                (doc.parent / "new.md").write_text("new reference")
+            elif change == "delete":
+                doc.unlink()
+            elif change == "rename":
+                doc.rename(doc.with_name("renamed.md"))
+            elif change == "alias":
+                alias.unlink()
+                alias.symlink_to(tmp_path / "different")
+            else:
+                index.write_text("changed index")
+            census.assert_unchanged()
+    assert census._watch is None
+
+
+def test_unavailable_document_watch_uses_original_full_census(tmp_path, monkeypatch):
+    census = R.DocumentReferences(tmp_path)
+
+    def unavailable(_):
+        raise OSError("watch budget exhausted")
+
+    monkeypatch.setattr(R, "_DocumentChangeWatch", unavailable)
+    with pytest.raises(R.DocumentReferenceError, match="document_references_changed"):
+        with census.watch_changes():
+            (tmp_path / "docs/new.md").write_text("new reference")
+            census.assert_unchanged()
+
+
+def test_document_watch_overflow_aborts_and_closes_fd(tmp_path, monkeypatch):
+    import struct
+
+    census = R.DocumentReferences(tmp_path)
+    fd = None
+    with pytest.raises(R.DocumentReferenceError, match="document_watch_invalidated"):
+        with census.watch_changes():
+            fd = census._watch.fd
+            original = os.read
+            monkeypatch.setattr(
+                os,
+                "read",
+                lambda f, n: (
+                    struct.pack("iIII", -1, 0x4000, 0, 0) if f == fd else original(f, n)
+                ),
+            )
+            census.assert_unchanged()
+    with pytest.raises(OSError):
+        os.fstat(fd)
+
+
 @pytest.mark.parametrize("leaf", ["proof (v1).json", "proof name.json"])
 def test_local_link_forms_and_archive_sibling_do_not_escape_protection(tmp_path, leaf):
     run = tmp_path / "tmp/run"

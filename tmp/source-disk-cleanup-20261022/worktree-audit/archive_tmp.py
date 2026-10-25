@@ -132,6 +132,11 @@ def delete_verified(root,rows):
     # Archive and resume callers, including subset deletion, converge here.
     documents = DocumentReferences(W)
     documents.require_unreferenced({str(root)})
+    with documents.watch_changes():
+        return _delete_verified(root,rows,documents)
+
+
+def _delete_verified(root,rows,documents):
     write_access(root,rows)
     deleted=[]
     for name,row in rows.items():

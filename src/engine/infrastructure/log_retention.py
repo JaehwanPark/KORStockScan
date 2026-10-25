@@ -7,6 +7,7 @@ unregistered temporary evidence remain protected. No trading authority.
 from __future__ import annotations
 
 import argparse
+import ctypes
 from contextlib import contextmanager
 from datetime import datetime, timezone
 import fcntl
@@ -18,6 +19,7 @@ from pathlib import Path
 import math
 import re
 import stat
+import struct
 import subprocess
 import time
 import uuid
@@ -48,6 +50,89 @@ class DocumentReferenceError(ValueError):
     """An incomplete or changed document census cannot authorize deletion."""
 
 
+class _DocumentChangeWatch:
+    """Observe every census/alias ancestor while a closed deletion batch runs."""
+
+    STRUCTURAL = 0x0004 | 0x0040 | 0x0080 | 0x0100 | 0x0200
+    CONTENT = STRUCTURAL | 0x0002 | 0x0008
+    INVALID = 0x0400 | 0x0800 | 0x2000 | 0x4000 | 0x8000
+
+    def __init__(self, census):
+        self.fd = -1
+        self.changed = False
+        self.rules = {}
+        libc = ctypes.CDLL(None, use_errno=True)
+        init = libc.inotify_init1
+        init.argtypes, init.restype = [ctypes.c_int], ctypes.c_int
+        add = libc.inotify_add_watch
+        add.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_uint32]
+        add.restype = ctypes.c_int
+        paths = {}
+
+        def parent_chain(path, content=False):
+            child = path
+            for parent in path.parents:
+                if parent.is_dir():
+                    names = paths.setdefault(parent, {})
+                    names[child.name] = names.get(child.name, 0) | (
+                        self.CONTENT if content and child == path else self.STRUCTURAL
+                    )
+                child = parent
+
+        for path, sig in census.inventory.items():
+            if stat.S_ISDIR(sig[-1]):
+                paths.setdefault(path, {})[None] = self.CONTENT
+            parent_chain(path, content=True)
+        for path in census.linked_documents:
+            parent_chain(path, content=True)
+        for target, resolved in census.aliases.items():
+            parent_chain(target)
+            parent_chain(resolved)
+        self.fd = init(os.O_NONBLOCK | os.O_CLOEXEC)
+        if self.fd < 0:
+            raise OSError(ctypes.get_errno(), "document_watch_init_failed")
+        try:
+            for path, rules in paths.items():
+                # IN_MASK_ADD preserves rules when two aliases share an inode.
+                wd = add(
+                    self.fd, os.fsencode(path), self.CONTENT | self.INVALID | 0x20000000
+                )
+                if wd < 0:
+                    raise OSError(ctypes.get_errno(), "document_watch_add_failed")
+                shared = self.rules.setdefault(wd, {})
+                for name, mask in rules.items():
+                    shared[name] = shared.get(name, 0) | mask
+        except BaseException:
+            self.close()
+            raise
+
+    def clean(self):
+        while True:
+            try:
+                events = os.read(self.fd, 65536)
+            except BlockingIOError:
+                return not self.changed
+            if not events:
+                raise DocumentReferenceError("document_watch_closed")
+            offset = 0
+            while offset < len(events):
+                wd, mask, _, length = struct.unpack_from("iIII", events, offset)
+                name = os.fsdecode(
+                    events[offset + 16 : offset + 16 + length].split(b"\0", 1)[0]
+                )
+                offset += 16 + length
+                if mask & self.INVALID or wd not in self.rules:
+                    raise DocumentReferenceError("document_watch_invalidated")
+                rules = self.rules[wd]
+                if mask & (rules.get(None, 0) | rules.get(name, 0)):
+                    self.changed = True
+
+    def close(self):
+        if self.fd >= 0:
+            os.close(self.fd)
+            self.fd = -1
+
+
 class DocumentReferences:
     """One bounded text read per run; restat the full census before each unlink.
 
@@ -57,6 +142,7 @@ class DocumentReferences:
     """
 
     def __init__(self, workspace):
+        self._watch = None
         self.workspace = Path(workspace).resolve()
         self.inventory = self._inventory()
         self.texts = []
@@ -161,6 +247,11 @@ class DocumentReferences:
         return (s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns, s.st_ctime_ns, s.st_mode)
 
     def assert_unchanged(self):
+        if self._watch is not None and self._watch.clean():
+            return
+        self._assert_full_census()
+
+    def _assert_full_census(self):
         if self._inventory() != self.inventory:
             raise DocumentReferenceError("document_references_changed")
         if any(
@@ -173,6 +264,30 @@ class DocumentReferences:
             target.resolve() != resolved for target, resolved in self.aliases.items()
         ):
             raise DocumentReferenceError("document_reference_alias_changed")
+
+    @contextmanager
+    def watch_changes(self):
+        """Keep per-unlink checks without repeating thousands of unchanged stats.
+
+        Unavailable watches retain the full census path. Observed changes force
+        full checks for the rest of this batch; lost events abort the batch.
+        """
+        if self._watch is not None:
+            raise DocumentReferenceError("document_watch_nested")
+        try:
+            watch = _DocumentChangeWatch(self)
+        except (AttributeError, OSError):
+            watch = None
+        try:
+            self._assert_full_census()
+            self._watch = watch
+            self.assert_unchanged()
+            yield
+            self.assert_unchanged()
+        finally:
+            self._watch = None
+            if watch is not None:
+                watch.close()
 
     def references(self, names):
         referenced = set()
