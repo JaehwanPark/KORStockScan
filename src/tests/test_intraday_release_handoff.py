@@ -5382,7 +5382,8 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
     )
     subprocess.run(["git", "-C", str(root), "checkout", "-q", "75e0fbbf7"], check=True)
     hashes = {
-        "current": handoff.REVIEWED_CANCEL_CACHE_PROFILE,
+        "current": handoff.REVIEWED_WORKFLOW_INVENTORY_PROFILE,
+        "consumed_cancel_cache": handoff.REVIEWED_CANCEL_CACHE_PROFILE,
         "consumed_archive_projection": handoff.REVIEWED_ARCHIVE_PROJECTION_PROFILE,
         "consumed_producer_identity": handoff.REVIEWED_PRODUCER_IDENTITY_PROFILE,
         "consumed_cold_postclose": handoff.REVIEWED_STOPPED_POSTCLOSE_PROFILE,
@@ -5432,6 +5433,7 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
                         "consumed_cold_postclose": "6fe72273e",
                         "consumed_producer_identity": "2c9f2a6ad",
                         "consumed_archive_projection": "c4fa59c86",
+                        "consumed_cancel_cache": "ed4e05e6f",
                         "consumed_postclose_source": "06dbfe661",
                         "consumed_closed_scanner": "2edf3263e",
                         "consumed_scanner_preflight": "6e970e41f",
@@ -6184,6 +6186,7 @@ def test_auxiliary_format_handoff_rejects_partial_successor(
         "consumed_cold_postclose",
         "consumed_producer_identity",
         "consumed_archive_projection",
+        "consumed_cancel_cache",
     ],
 )
 def test_cold_postclose_reader_preserves_original_complete_profile(
@@ -6201,6 +6204,7 @@ def test_cold_postclose_reader_preserves_original_complete_profile(
             **handoff.REVIEWED_STOPPED_POSTCLOSE_HASHES,
             **handoff.REVIEWED_ARCHIVE_PROJECTION_HASHES,
             **handoff.REVIEWED_CANCEL_CACHE_HASHES,
+            **handoff.REVIEWED_WORKFLOW_INVENTORY_HASHES,
         }
     ),
 )

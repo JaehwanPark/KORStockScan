@@ -2999,6 +2999,50 @@ def _native_verifier_code(proof):
     return Path(root), commit
 
 
+def _main_inventory_origin(item, proof):
+    """A cold workflow computes the new family; carried parents keep their origin."""
+    native = proof["native_verification"]
+    observation = native.get("stopped_postclose_observation")
+    if not observation or item["bundle_sha256"] != proof["policy_sha256"]:
+        return item["origin_commit"]
+    root, commit = _native_verifier_code(proof)
+    if str(root) == proof["selected_release_root"]:
+        return item["origin_commit"]
+    records = proof["closure"].get("preserved_generations") or {}
+    if len(records) != 1:
+        raise ValueError("startup_main_workflow_preparation_required")
+    sha, record = next(iter(records.items()))
+    path = Path(record["prepared_receipt_path"])
+    receipt = _json(path)
+    workflow = receipt.get("verification_workflow") or {}
+    if (
+        _sha(path) != sha
+        or native.get("validation_scope") != "current_full_contract"
+        or receipt.get("selected_release_commit") != proof["selected_release_commit"]
+        or item["origin_commit"] != proof["selected_release_commit"]
+        or receipt.get("target_date") != proof["target_date"]
+        or receipt.get("source_date") != native.get("source_date")
+        or observation.get("source_date") != native.get("source_date")
+        or observation.get("prepared_target_date") != proof["target_date"]
+        or observation.get("release_commit") != proof["selected_release_commit"]
+        or workflow.get("code_root") != str(root)
+        or workflow.get("code_commit") != commit
+        or workflow.get("native_cold_review_sha256") != _digest(observation)
+        or any(
+            workflow.get(k) is not False
+            for k in ("runtime_effect", "actual_pid_consumed")
+        )
+        or any(
+            observation.get(k) is not False
+            for k in ("runtime_effect", "actual_pid_consumed", "allowed_runtime_apply")
+        )
+        or not observation.get("source_hashes")
+    ):
+        raise ValueError("startup_main_workflow_origin_unbound")
+    _check_sources(observation["source_hashes"])
+    return commit
+
+
 def _attest_delay_inventory(selected, commit, records, sources):
     """Parent-only exact Git origin; the child consumes no Git subprocess."""
     import subprocess
@@ -3476,11 +3520,25 @@ def bind_main_preparation(root, commit, data_root, intake):
     ] or bundle["bundle_sha256"] not in closure.get("bundles", {}):
         raise ValueError("startup_main_native_bundle_unobserved")
     inventories = _main_inventories(bundle)
+    native_proof = dict(
+        policy_path=str(policy),
+        policy_sha256=bundle["bundle_sha256"],
+        target_date=day,
+        selected_release_commit=original_commit,
+        selected_release_root=str(selected),
+        execution_release_root=str(root),
+        execution_release_commit=commit,
+        native_verification=native,
+        closure=closure,
+    )
+    preserved_sources = _preserved_native_sources(native_proof)
+    native_root, native_commit = _native_verifier_code(native_proof)
     expected = {}
     inventory_attestations = {}
     for item in inventories:
         if not _hex(item["origin_commit"], 40):
             raise ValueError("startup_main_inventory_origin_invalid")
+        inventory_origin = _main_inventory_origin(item, native_proof)
         verified = {}
         for name, value in item["expected"].items():
             relative = _code_path(name)
@@ -3491,7 +3549,7 @@ def bind_main_preparation(root, commit, data_root, intake):
                         "-C",
                         str(selected),
                         "show",
-                        item["origin_commit"] + ":" + relative,
+                        inventory_origin + ":" + relative,
                     ]
                 )
             ).hexdigest()
@@ -3500,20 +3558,9 @@ def bind_main_preparation(root, commit, data_root, intake):
             verified[relative] = original
             expected[relative] = _sha(selected / relative)
         inventory_attestations[item["bundle_sha256"]] = dict(
-            origin_commit=item["origin_commit"], code_hashes=verified
+            origin_commit=inventory_origin, code_hashes=verified
         )
     manifests = closure.get("manifests")
-    preserved_sources = _preserved_native_sources(
-        dict(
-            policy_path=str(policy),
-            policy_sha256=bundle["bundle_sha256"],
-            target_date=day,
-            selected_release_commit=original_commit,
-            selected_release_root=str(selected),
-            native_verification=native,
-            closure=closure,
-        )
-    )
     if (
         not isinstance(manifests, dict)
         or len(manifests) > 16
@@ -3527,6 +3574,11 @@ def bind_main_preparation(root, commit, data_root, intake):
         ),
     }
     sources.update(preserved_sources)
+    observation = native.get("stopped_postclose_observation")
+    if observation:
+        for path, digest in observation["source_hashes"].items():
+            if sources.setdefault(path, digest) != digest:
+                raise ValueError("startup_main_workflow_source_conflict")
     histories, native_readers = {}, {}
     for ident, observed in manifests.items():
         manifest = _json(observed["path"])
@@ -3549,20 +3601,20 @@ def bind_main_preparation(root, commit, data_root, intake):
             if dependency in declared:
                 continue
             if (
-                not path.is_relative_to(selected / "src")
+                not path.is_relative_to(native_root / "src")
                 or path.resolve(strict=True) != path
                 or path.suffix != ".py"
             ):
                 raise ValueError("startup_main_native_reader_path_invalid")
-            relative = str(path.relative_to(selected))
+            relative = str(path.relative_to(native_root))
             digest = hashlib.sha256(
                 subprocess.check_output(
                     [
                         "git",
                         "-C",
-                        str(selected),
+                        str(native_root),
                         "show",
-                        original_commit + ":" + relative,
+                        native_commit + ":" + relative,
                     ]
                 )
             ).hexdigest()
@@ -3638,15 +3690,6 @@ def bind_main_preparation(root, commit, data_root, intake):
         for ref in item["artifacts"].values():
             if sources.setdefault(ref["path"], ref["sha256"]) != ref["sha256"]:
                 raise ValueError("startup_delay_native_source_conflict")
-    native_root, native_commit = _native_verifier_code(
-        dict(
-            native_verification=native,
-            selected_release_root=str(selected),
-            selected_release_commit=original_commit,
-            execution_release_root=str(root),
-            execution_release_commit=commit,
-        )
-    )
     delay_inventory = _attest_delay_inventory(
         native_root, native_commit, closure.get("delay_selections", {}), sources
     )
@@ -3800,7 +3843,7 @@ def _check_native_closure(proof):
         readers = proof.get("native_reader_code_sources", {})
         if not isinstance(readers, dict) or len(readers) > 128:
             raise ValueError("startup_main_native_reader_sources_invalid")
-        selected = Path(proof["selected_release_root"])
+        selected, _ = _native_verifier_code(proof)
         for relative, digest in readers.items():
             path = selected / relative
             if (
@@ -4048,7 +4091,7 @@ def _main_proof(proof, request):
             raise ValueError("startup_main_inventory_origin_invalid")
         values = {_code_path(name): value for name, value in item["expected"].items()}
         inventory_attestations[item["bundle_sha256"]] = dict(
-            origin_commit=item["origin_commit"], code_hashes=values
+            origin_commit=_main_inventory_origin(item, proof), code_hashes=values
         )
         for name, value in item["expected"].items():
             relative = _code_path(name)

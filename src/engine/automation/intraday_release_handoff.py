@@ -10856,6 +10856,50 @@ def reviewed_formatting_source(name, raw, *, review=None):
     return _formatting_original(name, row["before_sha256"])
 
 
+# Native cold workflow code origin in P5; selected runtime and parents stay distinct.
+REVIEWED_WORKFLOW_INVENTORY_HASHES = {
+    "src/engine/infrastructure/startup_validation_code_context.py": "919d6b976c987484799875102266280c595b478ac51e31e49e00c2c13e9905dd",
+}
+REVIEWED_WORKFLOW_INVENTORY_PROFILE = {
+    **REVIEWED_CANCEL_CACHE_PROFILE,
+    **REVIEWED_WORKFLOW_INVENTORY_HASHES,
+}
+REVIEWED_WORKFLOW_INVENTORY_VARIANTS = {
+    (key[0], REVIEWED_WORKFLOW_INVENTORY_HASHES.get(key[0], key[1])): {
+        **value,
+        "selector_path": "src/engine/infrastructure/startup_validation_code_context.py",
+        "selector_sha256": REVIEWED_WORKFLOW_INVENTORY_HASHES[
+            "src/engine/infrastructure/startup_validation_code_context.py"
+        ],
+        "dependencies": {**value["dependencies"], **REVIEWED_WORKFLOW_INVENTORY_HASHES},
+        "contract_extensions": {
+            origin: {
+                name: REVIEWED_WORKFLOW_INVENTORY_HASHES.get(
+                    os.path.normpath(name), sha
+                )
+                for name, sha in paths.items()
+            }
+            for origin, paths in value["contract_extensions"].items()
+        },
+    }
+    for key, value in REVIEWED_CANCEL_CACHE_VARIANTS.items()
+}
+REVIEWED_ENTRY_COST_PAIRS = {
+    **REVIEWED_ENTRY_COST_PAIRS,
+    **{
+        name: REVIEWED_ENTRY_COST_PAIRS.get(name, ())
+        + tuple(
+            (origin, current)
+            for origin in {
+                old for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ()) for old in pair
+            }
+            | {REVIEWED_CANCEL_CACHE_HASHES[name]}
+        )
+        for name, current in REVIEWED_WORKFLOW_INVENTORY_HASHES.items()
+    },
+}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -11423,6 +11467,15 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     ):
         prepared_hashes = REVIEWED_CANCEL_CACHE_PROFILE
         prepared_variants = REVIEWED_CANCEL_CACHE_VARIANTS
+    workflow_name = "src/engine/infrastructure/startup_validation_code_context.py"
+    workflow_successor = candidate_bytes(workflow_name, optional=True)
+    if (
+        workflow_successor is not None
+        and hashlib.sha256(workflow_successor).hexdigest()
+        == REVIEWED_WORKFLOW_INVENTORY_HASHES[workflow_name]
+    ):
+        prepared_hashes = REVIEWED_WORKFLOW_INVENTORY_PROFILE
+        prepared_variants = REVIEWED_WORKFLOW_INVENTORY_VARIANTS
     entry_cost_hashes = (
         prepared_hashes
         if prepared_owner_present

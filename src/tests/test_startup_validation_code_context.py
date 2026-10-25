@@ -1127,7 +1127,104 @@ def test_ordinary_digest_session_does_not_opt_in_new_reporting_consumers(
         D.ACTIVE.reset(token)
 
 
-@pytest.mark.parametrize("reader_generation", ["original", "reviewed", "unreviewed"])
+def _cold_workflow_preparation(data, proof, native, root, commit, source):
+    """Frozen native preparation fixture, with actual Git/source bytes."""
+    observation = dict(
+        source_date=native["source_date"],
+        prepared_target_date=DAY,
+        release_commit=proof["selected_release_commit"],
+        runtime_effect=False,
+        actual_pid_consumed=False,
+        allowed_runtime_apply=False,
+        source_hashes={str(source): C._sha(source)},
+    )
+    native.update(
+        verification_code_root=str(root),
+        verification_code_commit=commit,
+        stopped_postclose_observation=observation,
+    )
+    directory = data / "runtime/policy_bootstrap/prepared" / DAY / "workflow"
+    directory.mkdir(parents=True)
+    receipt = dict(
+        schema="next_preopen_readiness_v1",
+        status="prepared_verified",
+        source_date=native["source_date"],
+        target_date=DAY,
+        selected_release_commit=proof["selected_release_commit"],
+        runtime_effect=False,
+        actual_pid_consumed=False,
+        policy_receipts=[],
+        manifest_content_sha256="b" * 64,
+        activation_candidate={"bundle_sha256": proof["policy_sha256"]},
+        verification_workflow=dict(
+            code_root=str(root),
+            code_commit=commit,
+            native_cold_review_sha256=C._digest(observation),
+            runtime_effect=False,
+            actual_pid_consumed=False,
+        ),
+    )
+    refs = {}
+    for name, digest in (
+        ("manifest_path", "manifest_file_sha256"),
+        ("env_path", "env_sha256"),
+        ("verification_path", "verification_sha256"),
+        ("controller_path", "controller_sha256"),
+        ("summary_path", "summary_sha256"),
+    ):
+        path = directory / (name + ".json")
+        path.write_text(
+            json.dumps(
+                dict(
+                    manifest_sha256="b" * 64,
+                    target_date=DAY,
+                    selected_release_sha=proof["selected_release_commit"],
+                )
+            )
+        )
+        receipt[name], receipt[digest] = str(path), C._sha(path)
+        refs[str(path)] = C._sha(path)
+    path = directory / "readiness.json"
+    path.write_text(json.dumps(receipt))
+    sha = C._sha(path)
+    refs[str(path)] = sha
+    (directory.parent / "latest.json").write_text(
+        json.dumps(
+            dict(
+                schema="next_preopen_readiness_index_v1",
+                target_date=DAY,
+                receipt_path=str(path),
+                receipt_sha256=sha,
+            )
+        )
+    )
+    proof["closure"]["preserved_generations"] = {
+        sha: dict(
+            schema="startup_native_prepared_preopen_closure_v1",
+            target_date=DAY,
+            selected_release_commit=proof["selected_release_commit"],
+            prepared_receipt_path=str(path),
+            sources=refs,
+            prepared_manifest_sha256="b" * 64,
+            full_bootstrap=dict(
+                path=receipt["manifest_path"],
+                sha256=receipt["manifest_file_sha256"],
+                write=False,
+                full_native_verification=True,
+                result=dict(
+                    status="pass",
+                    findings=[],
+                    target_date=DAY,
+                    manifest_sha256="b" * 64,
+                ),
+            ),
+        )
+    }
+
+
+@pytest.mark.parametrize(
+    "reader_generation", ["original", "reviewed", "unreviewed", "workflow"]
+)
 def test_nested_native_inventories_keep_distinct_git_origins(
     tmp_path, tmp_path_factory, monkeypatch, reader_generation
 ):
@@ -1154,7 +1251,9 @@ def test_nested_native_inventories_keep_distinct_git_origins(
         continuous_reversal=dict(
             schema="continuous_reversal_policy_v6",
             family_sha256="e" * 64,
-            release_commit=commit,
+            release_commit=(
+                r["original_commit"] if reader_generation == "workflow" else commit
+            ),
             contract_file_sha256={"reversal_path_runtime.py": new},
             native_parent_bundle=parent,
         ),
@@ -1171,7 +1270,7 @@ def test_nested_native_inventories_keep_distinct_git_origins(
         }
     )
     if reader_generation != "original":
-        reader_hash = new if reader_generation == "reviewed" else "f" * 64
+        reader_hash = new if reader_generation in {"reviewed", "workflow"} else "f" * 64
         manifest = P.seal(
             {**manifest, "reader_code_hashes": {Path(owner).name: reader_hash}}
         )
@@ -1187,6 +1286,16 @@ def test_nested_native_inventories_keep_distinct_git_origins(
         target_date=DAY, family_sha256="e" * 64
     )
     native = {**proof["native_verification"], "native_machine_closure": closure}
+    if reader_generation == "workflow":
+        from src.engine.scalping import mechanistic_entry_runtime_policy as N
+
+        observed["dependencies"].append(
+            [str(source), json.loads(json.dumps(N._signature(source)))]
+        )
+        proof["policy_sha256"] = bundle["bundle_sha256"]
+        _cold_workflow_preparation(
+            Path(f["request"]["data_root"]), proof, native, r["root"], commit, source
+        )
     intake = dict(
         selected_root=r["selected"],
         selected_commit=r["original_commit"],
@@ -1214,6 +1323,56 @@ def test_nested_native_inventories_keep_distinct_git_origins(
         assert result["original_code_hashes"][owner] == old
     assert result["inventories"][0]["expected"]["reversal_path_runtime.py"] == new
     assert result["inventories"][1]["expected"]["reversal_path_runtime.py"] == old
+    request = dict(
+        f["request"],
+        execution_release_commit=commit,
+        expected_policy_hashes=dict.fromkeys(
+            ("main_machine", "main_auxiliary"), bundle["bundle_sha256"]
+        ),
+        source_hashes={**f["request"]["source_hashes"], **result["source_hashes"]},
+    )
+    C._main_proof(result, request)
+    if reader_generation == "workflow":
+        assert result["inventories"][0]["origin_commit"] == r["original_commit"]
+        assert (
+            result["inventory_git_attestations"][bundle["bundle_sha256"]][
+                "origin_commit"
+            ]
+            == commit
+        )
+        assert result["source_hashes"][str(source)] == new
+        assert result["native_reader_code_sources"] == {owner: new}
+        import copy
+
+        item = result["inventories"][0]
+        for key, changed in (
+            ("prepared_target_date", "2026-10-20"),
+            ("source_date", "2026-10-15"),
+            ("release_commit", "0" * 40),
+            ("actual_pid_consumed", True),
+        ):
+            damaged = copy.deepcopy(result)
+            damaged["native_verification"]["stopped_postclose_observation"][
+                key
+            ] = changed
+            with pytest.raises(ValueError, match="workflow_origin_unbound"):
+                C._main_inventory_origin(item, damaged)
+        damaged = copy.deepcopy(result)
+        damaged["native_verification"]["verification_code_commit"] = r[
+            "original_commit"
+        ]
+        with pytest.raises(ValueError, match="native_verifier_code_identity"):
+            C._main_inventory_origin(item, damaged)
+        damaged = copy.deepcopy(result)
+        damaged["closure"]["preserved_generations"] = {}
+        with pytest.raises(ValueError, match="workflow_preparation_required"):
+            C._main_inventory_origin(item, damaged)
+        damaged = copy.deepcopy(result)
+        damaged["inventory_git_attestations"][bundle["bundle_sha256"]][
+            "origin_commit"
+        ] = r["original_commit"]
+        with pytest.raises(ValueError, match="inventory_git_attestation_changed"):
+            C._main_proof(damaged, request)
     assert (
         result["inventory_git_attestations"][parent["bundle_sha256"]]["origin_commit"]
         == r["original_commit"]
