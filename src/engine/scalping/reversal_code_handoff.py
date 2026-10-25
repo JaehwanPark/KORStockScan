@@ -130,22 +130,30 @@ def validate(bundle, data_root, *, original_error):
     receipt_path = path(data_root, receipt_day, commit, bundle["bundle_sha256"])
     if not receipt_path.exists() and review is None:
         # Publication and activation are different dates. Resolve only this
-        # cold selection's exact issued receipt, never scan for a usable PASS.
+        # selection's exact issued receipt, never scan for a usable PASS.
         try:
             issued = datetime.fromisoformat(str(selection.get("selected_at_kst") or ""))
         except ValueError:
             raise original_error from None
-        source = selection.get("source_date")
+        current_parent = N._read(N.root(Path(data_root)) / "current.json")
+        parent_effective = current_parent.get("effective_date")
+        cold = selection.get("approval_scope") == "after_postclose_deploy_for_next_regular_start"
+        source = selection.get("source_date") if cold else bundle.get("source_date")
         if (
             issued.tzinfo is not None
             and selection.get("approved_by") == "user"
             and selection.get("approval_scope")
-            == "after_postclose_deploy_for_next_regular_start"
-            and selection.get("actual_pid_consumed") is False
-            and selection.get("main_start_authorized") is False
-            and selection.get("next_operating_date") == day
+            in {"after_postclose_deploy_for_next_regular_start", "ordered_intraday_deploy_and_restart"}
+            and (not cold or (
+                selection.get("actual_pid_consumed") is False
+                and selection.get("main_start_authorized") is False
+                and selection.get("next_operating_date") == day
+            ))
+            and current_parent.get("bundle_sha256") == bundle["bundle_sha256"]
             and isinstance(source, str)
             and source < day
+            and isinstance(parent_effective, str)
+            and parent_effective < day
         ):
             receipt_day = issued.astimezone(P.KST).date().isoformat()
             receipt_path = path(data_root, receipt_day, commit, bundle["bundle_sha256"])
@@ -153,8 +161,9 @@ def validate(bundle, data_root, *, original_error):
                 raise original_error
             scheduled = N._read(receipt_path)
             if (
-                scheduled.get("activation_date") != day
+                day not in {scheduled.get("activation_date"), scheduled.get("next_activation_date")}
                 or scheduled.get("source_trading_date") != source
+                or scheduled.get("parent_effective_date") != parent_effective
             ):
                 raise original_error
     # Preserve the native reason for unregistered code and tomorrow's parent
@@ -777,15 +786,17 @@ def issue(
     selection_path = workspace / "data/runtime/runtime_release_selection.json"
     selection_before = selection_path.read_bytes()
     selection = json.loads(selection_before)
+    from datetime import date
+    from src.utils.market_day import next_krx_trading_date
     activation_date = day
+    next_activation_date = next_krx_trading_date(date.fromisoformat(day)).isoformat()
     source_trading_date = None
-    if (selection.get("approval_scope") == "after_postclose_deploy_for_next_regular_start"
-            and selection.get("actual_pid_consumed") is False):
-        from datetime import date
-        from src.utils.market_day import next_krx_trading_date
-
+    cold = (selection.get("approval_scope") == "after_postclose_deploy_for_next_regular_start"
+            and selection.get("actual_pid_consumed") is False)
+    if cold:
         source_trading_date = selection["source_date"]
         activation_date = selection["next_operating_date"]
+        next_activation_date = activation_date
         if (
             selection.get("approved_by") != "user"
             or selection.get("actual_pid_consumed") is not False
@@ -811,6 +822,8 @@ def issue(
     bundle = N._read(
         N.root(Path(data_root)) / "generations" / (ptr["bundle_sha256"] + ".json")
     )
+    if not cold:
+        source_trading_date = bundle.get("source_date")
     N.validate(bundle, target_date=bundle["target_date"])
     parity = json.loads(Path(parity_path).read_text())
     codes = code_hashes()
@@ -904,7 +917,9 @@ def issue(
             target_date=day,
             issued_at_kst=issued_at.isoformat(),
             activation_date=activation_date,
+            next_activation_date=next_activation_date,
             source_trading_date=source_trading_date,
+            parent_effective_date=ptr.get("effective_date"),
             release_commit=commit,
             release_root=str(release_root),
             origin_root=str(origin_root),
@@ -1008,7 +1023,9 @@ def issue_activation_rollover(data_root, day, *, verified_receipt, confirm):
                     str(Path(__file__).resolve()): P.file_hash(__file__)}
             result = P.seal(dict(old, target_date=day,
                 issued_at_kst=datetime.now(P.KST).isoformat(), activation_date=day,
+                next_activation_date=day,
                 source_trading_date=source, source_hashes=refs,
+                parent_effective_date=current.get("effective_date"),
                 actual_pid_consumed=False,
                 activation_rollover=dict(original_receipt=str(original),
                     original_sha256=P.file_hash(original), verified_receipt=str(proof_path),

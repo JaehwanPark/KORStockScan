@@ -1291,6 +1291,7 @@ def test_active_code_handoff_is_exact_and_never_reselects_policy(
 
         receipt_day = (date.fromisoformat(day) - timedelta(days=1)).isoformat()
         source = (date.fromisoformat(day) - timedelta(days=3)).isoformat()
+        pointer.write_text(__import__("json").dumps(dict(bundle_sha256="bundle", effective_date=source)))
         selected = dict(
             git_commit=commit, release_root=str(root), approved_by="user",
             approval_scope="after_postclose_deploy_for_next_regular_start",
@@ -1301,13 +1302,25 @@ def test_active_code_handoff_is_exact_and_never_reselects_policy(
         selector.write_text(__import__("json").dumps(selected))
         receipt.update(target_date=receipt_day, activation_date=day,
                        source_trading_date=source,
+                       parent_effective_date=source,
+                       current_pointer_sha256=P.file_hash(pointer),
                        issued_at_kst=receipt_day + "T14:54:00+09:00")
+        if activation_rollover == "active":
+            selected.update(approval_scope="ordered_intraday_deploy_and_restart", actual_pid_consumed=True)
+            selector.write_text(__import__("json").dumps(selected))
+            receipt.update(activation_date=receipt_day, next_activation_date=day)
+            source = (date.fromisoformat(source) - timedelta(days=1)).isoformat()
+            receipt["source_trading_date"] = source
         if damage == "activation_date":
             receipt["activation_date"] = receipt_day
+            receipt["next_activation_date"] = receipt_day
         elif damage == "activation_source":
             receipt["source_trading_date"] = receipt_day
+        elif damage == "parent_effective":
+            receipt["parent_effective_date"] = receipt_day
         elif damage == "legacy_activation":
             receipt.pop("activation_date")
+            receipt.pop("next_activation_date", None)
         elif damage == "activation_consumed":
             selected["actual_pid_consumed"] = True
             selector.write_text(__import__("json").dumps(selected))
@@ -1490,7 +1503,7 @@ def test_active_code_handoff_is_exact_and_never_reselects_policy(
     if damage == "absent":
         dest.unlink()
     frozen = {p: p.read_bytes() for p in (code, old, pointer, selector)}
-    bundle = {"bundle_sha256": "bundle"}
+    bundle = {"bundle_sha256": "bundle", **({"source_date": source} if activation_rollover else {})}
     try:
         if damage:
             with pytest.raises(ValueError):
@@ -1514,7 +1527,7 @@ def test_active_code_handoff_is_exact_and_never_reselects_policy(
     assert frozen == {p: p.read_bytes() for p in frozen}
 
 
-@pytest.mark.parametrize("damage", [None, "activation_date", "activation_source",
+@pytest.mark.parametrize("damage", [None, "activation_date", "activation_source", "parent_effective",
     "legacy_activation", "activation_consumed", "source", "code", "pointer",
     "selector", "seal", "members", "absent"])
 def test_activation_uses_declared_date_instead_of_receipt_issue_date(
@@ -1522,6 +1535,14 @@ def test_activation_uses_declared_date_instead_of_receipt_issue_date(
 ):
     test_active_code_handoff_is_exact_and_never_reselects_policy(
         tmp_path, monkeypatch, damage, False, activation_rollover=True
+    )
+
+
+@pytest.mark.parametrize("damage", [None, "activation_date", "activation_source", "parent_effective",
+    "legacy_activation", "source", "code", "pointer", "selector", "seal", "absent"])
+def test_consumed_code_handoff_declares_the_next_parent_activation(tmp_path, monkeypatch, damage):
+    test_active_code_handoff_is_exact_and_never_reselects_policy(
+        tmp_path, monkeypatch, damage, False, activation_rollover="active"
     )
 
 
@@ -1692,6 +1713,9 @@ def test_second_code_handoff_preserves_selector_provenance_without_freezing_tran
     assert receipt["issued_at_kst"].startswith(day)
     if cold_activation:
         assert receipt["source_trading_date"] == "2026-10-23"
+        assert receipt["next_activation_date"] == "2026-10-26"
+    else:
+        assert receipt["next_activation_date"] > receipt["activation_date"]
     # The actual authorized selection changes, including the PID attestation;
     # the receipt must bind its current root/commit, not the predecessor bytes.
     selected[:] = [root, commit]

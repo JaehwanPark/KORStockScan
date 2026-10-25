@@ -43,6 +43,7 @@
 ## 실행 항목
 
 - [ ] `[DirectFamilyPreopenPolicyHandoff] direct family 날짜별 정책·bootstrap 장전 소비 확인` (`Due: 2026-10-26`, `Slot: PREOPEN`, `TimeWindow: 07:35~08:05`, `Track: RuntimeStability`)
+  - 10/26 08:22 복구 소비: PREOPEN08:13:20/P5새검증08:19:08 통과 후 ef992/PID1809842의 정책·PID 소비08:22:32 확인. 발행·활성·다음 활성·원 거래일·부모 실효일을 분리하는 영구 수리와 현재 observer/health의 후속 검증은 아래 같은 owner에서 계속한다.
   - 10/26 07:55 PREOPEN 복구: ef992의07:37:28 실패는 발행25/활성26을 혼동한 코드 영수증 조회 결함이다. 발행/활성/원 거래일을 명시하고 원 날짜의 부모 증빙·현 코드/포인터·실패 PREOPEN lease를 기존 owner에서 검증한다. 원 실패/정책/격리 원문 보존, 실제 재기동·PID/정책·현재 observer/health 확인까지 OPEN. [원인·수리·최종 수용](../audits/postclose-root-cause-recovery-review-2026-10-19.md#preopen-issue-date-and-activation-date-repair--2026-10-26).
   - Source: [runtime_approval_summary_2026-10-23.json](/home/ubuntu/KORStockScan/data/report/runtime_approval_summary/runtime_approval_summary_2026-10-23.json)
   - 판정 기준: source_date=`2026-10-23`, apply_date=`2026-10-26`, preopen_state=`pending`, due_policy_receipts=`compact_auxiliary(valid=True, handoff=incumbent_preserved); entry_cancel_wait(valid=True, handoff=blocked); entry_split(valid=True, handoff=blocked); main_mechanistic_entry(valid=True, handoff=incumbent_preserved); pre_submit_delay(valid=False, handoff=blocked); rising_missed(valid=True, handoff=not_applicable); scale_in_split(valid=True, handoff=not_applicable); main_stop_confirmation(policy=bfdc5ec9aee45e70c43dafe1dc82ce9c0bd9f5dddde8b56d65d6d6c19e746a16, pid_unobserved)`의 schema·semantic hash·scope와 bootstrap accepted/rejected 결과를 확인한다.
