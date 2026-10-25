@@ -1227,7 +1227,8 @@ def test_registration_exact_delta_native_publisher_and_dated_handoff(
     ],
 )
 def test_active_code_handoff_is_exact_and_never_reselects_policy(
-    tmp_path, monkeypatch, damage, predecessor_review, missing_origin=False
+    tmp_path, monkeypatch, damage, predecessor_review, missing_origin=False,
+    activation_rollover=False,
 ):
     from pathlib import Path
     from src.engine.scalping import (
@@ -1284,6 +1285,33 @@ def test_active_code_handoff_is_exact_and_never_reselects_policy(
     if damage == "members":
         receipt["code_hashes"] = {str(old): P.file_hash(old)}
     receipt = P.seal(receipt)
+    receipt_day = day
+    if activation_rollover:
+        from datetime import date, timedelta
+
+        receipt_day = (date.fromisoformat(day) - timedelta(days=1)).isoformat()
+        source = (date.fromisoformat(day) - timedelta(days=3)).isoformat()
+        selected = dict(
+            git_commit=commit, release_root=str(root), approved_by="user",
+            approval_scope="after_postclose_deploy_for_next_regular_start",
+            actual_pid_consumed=False, main_start_authorized=False,
+            source_date=source, next_operating_date=day,
+            selected_at_kst=receipt_day + "T14:55:33+09:00",
+        )
+        selector.write_text(__import__("json").dumps(selected))
+        receipt.update(target_date=receipt_day, activation_date=day,
+                       source_trading_date=source,
+                       issued_at_kst=receipt_day + "T14:54:00+09:00")
+        if damage == "activation_date":
+            receipt["activation_date"] = receipt_day
+        elif damage == "activation_source":
+            receipt["source_trading_date"] = receipt_day
+        elif damage == "legacy_activation":
+            receipt.pop("activation_date")
+        elif damage == "activation_consumed":
+            selected["actual_pid_consumed"] = True
+            selector.write_text(__import__("json").dumps(selected))
+        receipt = P.seal(receipt)
     if predecessor_review:
         from src.engine.automation import intraday_release_handoff as IH
 
@@ -1449,7 +1477,7 @@ def test_active_code_handoff_is_exact_and_never_reselects_policy(
             receipt = P.seal(dict(receipt, actual_pid_consumed=True))
     if damage == "seal":
         receipt["policy_reselected"] = True
-    dest = H.path(data, day, commit, "bundle")
+    dest = H.path(data, receipt_day, commit, "bundle")
     N._atomic_write_json(dest, receipt)
     if damage == "code":
         code.write_text("unreviewed code")
@@ -1486,6 +1514,17 @@ def test_active_code_handoff_is_exact_and_never_reselects_policy(
     assert frozen == {p: p.read_bytes() for p in frozen}
 
 
+@pytest.mark.parametrize("damage", [None, "activation_date", "activation_source",
+    "legacy_activation", "activation_consumed", "source", "code", "pointer",
+    "selector", "seal", "members", "absent"])
+def test_activation_uses_declared_date_instead_of_receipt_issue_date(
+    tmp_path, monkeypatch, damage
+):
+    test_active_code_handoff_is_exact_and_never_reselects_policy(
+        tmp_path, monkeypatch, damage, False, activation_rollover=True
+    )
+
+
 @pytest.mark.parametrize(
     "damage",
     [
@@ -1513,7 +1552,7 @@ def test_midnight_prepared_review_uses_own_receipt_without_origin_day_receipt(
     "damage", [None, "selection_changed", "observed_selection_changed"]
 )
 def test_second_code_handoff_preserves_selector_provenance_without_freezing_transition(
-    tmp_path, monkeypatch, damage, postclose
+    tmp_path, monkeypatch, damage, postclose, cold_activation=False
 ):
     import json
     from pathlib import Path
@@ -1533,6 +1572,13 @@ def test_second_code_handoff_preserves_selector_provenance_without_freezing_tran
     root.mkdir()
     origin.mkdir()
     day = datetime.now(P.KST).date().isoformat()
+    if cold_activation:
+        class Clock(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return cls(2026, 10, 25, 14, 54, tzinfo=P.KST)
+        monkeypatch.setattr(H, "datetime", Clock)
+        day = "2026-10-25"
     commit = "b" * 40
     code = root / "src/engine/scalping/reversal_code_handoff.py"
     code.parent.mkdir(parents=True)
@@ -1548,6 +1594,11 @@ def test_second_code_handoff_preserves_selector_provenance_without_freezing_tran
     N._atomic_write_json(N.root(data) / "generations/bundle.json", bundle)
     selector = data / "runtime/runtime_release_selection.json"
     selector.write_text(json.dumps(dict(git_commit="a" * 40, release_root=str(origin))))
+    if cold_activation:
+        selector.write_text(json.dumps(dict(git_commit="a" * 40, release_root=str(origin),
+            approved_by="user", approval_scope="after_postclose_deploy_for_next_regular_start",
+            actual_pid_consumed=False, source_date="2026-10-23",
+            next_operating_date="2026-10-26")))
     source = data / "policy.json"
     source.write_text("frozen policy")
     initial_sha = P.file_hash(selector)
@@ -1637,6 +1688,10 @@ def test_second_code_handoff_preserves_selector_provenance_without_freezing_tran
         and str(selector) not in receipt["source_hashes"]
     )
     assert receipt["source_hashes"][str(source)] == P.file_hash(source)
+    assert receipt["activation_date"] == ("2026-10-26" if cold_activation else day)
+    assert receipt["issued_at_kst"].startswith(day)
+    if cold_activation:
+        assert receipt["source_trading_date"] == "2026-10-23"
     # The actual authorized selection changes, including the PID attestation;
     # the receipt must bind its current root/commit, not the predecessor bytes.
     selected[:] = [root, commit]
@@ -1649,6 +1704,12 @@ def test_second_code_handoff_preserves_selector_provenance_without_freezing_tran
     selector.write_text(json.dumps(dict(git_commit="c" * 40, release_root=str(root))))
     with pytest.raises(ValueError, match="selection_changed"):
         H.validate(bundle, data, original_error=ValueError("code_changed"))
+
+
+def test_cold_code_handoff_publishes_next_activation_date(tmp_path, monkeypatch):
+    test_second_code_handoff_preserves_selector_provenance_without_freezing_transition(
+        tmp_path, monkeypatch, None, False, cold_activation=True
+    )
 
 
 @pytest.mark.parametrize(
@@ -1686,6 +1747,7 @@ def test_postclose_midnight_handoff_requires_stopped_exact_native_ancestry(
     selected_day=None,
     retained_workflow=False,
     parent_source=None,
+    legacy_undeclared=False,
 ):
     import json
     from pathlib import Path
@@ -1919,6 +1981,14 @@ def test_postclose_midnight_handoff_requires_stopped_exact_native_ancestry(
         predecessor.write_text(
             json.dumps(dict(postclose_source_date=parent_source or source))
         )
+        if legacy_undeclared:
+            from src.engine.scalping import mechanistic_entry_runtime_policy as native
+            predecessor.write_text("{}")
+            monkeypatch.setattr(native, "validate", lambda *a, **kw: None)
+            native._atomic_write_json(native.root(data) / "generations/bundle.json",
+                dict(bundle_sha256="bundle", target_date=source))
+            native._atomic_write_json(native.root(data) / "current.json",
+                dict(bundle_sha256="bundle", effective_date=source))
     original = D._owned_metadata
     reads = []
 
@@ -2593,3 +2663,10 @@ def test_native_legacy_parent_scope_repair_preserves_original_and_unchanged_cons
     if damage != "parent_race":
         assert pointer.read_bytes() == pointer_raw
     assert stale.read_text() == "semantically same but different physical bytes"
+
+
+def test_legacy_publication_receipt_is_revalidated_only_as_native_parent_ancestry(tmp_path, monkeypatch):
+    test_postclose_midnight_handoff_requires_stopped_exact_native_ancestry(
+        tmp_path, monkeypatch, None, observation_day="2026-10-26",
+        selected_day="2026-10-25", legacy_undeclared=True
+    )

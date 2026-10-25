@@ -126,7 +126,37 @@ def validate(bundle, data_root, *, original_error):
         root, commit = review["code_root"], review["code_commit"]
     # The authenticated review uses its own dated receipt. Requiring a second
     # receipt for the unchanged selected code would prevent a midnight review.
-    receipt_path = path(data_root, day, commit, bundle["bundle_sha256"])
+    receipt_day = day
+    receipt_path = path(data_root, receipt_day, commit, bundle["bundle_sha256"])
+    if not receipt_path.exists() and review is None:
+        # Publication and activation are different dates. Resolve only this
+        # cold selection's exact issued receipt, never scan for a usable PASS.
+        try:
+            issued = datetime.fromisoformat(str(selection.get("selected_at_kst") or ""))
+        except ValueError:
+            raise original_error from None
+        source = selection.get("source_date")
+        if (
+            issued.tzinfo is not None
+            and selection.get("approved_by") == "user"
+            and selection.get("approval_scope")
+            == "after_postclose_deploy_for_next_regular_start"
+            and selection.get("actual_pid_consumed") is False
+            and selection.get("main_start_authorized") is False
+            and selection.get("next_operating_date") == day
+            and isinstance(source, str)
+            and source < day
+        ):
+            receipt_day = issued.astimezone(P.KST).date().isoformat()
+            receipt_path = path(data_root, receipt_day, commit, bundle["bundle_sha256"])
+            if receipt_day >= day or not receipt_path.exists():
+                raise original_error
+            scheduled = N._read(receipt_path)
+            if (
+                scheduled.get("activation_date") != day
+                or scheduled.get("source_trading_date") != source
+            ):
+                raise original_error
     # Preserve the native reason for unregistered code and tomorrow's parent
     # transition. There is no generic historical-loader fallback.
     if not receipt_path.exists():
@@ -138,7 +168,7 @@ def validate(bundle, data_root, *, original_error):
     r = N._read(receipt_path)
     validate_receipt(
         r,
-        day=day,
+        day=receipt_day,
         commit=commit,
         root=root,
         bundle_sha=bundle["bundle_sha256"],
@@ -168,6 +198,14 @@ def validate(bundle, data_root, *, original_error):
             raise ValueError("active_policy_code_handoff_source_changed:" + name)
     if N._read(pointer)["bundle_sha256"] != bundle["bundle_sha256"]:
         raise ValueError("active_policy_code_handoff_pointer_changed")
+    if receipt_day != day and (
+        selected_release(Path(data_root).resolve().parent)
+        != (selected_root, selected_commit)
+        or N._read(Path(data_root) / "runtime/runtime_release_selection.json")
+        != selection
+        or N._read(receipt_path) != r
+    ):
+        raise ValueError("active_policy_activation_handoff_changed")
     if review is not None and (
         selected_release(Path(data_root).resolve().parent)
         != (selected_root, selected_commit)
@@ -367,6 +405,7 @@ def _postclose_origin_receipt(
     requires nor fabricates the downstream next-session policy/PREOPEN.
     """
     from src.engine.automation import ordered_intraday_deploy as D
+    from src.engine.scalping import mechanistic_entry_runtime_policy as N
     from src.utils.market_day import is_krx_trading_day, next_krx_trading_date
 
     root = Path(data_root).resolve()
@@ -522,7 +561,26 @@ def _postclose_origin_receipt(
             ) from None
         original = path(root, selected_day, origin_commit, bundle_sha)
         original_body, original_raw, original_identity = D._owned_metadata(original)
-        if original_body.get("postclose_source_date") != source_date:
+        declared_source = original_body.get("postclose_source_date") or original_body.get(
+            "source_trading_date"
+        )
+        if declared_source is None:
+            # Legacy same-day receipts did not declare the next activation.
+            # Revalidate their native parent scope before issuing a new proof;
+            # they remain ineligible for cross-date runtime consumption.
+            parent = N._read(
+                N.root(root) / "generations" / (bundle_sha + ".json")
+            )
+            N.validate(parent, target_date=source_date)
+            pointer = N._read(N.root(root) / "current.json")
+            if (
+                parent.get("bundle_sha256") != bundle_sha
+                or parent.get("target_date") != source_date
+                or pointer.get("effective_date") != source_date
+                or pointer.get("bundle_sha256") != bundle_sha
+            ):
+                raise ValueError("active_policy_postclose_ancestry_source_invalid")
+        elif declared_source != source_date:
             raise ValueError("active_policy_postclose_ancestry_source_invalid")
         checked = _validated_origin_receipt(
             root, selected_day, origin_root, origin_commit, bundle_sha, pointer_sha
@@ -702,9 +760,10 @@ def issue(
         git,
     )
 
+    issued_at = datetime.now(P.KST)
     if (
         confirm != AUTHORITY
-        or day != datetime.now(P.KST).date().isoformat()
+        or day != issued_at.date().isoformat()
         or postclose_source_date is not None
         and recover_stopped_origin is not False
     ):
@@ -717,6 +776,23 @@ def issue(
         raise ValueError("active_policy_code_handoff_origin_changed")
     selection_path = workspace / "data/runtime/runtime_release_selection.json"
     selection_before = selection_path.read_bytes()
+    selection = json.loads(selection_before)
+    activation_date = day
+    source_trading_date = None
+    if selection.get("approval_scope") == "after_postclose_deploy_for_next_regular_start":
+        from datetime import date
+        from src.utils.market_day import next_krx_trading_date
+
+        source_trading_date = selection["source_date"]
+        activation_date = selection["next_operating_date"]
+        if (
+            selection.get("approved_by") != "user"
+            or selection.get("actual_pid_consumed") is not False
+            or next_krx_trading_date(date.fromisoformat(source_trading_date)).isoformat()
+            != activation_date
+            or not source_trading_date <= day <= activation_date
+        ):
+            raise ValueError("active_policy_code_activation_date_invalid")
     selection_sha = P.file_hash(selection_path)
     commit = git(release_root, "rev-parse", "HEAD")
     validate_release(
@@ -825,6 +901,9 @@ def issue(
             schema=SCHEMA,
             authority=confirm,
             target_date=day,
+            issued_at_kst=issued_at.isoformat(),
+            activation_date=activation_date,
+            source_trading_date=source_trading_date,
             release_commit=commit,
             release_root=str(release_root),
             origin_root=str(origin_root),

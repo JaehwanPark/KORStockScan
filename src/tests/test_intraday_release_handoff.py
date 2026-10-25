@@ -37,7 +37,7 @@ NATIVE_SELECTION = handoff._selection
     ],
 )
 def test_stopped_postclose_review_requires_native_cold_custody(
-    tmp_path, monkeypatch, fault
+    tmp_path, monkeypatch, fault, rollover=False
 ):
     from src.engine.automation import ordered_intraday_deploy as D
     from src.engine.infrastructure import runtime_release_router as R
@@ -52,15 +52,24 @@ def test_stopped_postclose_review_requires_native_cold_custody(
     )
     for path in (root, candidate, prior_root):
         path.mkdir()
-    clock = [datetime(2026, 10, 25, 7, tzinfo=ZoneInfo("Asia/Seoul"))]
+    observed_day = "2026-10-26" if rollover else "2026-10-25"
+    clock = [datetime.fromisoformat(observed_day + "T07:40:00+09:00")]
 
     class Clock:
+        fromisoformat = staticmethod(datetime.fromisoformat)
         @staticmethod
         def now(tz):
             return clock[0]
 
     monkeypatch.setattr(handoff, "datetime", Clock)
     monkeypatch.setattr(readiness, "datetime", Clock)
+    if rollover:
+        def recovery(data, target):
+            if fault == "recovery_lease":
+                raise ValueError("failed_preopen_recovery_lease_invalid")
+            assert target == "2026-10-26"
+            return dict(target_date=target)
+        monkeypatch.setattr(readiness, "require_failed_preopen_recovery", recovery)
     monkeypatch.setattr(handoff, "DATA_DIR", data)
     monkeypatch.setattr(
         handoff,
@@ -118,6 +127,7 @@ def test_stopped_postclose_review_requires_native_cold_custody(
         main_start_authorized=fault == "start_authority",
         source_date="2026-10-23",
         next_operating_date="2026-10-26",
+        selected_at_kst="2026-10-25T14:55:33+09:00",
         previous_selection_backup=str(
             transition.directory / ("before-" + T.sha(prior_raw) + ".bytes")
         ),
@@ -152,13 +162,14 @@ def test_stopped_postclose_review_requires_native_cold_custody(
         "_validated_origin_receipt",
         lambda data, day, code_root, *a: (
             None
-            if fault == "parent_missing" and code_root == candidate
+            if (fault == "parent_missing" and code_root == candidate)
+            or (rollover and day == observed_day and code_root == root)
             else dict(source_hashes=sources)
         ),
     )
     codes = {str(candidate / "code.py"): "f" * 64}
     monkeypatch.setattr(A, "code_hashes", lambda: codes)
-    successor = A.path(data, "2026-10-25", NEW, "e" * 64)
+    successor = A.path(data, observed_day, NEW, "e" * 64)
     write(
         successor,
         dict(
@@ -167,6 +178,8 @@ def test_stopped_postclose_review_requires_native_cold_custody(
             origin_selection_sha256=T.sha(raw),
             code_hashes=codes,
             actual_pid_consumed=False,
+            activation_date="2026-10-25" if fault == "activation_date" else "2026-10-26",
+            source_trading_date="2026-10-23",
         ),
     )
     target = "2026-10-27" if fault == "target" else "2026-10-26"
@@ -174,15 +187,15 @@ def test_stopped_postclose_review_requires_native_cold_custody(
     def run():
         with handoff.stopped_postclose_review(target) as proof:
             assert proof["source_date"] == "2026-10-23"
-            assert proof["target_date"] == "2026-10-25"
+            assert proof["target_date"] == observed_day
             assert proof["prepared_target_date"] == "2026-10-26"
             assert proof["actual_pid_consumed"] is False
             review = handoff._PREDECESSOR_REVIEW.get()
             assert handoff.predecessor_review_matches(
-                review, "2026-10-25", root, OLD, candidate
+                review, observed_day, root, OLD, candidate
             )
             assert not handoff.predecessor_review_matches(
-                review, "2026-10-26", root, OLD, candidate
+                review, "2026-10-27", root, OLD, candidate
             )
             if fault == "selector_during":
                 selector.write_text("{}")
@@ -198,6 +211,15 @@ def test_stopped_postclose_review_requires_native_cold_custody(
         run()
         assert selector.read_bytes() == raw
     assert handoff._PREDECESSOR_REVIEW.get() is None
+
+
+@pytest.mark.parametrize("fault", [None, "activation_date", "parent_missing", "main", "source_during", "recovery_lease"])
+def test_stopped_parent_review_uses_original_issue_and_explicit_successor_activation(
+    tmp_path, monkeypatch, fault
+):
+    test_stopped_postclose_review_requires_native_cold_custody(
+        tmp_path, monkeypatch, fault, rollover=True
+    )
 
 
 @pytest.mark.parametrize(
@@ -5342,6 +5364,7 @@ def test_pre_submit_handoff_rejects_unreviewed_dependency(tmp_path, family, depe
     "generation",
     [
         "current",
+        "consumed_migration",
         "consumed_pre_startup",
         "consumed_pre_shutdown",
         "consumed_pre_native_label",
@@ -5382,7 +5405,8 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
     )
     subprocess.run(["git", "-C", str(root), "checkout", "-q", "75e0fbbf7"], check=True)
     hashes = {
-        "current": handoff.REVIEWED_MIGRATION_PROFILE,
+        "current": handoff.REVIEWED_ACTIVATION_DATE_PROFILE,
+        "consumed_migration": handoff.REVIEWED_MIGRATION_PROFILE,
         "consumed_auxiliary_envelope": handoff.REVIEWED_AUXILIARY_ENVELOPE_PROFILE,
         "consumed_source_boundary": handoff.REVIEWED_COLD_SOURCE_BOUNDARY_PROFILE,
         "consumed_workflow_inventory": handoff.REVIEWED_WORKFLOW_INVENTORY_PROFILE,
@@ -5439,6 +5463,7 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
                         "consumed_cancel_cache": "ed4e05e6f",
                         "consumed_workflow_inventory": "a6389ea2f",
                         "consumed_source_boundary": "fdbeee2c7",
+                        "consumed_migration": "ef9927b7c",
                         "consumed_auxiliary_envelope": "22b5630fd",
                         "consumed_postclose_source": "06dbfe661",
                         "consumed_closed_scanner": "2edf3263e",
@@ -6216,6 +6241,7 @@ def test_cold_postclose_reader_preserves_original_complete_profile(
             **handoff.REVIEWED_COLD_SOURCE_BOUNDARY_HASHES,
             **handoff.REVIEWED_AUXILIARY_ENVELOPE_HASHES,
             **handoff.REVIEWED_MIGRATION_HASHES,
+            **handoff.REVIEWED_ACTIVATION_DATE_HASHES,
         }
     ),
 )

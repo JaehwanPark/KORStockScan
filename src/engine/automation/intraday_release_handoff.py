@@ -745,9 +745,15 @@ def stopped_postclose_review(target_date):
         or selection.get("next_operating_date") != target_date
         or not isinstance(source, str)
         or not source <= day <= target_date
-        or target_after_postclose(source) != target_date
     ):
         raise ValueError("postclose_review_cold_selection_required")
+    if target_after_postclose(source) != target_date:
+        from src.engine.automation.next_preopen_readiness import require_failed_preopen_recovery
+        from src.utils.market_day import next_krx_trading_date
+
+        require_failed_preopen_recovery(data, target_date)
+        if next_krx_trading_date(datetime.fromisoformat(source).date()).isoformat() != target_date:
+            raise ValueError("postclose_review_recovery_source_target_invalid")
     protected = (
         data / "runtime/operator_startup_hold.json",
         workspace / "restart.flag",
@@ -828,10 +834,23 @@ def stopped_postclose_review(target_date):
         str(p): _sha(p)
         for p in (selector, backup, after, transition_path, p5_path, pointer)
     }
+    origin_receipt_day = day
     for code_root, code_commit in ((root, commit), (candidate, candidate_commit)):
         proof = A._validated_origin_receipt(
             data, day, code_root, code_commit, ptr["bundle_sha256"], T.sha(pointer_raw)
         )
+        if proof is None and code_root == root:
+            # Predecessor custody uses its original issue contract. This
+            # authenticates ancestry only, never target-day activation/PID.
+            issued = datetime.fromisoformat(selection["selected_at_kst"])
+            issued_day = issued.astimezone(KST).date().isoformat()
+            if issued.tzinfo is None or not source <= issued_day < day <= target_date:
+                raise ValueError("postclose_review_origin_issue_date_invalid")
+            proof = A._validated_origin_receipt(
+                data, issued_day, code_root, code_commit, ptr["bundle_sha256"],
+                T.sha(pointer_raw),
+            )
+            origin_receipt_day = issued_day
         if proof is None:
             raise ValueError("postclose_review_active_parent_receipt_missing")
         for name, sha in proof["source_hashes"].items():
@@ -845,6 +864,10 @@ def stopped_postclose_review(target_date):
         or successor.get("origin_selection_sha256") != T.sha(selected_raw)
         or successor.get("code_hashes") != A.code_hashes()
         or successor.get("actual_pid_consumed") is not False
+        or (origin_receipt_day != day and (
+            successor.get("activation_date") != target_date
+            or successor.get("source_trading_date") != source
+        ))
     ):
         raise ValueError("postclose_review_successor_parent_unbound")
     proof = dict(
@@ -11053,6 +11076,26 @@ REVIEWED_ENTRY_COST_PAIRS = {
 }
 
 
+# Explicit next-session activation date; retain original immutable profiles.
+REVIEWED_ACTIVATION_DATE_HASHES = {'src/engine/scalping/reversal_code_handoff.py': '852a607466a82086ba79609aa2878c54a2105587d6b56518e8895f0fbfc9f49e', 'src/engine/infrastructure/startup_validation_code_context.py': '8791b494406e03428e3b8ce1b28121051ab0be216c58e480d0d240a6775ba96f'}
+REVIEWED_ACTIVATION_DATE_PROFILE = {**REVIEWED_MIGRATION_PROFILE, **REVIEWED_ACTIVATION_DATE_HASHES}
+REVIEWED_ACTIVATION_DATE_VARIANTS = {
+    (key[0], REVIEWED_ACTIVATION_DATE_HASHES.get(key[0], key[1])): {
+        **value, "selector_path": "src/engine/scalping/reversal_code_handoff.py",
+        "selector_sha256": REVIEWED_ACTIVATION_DATE_HASHES["src/engine/scalping/reversal_code_handoff.py"],
+        "dependencies": {**value["dependencies"], **REVIEWED_ACTIVATION_DATE_HASHES},
+        "contract_extensions": {origin: {name: REVIEWED_ACTIVATION_DATE_HASHES.get(os.path.normpath(name), sha)
+            for name, sha in paths.items()} for origin, paths in value["contract_extensions"].items()},
+    } for key, value in REVIEWED_MIGRATION_VARIANTS.items()
+}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple((old, current)
+        for old in {value for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ()) for value in pair}
+        | {REVIEWED_MIGRATION_PROFILE[name]})
+    for name, current in REVIEWED_ACTIVATION_DATE_HASHES.items()
+}}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -11654,6 +11697,12 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     ):
         prepared_hashes = REVIEWED_MIGRATION_PROFILE
         prepared_variants = REVIEWED_MIGRATION_VARIANTS
+    activation_name = "src/engine/scalping/reversal_code_handoff.py"
+    activation_source = candidate_bytes(activation_name, optional=True)
+    if (activation_source is not None and hashlib.sha256(activation_source).hexdigest()
+            == REVIEWED_ACTIVATION_DATE_HASHES[activation_name]):
+        prepared_hashes = REVIEWED_ACTIVATION_DATE_PROFILE
+        prepared_variants = REVIEWED_ACTIVATION_DATE_VARIANTS
     entry_cost_hashes = (
         prepared_hashes
         if prepared_owner_present
