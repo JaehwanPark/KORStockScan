@@ -2333,6 +2333,46 @@ REVIEWED_PREPARATION_HISTORY.setdefault(
 )
 
 
+# Reviewed protected database configuration and native launcher generation.
+REVIEWED_PREPARATION_HISTORY.setdefault("src/utils/constants.py", set()).update(
+    {
+        (old, "6fad50da635c7c4b694afb1d59205d9f901f15d197db2156f489e4829750e8bb")
+        for old in (
+            "91b7840994ca13114176ced7cbc0ed23f9ecf53aad5dd9497956b9c991990252",
+            "a7fd2722df4e74270e87ee9489c1e696f540f43a996fcc034e5265ec5b67946e",
+        )
+    }
+)
+REVIEWED_PREPARATION_HISTORY.setdefault(
+    "src/engine/error_detectors/artifact_freshness.py", set()
+).update(
+    {
+        (old, "8dae2dc097b769214195f17c3b666fb6e43c2c2f25ea7c3a0311b723355bc665")
+        for old in (
+            "09c1d34cc554ef68060125590e84545e75a335add5ed2b87043b4a6a6b2eafb9",
+            "3a58f8ac3220ea8d64247cf17a756d2658c7815cd3d57744303f80bc40d34dcc",
+            "6f853e28cf95b2f6513ad6650350c6574ddeeb5b99f5d2d2d5756d34ebf14ed9",
+            "6f9cf859a4adf8e27b6465d38cf4eb536b16631381e94af199ecf84554ca7ffa",
+            "756a1fa9a36e7350a97d274b22047dffd8bedcdccd4bd4e3c7bb034efdcceba2",
+            "a6b9f2882bac4ae90f8a972a3cfbd56e111d78dd3bacead8cb5f32c41a949e27",
+            "f64db72754c88c8bab262e275fe3ab68440b32656a5b74ab9c4f0f0044b94ebf",
+        )
+    }
+)
+REVIEWED_PREPARATION_HISTORY.setdefault(
+    "src/engine/infrastructure/runtime_release_router.py", set()
+).update(
+    {
+        (old, "a02d89fca5ff58c1d257989dceb44dd6d4a9520552fbf4ad8e274c8522f1515d")
+        for old in (
+            "02e83a628b50041e5d5938697ef4b1e4a8bddde2b301b7564cc6644f465f8e63",
+            "58daee5eebdc8f02bf4fc86477929b0a05cc14438c5251c7e52d12b4d2a7f308",
+            "ab16b27904d4d9b2b680a27219844d76bb692bc257385b23e4abed5abe93d962",
+        )
+    }
+)
+
+
 def reviewed_preparation_pair(relative, old, current):
     # An already reviewed physical pair keeps its original authority; a
     # formatting projection must not replace either endpoint before this check.

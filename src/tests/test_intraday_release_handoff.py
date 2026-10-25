@@ -5382,7 +5382,8 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
     )
     subprocess.run(["git", "-C", str(root), "checkout", "-q", "75e0fbbf7"], check=True)
     hashes = {
-        "current": handoff.REVIEWED_AUXILIARY_ENVELOPE_PROFILE,
+        "current": handoff.REVIEWED_MIGRATION_PROFILE,
+        "consumed_auxiliary_envelope": handoff.REVIEWED_AUXILIARY_ENVELOPE_PROFILE,
         "consumed_source_boundary": handoff.REVIEWED_COLD_SOURCE_BOUNDARY_PROFILE,
         "consumed_workflow_inventory": handoff.REVIEWED_WORKFLOW_INVENTORY_PROFILE,
         "consumed_cancel_cache": handoff.REVIEWED_CANCEL_CACHE_PROFILE,
@@ -5438,6 +5439,7 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
                         "consumed_cancel_cache": "ed4e05e6f",
                         "consumed_workflow_inventory": "a6389ea2f",
                         "consumed_source_boundary": "fdbeee2c7",
+                        "consumed_auxiliary_envelope": "22b5630fd",
                         "consumed_postclose_source": "06dbfe661",
                         "consumed_closed_scanner": "2edf3263e",
                         "consumed_scanner_preflight": "6e970e41f",
@@ -6213,6 +6215,7 @@ def test_cold_postclose_reader_preserves_original_complete_profile(
             **handoff.REVIEWED_WORKFLOW_INVENTORY_HASHES,
             **handoff.REVIEWED_COLD_SOURCE_BOUNDARY_HASHES,
             **handoff.REVIEWED_AUXILIARY_ENVELOPE_HASHES,
+            **handoff.REVIEWED_MIGRATION_HASHES,
         }
     ),
 )
@@ -6222,4 +6225,21 @@ def test_cold_postclose_reader_preserves_original_complete_profile(
 def test_cold_postclose_reader_rejects_partial_successor(tmp_path, dependency, fault):
     test_entry_cost_handoff_keeps_exact_complete_generation(
         tmp_path, "pre_submit_delay", fault, "current", dependency
+    )
+
+
+@pytest.mark.parametrize("family", ["main_stop", "holding_vote", "pre_submit_delay"])
+@pytest.mark.parametrize(
+    "fault", [None, "missing", "dirty", "committed_change", "parent_mix"]
+)
+def test_migration_configuration_keeps_exact_policy_generation(tmp_path, family, fault):
+    test_entry_cost_handoff_keeps_exact_complete_generation(
+        tmp_path, family, fault, "current", "src/utils/constants.py"
+    )
+
+
+@pytest.mark.parametrize("family", ["main_stop", "holding_vote", "pre_submit_delay"])
+def test_migration_keeps_original_auxiliary_envelope_profile(tmp_path, family):
+    test_entry_cost_handoff_keeps_exact_complete_generation(
+        tmp_path, family, None, "consumed_auxiliary_envelope"
     )

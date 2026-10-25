@@ -3620,3 +3620,14 @@ EOD의 기존 completed_with_warnings는 제외된 범위이고 재실행하지 
 **최종 소비와 이관 형상.** [정리·보고서 분류 후 최종 native 읽기 검증](../../../KORStockScan-storage-archives/readiness-storage-migration-20261025/final-selected-readiness-verification.json)은 선택본22b5630fd, source10/23→target10/26, strict/controller/최종화/준비/P5 결속 PASS, Main/supervisor 없음이다. selector·활성 정책/수량·원 준비 세대 불변을 확인했다. 결속된 health를 다시 생성하거나 실제 PID 증거를 만들지 않았다. 현재 종료 상태는 여전히 `recovered_preparation_only`이고 실제 기동 및 다음 무보정 전체 실행 수용은 OPEN이다.
 
 [신규 계정 최종 인계 문서](../../../KORStockScan-storage-archives/readiness-storage-migration-20261025/migration/HANDOFF.md)에 Git bundle/경로 재구성, 실제 의존성151개와 기존 headless117개 비교, target cron45→43개, 보호 DB 환경, PostgreSQL15 원 image와 loopback/restart=no 템플릿, 원천·비밀·제외 범위 및 마지막 writer 동결/DB delta 절차를 준비했다. 원 BASELINE-01 세 wrapper는 현재 main/선택본과 같음을 확인했다. Git 커밋 보존은 dirty worktree 내용을 포함하지 않으며 원 서버의 미커밋 자료는 그대로 남긴다. 대상 계정/VM·설치·DB 덤프/복원·최종 동결은 미실행이고, 현재 P5를 새 소스/호스트 검증으로 사용하지 않는다. 운영 선택·서비스/cron 설정·Main 기동·주문·외부 문서 동기화는 수행하지 않았다.
+
+<a id="approved-migration-profile-deployment-2026-10-25"></a>
+## 2026-10-25 ae800d3de 승인 통합: 이관 설정 세대와 정지 상태 준비 검증
+
+**원인과 보완.** 사용자 승인 범위는 ae800d3de까지 통합 배포·필요한 재생성·10/23 strict/controller/최종화 및 10/26 PREOPEN 준비와 이관 묶음 갱신이며 Main 기동은 금지다. [원본 보존과 배포 전 검사](../../../KORStockScan-storage-archives/postclose-deploy-20261025-ae800d3de/preflight.json)는 선택본22b5630fd를 유지한 상태에서 delay/stop/holding 소비자의 constants 세대 미등록을 발견했다. 보호 DB URL-file/공통 launcher 수정은 ae800d3de에 있지만 검토된 정책 인계 및 독립 Main 준비의 정확한 source-pair 목록에 연결되지 않은 통합 누락이다. [원본 manifest](../../../KORStockScan-storage-archives/postclose-deploy-20261025-ae800d3de/original-manifest.json)와 실패 로그를 보존했다.
+
+기존 handoff/profile 및 독립 preparation owner에만 constants·artifact detector·release router와 준비 reader의 정확한 새 해시를 등록한다. issued predecessor profile/원 policy origin은 retained이고 새로운 선택 profile만 추가한다. 기존 매매 설정 class/function AST와 unset DB 값은 [비밀값 없는 의미 대사](../../../KORStockScan-storage-archives/postclose-deploy-20261025-ae800d3de/configuration-semantic-parity.json)로 동일성을 확인했다. 누락·변조·다른 committed code·혼합 세대 거부를 유지하고 세 정책의 실제 코드 검증과 독립 준비 검증을 함께 시험한다. 기존 기능 제거/새 실행 entrypoint/주문·provider·수량·안전 변경은 없다. 런타임 원본·기존 6개 OPEN 및 경제성 null을 보존한다.
+
+관측10/25는 휴장, 원천10/23과 다음 거래일10/26은 native calendar로 대사했다. 10/25 checklist 부재는 계속 기록하며 strict에 묶인10/26 원본을 수동 변경하지 않는다. 원천 재계산은 무효화된 세대의 최소 범위로 제한하고, 최종 배포본에서 summary/strict/controller/최종화/준비와 fresh P5가 완료되기 전에는 배포 수용 완료로 보고하지 않는다. 실제 Main/PID 수용과 다음 예정 무보정 완주는 기존 owner 아래 OPEN이다.
+
+[통합 소스 리뷰](../../../KORStockScan-storage-archives/postclose-deploy-20261025-ae800d3de/code-review.json)는 영향 회귀 356건 PASS, compile/diff/변경 링크4개/print-only backlog 검증 PASS다. 기준 ae800d3de 대비 비테스트 소스+109/-0, 테스트+41/-2이며 새 entrypoint 없이 기존 정확한 세대 registry만 확장했다. 기존 pytest garbage의 권한/비어 있지 않음 정리 경고는 원 로그에 남겼고 원본을 보존했다. 배포 및 자연 수용과 구분한다.

@@ -10993,6 +10993,66 @@ REVIEWED_ENTRY_COST_PAIRS = {
 }
 
 
+# Reviewed migration configuration; keep issued profiles and exact mixed-code rejection.
+REVIEWED_MIGRATION_HASHES = {
+    "src/utils/constants.py": "6fad50da635c7c4b694afb1d59205d9f901f15d197db2156f489e4829750e8bb",
+    "src/engine/error_detectors/artifact_freshness.py": "8dae2dc097b769214195f17c3b666fb6e43c2c2f25ea7c3a0311b723355bc665",
+    "src/engine/infrastructure/runtime_release_router.py": "a02d89fca5ff58c1d257989dceb44dd6d4a9520552fbf4ad8e274c8522f1515d",
+    "src/engine/infrastructure/startup_validation_code_context.py": "360d3d9f2d086135f9b6aa21689e70b2b93a8b662f4e15bd86f5a64f784fc38f",
+}
+REVIEWED_MIGRATION_ORIGINS = {
+    "src/utils/constants.py": [
+        "91b7840994ca13114176ced7cbc0ed23f9ecf53aad5dd9497956b9c991990252",
+        "a7fd2722df4e74270e87ee9489c1e696f540f43a996fcc034e5265ec5b67946e",
+    ],
+    "src/engine/error_detectors/artifact_freshness.py": [
+        "09c1d34cc554ef68060125590e84545e75a335add5ed2b87043b4a6a6b2eafb9",
+        "3a58f8ac3220ea8d64247cf17a756d2658c7815cd3d57744303f80bc40d34dcc",
+        "6f853e28cf95b2f6513ad6650350c6574ddeeb5b99f5d2d2d5756d34ebf14ed9",
+        "6f9cf859a4adf8e27b6465d38cf4eb536b16631381e94af199ecf84554ca7ffa",
+        "756a1fa9a36e7350a97d274b22047dffd8bedcdccd4bd4e3c7bb034efdcceba2",
+        "a6b9f2882bac4ae90f8a972a3cfbd56e111d78dd3bacead8cb5f32c41a949e27",
+        "f64db72754c88c8bab262e275fe3ab68440b32656a5b74ab9c4f0f0044b94ebf",
+    ],
+    "src/engine/infrastructure/runtime_release_router.py": [
+        "02e83a628b50041e5d5938697ef4b1e4a8bddde2b301b7564cc6644f465f8e63",
+        "58daee5eebdc8f02bf4fc86477929b0a05cc14438c5251c7e52d12b4d2a7f308",
+        "ab16b27904d4d9b2b680a27219844d76bb692bc257385b23e4abed5abe93d962",
+    ],
+    "src/engine/infrastructure/startup_validation_code_context.py": [
+        "0206c0105ef369957816a2383f72edc89e4e0f5a145868e7db837b37e6ca687d"
+    ],
+}
+REVIEWED_MIGRATION_PROFILE = {
+    **REVIEWED_AUXILIARY_ENVELOPE_PROFILE,
+    **REVIEWED_MIGRATION_HASHES,
+}
+REVIEWED_MIGRATION_VARIANTS = {
+    (key[0], REVIEWED_MIGRATION_HASHES.get(key[0], key[1])): {
+        **value,
+        "selector_path": "src/utils/constants.py",
+        "selector_sha256": REVIEWED_MIGRATION_HASHES["src/utils/constants.py"],
+        "dependencies": {**value["dependencies"], **REVIEWED_MIGRATION_HASHES},
+        "contract_extensions": {
+            origin: {
+                name: REVIEWED_MIGRATION_HASHES.get(os.path.normpath(name), digest)
+                for name, digest in paths.items()
+            }
+            for origin, paths in value["contract_extensions"].items()
+        },
+    }
+    for key, value in REVIEWED_AUXILIARY_ENVELOPE_VARIANTS.items()
+}
+REVIEWED_ENTRY_COST_PAIRS = {
+    **REVIEWED_ENTRY_COST_PAIRS,
+    **{
+        name: REVIEWED_ENTRY_COST_PAIRS.get(name, ())
+        + tuple((old, current) for old in REVIEWED_MIGRATION_ORIGINS[name])
+        for name, current in REVIEWED_MIGRATION_HASHES.items()
+    },
+}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -11585,6 +11645,15 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     ):
         prepared_hashes = REVIEWED_AUXILIARY_ENVELOPE_PROFILE
         prepared_variants = REVIEWED_AUXILIARY_ENVELOPE_VARIANTS
+    migration_name = "src/utils/constants.py"
+    migration_source = candidate_bytes(migration_name, optional=True)
+    if (
+        migration_source is not None
+        and hashlib.sha256(migration_source).hexdigest()
+        == REVIEWED_MIGRATION_HASHES[migration_name]
+    ):
+        prepared_hashes = REVIEWED_MIGRATION_PROFILE
+        prepared_variants = REVIEWED_MIGRATION_VARIANTS
     entry_cost_hashes = (
         prepared_hashes
         if prepared_owner_present

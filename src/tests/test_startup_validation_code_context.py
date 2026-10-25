@@ -2657,7 +2657,7 @@ def test_main_preparation_uses_reviewed_stopped_origin_code(name):
     review = json.loads((ROOT / H._FORMATTING_REVIEW_PATH).read_text())
     predecessor = review["sources"][name]["before_sha256"]
     if review["sources"][name]["after_sha256"] != current:
-        assert H.REVIEWED_AUXILIARY_ENVELOPE_PROFILE[name] == current
+        assert H.REVIEWED_MIGRATION_PROFILE[name] == current
         C._pairs({name: review["sources"][name]["after_sha256"]}, {name: current})
     origins = {old for old, new in pairs if new in {predecessor, current}}
     origins.add(predecessor)
@@ -2911,3 +2911,22 @@ def test_main_preparation_independently_reviews_closed_scanner(origin, damage):
     elif damage == "wrong_origin":
         old = "0" * 64
     assert C.reviewed_preparation_pair(relative, old, new) is (damage is None)
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "src/utils/constants.py",
+        "src/engine/error_detectors/artifact_freshness.py",
+        "src/engine/infrastructure/runtime_release_router.py",
+    ],
+)
+def test_migration_configuration_has_independent_exact_source_pairs(name):
+    current = hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
+    assert H.REVIEWED_MIGRATION_HASHES[name] == current
+    for old in H.REVIEWED_MIGRATION_ORIGINS[name]:
+        C._pairs({name: old}, {name: current})
+        with pytest.raises(ValueError, match="unreviewed"):
+            C._pairs({name: old}, {name: "0" * 64})
+    with pytest.raises(ValueError, match="unreviewed"):
+        C._pairs({name: "0" * 64}, {name: current})
