@@ -43,6 +43,7 @@
 ## 실행 항목
 
 - [ ] `[DirectFamilyPreopenPolicyHandoff] direct family 날짜별 정책·bootstrap 장전 소비 확인` (`Due: 2026-10-26`, `Slot: PREOPEN`, `TimeWindow: 07:35~08:05`, `Track: RuntimeStability`)
+  - 10/26 08:49 배포 preflight는 당일 진단 suffix45,966,079byte가32MiB를 넘어 정지 전 차단. 기존 Main/selector 유지,08:50 native 생산자 catch-up 뒤 증분421행·재구축0 검증. 실패 commit 원본을 보존하고 source 동등 후속 후보의 fresh P5·정상 native 전환을 진행한다.
   - 10/26 08:31 현재 관측 경보: 10/23 결함6행 격리 후 남은 진단 체크포인트를 기존 생산자로1회 복구하고 증분0행 검증. 오래된 분할 검증을 native 재검증했으며, 파생 PASS/원 종료 영수증 혼합과 물리 전송·arm 필드 유실은 관측 owner에서 수리한다. 원 사건 ID/해시·정상 안전 차단은 보존하며 통합 뒤 새 PID/current observer/health 및10/27 07:35~08:05 무보정 PREOPEN 수용은 같은 owner에서 확인한다.
   - 10/26 08:22 복구 소비: PREOPEN08:13:20/P5새검증08:19:08 통과 후 ef992/PID1809842의 정책·PID 소비08:22:32 확인. 발행·활성·다음 활성·원 거래일·부모 실효일을 분리하는 영구 수리와 현재 observer/health의 후속 검증은 아래 같은 owner에서 계속한다.
   - 10/26 07:55 PREOPEN 복구: ef992의07:37:28 실패는 발행25/활성26을 혼동한 코드 영수증 조회 결함이다. 발행/활성/원 거래일을 명시하고 원 날짜의 부모 증빙·현 코드/포인터·실패 PREOPEN lease를 기존 owner에서 검증한다. 원 실패/정책/격리 원문 보존, 실제 재기동·PID/정책·현재 observer/health 확인까지 OPEN. [원인·수리·최종 수용](../audits/postclose-root-cause-recovery-review-2026-10-19.md#preopen-issue-date-and-activation-date-repair--2026-10-26).
