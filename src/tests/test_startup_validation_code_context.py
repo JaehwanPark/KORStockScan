@@ -2930,3 +2930,16 @@ def test_migration_configuration_has_independent_exact_source_pairs(name):
             C._pairs({name: old}, {name: "0" * 64})
     with pytest.raises(ValueError, match="unreviewed"):
         C._pairs({name: "0" * 64}, {name: current})
+
+
+@pytest.mark.parametrize("name", ["src/engine/scalping/reversal_code_handoff.py",
+    "src/engine/monitoring/submission_bottleneck_monitor.py"])
+@pytest.mark.parametrize("fault", [None, "source", "target", "path"])
+def test_activation_and_native_receipt_repairs_bind_exact_independent_sources(name, fault):
+    old = hashlib.sha256(subprocess.check_output([
+        "git", "-C", str(ROOT), "show", "ef9927b7c:" + name])).hexdigest()
+    current = hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
+    if fault == "source":old = "0" * 64
+    elif fault == "target":current = "0" * 64
+    elif fault == "path":name = "src/engine/kiwoom_sniper_v2.py"
+    assert C.reviewed_preparation_pair(name, old, current) is (fault is None)

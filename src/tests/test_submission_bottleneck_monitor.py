@@ -469,6 +469,110 @@ def test_complete_provider_decisions_and_exact_main_closed_pass_are_observation_
     assert monitor.observation_health_projection(result)["status"] == "warning_pending"
 
 
+@pytest.mark.parametrize("stop", ["latency_block", "entry_physical_send_guard_block"])
+@pytest.mark.parametrize(
+    "fault",
+    [
+        None,
+        "no_return",
+        "no_terminal",
+        "unknown_guard",
+        "broker_attempted",
+        "broker_accepted",
+        "uncertain_result",
+        "arm_not_released",
+        "no_native",
+        "physical_send_unknown",
+        "physical_flag_conflict",
+    ],
+)
+def test_native_guard_closure_keeps_derived_pass_out_of_receipt_projection(stop, fault):
+    from types import SimpleNamespace
+
+    result = _provider_health_fixture("PASS", "accepted_to_entry_path")
+    events = result["async_disposition_coverage"]["attempt_projection"]
+    for event in events:
+        fields = event["fields"]
+        if fields["async_disposition"] == "entry_path_returned":
+            fields.update(
+                async_disposition_reason=stop,
+                async_entry_submit_attempt_id="guard-attempt",
+                async_entry_broker_attempts=(
+                    "0" if stop.startswith("entry_physical") else None
+                ),
+                async_entry_broker_accepted="False",
+                async_entry_submit_outcome="returned_false",
+                async_entry_arm_released="True",
+            )
+            if stop.startswith("entry_physical"):
+                fields.update(
+                    async_entry_physical_send_blocked="True",
+                    async_entry_physical_send_attempts="0",
+                )
+            if fault == "unknown_guard":
+                fields["async_disposition_reason"] = "unknown_guard"
+            elif fault == "broker_attempted":
+                fields["async_entry_broker_attempts"] = "1"
+            elif fault == "broker_accepted":
+                fields["async_entry_broker_accepted"] = "True"
+            elif fault == "uncertain_result":
+                fields["async_entry_submit_outcome"] = "uncertain"
+            elif fault == "arm_not_released":
+                fields["async_entry_arm_released"] = "False"
+            elif fault == "physical_send_unknown":
+                fields["async_entry_physical_send_attempts"] = "unknown"
+            elif fault == "physical_flag_conflict":
+                fields["async_entry_physical_send_blocked"] = (
+                    "False" if stop.startswith("entry_physical") else "True"
+                )
+    derived = []
+    for event in events:
+        if event["fields"]["async_disposition"] != "accepted_to_entry_path":
+            continue
+        fields = dict(
+            event["fields"],
+            async_producer_pid=679747,
+            async_disposition="validated_pass_trace",
+            async_disposition_event_id="pass-trace:"
+            + event["fields"]["ai_decision_trace_id"],
+        )
+        derived.append(
+            dict(emitted_at=event["emitted_at"], stock_code="196170", fields=fields)
+        )
+    if fault == "no_return":
+        events = [
+            r
+            for r in events
+            if r["fields"]["async_disposition"] != "entry_path_returned"
+        ]
+    elif fault == "no_terminal":
+        events = [
+            r
+            for r in events
+            if r["fields"]["async_disposition"] != "accepted_to_entry_path"
+        ]
+    elif fault == "no_native":
+        events = []
+    result["async_disposition_coverage"] = monitor.async_disposition_coverage(
+        [
+            SimpleNamespace(stage="entry_async_disposition", stock_code="196170", **r)
+            for r in events
+        ],
+        result["as_of"],
+        pass_projections=derived,
+        source_coverage="complete",
+    )
+    projection = result["async_disposition_coverage"]["attempt_projection"]
+    assert all(
+        r["fields"]["async_disposition"] != "validated_pass_trace" for r in projection
+    )
+    counts = next(iter(result["async_disposition_coverage"]["by_producer"].values()))
+    assert counts["pass_count"] == 2
+    assert (
+        monitor.observation_health_projection(result)["status"] == "warning_pending"
+    ) == (fault is None)
+
+
 def test_pass_native_invalidation_requires_exact_known_terminal_and_keeps_observation_pending():
     result = _provider_health_fixture("PASS")
     result["machine_semantics"]["reversal_provider_lineage"][

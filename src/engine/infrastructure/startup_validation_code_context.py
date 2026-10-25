@@ -2380,6 +2380,12 @@ REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/scalping/reversal_code_hando
       | {"da2546b0a8d923f7943c9da30c06f93443567baad3c597de20e451d15c4b6d0f", "b1fdf211b0318caaddeda2ccfdb63710c839c61edb89030633143bdf730396b7", "852a607466a82086ba79609aa2878c54a2105587d6b56518e8895f0fbfc9f49e"}}
 )
 
+# Exact reviewed monitor receipt/denominator separation and native guard custody.
+REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/monitoring/submission_bottleneck_monitor.py', set()).update(
+    {(old, '9b4327a28d01fe07d0b61359ffb908e5ac3932a7fefb4231f83f4afb3205a08c') for old in
+     {value for pair in REVIEWED_PREPARATION_HISTORY['src/engine/monitoring/submission_bottleneck_monitor.py'] for value in pair} | {'c1e3a4fe731fbc8909ff132de0d7929b162534e0b960d8e514950e587b60fcfd'}}
+)
+
 
 def reviewed_preparation_pair(relative, old, current):
     # An already reviewed physical pair keeps its original authority; a

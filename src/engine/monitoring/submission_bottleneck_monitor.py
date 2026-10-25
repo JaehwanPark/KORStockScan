@@ -4942,16 +4942,19 @@ def async_disposition_coverage(
     missing = {"", "-", "none", "null", "unknown"}
     from types import SimpleNamespace
 
-    sources = list(events) + [
-        SimpleNamespace(
-            stage="entry_async_disposition",
-            emitted_at=p.get("emitted_at"),
-            stock_code=p.get("stock_code"),
-            fields=p.get("fields") or {},
+    sources = [(event, False) for event in events] + [
+        (
+            SimpleNamespace(
+                stage="entry_async_disposition",
+                emitted_at=p.get("emitted_at"),
+                stock_code=p.get("stock_code"),
+                fields=p.get("fields") or {},
+            ),
+            True,
         )
         for p in pass_projections
     ]
-    for event in sources:
+    for event, derived in sources:
         emitted = stamp(event.emitted_at)
         if (
             event.stage != "entry_async_disposition"
@@ -5021,6 +5024,9 @@ def async_disposition_coverage(
             f.get("async_entry_broker_attempts"),
             f.get("async_entry_broker_accepted"),
             f.get("async_entry_submit_outcome"),
+            f.get("async_entry_physical_send_blocked"),
+            f.get("async_entry_physical_send_attempts"),
+            f.get("async_entry_arm_released"),
         )
         if not eid or eid in row["events"] and row["events"][eid] != content:
             row["conflict"] = True
@@ -5041,6 +5047,9 @@ def async_disposition_coverage(
                     "async_entry_broker_attempts",
                     "async_entry_broker_accepted",
                     "async_entry_submit_outcome",
+                    "async_entry_physical_send_blocked",
+                    "async_entry_physical_send_attempts",
+                    "async_entry_arm_released",
                 )
             }
             if row["post_entry"] and row["post_entry"] != post_entry:
@@ -5068,11 +5077,15 @@ def async_disposition_coverage(
                     "async_entry_broker_attempts",
                     "async_entry_broker_accepted",
                     "async_entry_submit_outcome",
+                    "async_entry_physical_send_blocked",
+                    "async_entry_physical_send_attempts",
+                    "async_entry_arm_released",
                 )
             },
         )
         fingerprint = json.dumps(projection, sort_keys=True, default=str)
-        if fingerprint not in retained_fingerprints:
+        # Derived PASS contributes to the denominator, never native closure.
+        if not derived and fingerprint not in retained_fingerprints:
             retained_fingerprints.add(fingerprint)
             retained.append(projection)
     by_producer = {}
@@ -8297,6 +8310,9 @@ def observation_health_projection(result):
                 str(r.get("async_entry_broker_attempts")),
                 str(r.get("async_entry_broker_accepted")),
                 str(r.get("async_entry_submit_outcome")),
+                str(r.get("async_entry_physical_send_blocked")),
+                str(r.get("async_entry_physical_send_attempts")),
+                str(r.get("async_entry_arm_released")),
             )
             for r in returned
             if all(
@@ -8307,12 +8323,45 @@ def observation_health_projection(result):
                     "async_entry_broker_attempts",
                     "async_entry_broker_accepted",
                     "async_entry_submit_outcome",
+                    "async_entry_physical_send_blocked",
+                    "async_entry_physical_send_attempts",
+                    "async_entry_arm_released",
                 )
             )
         }
         if len(evidence) != 1:
             return False
-        stop, submit, broker_attempts, accepted, outcome = next(iter(evidence))
+        (
+            stop,
+            submit,
+            broker_attempts,
+            accepted,
+            outcome,
+            physical_blocked,
+            physical_attempts,
+            arm_released,
+        ) = next(iter(evidence))
+        if stop in {"latency_block", "entry_physical_send_guard_block"}:
+            local_return = (
+                isinstance(submit, str)
+                and 0 < len(submit) <= 256
+                and accepted.lower() == "false"
+                and outcome == "returned_false"
+                and arm_released.lower() == "true"
+            )
+            if stop == "latency_block":
+                return (
+                    local_return
+                    and broker_attempts in {"None", "0"}
+                    and physical_blocked.lower() in {"none", "false"}
+                    and physical_attempts in {"None", "0"}
+                )
+            return (
+                local_return
+                and broker_attempts == "0"
+                and physical_blocked.lower() == "true"
+                and physical_attempts == "0"
+            )
         if stop in direct_guards:
             return True
         return (
