@@ -2375,9 +2375,9 @@ REVIEWED_PREPARATION_HISTORY.setdefault(
 
 # Reviewed explicit issue/activation date separation; preserve every predecessor.
 REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/scalping/reversal_code_handoff.py', set()).update(
-    {(old, '852a607466a82086ba79609aa2878c54a2105587d6b56518e8895f0fbfc9f49e') for old in
+    {(old, 'da2546b0a8d923f7943c9da30c06f93443567baad3c597de20e451d15c4b6d0f') for old in
       {value for pair in REVIEWED_PREPARATION_HISTORY['src/engine/scalping/reversal_code_handoff.py'] for value in pair}
-      | {"b1fdf211b0318caaddeda2ccfdb63710c839c61edb89030633143bdf730396b7"}}
+      | {"b1fdf211b0318caaddeda2ccfdb63710c839c61edb89030633143bdf730396b7", "852a607466a82086ba79609aa2878c54a2105587d6b56518e8895f0fbfc9f49e"}}
 )
 
 

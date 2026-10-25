@@ -779,7 +779,8 @@ def issue(
     selection = json.loads(selection_before)
     activation_date = day
     source_trading_date = None
-    if selection.get("approval_scope") == "after_postclose_deploy_for_next_regular_start":
+    if (selection.get("approval_scope") == "after_postclose_deploy_for_next_regular_start"
+            and selection.get("actual_pid_consumed") is False):
         from datetime import date
         from src.utils.market_day import next_krx_trading_date
 
@@ -937,6 +938,94 @@ def issue(
         raise ValueError("active_policy_code_handoff_receipt_conflict")
     N._atomic_write_json(dest, r)
     return r
+
+
+def issue_activation_rollover(data_root, day, *, verified_receipt, confirm):
+    """Issue a failed PREOPEN's exact consumer proof from native parent custody.
+
+    Preserve the immutable original and its consumer code. The already reviewed
+    source proof supplies activation intent, not a replacement policy or PID.
+    """
+    from src.engine.scalping import mechanistic_entry_runtime_policy as N
+    from src.engine.automation import ordered_intraday_deploy as D
+    from src.engine.automation import next_preopen_readiness as Q
+    from src.engine.infrastructure import runtime_release_router as R
+    import fcntl
+
+    data = Path(data_root).resolve()
+    workspace = data.parent
+    workflow = Path(__file__).resolve().parents[3]
+    if confirm != AUTHORITY:
+        raise ValueError("activation_rollover_authority_required")
+    workflow_commit = R.git(workflow, "rev-parse", "HEAD")
+    R.validate_release(workspace, dict(schema="runtime_release_selection_v1",
+        workspace=str(workspace), release_root=str(workflow), git_commit=workflow_commit))
+    with (R.scheduled_execution_lease(workspace, exclusive=True),
+          R.runtime_release_set_lock(workspace),
+          Q.failed_preopen_recovery(day, confirm=Q.RECOVERY_AUTHORITY)):
+        with (N.root(data) / "publisher.lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            selector = data / "runtime/runtime_release_selection.json"
+            selected_raw = selector.read_bytes()
+            selected = json.loads(selected_raw)
+            consumer, commit = R.selected_release(workspace)
+            pointer = N.root(data) / "current.json"
+            pointer_raw = pointer.read_bytes()
+            current = json.loads(pointer_raw)
+            issued = datetime.fromisoformat(selected["selected_at_kst"])
+            source = selected.get("source_date")
+            if (issued.tzinfo is None or selected.get("approved_by") != "user"
+                    or selected.get("approval_scope") != "after_postclose_deploy_for_next_regular_start"
+                    or selected.get("actual_pid_consumed") is not False
+                    or selected.get("main_start_authorized") is not False
+                    or selected.get("next_operating_date") != day
+                    or current.get("effective_date") != source
+                    or not source < issued.astimezone(P.KST).date().isoformat() < day
+                    or D._main_pids() or not D._session_absent()):
+                raise ValueError("activation_rollover_stopped_generation_required")
+            original_day = issued.astimezone(P.KST).date().isoformat()
+            original = path(data, original_day, commit, current["bundle_sha256"])
+            original_raw = original.read_bytes()
+            old = N._read(original)
+            if _validated_origin_receipt(data, original_day, consumer, commit,
+                    current["bundle_sha256"], P.file_hash(pointer)) is None:
+                raise ValueError("activation_rollover_original_missing")
+            proof_path = Path(verified_receipt).resolve(strict=True)
+            proof_raw = proof_path.read_bytes()
+            proof = N._read(proof_path)
+            if (proof_path != path(data, day, proof["release_commit"], current["bundle_sha256"])
+                    or proof.get("activation_date") != day
+                    or proof.get("source_trading_date") != source
+                    or proof.get("origin_root") != str(consumer)
+                    or proof.get("origin_commit") != commit
+                    or proof.get("actual_pid_consumed") is not False
+                    or proof.get("origin_selection_sha256") != P.file_hash(selector)
+                    or _validated_origin_receipt(data, day, Path(proof["release_root"]),
+                        proof["release_commit"], current["bundle_sha256"], P.file_hash(pointer)) is None):
+                raise ValueError("activation_rollover_native_proof_invalid")
+            refs = {**old["source_hashes"], str(original): P.file_hash(original),
+                    str(proof_path): P.file_hash(proof_path),
+                    str(Path(__file__).resolve()): P.file_hash(__file__)}
+            result = P.seal(dict(old, target_date=day,
+                issued_at_kst=datetime.now(P.KST).isoformat(), activation_date=day,
+                source_trading_date=source, source_hashes=refs,
+                actual_pid_consumed=False,
+                activation_rollover=dict(original_receipt=str(original),
+                    original_sha256=P.file_hash(original), verified_receipt=str(proof_path),
+                    verified_sha256=P.file_hash(proof_path), workflow_commit=workflow_commit,
+                    policy_reselected=False, actual_pid_consumed=False)))
+            Q.require_failed_preopen_recovery(data, day)
+            if (selector.read_bytes() != selected_raw or pointer.read_bytes() != pointer_raw
+                    or original.read_bytes() != original_raw or proof_path.read_bytes() != proof_raw
+                    or D._main_pids() or not D._session_absent()):
+                raise ValueError("activation_rollover_generation_changed")
+            destination = path(data, day, commit, current["bundle_sha256"])
+            if destination.exists() and N._read(destination) != result:
+                raise ValueError("activation_rollover_receipt_conflict")
+            N._atomic_write_json(destination, result)
+            validate_receipt(N._read(destination), day=day, commit=commit, root=consumer,
+                bundle_sha=current["bundle_sha256"], pointer_sha=P.file_hash(pointer))
+            return result
 
 
 LEGACY_PREPARED_PARENT_SCOPE_CODE = (

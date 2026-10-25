@@ -2670,3 +2670,78 @@ def test_legacy_publication_receipt_is_revalidated_only_as_native_parent_ancestr
         tmp_path, monkeypatch, None, observation_day="2026-10-26",
         selected_day="2026-10-25", legacy_undeclared=True
     )
+
+
+@pytest.mark.parametrize('fault', [None, 'date', 'source', 'origin', 'code', 'source_changed',
+    'pointer', 'authority', 'seal', 'consumed', 'live', 'supervisor', 'selection_race', 'proof_race'])
+def test_native_activation_rollover_preserves_consumer_and_original_receipt(tmp_path, monkeypatch, fault):
+    import json, contextlib
+    from pathlib import Path
+    from src.engine.scalping import reversal_code_handoff as H, mechanistic_entry_runtime_policy as N
+    from src.engine.scalping import continuous_reversal_postclose as P
+    from src.engine.automation import ordered_intraday_deploy as D, next_preopen_readiness as Q
+    from src.engine.infrastructure import runtime_release_router as R
+
+    data = tmp_path / 'data'; data.mkdir()
+    consumer, workflow, attested = (tmp_path / n for n in ['consumer', 'workflow', 'attested'])
+    codes = []
+    for root in [consumer, workflow, attested]:
+        code = root / 'src/engine/scalping/reversal_code_handoff.py'
+        code.parent.mkdir(parents=True); code.write_text(root.name); codes.append(code)
+    monkeypatch.setattr(H, '__file__', str(codes[1]))
+    monkeypatch.setattr(R, 'git', lambda *a: 'c' * 40)
+    monkeypatch.setattr(R, 'validate_release', lambda *a: (workflow, 'c' * 40))
+    monkeypatch.setattr(R, 'selected_release', lambda *a: (consumer, 'a' * 40))
+    monkeypatch.setattr(R, 'runtime_release_set_lock', lambda *a: contextlib.nullcontext())
+    monkeypatch.setattr(R, 'scheduled_execution_lease', lambda *a, **kw: contextlib.nullcontext())
+    monkeypatch.setattr(Q, 'failed_preopen_recovery', lambda *a, **kw: contextlib.nullcontext())
+    monkeypatch.setattr(D, '_main_pids', lambda: [7] if fault == 'live' else [])
+    monkeypatch.setattr(D, '_session_absent', lambda: fault != 'supervisor')
+    pointer = N.root(data) / 'current.json'; pointer.parent.mkdir(parents=True)
+    ident = 'e' * 64
+    pointer.write_text(json.dumps(dict(effective_date='2026-10-23', bundle_sha256=ident)))
+    selector = data / 'runtime/runtime_release_selection.json'
+    selector.write_text(json.dumps(dict(release_root=str(consumer), git_commit='a' * 40,
+        approved_by='user', approval_scope='after_postclose_deploy_for_next_regular_start',
+        actual_pid_consumed=fault == 'consumed', main_start_authorized=False,
+        next_operating_date='2026-10-26', source_date='2026-10-23',
+        selected_at_kst='2026-10-25T14:55:33+09:00')))
+    source = data / 'frozen-source.json'; source.write_text('{}')
+    def receipt(day, root, commit, code):
+        return P.seal(dict(schema=H.SCHEMA, authority=H.AUTHORITY, target_date=day,
+            release_root=str(root), release_commit=commit, bundle_sha256=ident,
+            current_pointer_sha256=P.file_hash(pointer), code_hashes={str(code):P.file_hash(code)},
+            source_hashes={str(source):P.file_hash(source)}, policy_reselected=False, provider_called=False,
+            actual_pid_consumed=False))
+    original = H.path(data, '2026-10-25', 'a' * 40, ident)
+    N._atomic_write_json(original, receipt('2026-10-25', consumer, 'a' * 40, codes[0]))
+    original_raw = original.read_bytes()
+    proof_path = H.path(data, '2026-10-26', 'b' * 40, ident)
+    proof = receipt('2026-10-26', attested, 'b' * 40, codes[2])
+    proof.update(activation_date='2026-10-25' if fault == 'date' else '2026-10-26',
+        source_trading_date='2026-10-22' if fault == 'source' else '2026-10-23',
+        origin_root='wrong' if fault == 'origin' else str(consumer), origin_commit='a' * 40,
+        origin_selection_sha256=P.file_hash(selector))
+    if fault == 'pointer': proof['current_pointer_sha256']='wrong'
+    if fault == 'authority': proof['authority']='unapproved'
+    proof = P.seal(proof)
+    if fault == 'seal': proof['provider_called']=True
+    N._atomic_write_json(proof_path, proof)
+    if fault == 'code': codes[0].write_text('changed')
+    if fault == 'source_changed': source.write_text('{"changed":true}')
+    def final_check(*a, **kw):
+        if fault == 'selection_race': selector.write_text('{}')
+        if fault == 'proof_race': proof_path.write_text('{}')
+    monkeypatch.setattr(Q, 'require_failed_preopen_recovery', final_check)
+    destination=H.path(data, '2026-10-26', 'a' * 40, ident)
+    call=lambda: H.issue_activation_rollover(data, '2026-10-26', verified_receipt=proof_path, confirm=H.AUTHORITY)
+    if fault:
+        with pytest.raises(ValueError):call()
+        assert not destination.exists()
+    else:
+        result=call()
+        assert result['activation_date']=='2026-10-26' and result['target_date']=='2026-10-26'
+        assert result['code_hashes']==json.loads(original_raw)['code_hashes']
+        assert result['activation_rollover']['original_sha256']==P.file_hash(original)
+        assert N._read(destination)==result
+    assert original.read_bytes()==original_raw

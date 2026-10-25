@@ -11077,7 +11077,7 @@ REVIEWED_ENTRY_COST_PAIRS = {
 
 
 # Explicit next-session activation date; retain original immutable profiles.
-REVIEWED_ACTIVATION_DATE_HASHES = {'src/engine/scalping/reversal_code_handoff.py': '852a607466a82086ba79609aa2878c54a2105587d6b56518e8895f0fbfc9f49e', 'src/engine/infrastructure/startup_validation_code_context.py': '8791b494406e03428e3b8ce1b28121051ab0be216c58e480d0d240a6775ba96f'}
+REVIEWED_ACTIVATION_DATE_HASHES = {'src/engine/scalping/reversal_code_handoff.py': 'da2546b0a8d923f7943c9da30c06f93443567baad3c597de20e451d15c4b6d0f', 'src/engine/infrastructure/startup_validation_code_context.py': 'ae70e337d5dca2aafd712a384b89f81fcaddaa55c8a4428256f03e89dca06bac'}
 REVIEWED_ACTIVATION_DATE_PROFILE = {**REVIEWED_MIGRATION_PROFILE, **REVIEWED_ACTIVATION_DATE_HASHES}
 REVIEWED_ACTIVATION_DATE_VARIANTS = {
     (key[0], REVIEWED_ACTIVATION_DATE_HASHES.get(key[0], key[1])): {
