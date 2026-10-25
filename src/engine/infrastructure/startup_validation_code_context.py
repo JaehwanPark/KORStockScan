@@ -3574,11 +3574,10 @@ def bind_main_preparation(root, commit, data_root, intake):
         ),
     }
     sources.update(preserved_sources)
-    observation = native.get("stopped_postclose_observation")
-    if observation:
-        for path, digest in observation["source_hashes"].items():
-            if sources.setdefault(path, digest) != digest:
-                raise ValueError("startup_main_workflow_source_conflict")
+    # Cold predecessor raw sources remain under their full native observation
+    # and digest closure. Generic request sources are bounded metadata/code.
+    # _main_inventory_origin rechecks the observation; never flatten its raw
+    # history into the independent small-source reader's authority.
     histories, native_readers = {}, {}
     for ident, observed in manifests.items():
         manifest = _json(observed["path"])

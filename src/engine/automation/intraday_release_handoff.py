@@ -10900,6 +10900,53 @@ REVIEWED_ENTRY_COST_PAIRS = {
 }
 
 
+# Keep large native predecessor sources out of the bounded generic header path.
+REVIEWED_COLD_SOURCE_BOUNDARY_HASHES = {
+    "src/engine/infrastructure/startup_validation_code_context.py": "4f7d53950d2c54046b68a1863309d87ba2d17f865511c199ac616aab96ae4fbf",
+}
+REVIEWED_COLD_SOURCE_BOUNDARY_PROFILE = {
+    **REVIEWED_WORKFLOW_INVENTORY_PROFILE,
+    **REVIEWED_COLD_SOURCE_BOUNDARY_HASHES,
+}
+REVIEWED_COLD_SOURCE_BOUNDARY_VARIANTS = {
+    (key[0], REVIEWED_COLD_SOURCE_BOUNDARY_HASHES.get(key[0], key[1])): {
+        **value,
+        "selector_path": "src/engine/infrastructure/startup_validation_code_context.py",
+        "selector_sha256": REVIEWED_COLD_SOURCE_BOUNDARY_HASHES[
+            "src/engine/infrastructure/startup_validation_code_context.py"
+        ],
+        "dependencies": {
+            **value["dependencies"],
+            **REVIEWED_COLD_SOURCE_BOUNDARY_HASHES,
+        },
+        "contract_extensions": {
+            origin: {
+                name: REVIEWED_COLD_SOURCE_BOUNDARY_HASHES.get(
+                    os.path.normpath(name), sha
+                )
+                for name, sha in paths.items()
+            }
+            for origin, paths in value["contract_extensions"].items()
+        },
+    }
+    for key, value in REVIEWED_WORKFLOW_INVENTORY_VARIANTS.items()
+}
+REVIEWED_ENTRY_COST_PAIRS = {
+    **REVIEWED_ENTRY_COST_PAIRS,
+    **{
+        name: REVIEWED_ENTRY_COST_PAIRS.get(name, ())
+        + tuple(
+            (origin, current)
+            for origin in {
+                old for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ()) for old in pair
+            }
+            | {REVIEWED_WORKFLOW_INVENTORY_HASHES[name]}
+        )
+        for name, current in REVIEWED_COLD_SOURCE_BOUNDARY_HASHES.items()
+    },
+}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -11476,6 +11523,13 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     ):
         prepared_hashes = REVIEWED_WORKFLOW_INVENTORY_PROFILE
         prepared_variants = REVIEWED_WORKFLOW_INVENTORY_VARIANTS
+    if (
+        workflow_successor is not None
+        and hashlib.sha256(workflow_successor).hexdigest()
+        == REVIEWED_COLD_SOURCE_BOUNDARY_HASHES[workflow_name]
+    ):
+        prepared_hashes = REVIEWED_COLD_SOURCE_BOUNDARY_PROFILE
+        prepared_variants = REVIEWED_COLD_SOURCE_BOUNDARY_VARIANTS
     entry_cost_hashes = (
         prepared_hashes
         if prepared_owner_present

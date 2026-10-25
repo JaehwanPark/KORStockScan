@@ -1129,6 +1129,16 @@ def test_ordinary_digest_session_does_not_opt_in_new_reporting_consumers(
 
 def _cold_workflow_preparation(data, proof, native, root, commit, source):
     """Frozen native preparation fixture, with actual Git/source bytes."""
+    import time
+    from src.engine.infrastructure.validation_digest_session import identity
+
+    raw = data / "cold-predecessor-history.bin"
+    with raw.open("wb") as stream:
+        stream.truncate(64 * 1024 * 1024 + 1)
+    raw_sha = C._sha(raw)
+    proof["closure"]["digest_entries"][str(raw)] = dict(
+        identity=identity(raw), digest=raw_sha, created=time.time()
+    )
     observation = dict(
         source_date=native["source_date"],
         prepared_target_date=DAY,
@@ -1136,7 +1146,7 @@ def _cold_workflow_preparation(data, proof, native, root, commit, source):
         runtime_effect=False,
         actual_pid_consumed=False,
         allowed_runtime_apply=False,
-        source_hashes={str(source): C._sha(source)},
+        source_hashes={str(source): C._sha(source), str(raw): raw_sha},
     )
     native.update(
         verification_code_root=str(root),
@@ -1220,6 +1230,7 @@ def _cold_workflow_preparation(data, proof, native, root, commit, source):
             ),
         )
     }
+    return raw
 
 
 @pytest.mark.parametrize(
@@ -1293,7 +1304,7 @@ def test_nested_native_inventories_keep_distinct_git_origins(
             [str(source), json.loads(json.dumps(N._signature(source)))]
         )
         proof["policy_sha256"] = bundle["bundle_sha256"]
-        _cold_workflow_preparation(
+        cold_raw = _cold_workflow_preparation(
             Path(f["request"]["data_root"]), proof, native, r["root"], commit, source
         )
     intake = dict(
@@ -1332,6 +1343,11 @@ def test_nested_native_inventories_keep_distinct_git_origins(
         source_hashes={**f["request"]["source_hashes"], **result["source_hashes"]},
     )
     C._main_proof(result, request)
+    # The independent header reader retains its 64 MiB cap. Cold raw history
+    # has native digest/identity custody and must not become a generic header.
+    from src.engine.automation import main_startup_validation as V
+
+    V._recheck(result["source_hashes"])
     if reader_generation == "workflow":
         assert result["inventories"][0]["origin_commit"] == r["original_commit"]
         assert (
@@ -1410,6 +1426,11 @@ def test_nested_native_inventories_keep_distinct_git_origins(
         C.bind_main_preparation(
             r["root"], commit, Path(f["request"]["data_root"]), intake
         )
+    if reader_generation == "workflow":
+        with cold_raw.open("r+b") as stream:
+            stream.write(b"x")
+        with pytest.raises(ValueError, match="code_context_source_changed"):
+            C._main_inventory_origin(result["inventories"][0], result)
 
 
 def _logical_fixture(f, monkeypatch):
