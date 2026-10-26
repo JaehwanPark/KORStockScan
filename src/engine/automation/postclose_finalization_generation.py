@@ -795,6 +795,16 @@ def capture_detector_retry_prefix(
     latest_failed = json.loads(frozen["failed_detector"])
     latest_failed_at = datetime.fromisoformat(latest_failed["timestamp"])
     retry_started = stamp(latest_started, "started_at")
+    # A failed suffix may never publish a detector report (for example, its
+    # nonblocking admission lock was occupied). Preserve that absence rather
+    # than assigning the old successful report to the failed attempt. Only an
+    # authenticated completed prefix and byte-identical original report may
+    # use this path; a fresh detector receipt is still required before DONE.
+    suffix_without_report = (
+        rebind_completed
+        and native_prefix is not None
+        and frozen["failed_detector"] == anchor["failed_detector"]
+    )
     controller_path = (
         data
         / "report/postclose_done_controller"
@@ -819,11 +829,11 @@ def capture_detector_retry_prefix(
         or latest_failed.get("summary_severity")
         not in (
             {"pass", "warning"}
-            if rebind_completed and native_prefix is None
+            if rebind_completed and (native_prefix is None or suffix_without_report)
             else {"fail"}
         )
         or latest_failed_at.tzinfo is None
-        or not retry_started <= latest_failed_at
+        or not suffix_without_report and not retry_started <= latest_failed_at
         or native_prefix is not None
         and not failed_at <= retry_started
         or latest_failed_at.timestamp() > paths["finalization_log"].stat().st_mtime + 1
@@ -897,9 +907,14 @@ def capture_detector_retry_prefix(
         originals=originals,
         generation=generation,
         latest_failed_detector_at=latest_failed_at.isoformat(),
+        latest_detector_report_state=(
+            "not_published_after_failed_suffix" if suffix_without_report else "observed"
+        ),
+        latest_suffix_started_at=retry_started.isoformat(),
         native_prefix=native_prefix or originals,
         controller_sha256=_sha(controller_path),
         recovery_code_sha256=_sha(Path(__file__)),
+        recovery_code_path=str(Path(__file__).resolve()),
         runtime_effect=False,
         allowed_runtime_apply=False,
         actual_pid_consumed=False,

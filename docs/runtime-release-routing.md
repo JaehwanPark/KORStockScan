@@ -736,3 +736,13 @@ to its original implementation, so this I/O-only validation repair does not
 invalidate research or policy-generation fingerprints. No adapter is installed
 outside isolation or without the Main proof; unknown paths and changed inputs
 remain rejected. Previously issued complete code profiles remain verifiable.
+
+A failed detector-only completed-prefix retry can leave the previous full report
+unchanged when admission prevented publication. The recovery owner may preserve
+that absence only against its authenticated immutable completed prefix and exact
+original report bytes, with unchanged source/controller/cleanup/snapshot bindings.
+It records the failed suffix start and actual reader path/SHA separately. It
+never treats the prior report as current success: native full detector execution
+and a fresh matching terminal receipt remain required before DONE. Recheck the
+scheduled detector and lock owner before recovery admission; keep retries within
+the original stage budget and preserve every failed attempt.

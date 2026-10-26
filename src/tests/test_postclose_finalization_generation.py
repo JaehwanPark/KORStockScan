@@ -1002,3 +1002,41 @@ def test_completed_rebind_failed_detector_retry_preserves_original_success(
         receipt["generation"]
         == json.loads(Path(first["receipt_path"]).read_bytes())["generation"]
     )
+
+
+@pytest.mark.parametrize('damage', [None, 'report_changed', 'wrong_date', 'snapshot', 'cleanup', 'missing_prefix', 'handoff'])
+def test_completed_rebind_resumes_failed_suffix_without_published_detector(
+    tmp_path, monkeypatch, damage
+):
+    final, detector, _ = _completed_rebind_fixture(tmp_path, monkeypatch)
+    first = capture_detector_retry_prefix(tmp_path, DAY, rebind_completed=True)
+    original = detector.read_bytes()
+    with final.open('a') as stream:
+        stream.write(
+            f'[START] postclose_finalization target_date={DAY} recovery=true started_at=2026-09-29T07:06:00+0900\n'
+            + ('' if damage == 'missing_prefix' else f'[INFO] postclose_finalization target_date={DAY} prefix_reused={json.dumps(first)}\n')
+            + ('' if damage == 'handoff' else f'[INFO] postclose_finalization target_date={DAY} cleanup=done detector_handoff=started\n')
+            + f'[FAIL] postclose_finalization target_date={DAY} reason=final_detector_failed\n'
+        )
+    if damage in {'report_changed', 'wrong_date'}:
+        body = json.loads(original)
+        body['timestamp'] = '2026-09-29T07:07:00+09:00'
+        if damage == 'wrong_date':
+            body['target_date'] = '2026-09-28'
+        _write_json(detector, body)
+    elif damage == 'snapshot':
+        (tmp_path/'data/report/monitor_snapshots'/f'trade_review_{DAY}.json').write_text('{}')
+    elif damage == 'cleanup':
+        (tmp_path/'logs/log_rotation_cleanup_cron.log').write_text('[FAIL]\n')
+    if damage:
+        with pytest.raises((FinalizationGenerationError, ValueError)):
+            capture_detector_retry_prefix(tmp_path, DAY, rebind_completed=True)
+        return
+    second = capture_detector_retry_prefix(tmp_path, DAY, rebind_completed=True)
+    receipt = json.loads(Path(second['receipt_path']).read_bytes())
+    assert receipt['latest_detector_report_state'] == 'not_published_after_failed_suffix'
+    assert receipt['latest_suffix_started_at'] == '2026-09-29T07:06:00+09:00'
+    assert receipt['runtime_effect'] is receipt['actual_pid_consumed'] is False
+    assert receipt['cleanup_reexecuted'] is receipt['controller_reexecuted'] is False
+    assert detector.read_bytes() == original
+    assert receipt['generation'] == json.loads(Path(first['receipt_path']).read_bytes())['generation']

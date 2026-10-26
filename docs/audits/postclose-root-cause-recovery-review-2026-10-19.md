@@ -3836,3 +3836,25 @@ restored successor. Their negative input now uses the actually issued2fb indexed
 profile, where mixing its changed production assembler with the restored-context
 successor is invalid; all six issued-predecessor cases pass. Three new positive
 formatted-physical-source cases pass. No error allowlist or guard changed.
+
+## Completed-prefix retry without a published detector report 2026-10-27
+
+At07:10:21 the explicit source26 final detector returned admission75 while the
+regular07:10 full detector held the native lock. The source26 report remained
+byte-identical to the verified05:53 original. Native completed-prefix capture had
+already succeeded, preserving controller/cleanup originals, but another retry
+incorrectly required a new failed detector report from an attempt that never
+published one. The original reproducer fails exactly at that clock/report guard;
+six changed-report/date/snapshot/cleanup/prefix/handoff negatives reject.
+The existing finalization recovery owner now records that report absence only
+for an authenticated reused completed prefix and byte-identical original report.
+It preserves the failed suffix's start separately and records actual recovery
+code path/SHA. Changed or unknown evidence remains rejected. No stale report is
+accepted as a current detector result: the existing wrapper still requires a
+fresh successful full native receipt before DONE. Cleanup/controller are not
+rerun. The old implicit fresh-failure-report assumption is replaced; ordinary
+finalization, real failed-report retries and native terminal receipt checks are
+retained. No policy/PID/provider/order authority is introduced.
+All67 finalization-generation regressions pass, including the original reproducer
+and its six negatives. Source-only review and actual successor-reader recovery
+remain separate from selected Main/PID acceptance and later integrated rollout.
