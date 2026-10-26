@@ -2484,6 +2484,17 @@ for _name, _sha in REVIEWED_CLOSED_LOADER_SOURCES.items():
     _history.update((old, _sha) for old in _prior)
 
 
+# Isolated indexed-source validation preserves native coverage and exact input
+# generations. The ordinary index consumer and database prohibition stay intact.
+REVIEWED_STOP_INDEX_SOURCES = {'src/engine/automation/main_trailing_source_assembler.py': '26fa3a2f2658f7d5081bb0d16d0d8ef27c19e8ab54da9f0e14074c82c3c096d5'}
+for _name, _sha in REVIEWED_STOP_INDEX_SOURCES.items():
+    _history = REVIEWED_PREPARATION_HISTORY.setdefault(_name, set())
+    _prior = {value for pair in _history for value in pair} | {'943d15e004967ac5e084d8e49bebf53c05cf524e6f229cc8b1a3312ece1968af'}
+    if _name in REVIEWED_PREPARATION_SOURCES:
+        _prior.update(REVIEWED_PREPARATION_SOURCES[_name])
+    _history.update((old, _sha) for old in _prior)
+
+
 def reviewed_preparation_pair(relative, old, current):
     # An already reviewed physical pair keeps its original authority; a
     # formatting projection must not replace either endpoint before this check.
@@ -3916,8 +3927,153 @@ def bind_main_preparation(root, commit, data_root, intake):
         allowed_runtime_apply=False,
         actual_pid_consumed=False,
     )
+    proof["stop_indexed_sources"] = _bind_stop_indexed_sources(
+        data_root, intake["manifest"].get("main_stop_confirmation_receipt"), sources
+    )
     _check_native_closure(proof)
     return proof
+
+
+def _stop_index_inventory(data_root, receipt):
+    """Read the exact native report named by preparation, never a latest file."""
+    if not receipt:
+        return {}, {}
+    day, target = receipt.get("source_date"), receipt.get("target_date")
+    if (
+        date.fromisoformat(day).isoformat() != day
+        or date.fromisoformat(target).isoformat() != target
+        or not day < target
+        or not _hex(receipt.get("generation"))
+    ):
+        raise ValueError("startup_stop_index_scope_invalid")
+    directory = (
+        Path(data_root)
+        / "threshold_cycle/main_stop_confirmation/generations"
+        / receipt["generation"]
+    )
+    path = directory / "report.json"
+    report, bundle = _json(path), _json(directory / "policy.json")
+    if (
+        report.get("report_sha256") != receipt.get("report_sha256")
+        or report.get("report_sha256")
+        != _digest({k: v for k, v in report.items() if k != "report_sha256"})
+        or report.get("source_date") != day
+        or report.get("target_date") != target
+        or report.get("policy_sha256") != receipt.get("policy_sha256")
+        or bundle.get("policy_sha256") != receipt.get("policy_sha256")
+        or bundle.get("research_sha256") != report.get("research_sha256")
+    ):
+        raise ValueError("startup_stop_index_report_changed")
+    from src.engine.automation.main_trailing_source_store import SCHEMA
+
+    inventory = {
+        name: value
+        for name, value in report.get("vote_source_inventory", {}).items()
+        if value.get("schema") == SCHEMA + ":generation"
+    }
+    return inventory, {str(p): _sha(p) for p in (path, directory / "policy.json")}
+
+
+def _stop_index_identities(data_root, path):
+    from src.engine.automation import main_trailing_source_store as S
+    from src.engine.infrastructure.validation_digest_session import identity
+
+    logical, _, database = S._location(data_root, path)
+    # Include absence: a new WAL or a raw-to-archive transition invalidates the
+    # parent observation too. SHM is a lock/index cache, not database content.
+    paths = (
+        logical,
+        Path(str(logical) + ".gz"),
+        Path(str(logical) + ".gz.archive_receipt.json"),
+        database,
+        Path(str(database) + "-wal"),
+    )
+    return {
+        str(p): identity(p) if p.exists() or p.is_symlink() else None for p in paths
+    }
+
+
+def _bind_stop_indexed_sources(data_root, receipt, sources):
+    """Parent-only native O(1) index reads, sealed for this isolated invocation."""
+    from src.engine.automation import main_trailing_source_store as S
+    from src.engine.automation.main_trailing_source_assembler import (
+        source_generation_matches,
+    )
+
+    inventory, refs = _stop_index_inventory(data_root, receipt)
+    entries = {}
+    for path, expected in inventory.items():
+        before = _stop_index_identities(data_root, path)
+        current = S.generation(data_root, path)
+        if (
+            not source_generation_matches(
+                data_root, receipt["source_date"], path, expected
+            )
+            or _stop_index_identities(data_root, path) != before
+        ):
+            raise ValueError("startup_stop_index_generation_changed")
+        entries[path] = dict(generation=current, identities=before)
+    for path, sha in refs.items():
+        if sources.setdefault(path, sha) != sha:
+            raise ValueError("startup_stop_index_source_conflict")
+    return dict(receipt=receipt, entries=entries, source_hashes=refs)
+
+
+def _verify_stop_indexed_sources(proof, *, verify_native=False):
+    from src.engine.automation import main_trailing_source_store as S
+
+    closure = proof.get("stop_indexed_sources")
+    if closure is None:
+        return {}  # Historical proofs without this consumer retain their scope.
+    data_root = Path(proof["policy_path"]).parents[3]
+    inventory, refs = _stop_index_inventory(data_root, closure.get("receipt"))
+    entries = closure.get("entries")
+    if (
+        not isinstance(entries, dict)
+        or set(entries) != set(inventory)
+        or refs != closure.get("source_hashes")
+        or any(proof["source_hashes"].get(p) != sha for p, sha in refs.items())
+    ):
+        raise ValueError("startup_stop_index_closure_unbound")
+    for path, entry in entries.items():
+        before = _stop_index_identities(data_root, path)
+        current, expected = entry["generation"], inventory[path]
+        if (
+            before != entry.get("identities")
+            or any(
+                value.get("sha256")
+                != hashlib.sha256(
+                    S.encode({k: v for k, v in value.items() if k != "sha256"})
+                ).hexdigest()
+                for value in (current, expected)
+            )
+            # Archived source_signature itself reads SQLite. Its native parent
+            # proof is instead pinned by the exact archive/receipt/DB/WAL set.
+            or Path(path).is_file()
+            and current.get("source_stat") != S.signature(Path(path).stat())
+            or (
+                current != expected
+                and (
+                    Path(path).exists()
+                    or not Path(str(path) + ".gz").is_file()
+                    or {
+                        k: v
+                        for k, v in current.items()
+                        if k not in {"source_stat", "sha256"}
+                    }
+                    != {
+                        k: v
+                        for k, v in expected.items()
+                        if k not in {"source_stat", "sha256"}
+                    }
+                )
+            )
+            or verify_native
+            and S.generation(data_root, path) != current
+            or _stop_index_identities(data_root, path) != before
+        ):
+            raise ValueError("startup_stop_index_generation_changed")
+    return entries
 
 
 def _check_native_closure(proof):
@@ -4109,6 +4265,7 @@ def _native_logical_sources(proof, *, verify_ledger=False):
     from src.engine.scalping import reversal_auxiliary_input_transition as J
     from src.engine.ai import offline_comparison_store as S
 
+    _verify_stop_indexed_sources(proof, verify_native=verify_ledger)
     native = proof["native_verification"]
     if (
         native.get("status") != "pass"
@@ -4248,6 +4405,10 @@ def _main_proof(proof, request):
         )
     ):
         raise ValueError("startup_main_preparation_proof_invalid")
+    stop = request["manifest"].get("main_stop_confirmation_receipt")
+    closure = proof.get("stop_indexed_sources")
+    if stop and (not isinstance(closure, dict) or closure.get("receipt") != stop):
+        raise ValueError("startup_stop_index_preparation_unbound")
     sources = proof.get("source_hashes")
     _check_sources(sources)
     if any(
@@ -4421,6 +4582,26 @@ def _main_context(*, digest_only=False):
     except (OSError, ValueError, KeyError, TypeError):
         _CONTEXT = {"valid": False}
         raise
+
+
+def validation_indexed_source_generation(data_root, path):
+    """Use exact native index evidence only inside the isolated P5 invocation.
+
+    The parent runs the native reader before and after the child. The child
+    rechecks raw/archive and DB/WAL identities; it never opens SQLite or scans
+    an unbounded raw stream. Ordinary consumers retain the native index reader.
+    """
+    if _CONTEXT is None:
+        return None
+    proof = _main_context()
+    request = _CONTEXT["request"]
+    if str(Path(data_root).resolve()) != request["data_root"]:
+        raise ValueError("startup_stop_index_data_root_changed")
+    entries = _verify_stop_indexed_sources(proof)
+    entry = entries.get(str(Path(path).absolute()))
+    if entry is None:
+        raise ValueError("startup_stop_index_source_unbound")
+    return json.loads(json.dumps(entry["generation"]))
 
 
 def validation_raw_vote_sources(data_root, source_date):

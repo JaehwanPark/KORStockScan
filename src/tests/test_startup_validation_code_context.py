@@ -553,6 +553,106 @@ install_validation_code_context(request)
 """
 
 
+def _bind_stop_fixture(f, report):
+    request = f["request"]
+    proof = request["main_preparation_code_handoff"]
+    data = Path(request["data_root"])
+    report["report_sha256"] = C._digest(report)
+    receipt = {k: report[k] for k in
+               ("source_date", "target_date", "policy_sha256", "report_sha256")}
+    receipt["generation"] = "e" * 64
+    directory = data / "threshold_cycle/main_stop_confirmation/generations" / receipt["generation"]
+    directory.mkdir(parents=True)
+    report_path = directory / "report.json"
+    report_path.write_text(json.dumps(report))
+    (directory / "policy.json").write_text(json.dumps({
+        k: report[k] for k in ("policy_sha256", "research_sha256")}))
+    request["manifest"]["main_stop_confirmation_receipt"] = receipt
+    closure = C._bind_stop_indexed_sources(data, receipt, proof["source_hashes"])
+    proof["stop_indexed_sources"] = closure
+    assert C._verify_stop_indexed_sources(proof, verify_native=True) == closure["entries"]
+    request["source_hashes"].update(proof["source_hashes"])
+    return closure, report_path
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        None,
+        "source",
+        "index",
+        "wal",
+        "report",
+        "missing",
+        "scope",
+        "lookup",
+        "data_root",
+        "generation",
+    ],
+)
+@pytest.mark.parametrize("archived", [False, True])
+def test_indexed_stop_source_survives_real_isolation_only_with_exact_native_binding(
+    request_fixture, monkeypatch, fault, archived
+):
+    from datetime import datetime
+    from src.tests.test_holding_path_vote_replay import _events
+    from src.engine.ai import holding_exit_vote as votes
+    from src.engine.automation import main_trailing_source_store as S
+
+    f = request_fixture
+    state = _main_fixture(f, monkeypatch)
+    request, proof = f["request"], state["proof"]
+    data = Path(request["data_root"])
+    day = "2026-10-16"
+    at = datetime.fromisoformat(day + "T09:00:00+09:00").timestamp()
+    path = votes.path_vote_store_path(data, "record:7")
+    monkeypatch.setattr(votes.time, "time", lambda: at + 20)
+    events = _events("EXIT_TRAILING_TP", "REGULAR", base_at=at, session_key=day)
+    assert votes.append_path_events_file(path, "record:7", events)[1] == "appended"
+    expected = S.generation(data, path)
+    if archived:
+        import gzip
+
+        Path(str(path) + ".gz").write_bytes(gzip.compress(path.read_bytes()))
+        path.unlink()
+        S.migrate_frozen_source(data, path)
+    report = dict(source_date=day, target_date=DAY, policy_sha256="a" * 64,
+                  research_sha256="d" * 64, vote_source_inventory={str(path): expected})
+    closure, report_path = _bind_stop_fixture(f, report)
+    _, _, index = S._location(data, path)
+    if fault in {"source", "index", "wal", "report"}:
+        damaged = {
+            "source": Path(str(path) + ".gz") if archived else path,
+            "index": index,
+            "wal": Path(str(index) + "-wal"),
+            "report": report_path,
+        }[fault]
+        with damaged.open("ab") as stream:
+            stream.write(b"changed")
+    elif fault == "missing":
+        closure["entries"] = {}
+    elif fault == "scope":
+        closure["receipt"] = {**closure["receipt"], "target_date": "2026-10-20"}
+    elif fault == "generation":
+        closure["entries"][str(path)]["generation"]["raw_records"] += 1
+    _write_request(f, request)
+    lookup = str(path) + ".segment-1" if fault == "lookup" else str(path)
+    root = str(data.parent) if fault == "data_root" else str(data)
+    result = _child(
+        f,
+        MAIN_CHILD_SETUP + f"""
+from src.engine.automation import main_trailing_source_assembler as A
+expected = {expected!r}
+assert A.source_generation_matches({root!r}, {day!r}, {lookup!r}, expected)
+assert_no_forbidden_attempts()
+""",
+    )
+    assert (result.returncode == 0) is (fault is None), result.stderr
+    audit = (f["run"] / "audit.jsonl").read_text()
+    assert "sqlite3.connect" not in audit
+
+
+
 def test_main_preparation_digest_reuses_only_exact_parent_bytes_in_real_isolation(
     request_fixture, monkeypatch
 ):
@@ -1978,6 +2078,9 @@ def test_isolated_stop_future_snapshot_preserves_native_tail_validation(
         request["manifest"]["main_stop_confirmation_receipt"][
             "source_date"
         ] = "2026-10-15"
+    _bind_stop_fixture(f, dict(
+        **request["manifest"]["main_stop_confirmation_receipt"],
+        research_sha256="d" * 64, vote_source_inventory={}))
     if fault == "no_policy":
         request["candidate_code_handoffs"].pop("main_stop")
     day = "2026-10-16" if fault == "past" else DAY

@@ -11259,6 +11259,35 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
 }}
 
 
+# Exact isolated native indexed-source closure, retaining all prior profiles.
+REVIEWED_STOP_INDEX_HASHES = {'src/engine/automation/main_trailing_source_assembler.py': '26fa3a2f2658f7d5081bb0d16d0d8ef27c19e8ab54da9f0e14074c82c3c096d5', 'src/engine/infrastructure/startup_validation_code_context.py': 'd760b6207bd253be85b9d543cbc052bb911e4a4fb2902ce70599791d31c87792'}
+REVIEWED_STOP_INDEX_PROFILE = {
+    **REVIEWED_CLOSED_LOADER_PROFILE, **REVIEWED_STOP_INDEX_HASHES
+}
+REVIEWED_STOP_INDEX_VARIANTS = {
+    (key[0], REVIEWED_STOP_INDEX_HASHES.get(key[0], key[1])): {
+        **value,
+        "selector_path": "src/engine/automation/main_trailing_source_assembler.py",
+        "selector_sha256": REVIEWED_STOP_INDEX_HASHES["src/engine/automation/main_trailing_source_assembler.py"],
+        "dependencies": {**value["dependencies"], **REVIEWED_STOP_INDEX_HASHES},
+        "contract_extensions": {
+            origin: {name: REVIEWED_STOP_INDEX_HASHES.get(os.path.normpath(name), sha)
+                     for name, sha in paths.items()}
+            for origin, paths in value["contract_extensions"].items()
+        },
+    }
+    for key, value in REVIEWED_CLOSED_LOADER_VARIANTS.items()
+}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple(
+        (old, current)
+        for old in {value for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ())
+                    for value in pair} | {REVIEWED_CLOSED_LOADER_PROFILE[name]}
+    )
+    for name, current in REVIEWED_STOP_INDEX_HASHES.items()
+}}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -11906,6 +11935,13 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     ):
         prepared_hashes = REVIEWED_CLOSED_LOADER_PROFILE
         prepared_variants = REVIEWED_CLOSED_LOADER_VARIANTS
+    if any(
+        (source := candidate_bytes(name, optional=True)) is not None
+        and hashlib.sha256(source).hexdigest() == sha
+        for name, sha in REVIEWED_STOP_INDEX_HASHES.items()
+    ):
+        prepared_hashes = REVIEWED_STOP_INDEX_PROFILE
+        prepared_variants = REVIEWED_STOP_INDEX_VARIANTS
     entry_cost_hashes = (
         prepared_hashes
         if prepared_owner_present
