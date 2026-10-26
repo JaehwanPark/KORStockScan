@@ -5412,6 +5412,7 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
     subprocess.run(["git", "-C", str(root), "checkout", "-q", "75e0fbbf7"], check=True)
     hashes = {
         "current": handoff.REVIEWED_ISOLATED_INDEX_PROFILE,
+        "consumed_stop_index": handoff.REVIEWED_STOP_INDEX_PROFILE,
         "consumed_closed_loader": handoff.REVIEWED_CLOSED_LOADER_PROFILE,
         "consumed_cumulative_hold": handoff.REVIEWED_CUMULATIVE_HOLD_PROFILE,
         "consumed_health_snapshot": handoff.REVIEWED_HEALTH_SNAPSHOT_PROFILE,
@@ -5474,6 +5475,7 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
                         "consumed_health_snapshot": "7b98fa4bc",
                         "consumed_cumulative_hold": "89a0a5fa2",
                         "consumed_closed_loader": "cb4f0ab58",
+                        "consumed_stop_index": "2fbf31449",
                         "consumed_auxiliary_format": "c0346b611",
                         "consumed_cold_postclose": "6fe72273e",
                         "consumed_producer_identity": "2c9f2a6ad",
@@ -6370,7 +6372,7 @@ def test_closed_loader_handoff_rejects_partial_successor(tmp_path, family, fault
 @pytest.mark.parametrize("fault", ["", "successor_mix"])
 def test_stop_index_handoff_preserves_prior_proof(tmp_path, family, fault):
     test_entry_cost_handoff_keeps_exact_complete_generation(
-        tmp_path, family, fault, "consumed_closed_loader",
+        tmp_path, family, fault, "consumed_stop_index",
         "src/engine/infrastructure/startup_validation_code_context.py")
 
 
@@ -6388,3 +6390,12 @@ def test_stop_index_handoff_rejects_mixed_generation(tmp_path, family, fault, de
 def test_isolated_index_handoff_rejects_mixed_generation(tmp_path, family, fault, dependency):
     test_entry_cost_handoff_keeps_exact_complete_generation(
         tmp_path, family, fault, "current", dependency)
+
+
+@pytest.mark.parametrize("family", ["main_stop", "holding_vote", "pre_submit_delay"])
+def test_isolated_index_complete_physical_formatted_successor(tmp_path, family):
+    # Use actual source bytes: the restored assembler is a reviewed formatted
+    # physical source, while the compatibility profile binds comparison bytes.
+    test_entry_cost_handoff_keeps_exact_complete_generation(
+        tmp_path, family, None, "current",
+        "src/engine/infrastructure/startup_validation_code_context.py")

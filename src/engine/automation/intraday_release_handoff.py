@@ -11289,7 +11289,7 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
 
 
 # Isolated-only indexed I/O; production research fingerprints are unchanged.
-REVIEWED_ISOLATED_INDEX_HASHES = {'src/engine/automation/main_trailing_source_assembler.py': '943d15e004967ac5e084d8e49bebf53c05cf524e6f229cc8b1a3312ece1968af', 'src/engine/infrastructure/startup_validation_code_context.py': '1932ef04fe121b341d64ad58675675b354444dab3915168b9458f2103914db15'}
+REVIEWED_ISOLATED_INDEX_HASHES = {'src/engine/automation/main_trailing_source_assembler.py': '1aa864f4fd5db4f3ef4d14b6983617c9ac41cc208e792497cf34134b4e99bc52', 'src/engine/infrastructure/startup_validation_code_context.py': '1932ef04fe121b341d64ad58675675b354444dab3915168b9458f2103914db15'}
 REVIEWED_ISOLATED_INDEX_PROFILE = {
     **REVIEWED_STOP_INDEX_PROFILE, **REVIEWED_ISOLATED_INDEX_HASHES
 }

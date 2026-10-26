@@ -3817,3 +3817,22 @@ non-test source+50/-7, tests+32/-3, docs+33/-0 before this validation note.
 Growth is confined to the existing isolated context and exact compatibility
 profile; the production adapter's seven lines are removed. Original failed
 attempts and corrected logs remain separate, not overwritten as PASS.
+
+The first immutable f7c50964b preparation stopped before selection because its
+complete profile used the restored assembler's physical SHA where the historical
+compatibility reader requires its already-reviewed formatting projection.
+The three exact native family readers reproduce the mismatch against origin89a.
+The profile now binds the original comparison SHA, retaining physical Git-byte
+checks; this changes no calculation module or semantic acceptance predicate.
+Three positive actual-physical-source cases supplement the mixed/missing/dirty
+negatives, which alone did not exercise successful profile intake. The failed
+candidate, native traceback and original parity remain preserved.
+
+
+Supplemental validation retains the three original formatter-profile failures.
+The corrected suite passes54 cases, with three obsolete negative fixtures: a
+closed-loader origin plus only the isolated context is now a valid complete
+restored successor. Their negative input now uses the actually issued2fb indexed
+profile, where mixing its changed production assembler with the restored-context
+successor is invalid; all six issued-predecessor cases pass. Three new positive
+formatted-physical-source cases pass. No error allowlist or guard changed.
