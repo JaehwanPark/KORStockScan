@@ -1083,10 +1083,6 @@ def _record_native_ready_locked(B, symbol, venue, item, market, epoch):
                         )
                         family = getattr(B, "_FAMILY", None) or {}
                         if selection["reason"] == "selected":
-                            from src.engine.scalping.reversal_extended_catalog import (
-                                CUMULATIVE_DEFINITIONS,
-                            )
-
                             branches = set(selection["matched_branches"])
                             selected.append(
                                 (
@@ -1119,7 +1115,6 @@ def _record_native_ready_locked(B, symbol, venue, item, market, epoch):
                                                 "branch_signals", {}
                                             ).items()
                                             if bid in branches
-                                            and bid not in CUMULATIVE_DEFINITIONS
                                             and signal.get("decision_phase")
                                             == "FIRST_PRICE_HOLD"
                                         },

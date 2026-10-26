@@ -2657,7 +2657,7 @@ def test_main_preparation_uses_reviewed_stopped_origin_code(name):
     review = json.loads((ROOT / H._FORMATTING_REVIEW_PATH).read_text())
     predecessor = review["sources"][name]["before_sha256"]
     if review["sources"][name]["after_sha256"] != current:
-        assert H.REVIEWED_HEALTH_SNAPSHOT_PROFILE[name] == current
+        assert H.REVIEWED_CUMULATIVE_HOLD_PROFILE[name] == current
         C._pairs({name: review["sources"][name]["after_sha256"]}, {name: current})
     origins = {old for old, new in pairs if new in {predecessor, current}}
     origins.add(predecessor)
@@ -2923,7 +2923,7 @@ def test_main_preparation_independently_reviews_closed_scanner(origin, damage):
 )
 def test_migration_configuration_has_independent_exact_source_pairs(name):
     current = hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
-    assert H.REVIEWED_HEALTH_SNAPSHOT_PROFILE[name] == current
+    assert H.REVIEWED_CUMULATIVE_HOLD_PROFILE[name] == current
     for old in H.REVIEWED_MIGRATION_ORIGINS[name]:
         C._pairs({name: old}, {name: current})
         with pytest.raises(ValueError, match="unreviewed"):
@@ -2983,6 +2983,17 @@ def test_health_snapshot_independent_preparation_exact_pairs(relative, fault):
     import subprocess
     old = hashlib.sha256(subprocess.check_output(
         ["git", "-C", str(ROOT), "show", "b6611ce26:" + relative])).hexdigest()
+    new = hashlib.sha256((ROOT / relative).read_bytes()).hexdigest()
+    if fault == "origin": old = "0" * 64
+    elif fault == "successor": new = "0" * 64
+    assert C.reviewed_preparation_pair(relative, old, new) is (fault is None)
+
+
+@pytest.mark.parametrize("fault", [None, "origin", "successor"])
+def test_cumulative_hold_independent_preparation_exact_pair(fault):
+    relative = "src/engine/monitoring/runtime_performance.py"
+    old = hashlib.sha256(subprocess.check_output(
+        ["git", "-C", str(ROOT), "show", "7b98fa4bc:" + relative])).hexdigest()
     new = hashlib.sha256((ROOT / relative).read_bytes()).hexdigest()
     if fault == "origin": old = "0" * 64
     elif fault == "successor": new = "0" * 64

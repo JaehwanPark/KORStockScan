@@ -1300,14 +1300,20 @@ def test_unjoinable_identity_does_not_abort_other_research_rows():
 
 
 @pytest.fixture
-def hold_invalidation(native, monkeypatch):
+def hold_invalidation(native, monkeypatch, request):
     """Exercise the real ready survival rule, without reconstructing qualification."""
     from src.engine.scalping.reversal_extended_state import State
     from src.engine.scalping import reversal_current_backend
 
-    bid = "manual_residual_0d7e29b0230e5b49"
+    bid = getattr(request, "param", "manual_residual_0d7e29b0230e5b49")
     family, bundle, generation = "a" * 64, "b" * 64, "c" * 64
-    item, symbol, venue, market = "066970_NX", "066970", "NXT", "PRE"
+    symbol = "066970"
+    venue, suffix, market, session = (
+        ("SOR", "_AL", "AFTER", "SOR_AFTERMARKET")
+        if bid in C.CUMULATIVE_DEFINITIONS
+        else ("NXT", "_NX", "PRE", "NXT_PREMARKET")
+    )
+    item = symbol + suffix
     band = C.cell_key(symbol, market, 100100)
     scope = (symbol, venue, item, market, "2026-10-12", band)
     state = State(branch_ids=[bid], generation=generation)
@@ -1317,11 +1323,11 @@ def hold_invalidation(native, monkeypatch):
         row[9] = item
         for key, value in changes.items():
             row[int(key)] = value
-        state.observe(row, symbol=symbol, venue=venue, session="NXT_PREMARKET")
+        state.observe(row, symbol=symbol, venue=venue, session=session)
         return row
 
     tick(0, 100100)
-    eid = "2026-10-12:NXT:NXT_PREMARKET:066970:1:0"
+    eid = f"2026-10-12:{venue}:{session}:{symbol}:1:0"
     event = dict(
         epoch=T,
         event_id=eid,
@@ -1336,7 +1342,11 @@ def hold_invalidation(native, monkeypatch):
         registry_generation=generation,
         entry_ask=100100,
         branch_signals={
-            bid: dict(decision_phase="FIRST_PRICE_HOLD", signal_proof={"price": 100100})
+            bid: dict(
+                extended_definition_id=bid,
+                decision_phase="FIRST_PRICE_HOLD",
+                signal_proof={"price": 100100},
+            )
         },
     )
     state.ready.append(dict(event=deepcopy(event), claimed=False, path_inputs={}))
@@ -1372,24 +1382,40 @@ def hold_invalidation(native, monkeypatch):
     return backend, state, event, tick
 
 
+@pytest.mark.parametrize(
+    "hold_invalidation",
+    ["manual_residual_0d7e29b0230e5b49", "manual_cumulative_59846db468e4602a246ef839"],
+    indirect=True,
+)
 def test_real_hold_breach_records_terminal_and_does_not_resurrect(hold_invalidation):
     backend, state, event, tick = hold_invalidation
     tick(1, 100000)
     assert not state.ready
-    R.record_native_ready(backend, "066970", "NXT", "066970_NX", "PRE", T + 0.1)
+    R.record_native_ready(
+        backend, event["symbol"], event["venue"], event["source_item"],
+        event["market"], T + 0.1
+    )
     life = next(iter(R._SELECTED_READY.values()))
     assert life["terminal"] == "invalidated_before_claim"
     assert life["terminal_reason"] == "first_price_hold_breached"
     assert life["branch_survival"] == {next(iter(event["branch_signals"])): False}
     original = deepcopy(life)
     tick(2, 100100)
-    R.record_native_ready(backend, "066970", "NXT", "066970_NX", "PRE", T + 0.2)
+    R.record_native_ready(
+        backend, event["symbol"], event["venue"], event["source_item"],
+        event["market"], T + 0.2
+    )
     assert next(iter(R._SELECTED_READY.values())) == original
     assert not state.ready and life["original_deadline"] == T + 5
 
 
 @pytest.mark.parametrize(
     "damage", ["source", "epoch", "gap", "generation", "unknown_removal", "quote"]
+)
+@pytest.mark.parametrize(
+    "hold_invalidation",
+    ["manual_residual_0d7e29b0230e5b49", "manual_cumulative_59846db468e4602a246ef839"],
+    indirect=True,
 )
 def test_hold_terminal_never_upgrades_invalid_or_unobserved_source(
     hold_invalidation, damage
@@ -1409,10 +1435,10 @@ def test_hold_terminal_never_upgrades_invalid_or_unobserved_source(
         state.ready.clear()
     R.record_native_ready(
         backend,
-        "066970",
-        "NXT",
-        "066970_NX",
-        "PRE",
+        event["symbol"],
+        event["venue"],
+        event["source_item"],
+        event["market"],
         T + (0.2 if damage == "gap" else 0.1),
     )
     life = next(iter(R._SELECTED_READY.values()))
@@ -1424,7 +1450,10 @@ def _hold_rejection(hold_invalidation, monkeypatch):
 
     backend, state, event, tick = hold_invalidation
     tick(1, 100000)
-    R.record_native_ready(backend, "066970", "NXT", "066970_NX", "PRE", T + 0.1)
+    R.record_native_ready(
+        backend, event["symbol"], event["venue"], event["source_item"],
+        event["market"], T + 0.1
+    )
     monkeypatch.setattr(D.time, "time", lambda: T + 0.2)
     observation = dict(
         schema="entry_source_quote_observer_v1",
@@ -1450,7 +1479,7 @@ def _hold_rejection(hold_invalidation, monkeypatch):
         stock_code="066970",
         evaluation_attempt_id="hold-attempt",
         machine_bundle_sha256="b" * 64,
-        market_data_route="nxt_only",
+        market_data_route={"NXT": "nxt_only", "SOR": "krx_nxt_integrated"}[event["venue"]],
         provider_called=False,
         machine_evaluation_status="assessment_contract_invalid",
         machine_contract_error=str(caught.value),
@@ -1487,6 +1516,11 @@ def _hold_rejection(hold_invalidation, monkeypatch):
         "new_root_conflict",
     ],
 )
+@pytest.mark.parametrize(
+    "hold_invalidation",
+    ["manual_residual_0d7e29b0230e5b49", "manual_cumulative_59846db468e4602a246ef839"],
+    indirect=True,
+)
 def test_hold_rejection_consumes_exact_native_terminal_only(
     hold_invalidation, monkeypatch, damage
 ):
@@ -1519,7 +1553,7 @@ def test_hold_rejection_consumes_exact_native_terminal_only(
     elif damage == "scope":
         selection["scope_execution_hash"] = "d" * 64
     elif damage == "item":
-        life["latest_native_observation"][9] = "066970_AL"
+        life["latest_native_observation"][9] = "999999_AL"
     elif damage == "signal":
         life["signal_id"] = "other"
     elif damage == "epoch":
@@ -1558,6 +1592,11 @@ def test_hold_rejection_consumes_exact_native_terminal_only(
     assert not redacted and safe == trace
 
 
+@pytest.mark.parametrize(
+    "hold_invalidation",
+    ["manual_residual_0d7e29b0230e5b49", "manual_cumulative_59846db468e4602a246ef839"],
+    indirect=True,
+)
 def test_same_hold_attempt_probe_and_trace_are_diagnostics_not_source_loss(
     hold_invalidation, monkeypatch, tmp_path
 ):
@@ -1580,7 +1619,7 @@ def test_same_hold_attempt_probe_and_trace_are_diagnostics_not_source_loss(
                 family_sha256="a" * 64,
                 deadline_epoch=T + 5,
             ),
-            zero_base_route="nxt_only",
+            zero_base_route=trace["market_data_route"],
             zero_base_machine_contract_error=trace["machine_contract_error"],
             evaluation_attempt_id=trace["evaluation_attempt_id"],
             machine_bundle_sha256="b" * 64,

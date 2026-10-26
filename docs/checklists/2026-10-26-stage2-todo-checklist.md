@@ -42,7 +42,8 @@
 
 ## 실행 항목
 
-- [ ] `[MainEntrySourceTerminalRepair1022] 미수신 exact lease·상시 native 준비 및 제출 종료 수용` (`Due: 2026-10-27`, `Slot: INTRADAY`, `TimeWindow: 09:05~09:15 정규장 SOR/_AL 자연 PASS·원 deadline·submit timing`, `Track: RuntimeStability`)
+- [ ] `[MainEntrySourceTerminalRepair1022] 미수신 exact lease·상시 native 준비 및 제출 종료 수용` (`Due: 2026-10-27`, `Slot: INTRADAY`, `TimeWindow: 09:05~09:15 정규장 SOR/_AL; 16:05~16:15 AFTER 누적 hold 종료 사유`, `Track: RuntimeStability`)
+  - 10/26 18:30·18:55 경보 원본/ID/SHA 대사:034730은 수신0B19/0D17 뒤 교차호가/source_invalid로 유지,138360은0B12/0D37 수신 뒤 누적FIRST_PRICE_HOLD 무효화 floor 기록 제외를 재현·수리한다. 원2실패→core2197 PASS, 주문/가드/route 불변. [수리·리뷰·잔여 원천](../audits/postclose-root-cause-recovery-review-2026-10-19.md#cumulative-hold-terminal-evidence-repair--2026-10-26). 배포/PID 수용은 DirectFamilyPreopenPolicyHandoff, 동일 branch 자연 수용은 다음10/27 16:05~16:15 SOR_AFTERMARKET/_AL에서 확인하며 당시 교차호가의 upstream 원인 및 원 영수증 결손은 보존한다.
   - 10/26 17:06 새PID3067962의 exact `_AL` 미수신21건을 ID/lease/transport/source SHA로 보존했다. local REG sent 뒤0B/0D wire 미관측, 개별ACKnull이며 API 결함/정상 무체결 모두 미확정이다. 현재 source 진단은 유지하고 기존 Acceptance의 동일 경로 수신→native→종료를 확인한다. [원천 대사](../../tmp/health-snapshot-repair-20261026/current-probe-source-summary.json).
   - History/Source: [10/23 동일 ID의 원 Acceptance·전체 이력](2026-10-23-stage2-todo-checklist.md), [10/26 정밀점검](../audits/postclose-root-cause-recovery-review-2026-10-19.md#exact-lease-first-receive-and-fixed-native-zero-review--2026-10-26). Due10/26인 기존 owner의 오늘 실행 인계 누락을 보완하며 원 계좌·정확 가격·세대·마감/TTL·continued detection·과거 결손/null 보존 기준을 계승한다.
   - 14:05 점검: c260d6b07/PID2198725의 미수신8건은 local REG sent→wire 0B/0D 미관측이다. 개별 ACK는null이며 정상 무체결/API 결함 모두 미확정이다. 상시5종목13:24~13:51 canonical accepted11,321건을 실제 선택 backend→ready 계측까지 재생해0건을 재현했다. 해당 구간은 선택 조건 미충족이며 전일/전시장 정상 또는 충분한 참여율을 주장하지 않는다.528회귀 PASS, 런타임 코드 수정0·구독/route/deadline/안전장치 불변이다.

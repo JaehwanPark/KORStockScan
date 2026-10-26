@@ -2462,6 +2462,17 @@ for _name, _sha in REVIEWED_HEALTH_SNAPSHOT_SOURCES.items():
     _history.update((old, _sha) for old in _prior)
 
 
+# Reviewed direct FIRST_PRICE_HOLD floor recording, including cumulative roots.
+# Preserve all previously reviewed predecessors; unknown generations fail closed.
+REVIEWED_CUMULATIVE_HOLD_SOURCES = {'src/engine/monitoring/runtime_performance.py': 'c23788f10acaaf0e554a42f187042ea3f37ea74d9b1d969ac95f7fdd4c9ca104'}
+for _name, _sha in REVIEWED_CUMULATIVE_HOLD_SOURCES.items():
+    _history = REVIEWED_PREPARATION_HISTORY.setdefault(_name, set())
+    _prior = {value for pair in _history for value in pair}
+    if _name in REVIEWED_PREPARATION_SOURCES:
+        _prior.update(REVIEWED_PREPARATION_SOURCES[_name])
+    _history.update((old, _sha) for old in _prior | {'e001ea31ffe885cd3ef2d9883d1eae99cb444e3a65e53b11e9d6dd28d6bdede1'})
+
+
 def reviewed_preparation_pair(relative, old, current):
     # An already reviewed physical pair keeps its original authority; a
     # formatting projection must not replace either endpoint before this check.
