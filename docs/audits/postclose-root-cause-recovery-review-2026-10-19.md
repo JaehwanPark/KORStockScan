@@ -3783,3 +3783,37 @@ Existing submit-attempt/runtime-performance/async-terminal owners now publish bo
 - Review: original branch fails the exact real-isolation regression. Raw and native compressed inputs pass20 positive/negative cases; supplemental future-tail fixture custody preserves its original native rejection reasons. Exact successor/prior/mixed handoff75PASS; original native regressions835PASS with5 fixture setup failures, followed by a corrected supplemental25PASS. Read-only replay validates the actual three operating input generations. Compilation and diff checks pass. Parent/transition145PASS and print-only document parsing PASS. No failed P5 is reused as a passing proof.
 - Replacement/removal: the indexed assembler lookup is consolidated into the existing invocation-scoped preparation evidence path only inside P5. Native index coverage, historical vote reader, runtime reader, parent revalidation, preparation owner and isolation guards are retained. No module, producer, worker, schedule or startup entrypoint is added. Source baseline cb4f0ab58; non-test source+224/-1, tests+122/-1 and docs+11/-0. Added branches cover one previously unsupported source schema and retain its first/last consumers.
 - Acceptance remains OPEN under DirectFamilyPreopenPolicyHandoff. Preserve this candidate's failed attempt, issue fresh active-parent and next-session code custody for the reviewed successor, pass candidate P5 and the exact offline transition before selection, then rebuild only invalidated monitor/summary/strict/controller/preparation dependencies and pass selected P5. Scheduled finalization, actual PREOPEN/PID/observer and the next unassisted full run retain separate acceptance states.
+
+
+## Isolated index adapter ownership repair 2026-10-27
+
+The 05:53 source-2026-10-26 finalization completed with two code-generation
+warnings: holding_vote successor_code_pair_unreviewed and invalid all-scope
+trailing research handoff. The first violated contract was an isolation-only
+adapter added to the shared assembler, changing its production code fingerprint.
+The unchanged report fingerprints are holding 7f30d09769b17801ad614d2403ca5742c5a45d4e56fb27212447de1384829386
+and research 28ea8f6e5e179d0f737ec283643ab29be3e408a6aaadfe892577c58318b05db9.
+Restoring the assembler's exact original bytes restores both fingerprints.
+The existing authenticated validation context now owns the isolated child's
+index I/O adapter. Parent native validation, sealed input identities, isolation
+and semantic predicates remain mandatory. Production dispatch is restored;
+the former assembler adapter is removed, existing context/reader and all issued
+profiles are retained for their current consumers. No new module, worker or
+policy authority is introduced. Original health, source results and failed
+regression attempts remain under /home/ubuntu/KORStockScan-storage-archives/postclose-monitor-20261026.
+The initial handoff regression had three outdated mixed-fixture failures: its
+restored assembler now correctly equals the original. The fixture now mixes the
+changed context owner instead; all six predecessor cases pass. Further validation
+and actual selected deployment/PREOPEN/PID acceptance are recorded separately.
+
+Validation: the complete context suite passed504 cases plus a new test with a
+missing child-only import; its corrected22-case affected run passes (505 distinct
+context cases covered). Handoff51 initially passed; the corrected six predecessor
+cases pass, closing54 distinct affected cases. Startup/transition145 pass.
+Compile and diff checks pass. Print-only docs parsing reports the source
+worktree's absent current daily checklist; final canonical parsing remains
+required after the dated operating record is updated. Baseline2fbf31449 delta:
+non-test source+50/-7, tests+32/-3, docs+33/-0 before this validation note.
+Growth is confined to the existing isolated context and exact compatibility
+profile; the production adapter's seven lines are removed. Original failed
+attempts and corrected logs remain separate, not overwritten as PASS.

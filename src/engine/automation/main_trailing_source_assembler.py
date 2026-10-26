@@ -350,13 +350,7 @@ def source_generation_matches(root, source_date, path, generation):
             return False
     if generation.get("schema") == INDEX_SCHEMA + ":generation":
         try:
-            from src.engine.infrastructure.startup_validation_code_context import (
-                validation_indexed_source_generation,
-            )
-
-            current = validation_indexed_source_generation(root, path)
-            if current is None:
-                current = index_generation(root, path)
+            current = index_generation(root, path)
             if current == generation:
                 return True
             # Native gzip enrollment changes physical identity only. The

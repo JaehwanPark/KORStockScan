@@ -641,8 +641,9 @@ def test_indexed_stop_source_survives_real_isolation_only_with_exact_native_bind
     result = _child(
         f,
         MAIN_CHILD_SETUP + f"""
-from src.engine.automation import main_trailing_source_assembler as A
+from src.engine.automation import main_trailing_source_assembler as A, main_trailing_source_store as S
 expected = {expected!r}
+assert S.generation is C.validation_indexed_source_generation
 assert A.source_generation_matches({root!r}, {day!r}, {lookup!r}, expected)
 assert_no_forbidden_attempts()
 """,
@@ -3112,3 +3113,23 @@ def test_closed_loader_independent_preparation_exact_pair(fault):
     if fault == "origin": old = "0" * 64
     elif fault == "successor": new = "0" * 64
     assert C.reviewed_preparation_pair(relative, old, new) is (fault is None)
+
+
+def test_indexed_reader_stays_native_outside_isolated_context():
+    from src.engine.automation import main_trailing_source_store as S
+
+    assert S.generation is not C.validation_indexed_source_generation
+    assert S.generation.__module__ == S.__name__
+
+
+def test_non_main_isolated_context_does_not_replace_indexed_reader(request_fixture):
+    result = _child(request_fixture, '''
+from src.engine.infrastructure import startup_validation_code_context as C
+from src.engine.automation import main_trailing_source_store as S
+native = S.generation
+install_validation_code_context(request)
+assert S.generation is native
+assert S.generation is not C.validation_indexed_source_generation
+assert_no_forbidden_attempts()
+''')
+    assert result.returncode == 0, result.stderr

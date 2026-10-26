@@ -5411,7 +5411,7 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
     )
     subprocess.run(["git", "-C", str(root), "checkout", "-q", "75e0fbbf7"], check=True)
     hashes = {
-        "current": handoff.REVIEWED_STOP_INDEX_PROFILE,
+        "current": handoff.REVIEWED_ISOLATED_INDEX_PROFILE,
         "consumed_closed_loader": handoff.REVIEWED_CLOSED_LOADER_PROFILE,
         "consumed_cumulative_hold": handoff.REVIEWED_CUMULATIVE_HOLD_PROFILE,
         "consumed_health_snapshot": handoff.REVIEWED_HEALTH_SNAPSHOT_PROFILE,
@@ -6371,12 +6371,20 @@ def test_closed_loader_handoff_rejects_partial_successor(tmp_path, family, fault
 def test_stop_index_handoff_preserves_prior_proof(tmp_path, family, fault):
     test_entry_cost_handoff_keeps_exact_complete_generation(
         tmp_path, family, fault, "consumed_closed_loader",
-        "src/engine/automation/main_trailing_source_assembler.py")
+        "src/engine/infrastructure/startup_validation_code_context.py")
 
 
 @pytest.mark.parametrize("family", ["main_stop", "holding_vote", "pre_submit_delay"])
 @pytest.mark.parametrize("fault", ["missing", "dirty", "committed_change", "parent_mix"])
 @pytest.mark.parametrize("dependency", list(handoff.REVIEWED_STOP_INDEX_HASHES))
 def test_stop_index_handoff_rejects_mixed_generation(tmp_path, family, fault, dependency):
+    test_entry_cost_handoff_keeps_exact_complete_generation(
+        tmp_path, family, fault, "current", dependency)
+
+
+@pytest.mark.parametrize("family", ["main_stop", "holding_vote", "pre_submit_delay"])
+@pytest.mark.parametrize("fault", ["missing", "dirty", "committed_change", "parent_mix"])
+@pytest.mark.parametrize("dependency", list(handoff.REVIEWED_ISOLATED_INDEX_HASHES))
+def test_isolated_index_handoff_rejects_mixed_generation(tmp_path, family, fault, dependency):
     test_entry_cost_handoff_keeps_exact_complete_generation(
         tmp_path, family, fault, "current", dependency)

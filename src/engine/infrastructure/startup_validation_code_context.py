@@ -2495,6 +2495,14 @@ for _name, _sha in REVIEWED_STOP_INDEX_SOURCES.items():
     _history.update((old, _sha) for old in _prior)
 
 
+# Restore the unchanged production assembler; indexed I/O belongs exclusively
+# to the authenticated isolated validation process. Retain the issued successor.
+_RESTORED_ASSEMBLER = "src/engine/automation/main_trailing_source_assembler.py"
+_assembler_history = REVIEWED_PREPARATION_HISTORY[_RESTORED_ASSEMBLER]
+_assembler_history.update((old, "943d15e004967ac5e084d8e49bebf53c05cf524e6f229cc8b1a3312ece1968af") for old in
+                          {v for pair in _assembler_history for v in pair})
+
+
 def reviewed_preparation_pair(relative, old, current):
     # An already reviewed physical pair keeps its original authority; a
     # formatting projection must not replace either endpoint before this check.
@@ -3029,6 +3037,12 @@ def install_validation_code_context(request: dict) -> None:
             _CONTEXT = {"valid": False}
             raise ValueError("startup_code_context_digest_owner_already_active")
         ACTIVE.set(_PreparationDigests())
+        # The native assembler imports this reader at call time. Install the
+        # I/O adapter only in this OS-isolated child after its Main proof is
+        # authenticated. Live producers and their code fingerprints stay intact.
+        from src.engine.automation import main_trailing_source_store as indexed
+
+        indexed.generation = validation_indexed_source_generation
 
 
 def verify_validation_consumer_code(

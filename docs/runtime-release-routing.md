@@ -725,3 +725,14 @@ StoppedDeploymentRecovery owns its verified stopped-origin hold transfer interna
 Shared preparation/consumption metadata participates in policy-generation capability signatures. Before a code-only transition, run the existing native family fixture publisher and verify the unchanged historical reports through policy_generation_code_handoff's exact reviewed successor pairs. Preserve both fixture generations and original report/policy bytes; capability verification never establishes original economics or successor PID consumption. Include this direct artifact consumer in candidate review/current health checks.
 
 Snapshot memory repairs retain exact source identity and full published report schemas. The report/archive owners may spill lossless row bodies into private temporary files and hash canonical JSON incrementally; downstream metadata readers must validate discarded timeline values and the unchanged whole-file identity. Scratch failures remain failed snapshots. Review the complete code profile and independent preparation bindings, run fresh native capability fixtures, and verify the actual native snapshot consumer under unchanged resource limits before claiming recovery.
+
+
+The indexed stop-source P5 adapter is installed by the existing validation code
+context only after OS isolation and the bound Main preparation proof pass. It
+replaces the child process's native index reader with the exact parent-verified
+generation, retaining source/archive/DB/WAL identities and native parent checks
+before and after the child. The shared production assembler remains byte-identical
+to its original implementation, so this I/O-only validation repair does not
+invalidate research or policy-generation fingerprints. No adapter is installed
+outside isolation or without the Main proof; unknown paths and changed inputs
+remain rejected. Previously issued complete code profiles remain verifiable.

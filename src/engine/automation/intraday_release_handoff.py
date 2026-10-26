@@ -11288,6 +11288,35 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
 }}
 
 
+# Isolated-only indexed I/O; production research fingerprints are unchanged.
+REVIEWED_ISOLATED_INDEX_HASHES = {'src/engine/automation/main_trailing_source_assembler.py': '943d15e004967ac5e084d8e49bebf53c05cf524e6f229cc8b1a3312ece1968af', 'src/engine/infrastructure/startup_validation_code_context.py': '1932ef04fe121b341d64ad58675675b354444dab3915168b9458f2103914db15'}
+REVIEWED_ISOLATED_INDEX_PROFILE = {
+    **REVIEWED_STOP_INDEX_PROFILE, **REVIEWED_ISOLATED_INDEX_HASHES
+}
+REVIEWED_ISOLATED_INDEX_VARIANTS = {
+    (key[0], REVIEWED_ISOLATED_INDEX_HASHES.get(key[0], key[1])): {
+        **value,
+        "selector_path": "src/engine/infrastructure/startup_validation_code_context.py",
+        "selector_sha256": REVIEWED_ISOLATED_INDEX_HASHES["src/engine/infrastructure/startup_validation_code_context.py"],
+        "dependencies": {**value["dependencies"], **REVIEWED_ISOLATED_INDEX_HASHES},
+        "contract_extensions": {
+            origin: {name: REVIEWED_ISOLATED_INDEX_HASHES.get(os.path.normpath(name), sha)
+                     for name, sha in paths.items()}
+            for origin, paths in value["contract_extensions"].items()
+        },
+    }
+    for key, value in REVIEWED_STOP_INDEX_VARIANTS.items()
+}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple(
+        (old, current)
+        for old in {value for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ())
+                    for value in pair} | {REVIEWED_STOP_INDEX_PROFILE[name]}
+    )
+    for name, current in REVIEWED_ISOLATED_INDEX_HASHES.items()
+}}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -11942,6 +11971,12 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     ):
         prepared_hashes = REVIEWED_STOP_INDEX_PROFILE
         prepared_variants = REVIEWED_STOP_INDEX_VARIANTS
+    if (
+        (source := candidate_bytes("src/engine/infrastructure/startup_validation_code_context.py", optional=True)) is not None
+        and hashlib.sha256(source).hexdigest() == REVIEWED_ISOLATED_INDEX_HASHES["src/engine/infrastructure/startup_validation_code_context.py"]
+    ):
+        prepared_hashes = REVIEWED_ISOLATED_INDEX_PROFILE
+        prepared_variants = REVIEWED_ISOLATED_INDEX_VARIANTS
     entry_cost_hashes = (
         prepared_hashes
         if prepared_owner_present
