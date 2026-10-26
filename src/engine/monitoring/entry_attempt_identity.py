@@ -6,9 +6,12 @@ cross threads implicitly, or grant execution authority.
 
 from contextvars import ContextVar
 from functools import wraps
+import json
 import logging
 import re
 from uuid import uuid4
+
+from src.engine.monitoring.runtime_performance import entry_stage, entry_timing_frame
 
 _ATTEMPT = ContextVar("entry_submit_observation_attempt", default=None)
 
@@ -60,44 +63,51 @@ def observe_submit_attempt(function=None, *, on_finish=None):
             )
         token = _ATTEMPT.set(identity)
         outcome = "raised"
-        try:
-            result = function(stock, code, *args, **kwargs)
-            return_outcome = (
-                "returned_true"
-                if result is True
-                else "returned_false" if result is False else "returned_other"
-            )
-            current = _ATTEMPT.get()
-            if isinstance(current, dict):
-                current = {**current, "return_outcome": return_outcome}
-                _ATTEMPT.set(current)
-                outcome = (
-                    "broker_accepted"
-                    if current.get("broker_submit_accepted") is True
-                    else return_outcome
-                )
-            else:
-                outcome = return_outcome
-            return result
-        except Exception:
-            current = _ATTEMPT.get()
-            if isinstance(current, dict):
-                current = {**current, "return_outcome": "raised"}
-                _ATTEMPT.set(current)
-                if current.get("broker_submit_accepted") is True:
-                    outcome = "broker_accepted"
-            raise
-        finally:
+        with entry_timing_frame() as timings:
             try:
-                if on_finish is not None:
-                    on_finish(stock, code, outcome)
-            except Exception as exc:
-                # Telemetry failure cannot change order execution or its result.
-                logging.getLogger(__name__).warning(
-                    "Submit completion telemetry failed: %s", type(exc).__name__
+                with entry_stage("entry_submit_total"):
+                    result = function(stock, code, *args, **kwargs)
+                return_outcome = (
+                    "returned_true"
+                    if result is True
+                    else "returned_false" if result is False else "returned_other"
                 )
+                current = _ATTEMPT.get()
+                if isinstance(current, dict):
+                    current = {**current, "return_outcome": return_outcome}
+                    _ATTEMPT.set(current)
+                    outcome = (
+                        "broker_accepted"
+                        if current.get("broker_submit_accepted") is True
+                        else return_outcome
+                    )
+                else:
+                    outcome = return_outcome
+                return result
+            except Exception:
+                current = _ATTEMPT.get()
+                if isinstance(current, dict):
+                    current = {**current, "return_outcome": "raised"}
+                    _ATTEMPT.set(current)
+                    if current.get("broker_submit_accepted") is True:
+                        outcome = "broker_accepted"
+                raise
             finally:
-                _ATTEMPT.reset(token)
+                try:
+                    current = _ATTEMPT.get()
+                    if isinstance(current, dict):
+                        # Freeze before completion logging, which belongs to
+                        # this frame but is outside the submit function body.
+                        _ATTEMPT.set({**current, "stage_timings_ms": dict(timings)})
+                    if on_finish is not None:
+                        on_finish(stock, code, outcome)
+                except Exception as exc:
+                    # Telemetry failure cannot change execution or its result.
+                    logging.getLogger(__name__).warning(
+                        "Submit completion telemetry failed: %s", type(exc).__name__
+                    )
+                finally:
+                    _ATTEMPT.reset(token)
 
     return wrapped
 
@@ -342,6 +352,15 @@ def submit_attempt_fields(stock, code):
         ),
         "entry_submit_attempt_return_outcome": str(
             value.get("return_outcome") or "not_returned"
+        ),
+        **(
+            {
+                "entry_submit_stage_timings_ms": json.dumps(
+                    value["stage_timings_ms"], sort_keys=True
+                )
+            }
+            if "stage_timings_ms" in value
+            else {}
         ),
         **value.get("machine_lineage", {}),
     }

@@ -13388,7 +13388,11 @@ def _log_entry_pipeline(stock, code, stage, **fields):
     # The pipeline writer stringifies every value. Normalize receipts after
     # provenance merge so a later echo cannot turn JSON into Python repr.
     merged_fields = _machine_auxiliary_receipt_wire_fields(merged_fields)
-    event_payload = emit_pipeline_event(
+    from src.engine.monitoring.runtime_performance import timed_entry_call
+
+    event_payload = timed_entry_call(
+        "entry_submit_pipeline_emit",
+        emit_pipeline_event,
         "ENTRY_PIPELINE",
         stock.get("name"),
         code,
@@ -64275,7 +64279,7 @@ def _set_async_terminal(stock, reason, **facts):
         guard.update(facts)
 
 
-def _async_entry_deadline_expired(stock):
+def _async_entry_deadline_expired(stock, *, phase="entry_path"):
     due = (stock or {}).get("_pre_submit_delay_due")
     if (
         isinstance(due, dict)
@@ -64302,9 +64306,27 @@ def _async_entry_deadline_expired(stock):
         ):
             return False
         epoch, perf = bound["deadline_epoch"], bound["deadline_perf"]
+    checked_epoch, checked_perf = time.time(), time.perf_counter()
+    guard = stock.get("_async_consumption_guard")
+    if isinstance(guard, dict):
+        # Exact clocks from this native boundary, not the later logger clock.
+        # Diagnostic fields never replace/rebase either original deadline.
+        guard["async_entry_deadline_check"] = json.dumps(
+            dict(
+                phase=phase,
+                deadline_epoch=epoch,
+                deadline_perf=perf,
+                checked_epoch=checked_epoch,
+                checked_perf=checked_perf,
+                remaining_epoch_ms=(
+                    (epoch - checked_epoch) * 1000 if epoch > 0 else None
+                ),
+                remaining_perf_ms=(perf - checked_perf) * 1000 if perf > 0 else None,
+            ),
+            sort_keys=True,
+        )
     return bool(
-        (epoch > 0 and time.time() >= epoch)
-        or (perf > 0 and time.perf_counter() >= perf)
+        (epoch > 0 and checked_epoch >= epoch) or (perf > 0 and checked_perf >= perf)
     )
 
 
@@ -69222,6 +69244,9 @@ def _observe_entry_submit_finished(stock, code, outcome):
             attempt_fields.get("entry_submit_attempt_broker_accepted")
         ),
         async_entry_submit_outcome=outcome,
+        async_entry_submit_stage_timings_ms=attempt_fields.get(
+            "entry_submit_stage_timings_ms"
+        ),
     )
     attempt_fields = submit_attempt_fields(stock, code)
     delayed = (
@@ -74504,7 +74529,11 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 )
                 _set_async_terminal(stock, "entry_ai_authority_expired_during_submit")
                 return False
-        operating_context = freeze_entry_operating_context(
+        from src.engine.monitoring.runtime_performance import timed_entry_call
+
+        operating_context = timed_entry_call(
+            "entry_submit_operating_context",
+            freeze_entry_operating_context,
             sys.modules[__name__],
             stock,
             sizing_context,
@@ -74641,28 +74670,28 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 operating_context["sha256"] = digest(
                     {k: v for k, v in operating_context.items() if k != "sha256"}
                 )
-            planned_orders, entry_execution_sizing_fields = (
-                compose_entry_execution_sizing_plan(
-                    planned_orders,
-                    expected_total_qty=requested_qty,
-                    replay_context={
-                        "stock_code": str(code),
-                        "observed_at": time.time(),
-                        "profile": latency_gate.get("entry_price_gap_profile"),
-                        "profile_bps": latency_gate.get("entry_price_gap_profile_bps"),
-                        "sizing_context": sizing_context,
-                        "operating_context": operating_context,
-                    },
-                    action_receipt=machine_action_receipt,
-                    quantity_policy_version=(
-                        stock.get("position_sizing_policy_version")
-                        or latency_gate.get("position_sizing_policy_version")
-                        or "entry_type_5stage_cap25_v1"
-                    ),
-                    split_policy_version=entry_split_fields.get(
-                        "entry_split_order_policy_version"
-                    ),
-                )
+            planned_orders, entry_execution_sizing_fields = timed_entry_call(
+                "entry_submit_sizing_plan",
+                compose_entry_execution_sizing_plan,
+                planned_orders,
+                expected_total_qty=requested_qty,
+                replay_context={
+                    "stock_code": str(code),
+                    "observed_at": time.time(),
+                    "profile": latency_gate.get("entry_price_gap_profile"),
+                    "profile_bps": latency_gate.get("entry_price_gap_profile_bps"),
+                    "sizing_context": sizing_context,
+                    "operating_context": operating_context,
+                },
+                action_receipt=machine_action_receipt,
+                quantity_policy_version=(
+                    stock.get("position_sizing_policy_version")
+                    or latency_gate.get("position_sizing_policy_version")
+                    or "entry_type_5stage_cap25_v1"
+                ),
+                split_policy_version=entry_split_fields.get(
+                    "entry_split_order_policy_version"
+                ),
             )
             seed = entry_execution_sizing_fields.get("entry_opportunity_replay_seed")
             if seed:
@@ -75831,8 +75860,13 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                     validate_attempt_generation,
                 )
 
-                generation_guard = validate_attempt_generation(
-                    pair_hash, data_root=DATA_DIR
+                from src.engine.monitoring.runtime_performance import timed_entry_call
+
+                generation_guard = timed_entry_call(
+                    "entry_submit_generation",
+                    validate_attempt_generation,
+                    pair_hash,
+                    data_root=DATA_DIR,
                 )
                 if not generation_guard["allowed"]:
                     stock["ai_wait_rebound_recheck_pending"] = True
@@ -75846,7 +75880,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                         broker_order_forbidden=True,
                     )
                     break
-        if _async_entry_deadline_expired(stock):
+        if _async_entry_deadline_expired(stock, phase="after_machine_generation"):
             _set_async_terminal(stock, "result_deadline_expired")
             break
         broker_submit_attempt_count += 1
@@ -76080,7 +76114,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             )
             broker_submit_attempt_count = max(0, broker_submit_attempt_count - 1)
             break
-        if _async_entry_deadline_expired(stock):
+        if _async_entry_deadline_expired(stock, phase="before_physical_send_context"):
             physical_send_block_fields = _initial_entry_known_not_sent(
                 stock,
                 code,

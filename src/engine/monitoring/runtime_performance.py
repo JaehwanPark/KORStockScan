@@ -69,6 +69,10 @@ _NAMES += (
     "entry_submit_native_load",
     "entry_submit_auxiliary",
     "entry_submit_generation",
+    "entry_submit_total",
+    "entry_submit_pipeline_emit",
+    "entry_submit_operating_context",
+    "entry_submit_sizing_plan",
 )
 _ENTRY_TIMINGS = ContextVar("entry_local_stage_timings", default=None)
 _NATIVE_VISIT_HINTS = OrderedDict()

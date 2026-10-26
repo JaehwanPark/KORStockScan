@@ -118,6 +118,190 @@ def test_generation_only_physical_boundary_keeps_native_check(monkeypatch, match
     )
 
 
+def test_generation_guard_does_not_spend_original_deadline_copying_policy(
+    tmp_path, monkeypatch
+):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from src.engine import sniper_state_handlers as H
+    from src.engine.scalping import mechanistic_entry_runtime_policy as N
+
+    monkeypatch.setattr(N, "_CURRENT_CACHE", {})
+    monkeypatch.setattr(N, "_CURRENT_FLIGHTS", {})
+    source = tmp_path / "source.json"
+    source.write_text('{"generation":"a"}')
+
+    def native(root, day):
+        generation = N._read(source)["generation"]
+        return {"bundle_sha256": generation * 64, "policy": list(range(1024))}
+
+    monkeypatch.setattr(N, "_load_current_uncached", native)
+    N._load_current(tmp_path, "2026-10-26", _immutable=True)
+    clock = [100.0]
+    monkeypatch.setattr(H.time, "time", lambda: clock[0])
+    monkeypatch.setattr(H.time, "perf_counter", lambda: clock[0])
+    copy_policy = N._copy_verified_container
+    copies = []
+
+    def expensive_owned_copy(value, memo):
+        copies.append(True)
+        clock[0] += 0.020
+        return copy_policy(value, memo)
+
+    monkeypatch.setattr(N, "_copy_verified_container", expensive_owned_copy)
+    stock = {
+        "last_watching_ai_machine_primary_fields": {"evaluation_attempt_id": "pair"},
+        "last_watching_ai_decision_trace_id": "trace",
+        "_async_entry_decision_deadline": {
+            "evaluation_attempt_id": "pair",
+            "ai_decision_trace_id": "trace",
+            "deadline_epoch": 100.015,
+            "deadline_perf": 100.015,
+        },
+    }
+    deadline = dict(stock["_async_entry_decision_deadline"])
+    now = datetime(2026, 10, 26, 14, tzinfo=ZoneInfo("Asia/Seoul"))
+    assert N.validate_attempt_generation("a" * 64, data_root=tmp_path, now=now)[
+        "allowed"
+    ]
+    assert not H._async_entry_deadline_expired(stock)
+    assert not copies
+    assert stock["_async_entry_decision_deadline"] == deadline
+    clock[0] = 100.015
+    assert H._async_entry_deadline_expired(stock)
+
+
+@pytest.mark.parametrize("damage", ["changed", "missing", "invalid", "symlink"])
+def test_readonly_generation_guard_revalidates_dependencies(
+    tmp_path, monkeypatch, damage
+):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from src.engine.scalping import mechanistic_entry_runtime_policy as N
+
+    monkeypatch.setattr(N, "_CURRENT_CACHE", {})
+    monkeypatch.setattr(N, "_CURRENT_FLIGHTS", {})
+    source = tmp_path / "source.json"
+    source.write_text('{"generation":"a"}')
+
+    def native(root, day):
+        return {"bundle_sha256": N._read(source)["generation"] * 64}
+
+    monkeypatch.setattr(N, "_load_current_uncached", native)
+    now = datetime(2026, 10, 26, 14, tzinfo=ZoneInfo("Asia/Seoul"))
+    assert N.validate_attempt_generation("a" * 64, data_root=tmp_path, now=now)[
+        "allowed"
+    ]
+    if damage == "changed":
+        source.write_text('{"generation":"b"}')
+    elif damage == "missing":
+        source.unlink()
+    elif damage == "invalid":
+        source.write_text("{")
+    else:
+        target = tmp_path / "replacement.json"
+        target.write_text('{"generation":"b"}')
+        source.unlink()
+        source.symlink_to(target)
+    guard = N.validate_attempt_generation("a" * 64, data_root=tmp_path, now=now)
+    assert guard["allowed"] is False
+    assert guard["reason"] == (
+        "policy_generation_changed"
+        if damage in {"changed", "symlink"}
+        else "policy_generation_invalid"
+    )
+
+
+@pytest.mark.parametrize("expired_clock", [None, "epoch", "perf"])
+def test_submit_deadline_diagnostics_preserve_both_native_clocks(
+    monkeypatch, expired_clock
+):
+    from src.engine import sniper_state_handlers as H
+    from src.engine.scalping.scanner_async_eval import ASYNC_CONSUMPTION
+
+    original = SimpleNamespace(deadline_epoch=100.0, deadline_perf=200.0)
+    monkeypatch.setattr(
+        H.time, "time", lambda: 100.0 if expired_clock == "epoch" else 99.9
+    )
+    monkeypatch.setattr(
+        H.time, "perf_counter", lambda: 200.0 if expired_clock == "perf" else 199.9
+    )
+    # A mutable arm may not supersede the call-local original result.
+    stock = {
+        "_async_consumption_guard": {},
+        "_async_entry_decision_deadline": {"deadline_epoch": 9999},
+    }
+    token = ASYNC_CONSUMPTION.set({"original_result": original})
+    try:
+        expired = H._async_entry_deadline_expired(
+            stock, phase="after_machine_generation"
+        )
+    finally:
+        ASYNC_CONSUMPTION.reset(token)
+    assert expired is (expired_clock is not None)
+    facts = json.loads(stock["_async_consumption_guard"]["async_entry_deadline_check"])
+    assert facts["phase"] == "after_machine_generation"
+    assert (facts["deadline_epoch"], facts["deadline_perf"]) == (100.0, 200.0)
+    assert facts["remaining_epoch_ms"] == pytest.approx(
+        0 if expired_clock == "epoch" else 100
+    )
+    assert facts["remaining_perf_ms"] == pytest.approx(
+        0 if expired_clock == "perf" else 100
+    )
+    assert original.deadline_epoch == 100 and original.deadline_perf == 200
+
+
+@pytest.mark.parametrize("raises", [False, True])
+def test_submit_timings_reach_exact_terminal_and_do_not_leak(monkeypatch, raises):
+    from src.engine import sniper_state_handlers as H
+    from src.engine.monitoring import entry_attempt_identity as I
+
+    events = []
+    clock = [10.0]
+    monkeypatch.setattr(R.time, "perf_counter", lambda: clock[0])
+
+    def emit(*args, **kwargs):
+        clock[0] += 0.010
+        events.append((args[3], kwargs["fields"]))
+        return {"structured_append_succeeded": True}
+
+    monkeypatch.setattr(H, "emit_pipeline_event", emit)
+    stock = {
+        "id": 1,
+        "name": "fixture",
+        "strategy": "SCALPING",
+        "_async_consumption_guard": {},
+    }
+
+    @I.observe_submit_attempt(on_finish=H._observe_entry_submit_finished)
+    def run(stock, code):
+        R.timed_entry_call("entry_submit_operating_context", lambda: None)
+        H._log_entry_pipeline(stock, code, "order_leg_request", qty=1)
+        H._set_async_terminal(stock, "result_deadline_expired")
+        if raises:
+            raise ValueError("original_failure")
+        return False
+
+    with R.entry_timing_frame() as parent:
+        if raises:
+            with pytest.raises(ValueError, match="original_failure"):
+                run(stock, "036930")
+        else:
+            assert run(stock, "036930") is False
+        assert R.entry_timings() == parent == {}
+    fields = next(
+        fields for stage, fields in events if stage == "entry_submit_attempt_finished"
+    )
+    timings = json.loads(fields["entry_submit_stage_timings_ms"])
+    assert timings["entry_submit_pipeline_emit"] == pytest.approx(10)
+    assert timings["entry_submit_total"] == pytest.approx(10)
+    assert "entry_submit_operating_context" in timings
+    guard = stock["_async_consumption_guard"]
+    assert guard["reason"] == "result_deadline_expired"
+    assert json.loads(guard["async_entry_submit_stage_timings_ms"]) == timings
+    assert I.submit_attempt_fields(stock, "036930") == {}
+
+
 @pytest.mark.parametrize("failure", [None, "generation", "revoked", "pointer"])
 def test_physical_boundary_shares_view_without_skipping_generation_or_revocation(
     monkeypatch, failure

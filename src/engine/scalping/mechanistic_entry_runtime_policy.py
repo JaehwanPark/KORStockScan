@@ -4272,11 +4272,17 @@ def rollback_machine_component(
 def validate_attempt_generation(
     bundle_sha256: str, *, data_root: Path, now: datetime | None = None
 ) -> dict:
-    """The exact machine/AI pair remains pinned until submit or a fresh recheck."""
+    """Check the live pair without copying a policy used only for its hash.
+
+    The immutable loader still validates every source dependency at this
+    independent boundary; no cached decision or time-based validity is used.
+    """
     current = now or datetime.now(KST)
     try:
         bundle = load_effective(
-            data_root=data_root, target_date=current.astimezone(KST).date().isoformat()
+            data_root=data_root,
+            target_date=current.astimezone(KST).date().isoformat(),
+            _immutable=True,
         )
         matched = bool(bundle and bundle["bundle_sha256"] == bundle_sha256)
         return dict(
