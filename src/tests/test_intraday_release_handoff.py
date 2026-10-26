@@ -5411,7 +5411,8 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
     )
     subprocess.run(["git", "-C", str(root), "checkout", "-q", "75e0fbbf7"], check=True)
     hashes = {
-        "current": handoff.REVIEWED_REGISTRY_REPLAY_PROFILE,
+        "current": handoff.REVIEWED_PREPARED_FIXTURE_PROFILE,
+        "consumed_registry": handoff.REVIEWED_REGISTRY_REPLAY_PROFILE,
         "consumed_activation_observer": handoff.REVIEWED_ACTIVATION_DATE_PROFILE,
         "consumed_migration": handoff.REVIEWED_MIGRATION_PROFILE,
         "consumed_auxiliary_envelope": handoff.REVIEWED_AUXILIARY_ENVELOPE_PROFILE,
@@ -5472,6 +5473,7 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
                         "consumed_source_boundary": "fdbeee2c7",
                         "consumed_migration": "ef9927b7c",
                         "consumed_activation_observer": "1081d2f8e",
+                        "consumed_registry": "9bc5829ca",
                         "consumed_auxiliary_envelope": "22b5630fd",
                         "consumed_postclose_source": "06dbfe661",
                         "consumed_closed_scanner": "2edf3263e",
@@ -6221,6 +6223,7 @@ def test_auxiliary_format_handoff_rejects_partial_successor(
     "generation",
     [
         "current",
+        "consumed_registry",
         "consumed_auxiliary_format",
         "consumed_activation_observer",
         "consumed_cold_postclose",

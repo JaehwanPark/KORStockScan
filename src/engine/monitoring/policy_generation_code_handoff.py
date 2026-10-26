@@ -960,6 +960,17 @@ REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS["auxiliary"] += (
 )
 
 
+# Reviewed prepared-versus-consumed metadata only; selection and trading
+# components retain their bytes. Keep both prior and current native fixtures.
+REVIEWED_PREPARED_STATE_SOURCE_SUCCESSORS = {'entry_cancel_wait': ('08489f10c33b2972a0d6b86b5b5696d4558d78e51d488ea47525a55a9d0510aa', '94903d6b941788b03166eeecf842eef2cf9cc96ea613e13b6ecdd8281a7380b3'), 'rising_missed': ('6d662d9e2cc6f67ec9945dfa3d9da37e3acd22765cc48a1c30d95b892a432eb7', 'c04fd6d33bc3183ee42eb9dd681be92ea94c59dfba09a9d809e7916e6429691a'), 'auxiliary': ('357573bd61c06c26c208be7ab5447eff3805a8efa21cf1bbf9df201be7c14ddd', '82a2c8b410c97dc89db45269ee865b21e2a1ba824d55448183bdb1c25769c06f'), 'holding_vote': ('2c8493a70cb399e336773c02f3d292d2f5d225fe742750089049b63ecc1a23b0', 'cfc14c1c37893a02c003674416339cdd8b9a8aec4791bb211c9c2ccefe2890a1')}
+for _family, (_previous, _current) in REVIEWED_PREPARED_STATE_SOURCE_SUCCESSORS.items():
+    _retained = REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS[_family]
+    REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS[_family] += (
+        (_previous, _current),
+        *((old, _current) for old, current in _retained if current == _previous),
+    )
+
+
 def current_fixture_observation(observed, data):
     family = observed.get("family")
     pair = REVIEWED_SUCCESSORS.get(family)

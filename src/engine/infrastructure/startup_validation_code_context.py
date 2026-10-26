@@ -2429,6 +2429,13 @@ REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/runtime_approval_summary.py'
 )
 
 
+# Exact reviewed source fixture capability transition; preserve prior readers.
+REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/monitoring/policy_generation_code_handoff.py', set()).update(
+    {(old, '0389b444ff6b4b2b44ed368baca7f08b073331fbaede3cdbe4ae782b977f2111') for old in
+     {value for pair in REVIEWED_PREPARATION_HISTORY['src/engine/monitoring/policy_generation_code_handoff.py'] for value in pair} | {'02609b635fdb49576cd9596e25fa3c697ce557aa4cd856a27e090be045f1ea04'}}
+)
+
+
 def reviewed_preparation_pair(relative, old, current):
     # An already reviewed physical pair keeps its original authority; a
     # formatting projection must not replace either endpoint before this check.

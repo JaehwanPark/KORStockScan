@@ -43,6 +43,7 @@
 ## 실행 항목
 
 - [ ] `[DirectFamilyPreopenPolicyHandoff] direct family 날짜별 정책·bootstrap 장전 소비 확인` (`Due: 2026-10-26`, `Slot: PREOPEN`, `TimeWindow: 07:35~08:05`, `Track: RuntimeStability`)
+  - 10/26 10:26 9bc5829ca/PID2114147 정책·PID 소비와 현재 observer 확인, 원 제출 관측 FAIL 해소.10:30 네 계열 capability 경고는 준비/소비 메타 코드의 새 지문 인계 누락으로 대조했다. native550/소비·보존1693 PASS 뒤 원본·경제성·정책 불변의 정확한 후속 코드쌍을 통합한다. Main은 후보 검증 동안 유지하며 새 PID/current health와10/27 무보정 PREOPEN은 같은 owner에서 확인한다.
   - 10/26 08:58 정상 collector 종료 뒤 선택 후 P5가 수량49445의 전체 registry 해시만 달라져 실패. 정확한 영수증/체결/clock 불변을 대조했고 기존 native 수량 재검증·projection 및 stopped recovery를 수리한다. 실패 원본과 hold를 보존하며 새 immutable 후보/P5→복구→실제 PID→현재 observer/health까지 같은 owner에서 확인한다.10/27 07:35~08:05 무보정 PREOPEN 수용은 OPEN이다.
   - 10/26 08:49 배포 preflight는 당일 진단 suffix45,966,079byte가32MiB를 넘어 정지 전 차단. 기존 Main/selector 유지,08:50 native 생산자 catch-up 뒤 증분421행·재구축0 검증. 실패 commit 원본을 보존하고 source 동등 후속 후보의 fresh P5·정상 native 전환을 진행한다.
   - 10/26 08:31 현재 관측 경보: 10/23 결함6행 격리 후 남은 진단 체크포인트를 기존 생산자로1회 복구하고 증분0행 검증. 오래된 분할 검증을 native 재검증했으며, 파생 PASS/원 종료 영수증 혼합과 물리 전송·arm 필드 유실은 관측 owner에서 수리한다. 원 사건 ID/해시·정상 안전 차단은 보존하며 통합 뒤 새 PID/current observer/health 및10/27 07:35~08:05 무보정 PREOPEN 수용은 같은 owner에서 확인한다.

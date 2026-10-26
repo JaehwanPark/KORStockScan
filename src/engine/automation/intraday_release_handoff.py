@@ -11116,6 +11116,26 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
 }}
 
 
+# Preserve the consumed registry/activation profile; fixture reader is separate.
+REVIEWED_PREPARED_FIXTURE_HASHES = {'src/engine/monitoring/policy_generation_code_handoff.py': '0389b444ff6b4b2b44ed368baca7f08b073331fbaede3cdbe4ae782b977f2111', 'src/engine/infrastructure/startup_validation_code_context.py': '14c9e87d9cd40276f6cfde243f319624cbece0b7838659e9f69c7f254a6ee6ec'}
+REVIEWED_PREPARED_FIXTURE_PROFILE = {**REVIEWED_REGISTRY_REPLAY_PROFILE, **REVIEWED_PREPARED_FIXTURE_HASHES}
+REVIEWED_PREPARED_FIXTURE_VARIANTS = {
+    (key[0], REVIEWED_PREPARED_FIXTURE_HASHES.get(key[0], key[1])): {
+        **value, "selector_path": "src/engine/monitoring/policy_generation_code_handoff.py",
+        "selector_sha256": REVIEWED_PREPARED_FIXTURE_HASHES["src/engine/monitoring/policy_generation_code_handoff.py"],
+        "dependencies": {**value["dependencies"], **REVIEWED_PREPARED_FIXTURE_HASHES},
+        "contract_extensions": {origin: {name: REVIEWED_PREPARED_FIXTURE_HASHES.get(os.path.normpath(name), sha)
+            for name, sha in paths.items()} for origin, paths in value["contract_extensions"].items()},
+    } for key, value in REVIEWED_REGISTRY_REPLAY_VARIANTS.items()
+}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple((old, current)
+        for old in {value for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ()) for value in pair}
+        | {REVIEWED_REGISTRY_REPLAY_PROFILE[name]})
+    for name, current in REVIEWED_PREPARED_FIXTURE_HASHES.items()
+}}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -11729,6 +11749,12 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
             == REVIEWED_REGISTRY_REPLAY_HASHES[registry_name]):
         prepared_hashes = REVIEWED_REGISTRY_REPLAY_PROFILE
         prepared_variants = REVIEWED_REGISTRY_REPLAY_VARIANTS
+    fixture_name = "src/engine/monitoring/policy_generation_code_handoff.py"
+    fixture_source = candidate_bytes(fixture_name, optional=True)
+    if (fixture_source is not None and hashlib.sha256(fixture_source).hexdigest()
+            == REVIEWED_PREPARED_FIXTURE_HASHES[fixture_name]):
+        prepared_hashes = REVIEWED_PREPARED_FIXTURE_PROFILE
+        prepared_variants = REVIEWED_PREPARED_FIXTURE_VARIANTS
     entry_cost_hashes = (
         prepared_hashes
         if prepared_owner_present

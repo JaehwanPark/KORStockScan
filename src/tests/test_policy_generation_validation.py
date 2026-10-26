@@ -1702,3 +1702,15 @@ def test_projection_generation_rotation_rejects_unproved_predecessor(
     assert pointer.read_bytes() == before
     with pytest.raises((ValueError, OSError)):
         validation.read_native_report(data, "entry_cancel_wait", DAY)
+
+
+@pytest.mark.parametrize("family", list(validation.PLANS))
+@pytest.mark.parametrize("damage", [None, "historical_missing", "current_missing", "current_code", "unreviewed_current", "original_source"])
+def test_prepared_state_metadata_accepts_exact_deployed_source_pair(tmp_path, monkeypatch, family, damage):
+    from src.engine.monitoring import policy_generation_code_handoff as handoff
+    pair = handoff.REVIEWED_PREPARED_STATE_SOURCE_SUCCESSORS[family]
+    assert pair[1] == generation.code_generation(family)
+    monkeypatch.setitem(handoff.REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS, family,
+        (*handoff.REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS[family], pair))
+    test_formatted_family_requires_both_exact_generations_without_promoting_history(
+        tmp_path, monkeypatch, family, damage)
