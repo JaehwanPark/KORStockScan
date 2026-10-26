@@ -3133,3 +3133,19 @@ assert S.generation is not C.validation_indexed_source_generation
 assert_no_forbidden_attempts()
 ''')
     assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize('damage', [None, 'origin', 'successor'])
+def test_report_absence_recovery_keeps_independent_source_pair(damage):
+    import subprocess
+
+    relative = 'src/engine/automation/postclose_finalization_generation.py'
+    old = hashlib.sha256(subprocess.check_output(
+        ['git', '-C', str(ROOT), 'show', '59a922b19:' + relative]
+    )).hexdigest()
+    new = hashlib.sha256((ROOT / relative).read_bytes()).hexdigest()
+    if damage == 'origin':
+        old = '0' * 64
+    elif damage == 'successor':
+        new = '0' * 64
+    assert C.reviewed_preparation_pair(relative, old, new) is (damage is None)

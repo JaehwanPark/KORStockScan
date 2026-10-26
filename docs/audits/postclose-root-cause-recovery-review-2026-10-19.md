@@ -3858,3 +3858,24 @@ retained. No policy/PID/provider/order authority is introduced.
 All67 finalization-generation regressions pass, including the original reproducer
 and its six negatives. Source-only review and actual successor-reader recovery
 remain separate from selected Main/PID acceptance and later integrated rollout.
+
+Actual source26 recovery used clean immutable13601311a only as the reviewed
+recovery reader, with PROJECT_DIR/PYTHONPATH and Main selection pinned to59a922b19.
+The native receipt records the actual reader path/SHA; no Main selector or policy
+changed. The07:10 skipped admission, original05:53 report and every original
+controller/cleanup/source/snapshot remain preserved. Fresh full native report
+cron-20261027T072821-3886953, SHA f536f43b5fc5b44403402e4bd7c121217befedabfab6f88fe4eb98adb1b1a735,
+has no FAIL. Native paired DONE at07:29:43 binds chaina246be4e and the unchanged
+snapshot19046e28. The only economic warning is the retained historical quantity
+source/cost gap; late recovered completion remains explicit. Natural07:35 PREOPEN
+completed07:39:05 without manual adjustment. Actual Main/PID acceptance is pending.
+
+The full integration extends the existing exact complete profile and independent
+preparation-reader source pairs for the recovery owner/context. Issued59a922b19
+and older profiles remain retained for their actual consumers. No new module,
+worker or strategy branch is added. Generation67, terminal-gate31, complete/mixed
+handoff36 and independent isolated-context508 regressions pass. Separate source
+and test deltas are recorded in the monitoring evidence. Main integration will
+use native policy-preserving custody, P5 and ordered transition after actual
+scheduled startup; the reviewed recovery tool itself does not attest Main code
+consumption or unassisted acceptance.

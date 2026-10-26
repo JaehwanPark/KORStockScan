@@ -2503,6 +2503,17 @@ _assembler_history.update((old, "943d15e004967ac5e084d8e49bebf53c05cf524e6f229cc
                           {v for pair in _assembler_history for v in pair})
 
 
+# Completed-prefix report absence changes recovery custody only; every native
+# policy, source and fresh terminal detector predicate remains unchanged.
+REVIEWED_SUFFIX_REPORT_SOURCES = {"src/engine/automation/postclose_finalization_generation.py": "0d70b7d26a768416c20b7345f47ac45155feda44469d3241930e48fa2f0e4c41"}
+for _name, _sha in REVIEWED_SUFFIX_REPORT_SOURCES.items():
+    _history = REVIEWED_PREPARATION_HISTORY.setdefault(_name, set())
+    _prior = {v for pair in _history for v in pair} | {"7f5cc8274e2ba7eba200102c34dbd29635e2dad158a380024fa8d8ed70153c72"}
+    if _name in REVIEWED_PREPARATION_SOURCES:
+        _prior.update(REVIEWED_PREPARATION_SOURCES[_name])
+    _history.update((old, _sha) for old in _prior)
+
+
 def reviewed_preparation_pair(relative, old, current):
     # An already reviewed physical pair keeps its original authority; a
     # formatting projection must not replace either endpoint before this check.

@@ -746,3 +746,10 @@ never treats the prior report as current success: native full detector execution
 and a fresh matching terminal receipt remain required before DONE. Recheck the
 scheduled detector and lock owner before recovery admission; keep retries within
 the original stage budget and preserve every failed attempt.
+
+Admit this recovery-source successor only through its complete exact source
+profile and independent preparation pair inventory. Keep the original completed
+prefix and distinguish the recovery reader's code path from the selected Main
+root. Fresh selected preparation/P5 and actual PID consumption remain separate
+from successful tool recovery; a recovery receipt cannot attest successor Main
+consumption.

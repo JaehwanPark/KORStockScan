@@ -11317,6 +11317,35 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
 }}
 
 
+# Complete reviewed report-absence recovery profile, retaining issued origins.
+REVIEWED_SUFFIX_REPORT_HASHES = {'src/engine/automation/postclose_finalization_generation.py': '0d70b7d26a768416c20b7345f47ac45155feda44469d3241930e48fa2f0e4c41', 'src/engine/infrastructure/startup_validation_code_context.py': '65c598fa42854b22eaa223b78f4ab93a6d95916af5b64b20d6bb95199f8d33a6'}
+REVIEWED_SUFFIX_REPORT_PROFILE = {
+    **REVIEWED_ISOLATED_INDEX_PROFILE, **REVIEWED_SUFFIX_REPORT_HASHES
+}
+REVIEWED_SUFFIX_REPORT_VARIANTS = {
+    (key[0], REVIEWED_SUFFIX_REPORT_HASHES.get(key[0], key[1])): {
+        **value,
+        "selector_path": "src/engine/infrastructure/startup_validation_code_context.py",
+        "selector_sha256": REVIEWED_SUFFIX_REPORT_HASHES["src/engine/infrastructure/startup_validation_code_context.py"],
+        "dependencies": {**value["dependencies"], **REVIEWED_SUFFIX_REPORT_HASHES},
+        "contract_extensions": {
+            origin: {name: REVIEWED_SUFFIX_REPORT_HASHES.get(os.path.normpath(name), sha)
+                     for name, sha in paths.items()}
+            for origin, paths in value["contract_extensions"].items()
+        },
+    }
+    for key, value in REVIEWED_ISOLATED_INDEX_VARIANTS.items()
+}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple(
+        (old, current)
+        for old in {value for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ())
+                    for value in pair} | {REVIEWED_ISOLATED_INDEX_PROFILE[name]}
+    )
+    for name, current in REVIEWED_SUFFIX_REPORT_HASHES.items()
+}}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -11977,6 +12006,12 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     ):
         prepared_hashes = REVIEWED_ISOLATED_INDEX_PROFILE
         prepared_variants = REVIEWED_ISOLATED_INDEX_VARIANTS
+    if (
+        (source := candidate_bytes("src/engine/infrastructure/startup_validation_code_context.py", optional=True)) is not None
+        and hashlib.sha256(source).hexdigest() == REVIEWED_SUFFIX_REPORT_HASHES["src/engine/infrastructure/startup_validation_code_context.py"]
+    ):
+        prepared_hashes = REVIEWED_SUFFIX_REPORT_PROFILE
+        prepared_variants = REVIEWED_SUFFIX_REPORT_VARIANTS
     entry_cost_hashes = (
         prepared_hashes
         if prepared_owner_present
