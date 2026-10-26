@@ -1154,7 +1154,7 @@ def read_joint_cases(timeout):
     return result
 
 
-def _issued_replay_representation(rebuilt, timeout, root):
+def _issued_replay_representation(rebuilt, timeout, root, *, replay=None):
     """Compare issued gzip receipts through the native lossless custody proof.
 
     Only the in-memory comparison uses the issued representation. Producers
@@ -1167,6 +1167,61 @@ def _issued_replay_representation(rebuilt, timeout, root):
         signature,
     )
     from src.engine.scalping.initial_quantity_policy import _digest, _file_sha256
+
+    if replay is not None:
+        expected = timeout["joint_replay_content_sha256"]
+        if (
+            replay.get("report_content_sha256") != expected
+            or _digest(
+                {k: v for k, v in replay.items() if k != "report_content_sha256"}
+            )
+            != expected
+        ):
+            return None
+        previous = {row["trade_id"]: row for row in replay["trades"]}
+        if len(previous) != len(replay["trades"]):
+            return None
+        rows = []
+        for row in rebuilt["trades"]:
+            prior = previous.get(row["trade_id"], {})
+            current_proof = row.get("native_buy_fill_source")
+            old_proof = prior.get("native_buy_fill_source")
+            if current_proof != old_proof and (current_proof or old_proof):
+                keys = {
+                    "receipt",
+                    "buy_fill_identity",
+                    "registry_sha256",
+                    "fill_event_hashes",
+                    "clock_source",
+                }
+                if (
+                    not isinstance(current_proof, dict)
+                    or not isinstance(old_proof, dict)
+                    or set(current_proof) != keys
+                    or set(old_proof) != keys
+                    or any(
+                        not isinstance(p["registry_sha256"], str)
+                        or len(p["registry_sha256"]) != 64
+                        or any(
+                            c not in "0123456789abcdef" for c in p["registry_sha256"]
+                        )
+                        for p in (current_proof, old_proof)
+                    )
+                    or {
+                        k: v for k, v in current_proof.items() if k != "registry_sha256"
+                    }
+                    != {k: v for k, v in old_proof.items() if k != "registry_sha256"}
+                ):
+                    return None
+                # The native rebuild revalidates the complete current custody
+                # census. Its whole-registry SHA is diagnostic; exact receipt,
+                # fill identities/hashes and every other trade field stay bound.
+                row = {**row, "native_buy_fill_source": old_proof}
+            rows.append(row)
+        rebuilt = {**rebuilt, "trades": rows}
+        rebuilt["report_content_sha256"] = _digest(
+            {k: v for k, v in rebuilt.items() if k != "report_content_sha256"}
+        )
 
     current = rebuilt["pipeline_source_receipts"]
     issued = timeout["pipeline_source_receipts"]
@@ -1259,7 +1314,9 @@ def joint_evidence_valid(timeout, *, replay=None):
             path_cache=shared,
             source_census=timeout["census"],
         )
-        comparable = _issued_replay_representation(rebuilt, timeout, root)
+        comparable = _issued_replay_representation(
+            rebuilt, timeout, root, replay=replay
+        )
         if (
             comparable is None
             or comparable["report_content_sha256"]

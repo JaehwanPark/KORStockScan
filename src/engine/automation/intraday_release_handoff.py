@@ -11095,6 +11095,26 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
     for name, current in REVIEWED_ACTIVATION_DATE_HASHES.items()
 }}
 
+# Preserve the actually selected observer/activation generation above.
+REVIEWED_REGISTRY_REPLAY_HASHES = {'src/engine/scalping/initial_quantity_policy.py': 'a60fc47c9467e0da033f8371ebdb66627e632d6b1bcd00b9a915b333fc11fd2f', 'src/engine/scalping/initial_quantity_refresh_evaluation.py': '5a143af8a348ef30c19848ccdf696659be69831dec840bb8f4233087b1ff82f8', 'src/engine/automation/postclose_summary_handoff.py': '176da9c6ddd6fa313539aadee65fafc7a2c5c4321c8f529d5a2b817e67455cfa', 'src/engine/automation/ordered_intraday_deploy.py': '7b10c5d127bd45ad4e82e90c4a504ca39dfd64f23a6d487c9be7880cc682beb5', 'src/engine/infrastructure/startup_validation_code_context.py': 'ed62b4bceb6afb18b2d062f046d4ce2977aa86fb6940e63c64ec2255f44fa6d7'}
+REVIEWED_REGISTRY_REPLAY_ORIGINS = {'src/engine/scalping/initial_quantity_policy.py': 'ab293d183811ca8740e94046dfc54f6011ccf24ebca9803d1420da29c7ef95bf', 'src/engine/scalping/initial_quantity_refresh_evaluation.py': 'cf4a6f44ae65f44fb273649845b65bdfb2ae7e1863be9d3790935ce95a9289b8', 'src/engine/automation/postclose_summary_handoff.py': '12fef0e06265f23c6f60f2f6de2a0c67cf75922d2c54e00af49bfda7e23fc8f3', 'src/engine/automation/ordered_intraday_deploy.py': '47a9283d556dcc394c49ccfb6a249a00a50823fc1a1b78c2015ade233aa07cc8', 'src/engine/infrastructure/startup_validation_code_context.py': 'b11cd38efcbb7486c2532598669925490b5bb205e597bc51dd1299f2523d1ece'}
+REVIEWED_REGISTRY_REPLAY_PROFILE = {**REVIEWED_ACTIVATION_DATE_PROFILE, **REVIEWED_REGISTRY_REPLAY_HASHES}
+REVIEWED_REGISTRY_REPLAY_VARIANTS = {
+    (key[0], REVIEWED_REGISTRY_REPLAY_HASHES.get(key[0], key[1])): {
+        **value, "selector_path": "src/engine/scalping/initial_quantity_refresh_evaluation.py",
+        "selector_sha256": REVIEWED_REGISTRY_REPLAY_HASHES["src/engine/scalping/initial_quantity_refresh_evaluation.py"],
+        "dependencies": {**value["dependencies"], **REVIEWED_REGISTRY_REPLAY_HASHES},
+        "contract_extensions": {origin: {name: REVIEWED_REGISTRY_REPLAY_HASHES.get(os.path.normpath(name), sha)
+            for name, sha in paths.items()} for origin, paths in value["contract_extensions"].items()},
+    } for key, value in REVIEWED_ACTIVATION_DATE_VARIANTS.items()
+}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple((old, current)
+        for old in {value for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ()) for value in pair}
+        | {REVIEWED_REGISTRY_REPLAY_ORIGINS[name]})
+    for name, current in REVIEWED_REGISTRY_REPLAY_HASHES.items()
+}}
+
 
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
@@ -11703,6 +11723,12 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
             == REVIEWED_ACTIVATION_DATE_HASHES[activation_name]):
         prepared_hashes = REVIEWED_ACTIVATION_DATE_PROFILE
         prepared_variants = REVIEWED_ACTIVATION_DATE_VARIANTS
+    registry_name = "src/engine/scalping/initial_quantity_refresh_evaluation.py"
+    registry_source = candidate_bytes(registry_name, optional=True)
+    if (registry_source is not None and hashlib.sha256(registry_source).hexdigest()
+            == REVIEWED_REGISTRY_REPLAY_HASHES[registry_name]):
+        prepared_hashes = REVIEWED_REGISTRY_REPLAY_PROFILE
+        prepared_variants = REVIEWED_REGISTRY_REPLAY_VARIANTS
     entry_cost_hashes = (
         prepared_hashes
         if prepared_owner_present

@@ -2386,6 +2386,24 @@ REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/monitoring/submission_bottle
      {value for pair in REVIEWED_PREPARATION_HISTORY['src/engine/monitoring/submission_bottleneck_monitor.py'] for value in pair} | {'c1e3a4fe731fbc8909ff132de0d7929b162534e0b960d8e514950e587b60fcfd'}}
 )
 
+# Frozen quantity/member proof and stopped native-intake recovery pairs.
+REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/scalping/initial_quantity_policy.py', set()).update(
+    {(old, 'a60fc47c9467e0da033f8371ebdb66627e632d6b1bcd00b9a915b333fc11fd2f') for old in
+     {value for pair in REVIEWED_PREPARATION_HISTORY['src/engine/scalping/initial_quantity_policy.py'] for value in pair} | {'ab293d183811ca8740e94046dfc54f6011ccf24ebca9803d1420da29c7ef95bf'}}
+)
+REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/scalping/initial_quantity_refresh_evaluation.py', set()).update(
+    {(old, '5a143af8a348ef30c19848ccdf696659be69831dec840bb8f4233087b1ff82f8') for old in
+     {value for pair in REVIEWED_PREPARATION_HISTORY['src/engine/scalping/initial_quantity_refresh_evaluation.py'] for value in pair} | {'cf4a6f44ae65f44fb273649845b65bdfb2ae7e1863be9d3790935ce95a9289b8'}}
+)
+REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/automation/postclose_summary_handoff.py', set()).update(
+    {(old, '176da9c6ddd6fa313539aadee65fafc7a2c5c4321c8f529d5a2b817e67455cfa') for old in
+     {value for pair in REVIEWED_PREPARATION_HISTORY['src/engine/automation/postclose_summary_handoff.py'] for value in pair} | {'12fef0e06265f23c6f60f2f6de2a0c67cf75922d2c54e00af49bfda7e23fc8f3'}}
+)
+REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/automation/ordered_intraday_deploy.py', set()).update(
+    {(old, '7b10c5d127bd45ad4e82e90c4a504ca39dfd64f23a6d487c9be7880cc682beb5') for old in
+     {value for pair in REVIEWED_PREPARATION_HISTORY['src/engine/automation/ordered_intraday_deploy.py'] for value in pair} | {'47a9283d556dcc394c49ccfb6a249a00a50823fc1a1b78c2015ade233aa07cc8'}}
+)
+
 
 def reviewed_preparation_pair(relative, old, current):
     # An already reviewed physical pair keeps its original authority; a

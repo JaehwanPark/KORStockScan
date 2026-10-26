@@ -3984,7 +3984,7 @@ def build_refresh_type_policy_candidate(
         )
         or not initial_replay_economics_valid(report)
         or not refresh_parent_policy_valid(parent_policy)
-        or not timeout_research_valid(timeout_research)
+        or not timeout_research_valid(timeout_research, replay=report)
         or evaluation.get("state") != "eligible_source_only"
         or evaluation.get("global_blockers")
         or evaluation.get("report_content_sha256") != report["report_content_sha256"]
@@ -4180,7 +4180,7 @@ def publish_refresh_quantity_evaluation(
         )
 
         if (
-            not timeout_research_valid(timeout_research)
+            not timeout_research_valid(timeout_research, replay=report)
             or timeout_research.get("generation_kind")
             != "refresh_post_apply_timeout_research"
             or timeout_research.get("source_date") != report.get("source_date")
@@ -4656,7 +4656,7 @@ def refresh_quantity_stage_terminal_valid(receipt: Any) -> bool:
                 return False
             timeout_research = json.loads(timeout_path.read_text(encoding="utf-8"))
             if (
-                not timeout_research_valid(timeout_research)
+                not timeout_research_valid(timeout_research, replay=report)
                 or timeout_research.get("generation_kind")
                 != "refresh_post_apply_timeout_research"
                 or timeout_research.get("source_date") != report.get("source_date")

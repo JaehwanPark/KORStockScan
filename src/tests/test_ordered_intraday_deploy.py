@@ -3343,7 +3343,7 @@ def test_stopped_lock_recovery_requires_all_native_preparations(
         "changed_after_preflight",
     ],
 )
-@pytest.mark.parametrize("short_reference", [False, True])
+@pytest.mark.parametrize("short_reference", [False, True, "native_intake"])
 def test_stopped_prestart_failure_is_bound_to_original_native_p5(
     stopped_recovery, damage, short_reference
 ):
@@ -3373,6 +3373,33 @@ def test_stopped_prestart_failure_is_bound_to_original_native_p5(
     )
     if short_reference:
         result["findings"] = ["ValueError:prepared_code_intraday_custody_invalid"]
+    if short_reference == "native_intake":
+        from datetime import date, timedelta
+
+        source_day = (date.fromisoformat(d.day) - timedelta(days=1)).isoformat()
+        result.update(
+            findings=["ValueError:startup_native_preparation_result_invalid"],
+            load_check_passed=False,
+            child_terminated=False,
+        )
+        intake.update(
+            status="invalid_result",
+            source_date=source_day,
+            exit_code=1,
+            diagnostics_status="observed",
+            native_validation_io=dict(source_date=source_day),
+            native_process_lifecycle=dict(
+                ownership_basis="dedicated_native_verifier_session",
+                pid=123,
+                process_group=123,
+                session_id=123,
+                start_ticks="456",
+                child_terminated=True,
+                descendants_drained=True,
+                cleanup_required=False,
+            ),
+        )
+        failed["candidate_report_currentness"] = dict(source_date=source_day)
     failed.update(
         failed_phase="prepared",
         error=repr(result),

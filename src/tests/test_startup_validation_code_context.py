@@ -2657,7 +2657,7 @@ def test_main_preparation_uses_reviewed_stopped_origin_code(name):
     review = json.loads((ROOT / H._FORMATTING_REVIEW_PATH).read_text())
     predecessor = review["sources"][name]["before_sha256"]
     if review["sources"][name]["after_sha256"] != current:
-        assert H.REVIEWED_ACTIVATION_DATE_PROFILE[name] == current
+        assert H.REVIEWED_REGISTRY_REPLAY_PROFILE[name] == current
         C._pairs({name: review["sources"][name]["after_sha256"]}, {name: current})
     origins = {old for old, new in pairs if new in {predecessor, current}}
     origins.add(predecessor)
@@ -2942,4 +2942,21 @@ def test_activation_and_native_receipt_repairs_bind_exact_independent_sources(na
     if fault == "source":old = "0" * 64
     elif fault == "target":current = "0" * 64
     elif fault == "path":name = "src/engine/kiwoom_sniper_v2.py"
+    assert C.reviewed_preparation_pair(name, old, current) is (fault is None)
+
+
+@pytest.mark.parametrize("name", [
+    "src/engine/scalping/initial_quantity_policy.py",
+    "src/engine/scalping/initial_quantity_refresh_evaluation.py",
+    "src/engine/automation/postclose_summary_handoff.py",
+    "src/engine/automation/ordered_intraday_deploy.py",
+])
+@pytest.mark.parametrize("fault", [None, "source", "target", "path"])
+def test_registry_replay_repair_binds_exact_independent_predecessor(name, fault):
+    old = hashlib.sha256(subprocess.check_output([
+        "git", "-C", str(ROOT), "show", "1081d2f8e:" + name])).hexdigest()
+    current = hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
+    if fault == "source": old = "0" * 64
+    elif fault == "target": current = "0" * 64
+    elif fault == "path": name = "src/engine/kiwoom_sniper_v2.py"
     assert C.reviewed_preparation_pair(name, old, current) is (fault is None)

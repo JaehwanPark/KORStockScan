@@ -602,6 +602,42 @@ def stopped_preparation_failure_sources(failed, failed_path):
             native, raw, _ = _owned_metadata(path)
             finding = "ValueError:startup_main_code_pair_unreviewed:src/engine/scalping/reversal_code_handoff.py"
         intake = native.get("native_preparation_checks", {}).get("intake", {})
+        native_intake_failure = short and native.get("findings") == [
+            "ValueError:startup_native_preparation_result_invalid"
+        ]
+        if native_intake_failure:
+            finding = native["findings"][0]
+            lifecycle = intake.get("native_process_lifecycle") or {}
+            source_day = (failed.get("candidate_report_currentness") or {}).get(
+                "source_date"
+            )
+            intake_bound = (
+                isinstance(source_day, str)
+                and source_day < failed.get("target_date", "")
+                and intake.get("source_date") == source_day
+                and (intake.get("native_validation_io") or {}).get("source_date")
+                == source_day
+                and intake.get("status") == "invalid_result"
+                and intake.get("exit_code") == 1
+                and intake.get("diagnostics_status") == "observed"
+                and native.get("load_check_passed") is False
+                and native.get("child_terminated") is False
+                and lifecycle.get("ownership_basis")
+                == "dedicated_native_verifier_session"
+                and type(lifecycle.get("pid")) is int
+                and lifecycle["pid"] > 0
+                and lifecycle.get("process_group") == lifecycle["pid"]
+                and lifecycle.get("session_id") == lifecycle["pid"]
+                and isinstance(lifecycle.get("start_ticks"), str)
+                and lifecycle["start_ticks"].isdigit()
+                and lifecycle.get("child_terminated") is True
+                and lifecycle.get("descendants_drained") is True
+                and lifecycle.get("cleanup_required") is False
+            )
+        else:
+            intake_bound = (
+                intake.get("status") == "pass" and intake.get("findings") == []
+            )
         if (
             native != value
             or native.get("schema") != "main_policy_load_exit_validation_v1"
@@ -618,12 +654,23 @@ def stopped_preparation_failure_sources(failed, failed_path):
                     "allowed_runtime_apply",
                 )
             )
-            or intake.get("status") != "pass"
-            or intake.get("findings") != []
+            or not intake_bound
             or intake.get("target_date") != failed.get("target_date")
-            or intake.get("selected_release_commit") != failed.get("candidate_commit")
-            or intake.get("verification_code_commit") != failed.get("candidate_commit")
-            or intake.get("verification_code_root") != failed.get("candidate_root")
+            or intake.get(
+                "selected_release_commit",
+                failed.get("candidate_commit") if native_intake_failure else None,
+            )
+            != failed.get("candidate_commit")
+            or intake.get(
+                "verification_code_commit",
+                failed.get("candidate_commit") if native_intake_failure else None,
+            )
+            != failed.get("candidate_commit")
+            or intake.get(
+                "verification_code_root",
+                failed.get("candidate_root") if native_intake_failure else None,
+            )
+            != failed.get("candidate_root")
         ):
             raise ValueError("deployment_prestart_failure_binding_invalid")
         sources[str(path)] = _digest(raw)

@@ -317,10 +317,24 @@ def source_receipt(paths: dict[str, Path], target_date: str) -> dict[str, Any]:
             )
 
             stage = json.loads(raw) if raw is not None else None
+            from src.engine.scalping import (
+                initial_quantity_monitor_projection as quantity_proof,
+            )
+
+            def read_quantity(source, *, limit, expected_sha=None):
+                value, identity = quantity_proof.files._read(Path(source), limit)
+                if expected_sha is not None and identity["sha256"] != expected_sha:
+                    raise ValueError("quantity_summary_source_hash_changed")
+                return value
+
+            proof = (
+                quantity_proof.read_verified(path, stage, read=read_quantity)
+                if isinstance(stage, dict)
+                else None
+            )
             if (
-                not refresh_quantity_stage_terminal_valid(stage)
-                or stage.get("source_date") != target_date
-            ):
+                proof is None and not refresh_quantity_stage_terminal_valid(stage)
+            ) or stage.get("source_date") != target_date:
                 raise RuntimeError("initial_quantity_refresh_stage_invalid")
         # Missing optional inputs are explicit, so a later arriving input invalidates
         # the summary. Permission/I/O errors must not look like optional absence.

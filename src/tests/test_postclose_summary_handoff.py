@@ -2761,3 +2761,36 @@ def test_native_stage_writer_binds_root_for_the_later_code_consumer(
         )
         == []
     )
+
+
+@pytest.mark.parametrize("mode", ["verified", "missing", "invalid", "wrong_date"])
+def test_quantity_summary_consumes_native_stage_proof_before_cold_replay(
+    tmp_path, monkeypatch, mode
+):
+    from src.engine.scalping import initial_quantity_policy as quantity
+    from src.engine.scalping import initial_quantity_monitor_projection as projection
+
+    day = "2026-10-23"
+    path = tmp_path / "stage.json"
+    path.write_text(
+        json.dumps(dict(source_date="2000-01-01" if mode == "wrong_date" else day))
+    )
+    calls = []
+
+    def proof(*a, **kw):
+        if mode == "invalid":
+            raise ValueError("quantity_monitor_source_changed")
+        return None if mode == "missing" else {"issued": {}, "observation": {}}
+
+    def cold(*a):
+        calls.append("cold")
+        return True
+
+    monkeypatch.setattr(projection, "read_verified", proof)
+    monkeypatch.setattr(quantity, "refresh_quantity_stage_terminal_valid", cold)
+    if mode in ("invalid", "wrong_date"):
+        with pytest.raises((ValueError, RuntimeError)):
+            mod.source_receipt({"initial_quantity_refresh_stage": path}, day)
+    else:
+        mod.source_receipt({"initial_quantity_refresh_stage": path}, day)
+    assert calls == (["cold"] if mode == "missing" else [])

@@ -5999,3 +5999,72 @@ def test_native_buy_quantity_path_binds_original_policy_without_inventing_venue(
         assert parent["applied_policy_runtime_pid"] == (
             "123" if fault is None else None
         )
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [
+        None,
+        "receipt",
+        "fill",
+        "event",
+        "clock",
+        "quantity",
+        "registry",
+        "issued_seal",
+        "missing",
+    ],
+)
+def test_frozen_quantity_replay_ignores_only_unrelated_registry_generation(
+    tmp_path, damage
+):
+    from copy import deepcopy
+    from src.engine.scalping.initial_quantity_refresh_evaluation import (
+        _issued_replay_representation,
+    )
+
+    proof = dict(
+        receipt=dict(path="1.json", size=710, sha256="a" * 64),
+        buy_fill_identity="b" * 64,
+        registry_sha256="c" * 64,
+        fill_event_hashes=["d" * 64],
+        clock_source="native_registry_fill_observed_at_kst",
+    )
+    original = dict(
+        pipeline_source_receipts={},
+        trades=[dict(trade_id="fact:1", buy_qty=1, native_buy_fill_source=proof)],
+    )
+    original["report_content_sha256"] = policy._digest(original)
+    rebuilt = deepcopy(original)
+    rebuilt["trades"][0]["native_buy_fill_source"]["registry_sha256"] = "e" * 64
+    row = rebuilt["trades"][0]
+    current = row["native_buy_fill_source"]
+    if damage == "receipt":
+        current["receipt"]["sha256"] = "f" * 64
+    elif damage == "fill":
+        current["buy_fill_identity"] = "f" * 64
+    elif damage == "event":
+        current["fill_event_hashes"] = ["f" * 64]
+    elif damage == "clock":
+        current["clock_source"] = "unknown"
+    elif damage == "quantity":
+        row["buy_qty"] = 2
+    elif damage == "registry":
+        current["registry_sha256"] = "unknown"
+    elif damage == "missing":
+        row.pop("native_buy_fill_source")
+    rebuilt["report_content_sha256"] = policy._digest(
+        {k: v for k, v in rebuilt.items() if k != "report_content_sha256"}
+    )
+    timeout = dict(
+        pipeline_source_receipts={},
+        joint_replay_content_sha256=original["report_content_sha256"],
+    )
+    if damage == "issued_seal":
+        original["report_content_sha256"] = "f" * 64
+    before = deepcopy((rebuilt, original))
+    comparable = _issued_replay_representation(
+        rebuilt, timeout, tmp_path, replay=original
+    )
+    assert (comparable == original) is (damage is None)
+    assert (rebuilt, original) == before
