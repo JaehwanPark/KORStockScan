@@ -54,6 +54,157 @@ def _snapshot(route="krx_only", item="123456", epoch=11.0):
     }
 
 
+@pytest.mark.parametrize("case", ["stale_trade", "short_window", "one_sided_quote"])
+@pytest.mark.parametrize(
+    "damage",
+    [
+        None,
+        "item",
+        "venue",
+        "epoch",
+        "sequence",
+        "pid",
+        "start_ticks",
+        "schema",
+        "receive_clock",
+        "future",
+        "before_ingress",
+        "generation",
+        "packet_provenance",
+        "boolean_sequence",
+        "malformed_reason",
+    ],
+)
+def test_terminal_native_wait_binds_ingest_without_granting_readiness(
+    monkeypatch, case, damage
+):
+    from pathlib import Path
+    import os
+    from src.engine.scalping import zero_base_probe as P
+    from src.engine.scalping import reversal_source_diagnostics as D
+    from src.engine.scalping import reversal_current_backend as B
+
+    clock = [10.0]
+    received = 11.0 if case == "stale_trade" else 19.0
+    source = _snapshot("krx_nxt_integrated", "123456_AL", epoch=received)
+    trade = source["realtime_type_snapshots_by_route"]["_AL|krx_nxt_integrated"]["0B"]
+    trade["route_sequence"] = 7
+    trade["market_source_latency"] = dict(
+        item="123456_AL",
+        transport_epoch=3,
+        route_sequence=7,
+        packet_received_epoch=received,
+        dispatch_started_epoch=received + 0.001,
+        normalized_epoch=received + 0.002,
+        native_ingest_returned_epoch=received + 0.003,
+    )
+    native = dict(
+        schema="native_observation_selection_v1",
+        item="123456_AL",
+        venue="SOR",
+        process_pid=os.getpid(),
+        process_start_ticks=Path("/proc/self/stat")
+        .read_text()
+        .rsplit(")", 1)[1]
+        .split()[19],
+        observed_epoch=20.0,
+        native_epoch=3,
+        native_sequence=7,
+        native_last_received_epoch=received,
+        reason="required_window_incomplete",
+        native_source_current=case != "stale_trade",
+        native_quote_current=case == "short_window",
+        selected_branch_truth={"G4": "UNKNOWN"},
+        selected_lifecycle_counts={"G4": {"FALSE": 6, "UNKNOWN": 1}},
+    )
+    changes = {
+        "item": ("item", "654321_AL"),
+        "venue": ("venue", "NXT"),
+        "epoch": ("native_epoch", 4),
+        "sequence": ("native_sequence", 8),
+        "pid": ("process_pid", os.getpid() + 1),
+        "start_ticks": ("process_start_ticks", "other"),
+        "schema": ("schema", "unverified"),
+        "receive_clock": ("native_last_received_epoch", received - 0.1),
+        "future": ("observed_epoch", 21),
+        "before_ingress": ("observed_epoch", received - 0.1),
+        "generation": ("reason", "scope_or_generation_mismatch"),
+        "boolean_sequence": ("native_sequence", True),
+        "malformed_reason": ("reason", []),
+    }
+    if damage in changes:
+        key, value = changes[damage]
+        native[key] = value
+    if damage == "packet_provenance":
+        trade["market_source_latency"]["item"] = "unbound"
+    if damage == "boolean_sequence":
+        trade["route_sequence"] = trade["market_source_latency"]["route_sequence"] = 1
+    readiness = {
+        "branch_descriptors": {
+            "G4": {
+                "missing_inputs": [
+                    "backward_window" if case == "short_window" else "executable_quote"
+                ]
+            }
+        }
+    }
+    ws = SimpleNamespace(
+        subscribed_codes={"123456"},
+        _registered_items_by_code={"123456": {"123456_AL"}},
+        get_exact_item_data=lambda *_a: source,
+    )
+
+    def wait(*_args, **_kwargs):
+        clock[0] = 20.0
+        return {"curr": 10000}, {}, "ready"
+
+    monkeypatch.setattr(P, "wait_for_exact_probe_ws_data", wait)
+    monkeypatch.setattr(P, "resolve_entry_candle_session", lambda: "KRX_REGULAR")
+    monkeypatch.setattr(
+        P, "resolve_entry_candle_request_code", lambda *_a, **_kw: "123456_AL"
+    )
+    monkeypatch.setattr(D, "observe_snapshot", lambda *_a, **_kw: (None, native.copy()))
+    monkeypatch.setattr(D, "branch_readiness", lambda *_a, **_kw: readiness)
+    monkeypatch.setattr(B, "backend", lambda: SimpleNamespace(_GENERATION="family"))
+    result = run_zero_base_probe(
+        {
+            "claim": {
+                "code": "123456",
+                "route": "krx_nxt_integrated",
+                "observed_epoch": 10,
+            },
+            "candidate": {"code": "123456", "route": "krx_nxt_integrated"},
+        },
+        ws_manager=ws,
+        ai_engine=object(),
+        token="test",
+        now=lambda: clock[0],
+        native_wait_deadline_epoch=20,
+        tick_fetcher=lambda *_a, **_kw: pytest.fail("native wait must not call REST"),
+        candle_fetcher=lambda *_a, **_kw: pytest.fail("native wait must not call REST"),
+    )
+    terminal = result["ws_observation_terminal"]["source_clocks"]["0B"]
+    expected_boundary = (
+        None
+        if damage is None
+        else (
+            "packet_receive_clock"
+            if damage == "packet_provenance"
+            else "native_ingest_receipt"
+        )
+    )
+    assert terminal["first_unobserved_boundary"] == expected_boundary
+    assert terminal["native_sequence_matches"] is (
+        damage in {None, "packet_provenance"}
+    )
+    assert result["native_observation_receipt"] == native
+    assert (result["result"], result["reason"]) == P.native_wait_result(
+        native, readiness
+    )
+    assert result["machine_action"] == "" and result["actual_order_submitted"] is False
+    assert result["broker_order_forbidden"] is True
+
+
 def test_probe_rejects_cross_route_or_old_transport_without_machine_call():
     good, reason = exact_probe_ws_data(
         _snapshot(), code="123456", route="krx_only", after_epoch=10

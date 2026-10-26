@@ -409,7 +409,13 @@ def exact_probe_ws_data(
 
 
 def probe_ws_observation(
-    snapshot: dict, *, code: str, route: str, after_epoch: float, now_epoch=None
+    snapshot: dict,
+    *,
+    code: str,
+    route: str,
+    after_epoch: float,
+    now_epoch=None,
+    native_receipt=None,
 ) -> dict:
     """Describe exact-route arrivals without promoting them to decision evidence."""
     snapshot = snapshot if isinstance(snapshot, dict) else {}
@@ -553,6 +559,42 @@ def probe_ws_observation(
             ),
             cause="unobservable" if not exact else "exact_normalized_source_observed",
         )
+    if isinstance(native_receipt, dict):
+        from src.engine.scalping.reversal_source_diagnostics import _PROCESS_START_TICKS
+
+        clock = clocks["0B"]
+        native_at = number(native_receipt.get("observed_epoch"))
+        received = clock["received_epoch"]
+        matches = bool(
+            native_receipt.get("schema") == "native_observation_selection_v1"
+            and native_receipt.get("process_pid") == os.getpid()
+            and _PROCESS_START_TICKS is not None
+            and native_receipt.get("process_start_ticks") == _PROCESS_START_TICKS
+            and native_receipt.get("item") == item
+            and native_receipt.get("venue") == _ROUTE_VENUE[route]
+            and isinstance(native_receipt.get("reason"), str)
+            and native_receipt.get("reason")
+            not in {"state_absent", "scope_or_generation_mismatch"}
+            and type(clock["route_sequence"]) is int
+            and clock["route_sequence"] > 0
+            and type(native_receipt.get("native_epoch")) is int
+            and type(native_receipt.get("native_sequence")) is int
+            and native_receipt.get("native_epoch") == clock["transport_epoch"]
+            and native_receipt.get("native_sequence") == clock["route_sequence"]
+            and number(native_receipt.get("native_last_received_epoch")) == received
+            and received is not None
+            and native_at is not None
+            and received <= native_at <= stamp
+        )
+        clock.update(
+            native_last_sequence=native_receipt.get("native_sequence"),
+            native_observed_epoch=native_receipt.get("observed_epoch"),
+            native_sequence_matches=matches,
+        )
+        # Receipt evidence is independent of freshness/readiness. Even a wait
+        # terminal can prove ingestion without making the old quote executable.
+        if matches and clock["first_unobserved_boundary"] == "native_ingest_receipt":
+            clock["first_unobserved_boundary"] = None
     return {
         "source_clocks": clocks,
         "arrival_quality": arrival_quality,
@@ -1439,6 +1481,7 @@ def run_zero_base_probe(
             route=route,
             after_epoch=registered_epoch,
             now_epoch=now(),
+            native_receipt=result.get("native_observation_receipt"),
         )
         if native_wait_deadline_epoch is not None:
             result["branch_readiness"] = branch_readiness(
@@ -1447,20 +1490,6 @@ def run_zero_base_probe(
                 deadline=native_wait_deadline_epoch,
                 original_requirements=claim.get("observation_requirements"),
             )
-            clock = result["ws_observation_pre_machine"]["source_clocks"]["0B"]
-            native = result.get("native_observation_receipt") or {}
-            clock["native_last_sequence"] = native.get("native_sequence")
-            clock["native_observed_epoch"] = native.get("observed_epoch")
-            clock["native_sequence_matches"] = (
-                clock["route_sequence"] is not None
-                and native.get("native_epoch") == clock["transport_epoch"]
-                and native.get("native_sequence") == clock["route_sequence"]
-            )
-            if (
-                clock["native_sequence_matches"]
-                and clock["first_unobserved_boundary"] == "native_ingest_receipt"
-            ):
-                clock["first_unobserved_boundary"] = None
         ws_data, source_reason = exact_probe_ws_data(
             refreshed_snapshot,
             code=code,
@@ -1810,6 +1839,7 @@ def run_zero_base_probe(
                 route=route,
                 after_epoch=registered_epoch,
                 now_epoch=now(),
+                native_receipt=result.get("native_observation_receipt"),
             )
         except Exception as exc:
             result["source_diagnostic_error"] = type(exc).__name__
