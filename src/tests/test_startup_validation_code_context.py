@@ -2657,7 +2657,7 @@ def test_main_preparation_uses_reviewed_stopped_origin_code(name):
     review = json.loads((ROOT / H._FORMATTING_REVIEW_PATH).read_text())
     predecessor = review["sources"][name]["before_sha256"]
     if review["sources"][name]["after_sha256"] != current:
-        assert H.REVIEWED_PREPARED_FIXTURE_PROFILE[name] == current
+        assert H.REVIEWED_SUBMIT_PROBE_PROFILE[name] == current
         C._pairs({name: review["sources"][name]["after_sha256"]}, {name: current})
     origins = {old for old, new in pairs if new in {predecessor, current}}
     origins.add(predecessor)
@@ -2960,3 +2960,18 @@ def test_registry_replay_repair_binds_exact_independent_predecessor(name, fault)
     elif fault == "target": current = "0" * 64
     elif fault == "path": name = "src/engine/kiwoom_sniper_v2.py"
     assert C.reviewed_preparation_pair(name, old, current) is (fault is None)
+
+
+@pytest.mark.parametrize("relative", list(C.REVIEWED_SUBMIT_PROBE_SOURCES))
+@pytest.mark.parametrize("fault", [None, "origin", "successor"])
+def test_submit_probe_independent_preparation_exact_pairs(relative, fault):
+    import subprocess
+    old = hashlib.sha256(subprocess.check_output(
+        ["git", "-C", str(ROOT), "show", "c260d6b07:" + relative]
+    )).hexdigest()
+    new = hashlib.sha256((ROOT / relative).read_bytes()).hexdigest()
+    if fault == "origin":
+        old = "0" * 64
+    elif fault == "successor":
+        new = "0" * 64
+    assert C.reviewed_preparation_pair(relative, old, new) is (fault is None)
