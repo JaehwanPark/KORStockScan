@@ -365,12 +365,42 @@ def _stopped_origin_receipt(
     ):
         raise ValueError("active_policy_stopped_origin_invalid")
     previous, previous_commit = D.R.validate_release(workspace, prior)
-    proof = D._stopped_intraday_predecessor(
-        day, previous, previous_commit, identity, failed_path
-    )
-    checked = _validated_origin_receipt(
-        data_root, day, previous, previous_commit, bundle_sha, pointer_sha
-    )
+    if selected.get("native_predecessor_path"):
+        proof = D.H._native_predecessor(
+            day,
+            origin_commit,
+            previous,
+            previous_commit,
+            identity,
+            selected["native_predecessor_path"],
+            selected.get("native_predecessor_sha256"),
+        )
+    else:
+        proof = D._stopped_intraday_predecessor(
+            day, previous, previous_commit, identity, failed_path
+        )
+    if selected.get("native_predecessor_path"):
+        # The original native Main need not own an intraday compatibility
+        # receipt. Authenticate the already-issued failed candidate receipt,
+        # which binds that Main's original selector and active parent.
+        issued_path = path(data_root, day, origin_commit, bundle_sha)
+        issued, issued_raw, _ = D._owned_metadata(issued_path)
+        checked = _validated_origin_receipt(
+            data_root, day, origin_root, origin_commit, bundle_sha, pointer_sha
+        )
+        if (
+            checked is None
+            or issued.get("origin_root") != str(previous)
+            or issued.get("origin_commit") != previous_commit
+            or issued.get("origin_selection_sha256") != D._digest(prior_raw)
+            or checked["source_hashes"].get(str(issued_path.resolve()))
+            != D._digest(issued_raw)
+        ):
+            raise ValueError("active_policy_stopped_native_ancestry_missing")
+    else:
+        checked = _validated_origin_receipt(
+            data_root, day, previous, previous_commit, bundle_sha, pointer_sha
+        )
     if checked is None:
         raise ValueError("active_policy_stopped_native_ancestry_missing")
     # The hold and selector are observed transition state, never frozen policy inputs.
@@ -396,7 +426,6 @@ def _stopped_origin_receipt(
         "verified_stopped_transition_original_native_code_ancestry"
     )
     return checked
-
 
 def _postclose_origin_receipt(
     data_root,

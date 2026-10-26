@@ -2405,6 +2405,13 @@ REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/automation/ordered_intraday_
 )
 
 
+# Native PREOPEN and intraday stopped origins keep their distinct owners.
+REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/scalping/reversal_code_handoff.py', set()).update(
+    {(old, '945d695b08b5f8a6bb06ef723f5a9dc8226469e49c66e03eb79dca3a70e429f4') for old in
+     {value for pair in REVIEWED_PREPARATION_HISTORY['src/engine/scalping/reversal_code_handoff.py'] for value in pair}}
+)
+
+
 def reviewed_preparation_pair(relative, old, current):
     # An already reviewed physical pair keeps its original authority; a
     # formatting projection must not replace either endpoint before this check.

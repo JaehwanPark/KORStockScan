@@ -2341,8 +2341,9 @@ def test_run_json_uses_predecessor_session_only_when_compatible_and_keeps_timeou
         "race",
     ],
 )
+@pytest.mark.parametrize("native_basis", [False, True])
 def test_stopped_policy_code_handoff_uses_only_proven_original_ancestry(
-    stopped_recovery, monkeypatch, damage
+    stopped_recovery, monkeypatch, damage, native_basis, origin_fault=None
 ):
     from src.engine.scalping import reversal_code_handoff as C
 
@@ -2351,20 +2352,45 @@ def test_stopped_policy_code_handoff_uses_only_proven_original_ancestry(
     failed_root = Path(selected["release_root"])
     failed_commit = selected["git_commit"]
     prior = D.H._read(status_path.with_name("selection-before.json"))
+    if native_basis:
+        selected.update(native_predecessor_path=str(status_path.with_name("native-predecessor.json")),
+                        native_predecessor_sha256="f" * 64)
+        d.selection.write_bytes(D._json_bytes(selected))
+        issued_path = C.path(d.workspace / "data", d.day, failed_commit, "bundle")
+        issued_path.parent.mkdir(parents=True)
+        issued = dict(origin_root=prior["release_root"], origin_commit=prior["git_commit"],
+                      origin_selection_sha256=D._digest(status_path.with_name("selection-before.json").read_bytes()))
+        if origin_fault: issued[origin_fault] = "foreign"
+        issued_path.write_bytes(D._json_bytes(issued))
+        def native(day, commit, previous, previous_commit, identity, path, sha):
+            assert day == d.day and commit == failed_commit
+            assert str(previous) == prior["release_root"] and previous_commit == prior["git_commit"]
+            assert path == selected["native_predecessor_path"] and sha == selected["native_predecessor_sha256"]
+            if damage == "native": raise ValueError("native invalid")
+            return dict(frozen_files={str(policy): D.H._sha(policy)})
+        monkeypatch.setattr(D.H, "_native_predecessor", native)
+    else:
+        selected.pop("native_predecessor_path", None)
+        selected.pop("native_predecessor_sha256", None)
+        d.selection.write_bytes(D._json_bytes(selected))
     monkeypatch.setattr(
         D,
         "_stopped_intraday_predecessor",
         lambda *a: dict(frozen_files={str(policy): D.H._sha(policy)}),
     )
 
+    if native_basis:
+        monkeypatch.setattr(D, "_stopped_intraday_predecessor", lambda *a: (_ for _ in ()).throw(AssertionError("native origin must not use intraday receipt")))
+
     def ancestry(data, day, origin, commit, bundle, pointer):
-        assert str(origin) == prior["release_root"] and commit == prior["git_commit"]
+        assert str(origin) == (str(failed_root) if native_basis else prior["release_root"])
+        assert commit == (failed_commit if native_basis else prior["git_commit"])
         if damage == "race":
             d.hold.write_text("{}")
         return (
             None
             if damage == "ancestry"
-            else dict(bundle_sha256=bundle, source_hashes={})
+            else dict(bundle_sha256=bundle, source_hashes={str(issued_path): D.H._sha(issued_path)} if native_basis else {})
         )
 
     monkeypatch.setattr(C, "_validated_origin_receipt", ancestry)
@@ -2398,7 +2424,7 @@ def test_stopped_policy_code_handoff_uses_only_proven_original_ancestry(
             lambda *a: (_ for _ in ()).throw(ValueError("native invalid")),
         )
     before = (d.selection.read_bytes(), status_path.read_bytes(), policy.read_bytes())
-    if damage:
+    if damage or origin_fault:
         with pytest.raises(ValueError):
             C._stopped_origin_receipt(
                 d.workspace / "data",
@@ -3718,3 +3744,9 @@ def test_interrupted_collector_preserves_original_and_never_claims_terminal(
         checked = D.verify_collector_shutdown(pin)
         assert checked["status"] == "preserved_unverified" and checked["receipts"] == []
         assert checked["terminal_verified"] is False
+
+
+@pytest.mark.parametrize("field", ["origin_root", "origin_commit", "origin_selection_sha256"])
+def test_native_stopped_handoff_rejects_foreign_issued_ancestry(stopped_recovery, monkeypatch, field):
+    test_stopped_policy_code_handoff_uses_only_proven_original_ancestry(
+        stopped_recovery, monkeypatch, None, True, origin_fault=field)
