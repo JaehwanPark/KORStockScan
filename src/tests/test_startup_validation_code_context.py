@@ -2923,7 +2923,7 @@ def test_main_preparation_independently_reviews_closed_scanner(origin, damage):
 )
 def test_migration_configuration_has_independent_exact_source_pairs(name):
     current = hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
-    assert H.REVIEWED_MIGRATION_HASHES[name] == current
+    assert H.REVIEWED_HEALTH_SNAPSHOT_PROFILE[name] == current
     for old in H.REVIEWED_MIGRATION_ORIGINS[name]:
         C._pairs({name: old}, {name: current})
         with pytest.raises(ValueError, match="unreviewed"):

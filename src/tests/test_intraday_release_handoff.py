@@ -6316,7 +6316,8 @@ def test_submit_probe_handoff_rejects_partial_successor(
 @pytest.mark.parametrize("fault", ["", "successor_mix"])
 def test_health_snapshot_handoff_keeps_live_predecessor(tmp_path, family, fault):
     test_entry_cost_handoff_keeps_exact_complete_generation(
-        tmp_path, family, fault, "consumed_submit_probe")
+        tmp_path, family, fault, "consumed_submit_probe",
+        "src/engine/log_archive_service.py")
 
 
 @pytest.mark.parametrize("family", ["main_stop", "holding_vote", "pre_submit_delay"])
