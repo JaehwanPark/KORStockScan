@@ -10,8 +10,7 @@ def _isolate_saved_structured_partition(monkeypatch, request):
     """Unit builders must not absorb the host's preserved trading archive."""
 
     if (
-        request.node.name
-        == "test_structured_trailing_projection_flags_wrong_partition_and_missing_id"
+        request.node.name.startswith("test_structured_trailing_projection_")
     ):
         return
     monkeypatch.setattr(
@@ -2735,3 +2734,36 @@ def unarchived_prior_snapshots(monkeypatch):
     monkeypatch.setattr(
         log_archive_service, "load_prior_entry_projection", lambda *a, **k: None
     )
+
+
+def test_structured_trailing_projection_spills_without_losing_fields(tmp_path, monkeypatch):
+    import tracemalloc
+    day = "2026-10-26"
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    path = tmp_path / "pipeline_events" / f"pipeline_events_{day}.jsonl"
+    path.parent.mkdir()
+    digest = hashlib.sha256()
+    with path.open("wb") as handle:
+        for index in range(1024):
+            row = {"pipeline": "HOLDING_PIPELINE", "stage": "scalp_trailing_input_transition",
+                   "emitted_at": day + "T09:00:00+09:00", "record_id": 7,
+                   "stock_code": "123456", "stock_name": "TEST",
+                   "fields": {"proof": str(index) + "x" * 32768,
+                              "classifier_events": '[{"seq":1}]'},
+                   "text_payload": "original " + str(index)}
+            raw = (json.dumps(row) + "\n").encode()
+            digest.update(raw); handle.write(raw)
+    tracemalloc.start()
+    try:
+        events, status, receipts = report_mod._load_holding_projection_events_from_structured(day)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert status == "structured_partition_read"
+    assert len(events) == 1024
+    assert events[-1].fields["proof"].startswith("1023")
+    assert events[-1].fields["classifier_events"] == [{"seq": 1}]
+    assert events[-1].fields["id"] == "7"
+    assert events[-1].raw_line == "original 1023"
+    assert receipts[0]["logical_sha256"] == digest.hexdigest()
+    assert peak < 8 * 1024 * 1024

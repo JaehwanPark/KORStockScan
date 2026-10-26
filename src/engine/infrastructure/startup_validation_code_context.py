@@ -2449,6 +2449,19 @@ for _name, _sha in REVIEWED_SUBMIT_PROBE_SOURCES.items():
     _history.update((old, _sha) for old in _prior)
 
 
+# Reviewed snapshot streaming and current capability/owner binding. Preserve
+# prior exact readers; missing/mixed generations still fail closed.
+REVIEWED_HEALTH_SNAPSHOT_SOURCES = {'src/engine/error_detectors/artifact_freshness.py': '0c3d6bfd413cf5e3a49e0d748d7d2366e2a60a75cb107514a6a69cbaf20db677', 'src/engine/monitoring/policy_generation_code_handoff.py': '93f96eb1ee42111142201a257155616a246cd9d7b8bbbabe5560a24892c82120', 'src/engine/log_archive_service.py': '7b530c05f6e5cf4498f332a6b7df10641126dbb4da5165af314d1f2507f73348', 'src/engine/sniper_trade_review_report.py': '188e761ec9373f0bf4f8890b620b6f7071b7ec925bf7455dcc4eeb8b11aee4ac', 'src/engine/sniper_performance_tuning_report.py': 'c6a00cba271c0b4af88f6bf6973e73b110dd7eba12ac9ddbf534ea1a3c5129af'}
+REVIEWED_HEALTH_SNAPSHOT_ORIGINS = {'src/engine/error_detectors/artifact_freshness.py': '8dae2dc097b769214195f17c3b666fb6e43c2c2f25ea7c3a0311b723355bc665', 'src/engine/monitoring/policy_generation_code_handoff.py': '0389b444ff6b4b2b44ed368baca7f08b073331fbaede3cdbe4ae782b977f2111', 'src/engine/log_archive_service.py': '08b7c8d890bd5d2857a428776195d1168fa4cba5dff7ee7d587e7466527114c3', 'src/engine/sniper_trade_review_report.py': '612d19f9108f6355a43188e1209b82078e3a6da7ce97323f18854d486065d53f', 'src/engine/sniper_performance_tuning_report.py': '64d66e04f7cae07a6c80ad48e7348ab77262be6f3ec8ad8ec3df1b2018dc0dd1'}
+for _name, _sha in REVIEWED_HEALTH_SNAPSHOT_SOURCES.items():
+    _history = REVIEWED_PREPARATION_HISTORY.setdefault(_name, set())
+    _prior = {value for pair in _history for value in pair}
+    _prior.add(REVIEWED_HEALTH_SNAPSHOT_ORIGINS[_name])
+    if _name in REVIEWED_PREPARATION_SOURCES:
+        _prior.update(REVIEWED_PREPARATION_SOURCES[_name])
+    _history.update((old, _sha) for old in _prior)
+
+
 def reviewed_preparation_pair(relative, old, current):
     # An already reviewed physical pair keeps its original authority; a
     # formatting projection must not replace either endpoint before this check.

@@ -1944,3 +1944,92 @@ def test_dated_log_cache_does_not_retain_large_unselected_population(tmp_path):
             path, target_date="2026-10-19", marker="SELECTED"
         ) == ["[2026-10-19 09:01] SELECTED"]
         assert not session.semantic_objects
+
+
+def test_snapshot_rows_preserve_json_hash_order_slices_and_insert(tmp_path):
+    import hashlib
+    from src.engine.log_archive_service import SnapshotRows, snapshot_json_sha256
+
+    values = [{"fields": {"한글": "큰 원천" * 100, "a": [1, None]}}, {"last": True}]
+    rows = SnapshotRows(values)
+    rows.insert(1, {"terminal": "observed"})
+    values.insert(1, {"terminal": "observed"})
+    assert rows == values
+    assert rows[-1] == values[-1]
+    assert rows[:2] == values[:2]
+    assert list(reversed(list(rows))) == values[::-1]
+    assert json.loads(json.dumps({"timeline": rows})) == {"timeline": values}
+    path = tmp_path / "snapshot.json"
+    with path.open("w") as output:
+        json.dump({"timeline": rows}, output, ensure_ascii=False, indent=2)
+    assert json.loads(path.read_text()) == {"timeline": values}
+    expected = hashlib.sha256(json.dumps(values, ensure_ascii=False, sort_keys=True,
+                                         separators=(",", ":")).encode()).hexdigest()
+    assert snapshot_json_sha256(rows) == expected
+    assert snapshot_json_sha256(SnapshotRows()) == snapshot_json_sha256([])
+    rows._file.seek(rows._rows[0][0])
+    rows._file.write(b"X")
+    rows._cached = None
+    with pytest.raises(ValueError, match="snapshot_private_row_changed"):
+        rows[0]
+
+
+def test_snapshot_timeline_build_has_bounded_resident_payload():
+    import tracemalloc
+    from src.engine.sniper_trade_review_report import HoldingEvent, _build_timeline
+
+    def events():
+        for index in range(1024):
+            yield HoldingEvent("2026-10-26 09:00:00", "TEST", "123456",
+                               "scalp_trailing_input_transition",
+                               {"id": "1", "proof": str(index) + "x" * 32768}, "")
+    tracemalloc.start()
+    try:
+        timeline = _build_timeline(events())
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert len(timeline) == 1024
+    assert timeline[-1]["fields"]["proof"].startswith("1023")
+    assert peak < 8 * 1024 * 1024
+
+
+@pytest.mark.parametrize("compressed", [False, True])
+@pytest.mark.parametrize("corrupt", [False, True])
+def test_snapshot_row_projection_validates_excluded_timeline(tmp_path, monkeypatch, compressed, corrupt):
+    import gzip
+    from src.engine import log_archive_service as owner
+    from src.engine import sniper_performance_tuning_report as consumer
+
+    monkeypatch.setattr(owner, "MONITOR_SNAPSHOT_DIR", tmp_path)
+    path = tmp_path / "trade_review_2026-10-26.json"
+    raw = '{"sections":{"recent_trades":[{"id":1,"profit_rate":null,"timeline":['
+    raw += '{"stage":"quote","fields":{"reason":"kept"}},' * 3000
+    raw += 'INVALID' if corrupt else '{"stage":"terminal"}'
+    raw += '],"compact_timeline":[{"stage":"terminal"}]}]},"meta":{"warnings":["source_gap"]}}'
+    if compressed:
+        path = path.with_suffix(".json.gz")
+        path.write_bytes(gzip.compress(raw.encode()))
+    else:
+        path.write_text(raw)
+    projected = owner.load_monitor_snapshot("trade_review", "2026-10-26",
+        section_names=("recent_trades",), excluded_row_fields=("timeline",))
+    if corrupt:
+        assert projected is None
+    else:
+        expected = [{"id": 1, "profit_rate": None, "compact_timeline": [{"stage": "terminal"}]}]
+        assert projected["sections"]["recent_trades"] == expected
+        assert consumer._build_current_trade_rows("2026-10-26") == (expected, ["source_gap"])
+        assert (gzip.decompress(path.read_bytes()).decode() if compressed else path.read_text()) == raw
+
+
+def test_snapshot_scratch_failure_is_not_published_as_a_source_gap(monkeypatch):
+    from src.engine.log_archive_service import SnapshotRows
+
+    rows = SnapshotRows()
+    def failed_write(raw):
+        raise OSError("scratch full")
+    monkeypatch.setattr(rows._file, "write", failed_write)
+    with pytest.raises(RuntimeError, match="snapshot_private_storage_write_failed"):
+        rows.append({"source": "valid"})
+    assert len(rows) == 0

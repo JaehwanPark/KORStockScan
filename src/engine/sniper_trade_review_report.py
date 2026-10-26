@@ -7,6 +7,7 @@ import hashlib
 import math
 import re
 from collections import Counter, defaultdict
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -14,7 +15,12 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from src.engine.trade_profit import calculate_net_realized_pnl
-from src.engine.log_archive_service import iter_target_log_lines, load_monitor_snapshot
+from src.engine.log_archive_service import (
+    SnapshotRows,
+    iter_target_log_lines,
+    load_monitor_snapshot,
+    snapshot_json_sha256,
+)
 from src.engine.monitor_snapshot_runtime import (
     guard_stdin_heavy_build,
     should_guard_stdin_heavy_build,
@@ -164,6 +170,48 @@ class HoldingEvent:
     fields: dict[str, str]
     raw_line: str
 
+    @property
+    def raw_identity(self):
+        return len(self.raw_line), hashlib.sha256(self.raw_line.encode()).digest()
+
+
+class _StoredFields(Mapping):
+    def __init__(self, rows, index, record_id):
+        self.rows, self.index, self.record_id = rows, index, record_id
+
+    def __getitem__(self, key):
+        if key == "id":
+            return self.record_id
+        return self.rows[self.index][0][key]
+
+    def __iter__(self):
+        return iter(self.rows[self.index][0])
+
+    def __len__(self):
+        return len(self.rows[self.index][0])
+
+
+class _StoredHoldingEvent(HoldingEvent):
+    """Keep sortable identity resident; field bodies remain lossless on disk."""
+    def __init__(self, event, rows):
+        self.timestamp, self.name = event.timestamp, event.name
+        self.code, self.stage = event.code, event.stage
+        self._rows, self._index = rows, len(rows)
+        self._fields = _StoredFields(rows, self._index, event.fields["id"])
+        self._raw_identity = event.raw_identity
+        rows.append([event.fields, event.raw_line])
+
+    @property
+    def fields(self):
+        return self._fields
+
+    @property
+    def raw_line(self):
+        return self._rows[self._index][1]
+
+    @property
+    def raw_identity(self):
+        return self._raw_identity
 
 def _parse_since_datetime(target_date: str, since_time: str | None) -> datetime | None:
     if not since_time:
@@ -246,6 +294,7 @@ def _load_holding_projection_events_from_structured(
         return [], "source_gap_structured_partition_missing", []
     base_missing = not paths[0].exists()
     events = []
+    event_bodies = SnapshotRows()
     malformed_count = 0
     source_receipts = []
     try:
@@ -286,14 +335,14 @@ def _load_holding_projection_events_from_structured(
                         continue
                     fields["id"] = str(record_id)
                     events.append(
-                        HoldingEvent(
+                        _StoredHoldingEvent(HoldingEvent(
                             timestamp=emitted_at[:19].replace("T", " "),
                             name=str(payload.get("stock_name") or "-"),
                             code=str(payload.get("stock_code") or "-")[:6],
                             stage=str(payload["stage"]),
                             fields=fields,
                             raw_line=str(payload.get("text_payload") or ""),
-                        )
+                        ), event_bodies)
                     )
             after = path.stat()
             if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (
@@ -652,7 +701,7 @@ def _match_trade_events(trade: dict, events: list[HoldingEvent]) -> list[Holding
 
 
 def _build_timeline(events: list[HoldingEvent]) -> list[dict[str, Any]]:
-    timeline: list[dict[str, Any]] = []
+    timeline = SnapshotRows()
     for event in events:
         if (
             timeline
@@ -3918,7 +3967,7 @@ def _completed_trade_projection(
             else None
         ),
         "exit_signal": _build_exit_signal(events, trade),
-        "timeline": [
+        "timeline": SnapshotRows(
             {
                 "stage": event.stage,
                 "timestamp": event.timestamp,
@@ -3926,7 +3975,7 @@ def _completed_trade_projection(
             }
             for event in events
             if event.stage in _PROJECTION_EVENT_STAGES
-        ],
+        ),
     }
 
 
@@ -3994,14 +4043,14 @@ def _open_scalp_position_projection(
             }
             for (reason, primary, action), count in sorted(rebound_blockers.items())
         ],
-        "timeline": [
+        "timeline": SnapshotRows(
             {
                 "stage": event.stage,
                 "timestamp": event.timestamp,
                 "fields": dict(event.fields),
             }
             for event in observed
-        ],
+        ),
     }
 
 
@@ -4624,15 +4673,7 @@ def _build_hard_stop_taxonomy(rows: list[dict], events: list[HoldingEvent]) -> d
 
 
 def _completed_census_sha256(value: Any) -> str:
-    return hashlib.sha256(
-        json.dumps(
-            value,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-            default=str,
-        ).encode("utf-8")
-    ).hexdigest()
+    return snapshot_json_sha256(value, default=str)
 
 
 def completed_census_manifest(report: dict) -> dict:
@@ -4934,7 +4975,7 @@ def build_trade_review_report(
         else None
     )
     structured_text_counts = Counter(
-        event.raw_line for event in structured_projection_events if event.raw_line
+        event.raw_identity for event in structured_projection_events if event.raw_identity[0]
     )
     unmatched_text_events = []
     for event in text_events:
@@ -4944,8 +4985,9 @@ def build_trade_review_report(
             if marker in event.raw_line
             else ""
         )
-        if structured_text_counts[text_payload] > 0:
-            structured_text_counts[text_payload] -= 1
+        text_identity = (len(text_payload), hashlib.sha256(text_payload.encode()).digest())
+        if structured_text_counts[text_identity] > 0:
+            structured_text_counts[text_identity] -= 1
             continue
         unmatched_text_events.append(event)
     all_events = unmatched_text_events + structured_projection_events
@@ -5365,7 +5407,7 @@ def build_trade_review_report(
                         {
                             "stage": event.stage,
                             "timestamp": event.timestamp,
-                            "fields": event.fields,
+                            "fields": dict(event.fields),
                         }
                         for event in all_events
                         if event.stage

@@ -23,6 +23,93 @@ LOG_ARCHIVE_DIR = DATA_DIR / "log_archive"
 MONITOR_SNAPSHOT_DIR = DATA_DIR / "report" / "monitor_snapshots"
 MONITOR_SNAPSHOT_MANIFEST_DIR = MONITOR_SNAPSHOT_DIR / "manifests"
 
+class SnapshotRows(list):
+    """Private lossless JSON rows with list-shaped streaming serialization.
+
+    Only row offsets and one decoded row are resident. Files are unlinked
+    TemporaryFiles, never persistent evidence or a replacement source ledger.
+    Producers append/insert; consumers iterate/index/serialize without mutation.
+    """
+
+    def __init__(self, rows=()):
+        super().__init__()
+        self._file = tempfile.TemporaryFile(mode="w+b")
+        self._rows = []
+        self._cached = None
+        self.extend(rows)
+
+    def __len__(self):
+        return len(self._rows)
+
+    def _write(self, value):
+        raw = json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode()
+        try:
+            self._file.seek(0, 2)
+            offset = self._file.tell()
+            self._file.write(raw)
+        except OSError as exc:
+            # Local scratch exhaustion is a failed snapshot, not bad market
+            # source evidence eligible for publication as a source gap.
+            raise RuntimeError("snapshot_private_storage_write_failed") from exc
+        return offset, len(raw), hashlib.sha256(raw).digest()
+
+    def append(self, value):
+        self._rows.append(self._write(value))
+
+    def extend(self, values):
+        for value in values:
+            self.append(value)
+
+    def insert(self, index, value):
+        self._rows.insert(index, self._write(value))
+
+    def __getitem__(self, index):
+        if isinstance(index, slice):
+            return [self[i] for i in range(*index.indices(len(self)))]
+        reference = self._rows[index]
+        if self._cached is not None and self._cached[0] == reference:
+            return self._cached[1]
+        offset, size, digest = reference
+        self._file.seek(offset)
+        raw = self._file.read(size)
+        if len(raw) != size or hashlib.sha256(raw).digest() != digest:
+            raise ValueError("snapshot_private_row_changed")
+        value = json.loads(raw)
+        self._cached = (reference, value)
+        return value
+
+    def __iter__(self):
+        for index in range(len(self)):
+            yield self[index]
+
+    def __reversed__(self):
+        for index in range(len(self) - 1, -1, -1):
+            yield self[index]
+
+    def __eq__(self, other):
+        if not isinstance(other, list):
+            return NotImplemented
+        return len(self) == len(other) and all(a == b for a, b in zip(self, other))
+
+    def __ne__(self, other):
+        result = self.__eq__(other)
+        return NotImplemented if result is NotImplemented else not result
+
+    def __del__(self):
+        if hasattr(self, "_file"):
+            self._file.close()
+
+
+def snapshot_json_sha256(value, *, default=None):
+    """Hash exactly the native compact sorted JSON without a resident copy."""
+    digest = hashlib.sha256()
+    encoder = json.JSONEncoder(
+        ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=default
+    )
+    for chunk in encoder.iterencode(value):
+        digest.update(chunk.encode("utf-8"))
+    return digest.hexdigest()
+
 
 def _env_float(name: str, default: float = 0.0) -> float:
     raw_value = str(os.getenv(name, "")).strip()
@@ -57,7 +144,7 @@ def _snapshot_manifest_path(target_date: str, profile: str) -> Path:
 
 
 def load_monitor_snapshot(
-    kind: str, target_date: str, *, section_names=None
+    kind: str, target_date: str, *, section_names=None, excluded_row_fields=()
 ) -> dict | None:
     """Load monitor snapshots from canonical JSON/GZip files only."""
     path = _snapshot_path(kind, target_date)
@@ -65,22 +152,55 @@ def load_monitor_snapshot(
         path = Path(f"{path}.gz")
     if path.exists():
         try:
-            from src.engine.lifecycle.research_json_stream import selected_object
+            from src.engine.lifecycle.research_json_stream import Reader, selected_object
 
             opener = gzip.open if path.suffix == ".gz" else open
             before = path.stat()
             with opener(path, "rt", encoding="utf-8") as handle:
-                value = (
-                    json.load(handle)
-                    if section_names is None
-                    else selected_object(
-                        handle,
-                        {
-                            "sections": {name: None for name in section_names},
-                            "meta": None,
-                        },
+                if excluded_row_fields:
+                    # A consumer may project row metadata without materializing
+                    # its full timeline. Discard still validates every value;
+                    # the unchanged before/after identity binds the whole read.
+                    reader = Reader(handle, budgeted=False)
+
+                    def row_field(key, child):
+                        if key in excluded_row_fields:
+                            child.discard()
+                        else:
+                            yield key, child.value(1024 * 1024 * 1024)
+
+                    def section(key, child):
+                        if key in section_names:
+                            yield key, list(
+                                child.array(
+                                    lambda r: dict(r.fields(row_field, max_fields=None))
+                                )
+                            )
+                        else:
+                            child.discard()
+
+                    def root(key, child):
+                        if key == "sections":
+                            yield key, dict(child.fields(section, max_fields=None))
+                        elif key == "meta":
+                            yield key, child.value(1024 * 1024 * 1024)
+                        else:
+                            child.discard()
+
+                    value = dict(reader.fields(root, max_fields=None))
+                    reader.finish()
+                else:
+                    value = (
+                        json.load(handle)
+                        if section_names is None
+                        else selected_object(
+                            handle,
+                            {
+                                "sections": {name: None for name in section_names},
+                                "meta": None,
+                            },
+                        )
                     )
-                )
             after = path.stat()
             if (
                 before.st_ino,
@@ -92,7 +212,7 @@ def load_monitor_snapshot(
             return value
         except Exception:
             pass
-    if section_names is not None:
+    if section_names is not None or excluded_row_fields:
         return None  # Do not silently fall back to decoding the entire census.
     return load_monitor_snapshot_file_first(kind, target_date)
 
@@ -538,14 +658,7 @@ def _save_trade_review_completed_projection(
     ):
         if key in (payload.get("metrics") or {}):
             body["metrics"][key] = payload["metrics"][key]
-    body["artifact_sha256"] = hashlib.sha256(
-        json.dumps(
-            body,
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=False,
-        ).encode("utf-8")
-    ).hexdigest()
+    body["artifact_sha256"] = snapshot_json_sha256(body)
     destination = path.with_suffix(".completed_projection.json")
     fd, name = tempfile.mkstemp(
         prefix=f".{destination.name}.", suffix=".tmp", dir=destination.parent

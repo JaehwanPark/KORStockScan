@@ -1186,7 +1186,8 @@ def _build_flow_bottleneck_lane(
 
 def _build_current_trade_rows(target_date: str) -> tuple[list[dict], list[str]]:
     snapshot = load_monitor_snapshot(
-        "trade_review", target_date, section_names=("recent_trades",)
+        "trade_review", target_date, section_names=("recent_trades",),
+        excluded_row_fields=("timeline",),
     )
     if snapshot:
         sections = snapshot.get("sections", {}) or {}

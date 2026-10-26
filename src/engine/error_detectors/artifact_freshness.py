@@ -4661,7 +4661,7 @@ def _project_semantic_owner(alert, current_owners, as_of_date):
 
         owner = OWNERS.get(alert.get("scope"))
         if (
-            alert.get("scope") == "holding_vote"
+            alert.get("scope") in {"holding_vote", "rising_missed"}
             and owner not in current_owners
             and "DirectFamilyPreopenPolicyHandoff" in current_owners
         ):

@@ -11168,6 +11168,37 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
 }}
 
 
+# Exact reviewed health/snapshot generation; retain the actual consumed
+# submit/probe profile. No runtime decision or source-validity guard changed.
+REVIEWED_HEALTH_SNAPSHOT_HASHES = {'src/engine/error_detectors/artifact_freshness.py': '0c3d6bfd413cf5e3a49e0d748d7d2366e2a60a75cb107514a6a69cbaf20db677', 'src/engine/monitoring/policy_generation_code_handoff.py': '93f96eb1ee42111142201a257155616a246cd9d7b8bbbabe5560a24892c82120', 'src/engine/log_archive_service.py': '7b530c05f6e5cf4498f332a6b7df10641126dbb4da5165af314d1f2507f73348', 'src/engine/sniper_trade_review_report.py': '188e761ec9373f0bf4f8890b620b6f7071b7ec925bf7455dcc4eeb8b11aee4ac', 'src/engine/sniper_performance_tuning_report.py': 'c6a00cba271c0b4af88f6bf6973e73b110dd7eba12ac9ddbf534ea1a3c5129af', 'src/engine/infrastructure/startup_validation_code_context.py': 'bb8c4efdaa7b8f9d43e2de53099a558a18c4c6855a1b85cfab36db7f52b7867e'}
+REVIEWED_HEALTH_SNAPSHOT_ORIGINS = {'src/engine/error_detectors/artifact_freshness.py': '8dae2dc097b769214195f17c3b666fb6e43c2c2f25ea7c3a0311b723355bc665', 'src/engine/monitoring/policy_generation_code_handoff.py': '0389b444ff6b4b2b44ed368baca7f08b073331fbaede3cdbe4ae782b977f2111', 'src/engine/log_archive_service.py': '08b7c8d890bd5d2857a428776195d1168fa4cba5dff7ee7d587e7466527114c3', 'src/engine/sniper_trade_review_report.py': '612d19f9108f6355a43188e1209b82078e3a6da7ce97323f18854d486065d53f', 'src/engine/sniper_performance_tuning_report.py': '64d66e04f7cae07a6c80ad48e7348ab77262be6f3ec8ad8ec3df1b2018dc0dd1', 'src/engine/infrastructure/startup_validation_code_context.py': 'ebafd87b937ad53627408d31d4a2f40c12e2e1800e6f775eb808f3fc289c82a5'}
+REVIEWED_HEALTH_SNAPSHOT_PROFILE = {
+    **REVIEWED_SUBMIT_PROBE_PROFILE, **REVIEWED_HEALTH_SNAPSHOT_HASHES
+}
+REVIEWED_HEALTH_SNAPSHOT_VARIANTS = {
+    (key[0], REVIEWED_HEALTH_SNAPSHOT_HASHES.get(key[0], key[1])): {
+        **value,
+        "selector_path": "src/engine/log_archive_service.py",
+        "selector_sha256": REVIEWED_HEALTH_SNAPSHOT_HASHES["src/engine/log_archive_service.py"],
+        "dependencies": {**value["dependencies"], **REVIEWED_HEALTH_SNAPSHOT_HASHES},
+        "contract_extensions": {
+            origin: {name: REVIEWED_HEALTH_SNAPSHOT_HASHES.get(os.path.normpath(name), sha)
+                     for name, sha in paths.items()}
+            for origin, paths in value["contract_extensions"].items()
+        },
+    }
+    for key, value in REVIEWED_SUBMIT_PROBE_VARIANTS.items()
+}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple(
+        (old, current)
+        for old in {value for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ())
+                    for value in pair} | {REVIEWED_HEALTH_SNAPSHOT_ORIGINS[name]}
+    )
+    for name, current in REVIEWED_HEALTH_SNAPSHOT_HASHES.items()
+}}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -11794,6 +11825,13 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     ):
         prepared_hashes = REVIEWED_SUBMIT_PROBE_PROFILE
         prepared_variants = REVIEWED_SUBMIT_PROBE_VARIANTS
+    if any(
+        (source := candidate_bytes(name, optional=True)) is not None
+        and hashlib.sha256(source).hexdigest() == sha
+        for name, sha in REVIEWED_HEALTH_SNAPSHOT_HASHES.items()
+    ):
+        prepared_hashes = REVIEWED_HEALTH_SNAPSHOT_PROFILE
+        prepared_variants = REVIEWED_HEALTH_SNAPSHOT_VARIANTS
     entry_cost_hashes = (
         prepared_hashes
         if prepared_owner_present

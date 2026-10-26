@@ -8285,3 +8285,21 @@ def test_semantic_reuse_caps_even_tiny_entries(tmp_path, monkeypatch):
             path.write_text("{}")
             assert owner._semantic_object(path)[0] == {}
         assert len(session.semantic_objects) <= 2
+
+
+def test_rising_policy_owner_transfer_requires_current_open_preopen_owner():
+    from src.engine.error_detectors.artifact_freshness import _project_semantic_owner
+
+    original = "PostcloseStructuralPolicyCompletion1011"
+    for owners, expected in [
+        ({"DirectFamilyPreopenPolicyHandoff"}, "DirectFamilyPreopenPolicyHandoff"),
+        ({original, "DirectFamilyPreopenPolicyHandoff"}, original),
+        (set(), "UNRESOLVED_CURRENT_OWNER:" + original),
+    ]:
+        alert = dict(stage="policy_generation", scope="rising_missed", owner=original,
+                     reason="policy_generation_unverified", source_date="2026-10-23")
+        _project_semantic_owner(alert, owners, "2026-10-26")
+        assert alert["owner"] == expected
+        assert alert["historical_owner"] == original
+        assert alert["reason"] == "policy_generation_unverified"
+        assert alert["owner_status"] == ("current_open" if owners else "unresolved")
