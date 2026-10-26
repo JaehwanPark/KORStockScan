@@ -11136,6 +11136,38 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
 }}
 
 
+# Exact reviewed submit-deadline and probe-terminal integration. Preserve
+# the consumed fixture profile; mixed or unknown successor bytes still fail.
+REVIEWED_SUBMIT_PROBE_HASHES = {'src/engine/scalping/zero_base_probe.py': '7df54ed102940afeb63b478d8d532c3a9604d1f6c6ade34780cd509b2be424ae', 'src/engine/scalping/mechanistic_entry_runtime_policy.py': '7d19b7409abfbb75ece84f1c877cd9e8ae58631fa770ce4956f90964742d46b7', 'src/engine/sniper_state_handlers.py': 'e441b1ad823d53e94aa10537e0645a5661d1612a4800ce6e54c7cf6b476fb259', 'src/engine/monitoring/entry_attempt_identity.py': '10132ab4e6d77b41a5c86408f85d8ece4350bc7a5c3e316a238fa35d291e02f4', 'src/engine/monitoring/runtime_performance.py': 'e001ea31ffe885cd3ef2d9883d1eae99cb444e3a65e53b11e9d6dd28d6bdede1'}
+REVIEWED_SUBMIT_PROBE_PROFILE = {
+    **REVIEWED_PREPARED_FIXTURE_PROFILE, **REVIEWED_SUBMIT_PROBE_HASHES
+}
+REVIEWED_SUBMIT_PROBE_VARIANTS = {
+    (key[0], REVIEWED_SUBMIT_PROBE_HASHES.get(key[0], key[1])): {
+        **value,
+        "selector_path": "src/engine/scalping/mechanistic_entry_runtime_policy.py",
+        "selector_sha256": REVIEWED_SUBMIT_PROBE_HASHES[
+            "src/engine/scalping/mechanistic_entry_runtime_policy.py"
+        ],
+        "dependencies": {**value["dependencies"], **REVIEWED_SUBMIT_PROBE_HASHES},
+        "contract_extensions": {
+            origin: {name: REVIEWED_SUBMIT_PROBE_HASHES.get(os.path.normpath(name), sha)
+                     for name, sha in paths.items()}
+            for origin, paths in value["contract_extensions"].items()
+        },
+    }
+    for key, value in REVIEWED_PREPARED_FIXTURE_VARIANTS.items()
+}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple(
+        (old, current)
+        for old in {value for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ())
+                    for value in pair} | {REVIEWED_PREPARED_FIXTURE_PROFILE[name]}
+    )
+    for name, current in REVIEWED_SUBMIT_PROBE_HASHES.items()
+}}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -11755,6 +11787,13 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
             == REVIEWED_PREPARED_FIXTURE_HASHES[fixture_name]):
         prepared_hashes = REVIEWED_PREPARED_FIXTURE_PROFILE
         prepared_variants = REVIEWED_PREPARED_FIXTURE_VARIANTS
+    if any(
+        (source := candidate_bytes(name, optional=True)) is not None
+        and hashlib.sha256(source).hexdigest() == sha
+        for name, sha in REVIEWED_SUBMIT_PROBE_HASHES.items()
+    ):
+        prepared_hashes = REVIEWED_SUBMIT_PROBE_PROFILE
+        prepared_variants = REVIEWED_SUBMIT_PROBE_VARIANTS
     entry_cost_hashes = (
         prepared_hashes
         if prepared_owner_present

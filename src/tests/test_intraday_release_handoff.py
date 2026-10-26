@@ -5411,7 +5411,8 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
     )
     subprocess.run(["git", "-C", str(root), "checkout", "-q", "75e0fbbf7"], check=True)
     hashes = {
-        "current": handoff.REVIEWED_PREPARED_FIXTURE_PROFILE,
+        "current": handoff.REVIEWED_SUBMIT_PROBE_PROFILE,
+        "consumed_fixture": handoff.REVIEWED_PREPARED_FIXTURE_PROFILE,
         "consumed_registry": handoff.REVIEWED_REGISTRY_REPLAY_PROFILE,
         "consumed_activation_observer": handoff.REVIEWED_ACTIVATION_DATE_PROFILE,
         "consumed_migration": handoff.REVIEWED_MIGRATION_PROFILE,
@@ -5464,6 +5465,7 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
                     str(canonical),
                     "show",
                     {
+                        "consumed_fixture": "c260d6b07",
                         "consumed_auxiliary_format": "c0346b611",
                         "consumed_cold_postclose": "6fe72273e",
                         "consumed_producer_identity": "2c9f2a6ad",
@@ -6287,3 +6289,22 @@ def test_migration_keeps_original_auxiliary_envelope_profile(tmp_path, family):
 def test_resealed_postclose_distinguishes_prepared_from_consumed_generation(fixture, monkeypatch, damage):
     test_resealed_postclose_accepts_actual_new_pid_without_rewriting_original_summary(
         fixture, monkeypatch, damage, prepared=True)
+
+
+@pytest.mark.parametrize("family", ["main_stop", "holding_vote", "pre_submit_delay"])
+@pytest.mark.parametrize("fault", ["", "successor_mix"])
+def test_submit_probe_handoff_preserves_consumed_fixture(tmp_path, family, fault):
+    test_entry_cost_handoff_keeps_exact_complete_generation(
+        tmp_path, family, fault, "consumed_fixture"
+    )
+
+
+@pytest.mark.parametrize("family", ["main_stop", "holding_vote", "pre_submit_delay"])
+@pytest.mark.parametrize("fault", ["missing", "dirty", "committed_change", "parent_mix"])
+@pytest.mark.parametrize("dependency", list(handoff.REVIEWED_SUBMIT_PROBE_HASHES))
+def test_submit_probe_handoff_rejects_partial_successor(
+    tmp_path, family, fault, dependency
+):
+    test_entry_cost_handoff_keeps_exact_complete_generation(
+        tmp_path, family, fault, "current", dependency
+    )
