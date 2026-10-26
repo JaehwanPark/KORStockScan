@@ -11229,6 +11229,36 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
 }}
 
 
+# Report-only normal postclose loader classification. Preserve every issued
+# profile and bind the complete reviewed successor and independent reader.
+REVIEWED_CLOSED_LOADER_HASHES = {'src/engine/error_detectors/artifact_freshness.py': 'adbd91229c1a84cf5bcacf8f6c7ef6e55f9636fefc37b182a9802f4aa1755bd3', 'src/engine/infrastructure/startup_validation_code_context.py': 'b1ee0ff0463b848d59d9eb676182373ff475d0868ce5dce2d3f7a6975294a7ae'}
+REVIEWED_CLOSED_LOADER_PROFILE = {
+    **REVIEWED_CUMULATIVE_HOLD_PROFILE, **REVIEWED_CLOSED_LOADER_HASHES
+}
+REVIEWED_CLOSED_LOADER_VARIANTS = {
+    (key[0], REVIEWED_CLOSED_LOADER_HASHES.get(key[0], key[1])): {
+        **value,
+        "selector_path": "src/engine/error_detectors/artifact_freshness.py",
+        "selector_sha256": REVIEWED_CLOSED_LOADER_HASHES["src/engine/error_detectors/artifact_freshness.py"],
+        "dependencies": {**value["dependencies"], **REVIEWED_CLOSED_LOADER_HASHES},
+        "contract_extensions": {
+            origin: {name: REVIEWED_CLOSED_LOADER_HASHES.get(os.path.normpath(name), sha)
+                     for name, sha in paths.items()}
+            for origin, paths in value["contract_extensions"].items()
+        },
+    }
+    for key, value in REVIEWED_CUMULATIVE_HOLD_VARIANTS.items()
+}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple(
+        (old, current)
+        for old in {value for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ())
+                    for value in pair} | {REVIEWED_CUMULATIVE_HOLD_PROFILE[name]}
+    )
+    for name, current in REVIEWED_CLOSED_LOADER_HASHES.items()
+}}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -11869,6 +11899,13 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     ):
         prepared_hashes = REVIEWED_CUMULATIVE_HOLD_PROFILE
         prepared_variants = REVIEWED_CUMULATIVE_HOLD_VARIANTS
+    if any(
+        (source := candidate_bytes(name, optional=True)) is not None
+        and hashlib.sha256(source).hexdigest() == sha
+        for name, sha in REVIEWED_CLOSED_LOADER_HASHES.items()
+    ):
+        prepared_hashes = REVIEWED_CLOSED_LOADER_PROFILE
+        prepared_variants = REVIEWED_CLOSED_LOADER_VARIANTS
     entry_cost_hashes = (
         prepared_hashes
         if prepared_owner_present

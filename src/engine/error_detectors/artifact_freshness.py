@@ -879,6 +879,83 @@ def _holding_profit_exit_semantics(
     }
 
 
+def _main_stop_closed_consumption(data_root, bundle, pointer, directory, consumed, now):
+    """Classify an exact normal terminal without claiming a current loader."""
+    if consumed.get("actual_pid_consumed") is not False or consumed.get("findings") != [
+        "main_stop_verified_pid_loader_not_observed"
+    ]:
+        return consumed
+    try:
+        from src.engine.automation import intraday_release_handoff as handoff
+        from src.engine.scalping import main_stop_policy as policy
+
+        if data_root != handoff.DATA_DIR.resolve():
+            raise ValueError("stop_closed_data_root_mismatch")
+        closed = handoff.closed_consumption_observation(bundle["target_date"], now=now)
+        if (
+            closed.get("schema") != "intraday_closed_consumption_observation_v1"
+            or closed.get("target_date") != bundle["target_date"]
+            or not closed.get("stopped_at")
+            or not closed.get("terminal_at")
+            or closed.get("basis") == "interrupted_consumed_process"
+            or closed.get("runtime_effect") is not False
+            or closed.get("current_observation_verified") is not False
+            or closed.get("new_pid_consumption_claimed") is not False
+        ):
+            raise ValueError("stop_closed_normal_terminal_unproven")
+        actor = closed["pid_identity"]
+        path = (
+            data_root
+            / "runtime/main_stop_confirmation"
+            / bundle["target_date"]
+            / f"pid_{actor['pid']}_{actor['start_ticks']}.json"
+        )
+        receipt, receipt_sha = _semantic_object(path, limit=32768)
+        loaded, loaded_sha = _semantic_object(
+            Path(receipt["policy_file"]), limit=1024 * 1024
+        )
+        if (
+            receipt.get("schema") != "main_stop_loaded_policy_v1"
+            or receipt.get("receipt_sha256")
+            != policy.digest(
+                {k: v for k, v in receipt.items() if k != "receipt_sha256"}
+            )
+            or {
+                "pid": receipt.get("pid"),
+                "start_ticks": receipt.get("start_ticks"),
+                "cwd": receipt.get("process_cwd"),
+            }
+            != actor
+            or receipt.get("target_date") != bundle["target_date"]
+            or receipt.get("policy_sha256") != bundle["policy_sha256"]
+            or Path(receipt["policy_file"]).resolve()
+            != (directory / "policy.json").resolve()
+            or loaded != bundle
+            or loaded_sha != pointer["policy_byte_sha256"]
+            or loaded_sha != receipt.get("policy_byte_sha256")
+            or receipt.get("loaded_cells_sha256")
+            != policy.digest({k: c["values"] for k, c in bundle["cells"].items()})
+            or _semantic_object(path, limit=32768)[1] != receipt_sha
+            or _semantic_object(Path(receipt["policy_file"]), limit=1024 * 1024)[1]
+            != loaded_sha
+            or handoff.closed_consumption_observation(bundle["target_date"], now=now)
+            != closed
+        ):
+            raise ValueError("stop_closed_loader_binding_invalid")
+        return dict(
+            consumed,
+            status="closed_session_verified",
+            findings=[],
+            historical_loader_observed=True,
+            current_observation_verified=False,
+            live_observation_findings=consumed["findings"],
+            closed_consumption=closed,
+            loader_receipt_sha256=receipt_sha,
+        )
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        return dict(consumed, closed_session_unverified=str(exc))
+
+
 def _main_stop_semantics(root, source_date, *, now):
     from src.engine.automation.main_stop_postclose import (
         read_committed,
@@ -909,10 +986,13 @@ def _main_stop_semantics(root, source_date, *, now):
         )
     try:
         _, before = _semantic_object(path, limit=1024 * 1024)
-        bundle, report, pointer, _ = read_committed(data_root, source_date)
+        bundle, report, pointer, directory = read_committed(data_root, source_date)
         from src.engine.automation.main_stop_postclose import runtime_consumption
 
         consumed = runtime_consumption(data_root, bundle)
+        consumed = _main_stop_closed_consumption(
+            data_root, bundle, pointer, directory, consumed, now
+        )
         if _semantic_object(path, limit=1024 * 1024)[1] != before:
             return dict(meta, status="unobservable", generation_changed=True)
         comparison = (

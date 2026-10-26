@@ -2473,6 +2473,17 @@ for _name, _sha in REVIEWED_CUMULATIVE_HOLD_SOURCES.items():
     _history.update((old, _sha) for old in _prior | {'e001ea31ffe885cd3ef2d9883d1eae99cb444e3a65e53b11e9d6dd28d6bdede1'})
 
 
+# Reviewed normal postclose loader classification, with exact historical custody.
+# Prior source pairs remain valid; unknown or mixed generations stay rejected.
+REVIEWED_CLOSED_LOADER_SOURCES = {'src/engine/error_detectors/artifact_freshness.py': 'adbd91229c1a84cf5bcacf8f6c7ef6e55f9636fefc37b182a9802f4aa1755bd3'}
+for _name, _sha in REVIEWED_CLOSED_LOADER_SOURCES.items():
+    _history = REVIEWED_PREPARATION_HISTORY.setdefault(_name, set())
+    _prior = {value for pair in _history for value in pair}
+    if _name in REVIEWED_PREPARATION_SOURCES:
+        _prior.update(REVIEWED_PREPARATION_SOURCES[_name])
+    _history.update((old, _sha) for old in _prior)
+
+
 def reviewed_preparation_pair(relative, old, current):
     # An already reviewed physical pair keeps its original authority; a
     # formatting projection must not replace either endpoint before this check.

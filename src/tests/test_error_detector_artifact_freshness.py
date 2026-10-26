@@ -2710,6 +2710,176 @@ def test_weekend_default_sweep_observes_completed_source_quantity(
     assert alert["owner"] == "InitialQuantityProducerConsumerRepair1010"
 
 
+@pytest.mark.parametrize(
+    "damage",
+    [
+        None,
+        "missing_receipt",
+        "wrong_actor",
+        "wrong_policy",
+        "wrong_map",
+        "changed_bytes",
+        "unknown_closure",
+        "interrupted",
+        "wrong_day",
+        "other_data",
+        "closure_changed",
+        "trailing_invalid",
+        "other_finding",
+    ],
+)
+@pytest.mark.parametrize("observation_day,hour", [(26, 21), (27, 0)])
+def test_main_stop_closed_loader_requires_exact_native_terminal_and_retained_policy(
+    tmp_path, monkeypatch, damage, observation_day, hour
+):
+    from copy import deepcopy
+    import hashlib
+    from src.engine.error_detectors import artifact_freshness as mod
+    from src.engine.automation import main_stop_postclose as stop
+    from src.engine.automation import intraday_release_handoff as handoff
+    from src.engine.scalping import main_stop_policy as policy
+
+    data = tmp_path / "data"
+    source, target = "2026-10-23", "2026-10-26"
+    committed = stop.committed_path(data, source)
+    committed.parent.mkdir(parents=True)
+    committed.write_text("{}")
+    directory = committed.parent / "generations" / ("b" * 64)
+    directory.mkdir(parents=True)
+    bundle = dict(
+        source_date=source,
+        target_date=target,
+        policy_sha256="a" * 64,
+        cells={"c": dict(status="incumbent_carry", values={"v": 1})},
+    )
+    policy_file = directory / "policy.json"
+    policy_file.write_text(json.dumps(bundle))
+    byte_sha = hashlib.sha256(policy_file.read_bytes()).hexdigest()
+    pointer = dict(generation="b" * 64, policy_byte_sha256=byte_sha)
+    monkeypatch.setattr(
+        stop, "read_committed", lambda *a: (bundle, {}, pointer, directory)
+    )
+    identity = dict(
+        pid=2147483647, start_ticks="123", cwd=str(tmp_path / "release/src")
+    )
+    receipt = dict(
+        schema="main_stop_loaded_policy_v1",
+        pid=identity["pid"],
+        start_ticks=identity["start_ticks"],
+        process_cwd=identity["cwd"],
+        target_date=target,
+        policy_sha256=bundle["policy_sha256"],
+        policy_file=str(policy_file),
+        policy_byte_sha256=byte_sha,
+        loaded_cells_sha256=policy.digest({"c": {"v": 1}}),
+    )
+    if damage == "wrong_actor":
+        receipt["process_cwd"] += "-other"
+    if damage == "wrong_policy":
+        receipt["policy_sha256"] = "c" * 64
+    if damage == "wrong_map":
+        receipt["loaded_cells_sha256"] = "c" * 64
+    receipt["receipt_sha256"] = policy.digest(receipt)
+    loader = (
+        data / "runtime/main_stop_confirmation" / target / "pid_2147483647_123.json"
+    )
+    loader.parent.mkdir(parents=True)
+    if damage != "missing_receipt":
+        loader.write_text(json.dumps(receipt))
+    if damage == "changed_bytes":
+        policy_file.write_text(json.dumps(bundle) + "\n")
+    verify = (
+        data
+        / "runtime/policy_bootstrap"
+        / f"runtime_policy_bootstrap_verify_{target}.json"
+    )
+    verify.parent.mkdir(parents=True)
+    verify.write_text(
+        json.dumps(dict(target_date=target, pid_passed=True, pid=identity["pid"]))
+    )
+    proof = dict(
+        schema="intraday_closed_consumption_observation_v1",
+        target_date=target,
+        pid_identity=identity,
+        stopped_at=target + "T20:56:02+09:00",
+        terminal_at=target + "T20:00:00+09:00",
+        runtime_effect=False,
+        current_observation_verified=False,
+        new_pid_consumption_claimed=False,
+    )
+    if damage == "interrupted":
+        proof.pop("stopped_at")
+        proof["basis"] = "interrupted_consumed_process"
+    if damage == "wrong_day":
+        proof["target_date"] = "2026-10-27"
+    monkeypatch.setattr(
+        handoff, "DATA_DIR", data if damage != "other_data" else tmp_path / "other"
+    )
+    calls = []
+
+    def closed(day, *, now):
+        calls.append(day)
+        if damage == "unknown_closure":
+            raise ValueError("intraday_closed_consumption_terminal_invalid")
+        result = deepcopy(proof)
+        if damage == "closure_changed" and len(calls) > 1:
+            result["pid_identity"]["start_ticks"] = "124"
+        return result
+
+    monkeypatch.setattr(handoff, "closed_consumption_observation", closed)
+    if damage == "trailing_invalid":
+        holding = (
+            data
+            / "report/monitor_snapshots"
+            / f"holding_exit_observation_{source}.json"
+        )
+        holding.parent.mkdir(parents=True)
+        holding.write_text(
+            json.dumps(
+                dict(
+                    date=source,
+                    all_scope_trailing_research={
+                        "report_path": str(tmp_path / "missing.json")
+                    },
+                )
+            )
+        )
+    if damage == "other_finding":
+        original = stop.runtime_consumption
+
+        def additional_finding(*args):
+            result = original(*args)
+            result["findings"].append("main_stop_position_pin_mismatch")
+            return result
+
+        monkeypatch.setattr(stop, "runtime_consumption", additional_finding)
+    result = mod._main_stop_semantics(
+        tmp_path,
+        source,
+        now=datetime(2026, 10, observation_day, hour, tzinfo=ZoneInfo("Asia/Seoul")),
+    )
+    assert result["actual_pid_consumed"] is False
+    if damage in (None, "trailing_invalid"):
+        if damage is None:
+            assert result["findings"] == []
+        else:
+            assert result["status"] == "source_invalid"
+            assert result["findings"][0].startswith(
+                "main_trailing_research_contract_invalid:"
+            )
+        consumed = result["runtime_consumption"]
+        assert consumed["status"] == "closed_session_verified"
+        assert consumed["historical_loader_observed"] is True
+        assert consumed["current_observation_verified"] is False
+        assert consumed["closed_consumption"]["pid_identity"] == identity
+        assert len(calls) == 2
+    else:
+        assert "main_stop_verified_pid_loader_not_observed" in result["findings"]
+        if damage == "other_finding":
+            assert "main_stop_position_pin_mismatch" in result["findings"]
+            assert calls == []
+
+
 def test_main_stop_native_receipt_cannot_hide_stale_trailing_extension(
     tmp_path, monkeypatch
 ):
@@ -8296,8 +8466,13 @@ def test_rising_policy_owner_transfer_requires_current_open_preopen_owner():
         ({original, "DirectFamilyPreopenPolicyHandoff"}, original),
         (set(), "UNRESOLVED_CURRENT_OWNER:" + original),
     ]:
-        alert = dict(stage="policy_generation", scope="rising_missed", owner=original,
-                     reason="policy_generation_unverified", source_date="2026-10-23")
+        alert = dict(
+            stage="policy_generation",
+            scope="rising_missed",
+            owner=original,
+            reason="policy_generation_unverified",
+            source_date="2026-10-23",
+        )
         _project_semantic_owner(alert, owners, "2026-10-26")
         assert alert["owner"] == expected
         assert alert["historical_owner"] == original
