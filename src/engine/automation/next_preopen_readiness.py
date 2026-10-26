@@ -946,6 +946,26 @@ def verify_prepared(
                 snapshot = (preserved.get("postclose_source_reseal") or {}).get(
                     "historical_checklist"
                 )
+                operating = (reseal or {}).get("operating_checklist")
+                if snapshot is None and operating is not None:
+                    if not isinstance(operating, dict):
+                        raise ValueError("prepared_strict_operating_snapshot_unbound")
+                    # This verified handoff may already own the original strict
+                    # bytes as its launch snapshot. Bind that exact generation;
+                    # an edited operating document is never a replacement.
+                    sealed = H.preserve_checklist(target_date)
+                    path = Path(str(operating.get("path") or ""))
+                    if (
+                        operating.get("role") != "launch_document_snapshot"
+                        or operating.get("target_date") != target_date
+                        or sealed.get("source_date") != receipt["source_date"]
+                        or operating.get("sha256") != sealed.get("sha256")
+                        or not path.is_absolute()
+                        or path.is_symlink()
+                        or _sha(path) != sealed["sha256"]
+                    ):
+                        raise ValueError("prepared_strict_operating_snapshot_unbound")
+                    snapshot = sealed
         source = _source_receipts(
             receipt["source_date"],
             target_date,

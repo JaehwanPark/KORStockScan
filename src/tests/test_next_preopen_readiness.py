@@ -674,6 +674,43 @@ def test_prepare_isolated_then_detects_source_and_release_drift(monkeypatch, tmp
         consumed.setattr(handoff, "verify_pid_consumption", changed)
         assert readiness.verify_prepared(target, now=midnight)["status"] == "fail"
     selection.write_bytes(original_selection)
+    # The consumed intraday handoff carries the exact strict bytes under its
+    # launch-snapshot role, without a second historical_checklist field.
+    for fault in (None, "role", "target", "source", "hash", "bytes", "missing", "symlink", "shape"):
+        with monkeypatch.context() as preserved_scope:
+            selected[0] = "b" * 40
+            ref = readiness._read(readiness.PREPARED_DIR / target / "latest.json")
+            launch = tmp_path / ("launch-" + str(fault) + ".md")
+            launch.write_text("original sealed checklist")
+            sealed_sha = readiness._sha(launch)
+            operating = dict(path=str(launch), sha256=sealed_sha,
+                             role="launch_document_snapshot", target_date=target)
+            sealed = dict(path=str(snapshot), sha256=sealed_sha, source_date=source)
+            if fault == "shape": operating = "unbound"
+            elif fault == "role": operating["role"] = "unverified"
+            elif fault == "target": operating["target_date"] = "2026-10-05"
+            elif fault == "source": sealed["source_date"] = "2026-09-29"
+            elif fault == "hash": operating["sha256"] = "0" * 64
+            elif fault == "bytes": launch.write_text("changed")
+            elif fault == "missing": launch.unlink()
+            elif fault == "symlink":
+                launch.unlink()
+                launch.symlink_to(snapshot)
+            proof = dict(status="pass", handoff=dict(
+                prepared_receipt_path=ref["receipt_path"],
+                prepared_receipt_sha256=ref["receipt_sha256"],
+                postclose_source_reseal=dict(current_source_receipts=receipts(source,target),
+                                            operating_checklist=operating)))
+            preserved_scope.setattr(handoff, "verify", lambda *a, **kw: proof)
+            preserved_scope.setattr(handoff, "preserve_checklist", lambda day: sealed)
+            def strict_receipts(_source, _target, **kwargs):
+                assert kwargs == dict(generation_only=True, checklist_snapshot=snapshot)
+                return receipts(_source, _target)
+            preserved_scope.setattr(readiness, "_source_receipts", strict_receipts)
+            result = readiness.verify_prepared(target, now=now)
+            assert result["status"] == ("fail" if fault else "pass"), result
+            assert result["actual_pid_consumed"] is result["runtime_effect"] is False
+    selected[0] = "a" * 40
     with monkeypatch.context() as bounded:
         bounded.setattr(
             readiness.bootstrap,
