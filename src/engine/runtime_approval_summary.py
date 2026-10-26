@@ -1391,6 +1391,7 @@ def _runtime_consumption_state(
     )
     actual_pid_consumed = bool(
         bootstrap_verified
+        and selection_binding["status"] != "intraday_prepared"
         and receipt_runtime_pid is not None
         and verification.get("status") == "pass"
         and verification.get("passed") is True

@@ -2007,6 +2007,36 @@ def release_selection_for_generation(
         if handoff_path.exists():
             try:
                 check = handoff.verify(target, current["git_commit"])
+                if current.get("actual_pid_consumed") is False:
+                    preserved = check.get("handoff") or {}
+                    old_identity = preserved.get("old_pid_identity") or {}
+                    if (
+                        check.get("status") != "pass"
+                        or consumed_path.exists()
+                        or consumed_path.is_symlink()
+                        or verification.get("status") != "pass"
+                        or verification.get("passed") is not True
+                        or verification.get("pid") != old_identity.get("pid")
+                        or verification.get("pid_passed") is not True
+                        or verification.get("pid_env_available") is not True
+                        or preserved.get("manifest_sha256")
+                        != manifest.get("manifest_sha256")
+                        or handoff._read(manifest_path(target)) != manifest
+                        or handoff._read(verify_path(target)) != verification
+                        or current_path.read_bytes() != current_raw
+                    ):
+                        raise ValueError("intraday_prepared_generation_unbound")
+                    return {
+                        "status": "intraday_prepared",
+                        "selection": current,
+                        "selection_path": str(current_path),
+                        "selection_sha256": _digest_bytes(current_raw),
+                        "original_manifest_release_commit": selected,
+                        "handoff_path": str(handoff_path),
+                        "handoff_sha256": handoff._sha(handoff_path),
+                        "actual_pid_consumed": False,
+                        "issues": [],
+                    }
                 consumed = handoff._read(consumed_path)
                 pid = verification.get("pid")
                 if (
@@ -2152,7 +2182,6 @@ def release_selection_for_generation(
             break
         successor = prior
     return {"status": "invalid", "issues": ["release_selection_generation_unproven"]}
-
 
 def future_handoff_transition_contract(
     source_date: str,

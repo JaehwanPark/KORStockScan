@@ -1288,7 +1288,7 @@ def test_second_same_day_handoff_requires_exact_live_predecessor_and_sealed_gene
 
 @pytest.mark.parametrize("damage", [None, "summary", "consumption", "policy"])
 def test_resealed_postclose_accepts_actual_new_pid_without_rewriting_original_summary(
-    fixture, monkeypatch, damage
+    fixture, monkeypatch, damage, prepared=False
 ):
     from src.engine.automation import postclose_summary_handoff as postclose
 
@@ -1422,11 +1422,12 @@ def test_resealed_postclose_accepts_actual_new_pid_without_rewriting_original_su
         now=NOW,
         reseal_postclose_source=True,
     )
-    _json(verification_file, {**verification, "pid": 2})
-    consumed = handoff.consume(DAY, pid=2, now=NOW)
+    if not prepared:
+        _json(verification_file, {**verification, "pid": 2})
+        consumed = handoff.consume(DAY, pid=2, now=NOW)
     check = handoff.verify
     monkeypatch.setattr(
-        handoff, "verify", lambda day, commit: check(day, commit, now=NOW)
+        handoff, "verify", lambda day, commit: check(day, commit, now=NOW + timedelta(days=1) if damage == "expired" else NOW)
     )
     # Launcher attestation legitimately changes selector bytes after consume.
     _json(
@@ -1435,26 +1436,31 @@ def test_resealed_postclose_accepts_actual_new_pid_without_rewriting_original_su
             schema="runtime_release_selection_v1",
             git_commit=NEW,
             release_root=str(selected),
-            actual_pid_consumed=True,
+            actual_pid_consumed=not prepared,
         ),
     )
     if damage == "summary":
         summary_file.write_text(summary_file.read_text() + " ")
     elif damage == "consumption":
-        _json(handoff._paths(DAY, NEW)[1], {**consumed, "handoff_sha256": "changed"})
+        _json(handoff._paths(DAY, NEW)[1], {"status": "pass"} if prepared else {**consumed, "handoff_sha256": "changed"})
     elif damage == "policy":
         env_file.write_text("changed")
+    elif damage == "pid":
+        _json(verification_file, {**verification, "pid": 2})
     result = postclose.inspect_future_handoff(
         summary, source_day, report_dir=data / "report"
     )
     if damage is None:
         assert (
-            result["status"] == "intraday_preserved_generation_pid_receipt_unconfirmed"
+            result["status"] == ("intraday_prepared_generation_unconsumed" if prepared else "intraday_preserved_generation_pid_receipt_unconfirmed")
         ), result
         assert (
             result["pid_receipt_present"] is True
             and result["actual_pid_consumed"] is False
         )
+        if prepared:
+            assert "consumption_sha256" not in result
+            assert not handoff._paths(DAY, NEW)[1].exists()
         assert all(Path(p).read_bytes() == value for p, value in before.items())
         assert not (
             data / "runtime/policy_bootstrap/future_handoff_transitions"
@@ -6272,3 +6278,9 @@ def test_migration_keeps_original_auxiliary_envelope_profile(tmp_path, family):
     test_entry_cost_handoff_keeps_exact_complete_generation(
         tmp_path, family, None, "consumed_auxiliary_envelope"
     )
+
+
+@pytest.mark.parametrize("damage", [None, "summary", "consumption", "policy", "pid", "expired"])
+def test_resealed_postclose_distinguishes_prepared_from_consumed_generation(fixture, monkeypatch, damage):
+    test_resealed_postclose_accepts_actual_new_pid_without_rewriting_original_summary(
+        fixture, monkeypatch, damage, prepared=True)

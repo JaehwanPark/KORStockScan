@@ -547,7 +547,7 @@ def inspect_future_handoff(
         "selected_release_commit": contract["selected_release_commit"],
         "release_selection_status": selection_binding["status"],
     }
-    if selection_binding["status"] == "intraday_preserved":
+    if selection_binding["status"] in {"intraday_preserved", "intraday_prepared"}:
         # The original summary stays immutable during a code-only handoff.
         # Its native reseal and consumed-PID receipts authenticate the newer
         # verification without rewriting PREOPEN or synthesizing a transition.
@@ -576,9 +576,17 @@ def inspect_future_handoff(
         ):
             return {
                 **result,
-                "status": "intraday_preserved_generation_pid_receipt_unconfirmed",
+                "status": (
+                    "intraday_prepared_generation_unconsumed"
+                    if selection_binding["status"] == "intraday_prepared"
+                    else "intraday_preserved_generation_pid_receipt_unconfirmed"
+                ),
                 "handoff_sha256": selection_binding["handoff_sha256"],
-                "consumption_sha256": selection_binding["consumption_sha256"],
+                **(
+                    {"consumption_sha256": selection_binding["consumption_sha256"]}
+                    if selection_binding["status"] == "intraday_preserved"
+                    else {}
+                ),
             }
     same = (
         preopen.get("manifest_sha256") == manifest_sha
@@ -621,7 +629,6 @@ def inspect_future_handoff(
         "status": "stale",
         "issues": ["future_transition_missing_or_mismatched"],
     }
-
 
 def direct_tower_required(target_date: str, summary: dict[str, Any]) -> bool:
     """Require the report consumer for the issued cancel reconciliation contract."""
@@ -3776,6 +3783,7 @@ def stage_overview(report_dir, day):
                 "transitioned_no_pid",
                 "same_generation_pid_receipt_unconfirmed",
                 "intraday_preserved_generation_pid_receipt_unconfirmed",
+                "intraday_prepared_generation_unconsumed",
             }
         )
     return dict(

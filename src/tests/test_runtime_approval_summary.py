@@ -1730,3 +1730,22 @@ def test_session_defaults_are_private_before_writer_imports():
     # Read-only imports do not create output directories. Both writers must
     # still resolve to the session-private data root before their first write.
     assert log_archive_service.MONITOR_SNAPSHOT_DIR.is_relative_to(constants.DATA_DIR)
+
+
+@pytest.mark.parametrize("binding", ["current", "intraday_preserved", "intraday_prepared"])
+def test_prepared_code_handoff_does_not_adopt_predecessor_pid(monkeypatch, tmp_path, binding):
+    data = _patch(monkeypatch, tmp_path)
+    target, effective = "2026-09-19", "2026-09-21"
+    _write(data / "runtime/policy_bootstrap/runtime_policy_bootstrap_2026-09-21.json",
+           dict(target_date=effective, selected_families=[]))
+    _write(data / "runtime/policy_bootstrap/runtime_policy_bootstrap_verify_2026-09-21.json",
+           dict(target_date=effective, status="pass", passed=True, pid=4321,
+                pid_passed=True, pid_env_available=True))
+    monkeypatch.setattr(mod, "release_selection_for_generation", lambda *a: dict(
+        status=binding, selection=dict(git_commit="a" * 40), issues=[]))
+    state, natural, receipt = mod._runtime_consumption_state(target, dict(
+        main=dict(exists=True, target_date_matches=True, effective_date=effective)))
+    assert state == "verified"
+    assert receipt["actual_pid_consumed"] is (binding != "intraday_prepared")
+    assert receipt["runtime_pid"] == 4321
+    assert natural == ("not_due" if binding == "intraday_prepared" else "pending")

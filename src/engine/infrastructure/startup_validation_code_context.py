@@ -2412,6 +2412,23 @@ REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/scalping/reversal_code_hando
 )
 
 
+# Prepared handoff evidence never claims successor PID consumption.
+REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/automation/runtime_policy_bootstrap.py', set()).update(
+    {(old, 'ab3e75ecf03a69bdb4787b358c06026e32963e945cf2e867aa70193bc5f32de0') for old in
+     {value for pair in REVIEWED_PREPARATION_HISTORY['src/engine/automation/runtime_policy_bootstrap.py'] for value in pair}}
+)
+REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/automation/postclose_summary_handoff.py', set()).update(
+    {(old, 'aeb5c0e1c259425c17de08af1dab323f2101d8147e1c7cd3c53731bcf78f024d') for old in
+     {value for pair in REVIEWED_PREPARATION_HISTORY['src/engine/automation/postclose_summary_handoff.py'] for value in pair}}
+)
+
+
+REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/runtime_approval_summary.py', set()).update(
+    {(old, '8de2430637152fbc72c60d7f246273492754bcb922109e0f3d1afa88165e7d3a') for old in
+     {value for pair in REVIEWED_PREPARATION_HISTORY['src/engine/runtime_approval_summary.py'] for value in pair} | {'ba8e192796659314dc1ea5d371fe72413135937f55655fd270b2bcb8b2266075'}}
+)
+
+
 def reviewed_preparation_pair(relative, old, current):
     # An already reviewed physical pair keeps its original authority; a
     # formatting projection must not replace either endpoint before this check.
