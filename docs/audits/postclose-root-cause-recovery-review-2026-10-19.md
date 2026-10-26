@@ -3879,3 +3879,24 @@ and test deltas are recorded in the monitoring evidence. Main integration will
 use native policy-preserving custody, P5 and ordered transition after actual
 scheduled startup; the reviewed recovery tool itself does not attest Main code
 consumption or unassisted acceptance.
+
+
+## Integration candidate daily-document custody 2026-10-27
+
+The first live ordered preflight for5413cbc84 stopped before hold/drain or
+selection at08:14:21: the operating10/27 checklist existed in shared docs but
+was absent from the candidate Git tree. Native predecessor consumption, active
+policy custody and candidate P5 had passed. The native document publication
+contract still requires a candidate checklist blob, even while preserving the
+editable operating document. The candidate packaging omitted that required input;
+this is not production-data corruption or permission to relax the document gate.
+The exact current working checklist bytes are now included in the source commit.
+The original operating document and its strict-bound historical copies remain
+unchanged. The failed transition, selector and incumbent PID3905944 are preserved;
+no startup hold, drain, publication or manual Main start occurred. Native Git-blob
+read and print-only document parser validate the packaging correction. All
+unchanged source/behavior regressions remain valid; the successor commit requires
+fresh active-parent custody, native candidate P5, and final selected P5 before
+native ordered restart. The original two-case caller proves the remaining
+sequence and failure unwind offline. No validator or accepted-error fallback was
+added; the existing document requirement remains enforced.
