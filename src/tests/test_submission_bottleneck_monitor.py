@@ -10635,24 +10635,20 @@ def test_indexed_lineage_source_reaches_bounded_health_without_raw_scan(
 
 @pytest.mark.parametrize("cumulative", [False, True])
 @pytest.mark.parametrize(
-    "damage",
-    [
-        None,
-        "no_breach",
-        "ready",
-        "predicate_missing",
-        "source",
-        "epoch",
-        "scope",
-        "registration",
-        "route",
-        "bundle",
-        "branch_phase",
-        "late",
-    ],
+    "rebound,damage",
+    [(rebound, damage) for rebound in (False, True) for damage in (
+        None, "no_breach", "ready", "predicate_missing", "source", "epoch",
+        "scope", "registration", "route", "bundle", "branch_phase", "late",
+    )] + [(True, damage) for damage in (
+        "first_missing", "first_hash", "first_null", "first_actor", "first_conflicting_actor",
+        "first_schema", "first_generation", "first_item", "first_branch", "first_definition",
+        "first_proof", "first_source", "first_quote", "first_epoch", "first_sequence",
+        "first_clock", "first_authority", "first_previous", "first_trace_actor",
+        "first_numeric", "first_previous_price", "first_deadline",
+    )],
 )
 def test_registered_native_first_hold_breach_is_diagnostic_only(
-    tmp_path, monkeypatch, cumulative, damage
+    tmp_path, monkeypatch, cumulative, rebound, damage
 ):
     from copy import deepcopy
     from src.engine.scalping import reversal_extended_runtime as B
@@ -10712,22 +10708,34 @@ def test_registered_native_first_hold_breach_is_diagnostic_only(
     update = row(126, price)
     update[9] = symbol + "_NX"
     state.observe(update, symbol=symbol, venue="NXT", session="NXT_PREMARKET")
-    monkeypatch.setattr(source.time, "time", lambda: at + 1)
+    checked = at + 1
+    if rebound:
+        recovery = row(127, values[-1][3])
+        recovery[9] = symbol + "_NX"
+        state.observe(recovery, symbol=symbol, venue="NXT", session="NXT_PREMARKET")
+        checked = at + 3
+    monkeypatch.setattr(source.time, "time", lambda: checked)
     with pytest.raises(ValueError) as error:
         source.validate_claim_with_receipt(
             claim,
             "f" * 64,
-            now=at + 1,
+            now=checked,
             evaluation_attempt_id="aims-held",
             machine_bundle_sha256="b" * 64,
         )
     assert str(error.value) == "reversal_signal_path_changed"
+    with pytest.raises(ValueError, match="reversal_signal_expired_or_changed"):
+        B.validate_claim(claim, "f" * 64, now=at + 5.001)
     receipt = deepcopy(error.value.reversal_source_receipt)
+    first_original = deepcopy(state.first_invalidations)
+    if not rebound:
+        # Preserve the original historical reader contract without a new receipt.
+        receipt.pop("first_signal_invalidation", None)
     trace = dict(
         schema="ai_decision_trace_v1",
         stock_code=symbol,
         decision_trace_id="held-trace",
-        decision_ts=B.K.iso(at + 1.01),
+        decision_ts=B.K.iso(checked + 0.01),
         decision_stage="entry_screen",
         provider_called=False,
         actual_order_submitted=False,
@@ -10738,8 +10746,16 @@ def test_registered_native_first_hold_breach_is_diagnostic_only(
         machine_contract_error="reversal_signal_path_changed",
         continuous_reversal_rejected_claim_receipt=receipt,
     )
+    if rebound:
+        trace.update(async_producer_pid=receipt["process_pid"],
+                     async_producer_start_ticks=receipt["process_start_ticks"])
+        first = receipt["first_signal_invalidation"]
+        assert first["branches"][bid]["observation"] == update
     if damage == "no_breach":
-        receipt["latest_native_observation"][3] = values[-1][3]
+        if rebound:
+            first["branches"][bid]["observation"][3] = values[-1][3]
+        else:
+            receipt["latest_native_observation"][3] = values[-1][3]
     elif damage == "ready":
         receipt["registered_signal_ready"] = True
     elif damage == "predicate_missing":
@@ -10762,12 +10778,82 @@ def test_registered_native_first_hold_breach_is_diagnostic_only(
         ] = "FIRST_UPTICK"
     elif damage == "late":
         receipt["state_observed_epoch"] += 10
+    elif damage == "first_missing":
+        receipt.pop("first_signal_invalidation")
+    elif damage == "first_hash":
+        first["sha256"] = "c" * 64
+    elif damage == "first_null":
+        receipt["first_signal_invalidation"] = None
+    elif damage == "first_actor":
+        first["pid"] += 1
+    elif damage == "first_conflicting_actor":
+        first["process_pid"] = first["pid"] + 1
+    elif damage == "first_trace_actor":
+        trace["async_producer_pid"] += 1
+    elif damage == "first_schema":
+        first["schema"] = "unknown"
+    elif damage == "first_generation":
+        first["registry_generation"] = "c" * 64
+    elif damage == "first_item":
+        first["branches"][bid]["observation"][9] = symbol + "_AL"
+    elif damage == "first_branch":
+        first["branches"].clear()
+    elif damage == "first_definition":
+        first["branches"][bid]["branch_definition_sha256"] = "c" * 64
+    elif damage == "first_proof":
+        first["branches"][bid]["signal_proof_sha256"] = "c" * 64
+    elif damage == "first_source":
+        first["branches"][bid]["observation"][8] = 0
+    elif damage == "first_quote":
+        first["branches"][bid]["observation"][4] *= 2
+    elif damage == "first_epoch":
+        first["branches"][bid]["observation"][1] += 1
+    elif damage == "first_sequence":
+        first["branches"][bid]["observation"][2] += 1
+    elif damage == "first_clock":
+        first["branches"][bid]["observation"][0] = at - 1
+    elif damage == "first_authority":
+        first["runtime_effect"] = True
+    elif damage == "first_previous":
+        first["branches"][bid]["previous_observation"][8] = 0
+    elif damage == "first_numeric":
+        first["branches"][bid]["observation"][3] = True
+    elif damage == "first_previous_price":
+        first["branches"][bid]["previous_observation"][3] = -1
+    elif damage == "first_deadline":
+        first["original_deadline"] += 1
+    if rebound and damage not in {"first_hash", "first_missing", "first_null"}:
+        first["sha256"] = B.digest({k: v for k, v in first.items() if k != "sha256"})
+    if damage is None:
+        from src.engine.scalping import ai_decision_trace as writer
+        from src.tests.test_ai_decision_trace import _enable
+
+        _enable(monkeypatch, tmp_path / "native-writer")
+        monkeypatch.setattr(writer, "_now", lambda: datetime.fromisoformat(trace["decision_ts"]))
+        writer.record_ai_decision_trace(
+            dict(
+                trace, ai_decision_trace_id=trace["decision_trace_id"], action="DROP",
+                ai_trace_market_data_route=trace["market_data_route"],
+            ),
+            prompt_type="scalping_entry",
+            prompt_version="fixture",
+            result_source="mechanistic_pre_adjudication_rejected",
+            provider_called=False,
+            stock_code=symbol,
+        )
+        stored = writer._trace_path(day).read_text().splitlines()
+        assert len(stored) == 1
+        exported = json.loads(stored[0])
+        assert exported["continuous_reversal_rejected_claim_receipt"] == json.loads(
+            json.dumps(receipt, allow_nan=False)
+        )
+        trace = exported
     _source_gap_files(
-        tmp_path, datetime.fromtimestamp(at + 1.1, B.K.KST), traces=[trace]
+        tmp_path, datetime.fromtimestamp(checked + 0.1, B.K.KST), traces=[trace]
     )
     before = deepcopy(trace)
     result = monitor.source_gap_semantics(
-        tmp_path, datetime.fromtimestamp(at + 1.1, B.K.KST)
+        tmp_path, datetime.fromtimestamp(checked + 0.1, B.K.KST)
     )
     assert result["issues"] == (
         {} if damage is None else {"machine_trace:reversal_signal_path_changed": 1}
@@ -10777,6 +10863,7 @@ def test_registered_native_first_hold_breach_is_diagnostic_only(
             "machine_trace:reversal_first_price_hold_invalidated": 1
         }
     assert trace == before
+    assert state.first_invalidations == first_original
 
 
 @pytest.mark.parametrize(

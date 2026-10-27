@@ -1757,6 +1757,8 @@ def _reversal_lifecycle_diagnostic(row):
             # floor breach; absent ready membership alone is never sufficient.
             from src.engine.scalping.reversal_extended_auxiliary import validate_signal
             from src.engine.scalping.reversal_cumulative_runtime import hold_breached
+            from src.engine.scalping.continuous_reversal import connected, good_quote
+            from src.engine.scalping.continuous_reversal_postclose import digest
 
             expected = dict(
                 native_state_present=True,
@@ -1776,8 +1778,69 @@ def _reversal_lifecycle_diagnostic(row):
                 == ["ready_membership_present"]
             ):
                 branches = event["branch_signals"]
+                first = receipt.get("first_signal_invalidation")
+                if "first_signal_invalidation" in receipt and not isinstance(first, dict):
+                    return None
+                if first is not None:
+                    # The native owner retains the actual first breach. A
+                    # later recovery cannot restore this claim or erase its
+                    # diagnostic cause. No history is inferred from absence.
+                    actor = [str(first["pid"]), str(first["process_start_ticks"])]
+                    if (
+                        first.get("schema") != "native_first_signal_invalidation_v1"
+                        or first.get("sha256") != digest({
+                            k: v for k, v in first.items() if k != "sha256"
+                        })
+                        or any(first.get(k) != event[k] for k in (
+                            "signal_id", "event_id", "symbol", "venue", "market",
+                            "source_item", "native_epoch", "native_sequence", "epoch",
+                            "registry_generation",
+                        ))
+                        or first.get("original_deadline") != event["epoch"] + 5
+                        or set(first["branches"]) != set(branches)
+                        or not all(v.isdigit() and int(v) > 0 for v in actor)
+                        or actor != [str(receipt.get(k)) for k in (
+                            "process_pid", "process_start_ticks"
+                        )]
+                        or _row_actor(row) != actor
+                        or _row_actor(first) != actor
+                        or any(first.get(k) is not False for k in (
+                            "runtime_effect", "allowed_runtime_apply", "actual_order_submitted"
+                        ))
+                        or first.get("broker_order_forbidden") is not True
+                    ):
+                        return None
                 for bid, signal in branches.items():
                     validate_signal(signal)
+                    breach = latest
+                    if first is not None:
+                        record = first["branches"][bid]
+                        breach, previous = record["observation"], record["previous_observation"]
+                        if (
+                            record.get("reason") != "first_price_hold_breached"
+                            or record.get("branch_definition_sha256") != signal["branch_definition_sha256"]
+                            or record.get("signal_proof_sha256") != digest(signal["signal_proof"])
+                            or len(breach) != 11 or len(previous) != 11
+                            or not connected(previous, breach)
+                            or not good_quote(previous) or not good_quote(breach)
+                            or not all(
+                                type(tick[i]) is int
+                                for tick in (previous, breach) for i in (1, 2, 8)
+                            )
+                            or not all(
+                                type(tick[i]) in (int, float)
+                                and math.isfinite(tick[i]) and tick[i] > 0
+                                for tick in (previous, breach) for i in (0, 3, 4, 5)
+                            )
+                            or previous[8] != 1 or breach[8] != 1
+                            or previous[9] != event["source_item"]
+                            or breach[9] != event["source_item"]
+                            or breach[1] != event["native_epoch"]
+                            or not event["native_sequence"] <= previous[2] < breach[2] <= latest[2]
+                            or not event["epoch"] <= previous[0] <= breach[0] <= latest[0]
+                            or hold_breached(signal, previous)
+                        ):
+                            break
                     if (
                         signal.get("extended_definition_id") != bid
                         or signal.get("decision_phase") != "FIRST_PRICE_HOLD"
@@ -1796,7 +1859,7 @@ def _reversal_lifecycle_diagnostic(row):
                                 "registry_generation",
                             )
                         )
-                        or not hold_breached(signal, latest)
+                        or not hold_breached(signal, breach)
                     ):
                         break
                 else:

@@ -1236,6 +1236,19 @@ def _claim_failure_receipt(B, claim, family_sha256, now, reason):
         # Keep the consumer's native lifecycle label; predicates supplement it.
         receipt["process_pid"] = os.getpid()
         receipt["process_start_ticks"] = _PROCESS_START_TICKS
+        first = (getattr(state, "first_invalidations", {}) or {}).get(
+            event.get("signal_id")
+        )
+        if first is not None:
+            # Native ingestion and this projection hold the same backend lock.
+            # Select only this immutable claim's branches; absent records stay
+            # explicit rather than being inferred from a later recovered price.
+            first = deepcopy(first)
+            first["branches"] = {
+                bid: first["branches"].get(bid)
+                for bid in event.get("branch_signals", {})
+            }
+            receipt["first_signal_invalidation"] = dict(first, sha256=B.digest(first))
     if (
         reason == "reversal_signal_generation_changed"
         and not original
