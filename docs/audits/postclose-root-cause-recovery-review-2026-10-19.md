@@ -3951,3 +3951,31 @@ Compile, diff and print-only docs parser pass (one current quantity owner).
 Baseline delta before this note: non-test source+420/-4, tests+419/-2, docs+50/-0.
 Growth stores bounded historical witnesses, exact native cost-window comparison,
 producer/consumer binding and their failure regressions in existing owners.
+
+The198286cf2 live transition stopped before selection at09:09:26. Main3940489
+and its supervisor exited cooperatively. Its native closed epoch1793057003153794049
+retains53593 queued/processed/persisted trade rows,48989 depth rows, empty queues,
+zero writer/close loss and complete raw reconciliation. The native research reader
+still reports unaccounted_raw_row_exclusion for mixed timestamp exclusions. The
+deployment owner incorrectly conflated this research-admission verdict with writer
+closure. Originals, failed transition and startup hold are preserved in
+`tmp/quantity-history-handoff-20261027/drain-recovery/original-sources.json`.
+
+The existing ordered drain now verifies modern actor-bound lossless closure
+separately and records the unchanged native ineligible verdict. It does not admit
+these source rows or alter the source-quality owner. Legacy actorless initial
+transition, canary guard, loss/pending/persistence/date/authority negatives stay
+strict. The existing stopped recovery owner additionally authenticates the exact
+preselection failure: original selector bytes, failed hold/commit/phase, captured
+real PID consumption, immutable closure and source hashes. Native closed custody
+lets candidate P5 read the genuine consumed predecessor without pretending EOD
+or a current process. The failed hold transfers only through normal CAS; it is
+never manually deleted. No unrelated research/source repair or policy tuning is
+included. Remaining research exclusion remains visible under its existing owner.
+
+Recovery validation: ordered449, custody/complete-profile57 and startup/independent
+preparation634 regressions pass. Actual preserved failed bytes reproduce the
+original rejection, while the reviewed reader verifies lossless closure and still
+returns research eligible=false. Compile/diff/docs parser pass. Incremental delta
+before this note: {'source': [147, 7], 'tests': [104, 1], 'docs': [34, 0]}. Source growth stays within the existing drain,
+closed-custody and exact reviewed-profile owners; no new execution entrypoint.

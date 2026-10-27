@@ -753,3 +753,15 @@ prefix and distinguish the recovery reader's code path from the selected Main
 root. Fresh selected preparation/P5 and actual PID consumption remain separate
 from successful tool recovery; a recovery receipt cannot attest successor Main
 consumption.
+
+Ordered collector drain verifies exact PID/start/epoch, closed original receipts,
+zero pending callbacks/queues and capture loss, and equal enqueue/process/persist
+counts. A research-ineligible row population is retained with its native semantic
+verdict; lossless process closure grants no source admission. Legacy actorless
+first-transition rules and canary-stop guard bindings remain strict. If this
+verification failed after shutdown but before selection, the existing stopped
+recovery owner may consume only the exact owned failed hold, byte-identical original
+selector, captured prior PID consumption and newly verified closed receipts. It
+preserves the failed attempt, transfers its hold by CAS and requires a new clean
+candidate/P5 followed by selected P5 and actual PID verification. No manual hold
+removal, fabricated consumption, EOD proof or research promotion is permitted.

@@ -1073,6 +1073,7 @@ def verify_collector_shutdown(pin):
             .isoformat()
         ]
     proofs = []
+    semantic_verdicts = []
     for day in dates:
         receipt = path.parent / "closed" / f"{day}-{snapshot['sequence_epoch']}.json"
         closed, raw = R._startup_receipt(receipt)
@@ -1096,11 +1097,43 @@ def verify_collector_shutdown(pin):
             and snapshot.get("broker_order_forbidden") is True
             and all(snapshot.get(k) is False for k in CANARY_FORBIDDEN_TRUE_FIELDS)
         )
+        # A closed source can remain research-ineligible (for example mixed
+        # row exclusions). Deployment needs lossless writer closure, not source
+        # admission. Keep the native semantic verdict unchanged in this receipt.
+        generated = datetime.fromisoformat(closed["generated_at"])
+        groups = [("enqueued_count", "worker_processed_count",
+                   "writer_persisted_envelope_count", "path_point_submitted_count")]
+        if snapshot.get("depth_capture_requested") is True:
+            groups.append(("depth_enqueued_count", "depth_worker_processed_count",
+                           "depth_writer_persisted_envelope_count"))
+        reconciled_closed = (
+            snapshot.get("process_pid") == pin["pid"]
+            and snapshot.get("process_start_ticks") == pin["start_ticks"]
+            and generated.tzinfo is not None
+            and generated <= datetime.now(H.KST)
+            and closed.get("source_date", generated.astimezone(H.KST).date().isoformat()) == day
+            and closed.get("generated_at") == payload.get("generated_at")
+            and closed.get("canary_guard") == payload.get("canary_guard")
+            and (closed.get("canary_guard") or {}).get("status") == "stopped_clean"
+            and (closed.get("canary_guard") or {}).get("stop_required") is False
+            and (closed.get("canary_guard") or {}).get("stop_reasons") in ([], ())
+            and snapshot.get("source_contract") == "main_market_source_v1"
+            and snapshot.get("collector_lifecycle") == "closed"
+            and source_close_verified(snapshot)
+            and snapshot.get("broker_order_forbidden") is True
+            and all(snapshot.get(k) is False for k in CANARY_FORBIDDEN_TRUE_FIELDS)
+            and all(type(snapshot.get(k)) is int and snapshot[k] == 0 for k in (
+                *source_loss_counters(snapshot), "stale_sequence_epoch_envelope_count",
+                "collector_active_callback_count", "writer_queue_depth", "depth_queue_depth"))
+            and all(all(type(snapshot.get(k)) is int and snapshot[k] >= 0 for k in group)
+                    and len({snapshot[k] for k in group}) == 1 for group in groups)
+        )
         if closed.get("collector_snapshot") != snapshot or not (
-            canary_drained or native.get("eligible")
+            canary_drained or reconciled_closed or native.get("eligible")
         ):
             raise ValueError("deployment_collector_closed_epoch_invalid")
         proofs.append(dict(path=str(receipt), sha256=_digest(raw), source_date=day))
+        semantic_verdicts.append(dict(source_date=day, **native))
     if "closed_receipts" in pin and proofs != pin["closed_receipts"]:
         raise ValueError("deployment_collector_closed_receipts_changed")
     return dict(
@@ -1110,6 +1143,7 @@ def verify_collector_shutdown(pin):
         sequence_epochs=epochs,
         receipts=proofs,
         source_admission="native_semantics_unchanged",
+        native_source_validation=semantic_verdicts,
         observer_canary_stopped=pin.get("basis") == "native_observer_canary_stop",
     )
 
@@ -2097,14 +2131,32 @@ class StoppedDeploymentRecovery(Deployment):
             / "status.json"
         )
         hold, hold_raw, hold_sig = _owned_metadata(self.hold)
+        preselection = selected.get("actual_pid_consumed") is True
+        if preselection:
+            held_commit = hold.get("candidate_commit")
+            if (not isinstance(held_commit, str) or len(held_commit) != 40
+                or any(c not in "0123456789abcdef" for c in held_commit)):
+                raise ValueError("deployment_drained_hold_commit_invalid")
+            failed_path = self.workspace / "data/runtime/release_transitions" / self.day / held_commit / "status.json"
+            if hold.get("transition") != str(failed_path):
+                raise ValueError("deployment_drained_hold_path_invalid")
         failed, failed_raw, failed_sig = _owned_metadata(failed_path)
+        if preselection:
+            failed_root, failed_commit = R.validate_release(self.workspace, dict(
+                schema="runtime_release_selection_v1", workspace=str(self.workspace),
+                release_root=failed.get("candidate_root"), git_commit=held_commit))
         prior_path = failed_path.with_name("selection-before.json")
         prior, prior_raw, prior_sig = _owned_metadata(prior_path)
         identity = failed.get("predecessor_identity") or {}
         preparation_sources = stopped_preparation_failure_sources(failed, failed_path)
         if (
-            selected.get("deployment_transition") != str(failed_path)
-            or selected.get("actual_pid_consumed") is not False
+            (not preselection and (
+                selected.get("deployment_transition") != str(failed_path)
+                or selected.get("actual_pid_consumed") is not False))
+            or (preselection and (
+                self.before != prior_raw
+                or failed.get("failed_phase") != "draining"
+                or failed.get("error") != "deployment_collector_closed_epoch_invalid"))
             or selected.get("approval_scope") != "ordered_intraday_deploy_and_restart"
             or selected.get("approved_by") != "user"
             or failed.get("schema") != "ordered_intraday_deployment_v1"
@@ -2124,6 +2176,7 @@ class StoppedDeploymentRecovery(Deployment):
                     ("starting", "deployment_pid_attestation_timeout"),
                 }
                 and not preparation_sources
+                and not preselection
             )
             or failed.get("policy_effect") != "unchanged"
             or hold
@@ -2140,9 +2193,10 @@ class StoppedDeploymentRecovery(Deployment):
             or prior.get("schema") != "runtime_release_selection_v1"
             or prior.get("git_commit") != failed.get("previous_commit")
             or prior.get("release_root") != failed.get("previous_root")
-            or selected.get("previous_selection_backup") != str(prior_path)
-            or selected.get("previous_git_commit") != prior.get("git_commit")
-            or selected.get("previous_release_root") != prior.get("release_root")
+            or (not preselection and (
+                selected.get("previous_selection_backup") != str(prior_path)
+                or selected.get("previous_git_commit") != prior.get("git_commit")
+                or selected.get("previous_release_root") != prior.get("release_root")))
             or type(identity.get("pid")) is not int
             or identity["pid"] <= 0
             or not isinstance(identity.get("start_ticks"), str)
@@ -2164,7 +2218,20 @@ class StoppedDeploymentRecovery(Deployment):
         self.launcher = failed["predecessor_launcher"]["pid"]
         self.assert_stopped()
         self.previous, self.previous_commit = R.validate_release(self.workspace, prior)
+        if preselection:
+            pin = failed.get("collector_shutdown_pin") or {}
+            if (pin.get("pid") != identity["pid"]
+                or pin.get("start_ticks") != identity["start_ticks"]
+                or pin.get("path") != str(self.workspace / "data/runtime/scalp_micro_reversion_forward_collector/latest.json")):
+                raise ValueError("deployment_drained_collector_identity_invalid")
+            closure = verify_collector_shutdown(pin)
+            native = _stopped_intraday_predecessor(
+                self.day, self.previous, self.previous_commit, identity, failed_path)
+            preparation_sources.update(native["frozen_files"])
+            preparation_sources[pin["path"]] = H._sha(pin["path"])
+            preparation_sources.update({r["path"]: r["sha256"] for r in closure["receipts"]})
         return dict(
+            preselection=preselection,
             selected=selected,
             failed_root=failed_root,
             failed_commit=failed_commit,
@@ -2217,7 +2284,7 @@ class StoppedDeploymentRecovery(Deployment):
             or Path(__file__).resolve().parents[3] != self.candidate
         ):
             raise ValueError("deployment_recovery_requires_new_reviewed_candidate")
-        native_basis = bool(selected.get("native_predecessor_path"))
+        native_basis = bool(selected.get("native_predecessor_path")) and not origin["preselection"]
         if native_basis:
             native = H._native_predecessor(
                 self.day,

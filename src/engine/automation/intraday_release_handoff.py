@@ -449,6 +449,34 @@ def closed_consumption_observation(day=None, *, now=None):
         raise ValueError("intraday_closed_consumption_pid_present")
     if not _postclose_main_absent():
         raise ValueError("intraday_closed_consumption_process_inventory_unknown")
+    hold_path = data / "runtime/operator_startup_hold.json"
+    if hold_path.is_file() and _read(hold_path).get("candidate_commit") != commit:
+        # The native ordered owner may have stopped the consumed predecessor
+        # before selection. Its exact failed attempt, hold and lossless closure
+        # are custody evidence; no EOD or new PID consumption is invented.
+        from src.engine.automation import ordered_intraday_deploy as D
+
+        driver = D.StoppedDeploymentRecovery(data.parent, Path(__file__).resolve().parents[3], day, D.CONFIRM)
+        origin = driver.inspect_stopped_origin()
+        stopped = datetime.fromisoformat(origin["failed"]["updated_at"])
+        closed = _read(origin["failed"]["collector_shutdown_pin"]["path"])
+        closed_at = datetime.fromisoformat(closed["generated_at"])
+        if (not origin["preselection"] or origin["identity"] != identity
+            or stopped.tzinfo is None or closed_at.tzinfo is None
+            or not recorded <= closed_at <= stopped <= current
+            or stopped.astimezone(KST).date().isoformat() != day):
+            raise ValueError("intraday_drained_predecessor_scope_invalid")
+        sources = {**origin["preparation_sources"],
+                   str(paths[0]): _sha(paths[0]), str(hold_path): _sha(hold_path),
+                   str(origin["failed_path"]): _sha(origin["failed_path"]),
+                   str(origin["prior_path"]): _sha(origin["prior_path"])}
+        return dict(schema="intraday_closed_consumption_observation_v1",
+                    basis="ordered_preselection_drained", target_date=day,
+                    release_commit=commit, pid_identity=identity,
+                    stopped_at=stopped.isoformat(), terminal_at=closed_at.isoformat(),
+                    selection_sha256=_sha(paths[0]), consumed_sha256=_sha(consumed_path),
+                    source_hashes=sources, runtime_effect=False,
+                    current_observation_verified=False, new_pid_consumption_claimed=False)
     beat = datetime.fromisoformat(
         str((heartbeat.get("main_loop") or {}).get("last_beat") or "")
     )
@@ -11373,6 +11401,34 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
     for name, current in REVIEWED_QUANTITY_HISTORY_HASHES.items()
 }}
 
+# Reviewed lossless drain recovery; source research admission is unchanged.
+REVIEWED_DRAIN_CLOSURE_HASHES = {'src/engine/automation/ordered_intraday_deploy.py': 'f4c46ebf3cfb0112a06da6a03e195b119b5a18376a6386e0fbb2efecdeed5e2e', 'src/engine/infrastructure/startup_validation_code_context.py': '6bb7575b7491f58906928f1968a723b10fce60d65b64d95b48dd7c7dc9e90d02'}
+REVIEWED_DRAIN_CLOSURE_PROFILE = {
+    **REVIEWED_QUANTITY_HISTORY_PROFILE, **REVIEWED_DRAIN_CLOSURE_HASHES
+}
+REVIEWED_DRAIN_CLOSURE_VARIANTS = {
+    (key[0], REVIEWED_DRAIN_CLOSURE_HASHES.get(key[0], key[1])): {
+        **value,
+        "selector_path": "src/engine/infrastructure/startup_validation_code_context.py",
+        "selector_sha256": REVIEWED_DRAIN_CLOSURE_HASHES["src/engine/infrastructure/startup_validation_code_context.py"],
+        "dependencies": {**value["dependencies"], **REVIEWED_DRAIN_CLOSURE_HASHES},
+        "contract_extensions": {
+            origin: {name: REVIEWED_DRAIN_CLOSURE_HASHES.get(os.path.normpath(name), sha)
+                     for name, sha in paths.items()}
+            for origin, paths in value["contract_extensions"].items()
+        },
+    }
+    for key, value in REVIEWED_QUANTITY_HISTORY_VARIANTS.items()
+}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple(
+        (old, current)
+        for old in {value for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ())
+                    for value in pair} | {REVIEWED_QUANTITY_HISTORY_PROFILE[name]}
+    )
+    for name, current in REVIEWED_DRAIN_CLOSURE_HASHES.items()
+}}
+
 
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
@@ -12046,6 +12102,12 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     ):
         prepared_hashes = REVIEWED_QUANTITY_HISTORY_PROFILE
         prepared_variants = REVIEWED_QUANTITY_HISTORY_VARIANTS
+    if (
+        (source := candidate_bytes("src/engine/infrastructure/startup_validation_code_context.py", optional=True)) is not None
+        and hashlib.sha256(source).hexdigest() == REVIEWED_DRAIN_CLOSURE_HASHES["src/engine/infrastructure/startup_validation_code_context.py"]
+    ):
+        prepared_hashes = REVIEWED_DRAIN_CLOSURE_PROFILE
+        prepared_variants = REVIEWED_DRAIN_CLOSURE_VARIANTS
     entry_cost_hashes = (
         prepared_hashes
         if prepared_owner_present

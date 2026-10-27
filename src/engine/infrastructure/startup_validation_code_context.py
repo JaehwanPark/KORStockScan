@@ -2525,6 +2525,17 @@ for _name, _sha in REVIEWED_QUANTITY_HISTORY_SOURCES.items():
     _history.update((old, _sha) for old in _prior)
 
 
+# Lossless closed collector custody does not grant research admission. Exact
+# preselection failure recovery preserves the original selector and all proofs.
+REVIEWED_DRAIN_CLOSURE_SOURCES = {"src/engine/automation/ordered_intraday_deploy.py": "f4c46ebf3cfb0112a06da6a03e195b119b5a18376a6386e0fbb2efecdeed5e2e"}
+for _name, _sha in REVIEWED_DRAIN_CLOSURE_SOURCES.items():
+    _history = REVIEWED_PREPARATION_HISTORY.setdefault(_name, set())
+    _prior = {v for pair in _history for v in pair} | {"7b10c5d127bd45ad4e82e90c4a504ca39dfd64f23a6d487c9be7880cc682beb5"}
+    if _name in REVIEWED_PREPARATION_SOURCES:
+        _prior.update(REVIEWED_PREPARATION_SOURCES[_name])
+    _history.update((old, _sha) for old in _prior)
+
+
 def reviewed_preparation_pair(relative, old, current):
     # An already reviewed physical pair keeps its original authority; a
     # formatting projection must not replace either endpoint before this check.

@@ -3750,3 +3750,85 @@ def test_interrupted_collector_preserves_original_and_never_claims_terminal(
 def test_native_stopped_handoff_rejects_foreign_issued_ancestry(stopped_recovery, monkeypatch, field):
     test_stopped_policy_code_handoff_uses_only_proven_original_ancestry(
         stopped_recovery, monkeypatch, None, True, origin_fault=field)
+
+
+@pytest.mark.parametrize('damage', [None, 'loss', 'pending', 'persistence', 'authority', 'date', 'changed_guard'])
+def test_drained_research_ineligible_epoch_preserves_semantic_rejection(tmp_path, damage):
+    from src.tests.test_micro_reversion_forward_collector import _closed_main_rejection_source
+    from src.engine.scalping.micro_reversion.observer_source_quality import main_raw_epoch_validation
+    _, payload, receipt = _closed_main_rejection_source(tmp_path)
+    c = payload['collector_snapshot']
+    latest = receipt.parent.parent / 'latest.json'
+    # Sealed row rejection remains semantically unresolved; persistence is exact.
+    payload['canary_guard']['raw_row_exclusion_required'] = True
+    payload['canary_guard']['source_quality_row_exclusions'] = ['unresolved_source_rows']
+    c['path_exchange_timestamp_regression_exceeded_count'] = 1
+    if damage == 'loss': c['writer_dropped_envelope_count'] = 1
+    if damage == 'pending': c['collector_active_callback_count'] = 1
+    if damage == 'persistence': c['writer_persisted_envelope_count'] += 1
+    if damage == 'authority': c['actual_order_submitted'] = True
+    closed = {**payload, 'source_date': receipt.name[:10]}
+    if damage == 'date': closed['source_date'] = '2099-01-01'
+    latest.write_text(json.dumps(payload)); receipt.write_text(json.dumps(closed))
+    if damage == 'changed_guard':
+        closed['canary_guard'] = {**payload['canary_guard'], 'extra': 'changed'}
+        receipt.write_text(json.dumps(closed))
+    pin = dict(path=str(latest), pid=c['process_pid'], start_ticks=c['process_start_ticks'],
+               sequence_epoch=c['sequence_epoch'], enqueued_count=1)
+    assert not main_raw_epoch_validation(closed, source_date=receipt.name[:10])['eligible']
+    before = receipt.read_bytes()
+    if damage:
+        with pytest.raises(ValueError): D.verify_collector_shutdown(pin)
+    else:
+        checked = D.verify_collector_shutdown(pin)
+        assert checked['status'] == 'verified'
+        assert checked['native_source_validation'][0]['eligible'] is False
+        assert checked['source_admission'] == 'native_semantics_unchanged'
+    assert receipt.read_bytes() == before
+
+
+@pytest.mark.parametrize('damage', [None, 'selector', 'hold', 'collector', 'closure', 'source_after_preflight'])
+def test_drained_preselection_recovery_keeps_original_selector_and_failed_evidence(stopped_recovery, monkeypatch, damage):
+    d, status_path, policy = stopped_recovery
+    prior_path = status_path.with_name('selection-before.json')
+    prior = D.H._read(prior_path)
+    prior.update(approved_by='user', approval_scope='ordered_intraday_deploy_and_restart')
+    prior_path.write_bytes(D._json_bytes(prior)); d.selection.write_bytes(prior_path.read_bytes())
+    monkeypatch.setattr(D.R, 'selected_release', lambda *a: (Path(prior['release_root']), prior['git_commit']))
+    _candidate_p5_fixture(d, 'c' * 40)
+    failed = D.H._read(status_path)
+    collector = d.workspace / 'data/runtime/scalp_micro_reversion_forward_collector/latest.json'
+    collector.parent.mkdir(); collector.write_text('{}')
+    failed.update(failed_phase='draining', error='deployment_collector_closed_epoch_invalid',
+                  original_selection_sha256=D._digest(prior_path.read_bytes()),
+                  collector_shutdown_pin=dict(path=str(collector), pid=failed['predecessor_identity']['pid'],
+                    start_ticks=failed['predecessor_identity']['start_ticks']))
+    status_path.write_bytes(D._json_bytes(failed))
+    proof = status_path.with_name('preflight-intraday_release_handoff.log'); proof.write_text('verified actual prior consumption')
+    monkeypatch.setattr(D, '_stopped_intraday_predecessor', lambda *a: dict(
+        path=str(proof), sha256=D.H._sha(proof), frozen_files={str(policy):D.H._sha(policy)}))
+    def closure(pin):
+        if damage == 'closure': raise ValueError('native closure invalid')
+        return dict(status='verified', receipts=[dict(path=str(collector),sha256=D.H._sha(collector))])
+    monkeypatch.setattr(D,'verify_collector_shutdown',closure)
+    if damage == 'selector': d.selection.write_bytes(d.selection.read_bytes()+b' ')
+    if damage == 'hold':
+        hold=D.H._read(d.hold);hold['old_pid_identity']['start_ticks']='foreign';d.hold.write_bytes(D._json_bytes(hold))
+    if damage == 'collector':
+        failed['collector_shutdown_pin']['pid']+=1;status_path.write_bytes(D._json_bytes(failed))
+    original = {p:p.read_bytes() for p in (d.selection, d.hold, status_path, prior_path)}
+    if damage and damage != 'source_after_preflight':
+        with pytest.raises(ValueError):d.preflight()
+        assert all(p.read_bytes()==raw for p,raw in original.items())
+        return
+    d.preflight()
+    if damage == 'source_after_preflight':
+        collector.write_text('{"changed":true}')
+        with pytest.raises(ValueError):d.acquire_hold()
+        assert d.hold.read_bytes()==original[d.hold]
+        return
+    d.acquire_hold();d.drain();d.publish()
+    assert D.H._read(d.selection)['previous_git_commit']==prior['git_commit']
+    assert status_path.read_bytes()==original[status_path]
+    assert prior_path.read_bytes()==original[prior_path]
+    assert not hasattr(d,'native_path')

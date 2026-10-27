@@ -3163,3 +3163,14 @@ def test_quantity_history_preparation_requires_exact_reviewed_pair(damage):
     elif damage == "wrong_origin":
         old = "0" * 64
     assert C.reviewed_preparation_pair(relative, old, current) is (damage is None)
+
+
+@pytest.mark.parametrize("damage", [None, "unreviewed", "wrong_origin"])
+def test_drain_closure_preparation_requires_exact_reviewed_pair(damage):
+    relative = "src/engine/automation/ordered_intraday_deploy.py"
+    old = hashlib.sha256(subprocess.check_output(
+        ["git", "-C", str(ROOT), "show", "198286cf2:" + relative])).hexdigest()
+    current = hashlib.sha256((ROOT / relative).read_bytes()).hexdigest()
+    if damage == "unreviewed": current = "0" * 64
+    elif damage == "wrong_origin": old = "0" * 64
+    assert C.reviewed_preparation_pair(relative, old, current) is (damage is None)

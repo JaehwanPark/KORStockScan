@@ -43,6 +43,7 @@
 ## 실행 항목
 
 - [ ] `[DirectFamilyPreopenPolicyHandoff] direct family 날짜별 정책·bootstrap 장전 소비 확인` (`Due: 2026-10-27`, `Slot: PREOPEN`, `TimeWindow: 07:35~08:05`, `Track: RuntimeStability`)
+  - 10/27 09:09 수량 통합198286cf2 전환: Main3940489 정상 drain 후 연구 부적격과 종료 검증의 혼동으로 선택 전 차단. 원 selector/실패 hold/종료 epoch 보존, 기존 ordered recovery에서 정확한 종료·과거 소비 검증과 CAS 인계를 수리하고 새 후보/P5→재기동/실제 소비까지 완료한다. [원인·보존·수리](../audits/postclose-root-cause-recovery-review-2026-10-19.md#quantity-historical-diagnostics-daily-handoff-2026-10-27).
   - Source: [runtime_approval_summary_2026-10-26.json](/home/ubuntu/KORStockScan/data/report/runtime_approval_summary/runtime_approval_summary_2026-10-26.json)
   - 판정 기준: source_date=`2026-10-26`, apply_date=`2026-10-27`, preopen_state=`pending`, due_policy_receipts=`compact_auxiliary(valid=True, handoff=incumbent_preserved); entry_cancel_wait(valid=True, handoff=blocked); entry_split(valid=True, handoff=blocked); main_mechanistic_entry(valid=True, handoff=incumbent_preserved); pre_submit_delay(valid=True, handoff=initial_quote_timing_policy_published); rising_missed(valid=True, handoff=not_applicable); scale_in_split(valid=True, handoff=not_applicable); main_stop_confirmation(policy=72679159acafbdb11bbab599458076de43b90d4c37f3b8875a9cc3e130e47f50, pid_unobserved)`의 schema·semantic hash·scope와 bootstrap accepted/rejected 결과를 확인한다.
   - incumbent 정책은 runtime override가 0이어야 하고 validated edge는 단일축 allowlist·operator lock·retired OFF·same-stage guard를 통과해야 한다.
