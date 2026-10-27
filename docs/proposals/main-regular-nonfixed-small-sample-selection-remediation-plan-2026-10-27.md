@@ -4,7 +4,7 @@
 
 **제안:** 비용을 반영한 WIN/STOP/TIMEOUT 라벨은 유지하고, 기계정책 순위를 `반복 확인점의 단순 승률`에서 `시간 중복을 제거한 누적 승률의 불확실성 보정 점수`로 바꾼다. 추가 패턴이 실패1건 때문에 소표본100% 현행에 영구히 밀리는 문제를 보완한다. 손익비·EV·AI 점수·호가 guard 완화를 순위에 넣지 않는다.
 
-이 문서는 **선택 계약의 변경안과 구현 owner**다. 현행 `cost_bound_cumulative_target_first_fraction`과 구분한다. 후속 구현 지시에 따라 격리 작업본에서 구현·리뷰·검증을 수행했다. 운영 채택·배포는 미실행이며, source27 종료 재검증은 아직 미래 창이다. [구현·원천·잔여 검증](../audits/main-regular-nonfixed-pattern-contribution-review-2026-10-27.md#8-선택구조-구현과-원천-소비-재점검--1439)이 현재 상태를 소유한다.
+이 문서는 **선택 계약의 변경안과 구현 owner**다. 현행 `cost_bound_cumulative_target_first_fraction`과 구분한다. 후속 구현 지시에 따라 격리 작업본에서 구현·리뷰·검증을 수행했다. 운영 채택·배포는 미실행이다. source27 정규장 연구는 하루 전체 장후 terminal을 기다리지 않고 별도로 검증한 정규장 원천부터 수행했다. 15:36 입력 고정 후 지정5후보의 당일·누적 재검증을 완료했으며 연구 순위는 저가A09·고가A12·중가현행이다. 미확정86점의 동일 item 원천 보강으로75점을 확정했고11점만 제외한다. 저가A09는 당일11/16승·누적113/204승으로 채택을 권고한다. 최신 운영3a 위 불변 후보a1b1b0f8a의 현행 정책 인계·격리기동 PASS이며 정식 A09 게시와 실제 PID 소비는 OPEN이다. [재집계와 운영 준비 §12](../audits/main-regular-nonfixed-pattern-contribution-review-2026-10-27.md)가 최신 상태를 소유한다.
 
 첫 범위는 `other_non_fixed|REGULAR|LT_20000/20000_TO_100000/GE_100000|SOR`다. 상시·PRE·AFTER·다른 route의 정책은 그대로 둔다. 기존 [MachinePatternOpportunityResearch1023 / MainEntrySourceTerminalRepair1022](../checklists/2026-10-27-stage2-todo-checklist.md)의 원 작업 창과 Acceptance를 유지하고 새 owner/예약을 만들지 않는다. 선행 [연구계획 §8](main-auxiliary-spread-liquidity-and-deadline-remediation-plan-2026-10-27.md#8-정규장-비상시-추가-패턴-비교-완료와-보완안)을 구체화한 문서다.
 
@@ -72,7 +72,7 @@ L = (p + z*z/(2*N) - z*sqrt(p*(1-p)/N + z*z/(4*N*N))) / (1 + z*z/N)
 | 고가 A12 | 12/20,60.0% | 0/0, U3 | 8/15,53.3% | 50.0~64.7% | WIN12개 중10개가09/29에 집중; 새 날짜 필요 |
 | 고가 A14 | 13/29,44.8% | 1/5 | 6/21,28.6% | 28.6~55.6% | WIN13개 중7개가031980; 확장 우선순위 낮춤 |
 
-현재 자료는 후보 선정에 이미 사용된 자료이므로 독립 holdout이 아니다. 다음 기존 source27 장후 창에서 종료·봉인된 적격 원천을 동일 정의로 추가하고 raw/순차/날짜별 W/S/T/U와 L을 갱신한다. source27을 사용할 수 없으면 미완료 이유를 원 owner에 유지하고 다른 날을 미래 검증처럼 대체하지 않는다. 현재 연구만으로 live 후보를 승인하지 않는다.
+현재 자료는 후보 선정에 이미 사용된 자료이므로 독립 holdout이 아니다. source27의 정규장 종료 후 별도 동결·검증한 적격 원천부터 동일 정의로 추가하고 raw/순차/날짜별 W/S/T/U와 L을 갱신한다. 아래 §7의 선행 연구는 하루 전체 native machine terminal을 요구하지 않는다. 이후 기존 장후 창의 정식 세대와 원 key·라벨·원천 차이를 대조한다. source27을 사용할 수 없으면 미완료 이유를 원 owner에 유지하고 다른 날을 미래 검증처럼 대체하지 않는다. 현재 연구만으로 live 후보를 승인하지 않는다.
 
 ### 중가 A08의30분 미달
 
@@ -108,5 +108,45 @@ L = (p + z*z/(2*N) - z*sqrt(p*(1-p)/N + z*z/(4*N*N))) / (1 + z*z/N)
 - `continuous_reversal_policy_v6`는 새 계약·선택 영수증을 후속 manifest에 전달하고, family의 선택 지표/부모/source hash를 확인한다. 새 점수 결과를 기존 raw 지표로 선언한 family 또는 raw 계약에 새 receipt만 끼운 경우를 거부한다. 기존 초기 등록/보조 호환 승계 경로와 hard safety는 유지한다.
 - raw replay checkpoint는 기존 코드/원천 identity를 유지하며, 점수 계산은 기존 확인점 객체에서 수행한다. raw checkpoint를 점수 캐시로 사용하지 않는다. score spec/승인 계약/source SHA는 비교 archive의 content hash와 실제 선택 영수증에 결속된다.
 - source26의 새 구현 재집계와 앞선 독립 연구의8조합에 대해 W/N/U·선택 key32개 대조가 모두 일치했다. 이는 source27의 독립 검증이 아니다. 실제 source27 machine report와 native machine terminal은14시대에 아직 없었다.
-- source27 검증 실행기는 [기존 원장을 읽는 재검증 도구](../../tmp/regular-selection-score-20261027/revalidate.py)다. 동일 source date의 native stage를 원 reader로 검증하고 Store의 partition hash·동결 population·candidate contract를 연결하며 결과를 code hash별 불변 파일로 쓴다. `--source-date 2026-10-27`로 실행하되 자료가 없으면 `source_terminal_not_available`만 기록한다. 실행·판정값을 임의로 채우지 않는다.
-- 다음 창은 기존 `MachinePatternOpportunityResearch1023`의10/27 **20:05~23:59**다. source27 종료·적격 partition을 확인한 뒤 동일 정의로 후보5개와 current의 raw/순차 누적·당일 W/S/T/U/L, 추가/제거 WIN, 중가 A08의30분 미달 경로를 비교한다. 결과가 좋더라도 별도 운영 채택/정상 code-policy 인계·배포·실제 PID 소비를 구분한다. 신규 자동 예약은 만들지 않는다.
+- source27 **정식 장후 세대** 검증 실행기는 [기존 원장을 읽는 재검증 도구](../../tmp/regular-selection-score-20261027/revalidate.py)다. 동일 source date의 native stage를 원 reader로 검증하고 Store의 partition hash·동결 population·candidate contract를 연결하며 결과를 code hash별 불변 파일로 쓴다. `--source-date 2026-10-27`로 실행하되 자료가 없으면 `source_terminal_not_available`만 기록한다. 이 실행기의 입력 조건은 아래 정규장 선행 연구의 필수 조건이 아니다. 실행·판정값을 임의로 채우지 않는다.
+- 다음 창은 기존 `MachinePatternOpportunityResearch1023`의10/27 **20:05~23:59**다. source27 종료·적격 partition을 확인한 뒤 동일 정의로 후보5개와 current의 raw/순차 누적·당일 W/S/T/U/L, 추가/제거 WIN, 중가 A08의30분 미달 경로를 비교한다. 결과가 좋더라도 별도 운영 채택/정상 code-policy 인계·배포·실제 PID 소비를 구분한다. 이전 구현 단계에서는 신규 자동 예약을 만들지 않았다. 후속 사용자의 source27 생성 후 계속 실행 지시에 따라 동일 owner의 단회 연구 대기 프로세스를 준비했다. cron/systemd·운영 dispatch 변경 없이 같은20:05~23:59 창에서만 실행하며, [원52건 추가 대사·동결 protocol·리뷰](../audits/main-regular-nonfixed-pattern-contribution-review-2026-10-27.md#9-source27-조건부-재검증과-원-무수신52건-추가-대사--1513)를 따른다.
+
+## 7. 정규장 종료 후 선행 연구 — 15:36 정정
+
+정규장 비상시 연구를 AFTER 종료까지 일괄 대기시킨 것은 연구 실행기를 하루 전체 native machine terminal에 연결했기 때문이다. 연구 목적 자체의 요구가 아니다. **정규장 source-only 동결 → 해당 구간 검증 → 지정 후보 재생**을 먼저 수행하고, 정식 장후 세대는 이후 원천/라벨 차이를 대조하는 별도 단계로 둔다. 운영 등록의 native stage 요구는 유지한다.
+
+- 입력은 `2026-10-27/SOR/SOR_REGULAR` 하나의 partition이다. 기존 `freeze_normalized_sources`의 완성 행 prefix hash·원 inode/절단 검사·native closed-epoch 검증을 재사용했다. PRE/AFTER 파일은 입력 참조 트리에 포함하지 않는다. 원 raw는 복제하지 않고 별도 정규화 gzip 약4.4MB만 만들었다.
+- native 원천 종료 검증을 통과한 epoch만 유효 처리한다. 15:36 기준 비상시 적격 행은 저가21,120·중가16,841·고가8,512이며 부적격13,350행은 계산에서 제외한다. 이는 체결 관측 행 수이고 독립 기회/승패 건수가 아니다. 고정된 원천은 [분리·검증 영수증](/home/ubuntu/KORStockScan/tmp/regular-selection-score-20261027/regular-only-feasibility/feasibility.json)을 따른다.
+- 마지막 raw 체결은15:17:43.168이다. 정규장 종료 시각까지 완전 수신했다고 표시하지 않는다. 각 정확 item/epoch/sequence별 연속 경로에서30분 내 WIN/STOP이 먼저 확정되면 그 결과를 쓰며, 목표·손절 어느 쪽도 관측하지 못하고30분이 부족하면 U다. 장말 구간 전체를 일괄 BLOCK/FAIL_TIMEOUT으로 바꾸지 않고 AFTER의 다른 session/route 가격을 붙이지 않는다.
+- 다음 계산은 동결한 원 current와 저가A05/A09·고가A12/A14·중가A08의 동일 정의를 사용한다. source26까지의 검증된 기존 객체는 재사용하고27일분만 추가한다. 당일/누적 raw·순차 W/S/T/U/L과 추가/제거 WIN을 구분한다. 완성봉 보강이 필요하면 같은 item·정규장 시간창·고정 revision과30분 도달 순서 검증을 통과한 것만 별도 출처로 사용한다.
+- 이번 요청에서 **정규장 입력 분리·검증 및 선행 연구 가능 여부 확인을 완료**했다. source27 후보별 승패 재집계는 아직 실행하지 않았으며 운영 채택은 OPEN이다. 기존20:05 대기 프로세스와 동결 protocol은 정식 장후 세대 검증용으로 보존했다. 해당 프로세스의 대기 상태를 정규장 연구 전체가 불가능하다는 뜻으로 사용하지 않는다.
+
+## 8. 지정5후보 재검증 완료와 적용 판단 — 15:52
+
+§7 뒤 사용자의 즉시 실행 지시에 따라 source27 정규장 분리 입력으로 재생을 완료했다. 이전 원장 전체를 다시 만들지 않고 source26까지의 검증된 집계와 당일분을 날짜별 통계 계약으로 합쳤다. 새 날이 이미 포함된 집계는 거부한다. source26의6종목157확인점은 native producer의 원 key·입력 특징·라벨과 일치했고 당일 통계 확인점93개의 exact item/epoch/sequence/ask·원 후행 경로도 재검증했다. 신규 provider 호출은0이다.
+
+| 후보(현행∪단일 추가) | 당일 W/N · U | 누적 W/N · U | 누적 점수 L | 다음 판단 |
+|---|---:|---:|---:|---|
+| 저가 A05 |0/1 ·9|36/63,57.1% ·59|44.86%|A09 대비 후순위. 당일 손절1 추가 |
+| 저가 A09 |1/1 ·20|103/189,54.5% ·133|47.38%|저가 우선 적용 검토 후보. 당일 확정 승리1 추가 |
+| 고가 A12 |0/0 ·1|12/20,60.0% ·18|38.66%|누적 연구 순위 유지. 당일 효과는 미확정 |
+| 고가 A14 |0/0 ·10|13/29,44.8% ·33|28.41%|A12 대비 후순위. 당일 효과는 미확정 |
+| 중가 A08 |5/5 ·46|171/539,31.7% ·405|27.94%|현행 유지. 당일5승만으로 누적 미달을 뒤집지 않음 |
+
+분모N은 WIN+STOP+TIMEOUT이며 U는 별도다. 당일 고정 현행 규칙의 재생 확인점은3유형 모두0이며 이는 운영 전체 이벤트 건수의 주장과 다르다. 당일 확정7점만으로1/1·5/5를 일반화하지 않는다. U86은 종목 원 경로 종료75·collector epoch 전환9·다음 행 부적격2이고, 보관된23개 완성봉 원천에도 해당86점의 동일 item 자료가 없었다. 원천을 보강하지 않은 채 U를실패/승리로 채우거나 새로운 최소 표본·승률 문턱을 붙이지 않는다.
+
+15:52 실제 선택 릴리스d5ddc0ae0의 활성3scope는 동결 비교 현행과 일치했다. 해당 릴리스에는 새 점수 코드가 없고, 활성/대기 scoring 계약도 없다. 따라서 연구 추천은 완료했으나 이 산출물만으로 즉시 운영 적용된 상태는 아니다. 저가A09는 다음 명시적 선택/등록·검토본 통합 배포의 우선 후보로 제안한다. 고가A12는 누적 후보를 유지하되 새 날짜 효과 미확정을 명시한다. 중가A08은 적용하지 않고 원 현행을 유지하는 결론이다. 기존 native 등록 경로의 정식 원천·부모/source/code 결속은 유지하며, 이 요건을 선행 연구 금지 조건으로 되돌리지 않는다.
+
+후속은 기존 owner에서 (1)86미확정 exact item의 정규장 후행 원천 보강 가능 여부,(2)정식 source27 세대의 동일 key/라벨 차이,(3)채택할 범위의 승인된 선택 계약·부모 인계/배포·실제 PID 소비 순서다. AFTER로 시장을 바꾸거나 정규장30분을60분으로 확대하지 않는다. 수치·추가/제거 승리·검증 및 남은 조건은 [검토서 §11](../audits/main-regular-nonfixed-pattern-contribution-review-2026-10-27.md#11-정규장-5후보-당일누적-재검증-완료--1552)을 따른다.
+
+## 9. 원천 보강 후 A09 단독 준비와 완료 경계 — 17:16
+
+[최신 실행 결과 §12](../audits/main-regular-nonfixed-pattern-contribution-review-2026-10-27.md)를 기준으로 원 U86 중 WIN32/TIMEOUT42/STOP1을 확정했고 잔여11은 중간 결손5·종료 부족3·clock 충돌3으로 제외했다. A09의 누적113/204승(55.4%)·L48.53%가 현행2/2의 L34.24%와 A05의44.77%보다 높아 저가 단독 채택을 권고한다. 고가A12의 당일0/1과 중가A08의 누적187/581은 이번 적용에 포함하지 않는다.
+
+구현은 `prepare-scoring --scope 'other_non_fixed|REGULAR|LT_20000|SOR' --candidate A09`로 후보를 고정하고 전체128개 부모 구성을 결속한다. 부분 계약은 `carry_parent`가 필수이며 나머지127개 범위는 자동 재선택하지 않는다. 현행 보조정책·hard guard·route·자금·수량·주문 제한을 변경하지 않는다. 새 최소 표본/EV/기존 WIN 보존 gate를 추가하지 않는다.
+
+최종 코드 `a1b1b0f8a54aaad8b1ac5546824329b4e958cdd8`는 최신 운영 `3a989b283446805cf5c2e5523b9d986228175b1a`를 통합했다. native complete dependency profile과 독립 preparation reader의 첫 결손을 수리해 현행 정책 신호569건 parity·정책 인계·격리 P5가 통과했다. A09의 private native family/보조 입력29건 검증도 통과했지만 정식 A09 정책 P5나 actual PID 소비로 대체 표시하지 않는다. 저장 제안은 미승인 상태이며 pending/active pointer에 쓰지 않았다.
+
+[최종 준비 JSON](/home/ubuntu/KORStockScan/tmp/regular-selection-score-20261027/a09-preparation/readiness-review.json)의 남은 조건은 source27 native machine terminal→저가A09 exact prepared-scoring→명시적 채택/배포 지시→native intake/변경된 직접 의존 stage 재생성→실제 A09 정책 인계/P5→ordered transition/정확 PID 소비다. 실제 terminal 이전에 정규장 연구를 대기시키지 않으며, 게시를 위해 하루 전체 terminal을 조작하거나 옛 receipt를 재사용하지 않는다. 코드만 배포할 경우 현행 정책 유지 범위의 준비는 완료했다.
+
+기존 `MachinePatternOpportunityResearch1023`에서20:05~23:59 source27 대조와 다음 영업일2026-10-28 09:30~10:00 REGULAR/SOR/_AL 자연 수용을 이어간다. 원 실패·이전 후보·running waiter·source26 근거는 실제 소비자가 있어 보존한다. 실행 결과를 이유로 원 소표본 규칙 외의 임의 제약이나 새 스케줄을 추가하지 않는다.
