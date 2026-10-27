@@ -2767,3 +2767,14 @@ def test_structured_trailing_projection_spills_without_losing_fields(tmp_path, m
     assert events[-1].raw_line == "original 1023"
     assert receipts[0]["logical_sha256"] == digest.hexdigest()
     assert peak < 8 * 1024 * 1024
+def test_machine_quote_display_is_not_a_second_source_copy():
+    from src.engine.sniper_trade_review_report import HoldingEvent, _build_timeline
+
+    fields = {"id": "1", "reason": "source_gap", "universal_trailing_quote": '{"bid":null}',
+              "_classifier_observations": [{"sequence": 4}]}
+    row = _build_timeline([HoldingEvent("2026-10-26 09:00:00", "TEST", "123456",
+                                      "scalp_trailing_input_transition", fields, "")])[0]
+    assert row["fields"] == fields
+    assert "source_gap" in str(row["details"])
+    assert "universal_trailing_quote" not in str(row["details"])
+    assert "_classifier_observations" not in str(row["details"])

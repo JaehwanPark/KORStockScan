@@ -133,6 +133,10 @@ _DETAIL_HIDDEN_KEYS = {
     "first_crossing",
     "operational_threshold_values",
     "operational_threshold_sources",
+    # Machine payloads remain verbatim in fields and in the research census.
+    # Rendering their JSON again as a display string duplicates each quote.
+    "universal_trailing_quote",
+    "_classifier_observations",
 }
 
 _DETAIL_KEY_ORDER = [

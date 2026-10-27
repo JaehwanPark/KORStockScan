@@ -10,11 +10,13 @@ import os
 import re
 import stat as stat_module
 import uuid
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from src.utils.constants import DATA_DIR
 from src.utils.jsonl_io import (
+    json_artifact_generation_lock,
     jsonl_artifact_generation_lock,
     write_json_object_generation_safe,
 )
@@ -510,6 +512,9 @@ def _gzip_file_unchecked(
         raise ValueError("archive_generation_changed_before_removal")
     if file_identity(path.stat()) != original_identity:
         raise ValueError("archive_source_changed_before_removal")
+    for custody_path, before in custody_identities.items():
+        if file_identity(custody_path.stat()) != before:
+            raise ValueError("storage_custody_changed_before_removal")
     path.unlink()
     return True, original_size - published_identity["size"]
 
@@ -719,8 +724,12 @@ def _storage_custody(target_date):
 
 
 def run(
-    *, retention_days: int, today: date, dry_run: bool, pipeline_dates=None
+    *, retention_days: int, today: date, dry_run: bool, pipeline_dates=None,
+    snapshots_only: bool = False, snapshot_dates=None,
 ) -> dict:
+    if pipeline_dates is not None and (snapshots_only or snapshot_dates is not None):
+        raise ValueError("archive_scope_conflict")
+    snapshots_only = snapshots_only or snapshot_dates is not None
     cutoff = today - timedelta(days=retention_days)
     stats = {
         "cutoff": cutoff.isoformat(),
@@ -758,6 +767,7 @@ def run(
         "retained_trade_window_source_count": 0,
         "skipped_postclose_protected": 0,
         "postclose_protection_reasons": {},
+        "snapshot_retained_bytes": 0,
         "errors": [],
     }
 
@@ -775,7 +785,7 @@ def run(
         return bool(reason)
 
     # pipeline_events_*.jsonl only (already compressed .gz excluded)
-    for path in sorted(PIPELINE_EVENTS_DIR.glob("pipeline_events_*.jsonl")):
+    for path in ([] if snapshots_only else sorted(PIPELINE_EVENTS_DIR.glob("pipeline_events_*.jsonl"))):
         target_date = _date_from_pipeline_file(path)
         if target_date is None or target_date > cutoff:
             continue
@@ -802,44 +812,61 @@ def run(
     if pipeline_dates is not None:
         return stats
 
-    # monitor snapshot *.json only (already compressed .gz excluded)
-    for path in sorted(MONITOR_SNAPSHOT_DIR.glob("*_*.json")):
+    # A prior attempt can commit the main archive before its sidecar. Census
+    # remaining sidecars independently so interrupted groups do not accumulate.
+    snapshots = set(MONITOR_SNAPSHOT_DIR.glob("*_*.json"))
+    snapshots.update(
+        path.with_name(path.name.removesuffix(".completed_projection.json") + ".json")
+        for path in MONITOR_SNAPSHOT_DIR.glob("trade_review_*.completed_projection.json")
+    )
+    for path in sorted(snapshots):
         parsed = _kind_and_date_from_snapshot_file(path)
         if parsed is None:
             continue
         kind, target_date = parsed
+        if snapshot_dates is not None and target_date not in snapshot_dates:
+            continue
         if target_date > cutoff:
             continue
         if protected(target_date):
+            for retained in (path, path.with_suffix(".completed_projection.json")):
+                if retained.is_file():
+                    stats["snapshot_retained_bytes"] += retained.stat().st_size
             continue
         stats["snapshots"]["scanned"] += 1
         try:
-            manifest_verified = _snapshot_manifest_verifies(kind, target_date)
-            content_valid = _snapshot_json_boundary_valid(path)
-            verified = manifest_verified and content_valid
-            if not verified:
-                stats["skipped_unverified"] += 1
-                if manifest_verified and not content_valid:
-                    stats["errors"].append(
-                        f"snapshot:{path.name}:invalid_json_boundary_not_compressed"
-                    )
-                continue
-            stats["snapshots"]["verified"] += 1
-            compressed, saved = _gzip_file(path, dry_run=dry_run)
-            if compressed:
-                stats["snapshots"]["compressed"] += 1
-                stats["snapshots"]["saved_bytes"] += saved
-            if kind == "trade_review":
-                sidecar = path.with_suffix(".completed_projection.json")
-                if sidecar.is_file():
-                    # Keep the small producer dependency receipt plain; its
-                    # projection bytes retain the same logical generation.
-                    compressed, saved = _gzip_file(sidecar, dry_run=dry_run)
+            with json_artifact_generation_lock(path, exclusive=True):
+                manifest_verified = _snapshot_manifest_verifies(kind, target_date)
+                if path.is_file():
+                    content_valid = _snapshot_json_boundary_valid(path)
+                else:
+                    from src.engine.lifecycle.snapshot_archive import archived_receipt
+
+                    content_valid = archived_receipt(path) is not None
+                if not manifest_verified or not content_valid:
+                    stats["skipped_unverified"] += 1
+                    if manifest_verified and not content_valid:
+                        stats["errors"].append(
+                            f"snapshot:{path.name}:invalid_json_boundary_not_compressed"
+                        )
+                    continue
+                stats["snapshots"]["verified"] += 1
+                custody = _storage_custody(target_date)
+                members = [path]
+                if kind == "trade_review":
+                    members.append(path.with_suffix(".completed_projection.json"))
+                for member in members:
+                    if not member.is_file():
+                        continue
+                    compressed, saved = _gzip_file(member, dry_run=dry_run, custody=custody)
                     if compressed:
                         stats["snapshots"]["compressed"] += 1
                         stats["snapshots"]["saved_bytes"] += saved
         except Exception as exc:
             stats["errors"].append(f"snapshot:{path.name}:{exc}")
+
+    if snapshots_only:
+        return stats
 
     # threshold-cycle immutable source snapshots (already compressed .gz excluded)
     for path in sorted(THRESHOLD_SNAPSHOT_DIR.glob("pipeline_events_*.jsonl")):
@@ -1001,13 +1028,27 @@ def main() -> int:
         type=date.fromisoformat,
         help="Limit storage repair to these pipeline dates; preserve other families",
     )
+    parser.add_argument(
+        "--snapshots-only", action="store_true",
+        help="Compact eligible monitor snapshots only, including interrupted sidecars",
+    )
+    parser.add_argument(
+        "--snapshot-date", action="append", type=date.fromisoformat,
+        help="Limit snapshot compaction to these source dates; preserve other families",
+    )
     args = parser.parse_args()
+    if args.pipeline_date and (args.snapshots_only or args.snapshot_date):
+        parser.error("--pipeline-date conflicts with snapshot-only scope")
 
     if args.days < 0:
         print("[DASHBOARD_ARCHIVE_ERROR] --days must be >= 0")
         return 2
 
-    today = _parse_iso_date(args.today) if args.today else date.today()
+    today = (
+        _parse_iso_date(args.today)
+        if args.today
+        else datetime.now(ZoneInfo("Asia/Seoul")).date()
+    )
     if today is None:
         print(f"[DASHBOARD_ARCHIVE_ERROR] invalid --date: {args.today}")
         return 2
@@ -1017,6 +1058,8 @@ def main() -> int:
         today=today,
         dry_run=args.dry_run,
         pipeline_dates=set(args.pipeline_date) if args.pipeline_date else None,
+        snapshots_only=args.snapshots_only,
+        snapshot_dates=set(args.snapshot_date) if args.snapshot_date else None,
     )
     mode = "DRY_RUN" if args.dry_run else "RUN"
     print(f"[DASHBOARD_ARCHIVE_{mode}] cutoff={stats['cutoff']}")
@@ -1044,6 +1087,7 @@ def main() -> int:
         f"verified={stats['snapshots']['verified']} "
         f"compressed={stats['snapshots']['compressed']} "
         f"saved_bytes={stats['snapshots']['saved_bytes']}({_format_bytes(stats['snapshots']['saved_bytes'])})"
+        f" retained_policy_or_closure_bytes={stats['snapshot_retained_bytes']}"
     )
     print(
         "[DASHBOARD_ARCHIVE_THRESHOLD_SNAPSHOTS] "
