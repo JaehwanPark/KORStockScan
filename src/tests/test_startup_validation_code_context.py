@@ -2761,7 +2761,7 @@ def test_main_preparation_uses_reviewed_stopped_origin_code(name):
     review = json.loads((ROOT / H._FORMATTING_REVIEW_PATH).read_text())
     predecessor = review["sources"][name]["before_sha256"]
     if review["sources"][name]["after_sha256"] != current:
-        assert H.REVIEWED_NONFIXED_FINAL_PROFILE[name] == current
+        assert H.REVIEWED_SCOPED_SCORING_PROFILE[name] == current
         C._pairs({name: review["sources"][name]["after_sha256"]}, {name: current})
     origins = {old for old, new in pairs if new in {predecessor, current}}
     origins.add(predecessor)
@@ -3079,6 +3079,18 @@ def test_submit_probe_independent_preparation_exact_pairs(relative, fault):
     elif fault == "successor":
         new = "0" * 64
     assert C.reviewed_preparation_pair(relative, old, new) is (fault is None)
+
+
+@pytest.mark.parametrize("name", sorted(C.REVIEWED_SCOPED_SCORING_SOURCES))
+@pytest.mark.parametrize("fault", [None, "origin", "successor"])
+def test_scoped_scoring_independent_preparation_binds_exact_generation(name, fault):
+    old = C.REVIEWED_SCOPED_SCORING_ORIGINS[name]
+    current = hashlib.sha256((ROOT/name).read_bytes()).hexdigest()
+    assert current == C.REVIEWED_SCOPED_SCORING_SOURCES[name]
+    assert current == H.REVIEWED_SCOPED_SCORING_HASHES[name]
+    if fault == "origin": old = "0" * 64
+    if fault == "successor": current = "0" * 64
+    assert C.reviewed_preparation_pair(name, old, current) is (fault is None)
 
 
 @pytest.mark.parametrize("relative", list(C.REVIEWED_HEALTH_SNAPSHOT_SOURCES))

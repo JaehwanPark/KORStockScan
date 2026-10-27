@@ -12065,6 +12065,47 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
 }}
 
 
+# Complete scoped-scoring generation. Matching the selector admits exactly
+# this dependency set; mixed sources and original policy digest changes fail.
+REVIEWED_SCOPED_SCORING_HASHES = {
+    "src/engine/scalping/continuous_reversal_policy_v6.py": "8c0a0a8effebd618029a9414c88ec0abee585e9fda24ed8b25327ee5fe6228da",
+    "src/engine/scalping/reversal_cumulative_registration.py": "f5a35312f6a0fff8c27aa6eef87513cb5ed8ba49b56f06323311b64fdc48dea4",
+    "src/engine/scalping/reversal_cumulative_postclose.py": "3943d7a42a662dcf1117d78aae433000effe08c75ca4355013afaeb96c8be3ed",
+    "src/engine/infrastructure/startup_validation_code_context.py": "3191c39581524d473fd176b7eab7e37f9ebab18cb4cbbbc9d4b7dd0a84bc8dfd",
+}
+REVIEWED_SCOPED_SCORING_ORIGINS = {
+    "src/engine/scalping/continuous_reversal_policy_v6.py": "9342dec3beb2683d68f6851d58e8e6614f5481630abb4590d809024e8e3e5da4",
+    "src/engine/scalping/reversal_cumulative_registration.py": "fd49ff4d01289a23891f3bb85ee5695134a73f95c55c1f6a00e6cfc2fe4d0624",
+    "src/engine/scalping/reversal_cumulative_postclose.py": "f24f1cd9dba38de51a7e3193b506cb8b0e02a8b53fbc94348bf432140782e1f9",
+    "src/engine/infrastructure/startup_validation_code_context.py": REVIEWED_NONFIXED_FINAL_PROFILE["src/engine/infrastructure/startup_validation_code_context.py"],
+}
+REVIEWED_SCOPED_SCORING_PROFILE = {
+    **REVIEWED_NONFIXED_FINAL_PROFILE, **REVIEWED_SCOPED_SCORING_HASHES
+}
+REVIEWED_SCOPED_SCORING_VARIANTS = {
+    (key[0], REVIEWED_SCOPED_SCORING_HASHES.get(key[0], key[1])): {
+        **value,
+        "selector_path": "src/engine/infrastructure/startup_validation_code_context.py",
+        "selector_sha256": REVIEWED_SCOPED_SCORING_HASHES["src/engine/infrastructure/startup_validation_code_context.py"],
+        "dependencies": {**value["dependencies"], **REVIEWED_SCOPED_SCORING_HASHES},
+        "contract_extensions": {
+            origin: {name: REVIEWED_SCOPED_SCORING_HASHES.get(os.path.normpath(name), sha)
+                     for name, sha in paths.items()}
+            for origin, paths in value["contract_extensions"].items()
+        },
+    }
+    for key, value in REVIEWED_NONFIXED_FINAL_VARIANTS.items()
+}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple(
+        (old, current)
+        for old in {value for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ()) for value in pair}
+                   | {REVIEWED_SCOPED_SCORING_ORIGINS[name]}
+    )
+    for name, current in REVIEWED_SCOPED_SCORING_HASHES.items()
+}}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -12826,6 +12867,12 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     ):
         prepared_hashes = REVIEWED_NONFIXED_FINAL_PROFILE
         prepared_variants = REVIEWED_NONFIXED_FINAL_VARIANTS
+    if (
+        (source := candidate_bytes("src/engine/infrastructure/startup_validation_code_context.py", optional=True)) is not None
+        and hashlib.sha256(source).hexdigest() == REVIEWED_SCOPED_SCORING_HASHES["src/engine/infrastructure/startup_validation_code_context.py"]
+    ):
+        prepared_hashes = REVIEWED_SCOPED_SCORING_PROFILE
+        prepared_variants = REVIEWED_SCOPED_SCORING_VARIANTS
     entry_cost_hashes = (
         prepared_hashes
         if prepared_owner_present

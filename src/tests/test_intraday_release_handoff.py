@@ -5354,6 +5354,9 @@ def test_pre_submit_keeps_consumed_preparation_and_rejects_mixed_successor(
         "src/engine/monitoring/runtime_performance.py",
         "src/trading/entry/physical_send_guard.py",
         "src/engine/monitoring/policy_generation_code_handoff.py",
+        "src/engine/scalping/continuous_reversal_policy_v6.py",
+        "src/engine/scalping/reversal_cumulative_registration.py",
+        "src/engine/scalping/reversal_cumulative_postclose.py",
     ],
 )
 def test_pre_submit_handoff_rejects_unreviewed_dependency(tmp_path, family, dependency):
@@ -5370,6 +5373,7 @@ def test_pre_submit_handoff_rejects_unreviewed_dependency(tmp_path, family, depe
     "generation",
     [
         "current",
+        "consumed_nonfixed_final",
         "consumed_invalidation_cadence",
         "consumed_nonfixed_identity",
         "consumed_preclaim",
@@ -5415,7 +5419,8 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
     )
     subprocess.run(["git", "-C", str(root), "checkout", "-q", "75e0fbbf7"], check=True)
     hashes = {
-        "current": handoff.REVIEWED_NONFIXED_FINAL_PROFILE,
+        "current": handoff.REVIEWED_SCOPED_SCORING_PROFILE,
+        "consumed_nonfixed_final": handoff.REVIEWED_NONFIXED_FINAL_PROFILE,
         "nonfixed_current": handoff.REVIEWED_NONFIXED_CURRENT_PROFILE,
         "preclaim_cadence": handoff.REVIEWED_PRECLAIM_CADENCE_PROFILE,
         "consumed_invalidation_cadence": handoff.REVIEWED_INVALIDATION_CADENCE_PROFILE,
@@ -5512,6 +5517,7 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
                         "preclaim_diagnostics": "c8d22dd41",
                         "invalidation_cadence": "d5ddc0ae0",
                         "nonfixed_current": "7add11172",
+                        "consumed_nonfixed_final": "3178d65e0",
                         "preclaim_cadence": "2b725bb39",
                         "finalization_admission": "194307750",
                         "consumed_suffix_report": "ab663e13b",

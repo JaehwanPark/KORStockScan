@@ -2865,6 +2865,27 @@ for _name, _sha in REVIEWED_NONFIXED_FINAL_SOURCES.items():
     _history.update((_old, _sha) for _old in _prior)
 
 
+# Scoped scoring changes selection only after explicit intake. Current policy
+# consumption retains the issued source generation and all runtime guards.
+REVIEWED_SCOPED_SCORING_SOURCES = {
+    "src/engine/scalping/continuous_reversal_policy_v6.py": "8c0a0a8effebd618029a9414c88ec0abee585e9fda24ed8b25327ee5fe6228da",
+    "src/engine/scalping/reversal_cumulative_registration.py": "f5a35312f6a0fff8c27aa6eef87513cb5ed8ba49b56f06323311b64fdc48dea4",
+    "src/engine/scalping/reversal_cumulative_postclose.py": "3943d7a42a662dcf1117d78aae433000effe08c75ca4355013afaeb96c8be3ed",
+}
+REVIEWED_SCOPED_SCORING_ORIGINS = {
+    "src/engine/scalping/continuous_reversal_policy_v6.py": "9342dec3beb2683d68f6851d58e8e6614f5481630abb4590d809024e8e3e5da4",
+    "src/engine/scalping/reversal_cumulative_registration.py": "fd49ff4d01289a23891f3bb85ee5695134a73f95c55c1f6a00e6cfc2fe4d0624",
+    "src/engine/scalping/reversal_cumulative_postclose.py": "f24f1cd9dba38de51a7e3193b506cb8b0e02a8b53fbc94348bf432140782e1f9",
+}
+for _name, _sha in REVIEWED_SCOPED_SCORING_SOURCES.items():
+    _history = REVIEWED_PREPARATION_HISTORY.setdefault(_name, set())
+    _origins = {value for pair in _history for value in pair}
+    _origins.add(REVIEWED_SCOPED_SCORING_ORIGINS[_name])
+    if _name in REVIEWED_PREPARATION_SOURCES:
+        _origins.update(REVIEWED_PREPARATION_SOURCES[_name])
+    _history.update((_old, _sha) for _old in _origins)
+
+
 def reviewed_preparation_pair(relative, old, current):
     # An already reviewed physical pair keeps its original authority; a
     # formatting projection must not replace either endpoint before this check.

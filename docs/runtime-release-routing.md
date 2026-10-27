@@ -308,6 +308,17 @@ The reviewed REST reduction uses `REVIEWED_REST_REDUCTION_SOURCES` for the exact
 
 ## Intraday diagnostic storage and refresh cadence
 
+The reviewed scoped-scoring successor uses `REVIEWED_SCOPED_SCORING_PROFILE`
+and the independent preparation reader's exact source pairs. The complete
+generation binds the v6 consumer, cumulative selector and postclose producer;
+mixed, dirty, missing or unreviewed dependencies still fail before drain.
+Active-policy confirmation parity and the issued native code handoff remain
+mandatory. Loading this code does not select a scoring contract. A scoped
+request freezes all parent memberships, names only its approved alternatives,
+and carries every unscored scope. `prepare-scoring --scope SCOPE --candidate
+A09` writes an unapproved preparation only; intake remains explicit and binds
+the native source generation, current parent and exact reviewed code.
+
 The observer validates the canonical ordered deployment transition before publication. During selected/prepared/starting it retains the exact frozen predecessor and incident state, skips calculation and notification, and returns deferred (75). The wrapper records DEFERRED without DONE, a cooldown update, or recovery of any earlier failure. A changed or invalid transition cannot publish current evidence. The existing detector allows only the exact captured predecessor through its bounded first scheduled slot; the next ordinary run must bind the attested current PID.
 
 Buy Funnel remains on its existing five-minute cron with the exclusive wrapper flock. Its default completion cooldown is zero: a long run no longer makes the next available scheduled run skip another window. A valid explicit `BUY_FUNNEL_SENTINEL_COOLDOWN_SEC` still overrides the default. The 600-second freshness check, native DONE/failure rules and source-only authority remain unchanged; a genuinely late report still fails freshness.
