@@ -319,6 +319,23 @@ and carries every unscored scope. `prepare-scoring --scope SCOPE --candidate
 A09` writes an unapproved preparation only; intake remains explicit and binds
 the native source generation, current parent and exact reviewed code.
 
+
+The source-first successor prepares scoped scoring from the native exact-date
+EOD, preflight binding and frozen source manifest before the first machine
+stage. An explicitly approved `request-scoring` freezes only the parent map and
+allowed alternatives. The existing postclose wrapper calls `fulfill-scoring`
+after preflight/resource checks and before machine launch. No matching request
+is a no-op. Intake uses the existing publisher and stage-writer CAS; a started
+stage, stale source, changed parent/code or conflicting request still fails.
+The terminal and stage bind the actual raw/scoped metric and both scoring hashes.
+Replay checkpoints include the requested detection memberships. The machine
+stage validates its immutable comparison and bound projection after the enabled
+auxiliary tuner replaces the separate publication view; changed original
+comparisons remain invalid. Keep historical
+raw/scoped profiles and receipts for their original consumers. Code deployment
+and unchanged-parent P5 do not prove A09 selection, new-policy startup or a full
+source-day postclose chain.
+
 The observer validates the canonical ordered deployment transition before publication. During selected/prepared/starting it retains the exact frozen predecessor and incident state, skips calculation and notification, and returns deferred (75). The wrapper records DEFERRED without DONE, a cooldown update, or recovery of any earlier failure. A changed or invalid transition cannot publish current evidence. The existing detector allows only the exact captured predecessor through its bounded first scheduled slot; the next ordinary run must bind the attested current PID.
 
 Buy Funnel remains on its existing five-minute cron with the exclusive wrapper flock. Its default completion cooldown is zero: a long run no longer makes the next available scheduled run skip another window. A valid explicit `BUY_FUNNEL_SENTINEL_COOLDOWN_SEC` still overrides the default. The 600-second freshness check, native DONE/failure rules and source-only authority remain unchanged; a genuinely late report still fails freshness.

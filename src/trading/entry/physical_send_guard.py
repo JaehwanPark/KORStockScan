@@ -201,6 +201,12 @@ class PhysicalEntrySendContext:
             or self.current_price <= 0
         ):
             reject("entry_context_invalid")
+        # An expired request cannot pay for native/quote reads or acquire a
+        # renewed budget. The independent check after those reads remains.
+        now, perf = time.time(), time.perf_counter()
+        if now >= self.original_deadline_epoch or perf >= self.original_deadline_perf:
+            receipt.update(checked_epoch=now, checked_perf=perf)
+            reject("original_entry_deadline_expired")
         try:
             decision, policy = self.binding_reader()
             if (

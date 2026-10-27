@@ -19,6 +19,25 @@ from src.engine.scalping.scanner_runtime_scheduler import ScannerGeneration
 from src.engine import sniper_state_handlers as handlers
 
 
+def test_fresh_native_signal_has_new_request_key_even_without_ai_clock_change():
+    generation = SimpleNamespace(generation_id="scanner-generation")
+    stock = {"_continuous_reversal_pending_claim": {"token": "first-native-claim"}}
+    args = dict(
+        generation=generation, trigger_reason="native_signal", last_ai_time=100.0
+    )
+    first = handlers._scanner_async_entry_cache_key(stock, **args)
+    assert handlers._scanner_async_entry_cache_key(stock, **args) == first
+    stock["_continuous_reversal_pending_claim"] = {"token": "fresh-native-claim"}
+    fresh = handlers._scanner_async_entry_cache_key(stock, **args)
+    assert fresh != first
+    # An in-flight request remains owned by its original queue key.
+    stock.update(
+        _scanner_async_generation_id=generation.generation_id,
+        _scanner_async_cache_key=first,
+    )
+    assert handlers._scanner_async_entry_cache_key(stock, **args) == first
+
+
 @pytest.fixture(autouse=True)
 def capacity_prefetch_calls(monkeypatch):
     calls = []
@@ -484,6 +503,7 @@ def test_native_ack_exception_is_before_acceptance_and_cleans_only_original(
         "delay_armed",
         "context_block",
         "local_guard_block",
+        "price_guard_block",
         "auth_guard_block",
         "local_preflight_block",
         "forged_local_guard",
@@ -864,17 +884,30 @@ def test_retained_pass_reaches_real_submit_body_and_adapter_once(
                     return_msg="nxt_market_to_best_limit",
                 )
             )
-        if outcome in {"local_guard_block", "auth_guard_block", "forged_local_guard"}:
+        if outcome in {
+            "local_guard_block",
+            "price_guard_block",
+            "auth_guard_block",
+            "forged_local_guard",
+        }:
             attempted = outcome == "auth_guard_block"
             response = dict(
                 return_code="ENTRY_SEND_GUARD_BLOCKED",
                 entry_send_guard_blocked=True,
-                return_msg="original_entry_deadline_expired",
+                return_msg=(
+                    "execution_price_changed_reprice_required"
+                    if outcome == "price_guard_block"
+                    else "original_entry_deadline_expired"
+                ),
                 broker_order_attempted=attempted,
                 physical_send_attempt_count=int(attempted),
                 entry_send_guard_receipt={
                     "allowed": False,
-                    "reason": "original_entry_deadline_expired",
+                    "reason": (
+                        "execution_price_changed_reprice_required"
+                        if outcome == "price_guard_block"
+                        else "original_entry_deadline_expired"
+                    ),
                 },
                 rejected_auth_response={"return_code": "8005"} if attempted else None,
             )
@@ -1021,6 +1054,7 @@ def test_retained_pass_reaches_real_submit_body_and_adapter_once(
         if outcome in {
             "context_block",
             "local_guard_block",
+            "price_guard_block",
             "auth_guard_block",
             "local_preflight_block",
             "forged_local_guard",
@@ -1056,6 +1090,13 @@ def test_retained_pass_reaches_real_submit_body_and_adapter_once(
                     stock["_async_entry_nonexecution_identity"]["evaluation_attempt_id"]
                     == "eval-original"
                 )
+                if outcome == "price_guard_block":
+                    parent = stock["_async_entry_nonexecution_identity"]
+                    assert parent["request_id"] == original.request_id
+                    assert parent["code"] == "005930"
+                    assert parent["physical_disposition"]["local_not_sent_reason"] == (
+                        "execution_price_changed_reprice_required"
+                    )
             else:
                 assert (
                     stock["_async_entry_submission_identity"]["evaluation_attempt_id"]

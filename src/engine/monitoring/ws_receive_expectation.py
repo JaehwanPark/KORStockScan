@@ -5,6 +5,7 @@ from math import isfinite
 from typing import Any, Mapping
 from collections import deque
 from hashlib import sha256
+from ast import literal_eval
 import json
 
 KST = timezone(timedelta(hours=9))
@@ -45,13 +46,15 @@ class DepthReceiveCadence:
     """
 
     def __init__(
-        self, *, item, epoch, generation, session, registered_at, route_sequence_base=0
+        self, *, item, epoch, generation, session, registered_at, route_sequence_base=0,
+        market_state=None,
     ):
         self.scope = dict(
             item=item,
             transport_epoch=epoch,
             subscription_generation=generation,
             session=session,
+            market_state=market_state,
             registered_at_epoch=registered_at,
             source_day=int((registered_at + 9 * 3600) // 86400),
             route_sequence_base=route_sequence_base,
@@ -244,8 +247,13 @@ def classify_delay_quote_collection(row, *, ledger_complete):
             if len(evidence) > 4096:
                 return verdict("contract_invalid", "collection_evidence_budget_invalid")
             evidence = json.loads(evidence)
-        except ValueError:
-            return verdict("contract_invalid", "collection_evidence_json_invalid")
+        except (ValueError, RecursionError):
+            # Original pipeline rows used str(dict). Read that bounded literal
+            # without changing original bytes or weakening the binding checks.
+            try:
+                evidence = literal_eval(evidence)
+            except (ValueError, SyntaxError, TypeError, RecursionError):
+                return verdict("contract_invalid", "collection_evidence_json_invalid")
     if not isinstance(evidence, Mapping):
         return verdict("unobservable", "legacy_collection_evidence_missing")
     if (

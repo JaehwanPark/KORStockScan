@@ -2088,6 +2088,7 @@ def _operating_machine_stage_fixture(tmp_path, monkeypatch, day="2026-10-13"):
     )
     owned = report / "continuous_reversal" / day
     (owned / "machine.json").write_text(json.dumps(machine))
+    (owned / "machine-comparison.json").write_text(json.dumps(machine))
     (owned / "source.json").write_text(
         json.dumps(p.seal(dict(schema=p.SCHEMA, source_date=day, **p.AUTH)))
     )
@@ -2207,6 +2208,7 @@ def test_scoped_stage_binds_real_selector_metadata_and_live_input_generation(tmp
     P.write(paths['machine_policy'],machine)
     # The stage consumes both the native report and its compatibility projection.
     P.write(report/'continuous_reversal'/day/'machine.json',machine)
+    P.write(report/'continuous_reversal'/day/'machine-comparison.json',machine)
     P.write(paths['machine_policy_terminal'],terminal)
     P.write(R.scoring_path(tmp_path),contract)
     stage=h.run_stage('main_machine_policy',day,report_dir=report,project=tmp_path,runner=lambda *a,**k:0)
@@ -2215,6 +2217,14 @@ def test_scoped_stage_binds_real_selector_metadata_and_live_input_generation(tmp
     assert stage['scoring_contract_sha256']==contract['artifact_content_sha256']
     assert stage['statistic_contract_sha256']==P.digest(R.scoring_spec())
     assert h.stage_receipt_issues(report,day,'main_machine_policy',code_hash='fixture-code')==[]
+    # The actual enabled tuner issues a different publication hash and sources.
+    # The machine stage must retain its original comparison/terminal binding.
+    P.write(report/'continuous_reversal'/day/'machine.json',P.seal(dict(machine,source_receipts=[dict(path='auxiliary-evaluation')],adoption_basis='carried')))
+    assert h.stage_receipt_issues(report,day,'main_machine_policy',code_hash='fixture-code')==[]
+    comparison=report/'continuous_reversal'/day/'machine-comparison.json'
+    P.write(comparison,P.seal(dict(machine,source_manifest_sha256='f'*64)))
+    assert h.stage_receipt_issues(report,day,'main_machine_policy',code_hash='fixture-code')==['main_machine_policy:operating_comparison_projection_changed']
+    P.write(comparison,machine)
     for field,bad in [('selection_basis','cumulative_raw_win_fraction'),('scoring_contract_sha256','f'*64),('statistic_contract_sha256','f'*64)]:
         assert not h._operating_machine_terminal_selected(P.seal(dict(terminal,**{field:bad})),day,machine)
     for field in ('selection_metric','scoring_contract_sha256','statistic_contract_sha256'):
@@ -2413,6 +2423,7 @@ def test_operating_selected_report_authority_cannot_be_added_by_resealing_both_a
         json.dumps(machine)
     )
     paths["machine_policy"].write_text(json.dumps(machine))
+    (report / "continuous_reversal" / day / "machine-comparison.json").write_text(json.dumps(machine))
     changed = p.seal(dict(native, report_sha256=machine["artifact_content_sha256"]))
     paths["machine_policy_terminal"].write_text(json.dumps(changed))
     assert not h._operating_machine_terminal_selected(changed, day, machine)

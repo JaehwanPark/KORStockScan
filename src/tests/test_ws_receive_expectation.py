@@ -63,6 +63,23 @@ def test_delay_collection_cadence_does_not_change_quote_eligibility(age, state):
     assert row == before
 
 
+@pytest.mark.parametrize("encoding", [json.dumps, str])
+def test_delay_collection_reads_current_json_and_original_logger_literal(encoding):
+    row, _ = delay_collection_row()
+    row["quote_collection_evidence"] = encoding(row["quote_collection_evidence"])
+    before = dict(row)
+    assert classify_delay_quote_collection(row, ledger_complete=True)["state"] == "expected_wait"
+    assert row == before
+
+
+@pytest.mark.parametrize("payload", ["{'schema': object()}", "[" * 2000, "x" * 4097])
+def test_delay_collection_legacy_reader_rejects_unsafe_or_oversized_literal(payload):
+    row, _ = delay_collection_row()
+    row["quote_collection_evidence"] = payload
+    assert classify_delay_quote_collection(row, ledger_complete=True)["state"] == "contract_invalid"
+
+
+@pytest.mark.parametrize("encoding", [lambda value: value, json.dumps, str])
 @pytest.mark.parametrize(
     "change,state,reason",
     [
@@ -88,6 +105,7 @@ def test_delay_collection_cadence_does_not_change_quote_eligibility(age, state):
             "wire_to_normalized_loss",
         ),
         ({"transport_epoch": 8}, "contract_invalid", "collection_scope_mismatch"),
+        ({"session": ""}, "contract_invalid", "collection_scope_mismatch"),
         ({"item": "196170_AL"}, "contract_invalid", "collection_scope_mismatch"),
         ({"receiver_ready": False}, "unobservable", "collection_boundary_unproven"),
         (
@@ -111,10 +129,11 @@ def test_delay_collection_cadence_does_not_change_quote_eligibility(age, state):
     ],
 )
 def test_delay_collection_detects_new_loss_without_waiving_stale_guard(
-    change, state, reason
+    change, state, reason, encoding
 ):
     row, _ = delay_collection_row()
     row["quote_collection_evidence"].update(change)
+    row["quote_collection_evidence"] = encoding(row["quote_collection_evidence"])
     result = classify_delay_quote_collection(row, ledger_complete=True)
     assert (result["state"], result["reason"]) == (state, reason)
     assert row["quote_valid"] is False

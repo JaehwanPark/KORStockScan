@@ -13,19 +13,32 @@ from src.engine.kiwoom_websocket import KiwoomWSManager
 _SESSION_ROUTE_REQUIRED = KiwoomWSManager._integrated_aftermarket_route_required
 
 
+@pytest.mark.parametrize("market_state", ["P", None])
+@pytest.mark.parametrize("start,regime", [
+    ("08:00:00", "krx_like_premarket"),
+    ("16:40:00", "KRX_NXT_AFTERMARKET"),
+])
+@pytest.mark.parametrize("queued", [False, True])
 def test_main_depth_wire_normalization_and_sampler_evidence_detect_actual_local_loss(
     monkeypatch,
+    market_state,
+    queued,
+    start,
+    regime,
 ):
     from src.engine import sniper_state_handlers as handlers
+    from src.engine.scalping import pre_submit_delay_observation as observation
+    from src.utils import pipeline_event_logger as pipeline_logger
     from src.engine.monitoring.ws_receive_expectation import (
         classify_delay_quote_collection,
     )
 
     manager = KiwoomWSManager("test-token")
-    clock = [datetime.fromisoformat("2026-10-27T08:00:00+09:00").timestamp()]
+    clock = [datetime.fromisoformat(f"2026-10-27T{start}+09:00").timestamp()]
     monkeypatch.setattr(kiwoom_websocket.time, "time", lambda: clock[0])
     monkeypatch.setattr(manager, "_maybe_write_dashboard_snapshot", lambda: None)
-    manager.market_session_state = "P"
+    if market_state is not None:
+        manager.market_session_state = market_state
     manager._market_data_transport_epoch = 7
     manager._session_ready.set()
     manager.subscribed_codes.add("196170")
@@ -71,12 +84,28 @@ def test_main_depth_wire_normalization_and_sampler_evidence_detect_actual_local_
     )
     assert evidence["wire_count"] == evidence["normalized_count"] == 105
     assert evidence["cadence_basis"] == "provisional_p95"
+    assert evidence["session"] == regime
+    assert evidence["market_state"] == market_state
     emitted = []
-    monkeypatch.setattr(
-        handlers,
-        "_log_pre_submit_delay_event",
-        lambda *a, **kw: emitted.append(kw) or True,
-    )
+    monkeypatch.setattr(pipeline_logger, "TRADING_RULES", SimpleNamespace(PIPELINE_EVENT_JSONL_ENABLED=False))
+    monkeypatch.setattr(pipeline_logger, "log_info", lambda *a, **kw: None)
+    monkeypatch.setattr(observation, "_CLOSING", False)
+
+    def emit(*args, **kwargs):
+        kwargs.pop("observation_category", None)
+        event = pipeline_logger.emit_pipeline_event(*args, **kwargs)
+        emitted.append(event["fields"])
+        return event
+
+    def sink(emitter, *args, **kwargs):
+        assert emitter is pipeline_logger.emit_pipeline_event
+        emit(*args, **kwargs)
+        return {"status": "queued"}
+
+    monkeypatch.setattr(observation, "_SINK", sink if queued else None)
+    monkeypatch.setattr(handlers, "_log_entry_pipeline", lambda stock, code, stage, **kw: emit(
+        "ENTRY_PIPELINE", code, code, stage, fields=kw
+    ))
 
     def observe(ws):
         handlers._observe_pre_submit_delay_state_quote(
@@ -97,7 +126,8 @@ def test_main_depth_wire_normalization_and_sampler_evidence_detect_actual_local_
         return dict(emitted[-1], stock_code="196170")
 
     first = observe(snapshot)
-    assert first["quote_valid"] is False
+    assert first["quote_valid"] == "False"
+    json.loads(first["quote_collection_evidence"])
     assert (
         classify_delay_quote_collection(first, ledger_complete=True)["state"]
         == "expected_wait"
@@ -112,21 +142,21 @@ def test_main_depth_wire_normalization_and_sampler_evidence_detect_actual_local_
     result = classify_delay_quote_collection(lost, ledger_complete=True)
     assert result["state"] == "collection_fault_confirmed"
     assert result["reason"] == "wire_to_normalized_loss"
-    assert lost["quote_valid"] is True
-    lost_receipt = dict(lost["quote_collection_evidence"])
+    assert lost["quote_valid"] == "True"
+    lost_receipt = lost["quote_collection_evidence"]
     clock[0] += 1
     receive(values)
     recovered = observe(manager.get_pre_submit_delay_depth("196170"))
     healthy = classify_delay_quote_collection(recovered, ledger_complete=True)
     assert healthy["state"] == "locally_healthy"
     assert healthy["loss_event_id"] == result["loss_event_id"]
-    receipt = recovered["quote_collection_evidence"]
+    receipt = json.loads(recovered["quote_collection_evidence"])
     assert receipt["missing_normalizations"] == 1
     assert (
-        receipt["normalized_route_sequence"] == recovered["quote_route_sequence"] == 107
+        receipt["normalized_route_sequence"] == int(recovered["quote_route_sequence"]) == 107
     )
     assert lost["quote_collection_evidence"] == lost_receipt
-    assert recovered["quote_valid"] is True
+    assert recovered["quote_valid"] == "True"
     assert not manager._exact_probe_item_leases
 
 
@@ -146,7 +176,7 @@ def test_delay_cadence_resets_on_registration_epoch_session_and_remove(monkeypat
     manager.market_session_state = "Q"
     manager._record_source_wire_receipt(message, at + 1, transport_epoch=7)
     assert manager._delay_depth_cadence["196170_NX"].wire_count == 1
-    assert manager._delay_depth_cadence["196170_NX"].scope["session"] == "Q"
+    assert manager._delay_depth_cadence["196170_NX"].scope["market_state"] == "Q"
     manager._market_data_transport_epoch = 8
     assert manager._record_source_wire_receipt(message, at + 2, transport_epoch=8) is None
     manager._registered_item_epochs["196170_NX"] = 8
@@ -188,6 +218,31 @@ def test_delay_diagnostics_capacity_never_changes_native_registration(monkeypatc
     assert len(manager._delay_depth_cadence) == 2
     assert len(manager._micro_reversion_registration_receipt["items"]) == 3
     assert manager._registered_items_by_code["000003"] == ["000003_NX"]
+
+
+@pytest.mark.parametrize("before,after,regime", [
+    ("2026-10-27T08:59:59+09:00", "2026-10-27T09:00:00+09:00", "KRX_REGULAR"),
+    ("2026-10-27T15:59:59+09:00", "2026-10-27T16:00:00+09:00", "KRX_NXT_AFTERMARKET"),
+    ("2026-10-27T16:40:00+09:00", "2026-10-28T16:40:00+09:00", "KRX_NXT_AFTERMARKET"),
+])
+def test_delay_cadence_resets_on_local_session_or_day_without_0s(monkeypatch, before, after, regime):
+    clock = [datetime.fromisoformat(before).timestamp()]
+    monkeypatch.setattr(kiwoom_websocket.time, "time", lambda: clock[0])
+    manager = KiwoomWSManager("test-token")
+    manager._market_data_transport_epoch = 7
+    manager._registered_items_by_code["403870"] = ["403870_AL"]
+    manager._registered_item_epochs["403870_AL"] = 7
+    manager._record_main_source_registration_locked("403870_AL", ("0D",), source="session-test")
+    original = manager._delay_depth_cadence["403870_AL"]
+    message = dict(type="0D", item="403870_AL")
+    manager._record_source_wire_receipt(message, clock[0], transport_epoch=7)
+    manager._record_source_wire_receipt(message, datetime.fromisoformat(after).timestamp(), transport_epoch=7)
+    current = manager._delay_depth_cadence["403870_AL"]
+    assert current is not original and current.wire_count == 1
+    assert current.scope["session"] == regime
+    assert current.scope["market_state"] is None
+    assert current.scope["subscription_generation"] == original.scope["subscription_generation"]
+    assert manager._registered_items_by_code["403870"] == ["403870_AL"]
 
 
 def test_old_wire_receipt_cannot_normalize_a_replacement_registration():

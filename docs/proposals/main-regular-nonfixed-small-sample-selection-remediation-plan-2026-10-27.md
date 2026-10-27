@@ -164,3 +164,18 @@ L = (p + z*z/(2*N) - z*sqrt(p*(1-p)/N + z*z/(4*N*N))) / (1 + z*z/N)
 5. 코드리뷰·수리·재검증이 끝난 후 최종 후보와 직접 의존 세대를 고정하고, 승인된 native ordered transition 및 exact PID 소비를 검증한다. 사후 세대 변경이 필요한 경우 native recovery로 마지막 bound consumer까지 재봉인하며 EOD/누적 원장을 무조건 재생성하지 않는다.
 
 위 수리와 전체 검증이 남아 있어 장후 포함 배포 준비 상태는 OPEN이다. 통계 연구의 A09 권고는 그대로이며 현재 정책/봇/cron/호출한도는 변경하지 않는다. 근거는 [추가 검토 JSON](/home/ubuntu/KORStockScan/tmp/regular-selection-score-20261027/a09-preparation/postclose-integration-review.json) 및 같은 기존 checklist owner에 기록한다.
+
+## 11. Source-first 구현과 승인된 코드 배포
+
+§10의 선행 수리를 기존 G/CP/H owner에서 구현했다. `prepare-scoring`은 완료된 machine 출력에 의존하지 않고 exact-date EOD·native preflight/binding·동결 source manifest·실제 부모/registry/code를 검증한다. 준비 전후 및 intake에서 기존 machine stage lock과 이미 시작한 출력/영수증을 확인한다. 오래 걸리는 원천 동결 중에는 machine writer lock을 점유하지 않으며, 정상 scheduled writer가 먼저 시작하면 신규 intake를 거부한다.
+
+사전에 명시 승인된 선택 요청은 기존 G의 `request-scoring`으로 전체128scope 부모와 승인 대안만 동결한다. 이 요청은 원천·승패·선택 정책을 미리 만들지 않는다. 기존 장후 wrapper는 preflight와 resource 확인 뒤 첫 machine launch 직전에 `fulfill-scoring`을 호출한다. 요청이 없거나 해당 publication date의 요청이 아니면 무동작이며, 유효 요청만 기존 resource admission·prepare/intake로 결속한다. 실행 중 신규 등록이나 stale/changed source·부모·코드는 거부한다. 이미 등록된 동일 요청은 동결 증거를 재검증해 재사용하며 새로운 intake를 하지 않는다.
+
+CP terminal과 H reader/stage는 raw와 scoped metric 및 scoring/statistic hash를 같은 owner에서 검증한다. 실제 탐지 membership을 replay fingerprint에 넣어 A05/A09 등 승인 범위 변경 때 이전 cache가 재사용되지 않게 했다. 불변 원천/object store와 기존 checkpoint를 사용하고 새 원장·stage·주문 경로는 추가하지 않는다.
+
+- 사용자 배포·재기동 승인을 받았다. 최신 운영 `6d48e76e5`의 제출 기한·신호 identity·발견 지연 수리를 통합하고, 코드 출처의 두 독립 reader에 완전한 현 세대를 결속한다.
+- 기존 `prepare_scoring`의 완료-machine 의존은 제거/대체, 기존 raw terminal 판정은 단일 `selection_metadata`로 통합했다. 역사 raw/scoped profile과 receipt는 원 소비자 검증을 위해 보존한다. 정상 machine·enabled 보조튜닝·정책 게시 및 주문 safety owner는 유지한다.
+- 이 승인으로 코드 배포를 진행하되 신규 A09 선택·정책 게시·실제 소비와 혼동하지 않는다. 실제 source27 전체 장후 및 새 A09 정책의 enabled 보조→summary/strict/controller/PREOPEN/P5 연결은 그 native 원천과 승인 계약이 준비된 경우에만 실행/닫는다. 기존 부모 P5나 격리 단위 fixture로 이 전체 수용을 대체하지 않는다.
+- 배포 전 확인은 코드리뷰/회귀, wrapper 순서/실패 차단, 두 reader의 완전 세대/혼합 차단, 최신 incumbent CAS, native unchanged-policy parity/인계, 후보 P5 및 정식 ordered transition이다. 선택 후에는 최종 prepared 세대의 P5, actual PID/start/cwd·정책 소비, native observer와 첫 health sweep을 확인한다.
+
+검증·실패 원본과 배포 증거는 `tmp/regular-selection-score-20261027/a09-preparation/`에 보존하고 현재 checklist의 `MachinePatternOpportunityResearch1023` 한 owner로 인계한다. 통계 연구의 A09 권고 및 잔여 U11 제외는 변경하지 않는다.

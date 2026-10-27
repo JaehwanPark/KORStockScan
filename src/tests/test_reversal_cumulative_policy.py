@@ -1912,3 +1912,46 @@ def test_scoring_replay_cache_binds_actual_requested_detection_memberships(tmp_p
     c['scopes'][sid]['alternatives']={'ADD_A09':alternatives['ADD_A09']}
     build();assert len(observed)==2 and observed[0]!=observed[1]
     build();assert len(observed)==2
+
+
+def test_scoped_machine_selection_survives_enabled_auxiliary_campaign_and_issue(tmp_path, monkeypatch):
+    from src.engine.scalping import reversal_cumulative_postclose as CP
+    from src.engine.scalping import continuous_reversal_postclose as P
+    from src.engine.scalping import continuous_reversal_policy_v6 as V
+    from src.engine.scalping import continuous_reversal_operating_postclose as O
+    from src.engine.scalping import reversal_auxiliary_tuning as T
+    from src.engine.scalping import reversal_auxiliary_registry as G
+    from src.engine.scalping import reversal_auxiliary_intraday as I
+    from src.engine.scalping import reversal_extended_union as U
+
+    parent, m = postclose_fixture(monkeypatch)
+    parent['bundle_sha256']='e'*64
+    parent['continuous_reversal']['schema']=V.SCHEMA
+    source=P.seal(dict(normalized_sources=dict(partitions=[])))
+    contract=P.seal(dict(scoring_contract(),source_manifest_sha256=source['artifact_content_sha256']))
+    monkeypatch.setattr(R,'pending',lambda *a:None)
+    monkeypatch.setattr(R,'scoring_for_build',lambda *a:contract)
+    monkeypatch.setattr(P,'population_receipt',lambda *a:dict(path='private-fixture'))
+    machine=CP.build(tmp_path,'2026-10-27','2026-10-27',parent,source=source)
+    before=copy.deepcopy(machine['operating_manifest'])
+    ident=G.register(tmp_path,G.definition(U.V1.ARMS[1],input_version=U.VERSION))
+    bindings={V.scope_id(k,r):ident for k,r in V.scopes()}
+    monkeypatch.setattr(I,'effective_bindings',lambda *a,**k:bindings.copy())
+    monkeypatch.setattr(I,'current',lambda *a,**k:None)
+    monkeypatch.setattr(I,'lineage_sources',lambda *a:[])
+    monkeypatch.setattr(I,'independent_scopes',lambda *a:set())
+    monkeypatch.setattr(I,'rollback_bindings',lambda *a:bindings.copy())
+    sid='other_non_fixed|REGULAR|LT_20000|SOR'
+    T.configure(tmp_path,candidate=ident,scopes=[sid],seed='scoped-native-test',max_pairs=50)
+    from src.tests.test_offline_comparison_store import activate
+    from src.engine.ai import offline_comparison_store as S
+    with S.Store(tmp_path) as store: activate(store)
+    campaign=T.prepare(tmp_path,'2026-10-27',machine,parent)
+    assert campaign['machine_report_sha256']==machine['artifact_content_sha256']
+    auxiliary=T.auxiliary_report(tmp_path,'2026-10-27','2026-10-27',parent,publish_policy=False)
+    issued=T.read(O.directory(tmp_path,'2026-10-27')/'machine.json')
+    assert issued['operating_manifest']==before and R.validate_manifest(before)
+    assert issued['cumulative_selection']==machine['cumulative_selection']
+    assert auxiliary['auxiliary_registry_bindings']==bindings
+    assert issued['artifact_content_sha256']!=machine['artifact_content_sha256']
+    assert T.read(O.directory(tmp_path,'2026-10-27')/'machine-comparison.json')==machine

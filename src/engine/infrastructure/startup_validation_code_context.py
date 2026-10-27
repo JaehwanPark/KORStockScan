@@ -2878,18 +2878,90 @@ for _name, _sha in REVIEWED_NONFIXED_OBSERVER_SOURCES.items():
     _history.update((_old, _sha) for _old in _prior)
 
 
-# Scoped scoring changes selection only after explicit intake. Current policy
-# consumption retains the issued source generation and all runtime guards.
-REVIEWED_SCOPED_SCORING_SOURCES = {
+# Exact collection and payload-context successor; independent preparation reader.
+REVIEWED_DELAY_COLLECTION_SOURCES = {
+    "src/engine/kiwoom_websocket.py": "5f8a0027e517f385a34fe9683aa34a6d7626b2f09efce7ab697889be363e3352",
+    "src/engine/monitoring/ws_receive_expectation.py": "b1f73780582e4411d184fe25aacb8cafd27382099db33aa32595d495e8c3a233",
+    "src/engine/sniper_state_handlers.py": "16fc3202f724a2fb78d0da7e01989966560d39c7fa7439473b692a160308a2eb",
+    "src/engine/monitoring/policy_generation_code_handoff.py": "bdf9c47cb05206eea269ba3ead0ba0083ff79a51da390cb3862d96d7782db40d"
+}
+REVIEWED_DELAY_COLLECTION_ORIGINS = {
+    "src/engine/kiwoom_websocket.py": "701fe3127352e8c29300d43134ab4e3bdb59f6486491ae7a91a4ff574c3ca474",
+    "src/engine/monitoring/ws_receive_expectation.py": "2098bfda2c73f367f0bda84a5023063e5e37da92fe94608b0b7db3b2cd38dbc8",
+    "src/engine/sniper_state_handlers.py": "193cfb02eed0f45b553f26b3777fb921f1ecc2fa1be46c5dbdd7b2a50831b13d",
+    "src/engine/monitoring/policy_generation_code_handoff.py": "52830e315e7f9be90d774b080ca31e79aca76bf7f6fdaf9f0dc29da38fa434a4"
+}
+for _name, _sha in REVIEWED_DELAY_COLLECTION_SOURCES.items():
+    _history = REVIEWED_PREPARATION_HISTORY.setdefault(_name, set())
+    _prior = {v for pair in _history for v in pair} | {REVIEWED_DELAY_COLLECTION_ORIGINS[_name]}
+    if _name in REVIEWED_PREPARATION_SOURCES:
+        _prior.update(REVIEWED_PREPARATION_SOURCES[_name])
+    _history.update((_old, _sha) for _old in _prior)
+
+
+# Exact current submit-local repair; independent child verifies both endpoints.
+REVIEWED_SUBMIT_FRESH_ORIGINS = {
+    "src/engine/kiwoom_sniper_v2.py": "66b57f8ca7d37af5be3f6d5897a20e3a4ee5b7f32b5e2b511954d713d9e4006a",
+    "src/engine/monitoring/policy_generation_code_handoff.py": "bdf9c47cb05206eea269ba3ead0ba0083ff79a51da390cb3862d96d7782db40d",
+    "src/engine/scalping/scanner_async_eval.py": "6daadef71a1e62c814986fdf9dd806a5a26b7d3aac1814900e24505f0d2256ca",
+    "src/engine/sniper_state_handlers.py": "16fc3202f724a2fb78d0da7e01989966560d39c7fa7439473b692a160308a2eb",
+    "src/scanners/zero_base_discovery_queue.py": "d8c93e78f8944428b6cfb726a88af9e4e0c39aee724c81c97d74d721d6d89d6b",
+    "src/scanners/zero_base_discovery_runtime.py": "61ebea82400e4139ed2b0dd66a2b7af5dff9e890c491af7185739b5045e36675",
+    "src/trading/entry/physical_send_guard.py": "83506e38c29ef132b05732320ac8d41f53d571bcf950cb4c0b17ed0ffbd1d41f",
+}
+REVIEWED_SUBMIT_FRESH_SOURCES = {
+    "src/engine/kiwoom_sniper_v2.py": "35393c7ffa067328fc6e2a2df931a5e352adc65ca15730513ef74da3274d0881",
+    "src/engine/monitoring/policy_generation_code_handoff.py": "2205cfa0be617994a148557397ae4bc1a13c1c9052d9b045cbc4ac0c1475223d",
+    "src/engine/scalping/scanner_async_eval.py": "376aef38820f7e2f2a6869b65822e1072eb0abe426836644c3ee9d7357b8bac7",
+    "src/engine/sniper_state_handlers.py": "8e070b77c3cd1a53454862bc18c7a7ddee09da158d862f4e93fdd56226287672",
+    "src/scanners/zero_base_discovery_queue.py": "47da6fad4d1f301e99da12f38505a193ce6b2f9bbfc122cb338503bf4b177d3e",
+    "src/scanners/zero_base_discovery_runtime.py": "441f47be2b070d26f1210b81088a7e879c87060335e9f4bef6b2dc55851fafd4",
+    "src/trading/entry/physical_send_guard.py": "182543858c29babbb6875ec4511aa93c09fa230f016ec758c389c5f4511f9c20",
+}
+REVIEWED_SUBMIT_FRESH_PROJECTED_ORIGINS = {
+    "src/engine/kiwoom_sniper_v2.py": "66b57f8ca7d37af5be3f6d5897a20e3a4ee5b7f32b5e2b511954d713d9e4006a",
+    "src/engine/monitoring/policy_generation_code_handoff.py": "bdf9c47cb05206eea269ba3ead0ba0083ff79a51da390cb3862d96d7782db40d",
+    "src/engine/scalping/scanner_async_eval.py": "9fb2ac9ff75f620f008fb38a6611e5f08c6984d552c475e3314fa6ad6f3fefdf",
+    "src/engine/sniper_state_handlers.py": "16fc3202f724a2fb78d0da7e01989966560d39c7fa7439473b692a160308a2eb",
+    "src/scanners/zero_base_discovery_queue.py": "d8c93e78f8944428b6cfb726a88af9e4e0c39aee724c81c97d74d721d6d89d6b",
+    "src/scanners/zero_base_discovery_runtime.py": "61ebea82400e4139ed2b0dd66a2b7af5dff9e890c491af7185739b5045e36675",
+    "src/trading/entry/physical_send_guard.py": "1d5d6f7feb0fba4062d770db52dc74d0a8fca8dbdd10b48e0485c9ec80865c27",
+    "src/engine/infrastructure/startup_validation_code_context.py": "9261405f04df1337774293dc47a2a6703c229f3ee9b0ed93d30c93ea42d67c6e",
+}
+for _name, _sha in REVIEWED_SUBMIT_FRESH_SOURCES.items():
+    _history = REVIEWED_PREPARATION_HISTORY.setdefault(_name, set())
+    _prior = {v for pair in _history for v in pair} | {
+        REVIEWED_SUBMIT_FRESH_ORIGINS[_name],
+        REVIEWED_SUBMIT_FRESH_PROJECTED_ORIGINS[_name],
+    }
+    if _name in REVIEWED_PREPARATION_SOURCES:
+        _prior.update(REVIEWED_PREPARATION_SOURCES[_name])
+    _history.update((_old, _sha) for _old in _prior)
+
+
+# Preserved original scoped-scoring preparation generation.
+REVIEWED_SCOPED_SCORING_INITIAL_SOURCES = {
     "src/engine/scalping/continuous_reversal_policy_v6.py": "8c0a0a8effebd618029a9414c88ec0abee585e9fda24ed8b25327ee5fe6228da",
     "src/engine/scalping/reversal_cumulative_registration.py": "f5a35312f6a0fff8c27aa6eef87513cb5ed8ba49b56f06323311b64fdc48dea4",
     "src/engine/scalping/reversal_cumulative_postclose.py": "3943d7a42a662dcf1117d78aae433000effe08c75ca4355013afaeb96c8be3ed",
 }
-REVIEWED_SCOPED_SCORING_ORIGINS = {
+REVIEWED_SCOPED_SCORING_INITIAL_ORIGINS = {
     "src/engine/scalping/continuous_reversal_policy_v6.py": "9342dec3beb2683d68f6851d58e8e6614f5481630abb4590d809024e8e3e5da4",
     "src/engine/scalping/reversal_cumulative_registration.py": "fd49ff4d01289a23891f3bb85ee5695134a73f95c55c1f6a00e6cfc2fe4d0624",
     "src/engine/scalping/reversal_cumulative_postclose.py": "f24f1cd9dba38de51a7e3193b506cb8b0e02a8b53fbc94348bf432140782e1f9",
 }
+for _name, _sha in REVIEWED_SCOPED_SCORING_INITIAL_SOURCES.items():
+    _history = REVIEWED_PREPARATION_HISTORY.setdefault(_name, set())
+    _origins = {value for pair in _history for value in pair}
+    _origins.add(REVIEWED_SCOPED_SCORING_INITIAL_ORIGINS[_name])
+    if _name in REVIEWED_PREPARATION_SOURCES:
+        _origins.update(REVIEWED_PREPARATION_SOURCES[_name])
+    _history.update((_old, _sha) for _old in _origins)
+
+
+# Source-first scoped scoring, integrated over the consumed submit-fresh generation.
+REVIEWED_SCOPED_SCORING_SOURCES = {'src/engine/scalping/continuous_reversal_policy_v6.py': '8c0a0a8effebd618029a9414c88ec0abee585e9fda24ed8b25327ee5fe6228da', 'src/engine/scalping/reversal_cumulative_registration.py': '55a35b7182abef7cb4d863d5befd9a5523169569d6bd7cd8a017195e07db43e5', 'src/engine/scalping/reversal_cumulative_postclose.py': '6bfcbdb2569a318942f227e63850a3bec9a4b0827a34202cc7f474c4aba1f511', 'src/engine/automation/postclose_summary_handoff.py': '14d18b30d6f435f55949f1e4afca9d2b00952bc7e44c82054eb49ed67f2e98b2', 'deploy/run_threshold_cycle_postclose.sh': 'f6040a75cbba42f6c9c4ebfb90cf4d664e696c38c71fc22b29d76ed41ed1ec7e'}
+REVIEWED_SCOPED_SCORING_ORIGINS = {'src/engine/scalping/continuous_reversal_policy_v6.py': '9342dec3beb2683d68f6851d58e8e6614f5481630abb4590d809024e8e3e5da4', 'src/engine/scalping/reversal_cumulative_registration.py': 'fd49ff4d01289a23891f3bb85ee5695134a73f95c55c1f6a00e6cfc2fe4d0624', 'src/engine/scalping/reversal_cumulative_postclose.py': 'f24f1cd9dba38de51a7e3193b506cb8b0e02a8b53fbc94348bf432140782e1f9', 'src/engine/automation/postclose_summary_handoff.py': 'aeb5c0e1c259425c17de08af1dab323f2101d8147e1c7cd3c53731bcf78f024d', 'deploy/run_threshold_cycle_postclose.sh': 'ce9cf7c699628ec67466c79890b135c9cea46f268381192c722e6259fd86bfac'}
 for _name, _sha in REVIEWED_SCOPED_SCORING_SOURCES.items():
     _history = REVIEWED_PREPARATION_HISTORY.setdefault(_name, set())
     _origins = {value for pair in _history for value in pair}

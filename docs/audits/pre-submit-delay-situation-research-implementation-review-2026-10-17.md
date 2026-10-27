@@ -370,3 +370,130 @@ The existing `DirectFamilyPreopenPolicyHandoff` owns the closed test failures an
 비테스트 source **5파일 +679/-23**, tests **3파일 +705/-4**와 원문 fixture **1파일 +79행/23,343 bytes**다. 이 외 문서는 기존 2개 owner의 계획·증거를 보완한다. source 증가는 등록 세대·bounded cadence·정확 원천 결속과 분류/알림에 해당하며 module 이동이나 복제 구현은 없다. 제거 완료를 미룬 실행 wrapper는 없다.
 
 현재 checklist의 `PreSubmitDelaySituationResearch1017`로 새 source-classification 결함의 코드 종결과 배포 대기를 인계한다. 다음 단계는 사용자 배포 지시 후의 통합/불변 후보/native active-policy handoff/P5·정식 전환과 실제 새 PID의 동일 source branch 관측이다. 기존 `DirectFamilyPreopenPolicyHandoff`의 운영 전환 소유권은 유지한다. selector/PREOPEN/policy/env·provider·수량·안전가드·실주문·배포/재기동 변경은 **0**이며, 현재 운영 알림에 이미 적용됐다고 주장하지 않는다.
+
+## 2026-10-27 AFTER collection serialization and physical payload binding review
+
+Ownership remains `PreSubmitDelaySituationResearch1017` for collection diagnostics
+and `MainEntrySourceTerminalRepair1022` for the initial-submit boundary. This is a
+reviewed candidate over selected commit `3178d65e0a0b39f63a8eb666a9bcb4b132a590f4`.
+The operator requested candidate preparation only; integration, selection and
+Main restart belong to the other session. No order, policy, provider, quantity,
+subscription, deadline or freshness-setting change is authorized by this review.
+
+### Incident and causal evidence
+
+The actual AFTER Main actor was PID1580293/start73079256, born at or after
+2026-10-27T16:30:44.560+09:00. Native PID consumption passed. HPSP403870 received
+machine ENTER_NOW and auxiliary PASS at16:40:15.587242+09:00 under attempt
+`aims-266ab76c525a96174da4`. Data item403870_AL and transport epoch1793086281030784
+were distinct from the requested broker routeSOR; no execution venue is inferred.
+
+Two source-only anchors, signal_ready and price_ready, generated all eight
+0/1/3/5/30/60/120/180-second observations. These are two observations of one
+PASS case, not two orders. Original bytes and source-validity outcomes remain in
+`tmp/submission-monitor-20261027-latest-1730/` in the canonical workspace.
+
+Three first broken contracts were reproduced:
+
+1. The sampler handed a dictionary to a pipeline logger that stringifies fields.
+   Its Python literal was rejected by the JSON-only collection reader. Fifteen
+   of16 observations had this representation; the initial price-ready snapshot
+   lacked cadence evidence and remains explicitly unobservable.
+2. Main cadence registration used optional broker0s operation state as mandatory
+   session identity. The real post-restart0B/0D source had an empty state. Merely
+   converting the fifteen original literals to JSON still failed exact scope
+   validation. This was a local diagnostic contract defect, not proven wire loss.
+3. The actual market first leg retained a sizing/reference price45750 in its
+   physical context, while the unchanged adapter sends market `ord_uv=""`.
+   Strict payload comparison correctly rejected the inconsistent producer with
+   `order_payload_binding_changed`, with zero physical send attempts. The original
+   entry deadline had not yet expired. No accepted order/fill is claimed.
+
+### Repair and replacement disposition
+
+| Existing owner/path | Disposition and consumer |
+| --- | --- |
+| sniper_state_handlers._observe_pre_submit_delay_state_quote | Consolidated nested evidence encoding as canonical JSON before both queued and fallback logger paths. Quote/source SHA and eligibility remain unchanged. |
+| ws_receive_expectation.classify_delay_quote_collection | Retained the JSON reader and added a4096-character bounded literal reader for original logger bytes. Schema/item/route/epoch/clock/hash/sequence/loss checks still run; empty session remains invalid. |
+| KiwoomWSManager cadence registration and wire receipt | Removed optional0s state as local session identity. The existing session_contract resolver supplies the local regime; raw market_state remains separate and null when absent. REG, transport, local-session, raw-state and day resets remain. |
+| sniper_state_handlers._main_initial_physical_send_context | Removed the reference price from non-limit wire bindings. The context now agrees with the existing adapter's empty ord_uv for market orders. The physical guard and adapter payload are unchanged. |
+| Native code-handoff and independent preparation readers | Retained issued predecessor profiles and added one exact complete successor, including fresh family capability requirements. Unknown/dirty/missing/mixed dependencies still reject. |
+
+No module, worker, schedule, public CLI or trading branch was added. One local
+session-scope helper is shared by the two existing cadence producers. Historical
+Python-literal reading is retained because original immutable pipeline rows are
+current consumers. No parallel detector, fallback subscription or relaxed guard
+was introduced. Removal of that reader is deferred under the same research owner
+until the final retained literal source expires and no historical consumer needs
+it; closure requires original-receipt and JSON-only regressions.
+
+### Review and validation
+
+The original implementation failed the new literal and missing-state cases.
+The original market producer separately failed the `order_payload_binding_changed`
+regression while both limit cases passed. Tests now exercise the actual pipeline
+string conversion in queued and fallback paths, and the real order adapter with
+mocked HTTP only. Wrong epoch/item/hash/sequence, missing/invalid session, stale
+quote, real wire-normalization loss, immutable past receipts, day/session changes,
+quantity/price/decision/owner changes and original deadline checks are preserved.
+
+The initial five receive/observer/producer suites passed1977 tests. The physical
+send and order suites passed193 tests before the final adapter round-trip was
+added; that strengthened producer matrix then passed42 tests. Final source-
+generation and handoff logs are in the canonical evidence directory; a test run
+that overlapped a reviewed profile update was rejected and rerun against frozen
+bytes. It is not a final validation receipt.
+
+Official Kiwoom reference gate rechecked upstream main953e5dbff123f437ab4d11a78a95191a685eb51f
+on2026-10-27. Inspected packets.py, decoders.py, core/ws_client.py and packaged
+API spec for0B/0D/0s pluskt10000 item/type, route, order type and optional price.
+Revision/path SHA/retrieval evidence is `official-reference-repair.json` in the
+same evidence directory. No live Kiwoom/provider call was made.
+
+Inventory was checked before candidate creation: native release-set consistency
+passed; the filesystem had about58.1GB free versus153.7MB tracked candidate bytes.
+The projected managed inventory was165 copies. No filesystem release/worktree
+count cap is declared by the examined native owners; the256 service-unit and
+legacy origin-discovery bounds are separate and were not raised. No cleanup,
+selector mutation, drain or restart was performed. See candidate-inventory.json
+for the exact inventory and reservation.
+
+### Remaining acceptance and other-session handoff
+
+The current operating PID still uses the pre-repair bytes. Offline regression,
+immutable candidate validation, candidate P5, active-parent handoff, actual PID
+consumption and natural acceptance are separate states. Final candidate manifest
+records whichever preparation checks have actually completed; no placeholder is
+an operating receipt. Any later merge requires final-root/source-bound fixtures,
+parity, policy handoff and P5 before the other session's authorized transition.
+
+Original empty-session receipts stay invalid and the initial frozen snapshot's
+missing cadence stays null. They are not rewritten as healthy. Exact current
+unreceived leases remain unproven wire receive, not broker rejection/API failure.
+Native healthy/wait/loss discrimination needs a new naturally occurring intent
+on the repaired PID. AFTER403870_AL acceptance does not close the PRE196170_NX
+branch; retain the existing owner through2026-10-28T08:03~08:40+09:00. No order
+or extra subscription may be created to manufacture that diagnostic acceptance.
+
+The repair-only commit is `509c49318`. During observation another session selected
+`3a989b283446805cf5c2e5523b9d986228175b1a`; its PID1781860/start73293800 was
+independently verified. Candidate assembly preserves that deployed observer
+consumer, its complete predecessor generation and every deployed test function.
+This local assembly does not publish a selector or restart Main. Counts and
+health for each actual PID are retained separately.
+
+Supplemental review rejected a transitive historical capability mapping; only
+three already retained native report origins and the exact consumed3178
+capability can reach this exact successor. The existing negative test remains
+unchanged. The corrected policy/adapter suites passed1865 tests, and the initial
+code-handoff/preparation scope passed197 tests. The integrated producer suites
+passed2012 tests; the final integrated handoff/P5 results are recorded in the
+candidate manifest after they finish. A collection attempt that could not write
+its test XML outside the isolated test filesystem is not counted as validation.
+
+Against deployed3a989b283, non-test source is +124/-12 across six existing files;
+tests add coverage in five existing files. Most source growth is the exact
+native/independent-reader dependency profile. Owners and entrypoints are retained,
+and the only new helper resolves the local diagnostic scope. No source/test move
+or unexplained displaced implementation is included. Exact final test/doc counts
+and source hashes are in the evidence manifest.

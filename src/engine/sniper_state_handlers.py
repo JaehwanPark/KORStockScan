@@ -63838,12 +63838,64 @@ def _scanner_async_entry_cache_key(
         f"{generation.generation_id}|{str(trigger_reason or 'unknown')}|"
         f"{float(last_ai_time):.6f}"
     )
+    claim = stock.get("_continuous_reversal_pending_claim") or {}
+    if isinstance(claim, dict) and claim.get("token"):
+        # A fresh native claim is a new evaluation even when the AI clock and
+        # scanner generation did not change. Pending requests keep their key.
+        seed += "|native_claim:" + str(claim["token"])
     pending_source = stock.get(MACHINE_SOURCE_RECOVERY_KEY)
     if isinstance(pending_source, dict):
         seed += "|source_parent:" + str(
             pending_source.get("parent_observation_sha256") or ""
         )
     return "watching:" + hashlib.sha256(seed.encode("utf-8")).hexdigest()[:16]
+
+
+def _price_change_fresh_parent_fields(stock, code, claim):
+    """Diagnostic lineage only; the existing native admission owns eligibility."""
+    parent = stock.get("_async_entry_nonexecution_identity") or {}
+    if not isinstance(parent, dict) or not isinstance(claim, dict):
+        return {}
+    disposition = parent.get("physical_disposition") or {}
+    snapshot = claim.get("snapshot")
+    if not isinstance(snapshot, (list, tuple)) or not snapshot:
+        return {}
+    event = snapshot[0]
+    if not isinstance(disposition, dict) or not isinstance(event, dict):
+        return {}
+    if (
+        disposition.get("local_not_sent_reason")
+        != "execution_price_changed_reprice_required"
+        or disposition.get("known_local_not_sent") is not True
+        or disposition.get("physical_send_attempt_count") != 0
+        or disposition.get("local_not_sent_custody_gap")
+        or disposition.get("local_not_sent_outbox_gap")
+        or not parent.get("request_id")
+        or not parent.get("evaluation_attempt_id")
+        or not parent.get("ai_decision_trace_id")
+        or parent.get("fresh_successor_request_id")
+        or not (claim or {}).get("token")
+        or not parent.get("native_claim_token")
+        or claim["token"] == parent["native_claim_token"]
+        or parent.get("code") != code
+        or event.get("symbol") != code
+        or not parent.get("source_item")
+        or type(parent.get("native_epoch")) is not int
+        or parent["native_epoch"] <= 0
+        or not parent.get("native_generation")
+        or parent.get("native_venue") != event.get("venue")
+        or parent.get("native_market") != event.get("market")
+        or parent.get("native_generation") != claim.get("generation")
+        or parent.get("source_item") != event.get("source_item")
+        or parent.get("native_epoch") != event.get("native_epoch")
+    ):
+        return {}
+    return dict(
+        entry_fresh_parent_request_id=parent["request_id"],
+        entry_fresh_parent_evaluation_attempt_id=parent["evaluation_attempt_id"],
+        entry_fresh_parent_ai_decision_trace_id=parent["ai_decision_trace_id"],
+        entry_fresh_parent_terminal_reason=disposition["local_not_sent_reason"],
+    )
 
 
 def _scanner_async_opening_rotation_cache_key(
@@ -64465,8 +64517,8 @@ def _main_initial_physical_send_context(
         canonical_binding,
     )
 
-    machine = _machine_primary_entry_provenance_fields(
-        thaw_scanner_async_value(original.ai_payload)
+    machine = thaw_scanner_async_value(
+        _machine_primary_entry_provenance_fields(dict(original.ai_payload))
     )
     evaluation = str(original.ai_payload.get("evaluation_attempt_id") or "")
     trace = str(original.ai_payload.get("ai_decision_trace_id") or "")
@@ -64477,9 +64529,9 @@ def _main_initial_physical_send_context(
         or original.code != code
     ):
         raise ValueError("initial_send_original_identity_invalid")
-    prepared = thaw_scanner_async_value(original.prepared_context)
+    prepared = original.prepared_context
     original_claim = thaw_scanner_async_value(original.native_claim)
-    candle_context = prepared.get("candle_context") or {}
+    candle_context = thaw_scanner_async_value(prepared.get("candle_context") or {})
     quote = ws_quote_source_receipt(ws_data, now_ts=time.time())
     policy = _entry_quote_time_policy()
     from src.trading.entry.quote_time_policy import active_contract_receipt
@@ -64633,7 +64685,13 @@ def _main_initial_physical_send_context(
         quantity=quantity,
         broker_route=broker_route,
         order_type=str(order_type),
-        broker_price=str(int(broker_price)) if broker_price else "",
+        # Bind the adapter's actual ord_uv, not the sizing/reference price
+        # retained by a market-order plan. Payload equality remains strict.
+        broker_price=(
+            str(int(broker_price))
+            if str(order_type) in {"0", "00"} and broker_price
+            else ""
+        ),
         evaluation_attempt_id=evaluation,
         ai_decision_trace_id=trace,
         decision_binding=expected_decision,
@@ -65177,13 +65235,20 @@ def _resolve_scanner_async_entry_ai(
             "status": "commit_rejected",
             "reason": "entry_machine_input_deadline_expired",
         }
+    fresh_parent_fields = _price_change_fresh_parent_fields(stock, code, claim)
     context = ScannerAsyncEvalContext.create(
         generation=generation,
         cache_key=cache_key,
         submitted_epoch=submitted_epoch,
         deadline_epoch=deadline_epoch,
         stock_snapshot=(
-            {**stock, "_continuous_reversal_pending_claim": claim} if claim else stock
+            {
+                **stock,
+                **fresh_parent_fields,
+                "_continuous_reversal_pending_claim": claim,
+            }
+            if claim
+            else stock
         ),
         ws_snapshot=ws_data,
         state_version=state_version,
@@ -65464,6 +65529,14 @@ def _resolve_scanner_async_entry_ai(
         )
     )
     if submit_decision.accepted:
+        if fresh_parent_fields:
+            with ENTRY_LOCK:
+                parent = stock.get("_async_entry_nonexecution_identity") or {}
+                if (
+                    parent.get("request_id")
+                    == fresh_parent_fields["entry_fresh_parent_request_id"]
+                ):
+                    parent.setdefault("fresh_successor_request_id", context.request_id)
         due = stock.get("_pre_submit_delay_due")
         if isinstance(due, dict) and due.get("schema") == "pre_submit_delay_policy_v2":
             # Bind this intent to the one native request admitted after due.
@@ -65492,6 +65565,7 @@ def _resolve_scanner_async_entry_ai(
         stock,
         code,
         "scanner_async_eval_dispatched",
+        **fresh_parent_fields,
         **generation.timing_fields(now_epoch=submitted_epoch),
         metric_role="runtime_scheduler_latency",
         decision_authority="scanner_async_preparation_dispatch_only",
@@ -69889,8 +69963,13 @@ def _observe_pre_submit_delay_state_quote(
             quote_receipt["quote_route_sequence"] = (matched_depth or {}).get(
                 "route_sequence"
             )
-            quote_receipt["quote_collection_evidence"] = dict(
-                collection, depth_source_sha256=depth_source_sha256
+            # The pipeline logger stringifies fields. Encode this nested
+            # report-only receipt before either queued or fallback emission.
+            quote_receipt["quote_collection_evidence"] = json.dumps(
+                dict(collection, depth_source_sha256=depth_source_sha256),
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
             )
         quote_receipt["quote_source_sha256"] = quote_source_sha256(quote_receipt)
         _log_pre_submit_delay_event(
@@ -76284,9 +76363,19 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                     and original.ai_payload.get("ai_decision_trace_id")
                 ):
                     with ENTRY_LOCK:
+                        native_event = (original.native_claim.get("snapshot") or [{}])[
+                            0
+                        ]
                         stock["_async_entry_submission_identity"] = dict(
                             request_id=original.request_id,
                             generation_id=original.generation_id,
+                            code=code,
+                            native_claim_token=original.native_claim.get("token"),
+                            native_generation=original.native_claim.get("generation"),
+                            native_venue=native_event.get("venue"),
+                            native_market=native_event.get("market"),
+                            source_item=native_event.get("source_item"),
+                            native_epoch=native_event.get("native_epoch"),
                             evaluation_attempt_id=original.ai_payload.get(
                                 "evaluation_attempt_id"
                             ),

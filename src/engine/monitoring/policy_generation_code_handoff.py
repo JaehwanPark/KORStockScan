@@ -616,6 +616,29 @@ REVIEWED_INTEGRATED_CONSUMED_SUCCESSORS = {
 }
 
 
+# Submit-local latency/identity changes preserve policy and historical reports.
+# Independent current-generation fixtures remain mandatory.
+REVIEWED_SUBMIT_FRESH_SOURCE_SUCCESSORS = {
+    "rising_missed": (
+        "28baa874610d6f76379c6be1fe4f76accbbfbc5f473b0c4ffcb2f323cdf75922",
+        "211e66b1be20bfe4470e65e7c9d6f710c5fb480908bae3c112460e7177c0a06b",
+    ),
+    "holding_vote": (
+        "7f30d09769b17801ad614d2403ca5742c5a45d4e56fb27212447de1384829386",
+        "efba28203d17ad1a8d8b11ce08e504a3203134ba3c931cbf7bb3500fbc235d69",
+    ),
+}
+REVIEWED_SUBMIT_FRESH_CONSUMED_SUCCESSORS = {
+    "rising_missed": (
+        "1a206224114b7dc0b03fdce56db85a99e1e70cb4e44b4deacd0bd73c6ea4514c",
+        "211e66b1be20bfe4470e65e7c9d6f710c5fb480908bae3c112460e7177c0a06b",
+    ),
+    "holding_vote": (
+        "231d058214999b2b9aa417be8b5b528e98c4499a7a54303503c44e1834e10831",
+        "efba28203d17ad1a8d8b11ce08e504a3203134ba3c931cbf7bb3500fbc235d69",
+    ),
+}
+
 
 def _historical_fixture(contract, data, family, *, late_report=None):
     """Preserve a prior fixture without using it to certify the successor."""
@@ -1050,7 +1073,6 @@ REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS["holding_vote"] += (
 )
 
 
-
 # Same frozen reports after preclaim diagnostic-only handler edits.
 # Native fresh fixtures and original source/economic nulls remain mandatory.
 REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS['rising_missed'] += (('6d662d9e2cc6f67ec9945dfa3d9da37e3acd22765cc48a1c30d95b892a432eb7', '77005017209bc2c64ee43ba0d5281fc67d40d9fb129fc053f65093401b7a174a'), ('28baa874610d6f76379c6be1fe4f76accbbfbc5f473b0c4ffcb2f323cdf75922', '77005017209bc2c64ee43ba0d5281fc67d40d9fb129fc053f65093401b7a174a'))
@@ -1087,6 +1109,16 @@ REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS['auxiliary'] += (('357573bd61c06c26c208b
 # fresh exact-generation fixture checks are retained.
 REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS['rising_missed'] += (('28baa874610d6f76379c6be1fe4f76accbbfbc5f473b0c4ffcb2f323cdf75922', 'b050a51dc792070ac3c28c9c81bb5b8a5d86e6dd74bffb504df3c37026bb7459'), ('6d662d9e2cc6f67ec9945dfa3d9da37e3acd22765cc48a1c30d95b892a432eb7', 'b050a51dc792070ac3c28c9c81bb5b8a5d86e6dd74bffb504df3c37026bb7459'), ('77005017209bc2c64ee43ba0d5281fc67d40d9fb129fc053f65093401b7a174a', 'b050a51dc792070ac3c28c9c81bb5b8a5d86e6dd74bffb504df3c37026bb7459'), ('9019999ecd6e980cf5dfe689bed7815c08b16632c65a879b6d202c4e305bd791', 'b050a51dc792070ac3c28c9c81bb5b8a5d86e6dd74bffb504df3c37026bb7459'), ('9600db0722b362ccb2eb926197ae5425b57b352d191c54f73ad51e736d89d6b3', 'b050a51dc792070ac3c28c9c81bb5b8a5d86e6dd74bffb504df3c37026bb7459'))
 REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS['holding_vote'] += (('05037a9d11e962bb160d3fa3e589935f36ab2290d5e087b25a98f8ed5f6e81cf', '4cc888f24e47ab76fee5b9e67d5af44025093b2ed9b0f62de724264c2115b53d'), ('272fd392f86ee32f42ee9a8b3b189ec0221da0250a75cfdf3adffc6706782810', '4cc888f24e47ab76fee5b9e67d5af44025093b2ed9b0f62de724264c2115b53d'), ('2c8493a70cb399e336773c02f3d292d2f5d225fe742750089049b63ecc1a23b0', '4cc888f24e47ab76fee5b9e67d5af44025093b2ed9b0f62de724264c2115b53d'), ('7f30d09769b17801ad614d2403ca5742c5a45d4e56fb27212447de1384829386', '4cc888f24e47ab76fee5b9e67d5af44025093b2ed9b0f62de724264c2115b53d'), ('cca052a101ebb25cbcc0ca92a50247477e8069dd9908f99c6b690c1d50170eee', '4cc888f24e47ab76fee5b9e67d5af44025093b2ed9b0f62de724264c2115b53d'))
+
+
+# Report-only collection serialization/session and exact market ord_uv context.
+# Only the retained native reports are reviewed; history is not transitive.
+REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS['rising_missed'] += (('6d662d9e2cc6f67ec9945dfa3d9da37e3acd22765cc48a1c30d95b892a432eb7', '1a206224114b7dc0b03fdce56db85a99e1e70cb4e44b4deacd0bd73c6ea4514c'), ('28baa874610d6f76379c6be1fe4f76accbbfbc5f473b0c4ffcb2f323cdf75922', '1a206224114b7dc0b03fdce56db85a99e1e70cb4e44b4deacd0bd73c6ea4514c'), ('9019999ecd6e980cf5dfe689bed7815c08b16632c65a879b6d202c4e305bd791', '1a206224114b7dc0b03fdce56db85a99e1e70cb4e44b4deacd0bd73c6ea4514c'))
+REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS['holding_vote'] += (('2c8493a70cb399e336773c02f3d292d2f5d225fe742750089049b63ecc1a23b0', '231d058214999b2b9aa417be8b5b528e98c4499a7a54303503c44e1834e10831'), ('7f30d09769b17801ad614d2403ca5742c5a45d4e56fb27212447de1384829386', '231d058214999b2b9aa417be8b5b528e98c4499a7a54303503c44e1834e10831'), ('05037a9d11e962bb160d3fa3e589935f36ab2290d5e087b25a98f8ed5f6e81cf', '231d058214999b2b9aa417be8b5b528e98c4499a7a54303503c44e1834e10831'))
+
+# Exact actually consumed 3178 predecessor capability.
+REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS['rising_missed'] += (('7849bf719462f6795bc44d19f7622309bff1c38859de133c41335fb04def509f', '1a206224114b7dc0b03fdce56db85a99e1e70cb4e44b4deacd0bd73c6ea4514c'),)
+REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS['holding_vote'] += (('24402a92575502c11660b5b72148d660f4e2d4e0961285614d046a2af2c90094', '231d058214999b2b9aa417be8b5b528e98c4499a7a54303503c44e1834e10831'),)
 
 
 def current_fixture_observation(observed, data):
@@ -1174,6 +1206,8 @@ def current_fixture_observation(observed, data):
         or actual_pair == REVIEWED_ARCHIVE_RETENTION_SOURCE_SUCCESSORS.get(family)
         or actual_pair == REVIEWED_INTEGRATED_OBSERVATION_SUCCESSORS.get(family)
         or actual_pair == REVIEWED_INTEGRATED_CONSUMED_SUCCESSORS.get(family)
+        or actual_pair == REVIEWED_SUBMIT_FRESH_CONSUMED_SUCCESSORS.get(family)
+        or actual_pair == REVIEWED_SUBMIT_FRESH_SOURCE_SUCCESSORS.get(family)
     )
     if reader_match:
         pair = actual_pair
@@ -1266,6 +1300,8 @@ def current_fixture_observation(observed, data):
                     REVIEWED_NATIVE_SELECTION_SUCCESSORS,
                     REVIEWED_NATIVE_SELECTION_SOURCE_SUCCESSORS,
                     REVIEWED_NATIVE_SELECTION_CONSUMED_SUCCESSORS,
+                    REVIEWED_SUBMIT_FRESH_CONSUMED_SUCCESSORS,
+                    REVIEWED_SUBMIT_FRESH_SOURCE_SUCCESSORS,
                 )
             )
             else None

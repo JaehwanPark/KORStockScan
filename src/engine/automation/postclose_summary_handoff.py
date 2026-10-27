@@ -2241,6 +2241,14 @@ def _stage_output_issues(report_dir, day, stage):
         )
 
         schema = value.get("schema")
+        if stage == "main_machine_policy" and schema == operating_schema:
+            # Auxiliary tuning later replaces machine.json with its publication
+            # view. This stage owns the immutable comparison and its projection.
+            comparison = _load_json(path.parent / "machine-comparison.json")
+            projection = _load_json(stage_artifacts(report_dir, day, stage)["machine_policy"])
+            if not comparison or comparison != projection:
+                return ["main_machine_policy:operating_comparison_projection_changed"]
+            value = comparison
         expected = (
             registered_cells()
             if schema in {registered_schema, path_schema, operating_schema}

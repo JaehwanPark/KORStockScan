@@ -13,6 +13,33 @@ from src.engine import sniper_state_handlers as handlers
 from src.engine import kiwoom_orders
 from src.trading.market import session_contract
 
+_NATIVE_CONSUMER_READINESS = main._zero_base_consumer_readiness
+
+
+@pytest.mark.parametrize("closing", [False, True])
+def test_native_readiness_never_advertises_a_closing_probe_consumer(
+    monkeypatch, closing
+):
+    from src.engine.scalping import zero_base_probe, reversal_current_backend
+
+    monkeypatch.setattr(main, "_zero_base_runtime_enabled", lambda: True)
+    monkeypatch.setattr(main, "_zero_base_active_target_snapshot", lambda _: {})
+    monkeypatch.setattr(
+        reversal_current_backend, "backend", lambda: SimpleNamespace(_GENERATION="g")
+    )
+    monkeypatch.setattr(
+        zero_base_probe,
+        "consumer_readiness",
+        lambda **kw: dict(ready=True, consumer_open=True, reason="ready"),
+    )
+    if closing:
+        main._ZERO_BASE_PROBE_CLOSING.set()
+    result = _NATIVE_CONSUMER_READINESS()
+    assert result["ready"] is (not closing)
+    assert result["consumer_open"] is (not closing)
+    if closing:
+        assert result["reason"] == "probe_admission_closed"
+
 
 @pytest.fixture(autouse=True)
 def _isolate_cleanup_retries(monkeypatch):

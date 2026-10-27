@@ -6324,6 +6324,15 @@ class KiwoomWSManager:
             future.add_done_callback(on_complete)
             return future
 
+    def _delay_collection_session_scope(self, observed_epoch):
+        """Local session identity and optional native 0s state are separate facts."""
+        return dict(
+            session=session_contract.resolve_market_session(
+                datetime.fromtimestamp(observed_epoch, KST)
+            ).session_regime,
+            market_state=getattr(self, "market_session_state", None) or None,
+        )
+
     def _record_source_wire_receipt(self, row, received_epoch, *, transport_epoch):
         """Exact epoch-bound Main/probe receive accounting; never a broker ACK."""
         if not isinstance(row, dict) or row.get("type") not in {"0B", "0D"}:
@@ -6342,20 +6351,25 @@ class KiwoomWSManager:
             state["last"][key] = dict(item=item[:32], received_epoch=received_epoch)
             cadence = getattr(self, "_delay_depth_cadence", {}).get(item)
             if cadence is not None:
-                session = str(getattr(self, "market_session_state", "") or "")
+                session_scope = self._delay_collection_session_scope(received_epoch)
                 if (
                     cadence.scope["transport_epoch"]
                     != self._market_data_transport_epoch
                 ):
                     cadence = None
-                elif cadence.scope["session"] != session or cadence.scope[
-                    "source_day"
-                ] != int((received_epoch + 9 * 3600) // 86400):
+                elif (
+                    any(
+                        cadence.scope.get(key) != value
+                        for key, value in session_scope.items()
+                    )
+                    or cadence.scope["source_day"]
+                    != int((received_epoch + 9 * 3600) // 86400)
+                ):
                     cadence = type(cadence)(
                         item=item,
                         epoch=cadence.scope["transport_epoch"],
                         generation=cadence.scope["subscription_generation"],
-                        session=session,
+                        **session_scope,
                         registered_at=cadence.scope["registered_at_epoch"],
                         route_sequence_base=self._route_realtime_sequence.get(
                             (item, "0D"), 0
@@ -6618,7 +6632,7 @@ class KiwoomWSManager:
             item=item,
             epoch=epoch,
             generation=f"{os.getpid()}:{epoch}:{self._delay_depth_registration_serial}:{item}",
-            session=str(getattr(self, "market_session_state", "") or ""),
+            **self._delay_collection_session_scope(row["registration_sent_at_epoch"]),
             registered_at=row["registration_sent_at_epoch"],
             route_sequence_base=self._route_realtime_sequence.get((item, "0D"), 0),
         )

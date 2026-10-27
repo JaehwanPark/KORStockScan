@@ -74,6 +74,101 @@ def _isolated_bus():
     return IsolatedBus()
 
 
+def test_unchanged_dispatch_skips_durable_rewrite_but_changed_state_is_saved(
+    tmp_path, monkeypatch
+):
+    from src.scanners import zero_base_discovery_runtime as module
+    import json
+
+    runtime = ZeroBaseDiscoveryRuntime(
+        event_bus=Bus(), session_date="2026-09-28", state_path=tmp_path / "q.json"
+    )
+    runtime.scan_once("fixture", fetcher=_panel, now_epoch=T0 + 1)
+    before = runtime.state_path.read_bytes()
+    syncs = []
+    monkeypatch.setattr(module.os, "fsync", lambda fd: syncs.append(fd))
+    runtime.dispatch_due_probes(now_epoch=T0 + 2)
+    assert syncs == []
+    assert runtime.state_path.read_bytes() == before
+    row = runtime.queue._candidates[("123456", "krx_nxt_integrated")]
+    row.discovery_volume += 1
+    runtime.dispatch_due_probes(now_epoch=T0 + 3)
+    assert len(syncs) == 2
+    assert (
+        json.loads(runtime.state_path.read_bytes())["candidates"][0]["discovery_volume"]
+        == row.discovery_volume
+    )
+
+
+def test_persist_skip_requires_same_file_generation(tmp_path, monkeypatch):
+    from src.scanners import zero_base_discovery_runtime as module
+
+    runtime = ZeroBaseDiscoveryRuntime(
+        event_bus=Bus(), session_date="2026-09-28", state_path=tmp_path / "q.json"
+    )
+    runtime.scan_once("fixture", fetcher=_panel, now_epoch=T0 + 1)
+    correct = runtime.state_path.read_bytes()
+    runtime.state_path.unlink()
+    runtime.state_path.write_bytes(b"{}")
+    syncs = []
+    monkeypatch.setattr(module.os, "fsync", lambda fd: syncs.append(fd))
+    runtime.dispatch_due_probes(now_epoch=T0 + 2)
+    assert len(syncs) == 2
+    assert runtime.state_path.read_bytes() == correct
+
+
+@pytest.mark.parametrize("fail_at", [1, 2])
+def test_failed_fsync_never_primes_unchanged_state_cache(
+    tmp_path, monkeypatch, fail_at
+):
+    from src.scanners import zero_base_discovery_runtime as module
+
+    runtime = ZeroBaseDiscoveryRuntime(
+        event_bus=Bus(), session_date="2026-09-28", state_path=tmp_path / "q.json"
+    )
+    count = 0
+
+    def fail_once(fd):
+        nonlocal count
+        count += 1
+        if count == fail_at:
+            raise OSError("fixture fsync failure")
+
+    monkeypatch.setattr(module.os, "fsync", fail_once)
+    with pytest.raises(OSError, match="fixture fsync failure"):
+        runtime._persist()
+    assert runtime._persisted_state is None
+    assert not list(tmp_path.glob("*.tmp.*"))
+    syncs = []
+    monkeypatch.setattr(module.os, "fsync", lambda fd: syncs.append(fd))
+    runtime._persist()
+    assert len(syncs) == 2 and runtime._persisted_state is not None
+    syncs.clear()
+    runtime._persist()
+    assert syncs == []
+
+
+def test_missing_post_commit_generation_is_never_cached(tmp_path, monkeypatch):
+    from src.scanners import zero_base_discovery_runtime as module
+
+    runtime = ZeroBaseDiscoveryRuntime(
+        event_bus=Bus(), session_date="2026-09-28", state_path=tmp_path / "q.json"
+    )
+    syncs = []
+
+    def removed_after_replace(fd):
+        syncs.append(fd)
+        if len(syncs) == 2:
+            runtime.state_path.unlink()
+
+    monkeypatch.setattr(module.os, "fsync", removed_after_replace)
+    runtime._persist()
+    assert runtime._persisted_state is None and not runtime.state_path.exists()
+    monkeypatch.setattr(module.os, "fsync", lambda fd: syncs.append(fd))
+    runtime._persist()
+    assert runtime.state_path.exists() and len(syncs) == 4
+
+
 def test_real_bus_startup_without_consumer_never_reserves_physical_capacity(tmp_path):
     bus = _isolated_bus()
     runtime = ZeroBaseDiscoveryRuntime(

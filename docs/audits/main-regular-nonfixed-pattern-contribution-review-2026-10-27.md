@@ -479,3 +479,20 @@ source26 기준 연구 순위는 저가 A09, 고가 A12, 중가 현행 유지다
 - 위 실제 경로를 동일 원천의 격리 환경에서 실행하고 missing/stale/conflict/새 세대/실패 unwind를 검증한다. 새 A09 정책 load/exit와 최종 prepared-generation 검증 뒤에만 승인된 ordered transition으로 배포·재기동한다. 이를 통과하기 전 포괄적인 '장후 포함 배포 준비 완료'를 주장하지 않는다.
 
 현재 결론은 **A09 통계상 채택 권고 유지 / 현행 정책 코드 로드 PASS 유지 / 신규 scoring 장후 통합·의미 결속 수리 및 배포 준비 OPEN**이다. 기존 stable owner `MachinePatternOpportunityResearch1023`에 이어가며 런타임·스케줄·provider·정책 변경은0이다.
+
+## 14. Source-first 수리·최신 운영 통합·배포 승인
+
+사용자는 10/27 배포·재기동을 명시 승인했다. §13의 결함을 기존 준비/선택/장후 owner에서 수리하고 최신 운영 `6d48e76e5`를 통합했다. source-first 준비는 native EOD/preflight/binding/원천·부모·registry·code를 고정하고 기존 stage writer와 CAS한다. wrapper의 신규 준비 연결은 명시 승인된 exact-date 요청이 있는 경우에만 첫 machine launch 전에 동작한다. 요청 부재는 기존 장후 경로를 그대로 진행하며, 오류 요청은 실행 전에 차단한다.
+
+terminal·stage reader의 metric/hash 결속과 실제 탐지 membership cache key를 함께 수리했다. 최초 stage fixture는 호환 projection만 바꾸고 실제 native report를 바꾸지 않아 실패했으며, 두 실제 소비 입력을 함께 연결한 뒤 통과했다. 원 실패 로그를 유지한다. 요청 fixture의 원천 원본 변경과 불변 archived 증거 변경은 첫 build와 exact resume의 서로 다른 검증 경계로 구분했다.
+
+- 원천 준비·기계·enabled 보조튜닝 회귀: `source-first-reviewed-tests.log`, 296 PASS.
+- 실제 wrapper 분기: `source-first-wrapper-tests.log`, 2 PASS. preflight 뒤·첫 launch 전 순서, 승인 요청 부재 시 정상 진행, 잘못된 요청의 launch 차단을 검증했다.
+- 독립 Main 준비 reader: `source-first-independent-reader-tests.log`, 28 PASS. 원본/후속 hash·unknown 경로 및 changed generation 차단을 포함한다.
+- 광범위 역사 profile 전수 회귀는 불필요하게 큰 조합이어서 176 PASS 후 중지했다. 이 중지 실행은 전체 PASS로 표시하지 않으며 `source-first-integration-gates.log`를 보존한다. 변경된 실제 profile·owner 및 원래 guard에 집중한 회귀로 대체한다.
+
+교체: 완료 machine을 선행 요구한 준비 의존은 제거하고 source-first 준비로 대체했다. raw metric 중복 판정은 G의 단일 metadata owner로 통합했다. 기존 역사 raw/scoped profile·immutable receipts·현재 Main/보조/게시/주문 owner는 소비자 증거 보존을 위해 유지한다. 새로운 engine-root 모듈·원장·stage·cron은 추가하지 않았다.
+
+전체 source27 장후의 새 A09 마지막 소비자 수용은 아직 OPEN이다. 코드 배포·현행 정책 P5·실제 PID 소비와 신규 A09 채택·전체 장후/PREOPEN·자연 REGULAR/SOR/_AL 수용·실현 경제성을 각각 기록한다. 신규 선택 계약 또는 정책을 수동 작성하거나 과거 PASS/terminal을 재사용해 이 경계를 닫지 않는다.
+
+후속 causal review에서 enabled 보조튜닝이 `machine.json`을 게시용 generation으로 교체한 뒤 기계 stage reader가 원 terminal과 비교하는 결함도 확인했다. H는 이제 원래 immutable `machine-comparison.json`과 stage에 결속된 호환 projection의 동일성을 검사한다. 보조 게시본은 보조/정책 소비자가 검증하며, 원 comparison/projection 변조는 계속 차단한다. 수리 후 stage141 PASS와 실제 enabled T campaign→issue 경로1 PASS를 확인했다. 이 1건은 무호출 private fixture이며 새 A09 전체 장후·정책 게시/P5의 운영 증거가 아니다.

@@ -5354,9 +5354,6 @@ def test_pre_submit_keeps_consumed_preparation_and_rejects_mixed_successor(
         "src/engine/monitoring/runtime_performance.py",
         "src/trading/entry/physical_send_guard.py",
         "src/engine/monitoring/policy_generation_code_handoff.py",
-        "src/engine/scalping/continuous_reversal_policy_v6.py",
-        "src/engine/scalping/reversal_cumulative_registration.py",
-        "src/engine/scalping/reversal_cumulative_postclose.py",
     ],
 )
 def test_pre_submit_handoff_rejects_unreviewed_dependency(tmp_path, family, dependency):
@@ -5373,8 +5370,6 @@ def test_pre_submit_handoff_rejects_unreviewed_dependency(tmp_path, family, depe
     "generation",
     [
         "current",
-        "consumed_nonfixed_final",
-        "consumed_nonfixed_observer",
         "consumed_invalidation_cadence",
         "consumed_nonfixed_identity",
         "consumed_preclaim",
@@ -5421,8 +5416,11 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
     subprocess.run(["git", "-C", str(root), "checkout", "-q", "75e0fbbf7"], check=True)
     hashes = {
         "current": handoff.REVIEWED_SCOPED_SCORING_PROFILE,
-        "consumed_nonfixed_final": handoff.REVIEWED_NONFIXED_FINAL_PROFILE,
+        "consumed_submit_fresh": handoff.REVIEWED_SUBMIT_FRESH_PROFILE,
+        "consumed_scoped_initial": handoff.REVIEWED_SCOPED_SCORING_INITIAL_PROFILE,
         "consumed_nonfixed_observer": handoff.REVIEWED_NONFIXED_OBSERVER_PROFILE,
+        "delay_collection": handoff.REVIEWED_DELAY_COLLECTION_PROFILE,
+        "consumed_nonfixed_final": handoff.REVIEWED_NONFIXED_FINAL_PROFILE,
         "nonfixed_final": handoff.REVIEWED_NONFIXED_FINAL_PROFILE,
         "nonfixed_current": handoff.REVIEWED_NONFIXED_CURRENT_PROFILE,
         "preclaim_cadence": handoff.REVIEWED_PRECLAIM_CADENCE_PROFILE,
@@ -5500,6 +5498,8 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
                     str(canonical),
                     "show",
                     {
+                        "consumed_nonfixed_final": "3178d65e0",
+                        "nonfixed_final": "3178d65e0",
                         "consumed_invalidation_cadence": "d5ddc0ae0",
                         "consumed_nonfixed_identity": "16130d883",
                         "consumed_preclaim": "c8d22dd41",
@@ -5520,9 +5520,9 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
                         "preclaim_diagnostics": "c8d22dd41",
                         "invalidation_cadence": "d5ddc0ae0",
                         "nonfixed_current": "7add11172",
-                        "consumed_nonfixed_final": "3178d65e0",
+                        "consumed_submit_fresh": "6d48e76e5",
+                        "consumed_scoped_initial": "a1b1b0f8a",
                         "consumed_nonfixed_observer": "3a989b283",
-                        "nonfixed_final": "3178d65e0",
                         "preclaim_cadence": "2b725bb39",
                         "finalization_admission": "194307750",
                         "consumed_suffix_report": "ab663e13b",
@@ -6631,3 +6631,35 @@ def test_preclaim_cadence_retains_each_complete_predecessor(tmp_path, generation
     test_entry_cost_handoff_keeps_exact_complete_generation(
         tmp_path, family, fault, generation, dependency
     )
+
+
+@pytest.mark.parametrize("family", ["main_stop", "holding_vote", "pre_submit_delay"])
+@pytest.mark.parametrize("fault", [None, "missing", "dirty", "committed_change", "parent_mix"])
+@pytest.mark.parametrize("dependency", list(handoff.REVIEWED_DELAY_COLLECTION_HASHES))
+def test_delay_collection_handoff_requires_complete_exact_successor(tmp_path, family, fault, dependency):
+    test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path, family, fault, "current", dependency)
+
+
+@pytest.mark.parametrize("family", ["main_stop", "holding_vote", "pre_submit_delay"])
+@pytest.mark.parametrize("fault", [None, "successor_mix"])
+def test_delay_collection_handoff_preserves_consumed_nonfixed_generation(tmp_path, family, fault):
+    test_entry_cost_handoff_keeps_exact_complete_generation(
+        tmp_path, family, fault, "consumed_nonfixed_final", "src/engine/sniper_state_handlers.py"
+    )
+
+
+@pytest.mark.parametrize('family', ['main_stop', 'holding_vote', 'pre_submit_delay'])
+@pytest.mark.parametrize('fault', [None, 'missing', 'parent_mix', 'committed_change', 'dirty'])
+def test_source_first_scoring_complete_handoff_generation(tmp_path, family, fault):
+    test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path, family, fault, 'current')
+
+
+@pytest.mark.parametrize('dependency', [
+    'src/engine/scalping/reversal_cumulative_registration.py',
+    'src/engine/scalping/reversal_cumulative_postclose.py',
+    'src/engine/automation/postclose_summary_handoff.py',
+    'deploy/run_threshold_cycle_postclose.sh',
+])
+@pytest.mark.parametrize('fault', ['missing', 'parent_mix', 'committed_change'])
+def test_source_first_scoring_rejects_each_changed_owner(tmp_path, dependency, fault):
+    test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path, 'main_stop', fault, 'current', dependency)

@@ -11,6 +11,36 @@ HASH_A = "a" * 64
 HASH_B = "b" * 64
 
 
+def test_fast_checkpoint_and_snapshot_preserve_native_schema_and_mutable_isolation():
+    from copy import deepcopy
+    from dataclasses import asdict
+
+    queue = DiscoveryQueue(DAY)
+    for code in ("000001", "000002"):
+        _observe(queue, code)
+    queue.claim(now_epoch=T0 + 2, limit=1)
+    expected = [
+        asdict(row)
+        for row in sorted(
+            queue._candidates.values(), key=lambda row: (row.code, row.route)
+        )
+    ]
+    checkpoint = deepcopy(queue)
+    assert queue.snapshot()["candidates"] == expected
+    queue._candidates[("000001", "krx_only")].name = "changed"
+    queue.claim_eligibility["fixture_mutable"] = [1]
+    assert checkpoint._candidates[("000001", "krx_only")].name != "changed"
+    assert "fixture_mutable" not in checkpoint.claim_eligibility
+    row = queue._candidates[("000002", "krx_only")]
+    row.name = ["unexpected mutable fixture"]
+    cloned = deepcopy(row)
+    row.name.append("new")
+    assert cloned.name == ["unexpected mutable fixture"]
+    snap = row._snapshot()
+    row.name.append("later")
+    assert snap["name"] == ["unexpected mutable fixture", "new"]
+
+
 def _observe(
     queue,
     code,

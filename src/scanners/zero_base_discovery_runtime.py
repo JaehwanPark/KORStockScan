@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 from pathlib import Path
 from collections import OrderedDict
@@ -57,6 +58,7 @@ class ZeroBaseDiscoveryRuntime:
         self._pending_promotions = []
         self._dirty = False
         self._admission_emitted = {}
+        self._persisted_state = None
         self.event_bus.subscribe(PROBE_RESULT_EVENT, self._receive_result)
         self.event_bus.subscribe(HANDOFF_ACK_EVENT, self._receive_result)
 
@@ -74,13 +76,28 @@ class ZeroBaseDiscoveryRuntime:
             raise RuntimeError("zero_base_queue_restore_failed") from exc
 
     def _persist(self):
+        payload = json.dumps(self.queue.snapshot(), sort_keys=True)
+        digest = hashlib.sha256(payload.encode()).hexdigest()
+
+        def generation():
+            try:
+                s = self.state_path.stat()
+                return (s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns, s.st_ctime_ns)
+            except FileNotFoundError:
+                return None
+
+        current_generation = generation()
+        if current_generation is not None and self._persisted_state == (
+            digest, current_generation
+        ):
+            return
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self.state_path.with_name(
             self.state_path.name + f".tmp.{os.getpid()}"
         )
         try:
             with temporary.open("w") as stream:
-                json.dump(self.queue.snapshot(), stream, sort_keys=True)
+                stream.write(payload)
                 stream.flush()
                 os.fsync(stream.fileno())
             os.replace(temporary, self.state_path)
@@ -89,6 +106,11 @@ class ZeroBaseDiscoveryRuntime:
                 os.fsync(directory_fd)
             finally:
                 os.close(directory_fd)
+            committed_generation = generation()
+            self._persisted_state = (
+                (digest, committed_generation)
+                if committed_generation is not None else None
+            )
         finally:
             temporary.unlink(missing_ok=True)
 

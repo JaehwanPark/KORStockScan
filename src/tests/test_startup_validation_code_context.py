@@ -3082,18 +3082,6 @@ def test_submit_probe_independent_preparation_exact_pairs(relative, fault):
     assert C.reviewed_preparation_pair(relative, old, new) is (fault is None)
 
 
-@pytest.mark.parametrize("name", sorted(C.REVIEWED_SCOPED_SCORING_SOURCES))
-@pytest.mark.parametrize("fault", [None, "origin", "successor"])
-def test_scoped_scoring_independent_preparation_binds_exact_generation(name, fault):
-    old = C.REVIEWED_SCOPED_SCORING_ORIGINS[name]
-    current = hashlib.sha256((ROOT/name).read_bytes()).hexdigest()
-    assert current == C.REVIEWED_SCOPED_SCORING_SOURCES[name]
-    assert current == H.REVIEWED_SCOPED_SCORING_HASHES[name]
-    if fault == "origin": old = "0" * 64
-    if fault == "successor": current = "0" * 64
-    assert C.reviewed_preparation_pair(name, old, current) is (fault is None)
-
-
 @pytest.mark.parametrize("relative", list(C.REVIEWED_HEALTH_SNAPSHOT_SOURCES))
 @pytest.mark.parametrize("fault", [None, "origin", "successor"])
 def test_health_snapshot_independent_preparation_exact_pairs(relative, fault):
@@ -3287,3 +3275,43 @@ def test_invalidation_cadence_independent_preparation_exact_pairs(relative, faul
     if fault == "origin": old = "0" * 64
     if fault == "successor": new = "0" * 64
     assert C.reviewed_preparation_pair(relative, old, new) is (fault is None)
+
+
+@pytest.mark.parametrize("relative", list(C.REVIEWED_DELAY_COLLECTION_SOURCES))
+@pytest.mark.parametrize("fault", [None, "origin", "successor", "path"])
+def test_delay_collection_independent_preparation_exact_pairs(relative, fault):
+    old = C.REVIEWED_DELAY_COLLECTION_ORIGINS[relative]
+    current = hashlib.sha256((ROOT / relative).read_bytes()).hexdigest()
+    assert H.REVIEWED_SUBMIT_FRESH_PROFILE[relative] == current
+    if fault == "origin": old = "0" * 64
+    if fault == "successor": current = "0" * 64
+    if fault == "path": relative = "src/engine/unknown_collection_owner.py"
+    assert C.reviewed_preparation_pair(relative, old, current) is (fault is None)
+
+
+@pytest.mark.parametrize("relative", sorted(C.REVIEWED_SUBMIT_FRESH_SOURCES))
+@pytest.mark.parametrize("fault", [None, "origin", "successor", "path"])
+@pytest.mark.parametrize("projected", [False, True])
+def test_submit_fresh_independent_preparation_exact_pairs(relative, fault, projected):
+    old = (
+        C.REVIEWED_SUBMIT_FRESH_PROJECTED_ORIGINS[relative]
+        if projected else C.REVIEWED_SUBMIT_FRESH_ORIGINS[relative]
+    )
+    current = hashlib.sha256((ROOT / relative).read_bytes()).hexdigest()
+    assert current == C.REVIEWED_SUBMIT_FRESH_SOURCES[relative]
+    if fault == "origin": old = "0" * 64
+    if fault == "successor": current = "0" * 64
+    if fault == "path": relative = "src/engine/unknown_submit_owner.py"
+    assert C.reviewed_preparation_pair(relative, old, current) is (fault is None)
+
+
+@pytest.mark.parametrize("name", sorted(C.REVIEWED_SCOPED_SCORING_SOURCES))
+@pytest.mark.parametrize("fault", [None, "origin", "successor"])
+def test_scoped_scoring_independent_preparation_binds_exact_generation(name, fault):
+    old = C.REVIEWED_SCOPED_SCORING_ORIGINS[name]
+    current = hashlib.sha256((ROOT/name).read_bytes()).hexdigest()
+    assert current == C.REVIEWED_SCOPED_SCORING_SOURCES[name]
+    assert current == H.REVIEWED_SCOPED_SCORING_HASHES[name]
+    if fault == "origin": old = "0" * 64
+    if fault == "successor": current = "0" * 64
+    assert C.reviewed_preparation_pair(name, old, current) is (fault is None)

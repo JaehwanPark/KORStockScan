@@ -1031,6 +1031,8 @@ def test_post_aux_guard_successor_does_not_transitively_promote_older_reports(
 @pytest.mark.parametrize(
     "family,review_map",
     [
+        *[(family, name) for family in ("rising_missed", "holding_vote")
+          for name in ("REVIEWED_SUBMIT_FRESH_SOURCE_SUCCESSORS", "REVIEWED_SUBMIT_FRESH_CONSUMED_SUCCESSORS")],
         ("auxiliary", "REVIEWED_SUCCESSORS"),
         ("auxiliary", "REVIEWED_AUXILIARY_INPUT_SOURCE_SUCCESSORS"),
         ("auxiliary", "REVIEWED_STARTUP_READONLY_SOURCE_SUCCESSORS"),
