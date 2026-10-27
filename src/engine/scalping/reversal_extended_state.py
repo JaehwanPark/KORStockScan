@@ -41,6 +41,7 @@ class State(OLD.State):
             b for b in branch_ids if b in C.EXTENDED_DEFINITIONS and b not in J.COMPOSED
         )
         self.extended_pending = {}
+        self.first_invalidations = {}
         self.extended_previous = {}
         self.extended_turn = None
         self.coverage_snapshot = MappingProxyType({})
@@ -60,6 +61,7 @@ class State(OLD.State):
             self.cumulative.reset()
         self.counts["extended_source_censored"] += len(self.extended_pending)
         self.extended_pending.clear()
+        self.first_invalidations.clear()
         self.extended_previous.clear()
         self.extended_turn = None
         self.coverage_snapshot = MappingProxyType({})
@@ -117,6 +119,57 @@ class State(OLD.State):
             source["facts"][key] = original[key]
         return source
 
+    def _remember_hold_invalidation(self, signal, row, previous):
+        """Keep the first native breach, never revive a removed ready signal.
+
+        Same state/ingestion lock and original five-second lifetime. Capacity
+        uses the existing ready limit; no disk or provider work runs here.
+        """
+        if signal.get("decision_phase") != "FIRST_PRICE_HOLD":
+            return
+        from src.engine.monitoring.runtime_performance import process_identity_fields
+
+        for key, old in tuple(self.first_invalidations.items()):
+            if (
+                row[0] > old["original_deadline"]
+                or old["registry_generation"] != self.generation
+            ):
+                self.first_invalidations.pop(key)
+        identity = signal["signal_id"]
+        proof = self.first_invalidations.setdefault(
+            identity,
+            dict(
+                schema="native_first_signal_invalidation_v1",
+                **{
+                    k: signal[k]
+                    for k in (
+                        "signal_id", "event_id", "symbol", "venue", "market",
+                        "source_item", "native_epoch", "native_sequence", "epoch",
+                        "registry_generation",
+                    )
+                },
+                original_deadline=signal["epoch"] + 5,
+                **process_identity_fields(),
+                runtime_effect=False,
+                allowed_runtime_apply=False,
+                actual_order_submitted=False,
+                broker_order_forbidden=True,
+                branches={},
+            ),
+        )
+        proof["branches"].setdefault(
+            signal["extended_definition_id"],
+            dict(
+                reason="first_price_hold_breached",
+                branch_definition_sha256=signal["branch_definition_sha256"],
+                signal_proof_sha256=digest(signal["signal_proof"]),
+                previous_observation=list(previous) if previous else None,
+                observation=list(row),
+            ),
+        )
+        while len(self.first_invalidations) > B.MAX_READY:
+            self.first_invalidations.pop(next(iter(self.first_invalidations)))
+
     def observe(self, row, *, symbol, venue, session):
         previous = self.legacy.last
         if previous and row == previous:
@@ -163,6 +216,12 @@ class State(OLD.State):
                     or floor is not None
                     and row[3] < floor
                 ):
+                    try:
+                        self._remember_hold_invalidation(signal, row, previous)
+                    except (KeyError, TypeError, ValueError, OverflowError):
+                        # Observation loss cannot retain an invalid signal.
+                        self.first_invalidations.pop(signal.get("signal_id"), None)
+                        self.counts["first_invalidation_capture_failed"] += 1
                     ready["event"]["branch_signals"].pop(bid)
                     ready.get("path_inputs", {}).pop(bid, None)
             if not ready["event"]["branch_signals"]:

@@ -1215,16 +1215,18 @@ def test_successor_requires_preserved_prior_fixture_and_independent_current_fixt
 def test_latest_capability_pair_is_current_and_keeps_original_source(family):
     from src.engine.monitoring import policy_generation_code_handoff as handoff
 
-    old, current = handoff.REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS[family][-1]
-    assert current == generation.code_generation(family)
+    pairs = handoff.REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS[family]
+    current = generation.code_generation(family)
+    # Multiple reviewed branches may be preserved. Their insertion order does
+    # not choose the native report; the consumer matches its exact source pair.
     assert (
-        old
-        == {
+        ({
             "rising_missed": "28baa874610d6f76379c6be1fe4f76accbbfbc5f473b0c4ffcb2f323cdf75922",
             "holding_vote": "7f30d09769b17801ad614d2403ca5742c5a45d4e56fb27212447de1384829386",
             "entry_cancel_wait": "5fa218b7b916b6b2a98a7a395573dac80ff96d2345edae3b64f9f99e3574125d",
             "auxiliary": "82a2c8b410c97dc89db45269ee865b21e2a1ba824d55448183bdb1c25769c06f",
-        }[family]
+        }[family], current)
+        in pairs
     )
 
 
@@ -1740,3 +1742,16 @@ def test_entry_latency_auxiliary_generation_is_exact_and_originals_are_retained(
     current = generation.code_generation("auxiliary")
     assert (origin, current) in handoff.REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS["auxiliary"]
     assert ("0" * 64, current) not in handoff.REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS["auxiliary"]
+
+
+@pytest.mark.parametrize("family", ["rising_missed", "holding_vote", "auxiliary"])
+def test_invalidation_cadence_capability_keeps_native_predecessors(family):
+    from src.engine.monitoring import policy_generation_code_handoff as handoff
+    current = generation.code_generation(family)
+    origins = {
+        "rising_missed": "9019999ecd6e980cf5dfe689bed7815c08b16632c65a879b6d202c4e305bd791",
+        "holding_vote": "05037a9d11e962bb160d3fa3e589935f36ab2290d5e087b25a98f8ed5f6e81cf",
+        "auxiliary": "9fb5d5b0bbe17b72ca832a883b059522d725f3234fca853324308beedf73bacc",
+    }
+    assert (origins[family], current) in handoff.REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS[family]
+    assert ("0" * 64, current) not in handoff.REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS[family]

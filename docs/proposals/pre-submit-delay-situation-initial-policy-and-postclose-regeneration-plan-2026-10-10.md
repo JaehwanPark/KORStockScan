@@ -136,6 +136,97 @@ S0는 파일 목록·크기·schema·기존 index를 먼저 읽는다. 당일 �
 
 Kiwoom request/response/FID/REG/REMOVE/recovery 수정이 필요하면 구현 전에 [공식 API reference gate](../kiwoom-api-data-contract.md#official-kiwoom-reference-gate)를 수행하고 upstream SHA·경로·조회 시각을 기록한다. 원천 projection/기존 snapshot 소비만으로 해결되는 부분은 wire 변경을 추가하지 않는다.
 
+### 4.6 호가 갱신 대기·수집 결함 분리 보완안 — 2026-10-27
+
+상태: **갱신 대기/수집 결함 분리 구현·검증 완료, 배포 대기**. 원 0.7초 근거 점검 뒤 사용자가 분리 보완안의 구현·반복 리뷰·검증과 원 intent 재생을 지시했다. [도입 이력·동일 생산자 실측·원 intent 대조](../audits/pre-submit-delay-situation-research-implementation-review-2026-10-17.md#2026-10-27-quote-cadence-evidence-and-monitoring-plan)와 [구현·검증·제거 판정](../audits/pre-submit-delay-situation-research-implementation-review-2026-10-17.md#2026-10-27-quote-cadence-implementation-review)이 근거다. 기존 `PreSubmitDelaySituationResearch1017`에 연결하며 매수 안전가드와 원 0.7초 연구 자격을 유지한다. 연구 age 기준 재선정·정식 장후 정책 재생성은 별도이고, 이번 구현의 운영 배포·재기동은 보류한다.
+
+**변경할 판정:** 현재 감시기의 `quote_valid=false -> quote_source_invalid` 단일 집계는 원 quote의 무효 사유와 원장 무결성·수집 상태를 분리하여 설명한다. 원 `quote_valid`, 원천 hash, 원 경보·관측 시각은 보존한다. 0.7초 초과를 신선한 호가로 승격하거나 매수 허용으로 연결하지 않는다. 이 계획의 `expected_wait`는 로컬 수집 증거와 과거 갱신 분포에 비추어 대기 중이라는 운영 진단이며 증권사 미송신/호가 무변경의 확정이 아니다.
+
+#### A. 수치·시계·신원을 먼저 고정
+
+1. 기존 관측 grid owner인 `scalping/pre_submit_delay_observation.py`와 원 commit의 grid/version/horizons/tolerance를 읽는다. 초기 문단의 5개 horizon은 초기 설계 이력이며 10/27 사건은 단일 intent의 0/1/3/5/30/60/120/180초 grid다. horizon 허용오차와 호가 age를 섞지 않는다.
+2. `quote_observed_at_epoch - ws_last_0d_epoch`는 그 시점에 읽은 호가의 나이다. 연속 0D의 `local_receive_timestamp` 차이는 갱신 간격이다. sampler due 지연, wire→정규화 지연, enqueue→append 지연, index/summary 소비 지연을 각각 별도 시계로 기록한다. 같은 ms의 복수 정상 수신은 native sequence로 구분하고 간격 0으로 남긴다. 미래 시각·역행과 뭉뚱그리지 않는다.
+3. 통계 key는 `(source_date, symbol, exact item, data route, session, transport epoch, native subscription generation)`이다. policy/effective venue cohort, requested/effective broker route와 실제 체결 venue는 별도 필드로 보존한다. `_NX`/`_AL`/plain 및 재접속 전후를 합치지 않는다. 실제 체결 venue는 native 실행 영수증이 없으면 미확정이다.
+4. Main fixed watch는 기존 watch/attachment·등록 세대에 결속한다. probe의 `lease_id`와 `exact_probe_source_trace`를 일반 Main 구독의 증거로 재사용하지 않는다. Main의 등록 세대·0D type coverage가 관측되지 않으면 `subscription_unproven`으로 남긴다. 새 lease를 합성하지 않는다.
+
+#### B. 기존 수신·저장 owner에 최소 증거 연결
+
+| Existing owner | Supplemental evidence / change | Retained boundary |
+| --- | --- | --- |
+| `kiwoom_websocket.py` REAL ingress, registered-item/control receipts, route snapshot | Exact item/type/subscription generation; last wire and normalized receive clocks/counters; native sequence and rejection reason | Registration sent is not a broker ACK; no REG/REMOVE, request, parser or route change |
+| `scalping/micro_reversion/forward_collector.py` and current native writer | Retain existing enqueue/persisted/rejected/drop owner; reuse exact quote-stage persistence and source digest through the current native writer | Global zero-drop alone does not prove one item's continuity; no second collector |
+| `scalping/pre_submit_delay_observation.py` and existing quote producer in `sniper_state_handlers.py` | Reference the frozen source and subscription generation; record due/actual offset, quote age and collection-evidence watermark | Original observation time, 0.7s eligibility and order authority unchanged |
+| `pipeline_event_logger`, existing index/summary/compact owners | Propagate small scalar evidence/version; compare identical committed event-time windows after each owner's existing flush deadline | No new per-tick duplicate ledger, forced count equality or enlarged flush deadline |
+| `monitoring/submission_bottleneck_monitor.py` | Compute separate ledger integrity, quote eligibility and collection-health summaries; bind alert to exact release/PID/epoch and stage | Report only; unknown input cannot become healthy |
+| `scalping/pre_submit_delay_tuning.py` and native projection/research readers | Preserve legacy interpretation; read the versioned supplemental diagnostics without changing pair admission | No source repair claim, stale-pair admission or policy promotion |
+
+현재 Main ingress에 wire/정규화 대응 증거가 없으면 그 경계는 미관측으로 남긴다. 기존 hook 보강이 Kiwoom realtime/subscription 코드에 닿는 구현에서는 착수 전에 공식 reference gate를 수행한다. probe 전용 영수증을 존재하지 않는 Main 영수증의 대체물로 쓰지 않는다.
+
+#### C. 분류 순서와 알림
+
+분류 계약의 label과 우선순위는 아래와 같다. `ledger_integrity`, `quote_eligibility`, `collection_health`를 독립된 축으로 유지한다.
+
+```text
+1. Invalid clock/identity/route/epoch or conflicting source:
+   collection_health = contract_invalid
+2. Exact receipt proves unexpected early REMOVE without a native shutdown or
+   session terminal, omitted required type in registration, source/control
+   rejection, drop, wire-to-normalized loss, or append/index loss after deadline:
+   collection_health = collection_fault_confirmed
+3. Due window closed by native shutdown/session/observation terminal:
+   retain existing horizon_states censor; emit no synthetic quote verdict
+4. Exact current local chain is complete and quote eligibility is valid:
+   collection_health = locally_healthy
+5. Subscription, same-generation wire/normalized/persisted coverage and live
+   receiver health are proven; age is inside an adequate past-only cadence band:
+   collection_health = expected_wait
+6. The same local chain is proven but age exceeds that cadence band:
+   collection_health = cadence_exceeded_unproven
+7. Required scope, baseline, receiver or intermediate evidence is absent/stale:
+   collection_health = unobservable
+
+quote_eligibility is computed independently under its owning contract.
+No collection_health value grants executable-quote or order authority.
+```
+
+- 현재 호가의 `locally_healthy`와 최근 손실 event는 별개다. 누적 누락을 초기화하지 않고 손실 시각·등록/epoch/item/세션/날짜·wire marker로 중복을 제거한다. 관측 사이에 손실 후 회복해도 기존 10분 창의 최근 event는 탐지하며, 그 창 밖 과거 누계만으로 현재 고장을 만들지 않는다. 새 고유 손실은 다시 탐지한다.
+- `expected_wait`여도 0.7초를 초과한 quote는 무효로 유지한다. 예상 갱신 간격 안의 대기라는 진단과 연구상 사용 불가를 함께 표시한다.
+- `expected_wait`는 수집 장애 알림의 분모에 넣지 않고 연구 무효/갱신 대기 진단 수에 유지한다. `unobservable`은 정상으로 내리지 않고 미확인 경계가 있는 WARN으로 유지한다. 이 의미 변경은 새 version/receipt로 설명하며 원 incident를 삭제하거나 경보만 억제하지 않는다.
+- `cadence_exceeded_unproven`은 확인이 필요한 WARN이며 고장 확정이나 정상 무거래로 바꾸지 않는다. 시간 범위 초과만으로 고장을 확정하지 않는다. 명시적인 collection fault와 clock/identity 손상은 기존 incident owner에서 경보를 유지한다.
+- 주문 안전가드의 정상 차단·AI 미진입·주문 함수 `returned_false`는 수집 결함의 증거가 아니다. required type 결손은 등록 원문/coverage에 실제 누락된 경우이며, 등록된 0D가 아직 오지 않았다는 이유만으로 고장 확정을 만들지 않는다.
+- 다른 종목 수신이나 같은 socket의 heartbeat는 transport 생존 근거로만 사용한다. 해당 item 결손의 부정 증거로 쓰지 않는다. 0B 누적 거래량 불변은 0D 주문장 불변을 증명하지 않는다. 나중에 같은 가격이 와도 당시 미수신 가격을 보완하지 않는다.
+- 알림은 `연구 호가 무효 수 / 원장 결손 수 / 수집 고장 확정 수 / 원인 미확정 수`와 intent 수를 분리하고, 대표 item·age·판정 기준·원 source ID·최초 미확인 경계를 붙인다. 변하지 않은 역사 중복은 incident에 보존하며 새 loss·악화·다른 epoch의 재발·회복 실패를 알린다. 새 정상 sample은 과거 결손을 지우지 않는다.
+
+#### D. 갱신 대기 범위의 실측 방법
+
+- 구현한 진단 창은 기존 감시의 10분 창과 맞춘 직전 10분·최근 최대 512개 간격이며 동일 연속 구독 세대만 사용한다. 0초 간격은 수신 건수에 포함하되 양수 간격 분포와 분리한다. 100개 이상 양수 간격일 때 P95를 진단용으로 게시하고, P99는 500개 이상일 때 게시한다. 100/500은 각각 상위 5개 정도의 tail 표본을 남기려는 **진단 계약값**이며 freshness/고장 임계치가 아니다. 부족하면 `baseline_insufficient`다. 다른 종목/route 평균을 대입하지 않는다.
+- `expected_wait`의 초안 상한은 동일 item의 **관측 시점 이전** P99에 기존 pipeline의 측정된 P99 전달 지연을 더한 값이다. P99 표본이 부족하고 P95만 충족하면 `provisional_p95`로 명시하며 같은 식의 P95 범위만 게시한다. 전달 지연 또는 연속 구독 증거가 없으면 범위를 만들지 않는다. 수신 간격만으로 broker 침묵의 정상성을 확정할 수 없으므로 상한 초과는 `cadence_exceeded_unproven`일 뿐이다. 최종 수치/창은 오프라인 회귀에서 세대·부하·개장 경계별 오탐/누락을 비교한 뒤 owner에 동결한다.
+- 현재 gap/새 장애는 자기 대기 범위를 늘리는 학습 입력으로 즉시 편입하지 않는다. 정상 정규화와 대응한 수신으로 닫힌 로컬 간격만 baseline에 사용하며, 확인된 정규화 손실을 가로지르는 간격과 REMOVE/재등록/세션 전환은 제외한다. 아직 닫히지 않은 현재 gap은 범위 계산 밖에 둔다. 이 로컬 통계는 증권사 무송신의 정상성 증명이 아니며 범위 초과를 고장 확정으로 바꾸지 않는다. 건강성 영수증이 stale이면 baseline을 재사용해 정상 판정하지 않는다.
+- 이번 10/27 전 구간 통계는 기술 통계다. 일부 item은 등록 연속성/lease 창이 복원되지 않았으므로 최대 간격 281초를 정상 대기 상한으로 사용하지 않는다. 사건 이후 수신과 종일 P95/P99를 당시의 실시간 판단에 소급 사용하지 않는다.
+
+#### E. 연구 표본과 매수 안전가드
+
+1. 0.7초는 우선 기존 연구 자격과 비교 baseline으로 보존한다. 별도 `source_chain_complete=true`만으로 `quote_valid=true`를 만들지 않는다. 현재 매수 경로의 설정·effective value·hard freshness/conflict/DANGER·slippage·broker/account/order/quantity/cooldown은 수정하지 않는다. 새 진단 필드는 주문 조건에서 읽지 않는다.
+2. 연구용 age 기준의 타당성은 별도 오프라인 비교다. age 구간별 유효 pair 비율, 종목·세션·상황별 소거율, 다음 실제 0D에서 확인되는 ask/bid/spread/depth 변화와 불리한 변동, 시간순 holdout의 선정 민감도를 보고한다. 후보 age 경계는 train의 실측 분포에서 정하고 validation 이후 선택하지 않는다. 단순 coverage 증가나 가격 동일만으로 더 오래된 호가를 허용하지 않는다. 다음 호가는 사후 검증 label이며 원 horizon 가격/feature가 아니다.
+3. 무효 horizon 뒤 새 quote가 와도 원 시각을 옮기거나 성공으로 덮어쓰지 않는다. 필요하면 기존 관측 lifetime·예산 안에서 다음 실제 갱신을 별도 진단으로 참조한다. 새 polling, 추가 구독, lifetime 연장, 재시도 주문을 만들지 않는다. 원 P0/Pd가 무효이면 해당 비교와 경제성은 계속 제외/null이다.
+4. 원 quote 무효를 ledger loss에서 분리한 새 projection은 별도 version/hash로만 생성한다. 기존 raw/compact/봉인 보고서는 변경하지 않는다. 이 진단 수리만으로 장후 정책 전체 재생성·0초 변경·양수 지연 발행을 수행하지 않는다.
+
+#### F. 구현 순서·검토·종료 검사
+
+| Step | Concrete output / acceptance |
+| --- | --- |
+| Q0 | Freeze source bytes/counters, original incident and dated code; identify missing Main subscription/wire boundary; preserve unobservable historical loss |
+| Q1 | Extend existing ingress/source receipt owners with bounded scalar continuity evidence; exercise exact Main and probe paths separately |
+| Q2 | Carry the same receipt generation through quote/index/summary/compact; reject missing/stale/conflicting bindings and partial writes |
+| Q3 | Replace the monitor's single invalid-quote explanation with the independent axes above; legacy raw remains readable and all new confirmed loss still alarms |
+| Q4 | Review/fix/re-review offline: expected sparse updates; same-ms events; future/backward clock; socket live with item loss; wrong type/item/route; reconnect/session/subscription generation; no baseline; overflow/drop/rejection; append/index lag and final censor |
+| Q5 | Replay the exact 8 incident horizons without altering any original quote validity; verify that sparse cadence alone does not become confirmed fault and missing wire evidence does not become proven quiet |
+| Q6 | Compare the actual BUY path before/after on the same frozen inputs: guard outcomes and order calls unchanged; measure callback/sampler p95/p99, bounded RSS/state, index lag and report work against the existing owner's performance guard |
+
+현재 WS의 Main/probe 수신 계수와 native sequence·quote/index 증거를 연결하며 별도 sampler/classifier service나 중복 validator를 만들지 않는다. 수신 callback은 O(1)으로 갱신하고 분위수는 WS lock 밖의 두 기존 조회 경로에서 계산한다. 같은 수신 세대의 요약은 재사용하며 첫 표본의 10분 창 만료·wire/정규화 변경·미래 cache이면 재계산한다. item별 최근 512개 간격과 전달 시각만 유지하고 기존 관측 owner의 `MAX_ACTIVE=128` 이내에서 추적한다. 포화/coverage 부족은 미확정으로 드러내며 native 등록·구독 cap을 변경하지 않는다. 독립 depth writer의 기존 loss 검출도 유지하며 전역 drop=0을 item 건강성 근거로 대입하지 않는다. 0D book 복사·hash는 원 snapshot generation별 기존 공유 경로를 쓴다.
+
+대체·보존: monitor의 `invalid quote == generic source loss` 설명은 Q3에서 대체하고 옛 중복 설명 분기를 제거한다. 원 quote producer/0.7초 자격/역사 reader/매수 guard는 현재 consumer가 있으므로 유지한다. source-generation 변경은 해당 projection/index/monitor에만 연결하며 원 sealed 경제성·정책을 덮어쓰지 않는다. 실제 배포·PID 소비·다음 자연 갱신 수용은 구현 검증과 별도이며 이번 문서에서 완료 처리하지 않는다.
+
 ## 5. 가격 비교·분할·상황별 초기 선정
 
 ### 5.1 원천 자격을 분할 전에 확정

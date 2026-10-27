@@ -9361,6 +9361,273 @@ def test_delay_cursor_partial_append_and_legacy_generation_do_not_lose_boundary(
     assert sum(v["count"] for v in changed["cursor"]["minutes"].values()) == 1
 
 
+@pytest.mark.parametrize(
+    "variant", ["original", "expected_wait", "loss", "epoch", "compact_loss"]
+)
+def test_original_intent_monitor_replay_preserves_invalid_quotes_and_detects_new_loss(
+    tmp_path, variant
+):
+    from copy import deepcopy
+    from pathlib import Path
+
+    fixture = json.loads(
+        (
+            Path(__file__).parent / "fixtures/pre_submit_delay_cadence_20261027.json"
+        ).read_text()
+    )
+    rows = [deepcopy(fixture["commit_projection"])] + [
+        json.loads(x["raw_line"]) for x in fixture["native_quotes"]
+    ]
+    if variant in {"expected_wait", "loss", "epoch"}:
+        # Explicit synthetic receipt variants; never substitute for missing
+        # original Main wire/subscription evidence in the native replay.
+        target = next(
+            x
+            for x in rows[1:]
+            if x["fields"]["target_delay_sec"]
+            == ("3" if variant == "expected_wait" else "60")
+        )
+        f = target["fields"]
+        at = float(f["quote_observed_at_epoch"])
+        depth = float(f["ws_last_0d_epoch"])
+        f["quote_collection_evidence"] = dict(
+            schema="delay_quote_collection_v1",
+            decision_authority="report_only",
+            runtime_effect=False,
+            item="196170_NX",
+            transport_epoch=int(f["quote_transport_epoch"]),
+            session="P",
+            subscription_generation="synthetic-test-only",
+            subscription_active=True,
+            required_types=["0B", "0D"],
+            source_day=int((at + 9 * 3600) // 86400),
+            as_of_epoch=at,
+            registered_at_epoch=at - 1000,
+            depth_source_sha256=f["route_depth_source_sha256"],
+            clock_invalid=False,
+            wire_count=514 if variant == "loss" else 513,
+            normalized_count=513,
+            normalized_wire_id=514 if variant == "loss" else 513,
+            normalized_route_sequence=513,
+            last_wire_epoch=depth - 0.001,
+            last_normalized_epoch=depth,
+            missing_normalizations=1 if variant == "loss" else 0,
+            last_loss_wire_id=514 if variant == "loss" else 0,
+            last_loss_epoch=depth if variant == "loss" else None,
+            receiver_ready=True,
+            cadence_sample_count=512,
+            cadence_basis="p99",
+            cadence_upper_sec=2.0,
+            delivery_p99_sec=0.01,
+            expected_wait_upper_sec=2.01,
+        )
+        f["quote_route_sequence"] = 513
+        if variant == "epoch":
+            f["quote_collection_evidence"]["transport_epoch"] += 1
+    started, _ = _delay_semantic_fixture(tmp_path, native_rows=rows)
+    if variant == "compact_loss":
+        compact = next(
+            (
+                tmp_path
+                / "threshold_cycle"
+                / f"date={started.date().isoformat()}"
+                / "family=pre_submit_delay"
+            ).glob("*.jsonl")
+        )
+        lines = compact.read_text().splitlines(keepends=True)
+        compact.write_text("".join(lines[:-1]))
+    semantics = monitor.pre_submit_delay_source_semantics(
+        tmp_path, monitor.stamp("2026-10-27T08:18:30+09:00")
+    )
+    assert semantics["quote_eligibility_counts"] == dict(valid=2, invalid=6)
+    assert semantics["collection_health_counts"].get(
+        "collection_fault_confirmed", 0
+    ) == (variant == "loss")
+    assert semantics["collection_health_counts"].get("contract_invalid", 0) == (
+        variant == "epoch"
+    )
+    assert semantics["collection_health_counts"].get("expected_wait", 0) == (
+        variant == "expected_wait"
+    )
+    assert semantics["issues"].get("quote_collection_unobservable") == 6 - (
+        variant == "expected_wait"
+    )
+    if variant in {"loss", "epoch"}:
+        assert semantics["issues"]["quote_collection_fault"] == 1
+    else:
+        assert "quote_collection_fault" not in semantics["issues"]
+    if variant == "compact_loss":
+        assert semantics["issues"]["raw_compact_event_missing"] == 1
+    else:
+        assert semantics["sources"] == dict(
+            raw="complete", summary="complete", compact="complete"
+        )
+    result = dict(
+        as_of=semantics["as_of"],
+        incidents={},
+        notification_pending=[],
+        status="unobservable",
+        blocker=None,
+    )
+    monitor.attach_pre_submit_delay_source_semantics(result, semantics)
+    sent = []
+    monitor.notify(result, "offline-original-intent.json", send=sent.append)
+    assert sent and "연구 호가 무효: 6" in sent[0]
+    if variant == "original":
+        assert "호가 관측 원인 미확정" in sent[0]
+        assert "수집 결함 확정: 0" in sent[0]
+        assert "[매수 지연 호가 관측 점검]" in sent[0]
+        same = dict(result, notification_pending=[])
+        monitor.attach_pre_submit_delay_source_semantics(same, semantics)
+        assert same["notification_pending"] == []
+        changed = deepcopy(semantics)
+        changed["collection_failure_event_ids"] = ["new-exact-failure-id"]
+        again = dict(result, notification_pending=[])
+        monitor.attach_pre_submit_delay_source_semantics(again, changed)
+        assert "pre_submit_delay_intraday_source_gap" in again["notification_pending"]
+        early = monitor.pre_submit_delay_source_semantics(
+            tmp_path, monitor.stamp("2026-10-27T08:17:02+09:00")
+        )
+        assert early["quote_eligibility_counts"]["invalid"] == 5
+        assert (
+            early["collection_health_counts"].get("collection_fault_confirmed", 0) == 0
+        )
+        recovered = deepcopy(semantics)
+        recovered.update(
+            issues={},
+            issues_by_scope={},
+            status="observed_no_gap",
+            healthy_by_scope={
+                "quote_collection_unobservable|NXT_ONLY|005930|krx_like_premarket": 1
+            },
+        )
+        other = deepcopy(result)
+        other["notification_pending"] = []
+        monitor.attach_pre_submit_delay_source_semantics(other, recovered)
+        assert (
+            other["incidents"]["pre_submit_delay_intraday_source_gap"]["status"]
+            == "historical_unresolved"
+        )
+        recovered["healthy_by_scope"] = {
+            "quote_collection_unobservable|NXT_ONLY|196170|krx_like_premarket": 1
+        }
+        exact = deepcopy(result)
+        exact["notification_pending"] = []
+        monitor.attach_pre_submit_delay_source_semantics(exact, recovered)
+        assert (
+            exact["incidents"]["pre_submit_delay_intraday_source_gap"]["status"]
+            == "recovered"
+        )
+        assert (
+            exact["incidents"]["pre_submit_delay_intraday_source_gap"][
+                "historical_source_repaired"
+            ]
+            is False
+        )
+
+
+@pytest.mark.parametrize("second_loss", [False, True])
+@pytest.mark.parametrize("loss_timing", ["at_quote", "between_quotes", "before_window"])
+def test_delay_collection_deduplicates_one_loss_and_detects_a_new_loss(
+    tmp_path, second_loss, loss_timing
+):
+    from copy import deepcopy
+    from src.engine.monitoring.ws_receive_expectation import (
+        DepthReceiveCadence,
+        project_depth_cadence,
+    )
+
+    started = monitor.stamp("2026-10-16T10:00:00+09:00").timestamp()
+    source = DepthReceiveCadence(
+        item="005930_AL",
+        epoch=7,
+        generation="synthetic-loss-recovery",
+        session="3",
+        registered_at=started - 1000,
+    )
+    if loss_timing == "before_window":
+        source.wire(started - 900)
+        source.normalized(started - 899, source.wire(started - 899))
+    for i in range(513):
+        at = started - 512.1 + i
+        source.normalized(at, source.wire(at))
+    updates = {}
+    for horizon in (0, 30, 60, 120, 180):
+        if horizon == 120 and loss_timing == "between_quotes":
+            source.wire(started + 90)
+            source.normalized(started + 91, source.wire(started + 91))
+        if (
+            horizon == 30
+            and loss_timing == "at_quote"
+            or horizon == 180
+            and second_loss
+        ):
+            source.wire(started + horizon - 1)
+        if horizon != 0 and (horizon != 60 or loss_timing != "at_quote"):
+            at = started + horizon - 0.1
+            source.normalized(at, source.wire(at))
+        at = started + horizon
+        evidence = project_depth_cadence(
+            source.freeze(active=True, required_types=["0D"], receiver_ready=True), at
+        )
+        evidence["depth_source_sha256"] = "a" * 64
+        valid = at - source.last_normalized <= 0.7
+        updates[horizon] = dict(
+            quote_valid=valid,
+            quote_source_reason="valid" if valid else "depth_stale_or_clock_invalid",
+            quote_transport_epoch=7,
+            ws_last_0d_epoch=source.last_normalized,
+            quote_route_sequence=source.normalized_route_sequence,
+            route_depth_source_sha256="a" * 64,
+            quote_collection_evidence=evidence,
+        )
+    _delay_semantic_fixture(
+        tmp_path, quote_horizons=tuple(updates), quote_updates=updates
+    )
+    semantics = monitor.pre_submit_delay_source_semantics(
+        tmp_path, monitor.stamp("2026-10-16T10:05:00+09:00")
+    )
+    assert semantics["sources"] == dict(
+        raw="complete", summary="complete", compact="complete"
+    )
+    count = (loss_timing != "before_window") + second_loss
+    assert semantics["issues"] == ({"quote_collection_fault": count} if count else {})
+    assert semantics["collection_fault_event_count"] == count
+    current_faults = (2 if loss_timing == "at_quote" else 0) + second_loss
+    assert (
+        semantics["collection_health_counts"].get("collection_fault_confirmed", 0)
+        == current_faults
+    )
+    assert (
+        semantics["collection_health_counts"]["locally_healthy"] == 5 - current_faults
+    )
+    invalid = loss_timing == "at_quote"
+    assert semantics["quote_eligibility_counts"] == (
+        dict(valid=4, invalid=1) if invalid else dict(valid=5)
+    )
+    if not count:
+        assert semantics["status"] == "observed_no_gap"
+        assert source.missing_normalizations == 1
+        return
+    result = dict(as_of=semantics["as_of"], incidents={}, notification_pending=[])
+    monitor.attach_pre_submit_delay_source_semantics(result, semantics)
+    sent = []
+    monitor.notify(result, "offline-loss-recovery.json", send=sent.append)
+    assert f"수집 결함 확정: {count}" in sent[0]
+    repeated = deepcopy(semantics)
+    repeated["collection_health_counts"]["collection_fault_confirmed"] = (
+        current_faults + 1
+    )
+    same = dict(result, notification_pending=[])
+    monitor.attach_pre_submit_delay_source_semantics(same, repeated)
+    assert same["notification_pending"] == []
+    changed = deepcopy(semantics)
+    changed["collection_failure_event_ids"].append("new-independent-wire-loss")
+    again = dict(result, notification_pending=[])
+    monitor.attach_pre_submit_delay_source_semantics(again, changed)
+    assert again["notification_pending"] == ["pre_submit_delay_intraday_source_gap"]
+
+
 def _delay_semantic_fixture(
     tmp_path,
     *,
@@ -9376,6 +9643,7 @@ def _delay_semantic_fixture(
     extra_terminals=(),
     record_id=9,
     writer=None,
+    native_rows=None,
 ):
     """Create all three physical source paths with the same exact rows."""
     from src.engine.pipeline_event_summary import (
@@ -9383,8 +9651,10 @@ def _delay_semantic_fixture(
         execution_projection_identity,
     )
 
-    day = "2026-10-16"
-    started = monitor.stamp(day + "T10:00:00+09:00")
+    day = native_rows[0]["emitted_date"] if native_rows else "2026-10-16"
+    started = monitor.stamp(
+        native_rows[0]["emitted_at"] if native_rows else day + "T10:00:00+09:00"
+    )
     base = dict(
         event_type="pipeline_event",
         pipeline="ENTRY_PIPELINE",
@@ -9460,6 +9730,8 @@ def _delay_semantic_fixture(
                     fields=dict(fields, **payload),
                 )
             )
+    if native_rows is not None:
+        rows = native_rows
     raw = tmp_path / "pipeline_events" / f"pipeline_events_{day}.jsonl"
     raw.parent.mkdir(exist_ok=True)
     raw.write_text("".join(json.dumps(row) + "\n" for row in rows))
@@ -10635,24 +10907,20 @@ def test_indexed_lineage_source_reaches_bounded_health_without_raw_scan(
 
 @pytest.mark.parametrize("cumulative", [False, True])
 @pytest.mark.parametrize(
-    "damage",
-    [
-        None,
-        "no_breach",
-        "ready",
-        "predicate_missing",
-        "source",
-        "epoch",
-        "scope",
-        "registration",
-        "route",
-        "bundle",
-        "branch_phase",
-        "late",
-    ],
+    "rebound,damage",
+    [(rebound, damage) for rebound in (False, True) for damage in (
+        None, "no_breach", "ready", "predicate_missing", "source", "epoch",
+        "scope", "registration", "route", "bundle", "branch_phase", "late",
+    )] + [(True, damage) for damage in (
+        "first_missing", "first_hash", "first_null", "first_actor", "first_conflicting_actor",
+        "first_schema", "first_generation", "first_item", "first_branch", "first_definition",
+        "first_proof", "first_source", "first_quote", "first_epoch", "first_sequence",
+        "first_clock", "first_authority", "first_previous", "first_trace_actor",
+        "first_numeric", "first_previous_price", "first_deadline",
+    )],
 )
 def test_registered_native_first_hold_breach_is_diagnostic_only(
-    tmp_path, monkeypatch, cumulative, damage
+    tmp_path, monkeypatch, cumulative, rebound, damage
 ):
     from copy import deepcopy
     from src.engine.scalping import reversal_extended_runtime as B
@@ -10712,22 +10980,34 @@ def test_registered_native_first_hold_breach_is_diagnostic_only(
     update = row(126, price)
     update[9] = symbol + "_NX"
     state.observe(update, symbol=symbol, venue="NXT", session="NXT_PREMARKET")
-    monkeypatch.setattr(source.time, "time", lambda: at + 1)
+    checked = at + 1
+    if rebound:
+        recovery = row(127, values[-1][3])
+        recovery[9] = symbol + "_NX"
+        state.observe(recovery, symbol=symbol, venue="NXT", session="NXT_PREMARKET")
+        checked = at + 3
+    monkeypatch.setattr(source.time, "time", lambda: checked)
     with pytest.raises(ValueError) as error:
         source.validate_claim_with_receipt(
             claim,
             "f" * 64,
-            now=at + 1,
+            now=checked,
             evaluation_attempt_id="aims-held",
             machine_bundle_sha256="b" * 64,
         )
     assert str(error.value) == "reversal_signal_path_changed"
+    with pytest.raises(ValueError, match="reversal_signal_expired_or_changed"):
+        B.validate_claim(claim, "f" * 64, now=at + 5.001)
     receipt = deepcopy(error.value.reversal_source_receipt)
+    first_original = deepcopy(state.first_invalidations)
+    if not rebound:
+        # Preserve the original historical reader contract without a new receipt.
+        receipt.pop("first_signal_invalidation", None)
     trace = dict(
         schema="ai_decision_trace_v1",
         stock_code=symbol,
         decision_trace_id="held-trace",
-        decision_ts=B.K.iso(at + 1.01),
+        decision_ts=B.K.iso(checked + 0.01),
         decision_stage="entry_screen",
         provider_called=False,
         actual_order_submitted=False,
@@ -10738,8 +11018,16 @@ def test_registered_native_first_hold_breach_is_diagnostic_only(
         machine_contract_error="reversal_signal_path_changed",
         continuous_reversal_rejected_claim_receipt=receipt,
     )
+    if rebound:
+        trace.update(async_producer_pid=receipt["process_pid"],
+                     async_producer_start_ticks=receipt["process_start_ticks"])
+        first = receipt["first_signal_invalidation"]
+        assert first["branches"][bid]["observation"] == update
     if damage == "no_breach":
-        receipt["latest_native_observation"][3] = values[-1][3]
+        if rebound:
+            first["branches"][bid]["observation"][3] = values[-1][3]
+        else:
+            receipt["latest_native_observation"][3] = values[-1][3]
     elif damage == "ready":
         receipt["registered_signal_ready"] = True
     elif damage == "predicate_missing":
@@ -10762,12 +11050,82 @@ def test_registered_native_first_hold_breach_is_diagnostic_only(
         ] = "FIRST_UPTICK"
     elif damage == "late":
         receipt["state_observed_epoch"] += 10
+    elif damage == "first_missing":
+        receipt.pop("first_signal_invalidation")
+    elif damage == "first_hash":
+        first["sha256"] = "c" * 64
+    elif damage == "first_null":
+        receipt["first_signal_invalidation"] = None
+    elif damage == "first_actor":
+        first["pid"] += 1
+    elif damage == "first_conflicting_actor":
+        first["process_pid"] = first["pid"] + 1
+    elif damage == "first_trace_actor":
+        trace["async_producer_pid"] += 1
+    elif damage == "first_schema":
+        first["schema"] = "unknown"
+    elif damage == "first_generation":
+        first["registry_generation"] = "c" * 64
+    elif damage == "first_item":
+        first["branches"][bid]["observation"][9] = symbol + "_AL"
+    elif damage == "first_branch":
+        first["branches"].clear()
+    elif damage == "first_definition":
+        first["branches"][bid]["branch_definition_sha256"] = "c" * 64
+    elif damage == "first_proof":
+        first["branches"][bid]["signal_proof_sha256"] = "c" * 64
+    elif damage == "first_source":
+        first["branches"][bid]["observation"][8] = 0
+    elif damage == "first_quote":
+        first["branches"][bid]["observation"][4] *= 2
+    elif damage == "first_epoch":
+        first["branches"][bid]["observation"][1] += 1
+    elif damage == "first_sequence":
+        first["branches"][bid]["observation"][2] += 1
+    elif damage == "first_clock":
+        first["branches"][bid]["observation"][0] = at - 1
+    elif damage == "first_authority":
+        first["runtime_effect"] = True
+    elif damage == "first_previous":
+        first["branches"][bid]["previous_observation"][8] = 0
+    elif damage == "first_numeric":
+        first["branches"][bid]["observation"][3] = True
+    elif damage == "first_previous_price":
+        first["branches"][bid]["previous_observation"][3] = -1
+    elif damage == "first_deadline":
+        first["original_deadline"] += 1
+    if rebound and damage not in {"first_hash", "first_missing", "first_null"}:
+        first["sha256"] = B.digest({k: v for k, v in first.items() if k != "sha256"})
+    if damage is None:
+        from src.engine.scalping import ai_decision_trace as writer
+        from src.tests.test_ai_decision_trace import _enable
+
+        _enable(monkeypatch, tmp_path / "native-writer")
+        monkeypatch.setattr(writer, "_now", lambda: datetime.fromisoformat(trace["decision_ts"]))
+        writer.record_ai_decision_trace(
+            dict(
+                trace, ai_decision_trace_id=trace["decision_trace_id"], action="DROP",
+                ai_trace_market_data_route=trace["market_data_route"],
+            ),
+            prompt_type="scalping_entry",
+            prompt_version="fixture",
+            result_source="mechanistic_pre_adjudication_rejected",
+            provider_called=False,
+            stock_code=symbol,
+        )
+        stored = writer._trace_path(day).read_text().splitlines()
+        assert len(stored) == 1
+        exported = json.loads(stored[0])
+        assert exported["continuous_reversal_rejected_claim_receipt"] == json.loads(
+            json.dumps(receipt, allow_nan=False)
+        )
+        trace = exported
     _source_gap_files(
-        tmp_path, datetime.fromtimestamp(at + 1.1, B.K.KST), traces=[trace]
+        tmp_path, datetime.fromtimestamp(checked + 0.1, B.K.KST), traces=[trace]
     )
     before = deepcopy(trace)
     result = monitor.source_gap_semantics(
-        tmp_path, datetime.fromtimestamp(at + 1.1, B.K.KST)
+        tmp_path, datetime.fromtimestamp(checked + 0.1, B.K.KST)
     )
     assert result["issues"] == (
         {} if damage is None else {"machine_trace:reversal_signal_path_changed": 1}
@@ -10777,6 +11135,7 @@ def test_registered_native_first_hold_breach_is_diagnostic_only(
             "machine_trace:reversal_first_price_hold_invalidated": 1
         }
     assert trace == before
+    assert state.first_invalidations == first_original
 
 
 @pytest.mark.parametrize(

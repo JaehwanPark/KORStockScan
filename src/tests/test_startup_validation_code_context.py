@@ -2761,7 +2761,7 @@ def test_main_preparation_uses_reviewed_stopped_origin_code(name):
     review = json.loads((ROOT / H._FORMATTING_REVIEW_PATH).read_text())
     predecessor = review["sources"][name]["before_sha256"]
     if review["sources"][name]["after_sha256"] != current:
-        assert H.REVIEWED_PRECLAIM_DIAGNOSTIC_PROFILE[name] == current
+        assert H.REVIEWED_PRECLAIM_CADENCE_PROFILE[name] == current
         C._pairs({name: review["sources"][name]["after_sha256"]}, {name: current})
     origins = {old for old, new in pairs if new in {predecessor, current}}
     origins.add(predecessor)
@@ -3233,6 +3233,31 @@ def test_entry_capability_independent_preparation_exact_pairs(relative, fault):
 @pytest.mark.parametrize("fault", [None, "origin", "successor"])
 def test_preclaim_diagnostics_independent_preparation_pairs(relative, fault):
     old = C.REVIEWED_PRECLAIM_DIAGNOSTIC_ORIGINS[relative]
+    new = hashlib.sha256((ROOT / relative).read_bytes()).hexdigest()
+    if fault == "origin": old = "0" * 64
+    if fault == "successor": new = "0" * 64
+    assert C.reviewed_preparation_pair(relative, old, new) is (fault is None)
+
+
+@pytest.mark.parametrize("relative", list(C.REVIEWED_PRECLAIM_CADENCE_SOURCES))
+@pytest.mark.parametrize("fault", [None, "origin", "successor"])
+def test_preclaim_cadence_independent_preparation_pairs(relative, fault):
+    old = C.REVIEWED_PRECLAIM_CADENCE_ORIGINS[relative]
+    new = hashlib.sha256((ROOT / relative).read_bytes()).hexdigest()
+    if fault == "origin": old = "0" * 64
+    if fault == "successor": new = "0" * 64
+    assert C.reviewed_preparation_pair(relative, old, new) is (fault is None)
+
+
+@pytest.mark.parametrize("relative", list(C.REVIEWED_INVALIDATION_CADENCE_SOURCES))
+@pytest.mark.parametrize("fault", [None, "origin", "successor"])
+@pytest.mark.parametrize("projected", [False, True])
+def test_invalidation_cadence_independent_preparation_exact_pairs(relative, fault, projected):
+    origins = (
+        C.REVIEWED_INVALIDATION_CADENCE_PROJECTED_ORIGINS
+        if projected else C.REVIEWED_INVALIDATION_CADENCE_ORIGINS
+    )
+    old = origins[relative]
     new = hashlib.sha256((ROOT / relative).read_bytes()).hexdigest()
     if fault == "origin": old = "0" * 64
     if fault == "successor": new = "0" * 64

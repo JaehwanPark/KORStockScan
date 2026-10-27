@@ -1679,6 +1679,25 @@ def test_archive_recovery_preserves_explicit_source_date(release, monkeypatch):
     assert env["PROJECT_DIR"] == str(root)
 
 
+def test_daily_snapshot_archive_uses_selected_code_and_scheduled_lease(release, monkeypatch):
+    workspace, root, _, _ = release
+    monkeypatch.setattr(router, "__file__",
+                        str(workspace / "src/engine/infrastructure/runtime_release_router.py"))
+    monkeypatch.setattr(router.sys, "argv", ["router", "snapshot-archive", "2026-10-28"])
+    monkeypatch.setattr(router.os, "chdir", lambda *a: None)
+    def child(command, **kwargs):
+        assert str(root / ".venv/bin/python") in command
+        assert command[-3:] == ["--snapshots-only", "--days", "1"]
+        assert "--date" not in command  # Actual KST clock owns retention age.
+        assert kwargs["env"]["PROJECT_DIR"] == str(root)
+        with pytest.raises(ValueError, match="scheduled_execution_active"):
+            with router.scheduled_execution_lease(workspace, exclusive=True):
+                pass
+        return subprocess.CompletedProcess(command, 0)
+    monkeypatch.setattr(router.subprocess, "run", child)
+    assert router.main() == 0
+
+
 def test_scheduled_child_keeps_lease_after_router_descriptor_closes(tmp_path):
     with router.scheduled_execution_lease(tmp_path) as descriptor:
         child = subprocess.Popen(

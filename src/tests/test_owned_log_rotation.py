@@ -213,6 +213,8 @@ def test_stage2_cron_install_is_idempotent_and_preserves_unrelated_jobs(tmp_path
     assert results[0] == results[1]
     assert unrelated in results[1] and "cat /dev/null" not in results[1]
     assert results[1].count("# LOG_RETENTION_DAILY") == 1
+    assert results[1].count("# SNAPSHOT_ARCHIVE_DAILY") == 1
+    assert "25 6 * * * bash " + str(project) + "/deploy/run_runtime_release.sh snapshot-archive" in results[1]
     assert results[1].count("# INTRADAY_WS_FRESHNESS_MONITOR_AFTERMARKET_5MIN") == 2
     for line in results[1].splitlines():
         if any(

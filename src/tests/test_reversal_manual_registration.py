@@ -45,6 +45,83 @@ def hold_rows():
     )
 
 
+@pytest.mark.parametrize("capture_failed", [False, True])
+def test_first_hold_invalidation_survives_rebound_without_changing_guard(
+    monkeypatch, capture_failed
+):
+    bid = bid_for("other_non_fixed", "FIRST_HOLD3")
+    values = hold_rows()
+    state = R.State(branch_ids=[bid], session_anchor=values[0], generation="a" * 64)
+    observe(state, values)
+    signal = copy.deepcopy(state.ready[-1]["event"]["branch_signals"][bid])
+    if capture_failed:
+        def fail(*args):
+            raise ValueError("capture_unavailable")
+        monkeypatch.setattr(state, "_remember_hold_invalidation", fail)
+    update = row(126, 99.49)
+    observe(state, [update])
+    first = copy.deepcopy(state.first_invalidations)
+    assert all(signal["signal_id"] != ready["event"]["signal_id"] for ready in state.ready)
+    observe(state, [row(127, values[-1][3]), row(128, 99.48)])
+    assert state.first_invalidations == first
+    assert all(signal["signal_id"] != ready["event"]["signal_id"] for ready in state.ready)
+    if capture_failed:
+        assert first == {} and state.counts["first_invalidation_capture_failed"] == 1
+    else:
+        proof = first[signal["signal_id"]]
+        assert proof["original_deadline"] == signal["epoch"] + 5
+        assert proof["branches"][bid]["observation"] == update
+        assert proof["branches"][bid]["previous_observation"] == values[-1]
+    state._reset_windows()
+    assert state.first_invalidations == {}
+
+
+def test_first_invalidation_storage_uses_existing_ready_capacity_and_generation(monkeypatch):
+    bid = bid_for("other_non_fixed", "FIRST_HOLD3")
+    values = hold_rows()
+    state = R.State(branch_ids=[bid], session_anchor=values[0], generation="a" * 64)
+    observe(state, values)
+    signal = copy.deepcopy(state.ready[-1]["event"]["branch_signals"][bid])
+    monkeypatch.setattr(R.B, "MAX_READY", 2)
+    previous, breach = values[-1], row(126, 99.49)
+    breach[9] = previous[9]
+    for i in range(3):
+        current = dict(signal, signal_id="bounded:" + str(i))
+        state._remember_hold_invalidation(current, breach, previous)
+    assert list(state.first_invalidations) == ["bounded:1", "bounded:2"]
+    later = list(breach)
+    later[0] = signal["epoch"] + 5.001
+    state._remember_hold_invalidation(dict(signal, signal_id="next"), later, previous)
+    assert list(state.first_invalidations) == ["next"]
+    state.generation = "b" * 64
+    state._remember_hold_invalidation(
+        dict(signal, signal_id="new-generation", registry_generation=state.generation),
+        later, previous,
+    )
+    assert list(state.first_invalidations) == ["new-generation"]
+
+
+@pytest.mark.parametrize("boundary", ["source", "epoch", "sequence", "item"])
+def test_first_invalidation_is_not_reused_across_native_source_boundary(boundary):
+    bid = bid_for("other_non_fixed", "FIRST_HOLD3")
+    values = hold_rows()
+    state = R.State(branch_ids=[bid], session_anchor=values[0])
+    observe(state, values + [row(126, 99.49)])
+    assert state.first_invalidations
+    following = row(127, 99.5001)
+    following[9] = values[-1][9]
+    if boundary == "source":
+        following[8] = 0
+    elif boundary == "epoch":
+        following[1] += 1
+    elif boundary == "sequence":
+        following[2] += 1
+    else:
+        following[9] = "000002_NX"
+    state.observe(following, symbol="000001", venue="NXT", session="NXT_PREMARKET")
+    assert state.first_invalidations == {}
+
+
 def test_frozen_base_registry_is_unchanged_and_six_additions_have_four_scopes():
     assert len(C.NEW_DEFINITIONS) == 13 and len(C.ADDITIONAL_DEFINITIONS) == 6
     assert C.SHA256 == P.digest(C.MANIFEST)
@@ -109,13 +186,22 @@ def test_same_tick_two_hold_branches_are_one_canonical_opportunity():
     three = bid_for("other_non_fixed", "FIRST_HOLD3")
     values = hold_rows()[:-3] + [row(125, 99.5001)]
     values[-1][2] = values[-2][2] + 1
-    hits = observe(R.State(branch_ids=[one, three], session_anchor=values[0]), values)
+    state = R.State(branch_ids=[one, three], session_anchor=values[0])
+    hits = observe(state, values)
     assert len(hits) == 1 and set(hits[0]["event"]["branch_signals"]) == {one, three}
     inp, _, _ = U.production_request(
         dict(branch_inputs=hits[0]["path_inputs"]), U.V1.ARMS[1], event=hits[0]["event"]
     )
     assert len(inp["signals"]) == 2
     assert inp["common_context"]["opportunity_key"] == U.opportunity(hits[0]["event"])
+    breach, rebound = row(126, 99.49), row(127, 99.5001)
+    breach[2], rebound[2] = values[-1][2] + 1, values[-1][2] + 2
+    observe(state, [breach])
+    first = copy.deepcopy(state.first_invalidations)
+    assert set(first[hits[0]["event"]["signal_id"]]["branches"]) == {one, three}
+    observe(state, [rebound])
+    assert state.first_invalidations == first
+    assert not state.ready
 
 
 def test_breakout_requires_known_false_transition_and_structural_prefix():

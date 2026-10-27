@@ -37,6 +37,7 @@ OBSERVATION_GRID_VERSION = "legacy_and_short_clock_v1"
 SHORT_RESEARCH_HORIZONS = (1, 3, 5)
 OBSERVATION_HORIZONS = (0, 1, 3, 5, 30, 60, 120, 180)
 SHORT_OBSERVATION_TOLERANCE_SEC = 0.25
+MAX_RESEARCH_DEPTH_AGE_SEC = 0.7
 _OBSERVATION_CONTRACT_KEYS = (
     "observation_grid_version",
     "observation_horizons_sec",
@@ -321,7 +322,7 @@ def _quote_source_issue(commit: dict[str, Any], quote: dict[str, Any]) -> str | 
             if short
             else abs(offset - horizon) > 3.0
         )
-        or not 0 <= observed - depth <= 0.7
+        or not 0 <= observed - depth <= MAX_RESEARCH_DEPTH_AGE_SEC
     ):
         return "quote_clock_or_hash_invalid"
     if str(quote.get("route") or "") != str(commit.get("route") or "") or str(
