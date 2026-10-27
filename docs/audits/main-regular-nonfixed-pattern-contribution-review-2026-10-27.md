@@ -2,6 +2,8 @@
 
 ## 결정
 
+**17:41 준비 범위 정정:** 통계상 A09 권고와 현행 정책의 코드 인계/P5 통과는 유효하다. 신규 scoring을 쓰는 장후 전체 경로는 미검증이며, §12의 포괄적인 배포 준비 PASS는 그 범위에서 철회한다. 아래 §13이 실행 순서와 OPEN 사항을 소유한다.
+
 **17:16 후속 결론:** 원천 보강 후 저가A09의 정규장 비상시 SOR 범위 채택을 권고한다. 당일11/16승·누적113/204승이며, 미확정86점 중75점을 확정했다. 최종 코드 후보 `a1b1b0f8a`의 현행 정책 인계·격리 기동은 통과했다. 정식 A09 정책 생성·게시와 실제 PID 소비는 아직 미실행이며 §12가 최신 결과를 소유한다. 아래 초기 판단과 각 시각의 원본은 보존한다.
 
 우선 보완 대상은 **비상시 원천의 판정 도달과 극소수 100% 정책에 고정되는 기계 선택 방식**이다. 보조 프롬프트만 바꾸어 해결할 상황은 아니다. 적격 등록 패턴 WIN 구간820개 중 현행이 포착한7개를 재현했다. 820개는 이미 원천·후행 라벨이 있는 연구 구간이므로 그 안의 미선택813개를 오늘 원천 수신 결손 때문이라고 설명해서도 안 된다.
@@ -455,3 +457,25 @@ source26 기준 연구 순위는 저가 A09, 고가 A12, 중가 현행 유지다
 4. 실제 정책 적용 후 기존 owner의 **2026-10-28 09:30~10:00 KST REGULAR/SOR/_AL**에서 A09 native 확인점→AI 입력→판정 receipt 소비를 관찰한다. 표본 없으면 자연 수용 OPEN을 유지하며 실제 주문을 만들어 수용시키지 않는다. 실제 체결 venue·경제적 성과는 별도 증빙이다.
 
 따라서 **코드 후보 배포 준비 PASS / 저가A09 채택 권고 / 정식 A09 게시·실제 기동 수용 OPEN**이다. 새 bootstrap/PREOPEN/PID 증거를 만들지 않았고 현재 릴리스·정책을 유지했다.
+
+## 13. 장후 적용 순서와 준비 완료 범위 정정
+
+사용자의 재검토 요청에 따라 실제 wrapper·producer·stage reader를 대조했다. **이전 준비 PASS는 현행 부모 정책을 새 코드로 읽는 검증이며 신규 A09 scoring의 장후 전체 완주 증거가 아니다.** 연구 수치와 원 P5는 변경하지 않는다. [추가 검토](/home/ubuntu/KORStockScan/tmp/regular-selection-score-20261027/a09-preparation/postclose-integration-review.json)가 이전 readiness 보고서의 판단 범위를 정정한다. 기존 native receipt를 수정하지 않았다.
+
+확인한 첫 결손과 미검증은 세 가지다.
+
+1. 후보 `reversal_cumulative_registration.prepare_scoring`은 native `main_machine_policy` 완료를 먼저 요구한다. 이후 `intake_scoring`이 producer 입력 `cumulative-scoring.json`을 바꾸므로 기계 보고서와 terminal을 다시 만들어야 한다. 정상 wrapper는 기계 stage 뒤 다른 작업과 보조 stage를 진행하며 신규 intake를 기다리는 적용 barrier가 없다. 따라서 이전의 '기계 완료→신규 계약 intake→일부 재생성'을 자동 작업과 병행할 수 있는 안전한 실행 순서로 제시한 것은 잘못이다. bound 출력·선행 receipt·입력이 바뀌면 native reader는 각각 `output_generation_changed`·`prerequisite_generation_changed`·`input_generation_changed`로 거부한다. 이번에 실제 장후 실패를 발생시키거나 재실행하지는 않았다.
+2. 새 CP 보고서는 `scope_bound_chronological_wilson_and_raw_fraction`을 선언하지만 CP terminal의 `selection_basis`와 stage reader는 `cumulative_raw_win_fraction`에 고정돼 있다. 실제 source26의 유효 report/terminal을 메모리에 복사해 metric만 새 값으로 바꾸고 hash를 일관되게 계산한 격리 reader 대조에서도 raw terminal이 accepted됐다. 이는 producer/consumer의 의미 불일치이며 경고가 없어도 준비 완료로 볼 수 없다. 단순히 허용 문자열을 늘리거나 기존 terminal을 수작업으로 바꾸어 해결하지 않는다.
+3. 현재 운영은 auxiliary tuning enabled·128개 union_v6 scope다. 기존 검증의 A09 private family/29개 입력과 현행 정책 P5는 실제 설정의 기계→보조 campaign→정책 게시→native stage→summary/strict/controller→PREOPEN→새 정책 P5를 함께 검증하지 않았다. 이 마지막 소비자 연결은 OPEN이다.
+
+'무조건 에러'를 실제 관측 결과로 단정하지는 않는다. 최초 검토 기준은 운영3a/활성6b93였다. 검토 중 별도 작업이 운영 릴리스를f14f42989로 전환했고 활성 정책6b93는 같았다. 최신 실제 stage reader로 같은 격리 대조를 수행해 raw/scoped 불일치 수용과 scoped terminal 거부를 다시 확인했다. [최신 consumer 대조](/home/ubuntu/KORStockScan/tmp/regular-selection-score-20261027/a09-preparation/postclose-integration-current-consumer.json). 미승인 A09 제안은 이번 작업에서 native pending/active에 등록하지 않았다. 이번 결손은 신규 A09 적용 절차와 의미적 연결에 대한 것이다.
+
+### 수정한 구현·검증 순서
+
+- 기존 `prepare_scoring` owner의 준비 입력을 **검증된 native 원천·preflight·현재 부모/registry/code**로 먼저 고정할 수 있도록 보완한다. 새 선택 계약의 준비를 그 계약으로 재생성할 완료 보고서에 의존시키지 않는다. 새 stage/우회 wrapper/가짜 terminal을 만들지 않으며 원 source·제외·실행 권한 검증은 유지한다. 이 source-first 경로는 아직 구현되지 않았다.
+- 비교 완료된 A09 범위의 미승인 준비 계약과 채택/배포 근거를 검토하고, 승인된 경우에만 **첫 기계 stage 전에** native intake를 끝낸다. 승인·정식 원천·코드가 준비되지 않았으면 현행 정책으로 통상 장후를 완료한다. 작업 중 승인 대기나 신규 계약 삽입을 하지 않는다.
+- 기계 보고서/terminal/manifest가 동일한 실제 metric·통계 계약·source/parent를 선언하고, native stage reader가 그 결속을 확인하도록 기존 producer/consumer를 함께 보완한다. 역사 raw 계약 reader는 유지한다.
+- 고정된 입력과 같은 코드로 최종 기계→실제 설정의 보조→정책/각 stage→summary/checklist/strict/controller→다음 PREOPEN을 순서대로 닫는다. 전체 EOD/raw/AI 원장을 반복 생성하지 않는다. 기존 봉인 세대를 사후 변경하는 경우에는 현재 native recovery owner가 무효화된 마지막 소비자까지 재봉인해야 한다.
+- 위 실제 경로를 동일 원천의 격리 환경에서 실행하고 missing/stale/conflict/새 세대/실패 unwind를 검증한다. 새 A09 정책 load/exit와 최종 prepared-generation 검증 뒤에만 승인된 ordered transition으로 배포·재기동한다. 이를 통과하기 전 포괄적인 '장후 포함 배포 준비 완료'를 주장하지 않는다.
+
+현재 결론은 **A09 통계상 채택 권고 유지 / 현행 정책 코드 로드 PASS 유지 / 신규 scoring 장후 통합·의미 결속 수리 및 배포 준비 OPEN**이다. 기존 stable owner `MachinePatternOpportunityResearch1023`에 이어가며 런타임·스케줄·provider·정책 변경은0이다.

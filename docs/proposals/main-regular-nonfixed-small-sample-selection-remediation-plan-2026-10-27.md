@@ -2,6 +2,8 @@
 
 ## 1. 결정·범위
 
+**장후 준비 범위 정정:** §10과 [검토 §13](../audits/main-regular-nonfixed-pattern-contribution-review-2026-10-27.md)이 최신 실행 순서를 소유한다. 현행 정책의 인계/P5는 통과했지만 신규 scoring 장후 통합은 미검증이므로 기존 포괄적인 배포 준비 완료 판단은 보류한다.
+
 **제안:** 비용을 반영한 WIN/STOP/TIMEOUT 라벨은 유지하고, 기계정책 순위를 `반복 확인점의 단순 승률`에서 `시간 중복을 제거한 누적 승률의 불확실성 보정 점수`로 바꾼다. 추가 패턴이 실패1건 때문에 소표본100% 현행에 영구히 밀리는 문제를 보완한다. 손익비·EV·AI 점수·호가 guard 완화를 순위에 넣지 않는다.
 
 이 문서는 **선택 계약의 변경안과 구현 owner**다. 현행 `cost_bound_cumulative_target_first_fraction`과 구분한다. 후속 구현 지시에 따라 격리 작업본에서 구현·리뷰·검증을 수행했다. 운영 채택·배포는 미실행이다. source27 정규장 연구는 하루 전체 장후 terminal을 기다리지 않고 별도로 검증한 정규장 원천부터 수행했다. 15:36 입력 고정 후 지정5후보의 당일·누적 재검증을 완료했으며 연구 순위는 저가A09·고가A12·중가현행이다. 미확정86점의 동일 item 원천 보강으로75점을 확정했고11점만 제외한다. 저가A09는 당일11/16승·누적113/204승으로 채택을 권고한다. 최신 운영3a 위 불변 후보a1b1b0f8a의 현행 정책 인계·격리기동 PASS이며 정식 A09 게시와 실제 PID 소비는 OPEN이다. [재집계와 운영 준비 §12](../audits/main-regular-nonfixed-pattern-contribution-review-2026-10-27.md)가 최신 상태를 소유한다.
@@ -150,3 +152,15 @@ L = (p + z*z/(2*N) - z*sqrt(p*(1-p)/N + z*z/(4*N*N))) / (1 + z*z/N)
 [최종 준비 JSON](/home/ubuntu/KORStockScan/tmp/regular-selection-score-20261027/a09-preparation/readiness-review.json)의 남은 조건은 source27 native machine terminal→저가A09 exact prepared-scoring→명시적 채택/배포 지시→native intake/변경된 직접 의존 stage 재생성→실제 A09 정책 인계/P5→ordered transition/정확 PID 소비다. 실제 terminal 이전에 정규장 연구를 대기시키지 않으며, 게시를 위해 하루 전체 terminal을 조작하거나 옛 receipt를 재사용하지 않는다. 코드만 배포할 경우 현행 정책 유지 범위의 준비는 완료했다.
 
 기존 `MachinePatternOpportunityResearch1023`에서20:05~23:59 source27 대조와 다음 영업일2026-10-28 09:30~10:00 REGULAR/SOR/_AL 자연 수용을 이어간다. 원 실패·이전 후보·running waiter·source26 근거는 실제 소비자가 있어 보존한다. 실행 결과를 이유로 원 소표본 규칙 외의 임의 제약이나 새 스케줄을 추가하지 않는다.
+
+## 10. 신규 scoring 장후 통합의 선행 수리
+
+기존 §9의 '완료된 machine terminal→scoring intake→machine/후행 재생성'은 정상 wrapper의 소비와 경합할 수 있다. 또한 새 metric을 raw fraction으로 표시하는 terminal/reader 연결이 남아 있다. §9는 당시의 검증 이력으로 보존하며 실제 실행은 아래 순서를 따른다.
+
+1. 기존 준비 owner를 source-first로 보완한다. native 원천·preflight의 적격/제외·시각·원문 hash와 실제 부모 전체128scope·registry·code를 고정해 미승인 scoped 준비 계약을 만든다. 완료된 machine 출력이 있어야 선택 입력을 만들 수 있는 의존을 제거하되, source 계약과 권한 검증을 약화하지 않는다. 아직 구현되지 않은 경로를 실행 가능으로 표시하지 않는다.
+2. CP terminal과 native stage reader를 함께 수정해 raw/scoped metric, scoring/statistic 계약 hash와 manifest/보고서의 결속을 검증한다. 과거 raw 증거를 보존하고 unknown/mixed generation을 계속 거부한다.
+3. 채택/코드 배포 권한과 최종 source가 준비된 경우 첫 기계 stage 전에 native intake를 완료한다. 준비되지 않았으면 현재 정책으로 정상 장후를 끝내며 자동 체인 중간에 계약을 삽입하거나 승인을 기다리지 않는다.
+4. 동일 원천·코드로 기계→현재 enabled 보조 tuning/승계→정책 게시→native stage→summary/checklist/strict/controller→PREOPEN→새 정책 P5의 격리 통합 검증을 수행한다. 기존 private family/29개 입력·현행 부모 P5를 이 검증으로 대체 표시하지 않는다.
+5. 코드리뷰·수리·재검증이 끝난 후 최종 후보와 직접 의존 세대를 고정하고, 승인된 native ordered transition 및 exact PID 소비를 검증한다. 사후 세대 변경이 필요한 경우 native recovery로 마지막 bound consumer까지 재봉인하며 EOD/누적 원장을 무조건 재생성하지 않는다.
+
+위 수리와 전체 검증이 남아 있어 장후 포함 배포 준비 상태는 OPEN이다. 통계 연구의 A09 권고는 그대로이며 현재 정책/봇/cron/호출한도는 변경하지 않는다. 근거는 [추가 검토 JSON](/home/ubuntu/KORStockScan/tmp/regular-selection-score-20261027/a09-preparation/postclose-integration-review.json) 및 같은 기존 checklist owner에 기록한다.
