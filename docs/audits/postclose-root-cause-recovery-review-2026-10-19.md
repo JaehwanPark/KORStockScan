@@ -4741,3 +4741,110 @@ print-only document parsing PASS. Baselinef98d1aaef; non-test source+157/-3 exte
 one existing owner plus its existing reviewed registries. Tests and docs are
 reported separately by Git numstat; additions retain distinct custody/epoch/
 issuer/role/exit failure coverage. No runtime scope or policy values change.
+
+### Scheduled PREOPEN and Main consumption -- 2026-10-28
+
+Decision: source27 reached recovered completion through scheduled target28
+PREOPEN and actual Main policy/PID consumption on selected29a3c1475. This is
+not unassisted acceptance or proof of complete route observations/economics.
+The session reloaded AGENTS and its required current owners. Procedural changes
+require the verified stopped/running phase, a change-scoped native consumer
+inventory before expensive validation, and complete original-issuer byte
+custody across process boundaries. They do not freeze incident values or make
+report-only diagnostics new startup requirements. The final
+[consumer census](../../../KORStockScan-storage-archives/postclose-monitor-20261027/handoff-root-review/consumer-inventory-selected-29a3c1475.json)
+records12 roles,7 individual native stages and16 source-owner hashes, including
+the original future issuer, selected active-parent reader, independent P5,
+finalization, PREOPEN, actual Main and observer/health consumers.
+
+Source29 clean commit was pushed after414 owner/digest/policy tests,926 full
+independent startup-context tests and45 complete current/prior profiles passed.
+The existing original prepared-validator owner now carries authenticated native
+byte observations into the parent's existing bounded digest admission. Native
+candidate P5e0603807287b48b2a95713c3b23bb8de passed, including the three large
+source27 bars and212 byte observations. The native transition offline sequence
+passed12 cases, and cold selection reached verified at06:05:57. No Main was
+started by the recovery caller. Original selector/failed attempts are retained.
+
+Recovery caller review kept two distinctions explicit. Controller review uses
+the existing same-process stopped-postclose scope; invoking it without that
+scope rejected active_policy_code_reader_root_changed. After selection, the
+original future issuer remains10f, while its already-issued active-parent
+receipt is read by the contract-permitted selected29 reader. Reusing10f for
+that live reader rejected postclose_review_active_parent_receipt_missing. Both
+failed attempts are preserved; no accepted-error expansion, policy change or
+permissive fallback was added. Native future code refresh completed06:09:16
+with unchanged behavioral family, memberships, thresholds and provider.
+
+The selected native finalizer finished06:22:14, exit0. Required summary, strict
+and whole-native controller passed; cleanup DONE06:19:49, with no maintenance
+failure or escalated writer deferral. Native compression reclaimed about998MB;
+purge remained disabled without deletion authority, and protected sources and
+original identity gaps were retained. EOD27 and unaffected calculation prefixes
+were reused, not rerun. Final chain2f04b7fe69d8113af2a7fa0e70cec64eda07b43fcecb50e0e7fa1d9459863474
+and snapshot2298969e7911a7b55758bfd0be1e1a881f35f8e995565e7589bd066a2568bcfc
+remain valid. Selected final-generation P5
+6fa1298b93b24eb8980ae9a275eead3c passed after final writers, with findings[],
+isolated child exit0 and protected sources unchanged. See
+[finalization receipt](../../../KORStockScan-storage-archives/postclose-monitor-20261027/handoff-root-review/candidate-29a3c1475/selected-finalization-result.json)
+and [selected P5](../../../KORStockScan-storage-archives/postclose-monitor-20261027/handoff-root-review/candidate-29a3c1475/selected-p5-reference.json).
+
+Scheduled PREOPEN ran07:35:01 to07:38:40, succeeded/exit0. Scheduled Main started
+as PID2852722, start_ticks78626491, cwd selected29/src. Its own native V6 receipt
+at07:55:59.368194+09:00 consumed bundle
+4abcce1001c0cc689d7b749376ba91be6455f479e4332dc97a1d2fc2d39ca46f,
+128 planned/128 newly consumed/0 legacy scopes, exact selected commit and actor.
+The independently sealed receipt SHA is
+712114558362b4d37790d18539447a967fdeb1e50a900e3ccea5770d96c11bc4.
+Native startup barrier is ready/current_pid_consumption_complete and bootstrap
+PID verification passed with findings[]. These configured scopes are not128
+natural route samples. See [actual consumption](../../../KORStockScan-storage-archives/postclose-monitor-20261027/handoff-root-review/candidate-29a3c1475/actual-main-consumption-observation.json)
+and [scheduled PREOPEN](../../../KORStockScan-storage-archives/postclose-monitor-20261027/handoff-root-review/candidate-29a3c1475/natural-preopen-observation.json).
+
+Main's native observer496412bbe20e4ea9baf3a3fe7b2ee29e completed07:56:12.764968
+with current generation and verified actor/selected root. Its coverage remains
+partial/unobservable: missing_stale_or_noncurrent_sentinel_evidence, and the
+snapshot does not itself prove policy consumption. The separate later V6
+receipt does. The first own full sweep started07:56:13.192480 and its observed
+07:56:29 report had0 FAIL. That producer atomically replaces its daily report;
+the first original bytes were not retained before replacement. The
+[ordering observation](../../../KORStockScan-storage-archives/postclose-monitor-20261027/handoff-root-review/candidate-29a3c1475/first-main-health-ordering-observation.json)
+explicitly records this limitation, not a reconstructed native report/hash.
+Later original07:58:55 own-health bytes and observer bytes are retained. At
+08:04:58 the same exact PID remains ready and current08:04:23 health has0 FAIL.
+No restart or bound-artifact rerun was performed for another PASS.
+
+The user's06:22:07 alert is the remaining quantity economic-source warning,
+not a failed deployment or startup. Native source27 census is37 inputs/33
+eligible, four excluded; source28 PID still uses the unchanged six parent
+quantity types/five-stage profile. Alert generation a34d980f... is the unchanged
+selected quantity pointer, not evidence that source27 evaluation failed to run.
+49013/49266 retain approved historical diagnoses. 49362/49415 remain current
+research_cost_execution_source_invalid / actual_cost_revision_pending:
+49362's original declared cost bytes verify, but actual/completion/fact cost
+generations changed beyond the current history-carry contract; 49415's original
+declaration rejects broker_cost_declared_window_changed. These findings do not
+establish new economic loss or permit copying old acknowledgements onto changed
+evidence. Close only after native cost/source-generation reconciliation and the
+existing monitor producer/direct consumer validate the result. Actual cost/PnL
+stays null/excluded. See [remaining native gap](../../../KORStockScan-storage-archives/postclose-monitor-20261027/handoff-root-review/candidate-29a3c1475/remaining-native-economic-gap.json).
+
+The other health warning is tmp capacity (about11.46GB against8GiB soft warning),
+with no growth warning and about46.8GB free at cleanup observation. Required
+originals remain protected; no arbitrary deletion or threshold increase closed
+that warning. Weakness research remains operator_paused. All six existing
+source/economic owners remain OPEN. The same DirectFamilyPreopenPolicyHandoff
+now owns source28 scheduled20:05 through29 PREOPEN07:35/Main07:55-08:05,
+including actual actor/policy, current observer and first full health without
+manual correction. Today27-to28 recovered completion cannot close that future
+unassisted acceptance.
+
+Before editing checklist28, the native owner preserved strict-bound original
+748fc505b0be3809073aeea8757c4e0eb02ef5f257f8a12c6608aaed52c5375e.
+After its operating notes changed, native read-only finalization validation
+returned issues[] using that original preserved checklist; no resealing or
+historical PASS rewrite was required. See
+[preserved-checklist verification](../../../KORStockScan-storage-archives/postclose-monitor-20261027/handoff-root-review/candidate-29a3c1475/finalization-after-checklist-edit.json).
+This closing change is documentation only. Original failed attempts, unrelated
+workspace changes and runtime selection29 are preserved; no executable owner,
+module or entrypoint is added, replaced or removed by these notes.
