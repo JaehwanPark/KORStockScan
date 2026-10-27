@@ -256,3 +256,117 @@ Classification remains24 unresolved before the exact wire receipt, normal market
 This phase adds no module, worker, validator, report producer, entrypoint, schedule or compatibility wrapper, and has no deferred removal. Source delta0; tests1 existing file +55/-12; docs1 existing review +46/-0. The canonical generated checklist receives2 scoped progress bullets outside the code commit; concurrent checklist changes are preserved. Scoped review finds no remaining fixture defect; unknown historical origins and deployment/natural acceptance remain OPEN. The original strict checklist SHA91d9874a2fe47a5bcebe281c052ca65d0c978fe3477562557a7e735ae8b23011 is preserved with the selected native helper before checklist edits.
 
 The existing `DirectFamilyPreopenPolicyHandoff` owns the closed test failures and any later authorized integration; `PreSubmitDelayFollowupSubscription1023` retains the24 origin uncertainties and exact natural collector-result/180s/REMOVE checks, while `PreSubmitDelayPremarketNxt1026` retains10/26 explicit NXT acceptance. [Current pin](../../tmp/handoff-no-wire-20261023/runtime-pin.json). Deployment/restart and live policy/PREOPEN/selector/provider/order actions performed by this task are0. A future natural lease must expose the original frozen volume/source kind/lease and actual collector outcome through the existing event chain after authorized integration. For no-wire cases, require an item-bound broker response or comparable existing bracketing market evidence; without it retain unknown origin. Test PASS is not a new candidate P5, actual PID consumption or economic acceptance.
+
+## 2026-10-27 quote cadence evidence and monitoring plan
+
+### 범위와 도입 근거
+
+사용자 요청은 **0.7초 근거 확인·실제 갱신 간격 점검·보완방안 구체화, 매수 안전가드 유지**다. 이번 변경은 분석 artifact와 기존 계획/감사 문서뿐이다. 구현·테스트·장후 재계산·정책 발행·구독 조작·배포·재기동을 수행하지 않는다. 구현 설계의 소유자는 [기존 계획 §4.6](../proposals/pre-submit-delay-situation-initial-policy-and-postclose-regeneration-plan-2026-10-10.md#46-호가-갱신-대기수집-결함-분리-보완안--2026-10-27)이다.
+
+- `0291c575cd752c23290de173020647826d3bd235` (`2026-09-23T14:14:45+09:00`)의 최초 지연 관측 구현부터 `0 <= depth_age <= 0.7`을 직접 사용했다. 확인한 도입 commit/연결 계획에는 종목별 갱신 분포·오탐·가격 위험을 비교해 0.7을 선택한 실측 근거가 없다. 최적 제출 지연시간을 뜻하는 값도 아니다.
+- 9/28 `d8aa4a646f81917ef4a39b72c3eebbc4d7ee686b`은 exact route/epoch/depth와 장후 검증을 강화했고, 9/30 `3d893a1c23a28fe1c00ac1eb9faaa98ea886c515`은 연구용 0D 신선도를 trade mark가 필요한 runtime normalizer와 분리했다. 0.7초는 유지했다. [10/2 계획](../proposals/pre-submit-delay-price-pattern-calculation-remediation-plan-2026-10-02.md#32-짝짓기와-결손-처리)의 0.7초도 기존 기준 보존을 명시한다.
+- 10/24 `2f1182f33c8844b802561c7cb601c5c65be4d9c1`의 blame은 formatting 결과이며 값의 최초 도입이 아니다. 현재 `QuoteConsistencyConfig`와 pre-submit refresh에도 700ms 기본값이 있지만, 같은 숫자라는 사실만으로 연구 기준의 실측 근거/동일 authority를 증명하지 않는다. 실제 매수 guard 설정이나 effective value를 이번 분석으로 변경하지 않는다.
+
+### 고정 생산자 모집단과 실측
+
+원 경보는 10/27 08:17:02 KST, release `59a922b1952085dbe268b331a808a5f4062047d8`, PID `3905944`의 자료다. [native 종료 영수증](../../data/runtime/scalp_micro_reversion_forward_collector/closed/2026-10-27-1793055359210484568.json)의 `sequence_epoch=1793055359210484568`, `transport_epoch=1793055359295799`를 고정했다. 분석 시 선택본 `ab663e13b69b1d1edae1e645d8c5c7ad3e8afc16`/PID `3940489`의 새 입력과 합치지 않았다. 원 bootstrap의 release SHA와 PID verify도 앞선 알림 분석에서 확인했다. source 시각은 offset을 가진 `local_receive_timestamp`의 계약대로 해석했다.
+
+[분석 JSON](../../tmp/pre-submit-delay-quote-cadence-20261027/analysis.json)에 exact 경로·prefix bytes/SHA·source stat·collector counter·종목별 분포·원 quote offset/행 SHA를 기록했다. 종료된 생산자의 NXT prefix `40,456,396` bytes/`32,053`행과 SOR prefix `146,423` bytes/`114`행의 합이 종료 영수증의 depth persisted `40,602,819` bytes/`32,167`건과 일치한다. 후속 append는 읽지 않았다. 관측창은 `08:00:01.484~08:20:43.280 KST`, exact item/cohort/session 조합은 37개다.
+
+같은 symbol/item/session/transport epoch의 연속 로컬 수신 시각 차이로 계산했다. 분위수는 양수 간격의 선형 보간이다. 동일 ms의 정상 복수 수신 51개는 별도 보존했고, native sequence의 역행/건너뜀은 0이다. 이 sequence는 로컬 생성값이며 증권사 송신 sequence가 아니다. per-item 연속 구독 세대가 모두 복원된 것은 아니므로 아래는 기술 통계이며 그 자체로 정상 무거래·연속 구독·대기 상한을 인증하지 않는다.
+
+| NXT item | 0D 수신 수 | P50 간격 | P95 간격 | P99 간격 | 최대 간격 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `005930_NX` | 6,251 | 0.200초 | 0.234초 | 0.379초 | 0.663초 |
+| `034020_NX` | 4,980 | 0.201초 | 0.568초 | 0.800초 | 1.401초 |
+| `196170_NX` | 1,682 | 0.486초 | 2.201초 | 3.453초 | 6.600초 |
+| `437730_NX` | 3,178 | 0.201초 | 0.604초 | 1.000초 | 1.800초 |
+
+196170의 양수 간격 1,681개 중 600개(35.69%)가 0.7초보다 길었다. 연속 수신 사이에서 `sum(max(gap-0.7,0))/sum(gap)`로 계산한 경과시간 비율은 35.74%다. 이는 **실제 intent 무효율이나 경제성 수치가 아니다**. 전체 혼합 분포의 최대 281초는 다른 item의 등록/lease 창 미확정 구간을 포함하므로 정상 대기 범위의 근거로 사용할 수 없다. 정규장·애프터·다른 날짜로 일반화하지 않는다.
+
+### 원 intent 대조와 확인 한계
+
+원 intent는 `6aa333b9cc81be3b0fec38bfe2edec97b3dc7f6b7a8af21366766de5dde0c1bf`, 기계 `ENTER_NOW`/보조 `PASS`, session `krx_like_premarket`, data item `196170_NX`, 관측 route `NXT_ONLY`다. 이 intent는 연구 `signal_ready` anchor이며 실제 broker 제출 route나 체결 venue 증명으로 사용하지 않는다. 동일 평가 `aims-d3d9d39ddcf6cf8f7cda`의 제출 경로는 `08:14:55.818` `latency_state_danger`/`quote_stale` 차단, `08:14:55.821` `entry_submit_attempt_finished=returned_false`다. 실제 체결 venue는 이 근거에서 미확정이다.
+
+| Horizon | 호가 age | 원 판정 | 직전→다음 실제 0D 간격 |
+| --- | ---: | --- | ---: |
+| 0초 | 2.321초 | invalid | 3.399초 |
+| 1초 | 3.331초 | invalid | 3.399초 |
+| 3초 | 0.722초 | invalid | 1.200초 |
+| 5초 | 1.523초 | invalid | 4.001초 |
+| 30초 | 2.358초 | invalid | 3.596초 |
+| 60초 | 0.521초 | valid | 1.401초 |
+| 120초 | 0.021초 | valid | 1.812초 |
+| 180초 | 0.801초 | invalid | 2.071초 |
+
+전 8개 관측의 `ws_last_0d_epoch`는 그 관측 시점까지 저장된 해당 item/transport epoch의 마지막 0D와 일치했다. 원장 source row SHA도 기록했다. 0·1초는 `08:14:52.785` 뒤 다음 수신 `08:14:56.184` 전에 발생했다. 정상 수신된 최신 호가를 조회에서 놓친 증거는 없다. age는 모두 양수이며 due offset도 허용창 안이다. 고정 생산자의 depth queue/worker/writer drop·error와 invalid depth clock/snapshot은 0이다. 나중의 같은 가격/정상 수신으로 과거 무효를 유효로 복원하지 않는다.
+
+같은 원 prefix를 재검증하여 미래 자료 없이 각 horizon 직전 10분의 최근 양수 간격 512개를 계산했다. P99는 0/1/3/5/30초 시점에 각각 `3.201/3.201/3.225/3.225/3.380초`였다. 1초 관측 age `3.331초`는 이 과거 P99도 약 `0.130초` 넘었다. 이것 역시 고장 증명이 아니다. 이 자료에는 해당 Main의 완전한 구독 세대와 wire→normalizer 전달 P99 결속이 없으므로 `expected_wait` 확정으로 사용하지 않는다. 사후 정상 quote나 전체 관측창 분위수로 당시 원인을 닫지 않는 반례로 보존한다.
+
+따라서 **0.7초 초과는 확인됐고, 로컬 quote 조회→저장 결손은 확인되지 않았다**. 당시 item별 pre-normalization wire/연속 구독 증거와 증권사 송신 이력이 충분하지 않아 정상 미송신과 upstream 전달 결함까지 구분한 것은 아니다. 기존 `quote_valid=false`를 곧바로 원장 결손으로 설명하는 감시 방식이 이 구분을 가렸다. 보완안은 원 자격을 보존하면서 ledger integrity/quote eligibility/collection health를 독립 표기하고 미확정 경계를 공개한다.
+
+### 검토·대체·완료 경계
+
+- 기준 workspace commit은 분석 JSON의 `1756de1d9d7943739d539d5207cc55484185bff5`다. 이 작업은 기존 proposal/audit만 보완하고 비테스트 source/test 변경은 각각 0이다. 관련 없는 기존 dirty 문서·config·Python과 현재 생성 checklist는 건드리지 않는다.
+- self review에서 전체 혼합 최대 간격의 정상화 금지, 현재/과거 생산자 분리, probe-only lease의 Main 오용 금지, future quote/사후 분포 누출 방지, same-ms 수신과 시계 역행 구분, 입력 부족 시 정상 판정 금지를 보완했다. 문서상 초안의 통계 창/표본수는 운영 설정이 아니며 실측 검증 전 임의 runtime 값으로 쓰지 않는다.
+- 대체 예정은 monitor의 단일 generic-loss 설명이다. 원 0.7초 연구 reader·호가 원문·매수 guard·역사 자료는 현재 consumer가 있어 유지한다. 신규 module/validator/wrapper/worker/cron이나 별도 실행 owner를 만들지 않는다. 제거·수리 구현은 이번 문서의 완료 주장이 아니다.
+- 문서 검증: `git diff --check` PASS, 새 링크/anchor 6개 PASS, print-only backlog parser 22개 항목 파싱 PASS. 원 source prefix 재검증도 일치했다. 보완 리뷰에서 정상 종료의 censor와 예기치 않은 REMOVE, 등록 요청의 실제 type 누락과 단순 무수신, 정상 매수 guard 차단과 수집 결함을 추가로 구분했다. [검증 영수증](../../tmp/pre-submit-delay-quote-cadence-20261027/document-validation.json). trading test/provider/정식 장후 재계산은 실행하지 않았다. 구현·원천 새 세대·배포·실제 PID 소비·자연 갱신 수용·경제성은 모두 미수행이다. 구현 후에도 현재 확인하지 못한 원 wire/구독 이력을 합성하거나 정상 무거래로 닫지 않는다.
+
+## 2026-10-27 quote cadence implementation review
+
+### 구현 범위와 상태
+
+후속 사용자 지시로 [기존 계획 §4.6](../proposals/pre-submit-delay-situation-initial-policy-and-postclose-regeneration-plan-2026-10-10.md#46-호가-갱신-대기수집-결함-분리-보완안--2026-10-27)의 갱신 대기/수집 결함 분리를 구현했다. **코드·오프라인 재생 검증 완료, 배포·재기동 대기**다. baseline `1756de1d9d7943739d539d5207cc55484185bff5`, branch `codex/pre-submit-cadence-20261027`, code root `/home/ubuntu/KORStockScan-worktrees/pre-submit-cadence-20261027`다. canonical의 다른 dirty source/config/docs는 구현에 섞지 않았다. 앞선 계획 수립 단계의 미수행 상태는 당시 이력이며 이 절이 후속 구현 결과다.
+
+공식 Kiwoom reference gate는 [고정 증거](../../tmp/pre-submit-delay-quote-cadence-20261027/official-reference.json)에 current remote HEAD `953e5dbff123f437ab4d11a78a95191a685eb51f`, 실제 조회 시각, inspected file SHA를 기록했다. packaged 0B/0D meta/request/response·REAL decoder·REG/REMOVE envelope·core/spec/Postman을 확인했다. 해당 revision에 `kiwoom_docs`가 없는 한계는 유지한다. 새 wire/FID/ACK 의미나 broker venue를 추정하지 않았으며 protocol/request/parser mapping·auth·주문 호출은 바꾸지 않았다.
+
+### 생산자에서 감시기까지
+
+1. **Main/probe 수신 계수:** 기존 REAL ingress에서 정확 item별 native 등록 세대와 wire ID를 기록한다. 등록 세대는 PID/epoch/등록 serial로 구분하므로 같은 시각 재등록도 별개다. 프레임의 객체 결속 token으로 새 등록/세션/epoch에 이전 wire 영수증이 들어가지 않게 한다. 기존 probe receipt도 같은 단일 owner에서 유지한다.
+2. **정규화와 호가 신원:** 같은 wire가 도달한 정규화 수·시각·native route sequence를 연결한다. source cache와 계수의 native sequence가 다르면 같은 ms라도 정상으로 합치지 않는다. 원 native ms 단위 clock 정밀도를 보존하고 wire→normalization 지연은 그 정밀도를 포함한 상한으로 계산한다. 단순 처리 중 pending은 고장으로 확정하지 않으며 이후 정상화된 wire ID가 앞선 누락을 증명한 경우 구분한다.
+3. **두 조회 경로:** Main의 `get_latest_data`와 기존 sampler의 `get_pre_submit_delay_depth`가 같은 진단 helper를 사용한다. WS lock 안에서는 bounded scalar/interval view만 복사하고 lock 밖에서 분위수를 계산한다. 진단 값은 원 quote 발생시각과 source hash를 바꾸지 않으며 저장된 quote의 route sequence/depth digest에 결속한다.
+4. **전달/소비:** 기존 raw→index/summary/compact는 full fields와 exact event hash를 이미 보존하므로 새로운 생산자나 중복 원장을 만들지 않았다. 감시 cursor v5가 새 scalar 증거를 보존하고 v4는 native bounded migration으로 인계한다. `quote_eligibility_counts`와 `collection_health_counts`를 분리한다. 정상 종료·censor는 기존 horizon/terminal owner에 남기며 가짜 quote를 만들지 않는다.
+5. **분류와 알림:** 오래된 quote 자체는 수집 고장 확정이 아니다. 충분한 같은 세대의 구독/수신/정규화·저장 증거와 과거 분포가 있으면 `expected_wait`, 범위만 초과하면 `cadence_exceeded_unproven`, 부족하면 `unobservable`이다. 정확 등록 type 누락·wire→normalization 손실·clock/identity 손상 및 기존 raw/summary/compact 결손은 계속 탐지한다. 독립 depth writer의 drop/reject 검출 owner도 유지하며 그 전역 zero counter를 item 건강성으로 대입하지 않는다.
+6. **의미 있는 재발:** 원인 코드만 같아도 새로운 exact 실패 event ID·scope·증가한 영향은 다시 알린다. 변하지 않은 동일 증거는 중복 통지하지 않는다. 과거 raw의 무효를 지우거나 경보 억제로 회복 처리하지 않는다. 원인 미확정 전용 알림은 수집 결함 확정 수와 연구 무효 수를 함께 표시한다.
+
+### 반복 리뷰에서 보완한 지점
+
+- 같은 시각 재등록의 문자열 identity 충돌, wire 수신과 정규화 사이의 등록 교체, 같은 ms의 다른 route sequence를 별도로 보완했다. 명시적 등록 누락과 단순 무수신, 미래/역행 clock과 정상 ms 정밀도, stale 진단 snapshot과 새 증거를 혼동하지 않는다.
+- 현재 구독/관측 owner의 `MAX_ACTIVE=128` 안에서 item 상태를 추적하고 각 deque는 512개다. 상한에 닿아도 native 구독/등록을 막거나 cap을 늘리지 않는다. 진단 범위 부족만 미확정으로 드러낸다. REMOVE/재등록/epoch/세션/날짜가 바뀌면 이전 기준을 재사용하지 않는다.
+- 최초 성능 리뷰의 매 조회 분위수 재계산을 제거했다. 동일 wire/normalization 세대의 scalar 요약 한 개를 공유하고 rolling window의 첫 만료·세대 변경·이른 과거 재생에는 재사용하지 않는다. cache는 공개 quote/WS payload에 들어가지 않는다.
+- 0.7초는 연구 owner의 `MAX_RESEARCH_DEPTH_AGE_SEC` 한 곳으로 모아 기존 관측/장후 검증/분류가 같은 값을 읽는다. 값은 그대로다. runtime guard ENV/config의 700ms 또는 다른 effective 값은 이 상수로 대체하지 않는다.
+- 마지막 재리뷰에서 회복 scope를 route·종목·commit 세션에 결속했다. 다른 종목/세션의 정상 수신으로 원 결손을 회복 처리하지 않는다. 같은 scope의 새 정확한 healthy receipt만 현재 구간의 회복 근거로 쓰며 과거 원천 복원은 여전히 false다.
+- 추가 재리뷰에서 누적 정규화 누락 하나가 이후 정상 호가까지 계속 고장으로 표시하는 결함을 발견해 수정했다. 누적 누락은 보존하고 현재 normalized wire 대응과 실제 native route sequence를 독립 검증한다. 정규화되지 않은 wire와 손실을 가로지르는 간격은 baseline에 넣지 않는다.
+- 손실 시각·등록/세션/날짜/epoch/item·native loss marker로 고유 ID를 만든다. 여러 horizon이 같은 손실을 보아도 고장 event는 한 건이며 관측 수는 별도다. 조회 사이에 손실 후 회복해도 기존 10분 감시 창 안이면 탐지하고, 창 밖 과거 누계만으로 현재 장애를 만들지 않는다. 새 손실 ID는 다시 알린다. 현재 호가 건강성과 최근 손실 event는 동시에 표시할 수 있다.
+- 첫 원 intent fixture의 as-of가 기존 20초 저장 유예 안에 있었던 검증 실패는 fixture 시각을 원 계약 이후로 고쳐 재검증했다. 원 production 유예·horizon·freshness를 늘려서 통과시키지 않았다.
+
+### 원 intent 재생과 신규 결손 회귀
+
+[원 intent 재생 영수증](../../tmp/pre-submit-delay-quote-cadence-20261027/original-intent-replay.json)은 실제 native quote 8행의 원문 SHA를 검증하고 임시 data root에서 세 저장 경로를 재생했다. 원 `08:17:02` alert 창의 **연구 무효 5건/수집 고장 확정 0건**, 180초 수신과 원 20초 유예 이후 `08:18:30` 창의 **무효 6건·유효 2건/고장 확정 0건**을 확인했다. 앞선 창의 유효 건수에는 같은 원천 유예가 적용되므로 전체 visible horizon 건수와 단순 비교하지 않는다. 원 구독/wire 이력을 합성하지 않아 원인 미확정은 남는다.
+
+원문 fixture와 별도 synthetic variant를 명확히 분리했다. 현재 정상 캐시를 읽는 실제 WS handler→quote producer에서는 **0.8초 age를 연구 무효로 유지하면서 갱신 대기**로 진단한다. 같은 handler에서 values 없는 wire 뒤 정상 wire를 넣으면 누락된 정규화 ID가 검출되며, 새 quote 자체가 fresh여도 수집 손실을 탐지한다. 후속 정상 wire의 현재 건강성 회복·누계 보존, 여러 관측의 단일 손실 집계, 관측 사이 손실/회복 탐지, 감시 창 밖 과거 손실의 비활성, 새 독립 손실 통지와 등록 type 누락·epoch/item/depth hash 불일치·native sequence 불일치·future/stale clock·표본 부족·오래된 진단·compact 행 삭제·동일 원인의 새 실패 ID도 회귀에 포함했다.
+
+격리 worktree의 config 기본 파일 부재로 standalone test-helper import 경고가 있었으나 실제 account/provider/API 호출 없이 명시적 임시 data root만 사용했다. 운영 데이터 손상으로 해석하거나 설정/원 데이터를 수정하지 않았다.
+
+### 검증과 성능 한계
+
+- 최종 [7개 영향 suite](../../tmp/pre-submit-delay-quote-cadence-20261027/final-regression.json) **2,005 PASS**, 실행 중 source/test SHA 변경 0. 이전 반복의 129/1,994/1,996/1,997 PASS와 cache 이전 세대 영수증도 보존했다. 기존 `pandas_ta`의 pandas deprecation warning 1건이 있으며 dependency를 바꾸지 않았다.
+- [안전가드 동등성](../../tmp/pre-submit-delay-quote-cadence-20261027/guard-parity.json): 다른 sniper 함수 **1,279개 AST 불변**. 해당 관측 함수도 진단 첨부와 같은 값의 상수 참조만 정규화하면 원 AST와 같다. 원 quote 8개의 source SHA도 모두 같다. source/test 8파일 compile과 diff check를 수행했다.
+- [성능 측정](../../tmp/pre-submit-delay-quote-cadence-20261027/performance.json): wire hook P99 **0.001576ms**, 5단 book source 조회 warm P99 **0.036694ms**, 새 표본마다 재계산한 cold P99 **0.241711ms**다. 기존 8-symbol sampler budget에 곱한 cold 값 **1.934ms**는 기존 50ms turn 안이다. 추가 worker/구독/원천 전수 스캔은 없다.
+- 128상태·각 512개 interval/delivery·채워진 summary cache를 둔 합성 allocation peak는 **13,507,560 bytes(12.88MiB)**다. 이는 full process RSS나 실제 장중 callback/PID 성능 수용이 아니다. 운영 배포를 하지 않았으므로 자연 부하 수용은 아직 없다.
+
+### 대체·제거와 인계
+
+| Old path / branch | Disposition and consumer |
+| --- | --- |
+| `_record_exact_probe_wire_receipt` | removed/consolidated into `_record_source_wire_receipt`; existing REAL dispatcher and probe tests migrated; no compatibility wrapper |
+| Invalid quote always explained as generic source loss | replaced by independent eligibility/collection diagnostics in existing monitor; original invalid rows remain excluded |
+| Repeated quantile calculation for unchanged source | replaced by one generation/window-bound scalar cache; current Main/sampler readers share it |
+| Cumulative normalization loss poisoning all later quotes | replaced by current native sequence accounting plus a time-bound, deduplicated loss event; original loss total retained |
+| Duplicated research 0.7 literals | consolidated under existing research owner; runtime safety config/guards retained |
+| Native writer/index/summary/compact and independent depth collector | retained with current direct consumers; no new producer, validator module, entrypoint, worker or cron |
+| Historical unknown wire source and original raw/failed attempts | retained as evidence; no healthy/no-trade/economic claim |
+
+비테스트 source **5파일 +679/-23**, tests **3파일 +705/-4**와 원문 fixture **1파일 +79행/23,343 bytes**다. 이 외 문서는 기존 2개 owner의 계획·증거를 보완한다. source 증가는 등록 세대·bounded cadence·정확 원천 결속과 분류/알림에 해당하며 module 이동이나 복제 구현은 없다. 제거 완료를 미룬 실행 wrapper는 없다.
+
+현재 checklist의 `PreSubmitDelaySituationResearch1017`로 새 source-classification 결함의 코드 종결과 배포 대기를 인계한다. 다음 단계는 사용자 배포 지시 후의 통합/불변 후보/native active-policy handoff/P5·정식 전환과 실제 새 PID의 동일 source branch 관측이다. 기존 `DirectFamilyPreopenPolicyHandoff`의 운영 전환 소유권은 유지한다. selector/PREOPEN/policy/env·provider·수량·안전가드·실주문·배포/재기동 변경은 **0**이며, 현재 운영 알림에 이미 적용됐다고 주장하지 않는다.

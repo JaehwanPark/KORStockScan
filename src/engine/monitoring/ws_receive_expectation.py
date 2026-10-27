@@ -3,6 +3,9 @@
 from datetime import datetime, timedelta, timezone
 from math import isfinite
 from typing import Any, Mapping
+from collections import deque
+from hashlib import sha256
+import json
 
 KST = timezone(timedelta(hours=9))
 CONTRACT_VERSION = "ws_market_state_receive_expectation_v2"
@@ -29,6 +32,389 @@ ABSENCE_REASONS = {
     "subscription_required_realtime_missing",
     "dashboard_snapshot_subscription_state_unavailable",
 }
+
+DELAY_COLLECTION_SCHEMA = "delay_quote_collection_v1"
+
+
+class DepthReceiveCadence:
+    """Bounded local 0D accounting; never a quote or subscription authority.
+
+    The WS owner supplies the lock and resets this object on each native REG,
+    transport/session transition or REMOVE. Sequence IDs refer to local wire
+    admission, not exchange transmission. Quantiles run only in the sampler.
+    """
+
+    def __init__(
+        self, *, item, epoch, generation, session, registered_at, route_sequence_base=0
+    ):
+        self.scope = dict(
+            item=item,
+            transport_epoch=epoch,
+            subscription_generation=generation,
+            session=session,
+            registered_at_epoch=registered_at,
+            source_day=int((registered_at + 9 * 3600) // 86400),
+            route_sequence_base=route_sequence_base,
+        )
+        self.wire_count = self.normalized_count = self.normalized_wire_id = 0
+        self.last_wire = self.last_normalized = None
+        self.last_normalized_wire = None
+        self.normalized_route_sequence = route_sequence_base
+        self.clock_invalid = False
+        self.missing_normalizations = 0
+        self.last_loss_wire_id = 0
+        self.last_loss_epoch = None
+        self.gaps = deque(maxlen=512)
+        self.delivery = deque(maxlen=512)
+        self._stats_cache = {}
+
+    def wire(self, at):
+        self.wire_count += 1
+        if not isinstance(at, (int, float)) or isinstance(at, bool) or not isfinite(at):
+            self.clock_invalid = True
+            return self.wire_count
+        if self.last_wire is not None:
+            gap = at - self.last_wire
+            if gap < 0:
+                self.clock_invalid = True
+        self.last_wire = at
+        return self.wire_count
+
+    def normalized(self, at, wire_id, source_sequence=None):
+        if type(wire_id) is not int or wire_id != self.wire_count:
+            self.clock_invalid = True
+            return
+        if wire_id <= self.normalized_wire_id:
+            self.clock_invalid = True
+            return
+        missing = wire_id - self.normalized_wire_id - 1
+        self.missing_normalizations += missing
+        if missing:
+            self.last_loss_wire_id = wire_id
+            self.last_loss_epoch = at
+        self.normalized_wire_id = wire_id
+        self.normalized_count += 1
+        self.normalized_route_sequence = (
+            self.scope["route_sequence_base"] + self.normalized_count
+            if source_sequence is None
+            else source_sequence
+        )
+        if (
+            not isinstance(at, (int, float))
+            or isinstance(at, bool)
+            or not isfinite(at)
+            or self.last_wire is None
+            or at + 0.001 < self.last_wire
+        ):
+            self.clock_invalid = True
+            return
+        if self.last_normalized_wire is not None and not missing:
+            gap = self.last_wire - self.last_normalized_wire
+            if gap > 0:
+                self.gaps.append((at, gap))
+        self.last_normalized_wire = self.last_wire
+        self.last_normalized = at
+        # Native depth normalization floors local time to milliseconds.
+        self.delivery.append((at, at - self.last_wire + 0.001))
+
+    def freeze(self, *, active, required_types, receiver_ready):
+        return dict(
+            self.scope,
+            wire_count=self.wire_count,
+            normalized_count=self.normalized_count,
+            normalized_wire_id=self.normalized_wire_id,
+            normalized_route_sequence=self.normalized_route_sequence,
+            last_wire_epoch=self.last_wire,
+            last_normalized_epoch=self.last_normalized,
+            clock_invalid=self.clock_invalid,
+            missing_normalizations=self.missing_normalizations,
+            last_loss_wire_id=self.last_loss_wire_id,
+            last_loss_epoch=self.last_loss_epoch,
+            subscription_active=active,
+            required_types=sorted(required_types),
+            receiver_ready=receiver_ready,
+            gaps=tuple(self.gaps),
+            delivery=tuple(self.delivery),
+            _cadence_cache=self._stats_cache,
+        )
+
+
+def project_depth_cadence(frozen, now):
+    """Past-only scalar projection outside the WS lock; no book/stream scan."""
+    result = {
+        k: v
+        for k, v in frozen.items()
+        if k not in {"gaps", "delivery", "_cadence_cache"}
+    }
+    key = (
+        frozen["wire_count"],
+        frozen["normalized_count"],
+        frozen["normalized_wire_id"],
+    )
+    cache = frozen["_cadence_cache"]
+    saved = cache.get("value")
+    if saved is not None and saved[0] == key and saved[1] <= now < saved[2]:
+        result.update(saved[3], as_of_epoch=now)
+        return result
+    gaps = sorted(v for at, v in frozen["gaps"] if now - 600 <= at <= now)
+    delivery = sorted(v for at, v in frozen["delivery"] if now - 600 <= at <= now)
+
+    def quantile(values, probability):
+        if not values:
+            return None
+        rank = (len(values) - 1) * probability
+        lo = int(rank)
+        hi = min(lo + 1, len(values) - 1)
+        return values[lo] + (values[hi] - values[lo]) * (rank - lo)
+
+    basis = (
+        "p99"
+        if len(gaps) >= 500
+        else "provisional_p95" if len(gaps) >= 100 else "insufficient"
+    )
+    cadence = (
+        quantile(gaps, 0.99 if basis == "p99" else 0.95)
+        if basis != "insufficient"
+        else None
+    )
+    lag = quantile(delivery, 0.99) if len(delivery) >= 100 else None
+    result.update(
+        schema=DELAY_COLLECTION_SCHEMA,
+        as_of_epoch=now,
+        cadence_sample_count=len(gaps),
+        cadence_basis=basis,
+        cadence_upper_sec=cadence,
+        delivery_p99_sec=lag,
+        expected_wait_upper_sec=(
+            cadence + lag if cadence is not None and lag is not None else None
+        ),
+        decision_authority="report_only",
+        runtime_effect=False,
+    )
+    names = (
+        "schema",
+        "cadence_sample_count",
+        "cadence_basis",
+        "cadence_upper_sec",
+        "delivery_p99_sec",
+        "expected_wait_upper_sec",
+        "decision_authority",
+        "runtime_effect",
+    )
+    expiries = [
+        at + 600
+        for at, _ in (*frozen["gaps"], *frozen["delivery"])
+        if now - 600 <= at <= now
+    ]
+    # One atomic immutable entry. A concurrent older view may evict this
+    # cache, but cannot reuse a different source generation or a future window.
+    cache["value"] = (
+        key,
+        now,
+        min(expiries, default=float("inf")),
+        {name: result[name] for name in names},
+    )
+    return result
+
+
+def classify_delay_quote_collection(row, *, ledger_complete):
+    """Separate quote eligibility from proven local loss and unproven silence."""
+
+    def number(value):
+        try:
+            n = float(value)
+            return n if not isinstance(value, bool) and isfinite(n) else None
+        except (TypeError, ValueError, OverflowError):
+            return None
+
+    loss_details = {}
+
+    def verdict(state, reason):
+        return dict(state=state, reason=reason, **loss_details)
+
+    reason = str(row.get("quote_source_reason") or "")
+    at, depth = number(row.get("quote_observed_at_epoch")), number(
+        row.get("ws_last_0d_epoch")
+    )
+    if at is not None and depth is not None and depth > at:
+        return verdict("contract_invalid", "depth_clock_future")
+    evidence = row.get("quote_collection_evidence")
+    if isinstance(evidence, str):
+        try:
+            if len(evidence) > 4096:
+                return verdict("contract_invalid", "collection_evidence_budget_invalid")
+            evidence = json.loads(evidence)
+        except ValueError:
+            return verdict("contract_invalid", "collection_evidence_json_invalid")
+    if not isinstance(evidence, Mapping):
+        return verdict("unobservable", "legacy_collection_evidence_missing")
+    if (
+        evidence.get("schema") != DELAY_COLLECTION_SCHEMA
+        or evidence.get("decision_authority") != "report_only"
+        or evidence.get("runtime_effect") is not False
+    ):
+        return verdict("contract_invalid", "collection_contract_invalid")
+    if evidence.get("unobservable_reason") == "cadence_capacity_or_uninitialized":
+        return verdict("unobservable", "cadence_capacity_or_uninitialized")
+    item = str(evidence.get("item") or "")
+    suffix = {"NXT_ONLY": "_NX", "KRX_NXT_INTEGRATED": "_AL", "KRX_ONLY": ""}.get(
+        str(row.get("quote_route") or "").upper()
+    )
+    if (
+        suffix is None
+        or item != str(row.get("stock_code") or "") + suffix
+        or str(evidence.get("transport_epoch")) != str(row.get("quote_transport_epoch"))
+        or not isinstance(evidence.get("subscription_generation"), str)
+        or not evidence.get("subscription_generation")
+        or not isinstance(evidence.get("session"), str)
+        or not evidence.get("session")
+    ):
+        return verdict("contract_invalid", "collection_scope_mismatch")
+    sampled = number(evidence.get("as_of_epoch"))
+    registered = number(evidence.get("registered_at_epoch"))
+    required = evidence.get("required_types")
+    depth_sha = row.get("route_depth_source_sha256")
+    if (
+        at is None
+        or sampled is None
+        or registered is None
+        or not 0 < registered <= sampled <= at
+        or type(evidence.get("source_day")) is not int
+        or evidence["source_day"] != int((at + 9 * 3600) // 86400)
+        or not isinstance(required, list)
+        or any(not isinstance(kind, str) for kind in required)
+        or not isinstance(depth_sha, str)
+        or len(depth_sha) != 64
+        or any(c not in "0123456789abcdef" for c in depth_sha)
+        or evidence.get("depth_source_sha256") != depth_sha
+    ):
+        return verdict("contract_invalid", "collection_generation_binding_invalid")
+    if evidence.get("clock_invalid") is not False:
+        return verdict("contract_invalid", "collection_clock_invalid")
+    if evidence.get("session") in {"UNKNOWN", "unknown", "-"}:
+        return verdict("unobservable", "subscription_session_unproven")
+    if evidence.get("subscription_active") is False or "0D" not in (
+        evidence.get("required_types") or []
+    ):
+        return verdict(
+            "collection_fault_confirmed", "required_depth_subscription_missing"
+        )
+    lost = evidence.get("missing_normalizations")
+    if type(lost) is not int or lost < 0:
+        return verdict("contract_invalid", "normalization_counter_invalid")
+    last_loss = evidence.get("last_loss_wire_id")
+    if type(last_loss) is not int or last_loss < 0:
+        return verdict("contract_invalid", "normalization_loss_marker_invalid")
+    wire, normalized, normalized_id = (
+        evidence.get(k)
+        for k in ("wire_count", "normalized_count", "normalized_wire_id")
+    )
+    if any(type(n) is not int or n < 0 for n in (wire, normalized, normalized_id)):
+        return verdict("contract_invalid", "collection_counter_invalid")
+    if (
+        normalized > wire
+        or normalized_id > wire
+        or normalized_id != normalized + lost
+        or last_loss > normalized_id
+        or bool(lost) != bool(last_loss)
+    ):
+        return verdict("contract_invalid", "collection_counter_conflict")
+    last_wire = number(evidence.get("last_wire_epoch"))
+    last_normal = number(evidence.get("last_normalized_epoch"))
+    if at is None or depth is None:
+        return verdict("contract_invalid", "collection_clock_binding_invalid")
+    if not wire or not normalized or last_wire is None or last_normal is None:
+        return verdict("unobservable", "first_depth_pending")
+    if last_wire > at or last_normal > at:
+        return verdict("contract_invalid", "collection_clock_binding_invalid")
+    sequence = number(row.get("quote_route_sequence"))
+    normalized_sequence = evidence.get("normalized_route_sequence")
+    if normalized_sequence is not None and (
+        type(normalized_sequence) is not int or normalized_sequence <= 0
+    ):
+        return verdict("contract_invalid", "collection_sequence_invalid")
+    if sequence is None or sequence != normalized_sequence:
+        return verdict("unobservable", "snapshot_generation_unproven")
+    if (
+        not ledger_complete
+        or evidence.get("receiver_ready") is not True
+        or evidence.get("subscription_active") is not True
+        or not wire
+        or normalized_id != wire
+        or last_normal != depth
+    ):
+        return verdict("unobservable", "collection_boundary_unproven")
+    from src.engine.scalping.pre_submit_delay_observation import SAMPLE_INTERVAL_SEC
+    from src.engine.scalping.pre_submit_delay_tuning import MAX_RESEARCH_DEPTH_AGE_SEC
+
+    if at - sampled > SAMPLE_INTERVAL_SEC:
+        return verdict("unobservable", "collection_evidence_stale")
+    if lost:
+        loss_at = number(evidence.get("last_loss_epoch"))
+        if loss_at is None or not registered <= loss_at <= last_normal:
+            return verdict("contract_invalid", "normalization_loss_clock_invalid")
+        identity = [
+            item,
+            evidence["transport_epoch"],
+            evidence["subscription_generation"],
+            evidence["session"],
+            evidence["source_day"],
+            last_loss,
+        ]
+        loss_details = dict(
+            loss_event_id=sha256(
+                json.dumps(identity, separators=(",", ":")).encode()
+            ).hexdigest(),
+            loss_observed_at_epoch=loss_at,
+            historical_missing_normalizations=lost,
+        )
+    if lost and last_loss == normalized_id:
+        # Current health and the time-bounded loss event are separate facts.
+        return verdict(
+            "collection_fault_confirmed",
+            "wire_to_normalized_loss",
+        )
+    if (
+        str(row.get("quote_valid")).lower() == "true"
+        and at - depth > MAX_RESEARCH_DEPTH_AGE_SEC
+        or reason == "depth_stale_or_clock_invalid"
+        and at - depth <= MAX_RESEARCH_DEPTH_AGE_SEC
+    ):
+        return verdict("contract_invalid", "quote_eligibility_clock_conflict")
+    if str(row.get("quote_valid")).lower() == "true":
+        return verdict("locally_healthy", "exact_local_chain_observed")
+    if reason != "depth_stale_or_clock_invalid":
+        return verdict("contract_invalid", reason or "quote_invalid")
+    upper = number(evidence.get("expected_wait_upper_sec"))
+    count = evidence.get("cadence_sample_count")
+    cadence, lag = number(evidence.get("cadence_upper_sec")), number(
+        evidence.get("delivery_p99_sec")
+    )
+    basis = evidence.get("cadence_basis")
+    if (
+        type(count) is not int
+        or not 100 <= count <= 512
+        or upper is None
+        or upper <= 0
+        or cadence is None
+        or cadence <= 0
+        or lag is None
+        or lag < 0
+        or abs(upper - cadence - lag) > 1e-6
+        or not isinstance(basis, str)
+        or basis not in {"p99", "provisional_p95"}
+        or basis == "p99"
+        and count < 500
+    ):
+        return verdict("unobservable", "cadence_baseline_insufficient")
+    return verdict(
+        "expected_wait" if at - depth <= upper else "cadence_exceeded_unproven",
+        (
+            "past_only_cadence_band"
+            if at - depth <= upper
+            else "cadence_exceeded_not_fault_proof"
+        ),
+    )
 
 
 def _aware_kst(value: Any) -> datetime | None:

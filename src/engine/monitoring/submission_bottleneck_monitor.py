@@ -3628,6 +3628,10 @@ def _delay_observation_grid(commit):
 def pre_submit_delay_source_semantics(data_root, now, prior_cursor=None):
     """Incremental raw/compact/summary and intent receipts; no order authority."""
     from src.engine.scalping.pre_submit_delay_tuning import expected_route_for_session
+    from src.engine.monitoring.ws_receive_expectation import (
+        classify_delay_quote_collection,
+        DELAY_COLLECTION_SCHEMA,
+    )
     from src.engine.pipeline_event_summary import (
         IDENTITY_MODULUS,
         PRODUCER_SUMMARY_STAGES,
@@ -3642,7 +3646,7 @@ def pre_submit_delay_source_semantics(data_root, now, prior_cursor=None):
     raw_path = data_root / "pipeline_events" / f"pipeline_events_{day}.jsonl"
     prior_today = isinstance(prior_cursor, dict) and prior_cursor.get("date") == day
     previous = prior_cursor if prior_today else {}
-    migrated = bool(previous and previous.get("delay_cursor_contract_version") != 4)
+    migrated = bool(previous and previous.get("delay_cursor_contract_version") != 5)
     if migrated:
         previous = {}
     if previous and (
@@ -3654,7 +3658,7 @@ def pre_submit_delay_source_semantics(data_root, now, prior_cursor=None):
         previous = {}
     cursor = {
         "date": day,
-        "delay_cursor_contract_version": 4,
+        "delay_cursor_contract_version": 5,
         "offset": 0,
         "device": None,
         "inode": None,
@@ -3663,6 +3667,10 @@ def pre_submit_delay_source_semantics(data_root, now, prior_cursor=None):
         "delay_events": [],
     }
     issues, diagnostics, healthy, examples = Counter(), Counter(), Counter(), []
+    collection_states, quote_eligibility = Counter(), Counter()
+    collection_examples = []
+    collection_failure_event_ids = set()
+    confirmed_collection_failure_ids = set()
     horizon_states, horizon_states_by_grid, recheck_states = (
         Counter(),
         Counter(),
@@ -3909,6 +3917,18 @@ def pre_submit_delay_source_semantics(data_root, now, prior_cursor=None):
                             "quote_route": str(fields.get("quote_route") or ""),
                             "quote_valid": fields.get("quote_valid"),
                             "quote_source_reason": fields.get("quote_source_reason"),
+                            "quote_route_sequence": fields.get("quote_route_sequence"),
+                            "quote_collection_evidence": fields.get(
+                                "quote_collection_evidence"
+                            ),
+                            "quote_transport_epoch": fields.get(
+                                "quote_transport_epoch"
+                            ),
+                            "route_depth_source_sha256": fields.get(
+                                "route_depth_source_sha256"
+                            ),
+                            "ws_last_0d_epoch": fields.get("ws_last_0d_epoch"),
+                            "ws_last_0d_age_sec": fields.get("ws_last_0d_age_sec"),
                             "decision_committed_at_epoch": fields.get(
                                 "decision_committed_at_epoch"
                             ),
@@ -4239,23 +4259,94 @@ def pre_submit_delay_source_semantics(data_root, now, prior_cursor=None):
                     or row["route"]
                     or "UNKNOWN"
                 )
-                if str(row["quote_valid"]).lower() != "true":
-                    issues["quote_source_invalid"] += 1
-                    issue_scopes[f"quote_source_invalid|{quote_scope}"] += 1
-                    if len(examples) < 3:
+                valid = str(row["quote_valid"]).lower() == "true"
+                collection_scope = f"{quote_scope}|{row['stock_code']}|{commit.get('session_bucket') or 'UNKNOWN'}"
+                quote_eligibility["valid" if valid else "invalid"] += 1
+                collection = classify_delay_quote_collection(
+                    row, ledger_complete=raw_status == "complete"
+                )
+                collection_states[collection["state"]] += 1
+                if len(collection_examples) < 8:
+                    collection_examples.append(
+                        dict(
+                            delay_intent_id=row["delay_intent_id"],
+                            target_delay_sec=row["target_delay_sec"],
+                            stock_code=row["stock_code"],
+                            quote_route=row["quote_route"],
+                            quote_age_sec=row.get("ws_last_0d_age_sec"),
+                            **collection,
+                        )
+                    )
+                recent_loss = bool(collection.get("loss_event_id")) and (
+                    0
+                    <= now.timestamp() - collection["loss_observed_at_epoch"]
+                    <= DELAY_WINDOW_SEC
+                )
+                fault = recent_loss or collection["state"] in {
+                    "contract_invalid",
+                    "collection_fault_confirmed",
+                }
+                stale = row["quote_source_reason"] == "depth_stale_or_clock_invalid"
+                issue = (
+                    "quote_collection_fault"
+                    if fault
+                    else (
+                        "quote_collection_unobservable"
+                        if not valid
+                        and stale
+                        and collection["state"] != "expected_wait"
+                        else "quote_source_invalid" if not valid and not stale else None
+                    )
+                )
+                if issue:
+                    failure_id = collection.get("loss_event_id") or row["event_id"]
+                    duplicate = failure_id in collection_failure_event_ids
+                    collection_failure_event_ids.add(failure_id)
+                    if (
+                        recent_loss
+                        or collection["state"] == "collection_fault_confirmed"
+                    ):
+                        confirmed_collection_failure_ids.add(failure_id)
+                    if not duplicate:
+                        issues[issue] += 1
+                        issue_scopes[
+                            f"{issue}|{quote_scope if issue == 'quote_source_invalid' else collection_scope}"
+                        ] += 1
+                    if not duplicate and len(examples) < 3:
                         examples.append(
                             {
-                                "reason": row["quote_source_reason"]
-                                or "quote_source_invalid",
+                                "reason": (
+                                    (
+                                        "recent_wire_to_normalized_loss"
+                                        if recent_loss
+                                        else collection["reason"]
+                                    )
+                                    if issue != "quote_source_invalid"
+                                    else row["quote_source_reason"]
+                                    or "quote_source_invalid"
+                                ),
+                                "quote_source_reason": row["quote_source_reason"],
+                                "stock_code": row["stock_code"],
+                                "quote_route": row["quote_route"],
                                 "stage": row["stage"],
                                 "delay_intent_id": row["delay_intent_id"],
+                                "collection_health": collection,
+                                "quote_age_sec": row.get("ws_last_0d_age_sec"),
                             }
                         )
-                else:
+                elif valid:
                     if not row["quote_route"]:
                         diagnostics["quote_route_derived_from_session"] += 1
                     healthy["quote_source_invalid"] += 1
                     healthy_scopes[f"quote_source_invalid|{quote_scope}"] += 1
+                    if collection["state"] == "locally_healthy":
+                        for name in (
+                            "quote_collection_fault",
+                            "quote_collection_unobservable",
+                        ):
+                            healthy_scopes[f"{name}|{collection_scope}"] += 1
+                else:
+                    diagnostics["quote_stale_expected_wait"] += 1
         if any(count > 1 for count in raw_recent_identity_counts.values()):
             issues["raw_family_duplicate_identity"] += sum(
                 count - 1 for count in raw_recent_identity_counts.values() if count > 1
@@ -4690,6 +4781,12 @@ def pre_submit_delay_source_semantics(data_root, now, prior_cursor=None):
         "diagnostics": dict(sorted(diagnostics.items())),
         "healthy": dict(sorted(healthy.items())),
         "horizon_states": dict(sorted(horizon_states.items())),
+        "collection_classification_version": DELAY_COLLECTION_SCHEMA,
+        "collection_health_counts": dict(sorted(collection_states.items())),
+        "collection_fault_event_count": len(confirmed_collection_failure_ids),
+        "quote_eligibility_counts": dict(sorted(quote_eligibility.items())),
+        "collection_examples": collection_examples,
+        "collection_failure_event_ids": sorted(collection_failure_event_ids),
         "horizon_states_by_grid": dict(sorted(horizon_states_by_grid.items())),
         "recheck_states": dict(sorted(recheck_states.items())),
         "policy_status_counts": dict(sorted(policy_states.items())),
@@ -4727,12 +4824,18 @@ def attach_pre_submit_delay_source_semantics(result, semantics):
             "count": sum(semantics["issues"].values()),
             "issues": semantics["issues"],
             "issues_by_scope": semantics["issues_by_scope"],
+            "evidence_ids": semantics.get("collection_failure_event_ids", []),
             "examples": semantics["examples"],
             "owner": "pipeline_event_logger|pre_submit_delay_tuning",
             "closure_test": "new exact raw_compact_summary and route_bound quote receipts",
             "notified_status": (
                 old.get("notified_status")
                 if set(semantics["issues"]) <= set(old.get("issues") or {})
+                and set(semantics["issues_by_scope"])
+                <= set(old.get("issues_by_scope") or {})
+                and set(semantics.get("collection_failure_event_ids", []))
+                <= set(old.get("evidence_ids") or [])
+                and sum(semantics["issues"].values()) <= old.get("count", 0)
                 else None
             ),
         }
@@ -10377,10 +10480,20 @@ def notify(result, path, send=None):
                 )
             else:
                 semantics = result.get("pre_submit_delay_source_semantics") or {}
+                collection_counts = semantics.get("collection_health_counts", {})
+                quote_counts = semantics.get("quote_eligibility_counts", {})
+                warning_only = set(item.get("issues") or {}) <= {
+                    "quote_collection_unobservable"
+                }
+                label = "호가 관측 원인 미확정" if warning_only else "장중 원천 점검"
                 messages.append(
-                    f'{item["status"]}: pre_submit_delay 장중 원천결손 / {item["count"]}건\n'
+                    f'{item["status"]}: pre_submit_delay {label} / {item["count"]}건\n'
                     f'원인: {json.dumps(item.get("issues", {}), ensure_ascii=False)[:450]}\n'
                     f'대표: {json.dumps((item.get("examples") or [{}])[0], ensure_ascii=False)[:350]}\n'
+                    f'연구 호가 무효: {quote_counts.get("invalid", 0)} / '
+                    f'수집 결함 확정: {semantics.get("collection_fault_event_count", collection_counts.get("collection_fault_confirmed", 0))} / '
+                    f'갱신 대기: {collection_counts.get("expected_wait", 0)} / '
+                    f'미확정: {collection_counts.get("unobservable", 0) + collection_counts.get("cadence_exceeded_unproven", 0)}\n'
                     f'원천 상태: {semantics.get("sources")} / 요약 PID: {semantics.get("summary_last_writer_pid")}\n'
                     "정확한 원천 ID와 호가 경로를 대조하세요. 자동 매매 변경은 없습니다."
                 )
@@ -10449,7 +10562,15 @@ def notify(result, path, send=None):
     elif active_rules == {"machine_auxiliary_intraday_source_gap"}:
         title = "판정 원천결손 점검"
     elif active_rules == {"pre_submit_delay_intraday_source_gap"}:
-        title = "매수 지연 원천결손 점검"
+        title = (
+            "매수 지연 호가 관측 점검"
+            if all(
+                set(result["incidents"][key].get("issues") or {})
+                <= {"quote_collection_unobservable"}
+                for key in keys
+            )
+            else "매수 지연 원천결손 점검"
+        )
     else:
         title = "제출병목 점검"
     message = (
