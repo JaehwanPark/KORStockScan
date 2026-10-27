@@ -33,10 +33,18 @@ def _assert_committed(family):
         raise ValueError("fixture_publication_requires_committed_sources")
 
 
-def validate(family, data, *, source_date, target_date, publish=False):
+def validate(family, data, *, source_date, target_date, publish=False, source_reviews=()):
     data = Path(data).resolve()
     if publish:
         _assert_committed(family)
+    from src.engine.monitoring.policy_generation_code_handoff import (
+        reviewed_source_transition,
+    )
+
+    reviews = [reviewed_source_transition(p) for p in source_reviews]
+    if any(family not in review["pairs"] for review in reviews):
+        raise ValueError("source_review_family_not_affected")
+    review_references = [review["reference"] for review in reviews]
     code = generation.code_generation(family)
     plan = validation.plan_identity(family)
     for day in (source_date, target_date):
@@ -68,6 +76,8 @@ def validate(family, data, *, source_date, target_date, publish=False):
     destination = validation.fixture_path(data, family)
     if destination.exists() or destination.is_symlink():
         value, reference = validation.verify_fixture(data, family)
+        if review_references and value.get("reviewed_source_transitions") != review_references:
+            raise ValueError("fixture_existing_source_review_differs")
         return dict(
             status="verified_existing",
             family=family,
@@ -161,6 +171,8 @@ def pytest_sessionfinish(session, exitstatus):
             family
         ) or plan != validation.plan_identity(family):
             raise ValueError("fixture_code_changed_during_validation")
+        if reviews != [reviewed_source_transition(p) for p in source_reviews]:
+            raise ValueError("fixture_source_review_changed_during_validation")
         body = dict(
             schema="postclose_generation_fixture_receipt_v1",
             family=family,
@@ -190,6 +202,8 @@ def pytest_sessionfinish(session, exitstatus):
             orders=0,
             **{key: False for key in validation.AUTHORITY_FALSE},
         )
+        if review_references:
+            body["reviewed_source_transitions"] = review_references
         body["receipt_sha256"] = generation.digest(body)
         candidate = run / "fixture.json"
         candidate.write_text(json.dumps(body, sort_keys=True, indent=2) + "\n")
@@ -235,6 +249,7 @@ def main(argv=None):
     parser.add_argument("--source-date", required=True)
     parser.add_argument("--target-date", required=True)
     parser.add_argument("--publish", action="store_true")
+    parser.add_argument("--source-review", type=Path, action="append", default=[])
     args = parser.parse_args(argv)
     print(
         json.dumps(
@@ -244,6 +259,7 @@ def main(argv=None):
                 source_date=args.source_date,
                 target_date=args.target_date,
                 publish=args.publish,
+                source_reviews=args.source_review,
             ),
             sort_keys=True,
         )

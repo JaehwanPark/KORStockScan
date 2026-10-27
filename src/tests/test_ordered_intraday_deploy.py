@@ -11,6 +11,12 @@ import pytest
 from src.engine.automation import ordered_intraday_deploy as D
 
 
+def _report_currentness_fixture(workspace, candidate, day):
+    from src.engine.monitoring.policy_generation_code_handoff import consumer_inventory
+    return dict(status="pass", source_date=day,
+                capability_consumers=consumer_inventory(candidate, day, data_root=workspace / "data"))
+
+
 def _candidate_p5_fixture(d, commit=None):
     selected = json.loads(d.selection.read_bytes())
     directory = d.workspace / "data/report/main_startup_validation" / d.day / ("d" * 32)
@@ -168,7 +174,7 @@ def stopped_recovery(tmp_path, monkeypatch):
     monkeypatch.setattr(
         D,
         "verify_candidate_report_currentness",
-        lambda *a: dict(status="pass"),
+        _report_currentness_fixture,
         raising=False,
     )
     d = D.StoppedDeploymentRecovery(tmp_path, candidate, day, D.CONFIRM)
@@ -855,7 +861,7 @@ def driver(tmp_path, monkeypatch):
     monkeypatch.setattr(
         D,
         "verify_candidate_report_currentness",
-        lambda *a: dict(status="pass"),
+        _report_currentness_fixture,
         raising=False,
     )
     monkeypatch.setattr(
@@ -887,7 +893,7 @@ def driver(tmp_path, monkeypatch):
     d.selection.write_bytes(d.before)
     d.directory = runtime / "transition"
     d.directory.mkdir()
-    d.state = {}
+    d.state = dict(candidate_report_currentness=_report_currentness_fixture(d.workspace, d.candidate, d.day))
     d.phase = "preflight"
     d.hold_bytes = None
     d.validation_session = "1" * 32
@@ -1843,7 +1849,7 @@ def _mock_adoption_preflight(d, monkeypatch, reject=None):
         calls.append("reports")
         if reject == "reports":
             raise ValueError("candidate_validation_rejected")
-        return {"status": "pass"}
+        return _report_currentness_fixture(*args)
 
     monkeypatch.setattr(
         D, "verify_candidate_report_currentness", reports, raising=False
@@ -2832,6 +2838,7 @@ def test_prepare_binds_native_source_window_before_start(
     driver.previous = tmp_path / "previous"
     driver.day = "2026-10-21"
     driver.identity = {"pid": 123}
+    driver.state = dict(candidate_report_currentness=_report_currentness_fixture(driver.workspace, driver.candidate, driver.day))
     calls = []
     driver.assert_hold = lambda: calls.append("hold")
     driver.run_json = lambda root, module, *args: calls.append(module)
@@ -3882,3 +3889,37 @@ def test_live_failed_collector_pointer_recovery_requires_both_consumed_generatio
         assert d.state['failed_hold_adoption']['source_failure']==failed['error']
         assert d.frozen[str(policy)]==D.H._sha(policy)
     assert (d.hold.read_bytes(),path.read_bytes())==before
+
+
+@pytest.mark.parametrize("phase", ["candidate", "selected_prepared", "actual_pid"])
+@pytest.mark.parametrize("damage", [None, "code", "registry", "role"])
+def test_deployment_uses_same_report_census_without_promoting_source_gaps(tmp_path, monkeypatch, phase, damage):
+    from src.engine.monitoring import policy_generation_code_handoff as handoff
+    baseline = [dict(family="auxiliary", role="report_only", source_date="2026-10-26", code_sha256="a" * 64,
+                     observation=dict(status="unverified", findings=["policy_generation_unverified"]))]
+    current = json.loads(json.dumps(baseline))
+    if damage == "code":
+        current[0]["code_sha256"] = "b" * 64
+    elif damage == "registry":
+        current.clear()
+    elif damage == "role":
+        current[0]["role"] = "startup_required"
+    elif phase != "candidate":
+        current[0]["observation"]["findings"] = ["historical_cost_source_gap"]
+    calls = []
+    def observe(root, day, *, data_root):
+        calls.append((root, day, data_root))
+        return current
+    monkeypatch.setattr(handoff, "consumer_inventory", observe)
+    d = object.__new__(D.Deployment)
+    d.workspace, d.candidate = tmp_path, tmp_path / "candidate"
+    d.state = dict(candidate_report_currentness=dict(source_date="2026-10-26", capability_consumers=baseline))
+    if damage:
+        with pytest.raises(ValueError, match="deployment_report_consumer_identity_changed"):
+            d.observe_report_consumers(phase)
+        assert "report_consumer_observations" not in d.state
+    else:
+        d.observe_report_consumers(phase)
+        assert d.state["report_consumer_observations"][phase] == current
+        assert current[0]["role"] == "report_only"
+    assert calls == [(d.candidate, "2026-10-26", tmp_path / "data")]

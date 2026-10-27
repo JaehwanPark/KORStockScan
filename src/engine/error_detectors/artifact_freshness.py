@@ -6461,23 +6461,23 @@ class ArtifactFreshnessDetector(BaseDetector):
         bindings = []
         observations = []
         from src.engine.monitoring.policy_generation_contract import (
-            observations as generation_observations,
             retirement_dispositions,
         )
+        from src.engine.monitoring.policy_generation_code_handoff import consumer_inventory
 
         details["policy_generation_retirements"] = retirement_dispositions(PROJECT_ROOT)
         details["policy_generation_semantics"] = []
+        details["policy_generation_consumer_inventory"] = []
         for semantic_day in semantic_days:
-            for observed in generation_observations(
+            for consumer in consumer_inventory(
                 PROJECT_ROOT, semantic_day, data_root=(PROJECT_ROOT / "data").resolve()
             ):
-                from src.engine.monitoring.policy_generation_code_handoff import (
-                    current_fixture_observation,
+                details["policy_generation_consumer_inventory"].append(
+                    {key: value for key, value in consumer.items() if key != "observation"}
                 )
-
-                observed = current_fixture_observation(
-                    observed, (PROJECT_ROOT / "data").resolve()
-                )
+                observed = consumer["observation"]
+                if observed is None:
+                    continue
                 details["policy_generation_semantics"].append(observed)
                 observations.append(dict(stage="policy_generation", semantics=observed))
                 bindings.append(

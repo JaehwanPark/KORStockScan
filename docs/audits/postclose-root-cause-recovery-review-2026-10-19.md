@@ -4066,3 +4066,64 @@ Pre-drain review closure: native code comparison correctly rejected the physical
 Additional approved storage integration: ff6172cd6 is merged over9121588c5, retaining2d7ad22b1/ba19da70d and the actually consumed6d0d19756 baseline. The only checklist conflict was resolved as one existing owner, preserving both histories and the10/28 06:25~08:05 window. The native source/independent-preparation profile now binds14 exact files, including storage writer/compressor/router/installer. Full negative source/preparation coverage185PASS; snapshot publisher/compressor/router/consumer569PASS (four initial wrapper invocations lacked the worktree .venv and pass after the project environment is restored). Runtime2021PASS and transition457PASS remain valid for unchanged handlers/transition code. Changed Python compiles, shell syntax/diff/print-only parser pass. No order/provider/policy/quantity/freshness/deadline change.
 
 The native cron installer was exercised with an isolated crontab tool before actual application: all existing non-target rows remain byte-identical and only one06:25 SNAPSHOT_ARCHIVE_DAILY row is added; actual crontab is unchanged during this check. Host timezone is KST. Current source26 remains policy-day protected; source27's formal postclose report/downstream closure and the first eligible10/28 06:25 sweep are future observations, not offline PASS. Preserve the incumbent/rollback, original frozen source, stage/controller/strict records and archive identity receipts. Fresh report generation may use the current-day bounded native snapshot owner; it cannot impersonate postclose completion. Final active-parent/parity, fresh fixtures, candidate/selected P5, ordered start, PID/observer/health and actual schedule application follow.
+
+## Report capability registration and consumer census repair — 2026-10-27
+
+Baseline: selected immutable `a8bc67ec33b3a923007f3cb7299dd0225ad924c0`.
+The current AGENTS procedure and bounded 12-row native consumer inventory were
+reloaded in this session; the inventory's owner hashes were checked against that
+selection. Source date is 2026-10-27; next native trading date is 2026-10-28.
+
+Cause: report-capability succession repeated manually enumerated family pairs,
+while deployment's existing trailing/quantity readers and health's four report
+families had different inventories. A shared code delta could therefore pass
+policy/PID validation while a report family remained unreviewed. Historical
+report/source/economic validity is a separate contract.
+
+Repair: extend the existing fixture publisher and handoff reader with immutable
+reviewed source inventories, derive all affected families from the native
+component registry, and bind both original and independent new fixtures. Missing
+families/files, changed source/commit/evidence, aliases and authority flags reject
+projection. The original report is never rewritten. The publisher's validation
+plan also binds the handoff reader it now invokes. Deployment candidate,
+selected preparation, actual-PID attestation and full health share the native
+report-only consumer census; existing startup-required gates remain intact.
+The policy/preparation reader has its own exact reviewed source profile.
+
+Replacement/removal: consolidated the duplicate family report-path enumeration
+under the existing native report-path owner and replaced health's private census.
+New report-capability successors use source inventory requests instead of new
+per-family pair registrations. Issued exact pair tables remain for immutable
+historical readers; no executor, worker, policy selector or order path was added.
+The broader 12-row inventory retains each existing native owner and phase.
+
+Original EOD finished at 20:56:22 without failed/warning steps and is reused.
+Before any calculation started, only the waiting postclose/controller/tuning/
+archive dependents were terminated at 20:53:50; the native original failure
+`terminated`, exit143, and all original receipts remain preserved. Main and the
+selector were retained. This is a recovered run; unassisted acceptance remains
+OPEN through the next complete scheduled run. Optional weakness research remains
+operator-paused until migration and explicit resumption.
+
+Review: checked original/current source identity, strict original fixture
+requirements, mutable versus immutable evidence lifetime, native verified-report
+short circuit, complete registration, missing/stale/conflicting evidence,
+phase-specific census identity and preservation of report-only authority.
+Validation and operational follow-up receipts are retained under
+`/home/ubuntu/KORStockScan-storage-archives/postclose-monitor-20261027/handoff-root-review/`.
+Code closure, selection, prepared/P5 readiness, actual PID and next natural
+completion are separate acceptance states; none is inferred from this document.
+
+Supplemental cause: the independent preparation reader normalized only the new
+endpoint of a pinned source-formatting alias. A later nonformat code successor
+could reject an otherwise reviewed physical original. It now normalizes each
+endpoint through the same pinned formatting review while retaining exact native
+source checks. An isolated predicate regression covers the original failure;
+unknown origin/path/target and generation mixtures remain rejected.
+
+Validation before candidate creation: report/deployment/detector regressions
+2,800 PASS; independent preparation regressions 867 PASS; focused new-profile and
+alias checks 38 PASS; source-review producer/consumer checks 17 PASS. The focused
+checks overlap the larger suites. Earlier failed attempts and superseded source
+snapshots remain in the evidence directory. Python compilation and diff checks
+pass. These are code/fixture results, not deployment or next Main consumption.

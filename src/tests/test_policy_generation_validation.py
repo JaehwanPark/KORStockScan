@@ -1214,11 +1214,10 @@ def test_successor_requires_preserved_prior_fixture_and_independent_current_fixt
 
 
 @pytest.mark.parametrize("family", list(validation.PLANS))
-def test_latest_capability_pair_is_current_and_keeps_original_source(family):
+def test_historical_capability_branches_keep_original_generations(family):
     from src.engine.monitoring import policy_generation_code_handoff as handoff
 
     pairs = handoff.REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS[family]
-    current = generation.code_generation(family)
     # Multiple reviewed branches may be preserved. Their insertion order does
     # not choose the native report; the consumer matches its exact source pair.
     assert (
@@ -1227,8 +1226,8 @@ def test_latest_capability_pair_is_current_and_keeps_original_source(family):
             "holding_vote": "7f30d09769b17801ad614d2403ca5742c5a45d4e56fb27212447de1384829386",
             "entry_cancel_wait": "5fa218b7b916b6b2a98a7a395573dac80ff96d2345edae3b64f9f99e3574125d",
             "auxiliary": "82a2c8b410c97dc89db45269ee865b21e2a1ba824d55448183bdb1c25769c06f",
-        }[family], current)
-        in pairs
+        }[family])
+        in {pair[0] for pair in pairs}
     )
 
 
@@ -1237,7 +1236,6 @@ def test_holding_quote_capability_retains_original_pairs(family):
     from src.engine.monitoring import policy_generation_code_handoff as handoff
 
     pairs = handoff.REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS[family]
-    current = generation.code_generation(family)
     original, previous = {
         "rising_missed": (
             (
@@ -1255,9 +1253,10 @@ def test_holding_quote_capability_retains_original_pairs(family):
         ),
     }[family]
     for source in original:
-        assert (source, previous) in pairs and (source, current) in pairs
+        assert (source, previous) in pairs
+        assert len({target for origin, target in pairs if origin == source}) > 1
         assert (source, source) not in pairs
-    assert ("a" * 64, current) not in pairs
+    assert "a" * 64 not in {origin for origin, target in pairs}
 
 
 @pytest.mark.parametrize("family", list(validation.PLANS))
@@ -1523,8 +1522,12 @@ def test_formatted_family_requires_both_exact_generations_without_promoting_hist
 
     data = tmp_path / "data"
     _, report, _, current_path, current_fixture, seal_current = _fixture(data, family)
-    old, current = handoff.REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS[family][-1]
-    assert current == generation.code_generation(family)
+    old = handoff.REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS[family][-1][0]
+    current = generation.code_generation(family)
+    # Legacy-reader behavior uses an explicit synthetic reviewed pair. Current
+    # source-review discovery has separate real-Git producer/consumer coverage.
+    monkeypatch.setitem(handoff.REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS, family,
+                        (*handoff.REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS[family], (old, current)))
     historical = dict(current_fixture, code_sha256=old)
     historical["receipt_sha256"] = generation.digest(
         {k: v for k, v in historical.items() if k != "receipt_sha256"}
@@ -1757,7 +1760,7 @@ def test_prepared_state_metadata_accepts_exact_deployed_source_pair(tmp_path, mo
 def test_entry_latency_auxiliary_generation_is_exact_and_originals_are_retained(origin):
     from src.engine.monitoring import policy_generation_code_handoff as handoff
     current = generation.code_generation("auxiliary")
-    assert (origin, current) in handoff.REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS["auxiliary"]
+    assert origin in {pair[0] for pair in handoff.REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS["auxiliary"]}
     assert ("0" * 64, current) not in handoff.REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS["auxiliary"]
 
 
@@ -1770,5 +1773,166 @@ def test_invalidation_cadence_capability_keeps_native_predecessors(family):
         "holding_vote": "05037a9d11e962bb160d3fa3e589935f36ab2290d5e087b25a98f8ed5f6e81cf",
         "auxiliary": "9fb5d5b0bbe17b72ca832a883b059522d725f3234fca853324308beedf73bacc",
     }
-    assert (origins[family], current) in handoff.REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS[family]
+    assert origins[family] in {pair[0] for pair in handoff.REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS[family]}
     assert ("0" * 64, current) not in handoff.REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS[family]
+
+
+def _source_review_case(tmp_path, monkeypatch):
+    """Two genuinely committed issuers, one shared change, all native families."""
+    import shutil
+    import subprocess
+    from src.engine.monitoring import policy_generation_code_handoff as handoff
+
+    old, new = (tmp_path / name for name in ("origin", "current"))
+    components = {family: (family + ".py",) for family in validation.PLANS}
+    common = ("shared.py",)
+    commits = {}
+    for role, root in (("origin", old), ("current", new)):
+        engine = root / "src/engine"
+        (engine / "monitoring").mkdir(parents=True)
+        (engine / "monitoring/policy_generation_contract.py").write_text(
+            "COMPONENTS = " + repr(components) + "\nCOMMON_CODE_COMPONENTS = " + repr(common) + "\n"
+        )
+        for family in components:
+            (engine / (family + ".py")).write_text("value = 1\n")
+        (engine / "shared.py").write_text("value = " + ("1" if role == "origin" else "2") + "\n")
+        for name in set(validation.plan_identity("auxiliary")) | {n for plan in validation.PLANS.values() for n in plan}:
+            target = root / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(validation.ROOT / name, target)
+        for command in (["init", "-q"], ["add", "."],
+                        ["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", role]):
+            subprocess.run(["git", *command], cwd=root, check=True, capture_output=True)
+        commits[role] = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+    monkeypatch.setattr(generation, "COMPONENTS", components)
+    monkeypatch.setattr(generation, "COMMON_CODE_COMPONENTS", common)
+    monkeypatch.setattr(generation, "ENGINE", new / "src/engine")
+    monkeypatch.setattr(validation, "ROOT", new)
+    evidence = tmp_path / "review.txt"
+    evidence.write_text("Reviewed shared change; original reports and economic gaps are preserved.\n")
+    body = dict(
+        schema="postclose_generation_source_review_v1",
+        verification_scope="report_only_code_capability",
+        origin_release_root=str(old), current_release_root=str(new),
+        origin_git_commit=commits["origin"], current_git_commit=commits["current"],
+        reviewed_files={"src/engine/shared.py": dict(
+            before=validation.file_sha(old / "src/engine/shared.py"),
+            after=validation.file_sha(new / "src/engine/shared.py"))},
+        reviewed_families=sorted(components),
+        review_evidence=dict(path=str(evidence), sha256=validation.file_sha(evidence)),
+        provider_calls=0, orders=0,
+        **{k: False for k in validation.AUTHORITY_FALSE},
+    )
+
+    def seal():
+        raw = (json.dumps(body, sort_keys=True) + "\n").encode()
+        path = tmp_path / (hashlib.sha256(raw).hexdigest() + ".json")
+        path.write_bytes(raw)
+        return path
+
+    return handoff, old, new, body, seal
+
+
+@pytest.mark.parametrize("damage", [None, "family", "file", "dirty", "commit", "authority", "evidence", "alias", "registry"])
+def test_source_review_discovers_every_affected_family_and_fails_closed(tmp_path, monkeypatch, damage):
+    handoff, old, new, body, seal = _source_review_case(tmp_path, monkeypatch)
+    if damage == "family":
+        body["reviewed_families"].pop()
+    elif damage == "file":
+        body["reviewed_files"].clear()
+    elif damage == "dirty":
+        (new / "src/engine/shared.py").write_text("value = 3\n")
+    elif damage == "commit":
+        body["current_git_commit"] = "0" * 40
+    elif damage == "authority":
+        body["allowed_runtime_apply"] = True
+    elif damage == "evidence":
+        Path(body["review_evidence"]["path"]).write_text("changed")
+    elif damage == "registry":
+        body["reviewed_families"] = ["invented"]
+    path = seal()
+    if damage == "alias":
+        alias = tmp_path / "alias.json"
+        alias.symlink_to(path)
+        path = alias
+    if damage:
+        with pytest.raises(ValueError, match="source_review_"):
+            handoff.reviewed_source_transition(path)
+    else:
+        result = handoff.reviewed_source_transition(path)
+        assert set(result["pairs"]) == set(validation.PLANS)
+        assert all(before != after for before, after in result["pairs"].values())
+        assert result["reference"]["sha256"] == validation.file_sha(path)
+
+
+@pytest.mark.parametrize("damage", [None, "missing_review", "missing_old_fixture", "missing_new_fixture", "changed_report", "changed_source"])
+def test_reviewed_inventory_consumes_original_and_new_native_fixtures(tmp_path, monkeypatch, damage):
+    handoff, old, new, body, seal_review = _source_review_case(tmp_path, monkeypatch)
+    request = seal_review()
+    review = handoff.reviewed_source_transition(request)
+    family = "auxiliary"
+    data = tmp_path / "data"
+    _, report, _, current_path, value, seal_current = _fixture(data, family)
+    old_code, new_code = review["pairs"][family]
+    historical = dict(value, code_sha256=old_code)
+    historical["receipt_sha256"] = generation.digest({k: v for k, v in historical.items() if k != "receipt_sha256"})
+    old_path = current_path.with_name(family + "_" + old_code + ".json")
+    old_path.write_text(json.dumps(historical))
+    original_ref = dict(path=str(old_path), sha256=validation.file_sha(old_path))
+    payload = json.loads(report.read_text())
+    contract = payload["policy_generation"]
+    contract.update(code_sha256=old_code, fixture_receipt=original_ref,
+                    retry_key=generation.digest([family, contract["source_generation"], old_code, contract["source_state"]]))
+    contract["contract_sha256"] = generation.digest({k: v for k, v in contract.items() if k != "contract_sha256"})
+    report.write_text(json.dumps(payload))
+    observed = generation.observations(new, DAY, data_root=data)[0]
+    assert handoff.current_fixture_observation(observed, data)["current_fixture_reason"] == "successor_code_pair_unreviewed"
+    value["reviewed_source_transitions"] = [review["reference"]]
+    seal_current()
+    if damage == "missing_review":
+        request.unlink()
+    elif damage == "missing_old_fixture":
+        old_path.unlink()
+    elif damage == "missing_new_fixture":
+        current_path.unlink()
+    elif damage == "changed_report":
+        report.write_text("{}")
+    elif damage == "changed_source":
+        (new / "src/engine/shared.py").write_text("value = 3\n")
+    before = report.read_bytes()
+    result = handoff.current_fixture_observation(observed, data)
+    assert result["status"] == ("unverified" if damage else "verified"), result
+    assert report.read_bytes() == before
+    assert result["source_state"] == "valid_empty" and result["comparison_state"] == "insufficient_sample"
+    assert result.get("allowed_runtime_apply", False) is False
+    if not damage:
+        assert result["preserved_historical_fixture"] == original_ref
+        assert result["reviewed_source_transition"] == review["reference"]
+        assert result["historical_contract_status"] == "unverified" and result["native_validated"] is False
+
+
+def test_consumer_inventory_keeps_missing_reports_and_report_only_role(tmp_path, monkeypatch):
+    from src.engine.monitoring import policy_generation_code_handoff as handoff
+    rows = handoff.consumer_inventory(tmp_path, DAY)
+    assert {r["family"] for r in rows} == set(generation.COMPONENTS)
+    assert all(r["role"] == "report_only" and r["observation"] is None for r in rows)
+    monkeypatch.setattr(validation, "PLANS", {})
+    with pytest.raises(ValueError, match="capability_consumer_registry_incomplete"):
+        handoff.consumer_inventory(tmp_path, DAY)
+
+
+def test_fixture_publisher_requires_complete_review_before_reusing_receipt(tmp_path, monkeypatch):
+    handoff, old, new, body, seal_review = _source_review_case(tmp_path, monkeypatch)
+    request = seal_review()
+    review = handoff.reviewed_source_transition(request)
+    data = tmp_path / "data"
+    _, _, _, _, value, seal = _fixture(data, "auxiliary")
+    with pytest.raises(ValueError, match="fixture_existing_source_review_differs"):
+        writer.validate("auxiliary", data, source_date=DAY, target_date="2026-10-15", source_reviews=[request])
+    value["reviewed_source_transitions"] = [review["reference"]]
+    seal()
+    result = writer.validate("auxiliary", data, source_date=DAY, target_date="2026-10-15", source_reviews=[request])
+    assert result["status"] == "verified_existing" and result["runtime_effect"] is False
+    body["reviewed_families"].pop()
+    with pytest.raises(ValueError, match="source_review_incomplete_change_inventory"):
+        writer.validate("auxiliary", data, source_date=DAY, target_date="2026-10-15", source_reviews=[seal_review()])

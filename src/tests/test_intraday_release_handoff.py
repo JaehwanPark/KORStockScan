@@ -5415,7 +5415,8 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
     )
     subprocess.run(["git", "-C", str(root), "checkout", "-q", "75e0fbbf7"], check=True)
     hashes = {
-        "current": handoff.REVIEWED_SCOPED_SCORING_PROFILE,
+        "current": handoff.REVIEWED_REPORT_CENSUS_PROFILE,
+        "report_census": handoff.REVIEWED_REPORT_CENSUS_PROFILE,
         "consumed_submit_fresh": handoff.REVIEWED_SUBMIT_FRESH_PROFILE,
         "consumed_scoped_initial": handoff.REVIEWED_SCOPED_SCORING_INITIAL_PROFILE,
         "consumed_nonfixed_observer": handoff.REVIEWED_NONFIXED_OBSERVER_PROFILE,
@@ -5490,7 +5491,7 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
     for name in hashes:
         content = (
             (canonical / name).read_bytes()
-            if generation == "current"
+            if generation in {"current", "report_census"}
             else subprocess.check_output(
                 [
                     "git",
@@ -6663,3 +6664,10 @@ def test_source_first_scoring_complete_handoff_generation(tmp_path, family, faul
 @pytest.mark.parametrize('fault', ['missing', 'parent_mix', 'committed_change'])
 def test_source_first_scoring_rejects_each_changed_owner(tmp_path, dependency, fault):
     test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path, 'main_stop', fault, 'current', dependency)
+
+
+@pytest.mark.parametrize("family", ["main_stop", "holding_vote", "pre_submit_delay"])
+@pytest.mark.parametrize("fault", [None, "dirty", "committed_change", "parent_mix"])
+def test_report_census_policy_handoff_keeps_complete_generation(tmp_path, family, fault):
+    test_entry_cost_handoff_keeps_exact_complete_generation(
+        tmp_path, family, fault, "report_census", "src/engine/monitoring/policy_generation_code_handoff.py")

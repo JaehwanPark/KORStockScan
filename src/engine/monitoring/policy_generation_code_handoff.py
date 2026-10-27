@@ -5,12 +5,142 @@ contracts and source bytes remain historical; no strategy authority is granted.
 """
 
 from copy import deepcopy
+import ast
 import hashlib
 import json
 from pathlib import Path
+import subprocess
 
 from src.engine.monitoring import policy_generation_contract as generation
 from src.engine.monitoring import policy_generation_validation as validation
+
+
+def reviewed_source_transition(path):
+    """Authenticate one reviewed source delta and derive every affected family.
+
+    The operator's immutable review is code-capability evidence only. Both
+    generations still need their own native fixtures at the consuming reader.
+    """
+    path = Path(path)
+    if not path.is_absolute() or path.is_symlink() or path.resolve() != path:
+        raise ValueError("source_review_path_invalid")
+    review, sha = validation.bounded_object(path, 2 * 1024 * 1024)
+    if (
+        path.is_symlink()
+        or path.name != sha + ".json"
+        or review.get("schema") != "postclose_generation_source_review_v1"
+        or review.get("verification_scope") != "report_only_code_capability"
+        or any(review.get(k) is not False for k in validation.AUTHORITY_FALSE)
+        or type(review.get("provider_calls")) is not int
+        or review["provider_calls"] != 0
+        or type(review.get("orders")) is not int
+        or review["orders"] != 0
+    ):
+        raise ValueError("source_review_identity_or_authority_invalid")
+    current = Path(review["current_release_root"])
+    origin = Path(review["origin_release_root"])
+    if current != validation.ROOT or current == origin:
+        raise ValueError("source_review_current_root_invalid")
+    inventories = []
+    source_hashes = {}
+    for role, root in (("origin", origin), ("current", current)):
+        if root.is_symlink() or not root.is_absolute() or root.resolve() != root:
+            raise ValueError("source_review_root_invalid")
+        commit = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=root, text=True, timeout=10
+        ).strip()
+        if commit != review[role + "_git_commit"]:
+            raise ValueError("source_review_commit_changed")
+        registry = root / "src/engine/monitoring/policy_generation_contract.py"
+        declarations = {}
+        for node in ast.parse(validation.file_bytes(registry).decode()).body:
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name) and target.id in {
+                        "COMPONENTS", "COMMON_CODE_COMPONENTS"
+                    }:
+                        declarations[target.id] = ast.literal_eval(node.value)
+        components = declarations["COMPONENTS"]
+        common = declarations["COMMON_CODE_COMPONENTS"]
+        if set(components) != set(generation.COMPONENTS):
+            raise ValueError("source_review_family_registry_changed")
+        families, relatives = {}, set()
+        for family, names in components.items():
+            values = {}
+            for name in (*names, *common):
+                source = root / "src/engine" / name
+                relative = source.resolve().relative_to(root.resolve()).as_posix()
+                ancestor = source
+                while ancestor != root:
+                    if ancestor.is_symlink():
+                        raise ValueError("source_review_source_alias_invalid")
+                    ancestor = ancestor.parent
+                key = str(source.resolve())
+                if key not in source_hashes:
+                    source_hashes[key] = validation.file_sha(source)
+                value = source_hashes[key]
+                values[name] = value
+                relatives.add(relative)
+            families[family] = generation.digest(values)
+        dirty = subprocess.check_output(
+            ["git", "diff", "--name-only", "HEAD", "--", *sorted(relatives)],
+            cwd=root, text=True, timeout=10,
+        )
+        if dirty.strip():
+            raise ValueError("source_review_uncommitted_components")
+        tracked = subprocess.check_output(
+            ["git", "ls-files", "--", *sorted(relatives)],
+            cwd=root, text=True, timeout=10,
+        ).splitlines()
+        if set(tracked) != relatives:
+            raise ValueError("source_review_untracked_components")
+        inventories.append((families, relatives, (components, common)))
+    old, new = inventories
+    if old[1] != new[1] or old[2] != new[2]:
+        raise ValueError("source_review_component_membership_changed")
+    delta = {}
+    for relative in sorted(old[1]):
+        before = source_hashes[str(origin / relative)]
+        after = source_hashes[str(current / relative)]
+        if before != after:
+            delta[relative] = dict(before=before, after=after)
+    affected = sorted(f for f in new[0] if old[0][f] != new[0][f])
+    if (
+        not affected
+        or review.get("reviewed_files") != delta
+        or review.get("reviewed_families") != affected
+        or any(new[0][f] != generation.code_generation(f) for f in affected)
+    ):
+        raise ValueError("source_review_incomplete_change_inventory")
+    evidence = review.get("review_evidence") or {}
+    if (
+        not evidence.get("path")
+        or validation.file_sha(Path(evidence["path"])) != evidence.get("sha256")
+    ):
+        raise ValueError("source_review_evidence_changed")
+    return dict(
+        reference=dict(path=str(path), sha256=sha),
+        pairs={family: [old[0][family], new[0][family]] for family in affected},
+        source_hashes=source_hashes,
+        review_evidence=evidence,
+    )
+
+
+def consumer_inventory(root, day, *, data_root=None):
+    """One native report-capability census for deployment and later health."""
+    data = Path(data_root) if data_root is not None else Path(root) / "data"
+    observed = {x["family"]: x for x in generation.observations(root, day, data_root=data)}
+    if set(validation.PLANS) != set(generation.COMPONENTS):
+        raise ValueError("capability_consumer_registry_incomplete")
+    return [
+        dict(
+            family=family, role="report_only", source_date=day,
+            code_sha256=generation.code_generation(family),
+            observation=(current_fixture_observation(observed[family], data)
+                         if family in observed else None),
+        )
+        for family in generation.COMPONENTS
+    ]
 
 # 92785b7da and the reviewed 86f789693 native-arm completion successor change
 # entry paths in the shared handler, not either family publication or policy.
@@ -1122,6 +1252,8 @@ REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS['holding_vote'] += (('24402a92575502c116
 
 
 def current_fixture_observation(observed, data):
+    if observed.get("status") == "verified" and observed.get("native_validated") is True:
+        return observed
     family = observed.get("family")
     pair = REVIEWED_SUCCESSORS.get(family)
     actual_pair = (observed.get("code_sha256"), generation.code_generation(family))
@@ -1211,6 +1343,33 @@ def current_fixture_observation(observed, data):
     )
     if reader_match:
         pair = actual_pair
+    source_review = None
+    if (not pair or actual_pair != pair) and family in validation.PLANS:
+        # A single reviewed source inventory covers every affected family.
+        # It never replaces either generation's independently verified fixture.
+        try:
+            fixture_path = validation.fixture_path(data, family)
+            candidate = (validation.bounded_object(fixture_path, 65536)[0]
+                         if fixture_path.is_file() else {})
+            references = candidate.get("reviewed_source_transitions", [])
+            if not isinstance(references, list):
+                raise ValueError("source_review_references_invalid")
+            if references:
+                fixture, _ = validation.verify_fixture(data, family)
+            for reference in references:
+                reviewed = reviewed_source_transition(reference["path"])
+                if reviewed["reference"] != reference:
+                    raise ValueError("source_review_reference_changed")
+                if reviewed["pairs"].get(family) == list(actual_pair):
+                    pair = actual_pair
+                    reader_match = True
+                    source_review = reviewed
+        except (OSError, ValueError, KeyError, TypeError, SyntaxError,
+                subprocess.SubprocessError) as exc:
+            # Keep the original unverified result and the exact failure. A
+            # missing new fixture must not authorize an unreviewed successor.
+            return dict(observed, current_fixture_status="unverified",
+                        current_fixture_reason=str(exc))
     if not pair or actual_pair != pair:
         if (
             family in validation.PLANS
@@ -1349,6 +1508,10 @@ def current_fixture_observation(observed, data):
             != historical_fixture["sha256"]
         ):
             raise ValueError("successor_historical_fixture_changed")
+        if source_review and reviewed_source_transition(
+            source_review["reference"]["path"]
+        ) != source_review:
+            raise ValueError("source_review_changed_during_observation")
         result = deepcopy(observed)
         result.update(
             status="verified",
@@ -1364,6 +1527,8 @@ def current_fixture_observation(observed, data):
         )
         if historical_fixture:
             result["preserved_historical_fixture"] = historical_fixture
+        if source_review:
+            result["reviewed_source_transition"] = source_review["reference"]
         result["scopes"] = {
             family: {
                 k: v

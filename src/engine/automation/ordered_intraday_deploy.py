@@ -195,6 +195,7 @@ def verify_candidate_report_currentness(workspace, candidate, day):
     from src.engine.error_detectors.artifact_freshness import (
         _initial_quantity_semantics,
     )
+    from src.engine.monitoring.policy_generation_code_handoff import consumer_inventory
 
     data = Path(workspace) / "data"
     source_date = H.preserve_checklist(day)["source_date"]
@@ -222,6 +223,7 @@ def verify_candidate_report_currentness(workspace, candidate, day):
         status="pass",
         source_date=source_date,
         target_date=day,
+        capability_consumers=consumer_inventory(candidate, source_date, data_root=data),
         trailing=observed,
         quantity={
             key: quantity.get(key)
@@ -1229,6 +1231,27 @@ class Deployment:
         )
         _atomic(self.directory / "status.json", _json_bytes(self.state))
 
+    def observe_report_consumers(self, phase):
+        """Carry the same native report-only census through each live phase.
+
+        Source/economic warnings remain observations. Registry/code identity
+        must remain the candidate's; these reports acquire no startup authority.
+        """
+        from src.engine.monitoring.policy_generation_code_handoff import consumer_inventory
+
+        reports = self.state["candidate_report_currentness"]
+        baseline = reports["capability_consumers"]
+        current = consumer_inventory(
+            self.candidate, reports["source_date"], data_root=self.workspace / "data"
+        )
+        identity = lambda rows: [
+            {k: row[k] for k in ("family", "role", "source_date", "code_sha256")}
+            for row in rows
+        ]
+        if identity(current) != identity(baseline):
+            raise ValueError("deployment_report_consumer_identity_changed")
+        self.state.setdefault("report_consumer_observations", {})[phase] = current
+
     def preflight(self):
         self.before = self.selection.read_bytes()
         self.old = json.loads(self.before)
@@ -1421,6 +1444,7 @@ class Deployment:
                 self.workspace, self.candidate, self.day
             )
         )
+        self.observe_report_consumers("candidate")
         self.frozen = dict(self.frozen)
         self.frozen.update(
             (code_check.get("prepared_code_origin") or {}).get("sources", {})
@@ -1926,6 +1950,7 @@ class Deployment:
         handoffs = code.issue_selected(
             self.workspace / "data", self.day, release_root=self.candidate
         )
+        self.observe_report_consumers("selected_prepared")
         self.checkpoint(
             "prepared",
             sentinel_source_window=source_window,
@@ -2007,6 +2032,7 @@ class Deployment:
             if path != str(self.checklist)
         ):
             raise ValueError("deployment_original_policy_generation_changed")
+        self.observe_report_consumers("actual_pid")
         self.checkpoint("complete", successor_identity=identity, status="pass")
         return self.state
 
@@ -2394,6 +2420,8 @@ class StoppedDeploymentRecovery(Deployment):
             ),
         )
         self.state["candidate_p5"] = self.candidate_p5
+        self.state["candidate_report_currentness"] = checks["reports"]
+        self.observe_report_consumers("candidate")
         self.failed_hold_adoption = dict(
             raw=hold_raw,
             signature=hold_sig,

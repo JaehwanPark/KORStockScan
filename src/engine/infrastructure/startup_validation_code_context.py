@@ -2971,6 +2971,19 @@ for _name, _sha in REVIEWED_SCOPED_SCORING_SOURCES.items():
     _history.update((_old, _sha) for _old in _origins)
 
 
+# Reviewed report-capability census and source-review publisher. Trading
+# policy sources retain their original authority and complete dependency checks.
+REVIEWED_REPORT_CENSUS_SOURCES = {'src/engine/automation/ordered_intraday_deploy.py': 'ddf0b36a3ed279c7ab89ad60e39f29d5d171c8137215e67c5b6eecc9d04baf2a', 'src/engine/automation/policy_generation_fixture_validation.py': '29da6c2abd0c52620fa9ae84d376ac12cac758df10a8afec5c85af2a9d03ca25', 'src/engine/error_detectors/artifact_freshness.py': '5fb82e262bf670d0469dde7f82eacacf29c9c52bce78a9433d2c02617d6e0a79', 'src/engine/monitoring/policy_generation_code_handoff.py': 'be930aedec5c1ad090d1f003158bc9ecc7a10605f636ffe63c2caf6710c1d0ff', 'src/engine/monitoring/policy_generation_contract.py': 'cd6ff4b31ab0661d0db2851ba6d6e0b7f5b7b258832a0ccbc72a751ed3108c44', 'src/engine/monitoring/policy_generation_validation.py': '83dd37ff2381801acb287a0060c61dd2afda3c89af5c1f76e504e5cf52de6e6c'}
+REVIEWED_REPORT_CENSUS_ORIGINS = {'src/engine/automation/ordered_intraday_deploy.py': 'c208f4ed8c369522c9554e87c4c03d57145f8ffac5f9a7175b05088b4c829bf1', 'src/engine/automation/policy_generation_fixture_validation.py': '3b3a796df23267330f4d3a0705cb356f7011d62a80407d34c1c587fd64794b2f', 'src/engine/error_detectors/artifact_freshness.py': 'adbd91229c1a84cf5bcacf8f6c7ef6e55f9636fefc37b182a9802f4aa1755bd3', 'src/engine/monitoring/policy_generation_code_handoff.py': '2205cfa0be617994a148557397ae4bc1a13c1c9052d9b045cbc4ac0c1475223d', 'src/engine/monitoring/policy_generation_contract.py': 'afb9e016f2772721a249566d51f02b5de0ae20c642446c0909194f21413914e4', 'src/engine/monitoring/policy_generation_validation.py': 'caa1f2fcfebceece4910b1594ba4f0507a7e098bbc9912e1e728aeb00e29129a'}
+for _name, _sha in REVIEWED_REPORT_CENSUS_SOURCES.items():
+    _history = REVIEWED_PREPARATION_HISTORY.setdefault(_name, set())
+    _origins = {value for pair in _history for value in pair}
+    _origins.add(REVIEWED_REPORT_CENSUS_ORIGINS[_name])
+    if _name in REVIEWED_PREPARATION_SOURCES:
+        _origins.update(REVIEWED_PREPARATION_SOURCES[_name])
+    _history.update((_old, _sha) for _old in _origins)
+
+
 def reviewed_preparation_pair(relative, old, current):
     # An already reviewed physical pair keeps its original authority; a
     # formatting projection must not replace either endpoint before this check.
@@ -2984,10 +2997,11 @@ def reviewed_preparation_pair(relative, old, current):
     )
 
     predecessor = reviewed_formatting_predecessor(relative, current)
-    if predecessor != current and old == predecessor:
+    origin = reviewed_formatting_predecessor(relative, old)
+    if predecessor != current and origin == predecessor:
         return True
-    return REVIEWED_PREPARATION_SOURCES.get(relative) == (old, predecessor) or (
-        old,
+    return REVIEWED_PREPARATION_SOURCES.get(relative) == (origin, predecessor) or (
+        origin,
         predecessor,
     ) in REVIEWED_PREPARATION_HISTORY.get(relative, ())
 

@@ -34,6 +34,27 @@ Owner: deployment infrastructure. Main and scheduled consumers use the selected 
 
 ## Authorized intraday policy-preserving code handoff
 
+The existing policy-generation fixture publisher accepts repeated `--source-review`
+references for report-only code succession. Each immutable review request binds
+clean committed original/current trees, unchanged native component membership,
+every changed component's before/after SHA, all affected families and a frozen
+review record. The reader derives the inventory from `COMPONENTS` and
+`COMMON_CODE_COMPONENTS`; omitted files or families, aliases, dirty sources,
+changed evidence and runtime authority flags reject the request. This replaces
+new family-by-family report-capability pair additions. Issued legacy exact pairs
+remain historical readers. Original native reports and their fixtures, independent
+new network-denied fixtures, source/economic gaps and policy guards remain required.
+Preserve both release origins and immutable request/review files through their last
+consumer. A source review never authenticates an active policy or actual PID.
+
+Ordered deployment and full health use the same registered report-capability
+consumer inventory. Candidate preflight records it; selected preparation and
+actual-PID attestation reobserve the same source date and reject changed registry,
+role or code identity. Missing optional reports and historical source/economic
+warnings remain report-only observations, without becoming new Main startup gates.
+The existing active-policy, trailing, quantity, native preparation/P5 and PID
+checks retain their own authority and failure behavior.
+
 When the current operational checklist was edited after an already-consumed handoff, first compare every frozen predecessor source. Only a checklist-only mismatch may use the exact prior-release Git checklist whose SHA equals the sealed handoff. Preserve both that original and the user's complete edited document. Under the ordered deployment and detector locks, stage the verified original for the strict predecessor check, then publish the reviewed candidate checklist with the new selector. Restore the edited document with compare-and-swap if transition fails before publication. This does not rewrite the predecessor receipt or permit policy/env/controller differences; retain both identities in the deployment evidence.
 
 A reviewed native-code repair whose source hashes differ from the active policy requires `scalping.reversal_code_handoff` evidence before draining Main. The dated receipt binds the unchanged active pointer and branch definitions, the clean candidate commit, all current contract code, full origin-validator source hashes and native confirmation parity. Only that selected candidate can use it; policy/source errors, missing receipts, changed sources and unreviewed code still fail. The native dependency cache observes the selector and every receipt/source/code dependency. No policy pointer is activated or relabelled. Preserve the receipt, parity and old immutable validator release as referenced sources until their consumer/rollback lifetime ends; the next-session candidate remains separately bound to the final release.

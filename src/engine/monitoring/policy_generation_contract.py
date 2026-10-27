@@ -479,22 +479,10 @@ def observations(root, day, *, data_root=None):
     root = Path(root)
     data = Path(data_root) if data_root is not None else root / "data"
     items = []
-    paths = {
-        "entry_cancel_wait": data
-        / "report/entry_cancel_wait_tuning"
-        / f"entry_cancel_wait_tuning_{day}.json",
-        "rising_missed": data
-        / "report/rising_missed_classifier_prior"
-        / f"rising_missed_classifier_prior_{day}.json",
-        "auxiliary": data
-        / "report/reversal_auxiliary_tuning"
-        / day
-        / "evaluation.json",
-        "holding_vote": data
-        / "report/monitor_snapshots"
-        / f"holding_exit_observation_{day}.json",
-    }
-    for family, path in paths.items():
+    from src.engine.monitoring.policy_generation_validation import native_report_path
+
+    for family in COMPONENTS:
+        path = native_report_path(data, family, day)
         if not path.exists() and not path.is_symlink():
             continue
         try:

@@ -319,6 +319,7 @@ def plan_identity(family):
         *PLANS[family],
         "src/engine/monitoring/policy_generation_validation.py",
         "src/engine/automation/policy_generation_fixture_validation.py",
+        "src/engine/monitoring/policy_generation_code_handoff.py",
     ]
     return {path: file_sha(ROOT / path) for path in paths}
 

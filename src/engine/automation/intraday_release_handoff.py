@@ -12287,6 +12287,37 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
 }}
 
 
+# The source-review registration owner derives all report-only family pairs.
+# The policy/preparation reader itself retains an exact reviewed source profile.
+REVIEWED_REPORT_CENSUS_HASHES = {'src/engine/automation/ordered_intraday_deploy.py': 'ddf0b36a3ed279c7ab89ad60e39f29d5d171c8137215e67c5b6eecc9d04baf2a', 'src/engine/automation/policy_generation_fixture_validation.py': '29da6c2abd0c52620fa9ae84d376ac12cac758df10a8afec5c85af2a9d03ca25', 'src/engine/error_detectors/artifact_freshness.py': '5fb82e262bf670d0469dde7f82eacacf29c9c52bce78a9433d2c02617d6e0a79', 'src/engine/monitoring/policy_generation_code_handoff.py': 'be930aedec5c1ad090d1f003158bc9ecc7a10605f636ffe63c2caf6710c1d0ff', 'src/engine/monitoring/policy_generation_contract.py': 'cd6ff4b31ab0661d0db2851ba6d6e0b7f5b7b258832a0ccbc72a751ed3108c44', 'src/engine/infrastructure/startup_validation_code_context.py': '5d1f9a5936a05e0af7a5f037165362546539727795410498dea65d8626847346', 'src/engine/monitoring/policy_generation_validation.py': '83dd37ff2381801acb287a0060c61dd2afda3c89af5c1f76e504e5cf52de6e6c'}
+REVIEWED_REPORT_CENSUS_ORIGINS = {'src/engine/automation/ordered_intraday_deploy.py': 'c208f4ed8c369522c9554e87c4c03d57145f8ffac5f9a7175b05088b4c829bf1', 'src/engine/automation/policy_generation_fixture_validation.py': '3b3a796df23267330f4d3a0705cb356f7011d62a80407d34c1c587fd64794b2f', 'src/engine/error_detectors/artifact_freshness.py': 'adbd91229c1a84cf5bcacf8f6c7ef6e55f9636fefc37b182a9802f4aa1755bd3', 'src/engine/monitoring/policy_generation_code_handoff.py': '2205cfa0be617994a148557397ae4bc1a13c1c9052d9b045cbc4ac0c1475223d', 'src/engine/monitoring/policy_generation_contract.py': 'afb9e016f2772721a249566d51f02b5de0ae20c642446c0909194f21413914e4', 'src/engine/infrastructure/startup_validation_code_context.py': 'd065373921062ab509557f8752af9be4a314f81221e0a384f7c44f78d93f209f', 'src/engine/monitoring/policy_generation_validation.py': 'caa1f2fcfebceece4910b1594ba4f0507a7e098bbc9912e1e728aeb00e29129a'}
+REVIEWED_REPORT_CENSUS_PROFILE = {
+    **REVIEWED_SCOPED_SCORING_PROFILE, **REVIEWED_REPORT_CENSUS_HASHES
+}
+REVIEWED_REPORT_CENSUS_VARIANTS = {
+    (key[0], REVIEWED_REPORT_CENSUS_HASHES.get(key[0], key[1])): {
+        **value,
+        "selector_path": "src/engine/infrastructure/startup_validation_code_context.py",
+        "selector_sha256": REVIEWED_REPORT_CENSUS_HASHES["src/engine/infrastructure/startup_validation_code_context.py"],
+        "dependencies": {**value["dependencies"], **REVIEWED_REPORT_CENSUS_HASHES},
+        "contract_extensions": {
+            origin: {name: REVIEWED_REPORT_CENSUS_HASHES.get(os.path.normpath(name), sha)
+                     for name, sha in paths.items()}
+            for origin, paths in value["contract_extensions"].items()
+        },
+    }
+    for key, value in REVIEWED_SCOPED_SCORING_VARIANTS.items()
+}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple(
+        (old, current)
+        for old in {value for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ()) for value in pair}
+                   | {REVIEWED_REPORT_CENSUS_ORIGINS[name]}
+    )
+    for name, current in REVIEWED_REPORT_CENSUS_HASHES.items()
+}}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -13078,6 +13109,12 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     ):
         prepared_hashes = REVIEWED_SCOPED_SCORING_PROFILE
         prepared_variants = REVIEWED_SCOPED_SCORING_VARIANTS
+    if (
+        (source := candidate_bytes("src/engine/infrastructure/startup_validation_code_context.py", optional=True)) is not None
+        and hashlib.sha256(source).hexdigest() == REVIEWED_REPORT_CENSUS_HASHES["src/engine/infrastructure/startup_validation_code_context.py"]
+    ):
+        prepared_hashes = REVIEWED_REPORT_CENSUS_PROFILE
+        prepared_variants = REVIEWED_REPORT_CENSUS_VARIANTS
     entry_cost_hashes = (
         prepared_hashes
         if prepared_owner_present

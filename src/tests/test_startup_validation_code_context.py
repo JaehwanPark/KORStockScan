@@ -2761,7 +2761,7 @@ def test_main_preparation_uses_reviewed_stopped_origin_code(name):
     review = json.loads((ROOT / H._FORMATTING_REVIEW_PATH).read_text())
     predecessor = review["sources"][name]["before_sha256"]
     if review["sources"][name]["after_sha256"] != current:
-        assert H.REVIEWED_SCOPED_SCORING_PROFILE[name] == current
+        assert H.REVIEWED_REPORT_CENSUS_PROFILE[name] == current
         C._pairs({name: review["sources"][name]["after_sha256"]}, {name: current})
     origins = {old for old, new in pairs if new in {predecessor, current}}
     origins.add(predecessor)
@@ -3027,7 +3027,7 @@ def test_main_preparation_independently_reviews_closed_scanner(origin, damage):
 )
 def test_migration_configuration_has_independent_exact_source_pairs(name):
     current = hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
-    assert H.REVIEWED_SCOPED_SCORING_PROFILE[name] == current
+    assert H.REVIEWED_REPORT_CENSUS_PROFILE[name] == current
     for old in H.REVIEWED_MIGRATION_ORIGINS[name]:
         C._pairs({name: old}, {name: H.REVIEWED_CLOSED_LOADER_PROFILE[name]})
         C._pairs({name: old}, {name: current})
@@ -3235,7 +3235,7 @@ def test_entry_capability_independent_preparation_exact_pairs(relative, fault):
 def test_nonfixed_identifier_preparation_uses_independent_exact_sources(name,fault):
     old=H.REVIEWED_NONFIXED_IDENTITY_ORIGINS[name]
     current=hashlib.sha256((ROOT/name).read_bytes()).hexdigest()
-    assert H.REVIEWED_SCOPED_SCORING_PROFILE[name]==current
+    assert H.REVIEWED_REPORT_CENSUS_PROFILE[name]==current
     if fault=='source':old='0'*64
     if fault=='target':current='0'*64
     if fault=='path':name='src/engine/unknown_identifier_owner.py'
@@ -3282,7 +3282,7 @@ def test_invalidation_cadence_independent_preparation_exact_pairs(relative, faul
 def test_delay_collection_independent_preparation_exact_pairs(relative, fault):
     old = C.REVIEWED_DELAY_COLLECTION_ORIGINS[relative]
     current = hashlib.sha256((ROOT / relative).read_bytes()).hexdigest()
-    assert H.REVIEWED_SUBMIT_FRESH_PROFILE[relative] == current
+    assert H.REVIEWED_REPORT_CENSUS_PROFILE[relative] == current
     if fault == "origin": old = "0" * 64
     if fault == "successor": current = "0" * 64
     if fault == "path": relative = "src/engine/unknown_collection_owner.py"
@@ -3298,7 +3298,7 @@ def test_submit_fresh_independent_preparation_exact_pairs(relative, fault, proje
         if projected else C.REVIEWED_SUBMIT_FRESH_ORIGINS[relative]
     )
     current = hashlib.sha256((ROOT / relative).read_bytes()).hexdigest()
-    assert current == C.REVIEWED_SUBMIT_FRESH_SOURCES[relative]
+    assert current == H.REVIEWED_REPORT_CENSUS_PROFILE[relative]
     if fault == "origin": old = "0" * 64
     if fault == "successor": current = "0" * 64
     if fault == "path": relative = "src/engine/unknown_submit_owner.py"
@@ -3315,3 +3315,44 @@ def test_scoped_scoring_independent_preparation_binds_exact_generation(name, fau
     if fault == "origin": old = "0" * 64
     if fault == "successor": current = "0" * 64
     assert C.reviewed_preparation_pair(name, old, current) is (fault is None)
+
+
+@pytest.mark.parametrize("name", sorted(C.REVIEWED_REPORT_CENSUS_SOURCES))
+@pytest.mark.parametrize("fault", [None, "origin", "successor"])
+def test_report_census_preparation_keeps_exact_reviewed_sources(name, fault):
+    old = C.REVIEWED_REPORT_CENSUS_ORIGINS[name]
+    current = hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
+    assert current == C.REVIEWED_REPORT_CENSUS_SOURCES[name]
+    assert current == H.REVIEWED_REPORT_CENSUS_HASHES[name]
+    assert current == H.REVIEWED_REPORT_CENSUS_PROFILE[name]
+    if fault == "origin":
+        old = "0" * 64
+    if fault == "successor":
+        current = "0" * 64
+    assert C.reviewed_preparation_pair(name, old, current) is (fault is None)
+
+
+@pytest.mark.parametrize("fault", [None, "origin", "successor", "path"])
+def test_preparation_preserves_reviewed_physical_origin_after_nonformat_successor(monkeypatch, fault):
+    relative = "src/engine/monitoring/policy_generation_code_handoff.py"
+    review = H._formatting_review()[relative]
+    old, current = review["after_sha256"], C.REVIEWED_REPORT_CENSUS_SOURCES[relative]
+    assert review["before_sha256"] != old and current != old
+    if fault == "origin": old = "0" * 64
+    if fault == "successor": current = "0" * 64
+    if fault == "path": relative = "src/engine/unknown_format_origin.py"
+    assert C.reviewed_preparation_pair(relative, old, current) is (fault is None)
+
+
+@pytest.mark.parametrize("fault", [None, "origin", "successor", "path"])
+def test_preparation_alias_resolution_requires_both_pinned_origin_and_reviewed_pair(monkeypatch, fault):
+    relative = "src/engine/monitoring/policy_generation_code_handoff.py"
+    review = H._formatting_review()[relative]
+    current = "f" * 64
+    monkeypatch.setattr(C, "REVIEWED_PREPARATION_SOURCES", {})
+    monkeypatch.setattr(C, "REVIEWED_PREPARATION_HISTORY", {relative: {(review["before_sha256"], current)}})
+    old = review["after_sha256"]
+    if fault == "origin": old = "0" * 64
+    if fault == "successor": current = "0" * 64
+    if fault == "path": relative = "src/engine/unknown_origin.py"
+    assert C.reviewed_preparation_pair(relative, old, current) is (fault is None)

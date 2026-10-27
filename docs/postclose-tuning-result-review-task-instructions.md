@@ -257,6 +257,14 @@ Source input allowed, decision CF input allowed, operational terminal reconciled
 
 ## 6. 실패 대응
 
+공유 코드 변경 후 report-only policy-generation capability를 승계할 때에는
+기존 component registry에서 영향받는 전체 family를 대사한다. 원본 보고서와
+과거 fixture를 보존하고, 기존 fixture publisher의 `--source-review`로 고정된
+코드리뷰 목록과 독립 새 fixture를 결속한다. 후보·선택 후 준비·기동 후 health는
+동일 consumer inventory를 사용한다. 경제성 결손이나 미확인 원천을 재분류하지
+않으며 report-only 진단에 새 기동 차단 권한을 부여하지 않는다. 상세 계약은
+[runtime release routing](runtime-release-routing.md#authorized-intraday-policy-preserving-code-handoff)을 따른다.
+
 [AGENTS §6 공통 에러처리 절차](../AGENTS.md#6-error-resolution-procedure)에 따라 최초 계약 위반과 재현 근거를 확인하고, 원인 수리·과거 결손 처분·현재 consumer 검증을 구분한다. 이 절은 장후의 권한·재생성 순서·terminal closure를 소유한다. 동일 원인으로 다시 실패하면 기존 owner의 원인 가설과 Acceptance를 재검토하며, 같은 전체 실행을 반복하거나 이전 PASS로 완료 처리하지 않는다.
 
 읽기 전용 점검에서는 최초 영향 producer, affected row/window/scope, downstream 소비·승격 영향, blocker owner/artifact, 필요한 조치와 closure test를 기록한다. identifiable bad row/window는 제외하는 계약이 기본이며 전체 block은 invalid/missing preflight·격리 실패·특정 불가능한 high-volume contract loss일 때만 인정한다.
