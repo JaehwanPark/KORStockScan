@@ -5481,6 +5481,7 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
                     str(canonical),
                     "show",
                     {
+                        "consumed_entry_capability": "6d0d19756",
                         "consumed_fixture": "c260d6b07",
                         "consumed_submit_probe": "b6611ce26",
                         "consumed_health_snapshot": "7b98fa4bc",

@@ -6748,7 +6748,7 @@ def _zero_base_scanner_enabled():
 
 def _zero_base_log_event(stage, *, code="", name="", fields=None):
     try:
-        emit_pipeline_event(
+        return emit_pipeline_event(
             "ENTRY_PIPELINE",
             name or "-",
             code or "-",
@@ -6774,6 +6774,7 @@ def _zero_base_log_event(stage, *, code="", name="", fields=None):
         )
     except Exception as exc:
         log_error("[ZERO_BASE_RECEIPT] append failed: " + type(exc).__name__)
+        return {"structured_append_succeeded": False}
 
 
 def run_zero_base_scanner(*, token, event_bus, is_test_mode=False):

@@ -11610,7 +11610,7 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
 
 # Reviewed complete identifier and source-isolation code generation.
 REVIEWED_NONFIXED_IDENTITY_HASHES = {
-    "src/engine/infrastructure/startup_validation_code_context.py": "ab99339ace14c520839d470c80bfb39c685c31a56dae7fcbe1d0bbbb3ff4c1e3",
+    "src/engine/infrastructure/startup_validation_code_context.py": "58b7d5fb72384a2342025044810db800a1a032d05b579f0729f1f3e6d30c45a2",
     "src/engine/kiwoom_orders.py": "75df3ff7d8adfedd9e14ca0fb0d57675dd1279f12d52ff1d9b6c931746cee5a7",
     "src/engine/kiwoom_sniper_v2.py": "66b57f8ca7d37af5be3f6d5897a20e3a4ee5b7f32b5e2b511954d713d9e4006a",
     "src/engine/kiwoom_websocket.py": "d5f4dc2cb836a3789acc2a5066fcefba1880dadd88bb3f33588a4f9cdb5c8784",
@@ -11623,10 +11623,10 @@ REVIEWED_NONFIXED_IDENTITY_HASHES = {
     "src/engine/scalping/zero_base_probe.py": "16f5e06e86943ef735fd2a20ca850a7215939e17adc734cd215762f117dacfbb",
     "src/engine/sniper_state_handlers.py": "51856ec3f5ec75d1242a7013ebe10140a4e402cd180de1e0f5f38339675faf93",
     "src/engine/sniper_trade_utils.py": "d0570ff0e17a7f164c63fd187eca593bfc92516e40c0e0c58eb019828c7ffbda",
-    "src/scanners/scalping_scanner.py": "4ee7f9d7c60b5eb4223edf5fda2a434a0410d0c51c1ef7b1d6ed73a515808de5",
+    "src/scanners/scalping_scanner.py": "eb938c01d837d52973f7d47b59f96da1d338b2df9be8025c18d7c2f936546e16",
     "src/scanners/scanner_source_census.py": "81010bcc9ec41cc55f2a88980ccec676e174023427e4884b1eab5b56e121e6e7",
     "src/scanners/zero_base_discovery_queue.py": "d8c93e78f8944428b6cfb726a88af9e4e0c39aee724c81c97d74d721d6d89d6b",
-    "src/scanners/zero_base_discovery_runtime.py": "801e2f9d5128c340b297baf41d05dca44f244def34ef154e3fd7995c70e8e9f3",
+    "src/scanners/zero_base_discovery_runtime.py": "61ebea82400e4139ed2b0dd66a2b7af5dff9e890c491af7185739b5045e36675",
     "src/scanners/zero_base_discovery_source.py": "65ce49d872b5b16ff0d43609c57e57acd7b36e20d2993bf6ce7f0ac529f1dd34",
     "src/trading/config/owner_identity.py": "db35da13c7471df8612a30e7b756f3ebe459884465eef786855a8102fbb60181",
     "src/trading/market/aftermarket_eligibility.py": "5630f3629ff8c0b5e35fa62b03aa1f56e509536efa05a6f28f9c044d485903b6",
@@ -11665,6 +11665,35 @@ REVIEWED_NONFIXED_IDENTITY_ORIGINS = {
     "src/trading/order/owner_custody_registry.py": "a5b40329f5d46eff8ac11696b809d520fa48620a1a7104fb8adf6faa94c59c3c",
     "src/utils/kiwoom_utils.py": "5c4b21121fab7a7d7fe436b6a17e376a7a9e0b79bb8b9e987612b5332840e641",
 }
+# Exact native 75e policy comparison bytes; not physical runtime aliases.
+REVIEWED_NONFIXED_IDENTITY_POLICY_ORIGINS = {
+    "src/engine/infrastructure/startup_validation_code_context.py": "6366e821e8af94ff9b9ce582593a5c317f608b93a826e8d1951d8214e0b4922c",
+    "src/engine/kiwoom_orders.py": "32e93c49a880e1f3a393ec0367cf1339dbc3ef00c689c821b45b159872c423d9",
+    "src/engine/kiwoom_sniper_v2.py": "f0289f079fc3f193efe02a0ff3ee7542da5dc3b1689292277372ba526bc4eba7",
+    "src/engine/kiwoom_websocket.py": "215a0e3d6388df5938a4d70e8e5afad689fa8087280a3a53b81619a2295e35e3",
+    "src/engine/monitoring/market_opportunity_census.py": "bf2f030ad06c1267a3850ea36330ed9b123e28e874ef32ded255c48176eede75",
+    "src/engine/monitoring/policy_generation_code_handoff.py": "858f6f949015f1c27d0185a0183df7a331f7fda971830408a5cdf53d16b39b5a",
+    "src/engine/scalping/continuous_reversal_source.py": "fb3d91a378457c244a805a49183572f74f3c4541cb3efdca4aa9f3c1a52df082",
+    "src/engine/scalping/micro_reversion/observer_source_quality.py": "9f87eb48e36b9a0d19ac97289f0fc667d9217da75a8270d60377fb2a351cce66",
+    "src/engine/scalping/reversal_auxiliary_compatibility.py": "9cc4e362967b0294c0ee43b92cb4ced24f8d40946257567d6becf72253940bce",
+    "src/engine/scalping/reversal_auxiliary_production_input.py": "ac517cab3a60a6a224cbabe1ef3b162edf9dfa1992b6ebfa0b4fafbf9e34428a",
+    "src/engine/scalping/zero_base_probe.py": "c8e671c81375910971a7b8f75d1e2d6162a3411906cfbd3a3a2e076c99837fc7",
+    "src/engine/sniper_state_handlers.py": "eaca4d2d23d2764c42e3f7cc2f73d04db0b29bb8115cabac4f10cf48e89d57aa",
+    "src/engine/sniper_trade_utils.py": "c816ae517e1557d9b79dd9338658458f3fde5929467b7a7879c64c70a42611ac",
+    "src/scanners/scalping_scanner.py": "ea6188939ecc11462923d4746d27d38042aadd06f4dcd02d14cea7b2e5f8123b",
+    "src/scanners/scanner_source_census.py": "3d697e54b738b310166f505a2737965483703e2928f28b4cc1f50dfe71dd277c",
+    "src/scanners/zero_base_discovery_queue.py": "46422619816d9ccffd272a0bd63a80f2265c61000c574bc21e51c7c1e455eda6",
+    "src/scanners/zero_base_discovery_runtime.py": "dc058e9520482506a7659ae9cbefe1e7ce2a3ac0f2dde0b8b053742aec0535f4",
+    "src/scanners/zero_base_discovery_source.py": "7cb5b73e5501feea78cafbff43ef21e671c267daeec0768ee692f64c2e4b199b",
+    "src/trading/config/owner_identity.py": "36f8983b4da46ed6f8958af429d1e4847430d55287be9a0502c123d7ae659e58",
+    "src/trading/market/aftermarket_eligibility.py": "f28f3dd45c2d9b1aee2dcb64898d8cbecb85798bb812b058741d7f011fb45a2b",
+    "src/trading/market/completed_history.py": "dec2b7afcb5fdaab16980d046a124ddac384515b7e3400249d73acaacaf348e7",
+    "src/trading/market/entry_ws_snapshot.py": "abb2cf0360820ab315e98dedb23d636ecf64f3fbb227fae9914d842bc657c053",
+    "src/trading/market/quote_consistency.py": "12431c0b9ad2abcb999d9f0f81ce7c321306507cf2b1c439047651ff758def18",
+    "src/trading/order/entry_liquidity_guard.py": "7d1e927576ef366cc78d5e7b0f7b6bbc2deb352c33b6f9c9af8bb610014d535a",
+    "src/trading/order/owner_custody_registry.py": "95bd5b8696115567a3549f99532d072cd57b0773f7537a41f7272ff773669001",
+    "src/utils/kiwoom_utils.py": "00b0fffbf665ac0d598fa53bc02ad4b0a927943846ed9de94fb7449ec05a9a0f",
+}
 REVIEWED_NONFIXED_IDENTITY_PROFILE = {
     **REVIEWED_ENTRY_CAPABILITY_PROFILE,
     **REVIEWED_NONFIXED_IDENTITY_HASHES,
@@ -11699,6 +11728,11 @@ REVIEWED_ENTRY_COST_PAIRS = {
                 for value in pair
             }
             | {REVIEWED_NONFIXED_IDENTITY_ORIGINS[name]}
+            | (
+                {REVIEWED_NONFIXED_IDENTITY_POLICY_ORIGINS[name]}
+                if name in REVIEWED_NONFIXED_IDENTITY_POLICY_ORIGINS
+                else set()
+            )
         )
         for name, current in REVIEWED_NONFIXED_IDENTITY_HASHES.items()
     },

@@ -423,7 +423,7 @@ class ZeroBaseDiscoveryRuntime:
         admission_status = "not_configured"
         if self.claim_receipt_emitter is not None:
             try:
-                (
+                outcome = (
                     self.claim_receipt_emitter(
                         "zero_base_probe_admission",
                         fields={
@@ -462,8 +462,14 @@ class ZeroBaseDiscoveryRuntime:
                     if selected
                     else None
                 )
-                self._admission_emitted.update(selected)
-                admission_status = "emitted" if selected else "unchanged"
+                if selected and (
+                    not isinstance(outcome, dict)
+                    or outcome.get("structured_append_succeeded") is not True
+                ):
+                    admission_status = "append_unconfirmed"
+                else:
+                    self._admission_emitted.update(selected)
+                    admission_status = "emitted" if selected else "unchanged"
             except Exception as exc:
                 admission_status = "emit_failed:" + type(exc).__name__
         return {
