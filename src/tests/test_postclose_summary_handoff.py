@@ -1966,20 +1966,20 @@ def test_synchronous_native_completion_after_original_deadline_is_deferred(
     assert terminal["synchronous_deadline_expired"] is True
 
 
-def _joint_stage_fixture(tmp_path, monkeypatch):
+def _joint_stage_fixture(tmp_path, monkeypatch, day="2026-10-13"):
     from src.engine.scalping import continuous_reversal_postclose as p
+    from src.engine.scalping import mechanistic_entry_runtime_policy as native
     from src.engine.scalping import reversal_joint_registration as joint
     from src.engine.scalping.reversal_registered_catalog import cells, ROUTES
 
     h = mod
-    day = "2026-10-13"
     report = tmp_path / "report"
     source = tmp_path / "frozen-source.json"
     source.write_text('{"original":true}')
     request = {
         "schema": joint.SCHEMA,
         "publication_date": day,
-        "target_date": "2026-10-14",
+        "target_date": native.next_target(day),
     }
     pending = joint.pending_path(tmp_path)
     pending.parent.mkdir(parents=True)
@@ -2074,10 +2074,10 @@ def test_joint_initial_stage_succeeds_without_legacy_reports_and_pins_sources(
     )
 
 
-def _operating_machine_stage_fixture(tmp_path, monkeypatch):
+def _operating_machine_stage_fixture(tmp_path, monkeypatch, day="2026-10-13"):
     from src.engine.scalping import continuous_reversal_postclose as p
 
-    h, day, report, machine, source = _joint_stage_fixture(tmp_path, monkeypatch)
+    h, day, report, machine, source = _joint_stage_fixture(tmp_path, monkeypatch, day=day)
     machine = p.seal(
         dict(
             machine,
@@ -2144,6 +2144,7 @@ def test_operating_machine_native_terminal_disposition_is_selected_and_old_recei
         )
         == []
     )
+
     old = dict(stage, policy_disposition="no_valid_candidate")
     old.pop("selection_metric")
     old.pop("machine_report_sha256")
@@ -2170,6 +2171,58 @@ def test_operating_machine_native_terminal_disposition_is_selected_and_old_recei
     )
     assert proof["actual_pid_consumed"] is False
     assert h.stage_path(report, day, "main_machine_policy").read_bytes() == original
+
+
+def test_scoped_stage_binds_real_selector_metadata_and_live_input_generation(tmp_path, monkeypatch):
+    from src.engine.scalping import reversal_cumulative_registration as R
+    from src.engine.scalping import continuous_reversal_postclose as P
+    from src.tests.test_reversal_cumulative_policy import scoring_contract, manifest
+
+    h, day, report, old = _operating_machine_stage_fixture(tmp_path, monkeypatch, day="2026-10-27")
+    contract = scoring_contract()
+    m = manifest()
+    current = {sid:g['baseline'] for sid,g in m['cumulative_variant_groups'].items()}
+    m['scopes'] = current
+    m['cumulative_scoring_contract'] = contract
+    metrics = {}
+    for sid,cfg in contract['scopes'].items():
+        for name in ['CURRENT_NATIVE',*cfg['alternatives']]:
+            metrics[sid+'::'+name]=dict(
+                source_universe_sha256=P.digest(['b'*64,sid,R.C.LABEL]),
+                source_complete=True,comparison_complete=True,statistic_source_complete=True,
+                scoring_contract_sha256=contract['artifact_content_sha256'],
+                statistic_contract_sha256=P.digest(R.scoring_spec()),chronological=dict(counts={}),
+            )
+    original=h._load_json(h.stage_artifacts(report,day,'main_machine_policy')['machine_policy'])
+    machine=R.apply_selection(P.seal(dict(
+        original, schema=old['schema'],source_date=day,target_date=day,publication_date=day,status='completed',
+        parent_bundle_sha256='e'*64,source_manifest_sha256='b'*64,
+        source_manifest_receipt=dict(path='private-fixture'),operating_manifest=m,
+        scoring_contract=contract,statistic_contract=R.scoring_spec(),label_contract=R.C.LABEL,
+        scope_decision_metrics={s:R.SCORE_VERSION for s in contract['scopes']},
+        primary_decision_metric=R.SCOPED_METRIC,proposal_metrics=metrics,**P.AUTH,
+    )),dict(bundle_sha256='e'*64,continuous_reversal=dict(operating_manifest=dict(scopes=current))))
+    terminal=P.seal(dict(old,report_sha256=machine['artifact_content_sha256'],**R.selection_metadata(machine)))
+    paths=h.stage_artifacts(report,day,'main_machine_policy')
+    P.write(paths['machine_policy'],machine)
+    # The stage consumes both the native report and its compatibility projection.
+    P.write(report/'continuous_reversal'/day/'machine.json',machine)
+    P.write(paths['machine_policy_terminal'],terminal)
+    P.write(R.scoring_path(tmp_path),contract)
+    stage=h.run_stage('main_machine_policy',day,report_dir=report,project=tmp_path,runner=lambda *a,**k:0)
+    assert stage['status']=='succeeded',stage
+    assert stage['selection_metric']==R.SCOPED_METRIC
+    assert stage['scoring_contract_sha256']==contract['artifact_content_sha256']
+    assert stage['statistic_contract_sha256']==P.digest(R.scoring_spec())
+    assert h.stage_receipt_issues(report,day,'main_machine_policy',code_hash='fixture-code')==[]
+    for field,bad in [('selection_basis','cumulative_raw_win_fraction'),('scoring_contract_sha256','f'*64),('statistic_contract_sha256','f'*64)]:
+        assert not h._operating_machine_terminal_selected(P.seal(dict(terminal,**{field:bad})),day,machine)
+    for field in ('selection_metric','scoring_contract_sha256','statistic_contract_sha256'):
+        h._stage_write(h.stage_path(report,day,'main_machine_policy'),dict(stage,**{field:'unbound'}))
+        assert h.stage_receipt_issues(report,day,'main_machine_policy',code_hash='fixture-code')==['main_machine_policy:recorded_native_disposition_unproven']
+    h._stage_write(h.stage_path(report,day,'main_machine_policy'),stage)
+    P.write(R.scoring_path(tmp_path),P.seal(dict(contract,source_manifest_sha256='f'*64)))
+    assert h.stage_receipt_issues(report,day,'main_machine_policy',code_hash='fixture-code')==['main_machine_policy:input_generation_changed']
 
 
 def test_machine_disposition_projection_fails_closed_on_late_native_source_change(

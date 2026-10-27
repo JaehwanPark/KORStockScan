@@ -1319,27 +1319,33 @@ def test_scored_producer_selection_manifest_and_projection(tmp_path, monkeypatch
 
     parent, m = postclose_fixture(monkeypatch)
     parent["bundle_sha256"] = "e" * 64
-    c = scoring_contract()
+    source = P.seal(dict(normalized_sources=dict(partitions=[])))
+    c = P.seal(dict(scoring_contract(), source_manifest_sha256=source["artifact_content_sha256"]))
     sid = next(iter(R.SCORING_ALIASES))
     cfg = c["scopes"][sid]
     m["cumulative_scoring_contract"] = c
     monkeypatch.setattr(R, "pending", lambda *a: None)
     monkeypatch.setattr(R, "scoring_for_build", lambda *a: c)
     monkeypatch.setattr(P, "population_receipt", lambda *a: dict(path="fixture"))
-    source = P.seal(dict(normalized_sources=dict(partitions=[])))
     report = CP.build(
         tmp_path,
         "2026-10-27",
         "2026-10-27",
         parent,
         source=source,
-        publish_outputs=False,
+        publish_outputs=True,
     )
     assert (
         report["primary_decision_metric"]
         == "scope_bound_chronological_wilson_and_raw_fraction"
     )
     assert R.validate_manifest(report["operating_manifest"])
+    from src.engine.automation import postclose_summary_handoff as H
+    terminal = json.loads((tmp_path/'report/ai_decision_action_outcome_calibration/winrate_policy_terminal_2026-10-27.json').read_text())
+    assert terminal['selection_basis'] == R.SCOPED_METRIC
+    assert H._operating_machine_terminal_selected(terminal,'2026-10-27',report)
+    for key,value in [('selection_basis','cumulative_raw_win_fraction'),('scoring_contract_sha256','f'*64),('statistic_contract_sha256','f'*64)]:
+        assert not H._operating_machine_terminal_selected(P.seal(dict(terminal,**{key:value})),'2026-10-27',report)
     with gzip.open(report["fixed_comparison_table"]["path"], "rt") as f:
         archive = json.load(f)
     assert archive["schema"] == "cumulative_fixed_comparison_table_v3"
@@ -1449,20 +1455,66 @@ def test_scoring_pending_parent_source_generation_and_consumed_carry(
         )
 
 
-def test_scoring_prepare_fails_before_any_write_on_open_terminal(tmp_path, monkeypatch):
-    from src.engine.automation import postclose_summary_handoff as H
+def native_preparation_files(data, day):
+    import json
+    from src.engine.scalping import continuous_reversal_postclose as P
 
-    monkeypatch.setattr(
-        H, "stage_receipt_issues", lambda *a: ["terminal_missing_or_invalid"]
+    raw = data / "pipeline_events" / f"pipeline_events_{day}.jsonl"
+    raw.parent.mkdir(parents=True, exist_ok=True)
+    raw.write_text('{"fixture":"native private input"}\n')
+    stat = raw.stat()
+    audit = data / "report/observation_source_quality_audit" / f"observation_source_quality_audit_{day}.json"
+    body = dict(
+        target_date=day, audit_phase="preflight", status="warning",
+        consumer_implementation_sha256="fixture-consumer",
+        summary=dict(tuning_input_allowed=True),
+        source=dict(generation_stable=True, pipeline_events=str(raw.resolve()),
+                    generation={name: getattr(stat, field) for name, field in (
+                        ("device", "st_dev"), ("inode", "st_ino"), ("size_bytes", "st_size"),
+                        ("mtime_ns", "st_mtime_ns"), ("ctime_ns", "st_ctime_ns"))}),
     )
-    with pytest.raises(ValueError, match="source_terminal_invalid"):
-        R.prepare_scoring(tmp_path, tmp_path / "out", parent={}, day="2026-10-27")
-    assert not (tmp_path / "out").exists()
+    P.write(audit, body)
+    P.write(Path(str(audit)+".final-contract.json"), dict(
+        schema="observation_source_quality_final_binding_v1", target_date=day,
+        audit_phase="preflight", artifact_sha256=P.file_hash(audit),
+        implementation_sha256=body["consumer_implementation_sha256"],
+    ))
+    eod = data / "runtime/update_kospi_status" / f"update_kospi_{day}.json"
+    P.write(eod, dict(status="completed_with_warnings", target_date=day,
+                      db_state=dict(latest_quote_date=day, rows_on_latest_date=10)))
+    return eod, audit, raw
+
+
+@pytest.mark.parametrize("fault", ["eod_missing", "eod_date", "rows", "audit", "raw", "blocked"])
+def test_scoring_prepare_rejects_invalid_source_before_creation(tmp_path, monkeypatch, fault):
+    from src.engine.scalping import continuous_reversal_postclose as P
+    from src.engine.scalping import mechanistic_entry_runtime_policy as N
+
+    day="2026-10-27"
+    eod, audit, raw = native_preparation_files(tmp_path, day)
+    if fault=="eod_missing": eod.unlink()
+    elif fault=="eod_date": P.write(eod, dict(status="completed", target_date="2026-10-26"))
+    elif fault=="rows": P.write(eod, dict(status="completed", target_date=day, db_state=dict(latest_quote_date=day,rows_on_latest_date=True)))
+    elif fault=="audit": audit.unlink()
+    elif fault=="raw": raw.write_text('changed')
+    else:
+        import json
+        value=json.loads(audit.read_text());value["summary"]["tuning_input_allowed"]=False
+        P.write(audit,value)
+    monkeypatch.setattr(N,"validate",lambda *a,**k:None)
+    monkeypatch.setattr(P,"ensure_population",lambda *a,**k:pytest.fail("invalid source must not create population"))
+    c=scoring_contract()
+    parent=dict(target_date=day,bundle_sha256="e"*64,continuous_reversal=dict(operating_manifest=dict(
+        scopes={s:v['parent_branch_ids'] for s,v in c['scopes'].items()},registration_receipts=[request()])))
+    with pytest.raises(ValueError, match="eod_source_invalid|preflight_invalid"):
+        R.prepare_scoring(tmp_path,tmp_path/"out",parent=parent,day=day)
+    assert not (tmp_path/"out").exists()
 
 
 @pytest.mark.parametrize("only_a09", [False, True])
+@pytest.mark.parametrize("fault", [None, "stage", "output", "locked", "reader", "raw", "source", "parent", "stage_race", "prepare_race"])
 def test_scoring_preparation_and_intake_are_separate_and_hash_bound(
-    tmp_path, monkeypatch, only_a09
+    tmp_path, monkeypatch, only_a09, fault
 ):
     from src.engine.automation import postclose_summary_handoff as H
     from src.engine.scalping import continuous_reversal_postclose as P
@@ -1495,31 +1547,30 @@ def test_scoring_preparation_and_intake_are_separate_and_hash_bound(
     source_path = tmp_path / "source.json"
     P.write(source_path, source)
     receipt = dict(path=str(source_path), sha256=P.file_hash(source_path))
-    machine = P.seal(
-        dict(
-            source_date=day,
-            status="completed",
-            parent_bundle_sha256=parent["bundle_sha256"],
-            label_contract=C.LABEL,
-            source_manifest_receipt=receipt,
-            source_manifest_sha256=source["artifact_content_sha256"],
-        )
-    )
-    P.write(
-        tmp_path / "report/continuous_reversal_operating" / day / "machine.json",
-        machine,
-    )
-    P.write(
-        H.stage_path(tmp_path / "report", day, "main_machine_policy"), {"fixture": True}
-    )
-    monkeypatch.setattr(H, "stage_receipt_issues", lambda *a: [])
+    native_preparation_files(tmp_path, day)
     monkeypatch.setattr(N, "validate", lambda *a, **kw: True)
     monkeypatch.setattr(P, "ensure_population", lambda *a, **kw: source)
     monkeypatch.setattr(P, "population_receipt", lambda *a: receipt)
+    if fault=='prepare_race':
+        import fcntl
+        stage=H.stage_path(tmp_path/'report',day,'main_machine_policy')
+        def source_with_scheduled_writer(*a,**k):
+            with stage.with_suffix('.lock').open('a') as writer:
+                fcntl.flock(writer,fcntl.LOCK_EX|fcntl.LOCK_NB)
+                P.write(stage,dict(status='running'))
+            return source
+        monkeypatch.setattr(P,'ensure_population',source_with_scheduled_writer)
+        with pytest.raises(ValueError,match='machine_stage_already_started'):
+            R.prepare_scoring(tmp_path,tmp_path/'prepared',parent=parent,day=day)
+        assert not (tmp_path/'prepared').exists()
+        return
     prepared = R.prepare_scoring(
         tmp_path, tmp_path / "prepared", parent=parent, day=day,
         scope_candidates={"other_non_fixed|REGULAR|LT_20000|SOR": ["A09"]} if only_a09 else None,
     )
+    assert prepared["preparation_basis"] == R.SOURCE_FIRST
+    assert not H.stage_path(tmp_path/"report",day,"main_machine_policy").exists()
+    assert not (tmp_path/"report/continuous_reversal_operating"/day/"machine.json").exists()
     if only_a09:
         assert list(prepared["scopes"]) == ["other_non_fixed|REGULAR|LT_20000|SOR"]
         assert prepared["unscored_scope_policy"] == "carry_parent"
@@ -1535,6 +1586,33 @@ def test_scoring_preparation_and_intake_are_separate_and_hash_bound(
     args = dict(
         confirm=R.SCORING_AUTHORITY, origin_root=tmp_path, origin_commit="a" * 40
     )
+    if fault:
+        import fcntl
+        import json
+        stage = H.stage_path(tmp_path/'report',day,'main_machine_policy')
+        lock = None
+        if fault=='stage': P.write(stage,dict(status='running'))
+        elif fault=='output': P.write(tmp_path/'report/continuous_reversal_operating'/day/'machine-comparison.json',{})
+        elif fault=='locked':
+            lock=stage.with_suffix('.lock').open('a');fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        elif fault=='raw': (tmp_path/'pipeline_events'/f'pipeline_events_{day}.jsonl').write_text('changed')
+        elif fault=='source': source_path.write_text('{}')
+        elif fault=='parent':
+            monkeypatch.setattr(V,'_attested_activation_parent',lambda *a,**k:dict(parent,bundle_sha256='f'*64))
+        elif fault=='stage_race':
+            def admitted(*a,**k):
+                P.write(stage,dict(status='running'));return parent
+            monkeypatch.setattr(V,'_attested_activation_parent',admitted)
+        else:
+            changed=P.seal(dict(prepared,preparation_reader_code_sha256='f'*64))
+            P.write(tmp_path/'prepared/prepared-scoring.json',changed)
+        try:
+            with pytest.raises(ValueError,match='stage_|preparation_reader_changed|preflight_invalid|prepared_source_changed|preparation_inputs_changed|parent_changed'):
+                R.intake_scoring(tmp_path,tmp_path/'prepared/prepared-scoring.json',**args)
+            assert not pointer.exists()
+        finally:
+            if lock:lock.close()
+        return
     adopted = R.intake_scoring(
         tmp_path, tmp_path / "prepared/prepared-scoring.json", **args
     )
@@ -1731,3 +1809,106 @@ def test_scoped_pending_rejects_different_full_parent_map(tmp_path, monkeypatch)
     parent["continuous_reversal"]["operating_manifest"]["scopes"][other] = []
     with pytest.raises(ValueError, match="parent_scope_map_changed"):
         R.scoring_for_build(tmp_path,parent,"2026-10-27","b"*64)
+
+
+@pytest.mark.parametrize('fault', [None, 'code', 'parent', 'raw', 'stage', 'busy'])
+def test_source_first_intent_fulfills_only_exact_approved_recipe(tmp_path, monkeypatch, fault):
+    from src.engine.scalping import continuous_reversal_postclose as P
+    from src.engine.scalping import continuous_reversal_policy_v6 as V
+    from src.engine.scalping import mechanistic_entry_runtime_policy as N
+    from src.engine.automation import postclose_summary_handoff as H
+    from src.engine.lifecycle.research_admission import acquire
+
+    day = '2026-10-27'
+    sid = 'other_non_fixed|REGULAR|LT_20000|SOR'
+    parent, _ = postclose_fixture(monkeypatch)
+    parent.update(bundle_sha256='e'*64, target_date=day)
+    parent['continuous_reversal']['operating_manifest']['registration_receipts'] = [request()]
+    monkeypatch.setattr(R, 'pending', lambda *a: None)
+    native_preparation_files(tmp_path, day)
+    source = P.seal(dict(normalized_sources=dict(partitions=[dict(day=day,venue='SOR',session='SOR_REGULAR')])))
+    src = tmp_path/'source.json'
+    P.write(src, source)
+    monkeypatch.setattr(N, 'validate', lambda *a, **k: True)
+    monkeypatch.setattr(V, '_attested_activation_parent', lambda *a, **k: parent)
+    monkeypatch.setattr(P, 'ensure_population', lambda *a, **k: source)
+    monkeypatch.setattr(P, 'population_receipt', lambda *a: dict(path=str(src),sha256=P.file_hash(src)))
+    P.write(N.root(tmp_path)/'current.json', dict(bundle_sha256=parent['bundle_sha256']))
+    assert R.fulfill_scoring(tmp_path,day,day)['status']=='not_requested'
+    assert not R.scoring_path(tmp_path).exists()
+    kwargs=dict(publication=day,scope_candidates={sid:['A09']},origin_root=tmp_path,origin_commit='a'*40)
+    with pytest.raises(ValueError, match='explicit_authority'):
+        R.request_scoring(tmp_path,confirm='implementation',**kwargs)
+    intent=R.request_scoring(tmp_path,confirm=R.SCORING_AUTHORITY,**kwargs)
+    assert 'source_manifest_sha256' not in intent
+    assert len(intent['frozen_parent_scopes'])==128
+    assert not R.scoring_path(tmp_path).exists()
+    assert R.fulfill_scoring(tmp_path,day,'2026-10-28')['status']=='not_requested_for_publication'
+    assert R.request_scoring(tmp_path,confirm=R.SCORING_AUTHORITY,**kwargs)==intent
+    reservation=[]
+    if fault=='code':
+        P.write(R.scoring_intent_path(tmp_path),P.seal(dict(intent,preparation_reader_code_sha256='f'*64)))
+    elif fault=='parent': parent['bundle_sha256']='f'*64
+    elif fault=='raw': (tmp_path/'pipeline_events'/f'pipeline_events_{day}.jsonl').write_text('changed')
+    elif fault=='stage': P.write(H.stage_path(tmp_path/'report',day,'main_machine_policy'),dict(status='running'))
+    elif fault=='busy':
+        reservation=[acquire(tmp_path,'main_machine_policy',day),acquire(tmp_path,'main_machine_policy',day)]
+        assert all(reservation)
+    try:
+        if fault:
+            with pytest.raises(ValueError,match='code_changed|parent_scope_map_changed|preflight_invalid|stage_already_started|admission_busy'):
+                R.fulfill_scoring(tmp_path,day,day)
+            assert not R.scoring_path(tmp_path).exists()
+            return
+        registered=R.fulfill_scoring(tmp_path,day,day)
+        assert registered['source_first_intent_sha256']==intent['artifact_content_sha256']
+        assert registered['operator_receipt']==R.SCORING_AUTHORITY
+        assert registered['scopes']==intent['scopes']
+        assert len(registered['frozen_parent_scopes'])==128
+        assert R.fulfill_scoring(tmp_path,day,day)==registered
+        # A late exact resume reads immutable evidence, never reinserts a new request.
+        P.write(H.stage_path(tmp_path/'report',day,'main_machine_policy'),dict(status='succeeded'))
+        assert R.fulfill_scoring(tmp_path,day,day)==registered
+        P.write(src, {})
+        with pytest.raises(ValueError,match='prepared_source_changed'):
+            R.scoring_for_build(tmp_path,parent,day,source['artifact_content_sha256'])
+        archived=Path(registered['source_receipts'][0]['path'])
+        archived.write_text('corrupted')
+        with pytest.raises(ValueError,match='source_changed'):
+            R.fulfill_scoring(tmp_path,day,day)
+    finally:
+        for item in reservation: item.close()
+
+
+def test_scoring_replay_cache_binds_actual_requested_detection_memberships(tmp_path, monkeypatch):
+    import gzip, json
+    from src.engine.scalping import reversal_cumulative_postclose as CP
+    from src.engine.scalping import continuous_reversal_postclose as P
+
+    parent, _ = postclose_fixture(monkeypatch)
+    parent['bundle_sha256']='e'*64
+    stream=rows([3000]*125+[2980,2981,2982])
+    for i,row in enumerate(stream): row[0]=1793070000+i;row[9]='000001_AL'
+    raw=tmp_path/'regular.json.gz'
+    raw.write_bytes(gzip.compress(json.dumps(dict(symbols={'000001':stream})).encode()))
+    source=P.seal(dict(normalized_sources=dict(partitions=[dict(day='2026-10-27',venue='SOR',session='SOR_REGULAR',path=str(raw),sha256=P.file_hash(raw))])))
+    c=scoring_contract();c['source_manifest_sha256']=source['artifact_content_sha256']
+    c['unscored_scope_policy']='carry_parent'
+    c['frozen_parent_scopes']=parent['continuous_reversal']['operating_manifest']['scopes']
+    sid='other_non_fixed|REGULAR|LT_20000|SOR'
+    c['scopes']={sid:c['scopes'][sid]}
+    alternatives=c['scopes'][sid]['alternatives']
+    c['scopes'][sid]['alternatives']={'ADD_A05':alternatives['ADD_A05']}
+    monkeypatch.setattr(R,'pending',lambda *a:None)
+    monkeypatch.setattr(R,'scoring_for_build',lambda *a:P.seal(c))
+    monkeypatch.setattr(P,'population_receipt',lambda *a:dict(path='private-fixture'))
+    actual=CP.State;observed=[]
+    def state(**kwargs):
+        observed.append(kwargs['branch_ids']);return actual(**kwargs)
+    monkeypatch.setattr(CP,'State',state)
+    def build(): return CP.build(tmp_path,'2026-10-27','2026-10-27',parent,source=source,publish_outputs=False)
+    build();assert len(observed)==1
+    build();assert len(observed)==1
+    c['scopes'][sid]['alternatives']={'ADD_A09':alternatives['ADD_A09']}
+    build();assert len(observed)==2 and observed[0]!=observed[1]
+    build();assert len(observed)==2

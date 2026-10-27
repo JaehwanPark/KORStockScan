@@ -1931,6 +1931,11 @@ if [[ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" == "true" || "$RUN_AI_DECISI
       exit 1
     fi
   else
+    # No-op unless an explicitly approved, exact-date scoped request exists.
+    # Freeze and intake it after native source preflight and before this stage.
+    run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.reversal_cumulative_registration \
+      fulfill-scoring --data-root "$PROJECT_DIR/data" --source-date "$TARGET_DATE" \
+      --publication-date "$POLICY_PUBLICATION_DATE"
     run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.automation.postclose_summary_handoff \
       --stage main_machine_policy --date "$TARGET_DATE" --publication-date "$POLICY_PUBLICATION_DATE" "${POSTCLOSE_STAGE_RECOVERY_ARGS[@]}" --launch
   fi

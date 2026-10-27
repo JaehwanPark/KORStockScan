@@ -1361,12 +1361,7 @@ def validate_initial_quantity_resume(project, day):
     eod = _load_json(
         project / "data/runtime/update_kospi_status" / f"update_kospi_{day}.json"
     )
-    if (
-        eod.get("status") not in {"completed", "completed_with_warnings"}
-        or eod.get("target_date") != day
-        or eod.get("db_state", {}).get("latest_quote_date") != day
-        or not eod.get("db_state", {}).get("rows_on_latest_date")
-    ):
+    if not _eod_source_valid(eod, day):
         raise ValueError("resume_eod_not_current")
     return dict(
         schema="postclose_initial_quantity_resume_v1",
@@ -1619,6 +1614,12 @@ def _operating_machine_terminal_selected(terminal, day, report):
     ):
         return False
     from src.engine.scalping.continuous_reversal_postclose import digest
+    from src.engine.scalping.reversal_cumulative_registration import selection_metadata
+
+    try:
+        metadata = selection_metadata(report)
+    except (ValueError, TypeError, KeyError):
+        return False
 
     staging = terminal.get("staged")
     return bool(
@@ -1632,7 +1633,10 @@ def _operating_machine_terminal_selected(terminal, day, report):
         and report.get("actual_order_submitted") is False
         and report.get("broker_order_forbidden") is True
         and terminal.get("source_date") == terminal.get("target_date") == day
-        and terminal.get("selection_basis") == "cumulative_raw_win_fraction"
+        and all(terminal.get(k) == v for k, v in metadata.items())
+        and all(k in metadata or terminal.get(k) is None for k in (
+            "scoring_contract_sha256", "statistic_contract_sha256"
+        ))
         and terminal.get("disposition") == "continuous_reversal_selected"
         and isinstance(staging, dict)
         and staging.get("status") == "machine_component_prepared"
@@ -1779,7 +1783,14 @@ def stage_receipt_issues(
                 or value.get("machine_report_sha256")
                 not in (None, terminal.get("report_sha256"))
                 or value.get("selection_metric")
-                not in (None, "cumulative_raw_win_fraction")
+                not in (None, terminal.get("selection_basis"))
+                or terminal.get("scoring_contract_sha256") is not None and any(
+                    value.get(k) != terminal.get(k) for k in (
+                        "scoring_contract_sha256", "statistic_contract_sha256"
+                    )
+                )
+                or terminal.get("scoring_contract_sha256") is not None
+                and value.get("selection_metric") != terminal.get("selection_basis")
             ):
                 issues.append(
                     "main_machine_policy:recorded_native_disposition_unproven"
@@ -1789,6 +1800,22 @@ def stage_receipt_issues(
 
 def stage_input_paths(report_dir, day, stage):
     paths = {s: stage_path(report_dir, day, s) for s in stage_prerequisites(stage, day)}
+    if stage == "main_machine_policy":
+        from src.engine.scalping.reversal_cumulative_registration import scoring_path
+
+        request = scoring_path(Path(report_dir).parent)
+        if request.exists():
+            publication = _load_json(request).get("publication_date")
+            # Only a valid future request is outside this historical stage.
+            # Malformed/current requests must remain visible to its validator.
+            from datetime import date
+
+            try:
+                future = date.fromisoformat(publication).isoformat() == publication and publication > day
+            except (ValueError, TypeError):
+                future = False
+            if not future:
+                paths["cumulative_scoring_contract"] = request
     if stage == "summary_handoff":
         paths.update(
             {
@@ -1823,6 +1850,19 @@ def stage_input_paths(report_dir, day, stage):
     if stage == "outcome_labels":
         paths.pop("labels", None)
     return paths
+
+
+def _eod_source_valid(value, day):
+    """Shared exact-date EOD boundary for resume and source-first preparation."""
+    state = value.get("db_state") if isinstance(value, dict) else None
+    return bool(
+        isinstance(state, dict)
+        and value.get("status") in {"completed", "completed_with_warnings"}
+        and value.get("target_date") == day
+        and state.get("latest_quote_date") == day
+        and type(state.get("rows_on_latest_date")) is int
+        and state["rows_on_latest_date"] > 0
+    )
 
 
 def _machine_source_preflight_issue(report_dir, day, *, recovery=False):
@@ -2252,7 +2292,9 @@ def _stage_output_issues(report_dir, day, stage):
             )
             claims_selected = (
                 terminal.get("disposition") == "continuous_reversal_selected"
-                or terminal.get("selection_basis") == "cumulative_raw_win_fraction"
+                or terminal.get("selection_basis") in {
+                    "cumulative_raw_win_fraction", "scope_bound_chronological_wilson_and_raw_fraction"
+                }
                 or staging.get("status") == "machine_component_prepared"
             )
             if (
@@ -3545,7 +3587,10 @@ def run_stage(
                     ),
                 ):
                     value["policy_disposition"] = "continuous_reversal_selected"
-                    value["selection_metric"] = "cumulative_raw_win_fraction"
+                    value["selection_metric"] = terminal.get("selection_basis", "cumulative_raw_win_fraction")
+                    for field in ("scoring_contract_sha256", "statistic_contract_sha256"):
+                        if terminal.get(field) is not None:
+                            value[field] = terminal[field]
                     value["machine_report_sha256"] = terminal.get("report_sha256")
             return _stage_write(path, value)
         except (OSError, ValueError, TypeError, KeyError, InterruptedError) as exc:

@@ -323,6 +323,10 @@ def build(data_root, day, publication, parent, *, source=None, publish_outputs=T
     bars = {}
     census = Counter()
     observed = Counter()
+    detection_memberships = {
+        sid: sorted({bid for ids in variants.values() for bid in ids})
+        for sid, variants in configs.items()
+    }
     with S.Store(data_root) as store:
         for rec in source["normalized_sources"]["partitions"]:
             if rec["day"] > day:
@@ -365,6 +369,7 @@ def build(data_root, day, publication, parent, *, source=None, publish_outputs=T
                     code,
                     bars[rec["day"]][1],
                     C.LABEL,
+                    detection_memberships,
                 ]
             )
             cached = store.checkpoint("cumulative-native-v2:" + fingerprint)
@@ -747,7 +752,7 @@ def build(data_root, day, publication, parent, *, source=None, publish_outputs=T
                     target_date=day,
                     status="completed",
                     report_sha256=report["artifact_content_sha256"],
-                    selection_basis="cumulative_raw_win_fraction",
+                    **G.selection_metadata(report),
                     disposition="continuous_reversal_selected",
                     staged=dict(status="machine_component_prepared"),
                     **P.AUTH,

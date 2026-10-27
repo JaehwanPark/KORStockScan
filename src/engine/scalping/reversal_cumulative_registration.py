@@ -8,6 +8,7 @@ import json
 import hashlib
 import re
 import math
+from contextlib import contextmanager
 from datetime import date
 from fractions import Fraction
 from functools import lru_cache
@@ -27,6 +28,8 @@ SCORING_SCHEMA = "cumulative_scoring_contract_v1"
 SCORING_AUTHORITY = "APPROVED_REGULAR_NONFIXED_CHRONOLOGICAL_WILSON_V1"
 SCORE_VERSION = "chronological_target_first_wilson_v1"
 SCOPED_METRIC = "scope_bound_chronological_wilson_and_raw_fraction"
+SOURCE_FIRST = "verified_native_source_before_machine_v1"
+SCORING_INTENT_SCHEMA = "cumulative_source_first_scoring_intent_v1"
 SCORE_Z = 1.959963984540054
 STATISTICAL_WINDOW = 1800
 SCORING_ALIASES = {
@@ -45,6 +48,112 @@ def scoring_spec():
         unresolved_occupies_window=True,
         label_contract=C.LABEL,
     )
+
+
+def selection_metadata(report):
+    """One producer/consumer identity for raw and scope-bound selections."""
+    manifest = report.get("operating_manifest") or {}
+    if not isinstance(manifest, dict):
+        raise ValueError("cumulative_selection_manifest_invalid")
+    contract = report.get("scoring_contract")
+    scoped = manifest.get("cumulative_scoring_contract")
+    if contract is None and scoped is None:
+        if report.get("primary_decision_metric") not in (
+            None, "cost_bound_cumulative_target_first_fraction", "cumulative_raw_win_fraction"
+        ):
+            raise ValueError("cumulative_selection_metric_unknown")
+        return dict(selection_basis="cumulative_raw_win_fraction")
+    if (
+        not isinstance(contract, dict) or scoped != contract
+        or report.get("primary_decision_metric") != SCOPED_METRIC
+        or report.get("statistic_contract") != scoring_spec()
+        or report.get("label_contract") != C.LABEL
+        or report.get("publication_date") != report.get("source_date")
+        or report.get("publication_date", "") < contract.get("publication_date", "")
+        or report.get("scope_decision_metrics") != {
+            sid: SCORE_VERSION for sid in contract.get("scopes", {})
+        }
+    ):
+        raise ValueError("cumulative_selection_metric_binding_invalid")
+    validate_scoring(contract)
+    if not validate_manifest(manifest):
+        raise ValueError("cumulative_selection_manifest_missing")
+    receipt = manifest["cumulative_selection_receipt"]
+    if (
+        receipt.get("parent_bundle_sha256") != report.get("parent_bundle_sha256")
+        or receipt.get("source_manifest_sha256") != report.get("source_manifest_sha256")
+        or report["publication_date"] == contract["publication_date"] and (
+            contract["parent_bundle_sha256"] != report.get("parent_bundle_sha256")
+            or contract["source_manifest_sha256"] != report.get("source_manifest_sha256")
+        )
+    ):
+        raise ValueError("cumulative_selection_report_binding_invalid")
+    return dict(
+        selection_basis=SCOPED_METRIC,
+        scoring_contract_sha256=contract["artifact_content_sha256"],
+        statistic_contract_sha256=P.digest(scoring_spec()),
+    )
+
+
+@contextmanager
+def _before_machine(data_root, day):
+    """Serialize intake with the existing native machine-stage writer."""
+    from src.engine.automation import postclose_summary_handoff as H
+    from src.engine.scalping import continuous_reversal_operating_postclose as O
+
+    stage = H.stage_path(Path(data_root) / "report", day, "main_machine_policy")
+    stage.parent.mkdir(parents=True, exist_ok=True)
+    with stage.with_suffix(".lock").open("a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise ValueError("cumulative_scoring_machine_stage_active") from exc
+        if stage.exists() or any(path.exists() for path in (
+            O.directory(data_root, day) / "machine-comparison.json",
+            O.directory(data_root, day) / "machine.json",
+            Path(data_root) / "report/ai_decision_action_outcome_calibration" / f"winrate_policy_{day}.json",
+        )):
+            raise ValueError("cumulative_scoring_machine_stage_already_started")
+        yield
+
+
+def _preparation_inputs(data_root, day):
+    from src.engine.automation import postclose_summary_handoff as H
+
+    data_root = Path(data_root)
+    eod = data_root / "runtime/update_kospi_status" / f"update_kospi_{day}.json"
+    if not H._eod_source_valid(H._load_json(eod), day):
+        raise ValueError("cumulative_scoring_eod_source_invalid")
+    issue = H._machine_source_preflight_issue(data_root / "report", day)
+    if issue:
+        raise ValueError("cumulative_scoring_preflight_invalid:" + issue)
+    audit = data_root / "report/observation_source_quality_audit" / f"observation_source_quality_audit_{day}.json"
+    return {
+        name: dict(path=str(path.resolve()), sha256=P.file_hash(path))
+        for name, path in (
+            ("eod", eod), ("preflight", audit),
+            ("preflight_binding", Path(str(audit) + ".final-contract.json")),
+        )
+    }
+
+
+def _verify_preparation_inputs(data_root, request):
+    from src.engine.automation import postclose_summary_handoff as H
+
+    if request.get("preparation_basis") != SOURCE_FIRST:
+        raise ValueError("cumulative_scoring_source_first_preparation_required")
+    if request.get("preparation_reader_code_sha256") != P.file_hash(H.__file__):
+        raise ValueError("cumulative_scoring_preparation_reader_changed")
+    if _preparation_inputs(data_root, request["publication_date"]) != request.get("preparation_inputs"):
+        raise ValueError("cumulative_scoring_preparation_inputs_changed")
+    receipt = request["native_source_manifest_receipt"]
+    source = P.ensure_population(
+        data_root, request["publication_date"],
+        source_generation=receipt.get("source_generation"),
+        expected_sha256=request["source_manifest_sha256"],
+    )
+    if P.population_receipt(source) != receipt:
+        raise ValueError("cumulative_scoring_prepared_source_changed")
 
 
 def wilson_score(w, n):
@@ -128,14 +237,168 @@ def validate_scoring(contract, *, approved=True, check_sources=False):
             raise ValueError("cumulative_scoring_source_changed")
     if not contract.get("contract_file_sha256"):
         raise ValueError("cumulative_scoring_code_missing")
+    intent_sha = contract.get("source_first_intent_sha256")
+    if intent_sha is not None and not re.fullmatch("[0-9a-f]{64}", str(intent_sha)):
+        raise ValueError("cumulative_scoring_intent_binding_invalid")
+    basis = contract.get("preparation_basis")
+    if intent_sha is not None and basis != SOURCE_FIRST:
+        raise ValueError("cumulative_scoring_source_first_preparation_required")
+    if basis is not None:
+        inputs = contract.get("preparation_inputs")
+        receipt = contract.get("native_source_manifest_receipt")
+        if (
+            basis != SOURCE_FIRST or not isinstance(inputs, dict)
+            or not re.fullmatch("[0-9a-f]{64}", str(contract.get("preparation_reader_code_sha256", "")))
+            or set(inputs) != {"eod", "preflight", "preflight_binding"}
+            or not isinstance(receipt, dict)
+            or any(
+                not isinstance(r, dict) or not Path(r.get("path", "")).is_absolute()
+                or not re.fullmatch("[0-9a-f]{64}", str(r.get("sha256", "")))
+                for r in [*inputs.values(), receipt]
+            )
+        ):
+            raise ValueError("cumulative_scoring_source_preparation_invalid")
     return contract
+
+
+def scoring_path(data_root):
+    return N.root(Path(data_root)) / "cumulative-scoring.json"
+
+
+def scoring_intent_path(data_root):
+    return N.root(Path(data_root)) / "cumulative-scoring-intent.json"
+
+
+def _validate_scoring_intent(value):
+    if (
+        not isinstance(value, dict) or value.get("schema") != SCORING_INTENT_SCHEMA
+        or value.get("artifact_content_sha256") != P.seal(value)["artifact_content_sha256"]
+        or value.get("operator_receipt") != SCORING_AUTHORITY
+        or value.get("spec") != scoring_spec()
+        or any(value.get(k) != v for k, v in P.AUTH.items())
+    ):
+        raise ValueError("cumulative_scoring_intent_invalid")
+    _dates(value.get("publication_date"), value.get("target_date"))
+    probe = dict(value)
+    probe.update(schema=SCORING_SCHEMA, source_manifest_sha256="0" * 64,
+                 source_receipts=[dict(path="/unmaterialized-source", sha256="0" * 64)])
+    validate_scoring(P.seal(probe))
+    origin = value.get("activation_parent_origin")
+    if (
+        not isinstance(origin, dict)
+        or not Path(origin.get("root", "")).is_absolute()
+        or not re.fullmatch("[0-9a-f]{40}", str(origin.get("commit", "")))
+        or not re.fullmatch("[0-9a-f]{64}", str(value.get("preparation_reader_code_sha256", "")))
+    ):
+        raise ValueError("cumulative_scoring_intent_origin_missing")
+    return value
+
+
+def request_scoring(data_root, *, publication, scope_candidates, confirm, origin_root, origin_commit):
+    """Authorize only the frozen selection recipe; source and policy stay unset."""
+    from src.engine.scalping import continuous_reversal_policy_v6 as V
+    from src.engine.automation import postclose_summary_handoff as H
+
+    if confirm != SCORING_AUTHORITY:
+        raise ValueError("cumulative_scoring_explicit_authority_required")
+    parent = V._attested_activation_parent(
+        data_root, publication, origin_root=origin_root, origin_commit=origin_commit)
+    m = parent["continuous_reversal"]["operating_manifest"]
+    batch = approval(m)["research_batch_sha256"]
+    catalog = Q.catalog(batch)
+    if not isinstance(scope_candidates, dict) or not scope_candidates or any(
+        sid not in SCORING_ALIASES or not isinstance(aliases, (tuple, list))
+        or not aliases or len(aliases) != len(set(aliases))
+        or not set(aliases) <= set(SCORING_ALIASES[sid])
+        for sid, aliases in scope_candidates.items()
+    ):
+        raise ValueError("cumulative_scoring_requested_candidates_invalid")
+    scopes = {sid:dict(
+        parent_branch_ids=m["scopes"][sid],
+        alternatives={"ADD_"+a:sorted(set(m["scopes"][sid])|{catalog["groups"][sid]["additions"][a]}) for a in aliases},
+    ) for sid, aliases in scope_candidates.items()}
+    intent = P.seal(dict(
+        schema=SCORING_INTENT_SCHEMA, spec=scoring_spec(), operator_receipt=confirm,
+        publication_date=publication, target_date=N.next_target(publication),
+        parent_bundle_sha256=parent["bundle_sha256"], scopes=scopes,
+        unscored_scope_policy="carry_parent", frozen_parent_scopes=m["scopes"],
+        research_batch_sha256=batch, registry_sha256=Q.registry(batch),
+        contract_file_sha256={Path(mod.__file__).name:P.file_hash(mod.__file__) for mod in V.contract_modules()},
+        preparation_reader_code_sha256=P.file_hash(H.__file__),
+        activation_parent_origin=dict(root=str(Path(origin_root).resolve()),commit=origin_commit),
+        **P.AUTH,
+    ))
+    _validate_scoring_intent(intent)
+    path = scoring_intent_path(data_root)
+    with _before_machine(data_root, publication), (path.parent/"publisher.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if N._read(path.parent/"current.json")["bundle_sha256"] != parent["bundle_sha256"]:
+            raise ValueError("cumulative_scoring_parent_changed")
+        if path.exists() and N._read(path) != intent:
+            raise ValueError("cumulative_scoring_intent_conflict")
+        P.write(path, intent)
+    return intent
+
+
+def fulfill_scoring(data_root, day, publication):
+    """Existing wrapper admission point after preflight, before machine launch."""
+    from src.engine.scalping import continuous_reversal_policy_v6 as V
+    from src.engine.automation import postclose_summary_handoff as H
+    from src.engine.infrastructure import runtime_release_router as router
+
+    path = scoring_intent_path(data_root)
+    if not path.exists():
+        return P.seal(dict(status="not_requested", source_date=day, **P.AUTH))
+    intent = _validate_scoring_intent(N._read(path))
+    if intent["publication_date"] != publication:
+        return P.seal(dict(status="not_requested_for_publication",source_date=day,**P.AUTH))
+    if day != publication:
+        raise ValueError("cumulative_scoring_observation_publication_mismatch")
+    code = {Path(mod.__file__).name:P.file_hash(mod.__file__) for mod in V.contract_modules()}
+    if code != intent["contract_file_sha256"] or P.file_hash(H.__file__) != intent["preparation_reader_code_sha256"]:
+        raise ValueError("cumulative_scoring_intent_code_changed")
+    pending = scoring_path(data_root)
+    if pending.exists():
+        prior = validate_scoring(N._read(pending), check_sources=True)
+        if prior.get("source_first_intent_sha256") != intent["artifact_content_sha256"]:
+            raise ValueError("cumulative_scoring_request_conflict")
+        return prior  # Exact resume, no new intake or source refresh.
+    root = Path(__file__).resolve().parents[3]
+    commit = router.git(root, "rev-parse", "HEAD")
+    parent = V._attested_activation_parent(data_root, publication, origin_root=root, origin_commit=commit)
+    if parent["bundle_sha256"] != intent["parent_bundle_sha256"] or parent["continuous_reversal"]["operating_manifest"]["scopes"] != intent["frozen_parent_scopes"]:
+        raise ValueError("cumulative_scoring_parent_scope_map_changed")
+    output = path.parent / "source-first-preparations" / intent["artifact_content_sha256"]
+    aliases = {sid:[name.removeprefix("ADD_") for name in cfg["alternatives"]] for sid,cfg in intent["scopes"].items()}
+    from src.engine.lifecycle.research_admission import acquire
+
+    reservation = acquire(data_root, "main_machine_policy", day)
+    if reservation is None:
+        raise ValueError("cumulative_scoring_resource_admission_busy")
+    try:
+        with reservation.worker():
+            prepared = prepare_scoring(data_root, output, parent=parent, day=day, scope_candidates=aliases)
+    finally:
+        reservation.close()
+    if prepared["scopes"] != intent["scopes"]:
+        raise ValueError("cumulative_scoring_intent_scope_changed")
+    frozen = _archive(path, output/"evidence")
+    bound = P.seal(dict(prepared, source_first_intent_sha256=intent["artifact_content_sha256"],
+                        source_receipts=prepared["source_receipts"]+[frozen]))
+    bound_path = output / "prepared-for-intent.json"
+    if bound_path.exists() and N._read(bound_path) != bound:
+        raise ValueError("cumulative_scoring_preparation_conflict")
+    P.write(bound_path, bound)
+    if N._read(path) != intent:
+        raise ValueError("cumulative_scoring_intent_changed")
+    return intake_scoring(data_root, bound_path, confirm=SCORING_AUTHORITY, origin_root=root, origin_commit=commit)
 
 
 def scoring_for_build(data_root, parent, day, source_sha):
     old = parent["continuous_reversal"]["operating_manifest"].get(
         "cumulative_scoring_contract"
     )
-    path = N.root(Path(data_root)) / "cumulative-scoring.json"
+    path = scoring_path(data_root)
     request = N._read(path) if path.exists() else old
     if request is None:
         return None
@@ -149,6 +412,8 @@ def scoring_for_build(data_root, parent, day, source_sha):
         raise ValueError("cumulative_scoring_parent_registry_changed")
     if old and request["artifact_content_sha256"] == old.get("artifact_content_sha256"):
         return request
+    if request.get("preparation_basis") is not None:
+        _verify_preparation_inputs(data_root, request)
     if (
         request["parent_bundle_sha256"] != parent["bundle_sha256"]
         or request["publication_date"] != day
@@ -937,42 +1202,12 @@ def run_postclose(data_root, day, publication, mode, *, source=None):
 
 
 def prepare_scoring(data_root, output, *, parent, day, scope_candidates=None):
-    """Freeze a completed native comparison; no selection pointer is written."""
-    from src.engine.automation import postclose_summary_handoff as H
-    from src.engine.scalping import continuous_reversal_operating_postclose as O
+    """Freeze verified native inputs before the first machine-stage writer."""
     from src.engine.scalping import continuous_reversal_policy_v6 as V
+    from src.engine.automation import postclose_summary_handoff as H
 
-    issues = H.stage_receipt_issues(
-        Path(data_root) / "report", day, "main_machine_policy"
-    )
-    if issues:
-        raise ValueError(
-            "cumulative_scoring_source_terminal_invalid:" + ",".join(issues)
-        )
-    path = O.directory(data_root, day) / "machine.json"
-    machine = N._read(path)
-    if (
-        machine.get("artifact_content_sha256")
-        != P.seal(machine)["artifact_content_sha256"]
-        or machine.get("source_date") != day
-        or machine.get("status") != "completed"
-        or machine.get("parent_bundle_sha256") != parent["bundle_sha256"]
-        or machine.get("label_contract") != C.LABEL
-    ):
-        raise ValueError("cumulative_scoring_native_comparison_invalid")
     N.validate(parent, target_date=parent["target_date"])
-    receipt = machine.get("source_manifest_receipt") or {}
-    source = P.ensure_population(
-        data_root,
-        day,
-        source_generation=receipt.get("source_generation"),
-        expected_sha256=machine["source_manifest_sha256"],
-    )
-    if P.population_receipt(source) != receipt or not any(
-        r["day"] == day and r["venue"] == "SOR" and "REGULAR" in r["session"]
-        for r in source["normalized_sources"]["partitions"]
-    ):
-        raise ValueError("cumulative_scoring_current_source_missing")
+    _dates(day, N.next_target(day))
     manifest = parent["continuous_reversal"]["operating_manifest"]
     batch = approval(manifest)["research_batch_sha256"]
     catalog = Q.catalog(batch)
@@ -996,45 +1231,50 @@ def prepare_scoring(data_root, output, *, parent, day, scope_candidates=None):
                 for a in aliases
             },
         )
-    output = Path(output)
-    sources = [
-        _archive(q, output / "evidence")
-        for q in (
-            path,
-            Path(receipt["path"]),
-            H.stage_path(Path(data_root) / "report", day, "main_machine_policy"),
-        )
-    ]
-    contract = P.seal(
-        dict(
-            schema=SCORING_SCHEMA,
-            spec=scoring_spec(),
-            operator_receipt=None,
+    inputs = _preparation_inputs(data_root, day)
+    reader_code = P.file_hash(H.__file__)
+    with _before_machine(data_root, day):
+        pass
+    # Population freezing may be expensive. Do not hold the stage writer lock
+    # while creating this unapproved draft; a scheduled writer wins normally.
+    source = P.ensure_population(data_root, day)
+    receipt = P.population_receipt(source)
+    if not receipt or not any(
+        r["day"] == day and r["venue"] == "SOR" and "REGULAR" in r["session"]
+        for r in source["normalized_sources"]["partitions"]
+    ):
+        raise ValueError("cumulative_scoring_current_source_missing")
+    with _before_machine(data_root, day):
+        if _preparation_inputs(data_root, day) != inputs:
+            raise ValueError("cumulative_scoring_preparation_inputs_changed")
+        if P.file_hash(H.__file__) != reader_code:
+            raise ValueError("cumulative_scoring_preparation_reader_changed")
+        output = Path(output)
+        sources = [
+            _archive(Path(r["path"]), output / "evidence")
+            for r in [receipt, *inputs.values()]
+        ]
+        contract = P.seal(dict(
+            schema=SCORING_SCHEMA, spec=scoring_spec(), operator_receipt=None,
+            preparation_basis=SOURCE_FIRST, preparation_inputs=inputs,
+            preparation_reader_code_sha256=reader_code,
+            native_source_manifest_receipt=receipt,
             parent_bundle_sha256=parent["bundle_sha256"],
             source_manifest_sha256=source["artifact_content_sha256"],
-            publication_date=day,
-            target_date=N.next_target(day),
-            scopes=scopes,
-            **(
-                dict(unscored_scope_policy="carry_parent", frozen_parent_scopes=copy.deepcopy(manifest["scopes"]))
-                if scope_candidates is not None else {}
-            ),
-            research_batch_sha256=batch,
-            registry_sha256=Q.registry(batch),
+            publication_date=day, target_date=N.next_target(day), scopes=scopes,
+            **(dict(unscored_scope_policy="carry_parent", frozen_parent_scopes=copy.deepcopy(manifest["scopes"]))
+               if scope_candidates is not None else {}),
+            research_batch_sha256=batch, registry_sha256=Q.registry(batch),
             source_receipts=sources,
-            contract_file_sha256={
-                Path(m.__file__).name: P.file_hash(m.__file__)
-                for m in V.contract_modules()
-            },
+            contract_file_sha256={Path(m.__file__).name: P.file_hash(m.__file__) for m in V.contract_modules()},
             **P.AUTH,
-        )
-    )
-    validate_scoring(contract, approved=False, check_sources=True)
-    destination = output / "prepared-scoring.json"
-    if destination.exists() and N._read(destination) != contract:
-        raise ValueError("cumulative_scoring_preparation_conflict")
-    P.write(destination, contract)
-    return contract
+        ))
+        validate_scoring(contract, approved=False, check_sources=True)
+        destination = output / "prepared-scoring.json"
+        if destination.exists() and N._read(destination) != contract:
+            raise ValueError("cumulative_scoring_preparation_conflict")
+        P.write(destination, contract)
+        return contract
 
 
 def intake_scoring(data_root, prepared_path, *, confirm, origin_root, origin_commit):
@@ -1046,6 +1286,7 @@ def intake_scoring(data_root, prepared_path, *, confirm, origin_root, origin_com
     prepared = validate_scoring(
         N._read(Path(prepared_path)), approved=False, check_sources=True
     )
+    _verify_preparation_inputs(data_root, prepared)
     if prepared["contract_file_sha256"] != {
         Path(m.__file__).name: P.file_hash(m.__file__) for m in V.contract_modules()
     }:
@@ -1065,14 +1306,20 @@ def intake_scoring(data_root, prepared_path, *, confirm, origin_root, origin_com
     request = P.seal(dict(prepared, operator_receipt=confirm))
     validate_scoring(request, check_sources=True)
     root = N.root(Path(data_root))
-    with (root / "publisher.lock").open("a") as lock:
+    with _before_machine(data_root, prepared["publication_date"]), (root / "publisher.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
+        if (
+            _preparation_inputs(data_root, prepared["publication_date"]) != prepared["preparation_inputs"]
+            or P.file_hash(prepared["native_source_manifest_receipt"]["path"])
+            != prepared["native_source_manifest_receipt"]["sha256"]
+        ):
+            raise ValueError("cumulative_scoring_preparation_inputs_changed")
         if (
             N._read(root / "current.json")["bundle_sha256"]
             != prepared["parent_bundle_sha256"]
         ):
             raise ValueError("cumulative_scoring_parent_changed")
-        path = root / "cumulative-scoring.json"
+        path = scoring_path(data_root)
         if path.exists() and N._read(path) != request:
             raise ValueError("cumulative_scoring_request_conflict")
         if pending(data_root, parent, prepared["target_date"]) is not None:
@@ -1129,8 +1376,26 @@ def main(argv=None):
         activate.add_argument("--" + name, type=Path, required=True)
     activate.add_argument("--origin-commit", required=True)
     activate.add_argument("--confirm", required=True)
+    request = sub.add_parser("request-scoring")
+    for name in ("data-root", "origin-root"):
+        request.add_argument("--" + name, type=Path, required=True)
+    for name in ("publication-date", "scope", "origin-commit", "confirm"):
+        request.add_argument("--" + name, required=True)
+    request.add_argument("--candidate", action="append", required=True)
+    fulfill = sub.add_parser("fulfill-scoring")
+    fulfill.add_argument("--data-root", type=Path, required=True)
+    fulfill.add_argument("--source-date", required=True)
+    fulfill.add_argument("--publication-date", required=True)
     args = parser.parse_args(argv)
-    if args.operation == "prepare":
+    if args.operation == "request-scoring":
+        result = request_scoring(
+            args.data_root, publication=args.publication_date,
+            scope_candidates={args.scope: args.candidate}, confirm=args.confirm,
+            origin_root=args.origin_root, origin_commit=args.origin_commit,
+        )
+    elif args.operation == "fulfill-scoring":
+        result = fulfill_scoring(args.data_root, args.source_date, args.publication_date)
+    elif args.operation == "prepare":
         result = prepare(
             args.evidence_root,
             args.output,
