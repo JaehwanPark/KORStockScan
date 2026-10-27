@@ -12390,6 +12390,30 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
 }}
 
 
+# Consumed completion sources and independent preparation keep exact profiles.
+REVIEWED_QUANTITY_SOURCE_HASHES = {'src/engine/scalping/initial_quantity_monitor_projection.py': '8ddea89000551cec2b35972f0f0752861cfd4c4f512474cb469929b0dbe5ede8', 'src/engine/infrastructure/startup_validation_code_context.py': 'c0f08c127f88c3df5e5e0e59e8937f400b89986f6e1cbb9e4bfcee83380a4c41'}
+REVIEWED_QUANTITY_SOURCE_ORIGINS = {'src/engine/scalping/initial_quantity_monitor_projection.py': 'e12b1702ab35598ff77113c3b42e0ae4e9d3aad623cda4a9161b34277e1ff350', 'src/engine/infrastructure/startup_validation_code_context.py': '0c9335b5993c69833df1bb6930cf1ac346a148b120e8b04e796f23fa19a5a36d'}
+REVIEWED_QUANTITY_SOURCE_PROFILE = {**REVIEWED_PRIOR_EXECUTION_PROFILE, **REVIEWED_QUANTITY_SOURCE_HASHES}
+REVIEWED_QUANTITY_SOURCE_VARIANTS = {
+    (key[0], REVIEWED_QUANTITY_SOURCE_HASHES.get(key[0], key[1])): {
+        **value,
+        "selector_path": "src/engine/scalping/initial_quantity_monitor_projection.py",
+        "selector_sha256": REVIEWED_QUANTITY_SOURCE_HASHES["src/engine/scalping/initial_quantity_monitor_projection.py"],
+        "dependencies": {**value["dependencies"], **REVIEWED_QUANTITY_SOURCE_HASHES},
+        "contract_extensions": {
+            origin: {name: REVIEWED_QUANTITY_SOURCE_HASHES.get(os.path.normpath(name), sha) for name, sha in paths.items()}
+            for origin, paths in value["contract_extensions"].items()
+        },
+    } for key, value in REVIEWED_PRIOR_EXECUTION_VARIANTS.items()
+}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple(
+        (old, current) for old in {value for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ()) for value in pair}
+        | {REVIEWED_QUANTITY_SOURCE_ORIGINS[name]})
+    for name, current in REVIEWED_QUANTITY_SOURCE_HASHES.items()
+}}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -13205,6 +13229,12 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     ):
         prepared_hashes = REVIEWED_PRIOR_EXECUTION_PROFILE
         prepared_variants = REVIEWED_PRIOR_EXECUTION_VARIANTS
+    if (
+        (source := candidate_bytes("src/engine/scalping/initial_quantity_monitor_projection.py", optional=True)) is not None
+        and hashlib.sha256(source).hexdigest() == REVIEWED_QUANTITY_SOURCE_HASHES["src/engine/scalping/initial_quantity_monitor_projection.py"]
+    ):
+        prepared_hashes = REVIEWED_QUANTITY_SOURCE_PROFILE
+        prepared_variants = REVIEWED_QUANTITY_SOURCE_VARIANTS
     entry_cost_hashes = (
         prepared_hashes
         if prepared_owner_present

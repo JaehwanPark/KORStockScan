@@ -4346,3 +4346,75 @@ Baseline: 8e4a4054d. Non-test source adds 232/deletes 33; tests add 368/delete 4
 including local formatting. Net growth adds native-source intake/provenance and
 failure coverage while reusing the existing index, allocator and publication
 owners. No new module, scheduler, provider, policy metric or safety limit exists.
+
+
+### Consumed completion dependency repair -- 2026-10-28
+
+Source27 native recovery77b34b3f2efe4df197f77a75fc379f0d used clean pushed
+`e93608c94`. The first actual49532 research receipt now joins the original26 BUY
+and official26+27 cost sources. Its first-prefix native seal remained unchanged
+after the quantity producer (read-only native verification01:56:00). Main machine,
+delay, outcome, legacy calibration and stop confirmation completed. The holding
+suffix completed02:16:42 without the former cost-generation failure. This is
+recovered execution, not unassisted acceptance or actual-cost/PID proof.
+
+The unselected workflow's auxiliary invocation initially chose a cold-only
+reader against ordered, consumed and normally closed selected10f. This was an
+invocation error, not a reason to weaken custody. All41 native auxiliary/policy
+members match the reviewed candidate. The original selected issuer consumed a
+native value-preserving canonical comparison projection and completed only the
+auxiliary stage02:02:43; the candidate's consumer verified its native receipt.
+Failed attempts, the previous projection and source/report bytes are preserved.
+The legacy projection remains bounded containment for named original10f readers
+until the native reference census permits removal. No full calculation rerun,
+EOD rerun, provider-budget increase, guard change or Main start was used.
+
+The final control tower failed02:29:25 with `quantity_monitor_source_changed`.
+The preserved small native proof has exactly one changed dependency: the full
+postclose-exit manifest was absent when quantity published, then arrived normally
+after its holding suffix. The native scalar completion reader did not consume
+that later manifest. The monitor's unconditional dependency collector mixed the
+scalar path with the legacy-original reader's full-manifest dependency.
+
+The existing monitor now binds the full manifest only for its actual native
+legacy-original validation reader. Raw/scalar/dependency/cost/archive and issued
+source bindings remain strict. The original quantity report/stage are unchanged;
+there is no fallback, new validator, module, publisher, schedule, policy or order
+path. The displaced unconditional dependency is removed; the legacy binding is
+retained with its current consumer. Exact predecessor profiles remain preserved,
+and the new monitor/independent-preparation profile rejects mixed/unknown bytes.
+
+Regression first reproduced the original failure (one failure, two legacy guard
+passes), then78 monitor tests passed. Broader source/quantity/summary/tower tests:
+555 PASS. Independent preparation:906 PASS. Current/prior complete handoff and
+unreviewed-sibling negatives:48 PASS. Actual native-context read-only replay of
+the original stage/report passed full native validation and dependency checks,
+without provider/order calls or protected-source mutation. See the existing
+monitor evidence directory's `quantity-monitor-actual-case-readonly-replay.json`
+and `candidate-e93608c94/quantity-monitor-failure-originals/manifest.json`.
+
+The same consumer inventory now expands all seven native registry stages into
+individual dispatch/issuer rows rather than treating12 top-level roles as a
+complete stage census. AGENTS-only commit`b8b34fd5e` adds the generic dispatch and
+actual-consumed-input rules. Existing historical/source/economic OPEN evidence
+and the original failing wrapper remain preserved. Minimal next recovery:
+regenerate the native monitor proof from the unchanged original report, then
+summary/tower/checklist/strict/controller and preparation. Revalidate the six
+calculation stages, completion prefix and holding suffix read-only; do not run
+EOD or unchanged calculations again. Archive terminal is reused only by native
+read-only verification. New candidate/selected P5, next PREOPEN, actual Main/PID,
+current observer/health and unassisted next-run acceptance remain pending.
+
+Self review: native quantity observations are byte-equivalent as objects before
+and after the dependency repair. The selected10f original reader also validates
+the same original calculation stage and resolves the same immutable9c6d04d1
+stage; this is recorded in `quantity-monitor-original-reader-census.json`.
+Original-reader preparation may issue its native code-specific monitor proof
+only after all source writers, preserving the original default alias. It is a
+bounded preparation dependency, not a reason to rerun quantity or relax sources.
+Against baseline`b8b34fd5e`: non-test source+58/-6, tests+114/-9, operating/audit
+text recorded separately. Most source growth is the exact H/C compatibility
+profile; no new module, validator or execution entrypoint was added. Compilation,
+whitespace and print-only document parsing pass; today's missing checklist is
+explicit until the native final handoff resumes. This gate closes source review,
+not deployment, selected preparation, PID consumption or unassisted acceptance.

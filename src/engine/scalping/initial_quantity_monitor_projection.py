@@ -138,7 +138,7 @@ def _identity(path):
 
 
 def _dependencies(stage_path, stage, report, data_root):
-    """Exact known native source inventory, including absent archive variants."""
+    """Bind consumed native sources, including their absent archive variants."""
     from src.engine.scalping.initial_quantity_source_cache import (
         completion_source_paths,
     )
@@ -158,11 +158,6 @@ def _dependencies(stage_path, stage, report, data_root):
     completions = census.get("completion_overlay_generations", {})
     for day in set(entries) | set(completions):
         paths.update(completion_source_paths(data_root, day))
-        paths.add(
-            Path(data_root)
-            / "report/monitor_snapshots/manifests"
-            / ("monitor_snapshot_manifest_" + day + "_postclose_exit.json")
-        )
         status_path = (
             Path(data_root)
             / "report/strategy_position_fact_sync"
@@ -194,6 +189,21 @@ def _dependencies(stage_path, stage, report, data_root):
                     and all(letter in "0123456789abcdef" for letter in candidate.stem)
                 ):
                     paths.add(candidate)
+                    # The legacy original reader consumes the full manifest.
+                    # Native scalar completion facts do not: their later
+                    # holding suffix must not invalidate this earlier proof.
+                    if (status.get("completion_snapshot_source") or {}).get(
+                        "source_basis"
+                    ) == "native_original_snapshot_stream":
+                        paths.add(
+                            Path(data_root)
+                            / "report/monitor_snapshots/manifests"
+                            / (
+                                "monitor_snapshot_manifest_"
+                                + day
+                                + "_postclose_exit.json"
+                            )
+                        )
     for generation in entries.values():
         if generation.get("path"):
             paths.add(Path(generation["path"]))

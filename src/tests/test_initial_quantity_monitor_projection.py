@@ -255,6 +255,89 @@ def test_canonical_completion_original_scalar_and_archive_changes_are_bound(
         projection.read_verified(path, stage, read=_read, data_root=data)
 
 
+def test_native_completion_does_not_bind_later_holding_suffix(tmp_path, monkeypatch):
+    data, path, stage, report, children = _fixture(tmp_path, monkeypatch)
+    day = report["source_date"]
+    report["census"]["persisted_fact_generations"] = {
+        day: {"issue": "explicit_source_gap"}
+    }
+    status = (
+        data
+        / "report/strategy_position_fact_sync"
+        / ("strategy_position_fact_sync_" + day + ".status.json")
+    )
+    status.parent.mkdir(parents=True)
+    status.write_text(
+        json.dumps(
+            {
+                "completion_snapshot_source": {
+                    "source_basis": "native_bounded_fact_projection"
+                }
+            }
+        )
+    )
+    _reseal(path, stage, report, children)
+    projection.publish(path, stage, report, data_root=data)
+    suffix = (
+        data
+        / "report/monitor_snapshots/manifests"
+        / ("monitor_snapshot_manifest_" + day + "_postclose_exit.json")
+    )
+    suffix.parent.mkdir(parents=True)
+    suffix.write_text('{"completion_scope":"holding_suffix"}')
+    observed = projection.read_verified(path, stage, read=_read, data_root=data)
+    assert observed["observation"]["postclose_input_fact_count"] == 1
+    # The consumed completion receipt remains bound after the unrelated suffix.
+    status.write_bytes(status.read_bytes() + b" ")
+    with pytest.raises(ValueError, match="source_changed"):
+        projection.read_verified(path, stage, read=_read, data_root=data)
+
+
+@pytest.mark.parametrize("change", ["replace", "remove"])
+def test_legacy_completion_keeps_consumed_full_manifest_bound(
+    tmp_path, monkeypatch, change
+):
+    data, path, stage, report, children = _fixture(tmp_path, monkeypatch)
+    day = report["source_date"]
+    report["census"]["persisted_fact_generations"] = {
+        day: {"issue": "explicit_source_gap"}
+    }
+    status = (
+        data
+        / "report/strategy_position_fact_sync"
+        / ("strategy_position_fact_sync_" + day + ".status.json")
+    )
+    original = status.parent / "legacy_sources" / day / ("a" * 64 + ".json")
+    original.parent.mkdir(parents=True)
+    original.write_text('{"original":true}')
+    status.write_text(
+        json.dumps(
+            {
+                "completion_snapshot_source": {
+                    "source_basis": "native_original_snapshot_stream",
+                    "legacy_original_validation": {"path": str(original)},
+                }
+            }
+        )
+    )
+    suffix = (
+        data
+        / "report/monitor_snapshots/manifests"
+        / ("monitor_snapshot_manifest_" + day + "_postclose_exit.json")
+    )
+    suffix.parent.mkdir(parents=True)
+    suffix.write_text('{"original_full_manifest":true}')
+    _reseal(path, stage, report, children)
+    projection.publish(path, stage, report, data_root=data)
+    assert projection.read_verified(path, stage, read=_read, data_root=data)
+    if change == "replace":
+        suffix.write_text('{"original_full_manifest":false}')
+    else:
+        suffix.unlink()
+    with pytest.raises(ValueError, match="source_changed"):
+        projection.read_verified(path, stage, read=_read, data_root=data)
+
+
 def test_added_lifecycle_receipt_invalidates_even_previously_empty_directory(
     tmp_path, monkeypatch
 ):
@@ -867,7 +950,10 @@ def test_daily_history_consumer_rechecks_bounded_original_sources(
         seen.add(str(path))
         assert kwargs["limit"] <= projection.MAX_BYTES
         value, metadata = projection.files._read(path, kwargs["limit"])
-        if kwargs.get("expected_sha") is not None and metadata["sha256"] != kwargs["expected_sha"]:
+        if (
+            kwargs.get("expected_sha") is not None
+            and metadata["sha256"] != kwargs["expected_sha"]
+        ):
             raise ValueError("historical_source_changed")
         return value
 

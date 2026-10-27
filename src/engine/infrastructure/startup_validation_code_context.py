@@ -3020,6 +3020,18 @@ for _name, _sha in REVIEWED_PRIOR_EXECUTION_SOURCES.items():
     _history.update((_old, _sha) for _old in _origins)
 
 
+# Exact consumed completion dependencies; later holding output is not an input.
+REVIEWED_QUANTITY_SOURCE_SOURCES = {'src/engine/scalping/initial_quantity_monitor_projection.py': '8ddea89000551cec2b35972f0f0752861cfd4c4f512474cb469929b0dbe5ede8'}
+REVIEWED_QUANTITY_SOURCE_ORIGINS = {'src/engine/scalping/initial_quantity_monitor_projection.py': 'e12b1702ab35598ff77113c3b42e0ae4e9d3aad623cda4a9161b34277e1ff350'}
+for _name, _sha in REVIEWED_QUANTITY_SOURCE_SOURCES.items():
+    _history = REVIEWED_PREPARATION_HISTORY.setdefault(_name, set())
+    _origins = {value for pair in _history for value in pair}
+    _origins.add(REVIEWED_QUANTITY_SOURCE_ORIGINS[_name])
+    if _name in REVIEWED_PREPARATION_SOURCES:
+        _origins.update(REVIEWED_PREPARATION_SOURCES[_name])
+    _history.update((_old, _sha) for _old in _origins)
+
+
 def reviewed_preparation_pair(relative, old, current):
     # An already reviewed physical pair keeps its original authority; a
     # formatting projection must not replace either endpoint before this check.

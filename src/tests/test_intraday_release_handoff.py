@@ -5370,6 +5370,7 @@ def test_pre_submit_handoff_rejects_unreviewed_dependency(tmp_path, family, depe
     "generation",
     [
         "current",
+        "prior_execution",
         "native_cost_intake",
         "consumed_invalidation_cadence",
         "consumed_nonfixed_identity",
@@ -5416,7 +5417,8 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
     )
     subprocess.run(["git", "-C", str(root), "checkout", "-q", "75e0fbbf7"], check=True)
     hashes = {
-        "current": handoff.REVIEWED_PRIOR_EXECUTION_PROFILE,
+        "current": handoff.REVIEWED_QUANTITY_SOURCE_PROFILE,
+        "prior_execution": handoff.REVIEWED_PRIOR_EXECUTION_PROFILE,
         "native_cost_intake": handoff.REVIEWED_NATIVE_COST_INTAKE_PROFILE,
         "machine_path": handoff.REVIEWED_MACHINE_PATH_PROFILE,
         "report_census": handoff.REVIEWED_REPORT_CENSUS_PROFILE,
@@ -5502,6 +5504,7 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
                     str(canonical),
                     "show",
                     {
+                        "prior_execution": "e93608c94",
                         "native_cost_intake": "0ee65ee7f",
                         "machine_path": "5dceaf032",
                         "report_census": "10f03701c",
