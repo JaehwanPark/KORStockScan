@@ -29,6 +29,7 @@ from src.engine.notify_error_detection_admin import (
 )
 from src.engine.monitoring import observer_artifact_io as observer_io
 from src.utils.constants import PROJECT_ROOT
+from src.utils.kiwoom_utils import is_canonical_stock_code
 
 SCHEMA = "submission_bottleneck_monitor_v1"
 KST = ZoneInfo("Asia/Seoul")
@@ -2176,9 +2177,7 @@ def _probe_verified_no_match(
         epoch = receipt.get("observed_epoch")
         signed_trades = fields.get("zero_base_ws_signed_0b_count")
         return (
-            isinstance(code, str)
-            and len(code) == 6
-            and code.isdigit()
+            is_canonical_stock_code(code)
             and receipt.get("schema") == "native_observation_selection_v1"
             and receipt.get("evaluation_role") == "probe_observation"
             and receipt.get("runtime_effect") is False
