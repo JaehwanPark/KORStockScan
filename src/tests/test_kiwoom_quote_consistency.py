@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from src.utils import kiwoom_utils
 from src.utils.kiwoom_read_request_control import KiwoomReadRequestCoordinator
 
@@ -414,3 +416,37 @@ def test_adopted_quote_receipt_cannot_pick_equal_clock_from_another_item():
     assert receipt["item"] == "005930_AL"
     assert receipt["route_sequence"] == 9
     assert receipt["observed_epoch"] == now
+
+
+@pytest.mark.parametrize("code", ["0158S0", "0013Y0", "0155E0"])
+def test_scanner_alphanumeric_requires_master_and_ws_keeps_exact_identity(code):
+    from src.engine.kiwoom_websocket import KiwoomWSManager
+    from src.trading.order.entry_liquidity_guard import entry_liquidity_request_code
+    from src.trading.order.owner_custody_registry import _registry_symbol
+
+    raw = code + "_AL"
+    assert kiwoom_utils._scanner_equity_code_fields(raw, "ka10027") is None
+    for approved in (False, True):
+        fields = kiwoom_utils._scanner_equity_code_fields(
+            raw, "ka10027", product_check=lambda code, name: {"eligible": approved}
+        )
+        assert bool(fields) is approved
+        if approved:
+            assert fields == {"Code": code, "RawInstrumentCode": raw}
+    assert KiwoomWSManager._normalize_code(raw) == code
+    assert entry_liquidity_request_code(code, "SOR") == raw
+    assert entry_liquidity_request_code(code, "NXT") == code + "_NX"
+    assert _registry_symbol(code) == code
+    assert _registry_symbol(code) != _registry_symbol(
+        "".join(c for c in code if c.isdigit())
+    )
+
+
+@pytest.mark.parametrize("code", ["0158#0", "0158Ｓ0", "0158S00", "0158S0_NX_AL"])
+def test_scanner_master_cannot_override_invalid_identifier_syntax(code):
+    assert (
+        kiwoom_utils._scanner_equity_code_fields(
+            code, "ka10027", product_check=lambda *_: {"eligible": True}
+        )
+        is None
+    )

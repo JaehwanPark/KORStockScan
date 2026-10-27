@@ -199,13 +199,38 @@ def timestamp_regression_row_quarantine_validation(
     if (
         not isinstance(exclusions, (list, tuple))
         or isinstance(exclusions, (str, bytes))
-        or len(exclusions) != 1
-        or not isinstance(exclusions[0], str)
+        or not exclusions
+        or any(not isinstance(reason, str) for reason in exclusions)
+        or len(set(exclusions)) != len(exclusions)
     ):
         return {**base, "status": "mixed_or_invalid_row_exclusion_reasons"}
-    match = TIMESTAMP_REGRESSION_ROW_EXCLUSION_PATTERN.fullmatch(exclusions[0])
-    if match is None:
+    matches = [
+        (reason, TIMESTAMP_REGRESSION_ROW_EXCLUSION_PATTERN.fullmatch(reason))
+        for reason in exclusions
+    ]
+    path_matches = [(reason, match) for reason, match in matches if match]
+    if len(path_matches) != 1:
         return {**base, "status": "non_timestamp_row_exclusion_present"}
+    path_reason, match = path_matches[0]
+    if len(exclusions) > 1:
+        from .canary_monitor import timestamp_source_quality_census
+
+        ingress = timestamp_source_quality_census(dict(collector))
+        # Compose the two existing isolation proofs, never an allowed-error list.
+        # The ingress census independently verifies exact sealed rejection rows.
+        # All path accounting, lifecycle, authority and loss checks below still
+        # apply. Unknown, missing, duplicated or mutated exclusions fail closed.
+        if (
+            collector.get("source_contract") != MAIN_SOURCE_CONTRACT
+            or type(collector.get("sequence_epoch")) is not int
+            or collector["sequence_epoch"] <= 0
+            or collector.get("timestamp_rejection_ledger") is None
+            or ingress.get("exact_rejected_row_exclusion_proven") is not True
+            or ingress.get("rejection_receipt_count", 0) <= 0
+            or guard.get("timestamp_source_quality") != ingress
+            or sorted(exclusions) != sorted([path_reason, *ingress["issues"]])
+        ):
+            return {**base, "status": "mixed_timestamp_isolation_unverified"}
     quarantined_count = int(match.group(1))
     if quarantined_count <= 0:
         return {**base, "status": "invalid_timestamp_quarantine_count"}
@@ -360,6 +385,11 @@ def timestamp_regression_row_quarantine_validation(
         "status": "fully_accounted_consumer_ineligible_rows",
         "quarantined_row_count": quarantined_count,
         "invalid_loss_fields": [],
+        **(
+            {"allowed_sequence_epoch": collector["sequence_epoch"]}
+            if len(exclusions) > 1
+            else {}
+        ),
     }
 
 
@@ -465,6 +495,8 @@ def main_raw_epoch_validation(
             return {**rejected, "status": "unaccounted_raw_row_exclusion"}
         if ingress.get("eligible") is True:
             ingress_epoch = ingress["allowed_sequence_epoch"]
+        elif quarantine.get("eligible") is True:
+            ingress_epoch = quarantine.get("allowed_sequence_epoch")
     epoch = c.get("sequence_epoch")
     if type(epoch) is not int or epoch <= 0:
         return rejected

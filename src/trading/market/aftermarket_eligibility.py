@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from src.utils.kiwoom_utils import is_canonical_stock_code
 from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any
@@ -451,9 +452,9 @@ def _normalize_stock_code(value: Any) -> str | None:
         if text.endswith(suffix):
             text = text[: -len(suffix)]
             break
-    if len(text) == 7 and text.startswith("A"):
+    if len(text) == 7 and text.startswith("A") and text[1:].isdigit():
         text = text[1:]
-    return text if len(text) == 6 and text.isdigit() else None
+    return text if is_canonical_stock_code(text) else None
 
 
 def _coerce_date(value: Any) -> date | None:

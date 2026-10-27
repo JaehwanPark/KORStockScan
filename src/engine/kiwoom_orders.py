@@ -1264,8 +1264,8 @@ def get_my_inventory(token):
                     if not isinstance(item, dict):
                         raise ValueError("kt00018_inventory_row_shape_invalid")
                     raw_code = str(item.get("stk_cd") or "").strip()
-                    code = raw_code[1:] if raw_code.startswith("A") else raw_code
-                    if re.fullmatch(r"[0-9]{6}", code) is None:
+                    code = kiwoom_utils.normalize_stock_code(raw_code)
+                    if re.fullmatch(r"[0-9A-Z]{6}", code) is None:
                         raise ValueError("kt00018_inventory_code_invalid")
                     raw_qty = item.get("rmnd_qty")
                     if isinstance(raw_qty, bool):

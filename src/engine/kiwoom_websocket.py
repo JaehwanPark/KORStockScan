@@ -17,6 +17,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 # 💡 [Level 1 & 2 적용] 독립 로거 및 싱글톤 이벤트 버스 임포트
+from src.utils.kiwoom_utils import is_canonical_stock_code
 from src.utils.logger import log_error
 from src.core.event_bus import EventBus
 from src.utils.constants import CONFIG_PATH, DEV_PATH, TRADING_RULES
@@ -863,15 +864,9 @@ class KiwoomWSManager:
 
     @staticmethod
     def _normalize_code(code):
-        raw = str(code or "").strip().upper().replace(".0", "")
-        for suffix in ("_AL", "_NX"):
-            if raw.endswith(suffix):
-                raw = raw[:-3]
-                break
-        if raw.startswith("A") and len(raw) >= 7:
-            raw = raw[1:]
-        digits = "".join(ch for ch in raw if ch.isdigit())
-        return digits[-6:].zfill(6) if digits else raw[:6]
+        from src.utils.kiwoom_utils import normalize_stock_code
+
+        return normalize_stock_code(code)
 
     @staticmethod
     def _explicit_ws_item(raw_code, canonical_code):
@@ -1011,7 +1006,7 @@ class KiwoomWSManager:
             code = self._normalize_code(raw_code)
             if not code:
                 continue
-            if len(code) != 6 or not code.isdigit():
+            if not is_canonical_stock_code(code):
                 invalid.append(str(raw_code))
                 continue
             if code in seen:
@@ -6668,8 +6663,7 @@ class KiwoomWSManager:
         event = expected["snapshot"][0]
         lease_id = payload.get("ws_handoff_id")
         if (
-            len(code) != 6
-            or not code.isdigit()
+            not is_canonical_stock_code(code)
             or not route
             or not lease_id
             or payload.get("physical_probe_lease_id") != lease_id

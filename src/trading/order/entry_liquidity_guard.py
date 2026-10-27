@@ -194,7 +194,7 @@ def entry_liquidity_request_code(symbol: str, route: str) -> str:
     """
 
     code = kiwoom_utils.normalize_stock_code(symbol)
-    if len(code) != 6 or not code.isdigit():
+    if not kiwoom_utils.is_canonical_stock_code(code):
         raise ValueError("entry_liquidity_symbol_invalid")
     normalized_route = str(route or "").strip().upper()
     if normalized_route in {"KRX", "SOR"}:

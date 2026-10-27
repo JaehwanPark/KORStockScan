@@ -308,7 +308,7 @@ def selected_entry_snapshot(*, symbol, route, kind):
         )
 
         values = items.split(",")
-        if any(not re.fullmatch(r"[0-9]{6}(?:_AL|_NX)?", value) for value in values):
+        if any(not re.fullmatch(r"[0-9A-Z]{6}(?:_AL|_NX)?", value) for value in values):
             unavailable = (
                 unavailable_entry_liquidity_snapshot
                 if kind == "0D"

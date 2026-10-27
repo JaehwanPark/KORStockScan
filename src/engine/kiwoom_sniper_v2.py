@@ -8707,7 +8707,7 @@ def _zero_base_active_target_snapshot(readiness):
             return {"status": "unobserved", "reason": "main_target_snapshot_bound"}
         identities = sorted(
             (
-                str((target or {}).get("code") or "").strip()[:6],
+                kiwoom_utils.normalize_stock_code((target or {}).get("code")),
                 str((target or {}).get("id") or ""),
                 str((target or {}).get("status") or "").upper(),
                 str((target or {}).get("owner") or ""),
@@ -8721,8 +8721,7 @@ def _zero_base_active_target_snapshot(readiness):
                 row[0]
                 for row in identities
                 for code, status in [(row[0], row[2])]
-                if len(code) == 6
-                and code.isdigit()
+                if kiwoom_utils.is_canonical_stock_code(code)
                 and status not in {"EXPIRED", "COMPLETED", "CANCELLED"}
             }
         )
@@ -8946,8 +8945,7 @@ def handle_zero_base_probe_requested(request):
         )
         return
     if (
-        len(code) != 6
-        or not code.isdigit()
+        not kiwoom_utils.is_canonical_stock_code(code)
         or candidate.get("code") != code
         or candidate.get("route") != claim.get("route")
         or candidate.get("source_sha256") != claim.get("source_sha256")
@@ -9541,8 +9539,7 @@ def handle_zero_base_machine_enter(result):
         not _zero_base_runtime_enabled()
         or result.get("result") != "assessed"
         or result.get("machine_action") != "ENTER_NOW"
-        or len(code) != 6
-        or not code.isdigit()
+        or not kiwoom_utils.is_canonical_stock_code(code)
         or candidate.get("code") != code
         or candidate.get("route") != route
         or candidate.get("source_sha256") != claim.get("source_sha256")

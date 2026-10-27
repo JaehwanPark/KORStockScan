@@ -10,6 +10,7 @@ from dataclasses import asdict, dataclass
 from datetime import date, datetime
 from math import isfinite
 import re
+from src.utils.kiwoom_utils import is_canonical_stock_code
 import uuid
 from zoneinfo import ZoneInfo
 
@@ -87,7 +88,7 @@ class DiscoveryQueue:
         source_kind: str = "",
     ) -> str:
         """Accept a fresh, exactly routed observation; never refresh it implicitly."""
-        if re.fullmatch(r"\d{6}", code or "") is None:
+        if not is_canonical_stock_code(code):
             return "invalid_code"
         if route not in ROUTES:
             return "route_unknown"
@@ -201,6 +202,7 @@ class DiscoveryQueue:
         )
         eligible_wait = []
         products = {}
+        self.admission_state = {}
         for candidate in self._candidates.values():
             # Activity is a discovery hint, not an entry decision. Keep one
             # bounded claim for gainers per source-rotation cycle.
@@ -212,36 +214,49 @@ class DiscoveryQueue:
                     candidate.code, candidate.name, candidate.market
                 )
             if candidate.in_flight:
+                reason = "in_flight"
                 self.claim_eligibility["in_flight_count"] += 1
             elif is_non_equity_product_name(candidate.name):
+                reason = "product_ineligible"
                 self.claim_eligibility["product_ineligible_count"] += 1
-            elif (
+            elif (product_check is None and not candidate.code.isdigit()) or (
                 product_check is not None
                 and products[(candidate.code, candidate.route)].get("eligible")
                 is not True
             ):
+                reason = "product_ineligible"
                 self.claim_eligibility["product_ineligible_count"] += 1
             elif eligible_routes is not None and candidate.route not in eligible_routes:
+                reason = "route_ineligible"
                 self.claim_eligibility["route_ineligible_count"] += 1
             elif max_observation_age_sec is not None and not (
                 0 <= now_epoch - candidate.observed_epoch <= max_observation_age_sec
             ):
+                reason = "stale"
                 self.claim_eligibility["stale_count"] += 1
             elif (
                 candidate.next_due_epoch > now_epoch
                 or candidate.last_claim_epoch + min_interval_sec > now_epoch
             ):
+                reason = "retry_not_due"
                 self.claim_eligibility["retry_not_due_count"] += 1
             elif candidate.code in (deferred_active_codes or ()):
+                reason = "active_target_deferred"
                 self.claim_eligibility["active_target_deferred_count"] += 1
             else:
+                reason = "eligible_due"
                 self.claim_eligibility["eligible_due_count"] += 1
                 key = (candidate.code, candidate.route)
                 first_eligible = self._eligible_since.setdefault(key, now_epoch)
                 eligible_wait.append(max(0.0, now_epoch - first_eligible))
                 ready_by_cohort.setdefault(cohort, []).append(candidate)
-                continue
-            self._eligible_since.pop((candidate.code, candidate.route), None)
+            key = (candidate.code, candidate.route)
+            self.admission_state[key] = (
+                reason,
+                products.get(key, {}).get("master_sha256"),
+            )
+            if reason != "eligible_due":
+                self._eligible_since.pop(key, None)
         self.claim_eligibility["eligible_due_wait_max_seconds"] = max(
             eligible_wait, default=None
         )
@@ -354,6 +369,11 @@ class DiscoveryQueue:
                         self.residence_deferred[reason] = (
                             self.residence_deferred.get(reason, 0) + 1
                         )
+                        key = (row.code, row.route)
+                        self.admission_state[key] = (
+                            reason,
+                            self.admission_state[key][1],
+                        )
                         rows.pop(0)
                     else:
                         break
@@ -396,6 +416,8 @@ class DiscoveryQueue:
             long_used += int(residence > 60)
             cohort_claims[cohort] += 1
         for candidate in ready:
+            key = (candidate.code, candidate.route)
+            self.admission_state[key] = ("claimed", self.admission_state[key][1])
             self._eligible_since.pop((candidate.code, candidate.route), None)
             candidate.last_claim_epoch = now_epoch
             candidate.claim_count += 1
@@ -600,7 +622,7 @@ class DiscoveryQueue:
         for raw in snapshot.get("candidates", []):
             row = Candidate(**raw)
             if (
-                re.fullmatch(r"\d{6}", row.code or "") is None
+                not is_canonical_stock_code(row.code)
                 or row.route not in ROUTES
                 or re.fullmatch(r"[0-9a-f]{64}", row.source_sha256 or "") is None
                 or row.source_scope != "observed_panel"

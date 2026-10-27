@@ -136,7 +136,7 @@ def observe_fetch(
             rejected += 1
             continue
         code = str(target.get("Code") or target.get("code") or "")
-        match = re.fullmatch(r"(\d{6})(?:_(AL|NX))?", code)
+        match = re.fullmatch(r"([0-9A-Z]{6})(?:_(AL|NX))?", code)
         if not match:
             rejected += 1
             continue
@@ -169,7 +169,7 @@ def observe_pool(targets, *, generation):
             rejected += 1
             continue
         code = str(target.get("Code") or "")
-        if re.fullmatch(r"\d{6}", code) is None:
+        if re.fullmatch(r"[0-9A-Z]{6}", code) is None:
             rejected += 1
             continue
         suffix = str(target.get("MarketSuffix") or "")
@@ -247,7 +247,7 @@ def decode_receipt(fields):
             return None
         if any(
             not isinstance(r, dict)
-            or not re.fullmatch(r"\d{6}", str(r.get("stock_code") or ""))
+            or not re.fullmatch(r"[0-9A-Z]{6}", str(r.get("stock_code") or ""))
             or r.get("venue") not in {"KRX", "NXT", "UNKNOWN"}
             or (
                 "market_data_route" in r

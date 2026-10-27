@@ -2153,9 +2153,33 @@ def _zero_base_stage_rows(
             "reason": str(fields.get("zero_base_probe_reason") or ""),
         }
 
+    alpha_claim_codes = {
+        row["stock_code"]
+        for row in rows
+        if row["raw_stage"] == "zero_base_probe_claim"
+        and row.get("pipeline") == "ENTRY_PIPELINE"
+        and row["fields"].get("zero_base_identifier_contract")
+        == "verified_common_stock_alphanumeric_v1"
+        and digest(row["fields"].get("zero_base_product_master_sha256"))
+    }
     for row in rows:
         raw = row["raw_stage"]
-        if re.fullmatch(r"[0-9]{6}", row["stock_code"]) is None:
+        if (
+            re.fullmatch(r"[0-9A-Z]{6}", row["stock_code"]) is None
+            or (
+                not row["stock_code"].isdigit()
+                and row["stock_code"] not in alpha_claim_codes
+            )
+            or (
+                not row["stock_code"].isdigit()
+                and raw == "zero_base_probe_claim"
+                and (
+                    row["fields"].get("zero_base_identifier_contract")
+                    != "verified_common_stock_alphanumeric_v1"
+                    or not digest(row["fields"].get("zero_base_product_master_sha256"))
+                )
+            )
+        ):
             gaps["zero_base_symbol_identity_invalid"] += 1
             continue
         if row.get("pipeline") != "ENTRY_PIPELINE":
@@ -2491,6 +2515,64 @@ def _load_stage_index(
         code = _safe_code(row.get("stock_code"))
         ts = _parse_ts(row.get("emitted_at"))
         fields = row.get("fields") if isinstance(row.get("fields"), dict) else {}
+        if raw_stage == "zero_base_probe_admission":
+            from src.scanners.scanner_source_census import MAX_ROWS
+
+            try:
+                records = fields.get("zero_base_admission_records")
+                records = json.loads(records) if isinstance(records, str) else records
+                observed = _safe_float(fields.get("zero_base_admission_at_epoch"))
+                if (
+                    row.get("pipeline") != "ENTRY_PIPELINE"
+                    or fields.get("zero_base_admission_schema")
+                    != "per_symbol_admission_delta_v1"
+                    or not isinstance(records, list)
+                    or len(records) > MAX_ROWS
+                    or observed is None
+                    or ts is None
+                    or observed > ts.timestamp()
+                    or ts.date().isoformat() != target_date
+                    or datetime.fromtimestamp(observed, KST).date().isoformat()
+                    != target_date
+                ):
+                    raise ValueError("invalid_admission_receipt")
+                for item in records:
+                    if (
+                        not isinstance(item, dict)
+                        or re.fullmatch(r"[0-9A-Z]{6}", str(item.get("code", "")))
+                        is None
+                        or item.get("route")
+                        not in {"nxt_only", "krx_nxt_integrated", "krx_only"}
+                        or re.fullmatch(
+                            r"[0-9a-f]{64}", str(item.get("source_sha256", ""))
+                        )
+                        is None
+                        or not isinstance(item.get("reason"), str)
+                        or not item["reason"]
+                        or _safe_float(item.get("observed_epoch")) is None
+                    ):
+                        raise ValueError("invalid_admission_item")
+                for item in records:
+                    index[item["code"]]["zero_base_admission"].append(
+                        dict(
+                            item,
+                            ts=ts,
+                            admission_at_epoch=observed,
+                            producer_pid=fields.get("zero_base_producer_pid"),
+                            producer_root=fields.get("zero_base_producer_code_root"),
+                            coverage="changed_generation_dispatch_samples_only",
+                            actual_execution_venue=None,
+                        )
+                    )
+            except (TypeError, ValueError, OverflowError):
+                if zero_base_source_census is not None:
+                    zero_base_source_census["invalid_admission_receipt_count"] = (
+                        zero_base_source_census.get(
+                            "invalid_admission_receipt_count", 0
+                        )
+                        + 1
+                    )
+            continue
         if (
             (
                 raw_stage
@@ -2512,6 +2594,8 @@ def _load_stage_index(
         ):
             keys = (
                 "zero_base_route",
+                "zero_base_identifier_contract",
+                "zero_base_product_master_sha256",
                 "zero_base_source_sha256",
                 "zero_base_claim_count",
                 "zero_base_claim_observed_epoch",
@@ -2805,6 +2889,9 @@ def _load_stage_index(
     )
     if zero_base_source_census is not None:
         zero_base_source_census.update(zero_base_summary)
+        zero_base_source_census["admission_observation_count"] = sum(
+            len(stages.get("zero_base_admission", [])) for stages in index.values()
+        )
     try:
         for row in iter_jsonl_objects_strict(ai_trace_path):
             if str(row.get("endpoint") or "") not in ENTRY_AI_ENDPOINTS:
@@ -3720,6 +3807,20 @@ def _coverage_row(
         ),
         "opportunity_validity_sec": OPPORTUNITY_VALIDITY_SEC,
         "terminal_coverage_reason": terminal_coverage_reason,
+        "logical_probe_admission_observations": [
+            {
+                **{key: value for key, value in item.items() if key != "ts"},
+                "at": item["ts"].isoformat(),
+                "physical_panel_binding_proven": False,
+            }
+            for item in stage_index.get(code, {}).get("zero_base_admission", [])
+            if isinstance(first_census_at, datetime)
+            and 0
+            <= (item["ts"] - first_census_at).total_seconds()
+            <= SCANNER_DETECTION_SLA_SEC
+            and (after is None or item["ts"] >= after)
+            and (before is None or item["ts"] <= before)
+        ],
         "ex_post_executable_opportunity": ex_post_executable_opportunity,
     }
 

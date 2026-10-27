@@ -343,7 +343,8 @@ def build_market_data_health(
         identity_ok = bool(
             len(symbol) == 6
             and symbol.isascii()
-            and symbol.isdigit()
+            and symbol.isalnum()
+            and symbol.upper() == symbol
             and scope != "UNKNOWN"
             and data.get("rest_freshness_basis") == "response_received_epoch_ms"
         )

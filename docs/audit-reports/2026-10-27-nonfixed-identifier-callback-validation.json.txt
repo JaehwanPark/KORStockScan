@@ -1,0 +1,214 @@
+{
+  "schema": "scalp_micro_reversion_callback_baseline_v1",
+  "baseline_id": "main_server_synthetic_0b_20261027T144128+0900",
+  "generated_at": "2026-10-27T14:41:28+09:00",
+  "host": {
+    "hostname": "ip-172-31-34-105",
+    "machine": "aarch64",
+    "python": "3.13.12",
+    "platform": "Linux-7.0.0-1014-aws-aarch64-with-glibc2.39"
+  },
+  "workload": {
+    "input": "same_valid_stable_price_kiwoom_0b_snapshot",
+    "observer_off_then_on": true,
+    "path_capture_enabled_on": true,
+    "discovery_enabled_on": false,
+    "iterations_per_repeat": 5000,
+    "warmup_per_repeat": 500,
+    "repeat_count": 5
+  },
+  "observer_off_runs": [
+    {
+      "p50_ms": 0.000122,
+      "p95_ms": 0.000129,
+      "p99_ms": 0.000142,
+      "max_ms": 0.000488,
+      "mean_ms": 0.0001231514
+    },
+    {
+      "p50_ms": 0.000123,
+      "p95_ms": 0.000129,
+      "p99_ms": 0.00014,
+      "max_ms": 0.010034,
+      "mean_ms": 0.0001264674
+    },
+    {
+      "p50_ms": 0.000122,
+      "p95_ms": 0.00013,
+      "p99_ms": 0.000164,
+      "max_ms": 0.000229,
+      "mean_ms": 0.0001237372
+    },
+    {
+      "p50_ms": 0.000123,
+      "p95_ms": 0.00013,
+      "p99_ms": 0.000138,
+      "max_ms": 0.012202,
+      "mean_ms": 0.0001261012
+    },
+    {
+      "p50_ms": 0.000125,
+      "p95_ms": 0.000132,
+      "p99_ms": 0.000145,
+      "max_ms": 0.000252,
+      "mean_ms": 0.0001255122
+    }
+  ],
+  "observer_on_runs": [
+    {
+      "p50_ms": 0.02226,
+      "p95_ms": 0.027193,
+      "p99_ms": 0.039326,
+      "max_ms": 27.369928,
+      "mean_ms": 0.0455849524,
+      "collector_internal_p95_ms": 0.025887,
+      "collector_internal_p99_ms": 0.038713,
+      "queue_drop_count": 0.0,
+      "worker_error_count": 0.0
+    },
+    {
+      "p50_ms": 0.022426,
+      "p95_ms": 0.024843,
+      "p99_ms": 0.033832,
+      "max_ms": 12.033759,
+      "mean_ms": 0.029255580200000002,
+      "collector_internal_p95_ms": 0.023366,
+      "collector_internal_p99_ms": 0.031604,
+      "queue_drop_count": 0.0,
+      "worker_error_count": 0.0
+    },
+    {
+      "p50_ms": 0.022514,
+      "p95_ms": 0.024079,
+      "p99_ms": 0.039493,
+      "max_ms": 15.526541,
+      "mean_ms": 0.0398603304,
+      "collector_internal_p95_ms": 0.022664,
+      "collector_internal_p99_ms": 0.038859,
+      "queue_drop_count": 0.0,
+      "worker_error_count": 0.0
+    },
+    {
+      "p50_ms": 0.022565,
+      "p95_ms": 0.025345,
+      "p99_ms": 0.035412,
+      "max_ms": 10.404379,
+      "mean_ms": 0.036884814999999994,
+      "collector_internal_p95_ms": 0.023955,
+      "collector_internal_p99_ms": 0.036333,
+      "queue_drop_count": 0.0,
+      "worker_error_count": 0.0
+    },
+    {
+      "p50_ms": 0.022518,
+      "p95_ms": 0.023955,
+      "p99_ms": 0.033855,
+      "max_ms": 12.538029,
+      "mean_ms": 0.0331357988,
+      "collector_internal_p95_ms": 0.02247,
+      "collector_internal_p99_ms": 0.032466,
+      "queue_drop_count": 0.0,
+      "worker_error_count": 0.0
+    }
+  ],
+  "summary": {
+    "observer_off_p95_ms_max": 0.000132,
+    "observer_off_p99_ms_max": 0.000164,
+    "observer_on_external_p95_ms_max": 0.027193,
+    "observer_on_external_p99_ms_max": 0.039493,
+    "observer_on_internal_p95_ms_max": 0.025887,
+    "observer_on_internal_p99_ms_max": 0.038859,
+    "queue_drop_count": 0,
+    "worker_error_count": 0
+  },
+  "frozen_limits": {
+    "derivation": "max(absolute_floor, five_times_max_observed_internal_percentile)",
+    "minimum_callback_samples": 1000,
+    "producer_callback_latency_p95_max_ms": 1.0,
+    "producer_callback_latency_p99_max_ms": 2.0,
+    "snapshot_stale_after_sec": 30.0
+  },
+  "metric_role": "source_quality_gate_and_observer_canary_safety_veto",
+  "decision_authority": "observer_canary_stop_only_no_trading_authority",
+  "window_policy": "current_process_cumulative_with_periodic_snapshot",
+  "sample_floor": "latency_guard_after_frozen_minimum_callback_samples",
+  "primary_decision_metric": "stop_required",
+  "source_quality_gate": "fresh_collector_snapshot_and_valid_frozen_guard_config;_bounded_ingress_queue_loss_is_source_quality_exclusion_and_provider_replay_hold;_successful_write_below_preventive_low_disk_watermark_is_operational_warning_only;_worker_writer_actual_capture_loss_storage_self_disable_or_authority_failure_is_immediate_stop",
+  "forbidden_uses": [
+    "broker_order_submission",
+    "broker_order_cancel",
+    "buy_wait_drop_or_entry_exit_decision",
+    "simulated_or_real_position_creation",
+    "threshold_provider_bot_quantity_or_cap_mutation",
+    "p2_policy_selection_or_economic_edge_claim"
+  ],
+  "status": "PASS_WITH_UNCHANGED_RUNTIME_LIMITS",
+  "scope": "collector_0b_absolute_canary_only",
+  "runtime_guard_changed": false,
+  "guard_config_sha256": "6fb3781d01b89352aeaf828a2aee25474066b9ab2581bbcad2880de71c5124cf",
+  "runtime_limits": {
+    "minimum_callback_samples": 1000,
+    "producer_callback_latency_p95_max_ms": 1.0,
+    "producer_callback_latency_p99_max_ms": 2.0,
+    "snapshot_stale_after_sec": 30.0
+  },
+  "source_hashes": {
+    "src/engine/kiwoom_websocket.py": "d5f4dc2cb836a3789acc2a5066fcefba1880dadd88bb3f33588a4f9cdb5c8784",
+    "src/engine/scalping/micro_reversion/canary_monitor.py": "ccf52d1c9dfb17af4d43eca012fdceed9bfdfab4e7989e21f765711449c63223",
+    "src/engine/scalping/micro_reversion/contracts.py": "670fb3aafc56d9d93057be31bb867d6cc1d50ce01f6c656f00049ebe76020d32",
+    "src/engine/scalping/micro_reversion/forward_collector.py": "0922b5db75dc895532ec63f185f2527d09d2e13c788a4b27f84c5369573504fe",
+    "src/engine/scalping/micro_reversion/observation_adapter.py": "8d4e64d5078f026a14d1503a4aa3b9f13c482feaffcf1a973e6ea5f8fefee7ec",
+    "src/engine/scalping/micro_reversion/observer_source_quality.py": "8c96cb422e13c7d0b67df9be71caa04926fc3e26dbd4f6389ccac97a2d968b5d",
+    "src/engine/scalping/micro_reversion/path_capture.py": "48ba43e4f6b0f1007f1ca328f1c1ca268dfda832742799b8e814f22dd76ed364",
+    "src/engine/scalping/micro_reversion/path_journal.py": "c3577e6bae685ef3dbd7ff1c188037d2104f9dc6b8c9cc66041e38b3ca8555b9",
+    "src/engine/scalping/micro_reversion/storage_maintenance.py": "fd2b6d58377e4ae3657550bfc30640e5fb5603e9fde647a1412a772e8d9d66e0",
+    "src/engine/scalping/native_packet_validation.py": "91b5c77c5fcc26b91e3c43e206a16381ad2c15d5938713e371fbecaf4d16e138",
+    "src/trading/market/session_contract.py": "13a13022de1ca080983f992f2074a0278fefd09ff2176efa0174e79ccd743ee3",
+    "src/utils/kiwoom_utils.py": "1a1c885edfd0a38921b2c8661c36787ee315d45a299491b63c1452c28545167a"
+  },
+  "benchmark_module_sha256": "ccf52d1c9dfb17af4d43eca012fdceed9bfdfab4e7989e21f765711449c63223",
+  "source_format_review": "docs/audit-reports/2026-10-27-nonfixed-identity-source-review.json.txt",
+  "source_format_review_sha256": "b059b0ff62208e011b0a43d6b95b75bb1a9460e1d108ccfe6cd256dd8d3080c3",
+  "predecessor_receipt": "docs/audit-reports/2026-10-24-normalization-custody-latency-validation.json.txt",
+  "predecessor_receipt_sha256": "c6bc684100a7a52271cbbc48dd0d0ed769944d4f821e1b7fd3eeaa2266b5f8a3",
+  "normalization_custody_measurement": {
+    "iterations_per_case": 1000,
+    "provider_calls": 0,
+    "orders": 0,
+    "scope": "synthetic 0D adapter plus callback; rejection batches of 50 drained between batches; no production workload claim",
+    "valid": {
+      "latency": {
+        "p50_ms": 0.046879,
+        "p95_ms": 0.058367,
+        "p99_ms": 0.144923,
+        "max_ms": 22.701976,
+        "mean_ms": 0.08634044299999999
+      },
+      "enqueued": 1000,
+      "processed": 1000,
+      "persisted": 0,
+      "omitted": 0,
+      "errors": 0,
+      "custody_status": "verified"
+    },
+    "rejected": {
+      "latency": {
+        "p50_ms": 0.031445,
+        "p95_ms": 0.052547,
+        "p99_ms": 0.157937,
+        "max_ms": 27.703862,
+        "mean_ms": 0.064495903
+      },
+      "enqueued": 0,
+      "processed": 0,
+      "persisted": 1000,
+      "omitted": 0,
+      "errors": 0,
+      "custody_status": "verified"
+    }
+  },
+  "measurement_script": "/home/ubuntu/KORStockScan/tmp/nonfixed-source-repair-20261027/measure_callback_sources.py",
+  "measurement_script_sha256": "261d8d35c16cd2d31be5e717738b1b0e8bd5dccc89ef93293c91fd2a37dba273",
+  "source_provenance": "Exact source bytes measured offline before clean commit; original guard and historical receipts unchanged.",
+  "acceptance_limits": "Synthetic source-quality diagnostic only. No selected release, Main PID, live websocket, provider, broker, trading or economic acceptance."
+}

@@ -5370,6 +5370,7 @@ def test_pre_submit_handoff_rejects_unreviewed_dependency(tmp_path, family, depe
     "generation",
     [
         "current",
+        "consumed_entry_capability",
         "consumed_migration",
         "consumed_pre_startup",
         "consumed_pre_shutdown",
@@ -5411,7 +5412,8 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
     )
     subprocess.run(["git", "-C", str(root), "checkout", "-q", "75e0fbbf7"], check=True)
     hashes = {
-        "current": handoff.REVIEWED_ENTRY_CAPABILITY_PROFILE,
+        "current": handoff.REVIEWED_NONFIXED_IDENTITY_PROFILE,
+        "consumed_entry_capability": handoff.REVIEWED_ENTRY_CAPABILITY_PROFILE,
         "entry_latency": handoff.REVIEWED_ENTRY_LATENCY_PROFILE,
         "holding_capability": handoff.REVIEWED_HOLDING_CAPABILITY_PROFILE,
         "finalization_admission": handoff.REVIEWED_FINALIZATION_ADMISSION_PROFILE,

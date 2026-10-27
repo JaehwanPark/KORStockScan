@@ -209,7 +209,9 @@ def freeze_normalized_sources(data_root, day, out):
                     if (
                         not isinstance(code, str)
                         or len(code) != 6
-                        or not code.isdigit()
+                        or not (
+                            code.isascii() and code.isalnum() and code.upper() == code
+                        )
                     ):
                         issues["invalid_symbol"] += 1
                         continue

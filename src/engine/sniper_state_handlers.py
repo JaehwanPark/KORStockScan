@@ -40486,9 +40486,9 @@ def _post_sell_exact_route_subscription_item(
 ) -> str:
     """Map the frozen route contract to one official Kiwoom REG item."""
 
-    normalized = str(code or "").strip()[:6]
+    normalized = kiwoom_utils.normalize_stock_code(code)
     route = str(expected_market_route or "").strip().lower()
-    if len(normalized) != 6 or not normalized.isdigit():
+    if not kiwoom_utils.is_canonical_stock_code(normalized):
         return ""
     return {
         "krx_only": normalized,

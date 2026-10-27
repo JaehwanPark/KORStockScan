@@ -148,7 +148,7 @@ def broker_account_key(*, require_explicit: bool = False) -> str:
 
 def _registry_symbol(value: object) -> str:
     clean = normalize_symbol(value)
-    if not (clean.isdigit() and len(clean) == 6):
+    if not (len(clean) == 6 and clean.isascii() and clean.isalnum()):
         raise OwnerRegistryError("owner_registry_symbol_invalid")
     return clean
 

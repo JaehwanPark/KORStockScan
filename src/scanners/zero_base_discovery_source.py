@@ -220,12 +220,14 @@ def fetch_discovery_panels(
     requests = [(kind, *panel) for kind in panel_kinds for panel in panel_requests]
     for kind, market, mrkt_tp, venue, stex_tp, route in requests:
         request_epoch = time.time() if now_epoch is None else float(now_epoch)
+        panel_product_check = lambda code, name: product_check(code, name, market)
         try:
             if kind == "activity":
                 rows, meta = activity_fetcher(
                     token,
                     mrkt_tp=mrkt_tp,
                     stex_tp=stex_tp,
+                    product_check=panel_product_check,
                     request_owner="zero_base_activity_panel",
                     request_class=REQUEST_CLASS_SOURCE_ONLY,
                     read_rate_max_wait_sec=3.0,
@@ -237,6 +239,7 @@ def fetch_discovery_panels(
                     trde_qty_cnd="0000",
                     limit=MAX_ROWS_PER_PANEL,
                     max_pages_limit=1,
+                    product_check=panel_product_check,
                     stex_tp=stex_tp,
                     sort_tp="1",
                     stk_cnd="4",
@@ -302,7 +305,7 @@ def fetch_discovery_panels(
                 panel["rejected_count"] += 1
                 continue
             if (
-                re.fullmatch(r"\d{6}", code) is None
+                not kiwoom_utils.is_canonical_stock_code(code)
                 or source_target_market_data_route(raw_code, route) != route
                 or not name
                 or not math.isfinite(change_rate)

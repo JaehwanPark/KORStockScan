@@ -6962,6 +6962,9 @@ def run_zero_base_scanner(*, token, event_bus, is_test_mode=False):
                         "zero_base_probe_consumer_ready": summary[
                             "probe_consumer_ready"
                         ],
+                        "zero_base_admission_diagnostic_status": summary.get(
+                            "probe_admission_diagnostic_status", "unobserved"
+                        ),
                         "zero_base_probe_no_consumer_count": summary[
                             "probe_no_consumer_count"
                         ],
@@ -7012,6 +7015,9 @@ def run_zero_base_scanner(*, token, event_bus, is_test_mode=False):
                         "zero_base_probe_consumer_ready": dispatch[
                             "probe_consumer_ready"
                         ],
+                        "zero_base_admission_diagnostic_status": dispatch.get(
+                            "probe_admission_diagnostic_status", "unobserved"
+                        ),
                         "zero_base_probe_no_consumer_count": dispatch[
                             "probe_no_consumer_count"
                         ],
