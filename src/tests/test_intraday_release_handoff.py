@@ -5372,6 +5372,7 @@ def test_pre_submit_handoff_rejects_unreviewed_dependency(tmp_path, family, depe
         "current",
         "quantity_source",
         "stopped_preparation",
+        "execution_exact",
         "prior_execution",
         "native_cost_intake",
         "consumed_invalidation_cadence",
@@ -5419,9 +5420,10 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
     )
     subprocess.run(["git", "-C", str(root), "checkout", "-q", "75e0fbbf7"], check=True)
     hashes = {
-        "current": handoff.REVIEWED_EXECUTION_EXACT_PROFILE,
+        "current": handoff.REVIEWED_HANDOFF_COORDINATION_PROFILE,
         "quantity_source": handoff.REVIEWED_QUANTITY_SOURCE_PROFILE,
         "stopped_preparation": handoff.REVIEWED_STOPPED_PREPARATION_PROFILE,
+        "execution_exact": handoff.REVIEWED_EXECUTION_EXACT_PROFILE,
         "prior_execution": handoff.REVIEWED_PRIOR_EXECUTION_PROFILE,
         "native_cost_intake": handoff.REVIEWED_NATIVE_COST_INTAKE_PROFILE,
         "machine_path": handoff.REVIEWED_MACHINE_PATH_PROFILE,
@@ -5510,6 +5512,7 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
                     {
                         "quantity_source": "fef43a8c5",
                         "stopped_preparation": "f48dd058d",
+                        "execution_exact": "2d3e27aeb",
                         "prior_execution": "e93608c94",
                         "native_cost_intake": "0ee65ee7f",
                         "machine_path": "5dceaf032",

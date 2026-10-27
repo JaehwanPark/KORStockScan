@@ -4535,3 +4535,61 @@ No new module, validator, publisher or entrypoint replaces an existing owner.
 The original selected native active-parent reader also passed the future rebind
 preflight, preserving source26/effective27/next28 roles and selector bytes.
 Actual new candidate/selected P5 and next scheduled runtime consumption remain OPEN.
+
+
+### Native coordination lifetime in active-policy receipt -- 2026-10-28
+
+Candidate2d3e27aeb passed isolated P5 run86467edea9c644469aaf0b3edec187e0,
+including real child PASS, forbidden attempts0 and final protected-source/native
+checks. Candidate source receipts and all policy-code bindings were valid. The
+actual native transition then failed before selector publication: active-parent
+receipt source changed at runtime/research_release_transition/current.json.
+The selector remained exactf560fd3727e5cf4c46bd2a7791a4bca5264689df7a06990f285fe2c884807a7f,
+Main remained OFF, and the native attempt retained prepared state with no entries
+or selector/policy writes. Its original log, selector, coordinator and old receipts are preserved
+under candidate-2d3e27aeb; no manual rollback/selector/control edit occurred.
+
+The first broken owner was A.issue's source capture. Its native origin-script
+open audit observed the coordinator, and issue incorrectly froze it as policy
+source. Original selected10f's issued27 receipt contains no such coordinator
+binding and remains valid; the unselected2d receipt froze the old verified26
+transaction's current pointer. Its exact old hash still matches that transaction's
+original transition.json. The next native owner correctly advanced current.json
+before active-parent verification; no policy or original source changed.
+The earlier offline caller mocked the active proof and therefore missed this
+phase change. AGENTS now explicitly requires real coordination/admission changes
+when exercising phase-sensitive proof consumption.
+
+The existing A issuer now authenticates canonical coordinator bytes, native seal
+and readability at issue, rechecks them before publication and records path/hash,
+transition ID and state as observed provenance. Only that exact mutable control
+leaf is removed from immutable policy sources. Policy, terminal, parity, original
+receipt and code hashes remain frozen. The native router still rejects corrupt
+or foreign publishing state at consumption. Existing issued receipts and the
+failed attempt remain original; the repair grants no new transition, policy,
+PID, provider or order authority. Delay/stop/holding code contracts contain no changed A/H/C member. Main V6
+explicitly includes A, so fresh fixed-workload confirmation parity and the native
+identical-policy future code refresh are required. Calculation results remain
+original; no unchanged calculation is rerun.
+
+Original source failed7 native-coordination regressions. Repaired issuer plus
+selector/cold cases pass14, including actual native publishing/verified states,
+changed observation, changed current record, corruption, foreign publisher,
+publication race and symlink. The complete producer/parent, independent child
+and preserved/current code-profile suites run before a new clean candidate.
+The current reader gets a unique exact profile; prior2d/f48/fef profiles remain
+available. No extra module, publisher, execution entrypoint or guard relaxation.
+Deployment remains OPEN until the native transaction, selected final preparation
+and selected P5 consume the repaired proof; natural next-session/PID acceptance
+and historical source/economic losses remain under their existing owners.
+
+Final coordination review gate:489 producer/parent/preparation tests PASS,925
+independent context tests PASS and60 current/preserved whole-generation cases
+PASS. Compilation, whitespace, links/authority and current-checklist print-only
+parser pass. Againstbfd3f300a, non-test source+74/-0, tests+129/-28 and document
+additions are recorded separately. The existing issuer and exact profiles are
+extended; no execution owner, module or entrypoint was added. Compatibility and
+historical readers remain retained for their issued consumers. Native remaining
+sequence requires new parity, identical-policy code refresh, source summary/strict
+reseal if invalidated, active-parent issue, candidate/selected P5 and exact next
+PID observation. This source gate does not select or start Main.

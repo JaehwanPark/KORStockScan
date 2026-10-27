@@ -934,6 +934,37 @@ def issue(
     observed_selection = sources.pop(str(selection_path.resolve()), None)
     if observed_selection is not None and observed_selection != selection_sha:
         raise ValueError("active_policy_code_handoff_selection_changed")
+    # The native transition owner advances this coordination record while
+    # publishing. It is observed provenance, like the selector, not policy
+    # input. Keep all policy and immutable terminal sources byte-bound.
+    coordination = (
+        Path(data_root).resolve() / "runtime/research_release_transition/current.json"
+    )
+    observed_coordination = sources.pop(str(coordination), None)
+    transition_observation = None
+
+    def verify_coordination():
+        if observed_coordination is None:
+            return None
+        from src.engine.infrastructure import research_release_transition as T
+
+        if (
+            coordination.is_symlink()
+            or coordination.parent.resolve() != coordination.parent
+        ):
+            raise ValueError("active_policy_code_handoff_coordination_path_invalid")
+        T.assert_readable(data_root)
+        record = T._record(coordination)
+        if P.file_hash(coordination) != observed_coordination:
+            raise ValueError("active_policy_code_handoff_coordination_changed")
+        return dict(
+            path=str(coordination),
+            sha256=observed_coordination,
+            transition_id=record["transition_id"],
+            state=record["state"],
+        )
+
+    transition_observation = verify_coordination()
     sources[str(Path(parity_path).resolve())] = P.file_hash(parity_path)
     for row in parity.get("targeted_validation", []):
         if P.file_hash(row["path"]) != row["sha256"]:
@@ -955,6 +986,7 @@ def issue(
             origin_commit=previous,
             bundle_sha256=bundle["bundle_sha256"],
             origin_selection_sha256=selection_sha,
+            origin_transition_observation=transition_observation,
             current_pointer_sha256=P.file_hash(pointer),
             source_hashes=sources,
             code_hashes=codes,
@@ -980,6 +1012,8 @@ def issue(
     dest.parent.mkdir(parents=True, exist_ok=True)
     if dest.exists() and N._read(dest) != r:
         raise ValueError("active_policy_code_handoff_receipt_conflict")
+    if verify_coordination() != transition_observation:
+        raise ValueError("active_policy_code_handoff_coordination_changed")
     N._atomic_write_json(dest, r)
     return r
 

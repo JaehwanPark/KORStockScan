@@ -3054,6 +3054,16 @@ for _name, _sha in REVIEWED_EXECUTION_EXACT_SOURCES.items():
     _history.update((_old, _sha) for _old in _origins)
 
 
+# Coordination observations are distinct from immutable native policy inputs.
+REVIEWED_HANDOFF_COORDINATION_SOURCES = {'src/engine/scalping/reversal_code_handoff.py': 'd79a22aecbd2e425fe00b40bdf19d8391ae63425d1cceff97657f3ae3581475f'}
+REVIEWED_HANDOFF_COORDINATION_ORIGINS = {'src/engine/scalping/reversal_code_handoff.py': '945d695b08b5f8a6bb06ef723f5a9dc8226469e49c66e03eb79dca3a70e429f4'}
+for _name, _sha in REVIEWED_HANDOFF_COORDINATION_SOURCES.items():
+    _history = REVIEWED_PREPARATION_HISTORY.setdefault(_name, set())
+    _origins = {value for pair in _history for value in pair}
+    _origins.add(REVIEWED_HANDOFF_COORDINATION_ORIGINS[_name])
+    _history.update((_old, _sha) for _old in _origins)
+
+
 def reviewed_preparation_pair(relative, old, current):
     # An already reviewed physical pair keeps its original authority; a
     # formatting projection must not replace either endpoint before this check.

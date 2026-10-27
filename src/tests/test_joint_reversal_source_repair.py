@@ -1573,7 +1573,7 @@ def test_midnight_prepared_review_uses_own_receipt_without_origin_day_receipt(
     "damage", [None, "selection_changed", "observed_selection_changed"]
 )
 def test_second_code_handoff_preserves_selector_provenance_without_freezing_transition(
-    tmp_path, monkeypatch, damage, postclose, cold_activation=False
+    tmp_path, monkeypatch, damage, postclose, cold_activation=False, coordination=False
 ):
     import json
     from pathlib import Path
@@ -1594,10 +1594,12 @@ def test_second_code_handoff_preserves_selector_provenance_without_freezing_tran
     origin.mkdir()
     day = datetime.now(P.KST).date().isoformat()
     if cold_activation:
+
         class Clock(datetime):
             @classmethod
             def now(cls, tz=None):
                 return cls(2026, 10, 25, 14, 54, tzinfo=P.KST)
+
         monkeypatch.setattr(H, "datetime", Clock)
         day = "2026-10-25"
     commit = "b" * 40
@@ -1616,10 +1618,19 @@ def test_second_code_handoff_preserves_selector_provenance_without_freezing_tran
     selector = data / "runtime/runtime_release_selection.json"
     selector.write_text(json.dumps(dict(git_commit="a" * 40, release_root=str(origin))))
     if cold_activation:
-        selector.write_text(json.dumps(dict(git_commit="a" * 40, release_root=str(origin),
-            approved_by="user", approval_scope="after_postclose_deploy_for_next_regular_start",
-            actual_pid_consumed=False, source_date="2026-10-23",
-            next_operating_date="2026-10-26")))
+        selector.write_text(
+            json.dumps(
+                dict(
+                    git_commit="a" * 40,
+                    release_root=str(origin),
+                    approved_by="user",
+                    approval_scope="after_postclose_deploy_for_next_regular_start",
+                    actual_pid_consumed=False,
+                    source_date="2026-10-23",
+                    next_operating_date="2026-10-26",
+                )
+            )
+        )
     source = data / "policy.json"
     source.write_text("frozen policy")
     initial_sha = P.file_hash(selector)
@@ -1645,23 +1656,56 @@ def test_second_code_handoff_preserves_selector_provenance_without_freezing_tran
     monkeypatch.setattr(router, "selected_release", lambda *a: tuple(selected))
     monkeypatch.setattr(router, "validate_release", lambda *a: None)
     monkeypatch.setattr(router, "git", lambda *a: commit)
+    control = data / "runtime/research_release_transition/current.json"
+    if coordination:
+        from src.engine.infrastructure.research_release_transition import Transition
+
+        original_transition = Transition(tmp_path, "original")
+        with original_transition.owner():
+            pass
+        original_control_sha = P.file_hash(control)
+        if damage == "coordination_race":
+            native_hash = P.file_hash
+
+            def raced_hash(path):
+                if Path(path) == parity:
+                    with Transition(tmp_path, "racing").owner():
+                        pass
+                return native_hash(path)
+
+            monkeypatch.setattr(P, "file_hash", raced_hash)
 
     def inspect(*args, **kwargs):
         if damage == "selection_changed":
             selector.write_text("{}")
-        return json.dumps(
-            dict(
-                bundle_sha256="bundle",
-                source_hashes={
-                    str(source): P.file_hash(source),
-                    str(selector): (
-                        "0" * 64
-                        if damage == "observed_selection_changed"
-                        else initial_sha
-                    ),
-                },
-            )
+        observed = dict(
+            bundle_sha256="bundle",
+            source_hashes={
+                str(source): P.file_hash(source),
+                str(selector): (
+                    "0" * 64 if damage == "observed_selection_changed" else initial_sha
+                ),
+            },
         )
+        if coordination:
+            observed["source_hashes"][str(control)] = (
+                "0" * 64
+                if damage == "observed_coordination_changed"
+                else original_control_sha
+            )
+            if damage == "coordination_changed":
+                with Transition(tmp_path, "changed").owner():
+                    pass
+            elif damage == "coordination_corrupt":
+                control.write_text("{}")
+            elif damage == "foreign_publishing":
+                with Transition(tmp_path, "foreign").owner() as foreign:
+                    foreign.value["state"] = "publishing"
+                    foreign._save()
+            elif damage == "coordination_symlink":
+                control.unlink()
+                control.symlink_to(original_transition.path)
+        return json.dumps(observed)
 
     monkeypatch.setattr(H.subprocess, "check_output", inspect)
     options = {}
@@ -1683,7 +1727,9 @@ def test_second_code_handoff_preserves_selector_provenance_without_freezing_tran
         monkeypatch.setattr(H, "_postclose_origin_receipt", postclose_origin)
         options["postclose_source_date"] = source_day
     if damage:
-        with pytest.raises(ValueError, match="parent_changed|selection_changed"):
+        with pytest.raises(
+            ValueError, match="parent_changed|selection_changed|coordination|transition"
+        ):
             H.issue(
                 data,
                 day,
@@ -1724,10 +1770,46 @@ def test_second_code_handoff_preserves_selector_provenance_without_freezing_tran
             dict(git_commit=commit, release_root=str(root), actual_pid_consumed=True)
         )
     )
+    if coordination:
+        assert str(control) not in receipt["source_hashes"]
+        assert (
+            receipt["origin_transition_observation"]["sha256"] == original_control_sha
+        )
+        # Exercise the real native transition, including its publishing state,
+        # rather than a mock that leaves the coordination pointer unchanged.
+        transition = Transition(tmp_path, "successor")
+        with transition.owner():
+            probe = data / "runtime/fixture.json"
+            transition.add(probe, b"{}")
+            transition.publish(
+                verify=lambda: H.validate(
+                    bundle, data, original_error=ValueError("code_changed")
+                )
+            )
     assert H.validate(bundle, data, original_error=ValueError("code_changed")) is bundle
     selector.write_text(json.dumps(dict(git_commit="c" * 40, release_root=str(root))))
     with pytest.raises(ValueError, match="selection_changed"):
         H.validate(bundle, data, original_error=ValueError("code_changed"))
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [
+        None,
+        "observed_coordination_changed",
+        "coordination_changed",
+        "coordination_corrupt",
+        "foreign_publishing",
+        "coordination_race",
+        "coordination_symlink",
+    ],
+)
+def test_native_transition_coordination_is_observed_without_freezing_policy(
+    tmp_path, monkeypatch, damage
+):
+    test_second_code_handoff_preserves_selector_provenance_without_freezing_transition(
+        tmp_path, monkeypatch, damage, False, coordination=True
+    )
 
 
 def test_cold_code_handoff_publishes_next_activation_date(tmp_path, monkeypatch):

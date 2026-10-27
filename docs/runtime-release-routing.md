@@ -859,3 +859,14 @@ grants no compatibility delta or runtime/PID authority. Non-exact code still
 requires the existing original-issuer compatibility chain. Active-parent custody,
 complete native preparation, policy loading and selected-generation/PID checks
 remain separate mandatory consumers.
+
+An active-policy handoff records a native transition coordinator seen by its
+origin reader as observed provenance, rather than freezing its mutable current
+pointer as policy input.
+Before issue, authenticate its canonical native record and readable ownership,
+and recheck the exact observed bytes through publication. Foreign publishing,
+corrupt/changed records and aliases fail. Policy, immutable terminal, original
+receipt and code sources remain frozen; the current release router continues to
+enforce native transaction readability at consumption. Prior issued receipts
+remain untouched. Exercise proof consumption under real native transition state
+changes in the isolated replay, including publishing and verified phases.

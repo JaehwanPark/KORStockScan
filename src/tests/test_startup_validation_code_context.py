@@ -267,6 +267,22 @@ def test_execution_exact_policy_origin_is_independently_checked_in_child(
         assert (fixture["run"] / "audit.jsonl").read_bytes() == b""
 
 
+@pytest.mark.parametrize("fault", [None, "old", "current", "sibling"])
+def test_handoff_coordination_preparation_pair_is_exact(fault):
+    name = "src/engine/scalping/reversal_code_handoff.py"
+    old = C.REVIEWED_HANDOFF_COORDINATION_ORIGINS[name]
+    current = C._sha(ROOT / name)
+    assert current == C.REVIEWED_HANDOFF_COORDINATION_SOURCES[name]
+    assert current == H.REVIEWED_HANDOFF_COORDINATION_PROFILE[name]
+    if fault == "old":
+        old = "0" * 64
+    elif fault == "current":
+        current = "0" * 64
+    elif fault == "sibling":
+        name = "src/engine/scalping/unreviewed_coordination.py"
+    assert C.reviewed_preparation_pair(name, old, current) is (fault is None)
+
+
 def test_install_outside_real_os_isolation_is_refused(request_fixture):
     result = _child(
         request_fixture, "install_validation_code_context(request)\n", isolated=False
@@ -2802,7 +2818,7 @@ def test_main_preparation_uses_reviewed_stopped_origin_code(name):
     review = json.loads((ROOT / H._FORMATTING_REVIEW_PATH).read_text())
     predecessor = review["sources"][name]["before_sha256"]
     if review["sources"][name]["after_sha256"] != current:
-        assert H.REVIEWED_EXECUTION_EXACT_PROFILE[name] == current
+        assert H.REVIEWED_HANDOFF_COORDINATION_PROFILE[name] == current
         C._pairs({name: review["sources"][name]["after_sha256"]}, {name: current})
     origins = {old for old, new in pairs if new in {predecessor, current}}
     origins.add(predecessor)
@@ -3068,7 +3084,7 @@ def test_main_preparation_independently_reviews_closed_scanner(origin, damage):
 )
 def test_migration_configuration_has_independent_exact_source_pairs(name):
     current = hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
-    assert H.REVIEWED_EXECUTION_EXACT_PROFILE[name] == current
+    assert H.REVIEWED_HANDOFF_COORDINATION_PROFILE[name] == current
     for old in H.REVIEWED_MIGRATION_ORIGINS[name]:
         C._pairs({name: old}, {name: H.REVIEWED_CLOSED_LOADER_PROFILE[name]})
         C._pairs({name: old}, {name: current})
@@ -3276,7 +3292,7 @@ def test_entry_capability_independent_preparation_exact_pairs(relative, fault):
 def test_nonfixed_identifier_preparation_uses_independent_exact_sources(name,fault):
     old=H.REVIEWED_NONFIXED_IDENTITY_ORIGINS[name]
     current=hashlib.sha256((ROOT/name).read_bytes()).hexdigest()
-    assert H.REVIEWED_EXECUTION_EXACT_PROFILE[name]==current
+    assert H.REVIEWED_HANDOFF_COORDINATION_PROFILE[name]==current
     if fault=='source':old='0'*64
     if fault=='target':current='0'*64
     if fault=='path':name='src/engine/unknown_identifier_owner.py'
@@ -3323,7 +3339,7 @@ def test_invalidation_cadence_independent_preparation_exact_pairs(relative, faul
 def test_delay_collection_independent_preparation_exact_pairs(relative, fault):
     old = C.REVIEWED_DELAY_COLLECTION_ORIGINS[relative]
     current = hashlib.sha256((ROOT / relative).read_bytes()).hexdigest()
-    assert H.REVIEWED_EXECUTION_EXACT_PROFILE[relative] == current
+    assert H.REVIEWED_HANDOFF_COORDINATION_PROFILE[relative] == current
     if fault == "origin": old = "0" * 64
     if fault == "successor": current = "0" * 64
     if fault == "path": relative = "src/engine/unknown_collection_owner.py"
@@ -3339,7 +3355,7 @@ def test_submit_fresh_independent_preparation_exact_pairs(relative, fault, proje
         if projected else C.REVIEWED_SUBMIT_FRESH_ORIGINS[relative]
     )
     current = hashlib.sha256((ROOT / relative).read_bytes()).hexdigest()
-    assert current == H.REVIEWED_EXECUTION_EXACT_PROFILE[relative]
+    assert current == H.REVIEWED_HANDOFF_COORDINATION_PROFILE[relative]
     if fault == "origin": old = "0" * 64
     if fault == "successor": current = "0" * 64
     if fault == "path": relative = "src/engine/unknown_submit_owner.py"
@@ -3368,7 +3384,7 @@ def test_report_census_preparation_keeps_exact_reviewed_sources(name, fault):
     current = hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
     assert current == C.REVIEWED_REPORT_CENSUS_SOURCES[name]
     assert current == H.REVIEWED_REPORT_CENSUS_HASHES[name]
-    assert current == H.REVIEWED_EXECUTION_EXACT_PROFILE[name]
+    assert current == H.REVIEWED_HANDOFF_COORDINATION_PROFILE[name]
     if fault == "origin":
         old = "0" * 64
     if fault == "successor":
@@ -3438,7 +3454,7 @@ def test_prior_execution_independent_preparation_exact_current_source(name, faul
     old = C.REVIEWED_PRIOR_EXECUTION_ORIGINS[name]
     current = hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
     assert current == C.REVIEWED_PRIOR_EXECUTION_SOURCES[name]
-    assert current == H.REVIEWED_EXECUTION_EXACT_PROFILE[name]
+    assert current == H.REVIEWED_HANDOFF_COORDINATION_PROFILE[name]
     if fault == "origin":
         old = "0" * 64
     elif fault == "successor":
@@ -3454,7 +3470,7 @@ def test_quantity_source_independent_preparation_keeps_exact_pair(name, fault):
     old = C.REVIEWED_QUANTITY_SOURCE_ORIGINS[name]
     current = hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
     assert current == C.REVIEWED_QUANTITY_SOURCE_SOURCES[name]
-    assert current == H.REVIEWED_EXECUTION_EXACT_PROFILE[name]
+    assert current == H.REVIEWED_HANDOFF_COORDINATION_PROFILE[name]
     if fault == "origin":
         old = "0" * 64
     elif fault == "successor":
@@ -3470,7 +3486,7 @@ def test_stopped_preparation_independent_source_pair_is_exact(name, fault):
     old = C.REVIEWED_STOPPED_PREPARATION_ORIGINS[name]
     current = hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
     assert current == C.REVIEWED_EXECUTION_EXACT_SOURCES.get(name, C.REVIEWED_STOPPED_PREPARATION_SOURCES[name])
-    assert current == H.REVIEWED_EXECUTION_EXACT_PROFILE[name]
+    assert current == H.REVIEWED_HANDOFF_COORDINATION_PROFILE[name]
     if fault == "origin":
         old = "0" * 64
     elif fault == "successor":
