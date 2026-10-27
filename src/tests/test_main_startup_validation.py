@@ -33,6 +33,121 @@ CODE_FILES = (
 )
 
 
+@pytest.mark.parametrize(
+    "fault", [None, "non_exact", "selector", "dirty", "unselected"]
+)
+def test_execution_exact_policy_code_does_not_require_previous_runtime_custody(
+    tmp_path, monkeypatch, fault
+):
+    from src.engine.infrastructure import runtime_release_router as R
+    from src.engine.infrastructure import startup_validation_code_context as C
+    from src.engine.automation import prepared_policy_code_handoff as P
+    from src.engine.scalping import main_stop_policy as S, holding_vote_experiment as V
+    from src.engine.scalping import holding_path_vote_policy as HP
+    from src.engine.scalping import pre_submit_delay_initial_policy as L
+
+    root, selected = tmp_path / "candidate", tmp_path / "previous"
+    paths = {
+        "pre_submit_delay": {"delay.py": "delay.py"},
+        "main_stop": {"stop.py": "src/engine/stop.py"},
+        "holding_vote": {"vote.py": "src/engine/vote.py"},
+    }
+    expected = {}
+    for family, inventory in paths.items():
+        for relative in inventory.values():
+            for directory, content in (
+                (root, "new policy code"),
+                (selected, "old code"),
+            ):
+                p = directory / relative
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_text(content)
+        expected[family] = validation._digest(
+            {
+                key: validation._sha(root / relative)
+                for key, relative in inventory.items()
+            }
+        )
+    selector = tmp_path / "data/runtime/runtime_release_selection.json"
+    selector.parent.mkdir(parents=True)
+    selector.write_text("original selector")
+    monkeypatch.setattr(validation, "ROOT", root)
+    monkeypatch.setattr(
+        validation,
+        "_git",
+        lambda _, *args: (
+            "c" * 40
+            if args[0] == "rev-parse"
+            else ("dirty" if fault == "dirty" else "")
+        ),
+    )
+    monkeypatch.setattr(
+        R,
+        "selected_release",
+        lambda _: (selected, "d" * 40 if fault == "selector" else "a" * 40),
+    )
+    monkeypatch.setattr(R, "validate_release", lambda *a: (root, "c" * 40))
+    monkeypatch.setattr(L, "CONTRACT_PATHS", paths["pre_submit_delay"])
+    monkeypatch.setattr(S, "implementation_paths", lambda: {"stop.py": None})
+    monkeypatch.setattr(V, "_code_paths", lambda: {"vote.py": None})
+    monkeypatch.setattr(
+        S,
+        "load_bundle",
+        lambda *a, **kw: dict(
+            policy_sha256="b" * 64, code_sha256=expected["main_stop"]
+        ),
+    )
+    monkeypatch.setattr(
+        HP,
+        "load_bundle",
+        lambda *a, **kw: dict(
+            bundle_sha256="b" * 64, code_sha256=expected["holding_vote"]
+        ),
+    )
+    monkeypatch.setattr(C, "bind_main_preparation", lambda *a: {"source_hashes": {}})
+
+    def no_unissued_custody(*a, **kw):
+        raise ValueError("native_compatibility_required")
+
+    monkeypatch.setattr(P, "resolve_prepared_code_origin", no_unissued_custody)
+    intake = dict(
+        selected_root=selected,
+        selected_commit="a" * 40,
+        manifest=dict(
+            target_date=DAY,
+            pre_submit_delay_handoff=dict(
+                policy_sha256="b" * 64,
+                code_contract_sha256=(
+                    "0" * 64 if fault == "non_exact" else expected["pre_submit_delay"]
+                ),
+            ),
+            main_stop_confirmation_receipt=dict(policy_sha256="b" * 64),
+            holding_path_vote_policy_receipt=dict(bundle_sha256="b" * 64),
+            env_overrides={S.ENV_FILE: "fixture", S.ENV_SHA: "b" * 64},
+        ),
+    )
+    if fault:
+        with pytest.raises(
+            ValueError,
+            match={
+                "non_exact": "native_compatibility_required",
+                "selector": "startup_selected_release_changed",
+                "dirty": "startup_execution_source_dirty",
+                "unselected": "startup_execution_not_selected",
+            }[fault],
+        ):
+            validation._bind_execution(tmp_path, root, intake, fault != "unselected")
+    else:
+        result = validation._bind_execution(tmp_path, root, intake, True)
+        assert set(result["contracts"]) == set(paths)
+        for family, proof in result["contracts"].items():
+            assert proof["origin"]["basis"] == "execution_exact_code_contract"
+            assert proof["runtime_code_contract_sha256"] == expected[family]
+            assert proof["origin"]["selected_release_commit"] == "a" * 40
+            assert proof["origin"]["origin_commit"] == "c" * 40
+            assert proof["changed_consumer_paths"] == []
+
+
 def test_source_closure_merge_never_overwrites_original_intake_generation():
     sources = {"/original/policy.json": "a" * 64, "/original/absent": None}
     validation._merge_source_hashes(

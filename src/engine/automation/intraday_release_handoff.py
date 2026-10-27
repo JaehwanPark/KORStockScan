@@ -12508,6 +12508,30 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
 }}
 
 
+# Preserve the issued stopped profile while adding exact-policy execution custody.
+REVIEWED_EXECUTION_EXACT_HASHES = {'src/engine/automation/main_startup_validation.py': 'ffc3433a9b8ef4a79f46562cecb4de59ed8a8b2a09ace5bb50027bb99f545c8f', 'src/engine/infrastructure/startup_validation_code_context.py': 'aa8e53029e9fc2d4e3b4562adba7b8ddb1b0f2966da2d621456c5de4c23c4d82'}
+REVIEWED_EXECUTION_EXACT_ORIGINS = {'src/engine/automation/main_startup_validation.py': '680d244ea1d468af3fee125fa1b18b558e584bc79bb8aeb29073c4572b13e481', 'src/engine/infrastructure/startup_validation_code_context.py': '0be485e750c0e62599036912c0cb0bfb8171bc8f045d3d104b5d2a17a26da183'}
+REVIEWED_EXECUTION_EXACT_PROFILE = {**REVIEWED_STOPPED_PREPARATION_PROFILE, **REVIEWED_EXECUTION_EXACT_HASHES}
+REVIEWED_EXECUTION_EXACT_VARIANTS = {
+    (key[0], REVIEWED_EXECUTION_EXACT_HASHES.get(key[0], key[1])): {
+        **value,
+        "selector_path": "src/engine/automation/main_startup_validation.py",
+        "selector_sha256": REVIEWED_EXECUTION_EXACT_HASHES["src/engine/automation/main_startup_validation.py"],
+        "dependencies": {**value["dependencies"], **REVIEWED_EXECUTION_EXACT_HASHES},
+        "contract_extensions": {
+            origin: {name: REVIEWED_EXECUTION_EXACT_HASHES.get(os.path.normpath(name), sha) for name, sha in paths.items()}
+            for origin, paths in value["contract_extensions"].items()
+        },
+    } for key, value in REVIEWED_STOPPED_PREPARATION_VARIANTS.items()
+}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple(
+        (old, current) for old in {value for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ()) for value in pair}
+        | {REVIEWED_EXECUTION_EXACT_ORIGINS[name]})
+    for name, current in REVIEWED_EXECUTION_EXACT_HASHES.items()
+}}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -13335,6 +13359,12 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     ):
         prepared_hashes = REVIEWED_STOPPED_PREPARATION_PROFILE
         prepared_variants = REVIEWED_STOPPED_PREPARATION_VARIANTS
+    if (
+        (source := candidate_bytes("src/engine/automation/main_startup_validation.py", optional=True)) is not None
+        and hashlib.sha256(source).hexdigest() == REVIEWED_EXECUTION_EXACT_HASHES["src/engine/automation/main_startup_validation.py"]
+    ):
+        prepared_hashes = REVIEWED_EXECUTION_EXACT_PROFILE
+        prepared_variants = REVIEWED_EXECUTION_EXACT_VARIANTS
     entry_cost_hashes = (
         prepared_hashes
         if prepared_owner_present

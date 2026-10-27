@@ -848,3 +848,14 @@ reselection, current observation or new PID-consumption claim. The existing
 `native_cold_review_sha256` workflow field is retained for compatibility and
 binds the exact native stopped review, including its explicit ordered-closed
 basis; its name grants no additional authority.
+
+For an isolated startup family whose execution code digest exactly equals the
+natively verified prepared policy's declared code digest, bind that exact
+execution generation directly. The selected predecessor remains an independently
+bound actor; do not require it to have consumed a policy calculated by a later
+workflow. The OS-isolated child rechecks the execution contract, original policy
+hash, selector/root/commit and unchanged source closure. This exact-code basis
+grants no compatibility delta or runtime/PID authority. Non-exact code still
+requires the existing original-issuer compatibility chain. Active-parent custody,
+complete native preparation, policy loading and selected-generation/PID checks
+remain separate mandatory consumers.

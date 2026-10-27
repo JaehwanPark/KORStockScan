@@ -891,24 +891,39 @@ def _bind_execution(workspace, execution_root, intake, candidate):
     contracts, contract_sources = {}, {}
 
     def bind_contract(family, policy_sha, expected, paths):
-        origin = resolve_prepared_code_origin(
-            workspace / "data",
-            manifest["target_date"],
-            family=family,
-            policy_sha=policy_sha,
-            expected=expected,
-            paths=paths,
-            selected_root=intake["selected_root"],
-            selected_commit=intake["selected_commit"],
-        )
-        changed = _verify_entry_code_delta(
-            root, commit, origin["origin_commit"], paths, expected
-        )
+        actual = _digest({key: _sha(root / name) for key, name in paths.items()})
+        if actual == expected:
+            # The native prepared policy can have been calculated by a newer
+            # workflow than the still-selected predecessor. Exact execution
+            # bytes need no compatibility claim about that predecessor.
+            selector = workspace / "data/runtime/runtime_release_selection.json"
+            origin = dict(
+                basis="execution_exact_code_contract",
+                origin_commit=commit,
+                selected_release_root=str(intake["selected_root"]),
+                selected_release_commit=intake["selected_commit"],
+                original_code_sha256=expected,
+                sources={str(selector): _sha(selector)},
+            )
+            changed = []
+        else:
+            origin = resolve_prepared_code_origin(
+                workspace / "data",
+                manifest["target_date"],
+                family=family,
+                policy_sha=policy_sha,
+                expected=expected,
+                paths=paths,
+                selected_root=intake["selected_root"],
+                selected_commit=intake["selected_commit"],
+            )
+            changed = _verify_entry_code_delta(
+                root, commit, origin["origin_commit"], paths, expected
+            )
         sources = dict(origin["sources"])
         sources.update(
             {str((root / name).resolve()): _sha(root / name) for name in paths.values()}
         )
-        actual = _digest({key: _sha(root / name) for key, name in paths.items()})
         contracts[family] = dict(
             schema="main_startup_validation_consumer_code_handoff_v1",
             target_date=manifest["target_date"],

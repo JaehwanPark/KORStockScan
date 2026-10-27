@@ -4479,3 +4479,59 @@ existing cold transaction under its state-specific branch; the new behavior
 extends its normal ordered-closed case and exact code profile. No owner, module,
 entrypoint or old historical reader was displaced. Compilation, diff whitespace,
 link/authority review and current-checklist print-only parsing pass.
+
+
+### Exact prepared-policy execution versus predecessor custody -- 2026-10-28
+
+The f48dd058d candidate remains unselected. Native ordered-closed review passed,
+and the original active-parent reader issued its code receipt without changing
+the policy pointer. Initial preparation correctly rejected the controller's
+summary-only result. That result had exit0 but preterminal scope; the native
+wrapper second phase (`POSTCLOSE_STAGE_WORKER=1`) completed whole controller
+DONE03:48:42 and whole strict sealing. No calculations, EOD or prefix were rerun.
+The failed preparation, summary-only controller/strict, summary stage and original
+checklist bytes are preserved under candidate-f48dd058d/pre-whole-seal-originals.
+Native preparation then succeeded03:51:33 for source27/target28 with selected10f
+and f48 as the separately named verification workflow.
+
+The inherited code-issuance recipe assumed a previous target28 compatibility
+receipt. Actual native policy inventories instead show exact candidate-code
+digests for delay, stop and holding; a compatibility receipt is unnecessary.
+The bounded native transition caller now verifies P._origin/P._policy and exact
+family code before its existing lock/CAS/verify/unwind sequence. Its twelve
+offline transition cases and native selector-input replay pass without protected
+writes, providers, orders or PID claims. Original caller bytes and failed
+first-issue attempt remain preserved. This is an invocation correction, not
+permission to relax native policy or bootstrap verification.
+
+Independent P5 then found a real source defect: run898391a098c041f3905dbe626c906008
+passed full native preparation but failed at bind-execution with
+prepared_code_intraday_custody_invalid before creating the Main child. The
+binding reader always asked selected10f for an already-consumed target28 origin,
+even when candidate code exactly matched the newly calculated target28 policy.
+The existing startup binder now recognizes exact execution bytes; the independent
+OS-isolated code-context reader verifies that basis, code/policy/selector identity
+and empty compatibility delta. Original selected identity remains separately
+bound. Non-exact code still uses the complete old native compatibility resolver.
+No live consumer, family calculation implementation, policy, provider, order,
+quantity, schedule, authority or package changes. Original f48 profiles remain
+readable; the new exact startup bytes have their own complete profile.
+
+Regression on original source:2 failures,10 negative passes. Repaired focused
+parent/isolated-child tests:12 PASS, including changed expected code, selector,
+commit, source, dirty/unselected code and non-exact fallback. Full parent, child
+and historical/current profile checks are running before a new immutable
+candidate. All failures, preparation and source identities remain preserved.
+Code closure does not imply deployment, selected P5, startup or unassisted
+acceptance. The existing DirectFamilyPreopenPolicyHandoff owns the next consumer.
+
+Final review gate: parent/preparation226 PASS, independent OS-context921 PASS,
+current and preserved stopped/quantity complete-generation45 PASS, additional
+profile9 PASS, compile/diff/link/authority/print-only document checks PASS.
+Against91fccfe44, non-test source+86/-23, tests+171/-12, document additions
+recorded separately. The existing binder/context and profiles are extended;
+non-exact compatibility, historical readers and native live paths are retained.
+No new module, validator, publisher or entrypoint replaces an existing owner.
+The original selected native active-parent reader also passed the future rebind
+preflight, preserving source26/effective27/next28 roles and selector bytes.
+Actual new candidate/selected P5 and next scheduled runtime consumption remain OPEN.

@@ -3044,6 +3044,16 @@ for _name, _sha in REVIEWED_STOPPED_PREPARATION_SOURCES.items():
     _history.update((_old, _sha) for _old in _origins)
 
 
+# Exact native policy code belongs to the execution workflow, not the selector.
+REVIEWED_EXECUTION_EXACT_SOURCES = {'src/engine/automation/main_startup_validation.py': 'ffc3433a9b8ef4a79f46562cecb4de59ed8a8b2a09ace5bb50027bb99f545c8f'}
+REVIEWED_EXECUTION_EXACT_ORIGINS = {'src/engine/automation/main_startup_validation.py': '680d244ea1d468af3fee125fa1b18b558e584bc79bb8aeb29073c4572b13e481'}
+for _name, _sha in REVIEWED_EXECUTION_EXACT_SOURCES.items():
+    _history = REVIEWED_PREPARATION_HISTORY.setdefault(_name, set())
+    _origins = {value for pair in _history for value in pair}
+    _origins.add(REVIEWED_EXECUTION_EXACT_ORIGINS[_name])
+    _history.update((_old, _sha) for _old in _origins)
+
+
 def reviewed_preparation_pair(relative, old, current):
     # An already reviewed physical pair keeps its original authority; a
     # formatting projection must not replace either endpoint before this check.
@@ -3243,6 +3253,23 @@ def _origin(proof, request):
         or origin.get("original_code_sha256") != proof["original_code_sha256"]
     ):
         raise ValueError("startup_code_context_origin_identity_invalid")
+    selector = Path(request["data_root"]) / "runtime/runtime_release_selection.json"
+    _bound_source(sources, selector)
+    selection = _json(selector)
+    if (
+        selection.get("schema") != "runtime_release_selection_v1"
+        or selection.get("release_root") != str(selected)
+        or selection.get("git_commit") != commit
+    ):
+        raise ValueError("startup_code_context_selected_identity_changed")
+    if origin.get("basis") == "execution_exact_code_contract":
+        if (
+            origin["origin_commit"] != request["execution_release_commit"]
+            or proof["runtime_code_contract_sha256"] != proof["original_code_sha256"]
+            or proof.get("changed_consumer_paths") != []
+        ):
+            raise ValueError("startup_code_context_execution_exact_origin_invalid")
+        return
     selected_paths = origin.get("selected_paths", proof["paths"])
     if (
         not isinstance(selected_paths, dict)
@@ -3253,15 +3280,6 @@ def _origin(proof, request):
     selected_code = _contract(selected, selected_paths, sources)
     if selected_code != origin.get("selected_runtime_code_sha256"):
         raise ValueError("startup_code_context_selected_contract_changed")
-    selector = Path(request["data_root"]) / "runtime/runtime_release_selection.json"
-    _bound_source(sources, selector)
-    selection = _json(selector)
-    if (
-        selection.get("schema") != "runtime_release_selection_v1"
-        or selection.get("release_root") != str(selected)
-        or selection.get("git_commit") != commit
-    ):
-        raise ValueError("startup_code_context_selected_identity_changed")
     basis = origin.get("basis")
     if basis == "selected_exact_code_contract":
         if (
