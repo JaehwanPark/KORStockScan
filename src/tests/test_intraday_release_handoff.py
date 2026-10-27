@@ -5415,7 +5415,8 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
     )
     subprocess.run(["git", "-C", str(root), "checkout", "-q", "75e0fbbf7"], check=True)
     hashes = {
-        "current": handoff.REVIEWED_NONFIXED_FINAL_PROFILE,
+        "current": handoff.REVIEWED_NONFIXED_OBSERVER_PROFILE,
+        "nonfixed_final": handoff.REVIEWED_NONFIXED_FINAL_PROFILE,
         "nonfixed_current": handoff.REVIEWED_NONFIXED_CURRENT_PROFILE,
         "preclaim_cadence": handoff.REVIEWED_PRECLAIM_CADENCE_PROFILE,
         "consumed_invalidation_cadence": handoff.REVIEWED_INVALIDATION_CADENCE_PROFILE,
@@ -5512,6 +5513,7 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
                         "preclaim_diagnostics": "c8d22dd41",
                         "invalidation_cadence": "d5ddc0ae0",
                         "nonfixed_current": "7add11172",
+                        "nonfixed_final": "3178d65e0",
                         "preclaim_cadence": "2b725bb39",
                         "finalization_admission": "194307750",
                         "consumed_suffix_report": "ab663e13b",
@@ -6604,7 +6606,7 @@ def test_invalidation_cadence_keeps_consumed_entry_capability(tmp_path, family, 
         "src/engine/infrastructure/startup_validation_code_context.py")
 
 
-@pytest.mark.parametrize("generation", ["preclaim_diagnostics", "invalidation_cadence", "nonfixed_current", "preclaim_cadence"])
+@pytest.mark.parametrize("generation", ["preclaim_diagnostics", "invalidation_cadence", "nonfixed_current", "preclaim_cadence", "nonfixed_final"])
 @pytest.mark.parametrize("family", ["main_stop", "holding_vote", "pre_submit_delay"])
 @pytest.mark.parametrize("fault", [None, "successor_mix"])
 def test_preclaim_cadence_retains_each_complete_predecessor(tmp_path, generation, family, fault):
@@ -6615,6 +6617,8 @@ def test_preclaim_cadence_retains_each_complete_predecessor(tmp_path, generation
         if generation == "nonfixed_current"
         else "src/engine/kiwoom_websocket.py"
     )
+    if generation == "nonfixed_final":
+        dependency = "src/engine/monitoring/submission_bottleneck_monitor.py"
     test_entry_cost_handoff_keeps_exact_complete_generation(
         tmp_path, family, fault, generation, dependency
     )

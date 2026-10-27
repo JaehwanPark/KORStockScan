@@ -2761,7 +2761,7 @@ def test_main_preparation_uses_reviewed_stopped_origin_code(name):
     review = json.loads((ROOT / H._FORMATTING_REVIEW_PATH).read_text())
     predecessor = review["sources"][name]["before_sha256"]
     if review["sources"][name]["after_sha256"] != current:
-        assert H.REVIEWED_NONFIXED_FINAL_PROFILE[name] == current
+        assert H.REVIEWED_NONFIXED_OBSERVER_PROFILE[name] == current
         C._pairs({name: review["sources"][name]["after_sha256"]}, {name: current})
     origins = {old for old, new in pairs if new in {predecessor, current}}
     origins.add(predecessor)
@@ -3027,8 +3027,9 @@ def test_main_preparation_independently_reviews_closed_scanner(origin, damage):
 )
 def test_migration_configuration_has_independent_exact_source_pairs(name):
     current = hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
-    assert H.REVIEWED_CLOSED_LOADER_PROFILE[name] == current
+    assert H.REVIEWED_NONFIXED_OBSERVER_PROFILE[name] == current
     for old in H.REVIEWED_MIGRATION_ORIGINS[name]:
+        C._pairs({name: old}, {name: H.REVIEWED_CLOSED_LOADER_PROFILE[name]})
         C._pairs({name: old}, {name: current})
         with pytest.raises(ValueError, match="unreviewed"):
             C._pairs({name: old}, {name: "0" * 64})
@@ -3234,7 +3235,7 @@ def test_entry_capability_independent_preparation_exact_pairs(relative, fault):
 def test_nonfixed_identifier_preparation_uses_independent_exact_sources(name,fault):
     old=H.REVIEWED_NONFIXED_IDENTITY_ORIGINS[name]
     current=hashlib.sha256((ROOT/name).read_bytes()).hexdigest()
-    assert H.REVIEWED_NONFIXED_FINAL_HASHES[name]==current
+    assert H.REVIEWED_NONFIXED_OBSERVER_HASHES[name]==current
     if fault=='source':old='0'*64
     if fault=='target':current='0'*64
     if fault=='path':name='src/engine/unknown_identifier_owner.py'

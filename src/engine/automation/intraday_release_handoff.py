@@ -12064,6 +12064,40 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
     for name, current in REVIEWED_NONFIXED_FINAL_HASHES.items()
 }}
 
+# Follow-up diagnostic consumer repair; preserve the deployed final generation.
+REVIEWED_NONFIXED_OBSERVER_HASHES = {
+    **REVIEWED_NONFIXED_FINAL_HASHES,
+    "src/engine/monitoring/submission_bottleneck_monitor.py": "9f38385273e4a89085f3f974d962b1bb31b40348a87ff2e7944bc26f3c8fde6a",
+    "src/engine/infrastructure/startup_validation_code_context.py": "07ae056ee3b09ed745654be963f4d1269b7b8e4fac610ee05b710d96e7cbafa3",
+}
+REVIEWED_NONFIXED_OBSERVER_ORIGINS = REVIEWED_NONFIXED_FINAL_HASHES
+REVIEWED_NONFIXED_OBSERVER_PROFILE = {
+    **REVIEWED_NONFIXED_FINAL_PROFILE,
+    **REVIEWED_NONFIXED_OBSERVER_HASHES,
+}
+REVIEWED_NONFIXED_OBSERVER_VARIANTS = {
+    (key[0], REVIEWED_NONFIXED_OBSERVER_HASHES.get(key[0], key[1])): {
+        **value,
+        "selector_path": "src/engine/infrastructure/startup_validation_code_context.py",
+        "selector_sha256": REVIEWED_NONFIXED_OBSERVER_HASHES["src/engine/infrastructure/startup_validation_code_context.py"],
+        "dependencies": {**value["dependencies"], **REVIEWED_NONFIXED_OBSERVER_HASHES},
+        "contract_extensions": {
+            origin: {name: REVIEWED_NONFIXED_OBSERVER_HASHES.get(os.path.normpath(name), sha)
+                     for name, sha in paths.items()}
+            for origin, paths in value["contract_extensions"].items()
+        },
+    }
+    for key, value in REVIEWED_NONFIXED_FINAL_VARIANTS.items()
+}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple(
+        (old, current)
+        for old in {value for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ()) for value in pair}
+                   | {REVIEWED_NONFIXED_OBSERVER_ORIGINS[name]}
+    )
+    for name, current in REVIEWED_NONFIXED_OBSERVER_HASHES.items()
+}}
+
 
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
@@ -12826,6 +12860,12 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     ):
         prepared_hashes = REVIEWED_NONFIXED_FINAL_PROFILE
         prepared_variants = REVIEWED_NONFIXED_FINAL_VARIANTS
+    if (
+        (source := candidate_bytes("src/engine/infrastructure/startup_validation_code_context.py", optional=True)) is not None
+        and hashlib.sha256(source).hexdigest() == REVIEWED_NONFIXED_OBSERVER_HASHES["src/engine/infrastructure/startup_validation_code_context.py"]
+    ):
+        prepared_hashes = REVIEWED_NONFIXED_OBSERVER_PROFILE
+        prepared_variants = REVIEWED_NONFIXED_OBSERVER_VARIANTS
     entry_cost_hashes = (
         prepared_hashes
         if prepared_owner_present
