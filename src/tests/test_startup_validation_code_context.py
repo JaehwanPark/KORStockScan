@@ -2761,7 +2761,7 @@ def test_main_preparation_uses_reviewed_stopped_origin_code(name):
     review = json.loads((ROOT / H._FORMATTING_REVIEW_PATH).read_text())
     predecessor = review["sources"][name]["before_sha256"]
     if review["sources"][name]["after_sha256"] != current:
-        assert H.REVIEWED_CLOSED_LOADER_PROFILE[name] == current
+        assert H.REVIEWED_HOLDING_QUOTE_PROFILE[name] == current
         C._pairs({name: review["sources"][name]["after_sha256"]}, {name: current})
     origins = {old for old, new in pairs if new in {predecessor, current}}
     origins.add(predecessor)
@@ -3170,6 +3170,17 @@ def test_drain_closure_preparation_requires_exact_reviewed_pair(damage):
     relative = "src/engine/automation/ordered_intraday_deploy.py"
     old = hashlib.sha256(subprocess.check_output(
         ["git", "-C", str(ROOT), "show", "198286cf2:" + relative])).hexdigest()
+    current = hashlib.sha256((ROOT / relative).read_bytes()).hexdigest()
+    if damage == "unreviewed": current = "0" * 64
+    elif damage == "wrong_origin": old = "0" * 64
+    assert C.reviewed_preparation_pair(relative, old, current) is (damage is None)
+
+
+@pytest.mark.parametrize("relative", list(C.REVIEWED_HOLDING_QUOTE_SOURCES))
+@pytest.mark.parametrize("damage", [None, "unreviewed", "wrong_origin"])
+def test_holding_quote_preparation_requires_exact_pair(relative, damage):
+    old = hashlib.sha256(subprocess.check_output(
+        ["git", "-C", str(ROOT), "show", "97bc1f62e:" + relative])).hexdigest()
     current = hashlib.sha256((ROOT / relative).read_bytes()).hexdigest()
     if damage == "unreviewed": current = "0" * 64
     elif damage == "wrong_origin": old = "0" * 64

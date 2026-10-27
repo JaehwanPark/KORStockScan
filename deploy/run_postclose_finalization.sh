@@ -257,6 +257,7 @@ run_final_detector() {
     --log "$PROJECT_DIR/logs/run_error_detection_cron.log" \
     env POSTCLOSE_FINALIZATION_DETECTOR_PARENT_PID="$$" POSTCLOSE_FINALIZATION_DETECTOR_DATE="$TARGET_DATE" \
     POSTCLOSE_PREPARED_EFFECTIVE_DATE="$TARGET_EFFECTIVE_DATE" \
+    ERROR_DETECTION_LOCK_WAIT_SEC="$detector_budget" \
     bash "$ERROR_DETECTION_RUNNER" "${detector_args[@]}"
 }
 

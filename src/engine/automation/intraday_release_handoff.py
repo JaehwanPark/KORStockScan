@@ -11458,6 +11458,35 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
 }}
 
 
+# Reviewed holding quote source and automatic custody release; exact complete generation.
+REVIEWED_HOLDING_QUOTE_HASHES = {'src/engine/kiwoom_sniper_v2.py': 'f9ac6408c2ead8f699728eaf01a6170729dea6b59bb01b327bc22ff295412293', 'src/engine/sniper_state_handlers.py': 'c7b1330cc82731b2362816c54ffd3c9df50536ef51878ee7a42b344e94d17dc3', 'src/engine/kiwoom_websocket.py': '6a794b5feb6e53990231e75404f1110b4b0cc91467b175345fdd4b0aef4be471', 'src/trading/market/aftermarket_eligibility.py': '34cce97a46d2d16af19f900012026cd78dc47f32e03594329c2e4068909f1d53', 'src/engine/infrastructure/startup_validation_code_context.py': '6594bc0b88c27131b8e44f2e74179c7f9f4983eeac5da6dd74abe1602497a45a'}
+REVIEWED_HOLDING_QUOTE_PROFILE = {
+    **REVIEWED_DRAIN_POINTER_PROFILE, **REVIEWED_HOLDING_QUOTE_HASHES
+}
+REVIEWED_HOLDING_QUOTE_VARIANTS = {
+    (key[0], REVIEWED_HOLDING_QUOTE_HASHES.get(key[0], key[1])): {
+        **value,
+        "selector_path": "src/engine/infrastructure/startup_validation_code_context.py",
+        "selector_sha256": REVIEWED_HOLDING_QUOTE_HASHES["src/engine/infrastructure/startup_validation_code_context.py"],
+        "dependencies": {**value["dependencies"], **REVIEWED_HOLDING_QUOTE_HASHES},
+        "contract_extensions": {
+            origin: {name: REVIEWED_HOLDING_QUOTE_HASHES.get(os.path.normpath(name), sha)
+                     for name, sha in paths.items()}
+            for origin, paths in value["contract_extensions"].items()
+        },
+    }
+    for key, value in REVIEWED_DRAIN_POINTER_VARIANTS.items()
+}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple(
+        (old, current)
+        for old in {value for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ())
+                    for value in pair} | {REVIEWED_DRAIN_POINTER_PROFILE[name]}
+    )
+    for name, current in REVIEWED_HOLDING_QUOTE_HASHES.items()
+}}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -12142,6 +12171,12 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     ):
         prepared_hashes = REVIEWED_DRAIN_POINTER_PROFILE
         prepared_variants = REVIEWED_DRAIN_POINTER_VARIANTS
+    if (
+        (source := candidate_bytes("src/engine/infrastructure/startup_validation_code_context.py", optional=True)) is not None
+        and hashlib.sha256(source).hexdigest() == REVIEWED_HOLDING_QUOTE_HASHES["src/engine/infrastructure/startup_validation_code_context.py"]
+    ):
+        prepared_hashes = REVIEWED_HOLDING_QUOTE_PROFILE
+        prepared_variants = REVIEWED_HOLDING_QUOTE_VARIANTS
     entry_cost_hashes = (
         prepared_hashes
         if prepared_owner_present

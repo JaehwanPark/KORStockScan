@@ -2546,6 +2546,17 @@ for _name, _sha in REVIEWED_DRAIN_POINTER_SOURCES.items():
     _history.update((old, _sha) for old in _prior)
 
 
+# Exact reviewed holding quote/custody consumer repair; policies and guards unchanged.
+REVIEWED_HOLDING_QUOTE_SOURCES = {'src/engine/kiwoom_sniper_v2.py': 'f9ac6408c2ead8f699728eaf01a6170729dea6b59bb01b327bc22ff295412293', 'src/engine/sniper_state_handlers.py': 'c7b1330cc82731b2362816c54ffd3c9df50536ef51878ee7a42b344e94d17dc3', 'src/engine/kiwoom_websocket.py': '6a794b5feb6e53990231e75404f1110b4b0cc91467b175345fdd4b0aef4be471', 'src/trading/market/aftermarket_eligibility.py': '34cce97a46d2d16af19f900012026cd78dc47f32e03594329c2e4068909f1d53'}
+REVIEWED_HOLDING_QUOTE_ORIGINS = {'src/engine/kiwoom_sniper_v2.py': '870985eb69dc70bb23271e883a9170ab48f5288c506a6b0195745f54849ab827', 'src/engine/sniper_state_handlers.py': 'e441b1ad823d53e94aa10537e0645a5661d1612a4800ce6e54c7cf6b476fb259', 'src/engine/kiwoom_websocket.py': 'cc5af2d47bcb6d18a64917fcf286e7cad909be5c056e49afedcc9827ea80e637', 'src/trading/market/aftermarket_eligibility.py': 'daa1fa457c208aeb2c98a12abca0a8d748d2a9f4e7a63c384c9e911fb0cf05b1'}
+for _name, _sha in REVIEWED_HOLDING_QUOTE_SOURCES.items():
+    _history = REVIEWED_PREPARATION_HISTORY.setdefault(_name, set())
+    _prior = {v for pair in _history for v in pair} | {REVIEWED_HOLDING_QUOTE_ORIGINS[_name]}
+    if _name in REVIEWED_PREPARATION_SOURCES:
+        _prior.update(REVIEWED_PREPARATION_SOURCES[_name])
+    _history.update((old, _sha) for old in _prior)
+
+
 def reviewed_preparation_pair(relative, old, current):
     # An already reviewed physical pair keeps its original authority; a
     # formatting projection must not replace either endpoint before this check.

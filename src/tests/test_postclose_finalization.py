@@ -40,7 +40,7 @@ def test_detector_resume_executes_only_fresh_detector_after_prefix_validation(
     _write_executable(
         cleanup, 'echo unexpected-cleanup >> "$PROJECT_DIR/order.txt"\nexit 87\n'
     )
-    _write_executable(detector, 'echo detector >> "$PROJECT_DIR/order.txt"\n')
+    _write_executable(detector, '[[ "$ERROR_DETECTION_LOCK_WAIT_SEC" == "600" ]]\necho detector >> "$PROJECT_DIR/order.txt"\n')
     _write_executable(
         python,
         """\

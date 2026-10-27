@@ -5411,7 +5411,8 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
     )
     subprocess.run(["git", "-C", str(root), "checkout", "-q", "75e0fbbf7"], check=True)
     hashes = {
-        "current": handoff.REVIEWED_DRAIN_POINTER_PROFILE,
+        "current": handoff.REVIEWED_HOLDING_QUOTE_PROFILE,
+        "drain_pointer": handoff.REVIEWED_DRAIN_POINTER_PROFILE,
         "drain_closure": handoff.REVIEWED_DRAIN_CLOSURE_PROFILE,
         "consumed_quantity_history": handoff.REVIEWED_QUANTITY_HISTORY_PROFILE,
         "consumed_suffix_report": handoff.REVIEWED_SUFFIX_REPORT_PROFILE,
@@ -5482,6 +5483,7 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
                         "consumed_stop_index": "2fbf31449",
                         "consumed_quantity_history": "198286cf2",
                         "drain_closure": "e930a7c95",
+                        "drain_pointer": "97bc1f62e",
                         "consumed_suffix_report": "ab663e13b",
                         "consumed_isolated_index": "59a922b19",
                         "consumed_auxiliary_format": "c0346b611",
@@ -6455,3 +6457,19 @@ def test_drain_pointer_handoff_keeps_prior_issued_generation(tmp_path, family, f
     test_entry_cost_handoff_keeps_exact_complete_generation(
         tmp_path, family, fault, "drain_closure",
         "src/engine/automation/ordered_intraday_deploy.py")
+
+
+@pytest.mark.parametrize("family", ["main_stop", "holding_vote", "pre_submit_delay"])
+@pytest.mark.parametrize("fault", [None, "missing", "dirty", "committed_change", "parent_mix"])
+@pytest.mark.parametrize("dependency", list(handoff.REVIEWED_HOLDING_QUOTE_HASHES))
+def test_holding_quote_handoff_complete_generation(tmp_path, family, fault, dependency):
+    test_entry_cost_handoff_keeps_exact_complete_generation(
+        tmp_path, family, fault, "current", dependency)
+
+
+@pytest.mark.parametrize("family", ["main_stop", "holding_vote", "pre_submit_delay"])
+@pytest.mark.parametrize("fault", ["", "successor_mix"])
+def test_holding_quote_handoff_keeps_consumed_pointer_generation(tmp_path, family, fault):
+    test_entry_cost_handoff_keeps_exact_complete_generation(
+        tmp_path, family, fault, "drain_pointer",
+        "src/engine/sniper_state_handlers.py")

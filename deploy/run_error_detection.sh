@@ -11,6 +11,11 @@ MODE="${1:-full}"
 LOCK_FILE="${PROJECT_DIR}/tmp/run_error_detection.lock"
 LOG_FILE="${PROJECT_DIR}/logs/run_error_detection.log"
 POSTCLOSE_SOURCE_DATE="${2:-}"
+LOCK_WAIT_SEC="${ERROR_DETECTION_LOCK_WAIT_SEC:-0}"
+if [[ ! "$LOCK_WAIT_SEC" =~ ^(0|[1-9][0-9]*)$ || ( "$LOCK_WAIT_SEC" != 0 && -z "$POSTCLOSE_SOURCE_DATE" ) ]]; then
+    echo "[FAIL] error detection reason=invalid_lock_wait_scope"
+    exit 2
+fi
 TARGET_DATE="${POSTCLOSE_SOURCE_DATE:-$(TZ=Asia/Seoul date +%F)}"
 REPORT_FILE="${PROJECT_DIR}/data/report/error_detection/error_detection_${TARGET_DATE}.json"
 CPU_AFFINITY="${ERROR_DETECTION_CPU_AFFINITY:-$(korstockscan_default_cpu_affinity health)}"
@@ -28,7 +33,13 @@ if [[ -z "$POSTCLOSE_SOURCE_DATE" ]]; then
 fi
 
 exec 9>"$LOCK_FILE"
-if ! flock -n 9; then
+# Finalization shares its existing wall budget between admission and execution.
+# Regular sweeps retain nonblocking admission; no completed report is reused.
+lock_args=(-n)
+if [[ "$LOCK_WAIT_SEC" != 0 ]]; then
+    lock_args=(-w "$LOCK_WAIT_SEC")
+fi
+if ! flock "${lock_args[@]}" 9; then
     echo "$(TZ=Asia/Seoul date '+%Y-%m-%d %H:%M:%S') [SKIP] error detection or ordered deployment holds lock mode=${MODE}" | tee -a "$LOG_FILE"
     if [[ -n "$POSTCLOSE_SOURCE_DATE" ]]; then
         exit 75

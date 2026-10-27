@@ -74,6 +74,8 @@ OFF·퇴역 producer, 유효 frozen policy/checkpoint, 별도 custody/override·
 | 다음 KRX 영업일 05:35, bounded | postclose finalization | 직전 KRX source date의 predecessor 확인→최신 summary/tower/checklist/strict closure→cleanup→source-date final detector receipt; 06:00 predecessor deadline, 06:50 종료 상한. 07:20 PREOPEN scanner 전 30분 확보 |
 | 장후 정기 5분, 21:50까지 및 finalization 후 | System Error Detector | 해당 run/stage/target의 unresolved critical·최신 terminal; 단순 이전 PASS 재사용 금지 |
 
+Finalization의 source-date detector는 정기 detector와 잠금이 겹치면 기존 detector 단계 예산 안에서 잠금 획득을 기다린다. 대기와 실행은 같은 외부 timeout 및 06:50 종료 상한을 공유하며 예산을 갱신하지 않는다. 잠금 획득 후 선택 release를 다시 검증하고 새 invocation report를 발행해야 DONE이 된다. 정기 sweep은 기존 nonblocking admission을 유지한다. 대기 만료·선택 변경·새 보고서 부재는 실패로 보존하며 과거 지연 복구 시각이나 원본 보고서를 정상 예정 완료로 바꾸지 않는다.
+
 ### 3.1 공통 배포 경로와 독립 서비스 경계
 
 `episode_policy`·`research_allocation`과 전용 21:15 final-refresh 서비스·wrapper·설치 스크립트는 영구 제거됐다. 해당 terminal이나 OFF 영수증을 새로 요구하거나 합성하지 않는다. 현행 Main 장후 예약과 수동 복구 진입점은 `bash deploy/run_runtime_release.sh postclose SOURCE_DATE`이며, 수동 실행은 별도 승인과 실행 중인 같은 날짜 worker 부재를 확인한다. 설치된 `THRESHOLD_CYCLE_POSTCLOSE_BOT_ACTION=stop` 부작용도 유지한다.

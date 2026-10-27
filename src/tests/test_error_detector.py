@@ -451,6 +451,66 @@ def test_recovery_detector_active_lock_is_not_terminal_success(tmp_path):
     assert "[DONE]" not in result.stdout
 
 
+@pytest.mark.parametrize("release_lock,selection_rc", [(True, 43), (True, 75), (False, 43)])
+def test_finalization_detector_waits_then_rechecks_selection(
+    tmp_path, release_lock, selection_rc
+):
+    import fcntl
+    import os
+    import subprocess
+    import time
+
+    project_root = Path(__file__).resolve().parents[2]
+    (tmp_path / "tmp").mkdir()
+    python = tmp_path / ".venv/bin/python"
+    python.parent.mkdir(parents=True)
+    python.write_text(
+        "#!/bin/bash\ncat >/dev/null\n"
+        'echo rechecked > "$PROJECT_DIR/selection-checked"\n'
+        f"exit {selection_rc}\n"
+    )
+    python.chmod(0o755)
+    with (tmp_path / "tmp/run_error_detection.lock").open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        child = subprocess.Popen(
+            ["bash", str(project_root / "deploy/run_error_detection.sh"),
+             "full", "2026-10-26"],
+            env={**os.environ, "PROJECT_DIR": str(tmp_path),
+                 "ERROR_DETECTION_LOCK_WAIT_SEC": "1"},
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        try:
+            time.sleep(0.15)
+            assert child.poll() is None
+            assert not (tmp_path / "selection-checked").exists()
+            if release_lock:
+                fcntl.flock(lock, fcntl.LOCK_UN)
+            stdout, stderr = child.communicate(timeout=5)
+        finally:
+            if child.poll() is None:
+                child.kill()
+                child.communicate()
+    assert child.returncode == (selection_rc if release_lock else 75), stderr
+    assert (tmp_path / "selection-checked").exists() == release_lock
+    assert "[DONE]" not in stdout
+    assert not list((tmp_path / "tmp").glob("error_detection_*.json"))
+
+
+@pytest.mark.parametrize("budget,source", [("-1", "2026-10-26"), ("NaN", "2026-10-26"), ("1", "")])
+def test_detector_rejects_unbounded_or_unscoped_lock_wait(tmp_path, budget, source):
+    import os
+    import subprocess
+
+    result = subprocess.run(
+        ["bash", str(Path(__file__).resolve().parents[2] / "deploy/run_error_detection.sh"), "full", source],
+        env={**os.environ, "PROJECT_DIR": str(tmp_path), "ERROR_DETECTION_LOCK_WAIT_SEC": budget},
+        capture_output=True, text=True, timeout=5,
+    )
+    assert result.returncode == 2
+    assert "invalid_lock_wait_scope" in result.stdout
+    assert not (tmp_path / "tmp").exists()
+
+
 def test_postclose_recovery_retains_real_asof_and_disables_all_mutations(monkeypatch):
     from datetime import datetime, timedelta
     from zoneinfo import ZoneInfo
