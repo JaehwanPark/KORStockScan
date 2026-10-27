@@ -11887,6 +11887,37 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
     for name, current in REVIEWED_INVALIDATION_CADENCE_HASHES.items()
 }}
 
+# Exact integration of preclaim/transport evidence with current cadence/storage.
+REVIEWED_PRECLAIM_CADENCE_HASHES = {'src/engine/ai_engine_openai.py': '4534fc7e63f3c9df0be4c82bc8c75af2bb4d02cc4f3673a31d64f54a79765429', 'src/engine/kiwoom_websocket.py': '1ce0eb18925736a6378ba6899d2700bc80e7563983da380b6cfa4558958bcfdb', 'src/engine/monitoring/runtime_performance.py': '90d6d73bcbc758a880d631a5862f0f2b0ea6b6764255d4fa5a73e4ff47596d82', 'src/engine/sniper_state_handlers.py': '6e05b0846d01ed54059021c6e44599a0668a8c7302dbfe69c7948131afb67fb3', 'src/engine/monitoring/policy_generation_code_handoff.py': '93c77c8978f67592c4df75278cebb4dd1cda0cbc1a5a14d6110c232d0158ad50', 'src/engine/infrastructure/startup_validation_code_context.py': '30532b85a72685965a887f9e9a78a9ac2f2e64d71cf870f1d267865ba7b1f09c'}
+REVIEWED_PRECLAIM_CADENCE_ORIGINS = {'src/engine/ai_engine_openai.py': 'cc30c12c7bc806a793016a731a4b0ca58dadab250d79aff76cfbcf470373c06e', 'src/engine/kiwoom_websocket.py': 'ae6186d59bde4795d8c105e98d362328c23e594e55cf741f6c7972bd96308e25', 'src/engine/monitoring/runtime_performance.py': 'c23788f10acaaf0e554a42f187042ea3f37ea74d9b1d969ac95f7fdd4c9ca104', 'src/engine/sniper_state_handlers.py': '21a8ab598c4b334a4795a99236f1d49453e4da17b0feca18423ff3c91c3171d4', 'src/engine/monitoring/policy_generation_code_handoff.py': '5390fba948c04da7692d0d640316621dea3e0496ee67a8ae1b17a022647782a9', 'src/engine/infrastructure/startup_validation_code_context.py': '8d5ac1eb3fd84a766dfef22ed03c252b0bcf4d3aa5f55f59eb59a6a7f799b743'}
+REVIEWED_PRECLAIM_CADENCE_PROJECTED_ORIGINS = {'src/engine/ai_engine_openai.py': '4534fc7e63f3c9df0be4c82bc8c75af2bb4d02cc4f3673a31d64f54a79765429', 'src/engine/kiwoom_websocket.py': 'a8ac34a024da459f64c4c17bc2b6e5a4d3f8c14616eb69e5003fde9ed76fdea1', 'src/engine/monitoring/runtime_performance.py': '90d6d73bcbc758a880d631a5862f0f2b0ea6b6764255d4fa5a73e4ff47596d82', 'src/engine/sniper_state_handlers.py': '2eb4ed4fe413266422d0d2460bf30572979b4696ba217dadb32b02e0caf80aa8', 'src/engine/monitoring/policy_generation_code_handoff.py': '7108296fed9882a4b2e2aac016de457e493698f06d33bdc7405e6adde72707ee', 'src/engine/infrastructure/startup_validation_code_context.py': '5dd24b983fa33bc30bfa38c462751c0d5c2e7deb42b26e2cd5c7dce0b36cdcdf'}
+REVIEWED_PRECLAIM_CADENCE_PROFILE = {
+    **REVIEWED_INVALIDATION_CADENCE_PROFILE, **REVIEWED_PRECLAIM_CADENCE_HASHES
+}
+REVIEWED_PRECLAIM_CADENCE_VARIANTS = {
+    (key[0], REVIEWED_PRECLAIM_CADENCE_HASHES.get(key[0], key[1])): {
+        **value,
+        "selector_path": "src/engine/infrastructure/startup_validation_code_context.py",
+        "selector_sha256": REVIEWED_PRECLAIM_CADENCE_HASHES["src/engine/infrastructure/startup_validation_code_context.py"],
+        "dependencies": {**value["dependencies"], **REVIEWED_PRECLAIM_CADENCE_HASHES},
+        "contract_extensions": {
+            origin: {name: REVIEWED_PRECLAIM_CADENCE_HASHES.get(os.path.normpath(name), sha)
+                     for name, sha in paths.items()}
+            for origin, paths in value["contract_extensions"].items()
+        },
+    }
+    for key, value in REVIEWED_INVALIDATION_CADENCE_VARIANTS.items()
+}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple(
+        (old, current)
+        for old in {value for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ()) for value in pair}
+                   | {REVIEWED_PRECLAIM_CADENCE_ORIGINS[name],
+                      REVIEWED_PRECLAIM_CADENCE_PROJECTED_ORIGINS[name]}
+    )
+    for name, current in REVIEWED_PRECLAIM_CADENCE_HASHES.items()
+}}
+
 
 # Complete combined candidate, selected by its independent preparation reader.
 REVIEWED_NONFIXED_CURRENT_HASHES = {
@@ -11993,6 +12024,44 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
                    | {REVIEWED_NONFIXED_CURRENT_ORIGINS[name]}
     )
     for name, current in REVIEWED_NONFIXED_CURRENT_HASHES.items()
+}}
+
+
+# Final identifier and receive/cadence integration; retain both immutable parents.
+REVIEWED_NONFIXED_FINAL_HASHES = {
+    **REVIEWED_NONFIXED_CURRENT_HASHES,
+    "src/engine/monitoring/policy_generation_code_handoff.py": "52830e315e7f9be90d774b080ca31e79aca76bf7f6fdaf9f0dc29da38fa434a4",
+    "src/engine/infrastructure/startup_validation_code_context.py": "5ef703be88c270bb08cf8a7ea54e164b8b8d98a1795c6af70275eaa52b957657",
+}
+REVIEWED_NONFIXED_FINAL_ORIGINS = {
+    **REVIEWED_NONFIXED_CURRENT_ORIGINS, **REVIEWED_PRECLAIM_CADENCE_HASHES
+}
+REVIEWED_NONFIXED_FINAL_PROFILE = {
+    **REVIEWED_NONFIXED_CURRENT_PROFILE,
+    **REVIEWED_PRECLAIM_CADENCE_PROFILE,
+    **REVIEWED_NONFIXED_FINAL_HASHES,
+}
+REVIEWED_NONFIXED_FINAL_VARIANTS = {
+    (key[0], REVIEWED_NONFIXED_FINAL_HASHES.get(key[0], key[1])): {
+        **value,
+        "selector_path": "src/engine/infrastructure/startup_validation_code_context.py",
+        "selector_sha256": REVIEWED_NONFIXED_FINAL_HASHES["src/engine/infrastructure/startup_validation_code_context.py"],
+        "dependencies": {**value["dependencies"], **REVIEWED_NONFIXED_FINAL_HASHES},
+        "contract_extensions": {
+            origin: {name: REVIEWED_NONFIXED_FINAL_HASHES.get(os.path.normpath(name), sha)
+                     for name, sha in paths.items()}
+            for origin, paths in value["contract_extensions"].items()
+        },
+    }
+    for key, value in REVIEWED_NONFIXED_CURRENT_VARIANTS.items()
+}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple(
+        (old, current)
+        for old in {value for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ()) for value in pair}
+                   | {REVIEWED_NONFIXED_FINAL_ORIGINS[name]}
+    )
+    for name, current in REVIEWED_NONFIXED_FINAL_HASHES.items()
 }}
 
 
@@ -12746,6 +12815,17 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     ):
         prepared_hashes = REVIEWED_NONFIXED_CURRENT_PROFILE
         prepared_variants = REVIEWED_NONFIXED_CURRENT_VARIANTS
+    elif (source is not None
+        and hashlib.sha256(source).hexdigest() == REVIEWED_PRECLAIM_CADENCE_HASHES["src/engine/infrastructure/startup_validation_code_context.py"]
+    ):
+        prepared_hashes = REVIEWED_PRECLAIM_CADENCE_PROFILE
+        prepared_variants = REVIEWED_PRECLAIM_CADENCE_VARIANTS
+    if (
+        (source := candidate_bytes("src/engine/infrastructure/startup_validation_code_context.py", optional=True)) is not None
+        and hashlib.sha256(source).hexdigest() == REVIEWED_NONFIXED_FINAL_HASHES["src/engine/infrastructure/startup_validation_code_context.py"]
+    ):
+        prepared_hashes = REVIEWED_NONFIXED_FINAL_PROFILE
+        prepared_variants = REVIEWED_NONFIXED_FINAL_VARIANTS
     entry_cost_hashes = (
         prepared_hashes
         if prepared_owner_present

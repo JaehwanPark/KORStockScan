@@ -142,18 +142,28 @@ def test_delay_cadence_resets_on_registration_epoch_session_and_remove(monkeypat
     original = manager._delay_depth_cadence["196170_NX"]
     at = original.scope["registered_at_epoch"] + 1
     message = dict(type="0D", item="196170_NX")
-    manager._record_source_wire_receipt(message, at, transport_epoch=manager._market_data_transport_epoch)
+    manager._record_source_wire_receipt(message, at, transport_epoch=7)
     manager.market_session_state = "Q"
-    manager._record_source_wire_receipt(message, at + 1, transport_epoch=manager._market_data_transport_epoch)
+    manager._record_source_wire_receipt(message, at + 1, transport_epoch=7)
     assert manager._delay_depth_cadence["196170_NX"].wire_count == 1
     assert manager._delay_depth_cadence["196170_NX"].scope["session"] == "Q"
     manager._market_data_transport_epoch = 8
-    assert manager._record_source_wire_receipt(message, at + 2, transport_epoch=manager._market_data_transport_epoch) is None
+    assert manager._record_source_wire_receipt(message, at + 2, transport_epoch=8) is None
     manager._registered_item_epochs["196170_NX"] = 8
     manager._record_main_source_registration_locked(
         "196170_NX", ("0D",), source="main-test"
     )
     assert manager._delay_depth_cadence["196170_NX"].wire_count == 0
+    # A packet captured by the prior socket cannot become evidence for the
+    # replacement Main registration, even when the item itself is unchanged.
+    assert manager._record_source_wire_receipt(
+        message, at + 3, transport_epoch=7
+    ) is None
+    assert manager._delay_depth_cadence["196170_NX"].wire_count == 0
+    assert manager._record_source_wire_receipt(
+        message, at + 4, transport_epoch=8
+    ) is not None
+    assert manager._delay_depth_cadence["196170_NX"].wire_count == 1
     manager._registered_items_by_code.clear()
     manager._record_main_source_registration_locked(
         "000660_NX", ("0D",), source="main-test"
@@ -188,13 +198,13 @@ def test_old_wire_receipt_cannot_normalize_a_replacement_registration():
     manager._registered_item_epochs["196170_NX"] = 7
     manager._record_main_source_registration_locked("196170_NX", ("0D",), source="old")
     at = manager._delay_depth_cadence["196170_NX"].scope["registered_at_epoch"] + 1
-    old = manager._record_source_wire_receipt(dict(item="196170_NX", type="0D"), at, transport_epoch=manager._market_data_transport_epoch)
+    old = manager._record_source_wire_receipt(dict(item="196170_NX", type="0D"), at, transport_epoch=7)
     manager._record_main_source_registration_locked("196170_NX", ("0D",), source="new")
     assert (
         old[0].scope["subscription_generation"]
         != manager._delay_depth_cadence["196170_NX"].scope["subscription_generation"]
     )
-    new = manager._record_source_wire_receipt(dict(item="196170_NX", type="0D"), at + 1, transport_epoch=manager._market_data_transport_epoch)
+    new = manager._record_source_wire_receipt(dict(item="196170_NX", type="0D"), at + 1, transport_epoch=7)
     manager._record_micro_reversion_registration_receipt(
         item="196170_NX",
         realtime_type="0D",

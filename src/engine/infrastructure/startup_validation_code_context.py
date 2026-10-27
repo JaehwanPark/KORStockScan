@@ -2753,6 +2753,18 @@ for _name, _sha in REVIEWED_INVALIDATION_CADENCE_SOURCES.items():
     _history.update((old, _sha) for old in _prior)
 
 
+# Exact integration of the reviewed preclaim and current cadence owners.
+# No original-source, policy, deadline or hard-guard waiver.
+REVIEWED_PRECLAIM_CADENCE_SOURCES = {'src/engine/ai_engine_openai.py': '4534fc7e63f3c9df0be4c82bc8c75af2bb4d02cc4f3673a31d64f54a79765429', 'src/engine/kiwoom_websocket.py': '1ce0eb18925736a6378ba6899d2700bc80e7563983da380b6cfa4558958bcfdb', 'src/engine/monitoring/runtime_performance.py': '90d6d73bcbc758a880d631a5862f0f2b0ea6b6764255d4fa5a73e4ff47596d82', 'src/engine/sniper_state_handlers.py': '6e05b0846d01ed54059021c6e44599a0668a8c7302dbfe69c7948131afb67fb3', 'src/engine/monitoring/policy_generation_code_handoff.py': '93c77c8978f67592c4df75278cebb4dd1cda0cbc1a5a14d6110c232d0158ad50'}
+REVIEWED_PRECLAIM_CADENCE_ORIGINS = {'src/engine/ai_engine_openai.py': 'cc30c12c7bc806a793016a731a4b0ca58dadab250d79aff76cfbcf470373c06e', 'src/engine/kiwoom_websocket.py': 'ae6186d59bde4795d8c105e98d362328c23e594e55cf741f6c7972bd96308e25', 'src/engine/monitoring/runtime_performance.py': 'c23788f10acaaf0e554a42f187042ea3f37ea74d9b1d969ac95f7fdd4c9ca104', 'src/engine/sniper_state_handlers.py': '21a8ab598c4b334a4795a99236f1d49453e4da17b0feca18423ff3c91c3171d4', 'src/engine/monitoring/policy_generation_code_handoff.py': '5390fba948c04da7692d0d640316621dea3e0496ee67a8ae1b17a022647782a9'}
+for _name, _sha in REVIEWED_PRECLAIM_CADENCE_SOURCES.items():
+    _history = REVIEWED_PREPARATION_HISTORY.setdefault(_name, set())
+    _prior = {v for pair in _history for v in pair} | {REVIEWED_PRECLAIM_CADENCE_ORIGINS[_name]}
+    if _name in REVIEWED_PREPARATION_SOURCES:
+        _prior.update(REVIEWED_PREPARATION_SOURCES[_name])
+    _history.update((old, _sha) for old in _prior)
+
+
 # Exact combined generation; standalone candidate source histories stay readable.
 REVIEWED_NONFIXED_CURRENT_SOURCES = {
     "deploy/install_stage2_ops_cron.sh": "c9ae93267d1822d090c2bc5978b236429ea74784b5e73f54e44fa1c00781205e",
@@ -2835,6 +2847,19 @@ REVIEWED_NONFIXED_CURRENT_ORIGINS = {
 for _name, _sha in REVIEWED_NONFIXED_CURRENT_SOURCES.items():
     _history = REVIEWED_PREPARATION_HISTORY.setdefault(_name, set())
     _prior = {v for pair in _history for v in pair} | {REVIEWED_NONFIXED_CURRENT_ORIGINS[_name]}
+    if _name in REVIEWED_PREPARATION_SOURCES:
+        _prior.update(REVIEWED_PREPARATION_SOURCES[_name])
+    _history.update((_old, _sha) for _old in _prior)
+
+
+# Final integration preserves both issued generations and one exact current set.
+REVIEWED_NONFIXED_FINAL_SOURCES = {
+    **REVIEWED_NONFIXED_CURRENT_SOURCES,
+    "src/engine/monitoring/policy_generation_code_handoff.py": "52830e315e7f9be90d774b080ca31e79aca76bf7f6fdaf9f0dc29da38fa434a4",
+}
+for _name, _sha in REVIEWED_NONFIXED_FINAL_SOURCES.items():
+    _history = REVIEWED_PREPARATION_HISTORY.setdefault(_name, set())
+    _prior = {v for pair in _history for v in pair}
     if _name in REVIEWED_PREPARATION_SOURCES:
         _prior.update(REVIEWED_PREPARATION_SOURCES[_name])
     _history.update((_old, _sha) for _old in _prior)

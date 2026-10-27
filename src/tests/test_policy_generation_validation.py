@@ -1216,17 +1216,18 @@ def test_latest_capability_pair_is_current_and_keeps_original_source(family):
     from src.engine.monitoring import policy_generation_code_handoff as handoff
 
     pairs = handoff.REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS[family]
-    _, current = pairs[-1]
-    assert current == generation.code_generation(family)
+    current = generation.code_generation(family)
+    # Multiple reviewed branches may be preserved. Their insertion order does
+    # not choose the native report; the consumer matches its exact source pair.
     assert (
-        {
+        ({
             "rising_missed": "28baa874610d6f76379c6be1fe4f76accbbfbc5f473b0c4ffcb2f323cdf75922",
             "holding_vote": "7f30d09769b17801ad614d2403ca5742c5a45d4e56fb27212447de1384829386",
             "entry_cancel_wait": "5fa218b7b916b6b2a98a7a395573dac80ff96d2345edae3b64f9f99e3574125d",
             "auxiliary": "82a2c8b410c97dc89db45269ee865b21e2a1ba824d55448183bdb1c25769c06f",
-        }[family],
-        current,
-    ) in pairs
+        }[family], current)
+        in pairs
+    )
 
 
 @pytest.mark.parametrize("family", ["rising_missed", "holding_vote"])
