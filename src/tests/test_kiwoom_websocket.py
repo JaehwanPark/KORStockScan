@@ -4546,12 +4546,14 @@ def test_exact_probe_trace_distinguishes_wire_from_normalization_and_freezes_bef
     trace = manager.exact_probe_source_trace("123456_AL", "lease")
     assert trace["first_unobserved_boundary_by_type"]["0B"] == "wire_receive"
     manager._record_exact_probe_wire_receipt(
-        {"item": "123456_AL", "type": "0B", "values": {}}, 100
+        {"item": "123456_AL", "type": "0B", "values": {}}, 100, transport_epoch=7
     )
     trace = manager.exact_probe_source_trace("123456_AL", "lease")
     assert trace["first_unobserved_boundary_by_type"]["0B"] == "normalized_receive"
     assert trace["broker_ack_observed"] is None and trace["order_authority"] is False
-    manager._record_exact_probe_wire_receipt({"item": "123456_NX", "type": "0D"}, 101)
+    manager._record_exact_probe_wire_receipt(
+        {"item": "123456_NX", "type": "0D"}, 101, transport_epoch=7
+    )
     manager._micro_reversion_registration_receipt["items"]["123456_AL"][
         "receipt_count_by_type"
     ]["0B"] = 1
@@ -5239,3 +5241,56 @@ def test_holding_repair_pins_exact_primary_without_borrowing_other_route(
     assert manager._registered_item_epochs[item] == 8
     assert "036930" not in manager._implicit_runtime_route_codes
     assert manager._runtime_primary_items_by_code["036930"] == item
+
+
+def test_probe_connection_activity_keeps_empty_item_unknown_and_rejects_old_transport():
+    import threading
+    from src.engine.infrastructure.ws_control_receipts import ControlReceipts
+
+    manager = KiwoomWSManager.__new__(KiwoomWSManager)
+    manager.lock = threading.RLock()
+    manager._market_data_transport_epoch = 7
+    manager._control_receipts = ControlReceipts()
+    manager._exact_probe_item_leases = {}
+    manager._micro_reversion_registration_receipt = {"items": {}}
+    peer = {"item": "005930_AL", "type": "0B"}
+    manager._record_exact_probe_wire_receipt(peer, 90.0, transport_epoch=7)
+    manager._exact_probe_item_leases["123456_AL"] = dict(
+        lease_id="lease",
+        epoch=7,
+        interval_started_epoch=100.0,
+        connection_wire_baseline=dict(manager._probe_connection_wire_state["counts"]),
+    )
+    manager._micro_reversion_registration_receipt["items"]["123456_AL"] = dict(
+        registration_transport_epoch=7, receipt_count_by_type={}
+    )
+    manager._record_exact_probe_wire_receipt(peer, 101.0, transport_epoch=7)
+    asyncio.run(
+        manager._handle_message(
+            json.dumps({"trnm": "REAL", "data": [{"item": "123456_AL", "type": "0B"}]}),
+            transport_epoch=6,
+        )
+    )
+    trace = manager.exact_probe_source_trace("123456_AL", "lease")
+    assert trace["first_unobserved_boundary_by_type"]["0B"] == "wire_receive"
+    assert trace["broker_ack_observed"] is None
+    assert trace["connection_activity"]["counts_by_route_type"] == {
+        "krx_nxt_integrated:0B": 1
+    }
+    assert (
+        trace["connection_activity"]["last_by_route_type"]["krx_nxt_integrated:0B"][
+            "item"
+        ]
+        == "005930_AL"
+    )
+    assert not trace["connection_activity"]["item_ack_proven"]
+    manager._market_data_transport_epoch = 8
+    manager._record_exact_probe_wire_receipt(peer, 103.0, transport_epoch=8)
+    assert (
+        manager.exact_probe_source_trace("123456_AL", "lease")["connection_activity"]
+        is None
+    )
+    assert (
+        trace["connection_activity"]["counts_by_route_type"]["krx_nxt_integrated:0B"]
+        == 1
+    )

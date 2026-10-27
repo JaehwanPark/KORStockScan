@@ -1015,6 +1015,11 @@ REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS["auxiliary"] += (
 )
 
 
+# Same frozen reports after preclaim diagnostic-only handler edits.
+# Native fresh fixtures and original source/economic nulls remain mandatory.
+REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS['rising_missed'] += (('6d662d9e2cc6f67ec9945dfa3d9da37e3acd22765cc48a1c30d95b892a432eb7', '77005017209bc2c64ee43ba0d5281fc67d40d9fb129fc053f65093401b7a174a'), ('28baa874610d6f76379c6be1fe4f76accbbfbc5f473b0c4ffcb2f323cdf75922', '77005017209bc2c64ee43ba0d5281fc67d40d9fb129fc053f65093401b7a174a'))
+REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS['holding_vote'] += (('2c8493a70cb399e336773c02f3d292d2f5d225fe742750089049b63ecc1a23b0', 'cca052a101ebb25cbcc0ca92a50247477e8069dd9908f99c6b690c1d50170eee'), ('7f30d09769b17801ad614d2403ca5742c5a45d4e56fb27212447de1384829386', 'cca052a101ebb25cbcc0ca92a50247477e8069dd9908f99c6b690c1d50170eee'))
+
 def current_fixture_observation(observed, data):
     family = observed.get("family")
     pair = REVIEWED_SUCCESSORS.get(family)

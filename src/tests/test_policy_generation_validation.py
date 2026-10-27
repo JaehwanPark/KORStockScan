@@ -1223,7 +1223,7 @@ def test_latest_capability_pair_is_current_and_keeps_original_source(family):
             "rising_missed": "28baa874610d6f76379c6be1fe4f76accbbfbc5f473b0c4ffcb2f323cdf75922",
             "holding_vote": "7f30d09769b17801ad614d2403ca5742c5a45d4e56fb27212447de1384829386",
             "entry_cancel_wait": "5fa218b7b916b6b2a98a7a395573dac80ff96d2345edae3b64f9f99e3574125d",
-            "auxiliary": "8f7446efe983c1ad88ba90c3ca72114fe9e90d045356e8c7d74acd0d4ceb62fd",
+            "auxiliary": "82a2c8b410c97dc89db45269ee865b21e2a1ba824d55448183bdb1c25769c06f",
         }[family]
     )
 

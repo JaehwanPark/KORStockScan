@@ -11607,6 +11607,35 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
     for name, current in REVIEWED_ENTRY_CAPABILITY_HASHES.items()
 }}
 
+# Reviewed preclaim/source diagnostics; original policy and hard guards unchanged.
+REVIEWED_PRECLAIM_DIAGNOSTIC_HASHES = {'src/engine/ai_engine_openai.py': '4534fc7e63f3c9df0be4c82bc8c75af2bb4d02cc4f3673a31d64f54a79765429', 'src/engine/kiwoom_websocket.py': 'a8ac34a024da459f64c4c17bc2b6e5a4d3f8c14616eb69e5003fde9ed76fdea1', 'src/engine/monitoring/runtime_performance.py': '90d6d73bcbc758a880d631a5862f0f2b0ea6b6764255d4fa5a73e4ff47596d82', 'src/engine/sniper_state_handlers.py': '2eb4ed4fe413266422d0d2460bf30572979b4696ba217dadb32b02e0caf80aa8', 'src/engine/monitoring/policy_generation_code_handoff.py': '7108296fed9882a4b2e2aac016de457e493698f06d33bdc7405e6adde72707ee', 'src/engine/infrastructure/startup_validation_code_context.py': '5dd24b983fa33bc30bfa38c462751c0d5c2e7deb42b26e2cd5c7dce0b36cdcdf'}
+REVIEWED_PRECLAIM_DIAGNOSTIC_ORIGINS = {'src/engine/ai_engine_openai.py': 'cc30c12c7bc806a793016a731a4b0ca58dadab250d79aff76cfbcf470373c06e', 'src/engine/kiwoom_websocket.py': '6a794b5feb6e53990231e75404f1110b4b0cc91467b175345fdd4b0aef4be471', 'src/engine/monitoring/runtime_performance.py': 'c23788f10acaaf0e554a42f187042ea3f37ea74d9b1d969ac95f7fdd4c9ca104', 'src/engine/sniper_state_handlers.py': 'c7b1330cc82731b2362816c54ffd3c9df50536ef51878ee7a42b344e94d17dc3', 'src/engine/monitoring/policy_generation_code_handoff.py': 'd6cc6f4180ff14d6ea965a174f3db15f62527d1349d375170ca14b1e1b42ae9d', 'src/engine/infrastructure/startup_validation_code_context.py': 'c49d0b5aa649e703f09d5c7a399ff8ed5e78856eabfe7d914298e0a3301d65d8'}
+REVIEWED_PRECLAIM_DIAGNOSTIC_PROFILE = {
+    **REVIEWED_ENTRY_CAPABILITY_PROFILE, **REVIEWED_PRECLAIM_DIAGNOSTIC_HASHES
+}
+REVIEWED_PRECLAIM_DIAGNOSTIC_VARIANTS = {
+    (key[0], REVIEWED_PRECLAIM_DIAGNOSTIC_HASHES.get(key[0], key[1])): {
+        **value,
+        "selector_path": "src/engine/infrastructure/startup_validation_code_context.py",
+        "selector_sha256": REVIEWED_PRECLAIM_DIAGNOSTIC_HASHES["src/engine/infrastructure/startup_validation_code_context.py"],
+        "dependencies": {**value["dependencies"], **REVIEWED_PRECLAIM_DIAGNOSTIC_HASHES},
+        "contract_extensions": {
+            origin: {name: REVIEWED_PRECLAIM_DIAGNOSTIC_HASHES.get(os.path.normpath(name), sha)
+                     for name, sha in paths.items()}
+            for origin, paths in value["contract_extensions"].items()
+        },
+    }
+    for key, value in REVIEWED_ENTRY_CAPABILITY_VARIANTS.items()
+}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple(
+        (old, current)
+        for old in {value for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ()) for value in pair}
+                   | {REVIEWED_PRECLAIM_DIAGNOSTIC_ORIGINS[name]}
+    )
+    for name, current in REVIEWED_PRECLAIM_DIAGNOSTIC_HASHES.items()
+}}
+
 
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
@@ -12322,6 +12351,12 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     ):
         prepared_hashes = REVIEWED_ENTRY_CAPABILITY_PROFILE
         prepared_variants = REVIEWED_ENTRY_CAPABILITY_VARIANTS
+    if (
+        (source := candidate_bytes("src/engine/infrastructure/startup_validation_code_context.py", optional=True)) is not None
+        and hashlib.sha256(source).hexdigest() == REVIEWED_PRECLAIM_DIAGNOSTIC_HASHES["src/engine/infrastructure/startup_validation_code_context.py"]
+    ):
+        prepared_hashes = REVIEWED_PRECLAIM_DIAGNOSTIC_PROFILE
+        prepared_variants = REVIEWED_PRECLAIM_DIAGNOSTIC_VARIANTS
     entry_cost_hashes = (
         prepared_hashes
         if prepared_owner_present

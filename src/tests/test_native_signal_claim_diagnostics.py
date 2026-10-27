@@ -218,11 +218,76 @@ def _preclaim_guard_source(native):
     )
 
 
+def test_preclaim_gate_records_actual_blocked_and_clear_visits_without_renewal(native):
+    row = observe(native)
+    R.acknowledge_native_watch_visit(dict(code=native[1][0]), None, now=T + 0.05)
+    args = _preclaim_guard_source(native)
+    original = deepcopy(native[2].ready)
+    metrics = dict(window_sec=8, window_buy_ratio=0.13, window_net_buy_qty=-23042)
+    assert R.record_native_preclaim_gate(**{**args, "reason": ""}) == 0
+    assert R.record_native_preclaim_gate(**args, metrics=metrics) == 1
+    assert R.record_native_preclaim_gate(**{**args, "now": T + 2}, metrics=metrics) == 1
+    assert row["main_preclaim_guard"]["observed_epoch"] == T + 0.1
+    assert row["main_preclaim_guard_last"]["observed_epoch"] == T + 2
+    assert row["main_preclaim_guard_observed_visits"] == 2
+    assert row["main_preclaim_guard"]["metrics"]["window_buy_ratio"] == 0.13
+    assert row["main_preclaim_guard"]["metrics"]["window_total_value"] is None
+    metrics["window_buy_ratio"] = float("nan")
+    assert (
+        R.record_native_preclaim_gate(
+            **{**args, "reason": "", "now": T + 3}, metrics=metrics
+        )
+        == 1
+    )
+    assert row["main_preclaim_guard_clear"]["metrics"]["window_buy_ratio"] is None
+    assert (
+        row["main_preclaim_guard_clear"]["gate_action"]
+        == "continue_to_remaining_guards"
+    )
+    assert R.record_native_preclaim_gate(**{**args, "reason": "", "now": T + 3.1}) == 0
+    assert R.record_native_preclaim_gate(**{**args, "now": T + 2.5}) == 0
+    assert R.record_native_preclaim_gate(**{**args, "now": T + 4}) == 1
+    assert R.record_native_preclaim_gate(**{**args, "reason": "", "now": T + 5}) == 0
+    assert row["main_preclaim_guard_observed_visits"] == 3
+    assert row["original_deadline"] == T + 5 and not row["claimed"]
+    assert native[2].ready == original
+    view = R.snapshot()["native_signal_lifecycle"]["recent"][0]
+    view["main_preclaim_guard"]["metrics"]["window_buy_ratio"] = 999
+    assert row["main_preclaim_guard"]["metrics"]["window_buy_ratio"] == 0.13
+
+
+def test_main_phase_aggregate_covers_truncated_tail_without_filling_missing_prefix(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        R,
+        "_MAIN_PHASE_HISTORY",
+        deque(
+            [
+                dict(
+                    name="target_visit" if i % 2 else "idle_wait",
+                    code="123456",
+                    perf=float(i),
+                )
+                for i in range(100)
+            ],
+            maxlen=256,
+        ),
+    )
+    result = R._phase_window_locked(0.0, 100.0)
+    assert result["coverage"] == "complete" and result["truncated"]
+    assert len(result["intervals"]) == 32
+    assert result["interval_count"] == 100
+    assert result["seconds_by_phase"] == {"target_visit": 50.0, "idle_wait": 50.0}
+    assert result["observed_seconds"] == 100.0
+    assert R._phase_window_locked(-5.0, 100.0)["coverage"] == "prefix_unobserved"
+
+
 def test_main_preclaim_guard_survives_later_native_invalidation(native):
     row = observe(native)
     R.acknowledge_native_watch_visit(dict(code=native[1][0]), None, now=T + 0.05)
     before = deepcopy(native[2].ready)
-    assert R.record_native_preclaim_guard(**_preclaim_guard_source(native)) == 1
+    assert R.record_native_preclaim_gate(**_preclaim_guard_source(native)) == 1
     native[2].legacy.turn = {"event_id": "new-low"}
     observe(native, T + 0.4)
     assert row["terminal"] == "invalidated_before_claim"
@@ -303,14 +368,14 @@ def test_preclaim_guard_cannot_join_another_source_or_unvisited_signal(native, d
         row["bundle_sha256"] = "other-bundle"
     elif damage == "unknown_reason":
         args["reason"] = "unknown_guard"
-    assert R.record_native_preclaim_guard(**args) == 0
+    assert R.record_native_preclaim_gate(**args) == 0
     assert "main_preclaim_guard" not in row
 
 
 def test_guard_evidence_does_not_prevent_a_later_valid_native_claim(native):
     row = observe(native)
     R.acknowledge_native_watch_visit(dict(code=native[1][0]), None, now=T + 0.05)
-    assert R.record_native_preclaim_guard(**_preclaim_guard_source(native)) == 1
+    assert R.record_native_preclaim_gate(**_preclaim_guard_source(native)) == 1
     claim = dict(snapshot=[native[3], {}], generation="scope")
     R.record_selected_native_claim(claim, family_sha256="family", now=T + 0.2)
     assert row["claimed"] and row["terminal"] == "claimed"
@@ -323,7 +388,7 @@ def test_signal_arriving_during_main_visit_retains_its_real_guard(native, monkey
         R, "_MAIN_PHASE", dict(name="target_visit", code=native[1][0], epoch=T - 0.1)
     )
     assert row.get("main_queue_first_visit") is None
-    assert R.record_native_preclaim_guard(**_preclaim_guard_source(native)) == 1
+    assert R.record_native_preclaim_gate(**_preclaim_guard_source(native)) == 1
     assert row["main_preclaim_guard"]["main_visit_basis"] == "current_target_phase"
     assert row["claim_attempt"] is None and row["claimed"] is False
 
@@ -1392,8 +1457,12 @@ def test_real_hold_breach_records_terminal_and_does_not_resurrect(hold_invalidat
     tick(1, 100000)
     assert not state.ready
     R.record_native_ready(
-        backend, event["symbol"], event["venue"], event["source_item"],
-        event["market"], T + 0.1
+        backend,
+        event["symbol"],
+        event["venue"],
+        event["source_item"],
+        event["market"],
+        T + 0.1,
     )
     life = next(iter(R._SELECTED_READY.values()))
     assert life["terminal"] == "invalidated_before_claim"
@@ -1402,8 +1471,12 @@ def test_real_hold_breach_records_terminal_and_does_not_resurrect(hold_invalidat
     original = deepcopy(life)
     tick(2, 100100)
     R.record_native_ready(
-        backend, event["symbol"], event["venue"], event["source_item"],
-        event["market"], T + 0.2
+        backend,
+        event["symbol"],
+        event["venue"],
+        event["source_item"],
+        event["market"],
+        T + 0.2,
     )
     assert next(iter(R._SELECTED_READY.values())) == original
     assert not state.ready and life["original_deadline"] == T + 5
@@ -1451,8 +1524,12 @@ def _hold_rejection(hold_invalidation, monkeypatch):
     backend, state, event, tick = hold_invalidation
     tick(1, 100000)
     R.record_native_ready(
-        backend, event["symbol"], event["venue"], event["source_item"],
-        event["market"], T + 0.1
+        backend,
+        event["symbol"],
+        event["venue"],
+        event["source_item"],
+        event["market"],
+        T + 0.1,
     )
     monkeypatch.setattr(D.time, "time", lambda: T + 0.2)
     observation = dict(
@@ -1479,7 +1556,9 @@ def _hold_rejection(hold_invalidation, monkeypatch):
         stock_code="066970",
         evaluation_attempt_id="hold-attempt",
         machine_bundle_sha256="b" * 64,
-        market_data_route={"NXT": "nxt_only", "SOR": "krx_nxt_integrated"}[event["venue"]],
+        market_data_route={"NXT": "nxt_only", "SOR": "krx_nxt_integrated"}[
+            event["venue"]
+        ],
         provider_called=False,
         machine_evaluation_status="assessment_contract_invalid",
         machine_contract_error=str(caught.value),
@@ -2041,3 +2120,38 @@ def test_first_turn_observer_keeps_unproved_or_conflicting_loss_actionable(
     if damage == "hash":
         r["sha256"] = "0" * 64
     assert _reversal_lifecycle_diagnostic(trace) is None
+
+
+def test_websocket_cycle_distinguishes_handler_delay_wait_and_wall_clock_change(
+    monkeypatch,
+):
+    monkeypatch.setattr(R, "_WS_SLOW_CYCLES", deque(maxlen=32))
+    # An 18s receive wait is not automatically attributed to the network.
+    R.record_ws_cycle(
+        transport_epoch=7,
+        started=(100.0, 10.0, 1.0),
+        received_epoch=118.0,
+        received=(28.0, 1.1),
+        ended=(28.002, 1.102),
+    )
+    row = R.snapshot()["websocket_receive_cycles"]["slow_recent"][0]
+    assert row["wait_seconds"] == 18.0
+    assert row["dispatch_seconds"] == pytest.approx(0.002)
+    assert row["wall_minus_monotonic_seconds"] == 0
+    assert "unresolved" in row["wait_semantics"]
+    R.record_ws_cycle(
+        transport_epoch=8,
+        started=(200.0, 40.0, 2.0),
+        received_epoch=218.0,
+        received=(40.01, 2.001),
+        ended=(42.01, 2.5),
+    )
+    rows = R.snapshot()["websocket_receive_cycles"]["slow_recent"]
+    assert rows[-1]["dispatch_seconds"] == 2.0
+    assert rows[-1]["wall_minus_monotonic_seconds"] == pytest.approx(17.99)
+    assert rows[-1]["transport_epoch"] == 8
+    rows[-1]["dispatch_seconds"] = 999
+    assert (
+        R.snapshot()["websocket_receive_cycles"]["slow_recent"][-1]["dispatch_seconds"]
+        == 2.0
+    )
