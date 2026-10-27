@@ -3900,3 +3900,54 @@ fresh active-parent custody, native candidate P5, and final selected P5 before
 native ordered restart. The original two-case caller proves the remaining
 sequence and failure unwind offline. No validator or accepted-error fallback was
 added; the existing document requirement remains enforced.
+
+## Quantity historical diagnostics daily handoff 2026-10-27
+
+Baseline selected ab663e13b69b1d1edae1e645d8c5c7ad3e8afc16, Main3940489,
+startticks70152682, was pinned before changes. Work is isolated in
+codex/quantity-history-handoff-20261027. The first broken contract was the
+same-stage-only historical acknowledgement: source26 could not consume the
+approved source23 exclusions, especially when its small report omitted a compact
+proof. The repair extends the existing projection owner and its existing native
+publication/read consumers; it adds no module, worker, trading branch or policy.
+
+Actual read-only comparison confirms49013,49266,49362,49415 remain the four
+historical excluded records. All realized PnL values remain null. Record49266's
+aggregate cost generation changed with a wider official query window; the native
+cost source owner verifies its preserved original bytes and unchanged old window.
+Original fact SHA b394d42860f6caeeac43b714daa2ef1dec154ff961d2f99c5ee91bbc0ae09514
+and current SHA7ba733646a2cdaa78d808df0586650c4dad31788e93bd41c25c6f61ff6ed287e
+are both retained. The other three full fact hashes are unchanged. Full per-ID
+hash evidence is in tmp/quantity-history-handoff-20261027/history-read-only.json.
+This comparison is not cost reconstruction, policy improvement or live acceptance.
+
+Replacement/removal: the same-stage-only assumption is replaced by a native
+same-day/previous-trading-session handoff; explicit first acceptance and v1 issued
+readers are retained for existing originals. Current native validation, economic
+nulls, new-gap detection, bounded reads and publication locks remain the owners.
+No forwarding wrapper, registry or duplicate classifier was added. New v2 proofs
+store bounded excluded witnesses and original/predecessor SHA references, not a
+recursive copy of daily history or whole replay. A changed/new gap remains current;
+a current producer failure cannot be converted to history. Exact source pairs and
+a complete dependency profile cover both normal handoff and independent P5 readers.
+
+Review fixes added same-day replacement, original-proof revalidation through the
+consumer's bounded reader, path containment, and missing/wider/corrected cost
+source cases. Consecutive sessions, Oct9 holiday/weekend, publication failure/retry,
+new ID, changed reason/fact, stale/missing/changed predecessor and current-native
+failure are covered. An unrelated preexisting quantity fixture failed identically
+on the selected baseline: its reconstructed legacy v1 replay was paired with a
+new v2 timeout report. The fixture now reconstructs both original v1 readers;
+production version rejection and guards are unchanged. Deployment and current
+consumer evidence will be recorded separately after fresh native validation.
+
+Final scoped validation: quantity/cost/policy183, direct-consumer/detector/ordered
+transition/location1371, complete/mixed/historical source handoff75 passed.
+Independent preparation and prepared-policy suites covered640 cases:639 passed
+before the physical-origin addition; its exact three-case retest passed afterward.
+The missing old physical SHA (32724869...) is now explicitly reviewed in addition
+to original comparison hashes; no generic source acceptance was introduced.
+Compile, diff and print-only docs parser pass (one current quantity owner).
+Baseline delta before this note: non-test source+420/-4, tests+419/-2, docs+50/-0.
+Growth stores bounded historical witnesses, exact native cost-window comparison,
+producer/consumer binding and their failure regressions in existing owners.

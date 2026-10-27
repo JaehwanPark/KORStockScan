@@ -76,6 +76,8 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 ## 미완료 원천 진단 인계
 
 - [ ] `[InitialQuantityProducerConsumerRepair1010] 매수수량 원천·fact·시간창·장후 소비 결손 수리와 자연 수용` (`Due: 2026-10-27`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~23:59`, `Track: RuntimeStability`)
+  - 10/27 역사 진단 일일 인계 수리: native 직전 거래일/같은 날짜 후속 stage의 정확한 승인 ID·원 fact/증명 SHA·null을 보존해 현재 검증 이후만 승계한다. 새 ID·변경 원천·비용 정정/미확인은 현재 경고 유지. 연속 거래일·한글날/주말·발행 실패 복구·독립 준비 reader 검증 및 승인된 통합 배포를 진행한다. [원인·대체·검증](../audits/postclose-root-cause-recovery-review-2026-10-19.md#quantity-historical-diagnostics-daily-handoff-2026-10-27). 다음 자연 수용:10/27 정규 장후 원천→10/28 PREOPEN/Main의 새 결손 탐지·과거4건 원본 보존을 확인; 준비/재기동 PASS만으로 자연 수용을 닫지 않는다.
+
   - 15:30 통합6d8891ac3/PID3299469 소비 완료.32입력/28적격·49445 복원/원4건 역사 제외 유지, 새 reader 전체 검증552.558초 뒤 동일 세대의 새 프로세스 검증0.142초. 매 재기동 전체 재검증이 아니며 원천/code 변경은 재검증한다. [최종 소비·시간](../audits/postclose-root-cause-recovery-review-2026-10-19.md#holding-stream-integration-deployment-and-quantity-validation-timing-2026-10-23).
   - 14:42 선행 정책 수리9e820cbf8 배포/PID3093698 native 소비·양 단계 P5·artifact_freshness PASS. 원4건 역사 제외와 자연 장후 수용은 유지. 후속 승인c4a177cb8 통합은 별도 코드/원천 검증 후 전환한다. [순차 완결 기록](../audits/postclose-root-cause-recovery-review-2026-10-19.md#consumed-policy-closure-deployment-and-holding-stream-integration-2026-10-23).
   - 10/23 최종 후보 adae196f3:승인7362b7772까지 통합,49445 BUY→수량 정책/PID 원천 연결을 보완했다. 영향877·인계138·준비140·native BUY41 PASS. 원4건과 새 결손 탐지 보존. 후속 native 소비 검증·P5·실제 전환 진행, 자연 장후 수용 OPEN. [최종 수리·대체·검증](../audits/postclose-root-cause-recovery-review-2026-10-19.md#final-native-buy-lineage-and-exact-probe-integration-2026-10-23).

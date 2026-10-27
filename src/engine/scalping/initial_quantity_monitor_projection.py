@@ -104,6 +104,7 @@ error_detectors/artifact_freshness.py""".split())
             "trading/order/split_execution_math.py",
             "trading/market/execution_venue.py",
             "utils/jsonl_io.py",
+            "utils/market_day.py",
         )
     )
     observed = cached_code_generation(paths)
@@ -476,6 +477,77 @@ def _historical_exclusions(stage, observation, disposition, input_manifest):
     from datetime import datetime
     from zoneinfo import ZoneInfo
 
+    if disposition.get("schema") == "initial_quantity_historical_exclusions_v2":
+        rows = disposition["excluded_rows"]
+        verified = datetime.fromisoformat(disposition["verified_at"])
+        counts = Counter(row["reason"] for row in rows)
+        gaps = Counter(observation["postclose_source_gap_reasons"])
+        if (
+            disposition.get("disposition") != "excluded_from_economic_sample"
+            or disposition.get("source_date") != stage["source_date"]
+            or disposition.get("stage_content_sha256")
+            != stage["receipt_content_sha256"]
+            or disposition.get("report_content_sha256")
+            != stage["report_content_sha256"]
+            or disposition.get("input_manifest_sha256") != input_manifest
+            or verified.tzinfo is None
+            or verified > datetime.now(ZoneInfo("Asia/Seoul"))
+            or stage["source_date"]
+            > verified.astimezone(ZoneInfo("Asia/Seoul")).date().isoformat()
+            or stage.get("terminal") is not True
+            or stage.get("stage_status") != "complete_source_only"
+            or stage.get("generation_kind") != "refresh"
+            or any(
+                stage.get(key) is not False
+                for key in (
+                    "runtime_apply_allowed",
+                    "runtime_effect",
+                    "actual_order_submitted",
+                )
+            )
+            or not rows
+            or len({row["record_id"] for row in rows}) != len(rows)
+            or counts - gaps
+            or dict(counts) != disposition.get("exclusion_counts")
+            or any(
+                row["fact_sha256"] != _native_digest(row["fact_witness"])
+                or str(row["fact_witness"].get("recommendation_id")) != row["record_id"]
+                or row["fact_witness"].get("stock_code") != row["stock_code"]
+                or row["origin"]["row"]["record_id"] != row["record_id"]
+                or row["origin"]["row"]["stock_code"] != row["stock_code"]
+                or row["origin"]["row"]["reason"] != row["reason"]
+                or row["origin"]["source_date"] > stage["source_date"]
+                or row["reason"]
+                not in {
+                    "terminal_cost_or_quantity_missing",
+                    "quantity_research_cost_invalid",
+                }
+                or not re.fullmatch("[0-9a-f]{64}", row["origin"]["row"]["fact_sha256"])
+                for row in rows
+            )
+        ):
+            raise ValueError("quantity_historical_exclusions_binding_invalid")
+        remaining = dict(gaps - counts)
+        quiet = (
+            not remaining
+            and observation.get("economic_sample_status") == "cost_eligible"
+            and observation.get("trade_policy_binding_status") == "bound"
+        )
+        return {
+            **observation,
+            "postclose_semantic_findings": (
+                [] if quiet else observation["postclose_semantic_findings"]
+            ),
+            "postclose_historical_diagnostics": [
+                "initial_quantity_economic_source_gap"
+            ],
+            "postclose_current_source_gap_reasons": remaining,
+            "postclose_attention_status": (
+                "historical_exclusions_recorded" if quiet else "current_source_gap"
+            ),
+            "postclose_historical_exclusions": disposition,
+        }
+
     rows = disposition.get("excluded_rows", [])
     accepted = datetime.fromisoformat(disposition["accepted_at"])
     counts = Counter(row["reason"] for row in rows)
@@ -532,6 +604,215 @@ def _historical_exclusions(stage, observation, disposition, input_manifest):
     }
 
 
+def _historical_predecessor(stage_path, stage, data_root, report=None):
+    """Resolve only the prior native trading session, never a latest-file guess."""
+    from datetime import date, timedelta
+    from src.utils.market_day import is_krx_trading_day
+    from src.engine.scalping import initial_quantity_policy as native
+
+    parent = Path(data_root) / "report/initial_entry_quantity_type_policy"
+    if not Path(stage_path).is_relative_to(parent):
+        return None
+    day = date.fromisoformat(stage["source_date"])
+    if not is_krx_trading_day(day):
+        raise ValueError("quantity_history_source_session_invalid")
+    base = parent / ("refresh_postclose_" + day.isoformat())
+    pointer = base / "committed_stage.json"
+    same_day = None
+    if pointer.exists() or pointer.is_symlink():
+        same_day = native._read_refresh_stage_reference(pointer, base, day.isoformat())
+    if same_day is None or Path(same_day["stage_path"]) == Path(stage_path):
+        for _ in range(370):
+            day -= timedelta(days=1)
+            if is_krx_trading_day(day):
+                break
+        else:
+            raise ValueError("quantity_history_previous_session_missing")
+        base = parent / ("refresh_postclose_" + day.isoformat())
+        pointer = base / "committed_stage.json"
+    if not pointer.exists() and not pointer.is_symlink():
+        return None
+    ref = native._read_refresh_stage_reference(pointer, base, day.isoformat())
+    previous_path = Path(ref["stage_path"])
+    previous, _ = files._read(previous_path, MAX_BYTES)
+
+    def read(path, *, limit, expected_sha=None):
+        value, metadata = files._read(Path(path), limit)
+        if expected_sha is not None and metadata["sha256"] != expected_sha:
+            raise ValueError("quantity_history_predecessor_hash_changed")
+        return value
+
+    proof = read_verified(
+        previous_path,
+        previous,
+        read=read,
+        data_root=data_root,
+        role="historical_predecessor",
+    )
+    if proof is None or not proof.get("history"):
+        return None
+    disposition = proof["history"]
+    rows = disposition["excluded_rows"]
+    if disposition["schema"] == "initial_quantity_historical_exclusions_v1":
+        # Bounded one-time adoption of an issued legacy acknowledgement. New
+        # receipts carry only their excluded witnesses, never the whole replay.
+        old_report = None
+        if Path(previous["report_path"]).stat().st_size <= MAX_BYTES:
+            old_report = read(
+                Path(previous["report_path"]),
+                limit=MAX_BYTES,
+                expected_sha=previous["report_file_sha256"],
+            )
+        witness_report = old_report or report
+        if witness_report is None:
+            raise ValueError("quantity_history_legacy_witness_required")
+        facts = {
+            str(row["recommendation_id"]): row
+            for row in witness_report["census"]["input_fact_rows"]
+        }
+        migrated = []
+        for row in rows:
+            fact = facts.get(row["record_id"])
+            if fact is None or _native_digest(fact) != row["fact_sha256"]:
+                if old_report is not None:
+                    raise ValueError("quantity_history_original_fact_changed")
+                # No unbounded legacy parse. An unmatched row stays current;
+                # the producer must provide its exact original witness first.
+                continue
+            migrated.append(
+                {
+                    **row,
+                    "fact_witness": fact,
+                    "cost_source_reference": _history_cost_reference(
+                        fact, witness_report
+                    ),
+                    "origin": {
+                        "source_date": previous["source_date"],
+                        "accepted_at": disposition["accepted_at"],
+                        "row": row,
+                        "projection": proof["history_source"],
+                    },
+                }
+            )
+        rows = migrated
+    return {
+        "rows": rows,
+        "source": proof["history_source"],
+        "stage_path": str(previous_path),
+        "stage_sha256": ref["stage_sha256"],
+    }
+
+
+def _history_cost_reference(fact, report):
+    costs = (fact.get("fact_generation") or {}).get("cost_generation") or {}
+    day = costs.get("completion_date")
+    generation = report["census"].get("persisted_fact_generations", {}).get(day, {})
+    for ref in (
+        generation.get("cost_generation", {})
+        .get("quantity_research_cost_generation", {})
+        .get("source_dates", [])
+    ):
+        if ref.get("source_date") == day and ref.get("sha256") == costs.get(
+            "official_source_sha256"
+        ):
+            return ref
+    return None
+
+
+def _same_historical_fact(previous, fact, data_root):
+    """Allow only a verified wider official-cost window for an unchanged record."""
+    old = previous["fact_witness"]
+    if old == fact:
+        return True
+    if {k: v for k, v in old.items() if k != "fact_generation"} != {
+        k: v for k, v in fact.items() if k != "fact_generation"
+    }:
+        return False
+    old_gen, new_gen = old.get("fact_generation", {}), fact.get("fact_generation", {})
+    if {k: v for k, v in old_gen.items() if k != "cost_generation"} != {
+        k: v for k, v in new_gen.items() if k != "cost_generation"
+    }:
+        return False
+
+    def record_cost(generation):
+        costs = dict(generation.get("cost_generation") or {})
+        costs.pop("sha256", None)
+        costs.pop("official_source_sha256", None)
+        research = dict(costs.get("quantity_research_cost_generation") or {})
+        for key in ("parent_generation_sha256", "research_generation_sha256"):
+            research.pop(key, None)
+        costs["quantity_research_cost_generation"] = research
+        return costs
+
+    reference = previous.get("cost_source_reference")
+    if reference is None or record_cost(old_gen) != record_cost(new_gen):
+        return False
+    from src.engine.lifecycle import broker_cost_source
+
+    # This owner rejects old-date corrections, changed accounts and missing
+    # original bytes. The full current native census is separately validated.
+    broker_cost_source.declared_source_bytes(data_root, reference)
+    current = broker_cost_source._source_raw(
+        broker_cost_source.source_path(data_root, reference["source_date"])
+    )
+    return hashlib.sha256(current).hexdigest() == new_gen["cost_generation"].get(
+        "official_source_sha256"
+    )
+
+
+def _carry_historical_exclusions(stage, report, observation, data_root, previous):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from src.engine.scalping import initial_quantity_policy as native
+
+    approved = {row["record_id"]: row for row in previous["rows"]}
+    rows = []
+    unverified = []
+    for fact in report["census"]["input_fact_rows"]:
+        rid = str(fact["recommendation_id"])
+        old = approved.get(rid)
+        if old is None:
+            continue
+        try:
+            same = _same_historical_fact(old, fact, data_root)
+        except (OSError, ValueError) as exc:
+            # Only this prior acknowledgement is unusable. Current native
+            # inputs were fully validated; keep the row in current diagnostics.
+            unverified.append(dict(record_id=rid, reason=str(exc)))
+            continue
+        if not same:
+            unverified.append(dict(record_id=rid, reason="historical_fact_changed"))
+            continue
+        _, census = native.completed_trade_fact_census(
+            stage["source_date"],
+            fact_rows=[fact],
+            data_dir=data_root,
+            entry_on_or_after=report["census"].get("entry_on_or_after"),
+        )
+        if census["excluded"] != {old["reason"]: 1}:
+            continue
+        rows.append({**old, "fact_sha256": native._digest(fact), "fact_witness": fact})
+    if not rows:
+        return None
+    result = dict(
+        schema="initial_quantity_historical_exclusions_v2",
+        disposition="excluded_from_economic_sample",
+        verified_at=datetime.now(ZoneInfo("Asia/Seoul")).isoformat(),
+        source_date=stage["source_date"],
+        stage_content_sha256=stage["receipt_content_sha256"],
+        report_content_sha256=stage["report_content_sha256"],
+        input_manifest_sha256=report["census"]["input_manifest_sha256"],
+        exclusion_counts=dict(Counter(row["reason"] for row in rows)),
+        excluded_rows=sorted(rows, key=lambda row: row["record_id"]),
+        unverified_history_rows=unverified,
+        predecessor={key: value for key, value in previous.items() if key != "rows"},
+    )
+    _historical_exclusions(
+        stage, observation, result, report["census"]["input_manifest_sha256"]
+    )
+    return result
+
+
 def _exclusion_disposition(
     stage_path, stage, report, observation, data_root, record_ids
 ):
@@ -557,6 +838,23 @@ def _exclusion_disposition(
         ):
             raise ValueError("quantity_monitor_projection_invalid")
         disposition = previous.get("historical_exclusion_disposition")
+    if (
+        disposition is not None
+        and disposition.get("schema") == "initial_quantity_historical_exclusions_v2"
+    ):
+        facts = {
+            str(row["recommendation_id"]): row
+            for row in report["census"]["input_fact_rows"]
+        }
+        if any(
+            facts.get(row["record_id"]) != row["fact_witness"]
+            for row in disposition["excluded_rows"]
+        ):
+            raise ValueError("quantity_historical_exclusions_population_changed")
+        _historical_exclusions(
+            stage, observation, disposition, report["census"]["input_manifest_sha256"]
+        )
+        return disposition
     if record_ids is not None or disposition is not None:
         rows = []
         for fact in report["census"]["input_fact_rows"]:
@@ -615,8 +913,15 @@ def publish(
     if type(publish_current) is not bool:
         raise ValueError("quantity_monitor_publication_mode_invalid")
     """Publish a native proof; historical exclusions require explicit acceptance."""
+    data_root = Path(data_root).resolve()
+    predecessor = (
+        None
+        if manifest_path(stage_path).exists()
+        else _historical_predecessor(stage_path, stage, data_root, report)
+    )
     if (
         accepted_historical_record_ids is None
+        and predecessor is None
         and not manifest_path(stage_path).exists()
         and not any(
             Path(stage[name + "_path"]).stat().st_size > CHILD_LIMIT
@@ -627,7 +932,6 @@ def publish(
         return None
     from src.engine.scalping import initial_quantity_policy as native
 
-    data_root = Path(data_root).resolve()
     code = _code()
     before = _dependencies(stage_path, stage, report, data_root)
     directories_before = _directories(report, data_root)
@@ -763,8 +1067,27 @@ def publish(
             data_root,
             accepted_historical_record_ids,
         )
+        if disposition is None and predecessor is not None:
+            disposition = _carry_historical_exclusions(
+                stage, report, observation, data_root, predecessor
+            )
         if disposition is not None:
             projection["historical_exclusion_disposition"] = disposition
+            if disposition.get("schema") == "initial_quantity_historical_exclusions_v2":
+                refs = [
+                    row["origin"]["projection"] for row in disposition["excluded_rows"]
+                ]
+                refs.append(disposition["predecessor"]["source"])
+                refs.append(
+                    dict(
+                        path=disposition["predecessor"]["stage_path"],
+                        sha256=disposition["predecessor"]["stage_sha256"],
+                    )
+                )
+                projection["history_sources"] = {
+                    ref["path"]: ref["sha256"] for ref in refs
+                }
+                _check_history_sources(projection, data_root)
         if len(files._canonical(projection)) > MAX_BYTES:
             raise ValueError("quantity_monitor_projection_budget")
         ident = _digest(projection)
@@ -809,12 +1132,45 @@ def publish(
             or code != _code()
         ):
             raise ValueError("quantity_monitor_source_changed")
+        _check_history_sources(projection, data_root)
     return pointer
+
+
+def _check_history_sources(value, data_root, *, read=None):
+    sources = value.get("history_sources", {})
+    disposition = value.get("historical_exclusion_disposition") or {}
+    if disposition.get("schema") == "initial_quantity_historical_exclusions_v2":
+        predecessor = disposition["predecessor"]
+        refs = [row["origin"]["projection"] for row in disposition["excluded_rows"]]
+        refs += [
+            predecessor["source"],
+            dict(path=predecessor["stage_path"], sha256=predecessor["stage_sha256"]),
+        ]
+        if sources != {ref["path"]: ref["sha256"] for ref in refs}:
+            raise ValueError("quantity_history_source_binding_invalid")
+    if not isinstance(sources, dict) or len(sources) > MAX_REFERENCES:
+        raise ValueError("quantity_history_source_budget")
+    total = 0
+    for name, sha in sources.items():
+        path = Path(name)
+        if not path.resolve().is_relative_to(
+            Path(data_root).resolve() / "report/initial_entry_quantity_type_policy"
+        ):
+            raise ValueError("quantity_history_source_path_invalid")
+        total += path.stat().st_size
+        if total > MAX_BYTES:
+            raise ValueError("quantity_history_source_budget")
+        if read is not None:
+            read(path, limit=MAX_BYTES, expected_sha=sha)
+        else:
+            _, metadata = files._read(path, MAX_BYTES)
+            if metadata["sha256"] != sha:
+                raise ValueError("quantity_history_predecessor_hash_changed")
 
 
 def read_verified(stage_path, stage, *, read, data_root=None, role="current_stage"):
     """Return a native proof or None for the unchanged bounded legacy reader."""
-    if role not in {"current_stage", "issued_ancestry"}:
+    if role not in {"current_stage", "issued_ancestry", "historical_predecessor"}:
         raise ValueError("quantity_monitor_role_invalid")
     code = _code() if role == "current_stage" else None
     pointer_path = manifest_path(stage_path, code=code)
@@ -927,13 +1283,27 @@ def read_verified(stage_path, stage, *, read, data_root=None, role="current_stag
         != stage
     ):
         raise ValueError("quantity_monitor_stage_file_mismatch")
-    if role == "issued_ancestry":
+    if role in {"issued_ancestry", "historical_predecessor"}:
         # An approved policy retains its original issued evidence. Later cost
         # corrections/archives and new native code affect current research,
         # never add a fresh economic or natural-consumption adoption hurdle.
         if issued_before != {name: _identity(Path(name)) for name in issued_sources}:
             raise ValueError("quantity_monitor_issued_source_changed")
-        return {"issued": value["issued"], "observation": value["observation"]}
+        result = {"issued": value["issued"], "observation": value["observation"]}
+        if role == "historical_predecessor":
+            history = value.get("historical_exclusion_disposition")
+            if history is not None:
+                _historical_exclusions(
+                    stage, observation, history, coverage["input_manifest_sha256"]
+                )
+                _check_history_sources(value, root, read=read)
+            result.update(
+                history=history,
+                history_source=dict(
+                    path=str(path), sha256=pointer["projection_sha256"]
+                ),
+            )
+        return result
     snapshots = value.get("logical_snapshot_dependencies", {})
     if not isinstance(snapshots, dict) or len(snapshots) > MAX_REFERENCES:
         raise ValueError("quantity_monitor_reference_budget")
@@ -1005,6 +1375,7 @@ def read_verified(stage_path, stage, *, read, data_root=None, role="current_stag
     ):
         raise ValueError("quantity_monitor_source_changed")
     _check_directories(value["source_directories"])
+    _check_history_sources(value, root, read=read)
     observation = value["observation"]
     if value.get("historical_exclusion_disposition") is not None:
         observation = _historical_exclusions(

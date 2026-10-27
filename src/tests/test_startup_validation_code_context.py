@@ -3149,3 +3149,17 @@ def test_report_absence_recovery_keeps_independent_source_pair(damage):
     elif damage == 'successor':
         new = '0' * 64
     assert C.reviewed_preparation_pair(relative, old, new) is (damage is None)
+
+
+@pytest.mark.parametrize("damage", [None, "unreviewed", "wrong_origin"])
+def test_quantity_history_preparation_requires_exact_reviewed_pair(damage):
+    relative = "src/engine/scalping/initial_quantity_monitor_projection.py"
+    old = hashlib.sha256(subprocess.check_output(
+        ["git", "-C", str(ROOT), "show", "ab663e13b:" + relative]
+    )).hexdigest()
+    current = hashlib.sha256((ROOT / relative).read_bytes()).hexdigest()
+    if damage == "unreviewed":
+        current = "0" * 64
+    elif damage == "wrong_origin":
+        old = "0" * 64
+    assert C.reviewed_preparation_pair(relative, old, current) is (damage is None)

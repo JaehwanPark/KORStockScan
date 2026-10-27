@@ -2000,6 +2000,18 @@ def test_refresh_uses_only_new_entries_and_requires_post_apply_receipts(
         build_timeout_research,
     )
 
+    current_timeout_builder = build_timeout_research
+
+    def build_timeout_research(*args, **kwargs):
+        timeout = current_timeout_builder(*args, **kwargs)
+        # Reconstruct the original v1 timeout, just like the legacy cap reader
+        # above. Current v2 paired evidence is exercised by the repair suite.
+        timeout.pop("evaluation_algorithm", None)
+        timeout["report_content_sha256"] = _digest(
+            {k: v for k, v in timeout.items() if k != "report_content_sha256"}
+        )
+        return timeout
+
     refresh_timeout = build_timeout_research(
         new_day,
         data_dir=tmp_path,

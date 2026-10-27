@@ -2514,6 +2514,17 @@ for _name, _sha in REVIEWED_SUFFIX_REPORT_SOURCES.items():
     _history.update((old, _sha) for old in _prior)
 
 
+# Reviewed daily historical diagnostic custody. Old IDs, null economics and
+# exact original proofs remain immutable; new/current source validation stays.
+REVIEWED_QUANTITY_HISTORY_SOURCES = {"src/engine/scalping/initial_quantity_monitor_projection.py": "e12b1702ab35598ff77113c3b42e0ae4e9d3aad623cda4a9161b34277e1ff350"}
+for _name, _sha in REVIEWED_QUANTITY_HISTORY_SOURCES.items():
+    _history = REVIEWED_PREPARATION_HISTORY.setdefault(_name, set())
+    _prior = {v for pair in _history for v in pair} | {"32724869c09d6495aa0ab4ec8113a49081f640f15b0bcb1fea5429d467ea354a"}
+    if _name in REVIEWED_PREPARATION_SOURCES:
+        _prior.update(REVIEWED_PREPARATION_SOURCES[_name])
+    _history.update((old, _sha) for old in _prior)
+
+
 def reviewed_preparation_pair(relative, old, current):
     # An already reviewed physical pair keeps its original authority; a
     # formatting projection must not replace either endpoint before this check.

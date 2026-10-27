@@ -11345,6 +11345,34 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
     for name, current in REVIEWED_SUFFIX_REPORT_HASHES.items()
 }}
 
+# Reviewed daily quantity history profile, retaining issued original readers.
+REVIEWED_QUANTITY_HISTORY_HASHES = {'src/engine/scalping/initial_quantity_monitor_projection.py': 'e12b1702ab35598ff77113c3b42e0ae4e9d3aad623cda4a9161b34277e1ff350', 'src/engine/infrastructure/startup_validation_code_context.py': '6bef3c59c43da529c4cc92f876dccb4bb4af83f5d2fb19e6399b77a8c2337ae0'}
+REVIEWED_QUANTITY_HISTORY_PROFILE = {
+    **REVIEWED_SUFFIX_REPORT_PROFILE, **REVIEWED_QUANTITY_HISTORY_HASHES
+}
+REVIEWED_QUANTITY_HISTORY_VARIANTS = {
+    (key[0], REVIEWED_QUANTITY_HISTORY_HASHES.get(key[0], key[1])): {
+        **value,
+        "selector_path": "src/engine/infrastructure/startup_validation_code_context.py",
+        "selector_sha256": REVIEWED_QUANTITY_HISTORY_HASHES["src/engine/infrastructure/startup_validation_code_context.py"],
+        "dependencies": {**value["dependencies"], **REVIEWED_QUANTITY_HISTORY_HASHES},
+        "contract_extensions": {
+            origin: {name: REVIEWED_QUANTITY_HISTORY_HASHES.get(os.path.normpath(name), sha)
+                     for name, sha in paths.items()}
+            for origin, paths in value["contract_extensions"].items()
+        },
+    }
+    for key, value in REVIEWED_SUFFIX_REPORT_VARIANTS.items()
+}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple(
+        (old, current)
+        for old in {value for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ())
+                    for value in pair} | {REVIEWED_SUFFIX_REPORT_PROFILE[name]}
+    )
+    for name, current in REVIEWED_QUANTITY_HISTORY_HASHES.items()
+}}
+
 
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
@@ -12012,6 +12040,12 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     ):
         prepared_hashes = REVIEWED_SUFFIX_REPORT_PROFILE
         prepared_variants = REVIEWED_SUFFIX_REPORT_VARIANTS
+    if (
+        (source := candidate_bytes("src/engine/infrastructure/startup_validation_code_context.py", optional=True)) is not None
+        and hashlib.sha256(source).hexdigest() == REVIEWED_QUANTITY_HISTORY_HASHES["src/engine/infrastructure/startup_validation_code_context.py"]
+    ):
+        prepared_hashes = REVIEWED_QUANTITY_HISTORY_PROFILE
+        prepared_variants = REVIEWED_QUANTITY_HISTORY_VARIANTS
     entry_cost_hashes = (
         prepared_hashes
         if prepared_owner_present

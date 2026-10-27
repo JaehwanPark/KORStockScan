@@ -342,3 +342,11 @@ PYTHONPATH=. "$VENV_PY" -m src.engine.lifecycle.broker_cost_source --date "$TARG
 ### 동일 날짜 후속 stage의 배포 준비 인계 — 2026-10-21
 
 기존 publish_refresh_quantity_evaluation의 publish_current=False는 운영 정책·공용 committed 참조를 유지하며 같은 날짜의 새 immutable generation을 검증된 후보 코드에만 결속한다. full native report/evaluation/timeout/census/terminal/source 검증 후 원 공용 참조 SHA를 CAS 부모로 포함한 code-addressed stage reference를 같은 commit lock에서 발행한다. 감시·summary는 기존 committed_refresh_stage_path의 공통 bounded parser를 사용하며, 정확한 코드 참조가 손상되거나 부모·날짜·경로·SHA가 달라지면 실패한다. 준비된 코드와 다른 기존 reader는 원 공용 참조를 계속 읽는다. 실제 선택 후 정상 native 발행은 공용 참조와 이미 준비된 같은 코드 참조를 이관하며 원 generation을 보존한다. 실제 정책 활성화/PID/자연 closed 수용은 별도다. [원인·검증](../audits/postclose-root-cause-recovery-review-2026-10-19.md#수량-후속-stage의-후보별-인계--2026-10-21).
+
+### 역사적 수량 결손의 일일 인계 — 2026-10-27
+
+기존 `initial_quantity_monitor_projection` 생산자가 같은 날짜의 committed 후속 세대 또는 native 달력상 직전 거래일의 committed stage에서 승인된 역사 진단을 읽는다. 임의 최신 파일·오래된 임의 날짜로 대체하지 않는다. 현재 날짜의 native stage·census·비용·원천 검증을 먼저 통과한 건만, 원 ID·종목·결손 사유·fact 해시/내용과 대조한다. 공식 비용 조회 구간 확장에 따른 aggregate 해시 변경은 기존 `broker_cost_source.declared_source_bytes`가 보존 원문과 기존 구간의 동일성을 증명하고 거래별 참조도 같은 경우에만 허용한다.
+
+후속 증명은 원 승인 projection의 경로/SHA, 최초 fact 해시, 현재 fact 해시와 필요한 witness를 함께 보존한다. 기존 stage/report, 원 결손 사유와 손익 null은 변경하지 않는다. 새 ID·바뀐 fact/사유·비용 정정·미확인 원문은 현재 결손으로 남으며 현재 검증 실패를 역사 진단으로 넘기지 않는다. 혼합 모집단에서도 검증된 역사 ID만 분리한다.
+
+기존 publisher lock·원천 재검증·불변 세대·코드별 포인터를 사용한다. 실패 후 재시도는 원 승인 바이트를 바꾸지 않고 같은 native 경로에서 재검증한다. 감시 소비자는 원 승인과 직전 stage/projection의 SHA도 자신의 bounded read 경로로 확인한다. 대형 과거 report의 일회성 이관은 기존 4MiB 한도를 넘겨 읽지 않으며, 정확한 witness가 없는 행은 현재 결손으로 유지한다. 새 worker/정책/검증 한도 확대는 없다. 정규 장후→다음 PREOPEN/PID 자연 수용은 현재 `InitialQuantityProducerConsumerRepair1010`에서 계속 확인한다.

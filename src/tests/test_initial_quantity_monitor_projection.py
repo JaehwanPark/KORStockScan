@@ -647,6 +647,379 @@ def test_republication_cannot_inherit_an_acknowledgement_for_changed_fact_identi
         projection.publish(path, stage, report, data_root=data)
 
 
+def _history_day(
+    data, original_stage, original_report, original_children, day, *, mutate=None
+):
+    import copy
+
+    stage, report = copy.deepcopy(original_stage), copy.deepcopy(original_report)
+    stage["source_date"] = report["source_date"] = day
+    if mutate:
+        mutate(report)
+        report["trades"], report["census"] = native.completed_trade_fact_census(
+            day, fact_rows=report["census"]["input_fact_rows"], data_dir=data
+        )
+        stage["all_completed_initial_trades"] = len(report["trades"])
+    base = (
+        data
+        / "report/initial_entry_quantity_type_policy"
+        / ("refresh_postclose_" + day)
+    )
+    directory = base / "generations" / native._digest(report)
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / ("initial_quantity_refresh_stage_" + day + ".json")
+    children = {}
+    for name, source in original_children.items():
+        value = json.loads(source.read_bytes())
+        if name == "evaluation":
+            value["source_date"] = day
+        children[name] = directory / (name + ".json")
+        children[name].write_text(json.dumps(value))
+        stage[name + "_path"] = str(children[name])
+    _reseal(path, stage, report, children)
+    # The daily path must publish history even for small reports.
+    for name, child in children.items():
+        child.write_bytes(child.read_bytes().rstrip())
+        stage[name + "_file_sha256"] = hashlib.sha256(child.read_bytes()).hexdigest()
+    stage["receipt_content_sha256"] = native._digest(
+        {k: v for k, v in stage.items() if k != "receipt_content_sha256"}
+    )
+    path.write_text(json.dumps(stage))
+    return path, stage, report, children
+
+
+def _commit_history_day(path, stage):
+    (path.parent.parent.parent / "committed_stage.json").write_text(
+        json.dumps(
+            dict(
+                schema="initial_quantity_stage_reference_v2",
+                source_date=stage["source_date"],
+                stage_path=str(path),
+                stage_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+            )
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    "days",
+    [
+        ("2026-10-21", "2026-10-22", "2026-10-23"),
+        ("2026-10-08", "2026-10-12", "2026-10-13"),
+        ("2026-10-22", "2026-10-23", "2026-10-26"),
+    ],
+)
+def test_daily_history_survives_consecutive_sessions_weekends_and_holidays(
+    tmp_path, monkeypatch, days
+):
+    data, _, stage, report, children = _historical_fixture(tmp_path, monkeypatch)
+    original_hash = native._digest(report["census"]["input_fact_rows"][1])
+    for index, day in enumerate(days):
+        path, current, replay, _ = _history_day(data, stage, report, children, day)
+        original = path.read_bytes()
+        projection.publish(
+            path,
+            current,
+            replay,
+            data_root=data,
+            accepted_historical_record_ids=["2"] if index == 0 else None,
+        )
+        observation = projection.read_verified(
+            path, current, read=_read, data_root=data
+        )["observation"]
+        assert observation["postclose_semantic_findings"] == []
+        assert (
+            observation["postclose_historical_exclusions"]["excluded_rows"][0][
+                "fact_sha256"
+            ]
+            == original_hash
+        )
+        if index:
+            row = observation["postclose_historical_exclusions"]["excluded_rows"][0]
+            assert row["origin"]["row"]["fact_sha256"] == original_hash
+            assert row["fact_witness"]["realized_pnl_krw"] is None
+            projection.publish(path, current, replay, data_root=data)
+        assert path.read_bytes() == original
+        _commit_history_day(path, current)
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "new_id",
+        "changed_reason",
+        "changed_fact",
+        "missing_predecessor",
+        "tampered_predecessor",
+    ],
+)
+def test_daily_history_does_not_hide_new_or_unproved_gaps(tmp_path, monkeypatch, fault):
+    data, _, stage, report, children = _historical_fixture(tmp_path, monkeypatch)
+    path, old, replay, _ = _history_day(data, stage, report, children, "2026-10-22")
+    projection.publish(
+        path, old, replay, data_root=data, accepted_historical_record_ids=["2"]
+    )
+    if fault != "missing_predecessor":
+        _commit_history_day(path, old)
+    if fault == "tampered_predecessor":
+        path.write_bytes(path.read_bytes() + b" ")
+
+    def mutate(replay):
+        row = replay["census"]["input_fact_rows"][1]
+        if fault == "new_id":
+            replay["census"]["input_fact_rows"].append(
+                {**row, "recommendation_id": "3"}
+            )
+        elif fault == "changed_reason":
+            row["buy_time"] = None
+        elif fault == "changed_fact":
+            row["buy_qty"] = 2
+
+    path, current, replay, _ = _history_day(
+        data, stage, report, children, "2026-10-23", mutate=mutate
+    )
+    if fault == "tampered_predecessor":
+        with pytest.raises(ValueError):
+            projection.publish(path, current, replay, data_root=data)
+        assert not projection.manifest_path(path).exists()
+        return
+    projection.publish(path, current, replay, data_root=data)
+    proof = projection.read_verified(path, current, read=_read, data_root=data)
+    if proof is not None:
+        assert proof["observation"]["postclose_semantic_findings"] == [
+            "initial_quantity_economic_source_gap"
+        ]
+        if fault == "new_id":
+            assert proof["observation"]["postclose_current_source_gap_reasons"] == {
+                "terminal_cost_or_quantity_missing": 1
+            }
+            assert [
+                r["record_id"]
+                for r in proof["observation"]["postclose_historical_exclusions"][
+                    "excluded_rows"
+                ]
+            ] == ["2"]
+    else:
+        assert fault == "missing_predecessor"
+
+
+def test_daily_history_failed_publication_retries_without_mutating_originals(
+    tmp_path, monkeypatch
+):
+    data, _, stage, report, children = _historical_fixture(tmp_path, monkeypatch)
+    path, old, replay, _ = _history_day(data, stage, report, children, "2026-10-22")
+    projection.publish(
+        path, old, replay, data_root=data, accepted_historical_record_ids=["2"]
+    )
+    _commit_history_day(path, old)
+    original = projection.manifest_path(path).read_bytes()
+    path, current, replay, _ = _history_day(data, stage, report, children, "2026-10-23")
+    write = projection.files._write_atomic
+
+    def fail_pointer(target, *args, **kwargs):
+        if ".monitor." in target.name:
+            raise OSError("injected publication failure")
+        return write(target, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(projection.files, "_write_atomic", fail_pointer)
+        with pytest.raises(OSError, match="injected"):
+            projection.publish(path, current, replay, data_root=data)
+    assert not projection.manifest_path(path).exists()
+    projection.publish(path, current, replay, data_root=data)
+    assert (
+        projection.read_verified(path, current, read=_read, data_root=data)[
+            "observation"
+        ]["postclose_semantic_findings"]
+        == []
+    )
+    previous = projection._historical_predecessor(path, current, data)
+    assert (
+        projection.manifest_path(Path(previous["stage_path"])).read_bytes() == original
+    )
+
+
+@pytest.mark.parametrize("fault", [None, "original_projection", "predecessor_stage"])
+def test_daily_history_consumer_rechecks_bounded_original_sources(
+    tmp_path, monkeypatch, fault
+):
+    data, _, stage, report, children = _historical_fixture(tmp_path, monkeypatch)
+    for index, day in enumerate(("2026-10-22", "2026-10-23", "2026-10-26")):
+        path, current, replay, _ = _history_day(data, stage, report, children, day)
+        pointer = projection.publish(
+            path,
+            current,
+            replay,
+            data_root=data,
+            accepted_historical_record_ids=["2"] if index == 0 else None,
+        )
+        _commit_history_day(path, current)
+    value = json.loads(Path(pointer["projection_path"]).read_bytes())
+    history = value["historical_exclusion_disposition"]
+    target = (
+        history["excluded_rows"][0]["origin"]["projection"]["path"]
+        if fault == "original_projection"
+        else history["predecessor"]["stage_path"]
+    )
+    seen = set()
+
+    def tracked(path, **kwargs):
+        seen.add(str(path))
+        assert kwargs["limit"] <= projection.MAX_BYTES
+        value, metadata = projection.files._read(path, kwargs["limit"])
+        if kwargs.get("expected_sha") is not None and metadata["sha256"] != kwargs["expected_sha"]:
+            raise ValueError("historical_source_changed")
+        return value
+
+    if fault:
+        original = Path(target).read_bytes()
+        Path(target).write_bytes(original + b" ")
+        with pytest.raises(ValueError):
+            projection.read_verified(path, current, read=tracked, data_root=data)
+        Path(target).write_bytes(original)
+    proof = projection.read_verified(path, current, read=tracked, data_root=data)
+    assert set(value["history_sources"]) <= seen
+    assert proof["observation"]["postclose_semantic_findings"] == []
+    assert proof["observation"]["postclose_source_gap_reasons"] == {
+        "terminal_cost_or_quantity_missing": 1
+    }
+
+
+def test_same_source_successor_uses_committed_history_and_rejects_changed_current_sources(
+    tmp_path, monkeypatch
+):
+    data, _, stage, report, children = _historical_fixture(tmp_path, monkeypatch)
+    path, old, replay, _ = _history_day(data, stage, report, children, "2026-10-22")
+    projection.publish(
+        path, old, replay, data_root=data, accepted_historical_record_ids=["2"]
+    )
+    _commit_history_day(path, old)
+
+    def new_input(replay):
+        replay["census"]["input_fact_rows"].append(
+            {"recommendation_id": "9", "status": "HOLDING"}
+        )
+
+    path, current, replay, children = _history_day(
+        data, stage, report, children, "2026-10-22", mutate=new_input
+    )
+    projection.publish(path, current, replay, data_root=data)
+    assert (
+        projection.read_verified(path, current, read=_read, data_root=data)[
+            "observation"
+        ]["postclose_semantic_findings"]
+        == []
+    )
+    children["report"].write_bytes(children["report"].read_bytes() + b" ")
+    with pytest.raises(ValueError, match="source_changed"):
+        projection.read_verified(path, current, read=_read, data_root=data)
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        None,
+        "old_cost_correction",
+        "new_record_receipt",
+        "missing_original",
+        "missing_native_validation",
+    ],
+)
+def test_history_cost_rollover_requires_unchanged_native_original_window(
+    tmp_path, monkeypatch, fault
+):
+    from copy import deepcopy
+    from datetime import timedelta
+    from src.tests.test_broker_cost_source import broker_fixture, C, DAY, NOW, seal
+
+    original, _, transport, _ = broker_fixture(tmp_path)
+    source_path = C.source_path(tmp_path, DAY)
+    reference = dict(
+        source_date=DAY,
+        source_sha256=original["source_sha256"],
+        sha256=hashlib.sha256(source_path.read_bytes()).hexdigest(),
+    )
+    C.collect(
+        tmp_path, DAY, transport=transport, now=NOW + timedelta(days=4), refresh=True
+    )
+    old = dict(
+        recommendation_id="2",
+        stock_code="005930",
+        realized_pnl_krw=None,
+        fact_generation=dict(
+            path="original.status.json",
+            sha256="a" * 64,
+            cost_generation=dict(
+                completion_date=DAY,
+                status="cost_source_unavailable",
+                count=0,
+                sha256="b" * 64,
+                official_source_sha256=reference["sha256"],
+                quantity_research_cost_generation=dict(
+                    projection_scope="record",
+                    record_id="2",
+                    receipts=[],
+                    source_dates=[],
+                    parent_generation_sha256="b" * 64,
+                    research_generation_sha256="c" * 64,
+                ),
+            ),
+        ),
+    )
+    current = deepcopy(old)
+    costs = current["fact_generation"]["cost_generation"]
+    costs["sha256"] = "d" * 64
+    costs["quantity_research_cost_generation"].update(
+        parent_generation_sha256="d" * 64, research_generation_sha256="e" * 64
+    )
+    if fault == "old_cost_correction":
+        value = C.load_source(tmp_path, DAY)
+        value["observations"]["ka10170"]["pages"][0]["tdy_trde_diary"][0][
+            "cmsn_alm_tax"
+        ] = "11"
+        seal(value)
+        C.atomic(source_path, value)
+    elif fault == "missing_original":
+        (
+            source_path.parent
+            / "generations"
+            / DAY
+            / (original["source_sha256"] + ".json")
+        ).unlink()
+    elif fault == "new_record_receipt":
+        costs["quantity_research_cost_generation"]["receipts"] = [
+            {"record_id": "2", "sha256": "f" * 64}
+        ]
+    costs["official_source_sha256"] = hashlib.sha256(
+        source_path.read_bytes()
+    ).hexdigest()
+    previous = dict(fact_witness=old, cost_source_reference=reference)
+    if fault in {"old_cost_correction", "missing_original"}:
+        with pytest.raises(ValueError):
+            projection._same_historical_fact(previous, current, tmp_path)
+    elif fault == "new_record_receipt":
+        assert not projection._same_historical_fact(previous, current, tmp_path)
+    elif fault == "missing_native_validation":
+        data, path, stage, report, children = _historical_fixture(
+            tmp_path / "isolated", monkeypatch
+        )
+        monkeypatch.setattr(
+            native, "refresh_quantity_stage_terminal_valid", lambda _: False
+        )
+        with pytest.raises(ValueError, match="native_stage_invalid"):
+            projection.publish(
+                path,
+                stage,
+                report,
+                data_root=data,
+                accepted_historical_record_ids=["2"],
+            )
+        assert not projection.manifest_path(path).exists()
+    else:
+        assert projection._same_historical_fact(previous, current, tmp_path)
+        assert old["realized_pnl_krw"] is current["realized_pnl_krw"] is None
+
+
 @pytest.mark.parametrize(
     "fault",
     [

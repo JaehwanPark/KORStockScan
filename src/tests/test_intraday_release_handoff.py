@@ -5411,7 +5411,8 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
     )
     subprocess.run(["git", "-C", str(root), "checkout", "-q", "75e0fbbf7"], check=True)
     hashes = {
-        "current": handoff.REVIEWED_SUFFIX_REPORT_PROFILE,
+        "current": handoff.REVIEWED_QUANTITY_HISTORY_PROFILE,
+        "consumed_suffix_report": handoff.REVIEWED_SUFFIX_REPORT_PROFILE,
         "consumed_isolated_index": handoff.REVIEWED_ISOLATED_INDEX_PROFILE,
         "consumed_stop_index": handoff.REVIEWED_STOP_INDEX_PROFILE,
         "consumed_closed_loader": handoff.REVIEWED_CLOSED_LOADER_PROFILE,
@@ -5477,6 +5478,7 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
                         "consumed_cumulative_hold": "89a0a5fa2",
                         "consumed_closed_loader": "cb4f0ab58",
                         "consumed_stop_index": "2fbf31449",
+                        "consumed_suffix_report": "ab663e13b",
                         "consumed_isolated_index": "59a922b19",
                         "consumed_auxiliary_format": "c0346b611",
                         "consumed_cold_postclose": "6fe72273e",
@@ -6417,3 +6419,19 @@ def test_suffix_report_handoff_preserves_issued_origin(tmp_path, family, fault):
     test_entry_cost_handoff_keeps_exact_complete_generation(
         tmp_path, family, fault, "consumed_isolated_index",
         "src/engine/automation/postclose_finalization_generation.py")
+
+
+@pytest.mark.parametrize("family", ["main_stop", "holding_vote", "pre_submit_delay"])
+@pytest.mark.parametrize("fault", [None, "missing", "dirty", "committed_change", "parent_mix"])
+@pytest.mark.parametrize("dependency", list(handoff.REVIEWED_QUANTITY_HISTORY_HASHES))
+def test_quantity_history_handoff_complete_generation(tmp_path, family, fault, dependency):
+    test_entry_cost_handoff_keeps_exact_complete_generation(
+        tmp_path, family, fault, "current", dependency)
+
+
+@pytest.mark.parametrize("family", ["main_stop", "holding_vote", "pre_submit_delay"])
+@pytest.mark.parametrize("fault", ["", "successor_mix"])
+def test_quantity_history_handoff_preserves_issued_origin(tmp_path, family, fault):
+    test_entry_cost_handoff_keeps_exact_complete_generation(
+        tmp_path, family, fault, "consumed_suffix_report",
+        "src/engine/scalping/initial_quantity_monitor_projection.py")
