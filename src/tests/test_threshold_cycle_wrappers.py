@@ -2066,32 +2066,89 @@ def test_workflow_provenance_uses_immutable_owner_after_snapshot_unlink():
     )
 
 
-@pytest.mark.parametrize('invalid_request', [False, True])
-def test_scoped_scoring_intake_precedes_first_machine_launch_and_fails_closed(tmp_path, invalid_request):
+@pytest.mark.parametrize("invalid_request", [False, True])
+def test_scoped_scoring_intake_precedes_first_machine_launch_and_fails_closed(
+    tmp_path, invalid_request
+):
     import os
     import subprocess
     import sys
 
-    script = _text('deploy/run_threshold_cycle_postclose.sh')
-    start = script.index('if [[ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" == "true"')
-    block = script[start:script.index('# Rising Missed scout entry', start)]
-    assert script.index('--audit-phase preflight --write') < start
-    assert block.index('fulfill-scoring') < block.index('--launch')
-    data = tmp_path/'data'
-    intent = data/'runtime/mechanistic_entry_policy/cumulative-scoring-intent.json'
+    script = _text("deploy/run_threshold_cycle_postclose.sh")
+    start = script.index(
+        'if [[ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" == "true"'
+    )
+    block = script[start : script.index("# Rising Missed scout entry", start)]
+    assert script.index("--audit-phase preflight --write") < start
+    assert block.index("fulfill-scoring") < block.index("--launch")
+    data = tmp_path / "data"
+    intent = data / "runtime/mechanistic_entry_policy/cumulative-scoring-intent.json"
     if invalid_request:
         intent.parent.mkdir(parents=True)
-        intent.write_text('{}')
-    marker = tmp_path/'machine-launched'
-    python = tmp_path/'python'
-    python.write_text('#!/bin/bash\nif [[ "$2" == "src.engine.automation.postclose_summary_handoff" ]]; then\n touch "$MACHINE_MARKER"\nelse\n exec "$REAL_PYTHON" "$@"\nfi\n')
+        intent.write_text("{}")
+    marker = tmp_path / "machine-launched"
+    python = tmp_path / "python"
+    python.write_text(
+        '#!/bin/bash\nif [[ "$2" == "src.engine.automation.postclose_summary_handoff" ]]; then\n touch "$MACHINE_MARKER"\nelse\n exec "$REAL_PYTHON" "$@"\nfi\n'
+    )
     python.chmod(0o700)
-    prelude='set -e\nwait_for_postclose_resources() { return 0; }\nrun_postclose_cmd() { "$@"; }\n'
-    env={**os.environ, 'VENV_PY':str(python), 'REAL_PYTHON':sys.executable,
-         'PROJECT_DIR':str(tmp_path), 'TARGET_DATE':'2026-10-27',
-         'POLICY_PUBLICATION_DATE':'2026-10-27', 'MACHINE_MARKER':str(marker),
-         'RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION':'true'}
-    completed=subprocess.run(['bash','-c',prelude+block],cwd=ROOT,env=env,capture_output=True,text=True)
-    assert (completed.returncode==0) is (not invalid_request), completed.stderr
+    prelude = 'set -e\nwait_for_postclose_resources() { return 0; }\nrun_postclose_cmd() { "$@"; }\n'
+    env = {
+        **os.environ,
+        "VENV_PY": str(python),
+        "REAL_PYTHON": sys.executable,
+        "PROJECT_DIR": str(tmp_path),
+        "TARGET_DATE": "2026-10-27",
+        "POLICY_PUBLICATION_DATE": "2026-10-27",
+        "MACHINE_MARKER": str(marker),
+        "RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION": "true",
+    }
+    completed = subprocess.run(
+        ["bash", "-c", prelude + block],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert (completed.returncode == 0) is (not invalid_request), completed.stderr
     assert marker.exists() is (not invalid_request)
-    assert not (intent.parent/'cumulative-scoring.json').exists()
+    assert not (intent.parent / "cumulative-scoring.json").exists()
+
+
+@pytest.mark.parametrize(
+    "failed",
+    ["main_machine_policy", "legacy_machine_report", "main_auxiliary_policy", "none"],
+)
+def test_holding_suffix_requires_valid_terminal_after_wait(tmp_path, failed):
+    import subprocess
+
+    script = _text("deploy/run_threshold_cycle_postclose.sh")
+    block = script.split("# Complete all AI-request writers", 1)[1].split(
+        'run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.automation.main_trailing_source_store',
+        1,
+    )[0]
+    block = "\n".join(block.splitlines()[1:])
+    # Exercise the actual scheduling block with a terminal-only wait and a
+    # producer check that rejects its failed owner, just as the native CLI does.
+    prelude = """set -e
+RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION=true
+TARGET_DATE=2026-10-27
+VENV_PY=python
+run_postclose_cmd() {
+  local check=false stage=wait previous=''
+  for token in "$@"; do
+    if [ "$previous" = --stage ]; then stage="$token"; fi
+    if [ "$token" = --check ]; then check=true; fi
+    previous="$token"
+  done
+  if $check && [ "$stage" = 'FAILED_OWNER' ]; then return 1; fi
+}
+""".replace("FAILED_OWNER", failed)
+    result = subprocess.run(
+        ["bash", "-c", prelude + block + "\nprintf 'suffix reached'\n"],
+        capture_output=True,
+        text=True,
+        cwd=tmp_path,
+    )
+    assert result.returncode == (0 if failed == "none" else 1), result.stderr
+    assert ("suffix reached" in result.stdout) is (failed == "none")

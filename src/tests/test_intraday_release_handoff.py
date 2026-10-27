@@ -5415,7 +5415,7 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
     )
     subprocess.run(["git", "-C", str(root), "checkout", "-q", "75e0fbbf7"], check=True)
     hashes = {
-        "current": handoff.REVIEWED_MACHINE_PATH_PROFILE,
+        "current": handoff.REVIEWED_NATIVE_COST_INTAKE_PROFILE,
         "machine_path": handoff.REVIEWED_MACHINE_PATH_PROFILE,
         "report_census": handoff.REVIEWED_REPORT_CENSUS_PROFILE,
         "consumed_submit_fresh": handoff.REVIEWED_SUBMIT_FRESH_PROFILE,
@@ -5492,7 +5492,7 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
     for name in hashes:
         content = (
             (canonical / name).read_bytes()
-            if generation in {"current", "machine_path"}
+            if generation == "current"
             else subprocess.check_output(
                 [
                     "git",
@@ -5500,6 +5500,7 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
                     str(canonical),
                     "show",
                     {
+                        "machine_path": "5dceaf032",
                         "report_census": "10f03701c",
                         "consumed_nonfixed_final": "3178d65e0",
                         "nonfixed_final": "3178d65e0",
@@ -6679,3 +6680,18 @@ def test_report_census_policy_handoff_keeps_complete_generation(tmp_path, family
 @pytest.mark.parametrize("fault", [None,"dirty","committed_change","parent_mix"])
 def test_machine_comparison_reader_keeps_complete_policy_code_generation(tmp_path,family,fault):
     test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path,family,fault,"machine_path","src/engine/automation/postclose_summary_handoff.py")
+
+
+@pytest.mark.parametrize("family", ["main_stop", "holding_vote", "pre_submit_delay"])
+@pytest.mark.parametrize("dependency", [
+    "src/engine/scalping/ai_action_outcome_calibration.py",
+    "src/engine/sniper_trade_review_report.py",
+    "src/engine/compress_db_backfilled_files.py",
+    "deploy/run_threshold_cycle_postclose.sh",
+])
+def test_native_cost_intake_profile_rejects_unreviewed_sibling_change(
+    tmp_path, family, dependency
+):
+    test_entry_cost_handoff_keeps_exact_complete_generation(
+        tmp_path, family, "committed_change", "current", dependency
+    )

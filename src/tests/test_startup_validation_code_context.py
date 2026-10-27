@@ -2761,7 +2761,7 @@ def test_main_preparation_uses_reviewed_stopped_origin_code(name):
     review = json.loads((ROOT / H._FORMATTING_REVIEW_PATH).read_text())
     predecessor = review["sources"][name]["before_sha256"]
     if review["sources"][name]["after_sha256"] != current:
-        assert H.REVIEWED_MACHINE_PATH_PROFILE[name] == current
+        assert H.REVIEWED_NATIVE_COST_INTAKE_PROFILE[name] == current
         C._pairs({name: review["sources"][name]["after_sha256"]}, {name: current})
     origins = {old for old, new in pairs if new in {predecessor, current}}
     origins.add(predecessor)
@@ -3027,7 +3027,7 @@ def test_main_preparation_independently_reviews_closed_scanner(origin, damage):
 )
 def test_migration_configuration_has_independent_exact_source_pairs(name):
     current = hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
-    assert H.REVIEWED_MACHINE_PATH_PROFILE[name] == current
+    assert H.REVIEWED_NATIVE_COST_INTAKE_PROFILE[name] == current
     for old in H.REVIEWED_MIGRATION_ORIGINS[name]:
         C._pairs({name: old}, {name: H.REVIEWED_CLOSED_LOADER_PROFILE[name]})
         C._pairs({name: old}, {name: current})
@@ -3235,7 +3235,7 @@ def test_entry_capability_independent_preparation_exact_pairs(relative, fault):
 def test_nonfixed_identifier_preparation_uses_independent_exact_sources(name,fault):
     old=H.REVIEWED_NONFIXED_IDENTITY_ORIGINS[name]
     current=hashlib.sha256((ROOT/name).read_bytes()).hexdigest()
-    assert H.REVIEWED_MACHINE_PATH_PROFILE[name]==current
+    assert H.REVIEWED_NATIVE_COST_INTAKE_PROFILE[name]==current
     if fault=='source':old='0'*64
     if fault=='target':current='0'*64
     if fault=='path':name='src/engine/unknown_identifier_owner.py'
@@ -3282,7 +3282,7 @@ def test_invalidation_cadence_independent_preparation_exact_pairs(relative, faul
 def test_delay_collection_independent_preparation_exact_pairs(relative, fault):
     old = C.REVIEWED_DELAY_COLLECTION_ORIGINS[relative]
     current = hashlib.sha256((ROOT / relative).read_bytes()).hexdigest()
-    assert H.REVIEWED_MACHINE_PATH_PROFILE[relative] == current
+    assert H.REVIEWED_NATIVE_COST_INTAKE_PROFILE[relative] == current
     if fault == "origin": old = "0" * 64
     if fault == "successor": current = "0" * 64
     if fault == "path": relative = "src/engine/unknown_collection_owner.py"
@@ -3298,7 +3298,7 @@ def test_submit_fresh_independent_preparation_exact_pairs(relative, fault, proje
         if projected else C.REVIEWED_SUBMIT_FRESH_ORIGINS[relative]
     )
     current = hashlib.sha256((ROOT / relative).read_bytes()).hexdigest()
-    assert current == H.REVIEWED_MACHINE_PATH_PROFILE[relative]
+    assert current == H.REVIEWED_NATIVE_COST_INTAKE_PROFILE[relative]
     if fault == "origin": old = "0" * 64
     if fault == "successor": current = "0" * 64
     if fault == "path": relative = "src/engine/unknown_submit_owner.py"
@@ -3308,8 +3308,11 @@ def test_submit_fresh_independent_preparation_exact_pairs(relative, fault, proje
 @pytest.mark.parametrize("name", sorted(C.REVIEWED_SCOPED_SCORING_SOURCES))
 @pytest.mark.parametrize("fault", [None, "origin", "successor"])
 def test_scoped_scoring_independent_preparation_binds_exact_generation(name, fault):
+    import subprocess
     old = C.REVIEWED_SCOPED_SCORING_ORIGINS[name]
-    current = hashlib.sha256((ROOT/name).read_bytes()).hexdigest()
+    # This consumed profile keeps its original bytes after later repairs.
+    original = subprocess.check_output(["git", "-C", str(ROOT), "show", "10f03701c:" + name])
+    current = hashlib.sha256(original).hexdigest()
     assert current == C.REVIEWED_SCOPED_SCORING_SOURCES[name]
     assert current == H.REVIEWED_SCOPED_SCORING_HASHES[name]
     if fault == "origin": old = "0" * 64
@@ -3324,7 +3327,7 @@ def test_report_census_preparation_keeps_exact_reviewed_sources(name, fault):
     current = hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
     assert current == C.REVIEWED_REPORT_CENSUS_SOURCES[name]
     assert current == H.REVIEWED_REPORT_CENSUS_HASHES[name]
-    assert current == H.REVIEWED_MACHINE_PATH_PROFILE[name]
+    assert current == H.REVIEWED_NATIVE_COST_INTAKE_PROFILE[name]
     if fault == "origin":
         old = "0" * 64
     if fault == "successor":
@@ -3368,3 +3371,19 @@ def test_machine_comparison_path_has_exact_independent_preparation_review(name, 
     if fault=="origin":old="0"*64
     if fault=="successor":current="0"*64
     assert C.reviewed_preparation_pair(name,old,current) is (fault is None)
+
+
+@pytest.mark.parametrize("name", sorted(C.REVIEWED_NATIVE_COST_INTAKE_SOURCES))
+@pytest.mark.parametrize("fault", [None, "origin", "successor", "path"])
+def test_native_cost_intake_independent_preparation_exact_current_source(name, fault):
+    old = C.REVIEWED_NATIVE_COST_INTAKE_ORIGINS[name]
+    current = hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
+    assert current == C.REVIEWED_NATIVE_COST_INTAKE_SOURCES[name]
+    assert current == H.REVIEWED_NATIVE_COST_INTAKE_PROFILE[name]
+    if fault == "origin":
+        old = "0" * 64
+    elif fault == "successor":
+        current = "0" * 64
+    elif fault == "path":
+        name = "src/engine/unreviewed_cost_owner.py"
+    assert C.reviewed_preparation_pair(name, old, current) is (fault is None)

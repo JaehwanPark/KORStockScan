@@ -2524,6 +2524,10 @@ if [ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" = "true" ] || [ "$RUN_AI_DECI
   for stage in main_machine_policy legacy_machine_report main_auxiliary_policy; do
     run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.automation.postclose_summary_handoff \
       --stage wait --wait-stage "$stage" --date "$TARGET_DATE" --timeout-sec 14400
+    # Waiting proves termination only. Reject a failed producer before the
+    # holding suffix reads any of its inputs or consumes a resource slot.
+    run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.automation.postclose_summary_handoff \
+      --stage "$stage" --date "$TARGET_DATE" --check
   done
 fi
 run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.automation.main_trailing_source_store \

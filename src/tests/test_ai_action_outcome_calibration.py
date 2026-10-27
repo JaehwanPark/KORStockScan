@@ -7717,3 +7717,49 @@ def test_next_day_legacy_diagnostic_uses_retained_exact_scope_not_live_reversal(
         calibration._legacy_diagnostic_for_cohort(incumbent, ("NXT", "NXT_AFTERMARKET"))
         is None
     )
+
+
+@pytest.mark.parametrize(
+    "namespace", ["pipeline_events", "ai_decision_payloads", "ai_decision_trace"]
+)
+def test_machine_fingerprint_binds_logical_source_across_native_compression(
+    monkeypatch, tmp_path, namespace
+):
+    from src.engine.scalping import continuous_reversal_operating_postclose as native
+    from src.engine.automation import main_trailing_source_store as store
+    from src.engine import compress_db_backfilled_files as archive
+
+    monkeypatch.setattr(native, "load_report_parent", lambda *a: None)
+    raw = tmp_path / namespace / (namespace + "_2026-10-23.jsonl")
+    raw.parent.mkdir()
+    raw.write_text('{"stage":"observation","event_id":"one"}\n')
+    store.prepare_window(tmp_path, "2026-10-23", start_date="2026-10-23")
+    first = calibration._main_mechanistic_input_fingerprint(tmp_path, "2026-10-23")
+    assert archive._gzip_file(raw, dry_run=False)[0]
+    assert (
+        calibration._main_mechanistic_input_fingerprint(tmp_path, "2026-10-23") == first
+    )
+    # A new lock is not a new population. A corrupt compressed source still fails.
+    Path(str(raw) + ".lock").write_text("unrelated owner metadata")
+    assert (
+        calibration._main_mechanistic_input_fingerprint(tmp_path, "2026-10-23") == first
+    )
+    compressed = Path(str(raw) + ".gz")
+    compressed.write_bytes(compressed.read_bytes()[:-1])
+    with pytest.raises(ValueError):
+        calibration._main_mechanistic_input_fingerprint(tmp_path, "2026-10-23")
+
+
+def test_machine_fingerprint_detects_raw_append(monkeypatch, tmp_path):
+    from src.engine.scalping import continuous_reversal_operating_postclose as native
+
+    monkeypatch.setattr(native, "load_report_parent", lambda *a: None)
+    raw = tmp_path / "pipeline_events/pipeline_events_2026-10-23.jsonl"
+    raw.parent.mkdir()
+    raw.write_text("{}\n")
+    first = calibration._main_mechanistic_input_fingerprint(tmp_path, "2026-10-23")
+    with raw.open("a") as handle:
+        handle.write('{"new":true}\n')
+    assert (
+        calibration._main_mechanistic_input_fingerprint(tmp_path, "2026-10-23") != first
+    )

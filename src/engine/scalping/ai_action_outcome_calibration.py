@@ -341,7 +341,16 @@ def _main_mechanistic_input_fingerprint(
         load_report_parent,
     )
 
+    from src.engine.automation import main_trailing_source_store as indexed_sources
+
+    raw_namespaces = {"ai_decision_payloads", "ai_decision_trace", "pipeline_events"}
+
     def generation(path: Path) -> dict[str, Any]:
+        if path.parent.name in raw_namespaces:
+            return {
+                "path": str(path.resolve()),
+                "source_stat": indexed_sources.source_signature(data_root, path),
+            }
         # Compact finalization rewrites its small sealed projection even when
         # the logical input is unchanged.  Binding that file by inode/mtime
         # would force the expensive main evaluator to rerun on every wrapper
@@ -383,6 +392,12 @@ def _main_mechanistic_input_fingerprint(
     refresh_floor = _refresh_floor(target_date)
     for pattern in patterns:
         for path in data_root.glob(pattern):
+            if path.parent.name in raw_namespaces:
+                # Locks and archive receipts are storage machinery, not rows.
+                if not path.name.endswith((".jsonl", ".jsonl.gz")):
+                    continue
+                if path.name.endswith(".gz"):
+                    path = path.with_suffix("")
             match = re.search(r"(\d{4}-\d{2}-\d{2})", path.name)
             if match and refresh_floor <= match.group(1) <= target_date:
                 # Prior reports carry frozen selections. The current output is
@@ -409,6 +424,7 @@ def _main_mechanistic_input_fingerprint(
             "continuous_reversal_operating_postclose.py",
         )
     ]
+    code_paths.append(Path(indexed_sources.__file__))
     body = {
         "contract_version": MAIN_MECHANISTIC_EVALUATION_CONTRACT_VERSION,
         "operating_model_implementation_sha256": entry_operating_model_identity(),

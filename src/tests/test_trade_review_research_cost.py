@@ -1245,3 +1245,95 @@ def test_reobserved_broker_receipt_without_buy_lineage_collapses_without_restori
     assert "holding_path_buy_fill_identity" not in normalized[0].fields
     assert normalized[0].fields["broker_actual_execution_venue"] == "UNKNOWN"
     assert rows == before
+
+
+@pytest.mark.parametrize("fault", [None, "missing", "clock", "foreign", "partial"])
+def test_first_cost_producer_uses_same_native_buy_as_quantity_refresh(
+    monkeypatch, tmp_path, fault
+):
+    import json
+    from src.engine.lifecycle import broker_cost_allocation as allocation
+    from src.engine.ai import holding_exit_vote as vote
+    from src.tests.test_broker_cost_allocation import source, position
+    from src.tests.test_main_stop_research_cost import registry
+
+    day = "2026-10-08"
+    item = position(1)
+    registry(tmp_path, [item])
+    stock = dict(
+        id=1,
+        code="005930",
+        buy_time=day + "T10:00:00",
+        buy_qty=2,
+        buy_price=10000,
+        entry_filled_qty=2,
+        _entry_receipt_filled_by_order_no={"11": 2},
+        _entry_receipt_executions_by_order_no={
+            "11": {
+                "101": dict(
+                    cumulative_qty=2,
+                    cumulative_exec_amount=20000,
+                    order_qty=2,
+                    remaining_qty=0,
+                    unit_exec_qty=2,
+                    unit_exec_price=10000,
+                )
+            }
+        },
+        _add_receipt_filled_by_order_no={},
+        _add_receipt_executions_by_order_no={},
+    )
+    if fault == "clock":
+        stock["buy_time"] += ".100000"
+    if fault != "missing":
+        vote.persist_buy_fill_receipt(stock, tmp_path)
+        path = tmp_path / "runtime/holding_buy_fill_receipts/1.json"
+        if fault in {"foreign", "partial"}:
+            body = json.loads(path.read_bytes())
+            if fault == "foreign":
+                body["source"] = "legacy_path_vote_exact_buy_legs"
+            else:
+                body["receipt_fields"]["_entry_receipt_executions_by_order_no"]["11"][
+                    "101"
+                ].update(order_qty=3, remaining_qty=1)
+            path.write_text(json.dumps(body))
+    trade = dict(
+        id=1,
+        code="005930",
+        buy_time=day + "T10:00:00",
+        buy_qty=2,
+        buy_price=10000,
+        status="COMPLETED",
+    )
+    missing = [
+        "source_gap_buy_fill_missing",
+        "source_gap_negative_position_balance",
+        "source_gap_position_quantity_not_conserved",
+    ]
+    ledger = dict(buy_fill_legs=[], strict_completion_reasons=missing)
+    projected = {**item, "buy_legs": [], "execution_source_quality_reasons": missing}
+    canonical = deepcopy(ledger)
+    monkeypatch.setattr(review, "DATA_DIR", tmp_path)
+    selected, generation = review._quantity_research_custody(
+        [(trade, [], {}, ledger)],
+        [],
+        research_positions=[projected],
+    )
+    assert ledger == canonical  # Canonical event/quantity evidence is unchanged.
+    observed = source(tmp_path)
+    first = allocation.build_research_cost_allocations({day: observed}, [projected])
+    if fault is None:
+        assert first["1"]["status"] == "research_cost_allocated"
+        assert projected["buy_legs"] and selected["1"]
+        assert (
+            generation["native_buy_recoveries"]["1"]["clock_source"]
+            == "native_registry_fill_observed_at_kst"
+        )
+        review._verify_quantity_research_registry(generation)
+        proof = tmp_path / "runtime/holding_buy_fill_receipts/1.json"
+        proof.write_bytes(proof.read_bytes() + b" ")
+        with pytest.raises(ValueError, match="research_native_buy_receipt_changed"):
+            review._verify_quantity_research_registry(generation)
+    else:
+        assert first["1"]["status"] == "research_cost_invalid"
+        assert not projected["buy_legs"]

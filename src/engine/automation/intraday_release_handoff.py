@@ -12342,6 +12342,30 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
 }}
 
 
+# Exact reviewed first-producer cost intake and logical-storage identity repair.
+REVIEWED_NATIVE_COST_INTAKE_HASHES = {'deploy/run_threshold_cycle_postclose.sh': '21df7914eb2f21733dee4fe6d57378cdb0a66b00793d30599e1193dcb740e63d', 'src/engine/scalping/ai_action_outcome_calibration.py': '84555ccb7672fd19e7fd36498fe2c9d481b3022ea641b8e8d6efe6ce13ec2ef2', 'src/engine/sniper_trade_review_report.py': 'dbf7a672f967bb449c22725221d21dbf5c5fa53e256fa64f7c1ad4822cec29cd', 'src/engine/compress_db_backfilled_files.py': '0760d1db83cd7d8456cac14e206056d56ddb72000e1f87bc61885b72e32f5dce', 'src/engine/infrastructure/startup_validation_code_context.py': '4683e6bb77262654d0e9b897b9bd178e295b40c46a21c6057d225f06f13aabac'}
+REVIEWED_NATIVE_COST_INTAKE_ORIGINS = {'deploy/run_threshold_cycle_postclose.sh': 'f6040a75cbba42f6c9c4ebfb90cf4d664e696c38c71fc22b29d76ed41ed1ec7e', 'src/engine/scalping/ai_action_outcome_calibration.py': 'c570880da2ac0a96fdab41a07aea9ddc8bdf9740d9ba542d364e8b5a4e469486', 'src/engine/sniper_trade_review_report.py': 'abefe48bfe066d9b234c4dc726d0cb91247a61c4ab1f68747f4c2279ca686da3', 'src/engine/compress_db_backfilled_files.py': '31e5e754441887eac1e8124515b8b4a69825be5e045feff7659aae54d80f7b80', 'src/engine/infrastructure/startup_validation_code_context.py': 'd71ba182bcaa5b2668863027f82461932014af0156c016282c05a1f0141bed26'}
+REVIEWED_NATIVE_COST_INTAKE_PROFILE = {**REVIEWED_MACHINE_PATH_PROFILE, **REVIEWED_NATIVE_COST_INTAKE_HASHES}
+REVIEWED_NATIVE_COST_INTAKE_VARIANTS = {
+    (key[0], REVIEWED_NATIVE_COST_INTAKE_HASHES.get(key[0], key[1])): {
+        **value,
+        "selector_path": "src/engine/scalping/ai_action_outcome_calibration.py",
+        "selector_sha256": REVIEWED_NATIVE_COST_INTAKE_HASHES["src/engine/scalping/ai_action_outcome_calibration.py"],
+        "dependencies": {**value["dependencies"], **REVIEWED_NATIVE_COST_INTAKE_HASHES},
+        "contract_extensions": {
+            origin: {name: REVIEWED_NATIVE_COST_INTAKE_HASHES.get(os.path.normpath(name), sha) for name, sha in paths.items()}
+            for origin, paths in value["contract_extensions"].items()
+        },
+    } for key, value in REVIEWED_MACHINE_PATH_VARIANTS.items()
+}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple(
+        (old, current) for old in {value for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ()) for value in pair}
+        | {REVIEWED_NATIVE_COST_INTAKE_ORIGINS[name]})
+    for name, current in REVIEWED_NATIVE_COST_INTAKE_HASHES.items()
+}}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -13145,6 +13169,12 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     ):
         prepared_hashes = REVIEWED_MACHINE_PATH_PROFILE
         prepared_variants = REVIEWED_MACHINE_PATH_VARIANTS
+    if (
+        (source := candidate_bytes("src/engine/scalping/ai_action_outcome_calibration.py", optional=True)) is not None
+        and hashlib.sha256(source).hexdigest() == REVIEWED_NATIVE_COST_INTAKE_HASHES["src/engine/scalping/ai_action_outcome_calibration.py"]
+    ):
+        prepared_hashes = REVIEWED_NATIVE_COST_INTAKE_PROFILE
+        prepared_variants = REVIEWED_NATIVE_COST_INTAKE_VARIANTS
     entry_cost_hashes = (
         prepared_hashes
         if prepared_owner_present

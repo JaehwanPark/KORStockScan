@@ -2996,6 +2996,18 @@ for _name, _sha in REVIEWED_MACHINE_PATH_SOURCES.items():
     _history.update((_old, _sha) for _old in _origins)
 
 
+# Exact reviewed cost-producer and logical-storage consumer succession.
+REVIEWED_NATIVE_COST_INTAKE_SOURCES = {'deploy/run_threshold_cycle_postclose.sh': '21df7914eb2f21733dee4fe6d57378cdb0a66b00793d30599e1193dcb740e63d', 'src/engine/scalping/ai_action_outcome_calibration.py': '84555ccb7672fd19e7fd36498fe2c9d481b3022ea641b8e8d6efe6ce13ec2ef2', 'src/engine/sniper_trade_review_report.py': 'dbf7a672f967bb449c22725221d21dbf5c5fa53e256fa64f7c1ad4822cec29cd', 'src/engine/compress_db_backfilled_files.py': '0760d1db83cd7d8456cac14e206056d56ddb72000e1f87bc61885b72e32f5dce'}
+REVIEWED_NATIVE_COST_INTAKE_ORIGINS = {'deploy/run_threshold_cycle_postclose.sh': 'f6040a75cbba42f6c9c4ebfb90cf4d664e696c38c71fc22b29d76ed41ed1ec7e', 'src/engine/scalping/ai_action_outcome_calibration.py': 'c570880da2ac0a96fdab41a07aea9ddc8bdf9740d9ba542d364e8b5a4e469486', 'src/engine/sniper_trade_review_report.py': 'abefe48bfe066d9b234c4dc726d0cb91247a61c4ab1f68747f4c2279ca686da3', 'src/engine/compress_db_backfilled_files.py': '31e5e754441887eac1e8124515b8b4a69825be5e045feff7659aae54d80f7b80'}
+for _name, _sha in REVIEWED_NATIVE_COST_INTAKE_SOURCES.items():
+    _history = REVIEWED_PREPARATION_HISTORY.setdefault(_name, set())
+    _origins = {value for pair in _history for value in pair}
+    _origins.add(REVIEWED_NATIVE_COST_INTAKE_ORIGINS[_name])
+    if _name in REVIEWED_PREPARATION_SOURCES:
+        _origins.update(REVIEWED_PREPARATION_SOURCES[_name])
+    _history.update((_old, _sha) for _old in _origins)
+
+
 def reviewed_preparation_pair(relative, old, current):
     # An already reviewed physical pair keeps its original authority; a
     # formatting projection must not replace either endpoint before this check.

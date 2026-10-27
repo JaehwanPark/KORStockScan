@@ -197,6 +197,7 @@ class _StoredFields(Mapping):
 
 class _StoredHoldingEvent(HoldingEvent):
     """Keep sortable identity resident; field bodies remain lossless on disk."""
+
     def __init__(self, event, rows):
         self.timestamp, self.name = event.timestamp, event.name
         self.code, self.stage = event.code, event.stage
@@ -216,6 +217,7 @@ class _StoredHoldingEvent(HoldingEvent):
     @property
     def raw_identity(self):
         return self._raw_identity
+
 
 def _parse_since_datetime(target_date: str, since_time: str | None) -> datetime | None:
     if not since_time:
@@ -339,14 +341,17 @@ def _load_holding_projection_events_from_structured(
                         continue
                     fields["id"] = str(record_id)
                     events.append(
-                        _StoredHoldingEvent(HoldingEvent(
-                            timestamp=emitted_at[:19].replace("T", " "),
-                            name=str(payload.get("stock_name") or "-"),
-                            code=str(payload.get("stock_code") or "-")[:6],
-                            stage=str(payload["stage"]),
-                            fields=fields,
-                            raw_line=str(payload.get("text_payload") or ""),
-                        ), event_bodies)
+                        _StoredHoldingEvent(
+                            HoldingEvent(
+                                timestamp=emitted_at[:19].replace("T", " "),
+                                name=str(payload.get("stock_name") or "-"),
+                                code=str(payload.get("stock_code") or "-")[:6],
+                                stage=str(payload["stage"]),
+                                fields=fields,
+                                raw_line=str(payload.get("text_payload") or ""),
+                            ),
+                            event_bodies,
+                        )
                     )
             after = path.stat()
             if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (
@@ -3266,7 +3271,9 @@ def _quantity_registry_fill_custody(
         return []
 
 
-def _quantity_research_custody(prepared_records, native_rows):
+def _quantity_research_custody(
+    prepared_records, native_rows, *, research_positions=None
+):
     """Join prior/current BUY fills to a bounded local, hash-verified journal."""
     from src.engine.lifecycle.broker_cost_allocation import custody_account
 
@@ -3344,7 +3351,48 @@ def _quantity_research_custody(prepared_records, native_rows):
                 maximum_source_bytes=4 * 1024 * 1024,
             )
             registry_index = _quantity_registry_index(registry)
+            positions = {row["record_id"]: row for row in research_positions or []}
             for trade, ledger in missing:
+                record = str(trade["id"])
+                if record in positions:
+                    # Use the same exact native BUY receipt projection as the
+                    # later quantity owner, before the first cost seal. This
+                    # does not synthesize a pipeline event or alter its ledger.
+                    from src.engine.lifecycle.broker_cost_allocation import (
+                        _native_missing_buy_position,
+                    )
+
+                    try:
+                        recovered, recovery = _native_missing_buy_position(
+                            Path(DATA_DIR),
+                            trade,
+                            positions[record],
+                            registry,
+                            generation,
+                            registry_index,
+                        )
+                    except (OSError, ValueError, TypeError, KeyError) as exc:
+                        if (
+                            str(exc).startswith("shared_research_budget_")
+                            or str(exc) == "research_native_buy_receipt_changed"
+                        ):
+                            raise
+                        positions[record]["execution_source_quality_reasons"] = sorted(
+                            set(positions[record]["execution_source_quality_reasons"])
+                            | {"source_gap_native_buy_receipt_invalid"}
+                        )
+                        recovered, recovery = positions[record], None
+                    accounts = {row.get("account_key") for row in selected[record]}
+                    if recovery is not None and (
+                        not accounts
+                        or accounts == {recovered["custody_rows"][0]["account_key"]}
+                    ):
+                        positions[record].update(recovered)
+                        selected[record] = recovered["custody_rows"]
+                        generation.setdefault("native_buy_recoveries", {})[
+                            record
+                        ] = recovery
+                        continue
                 proof = _quantity_registry_fill_custody(
                     trade, ledger, registry, generation, registry_index=registry_index
                 )
@@ -3359,6 +3407,7 @@ def _quantity_research_custody(prepared_records, native_rows):
             str(exc).startswith("shared_research_budget_")
             or "changed_during_report" in str(exc)
             or "changed_during_read" in str(exc)
+            or str(exc) == "research_native_buy_receipt_changed"
         ):
             raise
         generation = dict(
@@ -3373,6 +3422,16 @@ def _verify_quantity_research_registry(generation):
 
         if list(source_stat(Path(generation["path"]).stat())) != generation["stat"]:
             raise ValueError("quantity_research_registry_changed_during_report")
+        from src.engine.lifecycle import main_stop_research_cost as native
+
+        for record, proof in generation.get("native_buy_recoveries", {}).items():
+            path = (
+                Path(DATA_DIR)
+                / "runtime/holding_buy_fill_receipts"
+                / (record + ".json")
+            )
+            if native.byte_generation(path) != proof["receipt"]:
+                raise ValueError("research_native_buy_receipt_changed")
 
 
 def _quantity_research_position(
@@ -4979,7 +5038,9 @@ def build_trade_review_report(
         else None
     )
     structured_text_counts = Counter(
-        event.raw_identity for event in structured_projection_events if event.raw_identity[0]
+        event.raw_identity
+        for event in structured_projection_events
+        if event.raw_identity[0]
     )
     unmatched_text_events = []
     for event in text_events:
@@ -4989,7 +5050,10 @@ def build_trade_review_report(
             if marker in event.raw_line
             else ""
         )
-        text_identity = (len(text_payload), hashlib.sha256(text_payload.encode()).digest())
+        text_identity = (
+            len(text_payload),
+            hashlib.sha256(text_payload.encode()).digest(),
+        )
         if structured_text_counts[text_identity] > 0:
             structured_text_counts[text_identity] -= 1
             continue
@@ -5105,18 +5169,23 @@ def build_trade_review_report(
         compiled = _build_trade_row(trade, matched)
         ledger = _completed_execution_ledger(trade, matched)
         prepared_records.append((trade, matched, compiled, ledger))
-    research_custody, research_registry_generation = _quantity_research_custody(
-        prepared_records, custody_rows
-    )
+    custody_by_record = defaultdict(list)
+    for row in custody_rows:
+        custody_by_record[str(row.get("record_id"))].append(row)
     for trade, matched, _, ledger in prepared_records:
         research_positions.append(
             _quantity_research_position(
                 trade,
                 matched,
                 ledger,
-                research_custody.get(str(trade.get("id") or ""), []),
+                custody_by_record.get(str(trade.get("id") or ""), []),
             )
         )
+    research_custody, research_registry_generation = _quantity_research_custody(
+        prepared_records, custody_rows, research_positions=research_positions
+    )
+    for position in research_positions:
+        position["custody_rows"] = research_custody.get(position["record_id"], [])
     required_dates = _quantity_research_source_dates(research_positions, target_date)
     from src.engine.lifecycle.broker_cost_source import load_source
 

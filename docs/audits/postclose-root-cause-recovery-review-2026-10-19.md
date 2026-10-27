@@ -4226,3 +4226,55 @@ Self-review and supplemental symlink checks completed. Archive/snapshot/retentio
 regressions: 148 passed; compile and diff checks passed. Runtime recovery and
 next-session acceptance remain pending. The original EOD and successful native
 calculation checkpoints must not be rerun for this maintenance-only repair.
+
+
+### First cost producer and logical input repair -- 2026-10-28
+
+Source date remains 2026-10-27. The original recovered wrapper failed at
+23:50:59 after two distinct failures. The legacy evaluator rejected an input
+fingerprint change during concurrent native compression; its broad JSONL glob
+included storage receipts/locks and physical gzip paths. Separately, the first
+trade-review cost producer excluded record 49532's absent pipeline BUY, while
+the later quantity producer correctly consumed its accepted native BUY receipt.
+That later allocation changed the cost generation and invalidated the earlier
+completion-prefix seal. The original prefix, projection, fact projection,
+allocation index and failure bytes are preserved (1,882,326,487 bytes copied;
+source inode/mtime/ctime unchanged). No historical raw event is synthesized.
+
+The first cost producer now invokes the existing exact native BUY recovery
+owner already used by quantity research, before allocating and sealing costs.
+Both require the original receipt, complete registry executions, exact clock,
+owner/account/route/quantity/price and terminal conservation. The canonical
+pipeline ledger and its historical source-gap reasons remain unchanged. Native
+receipt changes during evaluation fail closed; other bad rows remain excluded.
+The later quantity cost adapter is retained for genuinely later official costs,
+not displaced or promoted to a second live execution owner.
+
+The legacy evaluator now enumerates only actual JSONL sources, normalizes plain
+and gzip aliases, and uses the existing native index's logical source identity.
+Storage-only lock/receipt appearance and verified compression preserve the
+fingerprint; raw append and corrupt archive generation still invalidate it.
+The shared index implementation is itself included in the evaluator signature.
+The wrapper's existing wait remains a termination-only API; its holding suffix
+now also checks each native producer terminal before preparing downstream work.
+This replaces optimistic continuation without introducing a new validator.
+
+Self-review added per-record native-input isolation, final receipt-generation
+checks, missing/clock/foreign/partial negatives, and exact policy-profile sibling
+negatives. Source/quantity/calculation/wrapper regressions: 870 passed; complete
+current policy profile and historical cases: 15 passed; unreviewed sibling
+changes: 12 rejected. Independent preparation: 890 passed after preserving the
+original scoped profile in its Git generation and registering exact new consumer
+pairs in its independent reader. The 12 initial failures and logs are retained.
+No provider,
+order, threshold, metric, safety or Main start authority changes were made.
+
+Baseline is a74b30350. Non-test source adds 146/deletes 15; tests add 260/delete
+30 (including local formatting); operating instructions add two lines plus this
+review. Net growth reuses the existing native recovery and source index and
+records the previously unverified admission/failure boundaries. No new module,
+scheduler or runtime execution branch is introduced. Runtime selection remains
+10f03701c; the reviewed source workflow and eventual selected next-session code
+must be verified separately. The 10/28 operating checklist has not yet been
+produced because source27 summary is incomplete; existing source27 ownership is
+preserved and is not treated as a replacement daily authority.
