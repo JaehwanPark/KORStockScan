@@ -1246,12 +1246,13 @@ def test_signed_trade_volume_primary_classifies_without_orderbook_touch(monkeypa
     assert tick["aggressor_aux_pressure_usable"] is False
 
 
-def test_recent_trade_ticks_are_partitioned_by_subscription_route(monkeypatch):
+@pytest.mark.parametrize("code", ["005930", "0158S0", "0013Y0", "0155E0"])
+def test_recent_trade_ticks_are_partitioned_by_subscription_route(monkeypatch, code):
     monkeypatch.setattr(kiwoom_websocket.time, "time", lambda: _epoch_at_090010())
     manager = KiwoomWSManager("test-token")
-    manager.subscribed_codes = {"005930"}
+    manager.subscribed_codes = {code}
 
-    for item, signed_volume in (("005930", "+10"), ("005930_AL", "+20")):
+    for item, signed_volume in ((code, "+10"), (code + "_AL", "+20")):
         asyncio.run(
             manager._handle_message(
                 json.dumps(
@@ -1275,7 +1276,7 @@ def test_recent_trade_ticks_are_partitioned_by_subscription_route(monkeypatch):
             )
         )
 
-    latest = manager.get_latest_data("005930")
+    latest = manager.get_latest_data(code)
     partitions = latest["recent_trade_ticks_by_route"]
     assert set(partitions) == {
         "KRX|krx_only",

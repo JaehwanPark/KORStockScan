@@ -484,3 +484,30 @@ def test_frozen_contract_rejects_unissued_mixed_source_generation(mixed):
     bad[key] = current[key]
     with pytest.raises(ValueError, match="contract_changed"):
         M.validate(bad)
+
+
+def test_identifier_successor_keeps_frozen_contracts_without_mixing_generations():
+    from src.engine.scalping import reversal_auxiliary_compatibility as C
+    from src.engine.scalping import reversal_auxiliary_production_input as I
+    from src.engine.scalping import reversal_auxiliary_wire as W
+
+    # Exercise the actual physical readers, including the current frozen source.
+    prod = C._source_generations(I.__file__)
+    wire = C._source_generations(W.__file__)
+    assert len(prod) == 4 and len(wire) == 3
+    actual = dict(source_sha256=prod[0], wire_sha256=wire[0], mode="unchanged")
+    sources = dict(source_sha256=I.__file__, wire_sha256=W.__file__)
+    for p, w in (
+        (prod[0], wire[0]),
+        (prod[1], wire[0]),
+        (prod[-2], wire[-2]),
+        (prod[-1], wire[-1]),
+    ):
+        assert C.contract_matches(
+            dict(actual, source_sha256=p, wire_sha256=w), actual, sources
+        )
+    assert not C.contract_matches(
+        dict(actual, source_sha256=prod[0], wire_sha256=wire[-2]), actual, sources
+    )
+    assert not C.contract_matches(dict(actual, source_sha256="0" * 64), actual, sources)
+    assert not C.contract_matches(dict(actual, mode="changed"), actual, sources)

@@ -29,6 +29,16 @@ REVIEWED_CONTRACT_SOURCE_PAIRS = {
 }
 
 
+# Exact identifier-only reader successor. Frozen numeric input contracts retain
+# their original identities; mixed formatting generations are still rejected.
+REVIEWED_CONTRACT_SOURCE_SUCCESSORS = {
+    "src/engine/scalping/reversal_auxiliary_production_input.py": (
+        "324b2d6e41bafaf0eddb1b65069de8f140325bb84e4e3aa42941e397d75d3464",
+        "0e576decb06aa17fff3548cdf15f4f23a2a87db57596b67095b7f8313d2f920f",
+    ),
+}
+
+
 def _source_generations(source):
     source = Path(source).resolve()
     actual = P.file_hash(source)
@@ -41,9 +51,12 @@ def _source_generations(source):
         reviewed_formatting_predecessor,
     )
 
+    successor = REVIEWED_CONTRACT_SOURCE_SUCCESSORS.get(name)
+    prior = successor[0] if successor and actual == successor[1] else actual
     pair = REVIEWED_CONTRACT_SOURCE_PAIRS.get(name)
-    if pair is not None and actual == pair[1]:
-        return (actual, pair[0][1], pair[0][0])
+    if pair is not None and prior == pair[1]:
+        historical = (prior, pair[0][1], pair[0][0])
+        return (actual, *historical) if prior != actual else historical
     return (actual, actual, reviewed_formatting_predecessor(name, actual))
 
 
@@ -57,13 +70,17 @@ def contract_matches(expected, actual, sources):
         return False
     if expected == actual:
         return True
-    views = [dict(actual) for _ in range(3)]
+    views = [dict(actual) for _ in range(4)]
     for field, source in sources.items():
         generations = _source_generations(source)
         if actual.get(field) != generations[0]:
             return False
-        for view, digest in zip(views, generations):
-            view[field] = digest
+        # View 1 projects only exact reviewed successors to their immediately
+        # consumed generation. Views 2/3 retain the original coherent format
+        # generations; this is not a Cartesian mix of individually known hashes.
+        offsets = (0, 1 if len(generations) == 4 else 0, -2, -1)
+        for view, offset in zip(views, offsets):
+            view[field] = generations[offset]
     return expected in views
 
 

@@ -6748,7 +6748,7 @@ def _zero_base_scanner_enabled():
 
 def _zero_base_log_event(stage, *, code="", name="", fields=None):
     try:
-        emit_pipeline_event(
+        return emit_pipeline_event(
             "ENTRY_PIPELINE",
             name or "-",
             code or "-",
@@ -6774,6 +6774,7 @@ def _zero_base_log_event(stage, *, code="", name="", fields=None):
         )
     except Exception as exc:
         log_error("[ZERO_BASE_RECEIPT] append failed: " + type(exc).__name__)
+        return {"structured_append_succeeded": False}
 
 
 def run_zero_base_scanner(*, token, event_bus, is_test_mode=False):
@@ -6962,6 +6963,9 @@ def run_zero_base_scanner(*, token, event_bus, is_test_mode=False):
                         "zero_base_probe_consumer_ready": summary[
                             "probe_consumer_ready"
                         ],
+                        "zero_base_admission_diagnostic_status": summary.get(
+                            "probe_admission_diagnostic_status", "unobserved"
+                        ),
                         "zero_base_probe_no_consumer_count": summary[
                             "probe_no_consumer_count"
                         ],
@@ -7012,6 +7016,9 @@ def run_zero_base_scanner(*, token, event_bus, is_test_mode=False):
                         "zero_base_probe_consumer_ready": dispatch[
                             "probe_consumer_ready"
                         ],
+                        "zero_base_admission_diagnostic_status": dispatch.get(
+                            "probe_admission_diagnostic_status", "unobserved"
+                        ),
                         "zero_base_probe_no_consumer_count": dispatch[
                             "probe_no_consumer_count"
                         ],

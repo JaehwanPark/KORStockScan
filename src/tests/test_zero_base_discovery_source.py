@@ -543,3 +543,74 @@ def test_panel_product_check_is_part_of_source_hash_and_rejects_unknown_product(
         for p in result["panels"]
         if p["kind"] == "gainers"
     )
+
+
+@pytest.mark.parametrize(
+    "hour,route,suffix",
+    [
+        (8, "nxt_only", "_NX"),
+        (10, "krx_nxt_integrated", "_AL"),
+        (16, "krx_nxt_integrated", "_AL"),
+    ],
+)
+def test_verified_alphanumeric_survives_native_adapters_queue_restore_and_route(
+    monkeypatch, hour, route, suffix
+):
+    from src.scanners import zero_base_discovery_source as S
+    from src.scanners.zero_base_discovery_queue import DiscoveryQueue
+    from src.engine.scalping.zero_base_probe import probe_item
+
+    stamp = datetime(2026, 9, 29, hour, 10, tzinfo=ZoneInfo("Asia/Seoul")).timestamp()
+
+    def check(code, name, market):
+        return dict(
+            eligible=code == "0158S0",
+            status=(
+                "ordinary_equity_verified" if code == "0158S0" else "product_unverified"
+            ),
+        )
+
+    monkeypatch.setattr(S, "discovery_product_filter", lambda *_: check)
+
+    def api(**kw):
+        key = "trde_qty_sdnin" if kw["api_id"] == "ka10023" else "pred_pre_flu_rt_upper"
+        rows = [
+            dict(
+                stk_cd=c + suffix,
+                stk_nm="ORDINARY",
+                cur_prc="11000",
+                flu_rt="+1.2",
+                now_trde_qty="10000",
+                sdnin_qty="100",
+                pred_pre_sig="2",
+            )
+            for c in ("0158S0", "0199X0", "0695E0")
+        ]
+        return [dict(return_code=0, **{key: rows})], dict(
+            rest_received_ts_ms=int(stamp * 1000), read_rate_control_status="admitted"
+        )
+
+    monkeypatch.setattr(kiwoom_utils, "fetch_kiwoom_api_continuous", api)
+    panel = S.fetch_discovery_panels("offline", now_epoch=stamp)
+    assert len(panel["observations"]) == 1
+    row = panel["observations"][0]
+    assert row["code"] == "0158S0" and row["route"] == route
+    q = DiscoveryQueue("2026-09-29")
+    for x in panel["observations"]:
+        q.observe(
+            code=x["code"],
+            route=x["route"],
+            observed_epoch=x["observed_epoch"],
+            received_epoch=x["observed_epoch"],
+            source_sha256=x["source_sha256"],
+            source_scope=x["source_scope"],
+            name=x["name"],
+            market=x["market"],
+            venue=x["venue"],
+        )
+    q = DiscoveryQueue.restore(q.snapshot(), session_date="2026-09-29")
+    assert q.claim(now_epoch=stamp + 1, limit=1) == []  # No master, no alpha claim.
+    claims = q.claim(now_epoch=stamp + 2, limit=1, product_check=check)
+    assert len(claims) == 1 and claims[0]["code"] == "0158S0"
+    assert probe_item(claims[0]["code"], route) == "0158S0" + suffix
+    assert probe_item("0158#0", route) == ""

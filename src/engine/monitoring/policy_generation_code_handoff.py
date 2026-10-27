@@ -1016,10 +1016,49 @@ REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS["auxiliary"] += (
 )
 
 
+# Verified identifier and epoch-isolation reader successor. Preserve the exact
+# 10/23 and 10/26 reports; fresh native fixtures are independently mandatory.
+REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS["rising_missed"] += (
+    (
+        "28baa874610d6f76379c6be1fe4f76accbbfbc5f473b0c4ffcb2f323cdf75922",
+        "995891232bb4b4274cf5a600b3b5289ed78720c9740b5375f46b73f2cb712fec",
+    ),
+    (
+        "6d662d9e2cc6f67ec9945dfa3d9da37e3acd22765cc48a1c30d95b892a432eb7",
+        "995891232bb4b4274cf5a600b3b5289ed78720c9740b5375f46b73f2cb712fec",
+    ),
+)
+REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS["auxiliary"] += (
+    (
+        "357573bd61c06c26c208be7ab5447eff3805a8efa21cf1bbf9df201be7c14ddd",
+        "1bc3ca151fbde9dbee1ed28482e0fd712617542fda9cf68ccd824d405b76b8dd",
+    ),
+    (
+        "82a2c8b410c97dc89db45269ee865b21e2a1ba824d55448183bdb1c25769c06f",
+        "1bc3ca151fbde9dbee1ed28482e0fd712617542fda9cf68ccd824d405b76b8dd",
+    ),
+)
+REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS["holding_vote"] += (
+    (
+        "2c8493a70cb399e336773c02f3d292d2f5d225fe742750089049b63ecc1a23b0",
+        "5a451bcdf8fee3a6a8247e51ae44c39409869de304d07ce06c2fa832a9ddf335",
+    ),
+    (
+        "7f30d09769b17801ad614d2403ca5742c5a45d4e56fb27212447de1384829386",
+        "5a451bcdf8fee3a6a8247e51ae44c39409869de304d07ce06c2fa832a9ddf335",
+    ),
+)
+
+
+
 # Same frozen reports after preclaim diagnostic-only handler edits.
 # Native fresh fixtures and original source/economic nulls remain mandatory.
 REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS['rising_missed'] += (('6d662d9e2cc6f67ec9945dfa3d9da37e3acd22765cc48a1c30d95b892a432eb7', '77005017209bc2c64ee43ba0d5281fc67d40d9fb129fc053f65093401b7a174a'), ('28baa874610d6f76379c6be1fe4f76accbbfbc5f473b0c4ffcb2f323cdf75922', '77005017209bc2c64ee43ba0d5281fc67d40d9fb129fc053f65093401b7a174a'))
 REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS['holding_vote'] += (('2c8493a70cb399e336773c02f3d292d2f5d225fe742750089049b63ecc1a23b0', 'cca052a101ebb25cbcc0ca92a50247477e8069dd9908f99c6b690c1d50170eee'), ('7f30d09769b17801ad614d2403ca5742c5a45d4e56fb27212447de1384829386', 'cca052a101ebb25cbcc0ca92a50247477e8069dd9908f99c6b690c1d50170eee'))
+
+# Integrated reviewed identifier and preclaim diagnostics; preserve both originals.
+REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS['rising_missed'] += (('6d662d9e2cc6f67ec9945dfa3d9da37e3acd22765cc48a1c30d95b892a432eb7', 'eaac7494caa26c3352a5331206b6e0a70272477678eb49c4b10ea51444920ee4'), ('28baa874610d6f76379c6be1fe4f76accbbfbc5f473b0c4ffcb2f323cdf75922', 'eaac7494caa26c3352a5331206b6e0a70272477678eb49c4b10ea51444920ee4'))
+REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS['holding_vote'] += (('2c8493a70cb399e336773c02f3d292d2f5d225fe742750089049b63ecc1a23b0', '8e067cd38af5413cc51a9b8cd8ad8b166029c6685e7838439ba04190889afb27'), ('7f30d09769b17801ad614d2403ca5742c5a45d4e56fb27212447de1384829386', '8e067cd38af5413cc51a9b8cd8ad8b166029c6685e7838439ba04190889afb27'))
 
 # Reviewed first-invalidation/cadence diagnostics only. Preserve original reports
 # and every issued fixture; fresh exact-generation fixtures remain mandatory.
@@ -1039,6 +1078,11 @@ REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS['auxiliary'] += (
     ('9fb5d5b0bbe17b72ca832a883b059522d725f3234fca853324308beedf73bacc', '6a9572dc3c2bd9f7ec1897c068615b2b507b7a3794df89ac071485938898e731'),
 )
 
+
+# Integrated reviewed identifier and preclaim diagnostics; preserve both originals.
+REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS['rising_missed'] += (('6d662d9e2cc6f67ec9945dfa3d9da37e3acd22765cc48a1c30d95b892a432eb7', '7849bf719462f6795bc44d19f7622309bff1c38859de133c41335fb04def509f'), ('28baa874610d6f76379c6be1fe4f76accbbfbc5f473b0c4ffcb2f323cdf75922', '7849bf719462f6795bc44d19f7622309bff1c38859de133c41335fb04def509f'), ('9019999ecd6e980cf5dfe689bed7815c08b16632c65a879b6d202c4e305bd791', '7849bf719462f6795bc44d19f7622309bff1c38859de133c41335fb04def509f'))
+REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS['holding_vote'] += (('2c8493a70cb399e336773c02f3d292d2f5d225fe742750089049b63ecc1a23b0', '24402a92575502c11660b5b72148d660f4e2d4e0961285614d046a2af2c90094'), ('7f30d09769b17801ad614d2403ca5742c5a45d4e56fb27212447de1384829386', '24402a92575502c11660b5b72148d660f4e2d4e0961285614d046a2af2c90094'), ('05037a9d11e962bb160d3fa3e589935f36ab2290d5e087b25a98f8ed5f6e81cf', '24402a92575502c11660b5b72148d660f4e2d4e0961285614d046a2af2c90094'))
+REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS['auxiliary'] += (('357573bd61c06c26c208be7ab5447eff3805a8efa21cf1bbf9df201be7c14ddd', '43d45b2c9d2564d25c04868f2249f14ec2220b12da00994ffa31131ad031d080'), ('82a2c8b410c97dc89db45269ee865b21e2a1ba824d55448183bdb1c25769c06f', '43d45b2c9d2564d25c04868f2249f14ec2220b12da00994ffa31131ad031d080'), ('9fb5d5b0bbe17b72ca832a883b059522d725f3234fca853324308beedf73bacc', '43d45b2c9d2564d25c04868f2249f14ec2220b12da00994ffa31131ad031d080'))
 # Integrated preclaim and cadence diagnostics; original frozen inputs and
 # fresh exact-generation fixture checks are retained.
 REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS['rising_missed'] += (('28baa874610d6f76379c6be1fe4f76accbbfbc5f473b0c4ffcb2f323cdf75922', 'b050a51dc792070ac3c28c9c81bb5b8a5d86e6dd74bffb504df3c37026bb7459'), ('6d662d9e2cc6f67ec9945dfa3d9da37e3acd22765cc48a1c30d95b892a432eb7', 'b050a51dc792070ac3c28c9c81bb5b8a5d86e6dd74bffb504df3c37026bb7459'), ('77005017209bc2c64ee43ba0d5281fc67d40d9fb129fc053f65093401b7a174a', 'b050a51dc792070ac3c28c9c81bb5b8a5d86e6dd74bffb504df3c37026bb7459'), ('9019999ecd6e980cf5dfe689bed7815c08b16632c65a879b6d202c4e305bd791', 'b050a51dc792070ac3c28c9c81bb5b8a5d86e6dd74bffb504df3c37026bb7459'), ('9600db0722b362ccb2eb926197ae5425b57b352d191c54f73ad51e736d89d6b3', 'b050a51dc792070ac3c28c9c81bb5b8a5d86e6dd74bffb504df3c37026bb7459'))

@@ -72,7 +72,7 @@ def _scope(logical_input, value):
     price = common.get("confirmation_price")
     if (
         not isinstance(common.get("symbol"), str)
-        or not re.fullmatch(r"\d{6}", common["symbol"])
+        or not re.fullmatch(r"[0-9A-Z]{6}", common["symbol"])
         or common.get("market") not in C.ROUTES
         or type(price) not in (int, float)
         or not math.isfinite(price)

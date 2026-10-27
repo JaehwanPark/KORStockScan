@@ -1861,3 +1861,49 @@ def test_zero_base_explicit_trace_binds_plan_and_final_request_without_conflict_
     )
     stock["last_watching_ai_machine_primary_fields"]["ai_trace_broker_route"] = conflict
     assert not handlers._bind_main_entry_order_request(stock, {}, now_ts=at)
+
+
+@pytest.mark.parametrize(
+    "regime,route",
+    [
+        ("krx_like_premarket", "nxt_only"),
+        ("KRX_REGULAR", "krx_nxt_integrated"),
+        ("KRX_NXT_AFTERMARKET", "krx_nxt_integrated"),
+    ],
+)
+@pytest.mark.parametrize("case", ["fresh", "expired", "veto", "source_conflict"])
+def test_alphanumeric_main_handoff_preserves_session_original_five_seconds_and_veto(
+    monkeypatch, regime, route, case
+):
+    rows, targets = _prepare(monkeypatch)
+    monkeypatch.setattr(
+        main,
+        "scalping_session_venue_provenance",
+        lambda _: dict(market_session_bucket=regime, market_session_regime=regime),
+    )
+    value = _result()
+    for key in ("claim", "candidate"):
+        value[key].update(code="0158S0", route=route)
+    if case == "expired":
+        for key in ("result_epoch", "probe_trade_epoch", "probe_depth_epoch"):
+            value[key] -= 5.1
+    if case == "source_conflict":
+        value["candidate"]["source_sha256"] = "c" * 64
+    if case == "veto":
+        monkeypatch.setattr(
+            main,
+            "evaluate_main_bot_control_exclusion",
+            lambda _: SimpleNamespace(excluded=True),
+        )
+
+    def attach(payload, **_):
+        assert payload["code"] == "0158S0" and payload["market_data_route"] == route
+        assert payload["broker_route"] == ("NXT" if route == "nxt_only" else "SOR")
+        targets.append(
+            dict(id=payload["record_id"], code=payload["code"], status="WATCHING")
+        )
+        return True
+
+    monkeypatch.setattr(main, "_apply_scalping_scanner_promoted_target", attach)
+    assert main.handle_zero_base_machine_enter(value) is (case == "fresh")
+    assert bool(rows) is (case == "fresh")

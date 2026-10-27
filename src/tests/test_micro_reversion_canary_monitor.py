@@ -566,7 +566,7 @@ def test_main_server_preflight_is_reproducible_and_drop_free() -> None:
 
 
 _CURRENT_CALLBACK_RECEIPT = (
-    "docs/audit-reports/2026-10-24-normalization-custody-latency-validation.json.txt"
+    "docs/audit-reports/2026-10-27-nonfixed-current-callback-validation.json.txt"
 )
 
 
@@ -575,8 +575,15 @@ def _reviewed_ws_lineage_sources():
     # lineage path has a separate measured, exact-source receipt.
     root = Path(__file__).resolve().parents[2]
     receipt = json.loads((root / _CURRENT_CALLBACK_RECEIPT).read_text())
-    predecessor = (
+    predecessor = "docs/audit-reports/2026-10-24-normalization-custody-latency-validation.json.txt"
+    previous = json.loads((root / predecessor).read_bytes())
+    original = (
         "docs/audit-reports/2026-10-24-formatted-collector-latency-validation.json.txt"
+    )
+    assert previous["predecessor_receipt"] == original
+    assert (
+        hashlib.sha256((root / original).read_bytes()).hexdigest()
+        == previous["predecessor_receipt_sha256"]
     )
     assert receipt["predecessor_receipt"] == predecessor
     assert (

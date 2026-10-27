@@ -987,3 +987,195 @@ def test_restored_queue_product_rejection_never_dispatches_or_consumes_capacity(
     )
     assert restored.queue._candidates[("487130", "krx_nxt_integrated")].claim_count == 0
     assert not [e for e in bus.events[before:] if e[0] == PROBE_REQUEST_EVENT]
+
+
+def test_admission_deltas_are_bounded_resume_and_reach_existing_census(
+    tmp_path, monkeypatch
+):
+    import json
+    from src.scanners import scanner_source_census as source
+    from src.engine.monitoring import market_opportunity_census as census
+
+    monkeypatch.setattr(source, "MAX_ROWS", 1)
+    bus = Bus(consumer=False)
+    emitted = []
+
+    def emit(stage, **kw):
+        if stage == "zero_base_probe_admission":
+            emitted.append(kw["fields"])
+            return {"structured_append_succeeded": True}
+
+    runtime = ZeroBaseDiscoveryRuntime(
+        event_bus=bus,
+        session_date="2026-09-28",
+        state_path=tmp_path / "q.json",
+        claim_receipt_emitter=emit,
+    )
+    for code in ("123450", "123460"):
+        runtime.queue.observe(
+            code=code,
+            route="krx_nxt_integrated",
+            observed_epoch=T0,
+            received_epoch=T0,
+            source_sha256="a" * 64,
+            source_scope="observed_panel",
+        )
+    for t in (T0 + 1, T0 + 2, T0 + 3):
+        runtime.dispatch_due_probes(now_epoch=t)
+    assert len(emitted) == 2
+    records = [r for f in emitted for r in json.loads(f["zero_base_admission_records"])]
+    assert [r["code"] for r in records] == ["123450", "123460"]
+    assert emitted[0]["zero_base_admission_pending_count"] == 1
+    assert emitted[1]["zero_base_admission_pending_count"] == 0
+    assert not bus.events and not runtime.queue.in_flight_count()
+    path = tmp_path / "pipeline.jsonl"
+    path.write_text(
+        "".join(
+            json.dumps(
+                dict(
+                    pipeline="ENTRY_PIPELINE",
+                    stage="zero_base_probe_admission",
+                    emitted_at=datetime.fromtimestamp(
+                        T0 + 10, ZoneInfo("Asia/Seoul")
+                    ).isoformat(),
+                    fields=f,
+                )
+            )
+            + "\n"
+            for f in emitted
+        )
+    )
+    summary = {}
+    index = census._load_stage_index(
+        path,
+        tmp_path / "absent-ai.jsonl",
+        target_date="2026-09-28",
+        zero_base_source_census=summary,
+    )
+    assert summary["admission_observation_count"] == 2
+    assert (
+        summary["valid_claim_count"] == summary["confirmed_watch_admission_count"] == 0
+    )
+    assert index["123450"]["zero_base_admission"][0]["reason"] == "eligible_due"
+    assert not index["123450"].get("source_seen")
+
+
+def test_admission_emit_failure_preserves_claims_and_pending_diagnostic(tmp_path):
+    emitted = []
+
+    def emit(stage, **kw):
+        if stage == "zero_base_probe_admission":
+            emitted.append(stage)
+            raise OSError("fixture writer failure")
+
+    runtime = ZeroBaseDiscoveryRuntime(
+        event_bus=Bus(consumer=False),
+        session_date="2026-09-28",
+        state_path=tmp_path / "q.json",
+        claim_receipt_emitter=emit,
+    )
+    runtime.scan_once("offline", fetcher=_panel, now_epoch=T0 + 1)
+    result = runtime.dispatch_due_probes(now_epoch=T0 + 2)
+    assert result["probe_admission_diagnostic_status"] == "emit_failed:OSError"
+    assert len(emitted) == 2 and not runtime._admission_emitted
+    assert runtime.queue.in_flight_count() == 0
+
+
+@pytest.mark.parametrize("outcome", [None, {}, {"structured_append_succeeded": False}])
+def test_unconfirmed_admission_append_remains_pending(tmp_path, outcome):
+    runtime = ZeroBaseDiscoveryRuntime(
+        event_bus=Bus(consumer=False),
+        session_date="2026-09-28",
+        state_path=tmp_path / "q.json",
+        claim_receipt_emitter=lambda *a, **k: outcome,
+    )
+    runtime.scan_once("offline", fetcher=_panel, now_epoch=T0 + 1)
+    assert not runtime._admission_emitted
+    result = runtime.dispatch_due_probes(now_epoch=T0 + 2)
+    assert result["probe_admission_diagnostic_status"] == "append_unconfirmed"
+    assert not runtime._admission_emitted and runtime.queue.in_flight_count() == 0
+
+
+def test_full_admission_page_native_logger_reaches_census_after_append_retry(
+    tmp_path, monkeypatch
+):
+    from types import SimpleNamespace
+    from src.utils import pipeline_event_logger as logger
+    from src.scanners import scalping_scanner as scanner
+    from src.scanners.scanner_source_census import MAX_ROWS
+    from src.engine.monitoring import market_opportunity_census as census
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            value = datetime.fromtimestamp(T0 + 3, ZoneInfo("Asia/Seoul"))
+            return value.astimezone(tz) if tz else value.replace(tzinfo=None)
+
+    logger._flush_producer_summary_at_exit()
+    monkeypatch.setattr(logger, "_PRODUCER_COMPACTOR", None)
+    monkeypatch.setattr(logger, "DATA_DIR", tmp_path / "data")
+    monkeypatch.setattr(logger, "datetime", Clock)
+    monkeypatch.setattr(
+        logger,
+        "TRADING_RULES",
+        SimpleNamespace(
+            PIPELINE_EVENT_JSONL_ENABLED=True,
+            PIPELINE_EVENT_TEXT_INFO_LOG_ENABLED=False,
+        ),
+    )
+    monkeypatch.setattr(
+        logger, "log_info", lambda *a, **k: pytest.fail("diagnostic INFO")
+    )
+    monkeypatch.setattr(logger, "log_error", lambda *a, **k: None)
+    runtime = ZeroBaseDiscoveryRuntime(
+        event_bus=Bus(consumer=False),
+        session_date="2026-09-28",
+        state_path=tmp_path / "q.json",
+        claim_receipt_emitter=scanner._zero_base_log_event,
+    )
+    for n in range(MAX_ROWS):
+        runtime.queue.observe(
+            code=str(123000 + n),
+            route="krx_nxt_integrated",
+            observed_epoch=T0,
+            received_epoch=T0,
+            source_sha256="a" * 64,
+            source_scope="observed_panel",
+        )
+    append = logger._append_pipeline_event_jsonl
+
+    def fail_append(*a, **kw):
+        raise OSError("offline failed append")
+
+    monkeypatch.setattr(logger, "_append_pipeline_event_jsonl", fail_append)
+    assert (
+        runtime.dispatch_due_probes(now_epoch=T0 + 1)[
+            "probe_admission_diagnostic_status"
+        ]
+        == "append_unconfirmed"
+    )
+    assert not runtime._admission_emitted
+    monkeypatch.setattr(logger, "_append_pipeline_event_jsonl", append)
+    assert (
+        runtime.dispatch_due_probes(now_epoch=T0 + 2)[
+            "probe_admission_diagnostic_status"
+        ]
+        == "emitted"
+    )
+    path = logger._event_path("2026-09-28")
+    summary = {}
+    index = census._load_stage_index(
+        path,
+        tmp_path / "absent.jsonl",
+        target_date="2026-09-28",
+        zero_base_source_census=summary,
+    )
+    assert len(index) == summary["admission_observation_count"] == MAX_ROWS
+    assert all(
+        len(index[str(123000 + n)]["zero_base_admission"]) == 1 for n in range(MAX_ROWS)
+    )
+    assert (
+        summary["valid_claim_count"] == summary["confirmed_watch_admission_count"] == 0
+    )
+    assert not runtime.queue.in_flight_count()
+    logger._flush_producer_summary_at_exit()

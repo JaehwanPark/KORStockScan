@@ -166,7 +166,9 @@ _ROUTE_KEY = {
 
 def probe_item(code: str, route: str) -> str:
     builder = _ROUTE_ITEM.get(route)
-    return builder(code) if builder and len(code) == 6 and code.isdigit() else ""
+    return (
+        builder(code) if builder and kiwoom_utils.is_canonical_stock_code(code) else ""
+    )
 
 
 def probe_registration_receipt(ws_manager, *, code: str, item: str) -> str:

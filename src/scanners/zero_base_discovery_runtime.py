@@ -8,6 +8,7 @@ from pathlib import Path
 from collections import OrderedDict
 from copy import deepcopy
 import re
+from src.utils.kiwoom_utils import is_canonical_stock_code
 import time
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
@@ -55,6 +56,7 @@ class ZeroBaseDiscoveryRuntime:
         self._panel_future = None
         self._pending_promotions = []
         self._dirty = False
+        self._admission_emitted = {}
         self.event_bus.subscribe(PROBE_RESULT_EVENT, self._receive_result)
         self.event_bus.subscribe(HANDOFF_ACK_EVENT, self._receive_result)
 
@@ -324,10 +326,7 @@ class ZeroBaseDiscoveryRuntime:
             and 0 <= snapshot_checked_epoch - snapshot["observed_epoch"] <= 2
             and isinstance(snapshot.get("active_codes"), list)
             and len(snapshot["active_codes"]) <= 512
-            and all(
-                isinstance(code, str) and re.fullmatch(r"\d{6}", code)
-                for code in snapshot["active_codes"]
-            )
+            and all(is_canonical_stock_code(code) for code in snapshot["active_codes"])
         )
         active_codes = set(snapshot["active_codes"]) if valid_snapshot else set()
         from src.engine.scalping.reversal_source_diagnostics import (
@@ -371,6 +370,10 @@ class ZeroBaseDiscoveryRuntime:
                     fields={
                         "zero_base_source_sha256": claim.get("source_sha256"),
                         "zero_base_route": claim.get("route"),
+                        "zero_base_identifier_contract": "verified_common_stock_alphanumeric_v1",
+                        "zero_base_product_master_sha256": self.queue.admission_state[
+                            (claim["code"], claim["route"])
+                        ][1],
                         "zero_base_claim_count": claim.get("claim_count"),
                         "zero_base_claim_observed_epoch": claim.get("observed_epoch"),
                         "zero_base_discovery_volume": claim.get("discovery_volume"),
@@ -398,7 +401,79 @@ class ZeroBaseDiscoveryRuntime:
                 not_dispatched += 1
         if not_dispatched:
             self._persist()
+        # Retain only changed per-symbol admission generations in the existing
+        # pipeline. Repeated dispatches do not rewrite the whole durable queue.
+        # This evidence is diagnostic; failed emission never changes a lease.
+        from src.scanners.scanner_source_census import MAX_ROWS
+
+        pending = {}
+        for key, (reason, master_sha) in self.queue.admission_state.items():
+            row = self.queue._candidates[key]
+            state = (
+                reason,
+                row.observed_epoch,
+                row.source_sha256,
+                row.next_due_epoch,
+                row.claim_count,
+                master_sha,
+            )
+            if self._admission_emitted.get(key) != state:
+                pending[key] = state
+        selected = list(pending.items())[:MAX_ROWS]
+        admission_status = "not_configured"
+        if self.claim_receipt_emitter is not None:
+            try:
+                outcome = (
+                    self.claim_receipt_emitter(
+                        "zero_base_probe_admission",
+                        fields={
+                            "zero_base_admission_schema": "per_symbol_admission_delta_v1",
+                            "zero_base_admission_at_epoch": now_epoch,
+                            "zero_base_admission_records": json.dumps(
+                                [
+                                    dict(
+                                        code=key[0],
+                                        route=key[1],
+                                        reason=value[0],
+                                        observed_epoch=value[1],
+                                        source_sha256=value[2],
+                                        next_due_epoch=value[3],
+                                        claim_count=value[4],
+                                        master_sha256=value[5],
+                                    )
+                                    for key, value in selected
+                                ],
+                                separators=(",", ":"),
+                                allow_nan=False,
+                            ),
+                            "zero_base_admission_active_snapshot_generation": (
+                                snapshot["generation"] if valid_snapshot else None
+                            ),
+                            "zero_base_admission_consumer_ready": consumer_ready,
+                            "zero_base_admission_consumer_start_ticks": readiness.get(
+                                "process_start_ticks"
+                            ),
+                            "zero_base_admission_available_slots": available_slots,
+                            "zero_base_admission_pending_count": len(pending)
+                            - len(selected),
+                            "zero_base_admission_coverage": "dispatch_samples_only",
+                        },
+                    )
+                    if selected
+                    else None
+                )
+                if selected and (
+                    not isinstance(outcome, dict)
+                    or outcome.get("structured_append_succeeded") is not True
+                ):
+                    admission_status = "append_unconfirmed"
+                else:
+                    self._admission_emitted.update(selected)
+                    admission_status = "emitted" if selected else "unchanged"
+            except Exception as exc:
+                admission_status = "emit_failed:" + type(exc).__name__
         return {
+            "probe_admission_diagnostic_status": admission_status,
             "probe_requested_count": dispatched,
             "probe_consumer_ready": consumer_ready,
             "probe_readiness": readiness,

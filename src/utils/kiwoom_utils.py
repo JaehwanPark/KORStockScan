@@ -716,6 +716,11 @@ def _split_kiwoom_market_suffix(code: str) -> tuple[str, str]:
     return raw, ""
 
 
+def is_canonical_stock_code(code: object) -> bool:
+    """Check identifier syntax only; product eligibility belongs to its master."""
+    return isinstance(code, str) and re.fullmatch(r"[0-9A-Z]{6}", code) is not None
+
+
 def kiwoom_stock_code_identity(code: str) -> dict:
     """Return a lossless Kiwoom instrument-code identity.
 
@@ -739,10 +744,14 @@ def kiwoom_stock_code_identity(code: str) -> dict:
         "raw_base_code": raw_base,
         "market_suffix": market_suffix,
         "canonical_code": canonical_code,
-        "is_equity_code": len(canonical_code) == 6 and canonical_code.isdigit(),
+        "is_equity_code": len(canonical_code) == 6
+        and canonical_code.isascii()
+        and canonical_code.isdigit(),
         "code_namespace": (
             "numeric_equity"
-            if len(canonical_code) == 6 and canonical_code.isdigit()
+            if len(canonical_code) == 6
+            and canonical_code.isascii()
+            and canonical_code.isdigit()
             else "non_equity_or_ambiguous"
         ),
     }
@@ -754,9 +763,18 @@ def normalize_stock_code(code: str) -> str:
     return str(kiwoom_stock_code_identity(code)["canonical_code"])
 
 
-def _scanner_equity_code_fields(code: str, api_id: str) -> dict | None:
+def _scanner_equity_code_fields(
+    code: str, api_id: str, *, product_check=None, name=""
+) -> dict | None:
     identity = kiwoom_stock_code_identity(code)
-    if identity["is_equity_code"]:
+    canonical = identity["canonical_code"]
+    verified = (
+        not identity["is_equity_code"]
+        and is_canonical_stock_code(canonical)
+        and product_check is not None
+        and product_check(canonical, name).get("eligible") is True
+    )
+    if identity["is_equity_code"] or verified:
         return {
             "Code": identity["canonical_code"],
             "RawInstrumentCode": identity["raw_instrument_code"],
@@ -1646,7 +1664,7 @@ def _normalize_order_history_rows(*, results, source_api, requested_trade_date="
                         _pick_first(item, ("stk_nm", "name", "hts_kor_isnm"))
                     ).strip(),
                     "side": side,
-                    "code_contract_valid": bool(re.fullmatch(r"[0-9]{6}", code)),
+                    "code_contract_valid": is_canonical_stock_code(code),
                     "order_no_contract_valid": bool(
                         re.fullmatch(r"[0-9]{7}", ord_no) and int(ord_no) > 0
                     ),
@@ -3188,6 +3206,7 @@ def get_top_fluctuation_ka10027(
     pric_cnd="0",
     trde_prica_cnd="0",
     pure_equity_only=False,
+    product_check=None,
     request_owner="kiwoom_utils.get_top_fluctuation_ka10027",
     request_class=REQUEST_CLASS_RUNTIME_REQUIRED,
     read_rate_max_wait_sec=None,
@@ -3299,7 +3318,12 @@ def get_top_fluctuation_ka10027(
 
         for source_rank, item in enumerate(items, start=1):
             if pure_equity_only:
-                code_fields = _scanner_equity_code_fields(item.get("stk_cd"), "ka10027")
+                code_fields = _scanner_equity_code_fields(
+                    item.get("stk_cd"),
+                    "ka10027",
+                    product_check=product_check,
+                    name=str(item.get("stk_nm") or "").strip(),
+                )
                 if not code_fields:
                     continue
                 code = code_fields["Code"]
@@ -4262,6 +4286,7 @@ def get_zero_base_volume_surge_ka10023(
     *,
     mrkt_tp,
     stex_tp,
+    product_check=None,
     request_owner="zero_base_activity_panel",
     request_class=REQUEST_CLASS_SOURCE_ONLY,
     read_rate_max_wait_sec=3.0,
@@ -4320,7 +4345,12 @@ def get_zero_base_volume_surge_ka10023(
             ):
                 if not isinstance(item, dict):
                     continue
-                code_fields = _scanner_equity_code_fields(item.get("stk_cd"), "ka10023")
+                code_fields = _scanner_equity_code_fields(
+                    item.get("stk_cd"),
+                    "ka10023",
+                    product_check=product_check,
+                    name=str(item.get("stk_nm") or "").strip(),
+                )
                 if not code_fields:
                     continue
                 code = code_fields["Code"]

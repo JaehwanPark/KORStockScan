@@ -317,7 +317,9 @@ def outcome_rows(value, *, day):
         or value.get("runtime_effect") is not False
         or value.get("allowed_runtime_apply") is not False
         or value.get("decision_authority") != "offline_outcome_only"
-        or not re.fullmatch(r"[0-9]{6}(?:_AL|_NX)?", str(value.get("source_item", "")))
+        or not re.fullmatch(
+            r"[0-9A-Z]{6}(?:_AL|_NX)?", str(value.get("source_item", ""))
+        )
         or not re.fullmatch(r"[0-9a-f]{64}", str(value.get("revision", "")))
         or value["rows_sha256"] != _digest(value["rows"])
         or not 0 < len(value["rows"]) <= MAX_ROWS

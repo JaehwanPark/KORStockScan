@@ -3918,3 +3918,106 @@ def test_capture_preserves_benchmark_but_spares_bbo_budget_for_verified_etn(
     observation = rows[0]["rows"][0]["executable_bbo_observation"]
     assert observation["gap_reason"] == "verified_non_common_stock_excluded"
     assert observation["symbol_master_exclusion"]["security_group"] == "EN"
+
+
+@pytest.mark.parametrize("verified", [False, True])
+def test_new_alphanumeric_claim_requires_explicit_master_contract_and_full_lineage(
+    tmp_path, verified
+):
+    rows = json.loads(
+        json.dumps(_zero_base_native_events()).replace("005930", "0158S0")
+    )
+    if verified:
+        claim = next(r for r in rows if r["stage"] == "zero_base_probe_claim")
+        claim["fields"].update(
+            zero_base_identifier_contract="verified_common_stock_alphanumeric_v1",
+            zero_base_product_master_sha256="c" * 64,
+        )
+    path = tmp_path / "pipeline.jsonl"
+    _write_jsonl(path, rows)
+    out = {}
+    index = census._load_stage_index(
+        path,
+        tmp_path / "ai.jsonl",
+        target_date="2026-10-16",
+        zero_base_source_census=out,
+    )
+    assert out["valid_claim_count"] == int(verified)
+    assert out["confirmed_watch_admission_count"] == int(verified)
+    assert bool(index.get("0158S0", {}).get("scanner_promoted")) is verified
+
+
+@pytest.mark.parametrize(
+    "damage", [None, "foreign_pipeline", "invalid_hash", "future_clock", "oversized"]
+)
+def test_admission_diagnostic_is_exact_and_cannot_create_market_coverage(
+    tmp_path, damage
+):
+    stamp = datetime.fromisoformat("2026-10-16T10:00:00+09:00")
+    item = dict(
+        code="0158S0",
+        route="krx_nxt_integrated",
+        reason="future_owner_reason",
+        observed_epoch=stamp.timestamp() - 1,
+        source_sha256="a" * 64,
+        next_due_epoch=stamp.timestamp() - 1,
+        claim_count=0,
+        master_sha256="b" * 64,
+    )
+    fields = dict(
+        zero_base_admission_schema="per_symbol_admission_delta_v1",
+        zero_base_admission_at_epoch=stamp.timestamp(),
+        zero_base_admission_records=json.dumps([item]),
+    )
+    event = dict(
+        pipeline="ENTRY_PIPELINE",
+        stage="zero_base_probe_admission",
+        emitted_at=stamp.isoformat(),
+        fields=fields,
+    )
+    if damage == "foreign_pipeline":
+        event["pipeline"] = "OTHER"
+    if damage == "invalid_hash":
+        fields["zero_base_admission_records"] = json.dumps(
+            [{**item, "source_sha256": "unknown"}]
+        )
+    if damage == "future_clock":
+        fields["zero_base_admission_at_epoch"] += 1
+    if damage == "oversized":
+        fields["zero_base_admission_records"] = json.dumps([item] * 1025)
+    path = tmp_path / "pipeline.jsonl"
+    _write_jsonl(path, [event])
+    out = {}
+    index = census._load_stage_index(
+        path,
+        tmp_path / "ai.jsonl",
+        target_date="2026-10-16",
+        zero_base_source_census=out,
+    )
+    assert out["admission_observation_count"] == int(damage is None)
+    assert out["valid_claim_count"] == out["confirmed_watch_admission_count"] == 0
+    if damage is not None:
+        assert out["invalid_admission_receipt_count"] == 1
+    else:
+        episode = dict(
+            stock_code="0158S0",
+            venue="KRX",
+            session="KRX_REGULAR",
+            first_census_at=stamp,
+        )
+        r = census._coverage_row(
+            episode,
+            index,
+            after=stamp,
+            before=stamp + timedelta(minutes=5),
+            require_venue=True,
+            require_lineage=True,
+        )
+        assert not r["stage_reached"]["source_seen"]
+        assert (
+            r["logical_probe_admission_observations"][0]["reason"]
+            == "future_owner_reason"
+        )
+        assert not r["logical_probe_admission_observations"][0][
+            "physical_panel_binding_proven"
+        ]

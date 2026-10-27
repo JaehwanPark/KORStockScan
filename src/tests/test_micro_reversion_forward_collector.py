@@ -2677,3 +2677,111 @@ def test_ws_retains_closed_collector_until_receipt_persistence_succeeds(
     monkeypatch.setattr(manager, "_persist_micro_reversion_canary_snapshot", lambda: {})
     assert manager._close_micro_reversion_forward_collector() is True
     assert manager._micro_reversion_forward_collector is None
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [
+        None,
+        "older_epoch",
+        "unknown_reason",
+        "duplicate_reason",
+        "ledger_hash",
+        "ledger_missing",
+        "ledger_receipt_missing",
+        "epoch",
+        "pid",
+        "writer_loss",
+        "authority",
+        "persistence",
+    ],
+)
+def test_main_closed_mixed_timestamp_isolation_composes_without_allowing_loss(
+    tmp_path, damage
+):
+    import copy
+    from src.engine.scalping.micro_reversion.canary_monitor import (
+        evaluate_canary_snapshot,
+        load_canary_guard,
+    )
+    from src.engine.scalping.micro_reversion.observer_source_quality import (
+        main_raw_epoch_validation,
+    )
+
+    c = ForwardObservationCollector(
+        flags=ObserverFeatureFlags(
+            observer_enabled=True, path_capture_enabled=True, depth_capture_enabled=True
+        ),
+        config=ForwardCollectorConfig(
+            output_root=tmp_path,
+            writer_flush_interval_sec=0.01,
+            worker_poll_interval_sec=0.01,
+        ),
+    )
+    c.start()
+    received = int(
+        datetime.fromisoformat("2026-08-08T09:00:54.121+09:00").timestamp() * 1000
+    )
+    try:
+        for value in ("090054000", "090052000"):
+            assert (
+                c.observe_kiwoom_0b(
+                    "000001",
+                    _snapshot(exchange_time=value, received_at_ms=received),
+                    realtime_type="0B",
+                )
+                is ProducerCanaryResult.ENQUEUED
+            )
+            received += 4
+        assert (
+            c.observe_kiwoom_0d(
+                "000001",
+                _depth_snapshot(orderbook_time="085900000", received_at_ms=received),
+                realtime_type="0D",
+            )
+            is ProducerCanaryResult.INVALID_EXCHANGE_TIMESTAMP
+        )
+    finally:
+        c.close()
+    source = c.runtime_snapshot().as_dict()
+    guard = evaluate_canary_snapshot(source, load_canary_guard())
+    assert len(guard["source_quality_row_exclusions"]) == 2
+    value = dict(
+        generated_at="2026-08-08T09:01:00+09:00",
+        source_date="2026-08-08",
+        collector_snapshot=copy.deepcopy(source),
+        canary_guard=copy.deepcopy(guard),
+    )
+    x = value["collector_snapshot"]
+    g = value["canary_guard"]
+    g["source_quality_row_exclusions"] = list(g["source_quality_row_exclusions"])
+    if damage == "older_epoch":
+        x["reconciled_sequence_epochs"] = [x["sequence_epoch"] - 1, x["sequence_epoch"]]
+    if damage == "ledger_receipt_missing":
+        x.pop("timestamp_rejection_ledger")
+    if damage == "unknown_reason":
+        g["source_quality_row_exclusions"].append("unknown_capture_loss:1")
+    if damage == "duplicate_reason":
+        g["source_quality_row_exclusions"].append(g["source_quality_row_exclusions"][0])
+    if damage == "ledger_hash":
+        x["timestamp_rejection_ledger"]["sha256"] = "0" * 64
+    if damage == "ledger_missing":
+        Path(x["timestamp_rejection_ledger"]["path"]).unlink()
+    if damage == "epoch":
+        x["sequence_epoch"] += 1
+    if damage == "pid":
+        x["process_pid"] += 1
+    if damage == "writer_loss":
+        x["writer_dropped_envelope_count"] = 1
+    if damage == "authority":
+        x["actual_order_submitted"] = True
+    if damage == "persistence":
+        x["writer_persisted_envelope_count"] += 1
+    result = main_raw_epoch_validation(value, source_date="2026-08-08")
+    assert result["eligible"] is (damage in (None, "older_epoch")), result
+    if damage in (None, "older_epoch"):
+        assert result["allowed_sequence_epochs"] == [source["sequence_epoch"]]
+        assert result["allowed_sequence_epoch"] == source["sequence_epoch"]
+        stream = next(tmp_path.rglob("market_stream.jsonl"))
+        rows = [json.loads(line) for line in stream.read_text().splitlines()]
+        assert [r["path_consumer_eligible"] for r in rows] == [True, False]

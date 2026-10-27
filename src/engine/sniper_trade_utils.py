@@ -303,7 +303,7 @@ def resolve_pending_sell_order_no(target_stock, token, *, now_epoch=None):
         target_stock.get("sell_submit_intended_session_bucket") or ""
     ).strip()
     if (
-        re.fullmatch(r"[0-9]{6}", code) is None
+        re.fullmatch(r"[0-9A-Z]{6}", code) is None
         or re.fullmatch(r"[0-9a-f]{32}", generation) is None
         or re.fullmatch(r"[0-9a-f]{64}", context_sha256) is None
         or requested_qty is None
@@ -594,7 +594,7 @@ def cancel_response_ack_exact(
             == expected_original
         )
         and re.fullmatch(
-            r"[0-9]{6}",
+            r"[0-9A-Z]{6}",
             str(response.get("cancel_request_code") or "").strip()[:6],
         )
         and (

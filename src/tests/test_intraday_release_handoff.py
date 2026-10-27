@@ -5370,6 +5370,10 @@ def test_pre_submit_handoff_rejects_unreviewed_dependency(tmp_path, family, depe
     "generation",
     [
         "current",
+        "consumed_invalidation_cadence",
+        "consumed_nonfixed_identity",
+        "consumed_preclaim",
+        "consumed_entry_capability",
         "consumed_migration",
         "consumed_pre_startup",
         "consumed_pre_shutdown",
@@ -5411,7 +5415,13 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
     )
     subprocess.run(["git", "-C", str(root), "checkout", "-q", "75e0fbbf7"], check=True)
     hashes = {
-        "current": handoff.REVIEWED_PRECLAIM_CADENCE_PROFILE,
+        "current": handoff.REVIEWED_NONFIXED_FINAL_PROFILE,
+        "nonfixed_current": handoff.REVIEWED_NONFIXED_CURRENT_PROFILE,
+        "preclaim_cadence": handoff.REVIEWED_PRECLAIM_CADENCE_PROFILE,
+        "consumed_invalidation_cadence": handoff.REVIEWED_INVALIDATION_CADENCE_PROFILE,
+        "consumed_nonfixed_identity": handoff.REVIEWED_NONFIXED_IDENTITY_PROFILE,
+        "consumed_preclaim": handoff.REVIEWED_PRECLAIM_DIAGNOSTIC_PROFILE,
+        "consumed_entry_capability": handoff.REVIEWED_ENTRY_CAPABILITY_PROFILE,
         "preclaim_diagnostics": handoff.REVIEWED_PRECLAIM_DIAGNOSTIC_PROFILE,
         "invalidation_cadence": handoff.REVIEWED_INVALIDATION_CADENCE_PROFILE,
         "entry_capability": handoff.REVIEWED_ENTRY_CAPABILITY_PROFILE,
@@ -5482,6 +5492,10 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
                     str(canonical),
                     "show",
                     {
+                        "consumed_invalidation_cadence": "d5ddc0ae0",
+                        "consumed_nonfixed_identity": "16130d883",
+                        "consumed_preclaim": "c8d22dd41",
+                        "consumed_entry_capability": "6d0d19756",
                         "consumed_fixture": "c260d6b07",
                         "consumed_submit_probe": "b6611ce26",
                         "consumed_health_snapshot": "7b98fa4bc",
@@ -5497,6 +5511,8 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
                         "entry_capability": "6d0d19756",
                         "preclaim_diagnostics": "c8d22dd41",
                         "invalidation_cadence": "d5ddc0ae0",
+                        "nonfixed_current": "7add11172",
+                        "preclaim_cadence": "2b725bb39",
                         "finalization_admission": "194307750",
                         "consumed_suffix_report": "ab663e13b",
                         "consumed_isolated_index": "59a922b19",
@@ -6588,10 +6604,17 @@ def test_invalidation_cadence_keeps_consumed_entry_capability(tmp_path, family, 
         "src/engine/infrastructure/startup_validation_code_context.py")
 
 
-@pytest.mark.parametrize("generation", ["preclaim_diagnostics", "invalidation_cadence"])
+@pytest.mark.parametrize("generation", ["preclaim_diagnostics", "invalidation_cadence", "nonfixed_current", "preclaim_cadence"])
 @pytest.mark.parametrize("family", ["main_stop", "holding_vote", "pre_submit_delay"])
 @pytest.mark.parametrize("fault", [None, "successor_mix"])
 def test_preclaim_cadence_retains_each_complete_predecessor(tmp_path, generation, family, fault):
+    # The final runtime WebSocket bytes equal the identifier parent. Mutate the
+    # changed preparation dependency to exercise an actual mixed generation.
+    dependency = (
+        "src/engine/monitoring/policy_generation_code_handoff.py"
+        if generation == "nonfixed_current"
+        else "src/engine/kiwoom_websocket.py"
+    )
     test_entry_cost_handoff_keeps_exact_complete_generation(
-        tmp_path, family, fault, generation, "src/engine/kiwoom_websocket.py"
+        tmp_path, family, fault, generation, dependency
     )
