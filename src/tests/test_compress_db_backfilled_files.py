@@ -8,7 +8,9 @@ from src.engine import compress_db_backfilled_files as archive
 
 
 @pytest.mark.parametrize("fault", [None, "missing", "changed"])
-def test_snapshot_archive_resumes_sidecar_after_main_commit(tmp_path, monkeypatch, fault):
+def test_snapshot_archive_resumes_sidecar_after_main_commit(
+    tmp_path, monkeypatch, fault
+):
     from src.engine.lifecycle.snapshot_archive import generation, read_bytes
 
     directory = tmp_path / "report/monitor_snapshots"
@@ -33,11 +35,94 @@ def test_snapshot_archive_resumes_sidecar_after_main_commit(tmp_path, monkeypatc
         assert result["snapshots"]["compressed"] == 1
         assert generation(sidecar) == before
         assert json.loads(read_bytes(sidecar, maximum=1024))["cost"] is None
-        again = archive.run(retention_days=1, today=date(2026, 10, 28), dry_run=False,
-                            snapshots_only=True)
+        again = archive.run(
+            retention_days=1,
+            today=date(2026, 10, 28),
+            dry_run=False,
+            snapshots_only=True,
+        )
         assert again["snapshots"]["compressed"] == 0
+    elif fault == "missing":
+        assert result["snapshot_resume_unverified"] == [
+            dict(
+                path=str(main),
+                source_date="2026-10-26",
+                reason="snapshot_archive_identity_unavailable",
+            )
+        ]
+        assert result["skipped_unverified"] == 1
+        assert not result["errors"]
     else:
         assert result["errors"]
+
+
+@pytest.mark.parametrize("archive_exists", [False, True])
+def test_orphan_sidecar_without_native_identity_is_not_an_archive_resume(
+    tmp_path, monkeypatch, archive_exists
+):
+    import gzip
+
+    directory = tmp_path / "monitor_snapshots"
+    directory.mkdir()
+    main = directory / "trade_review_2026-10-08.json"
+    sidecar = main.with_suffix(".completed_projection.json")
+    sidecar.write_text('{"cost":null,"snapshot_identity":{"size":2}}')
+    if archive_exists:
+        with gzip.open(str(main) + ".gz", "wb") as handle:
+            handle.write(b"{}")
+    originals = {p: p.read_bytes() for p in directory.iterdir()}
+    monkeypatch.setattr(archive, "MONITOR_SNAPSHOT_DIR", directory)
+    monkeypatch.setattr(archive, "_snapshot_manifest_verifies", lambda *a: True)
+    monkeypatch.setattr(archive, "_postclose_source_protection", lambda *a: None)
+    result = archive.run(
+        retention_days=1, today=date(2026, 10, 28), dry_run=False, snapshots_only=True
+    )
+    assert not result["errors"]
+    assert result["snapshots"]["compressed"] == 0
+    assert result["snapshot_resume_unverified"] == [
+        dict(
+            path=str(main),
+            source_date="2026-10-08",
+            reason="snapshot_archive_identity_unavailable",
+        )
+    ]
+    assert {
+        p: p.read_bytes() for p in directory.iterdir() if p.suffix != ".lock"
+    } == originals
+    from src.engine.lifecycle.snapshot_archive import identity_available
+
+    assert not identity_available(main)
+
+
+@pytest.mark.parametrize("link", ["archive", "receipt"])
+def test_orphan_snapshot_resume_rejects_symlink_custody(tmp_path, monkeypatch, link):
+    import gzip
+
+    directory = tmp_path / "monitor_snapshots"
+    directory.mkdir()
+    main = directory / "trade_review_2026-10-08.json"
+    main.with_suffix(".completed_projection.json").write_text('{"cost":null}')
+    archived = Path(str(main) + ".gz")
+    receipt = Path(str(archived) + ".archive_receipt.json")
+    foreign = tmp_path / "foreign"
+    foreign.write_bytes(b"{}")
+    if link == "archive":
+        archived.symlink_to(foreign)
+    else:
+        with gzip.open(archived, "wb") as handle:
+            handle.write(b"{}")
+        receipt.symlink_to(foreign)
+    monkeypatch.setattr(archive, "MONITOR_SNAPSHOT_DIR", directory)
+    monkeypatch.setattr(archive, "_snapshot_manifest_verifies", lambda *a: True)
+    monkeypatch.setattr(archive, "_postclose_source_protection", lambda *a: None)
+    result = archive.run(
+        retention_days=1, today=date(2026, 10, 28), dry_run=False, snapshots_only=True
+    )
+    assert result["errors"] == [
+        "snapshot:" + main.name + ":snapshot_archive_path_invalid"
+    ]
+    assert not result["snapshot_resume_unverified"]
+    assert foreign.read_bytes() == b"{}"
 
 
 def test_snapshot_only_cycle_keeps_policy_day_and_other_sources(tmp_path, monkeypatch):
@@ -47,17 +132,31 @@ def test_snapshot_only_cycle_keeps_policy_day_and_other_sources(tmp_path, monkey
     raw.write_text('{"source":"protected"}')
     pipeline = tmp_path / "pipeline"
     pipeline.mkdir()
-    (pipeline / "pipeline_events_2026-10-01.jsonl").write_text('{}\n')
+    (pipeline / "pipeline_events_2026-10-01.jsonl").write_text("{}\n")
     monkeypatch.setattr(archive, "MONITOR_SNAPSHOT_DIR", snapshots)
     monkeypatch.setattr(archive, "PIPELINE_EVENTS_DIR", pipeline)
-    monkeypatch.setattr(archive, "_postclose_source_protection",
-                        lambda *a: "postclose_policy_day_not_elapsed:2026-10-27")
-    result = archive.run(retention_days=1, today=date(2026, 10, 27), dry_run=False,
-                         snapshot_dates={date(2026, 10, 26)})
+    monkeypatch.setattr(
+        archive,
+        "_postclose_source_protection",
+        lambda *a: "postclose_policy_day_not_elapsed:2026-10-27",
+    )
+    result = archive.run(
+        retention_days=1,
+        today=date(2026, 10, 27),
+        dry_run=False,
+        snapshot_dates={date(2026, 10, 26)},
+    )
     assert result["snapshot_retained_bytes"] == raw.stat().st_size
     assert result["skipped_postclose_protected"] == 1
-    assert all(result[k]["scanned"] == 0 for k in
-               ("pipeline", "threshold_snapshots", "canonical_context", "pipeline_summaries"))
+    assert all(
+        result[k]["scanned"] == 0
+        for k in (
+            "pipeline",
+            "threshold_snapshots",
+            "canonical_context",
+            "pipeline_summaries",
+        )
+    )
 
 
 def test_snapshot_custody_change_at_receipt_keeps_plain_source(tmp_path, monkeypatch):
@@ -68,12 +167,16 @@ def test_snapshot_custody_change_at_receipt_keeps_plain_source(tmp_path, monkeyp
     source.write_text('{"evidence":"original"}')
     custody = tmp_path / "controller.json"
     custody.write_text('{"generation":"original"}')
-    refs = [dict(path=str(custody), sha256=hashlib.sha256(custody.read_bytes()).hexdigest())]
+    refs = [
+        dict(path=str(custody), sha256=hashlib.sha256(custody.read_bytes()).hexdigest())
+    ]
     write = archive.write_json_object_generation_safe
+
     def changed(*args, **kwargs):
         result = write(*args, **kwargs)
         custody.write_text('{"generation":"successor"}')
         return result
+
     monkeypatch.setattr(archive, "write_json_object_generation_safe", changed)
     with pytest.raises(ValueError, match="storage_custody_changed_before_removal"):
         archive._gzip_file(source, dry_run=False, custody=refs)
@@ -89,16 +192,19 @@ def test_snapshot_daily_age_uses_kst_calendar_even_on_utc_host(tmp_path, monkeyp
         def now(zone):
             assert str(zone) == "Asia/Seoul"
             return datetime(2026, 10, 27, 21, 25, tzinfo=timezone.utc).astimezone(zone)
+
     monkeypatch.setattr(archive, "datetime", Clock)
     monkeypatch.setattr(archive, "MONITOR_SNAPSHOT_DIR", tmp_path / "absent-snapshots")
     monkeypatch.setattr(archive, "PIPELINE_EVENTS_DIR", tmp_path / "absent-pipeline")
     monkeypatch.setattr(sys, "argv", ["archive", "--snapshots-only", "--dry-run"])
     original = archive.run
+
     def run(**kwargs):
         assert kwargs["today"] == date(2026, 10, 28)
         assert kwargs["snapshots_only"] is True
         # Empty isolated roots are supplied by the normal fixture.
         return original(**kwargs)
+
     monkeypatch.setattr(archive, "run", run)
     assert archive.main() == 0
 

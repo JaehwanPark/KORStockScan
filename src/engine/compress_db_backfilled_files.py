@@ -724,8 +724,13 @@ def _storage_custody(target_date):
 
 
 def run(
-    *, retention_days: int, today: date, dry_run: bool, pipeline_dates=None,
-    snapshots_only: bool = False, snapshot_dates=None,
+    *,
+    retention_days: int,
+    today: date,
+    dry_run: bool,
+    pipeline_dates=None,
+    snapshots_only: bool = False,
+    snapshot_dates=None,
 ) -> dict:
     if pipeline_dates is not None and (snapshots_only or snapshot_dates is not None):
         raise ValueError("archive_scope_conflict")
@@ -768,6 +773,7 @@ def run(
         "skipped_postclose_protected": 0,
         "postclose_protection_reasons": {},
         "snapshot_retained_bytes": 0,
+        "snapshot_resume_unverified": [],
         "errors": [],
     }
 
@@ -785,7 +791,11 @@ def run(
         return bool(reason)
 
     # pipeline_events_*.jsonl only (already compressed .gz excluded)
-    for path in ([] if snapshots_only else sorted(PIPELINE_EVENTS_DIR.glob("pipeline_events_*.jsonl"))):
+    for path in (
+        []
+        if snapshots_only
+        else sorted(PIPELINE_EVENTS_DIR.glob("pipeline_events_*.jsonl"))
+    ):
         target_date = _date_from_pipeline_file(path)
         if target_date is None or target_date > cutoff:
             continue
@@ -817,7 +827,9 @@ def run(
     snapshots = set(MONITOR_SNAPSHOT_DIR.glob("*_*.json"))
     snapshots.update(
         path.with_name(path.name.removesuffix(".completed_projection.json") + ".json")
-        for path in MONITOR_SNAPSHOT_DIR.glob("trade_review_*.completed_projection.json")
+        for path in MONITOR_SNAPSHOT_DIR.glob(
+            "trade_review_*.completed_projection.json"
+        )
     )
     for path in sorted(snapshots):
         parsed = _kind_and_date_from_snapshot_file(path)
@@ -840,8 +852,32 @@ def run(
                 if path.is_file():
                     content_valid = _snapshot_json_boundary_valid(path)
                 else:
-                    from src.engine.lifecycle.snapshot_archive import archived_receipt
+                    from src.engine.lifecycle.snapshot_archive import (
+                        archived_receipt,
+                        identity_available,
+                    )
 
+                    # A surviving sidecar does not authenticate a legacy gzip
+                    # or a lost original inode. Only resume a native archive;
+                    # leave unknown custody visible and both bytes untouched.
+                    if any(
+                        member.is_symlink()
+                        for member in (
+                            Path(str(path) + ".gz"),
+                            Path(str(path) + ".gz.archive_receipt.json"),
+                        )
+                    ):
+                        raise ValueError("snapshot_archive_path_invalid")
+                    if not identity_available(path):
+                        stats["skipped_unverified"] += 1
+                        stats["snapshot_resume_unverified"].append(
+                            dict(
+                                path=str(path),
+                                source_date=target_date.isoformat(),
+                                reason="snapshot_archive_identity_unavailable",
+                            )
+                        )
+                        continue
                     content_valid = archived_receipt(path) is not None
                 if not manifest_verified or not content_valid:
                     stats["skipped_unverified"] += 1
@@ -858,7 +894,9 @@ def run(
                 for member in members:
                     if not member.is_file():
                         continue
-                    compressed, saved = _gzip_file(member, dry_run=dry_run, custody=custody)
+                    compressed, saved = _gzip_file(
+                        member, dry_run=dry_run, custody=custody
+                    )
                     if compressed:
                         stats["snapshots"]["compressed"] += 1
                         stats["snapshots"]["saved_bytes"] += saved
@@ -1029,11 +1067,14 @@ def main() -> int:
         help="Limit storage repair to these pipeline dates; preserve other families",
     )
     parser.add_argument(
-        "--snapshots-only", action="store_true",
+        "--snapshots-only",
+        action="store_true",
         help="Compact eligible monitor snapshots only, including interrupted sidecars",
     )
     parser.add_argument(
-        "--snapshot-date", action="append", type=date.fromisoformat,
+        "--snapshot-date",
+        action="append",
+        type=date.fromisoformat,
         help="Limit snapshot compaction to these source dates; preserve other families",
     )
     args = parser.parse_args()
@@ -1109,6 +1150,15 @@ def main() -> int:
             f"saved_bytes={item['saved_bytes']}({_format_bytes(item['saved_bytes'])})"
         )
     print(f"[DASHBOARD_ARCHIVE_SKIPPED_UNVERIFIED] {stats['skipped_unverified']}")
+    if stats["snapshot_resume_unverified"]:
+        print(
+            "[DASHBOARD_ARCHIVE_SNAPSHOT_RESUME_UNVERIFIED] "
+            + json.dumps(
+                stats["snapshot_resume_unverified"],
+                ensure_ascii=True,
+                sort_keys=True,
+            )
+        )
     if stats["errors"]:
         print(f"[DASHBOARD_ARCHIVE_ERRORS] {len(stats['errors'])}")
         for item in stats["errors"][:20]:

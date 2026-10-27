@@ -4193,3 +4193,36 @@ cold-selection transaction for the next trading consumer, not an intraday restar
 to manufacture PID evidence. Current-parent custody, next-session preparation,
 actual next PID and unassisted acceptance remain distinct. The AGENTS preflight
 ordering now states that phase choice before candidate validation.
+
+
+### Archive sidecar resume admission repair -- 2026-10-27
+
+The approved native archive recovery failed at 23:43:20 with four missing
+`monitor_snapshot_archive_identity_v1` receipts. These were older gzip files
+with surviving completed-projection sidecars, not unfinished native archive
+commits. Their full decoded bytes match the original manifests, but a sidecar
+alone cannot authenticate the removed original inode. Original gzip, sidecar,
+manifest bytes and the failure log are preserved in the monitoring evidence.
+
+The existing archiver now uses the native `identity_available` contract before
+admitting a sidecar to interrupted-archive recovery. Unknown identity remains
+an explicit dated `snapshot_resume_unverified` diagnostic; it neither creates
+an archive receipt nor deletes the sidecar. Native receipts still undergo full
+verification, and corrupt archives, invalid receipts and symlink custody remain
+errors. Source/policy readers still reject newly lost identity and retain null
+or excluded historical semantics. This repairs maintenance census admission,
+without declaring the historical source gap fixed or suppressing its record.
+
+Replacement: the unconditional archived-receipt call is replaced by native
+resume eligibility followed by the same verifier. Existing archive writers,
+logical readers, historical gzip compatibility and custody guards are retained;
+no alternate writer, scheduled wrapper, validator or semantic fallback is added.
+Base is `5dceaf032`; source adds 58/deletes 8 (including local formatting), tests
+add 117/delete 11; documents record this causal review. Net growth records the
+previously unclassified resume state and covers valid native resume, missing
+proof, corrupt bytes, missing source and symlink rejection separately.
+
+Self-review and supplemental symlink checks completed. Archive/snapshot/retention
+regressions: 148 passed; compile and diff checks passed. Runtime recovery and
+next-session acceptance remain pending. The original EOD and successful native
+calculation checkpoints must not be rerun for this maintenance-only repair.
