@@ -88,6 +88,7 @@ COMPONENTS = {
 COMMON_CODE_COMPONENTS = (
     "monitoring/policy_generation_contract.py",
     "monitoring/policy_generation_validation.py",
+    "monitoring/policy_generation_code_handoff.py",
     "automation/policy_generation_fixture_validation.py",
     "lifecycle/holding_window_generation.py",
     "lifecycle/research_input_budget.py",

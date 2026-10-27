@@ -36,7 +36,7 @@ Owner: deployment infrastructure. Main and scheduled consumers use the selected 
 
 The existing policy-generation fixture publisher accepts repeated `--source-review`
 references for report-only code succession. Each immutable review request binds
-clean committed original/current trees, unchanged native component membership,
+clean committed original/current trees, unchanged native family/execution membership,
 every changed component's before/after SHA, all affected families and a frozen
 review record. The reader derives the inventory from `COMPONENTS` and
 `COMMON_CODE_COMPONENTS`; omitted files or families, aliases, dirty sources,
@@ -46,6 +46,14 @@ remain historical readers. Original native reports and their fixtures, independe
 new network-denied fixtures, source/economic gaps and policy guards remain required.
 Preserve both release origins and immutable request/review files through their last
 consumer. A source review never authenticates an active policy or actual PID.
+
+The sole admitted common-member extension binds the existing capability reader
+itself into fixture code generations. Later reader changes receive new fixture
+paths automatically. Original generations retain their original membership;
+unreviewed execution-owner changes still fail. An issued source review identifies
+its immutable issuer and exact code generation. Another clean immutable release
+with identical code and fixture plan may reuse it; its selected identity and PID
+remain subject to the independent native runtime checks.
 
 Ordered deployment and full health use the same registered report-capability
 consumer inventory. Candidate preflight records it; selected preparation and

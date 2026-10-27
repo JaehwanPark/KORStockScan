@@ -4127,3 +4127,35 @@ alias checks 38 PASS; source-review producer/consumer checks 17 PASS. The focuse
 checks overlap the larger suites. Earlier failed attempts and superseded source
 snapshots remain in the evidence directory. Python compilation and diff checks
 pass. These are code/fixture results, not deployment or next Main consumption.
+
+### Candidate lifetime follow-up
+
+`592526684` remains an unselected preserved candidate. Its pre-drain check
+correctly rejected the missing candidate-code quantity monitor proof; no startup
+hold, Main drain or selector publication occurred. The original native quantity
+stage/report and selected legacy pointer were preserved, and the existing
+publisher prepared only its code-addressed proof with full native validation
+(78.669 seconds). Required report currentness then passed. The original candidate
+P5 source closure was independently rechecked without rerunning its unchanged
+child. Both preflight attempts are retained; the native single-attempt-per-commit
+identity rejected reuse of that reserved transition directory.
+
+Review of successor lifetimes found two further code-contract defects: the
+source review incorrectly equated its immutable issuer root with every consumer
+root, and the capability reader's bytes participated in fixture validation plans
+without participating in fixture filenames. Same-code immutable successors now
+reuse only exact code/plan evidence; PID/release checks remain independent. The
+existing reader is added to common capability signatures, while historical
+fingerprints retain their original membership. The sole admitted membership
+extension cannot add an execution owner. New regressions cover same-code release
+roots, changed consumer bytes, reviewer-only extension and rejected execution-owner
+extension. The preserved candidate/fixture originals remain evidence; no receipt
+or artifact hash was edited to satisfy a check.
+
+Follow-up code gate: 2,804 report/deployment/detector regressions PASS, 38 native
+profile/alias checks PASS, and 25 source/lifetime/fingerprint checks PASS (overlap
+is disclosed). A separate reader-removal negative case rejects a downgrade of
+signature membership. Shared source generation now includes the reader itself;
+there is no manual producer-version bump to obtain a different fixture path.
+The unchanged candidate-code quantity proof is reusable by its exact native code
+signature, while fresh successor P5 and selected preparation remain required.

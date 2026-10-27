@@ -39,7 +39,7 @@ def reviewed_source_transition(path):
         raise ValueError("source_review_identity_or_authority_invalid")
     current = Path(review["current_release_root"])
     origin = Path(review["origin_release_root"])
-    if current != validation.ROOT or current == origin:
+    if current == origin:
         raise ValueError("source_review_current_root_invalid")
     inventories = []
     source_hashes = {}
@@ -67,7 +67,7 @@ def reviewed_source_transition(path):
         families, relatives = {}, set()
         for family, names in components.items():
             values = {}
-            for name in (*names, *common):
+            for name in dict.fromkeys((*names, *common, *generation.COMMON_CODE_COMPONENTS)):
                 source = root / "src/engine" / name
                 relative = source.resolve().relative_to(root.resolve()).as_posix()
                 ancestor = source
@@ -79,7 +79,8 @@ def reviewed_source_transition(path):
                 if key not in source_hashes:
                     source_hashes[key] = validation.file_sha(source)
                 value = source_hashes[key]
-                values[name] = value
+                if name in names or name in common:
+                    values[name] = value
                 relatives.add(relative)
             families[family] = generation.digest(values)
         dirty = subprocess.check_output(
@@ -96,7 +97,18 @@ def reviewed_source_transition(path):
             raise ValueError("source_review_untracked_components")
         inventories.append((families, relatives, (components, common)))
     old, new = inventories
-    if old[1] != new[1] or old[2] != new[2]:
+    # The sole admitted membership extension binds this existing capability
+    # reader into future fixture generations. Family/execution owners cannot
+    # change through a source review. Old hashes retain their original members.
+    reviewer = "monitoring/policy_generation_code_handoff.py"
+    if (
+        old[1] != new[1]
+        or old[2][0] != new[2][0]
+        or tuple(n for n in old[2][1] if n != reviewer)
+        != tuple(n for n in new[2][1] if n != reviewer)
+        or (reviewer in old[2][1] and reviewer not in new[2][1])
+        or new[2][1] != generation.COMMON_CODE_COMPONENTS
+    ):
         raise ValueError("source_review_component_membership_changed")
     delta = {}
     for relative in sorted(old[1]):

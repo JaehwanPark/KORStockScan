@@ -479,6 +479,7 @@ def test_fixture_publication_checks_the_same_shared_budget_dependency(
     [
         "lifecycle/research_input_budget.py",
         "monitoring/policy_generation_validation.py",
+        "monitoring/policy_generation_code_handoff.py",
         "automation/policy_generation_fixture_validation.py",
     ],
 )
@@ -1936,3 +1937,44 @@ def test_fixture_publisher_requires_complete_review_before_reusing_receipt(tmp_p
     body["reviewed_families"].pop()
     with pytest.raises(ValueError, match="source_review_incomplete_change_inventory"):
         writer.validate("auxiliary", data, source_date=DAY, target_date="2026-10-15", source_reviews=[seal_review()])
+
+
+@pytest.mark.parametrize("damage", [None, "consumer_code"])
+def test_source_review_tracks_code_identity_across_same_code_release_roots(tmp_path, monkeypatch, damage):
+    import shutil
+    handoff, old, issuer, body, seal = _source_review_case(tmp_path, monkeypatch)
+    request = seal()
+    consumer = tmp_path / "same-code-consumer"
+    shutil.copytree(issuer, consumer)
+    monkeypatch.setattr(validation, "ROOT", consumer)
+    monkeypatch.setattr(generation, "ENGINE", consumer / "src/engine")
+    if damage:
+        (consumer / "src/engine/shared.py").write_text("value = 3\n")
+        with pytest.raises(ValueError, match="source_review_incomplete_change_inventory"):
+            handoff.reviewed_source_transition(request)
+    else:
+        assert set(handoff.reviewed_source_transition(request)["pairs"]) == set(validation.PLANS)
+
+
+@pytest.mark.parametrize("damage", [None, "unreviewed_owner", "reader_removal"])
+def test_source_review_extends_only_existing_capability_reader_membership(tmp_path, monkeypatch, damage):
+    import subprocess
+    handoff, old, new, body, seal = _source_review_case(tmp_path, monkeypatch)
+    extra = "new_execution_owner.py" if damage == "unreviewed_owner" else "monitoring/policy_generation_code_handoff.py"
+    for role, root in (("origin", old), ("current", new)):
+        file = root / "src/engine" / extra
+        file.parent.mkdir(exist_ok=True)
+        file.write_text("value = " + ("1" if role == "origin" else "2") + "\n")
+        if (role == "current" and damage != "reader_removal") or (role == "origin" and damage == "reader_removal"):
+            registry = root / "src/engine/monitoring/policy_generation_contract.py"
+            registry.write_text(registry.read_text().replace("('shared.py',)", repr(("shared.py", extra))))
+        subprocess.run(["git", "add", "."], cwd=root, check=True, capture_output=True)
+        subprocess.run(["git", "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "dependency"], cwd=root, check=True, capture_output=True)
+        body[role + "_git_commit"] = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+    monkeypatch.setattr(generation, "COMMON_CODE_COMPONENTS", ("shared.py",) if damage == "reader_removal" else ("shared.py", extra))
+    body["reviewed_files"]["src/engine/" + extra] = dict(before=validation.file_sha(old / "src/engine" / extra), after=validation.file_sha(new / "src/engine" / extra))
+    if damage:
+        with pytest.raises(ValueError, match="source_review_component_membership_changed"):
+            handoff.reviewed_source_transition(seal())
+    else:
+        assert set(handoff.reviewed_source_transition(seal())["pairs"]) == set(validation.PLANS)
