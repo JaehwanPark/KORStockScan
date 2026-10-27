@@ -3205,3 +3205,15 @@ def test_holding_capability_preparation_requires_exact_pair(relative, damage):
     if damage == "unreviewed": current = "0" * 64
     elif damage == "wrong_origin": old = "0" * 64
     assert C.reviewed_preparation_pair(relative, old, current) is (damage is None)
+
+
+@pytest.mark.parametrize("relative", list(C.REVIEWED_ENTRY_LATENCY_SOURCES))
+@pytest.mark.parametrize("fault", [None, "origin", "successor"])
+def test_entry_latency_independent_preparation_exact_pairs(relative, fault):
+    old = C.REVIEWED_ENTRY_LATENCY_ORIGINS[relative]
+    new = hashlib.sha256((ROOT / relative).read_bytes()).hexdigest()
+    if fault == "origin":
+        old = "0" * 64
+    elif fault == "successor":
+        new = "0" * 64
+    assert C.reviewed_preparation_pair(relative, old, new) is (fault is None)

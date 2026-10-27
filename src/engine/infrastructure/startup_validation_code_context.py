@@ -2575,6 +2575,17 @@ for _name, _sha in REVIEWED_HOLDING_CAPABILITY_SOURCES.items():
     _prior = {v for pair in _history for v in pair} | {REVIEWED_HOLDING_CAPABILITY_ORIGINS[_name]}
     _history.update((_old, _sha) for _old in _prior)
 
+# Exact source-only latency/report successor; retain original preparation pairs.
+REVIEWED_ENTRY_LATENCY_SOURCES = {'src/engine/scalping/mechanistic_entry_runtime_policy.py': 'b3f63db7ba451860bb397c4a5c7838747ab53173509697df30b5a750dadc6537', 'src/engine/scalping/continuous_reversal_policy_v6.py': '9342dec3beb2683d68f6851d58e8e6614f5481630abb4590d809024e8e3e5da4', 'src/engine/buy_funnel_sentinel.py': '72ed2bf11dcab9ce6b3527ca1f5b8502452ec9af8bdd3c9ac4ce5b3d5bdf1455', 'src/engine/monitoring/sentinel_summary_contract.py': 'eab146de69c72b73f7d7f52e3ee5cc079a9f2dafd9d2360806520b798da4ae8f'}
+REVIEWED_ENTRY_LATENCY_ORIGINS = {'src/engine/scalping/mechanistic_entry_runtime_policy.py': '7d19b7409abfbb75ece84f1c877cd9e8ae58631fa770ce4956f90964742d46b7', 'src/engine/scalping/continuous_reversal_policy_v6.py': '0412a2b239cea96136f3d93347e399aea1fa9f7a782f8d679a57ffec5329390b', 'src/engine/buy_funnel_sentinel.py': 'a02d6c28e6ecf32ac67f99a60188d2c61bcb6cfc22f037022fa669be0ca46dd2', 'src/engine/monitoring/sentinel_summary_contract.py': '7f71509a725c4851b24e4db09020af5c0aba7325ac3a2372461f332e96a8066e'}
+for _name, _sha in REVIEWED_ENTRY_LATENCY_SOURCES.items():
+    _history = REVIEWED_PREPARATION_HISTORY.setdefault(_name, set())
+    _prior = {v for pair in _history for v in pair} | {REVIEWED_ENTRY_LATENCY_ORIGINS[_name]}
+    if _name in REVIEWED_PREPARATION_SOURCES:
+        _prior.update(REVIEWED_PREPARATION_SOURCES[_name])
+    _history.update((old, _sha) for old in _prior)
+
+
 def reviewed_preparation_pair(relative, old, current):
     # An already reviewed physical pair keeps its original authority; a
     # formatting projection must not replace either endpoint before this check.

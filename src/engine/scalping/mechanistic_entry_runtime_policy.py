@@ -228,25 +228,25 @@ class _IdentityPass:
             raise ValueError("machine_policy_source_symlink_cycle")
         parent, name = os.path.split(path)
         if parent == path:
-            return path, ()
+            return path, (), None
         if parent not in self.parents:
             self.parents[parent] = self.resolve(parent, depth + 1)
-        base, links = self.parents[parent]
+        base, links, _ = self.parents[parent]
         if name in ("", "."):
-            return base, links
+            return base, links, None
         if name == "..":
-            return os.path.dirname(base), links
+            return os.path.dirname(base), links, None
         candidate = os.path.join(base, name)
         s = os.lstat(candidate)
         if stat_module.S_ISLNK(s.st_mode):
             target = os.readlink(candidate)
             node = (s.st_dev, s.st_ino, s.st_mode, s.st_mtime_ns, s.st_ctime_ns, target)
             self.nodes[candidate] = node
-            resolved, tail = self.resolve(os.path.join(base, target), depth + 1)
-            return resolved, links + ((candidate, node),) + tail
+            resolved, tail, leaf = self.resolve(os.path.join(base, target), depth + 1)
+            return resolved, links + ((candidate, node),) + tail, leaf
         if stat_module.S_ISDIR(s.st_mode):
             self.nodes[candidate] = (s.st_dev, s.st_ino, s.st_mode)
-        return candidate, links
+        return candidate, links, s
 
     def verify(self):
         for path, expected in self.nodes.items():
@@ -290,6 +290,34 @@ def dependencies_unchanged(dependencies):
         except (OSError, ValueError) as exc:
             facts.update(error_type=type(exc).__name__, reason=str(exc)[:256])
             return False
+
+
+@contextmanager
+def verified_family_evaluation(family):
+    """Reuse structural proof only for an exact loader-issued immutable family.
+
+    Refresh source dependencies at this synchronous boundary. Mutable, copied
+    or evicted families still require their original full structural validator.
+    This proves policy content only; it never caches native signal eligibility.
+    """
+    issued = None
+    if type(family) is _FrozenDict:
+        with _CURRENT_CACHE_LOCK:
+            issued = next(
+                ((key, bundle) for key, (_, bundle) in _CURRENT_CACHE.items()
+                 if bundle.get("continuous_reversal") is family),
+                None,
+            )
+    if issued is None:
+        yield False
+        return
+    key, bundle = issued
+    with signature_pass(), verified_evaluation(
+        data_root=Path(key[0]), target_date=key[2]
+    ) as active:
+        if active is not bundle:
+            raise ValueError("machine_policy_family_generation_changed")
+        yield True
 
 
 @contextmanager
@@ -562,8 +590,13 @@ def _signature(path: Path | str) -> tuple:
     ):
         path = os.fspath(source_path(path))
     resolver = _SIGNATURE_PASS.get() or _IdentityPass()
-    resolved, links = resolver.resolve(path)
-    stat = os.stat(path)
+    resolved, links, stat = resolver.resolve(path)
+    # The resolver has just lstat'ed the resolved leaf, including symlink
+    # targets. Reuse that same fresh observation instead of issuing a second
+    # metadata syscall per historical dependency. Never cache leaf metadata:
+    # repeated checks in this pass must still see a replacement or mutation.
+    if stat is None:
+        stat = os.stat(path)
     signature = (
         resolved,
         stat.st_dev,

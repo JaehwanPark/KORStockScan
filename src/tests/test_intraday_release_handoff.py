@@ -5411,7 +5411,8 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
     )
     subprocess.run(["git", "-C", str(root), "checkout", "-q", "75e0fbbf7"], check=True)
     hashes = {
-        "current": handoff.REVIEWED_HOLDING_CAPABILITY_PROFILE,
+        "current": handoff.REVIEWED_ENTRY_LATENCY_PROFILE,
+        "holding_capability": handoff.REVIEWED_HOLDING_CAPABILITY_PROFILE,
         "finalization_admission": handoff.REVIEWED_FINALIZATION_ADMISSION_PROFILE,
         "holding_quote": handoff.REVIEWED_HOLDING_QUOTE_PROFILE,
         "drain_pointer": handoff.REVIEWED_DRAIN_POINTER_PROFILE,
@@ -5487,6 +5488,7 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
                         "drain_closure": "e930a7c95",
                         "drain_pointer": "97bc1f62e",
                         "holding_quote": "279886a71",
+                        "holding_capability": "bcfedb8ad",
                         "finalization_admission": "194307750",
                         "consumed_suffix_report": "ab663e13b",
                         "consumed_isolated_index": "59a922b19",
@@ -6509,3 +6511,22 @@ def test_holding_capability_keeps_deployed_generation(tmp_path, family, fault):
     test_entry_cost_handoff_keeps_exact_complete_generation(
         tmp_path, family, fault, "finalization_admission",
         "src/engine/monitoring/policy_generation_code_handoff.py")
+
+
+@pytest.mark.parametrize("family", ["main_stop", "holding_vote", "pre_submit_delay"])
+@pytest.mark.parametrize("fault", ["", "successor_mix"])
+@pytest.mark.parametrize("generation", ["finalization_admission", "holding_capability"])
+def test_entry_latency_keeps_consumed_finalization_generation(tmp_path, family, fault, generation):
+    test_entry_cost_handoff_keeps_exact_complete_generation(
+        tmp_path, family, fault, generation,
+        dependency="src/engine/scalping/mechanistic_entry_runtime_policy.py",
+    )
+
+
+@pytest.mark.parametrize("family", ["main_stop", "holding_vote", "pre_submit_delay"])
+@pytest.mark.parametrize("fault", ["missing", "dirty", "committed_change", "parent_mix"])
+@pytest.mark.parametrize("dependency", list(handoff.REVIEWED_ENTRY_LATENCY_HASHES))
+def test_entry_latency_rejects_partial_successor(tmp_path, family, fault, dependency):
+    test_entry_cost_handoff_keeps_exact_complete_generation(
+        tmp_path, family, fault, "current", dependency
+    )

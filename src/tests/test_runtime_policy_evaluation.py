@@ -72,6 +72,58 @@ def test_one_evaluation_is_immutable_and_next_boundary_revalidates(loader):
     assert len(calls) == 2
 
 
+@pytest.mark.parametrize("damage", [None, "source_changed", "invalid_source"])
+def test_assessment_reuses_only_loader_validated_immutable_family(
+    loader, monkeypatch, damage
+):
+    from src.engine.scalping import continuous_reversal_policy_v6 as V
+
+    root, path, calls = loader
+    original = N._load_current_uncached
+
+    def load(*args):
+        bundle = original(*args)
+        bundle["continuous_reversal"]["family_sha256"] = "a" * 64
+        return bundle
+
+    monkeypatch.setattr(N, "_load_current_uncached", load)
+    active = N.load_effective(data_root=root, target_date="2026-10-08", _immutable=True)
+    family = active["continuous_reversal"]
+    monkeypatch.setattr(V, "validate_family", lambda f: pytest.fail("repeated static validation"))
+    if damage:
+        path.write_text(path.read_text().replace('"generation": 1', '"generation": 2'))
+        if damage == "invalid_source":
+            monkeypatch.setattr(N, "_load_current_uncached", lambda *a: (_ for _ in ()).throw(ValueError("invalid_source")))
+        with pytest.raises(ValueError, match="family_generation_changed|invalid_source"):
+            V.assess(family, None, symbol="005930", session="krx_regular")
+    else:
+        result = V.assess(family, None, symbol="005930", session="krx_regular")
+        assert result[0]["action"] == "BLOCK" and result[0]["family_sha256"] == "a" * 64
+        assert len(calls) == 1
+    assert N._VERIFIED_EVALUATION.get() is None
+    assert N._SIGNATURE_PASS.get() is None
+
+
+@pytest.mark.parametrize("kind", ["mutable", "forged", "evicted"])
+def test_unissued_family_keeps_full_structural_validation(loader, monkeypatch, kind):
+    from src.engine.scalping import continuous_reversal_policy_v6 as V
+
+    root, path, calls = loader
+    family = N.load_effective(data_root=root, target_date="2026-10-08", _immutable=True)["continuous_reversal"]
+    if kind == "mutable":
+        family = dict(family)
+    elif kind == "forged":
+        family = N._freeze(dict(family))
+    else:
+        N._CURRENT_CACHE.clear()
+    def reject(f):
+        assert f is family
+        raise ValueError("structural_failure")
+    monkeypatch.setattr(V, "validate_family", reject)
+    with pytest.raises(ValueError, match="structural_failure"):
+        V.assess(family, None, symbol="005930", session="krx_regular")
+
+
 def test_verified_copy_preserves_ownership_aliases_cycles_and_unknown_protocol():
     class Custom:
         def __deepcopy__(self, memo):
@@ -152,6 +204,40 @@ def test_symlink_replacement_even_same_target_invalidates(tmp_path):
             N._signature(link / "a")
             link.unlink()
             link.symlink_to(folder, target_is_directory=True)
+
+
+@pytest.mark.parametrize("linked", [False, True])
+def test_signature_uses_one_fresh_leaf_metadata_read_per_check(
+    tmp_path, monkeypatch, linked
+):
+    source = tmp_path / "source"
+    source.write_text("original")
+    path = tmp_path / "link" if linked else source
+    if linked:
+        path.symlink_to(source)
+    real_stat, real_lstat = os.stat, os.lstat
+    calls = []
+
+    def stat(path, *args, **kwargs):
+        if os.fspath(path) == str(source):
+            calls.append("stat")
+        return real_stat(path, *args, **kwargs)
+
+    def lstat(path, *args, **kwargs):
+        if os.fspath(path) == str(source):
+            calls.append("lstat")
+        return real_lstat(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "stat", stat)
+    monkeypatch.setattr(os, "lstat", lstat)
+    with N.signature_pass():
+        before = N._signature(str(path))
+        assert before[2] == real_stat(source).st_ino
+        assert calls == ["lstat"]
+        source.write_text("modified")
+        calls.clear()
+        assert N._signature(str(path)) != before
+        assert calls == ["lstat"]
 
 
 @pytest.mark.parametrize("spelling", ["absolute", "relative", "symlink", "dot_parent"])

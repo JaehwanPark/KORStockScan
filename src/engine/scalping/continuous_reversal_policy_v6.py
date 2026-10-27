@@ -1009,7 +1009,15 @@ def stage_code_refresh(
 
 
 def assess(family, snapshot, *, symbol, session):
-    validate_family(family)
+    from src.engine.scalping import mechanistic_entry_runtime_policy as N
+
+    with N.verified_family_evaluation(family) as verified:
+        if not verified:
+            validate_family(family)
+        return _assess_validated(family, snapshot, symbol=symbol, session=session)
+
+
+def _assess_validated(family, snapshot, *, symbol, session):
     base = dict(
         schema="mechanistic_entry_policy_decision_v1",
         action="BLOCK",

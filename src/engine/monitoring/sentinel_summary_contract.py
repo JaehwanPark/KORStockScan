@@ -48,7 +48,10 @@ PRE_SCOPE_EXTRACTION_BUY_OWNER = (
 PRE_FORMAT_BUY_OWNER = (
     "40b489fff0e1b82edbf36b734424ca7826dbc2c4c8a3b27ee9069c9381e7df2a"
 )
-CURRENT_BUY_OWNER = "a02d6c28e6ecf32ac67f99a60188d2c61bcb6cfc22f037022fa669be0ca46dd2"
+# Call completion attribution changes only the report consumer. The native
+# summary parser and its callback definitions remain unchanged.
+PRE_CALL_FINISH_BUY_OWNER = "a02d6c28e6ecf32ac67f99a60188d2c61bcb6cfc22f037022fa669be0ca46dd2"
+CURRENT_BUY_OWNER = "72ed2bf11dcab9ce6b3527ca1f5b8502452ec9af8bdd3c9ac4ce5b3d5bdf1455"
 LIMIT = 32 * 1024 * 1024
 SUMMARY_LIMIT = 128 * 1024 * 1024
 DEFINITIONS = {
@@ -161,7 +164,7 @@ def _callback_predecessors(callbacks, parser_path):
         pre_read_reuse_parser,
         funnel_pre_liquidity,
     ) = ([], [], [], [])
-    funnel_pre_terminal, funnel_pre_scope_extraction = [], []
+    funnel_pre_terminal, funnel_pre_scope_extraction, funnel_pre_call_finish = [], [], []
     funnel = tuple(getattr(f, "__name__", None) for f in callbacks) == (
         "_blocker_label_from_stage_fields",
         "_is_ignored_event",
@@ -197,7 +200,8 @@ def _callback_predecessors(callbacks, parser_path):
             # The three native callback definitions retain their exact text;
             # only the pinned physical module owner changed under Black.
             owner_sha = reviewed_formatting_predecessor(
-                str(owner.relative_to(Path(__file__).resolve().parents[3])), owner_sha
+                str(owner.relative_to(Path(__file__).resolve().parents[3])),
+                PRE_CALL_FINISH_BUY_OWNER if funnel else owner_sha
             )
         pre_format_original.extend((source, owner_sha))
         prior_owner = PREVIOUS_PARSER if owner == parser_path else owner_sha
@@ -225,6 +229,9 @@ def _callback_predecessors(callbacks, parser_path):
         funnel_pre_scope_extraction.extend(
             (source, PRE_SCOPE_EXTRACTION_BUY_OWNER if funnel else prior_owner)
         )
+        funnel_pre_call_finish.extend(
+            (source, PRE_CALL_FINISH_BUY_OWNER if funnel else prior_owner)
+        )
     digest = lambda parts: hashlib.sha256("\n".join(parts).encode()).hexdigest()
     if funnel:
         # These are reviewed parser/owner pairs, not independent allowlists.
@@ -241,6 +248,7 @@ def _callback_predecessors(callbacks, parser_path):
             (PRE_FORMAT_PARSER, digest(funnel_pre_liquidity)),
             (PRE_FORMAT_PARSER, digest(funnel_pre_terminal)),
             (PRE_FORMAT_PARSER, digest(funnel_pre_scope_extraction)),
+            (CURRENT_PARSER, digest(funnel_pre_call_finish)),
         }
     else:
         # Preserve the existing parser-only migration for unchanged external

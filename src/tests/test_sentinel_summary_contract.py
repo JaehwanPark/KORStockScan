@@ -1179,3 +1179,24 @@ def test_formatting_keeps_exact_native_callback_text(callback):
         hashlib.sha256(original).hexdigest()
         != hashlib.sha256(owner.read_bytes()).hexdigest()
     )
+
+
+@pytest.mark.parametrize("parser", ["current", "previous"])
+def test_call_finish_consumer_preserves_only_exact_native_summary_predecessor(tmp_path, parser):
+    raw, options, manifest, original, _ = predecessor(
+        tmp_path,
+        parser_contract=C.CURRENT_PARSER if parser == "current" else C.PREVIOUS_PARSER,
+        buy_owner=C.PRE_CALL_FINISH_BUY_OWNER,
+    )
+    offset = raw.stat().st_size
+    with raw.open("a") as stream:
+        stream.write(json.dumps(event(2)) + "\n")
+    if parser == "previous":
+        with pytest.raises(RuntimeError, match="callback_predecessor_unverified"):
+            P.update_and_load_pipeline_event_summaries(**options)
+        assert manifest.read_bytes() == original
+    else:
+        rows, meta = P.update_and_load_pipeline_event_summaries(**options)
+        assert meta["start_raw_offset"] == offset and meta["rebuilt"] is False
+        assert Path(meta["contract_migration"]["original_manifest_archive"]).read_bytes() == original
+        assert sum(row["event_count"] for row in rows) == 2

@@ -5651,3 +5651,65 @@ def test_shared_scope_preserves_priority_lazy_reads_and_removed_private_paths():
             "_actual_execution_venue",
         ):
             assert not hasattr(owner, name)
+
+
+@pytest.mark.parametrize("native_schema", ["call_local_terminal_v1", "unknown"])
+@pytest.mark.parametrize("physical_block", [False, True])
+def test_finished_fixed_watch_call_keeps_native_terminal_and_rejects_later_gate(
+    native_schema, physical_block,
+):
+    from datetime import datetime, timedelta
+
+    start = datetime(2026, 10, 27, 11, 15)
+    call = {
+        "entry_submit_attempt_id": "fixed-call",
+        "entry_submit_attempt_schema": "call_local_submit_attempt_v1",
+        "entry_submit_attempt_authority": "observation_only",
+    }
+    terminal = (
+        "entry_physical_send_guard_block" if physical_block
+        else "auxiliary_binding_submit_recheck"
+    )
+    source = [("budget_pass", call), ("latency_pass", call)]
+    if physical_block:
+        source.append(("order_bundle_failed", {
+            **call,
+            "broker_submit_attempt_count": "0",
+            "broker_submit_success_response_count": "0",
+            "order_bundle_failure_mode": "pre_broker_blocked",
+        }))
+    source.extend([
+        ("entry_submit_attempt_finished", {
+            **call,
+            "submit_call_outcome": "returned_false",
+            "entry_submit_attempt_terminal_schema": native_schema,
+            "entry_submit_attempt_terminal_reason": terminal,
+        }),
+        ("blocked_strength_momentum", {"reason": "below_buy_ratio"}),
+    ])
+    events = [
+        sentinel.PipelineEvent(
+            start + timedelta(milliseconds=index), "ENTRY_PIPELINE", stage,
+            "fixture", "005930", "49542", fields,
+        )
+        for index, (stage, fields) in enumerate(source)
+    ]
+    result = sentinel._exact_submit_drought_axis_summary(events)
+    row = next(x for x in result["attempt_ledger"] if x["producer_attempt_id"] == "submit:fixed-call")
+    assert row["state"] == ("blocked" if physical_block else "unclassified")
+    assert row["terminal_stage"] == (
+        terminal if native_schema == "call_local_terminal_v1"
+        else "order_bundle_failed" if physical_block
+        else "entry_submit_attempt_finished"
+    )
+    assert row["last_event_at"] == events[-2].emitted_at.isoformat()
+    assert result["denominator_exact_attempt_counts"]["budget_pass"] == 1
+    assert result["denominator_exact_attempt_counts"]["order_bundle_submitted"] == 0
+    assert result["allowed_runtime_apply"] is False
+    if not physical_block:
+        assert result["status"] == "source_quality_gap_excluded"
+        assert row["lineage_gap_reason"] == (
+            "submit_call_terminal_axis_unclassified"
+            if native_schema == "call_local_terminal_v1"
+            else "submit_call_finished_without_terminal_evidence"
+        )

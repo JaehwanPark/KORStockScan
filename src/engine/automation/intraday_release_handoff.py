@@ -11547,6 +11547,37 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
 }}
 
 
+# Reviewed static-family reuse and call-local drought attribution. Unknown or
+# mixed dependency bytes remain rejected; the consumed generation is retained.
+REVIEWED_ENTRY_LATENCY_HASHES = {'src/engine/scalping/mechanistic_entry_runtime_policy.py': 'b3f63db7ba451860bb397c4a5c7838747ab53173509697df30b5a750dadc6537', 'src/engine/scalping/continuous_reversal_policy_v6.py': '9342dec3beb2683d68f6851d58e8e6614f5481630abb4590d809024e8e3e5da4', 'src/engine/buy_funnel_sentinel.py': '72ed2bf11dcab9ce6b3527ca1f5b8502452ec9af8bdd3c9ac4ce5b3d5bdf1455', 'src/engine/monitoring/sentinel_summary_contract.py': 'eab146de69c72b73f7d7f52e3ee5cc079a9f2dafd9d2360806520b798da4ae8f', 'src/engine/infrastructure/startup_validation_code_context.py': 'e3d52ea4f3aad7f38a2a007ced341071ce949782a3906887655017133b858d31'}
+REVIEWED_ENTRY_LATENCY_ORIGINS = {'src/engine/scalping/mechanistic_entry_runtime_policy.py': '7d19b7409abfbb75ece84f1c877cd9e8ae58631fa770ce4956f90964742d46b7', 'src/engine/scalping/continuous_reversal_policy_v6.py': '0412a2b239cea96136f3d93347e399aea1fa9f7a782f8d679a57ffec5329390b', 'src/engine/buy_funnel_sentinel.py': 'a02d6c28e6ecf32ac67f99a60188d2c61bcb6cfc22f037022fa669be0ca46dd2', 'src/engine/monitoring/sentinel_summary_contract.py': '7f71509a725c4851b24e4db09020af5c0aba7325ac3a2372461f332e96a8066e', 'src/engine/infrastructure/startup_validation_code_context.py': '39769bb29e24735db71e036385f9c86a4395bc9ce1001a6ca8b0cfb1dcf29bd5'}
+REVIEWED_ENTRY_LATENCY_PROFILE = {
+    **REVIEWED_HOLDING_CAPABILITY_PROFILE, **REVIEWED_ENTRY_LATENCY_HASHES
+}
+REVIEWED_ENTRY_LATENCY_VARIANTS = {
+    (key[0], REVIEWED_ENTRY_LATENCY_HASHES.get(key[0], key[1])): {
+        **value,
+        "selector_path": "src/engine/infrastructure/startup_validation_code_context.py",
+        "selector_sha256": REVIEWED_ENTRY_LATENCY_HASHES["src/engine/infrastructure/startup_validation_code_context.py"],
+        "dependencies": {**value["dependencies"], **REVIEWED_ENTRY_LATENCY_HASHES},
+        "contract_extensions": {
+            origin: {name: REVIEWED_ENTRY_LATENCY_HASHES.get(os.path.normpath(name), sha)
+                     for name, sha in paths.items()}
+            for origin, paths in value["contract_extensions"].items()
+        },
+    }
+    for key, value in REVIEWED_HOLDING_CAPABILITY_VARIANTS.items()
+}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple(
+        (old, current)
+        for old in {value for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ()) for value in pair}
+                   | {REVIEWED_ENTRY_LATENCY_ORIGINS[name]}
+    )
+    for name, current in REVIEWED_ENTRY_LATENCY_HASHES.items()
+}}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -12249,6 +12280,12 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     ):
         prepared_hashes = REVIEWED_HOLDING_CAPABILITY_PROFILE
         prepared_variants = REVIEWED_HOLDING_CAPABILITY_VARIANTS
+    if (
+        (source := candidate_bytes("src/engine/infrastructure/startup_validation_code_context.py", optional=True)) is not None
+        and hashlib.sha256(source).hexdigest() == REVIEWED_ENTRY_LATENCY_HASHES["src/engine/infrastructure/startup_validation_code_context.py"]
+    ):
+        prepared_hashes = REVIEWED_ENTRY_LATENCY_PROFILE
+        prepared_variants = REVIEWED_ENTRY_LATENCY_VARIANTS
     entry_cost_hashes = (
         prepared_hashes
         if prepared_owner_present

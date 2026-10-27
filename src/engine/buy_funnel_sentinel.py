@@ -1166,7 +1166,10 @@ def _exact_submit_drought_axis_summary(
             new_cycle = bool(
                 current
                 and (
-                    (
+                    # A finished synchronous call cannot own a later watch
+                    # evaluation merely because the record ID is unchanged.
+                    (not call_id and current.get("call_finished_at"))
+                    or (
                         not resumed_explicit
                         and producer_id
                         and explicit_id
@@ -1237,6 +1240,10 @@ def _exact_submit_drought_axis_summary(
                 current["parent_promotion_id"] = promotion_id
             if producer_id:
                 explicit_states[producer_id] = current
+            if call_id:
+                current.setdefault(
+                    "call_first_observed_at", event.emitted_at.isoformat()
+                )
             if ambiguous_unbound:
                 current["identity_gap_reason"] = (
                     "unbound_event_with_concurrent_submit_calls"
@@ -1274,14 +1281,34 @@ def _exact_submit_drought_axis_summary(
                 current["call_outcome"] = event.fields.get(
                     "submit_call_outcome", "unknown"
                 )
+                local_finish = bool(call_id and not current.get("identity_gap_reason"))
+                native_terminal = (
+                    identity("entry_submit_attempt_terminal_reason")
+                    if local_finish
+                    and event.fields.get("entry_submit_attempt_terminal_schema")
+                    == "call_local_terminal_v1"
+                    else ""
+                )
+                if local_finish:
+                    current["call_finished_at"] = event.emitted_at.isoformat()
+                if native_terminal:
+                    # Preserve the producer's call-local terminal even when
+                    # this reader cannot safely assign an existing causal axis.
+                    # Unknown attribution remains excluded, never a broker veto.
+                    current["call_terminal_reason"] = native_terminal
+                    current["terminal_stage"] = native_terminal
                 if current["state"] == "pending" and (
                     not current.get("wait_reason")
                     or current["call_outcome"] != "returned_false"
                 ):
                     current.update(
                         state="unclassified",
-                        terminal_stage=event.stage,
-                        lineage_gap_reason="submit_call_finished_without_terminal_evidence",
+                        terminal_stage=native_terminal or event.stage,
+                        lineage_gap_reason=(
+                            "submit_call_terminal_axis_unclassified"
+                            if native_terminal
+                            else "submit_call_finished_without_terminal_evidence"
+                        ),
                     )
                 continue
             if call_id and current["state"] == "submitted":
