@@ -66271,15 +66271,16 @@ def _handle_watching_strategy_branch(
                             ):
                                 if source_quality_block_reason:
                                     from src.engine.monitoring.runtime_performance import (
-                                        record_native_preclaim_guard,
+                                        record_native_preclaim_gate,
                                     )
 
-                                    record_native_preclaim_guard(
+                                    record_native_preclaim_gate(
                                         stock=stock,
                                         code=code,
                                         ws_data=ws_data,
                                         reason=source_quality_block_reason,
                                         now=time.time(),
+                                        metrics=momentum_gate,
                                     )
                                 return False
                             if (
@@ -66305,6 +66306,22 @@ def _handle_watching_strategy_branch(
                                 "entry_strength_momentum_recheck_source_quality_block_reason",
                             ],
                         )
+
+                if momentum_gate.get("enabled") and not momentum_gate.get(
+                    "scanner_rising_override"
+                ):
+                    from src.engine.monitoring.runtime_performance import (
+                        record_native_preclaim_gate,
+                    )
+
+                    record_native_preclaim_gate(
+                        stock=stock,
+                        code=code,
+                        ws_data=ws_data,
+                        reason="",
+                        now=time.time(),
+                        metrics=momentum_gate,
+                    )
 
                 if current_vpw < config["VPW_SCALP_LIMIT"]:
                     shadow_candidate = None

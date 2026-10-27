@@ -11646,10 +11646,16 @@ class GPTSniperEngine:
                 eligible = eligible and all(
                     isinstance(v, str) and bool(v) for v in identity
                 )
-                entry_circuit_ticket = self._entry_circuit().admit(
+                entry_circuit = self._entry_circuit()
+                admission_remaining = entry_budget.remaining()
+                if admission_remaining <= 0:
+                    # Local preparation consumed the original budget. This is
+                    # not a provider failure or an OPEN circuit admission.
+                    raise ValueError("entry_machine_input_deadline_expired")
+                entry_circuit_ticket = entry_circuit.admit(
                     identity,
                     eligible=eligible,
-                    deadline_remaining=entry_budget.remaining(),
+                    deadline_remaining=admission_remaining,
                     common_disabled=self.ai_disabled and common_recovery_ticket is None,
                 )
                 self._observe_entry_circuit()

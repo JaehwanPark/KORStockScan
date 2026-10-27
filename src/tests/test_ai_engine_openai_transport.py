@@ -9556,6 +9556,7 @@ def test_received_reversal_validator_exception_preserves_raw_response_and_waits_
         "post_capture_rejection",
         "local_deadline",
         "unsent_deadline",
+        "admission_deadline",
     ],
 )
 def test_full_analyze_target_received_reversal_exception_keeps_raw_and_execution_separate(
@@ -9799,7 +9800,18 @@ def test_full_analyze_target_received_reversal_exception_keeps_raw_and_execution
             return advance(root, key, state, **kwargs)
 
         monkeypatch.setattr(outbox_owner, "advance", fail_transition)
-    deadline_failure = failure_stage in {"local_deadline", "unsent_deadline"}
+    deadline_failure = failure_stage in {"local_deadline", "unsent_deadline", "admission_deadline"}
+    if failure_stage == "admission_deadline":
+        engine._set_last_transport_meta({"openai_request_id": "stale-other-call"})
+        original_perf = time.perf_counter
+        offset = [0.0]
+        monkeypatch.setattr(time, "perf_counter", lambda: original_perf() + offset[0])
+
+        def expire_at_admission():
+            offset[0] = 10.0
+            return entry_circuit
+
+        monkeypatch.setattr(engine, "_entry_circuit", expire_at_admission)
     if failure_stage == "local_deadline":
         engine.min_interval = 60
         engine.last_call_time = time.time()

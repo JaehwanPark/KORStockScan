@@ -28,6 +28,8 @@ _NAMES = (
     "ws_lock_wait",
     "ws_lock_hold",
     "ws_snapshot",
+    "ws_receive_wait",
+    "ws_message_dispatch",
     "confirmed_to_claim",
     "claim_to_machine",
     "provider_response",
@@ -86,6 +88,7 @@ _POLICY_CALL = ContextVar("policy_validation_call", default=None)
 _POLICY_SEQUENCE = 0
 _POLICY_VALIDATIONS = deque(maxlen=128)
 _POLICY_SLOW_VALIDATIONS = deque(maxlen=32)
+_WS_SLOW_CYCLES = deque(maxlen=32)
 
 
 @contextmanager
@@ -129,6 +132,31 @@ def policy_validation(stage):
             _POLICY_VALIDATIONS.append(dict(facts))
             if elapsed >= 1 or facts["status"] == "error":
                 _POLICY_SLOW_VALIDATIONS.append(dict(facts))
+
+
+def record_ws_cycle(*, transport_epoch, started, received_epoch, received, ended):
+    """Diagnose receive-await vs handler time; neither proves broker silence."""
+    wait = received[0] - started[1]
+    dispatch = ended[0] - received[0]
+    observe("ws_receive_wait", wait)
+    observe("ws_message_dispatch", dispatch)
+    if max(wait, dispatch) < 1:
+        return
+    row = dict(
+        transport_epoch=transport_epoch,
+        started_epoch=started[0],
+        received_epoch=received_epoch,
+        wait_seconds=wait,
+        dispatch_seconds=dispatch,
+        wait_thread_cpu_seconds=received[1] - started[2],
+        dispatch_thread_cpu_seconds=ended[1] - received[1],
+        wall_minus_monotonic_seconds=received_epoch - started[0] - wait,
+        wait_semantics="network_or_upstream_or_event_loop_or_process_scheduling_unresolved",
+        thread_cpu_semantics="same_ws_thread_includes_other_async_tasks",
+        runtime_effect=False,
+    )
+    with _LOCK:
+        _WS_SLOW_CYCLES.append(row)
 
 
 def record_policy_digest_read(byte_count):
@@ -232,7 +260,15 @@ def _phase_window_locked(start, end):
                     ended_perf=right,
                 )
             )
+    seconds_by_phase = {}
+    for interval in intervals:
+        name = interval["name"]
+        seconds_by_phase[name] = seconds_by_phase.get(name, 0.0) + (
+            interval["ended_perf"] - interval["started_perf"]
+        )
     return dict(
+        seconds_by_phase=seconds_by_phase,
+        observed_seconds=sum(seconds_by_phase.values()),
         coverage=(
             "complete" if phases and phases[0]["perf"] <= start else "prefix_unobserved"
         ),
@@ -810,6 +846,7 @@ def snapshot():
         ]
         policy_validations = list(_POLICY_VALIDATIONS)
         policy_slow = list(_POLICY_SLOW_VALIDATIONS)
+        ws_slow = [dict(row) for row in _WS_SLOW_CYCLES]
         selected = [dict(v) for v in _SELECTED_READY.values()]
         raw_ready_count = len(_READY)
         raw_ready_recent = deepcopy(list(_READY.values())[-32:])
@@ -892,6 +929,11 @@ def snapshot():
         signal_denominator="native_ready_seen_at_ingress_and_claimed_missing_joins_not_inferred",
         metrics=metrics,
         preparation_failures=failures,
+        websocket_receive_cycles=dict(
+            slow_recent=ws_slow,
+            retained_limit=32,
+            coverage="completed_cycles_only_not_connection_liveness",
+        ),
         policy_validation=dict(
             recent=policy_validations,
             slow_or_failed=policy_slow,
@@ -931,7 +973,7 @@ def snapshot():
             schema="native_signal_lifecycle_v1",
             counts=lifecycle_counts,
             count=sum(lifecycle_counts.values()),
-            recent=selected[-32:],
+            recent=deepcopy(selected[-32:]),
             append_admission_dropped=lifecycle_append_dropped,
             coverage="observed_snapshots_only_no_inferred_continuity",
             runtime_effect=False,
@@ -1420,8 +1462,8 @@ def _native_selection(B, native, scope, state, event, observed):
     return result
 
 
-def record_native_preclaim_guard(*, stock, code, ws_data, reason, now):
-    """Bind an actual Main return to a live selected signal, without claiming it.
+def record_native_preclaim_gate(*, stock, code, ws_data, reason, now, metrics=None):
+    """Bind actual strength-gate visits to the original live signal, without claims.
 
     Native invalidation remains a separate terminal. A later fresh Main visit
     may still claim the signal; this receipt carries no retry/order authority.
@@ -1435,6 +1477,7 @@ def record_native_preclaim_guard(*, stock, code, ws_data, reason, now):
         or not isinstance(reason, str)
         or reason
         not in {
+            "",
             "extreme_sell_dominant",
             "stale_ws_snapshot",
             "trade_tick_quiet",
@@ -1511,13 +1554,43 @@ def record_native_preclaim_guard(*, stock, code, ws_data, reason, now):
                     or not row["epoch"] <= stamp <= now
                     or row["native_epoch"] != epoch
                     or sequence < row["native_sequence"]
-                    or "main_preclaim_guard" in row
                 ):
                     continue
-                row["main_preclaim_guard"] = dict(
-                    stage="blocked_strength_momentum",
-                    reason=reason,
-                    gate_action="source_quality_block",
+                previous = row.get("main_preclaim_guard_last")
+                cleared = row.get("main_preclaim_guard_clear")
+                latest = (
+                    cleared
+                    if cleared
+                    and (
+                        previous is None
+                        or cleared["observed_epoch"] > previous["observed_epoch"]
+                    )
+                    else previous
+                )
+                if latest and (
+                    now < latest["observed_epoch"]
+                    or stamp < latest["source_observed_epoch"]
+                    or sequence < latest["source_sequence"]
+                ):
+                    continue
+                if not reason and (
+                    previous is None
+                    or cleared
+                    and cleared["observed_epoch"] >= previous["observed_epoch"]
+                ):
+                    continue
+                receipt = dict(
+                    stage=(
+                        "blocked_strength_momentum"
+                        if reason
+                        else "strength_gate_continued"
+                    ),
+                    reason=reason or "strength_gate_continued",
+                    gate_action=(
+                        "source_quality_block"
+                        if reason
+                        else "continue_to_remaining_guards"
+                    ),
                     observed_epoch=now,
                     source_observed_epoch=stamp,
                     source_item=item,
@@ -1532,6 +1605,35 @@ def record_native_preclaim_guard(*, stock, code, ws_data, reason, now):
                     watch_admission_id=stock.get("watch_admission_id"),
                     watch_generation_id=stock.get("watch_generation_id"),
                     runtime_effect=False,
+                )
+                if isinstance(metrics, dict):
+                    receipt["metrics"] = {
+                        name: (
+                            metrics.get(name)
+                            if type(metrics.get(name)) in (int, float)
+                            and math.isfinite(metrics[name])
+                            else None
+                        )
+                        for name in (
+                            "window_sec",
+                            "elapsed_sec",
+                            "window_total_value",
+                            "window_buy_ratio",
+                            "window_exec_buy_ratio",
+                            "window_net_buy_qty",
+                        )
+                    }
+                if reason:
+                    row.setdefault("main_preclaim_guard", receipt)
+                    row["main_preclaim_guard_last"] = receipt
+                    row["main_preclaim_guard_observed_visits"] = (
+                        row.get("main_preclaim_guard_observed_visits", 0) + 1
+                    )
+                else:
+                    row["main_preclaim_guard_clear"] = receipt
+                # Discrete visits do not prove continuous blocking between them.
+                row["main_preclaim_gate_coverage"] = (
+                    "observed_visits_only_no_inferred_continuity"
                 )
                 _queue_lifecycle(key, row)
                 recorded += 1

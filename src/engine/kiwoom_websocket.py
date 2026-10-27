@@ -3479,13 +3479,32 @@ class KiwoomWSManager:
                     while True:
                         self._schedule_integrated_runtime_route_reconcile()
                         receive_epoch = self._market_data_transport_epoch
+                        cycle_start = (
+                            time.time(),
+                            time.perf_counter(),
+                            time.thread_time(),
+                        )
                         message = await ws.recv()
                         packet_received_at = datetime.now(KST)
-                        await self._handle_message(
-                            message,
-                            received_at=packet_received_at,
-                            transport_epoch=receive_epoch,
-                        )
+                        receive_end = (time.perf_counter(), time.thread_time())
+                        try:
+                            await self._handle_message(
+                                message,
+                                received_at=packet_received_at,
+                                transport_epoch=receive_epoch,
+                            )
+                        finally:
+                            from src.engine.monitoring.runtime_performance import (
+                                record_ws_cycle,
+                            )
+
+                            record_ws_cycle(
+                                transport_epoch=receive_epoch,
+                                started=cycle_start,
+                                received_epoch=packet_received_at.timestamp(),
+                                received=receive_end,
+                                ended=(time.perf_counter(), time.thread_time()),
+                            )
 
             except websockets.ConnectionClosed as e:
                 if self._stop_event.is_set():
@@ -3692,7 +3711,9 @@ class KiwoomWSManager:
             if trnm == "REAL" and "data" in msg_dict:
                 for d in msg_dict["data"]:
                     self._record_exact_probe_wire_receipt(
-                        d, packet_received_at.timestamp()
+                        d,
+                        packet_received_at.timestamp(),
+                        transport_epoch=transport_epoch,
                     )
                     values = d.get("values", {})
                     if not values:
@@ -5321,6 +5342,16 @@ class KiwoomWSManager:
                     "lease_id": lease_id,
                     "epoch": epoch,
                     "interval_started_epoch": time.time(),
+                    "connection_wire_baseline": dict(
+                        getattr(self, "_probe_connection_wire_state", {}).get(
+                            "counts", {}
+                        )
+                        if getattr(self, "_probe_connection_wire_state", {}).get(
+                            "transport_epoch"
+                        )
+                        == epoch
+                        else {}
+                    ),
                 }
                 self._micro_reversion_observation_only_items.add(item)
                 self._micro_reversion_observation_route_data.pop(item, None)
@@ -6287,12 +6318,22 @@ class KiwoomWSManager:
             future.add_done_callback(on_complete)
             return future
 
-    def _record_exact_probe_wire_receipt(self, row, received_epoch):
+    def _record_exact_probe_wire_receipt(self, row, received_epoch, *, transport_epoch):
         """Bounded receipt counts before normalization; never a broker ACK."""
         if not isinstance(row, dict) or row.get("type") not in {"0B", "0D"}:
             return
         item = str(row.get("item") or "").strip().upper()
         with self.lock:
+            if transport_epoch != self._market_data_transport_epoch:
+                return
+            state = getattr(self, "_probe_connection_wire_state", {})
+            if state.get("transport_epoch") != transport_epoch:
+                state = dict(transport_epoch=transport_epoch, counts={}, last={})
+                self._probe_connection_wire_state = state
+            route = self._ws_item_route(item)
+            key = f"{route}:{row['type']}"
+            state["counts"][key] = state["counts"].get(key, 0) + 1
+            state["last"][key] = dict(item=item[:32], received_epoch=received_epoch)
             lease = getattr(self, "_exact_probe_item_leases", {}).get(item)
             if not lease or lease.get("epoch") != self._market_data_transport_epoch:
                 return
@@ -6375,9 +6416,30 @@ class KiwoomWSManager:
                 )
                 for kind in ("0B", "0D")
             }
+            activity = None
+            state = getattr(self, "_probe_connection_wire_state", {})
+            if (
+                bound
+                and "connection_wire_baseline" in lease
+                and state.get("transport_epoch") == lease.get("epoch")
+            ):
+                baseline = lease["connection_wire_baseline"]
+                activity = dict(
+                    counts_by_route_type={
+                        k: v - baseline.get(k, 0) for k, v in state["counts"].items()
+                    },
+                    last_by_route_type={
+                        k: v
+                        for k, v in state["last"].items()
+                        if v["received_epoch"] >= lease["interval_started_epoch"]
+                    },
+                    coverage="connection_packets_during_lease_not_item_registration_proof",
+                    item_ack_proven=False,
+                )
             return copy.deepcopy(
                 dict(
                     schema="exact_probe_source_trace_v1",
+                    connection_activity=activity,
                     item=item,
                     lease_id=lease_id,
                     transport_epoch=self._market_data_transport_epoch,
