@@ -43,6 +43,7 @@
 ## 실행 항목
 
 - [ ] `[DirectFamilyPreopenPolicyHandoff] direct family 날짜별 정책·bootstrap 장전 소비 확인` (`Due: 2026-10-27`, `Slot: PREOPEN`, `TimeWindow: 07:35~08:05`, `Track: RuntimeStability`)
+  - 10/27 ba19da70d 통합 배포/재기동 승인: 소비6d0d19756 위에 최초 무효화 이력2d7ad22b1과 통합, 원5초·매수/원천·계좌/주문/수량 안전가드 불변. native 인계·독립 준비·새 capability fixture·후보/선택 P5→ordered 전환→실제 PID/observer/health와 신규 intent 후행 관측을 단계별 확인한다. [통합·재리뷰·전환 기록](../audits/postclose-root-cause-recovery-review-2026-10-19.md#first-invalidation-and-quote-cadence-approved-integration--2026-10-27).
   - 10/27 승인 통합: 95def870e와 final detector 잠금 admission 수리. 기존600초/06:50 경계·선택 재검증·새 영수증 및 과거07:29 지연 보존. [수리·검증](../audits/postclose-root-cause-recovery-review-2026-10-19.md#finalization-admission-and-holding-quote-integration-2026-10-27). 후보/선택 P5→ordered 전환→실제 PID 소비 검증 후 source27→10/28 무개입 수용은 기존 창에서 확인한다.
   - 11:51 통합194307750/PID128751 기동·정책 소비 PASS. 두 보고서의 후속 코드 검증 연결 누락을 추가 수리한다. 원본·과거 지연·null 유지; 최종 선택/PID와 새 건강 검증은 같은 owner에서 이어간다.
   - 10/27 09:09 수량 통합198286cf2 전환: Main3940489 정상 drain 후 연구 부적격과 종료 검증의 혼동으로 선택 전 차단. 원 selector/실패 hold/종료 epoch 보존, 기존 ordered recovery에서 정확한 종료·과거 소비 검증과 CAS 인계를 수리하고 새 후보/P5→재기동/실제 소비까지 완료한다. [원인·보존·수리](../audits/postclose-root-cause-recovery-review-2026-10-19.md#quantity-historical-diagnostics-daily-handoff-2026-10-27).

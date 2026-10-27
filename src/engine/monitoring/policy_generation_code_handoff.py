@@ -1015,6 +1015,25 @@ REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS["auxiliary"] += (
 )
 
 
+# Reviewed first-invalidation/cadence diagnostics only. Preserve original reports
+# and every issued fixture; fresh exact-generation fixtures remain mandatory.
+REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS['rising_missed'] += (
+    ('6d662d9e2cc6f67ec9945dfa3d9da37e3acd22765cc48a1c30d95b892a432eb7', '9600db0722b362ccb2eb926197ae5425b57b352d191c54f73ad51e736d89d6b3'),
+    ('28baa874610d6f76379c6be1fe4f76accbbfbc5f473b0c4ffcb2f323cdf75922', '9600db0722b362ccb2eb926197ae5425b57b352d191c54f73ad51e736d89d6b3'),
+    ('9019999ecd6e980cf5dfe689bed7815c08b16632c65a879b6d202c4e305bd791', '9600db0722b362ccb2eb926197ae5425b57b352d191c54f73ad51e736d89d6b3'),
+)
+REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS['holding_vote'] += (
+    ('2c8493a70cb399e336773c02f3d292d2f5d225fe742750089049b63ecc1a23b0', '272fd392f86ee32f42ee9a8b3b189ec0221da0250a75cfdf3adffc6706782810'),
+    ('7f30d09769b17801ad614d2403ca5742c5a45d4e56fb27212447de1384829386', '272fd392f86ee32f42ee9a8b3b189ec0221da0250a75cfdf3adffc6706782810'),
+    ('05037a9d11e962bb160d3fa3e589935f36ab2290d5e087b25a98f8ed5f6e81cf', '272fd392f86ee32f42ee9a8b3b189ec0221da0250a75cfdf3adffc6706782810'),
+)
+REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS['auxiliary'] += (
+    ('357573bd61c06c26c208be7ab5447eff3805a8efa21cf1bbf9df201be7c14ddd', '6a9572dc3c2bd9f7ec1897c068615b2b507b7a3794df89ac071485938898e731'),
+    ('82a2c8b410c97dc89db45269ee865b21e2a1ba824d55448183bdb1c25769c06f', '6a9572dc3c2bd9f7ec1897c068615b2b507b7a3794df89ac071485938898e731'),
+    ('9fb5d5b0bbe17b72ca832a883b059522d725f3234fca853324308beedf73bacc', '6a9572dc3c2bd9f7ec1897c068615b2b507b7a3794df89ac071485938898e731'),
+)
+
+
 def current_fixture_observation(observed, data):
     family = observed.get("family")
     pair = REVIEWED_SUCCESSORS.get(family)

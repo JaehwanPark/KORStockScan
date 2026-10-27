@@ -1740,3 +1740,16 @@ def test_entry_latency_auxiliary_generation_is_exact_and_originals_are_retained(
     current = generation.code_generation("auxiliary")
     assert (origin, current) in handoff.REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS["auxiliary"]
     assert ("0" * 64, current) not in handoff.REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS["auxiliary"]
+
+
+@pytest.mark.parametrize("family", ["rising_missed", "holding_vote", "auxiliary"])
+def test_invalidation_cadence_capability_keeps_native_predecessors(family):
+    from src.engine.monitoring import policy_generation_code_handoff as handoff
+    current = generation.code_generation(family)
+    origins = {
+        "rising_missed": "9019999ecd6e980cf5dfe689bed7815c08b16632c65a879b6d202c4e305bd791",
+        "holding_vote": "05037a9d11e962bb160d3fa3e589935f36ab2290d5e087b25a98f8ed5f6e81cf",
+        "auxiliary": "9fb5d5b0bbe17b72ca832a883b059522d725f3234fca853324308beedf73bacc",
+    }
+    assert (origins[family], current) in handoff.REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS[family]
+    assert ("0" * 64, current) not in handoff.REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS[family]

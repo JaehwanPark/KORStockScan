@@ -11608,6 +11608,38 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
 }}
 
 
+# Reviewed first-invalidation/cadence diagnostics; bind the complete successor.
+REVIEWED_INVALIDATION_CADENCE_HASHES = {'src/engine/scalping/reversal_extended_state.py': '0e0d28be1cbb78e30f3e092e57f8f1adb3274379286a7a5d254a7e446eba34a1', 'src/engine/scalping/reversal_source_diagnostics.py': '997523f01e1583f1522328f2e16a15b8f25d7994bfe8e52f74fd14039fb44865', 'src/engine/monitoring/submission_bottleneck_monitor.py': '7ac3ba09372b54efe9f20d3bdfb4c9428832e8039a091625fdbb834d1b650cf2', 'src/engine/kiwoom_websocket.py': 'ae6186d59bde4795d8c105e98d362328c23e594e55cf741f6c7972bd96308e25', 'src/engine/monitoring/ws_receive_expectation.py': '2098bfda2c73f367f0bda84a5023063e5e37da92fe94608b0b7db3b2cd38dbc8', 'src/engine/scalping/pre_submit_delay_tuning.py': 'df3b0eefc8d05046ffbbb9be36c0929c843f5c1a71f9e6c72acc956bcea9407e', 'src/engine/sniper_state_handlers.py': '21a8ab598c4b334a4795a99236f1d49453e4da17b0feca18423ff3c91c3171d4', 'src/engine/monitoring/policy_generation_code_handoff.py': '5390fba948c04da7692d0d640316621dea3e0496ee67a8ae1b17a022647782a9', 'src/engine/infrastructure/startup_validation_code_context.py': '4c10ca10dcac20ebb5ab849428c3166a22df43f17c5e2dac95d386b524f493a9'}
+REVIEWED_INVALIDATION_CADENCE_ORIGINS = {'src/engine/scalping/reversal_extended_state.py': 'fb34756ccaf4224f5ae171dc36e69332e13184e2eef5279dca1782b4373488a3', 'src/engine/scalping/reversal_source_diagnostics.py': '3072a3bb0f67af8ee96cf3063d6940ef3fb0ff92c0bd5592c717d4b184f72ceb', 'src/engine/monitoring/submission_bottleneck_monitor.py': '9b4327a28d01fe07d0b61359ffb908e5ac3932a7fefb4231f83f4afb3205a08c', 'src/engine/kiwoom_websocket.py': '6a794b5feb6e53990231e75404f1110b4b0cc91467b175345fdd4b0aef4be471', 'src/engine/monitoring/ws_receive_expectation.py': 'e59e190be836c8a061e3d59f59607a8174d43636d6b76af6ea03e980bd306578', 'src/engine/scalping/pre_submit_delay_tuning.py': '59a4da7cce73f59fe3c3f563e8546e12a332735e2db60fbfa9c6658a230a2024', 'src/engine/sniper_state_handlers.py': 'c7b1330cc82731b2362816c54ffd3c9df50536ef51878ee7a42b344e94d17dc3', 'src/engine/monitoring/policy_generation_code_handoff.py': 'd6cc6f4180ff14d6ea965a174f3db15f62527d1349d375170ca14b1e1b42ae9d', 'src/engine/infrastructure/startup_validation_code_context.py': 'c49d0b5aa649e703f09d5c7a399ff8ed5e78856eabfe7d914298e0a3301d65d8'}
+REVIEWED_INVALIDATION_CADENCE_PROJECTED_ORIGINS = {'src/engine/scalping/reversal_extended_state.py': '59b4b781c0185067bf307d5bc261cdc058d7cfcd4b70f39da8cb2bd1aadb5e66', 'src/engine/scalping/reversal_source_diagnostics.py': 'bd5e37ae27b48464ea62f07b949979d3d5b112352f6e0e400c16e8f4fbc3cbee', 'src/engine/monitoring/submission_bottleneck_monitor.py': '9b4327a28d01fe07d0b61359ffb908e5ac3932a7fefb4231f83f4afb3205a08c', 'src/engine/kiwoom_websocket.py': '6a794b5feb6e53990231e75404f1110b4b0cc91467b175345fdd4b0aef4be471', 'src/engine/monitoring/ws_receive_expectation.py': '604dede3290548ebcf523888226bfc75df2f4070ae9039f2e0f87b66ccb0834a', 'src/engine/scalping/pre_submit_delay_tuning.py': '6d2335731199417edce383e773b5737b110f4401297fefce75fc578dd7ce6fd2', 'src/engine/sniper_state_handlers.py': 'c7b1330cc82731b2362816c54ffd3c9df50536ef51878ee7a42b344e94d17dc3', 'src/engine/monitoring/policy_generation_code_handoff.py': 'd6cc6f4180ff14d6ea965a174f3db15f62527d1349d375170ca14b1e1b42ae9d', 'src/engine/infrastructure/startup_validation_code_context.py': 'c49d0b5aa649e703f09d5c7a399ff8ed5e78856eabfe7d914298e0a3301d65d8'}
+REVIEWED_INVALIDATION_CADENCE_PROFILE = {
+    **REVIEWED_ENTRY_CAPABILITY_PROFILE, **REVIEWED_INVALIDATION_CADENCE_HASHES
+}
+REVIEWED_INVALIDATION_CADENCE_VARIANTS = {
+    (key[0], REVIEWED_INVALIDATION_CADENCE_HASHES.get(key[0], key[1])): {
+        **value,
+        "selector_path": "src/engine/infrastructure/startup_validation_code_context.py",
+        "selector_sha256": REVIEWED_INVALIDATION_CADENCE_HASHES["src/engine/infrastructure/startup_validation_code_context.py"],
+        "dependencies": {**value["dependencies"], **REVIEWED_INVALIDATION_CADENCE_HASHES},
+        "contract_extensions": {
+            origin: {name: REVIEWED_INVALIDATION_CADENCE_HASHES.get(os.path.normpath(name), sha)
+                     for name, sha in paths.items()}
+            for origin, paths in value["contract_extensions"].items()
+        },
+    }
+    for key, value in REVIEWED_ENTRY_CAPABILITY_VARIANTS.items()
+}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple(
+        (old, current)
+        for old in {value for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ()) for value in pair}
+                   | {REVIEWED_INVALIDATION_CADENCE_ORIGINS[name],
+                      REVIEWED_INVALIDATION_CADENCE_PROJECTED_ORIGINS[name]}
+    )
+    for name, current in REVIEWED_INVALIDATION_CADENCE_HASHES.items()
+}}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -12322,6 +12354,12 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     ):
         prepared_hashes = REVIEWED_ENTRY_CAPABILITY_PROFILE
         prepared_variants = REVIEWED_ENTRY_CAPABILITY_VARIANTS
+    if (
+        (source := candidate_bytes("src/engine/infrastructure/startup_validation_code_context.py", optional=True)) is not None
+        and hashlib.sha256(source).hexdigest() == REVIEWED_INVALIDATION_CADENCE_HASHES["src/engine/infrastructure/startup_validation_code_context.py"]
+    ):
+        prepared_hashes = REVIEWED_INVALIDATION_CADENCE_PROFILE
+        prepared_variants = REVIEWED_INVALIDATION_CADENCE_VARIANTS
     entry_cost_hashes = (
         prepared_hashes
         if prepared_owner_present
