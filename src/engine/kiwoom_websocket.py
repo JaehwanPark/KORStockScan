@@ -24,7 +24,12 @@ from src.utils.constants import CONFIG_PATH, DEV_PATH, TRADING_RULES
 from src.database.db_manager import is_swing_real_watching_enabled
 from src.engine.bd_fbuy_accum_pre_scanner import write_ws_snapshot
 from src.engine.monitoring.market_halt_windows import append_market_session_event
-from src.engine.monitoring.ws_receive_expectation import classify_receive_gap
+from src.engine.monitoring.ws_receive_expectation import (
+    classify_receive_gap,
+    DepthReceiveCadence,
+    project_depth_cadence,
+    DELAY_COLLECTION_SCHEMA,
+)
 from src.engine.sniper_time import (
     describe_scalping_buy_windows,
     is_scalping_prewarm_time_allowed,
@@ -369,6 +374,7 @@ class KiwoomWSManager:
         self._registered_items_by_code = {}
         self._registered_item_epochs = {}
         self._registered_item_types = {}
+        self._delay_depth_cadence = {}
         self._exact_probe_item_leases = {}
         self._registration_wire_lock = asyncio.Lock()
         self._implicit_runtime_route_codes = set()
@@ -3710,10 +3716,8 @@ class KiwoomWSManager:
             # =========================================================
             if trnm == "REAL" and "data" in msg_dict:
                 for d in msg_dict["data"]:
-                    self._record_exact_probe_wire_receipt(
-                        d,
-                        packet_received_at.timestamp(),
-                        transport_epoch=transport_epoch,
+                    delay_depth_wire_id = self._record_source_wire_receipt(
+                        d, packet_received_at.timestamp(), transport_epoch=transport_epoch
                     )
                     values = d.get("values", {})
                     if not values:
@@ -4794,6 +4798,7 @@ class KiwoomWSManager:
                                 item=normalized_raw_item,
                                 realtime_type=real_type,
                                 observed_at_epoch=now_update_ts,
+                                delay_depth_wire_id=delay_depth_wire_id,
                             )
                             market_suffix = self._ws_item_market_suffix(raw_item_code)
                             market_route = self._ws_item_route(raw_item_code)
@@ -6275,6 +6280,7 @@ class KiwoomWSManager:
             for code in normalized_codes:
                 self._recent_reg_request_ts.pop(code, None)
                 for item in self._registered_items_by_code.get(code, ()):
+                    getattr(self, "_delay_depth_cadence", {}).pop(item, None)
                     (self._micro_reversion_registration_receipt.get("items") or {}).pop(
                         item, None
                     )
@@ -6318,8 +6324,8 @@ class KiwoomWSManager:
             future.add_done_callback(on_complete)
             return future
 
-    def _record_exact_probe_wire_receipt(self, row, received_epoch, *, transport_epoch):
-        """Bounded receipt counts before normalization; never a broker ACK."""
+    def _record_source_wire_receipt(self, row, received_epoch, *, transport_epoch):
+        """Exact epoch-bound Main/probe receive accounting; never a broker ACK."""
         if not isinstance(row, dict) or row.get("type") not in {"0B", "0D"}:
             return
         item = str(row.get("item") or "").strip().upper()
@@ -6334,9 +6340,39 @@ class KiwoomWSManager:
             key = f"{route}:{row['type']}"
             state["counts"][key] = state["counts"].get(key, 0) + 1
             state["last"][key] = dict(item=item[:32], received_epoch=received_epoch)
+            cadence = getattr(self, "_delay_depth_cadence", {}).get(item)
+            if cadence is not None:
+                session = str(getattr(self, "market_session_state", "") or "")
+                if (
+                    cadence.scope["transport_epoch"]
+                    != self._market_data_transport_epoch
+                ):
+                    cadence = None
+                elif cadence.scope["session"] != session or cadence.scope[
+                    "source_day"
+                ] != int((received_epoch + 9 * 3600) // 86400):
+                    cadence = type(cadence)(
+                        item=item,
+                        epoch=cadence.scope["transport_epoch"],
+                        generation=cadence.scope["subscription_generation"],
+                        session=session,
+                        registered_at=cadence.scope["registered_at_epoch"],
+                        route_sequence_base=self._route_realtime_sequence.get(
+                            (item, "0D"), 0
+                        ),
+                    )
+                    cadence.scope["source_day"] = int(
+                        (received_epoch + 9 * 3600) // 86400
+                    )
+                    self._delay_depth_cadence[item] = cadence
+            wire_id = (
+                (cadence, cadence.wire(received_epoch))
+                if cadence is not None and row.get("type") == "0D"
+                else None
+            )
             lease = getattr(self, "_exact_probe_item_leases", {}).get(item)
             if not lease or lease.get("epoch") != self._market_data_transport_epoch:
-                return
+                return wire_id
             counts = lease.setdefault("wire_receipt_count_by_type", {})
             kind = row["type"]
             counts[kind] = counts.get(kind, 0) + 1
@@ -6346,6 +6382,7 @@ class KiwoomWSManager:
             lease.setdefault("wire_last_received_epoch_by_type", {})[
                 kind
             ] = received_epoch
+            return wire_id
 
     def exact_probe_control_failure(self, item, lease_id):
         """An attributed rejection belongs to this lease, not a replacement owner."""
@@ -6456,7 +6493,7 @@ class KiwoomWSManager:
             )
 
     def _record_micro_reversion_registration_receipt(
-        self, *, item, realtime_type, observed_at_epoch
+        self, *, item, realtime_type, observed_at_epoch, delay_depth_wire_id=None
     ):
         receipt = self._micro_reversion_registration_receipt
         if not isinstance(receipt, dict):
@@ -6498,6 +6535,20 @@ class KiwoomWSManager:
         transport_epochs = set(row.get("transport_epochs") or ())
         transport_epochs.add(int(self._market_data_transport_epoch))
         row["transport_epochs"] = sorted(transport_epochs)
+        cadence = getattr(self, "_delay_depth_cadence", {}).get(normalized_item)
+        if (
+            cadence is not None
+            and realtime_type == "0D"
+            and isinstance(delay_depth_wire_id, tuple)
+            and len(delay_depth_wire_id) == 2
+            and delay_depth_wire_id[0] is cadence
+        ):
+            cadence.normalized(
+                observed_at_epoch,
+                delay_depth_wire_id[1],
+                int(self._route_realtime_sequence.get((normalized_item, "0D")) or 0)
+                + 1,
+            )
 
     def _record_main_source_registration_locked(self, item, realtime_types, *, source):
         """One REG transition updates one bounded receipt; caller owns lock."""
@@ -6539,6 +6590,37 @@ class KiwoomWSManager:
             registration_sent_at_epoch=time.time(),
             required_realtime_types=sorted(set(realtime_types) & {"0B", "0D"}),
             source=source,
+        )
+        if not hasattr(self, "_delay_depth_cadence"):
+            self._delay_depth_cadence = {}
+        active = {
+            value
+            for values in self._registered_items_by_code.values()
+            for value in values
+        }
+        for released in tuple(self._delay_depth_cadence):
+            if (
+                released not in active
+                or self._registered_item_epochs.get(released) != epoch
+            ):
+                self._delay_depth_cadence.pop(released, None)
+        from src.engine.scalping.pre_submit_delay_observation import MAX_ACTIVE
+
+        if (
+            item not in self._delay_depth_cadence
+            and len(self._delay_depth_cadence) >= MAX_ACTIVE
+        ):
+            return
+        self._delay_depth_registration_serial = (
+            getattr(self, "_delay_depth_registration_serial", 0) + 1
+        )
+        self._delay_depth_cadence[item] = DepthReceiveCadence(
+            item=item,
+            epoch=epoch,
+            generation=f"{os.getpid()}:{epoch}:{self._delay_depth_registration_serial}:{item}",
+            session=str(getattr(self, "market_session_state", "") or ""),
+            registered_at=row["registration_sent_at_epoch"],
+            route_sequence_base=self._route_realtime_sequence.get((item, "0D"), 0),
         )
 
     @staticmethod
@@ -6645,7 +6727,57 @@ class KiwoomWSManager:
             snapshot = (
                 self._snapshot_target(target, _defer_finish=True) if target else {}
             )
+            views = self._delay_depth_views_locked(code, snapshot)
+        self._attach_delay_depth_views(snapshot, views)
         return self._finish_snapshot(snapshot) if snapshot else {}
+
+    def _delay_depth_views_locked(self, code, snapshot):
+        views = {}
+        partitions = snapshot.get("realtime_type_snapshots_by_route")
+        if not isinstance(partitions, dict) or len(partitions) > 16:
+            return views
+        for route, value in partitions.items():
+            depth = value.get("0D") if isinstance(value, dict) else None
+            if not isinstance(depth, dict):
+                continue
+            item = str(depth.get("item") or "").strip().upper()
+            cadence = getattr(self, "_delay_depth_cadence", {}).get(item)
+            if cadence is not None:
+                views[route] = cadence.freeze(
+                    active=(
+                        item in self._registered_items_by_code.get(code, ())
+                        and self._registered_item_epochs.get(item)
+                        == self._market_data_transport_epoch
+                    ),
+                    required_types=self._registered_item_types.get(item, ()),
+                    receiver_ready=(
+                        self._session_ready.is_set() and not self._stop_event.is_set()
+                    ),
+                )
+            elif item in self._registered_items_by_code.get(code, ()):
+                views[route] = dict(
+                    unobservable_reason="cadence_capacity_or_uninitialized"
+                )
+        return views
+
+    @staticmethod
+    def _attach_delay_depth_views(snapshot, views):
+        if not views:
+            return
+        now = time.time()
+        for route, view in views.items():
+            snapshot["realtime_type_snapshots_by_route"][route]["0D"][
+                "delay_collection_evidence"
+            ] = (
+                dict(
+                    schema=DELAY_COLLECTION_SCHEMA,
+                    decision_authority="report_only",
+                    runtime_effect=False,
+                    **view,
+                )
+                if "unobservable_reason" in view
+                else project_depth_cadence(view, now)
+            )
 
     def get_pre_submit_delay_depth(self, code):
         """Source-only copy of existing route-owned 0D; no protocol operation.
@@ -6659,7 +6791,7 @@ class KiwoomWSManager:
             partitions = target.get("realtime_type_snapshots_by_route") or {}
             if not isinstance(partitions, dict) or len(partitions) > 16:
                 return {}
-            return dict(
+            snapshot = dict(
                 market_data_transport_epoch=getattr(
                     self, "_market_data_transport_epoch", None
                 ),
@@ -6669,6 +6801,9 @@ class KiwoomWSManager:
                     if isinstance(value, dict) and isinstance(value.get("0D"), dict)
                 },
             )
+            views = self._delay_depth_views_locked(code, snapshot)
+        self._attach_delay_depth_views(snapshot, views)
+        return snapshot
 
     def get_exact_item_data(self, code, item):
         """Read the registered item's owning view without mixing route stores."""

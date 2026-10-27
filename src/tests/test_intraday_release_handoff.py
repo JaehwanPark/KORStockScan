@@ -5370,6 +5370,7 @@ def test_pre_submit_handoff_rejects_unreviewed_dependency(tmp_path, family, depe
     "generation",
     [
         "current",
+        "consumed_invalidation_cadence",
         "consumed_nonfixed_identity",
         "consumed_preclaim",
         "consumed_entry_capability",
@@ -5414,7 +5415,8 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
     )
     subprocess.run(["git", "-C", str(root), "checkout", "-q", "75e0fbbf7"], check=True)
     hashes = {
-        "current": handoff.REVIEWED_NONFIXED_PRECLAIM_PROFILE,
+        "current": handoff.REVIEWED_NONFIXED_CURRENT_PROFILE,
+        "consumed_invalidation_cadence": handoff.REVIEWED_INVALIDATION_CADENCE_PROFILE,
         "consumed_nonfixed_identity": handoff.REVIEWED_NONFIXED_IDENTITY_PROFILE,
         "consumed_preclaim": handoff.REVIEWED_PRECLAIM_DIAGNOSTIC_PROFILE,
         "consumed_entry_capability": handoff.REVIEWED_ENTRY_CAPABILITY_PROFILE,
@@ -5486,6 +5488,7 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
                     str(canonical),
                     "show",
                     {
+                        "consumed_invalidation_cadence": "d5ddc0ae0",
                         "consumed_nonfixed_identity": "16130d883",
                         "consumed_preclaim": "c8d22dd41",
                         "consumed_entry_capability": "6d0d19756",
@@ -6572,3 +6575,19 @@ def test_preclaim_diagnostics_requires_complete_exact_successor(tmp_path, family
 def test_preclaim_diagnostics_retains_consumed_generation(tmp_path, family, fault):
     test_entry_cost_handoff_keeps_exact_complete_generation(
         tmp_path, family, fault, "entry_capability", "src/engine/ai_engine_openai.py")
+
+@pytest.mark.parametrize("family,fault", [
+    (family, None) for family in ("main_stop", "holding_vote", "pre_submit_delay")
+] + [("pre_submit_delay", fault) for fault in ("missing", "dirty", "committed_change", "parent_mix")])
+@pytest.mark.parametrize("dependency", list(handoff.REVIEWED_INVALIDATION_CADENCE_HASHES))
+def test_invalidation_cadence_requires_complete_exact_successor(tmp_path, family, fault, dependency):
+    test_entry_cost_handoff_keeps_exact_complete_generation(
+        tmp_path, family, fault, "current", dependency)
+
+
+@pytest.mark.parametrize("family", ["main_stop", "holding_vote", "pre_submit_delay"])
+@pytest.mark.parametrize("fault", [None, "successor_mix"])
+def test_invalidation_cadence_keeps_consumed_entry_capability(tmp_path, family, fault):
+    test_entry_cost_handoff_keeps_exact_complete_generation(
+        tmp_path, family, fault, "entry_capability",
+        "src/engine/infrastructure/startup_validation_code_context.py")

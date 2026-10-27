@@ -69709,7 +69709,10 @@ def _observe_pre_submit_delay_state_quote(
     )
     if not isinstance(state, dict):
         return 0
-    from src.engine.scalping.pre_submit_delay_tuning import quote_source_sha256
+    from src.engine.scalping.pre_submit_delay_tuning import (
+        quote_source_sha256,
+        MAX_RESEARCH_DEPTH_AGE_SEC,
+    )
     from src.engine.scalping.pre_submit_delay_observation import (
         MAX_HORIZONS_PER_TURN,
         SHORT_HORIZONS,
@@ -69757,7 +69760,7 @@ def _observe_pre_submit_delay_state_quote(
         depth_fresh = (
             matched_depth is not None
             and depth_age is not None
-            and 0 <= depth_age <= 0.7
+            and 0 <= depth_age <= MAX_RESEARCH_DEPTH_AGE_SEC
         )
         quote_fields = {
             "quote_consistency_state": (
@@ -69819,7 +69822,7 @@ def _observe_pre_submit_delay_state_quote(
             and depth_bound
             and str(transport_epoch) == str(state.get("quote_transport_epoch") or "")
             and depth_age is not None
-            and 0 <= depth_age <= 0.7
+            and 0 <= depth_age <= MAX_RESEARCH_DEPTH_AGE_SEC
             and ask > 0
             and bid > 0
             and bid <= ask
@@ -69838,7 +69841,7 @@ def _observe_pre_submit_delay_state_quote(
             source_reason = "route_depth_missing_conflicted_or_ambiguous"
         elif str(transport_epoch) != str(state.get("quote_transport_epoch") or ""):
             source_reason = "transport_epoch_changed"
-        elif depth_age is None or not 0 <= depth_age <= 0.7:
+        elif depth_age is None or not 0 <= depth_age <= MAX_RESEARCH_DEPTH_AGE_SEC:
             source_reason = "depth_stale_or_clock_invalid"
         elif str(quote_fields.get("quote_consistency_state") or "").lower() in {
             "stale",
@@ -69880,6 +69883,14 @@ def _observe_pre_submit_delay_state_quote(
                 observation_grid_version=OBSERVATION_GRID_VERSION,
                 observation_tolerance_sec=SHORT_TOLERANCE_SEC,
                 target_due_at_epoch=float(state["committed_at_epoch"]) + float(horizon),
+            )
+        collection = (matched_depth or {}).get("delay_collection_evidence")
+        if isinstance(collection, dict):
+            quote_receipt["quote_route_sequence"] = (matched_depth or {}).get(
+                "route_sequence"
+            )
+            quote_receipt["quote_collection_evidence"] = dict(
+                collection, depth_source_sha256=depth_source_sha256
             )
         quote_receipt["quote_source_sha256"] = quote_source_sha256(quote_receipt)
         _log_pre_submit_delay_event(

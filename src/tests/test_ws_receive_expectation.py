@@ -4,7 +4,238 @@ import json
 import pytest
 
 from src.engine.monitoring.ws_receive_expectation import classify_receive_gap
+from src.engine.monitoring.ws_receive_expectation import (
+    DepthReceiveCadence,
+    project_depth_cadence,
+    classify_delay_quote_collection,
+)
 from src.engine.monitoring import intraday_ws_freshness_monitor as monitor
+
+
+def delay_collection_row(age=0.8):
+    source = DepthReceiveCadence(
+        item="196170_NX",
+        epoch=7,
+        generation="7:196170_NX:1000",
+        session="P",
+        registered_at=1000,
+    )
+    for at in range(1001, 1514):
+        wire = source.wire(float(at))
+        source.normalized(float(at), wire)
+    now = 1513 + age
+    evidence = project_depth_cadence(
+        source.freeze(active=True, required_types=["0B", "0D"], receiver_ready=True),
+        now,
+    )
+    evidence["depth_source_sha256"] = "a" * 64
+    return (
+        dict(
+            stock_code="196170",
+            quote_route="NXT_ONLY",
+            quote_transport_epoch="7",
+            quote_route_sequence=513,
+            route_depth_source_sha256="a" * 64,
+            quote_observed_at_epoch=now,
+            ws_last_0d_epoch=1513.0,
+            quote_valid=age <= 0.7,
+            quote_source_reason=(
+                "valid" if age <= 0.7 else "depth_stale_or_clock_invalid"
+            ),
+            quote_collection_evidence=evidence,
+        ),
+        source,
+    )
+
+
+@pytest.mark.parametrize(
+    "age,state",
+    [
+        (0.2, "locally_healthy"),
+        (0.8, "expected_wait"),
+        (1.5, "cadence_exceeded_unproven"),
+    ],
+)
+def test_delay_collection_cadence_does_not_change_quote_eligibility(age, state):
+    row, _ = delay_collection_row(age)
+    before = dict(row)
+    assert classify_delay_quote_collection(row, ledger_complete=True)["state"] == state
+    assert row == before
+
+
+@pytest.mark.parametrize(
+    "change,state,reason",
+    [
+        (
+            {"subscription_active": False},
+            "collection_fault_confirmed",
+            "required_depth_subscription_missing",
+        ),
+        (
+            {"required_types": ["0B"]},
+            "collection_fault_confirmed",
+            "required_depth_subscription_missing",
+        ),
+        (
+            {
+                "missing_normalizations": 1,
+                "wire_count": 514,
+                "normalized_wire_id": 514,
+                "last_loss_wire_id": 514,
+                "last_loss_epoch": 1513.0,
+            },
+            "collection_fault_confirmed",
+            "wire_to_normalized_loss",
+        ),
+        ({"transport_epoch": 8}, "contract_invalid", "collection_scope_mismatch"),
+        ({"item": "196170_AL"}, "contract_invalid", "collection_scope_mismatch"),
+        ({"receiver_ready": False}, "unobservable", "collection_boundary_unproven"),
+        (
+            {"normalized_route_sequence": 512},
+            "unobservable",
+            "snapshot_generation_unproven",
+        ),
+        ({"normalized_count": 512}, "contract_invalid", "collection_counter_conflict"),
+        (
+            {"last_loss_wire_id": -1},
+            "contract_invalid",
+            "normalization_loss_marker_invalid",
+        ),
+        ({"cadence_sample_count": 99}, "unobservable", "cadence_baseline_insufficient"),
+        (
+            {"depth_source_sha256": "b" * 64},
+            "contract_invalid",
+            "collection_generation_binding_invalid",
+        ),
+        ({"clock_invalid": True}, "contract_invalid", "collection_clock_invalid"),
+    ],
+)
+def test_delay_collection_detects_new_loss_without_waiving_stale_guard(
+    change, state, reason
+):
+    row, _ = delay_collection_row()
+    row["quote_collection_evidence"].update(change)
+    result = classify_delay_quote_collection(row, ledger_complete=True)
+    assert (result["state"], result["reason"]) == (state, reason)
+    assert row["quote_valid"] is False
+
+
+def test_delay_collection_missing_ledger_and_legacy_receipt_are_unproven():
+    row, _ = delay_collection_row()
+    assert (
+        classify_delay_quote_collection(row, ledger_complete=False)["state"]
+        == "unobservable"
+    )
+    row.pop("quote_collection_evidence")
+    assert (
+        classify_delay_quote_collection(row, ledger_complete=True)["state"]
+        == "unobservable"
+    )
+
+
+def test_old_collection_snapshot_never_proves_expected_wait():
+    row, _ = delay_collection_row()
+    row["quote_collection_evidence"]["as_of_epoch"] -= 0.1
+    assert classify_delay_quote_collection(row, ledger_complete=True) == dict(
+        state="unobservable", reason="collection_evidence_stale"
+    )
+
+
+def test_delay_cadence_cache_expires_and_never_imports_future_window():
+    _, source = delay_collection_row()
+    frozen = source.freeze(active=True, required_types=["0D"], receiver_ready=True)
+    first = project_depth_cadence(frozen, 1513.8)
+    saved = source._stats_cache["value"]
+    assert project_depth_cadence(frozen, 1513.9)["cadence_sample_count"] == 512
+    assert source._stats_cache["value"] is saved
+    assert project_depth_cadence(frozen, 1602.1)["cadence_sample_count"] == 511
+    # A future cache and an already full producer snapshot cannot backdate
+    # the quantiles for an earlier source observation.
+    past = project_depth_cadence(frozen, 1500.0)
+    assert past["cadence_sample_count"] == 499 and first["cadence_sample_count"] == 512
+    assert "_cadence_cache" not in past
+
+
+def test_delay_cadence_pending_is_not_proven_loss_until_next_normalized_id():
+    row, source = delay_collection_row()
+    pending = source.wire(1514.0)
+    view = source.freeze(active=True, required_types=["0D"], receiver_ready=True)
+    assert view["missing_normalizations"] == 0
+    wire = source.wire(1515.0)
+    source.normalized(1515.0, wire)
+    assert pending < wire
+    assert source.missing_normalizations == 1
+    assert len(source.gaps) <= 512 and len(source.delivery) <= 512
+    assert project_depth_cadence(view, 1513.0)["cadence_sample_count"] == 512
+
+
+def test_delay_cadence_isolates_loss_from_later_normalization_and_baseline():
+    row, source = delay_collection_row(0.2)
+
+    def observe(at):
+        evidence = project_depth_cadence(
+            source.freeze(active=True, required_types=["0D"], receiver_ready=True), at
+        )
+        evidence["depth_source_sha256"] = "a" * 64
+        row.update(
+            quote_observed_at_epoch=at,
+            ws_last_0d_epoch=source.last_normalized,
+            quote_route_sequence=source.normalized_route_sequence,
+            quote_collection_evidence=evidence,
+        )
+        return classify_delay_quote_collection(row, ledger_complete=True)
+
+    source.wire(1514.0)  # Admitted but never normalized.
+    source.normalized(1515.0, source.wire(1515.0), source_sequence=514)
+    lost = observe(1515.2)
+    assert lost["state"] == "collection_fault_confirmed"
+    assert len(source.gaps) == 512 and max(v for _, v in source.gaps) == 1
+    assert observe(1515.3)["loss_event_id"] == lost["loss_event_id"]
+    source.normalized(1516.0, source.wire(1516.0), source_sequence=515)
+    assert observe(1516.2)["state"] == "locally_healthy"
+    assert source.missing_normalizations == 1 and source.last_loss_wire_id == 515
+    assert row["quote_valid"] is True
+    source.wire(1517.0)
+    source.normalized(1518.0, source.wire(1518.0), source_sequence=516)
+    new_loss = observe(1518.2)
+    assert new_loss["state"] == "collection_fault_confirmed"
+    assert new_loss["loss_event_id"] != lost["loss_event_id"]
+    assert source.missing_normalizations == 2
+
+
+@pytest.mark.parametrize(
+    "delta,invalid", [(0.0, False), (-0.0005, False), (-0.01, True)]
+)
+def test_delay_normalizer_millisecond_precision_is_not_clock_reversal(delta, invalid):
+    source = DepthReceiveCadence(
+        item="196170_NX", epoch=7, generation="7:x", session="P", registered_at=10.0
+    )
+    wire = source.wire(11.0)
+    source.normalized(11.0 + delta, wire)
+    assert source.clock_invalid is invalid
+
+
+def test_original_delay_intent_retains_all_eight_native_quotes_and_unknown_wire_origin():
+    from pathlib import Path
+    import hashlib
+
+    fixture = json.loads(
+        (
+            Path(__file__).parent / "fixtures/pre_submit_delay_cadence_20261027.json"
+        ).read_text()
+    )
+    invalid = 0
+    for receipt in fixture["native_quotes"]:
+        raw = receipt["raw_line"].encode()
+        assert hashlib.sha256(raw).hexdigest() == receipt["raw_sha256"]
+        event = json.loads(raw)
+        row = dict(event["fields"], stock_code=event["stock_code"])
+        result = classify_delay_quote_collection(row, ledger_complete=True)
+        assert result == dict(
+            state="unobservable", reason="legacy_collection_evidence_missing"
+        )
+        invalid += str(row["quote_valid"]).lower() != "true"
+    assert len(fixture["native_quotes"]) == 8 and invalid == 6
 
 
 def stamp(clock):

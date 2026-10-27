@@ -566,7 +566,7 @@ def test_main_server_preflight_is_reproducible_and_drop_free() -> None:
 
 
 _CURRENT_CALLBACK_RECEIPT = (
-    "docs/audit-reports/2026-10-27-nonfixed-preclaim-integration-callback-validation.json.txt"
+    "docs/audit-reports/2026-10-27-nonfixed-current-callback-validation.json.txt"
 )
 
 

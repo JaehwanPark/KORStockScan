@@ -17,12 +17,13 @@ TMP_CRON="$(mktemp)"
 trap 'rm -f "$TMP_CRON"' EXIT
 
 crontab -l 2>/dev/null > "$TMP_CRON" || true
-awk '!/^# stage2 ops cron$/ && !/LOG_RETENTION_DAILY/ && !/cat[[:space:]]+\/dev\/null.*kiwoom_sniper_v2_info[.]log/ && !/truncate.*kiwoom_sniper_v2_info[.]log/ && !/REMOTE_LATENCY_BASELINE_PREOPEN/ && !/REMOTE_LATENCY_BASELINE_MIDMORNING/ && !/REMOTE_LATENCY_BASELINE_AFTERNOON/ && !/RUN_MONITOR_SNAPSHOT_1000/ && !/RUN_MONITOR_SNAPSHOT_1200/ && !/RUN_MONITOR_SNAPSHOT_INTRADAY_INC_09/ && !/RUN_MONITOR_SNAPSHOT_INTRADAY_INC_10_11/ && !/REMOTE_SCALPING_FETCH_1600/ && !/SYSTEM_METRIC_SAMPLER_1MIN/ && !/RISING_MISSED_INTRADAY_FEEDBACK_5MIN/ && !/SCALPING_PYRAMID_INTRADAY_FEEDBACK_5MIN/ && !/INTRADAY_WS_FRESHNESS_MONITOR_/ && !/BUY_FUNNEL_SENTINEL_/ && !/PRE_SUBMIT_SOURCE_/ && !/HOLDING_EXIT_SENTINEL_/' "$TMP_CRON" > "$TMP_CRON.filtered"
+awk '!/^# stage2 ops cron$/ && !/LOG_RETENTION_DAILY/ && !/SNAPSHOT_ARCHIVE_DAILY/ && !/cat[[:space:]]+\/dev\/null.*kiwoom_sniper_v2_info[.]log/ && !/truncate.*kiwoom_sniper_v2_info[.]log/ && !/REMOTE_LATENCY_BASELINE_PREOPEN/ && !/REMOTE_LATENCY_BASELINE_MIDMORNING/ && !/REMOTE_LATENCY_BASELINE_AFTERNOON/ && !/RUN_MONITOR_SNAPSHOT_1000/ && !/RUN_MONITOR_SNAPSHOT_1200/ && !/RUN_MONITOR_SNAPSHOT_INTRADAY_INC_09/ && !/RUN_MONITOR_SNAPSHOT_INTRADAY_INC_10_11/ && !/REMOTE_SCALPING_FETCH_1600/ && !/SYSTEM_METRIC_SAMPLER_1MIN/ && !/RISING_MISSED_INTRADAY_FEEDBACK_5MIN/ && !/SCALPING_PYRAMID_INTRADAY_FEEDBACK_5MIN/ && !/INTRADAY_WS_FRESHNESS_MONITOR_/ && !/BUY_FUNNEL_SENTINEL_/ && !/PRE_SUBMIT_SOURCE_/ && !/HOLDING_EXIT_SENTINEL_/' "$TMP_CRON" > "$TMP_CRON.filtered"
 mv "$TMP_CRON.filtered" "$TMP_CRON"
 
 cat >> "$TMP_CRON" <<EOF
 # stage2 ops cron
 17 6 * * * bash $PROJECT_DIR/deploy/run_runtime_release.sh log-retention \$(TZ=Asia/Seoul date +\%F) # LOG_RETENTION_DAILY
+25 6 * * * bash $PROJECT_DIR/deploy/run_runtime_release.sh snapshot-archive \$(TZ=Asia/Seoul date +\%F) # SNAPSHOT_ARCHIVE_DAILY
 * * * * 1-5 bash $PROJECT_DIR/deploy/run_with_owned_log.sh --owner system_metric_sampler_cron --log $PROJECT_DIR/logs/system_metric_sampler_cron.log $PROJECT_DIR/deploy/run_system_metric_sampler_cron.sh # SYSTEM_METRIC_SAMPLER_1MIN
 */5 8-19 * * 1-5 bash $PROJECT_DIR/deploy/run_with_owned_log.sh --owner run_buy_funnel_sentinel_cron --log $PROJECT_DIR/logs/run_buy_funnel_sentinel_cron.log bash $PROJECT_DIR/deploy/run_runtime_release.sh buy-funnel \$(TZ=Asia/Seoul date +\%F) # BUY_FUNNEL_SENTINEL_ALL_SESSIONS_5MIN
 2-57/5 8-19 * * 1-5 bash $PROJECT_DIR/deploy/run_with_owned_log.sh --owner run_pre_submit_source_monitor_cron --log $PROJECT_DIR/logs/run_pre_submit_source_monitor_cron.log bash $PROJECT_DIR/deploy/run_runtime_release.sh pre-submit-source \$(TZ=Asia/Seoul date +\%F) # PRE_SUBMIT_SOURCE_ALL_SESSIONS_5MIN

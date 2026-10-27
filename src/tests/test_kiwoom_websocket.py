@@ -13,6 +13,205 @@ from src.engine.kiwoom_websocket import KiwoomWSManager
 _SESSION_ROUTE_REQUIRED = KiwoomWSManager._integrated_aftermarket_route_required
 
 
+def test_main_depth_wire_normalization_and_sampler_evidence_detect_actual_local_loss(
+    monkeypatch,
+):
+    from src.engine import sniper_state_handlers as handlers
+    from src.engine.monitoring.ws_receive_expectation import (
+        classify_delay_quote_collection,
+    )
+
+    manager = KiwoomWSManager("test-token")
+    clock = [datetime.fromisoformat("2026-10-27T08:00:00+09:00").timestamp()]
+    monkeypatch.setattr(kiwoom_websocket.time, "time", lambda: clock[0])
+    monkeypatch.setattr(manager, "_maybe_write_dashboard_snapshot", lambda: None)
+    manager.market_session_state = "P"
+    manager._market_data_transport_epoch = 7
+    manager._session_ready.set()
+    manager.subscribed_codes.add("196170")
+    manager._registered_items_by_code["196170"] = ["196170_NX"]
+    manager._registered_item_types["196170_NX"] = ("0B", "0D")
+    manager._registered_item_epochs["196170_NX"] = 7
+    manager._record_main_source_registration_locked(
+        "196170_NX", ("0B", "0D"), source="main-test"
+    )
+
+    def receive(values):
+        asyncio.run(
+            manager._handle_message(
+                json.dumps(
+                    dict(
+                        trnm="REAL",
+                        data=[dict(type="0D", item="196170_NX", values=values)],
+                    )
+                ),
+                received_at=datetime.fromtimestamp(clock[0], kiwoom_websocket.KST),
+                transport_epoch=7,
+            )
+        )
+
+    values = {"21": "080100", "41": "100", "51": "99", "61": "10", "71": "10"}
+    for _ in range(105):
+        clock[0] += 1
+        receive(values)
+    clock[0] += 0.8
+    snapshot = manager.get_pre_submit_delay_depth("196170")
+    depth = next(iter(snapshot["realtime_type_snapshots_by_route"].values()))["0D"]
+    evidence = depth["delay_collection_evidence"]
+    main_depth = next(
+        iter(
+            manager.get_latest_data("196170")[
+                "realtime_type_snapshots_by_route"
+            ].values()
+        )
+    )["0D"]
+    assert (
+        main_depth["delay_collection_evidence"]["subscription_generation"]
+        == evidence["subscription_generation"]
+    )
+    assert evidence["wire_count"] == evidence["normalized_count"] == 105
+    assert evidence["cadence_basis"] == "provisional_p95"
+    emitted = []
+    monkeypatch.setattr(
+        handlers,
+        "_log_pre_submit_delay_event",
+        lambda *a, **kw: emitted.append(kw) or True,
+    )
+
+    def observe(ws):
+        handlers._observe_pre_submit_delay_state_quote(
+            dict(
+                _pre_submit_delay_observation=dict(
+                    id="main-source",
+                    remaining_sec=[0],
+                    committed_at_epoch=clock[0],
+                    route="NXT_ONLY",
+                    quote_transport_epoch=7,
+                    decision_source_sha256="a" * 64,
+                )
+            ),
+            "196170",
+            ws,
+            now_ts=clock[0],
+        )
+        return dict(emitted[-1], stock_code="196170")
+
+    first = observe(snapshot)
+    assert first["quote_valid"] is False
+    assert (
+        classify_delay_quote_collection(first, ledger_complete=True)["state"]
+        == "expected_wait"
+    )
+    # This wire receipt is admitted by the same owner but has no values and
+    # cannot reach normalization. The next normalized wire proves the loss.
+    clock[0] += 1
+    receive({})
+    clock[0] += 1
+    receive(values)
+    lost = observe(manager.get_pre_submit_delay_depth("196170"))
+    result = classify_delay_quote_collection(lost, ledger_complete=True)
+    assert result["state"] == "collection_fault_confirmed"
+    assert result["reason"] == "wire_to_normalized_loss"
+    assert lost["quote_valid"] is True
+    lost_receipt = dict(lost["quote_collection_evidence"])
+    clock[0] += 1
+    receive(values)
+    recovered = observe(manager.get_pre_submit_delay_depth("196170"))
+    healthy = classify_delay_quote_collection(recovered, ledger_complete=True)
+    assert healthy["state"] == "locally_healthy"
+    assert healthy["loss_event_id"] == result["loss_event_id"]
+    receipt = recovered["quote_collection_evidence"]
+    assert receipt["missing_normalizations"] == 1
+    assert (
+        receipt["normalized_route_sequence"] == recovered["quote_route_sequence"] == 107
+    )
+    assert lost["quote_collection_evidence"] == lost_receipt
+    assert recovered["quote_valid"] is True
+    assert not manager._exact_probe_item_leases
+
+
+def test_delay_cadence_resets_on_registration_epoch_session_and_remove(monkeypatch):
+    manager = KiwoomWSManager("test-token")
+    manager.market_session_state = "P"
+    manager._market_data_transport_epoch = 7
+    manager._registered_items_by_code["196170"] = ["196170_NX"]
+    manager._registered_item_epochs["196170_NX"] = 7
+    manager._record_main_source_registration_locked(
+        "196170_NX", ("0D",), source="main-test"
+    )
+    original = manager._delay_depth_cadence["196170_NX"]
+    at = original.scope["registered_at_epoch"] + 1
+    message = dict(type="0D", item="196170_NX")
+    manager._record_source_wire_receipt(message, at, transport_epoch=manager._market_data_transport_epoch)
+    manager.market_session_state = "Q"
+    manager._record_source_wire_receipt(message, at + 1, transport_epoch=manager._market_data_transport_epoch)
+    assert manager._delay_depth_cadence["196170_NX"].wire_count == 1
+    assert manager._delay_depth_cadence["196170_NX"].scope["session"] == "Q"
+    manager._market_data_transport_epoch = 8
+    assert manager._record_source_wire_receipt(message, at + 2, transport_epoch=manager._market_data_transport_epoch) is None
+    manager._registered_item_epochs["196170_NX"] = 8
+    manager._record_main_source_registration_locked(
+        "196170_NX", ("0D",), source="main-test"
+    )
+    assert manager._delay_depth_cadence["196170_NX"].wire_count == 0
+    manager._registered_items_by_code.clear()
+    manager._record_main_source_registration_locked(
+        "000660_NX", ("0D",), source="main-test"
+    )
+    assert "196170_NX" not in manager._delay_depth_cadence
+
+
+def test_delay_diagnostics_capacity_never_changes_native_registration(monkeypatch):
+    from src.engine.scalping import pre_submit_delay_observation as observation
+
+    monkeypatch.setattr(observation, "MAX_ACTIVE", 2)
+    manager = KiwoomWSManager("test-token")
+    manager.market_session_state = "P"
+    manager._market_data_transport_epoch = 7
+    for code in ("000001", "000002", "000003"):
+        item = code + "_NX"
+        manager._registered_items_by_code[code] = [item]
+        manager._registered_item_epochs[item] = 7
+        manager._record_main_source_registration_locked(
+            item, ("0D",), source="capacity-test"
+        )
+    assert len(manager._delay_depth_cadence) == 2
+    assert len(manager._micro_reversion_registration_receipt["items"]) == 3
+    assert manager._registered_items_by_code["000003"] == ["000003_NX"]
+
+
+def test_old_wire_receipt_cannot_normalize_a_replacement_registration():
+    manager = KiwoomWSManager("test-token")
+    manager.market_session_state = "P"
+    manager._market_data_transport_epoch = 7
+    manager._registered_items_by_code["196170"] = ["196170_NX"]
+    manager._registered_item_epochs["196170_NX"] = 7
+    manager._record_main_source_registration_locked("196170_NX", ("0D",), source="old")
+    at = manager._delay_depth_cadence["196170_NX"].scope["registered_at_epoch"] + 1
+    old = manager._record_source_wire_receipt(dict(item="196170_NX", type="0D"), at, transport_epoch=manager._market_data_transport_epoch)
+    manager._record_main_source_registration_locked("196170_NX", ("0D",), source="new")
+    assert (
+        old[0].scope["subscription_generation"]
+        != manager._delay_depth_cadence["196170_NX"].scope["subscription_generation"]
+    )
+    new = manager._record_source_wire_receipt(dict(item="196170_NX", type="0D"), at + 1, transport_epoch=manager._market_data_transport_epoch)
+    manager._record_micro_reversion_registration_receipt(
+        item="196170_NX",
+        realtime_type="0D",
+        observed_at_epoch=at + 1,
+        delay_depth_wire_id=old,
+    )
+    current = manager._delay_depth_cadence["196170_NX"]
+    assert current.normalized_count == 0
+    manager._record_micro_reversion_registration_receipt(
+        item="196170_NX",
+        realtime_type="0D",
+        observed_at_epoch=at + 1,
+        delay_depth_wire_id=new,
+    )
+    assert current.normalized_count == 1 and current.missing_normalizations == 0
+
+
 def test_delay_depth_reader_copies_only_existing_0d_and_current_transport():
     manager = KiwoomWSManager("test-token")
     manager._market_data_transport_epoch = 7
@@ -4546,13 +4745,13 @@ def test_exact_probe_trace_distinguishes_wire_from_normalization_and_freezes_bef
     }
     trace = manager.exact_probe_source_trace("123456_AL", "lease")
     assert trace["first_unobserved_boundary_by_type"]["0B"] == "wire_receive"
-    manager._record_exact_probe_wire_receipt(
+    manager._record_source_wire_receipt(
         {"item": "123456_AL", "type": "0B", "values": {}}, 100, transport_epoch=7
     )
     trace = manager.exact_probe_source_trace("123456_AL", "lease")
     assert trace["first_unobserved_boundary_by_type"]["0B"] == "normalized_receive"
     assert trace["broker_ack_observed"] is None and trace["order_authority"] is False
-    manager._record_exact_probe_wire_receipt(
+    manager._record_source_wire_receipt(
         {"item": "123456_NX", "type": "0D"}, 101, transport_epoch=7
     )
     manager._micro_reversion_registration_receipt["items"]["123456_AL"][
@@ -5255,7 +5454,7 @@ def test_probe_connection_activity_keeps_empty_item_unknown_and_rejects_old_tran
     manager._exact_probe_item_leases = {}
     manager._micro_reversion_registration_receipt = {"items": {}}
     peer = {"item": "005930_AL", "type": "0B"}
-    manager._record_exact_probe_wire_receipt(peer, 90.0, transport_epoch=7)
+    manager._record_source_wire_receipt(peer, 90.0, transport_epoch=7)
     manager._exact_probe_item_leases["123456_AL"] = dict(
         lease_id="lease",
         epoch=7,
@@ -5265,7 +5464,7 @@ def test_probe_connection_activity_keeps_empty_item_unknown_and_rejects_old_tran
     manager._micro_reversion_registration_receipt["items"]["123456_AL"] = dict(
         registration_transport_epoch=7, receipt_count_by_type={}
     )
-    manager._record_exact_probe_wire_receipt(peer, 101.0, transport_epoch=7)
+    manager._record_source_wire_receipt(peer, 101.0, transport_epoch=7)
     asyncio.run(
         manager._handle_message(
             json.dumps({"trnm": "REAL", "data": [{"item": "123456_AL", "type": "0B"}]}),
@@ -5286,7 +5485,7 @@ def test_probe_connection_activity_keeps_empty_item_unknown_and_rejects_old_tran
     )
     assert not trace["connection_activity"]["item_ack_proven"]
     manager._market_data_transport_epoch = 8
-    manager._record_exact_probe_wire_receipt(peer, 103.0, transport_epoch=8)
+    manager._record_source_wire_receipt(peer, 103.0, transport_epoch=8)
     assert (
         manager.exact_probe_source_trace("123456_AL", "lease")["connection_activity"]
         is None

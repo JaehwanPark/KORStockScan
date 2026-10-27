@@ -147,6 +147,38 @@ Content-consuming research streams gzip and checks CRC. Old archives without
 an original-identity receipt cannot fabricate a former raw inode or close an
 existing source gap.
 
+The trade snapshot publisher compacts row bodies but retains the root and section
+line locators used by the authenticated carry-position reader. It preserves all
+source fields, event order, census, cost/null values and logical section names.
+Machine quote JSON and internal classifier observations remain in `fields`; they
+are omitted only from the duplicate human-display `details` list. Private
+`SnapshotRows` scratch uses compressed, content-addressed rows while retaining
+every occurrence in its ordered list. Scratch is unlinked on close and has no
+policy or archival authority. Existing completion-prefix generation checks still
+own reuse; storage changes do not authorize rebuilding sealed historical reports.
+
+The stage2 installer defines `SNAPSHOT_ARCHIVE_DAILY` at 06:25 KST every day through
+the selected `snapshot-archive` router operation and its scheduled-execution lease.
+It invokes the existing compressor with `--snapshots-only --days 1` against the
+actual KST date, independently of today's EOD. The evening archive remains in
+place. Each source must still pass its native next-policy-day, controller, strict
+and custody gates; a holiday does not expire a pending policy consumer. The
+original remains plain through its next trading policy day, then becomes eligible
+at the following daily sweep only if native closure is valid. Eligibility is not
+a promise of immediate deletion. Protected bytes and exact reasons are reported.
+
+`--snapshot-date YYYY-MM-DD` restricts an authorized repair to those snapshots;
+it cannot be combined with pipeline-only scope. The compressor discovers remaining
+completed projections even after an earlier attempt archived their parent. The
+parent must have a valid native archive receipt. Publication and compression share
+the parent's JSON generation lock; custody is checked again immediately before
+source removal. Preserve dependency receipts and one verified logical archive,
+including failed-attempt evidence. There is no age-only purge of policy/research
+archives: their existing reference/custody owner must prove retirement first.
+Code delivery, installer application and the first natural sweep are separate;
+see the [report storage review](audits/report-storage-growth-review-2026-10-27.md)
+for the observed deployment state and verification.
+
 The journald drop-in `deploy/korstockscan-journald-retention.conf` specifies
 30 days, 512 MiB persistent, 128 MiB volatile and 1 GiB disk reserve. Installation
 backs up any prior drop-in and preserves the current journal; no immediate
