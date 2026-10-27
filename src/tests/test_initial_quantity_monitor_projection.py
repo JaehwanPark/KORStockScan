@@ -1110,6 +1110,132 @@ def test_history_cost_rollover_requires_unchanged_native_original_window(
     "fault",
     [
         None,
+        "completion_original",
+        "completion_hash",
+        "actual_projection",
+        "fact_projection",
+        "changed_receipt",
+        "new_cost_value",
+        "missing_original_completion",
+        "missing_current_completion",
+        "old_window_revision",
+        "missing_original_bytes",
+    ],
+)
+def test_history_cost_rollover_verifies_both_compact_completion_and_record_generations(
+    tmp_path, fault
+):
+    from copy import deepcopy
+    from datetime import timedelta
+    from src.tests.test_broker_cost_source import broker_fixture, C, DAY, NOW, seal
+    from src.engine.lifecycle import broker_cost_allocation as allocation
+    from src.engine.lifecycle.broker_cost_reconciliation import (
+        source_generation,
+        record_source_generation,
+    )
+    from src.engine.scalping.initial_quantity_source_cache import (
+        completion_generation_reference,
+    )
+
+    official, _, transport, _ = broker_fixture(tmp_path)
+    source_path = C.source_path(tmp_path, DAY)
+    reference = dict(
+        source_date=DAY,
+        source_sha256=official["source_sha256"],
+        sha256=hashlib.sha256(source_path.read_bytes()).hexdigest(),
+    )
+    receipt = allocation._missing(
+        "research_cost_execution_source_invalid", record_id="2"
+    )
+    allocation.persist_research_costs(tmp_path, DAY, {"2": receipt}, [DAY])
+    old_costs = source_generation(tmp_path, DAY)
+    original = dict(
+        schema="initial_quantity_completion_generation_v1",
+        source_date=DAY,
+        fact_receipt={"path": "original.status.json", "sha256": "a" * 64},
+        completion_snapshot_source={"actual_cost_source_generation": old_costs},
+        current_cost_generation=old_costs,
+    )
+    old = dict(
+        recommendation_id=2,
+        stock_code="005930",
+        realized_pnl_krw=None,
+        quantity_research_cost=receipt,
+        completion_generation=completion_generation_reference(original),
+        actual_cost_source_generation=record_source_generation(old_costs, "2", receipt),
+        fact_generation=dict(
+            path="original.status.json",
+            sha256="a" * 64,
+            cost_generation=record_source_generation(old_costs, "2", receipt),
+        ),
+    )
+    C.collect(
+        tmp_path, DAY, transport=transport, now=NOW + timedelta(days=4), refresh=True
+    )
+    if fault == "old_window_revision":
+        value = C.load_source(tmp_path, DAY)
+        value["observations"]["ka10170"]["pages"][0]["tdy_trde_diary"][0][
+            "cmsn_alm_tax"
+        ] = "11"
+        seal(value)
+        C.atomic(source_path, value)
+    new_costs = source_generation(tmp_path, DAY)
+    completed = {**deepcopy(original), "current_cost_generation": new_costs}
+    current = deepcopy(old)
+    current["actual_cost_source_generation"] = record_source_generation(
+        new_costs, "2", receipt
+    )
+    current["fact_generation"]["cost_generation"] = record_source_generation(
+        new_costs, "2", receipt
+    )
+    current["completion_generation"] = completion_generation_reference(completed)
+    previous = dict(
+        fact_witness=old,
+        cost_source_reference=reference,
+        completion_source_reference=original,
+    )
+    if fault == "completion_original":
+        completed["fact_receipt"]["sha256"] = "f" * 64
+        current["completion_generation"] = completion_generation_reference(completed)
+    elif fault == "completion_hash":
+        current["completion_generation"]["generation_sha256"] = "f" * 64
+    elif fault == "actual_projection":
+        current["actual_cost_source_generation"]["sha256"] = "f" * 64
+    elif fault == "fact_projection":
+        current["fact_generation"]["cost_generation"]["sha256"] = "f" * 64
+    elif fault == "changed_receipt":
+        current["quantity_research_cost"]["reason"] = "new_execution_gap"
+    elif fault == "new_cost_value":
+        current["realized_pnl_krw"] = 0
+    elif fault == "missing_original_completion":
+        previous.pop("completion_source_reference")
+    elif fault == "missing_current_completion":
+        completed = None
+    elif fault == "missing_original_bytes":
+        (
+            source_path.parent
+            / "generations"
+            / DAY
+            / (official["source_sha256"] + ".json")
+        ).unlink()
+    before = deepcopy((old, current))
+    if fault in {"old_window_revision", "missing_original_bytes"}:
+        with pytest.raises(ValueError):
+            projection._same_historical_fact(
+                previous, current, tmp_path, completion=completed
+            )
+    else:
+        assert projection._same_historical_fact(
+            previous, current, tmp_path, completion=completed
+        ) is (fault is None)
+    assert (old, current) == before
+    assert old["realized_pnl_krw"] is None
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        None,
         "archive",
         "receipt",
         "logical",
@@ -1173,3 +1299,87 @@ def test_native_snapshot_compression_preserves_only_cold_bound_logical_sources(
     else:
         result = projection.read_verified(path, stage, read=_read, data_root=data)
         assert result["observation"]["postclose_stage_status"] == "valid_empty"
+
+
+def test_published_history_retains_original_full_completion_for_cost_rollover(
+    tmp_path, monkeypatch
+):
+    from copy import deepcopy
+    from datetime import timedelta
+    from src.tests.test_broker_cost_source import broker_fixture, C, DAY, NOW
+    from src.tests.test_initial_quantity_producer_consumer_repair import (
+        _quantity_completion_overlay_fixture,
+    )
+    from src.engine.lifecycle import broker_cost_allocation as allocation
+    from src.engine.scalping.initial_quantity_source_cache import completion_overlay
+    from src.engine.lifecycle.broker_cost_reconciliation import (
+        source_generation,
+        record_source_generation,
+    )
+
+    data, _, stage, report, children = _historical_fixture(tmp_path, monkeypatch)
+    _, _, transport, _ = broker_fixture(data)
+    receipt = allocation._missing(
+        "research_cost_execution_source_invalid", record_id="1"
+    )
+    allocation.persist_research_costs(data, DAY, {"1": receipt}, [DAY])
+    original, _ = _quantity_completion_overlay_fixture(
+        data,
+        monkeypatch,
+        identity={"rec_date": DAY, "buy_time": DAY + "T09:30:00+09:00"},
+    )
+    original.update(rec_date=DAY, buy_time=DAY + "T09:30:00+09:00")
+    good = {**report["census"]["input_fact_rows"][0], "recommendation_id": "99"}
+
+    def native_report(day):
+        cost = source_generation(data, DAY)
+        entry_generation = {**original["fact_generation"], "cost_generation": cost}
+        entry = {
+            **original,
+            "fact_generation": {
+                **entry_generation,
+                "cost_generation": record_source_generation(cost, "1", receipt),
+            },
+        }
+        rows = completion_overlay(
+            [entry, good],
+            as_of=day,
+            data_dir=data,
+            entry_on_or_after="2026-06-05",
+            entry_generations={DAY: entry_generation},
+            validate_day=lambda _: None,
+        )
+        replay = deepcopy(report)
+        replay["source_date"] = day
+        replay["trades"], replay["census"] = native.completed_trade_fact_census(
+            day, fact_rows=rows, data_dir=data
+        )
+        return replay
+
+    # Both reports already consume late-cost overlays, matching the incident;
+    # the first appearance of a research receipt must remain a distinct change.
+    C.collect(data, DAY, transport=transport, now=NOW + timedelta(days=1), refresh=True)
+    replay = native_report("2026-10-22")
+    completion = replay["census"]["completion_overlay_generations"][DAY]
+    path, old, replay, old_children = _history_day(
+        data, stage, replay, children, "2026-10-22"
+    )
+    projection.publish(
+        path, old, replay, data_root=data, accepted_historical_record_ids=["1"]
+    )
+    _commit_history_day(path, old)
+    frozen = {p: p.read_bytes() for p in [path, *old_children.values()]}
+    C.collect(data, DAY, transport=transport, now=NOW + timedelta(days=4), refresh=True)
+    replay = native_report("2026-10-23")
+    current_completion = replay["census"]["completion_overlay_generations"][DAY]
+    path, current, replay, _ = _history_day(data, stage, replay, children, "2026-10-23")
+    previous = projection._historical_predecessor(path, current, data)
+    assert previous["rows"][0]["completion_source_reference"] == completion
+    projection.publish(path, current, replay, data_root=data)
+    verified = projection.read_verified(path, current, read=_read, data_root=data)
+    observation = verified["observation"]
+    assert observation["postclose_semantic_findings"] == []
+    row = observation["postclose_historical_exclusions"]["excluded_rows"][0]
+    assert row["fact_witness"]["realized_pnl_krw"] is None
+    assert row["completion_source_reference"] == current_completion
+    assert {p: p.read_bytes() for p in frozen} == frozen

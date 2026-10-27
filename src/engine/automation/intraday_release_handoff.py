@@ -12628,6 +12628,31 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
 }}
 
 
+# Complete research cost successor; immutable consumed profiles remain readable.
+REVIEWED_QUANTITY_COST_HASHES = {'src/engine/lifecycle/broker_cost_allocation.py': '98d7b7d529eb5e850b61da3a316c794dfd45dad939bbe18d344f83bfe4d3ebf2', 'src/engine/scalping/initial_quantity_policy.py': 'bf06e3259526962b0314ce570fdb656eba2a4797d90cf7afc95eedb7d023295d', 'src/engine/scalping/initial_quantity_monitor_projection.py': '10431b20d021e3e6088f09d2e8c9fd2b5bae09708423cfffc40036f4da1ee650', 'src/engine/infrastructure/startup_validation_code_context.py': 'e06a189b942df4106ad0cf48e455bb6f3516c2dc409493e3482574c4e503859e'}
+REVIEWED_QUANTITY_COST_ORIGINS = {'src/engine/lifecycle/broker_cost_allocation.py': '6c6b5e7f29de4e9941b4eea1f83292e3b4c6ca0425c1740fa3dda903add829a1', 'src/engine/scalping/initial_quantity_policy.py': 'a60fc47c9467e0da033f8371ebdb66627e632d6b1bcd00b9a915b333fc11fd2f', 'src/engine/scalping/initial_quantity_monitor_projection.py': '8ddea89000551cec2b35972f0f0752861cfd4c4f512474cb469929b0dbe5ede8', 'src/engine/infrastructure/startup_validation_code_context.py': '5ef16fce0b5ba3cea8c82d2bd58a6434effae4c1205115b8a3e08dc1c21d6d4f'}
+REVIEWED_QUANTITY_COST_PROFILE = {**REVIEWED_ISSUER_BYTES_PROFILE, **REVIEWED_QUANTITY_COST_HASHES}
+REVIEWED_QUANTITY_COST_VARIANTS = {
+    (key[0], REVIEWED_QUANTITY_COST_HASHES.get(key[0], key[1])): {
+        **value,
+        "selector_path": "src/engine/lifecycle/broker_cost_allocation.py",
+        "selector_sha256": REVIEWED_QUANTITY_COST_HASHES["src/engine/lifecycle/broker_cost_allocation.py"],
+        "dependencies": {**value["dependencies"], **REVIEWED_QUANTITY_COST_HASHES},
+        "contract_extensions": {
+            origin: {name: REVIEWED_QUANTITY_COST_HASHES.get(os.path.normpath(name), sha) for name, sha in paths.items()}
+            for origin, paths in value["contract_extensions"].items()
+        },
+    } for key, value in REVIEWED_ISSUER_BYTES_VARIANTS.items()
+}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple(
+        (old, current) for old in {value for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ()) for value in pair}
+        | {REVIEWED_QUANTITY_COST_ORIGINS[name]})
+    for name, current in REVIEWED_QUANTITY_COST_HASHES.items()
+}}
+
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -13485,6 +13510,12 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     ):
         prepared_hashes = REVIEWED_ISSUER_BYTES_PROFILE
         prepared_variants = REVIEWED_ISSUER_BYTES_VARIANTS
+    if (
+        (source := candidate_bytes("src/engine/lifecycle/broker_cost_allocation.py", optional=True)) is not None
+        and hashlib.sha256(source).hexdigest() == REVIEWED_QUANTITY_COST_HASHES["src/engine/lifecycle/broker_cost_allocation.py"]
+    ):
+        prepared_hashes = REVIEWED_QUANTITY_COST_PROFILE
+        prepared_variants = REVIEWED_QUANTITY_COST_VARIANTS
     entry_cost_hashes = (
         prepared_hashes
         if prepared_owner_present

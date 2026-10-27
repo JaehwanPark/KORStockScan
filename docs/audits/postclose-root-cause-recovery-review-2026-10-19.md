@@ -4848,3 +4848,121 @@ historical PASS rewrite was required. See
 This closing change is documentation only. Original failed attempts, unrelated
 workspace changes and runtime selection29 are preserved; no executable owner,
 module or entrypoint is added, replaced or removed by these notes.
+
+### Quantity cost lineage 49362 and 49415 — 2026-10-28
+
+Scope: explicit authorization covers source reconciliation, causal repair, review,
+regression, clean commit/push and necessary integrated deployment/minimal native
+regeneration. Baseline is `6a8028439c22010fd231f3addcc2d11fddfb09c7` on isolated
+`codex/quantity-cost-lineage-20261028`; unrelated canonical edits remain intact.
+The original alert is source27 initial quantity under selected `29a3c1475`.
+The user confirmed another session owns the stopped Main/operational transition
+at08:33. This session must not concurrently replace its selection, preparation,
+startup hold or shared research indices. Code/test closure below is distinct from
+that owner completing operational consumption.
+
+Original evidence: [93-file manifest](/home/ubuntu/KORStockScan-storage-archives/quantity-cost-lineage-20261028/original-manifest.json),
+[causal observation](/home/ubuntu/KORStockScan-storage-archives/quantity-cost-lineage-20261028/original-cause-observation.json),
+[original fact generations](/home/ubuntu/KORStockScan-storage-archives/quantity-cost-lineage-20261028/fact-generations-original.json).
+Original content-addressed copies, original failures, source dates and original
+null costs/PnL are retained. Account/journal context was obtained through the
+native router without exposing credentials or account identity. No provider or
+order call was made by this repair.
+
+- **49362 / completion19:** native BUY3, Main SELL1 and absent final SELL terminal.
+  The [original operator reconciliation](preopen-alert-repair-2026-10-19.md)
+  records the user's manual sale of the remaining2 shares at09:01:54. That is
+  neither a missing currently owned position nor authority to fabricate a Main
+  final fill. Exact cost and Main-owned complete execution remain unavailable;
+  normalized fact profit_rate, realized_pnl and broker_actual_fees_taxes remain
+  null/excluded. The current warning recurred because the unchanged record's
+  official cost query window and aggregate research index advanced, changing
+  `actual_cost_source_generation`, compact `completion_generation` and
+  `fact_generation.cost_generation` together. The old history comparison only
+  understood the last field. The original declared19 cost window verifies
+  unchanged, as do the original execution and invalid record receipt.
+- **49415 / completion21:** DB/native census BUY3/SELL3, retained accepted BUY
+  receipt and pipeline BUY2. Missing order0023803/execution8752 is a real Main
+  native registry fill: one share,236500KRW, observed10:03:53.833931+09:00. It
+  arrived before REST residual staging, so the old callback did not append it
+  to the BUY ledger. The original collector cause was already repaired by
+  `9bff47f8b` (10/21 10:29:28) and initial-entry counterpart `57143fe21`; the
+  selected29 source contains both. Their exact owner/account/order/quantity and
+  pre-REST callback regression coverage was rerun. The remaining defect was the
+  research recovery owner's rejection of every partial BUY census, even when
+  the preserved native registry independently proves the missing execution.
+  Its21 official settlement window also gained previously unobserved21 rows,
+  so carrying the old acknowledgement is correctly rejected. A new research
+  receipt is necessary, not acceptance of a changed old window.
+
+Existing allocation recovery now accepts a partial receipt only with a complete
+native one-share-per-order census, exact original entry intent clock, unchanged
+receipt bytes, account/owner/route/custody, original observed leg agreement,
+complete SELL terminal, quantity conservation and matching weighted entry price.
+Cumulative multi-fill amounts cannot price a missing execution. It preserves
+both raw pipeline and accepted receipt and creates no HOLDING event or physical
+venue attribution. Initial-quantity intake binds the exact recovered cost fill
+identity and retains existing leg clocks/venue metadata; only the recovered leg
+uses an explicitly named native registry observation clock and UNKNOWN venue.
+
+The existing history publisher now retains the original full native completion
+proof behind the compact digest. It verifies both old/current record cost
+projections and original completion bytes before normalizing the cost-only
+change, then invokes the unchanged original-window cost reader. Changed original
+window, record receipt, cost value, completion source or unknown/missing proof
+stays current. A different completion-date/entry-cost binding is not silently
+accepted by this same-generation comparison.
+
+[Isolated49415 consumer](/home/ubuntu/KORStockScan-storage-archives/quantity-cost-lineage-20261028/49415-isolated-consumption.json)
+verified native recovery→allocation→quantity path with three BUY legs. Its
+single-record research allocation is1835KRW cost/2165KRW modeled net; these are
+not a production-published allocation or exact broker per-trade costs. The
+[canonical-null clarification](/home/ubuntu/KORStockScan-storage-archives/quantity-cost-lineage-20261028/isolated-economics-clarification.json)
+distinguishes the original snapshot's unverified numeric profit_rate from the
+normalized fact's null actual economics. The full production cohort must still
+be allocated by the native owner. Actual fill cost, actual net profit and actual
+venue do not become known through this research reconstruction.
+
+Replacement/removal: extend existing allocation, quantity intake and historical
+monitor owners; consolidate their unconditional partial rejection and compact
+hash-only comparison. Existing whole-missing BUY recovery, historical readers,
+original code profiles, native source/cost guards and current consumers are
+retained. No new module, CLI, worker, schedule, policy or duplicated publisher;
+no deferred code removal. Independent preparation pairs and complete successor
+profile are added without deleting any issued predecessor profile.
+
+[Consumer/phase inventory](/home/ubuntu/KORStockScan-storage-archives/quantity-cost-lineage-20261028/consumer-inventory.json)
+owns the minimal operational handoff. Re-pin the other session's final selector,
+PID/start/cwd, active parent and changed files before integration; do not overwrite
+its profile with this baseline. Verify original completion21, then run existing
+late research-cost revision for21. Rebuild source27 replay/timeout/evaluation
+and monitor through native code-specific preparation (`publish_current=false`),
+retaining original committed stage, summary/strict/controller/finalization,
+policy and null actual economics. Other historical dates require only native
+code-revision revalidation if their existing owner invalidates the index.
+Revalidate every bound consumer; if a committed source must change, let its
+native downstream owners reseal in dependency order. No EOD or unchanged whole
+postclose rerun. Candidate and selected P5, active-policy handoff, actual selected
+consumer/current observer and the original alert must be separately verified.
+49362 remains historical excluded/null with its original manual-exit authority;
+49415 can close only after its newly issued research receipt is consumed. The
+other original49013/49266 gaps and source28→29 unassisted acceptance stay OPEN.
+
+Validation: **1,813 distinct targeted tests passed**:1,734 source/allocation,
+quantity, independent preparation and existing early-fill custody tests; one
+additional full native completion→history publication→bounded consumer case;
+15 complete current handoff cases and63 predecessor/missing/dirty/mixed code
+cases. The90-case monitor suite was rerun after its final fixture changes.
+The three causal regression cases fail with the original owners injected and
+pass with repaired owners. Original negative attempts are preserved, including
+an invalid test fixture and a test run invalidated by a concurrent local source
+edit; neither was treated as production failure or PASS. Existing pandas
+Copy-on-Write deprecation warning remains. Compile, black checks on changed
+formatted owners, diff whitespace, new links and the print-only backlog parser
+passed; the existing checklist owner occurs once in the parsed backlog.
+[Validation logs](/home/ubuntu/KORStockScan-storage-archives/quantity-cost-lineage-20261028/)
+and [actual49362/49415 history comparison](/home/ubuntu/KORStockScan-storage-archives/quantity-cost-lineage-20261028/49362-native-history-comparison.json)
+retain49362 as the verified unchanged historical fact and reject49415's changed
+old cost window. Review has no unresolved in-scope code findings; operational
+publication/consumer acceptance remains assigned to the confirmed transition
+owner, not claimed by these tests.

@@ -75,6 +75,243 @@ def allocated(tmp_path):
     )
 
 
+def partial_native_buy_fixture(tmp_path, fault=None):
+    from src.tests.test_main_stop_research_cost import registry
+    from src.engine.ai import holding_exit_vote as vote
+    from src.trading.order.owner_custody_registry import OrderOwnerRegistry
+    import hashlib
+
+    registry(tmp_path, [position(i, qty=1) for i in (1, 2, 3)])
+    path = tmp_path / "runtime/order_owner_registry.jsonl"
+    rows = [json.loads(line) for line in path.read_text().splitlines()]
+    for row in rows:
+        i = int(row["intent_id"].split("-")[-1])
+        row.update(
+            owner_id="main_scalping:1",
+            position_id="main_scalping:1",
+            client_intent_id=f"main_scalping:1:1:{'ENTRY_BUY' if i == 1 else 'ENTRY_RESIDUAL_BUY'}:test",
+        )
+        row["observed_at_kst"] = (
+            DAY + f"T10:00:0{i if row['event'] == 'FILL_RECORDED' else 0}+09:00"
+        )
+        if i == 2:
+            if fault == "account":
+                row["account_key"] = "foreign"
+            elif fault == "owner":
+                row.update(owner_id="main_scalping:2", position_id="main_scalping:2")
+            elif fault == "two_share_order":
+                row["quantity"] = 2
+            elif fault == "route":
+                row["route"] = "UNKNOWN"
+            if row["event"] == "FILL_RECORDED" and fault == "missing_price":
+                row["fill_amount"] = 0
+    if fault == "missing_middle":
+        rows = [row for row in rows if row["intent_id"] != "intent-2"]
+    if fault == "duplicate_execution":
+        rows.append(
+            deepcopy(next(row for row in rows if row["event"] == "FILL_RECORDED"))
+        )
+    previous = "0" * 64
+    for row in rows:
+        row.pop("event_hash", None)
+        row["previous_hash"] = previous
+        row["event_hash"] = hashlib.sha256(
+            previous.encode() + OrderOwnerRegistry._canonical(row)
+        ).hexdigest()
+        previous = row["event_hash"]
+    path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    stock = dict(
+        id=1,
+        code="005930",
+        buy_time=DAY + "T10:00:03",
+        buy_qty=2,
+        buy_price=10000,
+        entry_filled_qty=2,
+        _entry_receipt_filled_by_order_no={"11": 1, "31": 1},
+        _entry_receipt_executions_by_order_no={
+            str(i * 10 + 1): {
+                str(i * 100 + 1): dict(
+                    cumulative_qty=1,
+                    cumulative_exec_amount=10000,
+                    order_qty=1,
+                    remaining_qty=0,
+                    unit_exec_qty=1,
+                    unit_exec_price=10000,
+                )
+            }
+            for i in (1, 3)
+        },
+        _add_receipt_filled_by_order_no={},
+        _add_receipt_executions_by_order_no={},
+    )
+    vote.persist_buy_fill_receipt(stock, tmp_path)
+    if fault == "receipt":
+        receipt = tmp_path / "runtime/holding_buy_fill_receipts/1.json"
+        value = json.loads(receipt.read_bytes())
+        value["record_id"] = 2
+        receipt.write_text(json.dumps(value))
+    trade = dict(
+        id=1,
+        code="005930",
+        rec_date=DAY,
+        buy_time=DAY + "T10:00:00",
+        buy_qty=3,
+        buy_price=10000,
+        sell_price=10100,
+        status="COMPLETED",
+    )
+    if fault == "nonfinite_price":
+        trade["buy_price"] = float("nan")
+    if fault == "entry_clock":
+        trade["buy_time"] = DAY + "T10:00:01"
+    item = position(1, qty=3)
+    item["buy_legs"] = [
+        dict(
+            at=DAY + f"T10:00:0{i}+09:00",
+            order_no=str(i * 10 + 1),
+            execution_no=str(i * 100 + 1),
+            qty=1,
+            price=10000,
+            route="SOR",
+        )
+        for i in (1, 3)
+    ]
+    item["custody_rows"] = []
+    item["execution_source_quality_reasons"] = [
+        "source_gap_db_buy_quantity_mismatch",
+        "source_gap_db_buy_cost_mismatch",
+        "source_gap_negative_position_balance",
+        "source_gap_position_quantity_not_conserved",
+    ]
+    if fault == "unknown_guard":
+        item["execution_source_quality_reasons"].append("source_gap_unknown_execution")
+    elif fault == "observed_conflict":
+        item["buy_legs"][0]["price"] += 1
+    elif fault == "missing_terminal":
+        item["terminal_observed"] = False
+    elif fault == "missing_sell":
+        item["sell_legs"][0]["qty"] = 2
+    return trade, item
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        None,
+        "missing_middle",
+        "account",
+        "owner",
+        "two_share_order",
+        "route",
+        "missing_price",
+        "duplicate_execution",
+        "receipt",
+        "entry_clock",
+        "nonfinite_price",
+        "unknown_guard",
+        "observed_conflict",
+        "missing_terminal",
+        "missing_sell",
+    ],
+)
+def test_partial_native_buy_requires_complete_exact_registry_census(tmp_path, fault):
+    from src.engine.lifecycle import main_stop_research_cost as native
+    from src.engine import sniper_trade_review_report as review
+
+    trade, item = partial_native_buy_fixture(tmp_path, fault)
+    before = deepcopy(item)
+    registry, generation, _ = native._registry(tmp_path)
+    try:
+        recovered, proof = A._native_missing_buy_position(
+            tmp_path,
+            trade,
+            item,
+            registry,
+            generation,
+            review._quantity_registry_index(registry),
+        )
+    except ValueError:
+        assert fault is not None
+        return
+    assert item == before
+    if fault:
+        assert recovered == item and proof is None
+        return
+    assert (
+        len(recovered["buy_legs"]) == 3
+        and recovered["execution_source_quality_reasons"] == []
+    )
+    assert proof["basis"] == "native_registry_complete_single_share_orders"
+    observed = source(
+        tmp_path, buy_qty=3, sell_qty=3, buy_amount=30000, sell_amount=30300
+    )
+    receipt = A.build_research_cost_allocations({DAY: observed}, [recovered])["1"]
+    assert receipt["status"] == "research_cost_allocated"
+    assert receipt["actual_execution_cost"] is False
+    assert receipt["economics_scope"] == "initial_quantity_research_only"
+
+
+def test_partial_native_buy_first_producer_and_quantity_consumer_preserve_originals(
+    tmp_path, monkeypatch
+):
+    from src.engine import sniper_trade_review_report as review
+    from src.engine.scalping import initial_quantity_policy as policy
+
+    trade, item = partial_native_buy_fixture(tmp_path)
+    ledger = dict(
+        buy_fill_legs=deepcopy(item["buy_legs"]),
+        sell_fill_legs=deepcopy(item["sell_legs"]),
+        strict_completion_reasons=item["execution_source_quality_reasons"],
+    )
+    before = deepcopy(ledger)
+    original_receipt = (
+        tmp_path / "runtime/holding_buy_fill_receipts/1.json"
+    ).read_bytes()
+    monkeypatch.setattr(review, "DATA_DIR", tmp_path)
+    custody, generation = review._quantity_research_custody(
+        [(trade, [], {}, ledger)], [], research_positions=[item]
+    )
+    assert len(item["buy_legs"]) == 3 and custody["1"]
+    review._verify_quantity_research_registry(generation)
+    observed = source(
+        tmp_path, buy_qty=3, sell_qty=3, buy_amount=30000, sell_amount=30300
+    )
+    cost = A.build_research_cost_allocations({DAY: observed}, [item])["1"]
+    path = dict(fills=deepcopy(before["buy_fill_legs"]), source_gap=[])
+    path["fills"][0].update(
+        venue="KRX",
+        actual_execution_venue_verified=True,
+        broker_actual_execution_venue="KRX",
+        clock_source="original_pipeline",
+    )
+    original_fills = deepcopy(path["fills"])
+    policy._join_native_research_buy_fills(
+        [
+            dict(
+                trade_id="fact:1",
+                record_id=1,
+                stock_code="005930",
+                entry_at_fact_buy_time=trade["buy_time"],
+                buy_qty=3,
+                buy_price=10000,
+                quantity_research_cost=cost,
+            )
+        ],
+        {"fact:1": path},
+        tmp_path,
+    )
+    assert len(path["fills"]) == 3 and path["source_gap"] == []
+    assert path["native_buy_fill_source"]["original_pipeline_fills_sha256"]
+    assert path["fills"][0] == original_fills[0]
+    assert path["fills"][2] == original_fills[1]
+    assert path["fills"][1]["actual_execution_venue_verified"] is False
+    assert path["fills"][1]["venue"] == "UNKNOWN"
+    assert ledger == before
+    assert (
+        tmp_path / "runtime/holding_buy_fill_receipts/1.json"
+    ).read_bytes() == original_receipt
+
+
 def test_multirecord_total_is_conserved_without_claiming_exact_execution_cost(tmp_path):
     observed, positions, receipts = allocated(tmp_path)
     assert [receipts[str(i)]["allocated_fees_taxes_krw"] for i in (1, 2)] == [11, 10]

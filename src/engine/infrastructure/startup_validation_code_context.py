@@ -3086,6 +3086,18 @@ for _name, _sha in REVIEWED_ISSUER_BYTES_SOURCES.items():
     _history.update((_old, _sha) for _old in _origins)
 
 
+# Exact partial BUY research recovery and authenticated cost-only history rollover.
+REVIEWED_QUANTITY_COST_SOURCES = {'src/engine/lifecycle/broker_cost_allocation.py': '98d7b7d529eb5e850b61da3a316c794dfd45dad939bbe18d344f83bfe4d3ebf2', 'src/engine/scalping/initial_quantity_policy.py': 'bf06e3259526962b0314ce570fdb656eba2a4797d90cf7afc95eedb7d023295d', 'src/engine/scalping/initial_quantity_monitor_projection.py': '10431b20d021e3e6088f09d2e8c9fd2b5bae09708423cfffc40036f4da1ee650'}
+REVIEWED_QUANTITY_COST_ORIGINS = {'src/engine/lifecycle/broker_cost_allocation.py': '6c6b5e7f29de4e9941b4eea1f83292e3b4c6ca0425c1740fa3dda903add829a1', 'src/engine/scalping/initial_quantity_policy.py': 'a60fc47c9467e0da033f8371ebdb66627e632d6b1bcd00b9a915b333fc11fd2f', 'src/engine/scalping/initial_quantity_monitor_projection.py': '8ddea89000551cec2b35972f0f0752861cfd4c4f512474cb469929b0dbe5ede8'}
+for _name, _sha in REVIEWED_QUANTITY_COST_SOURCES.items():
+    _history = REVIEWED_PREPARATION_HISTORY.setdefault(_name, set())
+    _origins = {value for pair in _history for value in pair}
+    _origins.add(REVIEWED_QUANTITY_COST_ORIGINS[_name])
+    if _name in REVIEWED_PREPARATION_SOURCES:
+        _origins.update(REVIEWED_PREPARATION_SOURCES[_name])
+    _history.update((_old, _sha) for _old in _origins)
+
+
 def reviewed_preparation_pair(relative, old, current):
     # An already reviewed physical pair keeps its original authority; a
     # formatting projection must not replace either endpoint before this check.

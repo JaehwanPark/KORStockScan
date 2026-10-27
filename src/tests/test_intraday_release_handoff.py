@@ -5370,6 +5370,7 @@ def test_pre_submit_handoff_rejects_unreviewed_dependency(tmp_path, family, depe
     "generation",
     [
         "current",
+        "issuer_bytes_source",
         "quantity_source",
         "stopped_preparation",
         "execution_exact",
@@ -5423,7 +5424,8 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
     )
     subprocess.run(["git", "-C", str(root), "checkout", "-q", "75e0fbbf7"], check=True)
     hashes = {
-        "current": handoff.REVIEWED_ISSUER_BYTES_PROFILE,
+        "current": handoff.REVIEWED_QUANTITY_COST_PROFILE,
+        "issuer_bytes_source": handoff.REVIEWED_ISSUER_BYTES_PROFILE,
         "inventory_origin_source": handoff.REVIEWED_INVENTORY_ORIGIN_PROFILE,
         "quantity_source": handoff.REVIEWED_QUANTITY_SOURCE_PROFILE,
         "stopped_preparation": handoff.REVIEWED_STOPPED_PREPARATION_PROFILE,
@@ -5516,6 +5518,7 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
                     str(canonical),
                     "show",
                     {
+                        "issuer_bytes_source": "29a3c1475",
                         "quantity_source": "fef43a8c5",
                         "stopped_preparation": "f48dd058d",
                         "execution_exact": "2d3e27aeb",
@@ -6931,3 +6934,12 @@ def test_ordered_closed_postclose_scope_keeps_distinct_source_roles(
         run()
         assert selector.read_bytes() == raw
     assert handoff._PREDECESSOR_REVIEW.get() is None
+
+
+@pytest.mark.parametrize("family", ["main_stop", "holding_vote", "pre_submit_delay"])
+@pytest.mark.parametrize("dependency", sorted(handoff.REVIEWED_QUANTITY_COST_HASHES))
+@pytest.mark.parametrize("fault", ["missing", "dirty", "committed_change", "parent_mix"])
+def test_quantity_cost_handoff_rejects_incomplete_successor(tmp_path, family, dependency, fault):
+    test_entry_cost_handoff_keeps_exact_complete_generation(
+        tmp_path, family, fault, "current", dependency
+    )

@@ -1309,8 +1309,9 @@ def join_post_fill_paths(trades, **kwargs):
 def _join_native_research_buy_fills(trades, paths, data_dir):
     """Bind recovered cost executions to their original sizing/order path.
 
-    Raw pipeline caches remain unchanged. Existing partial/conflicting fills
-    are never replaced, and an observed registry clock proves no exchange venue.
+    Raw pipeline caches remain unchanged. An authenticated incomplete BUY
+    census may be completed; conflicting fills remain excluded. Registry
+    observation clocks prove no physical exchange venue.
     """
     from src.engine.lifecycle import broker_cost_allocation as allocation
     from src.engine.lifecycle import main_stop_research_cost as native
@@ -1322,8 +1323,11 @@ def _join_native_research_buy_fills(trades, paths, data_dir):
         for trade in trades
         if trade.get("quantity_research_cost")
         and trade["trade_id"] in paths
-        and not paths[trade["trade_id"]].get("fills")
         and not paths[trade["trade_id"]].get("source_gap")
+        and sum(
+            fill.get("qty", 0) for fill in paths[trade["trade_id"]].get("fills", [])
+        )
+        < trade["buy_qty"]
     ]
     if not pending:
         return
@@ -1357,25 +1361,51 @@ def _join_native_research_buy_fills(trades, paths, data_dir):
                     or sum(leg["qty"] for leg in legs) != trade["buy_qty"]
                 ):
                     raise ValueError("quantity_native_buy_cost_identity_mismatch")
+                original = path.get("fills") or []
+                existing = {}
+                indexed = {(leg["order_no"], leg["execution_no"]): leg for leg in legs}
+                for fill in original:
+                    key = (fill.get("order_no"), fill.get("execution_no"))
+                    leg = indexed.get(key)
+                    if (
+                        proof.get("basis")
+                        != "native_registry_complete_single_share_orders"
+                        or key in existing
+                        or leg is None
+                        or any(
+                            fill.get(field) != leg[field]
+                            for field in ("qty", "price", "route")
+                        )
+                    ):
+                        raise ValueError("quantity_native_partial_buy_conflict")
+                    existing[key] = fill
                 fills = [
-                    dict(
-                        at=_timestamp(leg["at"]),
-                        emitted_at=_timestamp(leg["at"]),
-                        price=leg["price"],
-                        qty=leg["qty"],
-                        order_no=leg["order_no"],
-                        execution_no=leg["execution_no"],
-                        route=leg["route"],
-                        venue="UNKNOWN",
-                        actual_execution_venue_verified=False,
-                        broker_actual_execution_venue="UNKNOWN",
-                        clock_precision_sec=0,
-                        clock_source=proof["clock_source"],
+                    (
+                        existing[(leg["order_no"], leg["execution_no"])].copy()
+                        if (leg["order_no"], leg["execution_no"]) in existing
+                        else dict(
+                            at=_timestamp(leg["at"]),
+                            emitted_at=_timestamp(leg["at"]),
+                            price=leg["price"],
+                            qty=leg["qty"],
+                            order_no=leg["order_no"],
+                            execution_no=leg["execution_no"],
+                            route=leg["route"],
+                            venue="UNKNOWN",
+                            actual_execution_venue_verified=False,
+                            broker_actual_execution_venue="UNKNOWN",
+                            clock_precision_sec=0,
+                            clock_source=proof["clock_source"],
+                        )
                     )
                     for leg in legs
                 ]
-                path["fills"].extend(fills)
-                path["native_buy_fill_source"] = proof
+                path["fills"] = fills
+                path["native_buy_fill_source"] = (
+                    {**proof, "original_pipeline_fills_sha256": _digest(original)}
+                    if original
+                    else proof
+                )
             except (ValueError, TypeError, KeyError, OSError) as exc:
                 if str(exc).startswith("shared_research_budget_"):
                     raise
