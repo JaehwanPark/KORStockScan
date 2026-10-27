@@ -3027,8 +3027,9 @@ def test_main_preparation_independently_reviews_closed_scanner(origin, damage):
 )
 def test_migration_configuration_has_independent_exact_source_pairs(name):
     current = hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
-    assert H.REVIEWED_CLOSED_LOADER_PROFILE[name] == current
+    assert H.REVIEWED_DELAY_COLLECTION_PROFILE[name] == current
     for old in H.REVIEWED_MIGRATION_ORIGINS[name]:
+        C._pairs({name: old}, {name: H.REVIEWED_CLOSED_LOADER_PROFILE[name]})
         C._pairs({name: old}, {name: current})
         with pytest.raises(ValueError, match="unreviewed"):
             C._pairs({name: old}, {name: "0" * 64})

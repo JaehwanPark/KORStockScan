@@ -474,3 +474,26 @@ Native healthy/wait/loss discrimination needs a new naturally occurring intent
 on the repaired PID. AFTER403870_AL acceptance does not close the PRE196170_NX
 branch; retain the existing owner through2026-10-28T08:03~08:40+09:00. No order
 or extra subscription may be created to manufacture that diagnostic acceptance.
+
+The repair-only commit is `509c49318`. During observation another session selected
+`3a989b283446805cf5c2e5523b9d986228175b1a`; its PID1781860/start73293800 was
+independently verified. Candidate assembly preserves that deployed observer
+consumer, its complete predecessor generation and every deployed test function.
+This local assembly does not publish a selector or restart Main. Counts and
+health for each actual PID are retained separately.
+
+Supplemental review rejected a transitive historical capability mapping; only
+three already retained native report origins and the exact consumed3178
+capability can reach this exact successor. The existing negative test remains
+unchanged. The corrected policy/adapter suites passed1865 tests, and the initial
+code-handoff/preparation scope passed197 tests. The integrated producer suites
+passed2012 tests; the final integrated handoff/P5 results are recorded in the
+candidate manifest after they finish. A collection attempt that could not write
+its test XML outside the isolated test filesystem is not counted as validation.
+
+Against deployed3a989b283, non-test source is +124/-12 across six existing files;
+tests add coverage in five existing files. Most source growth is the exact
+native/independent-reader dependency profile. Owners and entrypoints are retained,
+and the only new helper resolves the local diagnostic scope. No source/test move
+or unexplained displaced implementation is included. Exact final test/doc counts
+and source hashes are in the evidence manifest.

@@ -11227,3 +11227,57 @@ def test_legacy_preflight_historical_membership_never_invents_consumption(damage
         health["current_observation_verified"] is False
         and health["full_coverage_proven"] is False
     )
+
+
+@pytest.mark.parametrize("code", ["005930", "0010F0", "0158S0", "0013Y0"])
+@pytest.mark.parametrize("outcome", ["no_match", "pending", "history"])
+@pytest.mark.parametrize("route,suffix,venue", [
+    ("krx_only", "", "KRX"), ("nxt_only", "_NX", "NXT"),
+    ("krx_nxt_integrated", "_AL", "SOR"),
+])
+def test_probe_identity_receipt_and_census_share_canonical_codes(
+    tmp_path, code, outcome, route, suffix, venue
+):
+    now = START + timedelta(minutes=10)
+    row = _native_no_match_probe(now, receipt_format="dict")
+    row["stock_code"] = code
+    f = row["fields"]
+    f["zero_base_route"] = route
+    r = f["native_observation_receipt"]
+    r.update(item=code + suffix, venue=venue, native_source_current=True,
+             selected_pending_count=0, source_censored_count=0,
+             selected_lifecycle_counts={"G1": {"FALSE": 20}, "G2": {"FALSE": 10}})
+    f.update(zero_base_probe_result="pattern_not_matched",
+             zero_base_probe_reason="native_observation_no_matching_pattern")
+    if outcome == "pending":
+        f.update(zero_base_probe_result="observation_incomplete",
+                 zero_base_probe_reason="confirmation_pending_at_residence_end")
+        r["selected_pending_count"] = 1
+    elif outcome == "history":
+        f.update(zero_base_probe_result="observation_incomplete",
+                 zero_base_probe_reason="native_history_observed_current_source_stale")
+        r.update(native_source_current=False, source_censored_count=1)
+    verifier = {"no_match": monitor._probe_verified_no_match,
+                "pending": monitor._probe_verified_pending,
+                "history": monitor._probe_verified_history}[outcome]
+    assert verifier(row)
+    _source_gap_files(tmp_path, now, probes=[row])
+    gap = monitor.source_gap_semantics(tmp_path, now)
+    assert not gap["probe_route_assessed_counts"]
+    if outcome == "no_match":
+        assert gap["probe_route_native_no_match_counts"] == {route: 1}
+    elif outcome == "pending":
+        assert gap["native_pending_observations"]["verified_pending_count"] == 1
+    else:
+        assert gap["native_history_observations"]["verified_count"] == 1
+        assert gap["probe_route_source_covered_counts"] == {}
+    r["item"] = code + ("_NX" if suffix != "_NX" else "_AL")
+    assert not verifier(row)
+
+
+@pytest.mark.parametrize("code", ["0010f0", "0010F", "00010F0", "0010F0_AL", "００１０Ｆ０", "00593!", None])
+def test_probe_receipt_rejects_noncanonical_code_without_normalizing(code):
+    row = _native_no_match_probe(START, receipt_format="dict")
+    row["stock_code"] = code
+    row["fields"]["native_observation_receipt"]["item"] = str(code) + "_AL"
+    assert not monitor._probe_verified_no_match(row)

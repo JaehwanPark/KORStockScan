@@ -2865,6 +2865,19 @@ for _name, _sha in REVIEWED_NONFIXED_FINAL_SOURCES.items():
     _history.update((_old, _sha) for _old in _prior)
 
 
+# Diagnostic receipt syntax follows the existing lossless identifier owner.
+REVIEWED_NONFIXED_OBSERVER_SOURCES = {
+    **REVIEWED_NONFIXED_FINAL_SOURCES,
+    "src/engine/monitoring/submission_bottleneck_monitor.py": "9f38385273e4a89085f3f974d962b1bb31b40348a87ff2e7944bc26f3c8fde6a",
+}
+for _name, _sha in REVIEWED_NONFIXED_OBSERVER_SOURCES.items():
+    _history = REVIEWED_PREPARATION_HISTORY.setdefault(_name, set())
+    _prior = {v for pair in _history for v in pair}
+    if _name in REVIEWED_PREPARATION_SOURCES:
+        _prior.update(REVIEWED_PREPARATION_SOURCES[_name])
+    _history.update((_old, _sha) for _old in _prior)
+
+
 # Exact collection and payload-context successor; independent preparation reader.
 REVIEWED_DELAY_COLLECTION_SOURCES = {
     "src/engine/kiwoom_websocket.py": "5f8a0027e517f385a34fe9683aa34a6d7626b2f09efce7ab697889be363e3352",

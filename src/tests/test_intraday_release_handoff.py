@@ -5417,6 +5417,7 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
     hashes = {
         "current": handoff.REVIEWED_DELAY_COLLECTION_PROFILE,
         "consumed_nonfixed_final": handoff.REVIEWED_NONFIXED_FINAL_PROFILE,
+        "nonfixed_final": handoff.REVIEWED_NONFIXED_FINAL_PROFILE,
         "nonfixed_current": handoff.REVIEWED_NONFIXED_CURRENT_PROFILE,
         "preclaim_cadence": handoff.REVIEWED_PRECLAIM_CADENCE_PROFILE,
         "consumed_invalidation_cadence": handoff.REVIEWED_INVALIDATION_CADENCE_PROFILE,
@@ -5494,6 +5495,7 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
                     "show",
                     {
                         "consumed_nonfixed_final": "3178d65e0",
+                        "nonfixed_final": "3178d65e0",
                         "consumed_invalidation_cadence": "d5ddc0ae0",
                         "consumed_nonfixed_identity": "16130d883",
                         "consumed_preclaim": "c8d22dd41",
@@ -6606,7 +6608,7 @@ def test_invalidation_cadence_keeps_consumed_entry_capability(tmp_path, family, 
         "src/engine/infrastructure/startup_validation_code_context.py")
 
 
-@pytest.mark.parametrize("generation", ["preclaim_diagnostics", "invalidation_cadence", "nonfixed_current", "preclaim_cadence"])
+@pytest.mark.parametrize("generation", ["preclaim_diagnostics", "invalidation_cadence", "nonfixed_current", "preclaim_cadence", "nonfixed_final"])
 @pytest.mark.parametrize("family", ["main_stop", "holding_vote", "pre_submit_delay"])
 @pytest.mark.parametrize("fault", [None, "successor_mix"])
 def test_preclaim_cadence_retains_each_complete_predecessor(tmp_path, generation, family, fault):
@@ -6617,6 +6619,8 @@ def test_preclaim_cadence_retains_each_complete_predecessor(tmp_path, generation
         if generation == "nonfixed_current"
         else "src/engine/kiwoom_websocket.py"
     )
+    if generation == "nonfixed_final":
+        dependency = "src/engine/monitoring/submission_bottleneck_monitor.py"
     test_entry_cost_handoff_keeps_exact_complete_generation(
         tmp_path, family, fault, generation, dependency
     )
